@@ -330,6 +330,38 @@ export function resolvePadPhase(
  * actually swapped). `PadHostV3`'s own render-phase reset (below) is the
  * one call site — see that block's own comment for why a ref cannot back
  * this comparison in this repo (`react-hooks/refs`).
+ *
+ * INVESTIGATED, NOT CHANGED (R2b live bug follow-up, 2026-08-17): the owner
+ * also reported that manually picking a bowler and tapping again was
+ * "still refused." Suspected cause, unverified going in: this reset firing
+ * between the pick and the next tap. NOT confirmed for cricket specifically
+ * — cricket declares no `contextSelect` (cricket.tsx's own header), so
+ * `onSelect` below only calls `setContextOverrides`; it never dispatches,
+ * so picking a candidate alone never touches `pipeline.state` and cannot by
+ * itself trigger this reset. What IS real and worth a future investigator's
+ * time: this doc's own claim that "`prevState !== nextState` is exactly
+ * 'at least one new event landed'" is slightly stronger than the code
+ * actually guarantees — `foldedState`'s own `useMemo` (use-pad-pipeline.ts)
+ * depends on `lastRejection`/`serverOverride` in addition to the real event
+ * stream, and a rejected submission always constructs a NEW `{code,
+ * message}` object (no dedup against a same-content prior value), so
+ * `pipeline.state` CAN get a fresh reference from an UNRELATED async
+ * settlement (e.g. a different, earlier submission's rejection arriving
+ * late) landing in the gap between a pick and the next tap, not only from
+ * a change that actually affects the picked slot. Separately: the client's
+ * own optimistic fold (`foldClient`, called with no `opts` from
+ * use-pad-pipeline.ts) runs entirely non-strict (`strictFromSeq` undefined
+ * -> `strict: false` for every event, packages/engine/src/core/events.ts:
+ * 466/522), so an illegal bowler is NOT caught immediately client-side —
+ * it looks accepted until the server round-trip rejects it after
+ * `HOLD_MS`, which is a more likely source of "did my fix even take"
+ * confusion than this reset. Left AS IS: no reproduction found for the
+ * literal suspicion, and Part 1's fix (the bowler default is now always
+ * eligible-or-empty) closes the most common path to an illegal FIRST tap
+ * that this whole chain starts from. If this resurfaces, capture exact
+ * pick-to-tap timing and whether a second device/tab was scoring the same
+ * fixture concurrently — this file's own pure-builder test suite cannot
+ * observe either.
  */
 export function contextOverridesStale(overridesFor: unknown, currentState: unknown): boolean {
   return overridesFor !== currentState;
