@@ -82,6 +82,12 @@ export interface DisciplineModel {
 }
 
 // spec 02 §5 — a division's format is an ordered list of stages.
+// L3/#414 — americano/ladder/page_playoff close a type-vs-schema drift, not a
+// new capability: the DB has allowed all three since
+// db/migration/deltas/V298__page_playoff_stage_kind.sql. `TableStage` (spec
+// 05, competition/stage.ts) still only accepts league|group|swiss — americano
+// is adapted onto a league table elsewhere; ladder has no table/bracket shape
+// of its own (its finish order is `config.ladder_order`, apps/web).
 export const StageKind = z.enum([
   "league",
   "group",
@@ -89,6 +95,9 @@ export const StageKind = z.enum([
   "knockout",
   "double_elim",
   "stepladder",
+  "americano",
+  "ladder",
+  "page_playoff",
 ]);
 export type StageKind = z.infer<typeof StageKind>;
 

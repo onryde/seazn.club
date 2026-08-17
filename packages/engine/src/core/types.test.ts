@@ -33,8 +33,18 @@ describe("MatchOutcome", () => {
 });
 
 describe("StageKind / StageCtx", () => {
-  it("accepts the six stage kinds of spec 02 §5", () => {
-    for (const kind of ["league", "group", "swiss", "knockout", "double_elim", "stepladder"]) {
+  it("accepts all nine stage kinds (spec 02 §5 + L3/#414 americano/ladder/page_playoff)", () => {
+    for (const kind of [
+      "league",
+      "group",
+      "swiss",
+      "knockout",
+      "double_elim",
+      "stepladder",
+      "americano",
+      "ladder",
+      "page_playoff",
+    ]) {
       expect(StageKind.parse(kind)).toBe(kind);
     }
     expect(StageKind.safeParse("round_robin").success).toBe(false);
