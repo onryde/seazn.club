@@ -1,16 +1,27 @@
-// RS002 wave 2: eligibility extracted from registrations.ts, extended to
-// read the V364 first-class `divisions.category`/`age_min`/`age_max`
-// columns alongside the existing jsonb `eligibility` rules, plus the new
-// roster-level `rosterIssues`. Pure — no DB.
+// RS002 wave 2 (rewritten per _INDEX.md "RS002 entry conditions" item 5,
+// 2026-08-17): eligibility extracted from registrations.ts, evaluating the
+// V364 first-class divisions.category/age_min/age_max columns alongside the
+// existing jsonb eligibility rules, plus roster-level rosterIssues.
+//
+// Return shape is now STRUCTURED (EligibilityIssue[] with a machine `code`),
+// not string[] — RS011's organiser-side gates consume this same evaluator and
+// need codes for a 422's extra.violations[] and an override dialog, not
+// English sentences to re-parse. Assertions below check `code`/`meta`
+// wherever the old version checked a sentence; formatted-English coverage is
+// deliberately kept to ONE test so the display path (formatEligibilityIssues)
+// stays covered without re-coupling every case to exact wording.
 import { describe, expect, it } from "vitest";
 import {
   ageAt,
   divisionEligibilityIssues,
   eligibilityIssues,
+  formatEligibilityIssues,
   isMinor,
   requiresDob,
   rosterIssues,
   type EligibilityDivision,
+  type EligibilityIssue,
+  type EligibilityRosterPlayer,
 } from "../registration-eligibility";
 // The move must not shrink the set of importers: registrations.ts re-exports
 // every moved symbol verbatim.
@@ -28,6 +39,17 @@ const NO_RULES: EligibilityDivision = {
   age_max: null,
 };
 
+/** Strip `message` for assertions that only care about the structured part —
+ *  keeps every test below decoupled from the exact English wording. */
+function codesOf(issues: EligibilityIssue[]) {
+  return issues.map(({ code, meta, playerIndex, playerName }) => ({
+    code,
+    ...(meta !== undefined ? { meta } : {}),
+    ...(playerIndex !== undefined ? { playerIndex } : {}),
+    ...(playerName !== undefined ? { playerName } : {}),
+  }));
+}
+
 describe("registrations.ts re-exports the moved eligibility helpers", () => {
   it("re-exported ageAt/isMinor/eligibilityIssues/requiresDob behave identically to the originals", () => {
     expect(reexportedAgeAt("2010-06-05", new Date("2026-06-05T00:00:00Z"))).toBe(
@@ -42,7 +64,7 @@ describe("registrations.ts re-exports the moved eligibility helpers", () => {
   });
 });
 
-describe("requiresDob (division-aware overload, V364)", () => {
+describe("requiresDob (division-aware overload, V364) — unaffected by the code rework, still boolean", () => {
   it("is true for a division with only age_min/age_max set and no jsonb age rule", () => {
     expect(requiresDob({ eligibility: [], age_min: 10, age_max: null })).toBe(true);
     expect(requiresDob({ eligibility: [], age_min: null, age_max: 18 })).toBe(true);
@@ -65,13 +87,84 @@ describe("requiresDob (division-aware overload, V364)", () => {
   });
 });
 
+describe("eligibilityIssues (legacy string[] wrapper, unchanged signature per entry-condition item 5)", () => {
+  it("is a thin wrapper over the structured path — provably equivalent, not re-derived", () => {
+    const rules = [{ kind: "gender", allowed: ["f", "x"] }];
+    const person = { gender: "m" };
+    const direct = eligibilityIssues(rules, person, 2026);
+    const viaStructured = formatEligibilityIssues(
+      divisionEligibilityIssues(
+        { eligibility: rules, category: null, age_min: null, age_max: null },
+        person,
+        2026,
+      ),
+    );
+    expect(direct).toEqual(viaStructured);
+    expect(direct).toHaveLength(1); // not vacuously green
+  });
+
+  it("still returns [] for an eligible input (string[] contract unchanged)", () => {
+    expect(eligibilityIssues([], { dob: null }, 2026)).toEqual([]);
+  });
+});
+
+describe("MISSING_DOB / MISSING_GENDER are plain codes — no severity, no baked-in policy", () => {
+  it("the module never attaches a severity field; blocking-vs-warning is entirely the caller's decision", () => {
+    const ageOnlyDivision: EligibilityDivision = { ...NO_RULES, age_min: 10, age_max: null };
+    const dobIssues = divisionEligibilityIssues(ageOnlyDivision, { dob: null }, 2026);
+    expect(codesOf(dobIssues)).toEqual([{ code: "MISSING_DOB" }]);
+    expect(dobIssues[0]).not.toHaveProperty("severity");
+
+    const mensDivision: EligibilityDivision = { ...NO_RULES, category: "mens" };
+    const genderIssues = divisionEligibilityIssues(mensDivision, { gender: null }, 2026);
+    expect(codesOf(genderIssues)).toEqual([{ code: "MISSING_GENDER" }]);
+    expect(genderIssues[0]).not.toHaveProperty("severity");
+
+    // The jsonb-rule path emits the SAME codes for the SAME reason (no dob
+    // present for an age rule, no gender present for a gender rule) — one
+    // vocabulary, whichever source triggered it.
+    const jsonbAgeDivision: EligibilityDivision = {
+      ...NO_RULES,
+      eligibility: [{ kind: "age", maxAgeAt: 15 }],
+    };
+    expect(codesOf(divisionEligibilityIssues(jsonbAgeDivision, { dob: null }, 2026))).toEqual([
+      { code: "MISSING_DOB" },
+    ]);
+  });
+});
+
+describe("meta carries structured detail a consumer would otherwise have to re-parse from the sentence", () => {
+  it("AGE_TOO_OLD/AGE_TOO_YOUNG carry the limit, GENDER_NOT_ALLOWED the allowed list, CATEGORY_MISMATCH the category", () => {
+    const ageDivision: EligibilityDivision = { ...NO_RULES, age_min: 10, age_max: 15 };
+    expect(codesOf(divisionEligibilityIssues(ageDivision, { dob: "2010-01-01" }, 2026))).toEqual([
+      { code: "AGE_TOO_OLD", meta: { limit: 15 } },
+    ]); // age 16
+    expect(codesOf(divisionEligibilityIssues(ageDivision, { dob: "2017-01-01" }, 2026))).toEqual([
+      { code: "AGE_TOO_YOUNG", meta: { limit: 10 } },
+    ]); // age 9
+
+    const jsonbGenderDivision: EligibilityDivision = {
+      ...NO_RULES,
+      eligibility: [{ kind: "gender", allowed: ["f", "x"] }],
+    };
+    expect(
+      codesOf(divisionEligibilityIssues(jsonbGenderDivision, { gender: "m" }, 2026)),
+    ).toEqual([{ code: "GENDER_NOT_ALLOWED", meta: { allowed: ["f", "x"] } }]);
+
+    const mensDivision: EligibilityDivision = { ...NO_RULES, category: "mens" };
+    expect(codesOf(divisionEligibilityIssues(mensDivision, { gender: "f" }, 2026))).toEqual([
+      { code: "CATEGORY_MISMATCH", meta: { category: "mens" } },
+    ]);
+  });
+});
+
 describe("divisionEligibilityIssues — category (mens/womens), x never blocks", () => {
   const mens: EligibilityDivision = { ...NO_RULES, category: "mens" };
   const womens: EligibilityDivision = { ...NO_RULES, category: "womens" };
 
-  it("mens: an f player is an issue", () => {
-    expect(divisionEligibilityIssues(mens, { gender: "f" }, 2026)).toEqual([
-      "This division is not open to your gender category.",
+  it("mens: an f player yields CATEGORY_MISMATCH", () => {
+    expect(codesOf(divisionEligibilityIssues(mens, { gender: "f" }, 2026))).toEqual([
+      { code: "CATEGORY_MISMATCH", meta: { category: "mens" } },
     ]);
   });
 
@@ -79,9 +172,9 @@ describe("divisionEligibilityIssues — category (mens/womens), x never blocks",
     expect(divisionEligibilityIssues(mens, { gender: "x" }, 2026)).toEqual([]);
   });
 
-  it("mens: a null-gender player yields the 'Gender is required' issue", () => {
-    expect(divisionEligibilityIssues(mens, { gender: null }, 2026)).toEqual([
-      "Gender is required for this division.",
+  it("mens: a null-gender player yields MISSING_GENDER", () => {
+    expect(codesOf(divisionEligibilityIssues(mens, { gender: null }, 2026))).toEqual([
+      { code: "MISSING_GENDER" },
     ]);
   });
 
@@ -89,9 +182,9 @@ describe("divisionEligibilityIssues — category (mens/womens), x never blocks",
     expect(divisionEligibilityIssues(mens, { gender: "m" }, 2026)).toEqual([]);
   });
 
-  it("womens: an m player is an issue, f is eligible, x is eligible", () => {
-    expect(divisionEligibilityIssues(womens, { gender: "m" }, 2026)).toEqual([
-      "This division is not open to your gender category.",
+  it("womens: an m player is CATEGORY_MISMATCH, f is eligible, x is eligible", () => {
+    expect(codesOf(divisionEligibilityIssues(womens, { gender: "m" }, 2026))).toEqual([
+      { code: "CATEGORY_MISMATCH", meta: { category: "womens" } },
     ]);
     expect(divisionEligibilityIssues(womens, { gender: "f" }, 2026)).toEqual([]);
     expect(divisionEligibilityIssues(womens, { gender: "x" }, 2026)).toEqual([]);
@@ -115,21 +208,19 @@ describe("divisionEligibilityIssues — category (mens/womens), x never blocks",
 
 describe("divisionEligibilityIssues — age band (first-class age_min/age_max)", () => {
   // Cutoff = 1 Jan of seasonStartYear. Dobs land exactly on Jan 1 so the age
-  // math is exact: age = seasonStartYear - dobYear (see ageAt's UTC
-  // month/day comparison — a Jan-1 dob never triggers the "before birthday"
-  // subtraction against a Jan-1 cutoff).
+  // math is exact: age = seasonStartYear - dobYear.
   const division: EligibilityDivision = { ...NO_RULES, age_min: 10, age_max: 15 };
   const seasonStartYear = 2026;
 
-  it("above age_max is an issue", () => {
-    expect(divisionEligibilityIssues(division, { dob: "2010-01-01" }, seasonStartYear)).toEqual([
-      "Too old for this division (must be 15 or younger on the cutoff date).",
+  it("above age_max is AGE_TOO_OLD", () => {
+    expect(codesOf(divisionEligibilityIssues(division, { dob: "2010-01-01" }, seasonStartYear))).toEqual([
+      { code: "AGE_TOO_OLD", meta: { limit: 15 } },
     ]); // age 16
   });
 
-  it("below age_min is an issue", () => {
-    expect(divisionEligibilityIssues(division, { dob: "2017-01-01" }, seasonStartYear)).toEqual([
-      "Too young for this division (must be 10 or older on the cutoff date).",
+  it("below age_min is AGE_TOO_YOUNG", () => {
+    expect(codesOf(divisionEligibilityIssues(division, { dob: "2017-01-01" }, seasonStartYear))).toEqual([
+      { code: "AGE_TOO_YOUNG", meta: { limit: 10 } },
     ]); // age 9
   });
 
@@ -141,9 +232,9 @@ describe("divisionEligibilityIssues — age band (first-class age_min/age_max)",
     expect(divisionEligibilityIssues(division, { dob: "2016-01-01" }, seasonStartYear)).toEqual([]); // age 10
   });
 
-  it("missing dob is an issue when age_min/age_max is set", () => {
-    expect(divisionEligibilityIssues(division, { dob: null }, seasonStartYear)).toEqual([
-      "Date of birth is required for this age-restricted division.",
+  it("missing dob is MISSING_DOB when age_min/age_max is set", () => {
+    expect(codesOf(divisionEligibilityIssues(division, { dob: null }, seasonStartYear))).toEqual([
+      { code: "MISSING_DOB" },
     ]);
   });
 
@@ -155,15 +246,12 @@ describe("divisionEligibilityIssues — age band (first-class age_min/age_max)",
     const pastSeasonStartYear = currentYear - 6;
     const overAgeMax: EligibilityDivision = { ...NO_RULES, age_max: 12 };
     const dob = `${pastSeasonStartYear - 10}-01-01`; // age 10 AT the season-start cutoff
-    // Evaluated "today" this person would be 16 (10 + 6 years drift) > 12 —
-    // an issue. Evaluated correctly at the season-start cutoff they are 10,
-    // well under the age_max=12 band — eligible.
     expect(divisionEligibilityIssues(overAgeMax, { dob }, pastSeasonStartYear)).toEqual([]);
   });
 });
 
 describe("divisionEligibilityIssues — jsonb rules and first-class columns apply together", () => {
-  it("a division with both a jsonb gender rule and a first-class age_min yields both issues", () => {
+  it("a division with both a jsonb gender rule and a first-class age_min yields both codes", () => {
     const division: EligibilityDivision = {
       eligibility: [{ kind: "gender", allowed: ["f"] }],
       category: null,
@@ -171,64 +259,76 @@ describe("divisionEligibilityIssues — jsonb rules and first-class columns appl
       age_max: null,
     };
     expect(
-      divisionEligibilityIssues(division, { dob: "2015-01-01", gender: "m" }, 2026),
+      codesOf(divisionEligibilityIssues(division, { dob: "2015-01-01", gender: "m" }, 2026)),
     ).toEqual([
-      "This division is not open to your gender category.", // jsonb rule
-      "Too young for this division (must be 21 or older on the cutoff date).", // first-class column, age 11
-    ]);
-  });
-
-  it("plain eligibilityIssues (jsonb-only) is unaffected by the extension", () => {
-    const rules = [{ kind: "gender", allowed: ["f", "x"] }];
-    expect(eligibilityIssues(rules, { gender: "m" }, 2026)).toEqual([
-      "This division is not open to your gender category.",
+      { code: "GENDER_NOT_ALLOWED", meta: { allowed: ["f"] } }, // jsonb rule
+      { code: "AGE_TOO_YOUNG", meta: { limit: 21 } }, // first-class column, age 11
     ]);
   });
 });
 
-describe("rosterIssues — per-player prefixing", () => {
+describe("rosterIssues — per-player codes carry 1-based index and name", () => {
   it("names the offending row by 1-based index and player name", () => {
     const division: EligibilityDivision = { ...NO_RULES, category: "mens" };
-    const players = [
+    const players: EligibilityRosterPlayer[] = [
       { full_name: "Sam Lee", gender: "f" },
       { full_name: "Alex Kim", gender: "m" },
     ];
-    expect(rosterIssues(division, players, 2026)).toEqual([
-      "Player 1 (Sam Lee): This division is not open to your gender category.",
+    expect(codesOf(rosterIssues(division, players, 2026))).toEqual([
+      { code: "CATEGORY_MISMATCH", meta: { category: "mens" }, playerIndex: 1, playerName: "Sam Lee" },
     ]);
   });
 
-  it("age band issues in a roster name their 1-based row index; boundary rows are silent", () => {
+  it("age band issues in a roster carry their 1-based row index; boundary rows are silent", () => {
     const division: EligibilityDivision = { ...NO_RULES, age_min: 10, age_max: 15 };
-    const players = [
+    const players: EligibilityRosterPlayer[] = [
       { full_name: "Over Age", dob: "2010-01-01" }, // 16 — over age_max
       { full_name: "Under Age", dob: "2017-01-01" }, // 9 — under age_min
       { full_name: "At Max", dob: "2011-01-01" }, // 15 — boundary, eligible
       { full_name: "At Min", dob: "2016-01-01" }, // 10 — boundary, eligible
     ];
-    const issues = rosterIssues(division, players, 2026);
-    expect(issues).toEqual([
-      "Player 1 (Over Age): Too old for this division (must be 15 or younger on the cutoff date).",
-      "Player 2 (Under Age): Too young for this division (must be 10 or older on the cutoff date).",
+    expect(codesOf(rosterIssues(division, players, 2026))).toEqual([
+      { code: "AGE_TOO_OLD", meta: { limit: 15 }, playerIndex: 1, playerName: "Over Age" },
+      { code: "AGE_TOO_YOUNG", meta: { limit: 10 }, playerIndex: 2, playerName: "Under Age" },
     ]);
   });
 });
 
-describe("rosterIssues — mixed composition (roster-wide)", () => {
+describe("rosterIssues accepts a persons-shaped row (organiser gates call it against `persons`, no full_name required)", () => {
+  it("works with a row that has no full_name — code/meta/playerIndex are still correct, playerName is null", () => {
+    const division: EligibilityDivision = { ...NO_RULES, category: "mens" };
+    // A `persons` row: no full_name at all, unlike a registration_players row.
+    const players: EligibilityRosterPlayer[] = [{ gender: "f" }, { full_name: "Sam Lee", gender: "f" }];
+    const issues = rosterIssues(division, players, 2026);
+    expect(codesOf(issues)).toEqual([
+      { code: "CATEGORY_MISMATCH", meta: { category: "mens" }, playerIndex: 1, playerName: null },
+      { code: "CATEGORY_MISMATCH", meta: { category: "mens" }, playerIndex: 2, playerName: "Sam Lee" },
+    ]);
+    // The ONE test in this file asserting formatted English: proves
+    // formatEligibilityIssues' two branches (no name / with name) directly,
+    // per the acceptance criterion's own example format `Player 3: …`.
+    expect(formatEligibilityIssues(issues)).toEqual([
+      "Player 1: This division is not open to your gender category.",
+      "Player 2 (Sam Lee): This division is not open to your gender category.",
+    ]);
+  });
+});
+
+describe("rosterIssues — mixed composition (roster-wide, MIXED_NEEDS_BOTH_GENDERS)", () => {
   const mixed: EligibilityDivision = { ...NO_RULES, category: "mixed" };
 
   it("all-male roster fails the mixed rule", () => {
-    const players = [
+    const players: EligibilityRosterPlayer[] = [
       { full_name: "A", gender: "m" },
       { full_name: "B", gender: "m" },
     ];
-    expect(rosterIssues(mixed, players, 2026)).toEqual([
-      "This division requires a mixed roster (at least one male and one female player).",
+    expect(codesOf(rosterIssues(mixed, players, 2026))).toEqual([
+      { code: "MIXED_NEEDS_BOTH_GENDERS" },
     ]);
   });
 
   it("one m + one f satisfies the mixed rule", () => {
-    const players = [
+    const players: EligibilityRosterPlayer[] = [
       { full_name: "A", gender: "m" },
       { full_name: "B", gender: "f" },
     ];
@@ -236,7 +336,7 @@ describe("rosterIssues — mixed composition (roster-wide)", () => {
   });
 
   it("m + f + x satisfies the mixed rule", () => {
-    const players = [
+    const players: EligibilityRosterPlayer[] = [
       { full_name: "A", gender: "m" },
       { full_name: "B", gender: "f" },
       { full_name: "C", gender: "x" },
@@ -245,26 +345,24 @@ describe("rosterIssues — mixed composition (roster-wide)", () => {
   });
 
   it("an all-x roster fails the mixed rule, with NO per-player gender issue", () => {
-    const players = [
+    const players: EligibilityRosterPlayer[] = [
       { full_name: "A", gender: "x" },
       { full_name: "B", gender: "x" },
     ];
     const issues = rosterIssues(mixed, players, 2026);
-    expect(issues).toEqual([
-      "This division requires a mixed roster (at least one male and one female player).",
-    ]);
-    // Specifically: no "Player N (...): Gender is required" / "not open to
-    // your gender category" issue anywhere in the output.
-    expect(issues.some((i) => i.includes("Gender") || i.includes("gender category"))).toBe(false);
+    expect(codesOf(issues)).toEqual([{ code: "MIXED_NEEDS_BOTH_GENDERS" }]);
+    expect(issues.some((i) => i.code === "MISSING_GENDER" || i.code === "CATEGORY_MISMATCH")).toBe(
+      false,
+    );
   });
 
   it("an all-null-gender roster fails the mixed rule too (want of both sides, not the null itself)", () => {
-    const players = [
+    const players: EligibilityRosterPlayer[] = [
       { full_name: "A", gender: null },
       { full_name: "B", gender: null },
     ];
-    expect(rosterIssues(mixed, players, 2026)).toEqual([
-      "This division requires a mixed roster (at least one male and one female player).",
+    expect(codesOf(rosterIssues(mixed, players, 2026))).toEqual([
+      { code: "MIXED_NEEDS_BOTH_GENDERS" },
     ]);
   });
 });
