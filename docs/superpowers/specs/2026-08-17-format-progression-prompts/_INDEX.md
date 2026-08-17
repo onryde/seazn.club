@@ -35,7 +35,14 @@ implementation that landed differently — the scoringpad index is full of
    per-template fix), building the union of both vocabularies' expressiveness.
 3. **L3/#414 finishes on `qualification`** rather than stopping mid-flight; F2
    migrates its `RoundLosers` union member along with everything else.
-4. **Greenfield — there is no production data** (2026-08-17). F2 drops
+4. **The two overlapping rule pairs COLLAPSE** (2026-08-17). `topN {n}` and
+   `rankRange {from:1,to:n}` say the same thing; `bestOfRank` and `bestNth` say
+   near enough the same thing. F2 keeps **one of each and deletes the other**,
+   naming which survived in its PR body. This is a breaking change to spec
+   shape, which costs nothing today precisely because there is no production
+   data — and would be expensive later. Keeping both would rebuild the drift
+   this programme exists to end.
+5. **Greenfield — there is no production data** (2026-08-17). F2 drops
    `stages.qualification` and `stages.seeding` outright: no backfill, no
    dual-read, no compat shims, no flags; constraints strict from day one. The
    migration is destructive and its correctness rests entirely on that premise,
