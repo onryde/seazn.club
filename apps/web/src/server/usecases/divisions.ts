@@ -343,9 +343,10 @@ export async function deleteDivision(auth: AuthCtx, id: string): Promise<void> {
     // delete cascades the registrations away, so block it while any card
     // payment on this division is not fully refunded. Archive stays open.
     const [{ live_payments }] = await tx<{ live_payments: number }[]>`
-      select count(*)::int as live_payments from registrations
-      where division_id = ${id} and payment_intent_id is not null
-        and refunded_cents < amount_cents`;
+      select count(*)::int as live_payments from registrations r
+      join registration_groups g on g.id = r.group_id
+      where r.division_id = ${id} and g.payment_intent_id is not null
+        and g.refunded_cents < g.amount_cents`;
     if (live_payments > 0) {
       throw new HttpError(
         409,
