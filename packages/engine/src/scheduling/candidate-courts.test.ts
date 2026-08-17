@@ -1,0 +1,122 @@
+// candidate-courts.test.ts — P9 pass 2 (venues & courts -> scheduler): the
+// pure candidate-court filter shared by BOTH the build-input assembly
+// (apps/web usecases/schedule.ts) and the validate path
+// (validateScheduleIn) — see candidate-courts.ts's own header for why this
+// must stay the ONE copy (ruling 4, the placer/verifier fork this repo keeps
+// re-deriving as a bug).
+import { describe, expect, it } from "vitest";
+import { candidateCourts, type CourtMeta } from "./candidate-courts.ts";
+import { validateAssignments, type Assignment, type VerifyConfig } from "./calendar.ts";
+
+function meta(id: string, tags: string[], archived = false): CourtMeta {
+  return { id, tags, archived };
+}
+
+describe("candidateCourts — tag subset filter (design doc: tags ⊇ required)", () => {
+  it("a court whose tags are a SUPERSET of required qualifies", () => {
+    const out = candidateCourts(["c1"], [meta("c1", ["clay", "indoor", "lit"])], ["clay", "indoor"]);
+    expect(out.ids).toEqual(["c1"]);
+  });
+
+  it("a court whose tags EXACTLY match required qualifies", () => {
+    const out = candidateCourts(["c1"], [meta("c1", ["clay", "indoor"])], ["clay", "indoor"]);
+    expect(out.ids).toEqual(["c1"]);
+  });
+
+  it("a court missing ONE required tag is excluded", () => {
+    const out = candidateCourts(["c1"], [meta("c1", ["clay"])], ["clay", "indoor"]);
+    expect(out.ids).toEqual([]);
+  });
+
+  it("empty required tags qualifies every configured, non-archived court", () => {
+    const out = candidateCourts(
+      ["c1", "c2"],
+      [meta("c1", []), meta("c2", ["clay"])],
+      [],
+    );
+    expect(out.ids).toEqual(["c1", "c2"]);
+  });
+
+  it("a duplicate tag ON THE COURT does not change qualification", () => {
+    const out = candidateCourts(["c1"], [meta("c1", ["clay", "clay", "indoor"])], ["clay"]);
+    expect(out.ids).toEqual(["c1"]);
+  });
+
+  it("tag matching is case-sensitive — slugs arrive already lowercase; this fn never folds case", () => {
+    const out = candidateCourts(["c1"], [meta("c1", ["clay"])], ["Clay"]);
+    expect(out.ids).toEqual([]);
+  });
+});
+
+describe("candidateCourts — id→index mapping (ruling 1: position in config.courts, never sorted by id)", () => {
+  it("candidate order follows the CONFIGURED array's position, not the id's own sort order", () => {
+    const out = candidateCourts(["zzz", "aaa"], [meta("zzz", []), meta("aaa", [])], []);
+    expect(out.ids).toEqual(["zzz", "aaa"]);
+    expect(out.indexOf.get("zzz")).toBe(0);
+    expect(out.indexOf.get("aaa")).toBe(1);
+  });
+
+  it("the same configured array always yields the same indices (deterministic)", () => {
+    const courts = [meta("a", []), meta("b", []), meta("c", [])];
+    const out1 = candidateCourts(["a", "b", "c"], courts, []);
+    const out2 = candidateCourts(["a", "b", "c"], courts, []);
+    expect([...out1.indexOf.entries()]).toEqual([...out2.indexOf.entries()]);
+    expect(out1.indexOf.get("a")).toBe(0);
+    expect(out1.indexOf.get("b")).toBe(1);
+    expect(out1.indexOf.get("c")).toBe(2);
+  });
+
+  it("filtering a court out removes it WITHOUT reordering the survivors", () => {
+    // b lacks the required tag the other two carry -> excluded; a and c
+    // survive IN ORDER, closing up the gap rather than leaving it.
+    const courts = [meta("a", ["clay"]), meta("b", []), meta("c", ["clay"])];
+    const out = candidateCourts(["a", "b", "c"], courts, ["clay"]);
+    expect(out.ids).toEqual(["a", "c"]);
+    expect(out.indexOf.get("a")).toBe(0);
+    expect(out.indexOf.get("c")).toBe(1);
+    expect(out.indexOf.has("b")).toBe(false);
+  });
+
+  it("a duplicate id in the configured array collapses to its FIRST occurrence's index", () => {
+    const courts = [meta("a", []), meta("b", [])];
+    const out = candidateCourts(["a", "b", "a"], courts, []);
+    expect(out.ids).toEqual(["a", "b"]);
+    expect(out.indexOf.get("a")).toBe(0);
+    expect(out.indexOf.get("b")).toBe(1);
+  });
+
+  it("a configured id with no matching court row (deleted?) is silently excluded", () => {
+    const out = candidateCourts(["ghost", "a"], [meta("a", [])], []);
+    expect(out.ids).toEqual(["a"]);
+  });
+});
+
+describe("candidateCourts — archived exclusion (design doc A3: archived venues AND courts drop out)", () => {
+  it("an archived court is excluded from candidates even when its tags match", () => {
+    const out = candidateCourts(["a", "b"], [meta("a", [], true), meta("b", [], false)], []);
+    expect(out.ids).toEqual(["b"]);
+  });
+
+  it(
+    "archiving a court excludes it from FUTURE candidates but does not retroactively invalidate an " +
+      "EXISTING assignment already sitting on it — validateAssignments never consults candidate-set " +
+      "membership, so a court double-booking pass stays clean (ruling 3)",
+    () => {
+      const courts = [meta("archived-court", [], true)];
+      const candidates = candidateCourts(["archived-court"], courts, []);
+      expect(candidates.ids).toEqual([]); // excluded for NEW placement
+
+      const assignment: Assignment = {
+        fixtureId: "f1",
+        court: "archived-court",
+        startAt: 0,
+        endAt: 30 * 60_000,
+        entrants: [],
+        people: [],
+      };
+      const config: VerifyConfig = { perEntrantMinRest: 0, gapMinutes: 0 };
+      const conflicts = validateAssignments([assignment], config, [], []);
+      expect(conflicts).toEqual([]);
+    },
+  );
+});

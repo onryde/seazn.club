@@ -954,6 +954,27 @@ export type VerifyConfig = Pick<
      *  checked twice at two different values instead of once at the maximum —
      *  and their recovery does not care which bracket they are in (design §7.2). */
     restByDivision?: Readonly<Record<string, number>>;
+    /** P9 pass 2: the CANDIDATE court set (`candidate-courts.ts`'s own
+     *  output `.ids`) a caller resolved for this stage — tags ⊇ required,
+     *  archived excluded. Named `candidateCourtIds`, NOT `courts`,
+     *  deliberately: `BuildConfig`/many test-local aliases already
+     *  intersect `VerifyConfig` with a required `{ courts: string[] }` of
+     *  their own (a DIFFERENT, wider meaning — the organiser's whole
+     *  configured list, pre-filter), and a same-named optional
+     *  `readonly string[]` here made that intersection's `courts` property
+     *  unassignable from a plain object literal (`readonly string[]` is not
+     *  assignable to `readonly string[] & string[]`) everywhere a test spread
+     *  a `Partial<VerifyConfig>` — caught by this package's own `tsc`.
+     *  Additive plumbing: `validateAssignments` does not read this itself
+     *  (court double-booking below stays a pairwise scan over whatever
+     *  `.court` values `assignments`/`existing` carry, and an assignment
+     *  already sitting on a since-excluded court MUST keep validating clean
+     *  — design doc A3/ruling 3, archiving must not retroactively red a
+     *  board). Reserved for P10's stranded-fixture detector (design doc A6),
+     *  which needs `usableWindows` and does not exist yet. Absent for every
+     *  caller that does not resolve one, which is every pre-P9 caller —
+     *  inert, not a behaviour change. */
+    candidateCourtIds?: readonly string[];
   };
 
 /** Exactly the fields `scopeCoversFixture` reads. Named (#447) so the PLACER can
