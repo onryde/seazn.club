@@ -527,3 +527,80 @@ describe.skipIf(!HAS_DB)("round order is part of the delta gate too (C1 fix-loop
     expect(report.conflicts.filter((c) => c.code === "warn.order").length).toBeGreaterThan(0);
   });
 });
+
+// P9 pass 3a — a live bug found and fixed in the same pass: putScheduleSettings'
+// court-removal guard has compared `court_label = any(removedCourts)` since pass
+// 1 changed ScheduleConfig.courts to real court ids. A uuid can never equal a
+// free-text label, so the guard has been silently inert for a whole pass — a
+// court could be dropped from a division's config out from under a pinned or
+// in-play fixture with nothing refusing it. No test named this guard at all
+// before this pass (grep-verified: "cannot remove a court" appears nowhere in
+// __tests__/), so it was untested as well as broken.
+describe.skipIf(!HAS_DB)("putScheduleSettings refuses to remove a court still holding fixtures the schedule cannot move", () => {
+  it("refuses removal of a court holding a PINNED fixture, and writes nothing", async () => {
+    const board = await seedBoard();
+    const pinned = board.fixtures[0]!; // sits on board.courts[0] ("Court 1")
+    await moveFixture(board.auth, pinned.id, { schedule_locked: true });
+
+    await expect(
+      putScheduleSettings(board.auth, board.divisionId, {
+        config: {
+          startAt: T0,
+          matchMinutes: 30,
+          gapMinutes: 0,
+          courts: [board.courts[1], board.courts[2]], // drops courts[0]
+          perEntrantMinRest: 0,
+          blackouts: [],
+          sessionWindows: [],
+        },
+        tz: "UTC",
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+
+    // Atomicity: the refused write must not have landed.
+    const [row] = await sql<{ config: { courts: string[] } }[]>`
+      select config from schedule_settings where division_id = ${board.divisionId}`;
+    expect(row!.config.courts).toContain(board.courts[0]);
+  });
+
+  it("names the blocked court by its real NAME in the refusal, never a bare uuid", async () => {
+    const board = await seedBoard();
+    const pinned = board.fixtures[0]!;
+    await moveFixture(board.auth, pinned.id, { schedule_locked: true });
+
+    const err: unknown = await putScheduleSettings(board.auth, board.divisionId, {
+      config: {
+        startAt: T0,
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts: [board.courts[1], board.courts[2]],
+        perEntrantMinRest: 0,
+        blackouts: [],
+        sessionWindows: [],
+      },
+      tz: "UTC",
+    }).catch((e: unknown) => e);
+    const message = (err as { message: string }).message;
+    expect(message).toContain("Court 1");
+    expect(message).not.toContain(board.courts[0]);
+  });
+
+  it("allows removing a court nothing currently occupies", async () => {
+    const board = await seedBoard();
+    // courts[2] ("Court 3") is configured but seedBoard never places anything
+    // on it — nothing should block dropping it.
+    const out = await putScheduleSettings(board.auth, board.divisionId, {
+      config: {
+        startAt: T0,
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts: [board.courts[0], board.courts[1]],
+        perEntrantMinRest: 0,
+        blackouts: [],
+        sessionWindows: [],
+      },
+      tz: "UTC",
+    });
+    expect(out.config.courts).toEqual([board.courts[0], board.courts[1]]);
+  });
+});
