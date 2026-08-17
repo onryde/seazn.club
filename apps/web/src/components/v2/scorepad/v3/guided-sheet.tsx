@@ -106,9 +106,18 @@ function candidatesForStep(step: SheetPersonStep, view: PoolView): readonly stri
  *  ONE place both the stepper buttons and the typed field funnel through
  *  (types.ts's own doc on `SheetNumberStep`: a clamp only the skin enforces
  *  in its `buildPayload` is one this renderer could still be made to
- *  bypass, e.g. typing an out-of-range number directly into the field). */
+ *  bypass, e.g. typing an out-of-range number directly into the field).
+ *  Review fix (follow-up to c70c0e90): a non-finite `value` (NaN/±Infinity)
+ *  would otherwise sail through both bound checks unclamped — every NaN
+ *  comparison is false, and `Infinity` with no `max` set has nothing to
+ *  clamp it. Unreachable through TODAY's one call path (`step.initial` is
+ *  typed `number` and cricket always supplies a real one), but `initial`
+ *  is skin-supplied data, and a later R3-R7 skin is not guaranteed to hand
+ *  this a value that finite arithmetic already validated. Non-finite input
+ *  normalises to 0 — a safe, in-range-by-default baseline — BEFORE the
+ *  min/max clamps below apply on top of it. */
 function clampNumberStep(value: number, step: SheetNumberStep): number {
-  let v = value;
+  let v = Number.isFinite(value) ? value : 0;
   if (step.min !== undefined && v < step.min) v = step.min;
   if (step.max !== undefined && v > step.max) v = step.max;
   return v;
@@ -324,6 +333,23 @@ const numberFieldClass =
  * new chassis-level key), because a scorer edits a count across several
  * interactions — a few taps, or a typed correction — before it is ready to
  * submit, unlike picking a single option or person.
+ *
+ * Review fix (follow-up to c70c0e90) — accessible naming for all three
+ * controls, none of it a NEW dictionary key (dictionaries/scoring-vocab.ts
+ * are a parallel agent's files this wave):
+ *  - The field gets `aria-label={t(step.title)}` — choice/person steps
+ *    self-label via their button text, but a numeric field's visible
+ *    content is just a number, so a screen reader needs the step's own
+ *    title (already resolved here) attached directly rather than relying
+ *    on the sighted-only title paragraph the PARENT renders outside this
+ *    function.
+ *  - The −/+ buttons get `aria-label` built from that SAME already-
+ *    resolved title plus the glyph already visible on the button (a
+ *    symbol, not English prose) — enough to tell the two buttons apart
+ *    and tie them to the value they adjust, without inventing new
+ *    translatable copy. A dedicated increment/decrement key (e.g.
+ *    "Increase"/"Decrease") is still owed — this is a stopgap using only
+ *    what the chassis already has on hand.
  */
 function renderNumberStep(
   step: SheetNumberStep,
@@ -332,12 +358,14 @@ function renderNumberStep(
   onChange: (value: number) => void,
   onConfirm: () => void,
 ) {
+  const title = t(step.title);
   return (
     <div className="flex flex-col gap-3">
       {step.hint && <p className="text-sm text-slate-600">{step.hint}</p>}
       <div className="flex items-center gap-3">
         <button
           type="button"
+          aria-label={`${title} −`}
           onClick={() => onChange(clampNumberStep(value - 1, step))}
           style={{ minHeight: 44, minWidth: 44 }}
           className={stepperButtonClass}
@@ -347,6 +375,7 @@ function renderNumberStep(
         <input
           type="number"
           inputMode="numeric"
+          aria-label={title}
           min={step.min}
           max={step.max}
           value={value}
@@ -362,6 +391,7 @@ function renderNumberStep(
         />
         <button
           type="button"
+          aria-label={`${title} +`}
           onClick={() => onChange(clampNumberStep(value + 1, step))}
           style={{ minHeight: 44, minWidth: 44 }}
           className={stepperButtonClass}

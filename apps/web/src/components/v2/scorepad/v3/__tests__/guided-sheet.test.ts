@@ -620,6 +620,10 @@ function inputsOf(tree: ReturnType<typeof walk>) {
   return tree.filter((el) => el.type === "input");
 }
 
+function paragraphsOf(tree: ReturnType<typeof walk>) {
+  return tree.filter((el) => el.type === "p");
+}
+
 describe("GuidedSheet rendering — SheetNumberStep", () => {
   it("renders the hint above the control, a −/value/+ stepper at 44px, an editable field seeded from `initial`, and a confirm control", () => {
     const island = renderIsland(GuidedSheet, {
@@ -798,7 +802,17 @@ describe("GuidedSheet rendering — SheetNumberStep", () => {
     expect(completed).toBe(false);
   });
 
-  it("a number step declaring no hint renders no hint paragraph at all", () => {
+  // Review fix (follow-up to c70c0e90, item 4): the previous version of this
+  // test asserted `island.text()).not.toContain("pre-localised hint")` — a
+  // string that only ever lived in numberSpec's OWN "runs" hint fixture, not
+  // in this test's noHintSpec at all, so it could never appear here either
+  // way and the assertion was vacuous (see this file's own mutation-proof
+  // convention elsewhere — this one had none). Fixed to a STRUCTURAL check:
+  // count `<p>` elements. `GuidedSheet` itself always renders exactly one
+  // (the step title, in its own JSX, outside renderNumberStep) — a hint
+  // present adds a second, renderNumberStep's own `<p>{step.hint}</p>`; a
+  // hint absent must leave the count at one, not merely at an empty string.
+  it("a number step declaring no hint renders exactly ONE paragraph (the title) — no hint paragraph at all, not merely an empty one", () => {
     const noHintSpec: GuidedSheetSpec = {
       event: "cricket.summary",
       steps: [{ id: "runs", kind: "number", title: "pad.sheet.overSummary.runs.title", initial: 0 }],
@@ -811,7 +825,83 @@ describe("GuidedSheet rendering — SheetNumberStep", () => {
       t,
       onComplete: () => {},
     });
-    expect(island.text()).not.toContain("pre-localised hint");
+    expect(paragraphsOf(island.tree())).toHaveLength(1);
+  });
+
+  it("a number step WITH a hint renders exactly TWO paragraphs (title + hint) — proves the count above is measuring the hint, not something incidental", () => {
+    const island = renderIsland(GuidedSheet, {
+      spec: numberSpec, // "runs" step declares hint: "24/1 pre-localised hint"
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: () => {},
+    });
+    expect(paragraphsOf(island.tree())).toHaveLength(2);
+  });
+
+  // Review fix, item 1 (IMPORTANT): the numeric field had no label
+  // association at all — no aria-label, no id/aria-labelledby pair to the
+  // title paragraph (which is rendered by the PARENT, outside
+  // renderNumberStep). Choice/person steps self-label via their button
+  // text; a number field's visible content is just a number, so a screen
+  // reader user got an unlabelled spinbutton. Wired to the step's own
+  // (already-resolved) title.
+  it("review fix: the numeric field carries aria-label from the step's own title — never an unlabelled spinbutton", () => {
+    const island = renderIsland(GuidedSheet, {
+      spec: numberSpec,
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: () => {},
+    });
+    const field = inputsOf(island.tree())[0]!;
+    expect(propsOf(field)["aria-label"]).toBe(t("pad.sheet.overSummary.runs.title"));
+  });
+
+  // Review fix, item 3 (MINOR): the −/+ buttons carried only the bare
+  // Unicode glyph as their accessible name. No existing dictionary key
+  // covers increment/decrement (checked: addOns.extraOrg.increase/decrease
+  // is billing-specific wording, board.ai.stepperAria means a WORKFLOW step
+  // indicator — neither fits, and dictionaries/scoring-vocab.ts are a
+  // parallel agent's files this wave, not touched). Stopgap: derive the
+  // label from the step's own already-resolved title plus the glyph already
+  // visible on the button — a dedicated increment/decrement key is still
+  // owed (reported to the coordinator).
+  it("review fix: the − and + buttons carry an aria-label derived from the step title, not just the bare glyph", () => {
+    const island = renderIsland(GuidedSheet, {
+      spec: numberSpec,
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: () => {},
+    });
+    const title = t("pad.sheet.overSummary.runs.title");
+    expect(propsOf(findByText(buttonsOf(island.tree()), "−"))["aria-label"]).toBe(`${title} −`);
+    expect(propsOf(findByText(buttonsOf(island.tree()), "+"))["aria-label"]).toBe(`${title} +`);
+  });
+
+  // Review fix, item 2 (MINOR): clampNumberStep had no Number.isFinite
+  // guard, so a non-finite `initial` (NaN/Infinity) would sail through both
+  // bound checks unclamped (every NaN comparison is false). Unreachable
+  // through today's one call path but skin-supplied data a later R3-R7 skin
+  // is not guaranteed to hand back already-finite.
+  it("review fix: a non-finite `initial` (NaN) normalises to a finite, in-bounds value rather than surviving unclamped", () => {
+    const nanSpec: GuidedSheetSpec = {
+      event: "cricket.summary",
+      steps: [{ id: "runs", kind: "number", title: "t", initial: NaN, min: 0, max: 10 }],
+      buildPayload: (answers) => ({ runs: answers.runs }),
+    };
+    const island = renderIsland(GuidedSheet, {
+      spec: nanSpec,
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: () => {},
+    });
+    const value = propsOf(inputsOf(island.tree())[0]!).value as number;
+    expect(Number.isFinite(value)).toBe(true);
+    expect(value).toBeGreaterThanOrEqual(0);
+    expect(value).toBeLessThanOrEqual(10);
   });
 });
 
