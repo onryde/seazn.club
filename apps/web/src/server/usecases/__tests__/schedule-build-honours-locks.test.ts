@@ -34,6 +34,7 @@ import {
   type FixtureLite,
   type LockedScope,
 } from "../schedule";
+import { createVenue, createCourt } from "../venues";
 import { patchFixture } from "../fixtures";
 import { setDivisionLocks } from "../history";
 import { buildSchedulePack } from "../schedule-ai";
@@ -85,7 +86,7 @@ async function seedOrg(): Promise<AuthCtx> {
 async function seedStage(
   auth: AuthCtx,
   entrants: number,
-): Promise<{ stageId: string; divisionId: string; created: number }> {
+): Promise<{ stageId: string; divisionId: string; created: number; courts: [string, string] }> {
   const competition = await createCompetition(auth, {
     ends_on: "2030-12-31",
     name: "Locks " + randomUUID().slice(0, 6),
@@ -115,12 +116,21 @@ async function seedStage(
     name: "L",
     config: {},
   });
+  // P9 pass 3a: 2 real courts — `ScheduleConfig.courts` has been `CourtId[]`
+  // (real uuids) since pass 1, so a free-text "C1"/"C2" string is no longer
+  // legal on the config. Court NAMES are kept as "C1"/"C2" (cosmetic only —
+  // nothing below matches on them) purely so a human reading a failure still
+  // recognises which court is which.
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const court1 = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
+  const court2 = await createCourt(auth, venue.id, { name: "C2", sort: 1, tags: [] });
+  const courts: [string, string] = [court1.id, court2.id];
   await putScheduleSettings(auth, division.id, {
     config: {
       startAt: T0,
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["C1", "C2"],
+      courts,
       perEntrantMinRest: 30,
       blackouts: [],
       sessionWindows: [],
@@ -128,7 +138,7 @@ async function seedStage(
     tz: "UTC",
   });
   const generated = await generateStageFixtures(auth, stage.id);
-  return { stageId: stage.id, divisionId: division.id, created: generated.created };
+  return { stageId: stage.id, divisionId: division.id, created: generated.created, courts };
 }
 
 /**
@@ -221,14 +231,22 @@ async function parkSlot(stageId: string): Promise<string> {
  * otherwise coincide by construction, which would make "unchanged" true
  * whether or not the lock was ever read.
  *
+ * `courtId` is a real `courts.id` (P9 pass 3a) — see `seedStage`'s own
+ * `courts` tuple.
+ *
  * Returns the slot it parked at, because the caller must assert against the
  * instant actually used — a second `parkSlot()` call would re-read a board the
  * park itself has since changed.
  */
-async function parkAndLock(auth: AuthCtx, stageId: string, fixtureId: string): Promise<string> {
+async function parkAndLock(
+  auth: AuthCtx,
+  stageId: string,
+  fixtureId: string,
+  courtId: string,
+): Promise<string> {
   const parkedAt = await parkSlot(stageId);
   await applySchedule(auth, stageId, {
-    assignments: [{ fixture_id: fixtureId, scheduled_at: parkedAt, court_label: "C2" }],
+    assignments: [{ fixture_id: fixtureId, scheduled_at: parkedAt, court_id: courtId }],
     source: "manual",
   });
   await patchFixture(auth, fixtureId, { schedule_locked: true });
@@ -243,26 +261,35 @@ async function parkAndLock(auth: AuthCtx, stageId: string, fixtureId: string): P
  * scoped court first, same atypical slot as `parkAndLock`, so the lock has
  * something to bite and "it stayed" cannot be a compacting solver's
  * coincidence.
+ *
+ * P9 pass-3a-FIX: `locked_scopes.courts` holds a real `courts.id` now (V371's
+ * third migration block) — `scopeLocked` (schedule.ts) matches on
+ * `court_id`, never the legacy free-text `court_label`. The DB-backed tests
+ * that call this helper are this fix's own regression: on a revert to the
+ * pre-fix `scopeLocked` (matching `court_label`, which nothing writes any
+ * more since pass 3a's FULL cutover), the scope lock below matches nothing
+ * and the "locked" fixture moves.
  */
 async function parkAndScopeLock(
   auth: AuthCtx,
   stageId: string,
   divisionId: string,
   fixtureId: string,
+  courtId: string,
 ): Promise<string> {
   const parkedAt = await parkSlot(stageId);
   await applySchedule(auth, stageId, {
-    assignments: [{ fixture_id: fixtureId, scheduled_at: parkedAt, court_label: "C2" }],
+    assignments: [{ fixture_id: fixtureId, scheduled_at: parkedAt, court_id: courtId }],
     source: "manual",
   });
-  await setDivisionLocks(auth, divisionId, { locked_scopes: [{ courts: ["C2"] }] });
+  await setDivisionLocks(auth, divisionId, { locked_scopes: [{ courts: [courtId] }] });
   return parkedAt;
 }
 
 describe.skipIf(!HAS_DB)("BUILD honours a lock (owner report, 2026-08-12)", () => {
   it("a schedule_locked fixture stays at its time AND court across a second Auto-schedule click", async () => {
     const auth = await seedOrg();
-    const { stageId, created } = await seedStage(auth, 4);
+    const { stageId, created, courts } = await seedStage(auth, 4);
 
     // Click 1: "Auto-schedule" — `only_unlocked: false` is exactly what the
     // primary button posts (`use-board-actions.ts`'s `autoRun`, which
@@ -274,14 +301,14 @@ describe.skipIf(!HAS_DB)("BUILD honours a lock (owner report, 2026-08-12)", () =
       assignments: first.assignments.map((a) => ({
         fixture_id: a.fixture_id,
         scheduled_at: a.scheduled_at,
-        court_label: a.court_label,
+        court_id: a.court_id,
       })),
       source: "auto",
     });
 
     // Pin one fixture via the lock toggle, at a deliberately atypical slot.
     const targetId = await lastRoundFixtureId(stageId);
-    const parkedAt = await parkAndLock(auth, stageId, targetId);
+    const parkedAt = await parkAndLock(auth, stageId, targetId, courts[1]);
 
     // Click 2: "Auto-schedule" again — the owner's exact reported sequence,
     // same body as click 1.
@@ -291,14 +318,14 @@ describe.skipIf(!HAS_DB)("BUILD honours a lock (owner report, 2026-08-12)", () =
     // BOTH time and court, matching the owner's report precisely ("Its time
     // AND court both changed").
     expect(proposed?.scheduled_at).toBe(parkedAt);
-    expect(proposed?.court_label).toBe("C2");
+    expect(proposed?.court_id).toBe(courts[1]);
   }, 180_000);
 });
 
 describe.skipIf(!HAS_DB)("REFLOW and POLISH keep honouring a lock, unchanged by the BUILD fix", () => {
   it("reflow and polish still leave a locked fixture exactly where it is", async () => {
     const auth = await seedOrg();
-    const { stageId, created } = await seedStage(auth, 4);
+    const { stageId, created, courts } = await seedStage(auth, 4);
 
     const first = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
     expect(first.assignments).toHaveLength(created);
@@ -306,34 +333,34 @@ describe.skipIf(!HAS_DB)("REFLOW and POLISH keep honouring a lock, unchanged by 
       assignments: first.assignments.map((a) => ({
         fixture_id: a.fixture_id,
         scheduled_at: a.scheduled_at,
-        court_label: a.court_label,
+        court_id: a.court_id,
       })),
       source: "auto",
     });
 
     const targetId = await lastRoundFixtureId(stageId);
-    const parkedAt = await parkAndLock(auth, stageId, targetId);
+    const parkedAt = await parkAndLock(auth, stageId, targetId, courts[1]);
 
     // REFLOW: the exact shape the Re-flow button sends
     // (`only_unlocked: true`, no explicit mode — the default derivation).
     const reflow = await autoSchedule(auth, stageId, { only_unlocked: true, mode: "reflow" });
     const reflowed = reflow.assignments.find((a) => a.fixture_id === targetId);
     expect(reflowed?.scheduled_at).toBe(parkedAt);
-    expect(reflowed?.court_label).toBe("C2");
+    expect(reflowed?.court_id).toBe(courts[1]);
 
     // POLISH: the exact shape the Polish button sends
     // (`only_unlocked: true, mode: "polish"`, per schedule-board-polish.test.tsx).
     const polish = await autoSchedule(auth, stageId, { only_unlocked: true, mode: "polish" });
     const polished = polish.assignments.find((a) => a.fixture_id === targetId);
     expect(polished?.scheduled_at).toBe(parkedAt);
-    expect(polished?.court_label).toBe("C2");
+    expect(polished?.court_id).toBe(courts[1]);
   }, 180_000);
 });
 
 describe.skipIf(!HAS_DB)("ignore_locks is the explicit escape hatch", () => {
   it("keeps a lock by default and moves it only when ignore_locks is set, both reflected in locked_kept", async () => {
     const auth = await seedOrg();
-    const { stageId, created } = await seedStage(auth, 4);
+    const { stageId, created, courts } = await seedStage(auth, 4);
 
     const first = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
     expect(first.assignments).toHaveLength(created);
@@ -341,20 +368,20 @@ describe.skipIf(!HAS_DB)("ignore_locks is the explicit escape hatch", () => {
       assignments: first.assignments.map((a) => ({
         fixture_id: a.fixture_id,
         scheduled_at: a.scheduled_at,
-        court_label: a.court_label,
+        court_id: a.court_id,
       })),
       source: "auto",
     });
 
     const targetId = await lastRoundFixtureId(stageId);
-    const parkedAt = await parkAndLock(auth, stageId, targetId);
+    const parkedAt = await parkAndLock(auth, stageId, targetId, courts[1]);
 
     // Without the escape hatch: the fix under test — stays put, and the
     // response says exactly one fixture was held for being locked.
     const kept = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
     const keptCard = kept.assignments.find((a) => a.fixture_id === targetId);
     expect(keptCard?.scheduled_at).toBe(parkedAt);
-    expect(keptCard?.court_label).toBe("C2");
+    expect(keptCard?.court_id).toBe(courts[1]);
     expect(kept.solver.locked_kept).toBe(1);
 
     // WITH the escape hatch: the one explicit way to override a lock — moves,
@@ -373,9 +400,11 @@ describe.skipIf(!HAS_DB)("ignore_locks is the explicit escape hatch", () => {
 describe.skipIf(!HAS_DB)(
   "a locked_scopes scope lock is honoured end-to-end in BUILD (gap review flagged)",
   () => {
+    // P9 pass-3a-FIX Task 1's regression: see `parkAndScopeLock`'s own doc
+    // comment for exactly why this fails on a revert of `scopeLocked`.
     it("a court scope lock — no schedule_locked flag involved — keeps its fixture in place across a second Auto-schedule click", async () => {
       const auth = await seedOrg();
-      const { stageId, divisionId, created } = await seedStage(auth, 4);
+      const { stageId, divisionId, created, courts } = await seedStage(auth, 4);
 
       const first = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
       expect(first.assignments).toHaveLength(created);
@@ -383,13 +412,13 @@ describe.skipIf(!HAS_DB)(
         assignments: first.assignments.map((a) => ({
           fixture_id: a.fixture_id,
           scheduled_at: a.scheduled_at,
-          court_label: a.court_label,
+          court_id: a.court_id,
         })),
         source: "auto",
       });
 
       const targetId = await lastRoundFixtureId(stageId);
-      const parkedAt = await parkAndScopeLock(auth, stageId, divisionId, targetId);
+      const parkedAt = await parkAndScopeLock(auth, stageId, divisionId, targetId, courts[1]);
 
       // Same click the owner's report reproduced — `only_unlocked: false`,
       // `mode: "build"` — but this time the lock comes ONLY from the
@@ -398,7 +427,7 @@ describe.skipIf(!HAS_DB)(
       const second = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
       const proposed = second.assignments.find((a) => a.fixture_id === targetId);
       expect(proposed?.scheduled_at).toBe(parkedAt);
-      expect(proposed?.court_label).toBe("C2");
+      expect(proposed?.court_id).toBe(courts[1]);
     }, 180_000);
   },
 );
@@ -408,7 +437,7 @@ describe.skipIf(!HAS_DB)(
   () => {
     it("buildSchedulePack's generate-mode draft keeps a court-scope-locked fixture at its parked slot, and PackFixture.pinned is true for it", async () => {
       const auth = await seedOrg();
-      const { stageId, divisionId, created } = await seedStage(auth, 4);
+      const { stageId, divisionId, created, courts } = await seedStage(auth, 4);
 
       const first = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
       expect(first.assignments).toHaveLength(created);
@@ -416,13 +445,13 @@ describe.skipIf(!HAS_DB)(
         assignments: first.assignments.map((a) => ({
           fixture_id: a.fixture_id,
           scheduled_at: a.scheduled_at,
-          court_label: a.court_label,
+          court_id: a.court_id,
         })),
         source: "auto",
       });
 
       const targetId = await lastRoundFixtureId(stageId);
-      const parkedAt = await parkAndScopeLock(auth, stageId, divisionId, targetId);
+      const parkedAt = await parkAndScopeLock(auth, stageId, divisionId, targetId, courts[1]);
 
       const { pack } = await buildSchedulePack(auth, divisionId, {
         now: Date.parse(T0),
@@ -436,7 +465,12 @@ describe.skipIf(!HAS_DB)(
       // in the ORG zone (`zonedIso`), which may not spell the same offset
       // `at()` does even when it names the same instant.
       expect(Date.parse(drafted!.scheduled_at as string)).toBe(Date.parse(parkedAt));
-      expect(drafted!.court_label).toBe("C2");
+      // `.court_label` is `schedule-ai.ts`'s own wire field name (pass 3b,
+      // not converted by this pass) — but the VALUE flowing through it is
+      // already a real court_id: `toAssignment` (schedule.ts) has fed
+      // `f.court_id` into the engine's `Assignment.court` since pass 1, and
+      // this field is that same value passed straight through.
+      expect(drafted!.court_label).toBe(courts[1]);
 
       // Task 4: `PackFixture.pinned` (feeds `structuralCheck` and
       // `toEngineAssignments`'s `pinnedIds`) used to be `f.schedule_locked`
@@ -463,14 +497,19 @@ describe("lockedFixtureIds (the unified lock predicate)", () => {
     home_entrant_id: null,
     away_entrant_id: null,
     scheduled_at: "2026-08-01T09:00:00.000Z",
-    court_label: "C1",
+    // P9 pass-3a-FIX: court_id/venue_id are what scopeLocked reads now.
+    // court_label/venue are LEGACY and null here on purpose — the dedicated
+    // test below pins that they are no longer consulted at all.
+    court_id: "c1",
+    venue_id: null,
+    court_label: null,
     venue: null,
     status: "scheduled",
     schedule_locked: false,
     winner_to_fixture: null,
     loser_to_fixture: null,
   };
-  const scopeOnC9: LockedScope[] = [{ courts: ["C9"] }];
+  const scopeOnC9: LockedScope[] = [{ courts: ["c9"] }];
 
   it("includes a schedule_locked, placed fixture", () => {
     const f = { ...base, schedule_locked: true };
@@ -485,19 +524,19 @@ describe("lockedFixtureIds (the unified lock predicate)", () => {
    *  get right independently — a lock that comes from the division's
    *  `locked_scopes`, not from the fixture's own `schedule_locked` flag. */
   it("includes a fixture caught only by a scope lock, not schedule_locked", () => {
-    const f = { ...base, court_label: "C9" };
+    const f = { ...base, court_id: "c9" };
     expect(lockedFixtureIds([f], scopeOnC9, false)).toEqual(new Set(["f1"]));
   });
 
   it("excludes a schedule_locked fixture with no placement to anchor to", () => {
     const noTime = { ...base, schedule_locked: true, scheduled_at: null };
     expect(lockedFixtureIds([noTime], [], false)).toEqual(new Set());
-    const noCourt = { ...base, schedule_locked: true, court_label: null };
+    const noCourt = { ...base, schedule_locked: true, court_id: null };
     expect(lockedFixtureIds([noCourt], [], false)).toEqual(new Set());
   });
 
   it("ignoreLocks suppresses every lock, schedule_locked and scope-locked alike", () => {
-    const f = { ...base, schedule_locked: true, court_label: "C9" };
+    const f = { ...base, schedule_locked: true, court_id: "c9" };
     expect(lockedFixtureIds([f], scopeOnC9, true)).toEqual(new Set());
   });
 
@@ -506,5 +545,20 @@ describe("lockedFixtureIds (the unified lock predicate)", () => {
     // `only_unlocked` gating this exact test. There is no parameter left to
     // gate it with.
     expect(lockedFixtureIds.length).toBe(3);
+  });
+
+  // P9 pass-3a-FIX Task 1's regression at the pure-function level (companion
+  // to the DB-backed one on `parkAndScopeLock`, above): `scopeLocked` used to
+  // match a division's `locked_scopes` against the LEGACY `court_label`
+  // column, which pass 3a stopped writing — a court scope lock silently
+  // matched nothing from that point on. This fails on a revert to that
+  // behaviour: `stale` below carries the scope's string on `court_label` but
+  // NOT on `court_id`, which a court_label-reading scopeLocked would wrongly
+  // include.
+  it("matches on court_id, never the legacy court_label column", () => {
+    const stale = { ...base, court_label: "c9", court_id: "not-c9" };
+    expect(lockedFixtureIds([stale], scopeOnC9, false)).toEqual(new Set());
+    const real = { ...base, court_label: null, court_id: "c9" };
+    expect(lockedFixtureIds([real], scopeOnC9, false)).toEqual(new Set(["f1"]));
   });
 });
