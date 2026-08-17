@@ -364,7 +364,7 @@ dedupe are orthogonal to `TakeRule` and apply uniformly across all five kinds
   all `qualification:` emit sites, `detectTemplate`'s `topN`/`losersOfRound`
   reads.
 - **Modify** `apps/web/e2e/mobile.spec.ts:1504` — `seeding:` → `progression:`.
-- **Create** `db/migration/deltas/V370__stage_progression_field.sql` —
+- **Create** `db/migration/deltas/V371__stage_progression_field.sql` —
   **provisional.** V367 is already held by two other unmerged branches
   (`feat/p8-venues-schema-ui`'s `V367__venues_and_courts.sql`,
   `feat/rs002-registration-usecases`'s `V367__registration_entry_refunds.sql`)
@@ -1684,20 +1684,30 @@ git commit -m "schema(F2): one ProgressionSchema replaces QualificationSpecSchem
 ### Task 4: Migration — verify zero rows, drop `qualification`/`seeding`, add `progression jsonb`
 
 **Files:**
-- Create: `db/migration/deltas/V370__stage_progression_field.sql`
+- Create: `db/migration/deltas/V371__stage_progression_field.sql`
 
-**A note on the V-number, because it is already wrong twice over.** At time
-of writing, V367 is claimed by TWO other unmerged branches
-(`feat/p8-venues-schema-ui`: `V367__venues_and_courts.sql`;
-`feat/rs002-registration-usecases`: `V367__registration_entry_refunds.sql`),
-and V368 was claimed this session by `feat/f1-bracket-round-role`
-(`V368__fixture_round_role.sql`). V369 is this plan's best guess, not a
-reservation — **four branches are concurrently claiming numbers in this
-range**, and whichever of them merges last has to renumber regardless of
-what was free when its plan was written. Re-run
-`find db/migration/deltas -iname "V3*"` (or equivalent) against a freshly
-fetched `origin/main` immediately before opening this session's PR, and
-rename the file then if V369 has since been taken.
+**A note on the V-number, because this plan has now been wrong about it three
+times — and the third time broke `main`.** This file has been numbered V367,
+then V369, then V370, and is now **V371**.
+
+What happened is the part worth reading. RS002 (#607) and F1 (#606) each
+renumbered off P8's V367 while they were open, each independently landed on
+V368, and both merged minutes apart. `main` then contained two files numbered
+V368 and Flyway refused to run at all:
+
+    ERROR: Found more than one migration with version 368
+
+No fresh clone, worktree or CI Postgres job could build a schema. Every one of
+those pull requests was green in isolation — **the collision did not exist in
+any branch, only in the merge**, so no gate could have caught it. It was
+repaired on `main` by `604767c63`, which moved the registration delta to V370.
+
+So `main` now holds V367 (P8), V368 and V369 (F1), and V370 (RS002). V371 is
+this plan's best guess and **not a reservation**. The rule the episode
+teaches: a number is not claimed by choosing it, nor by opening a PR with it —
+only by merging. Re-check `git ls-tree origin/main db/migration/deltas`
+against a freshly fetched `origin/main` **immediately before merging**, not
+merely before opening the PR, and rename then if V371 has since gone.
 
 **Step 1: Verify the zero-rows premise — STOP if it is false.**
 
@@ -1787,7 +1797,7 @@ present, `qualification`/`seeding` absent.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add db/migration/deltas/V370__stage_progression_field.sql
+git add db/migration/deltas/V371__stage_progression_field.sql
 git commit -m "db(F2): drop stages.qualification/seeding, add stages.progression jsonb"
 ```
 
@@ -2601,4 +2611,4 @@ Global Constraints section.
 - `apps/web/src/server/api-v1/schemas.ts`
 - `apps/web/src/server/usecases/stages.ts`
 - `apps/web/src/server/usecases/stage-seeding.ts`
-- `db/migration/deltas/V370__stage_progression_field.sql`
+- `db/migration/deltas/V371__stage_progression_field.sql`
