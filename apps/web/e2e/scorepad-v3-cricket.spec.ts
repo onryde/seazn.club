@@ -71,6 +71,13 @@ async function setContextPerson(page: Page, chipLabel: string, personName: strin
   await candidate.click();
 }
 
+/** The guided-sheet root — chassis-generic (guided-sheet.tsx), same posture
+ *  `pad()` above already takes for the scorepad root itself. R2b's
+ *  over-by-over sheet is the first place THIS file drives it. */
+function sheetRoot(page: Page) {
+  return pad(page).locator('[data-role="v3-sheet"]');
+}
+
 test(
   "cricket v3: a bowler change through the context strip survives into the payload, a full " +
     "over honours cfg ballsPerOver, and a wicket completes through the guided sheet",
@@ -446,3 +453,180 @@ test("cricket v3: voiding an OLDER event from the activity panel writes core.voi
   // real per-event void from the ribbon's undo-the-last-thing.
   expect(voided.payload).toMatchObject({ event_id: oldest.id });
 });
+
+// R2b (2026-08-17) — the over-by-over tile's own e2e coverage, deferred by
+// that wave's plan (`docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-
+// cricket-over.md`, task 5) to this session. Task 3/4 already shipped the
+// tile/sheet/gate + i18n (commits 8224ca04, 80a10f72, 9cd2b3f2, c70c0e90,
+// b9692a52) — nothing below adds a src line. It exists because the wave's
+// OWN unit tests assert spec BUILDERS only (apps/web vitest is
+// `environment:"node"`, no jsdom, this file's own header) — nothing before
+// this proved the tile renders, the sheet opens PREFILLED from the fold, the
+// event actually reaches the ledger and the pad, or that R2b's mutually-
+// exclusive gate (Q1 owner ruling, `_INDEX.md`) really REMOVES a tile rather
+// than merely disabling one that still looks tappable.
+test(
+  "cricket v3: the over-by-over tile posts a partial summary, updates the pad and the ribbon with real " +
+    "copy, prefills its sheet from the fold on reopen, and hides the ball tiles once the innings is coarse",
+  async ({ page }) => {
+    // One real held dispatch (queue.ts HOLD_MS = 6000ms) plus openLiveConsole's
+    // own two 20s-ceiling polls, plus a second (cancelled, no network) sheet
+    // open — the two Undo conversions elsewhere in this file budget 120_000
+    // for the plain "one openLiveConsole + one submit" shape, so the same
+    // ceiling covers this test's extra, network-free step with headroom.
+    test.setTimeout(120_000);
+    const fx = await seedRosteredFixture(page.request, {
+      label: `V3 Cricket OverTile ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [{ fullName: `V3 OT Striker ${TAG}` }, { fullName: `V3 OT NonStriker ${TAG}` }],
+      away: [{ fullName: `V3 OT Bowler ${TAG}` }],
+    });
+    await openLiveConsole(page, fx);
+
+    // Pre-innings (`unopened`): NEITHER lane has locked in yet, so the over
+    // tile and the ball-derived tiles are BOTH legal and both visible (R2b
+    // Q1 owner ruling) — the tile's own sublabel names the over an entry
+    // would close: "1" while unopened, nothing recorded yet.
+    const overTile = pad(page).locator('[data-tile-id="overSummary"]');
+    await expect(overTile, "over tile must render before any ball is scored").toBeVisible({ timeout: 10_000 });
+    await expect(overTile).toContainText("1");
+    await expect(pad(page).locator('[data-tile-id="run0"]')).toBeVisible();
+    await expect(pad(page).locator('[data-tile-id="wicket"]')).toBeVisible();
+
+    await overTile.click();
+    const sheet = sheetRoot(page);
+    await expect(sheet, "tapping the tile must open the guided sheet").toBeVisible({ timeout: 10_000 });
+
+    // Step 1/3 — "Total runs": prefilled from the fold's CURRENT total (0,
+    // nothing recorded yet), never blank/undefined — R2b Q2's own ruling is
+    // that the sheet PREFILLS a running total, it is not a from-zero
+    // increment form.
+    let field = sheet.getByRole("spinbutton", { name: "Total runs" });
+    await expect(field).toBeVisible({ timeout: 10_000 });
+    await expect(field, "prefill must read the fold's current total, not a hardcoded 0").toHaveValue("0");
+    await field.fill("8");
+    await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+
+    // Step 2/3 — "Total wickets": prefilled 0, left unedited.
+    field = sheet.getByRole("spinbutton", { name: "Total wickets" });
+    await expect(field).toBeVisible({ timeout: 10_000 });
+    await expect(field).toHaveValue("0");
+    await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+
+    // Step 3/3 — "Balls bowled": prefilled to a FULL over past the current
+    // total (0 + t20's own 6-ball bpo, `overSummarySheet`'s own "assume a
+    // full over unless told otherwise") — left unedited; confirming closes
+    // the wizard and dispatches.
+    field = sheet.getByRole("spinbutton", { name: "Balls bowled" });
+    await expect(field).toBeVisible({ timeout: 10_000 });
+    await expect(field).toHaveValue("6");
+    await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(sheet, "the wizard's own last step closes the sheet").not.toBeVisible({ timeout: 10_000 });
+
+    await expect
+      .poll(
+        async () =>
+          (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.innings.summary").length,
+        { timeout: 20_000 },
+      )
+      .toBe(1);
+    const summary = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "cricket.innings.summary")!;
+    // A TOTAL, never an increment (R2b Q2): the payload is exactly what the
+    // scorer saw on screen, unedited past the runs prefill.
+    expect(summary.payload).toMatchObject({ runs: 8, wickets: 0, legalBalls: 6, partial: true });
+
+    // The pad reflects the posted totals, not a stale 0/0 — "the pad
+    // reflects the new totals" from this wave's own acceptance list.
+    const scorebug = pad(page).locator('[data-role="v3-scorebug"]');
+    await expect(scorebug).toContainText("8/0");
+    await expect(scorebug).toContainText("1.0");
+
+    // Real per-sport ribbon copy ("Over recorded",
+    // pad.cricket.ribbon.innings.summary) — never the generic
+    // `pad.ribbon.fallback` ("{event} recorded") a missing PAD_LABEL_KEYS
+    // entry would silently fall back to. The absence check is what actually
+    // separates a real hit from the fallback: "Over recorded" and
+    // "cricket.innings.summary recorded" both satisfy a bare
+    // toContainText("recorded").
+    const ribbon = pad(page).locator('[data-role="v3-ribbon"]');
+    await expect(ribbon).toContainText("Over recorded");
+    await expect(ribbon, "must never silently fall back to the raw event type").not.toContainText(
+      "cricket.innings.summary",
+    );
+
+    // THE GATE (coarse half) — this innings' first event was a summary, so
+    // it is now COARSE. The fold refuses a ball on a coarse innings
+    // (cricket.ts:1128-1131) — the chassis must not offer one, not merely
+    // disable it (R2b Q1 owner ruling).
+    await expect(
+      pad(page).locator('[data-tile-id="run0"]'),
+      "coarse innings: ball tiles must be GONE, not disabled",
+    ).not.toBeVisible();
+    await expect(
+      pad(page).locator('[data-tile-id="wicket"]'),
+      "coarse innings: wicket tile must be GONE, not disabled",
+    ).not.toBeVisible();
+    // The over tile survives — coarse stays eligible for the next partial —
+    // and its sublabel now names over 2.
+    await expect(overTile).toBeVisible();
+    await expect(overTile).toContainText("2");
+
+    // Reopen: the wizard PREFILLS from the fold's now-UPDATED total (8, not
+    // reset to 0) — the explicit "record something first, reopen, assert the
+    // prefill reflects it" proof this wave's own e2e gap named.
+    await overTile.click();
+    await expect(sheet).toBeVisible({ timeout: 10_000 });
+    field = sheet.getByRole("spinbutton", { name: "Total runs" });
+    await expect(field, "reopen must prefill from the FOLD's current total, not reset to 0").toHaveValue("8");
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(sheet).not.toBeVisible({ timeout: 10_000 });
+
+    // Cancel must not dispatch — the ledger's own summary count stays at 1.
+    const afterCancel = await ledger(page.request, fx.fixtureId);
+    expect(afterCancel.filter((e) => e.type === "cricket.innings.summary")).toHaveLength(1);
+  },
+);
+
+test(
+  "cricket v3: a ball recorded first locks the innings to ball-by-ball and hides the over-by-over tile",
+  async ({ page }) => {
+    // openLiveConsole's own two 20s-ceiling polls plus one held ball
+    // dispatch — the same shape the two Undo conversions elsewhere in this
+    // file budget 120_000 for.
+    test.setTimeout(120_000);
+    const fx = await seedRosteredFixture(page.request, {
+      label: `V3 Cricket OverGateFine ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [{ fullName: `V3 OGF Striker ${TAG}` }, { fullName: `V3 OGF NonStriker ${TAG}` }],
+      away: [{ fullName: `V3 OGF Bowler ${TAG}` }],
+    });
+    await openLiveConsole(page, fx);
+
+    // Both lanes are legal before any ball — the mirror starting point of
+    // the coarse-lane test above.
+    const overTile = pad(page).locator('[data-tile-id="overSummary"]');
+    await expect(overTile).toBeVisible({ timeout: 10_000 });
+
+    await pad(page).locator('[data-tile-id="run0"]').click();
+    await expect
+      .poll(
+        async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
+        { timeout: 20_000 },
+      )
+      .toBe(1);
+
+    // THE GATE (fine half — the mirror of the coarse assertion above): this
+    // innings' first event was a ball, so it is now FINE. The fold refuses a
+    // summary on a fine innings (cricket.ts:1402-1404) — the tile must be
+    // GONE, not disabled, exactly like the coarse direction.
+    await expect(overTile, "fine innings: over tile must be GONE, not disabled").not.toBeVisible({
+      timeout: 10_000,
+    });
+    // The ball tiles are still there — confirms this is the OTHER lane
+    // winning, not the pad losing its tiles generally.
+    await expect(pad(page).locator('[data-tile-id="run1"]')).toBeVisible();
+    await expect(pad(page).locator('[data-tile-id="wicket"]')).toBeVisible();
+  },
+);

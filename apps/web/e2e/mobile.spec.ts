@@ -674,7 +674,7 @@ test("lineup editor role/pair-order selects hold at phone width", async ({ page,
  * tile itself clears the touch floor and to bring the context strip on
  * screen for its own floor check right after.
  */
-test("cricket v3 pad: tiles + context strip hold the 44px floor, no horizontal scroll", async ({
+test("cricket v3 pad: tiles + over-summary sheet + context strip hold the 44px floor, no horizontal scroll", async ({
   page,
   request,
 }) => {
@@ -745,6 +745,29 @@ test("cricket v3 pad: tiles + context strip hold the 44px floor, no horizontal s
   // since the tap itself is what this same assertion is proving is safe.
   await assertFloor(pad.locator('[data-tile-id="run1"]'), "run tile \"1\"");
   await assertFloor(pad.locator('[data-tile-id="wicket"]'), "wicket tile");
+
+  // R2b: the over-by-over guided sheet (SheetNumberStep, guided-sheet.tsx) is
+  // a brand-new surface with zero width coverage until it lands here — same
+  // "new v3 surface, only covered inside this file" reasoning this test's
+  // own header gives for the tile grid itself. Checked BEFORE the run tap
+  // below: recording a ball first locks this innings to ball-by-ball
+  // fidelity and the tile disappears entirely (R2b's own mutually-exclusive
+  // gate), so this is the only point in the flow where the sheet is still
+  // reachable.
+  await assertFloor(pad.locator('[data-tile-id="overSummary"]'), "over-summary tile");
+  await pad.locator('[data-tile-id="overSummary"]').click();
+  const sheet = pad.locator('[data-role="v3-sheet"]');
+  await expect(sheet, "guided sheet must open").toBeVisible({ timeout: 10_000 });
+  await assertFloor(sheet.getByRole("button", { name: "Total runs −", exact: true }), "over-sheet stepper minus");
+  await assertFloor(sheet.getByRole("spinbutton", { name: "Total runs" }), "over-sheet numeric field");
+  await assertFloor(sheet.getByRole("button", { name: "Total runs +", exact: true }), "over-sheet stepper plus");
+  await assertFloor(sheet.getByRole("button", { name: "Confirm", exact: true }), "over-sheet confirm");
+  await expectNoHorizontalScroll(page);
+  // Cancel, not confirm: a real submission here would open this innings at
+  // COARSE fidelity and remove the run tiles the rest of this test still
+  // needs to exercise below.
+  await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(sheet, "cancel must close the sheet without dispatching").not.toBeVisible({ timeout: 10_000 });
 
   await pad.getByRole("button", { name: "1", exact: true }).click();
   await expect
