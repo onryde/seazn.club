@@ -293,6 +293,47 @@ Rulings taken (recorded as made):
   (V363) and nothing sets it, so the roster→person link that RS005/RS008/#404
   all read was inert.
 
+**Wave 1 CLOSED** (`130d3f6a`, `d53554e0`, `f31abc21`). V367 applies on the
+session DB and from zero (206 migrations → v367). The review loop found a
+**fourth** hazard of the same family that RS001's list did not name, plus two
+atomicity blockers on paths that were ALREADY live before RS002:
+
+- The late-payment and withdraw refund paths each wrote the entry total and the
+  cart total as **two autocommit statements**. A failure between them leaves
+  Stripe refunded, the entry marked, the cart total stale — and logs the whole
+  thing as `refund_failed`. Both are one `sql.begin` now, matching
+  `refundRegistration`. Reachable on a single-entry cart, i.e. today.
+- **Hazard 4 (unlisted): the lost-dispute write-off** overwrote the cart total
+  with the EARLIEST entry's `amount_cents` (`order by r.created_at limit 1`)
+  instead of accumulating the real `dispute.amount`, which was already in scope
+  and already used for the audit row two lines above. Now
+  `greatest(refunded_cents, ${dispute.amount})`.
+- The `late` outcome had no webhook-redelivery guard: a redelivered
+  `checkout.session.completed` re-entered the additive writes and relied
+  entirely on Stripe rejecting the second refund. Guarded and tested.
+- `RegistrationWithGroupRow` exposes the CART's total as
+  `group_refunded_cents`; the bare `refunded_cents` on that type is now the
+  ENTRY's. Seven pre-existing assertions were repointed at the cart field
+  (dispute write-off and the Stripe-dashboard refund mirror are genuinely
+  cart-scoped). `tsc` cannot see this distinction — both are `number` — so any
+  new query joining the two tables must name the columns explicitly.
+
+Gate at the wave boundary, rerun by the main thread with the placement service
+running: `src/server/usecases/__tests__/` + `registration-schema.test.ts` =
+**2382 total / 2351 passed / 0 failed / zero non-passing files**;
+`registrations.test.ts` 64 tests (56 baseline + 4 hazard + 4 review);
+`tsc --noEmit -p apps/web` EXIT=0.
+
+**Placement proof (settles the false premise above).** With
+`seazn-env up --label rs002 --placement` and `PLACEMENT_SERVICE_HOST` exported,
+`schedule-build-honours-locks.test.ts` is **11/11** on this branch. Two
+environment notes bought here: the script's readiness probe **failed against a
+healthy service** (40s budget vs a cold `import ortools` under test-suite load)
+and then killed it — fixed in the machine-local skill (import warmed
+explicitly, budget 180s); and a full `usecases/__tests__` run reports
+`failedSuites: 5` for 4 failed tests because vitest counts **describe blocks**
+there, not files. That is not the collection-failure trap it resembles.
+
 ## RS002 entry conditions (RS001 hands these over — do not start without reading)
 
 1. **Cart-level money is flattened onto entry-level rows.** `RegistrationWithGroupRow`
