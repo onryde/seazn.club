@@ -47,8 +47,15 @@ const t20: CricketCfg = cricket.configSchema.parse(
 const fold = (cfg: CricketCfg, events: EventEnvelope[]) =>
   foldMatch(cricket, cfg, lineups, events, STRICT_ALL);
 
-function stream(...specs: Array<[type: string, payload?: unknown]>): EventEnvelope[] {
-  return specs.map(([type, payload], i) => makeEnvelope(i, { type, payload: payload ?? {} }));
+// `voids` (3rd tuple slot) mirrors core/events.test.ts's own stream() — a
+// core.void's target travels in EventEnvelope.voids, not the payload
+// (CoreVoid = z.strictObject({})); resolveVoids reads it by that field.
+function stream(
+  ...specs: Array<[type: string, payload?: unknown, voids?: string]>
+): EventEnvelope[] {
+  return specs.map(([type, payload, voids], i) =>
+    makeEnvelope(i, { type, payload: payload ?? {} }, voids),
+  );
 }
 
 // Compact ball notation for hand-written goldens.
@@ -749,6 +756,95 @@ describe("a recorded revise survives a shortened over (§3.3)", () => {
         ),
       ),
     ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R2b (v3 pad, over-by-over tile) — the tile's gate rests entirely on the
+// per-innings fidelity lock (createInnings/applyDelivery/applySummary above)
+// and on undo recovering it by REPLAY, not by "resetting to coarse". This had
+// ZERO coverage before this addition; test-only, per the wave's brief — no
+// packages/engine/src line changes, only this file.
+// ---------------------------------------------------------------------------
+
+describe("cricket: per-innings fidelity lock is bidirectional, and undo recovers it by replay", () => {
+  // Batting side for innings 0 is "home" (battingFirst defaults "home" with
+  // no toss event, cricket.ts:2879); H-1/H-2 open, A-1 is a legal bowler.
+  const oneBall = [{ striker: "H-1", nonStriker: "H-2", bowler: "A-1", bat: 4 }];
+
+  it("refuses a partial summary on a ball-scored (fine) innings", () => {
+    const events = stream(
+      ["core.start"],
+      ...balls("cricket.ball", oneBall),
+      ["cricket.innings.summary", { runs: 4, wickets: 0, legalBalls: 1, partial: true }],
+    );
+    expect(() => fold(t20, events)).toThrowError(
+      expect.objectContaining({
+        code: "INVALID_EVENT",
+        message: expect.stringMatching(/recorded ball-by-ball — summaries are not allowed for it/),
+      }),
+    );
+  });
+
+  // The mirror of the refusal above. No existing test in this file covers a
+  // ball on a coarse innings (checked: zero hits for "summary fidelity" or
+  // "ball events are not allowed" outside this block) — new coverage, not a
+  // duplicate.
+  it("refuses a ball on a summary-fidelity (coarse) innings", () => {
+    const events = stream(
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 10, wickets: 0, legalBalls: 6, partial: true }],
+      ...balls("cricket.ball", oneBall),
+    );
+    expect(() => fold(t20, events)).toThrowError(
+      expect.objectContaining({
+        code: "INVALID_EVENT",
+        message: expect.stringMatching(/recorded at summary fidelity — ball events are not allowed/),
+      }),
+    );
+  });
+
+  it("undo of an innings' only ball reopens BOTH fidelities — fold replays from init, it does not reset to coarse", () => {
+    const voidOnly = fold(
+      t20,
+      stream(["core.start"], ...balls("cricket.ball", oneBall), ["core.void", {}, "e-1"]),
+    );
+    // createInnings("fine") ran once, folding e-1. resolveVoids drops e-1 (and
+    // the core.void itself) from the active stream before apply() ever sees
+    // it, and foldMatch replays the survivors from module.init — so the
+    // innings was never opened at all, not "reset to coarse": state.innings
+    // stays the [] init() started with (cricket.ts:2881).
+    expect(voidOnly.innings).toHaveLength(0);
+
+    const afterSummary = fold(
+      t20,
+      stream(
+        ["core.start"],
+        ...balls("cricket.ball", oneBall),
+        ["core.void", {}, "e-1"],
+        ["cricket.innings.summary", { runs: 4, wickets: 0, legalBalls: 1, partial: true }],
+      ),
+    );
+    expect(afterSummary.innings).toHaveLength(1);
+    expect(afterSummary.innings[0]).toMatchObject({ runs: 4, wickets: 0, legalBalls: 1, fine: null });
+  });
+
+  it("a sequence of partial summaries folds to the totals a scorer expects, without tripping the monotone guard", () => {
+    const events = stream(
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 12, wickets: 0, legalBalls: 6, partial: true }],
+      ["cricket.innings.summary", { runs: 24, wickets: 1, legalBalls: 12, partial: true }],
+      ["cricket.innings.summary", { runs: 31, wickets: 2, legalBalls: 18, partial: true }],
+    );
+    const state = fold(t20, events);
+    expect(state.innings).toHaveLength(1);
+    expect(state.innings[0]).toMatchObject({
+      runs: 31,
+      wickets: 2,
+      legalBalls: 18,
+      fine: null,
+      closed: false,
+    });
   });
 });
 
