@@ -251,8 +251,8 @@ or compacted session reads first).
   `seazn-env up --label rs002 --placement`. **Tear it down at session end** —
   a stale placement service makes the NEXT session's run green against code
   that has changed.
-- Waves: **W1 CLOSED**, **W2 CLOSED**, **W3 IN FLIGHT** (`materialise`), W4 and
-  W5 TODO.
+- Waves: **W1 CLOSED**, **W2 CLOSED**, **W3 CLOSED**, **W4 IN FLIGHT**
+  (`registration-submit.ts`), W5 TODO.
   - W3 = the four materialisation gaps: name+dob get-or-create for player rows
     with no `user_id`, `consent.public_name=true` on NEW persons only,
     `registration_players.person_id` write-back, and the missing `pair` branch.
@@ -428,6 +428,48 @@ sweeps. Proof, not assertion: the same two suites on a **fresh** DB are
 **71/71**. Consequence for the rest of RS002 and for RS003+: run the gate on a
 fresh schema, and never read a 30s timeout in a sweep suite as an assertion
 failure.
+
+**Wave 3 CLOSED** (`3ddbb7a2`, `82d2ae93`, `8d79c9cf`). Materialisation now
+implements design §6 and owner ruling 5 in full. Gate: 2438 total / 2407
+passed / 0 failed, 17 materialise tests, `tsc` EXIT=0.
+
+- **Person get-or-create, and the false premise behind the brief.** The prompt
+  says to honour "the existing persons identity index semantics" for a
+  `(org, name[, dob])` lookup. **No such index exists** — the only one is
+  `persons_org_user_lane_uq (org_id, user_id, lane) where user_id is not null
+  and lane='player' and merged_into is null`. Ruling as implemented: a player
+  row WITH `user_id` resolves through `resolvePlayerPerson` (unchanged); a row
+  WITHOUT one reuses a person only when the row has a **dob** and **exactly
+  one** non-merged `lane='player'` person in that org matches
+  `lower(trim(full_name))` AND that dob. No dob, no match, or **two or more
+  matches** → new person (`matches.length === 1`, deliberately not `limit 1`).
+  A duplicate person is a one-click #404 merge; fusing two same-named juniors
+  is not cleanly reversible.
+- **Owner ruling 5 was shipping HALF-implemented, and the brief caused it.**
+  `findOrCreatePlayerPerson` set `consent.public_name = true` on the anonymous
+  path, but `resolvePlayerPerson` — excluded by the wave brief — still created
+  linked persons with the bare `{}` default. So a registrant who ticks the
+  consent box themselves got NO consent recorded, while someone entered by a
+  club rep did. Reachable from all four `materialise` call sites. Fixed: the
+  insert names `consent`; the `do update` branch still never touches it,
+  because a returning person may have opted out.
+- **The idempotency test was measuring the caller, not the function.** Every
+  `materialise` call site short-circuits first (`status === 'confirmed'` at
+  `registrations.ts:2082` and its three siblings), so calling
+  `confirmRegistration` twice never re-enters `materialise` — its own
+  `if (reg.entrant_id) return` guard and both
+  `on conflict (entrant_id, person_id) do nothing` clauses had **zero coverage
+  in the repo**, and deleting the guard failed nothing. Now forced by seeding
+  a row with `entrant_id` set and `status` left non-confirmed. Same class:
+  `person_id` write-back was asserted only for `team`; the `individual`
+  branch's own write was untested.
+- `pair` shares the team path (it previously materialised an entrant with zero
+  members); `squad_number` and `is_captain` both carry; `loadPlayers` now
+  selects `is_captain` rather than only ordering by it.
+- `persons` already has `force row level security` (V227) enforcing org
+  isolation independently of the app-level `org_id` filter — which makes an
+  org-leak mutation check unfalsifiable by design, not by defect. The explicit
+  filter stays as defence in depth.
 
 ## RS002 entry conditions (RS001 hands these over — do not start without reading)
 
