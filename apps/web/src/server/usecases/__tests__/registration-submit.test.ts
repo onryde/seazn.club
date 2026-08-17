@@ -36,6 +36,8 @@ vi.mock("@/lib/ref-code", async (importOriginal) => {
 
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { LEGAL_VERSION } from "@/lib/legal";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -47,6 +49,25 @@ import {
   type SubmitGroupInput,
 } from "../registration-submit";
 const HAS_DB = !!process.env.DATABASE_URL;
+
+/**
+ * Poll `pg_locks` for genuinely blocked waiters instead of a fixed sleep
+ * (review MAJOR 5 — same technique as `slug-race.test.ts`'s
+ * `waitForBlockedInsert`, generalised to a caller-chosen count since this
+ * file's capacity race needs TWO simultaneous waiters, not one). A sleep
+ * "long enough" is a guess; this waits for the actual fact.
+ */
+async function waitForBlockedLocks(count: number, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const [row] = await sql<{ n: number }[]>`select count(*)::int as n from pg_locks where not granted`;
+    if (row!.n >= count) return;
+    if (Date.now() > deadline) {
+      throw new Error(`only ${row!.n}/${count} blocked locks appeared — race not staged`);
+    }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Fixtures — same shape as registrations.test.ts's seedOrg/rig (not exported
@@ -216,6 +237,10 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
       select entrant_id, status from registrations where id = ${res.entries[0]!.registration_id}`;
     expect(row!.status).toBe("confirmed");
     expect(row!.entrant_id).not.toBeNull();
+    const [group] = await sql<{ privacy_consent_at: Date | null; privacy_consent_version: string | null }[]>`
+      select privacy_consent_at, privacy_consent_version from registration_groups where id = ${res.group_id}`;
+    expect(group!.privacy_consent_at).not.toBeNull();
+    expect(group!.privacy_consent_version).toBe(LEGAL_VERSION);
   });
 
   it("privacy consent (GDPR) is required — a submission without it is refused", async () => {
@@ -283,6 +308,35 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
     expect(row!.consent_status).toBe("granted");
   });
 
+  it("an entry's declared entrant_kind must match the division's configured kind (review MINOR: entrant_kind mismatch)", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "team", fee_cents: 0 });
+
+    await expect(
+      submitRegistrationGroup(
+        { orgSlug, compSlug: competition.slug },
+        {
+          contact: baseContact(),
+          privacy_consent: true,
+          entries: [
+            {
+              division_id: division.id,
+              entrant_kind: "individual", // division is configured "team"
+              players: [{ full_name: "Wrong Kind" }],
+              answers: {},
+            },
+          ],
+        },
+      ),
+    ).rejects.toMatchObject({ status: 422 });
+
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from registration_groups where competition_id = ${competition.id}`;
+    expect(n).toBe(0);
+  });
+
   it("free_agent is only accepted when the division's allow_free_agents is on", async () => {
     const { orgId, orgSlug, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
@@ -320,6 +374,145 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
     const [row] = await sql<{ entrant_id: string | null }[]>`
       select entrant_id from registrations where id = ${res.entries[0]!.registration_id}`;
     expect(row!.entrant_id).toBeNull();
+    // A free agent is `entrant_kind: "team"` at the division level but is
+    // NOT a roster to grow (review MAJOR 4) — no join_code, even though
+    // every other team entry gets one.
+    expect(res.entries[0]!.join_code).toBeNull();
+  });
+
+  it("joinTeamEntry refuses a free-agent entry, even if one somehow carried a join_code", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "team", fee_cents: 0, allow_free_agents: true });
+    const res = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [
+          { division_id: division.id, entrant_kind: "team", free_agent: true, players: [{ full_name: "Floater" }], answers: {} },
+        ],
+      },
+    );
+    // Defense in depth: submitRegistrationGroup never mints a join_code for
+    // a free agent (asserted above) — force one directly to prove
+    // joinTeamEntry ALSO refuses it, not just that the code path is
+    // unreachable through normal submit.
+    const forcedCode = "SZ-FORCED-" + randomUUID().slice(0, 8); // unique per run — join_code is globally unique
+    await sql`update registrations set join_code = ${forcedCode} where id = ${res.entries[0]!.registration_id}`;
+    await expect(
+      joinTeamEntry({}, { join_code: forcedCode, player: { full_name: "Trying To Join" } }),
+    ).rejects.toMatchObject({ status: 422 });
+  });
+
+  it("a cart mixing payment methods across divisions is refused at validation time (review MAJOR 1)", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations set stripe_charges_enabled = true where id = ${orgId}`;
+    const { competition, division: stripeDivision } = await rig(owner);
+    await seedSettings(stripeDivision.id, { entrant_kind: "individual", fee_cents: 1000, payment_method: "stripe" });
+    const offlineDivision = await createDivision(owner, competition.id, {
+      name: "Offline Side",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      eligibility: [],
+    });
+    await seedSettings(offlineDivision.id, { entrant_kind: "individual", fee_cents: 500, payment_method: "offline" });
+
+    await expect(
+      submitRegistrationGroup(
+        { orgSlug, compSlug: competition.slug },
+        {
+          contact: baseContact(),
+          privacy_consent: true,
+          entries: [
+            { division_id: stripeDivision.id, entrant_kind: "individual", players: [{ full_name: "Card Payer" }], answers: {} },
+            { division_id: offlineDivision.id, entrant_kind: "individual", players: [{ full_name: "Cash Payer" }], answers: {} },
+          ],
+        },
+      ),
+    ).rejects.toMatchObject({ status: 422 });
+
+    // Rejected at VALIDATION time — before any transaction opens, so nothing
+    // was written at all (not even the group).
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from registration_groups where competition_id = ${competition.id}`;
+    expect(n).toBe(0);
+
+    // A cart entirely within ONE payment method (even a free entry alongside
+    // it — fee_cents=0 imposes no method constraint) is unaffected.
+    await seedSettings(offlineDivision.id, { entrant_kind: "individual", fee_cents: 0, payment_method: "offline" });
+    const ok = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [
+          { division_id: stripeDivision.id, entrant_kind: "individual", players: [{ full_name: "Card Payer" }], answers: {} },
+          { division_id: offlineDivision.id, entrant_kind: "individual", players: [{ full_name: "Free Rider" }], answers: {} },
+        ],
+      },
+    );
+    expect(ok.entries).toHaveLength(2);
+  });
+
+  it("a stripe-fee division 503s when Connect isn't live, and 402s when registration.paid is revoked", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 1000, payment_method: "stripe" });
+    const input: SubmitGroupInput = {
+      contact: baseContact(),
+      privacy_consent: true,
+      entries: [
+        { division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Card Payer" }], answers: {} },
+      ],
+    };
+
+    // Connect never went live (stripe_charges_enabled defaults false) -> 503,
+    // never reaching the entitlement check.
+    await expect(
+      submitRegistrationGroup({ orgSlug, compSlug: competition.slug }, input),
+    ).rejects.toMatchObject({ status: 503 });
+
+    // Connect live, but registration.paid explicitly revoked -> 402.
+    await sql`update organizations set stripe_charges_enabled = true where id = ${orgId}`;
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value)
+      values (${orgId}, 'registration.paid', false)`;
+    await invalidateOrgEntitlements(orgId);
+    await expect(
+      submitRegistrationGroup({ orgSlug, compSlug: competition.slug }, input),
+    ).rejects.toMatchObject({ status: 402 });
+  });
+
+  it("a uniform-stripe cart works when Connect is live and registration.paid is granted", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations set stripe_charges_enabled = true where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 1000, payment_method: "stripe" });
+
+    const res = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [
+          { division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Card Payer" }], answers: {} },
+        ],
+      },
+    );
+    // Fee due -> never auto-confirmed; the group needs its payment method +
+    // a pay-by window.
+    expect(res.entries[0]!.status).toBe("pending");
+    expect(res.amount_cents).toBe(1000);
+    const [group] = await sql<{ payment_method: string | null; expires_at: Date | null }[]>`
+      select payment_method, expires_at from registration_groups where id = ${res.group_id}`;
+    expect(group!.payment_method).toBe("stripe");
+    expect(group!.expires_at).not.toBeNull();
   });
 
   it("manual-approval division holds pending even when free and under capacity; auto division still confirms", async () => {
@@ -513,6 +706,36 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
     expect(unlinkedRow!.user_id).toBeNull();
   });
 
+  it("links the self row's OWN dob when the contact never repeated one at cart level (review MINOR 6)", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0 });
+    const sessionUserId = await makeUser("explicitdob");
+
+    const res = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug, sessionUserId },
+      {
+        contact: baseContact({ dob: null }), // cart-level dob left blank
+        privacy_consent: true,
+        entries: [
+          {
+            division_id: division.id,
+            entrant_kind: "individual",
+            registering_self: true,
+            self_player_index: 0,
+            // The row itself carries an explicit adult dob.
+            players: [{ full_name: "Explicit Dob", dob: "1990-01-01" }],
+            answers: {},
+          },
+        ],
+      },
+    );
+    const [row] = await sql<{ user_id: string | null }[]>`
+      select user_id from registration_players where registration_id = ${res.entries[0]!.registration_id}`;
+    expect(row!.user_id).toBe(sessionUserId);
+  });
+
   it("cart of 3 with 1 waitlisted: group amount_cents charges 2; the waitlisted entry's own amount_cents is 0", async () => {
     const { orgId, orgSlug, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
@@ -552,6 +775,32 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
     const [group] = await sql<{ amount_cents: number }[]>`
       select amount_cents from registration_groups where id = ${res.group_id}`;
     expect(group!.amount_cents).toBe(1000);
+  });
+
+  it("the PLAN cap folds into hardCap — a low plan limit drives the waitlist under a high division capacity (review MINOR: plan-cap folding)", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    // Division capacity is generous (10) — the PLAN must be what binds.
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0, capacity: 10 });
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
+      values (${orgId}, 'entrants.per_division.max', 1, 'test — plan-cap-folding coverage')`;
+    await invalidateOrgEntitlements(orgId);
+
+    const res = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [
+          { division_id: division.id, entrant_kind: "individual", players: [{ full_name: "P1" }], answers: {} },
+          { division_id: division.id, entrant_kind: "individual", players: [{ full_name: "P2" }], answers: {} },
+        ],
+      },
+    );
+    expect(res.entries[0]!.status).not.toBe("waitlisted"); // taken=0 < plan limit 1
+    expect(res.entries[1]!.status).toBe("waitlisted"); // taken=1 >= plan limit 1, well under division.capacity=10
   });
 
   it("group insert snapshots organizations.currency; a later org-currency change leaves existing groups untouched", async () => {
@@ -721,25 +970,30 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup — capacity race (genuine con
       ],
     });
 
-    // The interleave is FORCED, not hoped for (same technique as
+    // The interleave is FORCED, not hoped for (same underlying mechanism as
     // billing-group-move.test.ts's "an attach racing a detach" — holding
     // `for update` on the row from a transaction of our own makes both
-    // racers queue at a point we choose, rather than betting on Promise.all
-    // scheduling luck). With the capacity lock in submitRegistrationGroup,
-    // both racers queue BEHIND this held lock and each sees fresh state once
-    // it is released; without that lock they'd both already have read the
-    // pre-race count by the time this releases, and both would land pending.
+    // racers queue at a point we choose). The STAGING is polled, not slept
+    // (review MAJOR 5, matching slug-race.test.ts's `waitForBlockedInsert`):
+    // a fixed sleep "long enough for both to have reached their own first
+    // statement" can pass against broken code on a lucky interleaving; this
+    // waits for the actual fact — `staged` confirms the holder itself has
+    // the lock (its own `for update` only resolves once granted), and
+    // `waitForBlockedLocks(2)` confirms BOTH racers are genuinely parked on
+    // it before release.
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
+    let staged!: () => void;
+    const isStaged = new Promise<void>((r) => (staged = r));
     const holder = sql.begin(async (tx) => {
       await tx`select 1 from registration_settings where division_id = ${division.id} for update`;
+      staged();
       await held;
     });
-    await new Promise((r) => setTimeout(r, 100));
+    await isStaged;
 
     const racing = Promise.all([submitRegistrationGroup(ctx, inputFor("Racer A")), submitRegistrationGroup(ctx, inputFor("Racer B"))]);
-    // Long enough for both to have reached their own first statement.
-    await new Promise((r) => setTimeout(r, 400));
+    await waitForBlockedLocks(2);
     release();
     await holder;
     const [a, b] = await racing;
@@ -750,6 +1004,61 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup — capacity race (genuine con
       select count(*)::int as n from registrations
       where division_id = ${division.id} and status in ('pending','confirmed')`;
     expect(n).toBe(1);
+  });
+
+  it("stale settings: a fee change staged between the pre-read and the lock is honoured, not the pre-read snapshot (review MAJOR 3)", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 1000, capacity: 5 });
+
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let staged!: () => void;
+    const isStaged = new Promise<void>((r) => (staged = r));
+    // The price change happens INSIDE the holder's own transaction, after it
+    // already holds the lock — writing a row your OWN transaction already
+    // holds `for update` on is instant (no contention). Issuing the UPDATE
+    // from a SEPARATE connection instead would itself block behind the very
+    // lock this test releases only later — a self-deadlock in the test, not
+    // production; caught by running this exact test standalone and watching
+    // it hang past the wait budget instead of failing on an assertion.
+    const holder = sql.begin(async (tx) => {
+      await tx`select 1 from registration_settings where division_id = ${division.id} for update`;
+      await tx`update registration_settings set fee_cents = 2500 where division_id = ${division.id}`;
+      staged();
+      await held;
+    });
+    await isStaged;
+
+    const pending = submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [
+          { division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Late Price" }], answers: {} },
+        ],
+      },
+    );
+    // The organiser's price change above is UNCOMMITTED and invisible to
+    // anyone until the holder commits — parked here confirms
+    // submitRegistrationGroup's own `for update` is genuinely queued behind
+    // it, not racing ahead to read the pre-change value some other way.
+    // `registration_settings_capacity_check` (capacity > 0) rules out
+    // proving the SAME point via capacity directly (0 is not a legal value,
+    // and any positive number still admits an empty division), so fee is the
+    // cleanest observable dimension; `capacity`/`payment_method`/`approval`
+    // are read from this exact same live-locked row by the exact same query
+    // (see `liveSettingsById` in registration-submit.ts), not a separate
+    // path, so this one proof stands for all four.
+    await waitForBlockedLocks(1);
+    release();
+    await holder;
+    const res = await pending;
+
+    expect(res.entries[0]!.status).toBe("pending"); // still under capacity
+    expect(res.entries[0]!.amount_cents).toBe(2500); // the LIVE fee, never the stale pre-read's 1000
   });
 });
 
@@ -844,6 +1153,22 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
   it("withdrawn-entry rejection", async () => {
     const { entry } = await teamRig();
     await sql`update registrations set status = 'withdrawn' where id = ${entry.registration_id}`;
+    await expect(
+      joinTeamEntry({}, { join_code: entry.join_code!, player: { full_name: "Too Late" } }),
+    ).rejects.toMatchObject({ status: 422 });
+  });
+
+  it("rejected-entry rejection (review MINOR: dead-entry guard, 'rejected' branch)", async () => {
+    const { entry } = await teamRig();
+    await sql`update registrations set status = 'rejected' where id = ${entry.registration_id}`;
+    await expect(
+      joinTeamEntry({}, { join_code: entry.join_code!, player: { full_name: "Too Late" } }),
+    ).rejects.toMatchObject({ status: 422 });
+  });
+
+  it("expired-entry rejection (review MINOR: dead-entry guard, 'expired' branch)", async () => {
+    const { entry } = await teamRig();
+    await sql`update registrations set status = 'expired' where id = ${entry.registration_id}`;
     await expect(
       joinTeamEntry({}, { join_code: entry.join_code!, player: { full_name: "Too Late" } }),
     ).rejects.toMatchObject({ status: 422 });

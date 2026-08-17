@@ -220,6 +220,23 @@ function eligibilityError(issues: EligibilityIssue[]): HttpError {
   return new HttpError(422, formatEligibilityIssues(issues).join(" "), "ELIGIBILITY", { violations: issues });
 }
 
+/**
+ * One Stripe checkout pays the whole cart's subtotal (design §4 step 5) — a
+ * cart mixing a `stripe` division with an `offline` one (or two `stripe`
+ * divisions that could somehow disagree) cannot be collected in one session,
+ * so it must never be created (review MAJOR 1). A free division (fee_cents=0)
+ * imposes no constraint — it is never actually collected either way.
+ */
+function assertUniformPaymentMethod(settings: Iterable<{ fee_cents: number; payment_method: string }>): void {
+  const paidMethods = new Set([...settings].filter((s) => s.fee_cents > 0).map((s) => s.payment_method));
+  if (paidMethods.size > 1) {
+    throw new HttpError(
+      422,
+      "This cart mixes payment methods across divisions — submit these registrations separately",
+    );
+  }
+}
+
 /** `team` needs a name; `pair` falls back to "player & partner" (the partner
  *  is cosmetic-only text, NOT a second player row — see the module doc);
  *  `individual`/free-agent uses the sole player's name, or the contact's. */
@@ -327,6 +344,16 @@ export async function submitRegistrationGroup(
     settingsById.set(id, s);
   }
 
+  // One Stripe checkout per cart is the design (§4 step 5) — a cart whose
+  // PAID divisions disagree on how to collect payment cannot be paid in one
+  // session, so it must not be creatable at all (review MAJOR 1). Checked
+  // structurally here, before any waitlist outcome is known: a cart that can
+  // never be charged coherently 422s regardless of which entries end up
+  // waitlisted. Re-checked again under the lock below (paymentMethodsSeen)
+  // against LIVE settings — a concurrent edit could change which method a
+  // division charges between this read and the lock.
+  assertUniformPaymentMethod(settingsById.values());
+
   // Per-entry structural + eligibility validation — pure, no writes, so a bad
   // cart 422s before any transaction opens.
   const prepared: PreparedEntry[] = [];
@@ -426,8 +453,28 @@ export async function submitRegistrationGroup(
     // Deterministic lock order (sorted division ids, acquired sequentially)
     // — the ONLY safe way two transactions that both need several of the
     // same locks can never deadlock against each other.
+    //
+    // RE-SELECTS the locked row's live columns rather than a throwaway
+    // `select 1` (review MAJOR 3): `capacity`/`fee_cents`/`payment_method`/
+    // `approval` and the window were all read ABOVE, before this lock — a
+    // concurrent settings edit (capacity lowered, price changed,
+    // registration closed) between that read and this lock would otherwise
+    // be silently ignored, the exact class of bug the lock exists to
+    // prevent, one level up. The hardCap/fee/window/approval decisions below
+    // all read from `liveSettingsById`, never from the pre-lock `settingsById`
+    // snapshot (which stays in scope only for the pre-tx structural checks
+    // above, which do not need transactional freshness).
+    const liveSettingsById = new Map<string, SubmitSettingsRow>();
     for (const id of distinctDivisionIds) {
-      await tx`select 1 from registration_settings where division_id = ${id} for update`;
+      const [live] = await tx<SubmitSettingsRow[]>`
+        select division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
+               fee_cents, refund_lock_at, form_fields, payment_method,
+               payment_instructions, updated_at, approval, allow_free_agents
+        from registration_settings where division_id = ${id} for update`;
+      if (!live || !windowOpen(live, now)) {
+        throw new HttpError(422, "Registration is not open for this division");
+      }
+      liveSettingsById.set(id, live);
     }
 
     // The group row first (registrations FK to it) — amount_cents/payment
@@ -466,6 +513,9 @@ export async function submitRegistrationGroup(
     const entryResults: SubmitGroupEntryResult[] = [];
 
     for (const p of prepared) {
+      // LIVE settings (fetched under the lock above), never the pre-lock
+      // `p.settings` snapshot — review MAJOR 3.
+      const live = liveSettingsById.get(p.input.division_id)!;
       // Counting happens INSIDE the lock, after every earlier entry in THIS
       // SAME cart is already inserted (same transaction sees its own
       // uncommitted writes) — two entries in one cart for the same division
@@ -474,19 +524,25 @@ export async function submitRegistrationGroup(
         select count(*)::int as n from registrations
         where division_id = ${p.input.division_id} and status in ${tx([...SPOT_HOLDERS])}`;
       const hardCap = Math.min(
-        p.settings.capacity ?? Number.POSITIVE_INFINITY,
+        live.capacity ?? Number.POSITIVE_INFINITY,
         planLimit ?? Number.POSITIVE_INFINITY,
       );
       const waitlisted = taken >= hardCap;
-      const feeCents = waitlisted ? 0 : p.settings.fee_cents;
-      if (!waitlisted && feeCents > 0) paymentMethodsSeen.add(p.settings.payment_method);
+      const feeCents = waitlisted ? 0 : live.fee_cents;
+      if (!waitlisted && feeCents > 0) paymentMethodsSeen.add(live.payment_method);
       const status: RegistrationRow["status"] = waitlisted ? "waitlisted" : "pending";
 
       let regRow: RegistrationRow;
-      if (p.input.entrant_kind === "team") {
-        // join_code is minted for every team entry regardless of waitlist
-        // outcome — a waitlisted team can still grow its roster while it
-        // waits (only money/status are gated by waitlisting, not the link).
+      if (p.input.entrant_kind === "team" && !p.input.free_agent) {
+        // join_code is minted for every NON-free-agent team entry regardless
+        // of waitlist outcome — a waitlisted team can still grow its roster
+        // while it waits (only money/status are gated by waitlisting, not
+        // the link). A free agent is `entrant_kind: "team"` at the division
+        // level but represents ONE unassigned person (design §5) — minting a
+        // join_code for it would let other players "join" and grow it into
+        // an ad hoc roster, bypassing RS009's assignment flow entirely
+        // (review MAJOR 4). `joinTeamEntry` also refuses a free-agent row
+        // directly, as defense in depth.
         let row: RegistrationRow | undefined;
         for (let attempt = 0; attempt < 5 && !row; attempt++) {
           const candidate = generateRefCode();
@@ -526,6 +582,13 @@ export async function submitRegistrationGroup(
       for (let i = 0; i < p.players.length; i++) {
         const player = p.players[i]!;
         const isSelf = i === p.selfIndex;
+        // The RESOLVED self row's own dob (review MINOR 6) — not
+        // `input.contact.dob` directly. They usually agree (the self row
+        // falls back to the contact's cart-level dob when it carries none of
+        // its own, above), but a self row that DOES carry an explicit dob
+        // while `contact.dob` is null must still link: reading
+        // `input.contact.dob` here silently failed to link an eligible adult
+        // in that case, the #402/#404 dedupe producer going dormant.
         const playerUserId = isSelf
           ? deriveLinkUserId(
               ctx.sessionUserId ?? null,
@@ -533,7 +596,7 @@ export async function submitRegistrationGroup(
                 registering_self: true,
                 guardian_name: input.contact.guardian_name,
                 guardian_consent: input.contact.guardian_consent,
-                dob: input.contact.dob,
+                dob: player.dob,
               },
               now,
             )
@@ -556,7 +619,7 @@ export async function submitRegistrationGroup(
       // a free agent: there is no team yet to materialise into (design §5),
       // and never for a waitlisted entry.
       let finalStatus = regRow.status;
-      if (!waitlisted && !p.input.free_agent && p.settings.approval === "auto" && feeCents === 0) {
+      if (!waitlisted && !p.input.free_agent && live.approval === "auto" && feeCents === 0) {
         await materialise(tx, regRow, p.input.entrant_kind);
         finalStatus = "confirmed";
       }
@@ -572,12 +635,20 @@ export async function submitRegistrationGroup(
       });
     }
 
-    // A cart spanning divisions with DIFFERENT payment methods collapses
-    // onto whichever non-waitlisted, non-free entry's method was inserted
-    // first — same class of limitation `promoteOldestWaitlisted` already
-    // flags for multi-entry carts (registrations.ts). Not reachable by any
-    // acceptance criterion this wave; flagged, not fixed, matching that
-    // precedent (see the PR body / final report for the same note).
+    // Backstop re-check against LIVE data (review MAJOR 1 + MAJOR 3
+    // together): the pre-tx `assertUniformPaymentMethod` call already
+    // rejected a structurally-mixed cart, but a concurrent settings edit
+    // between that read and the lock above could in principle create a
+    // mismatch the pre-check never saw. `paymentMethodsSeen` was built from
+    // `liveSettingsById` and already excludes waitlisted/free entries, so
+    // >1 distinct method here is the same guarantee, made off fresh data —
+    // and this throw rolls back cleanly like any other in-tx failure.
+    if (paymentMethodsSeen.size > 1) {
+      throw new HttpError(
+        422,
+        "This cart mixes payment methods across divisions — submit these registrations separately",
+      );
+    }
     const groupPaymentMethod = [...paymentMethodsSeen][0] ?? null;
     const anyPendingStripe =
       groupPaymentMethod === "stripe" && entryResults.some((e) => e.status === "pending" && e.amount_cents > 0);
@@ -589,22 +660,26 @@ export async function submitRegistrationGroup(
           updated_at = now()
       where id = ${groupId}`;
 
-    log.info(
-      {
-        event: "registration.group_submitted",
-        group_id: groupId,
-        org_id: orgId,
-        competition_id: competitionId,
-        entries: entryResults.length,
-        waitlisted: entryResults.filter((e) => e.status === "waitlisted").length,
-        confirmed: entryResults.filter((e) => e.status === "confirmed").length,
-        amount_cents: subtotal,
-      },
-      "registration group submitted",
-    );
-
     return { groupId: groupId!, refCode, subtotal, entryResults };
   });
+
+  // Logged AFTER `sql.begin` resolves (review MINOR 7) — inside the callback
+  // this fired before commit was guaranteed; a rollback after the log line
+  // (the ref/join-code retry loops both throw past it on exhaustion) would
+  // have logged a submission that was never actually persisted.
+  log.info(
+    {
+      event: "registration.group_submitted",
+      group_id: txResult.groupId,
+      org_id: orgId,
+      competition_id: competitionId,
+      entries: txResult.entryResults.length,
+      waitlisted: txResult.entryResults.filter((e) => e.status === "waitlisted").length,
+      confirmed: txResult.entryResults.filter((e) => e.status === "confirmed").length,
+      amount_cents: txResult.subtotal,
+    },
+    "registration group submitted",
+  );
 
   return {
     group_id: txResult.groupId,
@@ -637,9 +712,18 @@ export async function joinTeamEntry(
   input: JoinTeamEntryInput,
 ): Promise<JoinTeamEntryResult> {
   const now = new Date();
-  const [reg] = await sql<{ id: string; division_id: string; status: string; org_id: string }[]>`
-    select id, division_id, status, org_id from registrations where join_code = ${input.join_code}`;
+  const [reg] = await sql<
+    { id: string; division_id: string; status: string; org_id: string; free_agent: boolean }[]
+  >`
+    select id, division_id, status, org_id, free_agent from registrations where join_code = ${input.join_code}`;
   if (!reg) throw new HttpError(404, "This join link is not valid");
+  // Defense in depth (review MAJOR 4): submitRegistrationGroup never mints a
+  // join_code for a free agent (design §5 — it is one unassigned person, not
+  // a roster to grow), so this should be unreachable through normal submit —
+  // but a code path that DID acquire one must still be refused here, before
+  // the roster-cap check, rather than let a free agent be "joined" into an
+  // ad hoc team that bypasses RS009's assignment flow.
+  if (reg.free_agent) throw new HttpError(422, "This entry has no roster to join yet");
   if (["withdrawn", "rejected", "expired"].includes(reg.status)) {
     throw new HttpError(422, "This entry is no longer accepting players");
   }
