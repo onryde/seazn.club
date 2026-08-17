@@ -189,6 +189,50 @@ describe.skipIf(!HAS_DB)("V368 court entities cutover", () => {
     expect(parsed4.courts[0]).toMatch(UUID_RE);
   });
 
+  // Review finding #2: `courts` PRESENT but the wrong shape (json null, a
+  // bare string, an object) is a different case from "absent" (d2 above) —
+  // `.default([])` only substitutes for `undefined`, never for a
+  // present-but-wrong-shaped value, so without the migration's step 0
+  // normalization this is a live 500 at ScheduleConfig.parse, not a
+  // rescued default.
+  it("a present-but-non-array `courts` value (null, string, object) normalizes to [] instead of 500ing at read", async () => {
+    const { orgId, divisionId: d1 } = await seedOrgWithDivision();
+    orgIds.push(orgId);
+    const { divisionId: d2 } = await seedOrgWithDivision().then((r) => {
+      orgIds.push(r.orgId);
+      return r;
+    });
+    const { divisionId: d3 } = await seedOrgWithDivision().then((r) => {
+      orgIds.push(r.orgId);
+      return r;
+    });
+
+    // d1: courts is JSON null (key present, wrong shape).
+    await sql`insert into schedule_settings (division_id, org_id, config)
+      values (${d1}, ${orgId}, ${sql.json({ courts: null })})`;
+    // d2: courts is a bare string.
+    await sql`insert into schedule_settings (division_id, org_id, config)
+      values (${d2}, ${orgId}, ${sql.json({ courts: "Court 1" })})`;
+    // d3: courts is an object.
+    await sql`insert into schedule_settings (division_id, org_id, config)
+      values (${d3}, ${orgId}, ${sql.json({ courts: {} })})`;
+
+    await sql.unsafe(migrationBlock("courts-migration"));
+
+    const rows = await sql<{ division_id: string; config: Record<string, unknown> }[]>`
+      select division_id, config from schedule_settings
+       where division_id in (${d1}, ${d2}, ${d3})`;
+    expect(rows).toHaveLength(3);
+    const byDivision = new Map(rows.map((r) => [r.division_id, r.config]));
+
+    const parsed1 = ScheduleConfig.parse(byDivision.get(d1));
+    expect(parsed1.courts).toEqual([]);
+    const parsed2 = ScheduleConfig.parse(byDivision.get(d2));
+    expect(parsed2.courts).toEqual([]);
+    const parsed3 = ScheduleConfig.parse(byDivision.get(d3));
+    expect(parsed3.courts).toEqual([]);
+  });
+
   it("fixtures.court_id is populated from court_label; court_label stays populated", async () => {
     const { orgId, divisionId } = await seedOrgWithDivision();
     orgIds.push(orgId);
@@ -272,5 +316,40 @@ describe.skipIf(!HAS_DB)("V368 court entities cutover", () => {
     expect(after2!.config).toEqual(after1!.config);
     expect(courtsAfter2).toBe(courtsAfter1);
     expect(courtsAfter1).toBe("2");
+  });
+
+  // Review finding #1: the header (SQL:50-52) claims this block is
+  // "naturally idempotent" (it only ever collects rows where `venue_id is
+  // null`) but nothing exercised that claim — mirrors the courts-migration
+  // idempotency test immediately above.
+  it("fixture-venue-migration block is a no-op on a second apply (idempotent)", async () => {
+    const { orgId, divisionId } = await seedOrgWithDivision();
+    orgIds.push(orgId);
+    const stageId = await seedStage(orgId, divisionId);
+
+    const [{ id: fixtureId }] = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, venue)
+      values (${stageId}, ${divisionId}, ${orgId}, 1, 1, 'Community Center')
+      returning id`;
+
+    const block = migrationBlock("fixture-venue-migration");
+    await sql.unsafe(block);
+
+    const [after1] = await sql<{ venue: string | null; venue_id: string | null }[]>`
+      select venue, venue_id from fixtures where id = ${fixtureId}`;
+    const [{ n: venuesAfter1 }] = await sql<{ n: string }[]>`
+      select count(*)::text as n from venues where org_id = ${orgId}`;
+
+    await sql.unsafe(block); // second apply — must change nothing
+
+    const [after2] = await sql<{ venue: string | null; venue_id: string | null }[]>`
+      select venue, venue_id from fixtures where id = ${fixtureId}`;
+    const [{ n: venuesAfter2 }] = await sql<{ n: string }[]>`
+      select count(*)::text as n from venues where org_id = ${orgId}`;
+
+    expect(after2!.venue_id).toBe(after1!.venue_id);
+    expect(after2!.venue).toBe("Community Center");
+    expect(venuesAfter2).toBe(venuesAfter1);
+    expect(venuesAfter1).toBe("1");
   });
 });

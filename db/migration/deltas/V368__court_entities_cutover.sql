@@ -50,6 +50,23 @@
 -- a config already on real ids is left byte-identical. The fixture-venue
 -- block is naturally idempotent: it only ever collects rows where
 -- `venue_id is null`, so a second run finds nothing to do.
+--
+-- Non-array `courts` (present-but-wrong-shaped: json null, a string, an
+-- object): normalized to `[]` by the courts block's step 0, BEFORE
+-- collection. This is the READ-PATH TRAP the whole migration exists to
+-- close, not tidiness — `ScheduleConfig.courts`'s `.default([])` only
+-- substitutes for an ABSENT key (`undefined`); it never fires for a
+-- present value of the wrong shape, so an un-normalized `courts: null` (or
+-- a string/object) is a live 500 at ScheduleConfig.parse. Step 0 is
+-- idempotent on its own terms: once normalized, the value is jsonb type
+-- "array", so a second run's `<> 'array'` guard finds nothing left to do.
+--
+-- Dry-run/write agreement (both blocks): the "does an active court/venue
+-- already exist with this name" lookup is computed exactly ONCE per block
+-- (court_strings_status.existing_court_id / venue_strings_status.
+-- existing_venue_id) and both the dry-run report and the write loop read
+-- that single precomputed column, so the two cannot independently drift —
+-- by construction, not by keeping two hand-written predicates in sync.
 -- =============================================================================
 
 -- Competition free-text venue analogue: fixtures.venue -> fixtures.venue_id.
@@ -75,6 +92,21 @@ declare
   v_total_strings int := 0;
   v_total_to_create int := 0;
 begin
+  -- 0) Normalize a present-but-non-array `courts` value (json null, a bare
+  -- string, a number, a bool, or an object) to `[]` — the same end state
+  -- `.default([])` gives an ABSENT key. This is the READ-PATH TRAP this
+  -- migration exists to close, not tidiness: `ScheduleConfig.courts`'s
+  -- `.default([])` only substitutes when the key is `undefined`; it never
+  -- fires for a present value of the wrong shape, so an un-normalized
+  -- `courts: null` (or a string/object) is a live 500 at
+  -- ScheduleConfig.parse. Idempotent on its own: once normalized the value
+  -- is jsonb type "array", so a second run's `<> 'array'` guard matches
+  -- nothing.
+  update schedule_settings ss
+     set config = jsonb_set(ss.config, '{courts}', '[]'::jsonb)
+   where ss.config ? 'courts'
+     and jsonb_typeof(ss.config -> 'courts') <> 'array';
+
   -- 1) Collect distinct (org_id, string) pairs from both sources, blank-
   -- filtered, excluding any string that already equals a real court id for
   -- that org (idempotency — see header).
@@ -96,18 +128,26 @@ begin
          select 1 from courts c2 where c2.org_id = f.org_id and c2.id::text = f.court_label
        );
 
-  -- 2) Precompute reuse-vs-create status per string (read-only, pre-write) —
-  -- feeds the dry-run report below and is reused by the write loop.
+  -- 2) Precompute, ONCE, both the reuse-vs-create status AND (when it
+  -- already exists) the actual court id per string (read-only, pre-write).
+  -- Both the dry-run report (step 3) and the write loop (step 4) read this
+  -- single computation — see header "Dry-run/write agreement" — instead of
+  -- each re-deriving their own copy of "does an active court with this
+  -- name already exist", so the two can never disagree.
   drop table if exists pg_temp.court_strings_status;
   create temp table court_strings_status as
     select cs.org_id, cs.court_string,
-           exists (
-             select 1 from courts c
-              where c.org_id = cs.org_id
-                and c.name = cs.court_string
-                and c.archived_at is null
-           ) as already_exists
-      from court_strings cs;
+           m.id as existing_court_id,
+           m.id is not null as already_exists
+      from court_strings cs
+      left join lateral (
+        select c.id
+          from courts c
+         where c.org_id = cs.org_id
+           and c.name = cs.court_string
+           and c.archived_at is null
+         limit 1
+      ) as m on true;
 
   -- 3) DRY-RUN REPORT — emitted BEFORE the first write (the safety property
   -- of this whole session, per the P9 dispatch).
@@ -140,13 +180,12 @@ begin
     primary key (org_id, court_string)
   );
 
-  for v_row in select org_id, court_string from court_strings order by org_id, court_string loop
-    select c.id into v_court_id
-      from courts c
-     where c.org_id = v_row.org_id
-       and c.name = v_row.court_string
-       and c.archived_at is null
-     limit 1;
+  for v_row in
+    select org_id, court_string, existing_court_id
+      from court_strings_status
+     order by org_id, court_string
+  loop
+    v_court_id := v_row.existing_court_id;
 
     if v_court_id is null then
       select id into v_venue_id
@@ -231,14 +270,24 @@ begin
          select 1 from venues v2 where v2.org_id = f.org_id and v2.id::text = f.venue
        );
 
+  -- Precompute, ONCE, both the reuse-vs-create status AND (when it already
+  -- exists) the actual venue id per string — same "compute once, both
+  -- consumers read it" discipline as the courts block's
+  -- court_strings_status (see header "Dry-run/write agreement").
   drop table if exists pg_temp.venue_strings_status;
   create temp table venue_strings_status as
     select vs.org_id, vs.venue_string,
-           exists (
-             select 1 from venues v
-              where v.org_id = vs.org_id and v.name = vs.venue_string and v.archived_at is null
-           ) as already_exists
-      from venue_strings vs;
+           m.id as existing_venue_id,
+           m.id is not null as already_exists
+      from venue_strings vs
+      left join lateral (
+        select v.id
+          from venues v
+         where v.org_id = vs.org_id
+           and v.name = vs.venue_string
+           and v.archived_at is null
+         limit 1
+      ) as m on true;
 
   -- DRY-RUN REPORT — before any write, same discipline as the courts block.
   for v_org in
@@ -264,11 +313,12 @@ begin
     primary key (org_id, venue_string)
   );
 
-  for v_row in select org_id, venue_string from venue_strings order by org_id, venue_string loop
-    select id into v_venue_id
-      from venues
-     where org_id = v_row.org_id and name = v_row.venue_string and archived_at is null
-     limit 1;
+  for v_row in
+    select org_id, venue_string, existing_venue_id
+      from venue_strings_status
+     order by org_id, venue_string
+  loop
+    v_venue_id := v_row.existing_venue_id;
 
     if v_venue_id is null then
       insert into venues (org_id, name) values (v_row.org_id, v_row.venue_string)
