@@ -28,6 +28,36 @@
 // file:line pin); reached here through `restrictToConfiguredCourtsForTests`,
 // the same test-only export-alias pattern `solveBuildForTests` already uses
 // there.
+//
+// P9 PASS 2b FINDING (reversed-order case, below): `latticeFingerprint`'s
+// byte-identical comparison is valid ONLY when the courts' own lexicographic
+// order coincides with their `config.courts` declared order — its own
+// docstring already said so, and the original two fixtures ("Court A/B/C"
+// and `…000a/b/c`) both happen to satisfy that, which is exactly why they
+// could never have caught a REAL declared-vs-lexicographic ordering bug. A
+// third fixture whose ids sort in the REVERSE of their declared order
+// (`…000c, …000b, …000a` in that array position order — the shape real
+// uuids actually arrive in) reds against `latticeFingerprint`: traced with
+// `--reporter=json`, position 0 comes back `rows:[7,8,9]` instead of the
+// aligned run's `rows:[0,1,2]`. Root-caused, NOT a production bug:
+// `BuildGrid.slots`/`byCourt`'s integer positions are numbered by
+// `repairCourts()`'s lexicographic sort (repair-domain.ts) purely as
+// internal bookkeeping — `byCourt` has ZERO readers anywhere outside
+// build-grid.ts/build.ts itself (grep-verified repo-wide) — while the
+// WIRE-VISIBLE court identity (`placement-client.ts`'s `buildIndexSpace`/
+// `courtIndexOf`/`courtNames`, and `toRequest`'s
+// `courtIndex: indices.courtIndexOf(court)`) resolves ENTIRELY by STRING
+// VALUE against the caller's DECLARED `config.courts` array and never once
+// touches `BuildGrid`'s internal lexicographic numbering. So the byte-level
+// fingerprint was pinning an accidental coupling, not a real invariant.
+// `latticeByDeclaredPosition` below asserts the invariant that is actually
+// true and actually matters — same admitted START TIMES at each declared
+// court position, independent of what the underlying strings are or how
+// they sort — against the reversed fixture, which is the realistic case
+// (real uuids have no relationship to array order) `latticeFingerprint`
+// could never exercise. `latticeFingerprint`'s own two tests and its committed
+// golden are UNCHANGED: they remain a legitimate structural pin for the
+// aligned shape, just no longer oversold as covering arbitrary id ordering.
 import { describe, expect, it } from "vitest";
 import { buildGrid } from "./build-grid.ts";
 import { restrictToConfiguredCourtsForTests as restrictToConfiguredCourts } from "./build.ts";
@@ -99,11 +129,54 @@ function latticeFingerprint(courts: readonly [string, string, string]): string {
   });
 }
 
-// PLACEHOLDER — captured for real on the first RED run below, then pinned
-// as a literal (see the comment at the top of this file for why this counts
-// as "a name-keyed run" rather than archived-code archaeology).
+// A structural snapshot pinned from CURRENT code (this file's own name-keyed
+// fixture run through today's unmodified `buildGrid`/`restrictToConfiguredCourts`
+// — see the top-of-file comment for why that counts as "a name-keyed run" in
+// the dispatch's sense), NOT a capture recovered from archived pre-cutover
+// code. Its job is to catch a future change to the lattice's own STRUCTURE;
+// it says nothing about id-vs-name representation on its own — that claim is
+// `latticeFingerprint`'s BYTE-IDENTICAL comparison against a fresh id-keyed
+// run, immediately below.
 const GOLDEN_NAME_KEYED_FINGERPRINT =
   '{"byCourt":[{"court":0,"rows":[0,1,2]},{"court":1,"rows":[3,4,5]},{"court":2,"rows":[6,7,8,9]}],"overCap":false,"slots":[{"court":0,"startAt":1800000},{"court":0,"startAt":3600000},{"court":0,"startAt":5400000},{"court":1,"startAt":0},{"court":1,"startAt":1800000},{"court":1,"startAt":5400000},{"court":2,"startAt":0},{"court":2,"startAt":1800000},{"court":2,"startAt":3600000},{"court":2,"startAt":5400000}],"stepMinutes":30}';
+
+/**
+ * Same fixed board as {@link latticeFingerprint} (existing bookings on
+ * `courts[0]`/`courts[1]`, `courts[2]` free), but projects each slot down to
+ * "which START TIMES are admitted at this DECLARED position" instead of
+ * `BuildGrid`'s own internal row-index integers — the invariant that is
+ * actually true regardless of how the courts' own strings happen to sort
+ * (see the P9 PASS 2b FINDING at the top of this file). This is what makes
+ * it safe to feed a fixture whose declared order is the REVERSE of its
+ * lexicographic order: unlike `latticeFingerprint`, nothing here is sensitive
+ * to `repairCourts()`'s internal lexicographic numbering.
+ */
+function latticeByDeclaredPosition(courts: readonly [string, string, string]): string {
+  const existing: Assignment[] = [
+    { fixtureId: "e1", court: courts[0], startAt: 0, endAt: 30 * MIN, entrants: [], people: [] },
+    { fixtureId: "e2", court: courts[1], startAt: 60 * MIN, endAt: 90 * MIN, entrants: [], people: [] },
+  ];
+  const config: SlotConfig = {
+    startAt: 0,
+    matchMinutes: 30,
+    gapMinutes: 0,
+    courts: [...courts],
+    perEntrantMinRest: 0,
+    sessionWindows: [{ from: 0, to: 120 * MIN }],
+  };
+  const grid = restrictToConfiguredCourts(buildGrid({ config, existing }), config.courts, []);
+  const startsByDeclaredPosition = courts.map((c) =>
+    grid.slots
+      .filter((s) => s.court === c)
+      .map((s) => s.startAt)
+      .sort((a, b) => a - b),
+  );
+  return stableStringify({
+    startsByDeclaredPosition,
+    stepMinutes: grid.stepMinutes,
+    overCap: grid.overCap,
+  });
+}
 
 describe("lattice byte-equivalence — the P9 court-id cutover is a pure representation swap", () => {
   it("a name-keyed and an id-keyed run produce an INDEX-IDENTICAL lattice", () => {
@@ -120,4 +193,19 @@ describe("lattice byte-equivalence — the P9 court-id cutover is a pure represe
     const nameKeyed = latticeFingerprint(["Court A", "Court B", "Court C"]);
     expect(nameKeyed).toBe(GOLDEN_NAME_KEYED_FINGERPRINT);
   });
+
+  it(
+    "a REVERSED-order id-keyed run (ids sort the OPPOSITE way from their config-array " +
+      "position — the shape real uuids actually arrive in) still resolves the SAME " +
+      "per-declared-position lattice as the name-keyed run",
+    () => {
+      const nameKeyed = latticeByDeclaredPosition(["Court A", "Court B", "Court C"]);
+      const reversedIdKeyed = latticeByDeclaredPosition([
+        "00000000-0000-4000-8000-00000000000c",
+        "00000000-0000-4000-8000-00000000000b",
+        "00000000-0000-4000-8000-00000000000a",
+      ]);
+      expect(reversedIdKeyed).toBe(nameKeyed);
+    },
+  );
 });
