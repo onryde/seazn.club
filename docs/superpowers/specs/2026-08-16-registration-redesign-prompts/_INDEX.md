@@ -347,6 +347,47 @@ explicitly, budget 180s); and a full `usecases/__tests__` run reports
 `failedSuites: 5` for 4 failed tests because vitest counts **describe blocks**
 there, not files. That is not the collection-failure trap it resembles.
 
+**Wave 2 CLOSED** (`23371bba`, `83b87b6e`, `2726ec66`). `registration-eligibility.ts`
+is a new, dependency-free module (it imports NOTHING from `registrations.ts`,
+which is what keeps the later `registration-submit.ts` /
+`registration-approval.ts` edges acyclic); `registrations.ts` re-exports every
+moved symbol, so **zero importers changed**. Exported surface: `ageAt`,
+`isMinor`, `requiresDob` (overloaded — bare rules array OR a division, and the
+division form is true whenever `age_min`/`age_max` is set), `EligibilityCode`,
+`EligibilityIssue`, `divisionEligibilityIssues`, `rosterIssues`,
+`formatEligibilityIssues`, and the legacy `eligibilityIssues` string wrapper.
+Gate at the boundary: 39 eligibility tests, 2421 total / 2389 passed;
+`tsc` EXIT=0.
+
+- **The evaluator returns CODES, not sentences** — done in response to RS011's
+  entry condition 5 landing mid-wave. Display strings come from
+  `formatEligibilityIssues`, which also owns the `Player <n> (<name>): ` prefix
+  so RS011 can render `playerIndex`/`playerName` as separate fields.
+  Deliberately **no `severity`** on the issue: RS011 calls
+  `MISSING_DOB`/`MISSING_GENDER` warnings while registration submit must keep
+  treating them as blocking, so classification belongs to the caller and is
+  keyed off `code`. `MIXED_NEEDS_BOTH_GENDERS` is RS002's addition — RS011's
+  list is individual-level and has no roster-level code.
+- **A wrapper-vs-delegate test is a tautology, and one shipped here before the
+  review caught it.** W2b replaced the legacy wrapper's literal-string
+  assertions with `eligibilityIssues(...) === formatEligibilityIssues(
+  divisionEligibilityIssues(...))` — the exact path the wrapper delegates to,
+  so it cannot fail. The wrapper exists SO THAT existing callers keep seeing
+  byte-identical sentences; that guarantee needs hardcoded text. Five
+  literal-string tests restored, one per code.
+
+**The `org-posts-digest.test.ts` red is the sweep-suite-on-an-accumulated-DB
+trap, NOT a flake and NOT load.** It failed in three separate runs on the
+session DB and passed alone, which reads like flake; the real message (visible
+only via `--reporter=verbose` — both `rtk` AND a bare `npx vitest --reporter=json`
+render it `STACK_TRACE_ERROR`) is `Test timed out in 30000ms`.
+`sweepWeeklyDigests` walks every org in the schema, and `registrations.test.ts`
+creates orgs throughout its run, so the sweep's working set grows while it
+sweeps. Proof, not assertion: the same two suites on a **fresh** DB are
+**71/71**. Consequence for the rest of RS002 and for RS003+: run the gate on a
+fresh schema, and never read a 30s timeout in a sweep suite as an assertion
+failure.
+
 ## RS002 entry conditions (RS001 hands these over — do not start without reading)
 
 1. **Cart-level money is flattened onto entry-level rows.** `RegistrationWithGroupRow`
