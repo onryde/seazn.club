@@ -162,13 +162,30 @@ jobs:
         run: npx turbo run lint
 
   # -------------------------------------------------------------------------
-  # The apps/web unit / property / grid suite. ~215s. Split out of `gates`
-  # (see that job's header) because at 179s it was the second-largest step in
-  # the old single job.
+  # The apps/web unit / property / grid suite, in two shards. It was 216s — 182s
+  # of it this one step — and second only to smoke-e2e once #600 landed, so it
+  # had to move for the floor to come down at all.
+  #
+  # `--shard` here, rather than the exclude-globs #600 needed for smoke-db, and
+  # the difference is worth knowing: `vitest run --shard` IS honoured (verified
+  # on this repo: 7 + 7 files, zero overlap, union 14) but `vitest list --shard`
+  # is SILENTLY IGNORED (247 files for 1/2, for 2/2 and unsharded). smoke-db is
+  # reconciled by the #339 collection guard, which is built on `vitest list`, so
+  # it could not use --shard. THIS job carries no collection reconciliation, so
+  # it can — and gets automatic rebalancing as files are added, with no boundary
+  # constant to maintain.
+  #
+  # No DB and no Postgres service: this job has never had DATABASE_URL, so every
+  # DB-backed suite self-skips here exactly as before. Sharding does not change
+  # which suites skip, only which shard sees them.
   # -------------------------------------------------------------------------
   test:
-    name: Unit tests (apps/web)
+    name: Unit tests (apps/web) ${{ matrix.shard }}/2
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # one shard's failure must not hide the other's
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
@@ -180,12 +197,64 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      - run: npm test --workspace apps/web
+      - name: Unit suite (shard ${{ matrix.shard }}/2)
+        run: npm test --workspace apps/web -- --shard=${{ matrix.shard }}/2 --reporter=default --reporter=json --outputFile=vitest-results-unit.json
+
+      # A silently-ignored `--shard` costs nothing visible: both shards would run
+      # the WHOLE suite, stay green, and just double the runner minutes. The
+      # dangerous direction is the other one — a shard that selects NOTHING is
+      # also green, and half the unit suite would stop running with no signal at
+      # all. So bound the executed count on both sides.
+      #
+      # The oracle is `vitest list --filesOnly` with NO --shard, which is the
+      # full set (that flag being ignored by `list` is exactly why it is usable
+      # here as a total). A healthy half sits well inside 25%–75%; the window is
+      # deliberately wide because vitest shards by file, and file counts say
+      # nothing about balance of RUNTIME. It is a tripwire for "the flag stopped
+      # working", not a balance gate.
+      - name: Assert this shard ran a real half of the suite
+        run: |
+          set -euo pipefail
+          # `|| true` because `grep -c` exits 1 on zero matches, and under
+          # `pipefail` that would kill the step with an opaque failure instead of
+          # the explicit "the oracle broke" message node prints below.
+          total="$(cd apps/web && npx vitest list --filesOnly 2>/dev/null | grep -cE '\.(test|spec)\.[cm]?[jt]sx?$' || true)"
+          node -e '
+            const fs = require("fs");
+            const total = Number(process.argv[1]);
+            const r = JSON.parse(fs.readFileSync("apps/web/vitest-results-unit.json", "utf8"));
+            const files = new Set((r.testResults || []).map(t => t.name));
+            const ran = files.size;
+            console.log(`shard ran ${ran} of ${total} test files (${r.numTotalTests} tests)`);
+            if (!Number.isFinite(total) || total < 2) {
+              console.error(`::error::could not establish a file total (got ${total}) — the oracle broke, not the shard`);
+              process.exit(1);
+            }
+            if (ran === 0) {
+              console.error("::error::this shard executed ZERO test files. Half the unit suite is not running.");
+              process.exit(1);
+            }
+            if (ran > total * 0.75) {
+              console.error(`::error::this shard ran ${ran} of ${total} files — too many for a half. --shard looks ignored, so both shards are running everything.`);
+              process.exit(1);
+            }
+            if (ran < total * 0.25) {
+              console.error(`::error::this shard ran only ${ran} of ${total} files — too few for a half.`);
+              process.exit(1);
+            }
+          ' "$total"
+
       # Live-Stripe tier probe (sk_test, test-mode): confirms our plan/tier
       # amounts still round-trip real Stripe. Self-contained (no stripe:sync /
       # DATABASE_URL needed). The secret is withheld from fork PRs, so it just
       # skips there; runs on the owner's branch PRs.
+      #
+      # Shard 1 ONLY. It names one file explicitly, so it is not subject to the
+      # shard split at all — without the guard both shards would issue the same
+      # real test-mode Stripe calls, doubling live API traffic to prove the same
+      # thing twice.
       - name: Live-Stripe tier probe (sk_test)
+        if: matrix.shard == 1
         run: npm test --workspace apps/web -- --run src/lib/__tests__/billing-tiers.live.test.ts
         env:
           BILLING_LIVE: "1"
@@ -469,6 +538,29 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      # buildx + the placement image are hoisted ABOVE the database chain and the
+      # image build is backgrounded, so its ~19s runs underneath Flyway migrate,
+      # the RLS guard, the sport sync and the repo-root scripts tests (~25s
+      # together) instead of in front of them. The steps themselves are unchanged
+      # and their rationale still lives at the join below.
+      #
+      # This was left out of #597 on the stated grounds that smoke-db sat below
+      # the workflow floor, so overlapping it would buy no wall clock. #600 made
+      # smoke-db the floor, which is what makes it worth doing now.
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the placement service image
+        id: image
+        background: true
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       # Flyway CLI is downloaded by scripts/flyway.sh on first use; cache it
       # per pinned version so CI doesn't re-download every run.
       - name: Cache Flyway CLI
@@ -558,21 +650,16 @@ jobs:
       # Mirrors placement-ci.yml's `integration` job rather than inventing
       # a second pattern. The build is cached (type=gha) and shared with that
       # workflow, so this is usually a cache hit rather than a second build.
-      # Required before `build-push-action`, and easy to omit when copying that
-      # step alone — this job had no buildx, so the build failed in 56s having
-      # never reached a test. placement-ci.yml's `integration` job carries
-      # the same pair; `cache-from`/`cache-to: type=gha` need it too.
-      - uses: docker/setup-buildx-action@v3
-      - name: Build the placement service image
-        uses: docker/build-push-action@v6
-        with:
-          context: services/placement
-          file: services/placement/Dockerfile
-          push: false
-          load: true
-          tags: placement-service:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      # buildx is required before `build-push-action`, and easy to omit when
+      # copying that step alone — this job once had no buildx, and the build
+      # failed in 56s having never reached a test. placement-ci.yml's
+      # `integration` job carries the same pair; `cache-from`/`cache-to:
+      # type=gha` need it too.
+      #
+      # Both steps now live ABOVE the database chain, near `pnpm install`, with
+      # the image build backgrounded. This is their join.
+      - name: Wait for the placement image
+        wait: [image]
 
       # A literal, not a repository secret — a throwaway container talking to a
       # throwaway client inside one ephemeral runner. It must nonetheless be
@@ -832,6 +919,34 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      # A REAL solver, for the same reason smoke-db needs one: without a
+      # reachable service build.ts catches the transport failure and returns a
+      # greedy board carrying `solver_unavailable`, which is useless to a test
+      # asserting `already_optimal` or `infeasible`. This half owns
+      # schedule-solver-telemetry.test.ts, so it is this job that would fail
+      # silently-in-spirit without the container — see the assertion below.
+      #
+      # buildx first: `cache-from`/`cache-to: type=gha` need it, and the build
+      # fails without ever reaching a test if it is omitted. The image is shared
+      # with smoke-db, smoke-e2e, e2e.yml and placement-ci.yml through the same
+      # gha layer cache, so this is a cache hit and not a fourth full build.
+      #
+      # Hoisted above the database chain and backgrounded, so its ~17s runs
+      # underneath Flyway migrate and the sport sync rather than after them.
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the placement service image
+        id: image
+        background: true
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Cache Flyway CLI
         uses: actions/cache@v4
         with:
@@ -847,28 +962,8 @@ jobs:
       - name: Sync sport catalog from the engine registry
         run: npm run sync:sports
 
-      # A REAL solver, for the same reason smoke-db needs one: without a
-      # reachable service build.ts catches the transport failure and returns a
-      # greedy board carrying `solver_unavailable`, which is useless to a test
-      # asserting `already_optimal` or `infeasible`. This half owns
-      # schedule-solver-telemetry.test.ts, so it is this job that would fail
-      # silently-in-spirit without the container — see the assertion below.
-      #
-      # buildx first: `cache-from`/`cache-to: type=gha` need it, and the build
-      # fails without ever reaching a test if it is omitted. The image is shared
-      # with smoke-db, smoke-e2e, e2e.yml and placement-ci.yml through the same
-      # gha layer cache, so this is a cache hit and not a fourth full build.
-      - uses: docker/setup-buildx-action@v3
-      - name: Build the placement service image
-        uses: docker/build-push-action@v6
-        with:
-          context: services/placement
-          file: services/placement/Dockerfile
-          push: false
-          load: true
-          tags: placement-service:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Wait for the placement image
+        wait: [image]
 
       # Container name differs from smoke-db's `placement-smoke`: these are
       # separate runners so a collision is impossible, but a distinct name keeps
@@ -1034,6 +1129,59 @@ jobs:
           path: ~/.cache/seazn-flyway
           key: flyway-cli-10.22.0-linux-x64
 
+      # Persist the compiler cache between runs so the production build only
+      # pays for what changed (nextjs.org/docs/pages/guides/ci-build-caching).
+      # Source-hash key with a lockfile restore-key: exact hit on unchanged
+      # source, warm partial cache otherwise.
+      #
+      # MOVED UP, with buildx and the two long builds below it, so the database
+      # chain runs UNDERNEATH them rather than ahead of them. Restores stay in
+      # the foreground: they are ~2s, and a backgrounded actions/cache loses its
+      # outputs (measured — see e2e.yml's note on the placement image).
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('apps/web/src/**/*.js', 'apps/web/src/**/*.jsx', 'apps/web/src/**/*.ts', 'apps/web/src/**/*.tsx') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Backgrounded. Nothing before the `wait:` below reads this image, and at
+      # 17s it was pure serial time in front of a 61s build.
+      - name: Build the placement service image
+        id: image
+        background: true
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Backgrounded, and the long pole of this job's setup at 61s. The DB chain
+      # below (migrate, RLS guard, sport sync, Stripe sync — ~20s together) now
+      # runs while this compiles instead of before it.
+      #
+      # On a cache hit turbo restores apps/web/.next/** (minus .next/cache,
+      # which the actions/cache step above owns) — including the standalone
+      # tree the "Start server" step copies .next/static into.
+      #
+      # SKIP_TYPECHECK is declared in turbo.json's `build.env`, so a run with
+      # it set hashes differently from one without: a cached build can never
+      # be silently reused across the type-checked / not-type-checked split.
+      - name: Build (production)
+        id: build
+        background: true
+        run: npx turbo run build
+        env:
+          # tsc gate already ran in the gates job — don't type-check twice.
+          SKIP_TYPECHECK: "1"
+
       - name: Bootstrap database (Flyway migrate)
         run: npm run db:apply
 
@@ -1056,17 +1204,13 @@ jobs:
         if: env.STRIPE_SECRET_KEY != ''
         run: npm run stripe:sync
 
-      - uses: docker/setup-buildx-action@v3
-      - name: Build the placement service image
-        uses: docker/build-push-action@v6
-        with:
-          context: services/placement
-          file: services/placement/Dockerfile
-          push: false
-          load: true
-          tags: placement-service:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      # The setup phase's join. Everything past here needs what the two
+      # background steps produce: the container needs the image, and both
+      # "Start server" and the smoke run need .next/standalone. A background
+      # step's FAILURE also surfaces here rather than where it happened, so a red
+      # on this step means "read the interleaved log above", not "the wait broke".
+      - name: Wait for the placement image and the production build
+        wait: [image, build]
 
       - name: Start the placement service
         run: |
@@ -1097,30 +1241,10 @@ jobs:
       # started 404ing transiently. The standalone server has neither the
       # watchdog nor per-request compiles — and it's what production runs.
 
-      # Persist the compiler cache between runs so the production build only
-      # pays for what changed (nextjs.org/docs/pages/guides/ci-build-caching).
-      # Source-hash key with a lockfile restore-key: exact hit on unchanged
-      # source, warm partial cache otherwise.
-      - name: Cache Next.js build cache
-        uses: actions/cache@v4
-        with:
-          path: apps/web/.next/cache
-          key: ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('apps/web/src/**/*.js', 'apps/web/src/**/*.jsx', 'apps/web/src/**/*.ts', 'apps/web/src/**/*.tsx') }}
-          restore-keys: |
-            ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
-
-      # On a cache hit turbo restores apps/web/.next/** (minus .next/cache,
-      # which the actions/cache step above owns) — including the standalone
-      # tree the "Start server" step copies .next/static into.
-      #
-      # SKIP_TYPECHECK is declared in turbo.json's `build.env`, so a run with
-      # it set hashes differently from one without: a cached build can never
-      # be silently reused across the type-checked / not-type-checked split.
-      - name: Build (production)
-        run: npx turbo run build
-        env:
-          # tsc gate already ran in the test job — don't type-check twice.
-          SKIP_TYPECHECK: "1"
+      # The Next.js cache restore and the production build used to sit here.
+      # Both MOVED UP above the database chain so that chain runs underneath the
+      # build rather than in front of it; the build is now a `background:` step
+      # joined at the `wait:` above.
 
       # Start the server PRODUCTION runs (#356). `next start` does not serve an
       # `output: standalone` build at all — it warns and serves the
