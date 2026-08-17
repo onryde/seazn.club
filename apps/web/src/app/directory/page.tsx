@@ -200,10 +200,10 @@ async function OfficialsTab({ ui }: { ui: Dict }) {
   );
 }
 
-// D5/P8: archived VENUES are fetched here (includeArchived: true) so the
-// panel's "Show archived" toggle is a client-side filter, not a refetch —
-// `listVenues` always nests only ACTIVE courts regardless of that option
-// (see venues-panel.tsx's file header for why).
+// D5/P8: fetched here with includeArchived: true so the panel's "Show
+// archived" toggle is a client-side filter, not a refetch — `listVenues`
+// threads the same flag into BOTH the venues and the nested courts query
+// (A5; see venues-panel.tsx's file header).
 async function VenuesTab({ ui }: { ui: Dict }) {
   const { auth, canEdit } = await requirePageAuth();
   const venues = await listVenues(auth, { includeArchived: true });

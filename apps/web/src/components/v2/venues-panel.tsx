@@ -264,6 +264,7 @@ export function VenuesPanel({
               plural={plural}
               confirm={confirm}
               tagSuggestions={tagSuggestions}
+              showArchived={showArchived}
             />
           ))}
         </div>
@@ -329,6 +330,7 @@ function VenueCard({
   plural,
   confirm,
   tagSuggestions,
+  showArchived,
 }: {
   venue: Venue;
   orgId: string;
@@ -339,11 +341,17 @@ function VenueCard({
   plural: Plural;
   confirm: Confirm;
   tagSuggestions: string[];
+  showArchived: boolean;
 }) {
   const [name, setName] = useState(venue.name);
   const [address, setAddress] = useState(venue.address ?? "");
   const archived = venue.archived_at !== null;
   const dirty = name.trim() !== venue.name || address.trim() !== (venue.address ?? "");
+  // Same toggle as the venue level, one level down (A5) — off hides archived
+  // courts entirely; moveCourt's array-position math below operates on THIS
+  // (visible) list, not the raw venue.courts, so "up"/"down" always target
+  // what's actually adjacent on screen rather than skipping over a hidden row.
+  const visibleCourts = filterCourtsByArchived(venue.courts, showArchived);
 
   const saveVenue = () =>
     run(
@@ -392,17 +400,18 @@ function VenueCard({
     );
 
   const moveCourt = (courtId: string, direction: "up" | "down") => {
-    const idx = venue.courts.findIndex((c) => c.id === courtId);
+    const idx = visibleCourts.findIndex((c) => c.id === courtId);
     const swapWith = direction === "up" ? idx - 1 : idx + 1;
-    if (idx < 0 || swapWith < 0 || swapWith >= venue.courts.length) return;
-    const a = venue.courts[idx]!;
-    const b = venue.courts[swapWith]!;
+    if (idx < 0 || swapWith < 0 || swapWith >= visibleCourts.length) return;
+    const a = visibleCourts[idx]!;
+    const b = visibleCourts[swapWith]!;
     // Target sort = the two ARRAY POSITIONS being swapped, not each other's
     // existing `sort` value: new courts default to sort 0, so two untouched
     // courts have equal sort and swapping their values would be a no-op —
     // clicking "up" and seeing nothing move. Positions are always distinct
-    // and match `venue.courts`' own display order (server: `order by sort,
-    // name, id`), so this also self-heals any earlier ties as it goes.
+    // and match the VISIBLE list's own display order (server: `order by
+    // sort, name, id`, then the archived filter above), so this also
+    // self-heals any earlier ties as it goes.
     run(async () => {
       await Promise.all([
         apiV1(`/api/v1/orgs/${orgId}/courts/${a.id}`, { method: "PATCH", json: { sort: swapWith } }),
@@ -458,11 +467,11 @@ function VenueCard({
 
       <div className="space-y-2 border-t border-slate-100 pt-3">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{msg("venues.courts.title")}</p>
-        {venue.courts.length === 0 ? (
+        {visibleCourts.length === 0 ? (
           <p className="text-xs text-slate-400">{msg("venues.courts.empty")}</p>
         ) : (
           <ul className="space-y-2">
-            {venue.courts.map((court, i) => (
+            {visibleCourts.map((court, i) => (
               <CourtRow
                 key={court.id}
                 court={court}
@@ -475,7 +484,7 @@ function VenueCard({
                 confirm={confirm}
                 tagSuggestions={tagSuggestions}
                 isFirst={i === 0}
-                isLast={i === venue.courts.length - 1}
+                isLast={i === visibleCourts.length - 1}
                 onMoveUp={() => moveCourt(court.id, "up")}
                 onMoveDown={() => moveCourt(court.id, "down")}
               />
@@ -548,6 +557,7 @@ function CourtRow({
   const [name, setName] = useState(court.name);
   const [expanded, setExpanded] = useState(false);
   const dirty = name.trim() !== court.name;
+  const archived = court.archived_at !== null;
 
   const saveName = () =>
     run(
@@ -571,6 +581,12 @@ function CourtRow({
     );
   };
 
+  const unarchiveCourt = () =>
+    run(
+      () => apiV1(`/api/v1/orgs/${orgId}/courts/${court.id}/archive`, { method: "DELETE" }),
+      msg("venues.notice.courtUnarchived"),
+    );
+
   const deleteCourt = async () => {
     const ok = await confirm({
       title: msg("venues.court.confirmDelete.title"),
@@ -583,17 +599,18 @@ function CourtRow({
   };
 
   return (
-    <li className="rounded-lg border border-slate-200 bg-white p-3">
+    <li className={`rounded-lg border border-slate-200 bg-white p-3 ${archived ? "opacity-60" : ""}`}>
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
           <input
             value={name}
-            disabled={!canEdit}
+            disabled={!canEdit || archived}
             onChange={(e) => setName(e.target.value)}
             className="input min-w-0 flex-1 text-sm font-medium"
             aria-label={msg("venues.court.editName")}
           />
-          {canEdit && dirty && (
+          {archived && <span className="badge bg-slate-200 text-slate-500">{msg("venues.court.archived")}</span>}
+          {canEdit && dirty && !archived && (
             <button type="button" disabled={busy || !name.trim()} onClick={saveName} className="btn btn-primary shrink-0 px-2.5 py-1.5 text-xs">
               {msg("venues.venue.save")}
             </button>
@@ -603,7 +620,7 @@ function CourtRow({
           <div className="flex shrink-0 items-center gap-1">
             <button
               type="button"
-              disabled={busy || isFirst}
+              disabled={busy || isFirst || archived}
               onClick={onMoveUp}
               aria-label={msg("venues.court.moveUp")}
               className="btn btn-ghost px-2 py-1 text-xs"
@@ -612,7 +629,7 @@ function CourtRow({
             </button>
             <button
               type="button"
-              disabled={busy || isLast}
+              disabled={busy || isLast || archived}
               onClick={onMoveDown}
               aria-label={msg("venues.court.moveDown")}
               className="btn btn-ghost px-2 py-1 text-xs"
@@ -628,7 +645,7 @@ function CourtRow({
           value={court.tags}
           onChange={setTags}
           suggestions={tagSuggestions}
-          disabled={!canEdit || busy}
+          disabled={!canEdit || busy || archived}
           label={msg("venues.court.tagsLabel")}
           placeholder={msg("tags.placeholder")}
           addLabel={msg("tags.add")}
@@ -646,7 +663,12 @@ function CourtRow({
         >
           {expanded ? msg("venues.court.hideHours") : msg("venues.court.editHours")}
         </button>
-        {canEdit && (
+        {canEdit && archived && (
+          <button type="button" disabled={busy} onClick={unarchiveCourt} className="text-slate-500 underline hover:text-slate-700">
+            {msg("venues.court.unarchive")}
+          </button>
+        )}
+        {canEdit && !archived && (
           <button type="button" disabled={busy} onClick={archiveCourt} className="text-slate-500 underline hover:text-slate-700">
             {msg("venues.court.archive")}
           </button>
@@ -660,7 +682,15 @@ function CourtRow({
 
       {expanded && (
         <div className="mt-3">
-          <CourtCalendarEditor court={court} orgId={orgId} canEdit={canEdit} busy={busy} run={run} msg={msg} plural={plural} />
+          <CourtCalendarEditor
+            court={court}
+            orgId={orgId}
+            canEdit={canEdit && !archived}
+            busy={busy}
+            run={run}
+            msg={msg}
+            plural={plural}
+          />
         </div>
       )}
     </li>
