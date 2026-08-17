@@ -902,6 +902,9 @@ test("gallery: venues (P8)", async ({ page }) => {
   // Court 1 sorts first (alphabetical tiebreak on equal `sort`) and is the
   // one with tags + a populated calendar — open ITS editor, not Court 2's.
   await page.getByRole("button", { name: "Hours", exact: true }).first().click();
-  await expect(page.getByText("Weekly hours")).toBeVisible();
+  // exact: true — the page's own eyebrow copy ends "...with each court's
+  // own weekly hours.", a case-insensitive substring match for the bare
+  // query and a strict-mode violation without it.
+  await expect(page.getByText("Weekly hours", { exact: true })).toBeVisible();
   await captureVenuesState(page, dir, "02-calendar");
 });
