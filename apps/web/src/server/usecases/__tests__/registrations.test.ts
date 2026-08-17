@@ -2226,6 +2226,93 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     );
     expect(bRefunded.refunded_cents).toBe(b.amount_cents);
   });
+
+  // -------------------------------------------------------------------------
+  // Wave-1 review findings: two non-transactional refund write pairs, an
+  // unlisted fourth hazard-2 site (dispute-lost write-off), and a missing
+  // webhook-redelivery guard. Single-entry carts suffice for all four —
+  // none of these are multi-entry-cart hazards.
+  // -------------------------------------------------------------------------
+
+  it("review (blocker): late-payment refund writes entry and cart atomically, not as two commits", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    await withdrawRegistrationPublic(res.registration.id, res.access_token); // never paid — no auto-refund fires here
+    // Force the CART write to fail (int4 overflow) while the ENTRY write
+    // alone would succeed — proves the pair is one transaction, not two
+    // independent autocommits that can diverge if the second one fails.
+    await sql`update registration_groups set refunded_cents = 2147483647
+              where id = ${res.registration.group_id}`;
+
+    await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 500));
+
+    const row = await loadWithGroup(res.registration.id);
+    // Reverting the sql.begin wrap (registrations.ts ~confirmPaidRegistration
+    // "late" branch) makes this fail: the entry write would commit alone
+    // and read back 500.
+    expect(row.refunded_cents).toBe(0);
+  });
+
+  it("review (blocker): withdraw auto-refund writes entry and cart atomically, not as two commits", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 500)); // paid + has payment_intent_id
+    await sql`update registration_groups set refunded_cents = 2147483647
+              where id = ${res.registration.group_id}`;
+
+    await withdrawRegistrationPublic(res.registration.id, res.access_token); // pre-lock auto-refund attempt
+
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("withdrawn"); // the status flip is its own, separate, unaffected tx
+    // Reverting the sql.begin wrap (registrations.ts ~withdrawCore
+    // auto-refund block) makes this fail: the entry write would commit
+    // alone and read back 500.
+    expect(row.refunded_cents).toBe(0);
+  });
+
+  it("review (minor): a redelivered late-payment webhook refunds only once", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    await withdrawRegistrationPublic(res.registration.id, res.access_token);
+    stripeMock.refundCreate.mockClear();
+
+    const session = fakeSession(res.registration.id, 500);
+    await handleRegistrationCheckoutCompleted(session);
+    await handleRegistrationCheckoutCompleted(session); // Stripe's "at least once" redelivery
+
+    // Reverting the already-refunded guard (registrations.ts
+    // ~confirmPaidRegistration, right before the "late" stripeRefund call)
+    // makes this fail: a second real refund fires and the totals double.
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.refunded_cents).toBe(500);
+    expect(row.group_refunded_cents).toBe(500);
+  });
+
+  it("review (major): a lost dispute accumulates via dispute.amount and never regresses the cart total", async () => {
+    const { owner, a, b, intent } = await twoEntryCart(1000, 700);
+    await refundRegistration(owner, a.id, undefined); // group_refunded_cents -> 1000
+    await refundRegistration(owner, b.id, undefined); // group_refunded_cents -> 1700
+
+    // A SMALLER, later dispute.amount (500) on the same intent must neither
+    // regress the 1700 two entry-level refunds already accumulated, nor be
+    // sourced from one entry's own amount_cents (1000 or 700, whichever the
+    // earliest-entry lookup picks — both are wrong either way).
+    await handleRegistrationDispute(
+      { id: "dp_major", payment_intent: intent, amount: 500, status: "needs_response" } as unknown as Stripe.Dispute,
+      "created",
+    );
+    await handleRegistrationDispute(
+      { id: "dp_major", payment_intent: intent, amount: 500, status: "lost" } as unknown as Stripe.Dispute,
+      "closed",
+    );
+
+    const after = await loadWithGroup(a.id);
+    // Reverting the greatest(refunded_cents, dispute.amount) fix
+    // (registrations.ts ~handleRegistrationDispute, "lost" branch) makes
+    // this fail: it would read back 1000 or 700, never 1700.
+    expect(after.group_refunded_cents).toBe(1700);
+  });
 });
 
 // describe("per-registrant email locale (cycle 47)") DELETED (RS001

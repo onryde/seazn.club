@@ -416,9 +416,15 @@ export interface RegistrationPlayerRow {
  *  would silently yield one of them). Code that needs the cart's total reads
  *  `group_refunded_cents` instead — today that is only the dispute-lost
  *  write-off and the Stripe-dashboard refund mirror, both genuinely
- *  cart-scoped (a dispute/charge is against the intent, not one entry) and
- *  deliberately left out of RS002's scope. No per-entry `refunded_at` either
- *  — deliberately out of scope; the cart's last-refund timestamp is enough.
+ *  cart-scoped (a dispute/charge is against the intent, not one entry), so
+ *  neither gets a per-entry write — that part is deliberately out of RS002's
+ *  scope. That scoping choice does NOT make the write itself safe: the
+ *  dispute-lost write-off was a fourth, unlisted site of hazard 2's class
+ *  (flat-overwrote using the earliest entry's own `amount_cents` instead of
+ *  `dispute.amount`) until a review pass caught it — it is
+ *  `greatest(refunded_cents, dispute.amount)` now, same monotonic pattern as
+ *  the dashboard mirror. No per-entry `refunded_at` either — deliberately
+ *  out of scope; the cart's last-refund timestamp is enough.
  *  ───────────────────────────────────────────────────────────────────────── */
 export type RegistrationWithGroupRow = RegistrationRow &
   Pick<
@@ -1319,21 +1325,38 @@ async function confirmPaidRegistration(
     // move on a late/duplicate refund for this one (block comment above
     // RegistrationWithGroupRow, hazard 1).
     const entryRefundCents = amountTotal ?? outcome.reg.amount_cents;
+    // Webhook redelivery guard (review fixup): Stripe delivers "at least
+    // once", so the SAME stale checkout session can complete more than once
+    // for a withdrawn/expired registration. withdrawCore avoids a double
+    // refund by flipping status inside the locked tx before its refund
+    // block; this path enters ALREADY withdrawn/expired, so it checks the
+    // entry's own refunded_cents instead — a redelivery is then a silent
+    // no-op rather than a second real Stripe refund (nothing enforced that
+    // before; relying on Stripe to reject an over-refund is not guaranteed
+    // once a partial refund or dispute has left headroom on the intent).
+    if (outcome.kind === "late" && outcome.reg.refunded_cents >= outcome.reg.amount_cents) {
+      return;
+    }
     const refund = await stripeRefund(outcome.intent, entryRefundCents);
     if (outcome.kind === "late") {
-      // Additive on BOTH tables (hazard 2 fixed) — never overwrite either
-      // total, since a sibling entry may already have contributed to the
-      // cart's refunded_cents. refunded_at stays group-only (V364); no
-      // per-entry clock (RS002 scope).
-      await sql`
-        update registrations
-        set refunded_cents = refunded_cents + ${entryRefundCents}, updated_at = now()
-        where id = ${outcome.reg.id}`;
-      await sql`
-        update registration_groups
-        set refunded_cents = refunded_cents + ${entryRefundCents},
-            refunded_at = now(), updated_at = now()
-        where id = ${outcome.reg.group_id}`;
+      // Additive on BOTH tables (hazard 2 fixed), in ONE transaction (review
+      // fixup — these were two separate autocommit statements; if the
+      // second failed after the first committed, Stripe would already have
+      // refunded the money while the entry and cart totals silently
+      // diverged, and the whole attempt would still land in the catch below
+      // as `refund_failed` — a misleading audit trail for a refund that
+      // actually succeeded).
+      await sql.begin(async (tx) => {
+        await tx`
+          update registrations
+          set refunded_cents = refunded_cents + ${entryRefundCents}, updated_at = now()
+          where id = ${outcome.reg.id}`;
+        await tx`
+          update registration_groups
+          set refunded_cents = refunded_cents + ${entryRefundCents},
+              refunded_at = now(), updated_at = now()
+          where id = ${outcome.reg.group_id}`;
+      });
     }
     await audit(sql, outcome.competitionId, outcome.reg.org_id, "registration.refunded", {
       registration_id: regId,
@@ -1409,11 +1432,17 @@ export async function handleRegistrationDispute(
   } else if (dispute.status === "lost") {
     // The write-off must land whatever Stripe does next — same contract as
     // refund failure never undoing a withdrawal. refunded_cents/refunded_at
-    // live on the cart now (V364); `amount_cents` here is THIS entry's own
-    // fee (still on `registrations`), not the cart's subtotal, so it has to
-    // ride as a JS value rather than a same-row column reference.
+    // live on the cart now (V364). Cart-scoped by design (review fixup —
+    // this used to read `reg.amount_cents`, the EARLIEST entry sharing the
+    // intent, and flat-overwrite with it: a fourth, unlisted site of hazard
+    // 2's class, wrong on two counts — wrong source value once a cart holds
+    // more than one entry, AND non-monotonic like the other three sites).
+    // `dispute.amount` is the actual disputed amount — already used the same
+    // way in the "created" phase's audit above (line ~1386) — and `greatest`
+    // matches syncRegistrationRefund's mirror: never regress what an
+    // entry-level refund may already have recorded.
     await sql`update registration_groups
-              set refunded_cents = ${reg.amount_cents},
+              set refunded_cents = greatest(refunded_cents, ${dispute.amount}),
                   refunded_at = coalesce(refunded_at, now()), updated_at = now()
               where id = ${reg.group_id}`;
     await audit(sql, ctx.competition_id, reg.org_id, "registration.dispute_lost", {
@@ -1864,18 +1893,22 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
     const remaining = locked.amount_cents - locked.refunded_cents;
     try {
       const refund = await stripeRefund(locked.payment_intent_id as string, remaining);
-      // Additive on BOTH tables (hazard 2 fixed) — a sibling entry may
-      // already have contributed to the cart's refunded_cents, so this must
-      // never overwrite it. refunded_at stays group-only (V364); no
-      // per-entry clock (RS002 scope).
-      await sql`
-        update registrations
-        set refunded_cents = refunded_cents + ${remaining}, updated_at = now()
-        where id = ${locked.id}`;
-      await sql`
-        update registration_groups
-        set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
-        where id = ${locked.group_id}`;
+      // Additive on BOTH tables (hazard 2 fixed), in ONE transaction (review
+      // fixup — matches refundRegistration's withTenant-wrapped pattern
+      // below: two separate autocommit statements could leave the entry and
+      // cart totals silently diverged if the second failed after the first
+      // committed, reachable today on a single-entry cart, no multi-entry
+      // cart needed).
+      await sql.begin(async (tx) => {
+        await tx`
+          update registrations
+          set refunded_cents = refunded_cents + ${remaining}, updated_at = now()
+          where id = ${locked.id}`;
+        await tx`
+          update registration_groups
+          set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
+          where id = ${locked.group_id}`;
+      });
       await audit(sql, ctx.competition_id, ctx.org_id, "registration.refunded", {
         registration_id: reg.id,
         amount_cents: remaining,
