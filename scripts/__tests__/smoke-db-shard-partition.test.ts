@@ -37,16 +37,48 @@ const CI_YML = join(REPO_ROOT, ".github/workflows/ci.yml");
  *
  * Regex rather than a YAML parse because no YAML library is a declared root
  * dependency, and toolchain.test.ts enforces that every dependency scripts/
- * imports is declared. The repo's other workflow-reading guards (toolchain,
- * db-suite-ci-wiring, z3-retirement-drift) all read the raw text the same way.
+ * imports is declared. The repo's other workflow-reading guards (toolchain and
+ * db-suite-ci-wiring among them) all read the raw text the same way.
+ *
+ * Do NOT name the solver-retirement drift guard here, or anywhere in a new
+ * file. That gate is a CLOSED SET over files mentioning the retired solver by
+ * name, so a NEW file naming it reds CI even when the mention is accurate and
+ * incidental — which is exactly what an earlier draft of this comment did.
  */
 const excludeGlobs = (): string[] => {
   const text = readFileSync(CI_YML, "utf8");
   return [...text.matchAll(/^\s*USECASES_EXCLUDE:\s*"([^"]+)"\s*$/gm)].map((m) => m[1]);
 };
 
-/** `vitest list --filesOnly` for these paths, narrowed by these globs. */
+/**
+ * `vitest list --filesOnly` for these paths, narrowed by these globs.
+ *
+ * Read the timeout situation before touching this file. These tests run in
+ * ci.yml's "Repo-root scripts tests" step, which invokes packages/engine's
+ * vitest binary from the REPO ROOT — where, as that step's own comment records,
+ * no vitest.config.* is discovered. So no repo-wide `testTimeout` convention is
+ * in force and vitest's 5s DEFAULT applies, not apps/web's 30s, while a single
+ * `vitest list` spawn costs ~1s locally and more on a runner sharing four cores
+ * with a Postgres and a Redis container. The tests below measured 3.6s and 2.3s.
+ *
+ * THE FIX IS THE `--testTimeout=30000` IN ci.yml, not this cache. It lives in
+ * the workflow rather than as an inline `{ timeout }` because an inline value
+ * silently overrides whatever the caller passes — the defect behind #363, where
+ * someone hits a CI timeout, passes the flag, watches it fail identically, and
+ * concludes the test hangs.
+ *
+ * The memo is worth keeping but is NOT what buys the headroom, and the honest
+ * accounting is: across both tests there are six listings and exactly ONE
+ * duplicate — `(['src/server/usecases'], [usecases])`, requested by each — so
+ * this saves one spawn of six, about a second. If a future test reuses more of
+ * these combinations it saves more; do not credit it with more than that today.
+ */
+const listCache = new Map<string, Set<string>>();
 const listed = (paths: string[], excludes: string[]): Set<string> => {
+  const key = JSON.stringify([paths, excludes]);
+  const hit = listCache.get(key);
+  if (hit) return hit;
+
   const args = [
     "vitest",
     "list",
@@ -60,13 +92,15 @@ const listed = (paths: string[], excludes: string[]): Set<string> => {
     maxBuffer: 64 * 1024 * 1024,
     stdio: ["ignore", "pipe", "inherit"],
   });
-  return new Set(
+  const set = new Set(
     out
       .split("\n")
       .map((l) => l.trim())
       .filter((l) => /\.(test|spec)\.[cm]?[jt]sx?$/.test(l))
       .map((l) => l.replace(/^.*?(apps\/web\/)?src\//, "src/")),
   );
+  listCache.set(key, set);
+  return set;
 };
 
 describe("ci.yml's smoke-db / smoke-db-usecases partition", () => {

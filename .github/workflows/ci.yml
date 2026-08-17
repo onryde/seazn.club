@@ -504,8 +504,26 @@ jobs:
       # auto-discovery walks up from cwd, and the repo root has no
       # vitest.config.*, so packages/engine's own restrictive one is never
       # picked up.
+      #
+      # That last sentence has a consequence worth spelling out, because it cost
+      # a CI round trip: with no config discovered, NO `testTimeout` convention
+      # is in force here and vitest's 5s DEFAULT applies — not apps/web's 30s.
+      # smoke-db-shard-partition.test.ts shells out to `vitest list`, which is
+      # ~1s per call locally and more on a runner sharing four cores with a
+      # Postgres and a Redis container. `--testTimeout` is set HERE rather than
+      # inline in the test because an inline `{ timeout }` silently overrides
+      # whatever the caller passes, which is the defect behind #363 — someone
+      # hits a CI timeout, passes the flag, watches it fail identically, and
+      # concludes the test hangs. The test also memoises its spawns, so this
+      # raises a ceiling rather than papering over repeat work.
+      #
+      # `--reporter=default` alongside the JSON one, matching every other test
+      # step in this file. With ONLY the JSON reporter a failure here printed
+      # nothing at all — just "Process completed with exit code 1" — so the log
+      # could not say which test failed or why. That is what made the round trip
+      # expensive rather than cheap.
       - name: Repo-root scripts tests (real Postgres)
-        run: ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile=vitest-results-scripts.json scripts/__tests__
+        run: ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-scripts.json --testTimeout=30000 scripts/__tests__
 
       # src/lib is in scope alongside src/server. It used to be excluded, which
       # meant the two suites guarding the Event Pass invariant —
