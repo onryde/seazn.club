@@ -25,6 +25,7 @@ import {
   cricketBallDetail,
   cricketSkinV3,
   currentInnings,
+  dueBattingSide,
   freeHitPending,
   inningsFidelity,
   nextOverNumber,
@@ -1772,8 +1773,16 @@ describe("buildTiles — innings closed disables the delivery-capable surface (R
     "wide", "wicket", "extra-noball", "extra-bye", "extra-legbye", "extra-penalty",
   ];
 
+  // R2b-next (2026-08-17): these fixtures now carry TWO closed innings —
+  // under the default single-innings-per-side cfg (`cfg()`'s own
+  // `inningsPerSide: 1`, so `maxInningsCount` is 2), ONE closed innings
+  // means a second is still DUE, which is exactly the state the R2b-next fix
+  // below now RE-ENABLES the delivery-capable surface for. A genuinely
+  // terminal fixture — nothing further due — needs both match innings
+  // recorded closed, matching `currentInnings`'s own "falls back to the last
+  // innings once every innings is closed" fixture shape (above).
   it("a fine-fidelity closed innings disables every ball tile, wicket, review, and inningsClose — still visible, not removed", () => {
-    const tiles = buildTiles(view({ state: state({ innings: [innings({ closed: true })] }) }));
+    const tiles = buildTiles(view({ state: state({ innings: [innings({ closed: true }), innings({ closed: true })] }) }));
     for (const id of [...BALL_TILE_IDS, "review", "inningsClose"]) {
       const tile = tiles.find((tl) => tl.id === id)!;
       expect(tile).toBeDefined();
@@ -1781,28 +1790,33 @@ describe("buildTiles — innings closed disables the delivery-capable surface (R
     }
   });
 
-  it("declare is disabled too, for a two-innings cfg", () => {
+  it("declare is disabled too, for a two-innings cfg — regardless of due-ness (declare never targets a not-yet-created innings)", () => {
     const tiles = buildTiles(view({
-      state: state({ innings: [innings({ closed: true })] }),
+      state: state({ innings: [innings({ closed: true })] }), // a 2nd innings IS due under this cfg — declare stays disabled anyway
       cfg: cfg({ inningsPerSide: 2 }),
     }));
     expect(tiles.find((tl) => tl.id === "declare")!.disabled).toBe(true);
   });
 
-  it("a coarse-fidelity closed innings disables overSummary instead — the ball tiles are already hidden by fidelity, not by this fix", () => {
-    const tiles = buildTiles(view({ state: state({ innings: [innings({ closed: true, fine: null })] }) }));
+  it("a coarse-fidelity closed innings disables overSummary instead, once nothing further is due — the ball tiles are already hidden by fidelity, not by this fix", () => {
+    const tiles = buildTiles(view({ state: state({ innings: [innings({ closed: true }), innings({ closed: true, fine: null })] }) }));
     expect(tiles.some((tl) => tl.id === "run0")).toBe(false);
     expect(tiles.find((tl) => tl.id === "overSummary")!.disabled).toBe(true);
   });
 
   it("More stays tappable — genuine between-innings actions (revise, follow-on, match close) are reachable only through it", () => {
-    const tiles = buildTiles(view({ state: state({ innings: [innings({ closed: true })] }) }));
+    const tiles = buildTiles(view({ state: state({ innings: [innings({ closed: true }), innings({ closed: true })] }) }));
     expect(tiles.find((tl) => tl.id === "more")!.disabled).toBeUndefined();
   });
 
-  it("blocks even when a second innings is still due (two-innings cfg, only one innings recorded) — there is no tile that targets the next innings", () => {
+  it("blocks when nothing further is due even under a two-innings cfg (all 4 match innings recorded closed)", () => {
     const tiles = buildTiles(view({
-      state: state({ innings: [innings({ closed: true })] }),
+      state: state({
+        innings: [
+          innings({ closed: true }), innings({ closed: true }),
+          innings({ closed: true }), innings({ closed: true }),
+        ],
+      }),
       cfg: cfg({ inningsPerSide: 2 }),
     }));
     for (const id of BALL_TILE_IDS) {
@@ -1816,9 +1830,64 @@ describe("buildTiles — innings closed disables the delivery-capable surface (R
   });
 });
 
+// ---------------------------------------------------------------------------
+// buildTiles / buildContext / basePayload — closed innings, ANOTHER due
+// (R2b-next, owner-confirmed live blocker, 2026-08-17): after the fix above
+// shipped, the owner could still not start scoring innings 2 from this pad —
+// `currentInnings()` falls back to the just-closed innings, so `basePayload`
+// built a payload for it (e.g. over 20.0, the wrong side batting) and R2b's
+// own closure gate then disabled the tiles outright, so NEITHER the stale
+// payload NOR the disabled tiles let anyone score the next innings. Opening
+// an innings is IMPLICIT in the fold (`createInnings`, cricket.ts:2935-2944/
+// :1401-1413, the same mechanism that opens innings ONE on its own first
+// delivery) — there is no dedicated "start innings" event, and this fix does
+// not invent one. `dueBattingSide` (cricket.tsx) is the engine's own
+// `nextBattingSide` (cricket.ts), so this is provably the same rule, not a
+// forked copy.
+// ---------------------------------------------------------------------------
+
+describe("dueBattingSide", () => {
+  it("null with no innings recorded yet", () => {
+    expect(dueBattingSide({}, cfg())).toBeNull();
+  });
+
+  it("null while the current innings is still open", () => {
+    expect(dueBattingSide(state(), cfg())).toBeNull();
+  });
+
+  it("null once every match innings is closed (terminal — single-innings cfg)", () => {
+    const s = state({ innings: [innings({ closed: true }), innings({ closed: true })] });
+    expect(dueBattingSide(s, cfg())).toBeNull();
+  });
+
+  it("the OTHER side once the first (of two match) innings is closed", () => {
+    const s = state({ battingFirst: "home", innings: [innings({ closed: true, battingSide: "home" })] });
+    expect(dueBattingSide(s, cfg())).toBe("away");
+  });
+
+  it("reads battingFirst, not a hardcoded home — an away-first match still returns the OTHER side (home)", () => {
+    const s = state({ battingFirst: "away", innings: [innings({ closed: true, battingSide: "away" })] });
+    expect(dueBattingSide(s, cfg())).toBe("home");
+  });
+
+  it("honours the F,S,S,F follow-on order — diverges from plain alternation, a two-innings-per-side cfg with 2 innings recorded", () => {
+    const twoInnings = cfg({ inningsPerSide: 2 });
+    const twoClosed = { innings: [innings({ closed: true }), innings({ closed: true })] };
+    // Plain alternation would say "home" (the 3rd innings, index 2, is even)
+    // for BOTH of these — only follow-on's F,S,S,F pattern tells them apart.
+    expect(dueBattingSide(state({ battingFirst: "home", followOnEnforced: false, ...twoClosed }), twoInnings)).toBe("home");
+    expect(dueBattingSide(state({ battingFirst: "home", followOnEnforced: true, ...twoClosed }), twoInnings)).toBe("away");
+  });
+});
+
 describe("buildContext — innings closed names the real cause (R2b defect 2)", () => {
+  // R2b-next (2026-08-17): both fixtures below now carry TWO closed innings
+  // — same reason as `buildTiles`'s own defect-2 block above: under the
+  // default single-innings-per-side cfg, ONE closed innings leaves a second
+  // one DUE, and `buildContext` now returns `null` for that state (see the
+  // new describe block below) rather than a closure-message spec.
   it("all three slots carry the closure message and are read-only", () => {
-    const v = view({ state: state({ innings: [innings({ closed: true })] }) });
+    const v = view({ state: state({ innings: [innings({ closed: true }), innings({ closed: true })] }) });
     const spec = buildContext(v, t)!;
     for (const id of ["striker", "nonStriker", "bowler"]) {
       const slot = spec.slots.find((s) => s.id === id)!;
@@ -1830,10 +1899,13 @@ describe("buildContext — innings closed names the real cause (R2b defect 2)", 
   it("closure wins over a bowler-eligibility message when both could apply off the same stale fold data", () => {
     const v = view({
       state: state({
-        innings: [innings({
-          closed: true,
-          fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} },
-        })],
+        innings: [
+          innings({ closed: true }),
+          innings({
+            closed: true,
+            fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} },
+          }),
+        ],
       }),
       contextOverrides: { bowler: "a1" }, // would read "prevOver" if eligibility were still checked — see next test
     });
@@ -1862,13 +1934,106 @@ describe("buildContext — innings closed names the real cause (R2b defect 2)", 
   });
 });
 
+describe("buildTiles / buildContext / basePayload — closed innings, ANOTHER due (R2b-next)", () => {
+  // battingFirst "home" batted innings 0 (now closed) -> innings 1 is due,
+  // "away" bats it. orders (state()'s own default) give the new sides'
+  // openers/first-fielder unambiguously: away h1/h2 swap to a1/a2, bowler
+  // defaults to home's order[0] since a fresh innings has no fine at all.
+  function closedFirstInningsDue(over: Record<string, unknown> = {}) {
+    return state({
+      battingFirst: "home",
+      innings: [innings({ closed: true, battingSide: "home", runs: 187, wickets: 6, legalBalls: 118 })],
+      ...over,
+    });
+  }
+
+  it("re-enables every ball-emitting tile and the over-summary tile — the fold can open the next innings on either", () => {
+    const tiles = buildTiles(view({ state: closedFirstInningsDue() }));
+    const ballIds = [
+      "run0", "run1", "run2", "run3", "run4", "run6",
+      "wide", "wicket", "extra-noball", "extra-bye", "extra-legbye", "extra-penalty",
+    ];
+    for (const id of [...ballIds, "overSummary"]) {
+      expect(tiles.find((tl) => tl.id === id)!.disabled).toBeUndefined();
+    }
+  });
+
+  it("review, inningsClose and declare stay disabled — nothing is open yet to review/close/declare", () => {
+    const tiles = buildTiles(view({ state: closedFirstInningsDue(), cfg: cfg({ inningsPerSide: 2 }) }));
+    for (const id of ["review", "inningsClose", "declare"]) {
+      expect(tiles.find((tl) => tl.id === id)!.disabled).toBe(true);
+    }
+  });
+
+  it("basePayload targets the NEXT innings: first-delivery over/ball numbers, the OTHER side's openers, the OTHER side's bowler", () => {
+    const tiles = buildTiles(view({ state: closedFirstInningsDue() }));
+    const run1 = tiles.find((tl) => tl.id === "run1")!;
+    expect(run1.action).toEqual({
+      event: {
+        type: "cricket.ball",
+        payload: {
+          over: 0, ballInOver: 1, // matches createInnings/applyDelivery's own first-delivery numbering
+          striker: "a1", nonStriker: "a2", // away's order[0]/[1] — away is the OTHER side
+          bowler: "h1", // home's order[0] — a fresh innings has no prevOverBowler/quota to exclude anyone
+          runs: { bat: 1 },
+        },
+      },
+    });
+  });
+
+  it("the over-summary tile's own labelText reads over 1 too, not a number derived from the closed innings' 118 legal balls", () => {
+    const tiles = buildTiles(view({ state: closedFirstInningsDue() }), t);
+    const over = tiles.find((tl) => tl.id === "overSummary")!;
+    expect(over.labelText).toBe(t("pad.cricket.action.endOfOver", { over: 1 }));
+  });
+
+  it("buildContext returns null — same as before ANY innings exists (no fold-backed state to show/edit yet, matching how innings 1 shows no strip before its own first ball)", () => {
+    expect(buildContext(view({ state: closedFirstInningsDue() }), t)).toBeNull();
+  });
+
+  it("the follow-on order is honoured, not plain alternation: 2 innings recorded + followOnEnforced -> the SAME side bats again", () => {
+    const s = state({
+      battingFirst: "home",
+      followOnEnforced: true,
+      innings: [innings({ closed: true, battingSide: "home" }), innings({ closed: true, battingSide: "away" })],
+    });
+    const tiles = buildTiles(view({ state: s, cfg: cfg({ inningsPerSide: 2 }) }));
+    const run1 = tiles.find((tl) => tl.id === "run1")!;
+    // Plain alternation would put "home" back in — follow-on keeps "away"
+    // batting (striker/nonStriker still a1/a2, bowler still h1).
+    expect(run1.action).toMatchObject({ event: { payload: { striker: "a1", nonStriker: "a2", bowler: "h1" } } });
+  });
+
+  it("the genuinely terminal case (nothing further due) is unaffected by this block — tiles stay disabled, buildContext still shows the closure message (regression pin against the tests above)", () => {
+    const terminal = state({ innings: [innings({ closed: true }), innings({ closed: true })] });
+    expect(buildTiles(view({ state: terminal })).find((tl) => tl.id === "run1")!.disabled).toBe(true);
+    expect(buildContext(view({ state: terminal }), t)!.slots[0]!.message).toBe(t("pad.cricket.context.innings.closed"));
+  });
+});
+
 describe("buildScorebug — closed innings with nothing else open still shows the final score (regression: the defect-2 tile/context gate must not touch the read path)", () => {
-  it("shows the closed innings' final runs/wickets/overs, not a blank or zeroed line", () => {
+  it("shows the closed innings' final runs/wickets/overs, not a blank or zeroed line (this fixture is ALSO the 'another innings due' state — see the R2b-next test alongside it below)", () => {
     const spec = buildScorebug(
       view({ state: state({ innings: [innings({ closed: true, runs: 187, wickets: 6, legalBalls: 118 })] }) }),
       t,
     );
     expect(spec.halves[0]!.big).toBe("187/6");
+    expect(spec.halves[1]!.big).toBe("19.4");
+  });
+
+  it("R2b-next: shows the SAME closed final score in the genuinely terminal state too — the read path must not care either way", () => {
+    const spec = buildScorebug(
+      view({
+        state: state({
+          innings: [
+            innings({ closed: true, runs: 300, wickets: 4, legalBalls: 300 }),
+            innings({ closed: true, runs: 187, wickets: 6, legalBalls: 118 }),
+          ],
+        }),
+      }),
+      t,
+    );
+    expect(spec.halves[0]!.big).toBe("187/6"); // currentInnings() falls back to the LAST (most recent) closed innings
     expect(spec.halves[1]!.big).toBe("19.4");
   });
 });
@@ -2145,6 +2310,23 @@ describe("buildSheets — over summary (R2b)", () => {
     // floored at min:0 and buildPayload only ever ADDS it onto the fold's own
     // reads, which is what makes a DECREASING total structurally unreachable
     // through this sheet.
+  });
+
+  // R2b-next (2026-08-17): before this fix, a closed innings with another
+  // due would prefill/hint off the CLOSED innings' own stale totals (e.g.
+  // 187/6) and buildPayload would ADD the scorer's entered over onto them —
+  // producing a wildly wrong cricket.innings.summary for the brand new
+  // innings. Must reset to 0/0/bpo, the identical treatment "no innings open
+  // yet" already gets (the test right above this block).
+  it("closed innings with another due: hint/prefill reset to 0/0/bpo, never the closed innings' stale totals", () => {
+    const spec = buildSheets(
+      view({ state: state({ innings: [innings({ closed: true, runs: 187, wickets: 6, legalBalls: 118 })] }) }),
+    ).overSummary;
+    expect(numberStep(spec, "runs")).toMatchObject({ initial: 0, hint: "0/0" });
+    expect(numberStep(spec, "wickets")).toMatchObject({ initial: 0, hint: "0/0" });
+    expect(numberStep(spec, "balls")).toMatchObject({ initial: 6, max: 6 });
+    const payload = spec.buildPayload({ runs: "7", wickets: "1", balls: "6" });
+    expect(payload).toEqual({ runs: 7, wickets: 1, legalBalls: 6, partial: true }); // NOT 194/7/124
   });
 });
 

@@ -79,6 +79,16 @@
 // rather than silently deviating from the literal brief text.
 "use client";
 import type { EventEnvelope } from "@seazn/engine/core";
+// R2b-next (owner-sanctioned exception to R2b's "no engine src changes"
+// rule, 2026-08-17): the ONE genuine import from packages/engine in this
+// file. Every other engine rule this file needs (`isEligibleOverBowler`,
+// `eligibleBowlers`) is MIRRORED rather than imported (that function's own
+// doc explains why: packages/engine's cricket module has no reason to
+// export it) — `nextBattingSide` is different because hand-copying its
+// alternation/follow-on branches would fork a real decision rule across a
+// package boundary, the recurring defect class this repo has hit before.
+// Exported specifically for this call site (packages/engine PR, same wave).
+import { nextBattingSide } from "@seazn/engine/sports/cricket";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
@@ -178,6 +188,15 @@ interface CricketStateShape {
    *  these two drive). */
   revisedTarget?: number | null;
   targetSource?: "dls" | "manual" | null;
+  /** Bug fix (owner-confirmed live blocker, 2026-08-17 — R2b-next): who bats
+   *  first (`CricketState.battingFirst`, cricket.ts:460) and whether a
+   *  follow-on was enforced (`.followOnEnforced`, cricket.ts:463) — needed
+   *  by `dueBattingSide` (below) to mirror the engine's own
+   *  `nextBattingSide` innings-sequencing rule. Absent from this shape until
+   *  this fix, same "add the field this fix needs" pattern every other
+   *  addition here already follows. */
+  battingFirst?: "home" | "away";
+  followOnEnforced?: boolean;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -262,6 +281,50 @@ export function inningsFidelity(innings: CricketInningsShape | null): InningsFid
 }
 
 /**
+ * R2b-next (owner-confirmed live blocker, 2026-08-17): the batting side for
+ * the innings that would open NEXT, but ONLY in the one state where that
+ * question is actually live — the current/fallback innings (`currentInnings`
+ * above) is CLOSED and the fold would still accept another one. `null` in
+ * every other case: no innings exists yet, the current one is still OPEN
+ * (its own `battingSide` already answers this), or nothing further is due
+ * (the genuinely terminal case — the closure message stays correct there).
+ *
+ * A thin wrapper around the engine's own `nextBattingSide` (cricket.ts,
+ * exported this same wave) — never a hand-copy of its alternation/follow-on
+ * branches, the recurring defect class this repo keeps hitting when a rule
+ * gets forked across the engine/apps-web boundary. `state.innings.length`
+ * is the SAME index `createInnings` itself addresses by (cricket.ts:662).
+ */
+export function dueBattingSide(state: CricketStateShape, cfg: CricketCfgShape): "home" | "away" | null {
+  const innings = currentInnings(state);
+  if (innings === null || innings.closed !== true) return null;
+  return nextBattingSide({
+    battingFirst: state.battingFirst ?? "home",
+    followOnEnforced: state.followOnEnforced ?? false,
+    cfg: { inningsPerSide: cfg.inningsPerSide ?? 1 },
+    inningsCount: state.innings?.length ?? 0,
+  });
+}
+
+/**
+ * R2b-next: the innings to build a NEW payload/tile-set/sheet-default
+ * against — as opposed to `currentInnings` (DISPLAY: `buildScorebug` must
+ * keep showing the closed innings' own final score no matter what). `null`
+ * whenever a FRESH innings is what is actually being scored: pre-match
+ * (nothing recorded at all) and "closed, another due" (nothing recorded for
+ * THAT one either) collapse to the identical treatment throughout this file
+ * — `inningsFidelity`, `nextOverNumber`, and this function's own callers
+ * below all already do the right thing for `null` (an unopened innings
+ * offers both fidelity lanes and starts counting from over 1, exactly what
+ * a not-yet-created next innings should do too). `dueBattingSide` (above) is
+ * the one place that DOES tell the two `null`-producing cases apart, and
+ * every caller needing that distinction reads it separately.
+ */
+function scoringInnings(state: CricketStateShape, cfg: CricketCfgShape): CricketInningsShape | null {
+  return dueBattingSide(state, cfg) !== null ? null : currentInnings(state);
+}
+
+/**
  * 1-indexed: the over an over-summary entry, if confirmed unedited, would
  * complete — matching how a scorer counts overs aloud ("this is over 14"),
  * not `basePayload`'s own 0-indexed `over` field (that one names the over a
@@ -295,8 +358,11 @@ export interface ResolvedPeople {
  * checks at an over boundary (`fine.currentBowler === null`) verbatim:
  * `applyDelivery`, cricket.ts:1160-1171, and the identical filter its own
  * random-stream generator uses internally, `eligibleBowlers`, cricket.ts:
- * 1784-1795 (private to that module; mirrored here, not imported —
- * packages/engine is read-only from this file). No consecutive overs
+ * 1784-1795 (private to that module; mirrored here, not imported — this
+ * file's own header now documents the ONE deliberate exception,
+ * `nextBattingSide`, granted specifically because that rule was worth an
+ * engine export rather than a second fork; `eligibleBowlers` was not
+ * granted one). No consecutive overs
  * (`personId === fine.prevOverBowler`), and — only when the cfg actually
  * caps it — the per-bowler quota (`floor(bowlerBalls[id] / bpo) >=
  * maxOversPerBowler`). The engine's THIRD refusal ground ("not in the
@@ -361,8 +427,15 @@ export function resolvePeople(
   overrides: Readonly<Record<string, string>> = {},
   cfg: CricketCfgShape = {},
 ): ResolvedPeople {
-  const innings = currentInnings(state);
-  const battingSide = innings?.battingSide ?? "home";
+  // R2b-next: `scoringInnings`/`dueBattingSide` (above) — `battingSide`
+  // falls through to the DUE side (closed, another innings still due)
+  // ahead of the stale closed innings' own `battingSide`; `innings` itself
+  // (for `fine`, below) is `null` in that same state, so striker/nonStriker/
+  // bowler all fall to their own "unopened innings" defaults, exactly as
+  // they already do before innings ONE's own first ball.
+  const innings = scoringInnings(state, cfg);
+  const due = dueBattingSide(state, cfg);
+  const battingSide = due ?? innings?.battingSide ?? "home";
   const bowlingSide = opponentSide(battingSide);
   const battingOrder = state.orders?.[battingSide] ?? [];
   const bowlingOrder = state.orders?.[bowlingSide] ?? [];
@@ -438,7 +511,11 @@ export function bowlerBlockReason(
   people: ResolvedPeople,
   cfg: CricketCfgShape,
 ): BowlerBlockReason | null {
-  const innings = currentInnings(state);
+  // R2b-next: `scoringInnings`, not `currentInnings` — reading the CLOSED
+  // innings' own stale `fine` here (prevOverBowler/bowlerBalls from the
+  // innings that just ended) would wrongly block `people.bowler`, who was
+  // resolved against the NEW innings and has no history in this one at all.
+  const innings = scoringInnings(state, cfg);
   const fine = innings?.fine ?? null;
   if ((fine?.currentBowler ?? null) !== null) return null;
   if (people.bowler === "") return "noEligible";
@@ -450,7 +527,12 @@ export function bowlerBlockReason(
 }
 
 function basePayload(state: CricketStateShape, cfg: CricketCfgShape, overrides: Readonly<Record<string, string>>): Record<string, unknown> {
-  const innings = currentInnings(state);
+  // R2b-next: `scoringInnings`, not `currentInnings` — closed + another due
+  // reads as `null` here, so `legalBalls` falls to 0 and over/ballInOver
+  // below come out 0/1, the engine's own first-delivery numbering
+  // (`applyDelivery`'s `expectedOver`/`expectedBall` off `legalBalls: 0`),
+  // instead of the closed innings' own final over count.
+  const innings = scoringInnings(state, cfg);
   const bpo = ballsPerOverOf(cfg);
   const legalBalls = innings?.legalBalls ?? 0;
   const people = resolvePeople(state, overrides, cfg);
@@ -994,7 +1076,11 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   const type = ballEventType(state);
   const twoInnings = cfg.inningsPerSide === 2;
   const innings = currentInnings(state);
-  const fidelity = inningsFidelity(innings);
+  // R2b-next: fidelity/next-over-number are computed off `scoringInnings`,
+  // not the raw (possibly closed) `innings` above — see that function's own
+  // doc for why `null` is exactly right for "closed, another due" too.
+  const scoring = scoringInnings(state, cfg);
+  const fidelity = inningsFidelity(scoring);
   // R2b (owner ruling, bowler-eligibility block, 2026-08-17): the SAME
   // resolvePeople() call every other builder in this file uses (G5's own
   // "one default computed in one place" reasoning) — so a tile that goes
@@ -1016,29 +1102,25 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   // `bowlerBlocked` itself: `buildContext` below needs to tell the two
   // causes apart to avoid showing a stale, possibly-misleading
   // bowler-eligibility message once the real cause is closure).
-  //
-  // Applies regardless of whether another innings is still due (e.g. a
-  // two-innings cfg with only one innings recorded): opening the next one is
-  // IMPLICIT in the fold, not a decision this gate defers — `cricket.ball`/
-  // `cricket.innings.summary` both auto-create it via `createInnings` the
-  // moment `openInnings()` is null (cricket.ts:2935-2944 / :1401-1413), and
-  // there is no dedicated event to open one explicitly (no event type exists
-  // to invent here, and the brief for this fix is explicit that one must
-  // not be invented). What stops this file from simply UN-gating the ball
-  // tiles once a next innings is due, rather than disabling them: making
-  // THIS pad target that new innings correctly needs the engine's own
-  // (private, unexported) batting-side alternation rule (`battingSideAt`,
-  // cricket.ts — single-innings: strict alternation; two-innings per side:
-  // an F,S,S,F pattern gated on follow-on), which in turn needs cfg/state
-  // fields (`battingFirst`, `followOnEnforced`) this skin's own defensive
-  // shapes do not currently read at all. Mirroring engine logic has
-  // precedent in this file (`isEligibleOverBowler`'s own doc), but doing so
-  // here is a materially bigger, real product/engineering decision — e.g.
-  // whether tapping "0"/"1" should silently start the next innings with no
-  // confirmation step — reported rather than guessed, per this task's own
-  // brief. See this task's own report for the full writeup.
   const inningsClosed = innings?.closed === true;
   const closedTile = (spec: TileSpec): TileSpec => (inningsClosed ? { ...spec, disabled: true } : spec);
+  // R2b-next (owner-confirmed live blocker, 2026-08-17): the gate above
+  // originally applied REGARDLESS of whether another innings was still due
+  // — the state this fix now targets. `dueBattingSide` (above) narrows it:
+  // `blockedByClosure` is true only for the GENUINELY terminal case (closed,
+  // nothing further due), and is what the ball-emitting tiles and the
+  // over-summary tile gate on below instead of the unnarrowed
+  // `inningsClosed` — both are able to CREATE the next innings on tap (the
+  // engine's own two implicit-open paths, `createInnings` from either
+  // `cricket.ball` or `cricket.innings.summary`, cricket.ts:2935-2944/
+  // :1401-1413 — no dedicated "start innings" event exists or should be
+  // invented, per this fix's own brief). `review`/`inningsClose`/`declare`
+  // stay on the unnarrowed `closedTile`/`inningsClosed` below, unchanged —
+  // none of them make sense against an innings that has not been created
+  // yet (nothing is open to review, close, or declare on).
+  const dueSide = dueBattingSide(state, cfg);
+  const blockedByClosure = inningsClosed && dueSide === null;
+  const dueAwareTile = (spec: TileSpec): TileSpec => (blockedByClosure ? { ...spec, disabled: true } : spec);
 
   const tiles: TileSpec[] = [
     { id: "toss", label: "pad.cricket.action.toss", kind: "primary", phases: ["pre"], action: { sheet: "toss" } },
@@ -1056,7 +1138,7 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
     // gets set in this function; non-ball tiles (review/retire/
     // inningsClose/declare/overSummary/more, pushed further down, outside
     // this branch) are untouched.
-    const ballTile = (spec: TileSpec): TileSpec => (bowlerBlocked || inningsClosed ? { ...spec, disabled: true } : spec);
+    const ballTile = (spec: TileSpec): TileSpec => (bowlerBlocked || blockedByClosure ? { ...spec, disabled: true } : spec);
 
     for (const r of RUN_VALUES) {
       tiles.push(ballTile({
@@ -1145,7 +1227,7 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   // round 1's own note), so this is a deliberate exception, not a defect.
   if (fidelity !== "fine") {
     const overLabel = "pad.cricket.action.endOfOver";
-    tiles.push(closedTile({
+    tiles.push(dueAwareTile({
       id: "overSummary",
       label: overLabel,
       // R2b follow-up (owner sign-off, single-line label fix): the over
@@ -1157,8 +1239,10 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
       // sublabelText, right below its doc). `label` above still carries
       // the real dictionary key ("End of over {over}", en/ui.json) as the
       // fallback/canonical value tile-grid.tsx resolves for any tile that
-      // doesn't set labelText.
-      labelText: t(overLabel, { over: nextOverNumber(innings, bpo) }),
+      // doesn't set labelText. R2b-next: `scoring`, not `innings` — reads
+      // over 1 for a closed-with-another-due innings, not a number derived
+      // from the closed innings' own final legalBalls.
+      labelText: t(overLabel, { over: nextOverNumber(scoring, bpo) }),
       kind: "primary",
       span: 2,
       phases: ["live"],
@@ -1385,9 +1469,19 @@ function bowlerBlockMessage(
 export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextStripSpec | null {
   const state = asState(view.state);
   if (state.phase !== "live" && state.phase !== "super_over") return null;
+  const cfg = asCfg(view.cfg);
   const innings = currentInnings(state);
   if (innings === null) return null;
-  const cfg = asCfg(view.cfg);
+  // R2b-next (owner-confirmed live blocker, 2026-08-17): closed, with
+  // another innings due, is treated identically to "no innings open yet"
+  // (the check right above) — there is genuinely no fold-backed state to
+  // show or edit for an innings that has not been created (same reasoning
+  // `scoringInnings`'s own doc gives). This is not new UI to design: it is
+  // the SAME strip-less window innings ONE's own first ball already scores
+  // through today. `basePayload`/`resolvePeople` (below, and in buildTiles)
+  // still compute correct silent defaults for that first tap, exactly as
+  // they already do before innings one's own first ball.
+  if (dueBattingSide(state, cfg) !== null) return null;
   const people = resolvePeople(state, view.contextOverrides, cfg);
   const bowlerReadOnly = bowlerIsReadOnly(innings);
   // R2b (owner ruling, live-tile audit defect 2, `_INDEX.md`): closure is the
@@ -1719,8 +1813,13 @@ function inningsCloseSheet(): GuidedSheetSpec {
  */
 function overSummarySheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
-  const innings = currentInnings(state);
-  const bpo = ballsPerOverOf(view.cfg);
+  const cfg = asCfg(view.cfg);
+  // R2b-next: `scoringInnings`, not `currentInnings` — a closed innings with
+  // another due must prefill/hint from 0/0/0, not the closed innings' own
+  // final totals, or buildPayload below would ADD this over's entered delta
+  // onto a completely unrelated (and much larger) base.
+  const innings = scoringInnings(state, cfg);
+  const bpo = ballsPerOverOf(cfg);
   const runs = innings?.runs ?? 0;
   const wickets = innings?.wickets ?? 0;
   const legalBalls = innings?.legalBalls ?? 0;
