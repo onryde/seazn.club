@@ -192,9 +192,14 @@ serves its closed/unavailable state during that window.
   the E2E owed here is deferred to **RS004** for the select/chip and **RS006**
   for the paid public flow. What DID ship in e2e is the fixture correction above
   — `payments-hardening.spec.ts` would 500 on the new NOT NULL otherwise.
-- **Smoke shipped**: `regQueueSuite` now PUTs `currency: "usd"` at a gbp org and
-  asserts the response comes back `gbp` — i.e. a per-division currency is
-  ignored and the org's is quoted. That is the reachable RS001b behaviour today.
+- **Smoke shipped and RUN**: `regQueueSuite` now PUTs `currency: "usd"` at a gbp
+  org and asserts the response comes back `gbp` — i.e. a per-division currency
+  is ignored and the org's is quoted. That is the reachable RS001b behaviour
+  today. Local full smoke against a standalone prod build on `:3210` with its
+  own fresh DB: **815 passed, 5 failed**, the RS001b check among the passes. All
+  5 failures are the placement/solver service, which this run never started (CI
+  runs it in Docker on `:50051`) — they name it explicitly ("the solver was
+  reachable in prod (not the solver_unavailable fallback)").
 - **Unplanned, owner-approved (2026-08-17): the RLS guard was checking nothing.**
   `scripts/check-rls.ts` filtered on schema `public`; every table in this
   database lives in `seazn_club`. It selected **zero rows** and printed "RLS
