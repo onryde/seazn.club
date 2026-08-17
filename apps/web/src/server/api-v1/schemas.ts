@@ -175,6 +175,14 @@ export const PatchDivision = z
      *  FORMAT_LOCKED and re-validates via the pinned module schema. */
     variant_key: z.string().min(1).max(100),
     config: z.record(z.string(), z.unknown()),
+    /** D5/P8 candidate-court filter (design doc "Tag semantics"): a court
+     *  must carry every one of these tags; empty = any court. Normalised
+     *  (trim/lowercase/dedupe) by usecases/divisions.ts via the SAME
+     *  normalizeTags() the courts path uses — same shape, same rules, one
+     *  copy. Stored and read back only; not yet read by scheduling or
+     *  candidate-court filtering (P9), and `stages.required_court_tags`
+     *  (V367) stays unwired for the same reason — both are P9's. */
+    required_court_tags: z.array(z.string().min(1).max(40)).max(50),
   })
   .partial()
   .refine((p) => Object.keys(p).length > 0, "empty patch");
@@ -199,6 +207,7 @@ export const Division = z.object({
   auto_posts: z.boolean(),
   archived_at: z.string().nullable(), // v3/09 §4 — set = archived (hidden, restorable)
   created_at: z.string(),
+  required_court_tags: z.array(z.string()), // D5/P8 candidate-court filter; see PatchDivision above
 });
 
 // ---------------------------------------------------------------------------

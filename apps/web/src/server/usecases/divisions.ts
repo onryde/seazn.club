@@ -22,6 +22,10 @@ import {
   RESERVED_ENTITY_SLUGS,
 } from "./slugs";
 import { invalidateSlugCache } from "@/server/slug-resolve";
+// D5/P8: same trim/lowercase/dedupe/drop-empties rule the courts path uses
+// for their own `tags` — one copy, imported, not re-implemented (a court
+// tagged "clay" must match a division requiring "Clay").
+import { normalizeTags } from "./venues";
 
 export interface DivisionRow {
   id: string;
@@ -53,13 +57,18 @@ export interface DivisionRow {
   /** Card identity (V274, v8): uploaded logo; null → monogram tile. */
   logo_url: string | null;
   logo_storage_path: string | null;
+  /** D5/P8 candidate-court filter (V367): tags ⊇ required_court_tags, empty
+   *  = any court. Stored and read back only here — scheduling/candidate-
+   *  court filtering is P9's, and `stages.required_court_tags` (the sibling
+   *  V367 column) stays deliberately unwired for the same reason. */
+  required_court_tags: string[];
 }
 
 const COLS = [
   "id", "competition_id", "name", "slug", "description", "sport_key", "variant_key", "config",
   "module_version", "eligibility", "tiebreakers", "status", "officials_hide_names",
   "scheduling_mode", "auto_progress", "auto_posts", "schedule_locked", "archived_at", "created_at",
-  "seq", "youth", "player_name_display", "logo_url", "logo_storage_path",
+  "seq", "youth", "player_name_display", "logo_url", "logo_storage_path", "required_court_tags",
 ] as const;
 
 /** Variant choices for the Settings tab's format editor (v8) — system
@@ -655,6 +664,14 @@ export async function patchDivision(
         ...eff,
         ...(patch.eligibility ? { eligibility: q.json(patch.eligibility as never) } : {}),
         ...(patch.tiebreakers ? { tiebreakers: q.json(patch.tiebreakers as never) } : {}),
+        // `required_court_tags` is a real `text[]` column (V367, not jsonb —
+        // q.array, not q.json), normalised on write with the SAME helper the
+        // courts path uses. Truthy-checked like eligibility/tiebreakers
+        // above: an explicit `[]` (clearing the requirement back to "any
+        // court") is still a truthy array and takes this branch correctly.
+        ...(patch.required_court_tags
+          ? { required_court_tags: q.array(normalizeTags(patch.required_court_tags)) }
+          : {}),
       };
       const [row] = await q<DivisionRow[]>`
         update divisions set ${q(values as never, ...(cols as never[]))}
