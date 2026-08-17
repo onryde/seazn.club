@@ -4,6 +4,8 @@ description: When a division fills, new entries queue — and promote automatica
 order: 4
 ---
 
+**Registration is temporarily switched off** while the sign-up flow is rebuilt. Your division settings are kept and nothing you have configured is lost — the public page tells visitors that registration is not open, and this page describes how it works once it is back on.
+
 Set a **capacity** on registration and the division can never overfill. Entry number *capacity + 1* is offered the **waitlist** instead of a rejection.
 
 ## How it works
