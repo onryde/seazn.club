@@ -17,6 +17,8 @@ import {
   patchVenue,
   deleteVenue,
   listVenues,
+  archiveVenue,
+  unarchiveVenue,
   archiveCourt,
   unarchiveCourt,
   createCourt,
@@ -338,6 +340,63 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
       status: 409,
       code: "COURT_NAME_TAKEN",
     });
+  });
+
+  it("archiveVenue succeeds when its courts carry only COMPLETED fixtures, drops out of listVenues by default, and reappears with includeArchived", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "History Venue", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    await seedFixtureOnCourt(auth, court.id, "finalized");
+
+    const archived = await archiveVenue(auth, venue.id);
+    expect(archived.archived_at).not.toBeNull();
+
+    const listed = await listVenues(auth);
+    expect(listed.map((v) => v.id)).not.toContain(venue.id);
+
+    const withArchived = await listVenues(auth, { includeArchived: true });
+    expect(withArchived.map((v) => v.id)).toContain(venue.id);
+
+    // Idempotent: archiving an already-archived venue is a no-op, not an error.
+    const archivedAgain = await archiveVenue(auth, venue.id);
+    expect(archivedAgain.archived_at).toEqual(archived.archived_at);
+  });
+
+  it("archiveVenue blocks when ANY court under it is referenced by an UNPLAYED fixture (409 VENUE_IN_USE)", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Live Venue", address: null, sort: 0 });
+    const courtA = await createCourt(auth, venue.id, { name: "Court A", sort: 0, tags: [] });
+    const courtB = await createCourt(auth, venue.id, { name: "Court B", sort: 0, tags: [] });
+    // Court A's fixture is history; Court B's is still unplayed — the venue
+    // gate must key on ANY court, not just the first one checked.
+    await seedFixtureOnCourt(auth, courtA.id, "finalized");
+    await seedFixtureOnCourt(auth, courtB.id, "scheduled");
+
+    await expect(archiveVenue(auth, venue.id)).rejects.toMatchObject({
+      status: 409,
+      code: "VENUE_IN_USE",
+    });
+  });
+
+  it("unarchiveVenue restores the venue only — courts keep their own independent archived_at", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Restore Venue", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    await archiveCourt(auth, court.id);
+    await archiveVenue(auth, venue.id);
+
+    const restored = await unarchiveVenue(auth, venue.id);
+    expect(restored.archived_at).toBeNull();
+
+    // The court was archived independently BEFORE the venue archive — this
+    // call must not cascade and restore it too.
+    const [courtRow] = await sql<{ archived_at: string | null }[]>`
+      select archived_at from courts where id = ${court.id}`;
+    expect(courtRow!.archived_at).not.toBeNull();
+
+    // Idempotent.
+    const restoredAgain = await unarchiveVenue(auth, venue.id);
+    expect(restoredAgain.archived_at).toBeNull();
   });
 
   it("PUT calendar reports an advisory strandedFixtureCount for unplayed fixtures now outside the new hours", async () => {

@@ -9,7 +9,8 @@ export async function GET(req: Request, { params }: Ctx) {
     const { id } = await params;
     assertUuid(id, "organization");
     const auth = await requireOrgAuth(req, id, "read");
-    return listVenues(auth);
+    const includeArchived = new URL(req.url).searchParams.get("archived") === "1";
+    return listVenues(auth, { includeArchived });
   });
 }
 

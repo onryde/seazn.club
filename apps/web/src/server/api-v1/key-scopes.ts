@@ -201,6 +201,8 @@ const RULES: RouteRule[] = [
   { method: "POST", path: "/orgs/:id/venues", scope: "manage" },
   { method: "PATCH", path: "/orgs/:id/venues/:venueId", scope: "manage" },
   { method: "DELETE", path: "/orgs/:id/venues/:venueId", scope: "manage" },
+  { method: "POST", path: "/orgs/:id/venues/:venueId/archive", scope: "manage" },
+  { method: "DELETE", path: "/orgs/:id/venues/:venueId/archive", scope: "manage" },
   { method: "POST", path: "/orgs/:id/venues/:venueId/courts", scope: "manage" },
   { method: "PATCH", path: "/orgs/:id/courts/:courtId", scope: "manage" },
   { method: "DELETE", path: "/orgs/:id/courts/:courtId", scope: "manage" },

@@ -14,11 +14,17 @@ import "server-only";
 // `set_org_from_parent` trigger; a value that disagreed with the parent
 // would fail the FK, not silently pass).
 import { z } from "zod";
+import type postgres from "postgres";
 import { dayKeyInTz, hhmmInTz, weekdayOfYmd, type Weekday } from "@seazn/engine/scheduling/tz";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
+
+// db.ts declares its own `Tx` internally but does not export it — every
+// usecase that needs the transaction type redeclares this same one-liner
+// (see discipline.ts/entrants.ts/exports.ts for the precedent).
+type Tx = postgres.TransactionSql;
 
 // 0 = Sunday, matching `weekdayOfYmd`'s own `getUTCDay()`-based convention
 // (see V367's header comment) — court_hours.weekday and the advisory
@@ -39,6 +45,7 @@ const UNPLAYED_FIXTURE_STATUSES = ["scheduled", "in_play"] as const;
 
 export const VENUE_NOT_FOUND_CODE = "VENUE_NOT_FOUND";
 export const VENUE_NOT_EMPTY_CODE = "VENUE_NOT_EMPTY";
+export const VENUE_IN_USE_CODE = "VENUE_IN_USE";
 export const COURT_NOT_FOUND_CODE = "COURT_NOT_FOUND";
 export const COURT_IN_USE_CODE = "COURT_IN_USE";
 export const COURT_HOURS_OVERLAP_CODE = "COURT_HOURS_OVERLAP";
@@ -274,12 +281,21 @@ function toDateStr(d: string | Date): string {
  *  (hours + exceptions). There is no separate GET for courts or a court's
  *  calendar in the API surface (design doc, "API surface (P8)") — this is
  *  the one read path everything hangs off. Three flat queries + in-memory
- *  assembly rather than N+1 per court. */
-export async function listVenues(auth: AuthCtx): Promise<VenueWithCourts[]> {
+ *  assembly rather than N+1 per court.
+ *
+ *  Archived venues are hidden by default (`opts.includeArchived` — same
+ *  parameter name/shape/default as `listDivisions`' opt-in). Courts stay
+ *  unconditionally filtered to active-only regardless of this flag —
+ *  toggling archived-court visibility here is out of this session's scope. */
+export async function listVenues(
+  auth: AuthCtx,
+  opts: { includeArchived?: boolean } = {},
+): Promise<VenueWithCourts[]> {
   return withTenant(auth.orgId, async (tx) => {
     const venues = await tx<VenueRow[]>`
       select ${tx(VENUE_COLS)} from venues
-      where archived_at is null order by sort, name, id`;
+      ${opts.includeArchived ? tx`` : tx`where archived_at is null`}
+      order by sort, name, id`;
     const courts = await tx<CourtRow[]>`
       select ${tx(COURT_COLS)} from courts
       where archived_at is null order by sort, name, id`;
@@ -373,6 +389,79 @@ export async function deleteVenue(auth: AuthCtx, id: string): Promise<void> {
   log.info({ orgId: auth.orgId, venueId: id }, "venue_deleted");
 }
 
+/**
+ * Shared predicate behind every archive-or-block gate (owner ruling, A3
+ * amendment): true iff ANY of the given courts is referenced by a still
+ * UNPLAYED fixture (`scheduled`/`in_play`). `archiveCourt` below calls this
+ * with its own single id; `archiveVenue` calls it with every court the
+ * venue owns — one rule, two call sites, so the venue gate can never drift
+ * into a second copy of the court gate. An empty `courtIds` (a venue with
+ * no courts at all) short-circuits to `false` without a query — postgres.js's
+ * `tx(array)` IN-list helper does not accept an empty array.
+ */
+async function anyCourtHasUnplayedFixture(tx: Tx, courtIds: readonly string[]): Promise<boolean> {
+  if (courtIds.length === 0) return false;
+  const [unplayed] = await tx<{ id: string }[]>`
+    select id from fixtures
+    where court_id in ${tx(courtIds)} and status in ${tx(UNPLAYED_FIXTURE_STATUSES)}
+    limit 1`;
+  return !!unplayed;
+}
+
+/**
+ * Archive-or-block, mirrored from `archiveCourt` transitively across every
+ * court the venue owns (owner ruling, A3 amendment, D5/P8): a venue is
+ * blocked from archiving iff any of its courts is referenced by an
+ * UNPLAYED fixture, via the shared `anyCourtHasUnplayedFixture` predicate
+ * above — never a second copy of the court rule. A venue whose courts
+ * carry only COMPLETED-fixture history (or no fixture history, or no
+ * courts at all) can always be archived. Idempotent: archiving an
+ * already-archived venue is a no-op, not an error.
+ */
+export async function archiveVenue(auth: AuthCtx, id: string): Promise<VenueRow> {
+  const row = await withTenant(auth.orgId, async (tx) => {
+    const [existing] = await tx<VenueRow[]>`select ${tx(VENUE_COLS)} from venues where id = ${id}`;
+    if (!existing) throw new HttpError(404, "venue not found", VENUE_NOT_FOUND_CODE);
+    if (existing.archived_at !== null) return existing;
+    const courts = await tx<{ id: string }[]>`select id from courts where venue_id = ${id}`;
+    if (await anyCourtHasUnplayedFixture(tx, courts.map((c) => c.id))) {
+      throw new HttpError(
+        409,
+        "A court at this venue has an unplayed fixture — reassign it before archiving",
+        VENUE_IN_USE_CODE,
+      );
+    }
+    const [updated] = await tx<VenueRow[]>`
+      update venues set archived_at = now() where id = ${id} returning ${tx(VENUE_COLS)}`;
+    return updated!;
+  });
+  log.info({ orgId: auth.orgId, venueId: id }, "venue_archived");
+  return row;
+}
+
+/** Restore an archived venue. Idempotent. Unlike `unarchiveCourt`, there is
+ *  no name-collision to catch here — `venues` carries no name-uniqueness
+ *  constraint at all (only `courts` does, and only among active courts;
+ *  V367). Restores the VENUE ONLY: courts keep their own independent
+ *  `archived_at`, untouched by this call — a court archived on its own
+ *  before, during or after the venue's archive window stays exactly as it
+ *  was. This is deliberate (owner ruling), NOT a gap to "fix" into a
+ *  cascade: cascading would silently reverse an operator's separate,
+ *  unrelated decision to archive that specific court.
+ */
+export async function unarchiveVenue(auth: AuthCtx, id: string): Promise<VenueRow> {
+  const row = await withTenant(auth.orgId, async (tx) => {
+    const [existing] = await tx<VenueRow[]>`select ${tx(VENUE_COLS)} from venues where id = ${id}`;
+    if (!existing) throw new HttpError(404, "venue not found", VENUE_NOT_FOUND_CODE);
+    if (existing.archived_at === null) return existing;
+    const [updated] = await tx<VenueRow[]>`
+      update venues set archived_at = null where id = ${id} returning ${tx(VENUE_COLS)}`;
+    return updated!;
+  });
+  log.info({ orgId: auth.orgId, venueId: id }, "venue_unarchived");
+  return row;
+}
+
 export async function createCourt(
   auth: AuthCtx,
   venueId: string,
@@ -453,11 +542,7 @@ export async function archiveCourt(auth: AuthCtx, id: string): Promise<CourtRow>
     const [existing] = await tx<CourtRow[]>`select ${tx(COURT_COLS)} from courts where id = ${id}`;
     if (!existing) throw new HttpError(404, "court not found", COURT_NOT_FOUND_CODE);
     if (existing.archived_at !== null) return existing;
-    const [unplayed] = await tx<{ id: string }[]>`
-      select id from fixtures
-      where court_id = ${id} and status in ${tx(UNPLAYED_FIXTURE_STATUSES)}
-      limit 1`;
-    if (unplayed) {
+    if (await anyCourtHasUnplayedFixture(tx, [id])) {
       throw new HttpError(
         409,
         "This court has an unplayed fixture — reassign it before archiving",
