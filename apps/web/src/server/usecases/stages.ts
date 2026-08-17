@@ -58,6 +58,7 @@ import { CreateStage } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { msg } from "@/lib/messages";
 import { resolveSlotLabel } from "@/lib/slot-label";
+import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { validateSchedule } from "./schedule";
 import {
   descriptorKey,
@@ -96,6 +97,30 @@ export const FIXTURE_COLS = [
   "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label",
   "scheduled_at", "venue", "court_label",
   "officials", "status", "outcome", "schedule_source", "schedule_locked", "created_at",
+  "ext_key", "lane", "is_final", "third_place", "conditional",
+] as const;
+
+/** F1 follow-up (2026-08-17, payload-budget regression — board-v3.spec.ts
+ *  "gap 15" reds on PR #606, expect flightBytes-dictBytes < 250000, got
+ *  279043): the schedule board (competition-wide AND single-division)
+ *  never renders ext_key/lane/is_final/third_place/conditional — only the
+ *  division page's bracket/stages panel does (StagesPanel/BracketPanel,
+ *  fed by the full FIXTURE_COLS read via listDivisionFixtures above).
+ *  Shipping those five columns to a board that reads none of them cost
+ *  ~88 escaped bytes/fixture on the RSC flight — invisible on one
+ *  division, ~29KB over budget at a 5-division x 66-fixture board.
+ *  listDivisionFixturesForBoard (fixtures.ts) selects this instead.
+ *  ext_key's exclusion isn't new scope creep, either — board/settings-
+ *  panel.tsx already documented (pre-dating this branch) that "the page's
+ *  fetched fixture list never carries ext_key" as a design invariant for
+ *  its capacity precheck; this restores that invariant rather than
+ *  breaking new ground. Same as FIXTURE_COLS minus those five columns —
+ *  keep the two in sync by hand if FIXTURE_COLS's other columns change. */
+export const BOARD_FIXTURE_COLS = [
+  "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "fixture_no",
+  "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label",
+  "scheduled_at", "venue", "court_label",
+  "officials", "status", "outcome", "schedule_source", "schedule_locked", "created_at",
 ] as const;
 
 export interface FixtureRow {
@@ -122,6 +147,23 @@ export interface FixtureRow {
   schedule_source: "none" | "auto" | "manual" | "ai";
   schedule_locked: boolean;
   created_at: string;
+  /** Generator-stable id (idempotent regeneration key). Also the ONE place
+   *  a page-playoff fixture's Qualifier-1-vs-Eliminator identity survives —
+   *  both share a round and a match count (F1 Task 4). Optional (like the
+   *  four fields below), not because a real row can lack one — FIXTURE_COLS
+   *  always selects it — but because dozens of pre-existing tests hand-build
+   *  a FixtureRow-shaped literal that predates this field (the same
+   *  precedent ScheduleSolverInfo's later fields already established:
+   *  required would break every one of those literals without a full
+   *  apps/web typecheck to find them all). */
+  ext_key?: string | null;
+  /** F1 (2026-08-17): the engine's bracket-position role, persisted instead
+   *  of re-derived per consumer (db/migration/deltas/V368__fixture_round_role.sql).
+   *  `lane` is null for single-lane brackets and non-bracket stages. */
+  lane?: "WB" | "LB" | "GF" | null;
+  is_final?: boolean;
+  third_place?: boolean;
+  conditional?: boolean;
 }
 
 export async function listStages(auth: AuthCtx, divisionId: string): Promise<StageRow[]> {
@@ -512,6 +554,13 @@ interface GenFixture {
   awayFrom?: { extKey: string; side: "winner" | "loser" };
   award?: string; // bye: auto-advancing entrant
   poolId?: string; // group stages: which pool this fixture belongs to
+  // F1 (round-role persistence): carried straight from BracketFixtureGen so
+  // the generated round's ROLE survives insertion instead of being
+  // re-derived from round_no/match-count by each consumer (design §2.3).
+  lane?: "WB" | "LB" | "GF";
+  isFinal?: boolean;
+  thirdPlace?: boolean;
+  conditional?: boolean;
 }
 
 interface ActiveEntrant {
@@ -537,6 +586,10 @@ function bracketToGen(bracket: GeneratedBracket, laneDepth: number): GenFixture[
       ...(f.homeFrom ? { homeFrom: { extKey: f.homeFrom.fixtureId, side: f.homeFrom.side } } : {}),
       ...(f.awayFrom ? { awayFrom: { extKey: f.awayFrom.fixtureId, side: f.awayFrom.side } } : {}),
       ...(f.award ? { award: f.award } : {}),
+      ...(f.bracket ? { lane: f.bracket } : {}),
+      ...(f.isFinal ? { isFinal: true } : {}),
+      ...(f.thirdPlace ? { thirdPlace: true } : {}),
+      ...(f.conditional ? { conditional: true } : {}),
     };
   });
 }
@@ -762,16 +815,6 @@ function qualifierCount(qualification: unknown): number {
   return isSpec ? qualificationSize(qualification as QualificationSpec) : 0;
 }
 
-// Bracket-round title from the number of matches in that round.
-function roundTitle(kind: string, roundNo: number, matchCount: number): string {
-  const bracketish = kind === "knockout" || kind === "double_elim" || kind === "stepladder" || kind === "page_playoff";
-  if (!bracketish) return `Round ${roundNo}`;
-  if (matchCount === 1) return "Final";
-  if (matchCount === 2) return "Semi-finals";
-  if (matchCount <= 4) return "Quarter-finals";
-  return `Round of ${matchCount * 2}`;
-}
-
 /** Preview a whole stage graph. Stage 1 uses A,B,C… entrants; later (qualifier)
  *  stages use "Seed 1…q". Score-dependent formats (swiss/americano/ladder)
  *  can't be drawn before results, so they return an explanatory note. */
@@ -842,15 +885,49 @@ export function previewDivisionFixtures(
       (grouped.get(key) ?? grouped.set(key, []).get(key)!).push(f);
     }
 
+    // F1 Task 4: name each round by its POSITION (roundRole), never by match
+    // count — a double-elim's losers bracket has repeated round sizes, so a
+    // count-based namer produces several "Semi-finals" and several "Final"s
+    // in one bracket (design §2.3). Ranked per LANE (laneRoundRank), not
+    // across the whole stage. Non-bracket kinds (league/group round robins)
+    // keep the plain "Round N" — roundRole()'s fromEnd arithmetic assumes a
+    // bracket shape and is meaningless outside BRACKET_KINDS.
+    const laneFixtures = gen.map((f) => ({ round_no: f.roundNo, lane: f.lane ?? null }));
+
     const sections: PreviewSection[] = [...grouped.entries()]
       .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
       .map(([key, fixtures]) => {
         const matches = fixtures
           .sort((a, b) => a.roundNo - b.roundNo || a.seqInRound - b.seqInRound)
-          .map((f) => ({ home: slot(f.home, f.homeFrom), away: slot(f.away, f.awayFrom) }));
+          .map((f) => ({
+            home: slot(f.home, f.homeFrom),
+            // Task 5: a bye is known at setup and never resolves to anyone —
+            // "TBD" tells an organiser to wait for something that isn't
+            // coming. BracketFixtureGen.award marks the whole fixture; the
+            // engine always lands the award on `home` (buildSingleElim), so
+            // `away` is unconditionally the phantom slot here.
+            away: f.award !== undefined ? msg("bracket.slot.bye") : slot(f.away, f.awayFrom),
+          }));
+        const first = fixtures[0]!;
         const title = byPool
           ? `Group ${key.slice(5)}`
-          : roundTitle(stage.kind, fixtures[0]!.roundNo, fixtures.length);
+          : BRACKET_KINDS.has(stage.kind)
+            ? roundRoleLabel(
+                msg,
+                roundRoleFor(
+                  laneFixtures,
+                  {
+                    round_no: first.roundNo,
+                    lane: first.lane ?? null,
+                    is_final: first.isFinal === true,
+                    third_place: first.thirdPlace === true,
+                    conditional: first.conditional === true,
+                  },
+                  stage.kind,
+                  first.extKey,
+                ),
+              )
+            : msg("bracket.round.plain", { n: first.roundNo });
         return { title, matches };
       });
 
@@ -1075,6 +1152,19 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
       const key = from.side === "loser" ? "slot.loser_match" : "slot.winner_match";
       return { key, params };
     };
+    // Review finding (defect 1): a bye is known at setup and never resolves
+    // to anyone — "TBD" tells an organiser to wait for something that is not
+    // coming (same rationale previewDivisionFixtures already applies at its
+    // own bye branch above). The engine always lands the award on `home`
+    // (buildSingleElim), so in practice this only ever fires for `away`, but
+    // both sides are guarded symmetrically rather than assuming that engine
+    // detail here. Stored at INSERT time, not derived at render time: this
+    // is the ONE place a bye's phantom side is decided, so every renderer
+    // that already goes through resolveSlotLabel (public bracket, console
+    // stages/bracket panels, …) picks it up for free, the same way every
+    // other slot label on this row already does.
+    const byeSlotLabel = (isBye: boolean): { key: string; params: Record<string, never> } | null =>
+      isBye ? { key: "bracket.slot.bye", params: {} } : null;
 
     // First pass: all new fixtures in one multi-row insert. Ids are generated
     // client-side so the feed/bye passes can reference them without relying
@@ -1093,11 +1183,20 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
           seq_in_round: g.seqInRound,
           home_entrant_id,
           away_entrant_id,
-          home_slot_label: home_entrant_id ? null : matchSlotLabel(g.homeFrom),
-          away_slot_label: away_entrant_id ? null : matchSlotLabel(g.awayFrom),
+          home_slot_label: home_entrant_id ? null : (byeSlotLabel(g.award !== undefined) ?? matchSlotLabel(g.homeFrom)),
+          away_slot_label: away_entrant_id ? null : (byeSlotLabel(g.award !== undefined) ?? matchSlotLabel(g.awayFrom)),
           ext_key: g.extKey,
           status: g.award !== undefined ? "forfeited" : "scheduled",
           outcome: g.award !== undefined ? JSON.stringify({ kind: "award", winner: g.award }) : null,
+          // F1: the bracket ROLE the engine already computed (BracketFixtureGen
+          // via bracketToGen) — always present with a concrete value (never
+          // `undefined`) so every row in this batch insert shares one column
+          // set; a non-bracket/single-lane fixture keeps lane null, same as
+          // every row does today, so no existing render changes.
+          lane: g.lane ?? null,
+          is_final: g.isFinal === true,
+          third_place: g.thirdPlace === true,
+          conditional: g.conditional === true,
         };
       });
     if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
@@ -1541,6 +1640,13 @@ async function generateSeededStageFixtures(auth: AuthCtx, stageId: string): Prom
         ext_key: g.extKey,
         status: "scheduled",
         outcome: null,
+        // F1: same role columns as the plain generateStageFixtures path —
+        // seeded (placeholder) brackets must persist a role too, or the
+        // day-one preview path F3 depends on renders with no role at all.
+        lane: g.lane ?? null,
+        is_final: g.isFinal === true,
+        third_place: g.thirdPlace === true,
+        conditional: g.conditional === true,
       }));
     if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
     for (const r of newRows) byKey.set(r.ext_key, r.id);
@@ -1711,10 +1817,16 @@ function toBracketFixtureStatus(dbStatus: string): FixtureStatus {
 // Rebuild the completed bracket's own BracketFixture[] for `losersOfRound`
 // (qualification.ts) — never re-derived from `standings_snapshots`, which
 // only ever carries FINAL ranks, not which round a fixture belongs to.
-// `ext_key` is the only place lane/thirdPlace survive persistence (spec 05
-// §2.3/§2.5): PARSE it via engine-db/competition.ts's own parseExtKey
-// (pass 2), never re-derive from round/position — a bracket's rounds number
-// sparsely (1,2,3 winners' side, 7-10 losers' side, 14 grand final).
+// Before F1 (2026-08-17), `ext_key` was the only place a bracket fixture's
+// lane/thirdPlace survived persistence, so this parsed it via engine-db/
+// competition.ts's own parseExtKey (pass 2) rather than reading a column.
+// `fixtures.lane`/`fixtures.third_place` now carry the same information
+// directly (db/migration/deltas/V368__fixture_round_role.sql) — this
+// function still derives from ext_key below because it hasn't been migrated
+// to the new columns, not because ext_key is still the only source. Either
+// way, never re-derive bracket position from round/seq_in_round: a
+// bracket's rounds number sparsely (1,2,3 winners' side, 7-10 losers' side,
+// 14 grand final).
 // resolveQualification's isRoundLosers trusts ITS CALLER for bracket-position
 // order (there is nothing left for it to sort by) — `order by round_no,
 // seq_in_round` below is what makes THIS the ordering authority.

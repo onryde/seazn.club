@@ -6,7 +6,7 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { PatchFixture, PutLineup, ScheduleConflict } from "@/server/api-v1/schemas";
-import { FIXTURE_COLS, type FixtureRow } from "./stages";
+import { FIXTURE_COLS, BOARD_FIXTURE_COLS, type FixtureRow } from "./stages";
 import { moveFixture } from "./schedule";
 import { scoresViaAssignment } from "./scorers";
 
@@ -35,6 +35,27 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
     if (!division) throw new HttpError(404, "division not found");
     return tx<FixtureRow[]>`
       select ${tx(FIXTURE_COLS)} from fixtures
+      where division_id = ${divisionId}
+      order by stage_id, round_no, seq_in_round`;
+  });
+}
+
+/** The schedule board's fixture read (F1 follow-up, payload budget "gap
+ *  15" — board-v3.spec.ts). Same query as listDivisionFixtures above, but
+ *  projected onto BOARD_FIXTURE_COLS: the board never reads
+ *  ext_key/lane/is_final/third_place/conditional, so this drops them
+ *  instead of shipping them across the RSC flight unread. Callers that DO
+ *  need those five fields (the division page's bracket/stages panel) keep
+ *  using listDivisionFixtures. */
+export async function listDivisionFixturesForBoard(
+  auth: AuthCtx,
+  divisionId: string,
+): Promise<FixtureRow[]> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
+    if (!division) throw new HttpError(404, "division not found");
+    return tx<FixtureRow[]>`
+      select ${tx(BOARD_FIXTURE_COLS)} from fixtures
       where division_id = ${divisionId}
       order by stage_id, round_no, seq_in_round`;
   });

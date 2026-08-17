@@ -395,10 +395,12 @@ export interface SchedulePack {
    *  whose stage is round-robin-kind — the SAME `roundRobin` set that gates
    *  `schedulable`'s own `roundNo` below. `fixtures.round_no` is shared
    *  display numbering for EVERY stage kind (bracket rounds, swiss rounds,
-   *  stepladder legs all reuse the column — `stages.ts`'s `roundTitle`), so
-   *  forwarding it ungated would recreate the cross-sequence collision the
-   *  whole round-order feature exists to prevent (the design doc's own
-   *  motivating symptom). Absent key means "not round-robin, or not
+   *  stepladder legs all reuse the column — F1's roundRole()/
+   *  roundRoleLabel() names every one of them by position, never derived
+   *  from this column alone), so forwarding it ungated would recreate the
+   *  cross-sequence collision the whole round-order feature exists to
+   *  prevent (the design doc's own motivating symptom). Absent key means
+   *  "not round-robin, or not
    *  movable" — never round 0.
    *
    *  SERVER-SIDE ONLY, like `poolIds`/`stageIds`: `toModelPayload` omits it.
@@ -674,9 +676,10 @@ export async function buildSchedulePack(
     // — the AI-plan verify seam) need this set in EVERY mode, not just
     // generate: a refine/repair plan is verified through the same seam. `f.
     // round_no` is display numbering shared by every stage kind (bracket
-    // rounds, swiss rounds, stepladder legs all reuse the column — see
-    // `stages.ts`'s `roundTitle`), so `roundRobin.has(f.stage_id)` is the gate
-    // that keeps a non-round-robin stage's round_no from being read as
+    // rounds, swiss rounds, stepladder legs all reuse the column — F1's
+    // roundRole()/roundRoleLabel() names every one of them by position,
+    // never derived from this column alone), so `roundRobin.has(f.stage_id)`
+    // is the gate that keeps a non-round-robin stage's round_no from being read as
     // round-robin order — the design doc's own motivating symptom. Computed
     // ONCE here, ahead of every mode branch, same reasoning as `lockedIds`
     // just above.

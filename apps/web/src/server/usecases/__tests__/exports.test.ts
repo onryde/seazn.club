@@ -392,4 +392,49 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
     expect(flat).toContain("Court 1");
     expect(flat).not.toContain("Court 2");
   });
+
+  // F1 Task 4: buildBracket's round names now come from an injected
+  // callback (exports.ts wires roundRole()/roundRoleLabel() through it) --
+  // nothing else in this file exercises the "bracket" doc kind, so a
+  // mutation that broke that wiring (e.g. swapped it for a callback that
+  // always throws) survived every other test here unnoticed. Proves the
+  // real usecase-level wiring, not just buildBracket's own unit test.
+  it("bracket export names rounds via the injected roundRole wiring", async () => {
+    const { auth } = await seedOrg();
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Print Cup",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    await createEntrants(
+      auth,
+      division.id,
+      Array.from({ length: 8 }, (_, i) => ({
+        kind: "individual" as const,
+        display_name: `E${i + 1}`,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "knockout",
+      name: "KO",
+      config: {},
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const model = await buildDivisionDocModel(auth, division.id, "bracket", {
+      printedAt: PRINTED,
+    });
+    expect(model.bracket!.roundLabels).toEqual(["Quarter-finals", "Semi-finals", "Final"]);
+  });
 });

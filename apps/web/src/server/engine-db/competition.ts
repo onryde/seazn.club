@@ -77,12 +77,16 @@ function toEngineStatus(dbStatus: string): FixtureStatus {
   }
 }
 
-// L3/#414 pass 2 — `ext_key` is the only place a bracket fixture's lane
-// (WB/LB/GF, double-elim only) and thirdPlace status survive persistence:
-// bracket.ts mints these ids at generation (`wb-r{r}-i{i}`, `lb-r{r}-i{i}`,
-// `gf`/`gf-reset`, `${idPrefix}-3p`) and stages.ts writes them straight to
-// fixtures.ext_key (PROMPT-09) — there is no separate lane/thirdPlace column.
-// PARSE the id, never re-derive either fact from round/position: a bracket's
+// L3/#414 pass 2 — `ext_key` is the ONE place a bracket fixture's lane
+// (WB/LB/GF, double-elim only) and thirdPlace status can be recovered by
+// PARSING an id: bracket.ts mints these ids at generation (`wb-r{r}-i{i}`,
+// `lb-r{r}-i{i}`, `gf`/`gf-reset`, `${idPrefix}-3p`) and stages.ts writes
+// them straight to fixtures.ext_key (PROMPT-09). F1 (2026-08-17) added
+// fixtures.lane/fixtures.third_place as a direct, cheaper alternative
+// (db/migration/deltas/V368__fixture_round_role.sql) — this function still
+// parses ext_key rather than reading those columns because it hasn't been
+// migrated to them, not because ext_key remains the only source. Either
+// way, never re-derive lane/thirdPlace from round/position: a bracket's
 // rounds number sparsely (1,2,3 on a winners' lane, 7-10 on a losers' lane,
 // 14 for a grand final — spec 05 §2.3/§2.5), so no arithmetic on `round` can
 // recover which lane a fixture belongs to.

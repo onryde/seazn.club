@@ -85,11 +85,42 @@ describe("BracketPanel", () => {
     expect(html).toContain('data-testid="bracket-panel-de"');
     expect(html).toContain("bracket.winners");
     expect(html).toContain("bracket.losers");
+    // Lane/pair annotation, deliberately left as-is (see bracket-panel.tsx's
+    // own comment) -- matches the public site's untouched "Grand final"/
+    // "Reset" pair rather than roundRoleLabel's list-heading phrasing.
     expect(html).toContain("bracket.grandFinal");
     expect(html.match(/data-lane="WB"/g)?.length).toBe(3);
     expect(html.match(/data-lane="LB"/g)?.length).toBe(2);
     expect(html).toContain('href="/o/org/c/cup/d/open/f/6"');
     expect(html).toContain("<svg");
+  });
+
+  // Post-merge code review, defect 2: same structural gap as the public
+  // site's DoubleElim tree — this panel labelled the two LANES as a whole
+  // ("bracket.winners"/"bracket.losers") but never named individual ROUNDS
+  // via roundRoleLabel. Reuses the "G8" test's 4-entrant shape above (k=2):
+  // WB round_no 1 (2 games) is a semi-final, round_no 2 (1 game) the
+  // winners' final; LB round_no 5 is losers' round 1, round_no 6 the
+  // losers' final. useMsg() is mocked to the identity function in this
+  // file, so asserting the KEY (not translated text) is the faithful check
+  // here, same as the G8 test's own "bracket.winners" assertion.
+  it("names each round's column too, not just the two lanes (review finding: defect 2)", () => {
+    const de = [
+      FIX("w1", 1, 1, "e1", "e2", null, "scheduled", 1),
+      FIX("w2", 1, 2, "e3", "e4", null, "scheduled", 2),
+      FIX("wf", 2, 1, null, null, null, "scheduled", 3),
+      FIX("l1", 5, 1, null, null, null, "scheduled", 4),
+      FIX("lf", 6, 1, null, null, null, "scheduled", 5),
+      FIX("gf", 9, 1, null, null, null, "scheduled", 6),
+    ];
+    const html = markup({ fixtures: de as never });
+    expect(html).toContain("bracket.round.semi"); // WB round_no 1
+    expect(html).toContain("bracket.round.winnersFinal"); // WB round_no 2
+    expect(html).toContain("bracket.round.losersRound"); // LB round_no 5
+    expect(html).toContain("bracket.round.losersFinal"); // LB round_no 6
+    // The lane headers are still present too — this addition is additive.
+    expect(html).toContain("bracket.winners");
+    expect(html).toContain("bracket.losers");
   });
 });
 
@@ -102,8 +133,8 @@ describe("BracketPanel — stepladder", () => {
     ];
     const html = markup({ kind: "stepladder", fixtures: rungs as never });
     expect(html).toContain('data-testid="bracket-panel-ladder"');
-    expect((html.match(/bracket\.rung/g) ?? []).length).toBe(2);
-    expect(html).toContain("bracket.final"); // the summit match is the Final
+    expect((html.match(/bracket\.round\.rung/g) ?? []).length).toBe(2); // F1: was bracket.rung
+    expect(html).toContain("bracket.round.final"); // the summit match is the Final (F1: was bracket.final)
     expect(html).toContain('href="/o/org/c/cup/d/open/f/2"');
     expect(html).toContain("bracket.tbd"); // unresolved rung-3 slot
   });
@@ -119,7 +150,8 @@ describe("BracketPanel — page playoffs", () => {
     ];
     const html = markup({ kind: "page_playoff", fixtures: fx as never });
     expect(html).toContain('data-testid="bracket-panel-page"');
-    for (const key of ["bracket.qualifier1", "bracket.eliminator", "bracket.qualifier2", "bracket.final"]) {
+    // F1: these four moved from bracket.* to bracket.round.* (PP_ROLE).
+    for (const key of ["bracket.round.qualifier1", "bracket.round.eliminator", "bracket.round.qualifier2", "bracket.round.final"]) {
       expect(html).toContain(key);
     }
     expect(html.match(/data-slot=/g)?.length).toBe(4);

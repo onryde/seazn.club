@@ -18805,6 +18805,40 @@
                               },
                               "created_at": {
                                 "type": "string"
+                              },
+                              "ext_key": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "lane": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "WB",
+                                      "LB",
+                                      "GF"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "is_final": {
+                                "type": "boolean"
+                              },
+                              "third_place": {
+                                "type": "boolean"
+                              },
+                              "conditional": {
+                                "type": "boolean"
                               }
                             },
                             "required": [
@@ -20585,6 +20619,40 @@
                               },
                               "created_at": {
                                 "type": "string"
+                              },
+                              "ext_key": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "lane": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "WB",
+                                      "LB",
+                                      "GF"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "is_final": {
+                                "type": "boolean"
+                              },
+                              "third_place": {
+                                "type": "boolean"
+                              },
+                              "conditional": {
+                                "type": "boolean"
                               }
                             },
                             "required": [
@@ -28428,6 +28496,40 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "ext_key": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "lane": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "WB",
+                                "LB",
+                                "GF"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "is_final": {
+                          "type": "boolean"
+                        },
+                        "third_place": {
+                          "type": "boolean"
+                        },
+                        "conditional": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -28936,6 +29038,40 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "ext_key": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "lane": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "WB",
+                                "LB",
+                                "GF"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "is_final": {
+                          "type": "boolean"
+                        },
+                        "third_place": {
+                          "type": "boolean"
+                        },
+                        "conditional": {
+                          "type": "boolean"
                         },
                         "conflicts": {
                           "type": "array",

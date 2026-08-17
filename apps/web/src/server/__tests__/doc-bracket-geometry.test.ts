@@ -8,6 +8,11 @@ import { bracketPageGeometry } from "../doc-bracket-geometry";
 // A4 landscape: 841.89 × 595.28, margin 40, masthead+title ≈ 120pt used.
 const BOX = { x: 40, y: 130, w: 841.89 - 80, h: 595.28 - 130 - 50 };
 
+// F1 Task 4: buildBracket takes round-name resolution as an injected
+// callback now -- this geometry test only cares about label BOUNDS, not
+// text, so any deterministic string works.
+const roundLabel = (fromEnd: number): string => `Round ${fromEnd}`;
+
 function fieldOf(n: number): DocBracket {
   const rounds = Math.log2(n);
   const fixtures: { id: string; round_no: number; seq_in_round: number; home: string | null; away: string | null; headline: string | null; decided: boolean }[] = [];
@@ -21,7 +26,7 @@ function fieldOf(n: number): DocBracket {
       });
     }
   }
-  return buildBracket("Cup", fixtures, { printedAt: "2026-07-18T00:00:00Z" }).bracket!;
+  return buildBracket("Cup", fixtures, roundLabel, { printedAt: "2026-07-18T00:00:00Z" }).bracket!;
 }
 
 describe("bracketPageGeometry — one-sheet bounds", () => {

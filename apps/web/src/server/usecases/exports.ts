@@ -24,7 +24,9 @@ import {
   type ExportTicket,
   type PageBreaks,
 } from "@seazn/engine/exports";
-import type { StandingsRow } from "@seazn/engine/competition";
+import { roundRole, type StandingsRow } from "@seazn/engine/competition";
+import { roundRoleLabel } from "@/lib/round-role-label";
+import { msg } from "@/lib/messages";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
@@ -478,7 +480,30 @@ export async function buildDivisionDocModel(
         if (stage.kind === "stepladder") {
           return buildLadderPoster(title, exportFixtures, (i) => (i === exportFixtures.length - 1 ? "Final" : `Rung ${i + 1}`), buildOpts);
         }
-        return buildBracket(title, exportFixtures, buildOpts);
+        // F1 Task 4: buildBracket takes the round-name resolution as an
+        // injected callback now (the engine cannot carry English) -- same
+        // client-safe msg() default the sibling calls above (laneLabels,
+        // Page-playoff/ladder labels) already use, since this export
+        // surface has never been locale-aware.
+        return buildBracket(
+          title,
+          exportFixtures,
+          (fromEnd) =>
+            roundRoleLabel(
+              msg,
+              roundRole({
+                stageKind: "knockout",
+                lane: null,
+                roundInLane: 0,
+                lastRoundInLane: fromEnd,
+                isFinal: false,
+                thirdPlace: false,
+                conditional: false,
+                extKey: null,
+              }),
+            ),
+          buildOpts,
+        );
       }
     }
   });

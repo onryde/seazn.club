@@ -9,7 +9,7 @@ import { routes } from "@/lib/routes";
 import { getCompetition } from "@/server/usecases/competitions";
 import { listDivisions } from "@/server/usecases/divisions";
 import { listStages } from "@/server/usecases/stages";
-import { listDivisionFixtures } from "@/server/usecases/fixtures";
+import { listDivisionFixturesForBoard } from "@/server/usecases/fixtures";
 import { listEntrants } from "@/server/usecases/entrants";
 import { getScheduleSettings } from "@/server/usecases/schedule";
 import { hasFeature } from "@/lib/entitlements";
@@ -97,7 +97,10 @@ export default async function CompetitionSchedulePage({
     divisions.map(async (d) => ({
       division: d,
       stages: await listStages(auth, d.id),
-      fixtures: await listDivisionFixtures(auth, d.id),
+      // F1 follow-up (payload budget "gap 15"): the board never reads
+      // ext_key/lane/is_final/third_place/conditional — this projection
+      // drops them instead of shipping them across the RSC flight unread.
+      fixtures: await listDivisionFixturesForBoard(auth, d.id),
       entrants: await listEntrants(auth, d.id),
     })),
   );

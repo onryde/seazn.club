@@ -466,8 +466,9 @@ export async function divisionLockState(
  * C1 (2026-08-12 round-order design): round attaches to round-robin-
  * generated fixtures ONLY. `fixtures.round_no` is one shared column
  * populated for EVERY stage kind (a bracket's own round, a swiss round, a
- * stepladder leg — see `stages.ts`'s `roundTitle`, which labels all of
- * them), so which stages may forward it as a scheduling ORDERING input is
+ * stepladder leg — F1 (2026-08-17) names every one of them by position via
+ * roundRole()/roundRoleLabel(), never derived from this column alone), so
+ * which stages may forward it as a scheduling ORDERING input is
  * not derivable from a `FixtureLite` row alone; this is the one query that
  * resolves it, so `toAssignment` and the schedulable builder can both ask
  * it the SAME question rather than guessing from the row itself. Without

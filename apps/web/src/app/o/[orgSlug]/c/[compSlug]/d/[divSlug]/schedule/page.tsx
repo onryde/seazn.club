@@ -11,7 +11,7 @@ import { routes } from "@/lib/routes";
 import { getDivision } from "@/server/usecases/divisions";
 import { getCompetition } from "@/server/usecases/competitions";
 import { listStages } from "@/server/usecases/stages";
-import { listDivisionFixtures } from "@/server/usecases/fixtures";
+import { listDivisionFixturesForBoard } from "@/server/usecases/fixtures";
 import { listEntrants } from "@/server/usecases/entrants";
 import { getScheduleSettings } from "@/server/usecases/schedule";
 import { hasFeature } from "@/lib/entitlements";
@@ -115,7 +115,10 @@ export default async function DivisionSchedulePage({
   ] = await Promise.all([
     getCompetition(auth, division.competition_id),
     listStages(auth, id),
-    listDivisionFixtures(auth, id),
+    // F1 follow-up (payload budget "gap 15"): the board never reads
+    // ext_key/lane/is_final/third_place/conditional — this projection
+    // drops them instead of shipping them across the RSC flight unread.
+    listDivisionFixturesForBoard(auth, id),
     listEntrants(auth, id),
     getScheduleSettings(auth, id),
     hasFeature(auth.orgId, "scheduling.board"),

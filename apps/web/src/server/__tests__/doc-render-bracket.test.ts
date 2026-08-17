@@ -30,6 +30,18 @@ vi.mock("pdfkit", () => {
 import { docModelToPdf } from "../doc-render";
 import { buildBracket } from "@seazn/engine/exports";
 
+// F1 Task 4: buildBracket takes round-name resolution as an injected
+// callback now (the engine cannot carry English) -- mirrors what
+// roundRoleLabel(msg, roundRole({stageKind:"knockout", ...})) produces for
+// a knockout, same as exports.ts's own real caller, without pulling
+// apps/web's full i18n stack into this focused renderer test.
+const roundLabel = (fromEnd: number): string => {
+  if (fromEnd === 0) return "Final";
+  if (fromEnd === 1) return "Semi-finals";
+  if (fromEnd === 2) return "Quarter-finals";
+  return `Round of ${2 ** (fromEnd + 1)}`;
+};
+
 const eight = [
   { id: "q1", round_no: 0, seq_in_round: 1, home: "Mexico", away: "Chile", headline: "2–0", decided: true },
   { id: "q2", round_no: 0, seq_in_round: 2, home: "Japan", away: "Ghana", headline: "1–0", decided: true },
@@ -42,7 +54,7 @@ const eight = [
 
 async function render(branded: boolean) {
   rec.text = []; rec.images = 0; rec.fills = [];
-  const model = buildBracket("Summer Cup — Open", eight, {
+  const model = buildBracket("Summer Cup — Open", eight, roundLabel, {
     printedAt: "2026-07-18T00:00:00Z",
     description: "The knockout tree — filled from live results.",
     ...(branded ? { branding: { orgName: "Riverside SC" } } : {}),

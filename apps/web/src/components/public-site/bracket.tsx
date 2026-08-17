@@ -18,7 +18,10 @@ import {
   type BracketNode,
   type DoubleElimLayout,
   type PagePlayoffLayout,
+  type PagePlayoffSlot,
 } from "@seazn/engine/scheduling";
+import type { RoundRole } from "@seazn/engine/competition";
+import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 
 interface Props {
   kind: "knockout" | "double_elim" | "stepladder" | "page_playoff";
@@ -250,10 +253,18 @@ function DoubleElim({
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const LANE_GAP = 48;
   const LABEL_H = 24;
+  // Review finding (defect 2): this tree only ever labelled the two LANES as
+  // a whole ("Winners bracket"/"Losers bracket") — it never named individual
+  // ROUNDS, so the flagship "name every round by its role" fix (Task 4,
+  // roundRoleLabel) never reached the primary view a well-formed
+  // double-elim actually renders through (the column-fallback branch below
+  // only fires for irregular shapes). ROUND_LABEL_H reserves a second
+  // caption row, under the lane title, for a per-COLUMN round name.
+  const ROUND_LABEL_H = 18;
   const wbH = Math.max(layout.wbRows, 1) * SLOT_H;
   const lbH = Math.max(layout.lbRows, 0) * SLOT_H;
-  const wbTop = LABEL_H;
-  const lbTop = wbTop + wbH + LANE_GAP + (lbH > 0 ? LABEL_H : 0);
+  const wbTop = LABEL_H + ROUND_LABEL_H;
+  const lbTop = wbTop + wbH + LANE_GAP + (lbH > 0 ? LABEL_H + ROUND_LABEL_H : 0);
   const gfX = Math.max(layout.k, layout.lbCols) * COL_W;
   const totalW = gfX + COL_W * (layout.resetId !== undefined ? 2 : 1);
   const totalH = lbTop + lbH;
@@ -264,17 +275,60 @@ function DoubleElim({
   const lbFinalY = layout.lbCols > 0 ? lbY(layout.lbCols - 1, 0) : wbFinalY;
   const laneLabel = "font-display text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted";
 
+  // Per-column round name (Quarter-finals, Semi-finals, Winners' final, …),
+  // ranked within its OWN lane via roundRoleFor — never globally, or a DE's
+  // longer losers lane silently reintroduces the count-based naming bug this
+  // whole session exists to kill (design §2.3). Same helper the column
+  // fallback below already uses, so a round is named identically regardless
+  // of which branch renders it.
+  const laneFixtures = fixtures.map((f) => ({ round_no: f.round_no, lane: f.lane ?? null }));
+  const columnRoundLabel = (lane: "WB" | "LB", col: number): string => {
+    const node = layout.nodes.find((n) => n.lane === lane && n.col === col);
+    const f = node ? byId.get(node.fixtureId) : undefined;
+    if (!f) return "";
+    return roundRoleLabel(
+      lookup,
+      roundRoleFor(
+        laneFixtures,
+        {
+          round_no: f.round_no,
+          lane: f.lane ?? null,
+          is_final: f.is_final === true,
+          third_place: f.third_place === true,
+          conditional: f.conditional === true,
+        },
+        "double_elim",
+        null,
+      ),
+    );
+  };
+
   return (
     <div className="overflow-x-auto" data-bracket="double-elim">
       <div className="relative" style={{ width: totalW, height: totalH }}>
         <span className={`absolute ${laneLabel}`} style={{ left: 0, top: 0 }}>
-          Winners bracket
+          {lookup("bracket.winners")}
         </span>
+        {Array.from({ length: layout.k }, (_, col) => (
+          <span key={`wb-round-${col}`} className={`absolute ${laneLabel}`} style={{ left: col * COL_W, top: LABEL_H }}>
+            {columnRoundLabel("WB", col)}
+          </span>
+        ))}
         {lbH > 0 && (
           <span className={`absolute ${laneLabel}`} style={{ left: 0, top: wbTop + wbH + LANE_GAP }}>
-            Losers bracket
+            {lookup("bracket.losers")}
           </span>
         )}
+        {lbH > 0 &&
+          Array.from({ length: layout.lbCols }, (_, col) => (
+            <span
+              key={`lb-round-${col}`}
+              className={`absolute ${laneLabel}`}
+              style={{ left: col * COL_W, top: wbTop + wbH + LANE_GAP + LABEL_H }}
+            >
+              {columnRoundLabel("LB", col)}
+            </span>
+          ))}
         <svg aria-hidden className="absolute inset-0" width={totalW} height={totalH} viewBox={`0 0 ${totalW} ${totalH}`}>
           {layout.connectors.map((c, i) => {
             const y = c.lane === "WB" ? wbY : lbY;
@@ -312,7 +366,7 @@ function DoubleElim({
           return (
             <div key={node.fixtureId} data-lane={node.lane} className="absolute" style={{ left, top, width: NODE_W }}>
               {node.lane === "GF" && (
-                <p className={`mb-1 ${laneLabel}`}>{node.col === 0 ? "Grand final" : "Reset"}</p>
+                <p className={`mb-1 ${laneLabel}`}>{node.col === 0 ? lookup("bracket.grandFinal") : lookup("bracket.reset")}</p>
               )}
               <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} />
             </div>
@@ -379,22 +433,35 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
     rounds.set(f.round_no, list);
   }
   const ordered = [...rounds.entries()].sort(([a], [b]) => a - b);
-  // Distance from the last round — stable even when byes thin out a round.
-  // Double-elim round numbers encode WB/LB/GF lanes, so keep plain numbers.
-  const maxRound = ordered.length > 0 ? ordered[ordered.length - 1][0] : 0;
-  const roundName = (roundNo: number): string => {
-    if (kind === "stepladder") {
-      // The summit match IS the final — "Rung N" reads wrong at the top
-      // ("the winner plays seed 1 in the final", help copy).
-      return roundNo === maxRound ? "Final" : `Rung ${roundNo}`;
+  // F1 Task 4: name each round by its POSITION (roundRole), never by match
+  // count — a double-elim's losers bracket has repeated round sizes, so a
+  // count-based namer produces several "Semi-finals" and several "Final"s
+  // in one bracket. Ranked per LANE, not across the whole stage: a DE's LB
+  // has more rounds than its WB, and a global rank silently reintroduces
+  // the bug. page_playoff never reaches this fallback with a real shape
+  // (a well-formed 4-fixture set always takes the PagePlayoff tree branch
+  // above), so it keeps the plain "Round N" here, same as before.
+  const laneFixtures = fixtures.map((f) => ({ round_no: f.round_no, lane: f.lane ?? null }));
+  const roundName = (roundNo: number, list: PublicFixture[]): string => {
+    if (kind === "knockout" || kind === "double_elim" || kind === "stepladder") {
+      const first = list[0]!;
+      return roundRoleLabel(
+        lookup,
+        roundRoleFor(
+          laneFixtures,
+          {
+            round_no: roundNo,
+            lane: first.lane ?? null,
+            is_final: first.is_final === true,
+            third_place: first.third_place === true,
+            conditional: first.conditional === true,
+          },
+          kind,
+          null,
+        ),
+      );
     }
-    if (kind === "knockout") {
-      const fromEnd = maxRound - roundNo;
-      if (fromEnd === 0) return "Final";
-      if (fromEnd === 1) return "Semi-finals";
-      if (fromEnd === 2) return "Quarter-finals";
-    }
-    return `Round ${roundNo}`;
+    return roundRoleLabel(lookup, { kind: "plain_round", n: roundNo });
   };
 
   return (
@@ -403,7 +470,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
         {ordered.map(([roundNo, list]) => (
           <div key={roundNo} className="min-w-48">
             <h3 className="mb-2 font-display text-sm font-semibold uppercase tracking-[0.18em] text-ink-muted">
-              {roundName(roundNo)}
+              {roundName(roundNo, list)}
             </h3>
             <div className="flex flex-col justify-around gap-3">
               {list
@@ -429,7 +496,16 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
 // Page playoffs (IPL): Qualifier 1 and the Eliminator on the left, Qualifier 2
 // centre (Q1's loser drops in, the Eliminator's winner advances), the Final on
 // the right fed by both winners. Positions are the classic playoff card.
-const PP_LABEL = { q1: "Qualifier 1", eliminator: "Eliminator", q2: "Qualifier 2", final: "Final" } as const;
+// The layout's own `slot` already IS the fixture's identity (pagePlayoffBracket
+// assigns it positionally from the SAME emission order bracket.ts's ext_key
+// ids encode — F1 Task 4: map it straight to a RoundRole, never re-derive
+// from round size).
+const PP_ROLE: Record<PagePlayoffSlot, RoundRole> = {
+  q1: { kind: "qualifier1" },
+  eliminator: { kind: "eliminator" },
+  q2: { kind: "qualifier2" },
+  final: { kind: "final" },
+};
 
 function PagePlayoff({
   layout,
@@ -478,7 +554,7 @@ function PagePlayoff({
           return (
             <div key={n.fixtureId} data-slot={n.slot} className="absolute" style={{ left: p.x, top: p.y, width: NODE_W }}>
               <p className="mb-1 font-display text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">
-                {PP_LABEL[n.slot]}
+                {roundRoleLabel(lookup, PP_ROLE[n.slot])}
               </p>
               <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} />
             </div>

@@ -701,6 +701,22 @@ export const Fixture = z.object({
   schedule_source: z.enum(["none", "auto", "manual", "ai"]),
   schedule_locked: z.boolean(),
   created_at: z.string(),
+  /** F1 (2026-08-17): the engine's bracket-position role, persisted instead
+   *  of re-derived per consumer (V368/V369). Declared here for the same
+   *  reason as `fixture_no` above — `FIXTURE_COLS` now selects it and every
+   *  fixture route returns its row unmapped, so leaving it undocumented
+   *  would be a silent gap between the published spec and the real
+   *  payload, not a missing field. `.optional()`, unlike `fixture_no`: a
+   *  real response always sends it, but dozens of pre-existing tests
+   *  `Fixture.parse()` a hand-built row literal that predates these five
+   *  fields, and `.optional()` is this schema's own established way of
+   *  landing a new response field without breaking every one of them
+   *  (see ScheduleSolverInfo's later fields for the same convention). */
+  ext_key: z.string().nullable().optional(),
+  lane: z.enum(["WB", "LB", "GF"]).nullable().optional(),
+  is_final: z.boolean().optional(),
+  third_place: z.boolean().optional(),
+  conditional: z.boolean().optional(),
 });
 
 export const LineupSlotInput = z.object({

@@ -1,0 +1,208 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`format catalogue — shape regression (F1 Task 5) > every shipped format produces its known shape 1`] = `
+[
+  {
+    "key": "league",
+    "rounds": [
+      [
+        "Round 1",
+        "Round 2",
+        "Round 3",
+        "Round 4",
+        "Round 5",
+        "Round 6",
+        "Round 7",
+      ],
+    ],
+    "stages": "league:-",
+  },
+  {
+    "key": "league_ko",
+    "rounds": [
+      [
+        "Round 1",
+        "Round 2",
+        "Round 3",
+        "Round 4",
+        "Round 5",
+        "Round 6",
+        "Round 7",
+      ],
+      [
+        "Semi-finals",
+        "Final",
+      ],
+    ],
+    "stages": "league:->knockout:Q",
+  },
+  {
+    "key": "groups_ko",
+    "rounds": [
+      [
+        "Group A",
+        "Group B",
+      ],
+      [
+        "Semi-finals",
+        "Final",
+      ],
+    ],
+    "stages": "group:->knockout:Q",
+  },
+  {
+    "key": "group_stepladder",
+    "rounds": [
+      [
+        "Round 1",
+        "Round 2",
+        "Round 3",
+        "Round 4",
+        "Round 5",
+        "Round 6",
+        "Round 7",
+      ],
+      [
+        "Rung 1",
+        "Rung 2",
+        "Final",
+      ],
+    ],
+    "stages": "league:->stepladder:Q",
+  },
+  {
+    "key": "group_playoffs",
+    "rounds": [
+      [
+        "Round 1",
+        "Round 2",
+        "Round 3",
+        "Round 4",
+        "Round 5",
+        "Round 6",
+        "Round 7",
+      ],
+      [
+        "Qualifier 1",
+        "Qualifier 2",
+        "Final",
+      ],
+    ],
+    "stages": "league:->page_playoff:Q",
+  },
+  {
+    "key": "swiss",
+    "rounds": [
+      [],
+    ],
+    "stages": "swiss:-",
+  },
+  {
+    "key": "knockout",
+    "rounds": [
+      [
+        "Quarter-finals",
+        "Semi-finals",
+        "Final",
+      ],
+    ],
+    "stages": "knockout:-",
+  },
+  {
+    "key": "double_elim",
+    "rounds": [
+      [
+        "Quarter-finals",
+        "Semi-finals",
+        "Winners' final",
+        "Losers' round 1",
+        "Losers' round 2",
+        "Losers' round 3",
+        "Losers' final",
+        "Grand final",
+      ],
+    ],
+    "stages": "double_elim:-",
+  },
+  {
+    "key": "triple_rr",
+    "rounds": [
+      [
+        "Round 1",
+        "Round 2",
+        "Round 3",
+        "Round 4",
+        "Round 5",
+        "Round 6",
+        "Round 7",
+        "Round 8",
+        "Round 9",
+        "Round 10",
+        "Round 11",
+        "Round 12",
+        "Round 13",
+        "Round 14",
+        "Round 15",
+        "Round 16",
+        "Round 17",
+        "Round 18",
+        "Round 19",
+        "Round 20",
+        "Round 21",
+      ],
+    ],
+    "stages": "league:-",
+  },
+  {
+    "key": "americano",
+    "rounds": [
+      [],
+    ],
+    "stages": "americano:-",
+  },
+  {
+    "key": "mexicano",
+    "rounds": [
+      [],
+    ],
+    "stages": "americano:-",
+  },
+  {
+    "key": "ladder",
+    "rounds": [
+      [],
+    ],
+    "stages": "ladder:-",
+  },
+  {
+    "key": "ko_plate",
+    "rounds": [
+      [
+        "Quarter-finals",
+        "Semi-finals",
+        "Final",
+      ],
+      [
+        "Semi-finals",
+        "Final",
+      ],
+    ],
+    "stages": "knockout:->knockout:Q",
+  },
+  {
+    "key": "qualifying_main",
+    "rounds": [
+      [
+        "Quarter-finals",
+        "Semi-finals",
+        "Final",
+      ],
+      [
+        "Semi-finals",
+        "Final",
+      ],
+    ],
+    "stages": "knockout:->knockout:Q",
+  },
+]
+`;
