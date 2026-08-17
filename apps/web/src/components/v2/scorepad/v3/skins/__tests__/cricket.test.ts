@@ -1586,15 +1586,17 @@ describe("resolvePeople / buildTiles / buildContext — bowler default is ELIGIB
     expect(spec.slots.find((s) => s.id === "bowler")!.personId).toBe("a2");
   });
 
-  it("mutation proof: a version blind to prevOverBowler (quota-only) would disagree with the real one here", () => {
-    const ignoresPrevOverBowler = () => "a1"; // pretends bowlingOrder[0] is always fine
-    const s = state({
-      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })],
-    });
-    const real = resolvePeople(s).bowler;
-    const viaMutant = ignoresPrevOverBowler();
-    expect(real).not.toBe(viaMutant); // real: "a2" (skips a1); mutant: "a1" (blind to prevOverBowler)
-  });
+  // R2b-cricket-over follow-up (test-naming pass, 2026-08-17): a test
+  // named "mutation proof: a version blind to prevOverBowler (quota-only)
+  // would disagree with the real one here" previously lived here. It did
+  // not mutate anything — its "mutant" was a standalone `() => "a1"`
+  // literal that ignored its argument entirely, never a broken variant of
+  // resolvePeople — so its only real claim was `resolvePeople(s).bowler
+  // !== "a1"` against this exact fixture. The "skips bowlingOrder[0] when
+  // he bowled the PREVIOUS over" test at the top of this block already
+  // proves that more strongly, against the identical fixture (`.toBe("a2")`
+  // implies `.not.toBe("a1")` outright). Removed as a near-duplicate rather
+  // than kept under a corrected name, per review.
 });
 
 // ---------------------------------------------------------------------------
