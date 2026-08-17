@@ -2739,6 +2739,8 @@ export type DictionaryKey =
   | "pad.ribbon.withDetail"
   | "pad.sheet.back"
   | "pad.sheet.cancel"
+  | "pad.sheet.decrease"
+  | "pad.sheet.increase"
   | "pad.tabletennis.action.expediteStart"
   | "pad.tabletennis.action.rally"
   | "pad.tabletennis.action.rallyAttributed"

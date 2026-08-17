@@ -335,21 +335,31 @@ const numberFieldClass =
  * submit, unlike picking a single option or person.
  *
  * Review fix (follow-up to c70c0e90) — accessible naming for all three
- * controls, none of it a NEW dictionary key (dictionaries/scoring-vocab.ts
- * are a parallel agent's files this wave):
+ * controls:
  *  - The field gets `aria-label={t(step.title)}` — choice/person steps
  *    self-label via their button text, but a numeric field's visible
  *    content is just a number, so a screen reader needs the step's own
  *    title (already resolved here) attached directly rather than relying
  *    on the sighted-only title paragraph the PARENT renders outside this
  *    function.
- *  - The −/+ buttons get `aria-label` built from that SAME already-
- *    resolved title plus the glyph already visible on the button (a
- *    symbol, not English prose) — enough to tell the two buttons apart
- *    and tie them to the value they adjust, without inventing new
- *    translatable copy. A dedicated increment/decrement key (e.g.
- *    "Increase"/"Decrease") is still owed — this is a stopgap using only
- *    what the chassis already has on hand.
+ *  - Fix round (review finding 2, deferred from the chassis review): the
+ *    −/+ buttons originally derived their name from that SAME title plus
+ *    the bare glyph (`${title} −`) — a stopgap, because the dictionaries
+ *    were a parallel agent's files at the time. They are free now.
+ *    `pad.sheet.decrease`/`pad.sheet.increase` (dictionaries/{locale}/
+ *    ui.json) are dedicated, GENERIC chassis keys — same `pad.sheet.*`
+ *    namespace as `pad.sheet.back`/`.cancel` — interpolated with the
+ *    step's own already-resolved `{title}`, real per-locale wording rather
+ *    than a bare symbol suffix. Checked first, per the earlier report:
+ *    `addOns.extraOrg.increase`/`.decrease` is billing-specific (hardcoded
+ *    to "extra organisations"), `board.ai.stepperAria`/`.trace.
+ *    stepperAria` name a WORKFLOW step indicator, not a numeric +/-
+ *    control — neither reusable, confirming the earlier finding rather
+ *    than assuming it. Deliberately NOT added to `PAD_LABEL_KEYS`
+ *    (scoring-vocab.ts): that registry mirrors the ENGINE's own
+ *    `padSpec(cfg)` output, and this chassis-level control is not
+ *    something any sport module emits — same reason `pad.sheet.back`/
+ *    `.cancel` were never in it either.
  */
 function renderNumberStep(
   step: SheetNumberStep,
@@ -365,7 +375,7 @@ function renderNumberStep(
       <div className="flex items-center gap-3">
         <button
           type="button"
-          aria-label={`${title} −`}
+          aria-label={t("pad.sheet.decrease", { title })}
           onClick={() => onChange(clampNumberStep(value - 1, step))}
           style={{ minHeight: 44, minWidth: 44 }}
           className={stepperButtonClass}
@@ -391,7 +401,7 @@ function renderNumberStep(
         />
         <button
           type="button"
-          aria-label={`${title} +`}
+          aria-label={t("pad.sheet.increase", { title })}
           onClick={() => onChange(clampNumberStep(value + 1, step))}
           style={{ minHeight: 44, minWidth: 44 }}
           className={stepperButtonClass}

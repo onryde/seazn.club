@@ -2481,6 +2481,8 @@
   "pad.host.moreEmpty": "Rien d'autre à enregistrer ici pour l'instant.",
   "pad.sheet.back": "Retour",
   "pad.sheet.cancel": "Annuler",
+  "pad.sheet.decrease": "Réduire {title}",
+  "pad.sheet.increase": "Augmenter {title}",
   "pad.recording.band.0": "Résultat uniquement",
   "pad.recording.band.1": "Cartons et moments clés",
   "pad.recording.band.2": "Chronologie complète",

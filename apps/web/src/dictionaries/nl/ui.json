@@ -2436,6 +2436,8 @@
   "pad.host.moreEmpty": "Hier is nog niets anders om vast te leggen.",
   "pad.sheet.back": "Terug",
   "pad.sheet.cancel": "Annuleren",
+  "pad.sheet.decrease": "{title} verminderen",
+  "pad.sheet.increase": "{title} verhogen",
   "pad.recording.band.0": "Alleen resultaat",
   "pad.recording.band.1": "Kaarten en belangrijke momenten",
   "pad.recording.band.2": "Volledige tijdlijn",

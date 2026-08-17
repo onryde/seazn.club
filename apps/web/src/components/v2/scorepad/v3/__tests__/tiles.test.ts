@@ -14,9 +14,11 @@
 // 4-primary skin; three in the SAME phase is not. Never throws — returns
 // violation strings, same non-throwing convention as `assertScorebugSpec`
 // in ../types.ts (see ../__tests__/types.test.ts).
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { tilesForPhase, assertTileHierarchy, TileGrid, type TileGridProps } from "../tile-grid";
 import type { TileSpec } from "../types";
+import type { Dict } from "@/lib/i18n-constants";
+import { t as realT } from "@/lib/i18n-runtime";
 
 const tile = (over: Partial<TileSpec> = {}): TileSpec => ({
   id: "t",
@@ -174,6 +176,77 @@ describe("Tile rendering — finding 1 fix: min-w-0 / break-words present on the
     const button = renderTile(tile({ kind: "standard", sublabel: "pad.tile.sub" }));
     const [, sublabelSpan] = button.props.children;
     expect(sublabelSpan && sublabelSpan.props.className).toContain("break-words");
+  });
+});
+
+// Review finding 1 (fix round, R2b): `TileSpec.sublabelText` — a
+// PRE-LOCALISED raw string the chassis renders VERBATIM, never through
+// `t()` (types.ts's own doc, same convention as `WhoLine.servingLabel`).
+// Exists because cricket's over-summary tile carries a bare over NUMBER
+// (locale-invariant, same category as `variantCode()`'s T20/ODI/HUNDRED/
+// TEST) — the pre-fix code routed it through `sublabel` (an i18n KEY
+// resolved via `t()`), which fired `[i18n] missing key: N` on every
+// render because no dictionary will ever carry a key literally named "6".
+//
+// These tests call the REAL `t()` from lib/i18n-runtime.ts (not a stub),
+// against a dict that resolves `label` cleanly but carries NO entry for
+// either sublabel value used below — isolating the warn spy to the
+// SUBLABEL path specifically, the one this fix changes. A stub `t` that
+// merely echoed its key back (this file's other describe blocks use one)
+// could not tell "warns" from "doesn't warn" at all.
+describe("Tile rendering — sublabelText: pre-localised raw text, never routed through t() (review finding 1)", () => {
+  // Belt-and-suspenders over the manual `warn.mockRestore()` at the end of
+  // each `it` below: a RED assertion throws before reaching that line,
+  // which would otherwise leave console.warn mocked (and that test's own
+  // call count still attached) for whatever test runs next in this file.
+  // Load-bearing while these tests are red pre-fix, not just tidiness.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const dict: Dict = { "pad.tile.label": "Label" };
+  const realTStub: TileGridProps["t"] = (k, vars) => realT(dict, k, vars);
+
+  function renderSublabel(spec: TileSpec) {
+    const grid = TileGrid({ tiles: [spec], phase: "live", t: realTStub }) as unknown as RenderedEl<{
+      children: RenderedEl<unknown>[];
+    }>;
+    const [tileEl] = grid.props.children;
+    const button = tileEl.type(tileEl.props) as unknown as {
+      props: { children: [unknown, { props: { children: string } } | false] };
+    };
+    return button.props.children[1];
+  }
+
+  it("sublabelText renders verbatim and fires no i18n missing-key warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const span = renderSublabel(tile({ sublabelText: "6" }));
+    expect(span && span.props.children).toBe("6");
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("mutation proof the spy is real: the OLD sublabel-as-key shape DOES fire the missing-key warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    renderSublabel(tile({ sublabel: "6" }));
+    expect(warn).toHaveBeenCalledWith("[i18n] missing key: 6");
+    warn.mockRestore();
+  });
+
+  it("when both sublabel and sublabelText are set, sublabelText wins verbatim and sublabel's key is never resolved (no warning)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const span = renderSublabel(tile({ sublabel: "pad.tile.sub", sublabelText: "6" }));
+    expect(span && span.props.children).toBe("6");
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("sublabel alone still resolves through t() exactly as before — no regression to the existing path", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const span = renderSublabel(tile({ sublabel: "pad.tile.label" })); // a KEY that DOES exist in `dict`
+    expect(span && span.props.children).toBe("Label");
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
 

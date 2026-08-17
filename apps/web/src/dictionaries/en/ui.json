@@ -2481,6 +2481,8 @@
   "pad.host.moreEmpty": "Nothing else to record here yet.",
   "pad.sheet.back": "Back",
   "pad.sheet.cancel": "Cancel",
+  "pad.sheet.decrease": "Decrease {title}",
+  "pad.sheet.increase": "Increase {title}",
   "pad.recording.band.0": "Result only",
   "pad.recording.band.1": "Cards & key moments",
   "pad.recording.band.2": "Full timeline",

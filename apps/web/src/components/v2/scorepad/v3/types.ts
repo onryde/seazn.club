@@ -53,6 +53,28 @@ export interface TileSpec {
   id: string;
   label: string;                  // i18n key
   sublabel?: string;              // i18n key
+  /**
+   * Fix round (review finding 1, R2b): a PRE-LOCALISED raw string, rendered
+   * VERBATIM by the chassis (tile-grid.tsx) — never resolved through `t()`.
+   * Same convention `WhoLine.servingLabel` and `ScorebugSpec.context`
+   * already establish elsewhere in this file: some tile sublabels are not
+   * translatable prose at all (cricket's over-summary tile carries a bare
+   * over NUMBER — the same "locale-invariant" category `variantCode()`
+   * documents for T20/ODI/HUNDRED/TEST, cricket.tsx), and routing one
+   * through `sublabel` (an i18n KEY) fires `[i18n] missing key: …` on
+   * every render, since no dictionary will ever carry a key literally
+   * named "6". A skin with a genuinely translatable sublabel keeps using
+   * `sublabel` exactly as before — this field is additive/optional, so
+   * every existing skin is unchanged.
+   *
+   * A tile sets ONE of `sublabel`/`sublabelText`, not both, in the normal
+   * case — but if both are present, `sublabelText` WINS and `sublabel`'s
+   * key is never resolved at all (tile-grid.tsx), never concatenated or
+   * merged. Same "explicit pre-localised value overrides the key-resolved
+   * one" posture `PadHostView.contextOverrides` already documents for a
+   * different field pair in this file.
+   */
+  sublabelText?: string;
   kind: TileKind;
   span?: 1 | 2 | 3 | 4;
   phases: PadPhase[];

@@ -710,16 +710,12 @@ export function buildTiles(view: PadHostView): TileSpec[] {
     tiles.push({
       id: "overSummary",
       label: "pad.cricket.action.endOfOver",
-      // Locale-invariant numeral, same convention `variantCode()` documents
-      // above for T20/ODI/HUNDRED/TEST: a bare over count needs no
-      // translation, and `tile-grid.tsx` (out of this wave's file grant)
-      // resolves `sublabel` as `t(tile.sublabel)` with no `vars` — a key
-      // needing interpolation would have nowhere to receive one. A bare
-      // numeral renders correctly on every locale with zero dictionary
-      // entries because `msgFor`'s own fallback echoes an unregistered key
-      // verbatim (`messages-i18n.test.ts`), which is exactly a numeral's
-      // own "translation."
-      sublabel: String(nextOverNumber(innings, bpo)),
+      // Fix round (review finding 1): a pre-localised raw numeral —
+      // TileSpec.sublabelText (types.ts), rendered verbatim, never through
+      // t(). NOT `sublabel` (an i18n key): no dictionary will ever carry a
+      // key literally named "6", so that path fired `[i18n] missing key: …`
+      // on every render.
+      sublabelText: String(nextOverNumber(innings, bpo)),
       kind: "primary",
       span: 2,
       phases: ["live"],

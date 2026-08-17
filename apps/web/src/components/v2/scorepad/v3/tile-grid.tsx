@@ -117,7 +117,10 @@ export interface TileGridProps {
   /** Interpolating message lookup — same shape ribbon.ts's MsgFn and
    *  scorebug.tsx's `t` prop take (useMsg()/msgFor() both hand callers
    *  this shape). Tile `label`/`sublabel` are i18n keys (types.ts), never
-   *  hardcoded English — this renderer never prints raw copy. */
+   *  hardcoded English — this renderer never prints raw copy. The one
+   *  exception is `sublabelText` (types.ts's own doc): a pre-localised raw
+   *  string the skin already resolved, rendered verbatim below with no
+   *  call to `t` at all. */
   t: (key: string, vars?: Record<string, string | number>) => string;
   /** Fires with the tapped tile's own `action`, untouched, for every action
    *  shape EXCEPT `{sheet}` (task A1 carved that one out below — see
@@ -220,7 +223,9 @@ function Tile({
       }`}
     >
       <span className={`break-words ${tile.kind === "minor" ? "text-xs" : "text-sm"}`}>{t(tile.label)}</span>
-      {tile.sublabel && <span className="break-words text-[11px] opacity-70">{t(tile.sublabel)}</span>}
+      {tile.sublabelText
+        ? <span className="break-words text-[11px] opacity-70">{tile.sublabelText}</span>
+        : tile.sublabel && <span className="break-words text-[11px] opacity-70">{t(tile.sublabel)}</span>}
     </button>
   );
 }

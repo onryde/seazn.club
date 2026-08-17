@@ -721,10 +721,19 @@ describe("buildTiles", () => {
     }
   });
 
-  it("the over-summary tile's sublabel is the 1-indexed over this entry would complete", () => {
+  // Fix round (review finding 1): the over number is a locale-invariant
+  // NUMERAL, not a translatable phrase — it must ride `sublabelText`
+  // (types.ts), rendered verbatim by tile-grid.tsx, never `sublabel` (an
+  // i18n KEY the chassis resolves through `t()`). Routing a bare numeral
+  // through `t()` fired `[i18n] missing key: N` on every render (no
+  // dictionary will ever carry a key literally named "6"). Asserting
+  // `sublabel` is undefined is the load-bearing half of this test: it is
+  // what proves the numeral no longer takes the t()-resolved path at all.
+  it("the over-summary tile's sublabelText is the 1-indexed over this entry would complete, pre-localised — never a sublabel i18n key", () => {
     const tiles = buildTiles(view({ state: state({ innings: [innings({ fine: null, legalBalls: 30 })] }) }));
     const over = tiles.find((tl) => tl.id === "overSummary")!;
-    expect(over.sublabel).toBe("6");
+    expect(over.sublabelText).toBe("6");
+    expect(over.sublabel).toBeUndefined();
   });
 
   it("the over-summary tile sits before More in tile order", () => {

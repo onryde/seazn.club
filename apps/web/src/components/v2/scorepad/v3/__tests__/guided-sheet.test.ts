@@ -858,16 +858,21 @@ describe("GuidedSheet rendering — SheetNumberStep", () => {
     expect(propsOf(field)["aria-label"]).toBe(t("pad.sheet.overSummary.runs.title"));
   });
 
-  // Review fix, item 3 (MINOR): the −/+ buttons carried only the bare
-  // Unicode glyph as their accessible name. No existing dictionary key
-  // covers increment/decrement (checked: addOns.extraOrg.increase/decrease
-  // is billing-specific wording, board.ai.stepperAria means a WORKFLOW step
-  // indicator — neither fits, and dictionaries/scoring-vocab.ts are a
-  // parallel agent's files this wave, not touched). Stopgap: derive the
-  // label from the step's own already-resolved title plus the glyph already
-  // visible on the button — a dedicated increment/decrement key is still
-  // owed (reported to the coordinator).
-  it("review fix: the − and + buttons carry an aria-label derived from the step title, not just the bare glyph", () => {
+  // Fix round (review finding 2, deferred from the chassis review): the
+  // stopgap above described a "dedicated increment/decrement key... still
+  // owed" — the dictionaries were a parallel agent's files at the time.
+  // They are free now. Re-checked before adding anything (this test's own
+  // regression, not just the report): `addOns.extraOrg.increase`/
+  // `.decrease` is billing-specific wording hardcoded to "extra
+  // organisations", and `board.ai.stepperAria`/`board.ai.trace.stepperAria`
+  // name a WORKFLOW step indicator, not a numeric +/- control — neither
+  // reusable here, confirming the earlier report. New GENERIC chassis keys,
+  // same `pad.sheet.*` namespace as `pad.sheet.back`/`.cancel`:
+  // `pad.sheet.decrease`/`pad.sheet.increase`, interpolated with the step's
+  // own already-resolved `{title}`. Verb choice per locale matches the
+  // `addOns.extraOrg` precedent exactly — the identical "raise/lower a
+  // quantity" concept, not a fresh translation decision.
+  it("review fix: the − and + buttons carry an accessible name built from dedicated pad.sheet.decrease/increase keys, not the bare glyph", () => {
     const island = renderIsland(GuidedSheet, {
       spec: numberSpec,
       views: numberViews,
@@ -876,8 +881,12 @@ describe("GuidedSheet rendering — SheetNumberStep", () => {
       onComplete: () => {},
     });
     const title = t("pad.sheet.overSummary.runs.title");
-    expect(propsOf(findByText(buttonsOf(island.tree()), "−"))["aria-label"]).toBe(`${title} −`);
-    expect(propsOf(findByText(buttonsOf(island.tree()), "+"))["aria-label"]).toBe(`${title} +`);
+    expect(propsOf(findByText(buttonsOf(island.tree()), "−"))["aria-label"]).toBe(
+      t("pad.sheet.decrease", { title }),
+    );
+    expect(propsOf(findByText(buttonsOf(island.tree()), "+"))["aria-label"]).toBe(
+      t("pad.sheet.increase", { title }),
+    );
   });
 
   // Review fix, item 2 (MINOR): clampNumberStep had no Number.isFinite
