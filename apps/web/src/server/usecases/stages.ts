@@ -33,13 +33,24 @@ import {
 import {
   PointsRule,
   carryDeltas,
+  placementTable,
+  qualificationSize,
   resolveQualification,
   validatePointsRule,
+  type BracketFixture,
+  type FixtureStatus,
+  type PoolTable,
   type QualificationSpec,
   type StandingsRow,
 } from "@seazn/engine/competition";
 import { completeStageIfReady, recomputeStandings, type CompleteResult } from "@/server/engine-db";
 import { resolveModule } from "@/server/engine-db";
+// L3/#414 pass 3 — not re-exported through the engine-db barrel (index.ts),
+// but these two ARE exported from the module itself (pass 2); reuse them
+// rather than re-deriving lane/thirdPlace from round/position (never
+// arithmetic — see parseExtKey's own comment).
+import { parseExtKey, bracketWinnerLoser } from "@/server/engine-db/competition";
+import { personalPointsLeaderboard } from "./americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStages, StageSeedingInput } from "@/server/api-v1/schemas";
 import { z } from "zod";
@@ -734,12 +745,21 @@ function alphaLabel(i: number): string {
   return s;
 }
 
+// L3/#414 pass 3 — delegates to the engine's `qualificationSize` (TOTAL for
+// every spec shape, never throws) instead of re-deriving per-shape counts by
+// hand. The old version only understood topN/take: bestOfRank and combine
+// silently fell through to 0, masked by the `|| 4` at the call site below —
+// previewDivisionFixtures drew a fake 4-entrant bracket for those specs
+// instead of the real (often larger) qualifier count. The `isSpec` guard
+// stays local: `qualificationSize` assumes a shape it can recognise, and this
+// is a READ path fed straight from a DB column — never let a malformed value
+// reach it.
 function qualifierCount(qualification: unknown): number {
   if (!qualification || typeof qualification !== "object") return 0;
-  const q = qualification as { topN?: unknown; take?: unknown };
-  if (typeof q.topN === "number") return q.topN;
-  if (Array.isArray(q.take)) return q.take.length;
-  return 0;
+  const spec = qualification as Record<string, unknown>;
+  const isSpec =
+    "take" in spec || "topN" in spec || "bestOfRank" in spec || "combine" in spec || "losersOfRound" in spec;
+  return isSpec ? qualificationSize(qualification as QualificationSpec) : 0;
 }
 
 // Bracket-round title from the number of matches in that round.
@@ -1653,7 +1673,82 @@ export async function fillSlot(
   }
 }
 
-const TABLE_KINDS = new Set(["league", "group", "swiss", "americano"]);
+// L3/#414 pass 3 — REAL_TABLE_KINDS are the only kinds whose standings
+// snapshot carries actual points/metrics (folded via completeTableStage,
+// engine-db/competition.ts): league/group/swiss. Carry-over (seedNextStage,
+// below) can only source from these — a bracket/ladder/americano completion
+// snapshots POSITIONAL placements only (placementTable zeroes every stat),
+// so carrying from one would seed the next stage with fabricated zeros
+// instead of refusing outright. BRACKET_KINDS mirrors engine-db/
+// competition.ts's own (unexported) list — losersOfRound only makes sense
+// sourced from one of these.
+const REAL_TABLE_KINDS = new Set(["league", "group", "swiss"]);
+const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
+
+// Mirrors engine-db/competition.ts's private toEngineStatus (not exported):
+// DB fixtures.status -> engine FixtureStatus (spec 05 §1 vocabulary). Needed
+// only to satisfy BracketFixture's required `status` field when rebuilding a
+// completed bracket's own fixtures for `losersOfRound` below —
+// resolveQualification's isRoundLosers branch never actually reads status
+// (round + loser only), but the type does.
+function toBracketFixtureStatus(dbStatus: string): FixtureStatus {
+  switch (dbStatus) {
+    case "decided":
+    case "finalized":
+      return "decided";
+    case "forfeited":
+      return "walkover";
+    case "abandoned":
+    case "cancelled":
+      return "void";
+    case "in_play":
+      return "in_play";
+    default:
+      return "scheduled";
+  }
+}
+
+// Rebuild the completed bracket's own BracketFixture[] for `losersOfRound`
+// (qualification.ts) — never re-derived from `standings_snapshots`, which
+// only ever carries FINAL ranks, not which round a fixture belongs to.
+// `ext_key` is the only place lane/thirdPlace survive persistence (spec 05
+// §2.3/§2.5): PARSE it via engine-db/competition.ts's own parseExtKey
+// (pass 2), never re-derive from round/position — a bracket's rounds number
+// sparsely (1,2,3 winners' side, 7-10 losers' side, 14 grand final).
+// resolveQualification's isRoundLosers trusts ITS CALLER for bracket-position
+// order (there is nothing left for it to sort by) — `order by round_no,
+// seq_in_round` below is what makes THIS the ordering authority.
+async function loadBracketFixtures(tx: Tx, stageId: string): Promise<BracketFixture[]> {
+  const rows = await tx<
+    {
+      id: string;
+      round_no: number;
+      status: string;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+      outcome: unknown;
+      ext_key: string | null;
+    }[]
+  >`
+    select id, round_no, status, home_entrant_id, away_entrant_id, outcome, ext_key
+    from fixtures where stage_id = ${stageId}
+    order by round_no, seq_in_round`;
+  return rows.map((f) => {
+    const { bracket, thirdPlace } = parseExtKey(f.ext_key);
+    const { winner, loser } = bracketWinnerLoser(f.outcome, f.home_entrant_id, f.away_entrant_id);
+    return {
+      id: f.id,
+      round: f.round_no,
+      status: toBracketFixtureStatus(f.status),
+      ...(bracket !== undefined ? { bracket } : {}),
+      ...(thirdPlace ? { thirdPlace: true } : {}),
+      ...(f.home_entrant_id !== null ? { home: f.home_entrant_id } : {}),
+      ...(f.away_entrant_id !== null ? { away: f.away_entrant_id } : {}),
+      ...(winner !== undefined ? { winner } : {}),
+      ...(loser !== undefined ? { loser } : {}),
+    };
+  });
+}
 
 export interface SeededStage {
   stage_id: string;
@@ -1757,9 +1852,19 @@ export async function completeStage(auth: AuthCtx, stageId: string): Promise<Com
   return { ...result, qualified, ...(generated !== undefined ? { next_stage_fixtures: generated } : {}) };
 }
 
-// Resolve the next pending stage's qualification against the completed stage's
-// standings snapshots. Pool names in specs are the pools.key letters ('A'…);
-// a single-table stage is the unnamed pool '' / `overall`.
+// Resolve the next pending stage's qualification against the completed
+// stage's placements. L3/#414 pass 3 — every stage kind now completes with a
+// placement snapshot (pass 2's completeStageIfReady): table kinds (league/
+// group/swiss) write REAL per-pool standings; bracket/ladder write a single
+// placementTable-wrapped row (pool_id null). Both read the SAME way below —
+// a null pool_id resolves to the unnamed pool "" / `overall`, so topN/take/
+// bestOfRank/losersOfRound all just work once the old throw is gone.
+// Americano is the one exception: its OWN standings_snapshot folds over
+// ephemeral per-round PAIR entrants (Jul3/08 §3), not the persistent
+// individual entrants the next stage draws from, so it re-ranks fresh from
+// the personal-points leaderboard instead (usecases/americano.ts). Pool
+// names in specs are the pools.key letters ('A'…); a single-table stage is
+// the unnamed pool '' / `overall`.
 async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<SeededStage | null> {
   return withTenant(auth.orgId, async (tx) => {
     const [current] = await tx<{ division_id: string; seq: number; kind: string }[]>`
@@ -1776,52 +1881,92 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
       // Already seeded (idempotent re-complete).
       return { stage_id: next.id, entrants: next.config.qualified as string[] };
     }
-    if (!TABLE_KINDS.has(current.kind)) {
-      throw new EngineError(
-        "STAGE_NOT_READY",
-        "qualification from a bracket stage is not supported yet — use a table stage as the source",
-        { stageId: completedStageId, kind: current.kind },
-      );
-    }
 
     const spec = next.qualification as unknown;
     const isSpec =
       typeof spec === "object" && spec !== null &&
-      ("take" in spec || "topN" in spec || "bestOfRank" in spec || "combine" in spec);
+      ("take" in spec || "topN" in spec || "bestOfRank" in spec || "combine" in spec || "losersOfRound" in spec);
     if (!isSpec) {
       throw new EngineError("CONFIG_INVALID", "unrecognised qualification spec", {
         stageId: next.id,
       });
     }
 
-    // Ranked tables from the completion snapshots; translate pool uuids back
-    // to their spec-facing keys.
-    const poolRows = await tx<{ id: string; key: string }[]>`
-      select id, key from pools where stage_id = ${completedStageId}`;
-    const keyOf = new Map(poolRows.map((p) => [p.id, p.key]));
-    const snapshots = await tx<{ pool_id: string | null; rows: StandingsRow[] }[]>`
-      select pool_id, rows from standings_snapshots where stage_id = ${completedStageId}`;
-    if (snapshots.length === 0) {
-      throw new EngineError("STAGE_NOT_READY", "completed stage has no standings snapshots", {
-        stageId: completedStageId,
-      });
+    let pools: PoolTable[];
+    let overall: readonly StandingsRow[] | undefined;
+
+    if (current.kind === "americano") {
+      // Rank by personal points, then map each ranked person to the
+      // division's persistent INDIVIDUAL entrant — never the ephemeral
+      // `pair` entrant a fixture actually ran on (pairEntrantsFor above);
+      // the next stage's generator only ever draws from real, registered
+      // division entrants (generateStageFixtures's `active` query).
+      const leaderboard = await personalPointsLeaderboard(tx, completedStageId);
+      const memberRows = await tx<{ entrant_id: string; person_id: string }[]>`
+        select e.id as entrant_id, em.person_id
+        from entrants e
+        join entrant_members em on em.entrant_id = e.id
+        where e.division_id = ${current.division_id} and e.kind = 'individual'`;
+      const entrantOf = new Map(memberRows.map((r) => [r.person_id, r.entrant_id]));
+      const ordered = leaderboard
+        .map((row) => entrantOf.get(row.person_id))
+        .filter((id): id is string => id !== undefined);
+      const table = placementTable(ordered);
+      pools = [table];
+      overall = table.rows;
+    } else {
+      // Ranked tables from the completion snapshot(s); translate pool uuids
+      // back to their spec-facing keys.
+      const poolRows = await tx<{ id: string; key: string }[]>`
+        select id, key from pools where stage_id = ${completedStageId}`;
+      const keyOf = new Map(poolRows.map((p) => [p.id, p.key]));
+      const snapshots = await tx<{ pool_id: string | null; rows: StandingsRow[] }[]>`
+        select pool_id, rows from standings_snapshots where stage_id = ${completedStageId}`;
+      if (snapshots.length === 0) {
+        throw new EngineError("STAGE_NOT_READY", "completed stage has no standings snapshots", {
+          stageId: completedStageId,
+        });
+      }
+      pools = snapshots.map((s) => ({
+        pool: s.pool_id ? (keyOf.get(s.pool_id) ?? s.pool_id) : "",
+        rows: s.rows,
+      }));
+      overall = pools.find((p) => p.pool === "")?.rows;
     }
-    const pools = snapshots.map((s) => ({
-      pool: s.pool_id ? (keyOf.get(s.pool_id) ?? s.pool_id) : "",
-      rows: s.rows,
-    }));
-    const overall = pools.find((p) => p.pool === "")?.rows;
+
+    // losersOfRound (including nested inside a combine) reads the completed
+    // bracket's OWN fixtures, never the standings_snapshot (final ranks
+    // only, not per-round results) — only a bracket-kind source has any, so
+    // this is a cheap no-op query result for every other kind.
+    const bracket = BRACKET_KINDS.has(current.kind)
+      ? await loadBracketFixtures(tx, completedStageId)
+      : undefined;
+
     const entrants = resolveQualification(spec as QualificationSpec, {
       pools,
       ...(overall ? { overall } : {}),
+      ...(bracket ? { bracket } : {}),
     });
+    log.info(
+      { event: "qualification_resolved", stageId: completedStageId, nextStageId: next.id, kind: current.kind, count: entrants.length },
+      "qualification_resolved",
+    );
 
     // Carry-over (Jul3/05 §3): seed the next stage with opening deltas from
     // the completed tables — prior points/metrics arrive as data, prior H2H
-    // is never replayed.
+    // is never replayed. Only a REAL table source has real points to carry
+    // (REAL_TABLE_KINDS above); a bracket/ladder/americano source is refused
+    // outright rather than silently carrying fabricated zeros.
     const carryMode = (spec as { carry?: "none" | "points" | "full" }).carry ?? "none";
     let carriedDeltas: unknown[] | undefined;
     if (carryMode !== "none") {
+      if (!REAL_TABLE_KINDS.has(current.kind)) {
+        throw new EngineError(
+          "CONFIG_INVALID",
+          `carry-over needs a table-stage source (league/group/swiss) — a "${current.kind}" completion has no real points to carry`,
+          { stageId: completedStageId, kind: current.kind, carry: carryMode },
+        );
+      }
       const qualifiedSet = new Set(entrants);
       const sourceRows = pools
         .flatMap((p) => p.rows)
