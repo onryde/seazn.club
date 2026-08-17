@@ -74,6 +74,7 @@ async function seedPlayerEntry(
     squadNumber?: number | null;
     isCaptain?: boolean;
   }[],
+  opts: { displayName?: string } = {},
 ): Promise<{ id: string }> {
   const [{ competition_id: competitionId }] = await sql<{ competition_id: string }[]>`
     select competition_id from divisions where id = ${divisionId}`;
@@ -87,7 +88,7 @@ async function seedPlayerEntry(
     returning id`;
   const [reg] = await sql<{ id: string }[]>`
     insert into registrations (group_id, division_id, display_name)
-    values (${group.id}, ${divisionId}, ${players[0]?.name ?? "Entry"})
+    values (${group.id}, ${divisionId}, ${opts.displayName ?? players[0]?.name ?? "Entry"})
     returning id`;
   for (const p of players) {
     await sql`
@@ -171,6 +172,14 @@ describe.skipIf(!HAS_DB)("player person get-or-create by (org, name, dob) — no
       where entrant_id in (${ca.entrant_id as string}, ${cb.entrant_id as string})`;
     expect(members).toHaveLength(2);
     expect(members[0]!.person_id).toBe(members[1]!.person_id);
+
+    // MAJOR (review): the individual branch's OWN person_id write-back
+    // (registrations.ts ~656-660, guarded by `if (p)`) had no coverage
+    // anywhere — every other person_id assertion in this file used
+    // entrant_kind "team". Pin it here, on the default individual kind.
+    const [playerRow] = await sql<{ person_id: string | null }[]>`
+      select person_id from registration_players where registration_id = ${a.id}`;
+    expect(playerRow!.person_id).toBe(members[0]!.person_id);
   });
 
   it("same name, NO dob → two persons (the ruling, asserted)", async () => {
@@ -322,6 +331,31 @@ describe.skipIf(!HAS_DB)("new persons default to public_name consent (owner ruli
     expect(person_id).toBe(optedOut.id);
     expect(public_name).toBe("false");
   });
+
+  // BLOCKER (review): findOrCreatePlayerPerson gets ruling 5 right for the
+  // ANONYMOUS path only. The PRIMARY path — a signed-in registrant's own
+  // first-ever linked person, resolved via resolvePlayerPerson — is reached
+  // from every materialise call site whenever a player row carries a
+  // user_id, and it did not set consent at all (table default `{}`).
+  it("a NEWLY linked person (fresh user_id, first confirm) also gets consent.public_name = true", async () => {
+    const { auth } = await seedOrg("pro");
+    const div = await seedOpenDivision(auth);
+    const userId = await makeUser();
+
+    const a = await seedPlayerEntry(div.divisionId, [
+      { name: tag("Linked Consent"), dob: "1997-07-07", userId },
+    ]);
+    const confirmed = await confirmRegistration(auth, a.id);
+
+    const [{ user_id, public_name }] = await sql<
+      { user_id: string | null; public_name: string }[]
+    >`
+      select p.user_id, p.consent->>'public_name' as public_name from persons p
+      join entrant_members em on em.person_id = p.id
+      where em.entrant_id = ${confirmed.entrant_id as string}`;
+    expect(user_id).toBe(userId); // confirms this went through resolvePlayerPerson
+    expect(public_name).toBe("true");
+  });
 });
 
 describe.skipIf(!HAS_DB)("registration_players.person_id is written at materialisation", () => {
@@ -373,8 +407,28 @@ describe.skipIf(!HAS_DB)("pair entrant_kind materialises both players (RS002 gap
   });
 });
 
+describe.skipIf(!HAS_DB)("individual branch falls back to reg.display_name on a blank full_name (review MINOR)", () => {
+  it("a whitespace-only individual full_name falls back to reg.display_name, never creating a blank-named person", async () => {
+    const { auth } = await seedOrg("pro");
+    const div = await seedOpenDivision(auth, "individual");
+    const displayName = tag("Blank Fallback Entry");
+    const reg = await seedPlayerEntry(
+      div.divisionId,
+      [{ name: "   ", dob: null }],
+      { displayName },
+    );
+    const confirmed = await confirmRegistration(auth, reg.id);
+
+    const [{ full_name }] = await sql<{ full_name: string }[]>`
+      select p.full_name from persons p join entrant_members em on em.person_id = p.id
+      where em.entrant_id = ${confirmed.entrant_id as string}`;
+    expect(full_name).toBe(displayName);
+    expect(full_name.trim()).not.toBe("");
+  });
+});
+
 describe.skipIf(!HAS_DB)("materialisation idempotency (pair roster + person reuse combined)", () => {
-  it("confirming twice yields one entrant, one member per player, one person per player, entrant_id unchanged", async () => {
+  it("confirming twice via the public API yields one entrant, one member per player, one person per player", async () => {
     const { auth } = await seedOrg("pro");
     const div = await seedOpenDivision(auth, "pair");
     const reg = await seedPlayerEntry(div.divisionId, [
@@ -390,6 +444,43 @@ describe.skipIf(!HAS_DB)("materialisation idempotency (pair roster + person reus
     const [{ n }] = await sql<{ n: number }[]>`
       select count(*)::int as n from entrant_members where entrant_id = ${first.entrant_id as string}`;
     expect(n).toBe(2);
+  });
+
+  // MAJOR (review): the test above never actually re-enters materialise a
+  // second time — confirmRegistration's OWN `status === "confirmed"` early
+  // return (registrations.ts ~2082) short-circuits before materialise is
+  // even called, so materialise's OWN `if (reg.entrant_id) return` guard
+  // (~627) and the `on conflict ... do nothing` writes it protects are
+  // never exercised by that test. Deleting materialise's early return
+  // failed nothing in the suite. This test forces TRUE re-entry: seed the
+  // registration with entrant_id already pointing at a real (unrelated)
+  // entrant directly via SQL, with status knocked to something
+  // confirmRegistration's early return does not intercept, then call
+  // confirmRegistration ONCE — materialise is reached with reg.entrant_id
+  // already truthy on this very call.
+  it("materialise's OWN idempotency guard fires on true re-entry (entrant_id pre-set, status forced off 'confirmed')", async () => {
+    const { auth } = await seedOrg("pro");
+    const div = await seedOpenDivision(auth, "individual");
+    const reg = await seedPlayerEntry(div.divisionId, [
+      { name: tag("Reentry Guard"), dob: "1990-01-01" },
+    ]);
+
+    const [entrant] = await sql<{ id: string }[]>`
+      insert into entrants (division_id, kind, display_name, status)
+      values (${div.divisionId}, 'individual', 'Pre-existing Entrant', 'confirmed')
+      returning id`;
+    await sql`
+      update registrations set entrant_id = ${entrant.id}, status = 'paid'
+      where id = ${reg.id}`;
+
+    const before = await personCount(auth.orgId);
+    const confirmed = await confirmRegistration(auth, reg.id);
+
+    expect(confirmed.entrant_id).toBe(entrant.id);
+    expect(await personCount(auth.orgId)).toBe(before); // no person created
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from entrants where division_id = ${div.divisionId}`;
+    expect(n).toBe(1); // no second entrant created
   });
 });
 

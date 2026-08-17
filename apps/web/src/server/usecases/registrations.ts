@@ -537,9 +537,18 @@ export async function resolvePlayerPerson(
   dob: string | null,
   gender: string | null,
 ): Promise<string> {
+  // consent defaults to public_name=true on the INSERT branch only (ruling
+  // 5, review BLOCKER — this is the PRIMARY path a signed-in registrant's
+  // own first-ever linked person takes, so it owes the ruling exactly like
+  // findOrCreatePlayerPerson's anonymous-path insert does). The DO UPDATE
+  // branch stays untouched: it never mentions consent, so a returning
+  // person's own consent (including an opt-out) is never overwritten.
   const [person] = await tx<{ id: string }[]>`
-    insert into persons (org_id, full_name, dob, gender, user_id, lane)
-    values (${orgId}, ${fullName}, ${dob}, ${gender}, ${userId}, 'player')
+    insert into persons (org_id, full_name, dob, gender, user_id, lane, consent)
+    values (
+      ${orgId}, ${fullName}, ${dob}, ${gender}, ${userId}, 'player',
+      ${tx.json({ public_name: true } as never)}
+    )
     on conflict (org_id, user_id, lane)
       where user_id is not null and lane = 'player' and merged_into is null
     do update set full_name = persons.full_name
@@ -634,8 +643,11 @@ async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: string): P
     // No player row yet (nothing populates registration_players until
     // RS002/RS003 ship the new submit flow) falls back to the entry's own
     // display_name with no dob/gender — byte-for-byte the old anonymous path.
+    // A player row that DOES exist but carries only whitespace (review
+    // MINOR) falls back the same way — `.trim() || …` matches the
+    // team/pair branch below, which already trims and skips blank names.
     const p = players[0];
-    const fullName = p?.full_name ?? reg.display_name;
+    const fullName = p?.full_name?.trim() || reg.display_name;
     const dob = p?.dob ?? null;
     const gender = p?.gender ?? null;
     // A player row carrying a user_id (#402) resolves into that account's
