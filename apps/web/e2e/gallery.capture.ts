@@ -8,6 +8,7 @@ import {
   fixturePath,
   apiJson,
   expectNoHorizontalScroll,
+  activeOrg,
   TAG,
   type RosterSlotSpec,
   type RosteredFixture,
@@ -823,3 +824,84 @@ for (const sport of SPORTS) {
     });
   });
 }
+
+// D5/P8 venues & courts (Directory > Venues, not a sport skin — no fixture,
+// no `data-testid="score-pad"`) — a wholly separate capture, added to this
+// same file only because it already owns WIDTHS/HEIGHTS/GALLERY_DIR/
+// expectNoHorizontalScroll and the `gallery` Playwright project's testMatch
+// (playwright.config.ts) is scoped to this one file. Not folded into the
+// SPORTS loop/manifest: `GallerySport`/`SportManifestEntry` are shaped
+// around a fixture's pre/live/scored/dock lifecycle, which a venue has none
+// of. Screenshots land in `${GALLERY_DIR}/venues/`, outside the per-sport
+// manifest.json/index.html this file also writes.
+async function captureVenuesState(page: Page, dir: string, state: string): Promise<void> {
+  for (const width of WIDTHS) {
+    await page.setViewportSize({ width, height: HEIGHTS[width] });
+    if (width === 320) await expectNoHorizontalScroll(page);
+    await page.screenshot({
+      path: join(dir, `${state}-${width}.png`),
+      fullPage: true,
+      animations: "disabled",
+      timeout: 20_000,
+    });
+  }
+}
+
+test("gallery: venues (P8)", async ({ page }) => {
+  test.setTimeout(120_000);
+  const tag = `${TAG}${Math.random().toString(36).slice(2, 6)}`;
+  const dir = join(GALLERY_DIR, "venues");
+  mkdirSync(dir, { recursive: true });
+  const email = `gallery-venues-${tag}@example.com`;
+
+  await armCookieBypass(page);
+  await loginUi(page, email);
+  // requirePageAuth (any server page) is what auto-provisions "My
+  // organization" for a member of none — activeOrg needs that to have
+  // already happened (mobile.spec.ts's dual-role test hits the same trap).
+  await page.goto("/dashboard", { waitUntil: "load" });
+  const org = await activeOrg(page);
+
+  const venue = await apiJson<{ id: string }>(
+    page.request,
+    `/api/v1/orgs/${org.id}/venues`,
+    "POST",
+    { name: `Riverside Sports Centre ${tag}`, address: "12 River Road" },
+  );
+  const court1 = await apiJson<{ id: string }>(
+    page.request,
+    `/api/v1/orgs/${org.id}/venues/${venue.data!.id}/courts`,
+    "POST",
+    { name: "Court 1", tags: ["indoor", "hardwood"] },
+  );
+  // A realistic week: open Mon-Sat, longer on Fri, closed Sun (no row at
+  // all — the calendar editor shows "Closed all day." for it), plus one
+  // holiday exception — so 02-calendar is a genuinely populated editor
+  // rather than every day showing "Add a time range" and nothing else.
+  await apiJson(page.request, `/api/v1/orgs/${org.id}/courts/${court1.data!.id}/calendar`, "PUT", {
+    hours: [1, 2, 3, 4, 5, 6].map((weekday) => ({
+      weekday,
+      open_min: 9 * 60,
+      close_min: weekday === 5 ? 22 * 60 : weekday === 6 ? 17 * 60 : 21 * 60,
+    })),
+    exceptions: [{ date: "2026-12-25", closed: true, open_min: null, close_min: null }],
+  });
+  await apiJson(page.request, `/api/v1/orgs/${org.id}/venues/${venue.data!.id}/courts`, "POST", {
+    name: "Court 2",
+    tags: ["outdoor"],
+  });
+
+  await page.goto("/directory?tab=venues", { waitUntil: "load" });
+  // Two "Venue name"-labelled fields exist once a venue card renders: the
+  // always-present Add form's (empty) field, and this new card's (filled)
+  // one — count, not text, since the name is an input VALUE, never static
+  // text, anywhere in this component.
+  await expect(page.getByLabel("Venue name")).toHaveCount(2, { timeout: 20_000 });
+  await captureVenuesState(page, dir, "01-list");
+
+  // Court 1 sorts first (alphabetical tiebreak on equal `sort`) and is the
+  // one with tags + a populated calendar — open ITS editor, not Court 2's.
+  await page.getByRole("button", { name: "Hours", exact: true }).first().click();
+  await expect(page.getByText("Weekly hours")).toBeVisible();
+  await captureVenuesState(page, dir, "02-calendar");
+});
