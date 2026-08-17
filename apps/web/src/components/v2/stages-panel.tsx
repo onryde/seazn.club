@@ -17,6 +17,7 @@ import { TipCallout } from "@/components/ui/tip";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { resolveSlotLabel } from "@/lib/slot-label";
+import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { DocumentsMenu } from "@/components/v2/board/documents-menu";
 import { ScheduleResultStrip } from "@/components/v2/board/result-strip";
@@ -62,6 +63,17 @@ interface FixtureRow {
   court_label: string | null;
   status: string;
   outcome: unknown;
+  /** F1 (2026-08-17) — the engine's bracket-position role, persisted on
+   *  fixtures (V368) and selected by usecases/stages.ts's FIXTURE_COLS.
+   *  Optional here for the same reason it's optional on the shared
+   *  FixtureRow this local type otherwise mirrors: real rows always carry
+   *  it, but pre-existing hand-built test fixtures in this panel's own
+   *  __tests__ don't. */
+  ext_key?: string | null;
+  lane?: "WB" | "LB" | "GF" | null;
+  is_final?: boolean;
+  third_place?: boolean;
+  conditional?: boolean;
 }
 
 interface Props {
@@ -637,7 +649,6 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         const deletable =
           stage.seq === Math.max(...stages.map((s) => s.seq)) &&
           !stageFixtures.some((f) => ["in_play", "decided", "finalized"].includes(f.status));
-        const maxRound = rounds[rounds.length - 1] ?? 0;
         // Bracket stages: one card per named round (Quarter-finals, Semi-finals,
         // Final / Rung N) instead of one long card with anonymous round breaks.
         const splitRounds = BRACKET_KINDS.has(stage.kind) && rounds.length > 0;
@@ -859,7 +870,7 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
               <section key={round} className="card overflow-hidden">
                 <header className="sticky top-0 z-10 border-b border-slate-100 bg-slate-50 px-4 py-2">
                   <h4 className="flex items-baseline gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
-                    {stage.name} — {bracketRoundLabel(msg, stage.kind, round, maxRound)}
+                    {stage.name} — {bracketRoundLabel(msg, stage.kind, round, stageFixtures)}
                     {dates.from && (
                       <span data-testid="round-dates" className="normal-case text-slate-500">
                         <ClientDateRange from={dates.from} to={dates.to} tz={tz} />
@@ -1086,22 +1097,40 @@ function isBye(f: FixtureRow): boolean {
 /** Voided fixtures render struck through with the reason (item 6). */
 const VOID_STATUSES = new Set(["cancelled", "abandoned", "forfeited"]);
 
-// Named bracket rounds, by distance from the last round. Double-elim round
-// numbers encode WB/LB/GF lanes, so plain "Round N" stays honest there.
-function bracketRoundLabel(msg: Msg, kind: string, roundNo: number, maxRound: number): string {
-  if (kind === "page_playoff") {
-    if (roundNo === 1) return msg("bracket.qualifiers");
-    if (roundNo === 2) return msg("bracket.qualifier2");
-    return msg("bracket.final");
-  }
-  if (kind === "stepladder") return msg("schedule.bracket.rung", { n: roundNo });
-  if (kind === "knockout") {
-    const fromEnd = maxRound - roundNo;
-    if (fromEnd === 0) return msg("schedule.bracket.final");
-    if (fromEnd === 1) return msg("schedule.bracket.semi");
-    if (fromEnd === 2) return msg("schedule.bracket.quarter");
-  }
-  return msg("schedule.round", { n: roundNo });
+// F1 Task 4: named bracket rounds by POSITION (roundRole), never by match
+// count or a stage-wide max — a double-elim's losers bracket has more
+// rounds than its winners bracket, so ranking round_no across the whole
+// stage (the old `maxRound`) skews every winners-side name past round 1.
+// roundRoleFor ranks `roundNo` within its own lane instead.
+//
+// page_playoff round 1 holds BOTH Qualifier 1 and the Eliminator (they
+// share a round and a match count — ext_key is the only way to tell them
+// apart, spec 05 §2.3) — this panel renders one card per round_no, so
+// splitting them into two cards is a structural change outside this fix's
+// scope (same "known disagreement" the F1 plan itself calls out). That one
+// case keeps its existing merged "Qualifiers" header; round 2 (Qualifier 2)
+// and the Final each hold exactly one fixture and resolve through the same
+// roundRole() as every other bracket kind.
+function bracketRoundLabel(msg: Msg, kind: string, roundNo: number, stageFixtures: readonly FixtureRow[]): string {
+  if (kind === "page_playoff" && roundNo === 1) return msg("bracket.qualifiers");
+  const first = stageFixtures.find((f) => f.round_no === roundNo);
+  if (!first) return msg("schedule.round", { n: roundNo });
+  const laneFixtures = stageFixtures.map((f) => ({ round_no: f.round_no, lane: f.lane ?? null }));
+  return roundRoleLabel(
+    msg,
+    roundRoleFor(
+      laneFixtures,
+      {
+        round_no: roundNo,
+        lane: first.lane ?? null,
+        is_final: first.is_final === true,
+        third_place: first.third_place === true,
+        conditional: first.conditional === true,
+      },
+      kind,
+      first.ext_key ?? null,
+    ),
+  );
 }
 
 function stageStatusStyle(status: string): string {
