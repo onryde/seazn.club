@@ -82,7 +82,18 @@ function state(over: Record<string, unknown> = {}) {
 }
 
 function cfg(over: Record<string, unknown> = {}) {
-  return { ballsPerOver: 6, inningsPerSide: 1, ballsPerInnings: 120, dls: { enabled: false }, superOver: false, ...over };
+  // `inningsPerSide` is `1 | 2` on the skin's CricketCfgShape, not `number`.
+  // Without the annotation the literal widens to `number` and every call site
+  // below fails to typecheck while still passing under vitest, which does not
+  // typecheck at all.
+  return {
+    ballsPerOver: 6,
+    inningsPerSide: 1 as 1 | 2,
+    ballsPerInnings: 120,
+    dls: { enabled: false },
+    superOver: false,
+    ...over,
+  };
 }
 
 function view(over: Partial<PadHostView> = {}): PadHostView {

@@ -447,7 +447,10 @@ describe("rejectionText", () => {
 
 describe("rejectionText — mutation proof (blocker 1: the v3 pad swallowed every engine refusal)", () => {
   it("a version that stops reading `rejection` (always returns null) disagrees with the real one on a genuine rejection", () => {
-    const stopsReadingRejection = (): string | null => null; // ignores its args entirely, by design
+    // Typed AS `rejectionText` so the mutant is callable with the same two
+    // args while ignoring both — a bare `(): string | null` stub does not
+    // typecheck against a 2-arg call.
+    const stopsReadingRejection: typeof rejectionText = () => null;
     const rejection: RejectionInfo = { code: "NETWORK_ERROR", message: "Server exploded" };
     const real = rejectionText(rejection, identityMsg);
     const viaMutant = stopsReadingRejection(rejection, identityMsg);
