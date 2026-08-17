@@ -2590,6 +2590,7 @@ export type DictionaryKey =
   | "pad.cricket.context.bowler.blocked.notInLineup"
   | "pad.cricket.context.bowler.blocked.prevOver"
   | "pad.cricket.context.bowler.blocked.quota"
+  | "pad.cricket.context.innings.closed"
   | "pad.cricket.context.nonStriker"
   | "pad.cricket.context.striker"
   | "pad.cricket.dock.batRun1"

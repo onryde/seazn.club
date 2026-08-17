@@ -3891,6 +3891,7 @@
   "pad.cricket.context.bowler.blocked.quota": "{name} has already bowled the maximum {quota} overs.",
   "pad.cricket.context.bowler.blocked.notInLineup": "{name} is not in the fielding lineup.",
   "pad.cricket.context.bowler.blocked.noEligible": "No bowler is eligible to open the next over.",
+  "pad.cricket.context.innings.closed": "This innings is closed.",
   "pad.cricket.sheet.wicket.kind.title": "What happened?",
   "pad.cricket.sheet.wicket.who.title": "Who's out?",
   "pad.cricket.sheet.wicket.fielder.title": "Fielder",

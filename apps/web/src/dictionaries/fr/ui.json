@@ -3891,6 +3891,7 @@
   "pad.cricket.context.bowler.blocked.quota": "{name} a déjà lancé le maximum de {quota} overs.",
   "pad.cricket.context.bowler.blocked.notInLineup": "{name} ne fait pas partie de la composition sur le terrain.",
   "pad.cricket.context.bowler.blocked.noEligible": "Aucun lanceur n'est éligible pour commencer le prochain over.",
+  "pad.cricket.context.innings.closed": "Cette manche est terminée.",
   "pad.cricket.sheet.wicket.kind.title": "Que s'est-il passé ?",
   "pad.cricket.sheet.wicket.who.title": "Qui est éliminé ?",
   "pad.cricket.sheet.wicket.fielder.title": "Joueur de champ",

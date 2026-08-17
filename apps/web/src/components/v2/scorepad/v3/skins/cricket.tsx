@@ -1002,6 +1002,43 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   // built, never a second, possibly-disagreeing computation.
   const people = resolvePeople(state, view.contextOverrides, cfg);
   const bowlerBlocked = bowlerBlockReason(state, people, cfg) !== null;
+  // R2b (owner ruling, live-tile audit defect 2, `_INDEX.md`, HIGH):
+  // `currentInnings()` falls back to the JUST-CLOSED innings once none is
+  // open — load-bearing for READ paths (`buildScorebug` above must still
+  // show the closed innings' final score) — but every delivery-capable tile
+  // used to stay tappable against it, and every tap 422d with "over/
+  // ballInOver do not match the ledger", a message that names ball
+  // sequencing, not the real cause (closure). `closedTile` reuses the EXACT
+  // bowler-block mechanism (`TileSpec.disabled` + a message on
+  // `ContextSlot`, `buildContext` below) rather than inventing a second one —
+  // same posture `ballTile` already takes for bowler-ineligibility, just
+  // gated on a different, independent condition (never OR'd into
+  // `bowlerBlocked` itself: `buildContext` below needs to tell the two
+  // causes apart to avoid showing a stale, possibly-misleading
+  // bowler-eligibility message once the real cause is closure).
+  //
+  // Applies regardless of whether another innings is still due (e.g. a
+  // two-innings cfg with only one innings recorded): opening the next one is
+  // IMPLICIT in the fold, not a decision this gate defers — `cricket.ball`/
+  // `cricket.innings.summary` both auto-create it via `createInnings` the
+  // moment `openInnings()` is null (cricket.ts:2935-2944 / :1401-1413), and
+  // there is no dedicated event to open one explicitly (no event type exists
+  // to invent here, and the brief for this fix is explicit that one must
+  // not be invented). What stops this file from simply UN-gating the ball
+  // tiles once a next innings is due, rather than disabling them: making
+  // THIS pad target that new innings correctly needs the engine's own
+  // (private, unexported) batting-side alternation rule (`battingSideAt`,
+  // cricket.ts — single-innings: strict alternation; two-innings per side:
+  // an F,S,S,F pattern gated on follow-on), which in turn needs cfg/state
+  // fields (`battingFirst`, `followOnEnforced`) this skin's own defensive
+  // shapes do not currently read at all. Mirroring engine logic has
+  // precedent in this file (`isEligibleOverBowler`'s own doc), but doing so
+  // here is a materially bigger, real product/engineering decision — e.g.
+  // whether tapping "0"/"1" should silently start the next innings with no
+  // confirmation step — reported rather than guessed, per this task's own
+  // brief. See this task's own report for the full writeup.
+  const inningsClosed = innings?.closed === true;
+  const closedTile = (spec: TileSpec): TileSpec => (inningsClosed ? { ...spec, disabled: true } : spec);
 
   const tiles: TileSpec[] = [
     { id: "toss", label: "pad.cricket.action.toss", kind: "primary", phases: ["pre"], action: { sheet: "toss" } },
@@ -1019,7 +1056,7 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
     // gets set in this function; non-ball tiles (review/retire/
     // inningsClose/declare/overSummary/more, pushed further down, outside
     // this branch) are untouched.
-    const ballTile = (spec: TileSpec): TileSpec => (bowlerBlocked ? { ...spec, disabled: true } : spec);
+    const ballTile = (spec: TileSpec): TileSpec => (bowlerBlocked || inningsClosed ? { ...spec, disabled: true } : spec);
 
     for (const r of RUN_VALUES) {
       tiles.push(ballTile({
@@ -1064,7 +1101,7 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
     }
   }
 
-  tiles.push({ id: "review", label: "pad.cricket.action.review", kind: "standard", phases: ["live"], action: { sheet: "review" } });
+  tiles.push(closedTile({ id: "review", label: "pad.cricket.action.review", kind: "standard", phases: ["live"], action: { sheet: "review" } }));
   // R2b (owner ruling, live-tile audit defect 4, 2026-08-17): the dedicated
   // Retire tile is GONE — its own SwapSheet scoped "off" to the whole
   // batting side (never just the crease, engine backstops it at
@@ -1079,22 +1116,22 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   // stays reachable the same way now — nothing to add here, only to remove.
   // See `buildSwap`'s own former header (this section, now deleted) and
   // `cricketSkinV3`'s factory below for the rest of the removal.
-  tiles.push({
+  tiles.push(closedTile({
     id: "inningsClose",
     label: "pad.cricket.action.inningsClose",
     kind: "standard",
     phases: ["live"],
     action: { sheet: "inningsClose" },
-  });
+  }));
 
   if (twoInnings) {
-    tiles.push({
+    tiles.push(closedTile({
       id: "declare",
       label: "pad.cricket.action.declare",
       kind: "standard",
       phases: ["live"],
       action: { event: { type: "cricket.innings.declare", payload: {} } },
-    });
+    }));
   }
 
   // R2b (Q1 owner ruling): the over-by-over entry point — hidden once this
@@ -1108,7 +1145,7 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   // round 1's own note), so this is a deliberate exception, not a defect.
   if (fidelity !== "fine") {
     const overLabel = "pad.cricket.action.endOfOver";
-    tiles.push({
+    tiles.push(closedTile({
       id: "overSummary",
       label: overLabel,
       // R2b follow-up (owner sign-off, single-line label fix): the over
@@ -1126,7 +1163,7 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
       span: 2,
       phases: ["live"],
       action: { sheet: "overSummary" },
-    });
+    }));
   }
 
   tiles.push({
@@ -1353,12 +1390,21 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
   const cfg = asCfg(view.cfg);
   const people = resolvePeople(state, view.contextOverrides, cfg);
   const bowlerReadOnly = bowlerIsReadOnly(innings);
+  // R2b (owner ruling, live-tile audit defect 2, `_INDEX.md`): closure is the
+  // ROOT cause once it applies — a bowler-eligibility read off the CLOSED
+  // innings' own stale `fine` would be a second, possibly-misleading message
+  // stacked on (or shown INSTEAD of) the real one, so the eligibility check
+  // is skipped entirely rather than computed and overridden. Mirrors
+  // `buildTiles`'s own `inningsClosed`/`closedTile` — see that function's
+  // header for the full defect/investigation writeup (not duplicated here).
+  const inningsClosed = innings.closed === true;
+  const closedMessage = inningsClosed ? t("pad.cricket.context.innings.closed") : undefined;
   // R2b (owner ruling, bowler-eligibility block, 2026-08-17): the SAME
   // decision `buildTiles` gates its own `disabled` tiles on — the strip and
   // the tap can never disagree about WHETHER the bowler is blocked, same
   // "one default computed in one place" reasoning G5 already established
   // for WHO the bowler is.
-  const blockReason = bowlerBlockReason(state, people, cfg);
+  const blockReason = inningsClosed ? null : bowlerBlockReason(state, people, cfg);
   return {
     slots: [
       {
@@ -1368,6 +1414,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         pool: "onfield",
         required: true,
         readOnly: true, // blocker 2 — see this file's header above
+        message: closedMessage, // defect 2 — see this file's header above
       },
       {
         id: "nonStriker",
@@ -1376,6 +1423,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         pool: "onfield",
         required: true,
         readOnly: true, // blocker 2 — see this file's header above
+        message: closedMessage, // defect 2 — see this file's header above
       },
       {
         // CANDIDATE-LIST GAP (checked as part of the R2b live bug fix,
@@ -1414,8 +1462,11 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         personId: people.bowler || undefined,
         pool: "onfield",
         required: true,
-        readOnly: bowlerReadOnly ? true : undefined, // defect 3 — see this file's header above
-        message: blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg) : undefined,
+        // defect 3 (readOnly) / defect 2 (closure) — see this file's header
+        // above for both. Closure forces readOnly too: there is no "over
+        // boundary" concept once the innings itself is over.
+        readOnly: inningsClosed || bowlerReadOnly ? true : undefined,
+        message: closedMessage ?? (blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg) : undefined),
       },
     ],
   };

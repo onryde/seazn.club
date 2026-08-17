@@ -3891,6 +3891,7 @@
   "pad.cricket.context.bowler.blocked.quota": "{name} heeft het maximum van {quota} overs al gebowld.",
   "pad.cricket.context.bowler.blocked.notInLineup": "{name} staat niet in de veldopstelling.",
   "pad.cricket.context.bowler.blocked.noEligible": "Geen enkele bowler mag de volgende over beginnen.",
+  "pad.cricket.context.innings.closed": "Deze innings is gesloten.",
   "pad.cricket.sheet.wicket.kind.title": "Wat gebeurde er?",
   "pad.cricket.sheet.wicket.who.title": "Wie is uit?",
   "pad.cricket.sheet.wicket.fielder.title": "Velder",

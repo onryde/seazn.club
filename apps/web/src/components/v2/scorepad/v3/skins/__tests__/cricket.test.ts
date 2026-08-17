@@ -1754,6 +1754,126 @@ describe("buildContext — bowler-block message, distinguishable per engine cond
 });
 
 // ---------------------------------------------------------------------------
+// buildTiles / buildContext — innings closed (R2b live-tile audit defect 2,
+// `_INDEX.md`, HIGH): `currentInnings()` falls back to the JUST-CLOSED
+// innings once none is open — load-bearing for `buildScorebug`'s own READ
+// path (proved again below, unchanged) — but `buildTiles`/`buildContext`
+// never checked `.closed`, so every delivery-capable tile stayed tappable
+// and every tap 422d with "over/ballInOver do not match the ledger", which
+// names ball sequencing, never the real cause. Reuses the bowler-eligibility
+// block's own mechanism verbatim (`TileSpec.disabled` + `ContextSlot.
+// message`) rather than a second one — see `closedTile`'s own doc comment,
+// cricket.tsx.
+// ---------------------------------------------------------------------------
+
+describe("buildTiles — innings closed disables the delivery-capable surface (R2b defect 2)", () => {
+  const BALL_TILE_IDS = [
+    "run0", "run1", "run2", "run3", "run4", "run6",
+    "wide", "wicket", "extra-noball", "extra-bye", "extra-legbye", "extra-penalty",
+  ];
+
+  it("a fine-fidelity closed innings disables every ball tile, wicket, review, and inningsClose — still visible, not removed", () => {
+    const tiles = buildTiles(view({ state: state({ innings: [innings({ closed: true })] }) }));
+    for (const id of [...BALL_TILE_IDS, "review", "inningsClose"]) {
+      const tile = tiles.find((tl) => tl.id === id)!;
+      expect(tile).toBeDefined();
+      expect(tile.disabled).toBe(true);
+    }
+  });
+
+  it("declare is disabled too, for a two-innings cfg", () => {
+    const tiles = buildTiles(view({
+      state: state({ innings: [innings({ closed: true })] }),
+      cfg: cfg({ inningsPerSide: 2 }),
+    }));
+    expect(tiles.find((tl) => tl.id === "declare")!.disabled).toBe(true);
+  });
+
+  it("a coarse-fidelity closed innings disables overSummary instead — the ball tiles are already hidden by fidelity, not by this fix", () => {
+    const tiles = buildTiles(view({ state: state({ innings: [innings({ closed: true, fine: null })] }) }));
+    expect(tiles.some((tl) => tl.id === "run0")).toBe(false);
+    expect(tiles.find((tl) => tl.id === "overSummary")!.disabled).toBe(true);
+  });
+
+  it("More stays tappable — genuine between-innings actions (revise, follow-on, match close) are reachable only through it", () => {
+    const tiles = buildTiles(view({ state: state({ innings: [innings({ closed: true })] }) }));
+    expect(tiles.find((tl) => tl.id === "more")!.disabled).toBeUndefined();
+  });
+
+  it("blocks even when a second innings is still due (two-innings cfg, only one innings recorded) — there is no tile that targets the next innings", () => {
+    const tiles = buildTiles(view({
+      state: state({ innings: [innings({ closed: true })] }),
+      cfg: cfg({ inningsPerSide: 2 }),
+    }));
+    for (const id of BALL_TILE_IDS) {
+      expect(tiles.find((tl) => tl.id === id)!.disabled).toBe(true);
+    }
+  });
+
+  it("an OPEN innings is unaffected — no tile is disabled (mutation-check control: a fix that disabled everything unconditionally would also pass every test above)", () => {
+    const tiles = buildTiles(view());
+    expect(tiles.some((tl) => tl.disabled)).toBe(false);
+  });
+});
+
+describe("buildContext — innings closed names the real cause (R2b defect 2)", () => {
+  it("all three slots carry the closure message and are read-only", () => {
+    const v = view({ state: state({ innings: [innings({ closed: true })] }) });
+    const spec = buildContext(v, t)!;
+    for (const id of ["striker", "nonStriker", "bowler"]) {
+      const slot = spec.slots.find((s) => s.id === id)!;
+      expect(slot.message).toBe(t("pad.cricket.context.innings.closed"));
+      expect(slot.readOnly).toBe(true);
+    }
+  });
+
+  it("closure wins over a bowler-eligibility message when both could apply off the same stale fold data", () => {
+    const v = view({
+      state: state({
+        innings: [innings({
+          closed: true,
+          fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} },
+        })],
+      }),
+      contextOverrides: { bowler: "a1" }, // would read "prevOver" if eligibility were still checked — see next test
+    });
+    const bowlerSlot = buildContext(v, t)!.slots.find((s) => s.id === "bowler")!;
+    expect(bowlerSlot.message).toBe(t("pad.cricket.context.innings.closed"));
+  });
+
+  it("counterfactual: the SAME fixture without closed:true really would read prevOver — proves the above is a genuine override, not a vacuous check", () => {
+    const v = view({
+      state: state({
+        innings: [innings({
+          fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} },
+        })],
+      }),
+      contextOverrides: { bowler: "a1" },
+    });
+    const bowlerSlot = buildContext(v, t)!.slots.find((s) => s.id === "bowler")!;
+    expect(bowlerSlot.message).toBe(t("pad.cricket.context.bowler.blocked.prevOver", { name: "Away One" }));
+  });
+
+  it("an open innings carries no closure message on any slot", () => {
+    const spec = buildContext(view(), t)!;
+    for (const id of ["striker", "nonStriker", "bowler"]) {
+      expect(spec.slots.find((s) => s.id === id)!.message).toBeUndefined();
+    }
+  });
+});
+
+describe("buildScorebug — closed innings with nothing else open still shows the final score (regression: the defect-2 tile/context gate must not touch the read path)", () => {
+  it("shows the closed innings' final runs/wickets/overs, not a blank or zeroed line", () => {
+    const spec = buildScorebug(
+      view({ state: state({ innings: [innings({ closed: true, runs: 187, wickets: 6, legalBalls: 118 })] }) }),
+      t,
+    );
+    expect(spec.halves[0]!.big).toBe("187/6");
+    expect(spec.halves[1]!.big).toBe("19.4");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildSheets — wicket sheet `when`-skip logic driven through the REAL
 // guided-sheet.tsx step machine (mutation target #1).
 // ---------------------------------------------------------------------------
