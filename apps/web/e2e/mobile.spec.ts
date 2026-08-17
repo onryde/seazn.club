@@ -758,9 +758,14 @@ test("cricket v3 pad: tiles + over-summary sheet + context strip hold the 44px f
   await pad.locator('[data-tile-id="overSummary"]').click();
   const sheet = pad.locator('[data-role="v3-sheet"]');
   await expect(sheet, "guided sheet must open").toBeVisible({ timeout: 10_000 });
-  await assertFloor(sheet.getByRole("button", { name: "Total runs −", exact: true }), "over-sheet stepper minus");
+  // Fix 1f7403c0 (review finding 2): the stepper buttons' accessible names
+  // now come from dedicated pad.sheet.decrease/.increase dictionary keys
+  // ("Decrease {title}"/"Increase {title}", en/ui.json) rather than the
+  // step title plus a bare glyph — "Decrease Total runs"/"Increase Total
+  // runs", not "Total runs −"/"Total runs +".
+  await assertFloor(sheet.getByRole("button", { name: "Decrease Total runs", exact: true }), "over-sheet stepper minus");
   await assertFloor(sheet.getByRole("spinbutton", { name: "Total runs" }), "over-sheet numeric field");
-  await assertFloor(sheet.getByRole("button", { name: "Total runs +", exact: true }), "over-sheet stepper plus");
+  await assertFloor(sheet.getByRole("button", { name: "Increase Total runs", exact: true }), "over-sheet stepper plus");
   await assertFloor(sheet.getByRole("button", { name: "Confirm", exact: true }), "over-sheet confirm");
   await expectNoHorizontalScroll(page);
   // Cancel, not confirm: a real submission here would open this innings at
