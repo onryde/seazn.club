@@ -129,17 +129,32 @@ conflate them.
    fully testable there); Task 6 wires it through `stages.ts` at the level
    the acceptance criterion requires, with an explicitly narrowed trigger
    contract (see Decision 4).
-2. **`bestOfRank.normaliseUnequalPools` is dead code in production today,
-   independent of this session.** `resolveQualification`'s `normalisedRow`
-   (`qualification.ts:153-177`) only does anything when
-   `table.results` is non-empty; `seedNextStage` builds its `PoolTable`s
-   from `standings_snapshots` rows only (`stages.ts:1930-1933`) and **never
-   sets `.results`**, so `normalisedRow` always takes its no-op branch in
-   production. Absorbing this field into the merged `bestNth` (Decision 2)
-   does not regress anything working today, and does not require plumbing a
-   per-pool match ledger through `seedNextStage`/`sourceStandingsTables` to
-   "close the gap" — see Decision 2b for what this session does and does not
-   do about it.
+2. **`bestOfRank.normaliseUnequalPools` is implemented and unit-tested, but
+   UNREACHABLE in production — it is an inert seam, not dead code.** The
+   distinction matters, because "dead code" invites deletion and this is a
+   working engine capability with no caller that can trigger it. Verified
+   2026-08-17, all three links in the chain:
+   - `resolveQualification` reads the flag and acts on it
+     (`qualification.ts:274,277`), calling `normalisedRow`.
+   - `normalisedRow` (`qualification.ts:153-177`) returns the **un-normalised**
+     row whenever `results.length === 0` — that is its first branch.
+   - The only production caller is `seedNextStage` (`stages.ts:1945`), which
+     builds its `PoolTable`s from `standings_snapshots` as `{pool, rows}`
+     (`stages.ts:1930-1933`). **`grep -an 'results:' stages.ts` returns
+     nothing** — `.results` is never populated anywhere in that file, so
+     `normalisedRow` always takes its no-op branch in production.
+
+   The only callers that DO populate `.results` are `qualification.test.ts`
+   (via its `rankedPool` helper) and `testkit/simulation.ts:796`. So the
+   capability is real and green in unit tests, and cannot fire for a user.
+
+   Consequence for this session: absorbing the field into the merged `bestNth`
+   (Decision 2) regresses nothing, and does NOT oblige this session to plumb a
+   per-pool match ledger through `seedNextStage`/`sourceStandingsTables`. What
+   it DOES oblige is honesty about the state — see Decision 2b. What would make
+   it reachable, if a later session wants it: populate `PoolTable.results` in
+   `seedNextStage` from the source stage's fixture results, at which point the
+   existing engine branch starts working with no engine change at all.
 3. **`stage-seeding.ts:19-33`'s KNOWN GAP comment** (bestNth has no UEFA
    unequal-pools normalisation; it refuses instead,
    `SEEDING_BESTNTH_UNEQUAL_POOLS`) is answered by Decision 2b: **carried
@@ -208,8 +223,8 @@ already carries the real, tested cross-group cascade with tie-flagging and
 an explicit unequal-pools refusal (`stage-seeding.ts:299-346`,
 `resolveQualifiers`), which two shipped catalogue templates
 (`euro24.json`, `t20-super8.json`) already depend on, while `bestOfRank`'s
-only additional field (`normaliseUnequalPools`) is the dead code documented
-in Finding 2 above. Both survivors keep the `kind`-tagged discriminated-union
+only additional field (`normaliseUnequalPools`) is the production-unreachable
+inert seam documented in Finding 2 above. Both survivors keep the `kind`-tagged discriminated-union
 style already used by `rankRange`/`topNPerGroup`/`bestNth` — the untagged
 bare-object style (`{topN: n}`, `{bestOfRank: {...}}`) does not survive
 either collapse, for consistency with the merged `TakeRule` union needing to
@@ -239,6 +254,16 @@ test proving both branches (refuse vs. silence-the-refusal) still fire
 satisfies without that expansion. Task 2's tests pin both branches so a
 future session that DOES wire real ledgers through has a red test the moment
 it changes this behaviour, rather than a silent no-op staying green forever.
+
+**Required alongside those tests:** the merged rule's implementation carries a
+comment stating, in the code itself, that the `normaliseUnequalPools: true`
+branch is unreachable in production because no caller populates
+`PoolTable.results`, and that populating it in `seedNextStage` from the source
+stage's fixture results is the one change that makes the existing branch start
+working. Finding 2 cost a full re-derivation this session precisely because
+that fact lived nowhere near the code; a plan-only record repeats the cost for
+the next reader. The comment is part of Task 2's deliverable, not optional
+polish.
 
 **Decision 3 — the two DB-level flows (auto-seed-on-complete,
 propose/confirm-at-setup) stay separate.** Unifying the **field** does not
@@ -339,9 +364,15 @@ dedupe are orthogonal to `TakeRule` and apply uniformly across all five kinds
   all `qualification:` emit sites, `detectTemplate`'s `topN`/`losersOfRound`
   reads.
 - **Modify** `apps/web/e2e/mobile.spec.ts:1504` — `seeding:` → `progression:`.
-- **Create** `db/migration/deltas/V367__stage_progression_field.sql` (verify
-  the next free V-number at execution time — 366 was the high-water mark on
-  2026-08-17).
+- **Create** `db/migration/deltas/V369__stage_progression_field.sql` —
+  **provisional.** V367 is already held by two other unmerged branches
+  (`feat/p8-venues-schema-ui`'s `V367__venues_and_courts.sql`,
+  `feat/rs002-registration-usecases`'s `V367__registration_entry_refunds.sql`)
+  and V368 was taken this session by `feat/f1-bracket-round-role`'s
+  `V368__fixture_round_role.sql`. Re-verify against `origin/main` immediately
+  before opening this session's PR (see Task 4's note) — whichever of these
+  branches merges last has to renumber regardless of what was free when its
+  plan was written.
 - **Modify** `packages/engine/src/core/errors.ts` and `errors.test.ts` — four
   new `EngineErrorCode` members.
 - **Modify** `apps/web/src/server/api-v1/http.ts` — `ENGINE_HTTP` map gains
@@ -1650,9 +1681,20 @@ git commit -m "schema(F2): one ProgressionSchema replaces QualificationSpecSchem
 ### Task 4: Migration — verify zero rows, drop `qualification`/`seeding`, add `progression jsonb`
 
 **Files:**
-- Create: `db/migration/deltas/V367__stage_progression_field.sql` (verify the
-  next free V-number at execution — 366 was the high-water mark on
-  2026-08-17; this session and F1 both may have taken a number since)
+- Create: `db/migration/deltas/V369__stage_progression_field.sql`
+
+**A note on the V-number, because it is already wrong twice over.** At time
+of writing, V367 is claimed by TWO other unmerged branches
+(`feat/p8-venues-schema-ui`: `V367__venues_and_courts.sql`;
+`feat/rs002-registration-usecases`: `V367__registration_entry_refunds.sql`),
+and V368 was claimed this session by `feat/f1-bracket-round-role`
+(`V368__fixture_round_role.sql`). V369 is this plan's best guess, not a
+reservation — **four branches are concurrently claiming numbers in this
+range**, and whichever of them merges last has to renumber regardless of
+what was free when its plan was written. Re-run
+`find db/migration/deltas -iname "V3*"` (or equivalent) against a freshly
+fetched `origin/main` immediately before opening this session's PR, and
+rename the file then if V369 has since been taken.
 
 **Step 1: Verify the zero-rows premise — STOP if it is false.**
 
@@ -1678,7 +1720,7 @@ optional evidence.
 - [ ] **Step 2: Write the migration**
 
 ```sql
--- V367 — unify stages.qualification and stages.seeding into one
+-- V369 — unify stages.qualification and stages.seeding into one
 -- stages.progression field (F2, design doc §2.1/§5). Greenfield per owner
 -- ruling 2026-08-17: no production data (verified zero rows against the
 -- target database before this file was written — see the PR body for the
@@ -1742,7 +1784,7 @@ present, `qualification`/`seeding` absent.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add db/migration/deltas/V367__stage_progression_field.sql
+git add db/migration/deltas/V369__stage_progression_field.sql
 git commit -m "db(F2): drop stages.qualification/seeding, add stages.progression jsonb"
 ```
 
@@ -2556,4 +2598,4 @@ Global Constraints section.
 - `apps/web/src/server/api-v1/schemas.ts`
 - `apps/web/src/server/usecases/stages.ts`
 - `apps/web/src/server/usecases/stage-seeding.ts`
-- `db/migration/deltas/V367__stage_progression_field.sql`
+- `db/migration/deltas/V369__stage_progression_field.sql`
