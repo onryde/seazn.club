@@ -12,7 +12,7 @@
 // own module graph, which a barrel-level mock cannot do). Spying on
 // `repairDecomposedCpsat` instead proves the same fact this file always
 // proved: the repair round reaches the placement-service-backed CP-SAT
-// path, never z3's `repairDecomposed`.
+// path. The z3 driver it used to be contrasted against was deleted in C8.
 //
 // Real Postgres is required (skipped without DATABASE_URL); the placement
 // service is whatever `PLACEMENT_SERVICE_HOST` points at (or unreachable,
@@ -30,7 +30,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
-const calls = vi.hoisted(() => ({ repairDecomposedCpsat: 0, repairDecomposed: 0 }));
+const calls = vi.hoisted(() => ({ repairDecomposedCpsat: 0 }));
 
 vi.mock("@seazn/engine/scheduling", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@seazn/engine/scheduling")>();
@@ -39,10 +39,6 @@ vi.mock("@seazn/engine/scheduling", async (importOriginal) => {
     repairDecomposedCpsat: async (input: Parameters<typeof actual.repairDecomposedCpsat>[0]) => {
       calls.repairDecomposedCpsat++;
       return actual.repairDecomposedCpsat(input);
-    },
-    repairDecomposed: async (input: Parameters<typeof actual.repairDecomposed>[0]) => {
-      calls.repairDecomposed++;
-      return actual.repairDecomposed(input);
     },
   };
 });
@@ -168,11 +164,10 @@ function clashingPlan(fixtureIds: string[]): unknown {
   };
 }
 
-describe.skipIf(!HAS_DB)("AI repair round calls repairDecomposedCpsat, never z3's repairDecomposed (C9 wiring)", () => {
+describe.skipIf(!HAS_DB)("AI repair round calls repairDecomposedCpsat (C9 wiring)", () => {
   it("single-division: runAiPlan's repair round routes through the placement client, not z3's repair solver", async () => {
     parse.mockReset();
     calls.repairDecomposedCpsat = 0;
-    calls.repairDecomposed = 0;
     process.env.ANTHROPIC_API_KEY = "test-key";
     delete process.env.SCHEDULING_REPAIR_SOLVER;
 
@@ -188,7 +183,9 @@ describe.skipIf(!HAS_DB)("AI repair round calls repairDecomposedCpsat, never z3'
     const out = await runAiPlan(pack, movableIds);
 
     expect(calls.repairDecomposedCpsat).toBeGreaterThan(0);
-    expect(calls.repairDecomposed).toBe(0);
+    // The "never z3's repairDecomposed" half of this assertion retired with
+    // that function in C8. It is structural now — there is no other decomposed
+    // driver to reach — so what remains worth asserting is the positive above.
     // The clash was genuinely a live conflict, not a no-op: some engine
     // actually ran a repair round (solver or, if it declined, the LLM —
     // either way `repair.engine` is never "none" on a board that started
@@ -199,7 +196,6 @@ describe.skipIf(!HAS_DB)("AI repair round calls repairDecomposedCpsat, never z3'
   it("joint: runCompetitionAiPlan's repair round routes through the placement client, not z3's repair solver", async () => {
     parse.mockReset();
     calls.repairDecomposedCpsat = 0;
-    calls.repairDecomposed = 0;
     process.env.ANTHROPIC_API_KEY = "test-key";
     delete process.env.SCHEDULING_REPAIR_SOLVER;
 
@@ -221,7 +217,9 @@ describe.skipIf(!HAS_DB)("AI repair round calls repairDecomposedCpsat, never z3'
     const out = await runCompetitionAiPlan(pack, movableIds);
 
     expect(calls.repairDecomposedCpsat).toBeGreaterThan(0);
-    expect(calls.repairDecomposed).toBe(0);
+    // The "never z3's repairDecomposed" half of this assertion retired with
+    // that function in C8. It is structural now — there is no other decomposed
+    // driver to reach — so what remains worth asserting is the positive above.
     expect(out.repair.engine).not.toBe("none");
   }, 120_000);
 });

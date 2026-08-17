@@ -69,23 +69,13 @@ export * from "./grid-step.ts";
 // the same bundle reason as `grid-step` above.
 export * from "./rest-floor.ts";
 export * from "./build-grid.ts";
-// The boolean model over that lattice. Free to name here for the same reason
-// the repair block below is: its only `z3-solver` reference is `import type`.
-export * from "./build-encode.ts";
-// The large-neighbourhood fallback over that same model. Pure too: it owns the
-// window plan and the acceptance rule and takes the solve itself as a
-// parameter, so it names no z3 at all.
-export * from "./build-lns.ts";
-// The control loop. It solves through the placement service now, not the model
-// above — its only remaining z3 reference is the `withZ3LockAndReset` mutex it
-// shares with the repair path, and even that names no WASM: the dynamic import
-// stays inside `loadZ3`.
+// The control loop. It solves through the placement service — the boolean
+// model it used to drive, and the LNS fallback over that model, went with the
+// solver in C8.
 export * from "./build.ts";
-// The repair solver (#401). All three are free to name here: `z3-load.ts`'s
-// only `z3-solver` reference is `import type`, and the WASM stays behind the
-// dynamic import inside `loadZ3`, so importing this barrel costs nothing.
+// The repair domain and the component graph beneath the decomposed driver.
+// Both solver-agnostic; the z3 encoder they used to feed is gone.
 export * from "./repair-domain.ts";
-export * from "./repair.ts";
 export * from "./repair-decompose.ts";
 export * from "./repair-minimality.ts";
 // The decomposed CP-SAT driver (C9). Free to name here for the same reason
@@ -93,4 +83,3 @@ export * from "./repair-minimality.ts";
 // dynamic import already keeps `placement-client.ts`'s gRPC dependency out of
 // a client bundle.
 export * from "./repair-decompose-cpsat.ts";
-export * from "./z3-load.ts";

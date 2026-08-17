@@ -19,7 +19,6 @@
 // which names nobody and is fed verbatim to the repair prompt.
 import { describe, expect, it } from "vitest";
 import { buildSchedule } from "./build.ts";
-import { resetZ3 } from "./z3-load.ts";
 import { slotFixtures } from "./calendar.ts";
 import type { SchedulableFixture, SlotConfig } from "./calendar.ts";
 
@@ -68,7 +67,6 @@ describe("a card that greedy placed and something later dropped", () => {
       ["a", "court", { kind: "court_double_booking", court: "C1", otherFixtureId: "b" }],
       ["b", "court", { kind: "court_double_booking", court: "C1", otherFixtureId: "a" }],
     ]);
-    await resetZ3();
   }, 120_000);
 
   it("still gives greedy's own diagnosis to a card greedy could not place", async () => {
@@ -95,6 +93,5 @@ describe("a card that greedy placed and something later dropped", () => {
     const out = await buildSchedule({ fixtures, config: tight });
     const forB = out.conflicts.filter((c) => c.fixtureId === "b");
     expect(forB).toEqual(greedySaid);
-    await resetZ3();
   }, 120_000);
 });

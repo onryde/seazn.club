@@ -29,9 +29,38 @@ const REPO_ROOT = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   encoding: "utf8",
 }).trim();
 
+/**
+ * The trees that hold code. `docs/**` is deliberately OUT: the historical plan
+ * documents quote the deleted modules' own source, imports and all, and those
+ * quotations are the record of what was removed. A gate that cannot tell a
+ * live import from a code sample in a design doc would either fail forever or
+ * force the history to be rewritten — C6 made the same call for the prose
+ * gate, and this is the import-level twin of it.
+ */
+const LIVE_TREES = [
+  "packages/engine/src",
+  "packages/engine/scripts",
+  "apps/web/src",
+  "apps/web/e2e",
+  "scripts",
+] as const;
+
 function gitGrep(args: readonly string[]): string {
   try {
-    return execFileSync("git", ["-C", REPO_ROOT, "grep", "-a", "-n", ...args], {
+    return execFileSync(
+      "git",
+      ["-C", REPO_ROOT, "grep", "-a", "-n", ...args, "--", ...LIVE_TREES],
+      { encoding: "utf8" },
+    ).trim();
+  } catch {
+    return "";
+  }
+}
+
+/** Same call, but against an explicit pathspec instead of the live trees. */
+function gitGrepAt(args: readonly string[], paths: readonly string[]): string {
+  try {
+    return execFileSync("git", ["-C", REPO_ROOT, "grep", "-a", "-n", ...args, "--", ...paths], {
       encoding: "utf8",
     }).trim();
   } catch {
@@ -40,6 +69,19 @@ function gitGrep(args: readonly string[]): string {
 }
 
 describe("the z3 dependency is unreferenced", () => {
+  /**
+   * The control. Every assertion below is "a grep found nothing", which is
+   * also what a grep aimed at the wrong place returns — and this file narrowed
+   * its pathspec to `LIVE_TREES` precisely so that historical design docs
+   * could keep quoting the deleted source. If that pathspec ever stops
+   * covering the code, this case goes red and the rest stop being evidence.
+   */
+  it("scans a tree that actually holds the code", () => {
+    expect(gitGrep(["-l", "-F", "buildSchedule"]).split("\n").filter(Boolean).length).toBeGreaterThan(
+      10,
+    );
+  });
+
   it("no file imports the z3-solver package", () => {
     expect(gitGrep(["-E", String.raw`from ["']z3-solver["']|require\(["']z3-solver["']\)`])).toBe(
       "",
@@ -56,7 +98,7 @@ describe("the z3 dependency is unreferenced", () => {
 
   it("neither workspace manifest declares the dependency", () => {
     expect(
-      gitGrep(["z3-solver", "--", "apps/web/package.json", "packages/engine/package.json"]),
+      gitGrepAt(["z3-solver"], ["apps/web/package.json", "packages/engine/package.json"]),
     ).toBe("");
   });
 
@@ -64,7 +106,7 @@ describe("the z3 dependency is unreferenced", () => {
     // Both halves of the pair go together: `serverExternalPackages` AND the
     // `outputFileTracingIncludes` entry were needed to make the WASM work in
     // standalone, so removing one leaves config that does nothing.
-    expect(gitGrep(["-i", "z3", "--", "apps/web/next.config.js"])).toBe("");
+    expect(gitGrepAt(["-i", "z3"], ["apps/web/next.config.js"])).toBe("");
   });
 
   /**

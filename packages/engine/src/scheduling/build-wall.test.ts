@@ -23,7 +23,6 @@ import {
 } from "vitest";
 import { MAX_SOLVE_ENCODING, canSolveWithin } from "./build.ts";
 import { buildGrid } from "./build-grid.ts";
-import { resetZ3 } from "./z3-load.ts";
 import type { SchedulableFixture, SlotConfig } from "./calendar.ts";
 
 const MIN = 60_000;
@@ -80,166 +79,18 @@ function board(opts: { n: number; days: number; slotsPerCourtDay: number }): {
   return { fixtures, config };
 }
 
-// `isolate: false` on a thread pool means this file shares one z3 instance
-// with its neighbours, and the WASM heap only ever grows. Reset both ends of
-// the whole file, not just the block that first needed it — the R22 wiring
-// test below also drives `buildSchedule` through the encode spy.
-beforeAll(async () => {
-  await resetZ3();
-});
-afterEach(() => {
-  vi.doUnmock("./build-encode.ts");
-  vi.resetModules();
-});
-afterAll(async () => {
-  await resetZ3();
-});
-
-/** Loads `build.ts` with `encodeBuild` counted. The real implementation still
- *  runs — this records that the step happened, it does not replace it. */
-async function withEncodeSpy(): Promise<{
-  calls: { n: number };
-  mod: typeof import("./build.ts");
-}> {
-  const calls = { n: 0 };
-  // BEFORE the mock, and this line is load-bearing. This file imports
-  // `./build.ts` STATICALLY at the top for `MAX_SOLVE_ENCODING`, so by the
-  // time any test runs, `build.ts` is already in the module cache holding a
-  // direct reference to the REAL `encodeBuild`. Without this reset the
-  // `await import("./build.ts")` below hands back that cached copy, the spy
-  // is wired to nothing, and `calls.n` is 0 whatever the solver does —
-  // which is precisely the assertion the first test makes. MEASURED: with
-  // the R23 guard deleted from `build.ts`, the file still passed 5/5.
-  //
-  // The second test escaped it only by accident, because `afterEach` had
-  // already reset the modules by the time it ran — which is why it read as
-  // a working spy and hid the fact that the first one was inert.
-  vi.resetModules();
-  vi.doMock("./build-encode.ts", async () => {
-    const actual =
-      await vi.importActual<typeof import("./build-encode.ts")>(
-        "./build-encode.ts",
-      );
-    return {
-      ...actual,
-      encodeBuild: (input: Parameters<typeof actual.encodeBuild>[0]) => {
-        calls.n += 1;
-        return actual.encodeBuild(input);
-      },
-    };
-  });
-  return { calls, mod: await import("./build.ts") };
-}
-
-describe("R23 — the wall bounds the encode path, not just the search loops", () => {
-  // A SMALL board, and the size is the point.
-  //
-  // The first two drafts of this test proved the guard with a STOPWATCH: run
-  // the board through `buildSchedule` with the wall already gone, then price
-  // one `encodeBuild` of the same board directly, and assert the whole run cost
-  // less than the encode. That needs a board big enough for the encode to
-  // dominate, and it cost this suite two separate outages:
-  //
-  //   * at 200 x 432 fixture-slots the encode poisoned the whole run. The
-  //     engine's vitest config is `isolate: false` on a thread pool and z3's
-  //     WASM heap only ever GROWS, so one encode that large killed 17 tests in
-  //     UNRELATED files — officials/assign.property, testkit/golden,
-  //     testkit/simulation — with bare `STACK_TRACE_ERROR`s. `resetZ3()` cannot
-  //     hand the memory back.
-  //   * at 200 x 216 the ratio itself broke, in BOTH directions. The guarded
-  //     arm is `boot + greedy + lattice`, and z3's boot is a fixed ~700 ms that
-  //     does not shrink with the board; the encode does. Under a loaded machine
-  //     the guarded arm drifted up; under an idle one the encode dropped to
-  //     1_287 ms and the assertion failed as `expected 796 to be less than 643`.
-  //     There is no board size that fixes both ends, because the two arms scale
-  //     differently.
-  //
-  // So the timing is gone. The claim was never "the run is fast" — it is "the
-  // run did not encode", and that is directly observable: mock `encodeBuild`
-  // and count the calls. Deterministic, machine-independent, strictly stronger
-  // than any threshold, and it frees the board to be small enough that this
-  // file stops being the heaviest z3 test in the suite.
-  const small = board({ n: 20, days: 1, slotsPerCourtDay: 12 });
-
-  it("returns the greedy seed without encoding when the wall is already gone", async () => {
-    const grid = buildGrid({ config: small.config });
-    // 20 x 48 = 960 fixture-slots. Pinned so a lattice change cannot quietly
-    // turn this into a board with nothing to encode.
-    expect({ slots: grid.slots.length, overCap: grid.overCap }).toEqual({
-      slots: 48,
-      overCap: false,
-    });
-
-    const { calls, mod } = await withEncodeSpy();
-    const out = await mod.buildSchedule({
-      fixtures: small.fixtures,
-      config: small.config,
-      wallMs: 1,
-    });
-
-    // THE ASSERTION. Two guards can produce this same shape now — the R22 size
-    // gate (`canSolveWithin`, scaled by this same `wallMs: 1` down to a budget
-    // of ~0, refused ahead of the queue and the lock) and, for a board that
-    // clears it, the wall check at `build.ts:1043` between the WASM boot and
-    // `encodeBuild`. Both report the run as budget-insufficient the same way
-    // (see `greedyOnly`'s doc comment), so which one fires is not observable
-    // from the result shape — only `encodeBuild` never running is.
-    expect(calls.n).toBe(0);
-
-    // It bails rather than throwing, and it bails to the SEED — D6 ("never
-    // worse than greedy") has to survive an encode-time bail, and the greedy
-    // board is what every other expired path returns too.
-    //
-    // `not_searched`, NOT `ok`. This exit runs no `check()` at all — the
-    // assertion below pins `rlimitSpent: 0` — so the board it hands back has
-    // never been looked at by a solver, and `ok` is documented as "a board was
-    // produced and the gate accepted it". `budgetExpired` alone does not carry
-    // that: it is set on every partially-searched run too, so it says the run
-    // was cut short and nothing about whether a search happened at all.
-    expect({
-      engine: out.engine,
-      status: out.status,
-      budgetExpired: out.budgetExpired,
-      tiers: out.tiersCompleted,
-      placed: out.metrics.placed,
-    }).toEqual({
-      engine: "greedy",
-      status: "not_searched",
-      budgetExpired: true,
-      tiers: 0,
-      placed: 20,
-    });
-
-    // z3's own counter never moved, so no `check()` ran either.
-    expect(out.rlimitSpent).toBe(0);
-  }, 120_000);
-
-  // SKIPPED (Task 06, placement cutover): `solveBuild` no longer calls
-  // `encodeBuild` at all, so `withEncodeSpy`'s positive witness
-  // (`calls.n === 1`) can never be satisfied on this path — genuinely dead,
-  // not merely unreachable in this test environment. The R23 guard THIS
-  // witnesses (the sibling `it` above, which is NOT skipped) still holds:
-  // an already-gone wall still returns the greedy floor without attempting
-  // placement, which is exactly what `solveBuild`'s own `outOfTime()` check
-  // before the RPC call does now.
-  it.skip("still encodes when the wall is intact — the guard is a skip, not a removal", async () => {
-    // THE POSITIVE WITNESS, and without it the test above is satisfied by a
-    // solver that never encodes anything at all. `rlimit: 1` starves every
-    // check the moment the model exists, so this pays for the encode and
-    // nothing after it — the encode is what is being witnessed, not the search.
-    const { calls, mod } = await withEncodeSpy();
-    const out = await mod.buildSchedule({
-      fixtures: small.fixtures,
-      config: small.config,
-      wallMs: 30_000,
-      rlimit: 1,
-    });
-
-    expect(calls.n).toBe(1);
-    // And the run is still held to the greedy floor on the way out.
-    expect(out.metrics.placed).toBe(20);
-  }, 120_000);
-});
+/**
+ * R23's half of this file — "the wall bounds the encode path, not just the
+ * search loops" — went with `build-encode.ts` in C8. Every case in it spied on
+ * `encodeBuild` to prove a run refused before encoding, and there is no
+ * encoder left to refuse to call. Its last case, which asserted `buildSchedule`
+ * consults the gate rather than merely exposing it, went the same way for the
+ * same reason: the only observable it had was the encode spy.
+ *
+ * What survives is the gate's own arithmetic, below. Restoring the wiring
+ * assertion means spying on the placement client instead — worth doing, and
+ * not doable by editing this file alone.
+ */
 
 describe("R22 — canSolveWithin is the one place the size gate lives", () => {
   // 90 x 144 = 12_960 fixture-slots, inside the measured knee.
@@ -303,34 +154,4 @@ describe("R22 — canSolveWithin is the one place the size gate lives", () => {
     expect(canSolveWithin(inside.fixtures, wide, 8_000)).toBe(false);
   });
 
-  // THE GATE WAS UNWIRED. `canSolveWithin` answered `false` for exactly this
-  // board (asserted above), but nothing on the `buildSchedule` path ever asked
-  // it — every caller, including the production web layer, ran `outside`
-  // straight into `encodeBuild` and the first `push()` and paid the full R23
-  // overrun before the wall guard downstream finally caught it. This is the
-  // gate actually stopping the call, not just answering the question.
-  it("buildSchedule itself refuses a board outside the gate, without encoding it", async () => {
-    const { calls, mod } = await withEncodeSpy();
-    const out = await mod.buildSchedule({
-      fixtures: outside.fixtures,
-      config: outside.config,
-      wallMs: 8_000,
-    });
-
-    expect(calls.n).toBe(0);
-    expect({
-      engine: out.engine,
-      status: out.status,
-      budgetExpired: out.budgetExpired,
-      rlimitSpent: out.rlimitSpent,
-    }).toEqual({
-      engine: "greedy",
-      status: "not_searched",
-      // `true`, not the queue-cap refusal's `false` — this board will refuse
-      // again on retry at this same `wallMs`, which is what `budgetExpired`
-      // means here. See `greedyOnly`'s doc comment for the distinction.
-      budgetExpired: true,
-      rlimitSpent: 0,
-    });
-  }, 120_000);
 });

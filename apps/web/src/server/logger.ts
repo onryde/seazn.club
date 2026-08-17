@@ -7,8 +7,9 @@
 // Deliberately NOT `pino({ transport: {...} })`: a transport spawns a worker
 // thread that does a dynamic `require()` of the transport target, which
 // Next's standalone build cannot trace statically — see next.config.js's
-// `serverExternalPackages` comment for the same class of failure with
-// z3-solver's WASM file. Plain JSON-to-stdout needs no such tracing: `import
+// `serverExternalPackages` comment for the same class of failure with a
+// package that reads a data file off disk. Plain JSON-to-stdout needs no such
+// tracing: `import
 // pino from "pino"` is an ordinary static import.
 import pino from "pino";
 

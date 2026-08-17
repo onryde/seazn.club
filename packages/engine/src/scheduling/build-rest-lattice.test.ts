@@ -47,7 +47,6 @@ import { buildGrid } from "./build-grid.ts";
 import { gridStepMinutes } from "./grid-step.ts";
 import { boardMetrics } from "./build-objectives.ts";
 import { slotFixtures } from "./calendar.ts";
-import { resetZ3 } from "./z3-load.ts";
 import type { Assignment, SchedulableFixture, SlotConfig } from "./calendar.ts";
 import type { SchedulingConstraints } from "./constraints.ts";
 import type { SolveBuildOutcome } from "./placement-client.ts";
@@ -267,7 +266,6 @@ describe("a rest-configured board is actually searched", () => {
     expect(out.engine).toBe("optimized");
     expect(out.status).toBe("ok");
     expect(out.tiersCompleted).toBe(TIER_COUNT);
-    await resetZ3();
   }, 120_000);
 
   it("proves the chained board optimal instead of never searching it", async () => {
@@ -289,7 +287,6 @@ describe("a rest-configured board is actually searched", () => {
       placed: 3,
     });
     expect(out.assignments.map((a) => (a.startAt - T0) / MIN)).toEqual([0, 65, 130]);
-    await resetZ3();
   }, 120_000);
 
   it("searches a board held to an absolute anchor no step could divide", async () => {
@@ -338,7 +335,6 @@ describe("a rest-configured board is actually searched", () => {
       tiers: TIER_COUNT,
     });
     expect(out.assignments).toEqual(seed.assignments);
-    await resetZ3();
   }, 120_000);
 });
 
@@ -519,6 +515,5 @@ describe("a board split across mismatched court grids now reaches the solver", (
     const sentC1 = sentInput.grid.slots.filter((s) => s.court === "C1").length;
     const sentC2 = sentInput.grid.slots.filter((s) => s.court === "C2").length;
     expect(sentC1).toBeLessThan(sentC2);
-    await resetZ3();
   }, 120_000);
 });

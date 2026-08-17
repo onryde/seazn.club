@@ -90,7 +90,6 @@
 // mentions in this file are prose in comments about the WASM heap, not types.
 import { boardMetrics, isStrictlyBetter, type BoardMetrics, type DayView } from "./build-objectives.ts";
 import { buildGrid, type BuildGrid, type BuildSlot } from "./build-grid.ts";
-import type { BuildConfig } from "./build-encode.ts";
 import {
   deltaConflicts,
   effectiveHard,
@@ -110,10 +109,6 @@ import {
 import type { HardConstraint } from "./constraints.ts";
 import { dayKeyInTz } from "./tz.ts";
 import { repairUniverse } from "./repair-domain.ts";
-// `withZ3LockAndReset` only — `Z3Context` was the deleted encoder's. The lock
-// itself is still taken around the placement solve and is vestigial rather
-// than dead; see the comment at its call site.
-import { withZ3LockAndReset } from "./z3-load.ts";
 // `placement-client.ts` is imported dynamically at the call site inside
 // `solveBuild`, never statically — see the comment there. This is a
 // TYPE-only import: `import type` is erased at compile time, so it creates
@@ -355,6 +350,11 @@ const AUTO_SOLVER_WALL_MS_AT_MEASUREMENT = 8_000;
 // still own the actual solving logic, untouched, for Prompt 10 to remove as
 // a unit) are.
 
+/** The verify config plus the two dimensions a board is laid out on.
+ *  Lived in `build-encode.ts` (the z3 encoder) until C8 deleted it; the type
+ *  itself never had anything to do with z3. */
+export type BuildConfig = VerifyConfig & { matchMinutes: number; courts: string[] };
+
 export type BuildStatus =
   /** A board was produced and the gate accepted it. */
   | "ok"
@@ -443,7 +443,7 @@ export type BuildStatus =
    * is barely better: it reads as a board the solver produced and accepted.
    */
   | "not_searched"
-  /** This build declined to QUEUE behind `withZ3Lock` rather than wait it out:
+  /** This build declined to QUEUE behind the solver rather than wait it out:
    *  `MAX_SOLVER_QUEUE` builds were already in flight, so the greedy board came
    *  back at once and the solver was never consulted. Ordinary rather than an
    *  error — the board is valid, and a retry can do better. */
@@ -1108,12 +1108,11 @@ function greedyOnly(
 }
 
 /**
- * How many builds may be waiting on the WASM before a caller is told to take the
- * greedy board instead (Gap 4).
+ * How many builds may be waiting on the solver before a caller is told to take
+ * the greedy board instead (Gap 4).
  *
- * `withZ3Lock` serialises the whole PROCESS — it is a correctness device, not a
- * throttle: `resetZ3` kills pthreads process-wide, so it cannot be reentrant.
- * Without this cap the third organiser to click auto-schedule waits out two full
+ * Sized when a process-wide z3 lock made solves strictly serial. Without this
+ * cap the third organiser to click auto-schedule waits out two full
  * `wallMs` budgets before their own run even starts, and their request simply
  * appears hung. Declining to queue converts that into an immediate greedy board
  * carrying `status: "solver_busy"`, which the result strip already renders as an
@@ -1121,9 +1120,8 @@ function greedyOnly(
  *
  * **`queued` IS PER-PROCESS, so on a multi-instance deployment the real ceiling
  * is `instances x MAX_SOLVER_QUEUE` concurrent solves.** This is memory
- * protection for ONE process's WASM heap — z3's heap only ever grows, and behind
- * a process-wide lock a deeper queue buys no throughput at all, only waiting. It
- * is NOT global admission control and must not be read as one: nothing here
+ * protection for ONE process — it is NOT global admission control and must not
+ * be read as one: nothing here
  * coordinates between instances, so a fleet-wide concurrency limit sized off
  * this number would be sized off a single box's.
  */
@@ -1161,54 +1159,31 @@ export function buildSchedule(input: BuildInput): Promise<BuildResult> {
   if (!canSolveWithin(input.fixtures, input.config, input.wallMs ?? DEFAULT_BUILD_WALL_MS, input.existing ?? []))
     return Promise.resolve(greedyOnly(input, "not_searched", true, "too_big"));
   queued++;
-  // `withZ3Lock` is NOT reentrant. It is taken exactly here, and nothing below
-  // may take it again — `loadZ3` deliberately does not, neither does anything
-  // in `build-encode.ts`, and the LNS pass re-enters `solveBuild` rather than
-  // `buildSchedule` for exactly this reason. (The plan proposed driving LNS
-  // through `repairSchedule`, which DOES take the lock itself, and therefore
-  // proposed moving this call inward; nothing here takes it twice, so the lock
-  // stays on the outside where it can serialise the whole run.)
+  // NO PROCESS-WIDE LOCK HERE ANY MORE. One wrapped this call for as long as
+  // z3 existed: it was a correctness device rather than a throttle (the reset
+  // killed pthreads process-wide, so it could not be reentrant), and the
+  // teardown had to happen while the lock was still held, because a WASM heap
+  // that only grows OOMs the process at about six consecutive solves.
   //
-  // AND THE TEARDOWN IS OURS, not the caller's (R17). z3's WASM heap only ever
-  // grows and nothing frees a finished `Solver`, so a process that runs a
-  // handful of solves aborts with an OOM and takes node with it — measured at
-  // six consecutive solves. That fix first landed as a `finally` at the web
-  // seam, where the NEXT entry point re-introduces the crash simply by not
-  // knowing about it; `repairDecomposed` already owns its own resets, and this
-  // now matches. `withZ3LockAndReset` rather than a `finally` around this call
-  // because the reset has to happen while the lock is still HELD — see its
-  // comment for what the obvious spelling does instead.
+  // None of that survives the solver. `solveBuild` is an out-of-process gRPC
+  // call to the placement service: no WASM heap, no `Solver` instance, no
+  // mutable process-wide state to serialise. Earlier rounds recorded the wrap
+  // as vestigial and left it anyway, because dropping a process-wide lock is a
+  // blast-radius change that wanted its own test first; C8 deleted the module
+  // that owned the lock, which settles the question rather than re-opening it.
+  //
+  // `queued` and `MAX_SOLVER_QUEUE` stay: they are what bounds how many
+  // concurrent requests reach the service. `build-teardown.test.ts`, which
+  // pinned the serialise-and-tear-down behaviour, went with the solver — every
+  // case in it mocked `z3-solver` or the encoder. Nothing now asserts that two
+  // concurrent runs queue rather than pile up; the cap itself is still applied
+  // here, but its test is owed.
   //
   // `finally` on the promise, not a `try`/`finally` around the call: the
-  // decrement has to happen when the SOLVE settles, and it must run on the throw
-  // path too — `solveBuild` swallows a boot failure but not an encoder-drift
-  // throw, and a counter that leaked one of those would refuse every subsequent
-  // build in this process for as long as it lived.
-  // STILL HELD FOR THE PLACEMENT PATH TOO (fix round 1 finding, deliberately
-  // NOT changed this round — a process-wide lock is a blast-radius change
-  // and the one test that would prove dropping it safe needed writing
-  // first; see `build-teardown.test.ts`'s "still serialises, and still
-  // tears down, when two runs queue together").
-  //
-  // `solveBuild` no longer touches z3 on this path at all, so `withZ3Lock`
-  // buys this call NOTHING correctness-wise: placement is an out-of-process
-  // gRPC call, sharing no WASM heap, no `Solver` instance, no mutable
-  // process-wide state with anything this lock protects. `tearDownZ3`
-  // itself degrades gracefully (`if (loaded === null) return;` — a
-  // near-instant no-op whenever z3 was never booted, which on this path is
-  // always), so nothing is BROKEN by keeping the wrap — but it is not free
-  // either: every placement call still queues behind `MAX_SOLVER_QUEUE` AND
-  // behind this lock, needlessly serialising concurrent BUILD/POLISH
-  // requests against each other (redundant with the queue cap and the
-  // service's own `PLACEMENT_MAX_WORKERS`) and against REFLOW's concurrent z3
-  // repairs (`repairSchedule` takes the SAME lock, and shares nothing with
-  // placement either).
-  //
-  // Left in place because removing it is REFLOW's call to weigh in on too
-  // (this lock is `z3-load.ts`'s, not BUILD/POLISH's own), and because the
-  // throughput cost is unmeasured, not merely asserted — a claim worth
-  // benchmarking before acting on, not assuming.
-  return withZ3LockAndReset(() => solveBuild(input)).finally(() => {
+  // decrement has to happen when the SOLVE settles, and it must run on the
+  // throw path too — a counter that leaked one of those would refuse every
+  // subsequent build in this process for as long as it lived.
+  return solveBuild(input).finally(() => {
     queued--;
   });
 }
@@ -2398,10 +2373,9 @@ function restrictToConfiguredCourts(
 // lines were on their own enough to drag the global line coverage under its
 // 90% threshold (89.76% with them, above it without).
 //
-// This is NOT Prompt 10. That task removes z3 as a CAPABILITY — the WASM
-// loader, the fallback path, repair/REFLOW's own z3 — and stays gated on
-// C1/C2/C4. Deleting an uncalled function removes no capability, because
-// nothing could reach it: `build.ts` already routes BUILD entirely through
-// `solveBuild`, and the `withZ3LockAndReset` wrapper around it is vestigial
-// (see the comment at that call site). Anything Prompt 10 needs from this
-// code is in git history.
+// This was NOT stage E. That task removed z3 as a CAPABILITY. Deleting an
+// uncalled function removed no capability, because nothing could reach it:
+// `build.ts` already routed BUILD entirely through
+// `solveBuild`. Anything stage E needed from this code is in git history —
+// and stage E has now run, taking the WASM loader, the fallback path and the
+// repair/REFLOW encoders with it.

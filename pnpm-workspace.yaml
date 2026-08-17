@@ -15,12 +15,12 @@ packages:
 # (inside the repo the probe is worthless — resolution escapes upward into the
 # source tree and every lookup succeeds):
 #
-#   UNRESOLVABLE from apps/web/server.js | MODULE_NOT_FOUND   (z3-solver)
 #   FAIL pdfkit MODULE_NOT_FOUND
 #   ok exceljs  .../node_modules/.pnpm/exceljs@4.4.0/...      (root-level, worked)
 #
 # exceljs resolving and the other two not is the tell: root-level presence is the
-# whole difference. Both failures are silent in production — z3 falls back to LLM
+# whole difference. Both failures are silent in production — the scheduler falls
+# back to LLM
 # repair, a designed path, and pdfkit takes the export error path.
 #
 # This is deliberately three named packages rather than `node-linker=hoisted` or
@@ -38,4 +38,3 @@ packages:
 publicHoistPattern:
   - pdfkit
   - exceljs
-  - z3-solver

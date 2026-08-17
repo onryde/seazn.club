@@ -9,7 +9,8 @@
 // thread that does a dynamic `require()` of the transport target, which a
 // bundler (Next.js standalone tracing, Turbopack) cannot statically follow —
 // see `apps/web/next.config.js`'s `serverExternalPackages` comment for the
-// same class of failure with z3-solver's WASM file. Plain JSON-to-stdout has
+// same class of failure with a package that reads a data file off disk.
+// Plain JSON-to-stdout has
 // no such seam: `import pino from "pino"` is an ordinary static import a
 // bundler traces like any other dependency.
 import pino from "pino";

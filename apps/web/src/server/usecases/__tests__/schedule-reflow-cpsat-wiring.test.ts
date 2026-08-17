@@ -15,7 +15,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
-const calls = vi.hoisted(() => ({ buildSchedule: 0, repairSchedule: 0 }));
+const calls = vi.hoisted(() => ({ buildSchedule: 0 }));
 
 vi.mock("@seazn/engine/scheduling", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@seazn/engine/scheduling")>();
@@ -24,10 +24,6 @@ vi.mock("@seazn/engine/scheduling", async (importOriginal) => {
     buildSchedule: async (input: Parameters<typeof actual.buildSchedule>[0]) => {
       calls.buildSchedule++;
       return actual.buildSchedule(input);
-    },
-    repairSchedule: async (input: Parameters<typeof actual.repairSchedule>[0]) => {
-      calls.repairSchedule++;
-      return actual.repairSchedule(input);
     },
   };
 });
@@ -114,13 +110,16 @@ async function seedStage(): Promise<{ auth: AuthCtx; stageId: string }> {
   return { auth, stageId: stage.id };
 }
 
-describe.skipIf(!HAS_DB)("REFLOW calls buildSchedule, never repairSchedule (C4 wiring)", () => {
+describe.skipIf(!HAS_DB)("REFLOW calls buildSchedule (C4 wiring)", () => {
   it("routes a reflow invocation through the placement client, not z3's repair solver", async () => {
     const { auth, stageId } = await seedStage();
 
     await autoSchedule(auth, stageId, { only_unlocked: true, mode: "reflow" });
 
     expect(calls.buildSchedule).toBeGreaterThan(0);
-    expect(calls.repairSchedule).toBe(0);
+    // The "never repairSchedule" half of this assertion retired with the
+    // function in C8: there is no z3 repair encoder left to call, so the fact
+    // is now structural rather than tested. What still needs asserting — that
+    // REFLOW reaches the placement service at all — is the line above.
   }, 120_000);
 });

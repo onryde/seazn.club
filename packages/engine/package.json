@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Pure tournament engine for seazn.club \u2014 zero effectful deps (design corpus: engine/).",
+  "description": "Pure tournament engine for seazn.club — zero effectful deps (design corpus: engine/).",
   "exports": {
     "./core": "./src/core/index.ts",
     "./sport": "./src/sport/index.ts",
@@ -44,7 +44,6 @@
     "@bufbuild/protobuf": "^2.13.0",
     "@grpc/grpc-js": "^1.14.4",
     "pino": "^10.3.1",
-    "z3-solver": "5.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -54,8 +53,8 @@
     "fast-check": "^3",
     "protoc": "35.1.0",
     "ts-proto": "2.12.0",
-    "typescript-eslint": "^8",
     "typescript": "6.0.3",
+    "typescript-eslint": "^8",
     "typescript-native": "npm:typescript@7.0.2",
     "vitest": "^4.1.9"
   }

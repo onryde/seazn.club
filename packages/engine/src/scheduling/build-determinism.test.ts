@@ -15,7 +15,6 @@
 // never fired and the comparison is not two truncated runs agreeing by luck.
 import { describe, expect, it } from "vitest";
 import { buildSchedule, TIER_COUNT } from "./build.ts";
-import { resetZ3 } from "./z3-load.ts";
 import type { SchedulableFixture, SlotConfig } from "./calendar.ts";
 
 const MIN = 60_000;
@@ -61,7 +60,6 @@ describe.skip("buildSchedule determinism", () => {
     // Not vacuous: a run that stopped before T0 would also match itself.
     expect(a.tiersCompleted).toBe(TIER_COUNT);
     expect(a.budgetExpired).toBe(false);
-    await resetZ3();
   }, 180_000);
 
   it("returns the same board under two different wall-clock caps", async () => {
@@ -73,7 +71,6 @@ describe.skip("buildSchedule determinism", () => {
     expect(a.tiersCompleted).toBe(TIER_COUNT);
     expect(a.budgetExpired).toBe(false);
     expect(b.budgetExpired).toBe(false);
-    await resetZ3();
   }, 240_000);
 
   // --- the window fallback ---------------------------------------------------
@@ -122,6 +119,5 @@ describe.skip("buildSchedule determinism", () => {
     // tiers and never opened a window at all.
     expect(a.tiersCompleted).toBeLessThan(4);
     expect(a.budgetExpired).toBe(true);
-    await resetZ3();
   }, 240_000);
 });

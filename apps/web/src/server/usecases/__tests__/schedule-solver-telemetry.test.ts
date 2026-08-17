@@ -27,9 +27,7 @@ import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
   buildSchedule,
-  resetZ3,
   slotFixtures,
-  z3LoadCount,
   type SchedulableFixture,
   type SlotConfig,
   type VerifyConfig,
@@ -778,10 +776,9 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
    * process abort node with `Cannot enlarge memory arrays … (OOM)`; that is not
    * a hypothetical, it is what the first run of this very file did.
    *
-   * `z3LoadCount()` reads "loads since the last reset", so a zero after a run
-   * that demonstrably booted the WASM is the teardown having happened. The
-   * `toBeGreaterThan(0)` on the way in is what stops this passing on a run that
-   * never loaded z3 at all.
+   * That teardown, and the load counter that witnessed it, went with the
+   * solver in C8. Kept as the record of why the shape of this file is what it
+   * is.
    */
   // REWRITTEN BY THE PLACEMENT CUTOVER. Its old witness was
   // `expect(witness.rlimitSpent).toBeGreaterThan(0)` — a delta of z3's own
@@ -830,7 +827,6 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
   it.skipIf(!HAS_SOLVER)("solves BUILD without booting the z3 WASM at all", async () => {
     const auth = await seedOrg();
     const { stageId } = await seedStage(auth, 5);
-    await resetZ3();
 
     const out = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
 
@@ -853,15 +849,13 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
     // What is NOT a race is that the service ANSWERED. Every fallback status
     // (`solver_unavailable`, `solver_busy`, `not_searched`) is excluded below,
     // so this still fails loudly if the solve never reached the service —
-    // which is the failure this test exists to catch, and what makes the
-    // `z3LoadCount()` check non-vacuous rather than a 0 that means "nothing
-    // ran".
+    // which is the failure this test exists to catch.
     expect(["ok", "already_optimal"]).toContain(out.solver.status);
 
-    // The point of the test, and the one thing that must never drift: BUILD
-    // reaches the remote solver and boots no WASM at all.
-    expect(z3LoadCount()).toBe(0);
-    await resetZ3();
+    // The "and boots no WASM at all" half of this test was a z3 load-counter
+    // assertion. C8 deleted the counter with the solver, so the fact is now
+    // structural: there is no WASM left to boot. The status assertion above is
+    // what still carries the point — BUILD reached the remote solver.
   }, 120_000);
 
   /** The two blocks are REQUIRED on the wire (Task 8), so every mode has to

@@ -170,43 +170,20 @@ const RETIRED_CLAIMS: readonly { path: string; pattern: string; nowTrue: string 
 const OWNED_BY_C7: string[] = [];
 
 /** Owned by stage E: the solver, its WASM plumbing, its benches, and the tests
- *  that boot it. These files carry accurate z3 prose — they still run z3 — and
- *  the prose goes when the file does. */
-const OWNED_BY_C8 = [
-  "apps/web/src/__tests__/toolchain.test.ts",
-  "apps/web/src/lib/__tests__/z3-tracing-config.test.ts",
-  "apps/web/src/lib/capacity-input.ts",
-  "apps/web/src/lib/health-input.ts",
-  "apps/web/src/server/logger.ts",
-  "packages/engine/src/scheduling/build-encode-parity.test.ts",
-  "packages/engine/src/scheduling/build-encode-rules.test.ts",
-  "packages/engine/src/scheduling/build-encode.ts",
-  "packages/engine/src/scheduling/build-lns-wiring.test.ts",
-  "packages/engine/src/scheduling/build-lns.test.ts",
-  "packages/engine/src/scheduling/build-lns.ts",
-  "packages/engine/src/scheduling/logger.ts",
-  "packages/engine/src/scheduling/repair-decompose.test.ts",
-  "packages/engine/src/scheduling/repair-decompose.ts",
-  "packages/engine/src/scheduling/repair-scale.test.ts",
-  "packages/engine/src/scheduling/repair-subminute.test.ts",
-  "packages/engine/src/scheduling/repair-verify.test.ts",
-  "packages/engine/src/scheduling/repair.test.ts",
-  "packages/engine/src/scheduling/repair.ts",
-  "packages/engine/src/scheduling/solver-test-bounds.ts",
-  "packages/engine/src/scheduling/z3-handle-release.test.ts",
-  "packages/engine/src/scheduling/z3-load.test.ts",
-  "packages/engine/src/scheduling/z3-load.ts",
-  "packages/engine/src/scheduling/z3-serialisation.test.ts",
-  // The benches and harnesses. `bench-repair.ts` and `bench-decompose.ts` are
-  // named in C8's file set outright; the other four survive as files but lose
-  // their z3 imports with `z3-load.ts`, so their entries here go either way.
-  "packages/engine/scripts/bench-ai-repair-cpsat.ts",
-  "packages/engine/scripts/bench-decompose.ts",
-  "packages/engine/scripts/bench-reflow.ts",
-  "packages/engine/scripts/bench-repair.ts",
-  "packages/engine/scripts/probe-lns-gate.ts",
-  "packages/engine/scripts/repair-cpsat-harness.ts",
-];
+ *  that boot it.
+ *
+ *  EMPTY since C8 (2026-08-17) shipped stage E. Every file that was listed here
+ *  is deleted — the encoder, the LNS fallback, the WASM loader, the repair
+ *  solver, their tests and their benches — along with the dependency and both
+ *  halves of the `next.config` plumbing.
+ *
+ *  The list was an UNDERCOUNT of the work: the ledger named the files that
+ *  mentioned z3, not the files that would stop compiling once they were gone.
+ *  Deleting it took four more engine test files, a `next.config` helper, the
+ *  pnpm hoist pattern, the Dockerfile note, and eleven `apps/web` tests that
+ *  spied on z3 to prove it was NOT called — assertions that become structural
+ *  when the function stops existing. */
+const OWNED_BY_C8: string[] = [];
 
 /** Neither stage's: prose that is TRUE today. Two shapes, both legitimate —
  *  a guard proving z3 is NOT called (`z3LoadCount`, `resetZ3` hygiene), and
@@ -231,9 +208,7 @@ const ACCURATE_TODAY = [
   "apps/web/src/server/usecases/__tests__/schedule-ai-repair.test.ts",
   "apps/web/src/server/usecases/__tests__/schedule-ai-solver.test.ts",
   "apps/web/src/server/usecases/__tests__/schedule-auto-cooldown.test.ts",
-  "apps/web/src/server/usecases/__tests__/schedule-auto-day-spread.test.ts",
   "apps/web/src/server/usecases/__tests__/schedule-auto-feed-order.test.ts",
-  "apps/web/src/server/usecases/__tests__/schedule-auto-solver-busy-latency.test.ts",
   "apps/web/src/server/usecases/__tests__/schedule-auto-tx-boundary.test.ts",
   "apps/web/src/server/usecases/__tests__/schedule-capacity-guard.test.ts",
   "apps/web/src/server/usecases/__tests__/schedule-default-day-spread.test.ts",
@@ -254,8 +229,6 @@ const ACCURATE_TODAY = [
   "packages/engine/src/scheduling/build-pins.test.ts",
   "packages/engine/src/scheduling/build-polish.test.ts",
   "packages/engine/src/scheduling/build-rest-lattice.test.ts",
-  "packages/engine/src/scheduling/build-teardown.test.ts",
-  "packages/engine/src/scheduling/build-wall.test.ts",
   "packages/engine/src/scheduling/build.test.ts",
   "packages/engine/src/scheduling/build.ts",
   "packages/engine/src/scheduling/capacity.test.ts",
@@ -263,7 +236,10 @@ const ACCURATE_TODAY = [
   "packages/engine/src/scheduling/health.test.ts",
   "packages/engine/src/scheduling/index.ts",
   "packages/engine/src/scheduling/repair-decompose-cpsat.ts",
+  "packages/engine/src/scheduling/repair-decompose.test.ts",
+  "packages/engine/src/scheduling/repair-decompose.ts",
   "packages/engine/src/scheduling/repair-domain.test.ts",
+  "packages/engine/src/scheduling/z3-dependency-retired.test.ts",
   "packages/engine/src/scheduling/repair-domain.ts",
   "scripts/repro-ai-bracket-frozen-feeder.ts",
   "scripts/smoke.ts",

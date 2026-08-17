@@ -35,7 +35,6 @@
 // to provide.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildSchedule, TIER_COUNT, TIER_NAMES } from "./build.ts";
-import { resetZ3 } from "./z3-load.ts";
 import type { Assignment, SchedulableFixture, SlotConfig } from "./calendar.ts";
 import type { SolveBuildOutcome } from "./placement-client.ts";
 
@@ -146,7 +145,6 @@ describe("buildSchedule — polish", () => {
     // an opinion about a board nobody finished looking at.
     expect(out.tiersCompleted).toBe(TIER_COUNT);
     expect(out.budgetExpired).toBe(false);
-    await resetZ3();
   }, 120_000);
 
   it("improves an unpublished card and leaves every frozen one alone", async () => {
@@ -159,7 +157,6 @@ describe("buildSchedule — polish", () => {
     expect({ court: pub.court, startAt: pub.startAt }).toEqual({ court: "C1", startAt: T0 });
     // The draft joins it rather than trailing behind it.
     expect(out.metrics.makespanMinutes).toBe(30);
-    await resetZ3();
   }, 120_000);
 
   // NOTE ON WHAT THE TWO CASES ABOVE DO **NOT** COVER — this is survivor M10.
@@ -216,7 +213,6 @@ describe("buildSchedule — polish", () => {
     // the two happening to coincide.
     expect(a.startAt).not.toBe(T0);
     expect(out.metrics.placed).toBe(2);
-    await resetZ3();
   }, 120_000);
 
   it("measures `moved` from the caller's board, not from the greedy seed", async () => {
@@ -259,7 +255,6 @@ describe("buildSchedule — polish", () => {
     );
     const seedBaseline = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
     expect(seedBaseline.moved).toBe(0);
-    await resetZ3();
   }, 120_000);
 
   it("treats an EMPTY current as no board at all", async () => {
@@ -281,7 +276,6 @@ describe("buildSchedule — polish", () => {
     // Pinned absolutely as well as relatively: equality alone would hold if both
     // arms drifted to the same wrong number.
     expect(empty.moved).toBe(0);
-    await resetZ3();
   }, 120_000);
 
   it("reports a card the run could not place as LOST, not as nothing", async () => {
@@ -321,7 +315,6 @@ describe("buildSchedule — polish", () => {
     // Asserted as a PAIR: the old conflated number could not tell this board
     // apart from one where a card had merely shifted slot.
     expect(out.lost).toBe(1);
-    await resetZ3();
   }, 120_000);
 
   it("does not count a seed row the solver dropped as lost", async () => {
@@ -396,7 +389,6 @@ describe("buildSchedule — polish", () => {
     // The invariant the conflated number broke, stated in its own right: a strip
     // rendering "moved N" beside this board cannot print an N larger than it.
     expect(held.moved).toBeLessThanOrEqual(held.assignments.length);
-    await resetZ3();
   }, 120_000);
 
   it("does not call a starved run optimal, however little it moved", async () => {
@@ -442,7 +434,6 @@ describe("buildSchedule — polish", () => {
     // `rlimit` arming and the accounting gate — and an inequality cannot say
     // which one did the work, nor that no tier ran at all.
     expect(out.tiersCompleted).toBe(0);
-    await resetZ3();
   }, 120_000);
 
   it("proves optimality off the tiers, not off the mode", async () => {
@@ -470,6 +461,5 @@ describe("buildSchedule — polish", () => {
       tiers: polished.tiersCompleted,
     });
     expect(built.status).toBe("already_optimal");
-    await resetZ3();
   }, 120_000);
 });

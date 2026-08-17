@@ -6,7 +6,7 @@
 // organiser set none of their own, so the auto pass spreads by default.
 //
 // Sized deliberately to fit under the R22 size gate (`canSolveWithin`) and
-// actually reach z3, not just the greedy fallback: this is the path the
+// actually reach the solver, not just the greedy fallback: this is the path the
 // production board (37 fixtures / 5 courts, ~77k fixture-slots) does NOT
 // take — that board is still too large for the gate even at the 20s wall and
 // falls back to greedy, which separately honors `max_fixtures_per_day` at
@@ -16,7 +16,6 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const { sql } = await import("@/lib/db");
-const { resetZ3 } = await import("@seazn/engine/scheduling");
 const { createCompetition } = await import("../competitions");
 const { createDivision } = await import("../divisions");
 const { createEntrants } = await import("../entrants");
@@ -106,7 +105,6 @@ async function seedStage(entrantCount: number): Promise<{ auth: AuthCtx; stageId
 
 afterAll(async () => {
   if (!HAS_DB) return;
-  await resetZ3();
   await sql.end({ timeout: 5 });
 });
 

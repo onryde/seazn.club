@@ -46,7 +46,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildSchedule } from "./build.ts";
 import { boardMetrics, isStrictlyBetter } from "./build-objectives.ts";
 import { isBlockingConflict, slotFixtures, validateAssignments } from "./calendar.ts";
-import { resetZ3 } from "./z3-load.ts";
 import type { Assignment, SchedulableFixture, SlotConfig } from "./calendar.ts";
 
 const MIN = 60_000;
@@ -97,13 +96,7 @@ describe("buildSchedule run budget", () => {
   // rlimit) are the heaviest in the suite, so inheriting an already-grown heap
   // kills the worker outright: it passes 3/3 in isolation and dies with a bare
   // `STACK_TRACE_ERROR` in a full run, which reads as a flake and is not one.
-  beforeAll(async () => {
-    await resetZ3();
-  });
 
-  afterAll(async () => {
-    await resetZ3();
-  });
 
   it.skip("bounds the WHOLE run, not each check", async () => {
     // `generous` is the control, and it is what makes the rest non-vacuous: it

@@ -7,8 +7,8 @@
 // callback. Before the solver wave the in-transaction work was a synchronous
 // `slotFixtures` pass — microseconds. It is now up to `AUTO_SOLVER_WALL_MS` of
 // solving (a network round trip to the placement service, or — historically,
-// pre-C4, for REFLOW — a `resetZ3()` that must first queue behind any
-// concurrent solve's `withZ3Lock`). A solve inside the transaction is
+// pre-C4, for REFLOW — a solver teardown that had to queue behind any
+// concurrent solve's process-wide lock). A solve inside the transaction is
 // therefore tens of seconds of idle-in-transaction per organiser click, and a
 // handful of concurrent clicks exhausts the pool and stalls database traffic
 // for the whole application — an outage reached from a feature that "works"
@@ -65,10 +65,6 @@ vi.mock("@seazn/engine/scheduling", async (importOriginal) => {
     buildSchedule: (input: Parameters<typeof actual.buildSchedule>[0]) => {
       tx.solveDepths.push(tx.depth);
       return actual.buildSchedule(input);
-    },
-    repairSchedule: (input: Parameters<typeof actual.repairSchedule>[0]) => {
-      tx.solveDepths.push(tx.depth);
-      return actual.repairSchedule(input);
     },
   };
 });

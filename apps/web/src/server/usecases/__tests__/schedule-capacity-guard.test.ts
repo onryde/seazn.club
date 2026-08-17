@@ -8,7 +8,6 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { z3LoadCount } from "@seazn/engine/scheduling";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -105,23 +104,19 @@ describe.skipIf(!HAS_DB)("autoSchedule — D2 capacity guard wiring", () => {
     const { stageId } = await seedRoundRobin(auth, [
       { from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" },
     ]);
-    const z3Before = z3LoadCount();
     await expect(autoSchedule(auth, stageId, { only_unlocked: true, mode: "reflow" })).rejects.toMatchObject({
       status: 422,
       code: "CAPACITY_IMPOSSIBLE",
     });
-    // REFLOW's solve phase WAS the local z3 repair solver, and this counter
-    // was direct proof the run never reached it: `z3LoadCount` is a
-    // per-process WASM-load counter (`z3-load.ts`), so an unchanged count
-    // meant no solve happened.
+    // A z3 WASM-load-counter assertion sat here and was DELETED, not ported,
+    // in C8. It once proved the run never reached REFLOW's local solver; C4
+    // moved REFLOW onto `buildSchedule`, after which the counter could not
+    // move on this path whatever happened, and C6 recorded it as vacuous and
+    // due to die with the counter. The 422 above is what proves the guard
+    // fired.
     //
-    // C4 moved REFLOW onto `buildSchedule` (CP-SAT), so this assertion can no
-    // longer fail on this path — nothing here loads z3 whether the guard fires
-    // or not. It is kept, unchanged, only because it is harmless and belongs
-    // to the same deletion as `z3LoadCount` itself (z3 retirement stage E).
-    // What actually proves the guard fired is the 422 above; if you want the
-    // "never reached the solver" fact back, spy on `placement-client` instead.
-    expect(z3LoadCount()).toBe(z3Before);
+    // OWED: the "never reached the solver" fact itself is now untested. A spy
+    // on `placement-client` restores it, and is the shape to use.
   });
 
   it("loosening the single binding constraint (the session window, to the whole day) exits impossible", async () => {
