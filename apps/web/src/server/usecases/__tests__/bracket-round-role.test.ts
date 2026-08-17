@@ -210,4 +210,42 @@ describe.skipIf(!HAS_DB)("generateStageFixtures — persists bracket round role 
     expect(rows.filter((r) => r.is_final).length).toBeGreaterThan(0);
     expect(rows.some((r) => r.conditional)).toBe(true); // the bracket-reset game
   });
+
+  // Post-merge code review, defect 1: the fix for "a bye renders TBD" only
+  // ever reached previewDivisionFixtures (stages.ts:886, the wizard's
+  // in-memory preview) — the REAL insert path persisted away_slot_label =
+  // NULL for a bye's phantom side, so every real renderer (public bracket,
+  // stages-panel, bracket-panel, ~15 more) fell through resolveSlotLabel's
+  // null-label branch to "TBD". Confirmed against a live division before the
+  // fix: has_away=false, away_slot_label=NULL. A bye is known at setup and
+  // never resolves to anyone, so "TBD" tells an organiser to wait for
+  // something that is not coming. This test goes through generateStageFixtures
+  // and reads the PERSISTED column, not previewDivisionFixtures's in-memory
+  // shape, so it actually covers the path real users hit.
+  it("persists a Bye slot label on a bye's phantom side, not a null that renders TBD (review finding: defect 1)", async () => {
+    // 6 entrants -> buildSingleElim pads to 8 slots -> 2 byes in round 0: a
+    // real entrant lands on `home`, `away` is never filled, ever.
+    const { auth, stageId } = await seedKnockoutStage(6, {});
+    await generateStageFixtures(auth, stageId);
+
+    const rows = await sql<
+      {
+        ext_key: string | null;
+        status: string;
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
+        away_slot_label: { key: string; params: Record<string, unknown> } | null;
+      }[]
+    >`
+      select ext_key, status, home_entrant_id, away_entrant_id, away_slot_label
+      from fixtures where stage_id = ${stageId} order by round_no, seq_in_round`;
+
+    const byeRows = rows.filter((r) => r.status === "forfeited");
+    expect(byeRows.length).toBeGreaterThan(0); // 6-into-8 always produces byes
+    for (const row of byeRows) {
+      expect(row.home_entrant_id).not.toBeNull(); // the awarded side is real
+      expect(row.away_entrant_id).toBeNull(); // the phantom side is never filled
+      expect(row.away_slot_label).toEqual({ key: "bracket.slot.bye", params: {} });
+    }
+  });
 });

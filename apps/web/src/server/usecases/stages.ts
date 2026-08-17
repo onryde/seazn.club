@@ -1129,6 +1129,19 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
       const key = from.side === "loser" ? "slot.loser_match" : "slot.winner_match";
       return { key, params };
     };
+    // Review finding (defect 1): a bye is known at setup and never resolves
+    // to anyone — "TBD" tells an organiser to wait for something that is not
+    // coming (same rationale previewDivisionFixtures already applies at its
+    // own bye branch above). The engine always lands the award on `home`
+    // (buildSingleElim), so in practice this only ever fires for `away`, but
+    // both sides are guarded symmetrically rather than assuming that engine
+    // detail here. Stored at INSERT time, not derived at render time: this
+    // is the ONE place a bye's phantom side is decided, so every renderer
+    // that already goes through resolveSlotLabel (public bracket, console
+    // stages/bracket panels, …) picks it up for free, the same way every
+    // other slot label on this row already does.
+    const byeSlotLabel = (isBye: boolean): { key: string; params: Record<string, never> } | null =>
+      isBye ? { key: "bracket.slot.bye", params: {} } : null;
 
     // First pass: all new fixtures in one multi-row insert. Ids are generated
     // client-side so the feed/bye passes can reference them without relying
@@ -1147,8 +1160,8 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
           seq_in_round: g.seqInRound,
           home_entrant_id,
           away_entrant_id,
-          home_slot_label: home_entrant_id ? null : matchSlotLabel(g.homeFrom),
-          away_slot_label: away_entrant_id ? null : matchSlotLabel(g.awayFrom),
+          home_slot_label: home_entrant_id ? null : (byeSlotLabel(g.award !== undefined) ?? matchSlotLabel(g.homeFrom)),
+          away_slot_label: away_entrant_id ? null : (byeSlotLabel(g.award !== undefined) ?? matchSlotLabel(g.awayFrom)),
           ext_key: g.extKey,
           status: g.award !== undefined ? "forfeited" : "scheduled",
           outcome: g.award !== undefined ? JSON.stringify({ kind: "award", winner: g.award }) : null,
