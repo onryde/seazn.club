@@ -19,7 +19,7 @@
 //   * the floor is not greedy's board, it is greedy's LEGAL board. Counting a
 //     card that carries a blocking conflict as "placed" is what let an illegal
 //     greedy board outrank every legal one D3 could reach.
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_SOLVER_QUEUE,
   TIER_COUNT, TIER_NAMES,
@@ -34,10 +34,8 @@ import {
   scopeCoversFixture,
   slotFixtures,
   validateAssignments,
-  validateInstructionRules,
   type Assignment,
   type Conflict,
-  type RuleFixture,
   type SchedulableFixture,
   type ScopeRow,
   type SlotConfig,

@@ -7,24 +7,18 @@
 // these tests are first of all tests of the partition, because a partition that
 // separates two fixtures which can actually collide is a partition that hands
 // the solver a board the verifier then rejects.
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { Assignment, OrderDependency, VerifyConfig } from "./calendar.ts";
 import { validateAssignments } from "./calendar.ts";
 import {
   dayCapGuard,
   repairComponents,
-  type DecomposedRepairResult,
-  type RepairComponentReport,
 } from "./repair-decompose.ts";
 import { disjointConflictBound } from "./repair-minimality.ts";
-import { singleComponentBoard } from "./repair-synthetic-board.ts";
+import {} from "./repair-synthetic-board.ts";
 import {
-  atABudgetThatReachesTheSolver,
-  scaleForLoad,
-  timedUnderLoad,
 } from "./solver-test-bounds.ts";
 
-const SOLVE_TIMEOUT = 120_000;
 
 
 

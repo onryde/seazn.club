@@ -55,8 +55,6 @@
 //      — see `repair-minimality.ts`.
 import {
   effectiveHard,
-  isBlockingConflict,
-  validateAssignments,
   type Assignment,
   type Conflict,
   type OrderDependency,
@@ -65,10 +63,9 @@ import {
 import {
   maxSeparationMinutes,
   sharesParticipant,
-  sortFamilies,
   type RepairFamily,
 } from "./repair-domain.ts";
-import { disjointConflictBound, type MinimalityWitness } from "./repair-minimality.ts";
+import { type MinimalityWitness } from "./repair-minimality.ts";
 
 const MS_PER_MIN = 60_000;
 

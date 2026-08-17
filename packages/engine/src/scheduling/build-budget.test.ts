@@ -42,7 +42,7 @@
 // Asserting BOTH the tier count and the spend is deliberate: the tier count
 // alone would also move if the model got harder, and the spend alone would also
 // move if a check got cheaper.
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildSchedule } from "./build.ts";
 import { boardMetrics, isStrictlyBetter } from "./build-objectives.ts";
 import { isBlockingConflict, slotFixtures, validateAssignments } from "./calendar.ts";

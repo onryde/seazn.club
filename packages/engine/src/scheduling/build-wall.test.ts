@@ -13,13 +13,9 @@
 // place, because a second copy of it is a placer/verifier fork wearing a
 // different hat, which is the defect shape this subsystem has hit three times.
 import {
-  afterAll,
-  afterEach,
-  beforeAll,
   describe,
   expect,
   it,
-  vi,
 } from "vitest";
 import { MAX_SOLVE_ENCODING, canSolveWithin } from "./build.ts";
 import { buildGrid } from "./build-grid.ts";
