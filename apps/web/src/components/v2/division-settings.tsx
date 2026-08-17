@@ -4,7 +4,7 @@
 // Danger zone, tap-per-section. The format section renders read-only once
 // fixtures exist; patchDivision enforces the same rule (409 FORMAT_LOCKED),
 // so hiding and enforcement can't drift.
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { apiV1 } from "@/lib/client-v1";
@@ -13,6 +13,7 @@ import { MatchRuleFields, buildRuleOverride } from "./match-rules";
 import { STAGE_TEMPLATES, buildTemplateStages, detectTemplate } from "./format-templates";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { TagChipInput } from "@/components/ui/tag-chip-input";
 import type { MessageKey } from "@/lib/messages";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 
@@ -33,6 +34,16 @@ export interface DivisionSettingsInfo {
   config: unknown;
   logo_url: string | null;
   logo_storage_path: string | null;
+  /** D5/P9 candidate-court filter (tags ⊇ required_court_tags; empty = any
+   *  court) — stored and read back by this picker (server: PatchDivision +
+   *  COLS, usecases/divisions.ts); not yet READ by scheduling or
+   *  candidate-court filtering, which is P9's. Optional (not required) so
+   *  existing callers/fixtures that predate this field — the page always
+   *  passes it, but division-settings-entrants.test.tsx and any other
+   *  DivisionSettingsInfo fixture do not — keep compiling and rendering; the
+   *  component defaults a missing value to "no requirement" rather than
+   *  throwing. */
+  required_court_tags?: string[];
 }
 
 function Group({
@@ -99,6 +110,7 @@ async function fileToWebp(file: File, max: number): Promise<Blob> {
 
 export function DivisionSettings({
   division,
+  orgId,
   variants,
   locked,
   stages,
@@ -113,6 +125,9 @@ export function DivisionSettings({
   canAutoPost,
 }: {
   division: DivisionSettingsInfo;
+  /** Org id, for the tag-suggestions fetch only (the division PATCH itself
+   *  is not org-scoped in its URL) — see saveRequiredCourtTags below. */
+  orgId: string;
   variants: { key: string; name: string }[];
   /** formatLocked() from the page — fixtures exist. */
   locked: boolean;
@@ -176,11 +191,46 @@ export function DivisionSettings({
   const [squadNumbers, setSquadNumbers] = useState<boolean>(entrantModel.squadNumbers);
   const [captain, setCaptain] = useState<boolean>(entrantModel.captain);
   const [autoPostsOn, setAutoPostsOn] = useState<boolean>(autoPosts);
+  // D5/P8 required-court-tags picker (design doc §"Division settings:
+  // required-tags picker"). Staged locally, explicit Save — same shape as
+  // the Entrants block above, not autosave-per-chip like venues-panel's
+  // court tags, because this file's OWN convention (every other multi-field
+  // section here) is stage-then-Save.
+  const [requiredCourtTags, setRequiredCourtTags] = useState<string[]>(division.required_court_tags ?? []);
+  const [courtTagSuggestions, setCourtTagSuggestions] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputId = `division-logo-${division.id}`;
   const hue = divisionAccent(division.id);
+
+  // Tag suggestions for the picker below: every tag currently used by any
+  // court in the org, ranked by count (same rule venues-panel.tsx applies to
+  // a court's own tags — see `rankTagsByCount` there). A soft enhancement,
+  // not core function: this tab has no other reason to fetch venues, so a
+  // failure here is swallowed rather than surfaced as a page error.
+  useEffect(() => {
+    let cancelled = false;
+    apiV1<{ courts: { tags: string[] }[] }[]>(`/api/v1/orgs/${orgId}/venues`)
+      .then((venues) => {
+        if (cancelled) return;
+        const counts = new Map<string, number>();
+        for (const v of venues) {
+          for (const c of v.courts) {
+            for (const tag of c.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+          }
+        }
+        setCourtTagSuggestions(
+          [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([tag]) => tag),
+        );
+      })
+      .catch(() => {
+        /* suggestions are a nicety — free-form entry still works without them */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId]);
 
   async function run(fn: () => Promise<void>, done: string) {
     setBusy(true);
@@ -339,6 +389,18 @@ export function DivisionSettings({
       }
     }, msg("divset.news.saved"));
   };
+
+  // D5/P8 gap closed: PatchDivision (server/api-v1/schemas.ts) and COLS
+  // (usecases/divisions.ts) now carry `required_court_tags`, normalised on
+  // write with the same normalizeTags() the courts path uses. Not read by
+  // scheduling/candidate-court filtering — that stays P9's.
+  const saveRequiredCourtTags = () =>
+    run(async () => {
+      await apiV1(`/api/v1/divisions/${division.id}`, {
+        method: "PATCH",
+        json: { required_court_tags: requiredCourtTags },
+      });
+    }, msg("divset.requiredTags.saved"));
 
   return (
     <div className="max-w-2xl space-y-3" data-testid="division-settings">
@@ -702,6 +764,34 @@ export function DivisionSettings({
           </button>
         )}
         <p className="text-[11px] text-slate-400">{msg("divset.entrants.note")}</p>
+      </Group>
+
+      <Group
+        title={msg("divset.requiredTags.title")}
+        summary={requiredCourtTags.length > 0 ? requiredCourtTags.join(", ") : msg("divset.requiredTags.any")}
+      >
+        <p className="text-xs text-slate-500">{msg("divset.requiredTags.desc")}</p>
+        <TagChipInput
+          value={requiredCourtTags}
+          onChange={setRequiredCourtTags}
+          suggestions={courtTagSuggestions}
+          disabled={!canEdit}
+          label={msg("divset.requiredTags.label")}
+          placeholder={msg("tags.placeholder")}
+          addLabel={msg("tags.add")}
+          removeLabelFor={(tag) => msg("tags.remove", { tag })}
+          suggestionsLabel={msg("tags.suggestions")}
+        />
+        {canEdit && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={saveRequiredCourtTags}
+            className="btn btn-primary text-xs"
+          >
+            {msg("divset.requiredTags.save")}
+          </button>
+        )}
       </Group>
 
       <Group

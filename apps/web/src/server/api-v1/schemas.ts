@@ -175,6 +175,14 @@ export const PatchDivision = z
      *  FORMAT_LOCKED and re-validates via the pinned module schema. */
     variant_key: z.string().min(1).max(100),
     config: z.record(z.string(), z.unknown()),
+    /** D5/P8 candidate-court filter (design doc "Tag semantics"): a court
+     *  must carry every one of these tags; empty = any court. Normalised
+     *  (trim/lowercase/dedupe) by usecases/divisions.ts via the SAME
+     *  normalizeTags() the courts path uses — same shape, same rules, one
+     *  copy. Stored and read back only; not yet read by scheduling or
+     *  candidate-court filtering (P9), and `stages.required_court_tags`
+     *  (V367) stays unwired for the same reason — both are P9's. */
+    required_court_tags: z.array(z.string().min(1).max(40)).max(50),
   })
   .partial()
   .refine((p) => Object.keys(p).length > 0, "empty patch");
@@ -199,6 +207,7 @@ export const Division = z.object({
   auto_posts: z.boolean(),
   archived_at: z.string().nullable(), // v3/09 §4 — set = archived (hidden, restorable)
   created_at: z.string(),
+  required_court_tags: z.array(z.string()), // D5/P8 candidate-court filter; see PatchDivision above
 });
 
 // ---------------------------------------------------------------------------
@@ -3408,5 +3417,86 @@ export const MergeLog = z.object({
       reversed_at: z.string().nullable(),
     }),
   ),
+});
+
+// Venues & courts (D5/P8) -----------------------------------------------------
+// Runtime validation lives in usecases/venues.ts (the actual parseBody
+// schemas the routes use); these mirror that shape for OpenAPI generation
+// only, same split as the Sponsor CRM group above.
+
+export const CourtHoursRangeS = z.object({
+  weekday: z.number().int().min(0).max(6),
+  open_min: z.number().int().min(0).max(1440),
+  close_min: z.number().int().min(0).max(1440),
+});
+
+export const CourtExceptionS = z.object({
+  date: z.string(),
+  closed: z.boolean(),
+  open_min: z.number().int().nullable(),
+  close_min: z.number().int().nullable(),
+});
+
+/** Plain court row — the create/patch response shape. */
+export const Court = z.object({
+  id: Uuid,
+  venue_id: Uuid,
+  name: z.string(),
+  sort: z.number().int(),
+  tags: z.array(z.string()),
+  archived_at: z.string().nullable(),
+  created_at: z.string(),
+});
+
+/** A court nested under a venue in the list response, its full calendar
+ *  embedded — there is no separate GET for a court or its calendar. */
+export const CourtWithCalendar = Court.extend({
+  hours: z.array(CourtHoursRangeS),
+  exceptions: z.array(CourtExceptionS),
+});
+
+/** Plain venue row — the create/patch response shape. */
+export const Venue = z.object({
+  id: Uuid,
+  name: z.string(),
+  address: z.string().nullable(),
+  sort: z.number().int(),
+  archived_at: z.string().nullable(),
+  created_at: z.string(),
+});
+
+export const VenueWithCourts = Venue.extend({
+  courts: z.array(CourtWithCalendar),
+});
+
+export const CreateVenue = z.object({
+  name: z.string().min(1).max(200),
+  address: z.string().max(500).nullish(),
+  sort: z.number().int().default(0),
+});
+
+export const PatchVenue = CreateVenue.partial();
+
+export const CreateCourt = z.object({
+  name: z.string().min(1).max(200),
+  sort: z.number().int().default(0),
+  tags: z.array(z.string().min(1).max(40)).max(50).default([]),
+});
+
+export const PatchCourt = CreateCourt.partial();
+
+export const PutCourtCalendar = z.object({
+  hours: z.array(CourtHoursRangeS).max(200).default([]),
+  exceptions: z.array(CourtExceptionS).max(500).default([]),
+});
+
+export const CourtCalendar = z.object({
+  court_id: Uuid,
+  hours: z.array(CourtHoursRangeS),
+  exceptions: z.array(CourtExceptionS),
+  /** Advisory only (owner ruling): unplayed fixtures on this court that the
+   *  new calendar no longer covers. Non-blocking — the write already
+   *  happened; the real conflict code is P10's. */
+  strandedFixtureCount: z.number().int(),
 });
 export type MergeLog = z.infer<typeof MergeLog>;

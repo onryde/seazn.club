@@ -184,6 +184,12 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
       allowancePx: test.info().project.name === "mobile-320" ? 6 : undefined,
     },
     { path: "/directory" },
+    // D5/P8 venues & courts — Directory tab, not org settings (A2). Without
+    // this entry the seven width projects never render the venue list or
+    // the per-court calendar editor at all; gallery.capture.ts's own
+    // "venues" capture (320/768/1280) shows the calendar editor OPEN, which
+    // this route-level pass cannot — see that harness for the layout check.
+    { path: "/directory?tab=venues" },
     { path: "/import" },
     { path: "/my-matches" },
     // P4/D1a wizard step 0 — the template gallery. A 6-card grid, which is the
@@ -194,6 +200,68 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
   for (const { path, allowancePx } of routes) {
     await auditRoute(page, path, { allowancePx });
   }
+});
+
+// P8/D5a added a FOURTH Directory tab, which pushed "Venues" past the right
+// edge of the tab strip at 320: you land on the venues tab and cannot see
+// which tab is selected. The no-horizontal-scroll gate above is structurally
+// unable to catch this — `.scroll-x` means the strip is SUPPOSED to scroll, so
+// the page body never overflows and the audit passes while the active tab sits
+// off-screen. A full-page screenshot cannot be trusted here either: Chromium's
+// fullPage capture resets nested scroll containers, so the tab reads as hidden
+// in `gallery.capture.ts` output whether the fix works or not.
+//
+// Hence a geometry assertion against the scroller's own visible box. This is
+// the only instrument in the repo that can fail for the real reason.
+test("Directory: the active tab is scrolled into view at this width", async ({ page }) => {
+  await page.goto("/directory?tab=venues", { waitUntil: "load" });
+
+  const active = page.locator('nav [aria-current="page"]');
+  await expect(active).toHaveText(/venue/i);
+
+  // Proves the assertion below can actually fail: force the strip back to the
+  // unscrolled state this test exists to catch, and confirm the geometry check
+  // rejects it. Without this the test would pass on any width where the tabs
+  // happen to fit, and silently stop guarding anything.
+  const visibleWhenUnscrolled = await active.evaluate((el) => {
+    const nav = el.closest("nav")!;
+    const restore = nav.scrollLeft;
+    nav.scrollLeft = 0;
+    const tab = el.getBoundingClientRect();
+    const strip = nav.getBoundingClientRect();
+    const inView = tab.left >= strip.left - 1 && tab.right <= strip.right + 1;
+    nav.scrollLeft = restore;
+    return inView;
+  });
+  const overflows = await active.evaluate((el) => {
+    const nav = el.closest("nav")!;
+    return nav.scrollWidth > nav.clientWidth;
+  });
+  if (overflows) {
+    expect(
+      visibleWhenUnscrolled,
+      "control failed: the tab is reachable without scrolling, so this test proves nothing at this width",
+    ).toBe(false);
+  }
+
+  await expect
+    .poll(
+      async () =>
+        active.evaluate((el) => {
+          const nav = el.closest("nav");
+          if (!nav) return false;
+          const tab = el.getBoundingClientRect();
+          const strip = nav.getBoundingClientRect();
+          // Fully inside the scroller's visible box, 1px tolerance for
+          // sub-pixel layout. Deliberately NOT requiring the tab to clear the
+          // 24px `.scroll-x-fade` gradient: the LAST tab scrolled to the end
+          // sits flush against that edge by construction, so demanding fade
+          // clearance asserts something no correct implementation can satisfy.
+          return tab.left >= strip.left - 1 && tab.right <= strip.right + 1;
+        }),
+      { message: "the active Directory tab never scrolled inside the visible strip" },
+    )
+    .toBe(true);
 });
 
 // #516: an organiser who is ALSO a claimed player (nav.tsx's `isPlayer`,

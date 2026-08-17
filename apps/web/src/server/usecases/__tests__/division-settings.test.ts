@@ -86,6 +86,42 @@ describe.skipIf(!HAS_DB)("division logo columns (V274)", () => {
   });
 });
 
+describe.skipIf(!HAS_DB)("required_court_tags (D5/P8 gap close)", () => {
+  it("patch round-trips required_court_tags and getDivision returns it changed", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+    // V367's column default — a freshly created division requires no court.
+    expect(division.required_court_tags).toEqual([]);
+
+    const patched = await patchDivision(owner, division.id, {
+      required_court_tags: ["clay", "indoor"],
+    });
+    expect(patched.required_court_tags).toEqual(["clay", "indoor"]);
+
+    const fetched = await getDivision(owner, division.id);
+    expect(fetched.required_court_tags).toEqual(["clay", "indoor"]);
+
+    // Clearing back to "any court" round-trips too.
+    const cleared = await patchDivision(owner, division.id, {
+      required_court_tags: [],
+    });
+    expect(cleared.required_court_tags).toEqual([]);
+  });
+
+  it("normalises on write with the SAME helper the courts path uses — trims, lowercases, dedupes", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+
+    const patched = await patchDivision(owner, division.id, {
+      required_court_tags: [" Clay ", "clay"],
+    });
+    expect(patched.required_court_tags).toEqual(["clay"]);
+
+    const fetched = await getDivision(owner, division.id);
+    expect(fetched.required_court_tags).toEqual(["clay"]);
+  });
+});
+
 describe.skipIf(!HAS_DB)("format lock (v8)", () => {
   it("variant/config edits work until fixtures exist, then 409 FORMAT_LOCKED", async () => {
     const owner = await seedOwner();

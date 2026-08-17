@@ -509,7 +509,9 @@ export default async function DivisionPage({
               // survives remounts (tab switches) — same fix as the card.
               logo_url: resolveLogoUrl(division.logo_storage_path, division.logo_url),
               logo_storage_path: division.logo_storage_path,
+              required_court_tags: division.required_court_tags,
             }}
+            orgId={auth.orgId}
             variants={await listVariantOptions(auth, division.sport_key)}
             locked={formatLocked([{ fixture_count: fixtures.length }])}
             stages={stages.map((st) => ({
