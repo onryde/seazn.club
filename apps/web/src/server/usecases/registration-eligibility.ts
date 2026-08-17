@@ -162,6 +162,16 @@ export function requiresDob(
  * RS002). A null gender is only an issue where the division actually needs
  * one — `mens`/`womens` here, or a jsonb gender rule.
  *
+ * Precedence when a division carries BOTH a jsonb `GenderRule` and a
+ * `mens`/`womens` category (owner ruling, 2026-08-17 review, recorded in
+ * `_INDEX.md`'s RS002 session rulings): within one person's evaluation the
+ * same code never fires twice, and if the jsonb loop above already emitted a
+ * gender-family code (`MISSING_GENDER` or `GENDER_NOT_ALLOWED`) for this
+ * person, the category block below emits NOTHING further for gender — the
+ * organiser-authored jsonb rule is the more specific statement and wins.
+ * Roster-level `MIXED_NEEDS_BOTH_GENDERS` is unaffected by this: it is a
+ * property of the roster, not of a person, and always fires independently.
+ *
  * Age band: evaluated at 1 January of `seasonStartYear` — never "today" —
  * matching the jsonb rules' `cutoff.yearOf: "season_start"` branch exactly,
  * deliberately: a season-long division must not change who is eligible
@@ -218,7 +228,13 @@ export function divisionEligibilityIssues(
     }
   }
 
-  if (division.category === "mens" || division.category === "womens") {
+  const jsonbAlreadyFlaggedGender = issues.some(
+    (i) => i.code === "MISSING_GENDER" || i.code === "GENDER_NOT_ALLOWED",
+  );
+  if (
+    !jsonbAlreadyFlaggedGender &&
+    (division.category === "mens" || division.category === "womens")
+  ) {
     const needed = division.category === "mens" ? "m" : "f";
     if (!person.gender) {
       issues.push({ code: "MISSING_GENDER", message: "Gender is required for this division." });

@@ -87,20 +87,58 @@ describe("requiresDob (division-aware overload, V364) — unaffected by the code
   });
 });
 
-describe("eligibilityIssues (legacy string[] wrapper, unchanged signature per entry-condition item 5)", () => {
-  it("is a thin wrapper over the structured path — provably equivalent, not re-derived", () => {
-    const rules = [{ kind: "gender", allowed: ["f", "x"] }];
-    const person = { gender: "m" };
-    const direct = eligibilityIssues(rules, person, 2026);
-    const viaStructured = formatEligibilityIssues(
-      divisionEligibilityIssues(
-        { eligibility: rules, category: null, age_min: null, age_max: null },
-        person,
-        2026,
-      ),
-    );
-    expect(direct).toEqual(viaStructured);
-    expect(direct).toHaveLength(1); // not vacuously green
+describe("eligibilityIssues (legacy string[] wrapper) — literal English is pinned per code", () => {
+  // Review finding (MAJOR, post-W2b): comparing eligibilityIssues(...) against
+  // formatEligibilityIssues(divisionEligibilityIssues(...)) is tautological —
+  // that IS eligibilityIssues' own implementation (registration-eligibility.ts,
+  // the `eligibilityIssues` function body), so the comparison cannot fail.
+  // These assertions hardcode the literal sentence instead: the legacy wrapper
+  // exists so existing callers keep seeing BYTE-IDENTICAL text, so something
+  // has to pin the actual bytes, not just "whatever the code currently does".
+  const ageRule = [
+    {
+      kind: "age",
+      maxAgeAt: 15,
+      minAgeAt: 10,
+      cutoff: { month: 1, day: 1, yearOf: "season_start" as const },
+    },
+  ];
+  const genderRule = [{ kind: "gender", allowed: ["f"] }];
+
+  it("MISSING_DOB", () => {
+    // Reverting registration-eligibility.ts:182-185 (the jsonb age branch's
+    // MISSING_DOB push) changes this string and reds the test.
+    expect(eligibilityIssues(ageRule, { dob: null }, 2026)).toEqual([
+      "Date of birth is required for this age-restricted division.",
+    ]);
+  });
+
+  it("AGE_TOO_OLD", () => {
+    // Pins registration-eligibility.ts:193-198 (age 16 > maxAgeAt 15).
+    expect(eligibilityIssues(ageRule, { dob: "2010-01-01" }, 2026)).toEqual([
+      "Too old for this division (must be 15 or younger on the cutoff date).",
+    ]);
+  });
+
+  it("AGE_TOO_YOUNG", () => {
+    // Pins registration-eligibility.ts:200-205 (age 9 < minAgeAt 10).
+    expect(eligibilityIssues(ageRule, { dob: "2017-01-01" }, 2026)).toEqual([
+      "Too young for this division (must be 10 or older on the cutoff date).",
+    ]);
+  });
+
+  it("GENDER_NOT_ALLOWED", () => {
+    // Pins registration-eligibility.ts:211-216.
+    expect(eligibilityIssues(genderRule, { gender: "m" }, 2026)).toEqual([
+      "This division is not open to your gender category.",
+    ]);
+  });
+
+  it("MISSING_GENDER", () => {
+    // Pins registration-eligibility.ts:209-210 (the jsonb gender branch).
+    expect(eligibilityIssues(genderRule, { gender: null }, 2026)).toEqual([
+      "Gender is required for this division.",
+    ]);
   });
 
   it("still returns [] for an eligible input (string[] contract unchanged)", () => {
@@ -203,6 +241,51 @@ describe("divisionEligibilityIssues — category (mens/womens), x never blocks",
     for (const gender of ["m", "f", "x", null]) {
       expect(divisionEligibilityIssues(mixed, { gender }, 2026)).toEqual([]);
     }
+  });
+});
+
+describe("divisionEligibilityIssues — one code per root cause (jsonb GenderRule + mens/womens category overlap)", () => {
+  // Review finding (MINOR 1): a division carrying BOTH a jsonb GenderRule and
+  // a mens/womens category used to double-emit for one person — MISSING_GENDER
+  // from both blocks, or GENDER_NOT_ALLOWED + CATEGORY_MISMATCH together.
+  // Ruling: the jsonb rule (organiser-authored, more specific) wins; the
+  // category block emits nothing further for gender once jsonb already has.
+  const bothSources: EligibilityDivision = {
+    eligibility: [{ kind: "gender", allowed: ["m"] }],
+    category: "mens",
+    age_min: null,
+    age_max: null,
+  };
+
+  it("gender=null yields exactly ONE MISSING_GENDER, not two", () => {
+    // Reverting the dedup guard on registration-eligibility.ts's category
+    // block (the `!jsonbGenderIssue &&` condition) makes this a 2-element
+    // array again and reds.
+    expect(codesOf(divisionEligibilityIssues(bothSources, { gender: null }, 2026))).toEqual([
+      { code: "MISSING_GENDER" },
+    ]);
+  });
+
+  it("a gender failing both sources yields only GENDER_NOT_ALLOWED — jsonb wins over CATEGORY_MISMATCH", () => {
+    expect(codesOf(divisionEligibilityIssues(bothSources, { gender: "f" }, 2026))).toEqual([
+      { code: "GENDER_NOT_ALLOWED", meta: { allowed: ["m"] } },
+    ]);
+  });
+
+  it("roster-level MIXED_NEEDS_BOTH_GENDERS still fires independently — it is a roster property, not a person one", () => {
+    const mixedWithJsonbRule: EligibilityDivision = {
+      eligibility: [{ kind: "gender", allowed: ["m", "f"] }], // both pass this jsonb rule
+      category: "mixed",
+      age_min: null,
+      age_max: null,
+    };
+    const players: EligibilityRosterPlayer[] = [
+      { full_name: "A", gender: "m" },
+      { full_name: "B", gender: "m" }, // both pass jsonb; roster still lacks an f
+    ];
+    expect(codesOf(rosterIssues(mixedWithJsonbRule, players, 2026))).toEqual([
+      { code: "MIXED_NEEDS_BOTH_GENDERS" },
+    ]);
   });
 });
 
@@ -335,13 +418,27 @@ describe("rosterIssues — mixed composition (roster-wide, MIXED_NEEDS_BOTH_GEND
     expect(rosterIssues(mixed, players, 2026)).toEqual([]);
   });
 
-  it("m + f + x satisfies the mixed rule", () => {
+  it("m + f + x still satisfies the mixed rule (x present, roster already has both)", () => {
     const players: EligibilityRosterPlayer[] = [
       { full_name: "A", gender: "m" },
       { full_name: "B", gender: "f" },
       { full_name: "C", gender: "x" },
     ];
     expect(rosterIssues(mixed, players, 2026)).toEqual([]);
+  });
+
+  it("m + x FAILS the mixed rule — x satisfies neither side, it does not substitute for the missing f", () => {
+    // Review finding (MINOR 2): the m+f+x case above proves nothing about x,
+    // since hasM/hasF are already both true from m and f alone — it would
+    // pass regardless of what x did. THIS case is the one with teeth: if x
+    // wrongly counted toward hasF, this roster would be reported eligible.
+    const players: EligibilityRosterPlayer[] = [
+      { full_name: "A", gender: "m" },
+      { full_name: "B", gender: "x" },
+    ];
+    expect(codesOf(rosterIssues(mixed, players, 2026))).toEqual([
+      { code: "MIXED_NEEDS_BOTH_GENDERS" },
+    ]);
   });
 
   it("an all-x roster fails the mixed rule, with NO per-player gender issue", () => {

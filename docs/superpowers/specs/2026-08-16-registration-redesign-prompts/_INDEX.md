@@ -292,6 +292,19 @@ Rulings taken (recorded as made):
 - **`materialise` writes `registration_players.person_id`** — the column exists
   (V363) and nothing sets it, so the roster→person link that RS005/RS008/#404
   all read was inert.
+- **jsonb `GenderRule` wins over the `mens`/`womens` category block for the
+  same person** (review ruling, 2026-08-17, `registration-eligibility.ts`): a
+  division carrying BOTH a jsonb gender rule and a first-class category used
+  to double-emit for one root cause — `MISSING_GENDER` from both blocks, or
+  `GENDER_NOT_ALLOWED` **and** `CATEGORY_MISMATCH` together. Fixed: within one
+  person's evaluation the same code never fires twice; once the jsonb loop has
+  emitted a gender-family code (`MISSING_GENDER`/`GENDER_NOT_ALLOWED`) for
+  that person, the category block emits nothing further for gender — the
+  organiser-authored jsonb rule is the more specific statement and wins.
+  Roster-level `MIXED_NEEDS_BOTH_GENDERS` is a property of the roster, not the
+  person, and is unaffected — it still fires independently. Matters beyond
+  this session: this file is now shared with RS011, whose override dialog
+  would otherwise render two rows for one problem.
 
 **Wave 1 CLOSED** (`130d3f6a`, `d53554e0`, `f31abc21`). V367 applies on the
 session DB and from zero (206 migrations → v367). The review loop found a
