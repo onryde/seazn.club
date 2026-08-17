@@ -9,7 +9,7 @@ import type { LineupPair, StageCtx } from "../core/types.ts";
 import { generic, type GenericCfg } from "../sports/generic/generic.ts";
 import { makeEnvelope } from "../testkit/helpers.ts";
 import type { FixtureResult } from "./standings.ts";
-import { resolveQualification } from "./qualification.ts";
+import { resolveProgression, type ProgressionSpec } from "./progression.ts";
 import {
   completeBracketStage,
   completeTableStage,
@@ -126,9 +126,22 @@ function runDivision(): { champion: string; events: DivisionEvent[]; finalRanks:
   events.push(...completedGroups.events);
 
   // --- Qualification: A1,B1,A2,B2 seed the bracket (cross-pool template). ---
-  const seeds = resolveQualification(
-    { from: "groups", take: [{ pool: "A", rank: 1 }, { pool: "B", rank: 1 }, { pool: "A", rank: 2 }, { pool: "B", rank: 2 }] },
-    completedGroups.tables,
+  const progressionSpec: ProgressionSpec = {
+    sources: [
+      {
+        stage: "previous",
+        take: [
+          {
+            kind: "picks",
+            picks: [{ pool: "A", rank: 1 }, { pool: "B", rank: 1 }, { pool: "A", rank: 2 }, { pool: "B", rank: 2 }],
+          },
+        ],
+      },
+    ],
+    placement: "rank_order",
+  };
+  const seeds = resolveProgression(progressionSpec, [{ poolKeys: ["A", "B"] }], [completedGroups.tables]).qualifiers.map(
+    (q) => q.entrantId,
   );
 
   // --- Knockout stage: seeded SE bracket to the final. ---

@@ -17,11 +17,11 @@ import {
   type TableStage,
 } from "../competition/stage.ts";
 import {
-  qualificationSize,
-  resolveQualification,
-  type QualificationSpec,
-  type StageTables,
-} from "../competition/qualification.ts";
+  progressionSize,
+  resolveProgression,
+  type ProgressionSpec,
+  type SourceTables,
+} from "../competition/progression.ts";
 import type { FixtureResult } from "../competition/standings.ts";
 import { EngineError } from "../core/errors.ts";
 import { foldMatch, type EventEnvelope } from "../core/events.ts";
@@ -112,11 +112,11 @@ export interface SimStageRecord {
   kind: StageKind;
   entrants: EntrantId[];
   fixtures: SimFixtureRecord[];
-  tables?: StageTables;
+  tables?: SourceTables;
   cascade?: TiebreakerKey[]; // table stages: the ranking cascade applied
   legs?: number; // round robins: pairings repeat exactly this often (Jul3/08 §2)
   finalRanks: EntrantId[];
-  qualification?: { spec: QualificationSpec; seeds: EntrantId[] }; // feed to the next stage
+  qualification?: { spec: ProgressionSpec; seeds: EntrantId[] }; // feed to the next stage
 }
 
 export interface SimInjectionRecord {
@@ -485,7 +485,7 @@ function toRecord(
 
 interface PlayedTableStage {
   record: SimStageRecord;
-  tables: StageTables;
+  tables: SourceTables;
   finalRanks: EntrantId[];
 }
 
@@ -790,16 +790,20 @@ function playBracketStage(
 
 function qualify(
   stageRecord: SimStageRecord,
-  spec: QualificationSpec,
-  tables: StageTables,
+  spec: ProgressionSpec,
+  tables: SourceTables,
 ): EntrantId[] {
-  const seeds = resolveQualification(spec, tables);
+  // The simulation harness only ever builds single-source specs, so
+  // `spec.sources[0]!.take` is exact for progressionSize (not an
+  // approximation), and `[{ poolKeys: [] }]` is safe regardless of the
+  // source's real pool shape — neither rankRange nor picks (the only two
+  // TakeRule kinds this harness emits) reads shape.poolKeys.
+  const size = progressionSize(spec.sources[0]!.take);
+  const { qualifiers } = resolveProgression(spec, [{ poolKeys: [] }], [tables]);
+  const seeds = qualifiers.map((q) => q.entrantId);
   stageRecord.qualification = { spec, seeds };
-  if (seeds.length !== qualificationSize(spec)) {
-    throw new SimInvariantError(
-      `qualification produced ${seeds.length} seeds, spec wants ${qualificationSize(spec)}`,
-      { spec },
-    );
+  if (seeds.length !== size) {
+    throw new SimInvariantError(`qualification produced ${seeds.length} seeds, spec wants ${size}`, { spec });
   }
   if (new Set(seeds).size !== seeds.length) {
     throw new SimInvariantError(`qualification seeds not distinct`, { seeds });
@@ -873,14 +877,25 @@ export function simulateDivision(opts: SimOptions): SimulationResult {
       const groups = playRoundRobinStage(ctx, "groups", "group", pools, seeds);
       stages.push(groups.record);
 
-      const spec: QualificationSpec =
+      const spec: ProgressionSpec =
         poolCount === 1
-          ? { from: "groups", topN: Math.min(4, n) }
+          ? {
+              sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: Math.min(4, n) }] }],
+              placement: "rank_order",
+            }
           : {
-              from: "groups",
-              take: [1, 2].flatMap((rank) =>
-                pools.map((pool) => ({ pool: pool.poolId, rank })),
-              ),
+              sources: [
+                {
+                  stage: "previous",
+                  take: [
+                    {
+                      kind: "picks",
+                      picks: [1, 2].flatMap((rank) => pools.map((pool) => ({ pool: pool.poolId, rank }))),
+                    },
+                  ],
+                },
+              ],
+              placement: "rank_order",
             };
       const qualified = qualify(groups.record, spec, groups.tables);
       const koSeeds = seedMap(qualified);
@@ -900,7 +915,10 @@ export function simulateDivision(opts: SimOptions): SimulationResult {
       const swiss = playSwissStage(ctx, "swiss", entrants, seeds);
       stages.push(swiss.record);
 
-      const spec: QualificationSpec = { from: "swiss", topN: Math.min(4, n) };
+      const spec: ProgressionSpec = {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: Math.min(4, n) }] }],
+        placement: "rank_order",
+      };
       const qualified = qualify(swiss.record, spec, swiss.tables);
       const koSeeds = seedMap(qualified);
       const ko = playBracketStage(
@@ -1143,7 +1161,8 @@ export function assertDivisionInvariants(
     // Qualification counts (spec 05 §6): output size = next stage's input size.
     if (stage.qualification !== undefined) {
       const { spec, seeds } = stage.qualification;
-      if (seeds.length !== qualificationSize(spec)) {
+      // Single-source only, per the harness's own qualify() — see its comment.
+      if (seeds.length !== progressionSize(spec.sources[0]!.take)) {
         fail(sim, `stage "${stage.id}" qualification size mismatch`, stage.qualification);
       }
       for (const id of seeds) {
