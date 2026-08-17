@@ -489,15 +489,88 @@ describe("parser vocabulary limits (#398)", () => {
     expect(RawParsed.safeParse(bad).success).toBe(false);
   });
 
-  it("tells the model that a per-player cap is NOT max_fixtures_per_day", () => {
-    // Without this the model's only landing spot for "no player plays more than
-    // twice a day" is a board-wide cap — a drastically different, wrong rule.
-    expect(PARSER_PROMPT).toMatch(/PER-PLAYER/);
+  it("gives a per-player cap a universal scope, and still warns off competition scope", () => {
+    // INVERTED 2026-08-17. Rule 8 used to send "no player plays more than twice
+    // a day" to `unparsed`, because the only landing spot was a board-wide cap —
+    // a drastically different, wrong rule. `every_person` is now that landing
+    // spot, so the prompt states a right answer instead of a prohibition. The
+    // WARNING has to survive the inversion: competition scope is still wrong
+    // here, and it is the failure that silently caps a 60-player event at two.
+    expect(PARSER_PROMPT).toMatch(/every_person/);
+    expect(PARSER_PROMPT).toMatch(/every_entrant/);
+    expect(PARSER_PROMPT).toMatch(/60-player/);
+    // A rule naming ONE entrant still defers — the id-invention objection that
+    // keeps `entrant`/`person`/`pool` out has not gone away, it just never
+    // applied to the two id-less scopes.
     expect(PARSER_PROMPT).toMatch(/unparsed VERBATIM/);
+  });
+
+  it("accepts the universal scopes and still rejects the id-bearing ones", () => {
+    const universal = {
+      hard: [{ type: "max_fixtures_per_day", count: 2, scope: { kind: "every_person" } }],
+      soft: [],
+      unparsed: [],
+    };
+    expect(RawParsed.safeParse(universal).success).toBe(true);
+    const perEntry = {
+      hard: [{ type: "max_fixtures_per_day", count: 2, scope: { kind: "every_entrant" } }],
+      soft: [],
+      unparsed: [],
+    };
+    expect(RawParsed.safeParse(perEntry).success).toBe(true);
+    // The control: a scope needing an id the model was never shown is still out.
+    const pooled = {
+      hard: [{ type: "max_fixtures_per_day", count: 2, scope: { kind: "pool", divisionId: "d1", pool: "A" } }],
+      soft: [],
+      unparsed: [],
+    };
+    expect(RawParsed.safeParse(pooled).success).toBe(false);
   });
 
   it("does not advertise a scope it cannot be given the ids for", () => {
     expect(PARSER_PROMPT).not.toMatch(/"kind":"entrant"/);
     expect(PARSER_PROMPT).not.toMatch(/"kind":"pool"/);
+  });
+
+  it("keeps a whole-run cap and a per-player cap as SEPARATE rules, not rivals", () => {
+    // REGRESSION. `scopeKey` returned the literal "competition" for every scope
+    // that was not division-qualified. With only two kinds in the union that was
+    // the same thing as `scope.kind`; with the universal scopes added it meant a
+    // per-player cap and a whole-run cap shared one `conflictKeyOf` identity, so
+    // `refuseContradictions` treated two rules that can obviously both hold as
+    // contradictory and dropped one. "Run at most 10 a day AND no player more
+    // than 2" is the sentence an organiser of a one-day event actually writes.
+    const resolved = resolveParsed(
+      {
+        hard: [
+          { type: "max_fixtures_per_day", count: 10, scope: { kind: "competition" } },
+          { type: "max_fixtures_per_day", count: 2, scope: { kind: "every_person" } },
+        ],
+        soft: [],
+        unparsed: [],
+      } as never,
+      CLOCK,
+      TZ,
+    );
+    const caps = resolved.hard.filter((h) => h.type === "max_fixtures_per_day");
+    expect(caps).toHaveLength(2);
+    expect(caps.map((c) => c.scope.kind).sort()).toEqual(["competition", "every_person"]);
+  });
+
+  it("says a universal cap was applied, before the organiser meets an impossible board", () => {
+    // A per-person cap is a real tightening: a 60-player one-day event capped at
+    // 2 may have no legal board at all, and what the organiser meets is
+    // unschedulable fixtures with no stated reason.
+    const resolved = resolveParsed(
+      {
+        hard: [{ type: "max_fixtures_per_day", count: 2, scope: { kind: "every_person" } }],
+        soft: [],
+        unparsed: [],
+      } as never,
+      CLOCK,
+      TZ,
+    );
+    expect(resolved.assumptions.join(" ")).toMatch(/each PLAYER/);
+    expect(resolved.assumptions.join(" ")).toMatch(/2 matches a day/);
   });
 });
