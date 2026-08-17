@@ -143,3 +143,66 @@ Both hard gates cleared before start:
 - 2026-08-17 — gates verified, worktree + DB + placement up, scout re-pin
   complete, two rulings above recorded. Implementation starting: server tier
   (migration → usecase → routes → openapi) first, UI tier second.
+
+- 2026-08-17 — **server tier + Directory UI + i18n DONE and gate-green.**
+  Orchestrator's own measurement on a DB rebuilt from the current V367 (not an
+  agent's self-report): apps/web `src` **8395 total / 8323 passed / 4 failed**,
+  the 4 being `schedule-build-honours-locks` (pre-existing on main). tsc 0
+  errors, lint `✖ 75 problems (0 errors, 75 warnings)`, `check:rls` 58 tenant
+  tables naming all four new ones, i18n parity 4790 keys ×4, no OpenAPI drift.
+  Shipped: V367, `usecases/venues.ts`, 8 routes, archive at court AND venue
+  level, advisory stranded count, Directory venues tab, `venues-panel.tsx`,
+  reusable `components/ui/tag-chip-input.tsx`, calendar editor, division
+  required-tags picker, 84 `venues.*` keys ×4.
+
+- 2026-08-17 — **reviewer found 7, all closed.** The three that mattered:
+  `listVenues` filtered courts to non-archived regardless of the flag (archived
+  courts unreachable by ANY endpoint, making A5's toggle unbuildable); a
+  duplicate court name fell through to a raw 500 leaking the Postgres
+  constraint string while `unarchiveCourt` handled the same constraint cleanly
+  90 lines below; and `deleteVenue` was check-then-act with a cascading FK, so
+  a concurrently-created court was silently deleted instead of blocking. The
+  race was closed in BOTH layers — a `for update` lock AND `courts.venue_id`
+  changed to `on delete restrict`, so a bypassed guard fails loudly instead of
+  quietly. Its tests hold an uncommitted transaction open and poll
+  `pg_stat_activity` for `wait_event_type = 'Lock'`; a `Promise.all` proves
+  nothing here, per this repo's own `uniqueSlug` precedent.
+
+### Defects this session found AFTER "done" was reported
+
+Recorded because all three were invisible to a green suite:
+
+1. **3 real `tsc` errors reported as "tsc: clean (3 runs)".** `CourtException`
+   declares `open_min: number | null`; the zod input used `.nullish()`, which
+   infers it optional. Fixed at the parse boundary with `.default(null)`.
+   **vitest never typechecks**, and every existing exception test passed an
+   explicit `null` — the omitted wire form had no coverage at all.
+2. **`required_court_tags` was completely inert.** V367 adds the column to
+   `divisions` and `stages`, the picker holds and sends it, and
+   `grep -arn required_court_tags apps/web/src/server/` returned NOTHING — no
+   schema, no usecase. Save silently no-opped. Grep the server tier for a new
+   field's name before believing a picker persists.
+3. **A stale comment asserting an impossibility.** `venues-panel.tsx` carried a
+   comment explaining archived courts could not be shown, written against an API
+   limitation that the review-fix pass had already removed.
+
+### Process notes for the next session
+
+- **Three subagents ended their turn parked on background watchers** and
+  reported nothing. Work survived every time because they committed as they
+  went, but every report had to be reconstructed from the tree. Dispatch briefs
+  should mandate foreground verification explicitly.
+- **Never trust an agent's gate numbers.** Of three "green" reports, one hid 3
+  tsc errors, one hid two inert seams, and one measured against a stale schema.
+  Re-run the gate at the wave boundary — the standing rule earned its keep here.
+- Running vitest from the WORKTREE ROOT rather than `apps/web` under pnpm
+  under-collects by ~2600 tests while printing a plausible total. Cost this
+  session: one wrong conclusion (a new test file blamed for pollution it did
+  not cause).
+
+### Outstanding at compaction
+
+e2e spec; **`apps/web/e2e/mobile.spec.ts` console-routes array registration**
+(without it the seven width projects never see the surface); smoke suite;
+screenshots 1280/320/768; PR; `_INDEX.md` P8 row → DONE (its **P7 row is also
+stale** — still says "PR open" though `98e95c9e` merged).
