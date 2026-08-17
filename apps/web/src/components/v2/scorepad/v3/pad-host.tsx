@@ -833,14 +833,20 @@ export function PadHostV3(props: PadHostV3Props) {
               ? // R2b (owner ruling, freeHit chip removal): `history` is
                 // forwarded verbatim from ActivityPanel's own call (it
                 // already resolves per-row history — `priorActivityEvents`,
-                // activity.tsx). `view.cfg` is CAPTURED from this closure's
-                // own enclosing scope, not passed through ActivityPanel's
-                // prop contract at all — cfg is static per render (not a
-                // per-row fact), and this keeps ActivityPanel itself from
-                // ever having to learn cfg exists (SkinDefV3.activityDetail's
-                // own doc explains why).
+                // activity.tsx). `view.cfg` and `personNames` are CAPTURED
+                // from this closure's own enclosing scope, not passed
+                // through ActivityPanel's own prop contract at all — both
+                // are static per render (not a per-row fact), and this keeps
+                // ActivityPanel itself from ever having to learn either
+                // exists (SkinDefV3.activityDetail's own doc explains why).
+                // `personNames` (R2b, owner ruling, live-tile audit wave —
+                // "name the bowler"): the SAME map this component already
+                // resolves above (`const personNames = props.personNames ??
+                // NO_NAMES`) for the ribbon and for `<ActivityPanel
+                // personNames={personNames}>` itself — no new plumbing, just
+                // one more forward at a boundary `cfg` already crosses.
                 (eventType, payload, prev, history) =>
-                  props.skin.activityDetail!(t, eventType, payload, prev, history, view.cfg)
+                  props.skin.activityDetail!(t, eventType, payload, prev, history, view.cfg, personNames)
               : undefined
           }
         />

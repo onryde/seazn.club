@@ -122,4 +122,25 @@ describe("legacy parity — capabilities the v3 chassis must not lose", () => {
     );
     expect(scoringVocab).toContain('"pad.cricket.ribbon.innings.summary"');
   });
+
+  it("6. the bowler-changed activity note resolves a NAME, not a raw id — personNames is forwarded from host to skin", () => {
+    // Same shape as 3b's own gap: `cricketBallDetail` shipping a
+    // `personNames` parameter with passing unit tests proves nothing about
+    // the product if `pad-host.tsx`'s own call site never forwards the real
+    // map — exactly the "unit-tested function nothing calls" defect 3b
+    // exists to catch, one parameter over.
+    const cricket = readFileSync(join(V3, "skins", "cricket.tsx"), "utf8");
+    const types = readFileSync(join(V3, "types.ts"), "utf8");
+    // Non-greedy [\s\S]*? (not [^)]*): activityDetail's own first parameter
+    // (`t`) is itself an arrow-function TYPE with a `)` inside it
+    // (`(key: string, vars?: ...) => string`), so a paren-excluding class
+    // stops short of ever reaching personNames — found live, not assumed.
+    expect(types).toMatch(/activityDetail\?\([\s\S]*?personNames\?:/); // the contract accepts it
+    expect(cricket).toMatch(/function cricketBallDetail\([\s\S]*?personNames\?:/); // the skin reads it
+    // The host's own resolveDetail closure must pass personNames alongside
+    // cfg — not merely have it in scope (props.personNames is read for the
+    // ribbon and the ActivityPanel prop too; only the activityDetail call
+    // site proves THIS feature is wired).
+    expect(padHost).toMatch(/activityDetail!\(t, eventType, payload, prev, history, view\.cfg, personNames\)/);
+  });
 });

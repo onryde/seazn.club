@@ -666,15 +666,21 @@ export function freeHitPending(
  * row this file must reject itself). `bowlerChanged` below is what does
  * that rejection, via this file's own `BALL_EVENT_TYPES`.
  *
- * NAME-FREE by design, not by oversight: this function receives `t` but no
- * person-name map, so it cannot turn `bowler` (a raw id) into a display
- * name — `SkinDefV3.activityDetail`'s contract stops at `prev: {type,
- * payload}` (types.ts) plus, as of R2b, `history`/`cfg` (below) — and
- * reaching for a name would mean widening it further still (e.g. a resolver
- * function bundled alongside `prev`) beyond what this wave's brief
- * authorised. The dictionary copy below reads "New bowler" with no name — a
- * real but smaller usefulness cost than a widened contract every other
- * skin's `activityDetail` would also have to reckon with.
+ * NAMED as of R2b follow-up (owner ruling, live-tile audit wave — "name the
+ * bowler, not just 'New bowler'"): `personNames` (7th param, below) resolves
+ * `bowler` (a raw id) to a display name — same shape as `history`/`cfg`
+ * immediately below (an optional, additive, closure-captured data bag
+ * `pad-host.tsx` forwards verbatim from `PadHostView.personNames`, not a new
+ * kind of parameter — `ActivityPanel` already holds this exact map for its
+ * own `nameOf`, so no new plumbing exists between the DOM and this call,
+ * only one more forward at the boundary `cfg` already crosses). Falls back
+ * to `t("eventCopy.unknownPerson")` on a missing/unresolved id — the SAME
+ * fallback `bowlerBlockMessage` (this file, below) already uses for this
+ * exact bowler-naming problem elsewhere — and NEVER the raw id: an
+ * unresolved id in the activity log is worse than the name-free note it
+ * replaces, so this function does not fall back to the id the way
+ * `ActivityPanel`'s own `nameOf` (`personNames[id] ?? id`) safely can (that
+ * fallback never reaches composed prose; this one would).
  *
  * `history`/`cfg` (R2b, owner ruling — freeHit chip removal): when BOTH are
  * given, this ALSO appends a free-hit note — via the SAME `freeHitPending`
@@ -695,6 +701,7 @@ export function cricketBallDetail(
   prev?: { type: string; payload: Record<string, unknown> },
   history?: readonly { type: string; payload: Record<string, unknown> }[],
   cfg?: unknown,
+  personNames?: Readonly<Record<string, string>>,
 ): string | undefined {
   if (!BALL_EVENT_TYPES.has(eventType)) return undefined;
   const p = payload as {
@@ -703,7 +710,14 @@ export function cricketBallDetail(
     bowler?: unknown;
   };
   let detail = baseBallDetail(t, p);
-  if (bowlerChanged(p.bowler, prev)) detail = t("pad.cricket.ribbon.ball.bowlerChanged", { detail });
+  if (bowlerChanged(p.bowler, prev)) {
+    // `bowlerChanged` above already proved `p.bowler` is a non-empty
+    // string (its own doc) — re-narrowed here rather than cast, so this
+    // stays a genuine type guard, not an `as`.
+    const bowlerId = typeof p.bowler === "string" ? p.bowler : "";
+    const name = personNames?.[bowlerId] ?? t("eventCopy.unknownPerson");
+    detail = t("pad.cricket.ribbon.ball.bowlerChanged", { detail, name });
+  }
   if (history !== undefined && cfg !== undefined) {
     const whiteBall = asCfg(cfg).ballsPerInnings !== null;
     if (freeHitPending(history, whiteBall)) detail = t("pad.cricket.ribbon.ball.freeHit", { detail });

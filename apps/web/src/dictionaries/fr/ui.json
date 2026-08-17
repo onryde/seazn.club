@@ -3876,7 +3876,7 @@
   "pad.cricket.ribbon.ball.dot": "Balle sans course",
   "pad.cricket.ribbon.ball.run": "1 course",
   "pad.cricket.ribbon.ball.runs": "{runs} courses",
-  "pad.cricket.ribbon.ball.bowlerChanged": "{detail} — Nouveau lanceur",
+  "pad.cricket.ribbon.ball.bowlerChanged": "{detail} — Nouveau lanceur : {name}",
   "pad.cricket.ribbon.ball.freeHit": "{detail} — Free hit",
   "pad.cricket.tile.runs.0": "0",
   "pad.cricket.tile.runs.1": "1",

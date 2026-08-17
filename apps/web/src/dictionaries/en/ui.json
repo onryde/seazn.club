@@ -3876,7 +3876,7 @@
   "pad.cricket.ribbon.ball.dot": "Dot ball",
   "pad.cricket.ribbon.ball.run": "1 run",
   "pad.cricket.ribbon.ball.runs": "{runs} runs",
-  "pad.cricket.ribbon.ball.bowlerChanged": "{detail} — New bowler",
+  "pad.cricket.ribbon.ball.bowlerChanged": "{detail} — New bowler: {name}",
   "pad.cricket.ribbon.ball.freeHit": "{detail} — Free hit",
   "pad.cricket.tile.runs.0": "0",
   "pad.cricket.tile.runs.1": "1",

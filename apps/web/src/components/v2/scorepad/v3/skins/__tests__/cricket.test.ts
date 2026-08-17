@@ -470,11 +470,26 @@ describe("cricketBallDetail", () => {
 // parameter, `SkinDefV3.activityDetail`'s own widened contract, types.ts)
 // and APPENDS a note when they differ, rather than replacing the existing
 // dot/run/wicket/extra detail.
+//
+// R2b follow-up (owner ruling, live-tile audit wave — "name the bowler, not
+// just 'New bowler'"): the note now carries the RESOLVED display name via
+// the 7th, optional/additive `personNames` param — mirrors `cfg` (6th
+// param)'s own shape exactly (a static, closure-captured data bag
+// `pad-host.tsx` forwards verbatim), not a new kind of parameter. Falls back
+// to `t("eventCopy.unknownPerson")` on a missing/absent name — the SAME
+// fallback `bowlerBlockMessage` (cricket.tsx) already uses for the bowler
+// context slot — NEVER the raw personId, proved below by asserting the
+// output does not contain the id string at all, not merely that it takes
+// some other branch.
 describe("cricketBallDetail — bowler-changed note (R2b)", () => {
   const ball = (bowler: string, extra: Record<string, unknown> = {}) => ({
     type: "cricket.ball",
     payload: { bowler, runs: { bat: 0 }, ...extra },
   });
+  // R2b (owner ruling, live-tile audit defect 4 wave — "name the bowler"):
+  // the 7th, optional/additive `personNames` param — see this describe
+  // block's own new tests below for the id-genuinely-unknown fallback.
+  const names = { b1: "Ravi Bowler", b2: "Sam Spinner" };
 
   it("the same bowler across consecutive balls — no note appended", () => {
     const prev = ball("b1");
@@ -483,10 +498,10 @@ describe("cricketBallDetail — bowler-changed note (R2b)", () => {
     );
   });
 
-  it("a different bowler — the note is appended onto the existing base detail", () => {
+  it("a different bowler — the note is appended onto the existing base detail, carrying the RESOLVED name", () => {
     const prev = ball("b1");
-    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b2", runs: { bat: 1 } }, prev)).toBe(
-      'pad.cricket.ribbon.ball.bowlerChanged({"detail":"pad.cricket.ribbon.ball.run"})',
+    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b2", runs: { bat: 1 } }, prev, undefined, undefined, names)).toBe(
+      'pad.cricket.ribbon.ball.bowlerChanged({"detail":"pad.cricket.ribbon.ball.run","name":"Sam Spinner"})',
     );
   });
 
@@ -497,8 +512,37 @@ describe("cricketBallDetail — bowler-changed note (R2b)", () => {
       "cricket.ball",
       { bowler: "b2", wicket: { kind: "bowled" }, runs: { bat: 0 } },
       prev,
+      undefined,
+      undefined,
+      names,
     );
-    expect(result).toBe('pad.cricket.ribbon.ball.bowlerChanged({"detail":"wicket.bowled"})');
+    expect(result).toBe('pad.cricket.ribbon.ball.bowlerChanged({"detail":"wicket.bowled","name":"Sam Spinner"})');
+  });
+
+  it("no personNames given at all — falls back to the unknown-person copy, never the raw id", () => {
+    const prev = ball("b1");
+    const result = cricketBallDetail(t, "cricket.ball", { bowler: "b2", runs: { bat: 1 } }, prev);
+    expect(result).toBe(
+      'pad.cricket.ribbon.ball.bowlerChanged({"detail":"pad.cricket.ribbon.ball.run","name":"eventCopy.unknownPerson"})',
+    );
+    expect(result).not.toContain("b2"); // never a raw personId
+  });
+
+  it("a personNames map that does not cover the new bowler — same fallback, never the raw id", () => {
+    const prev = ball("b1");
+    const result = cricketBallDetail(
+      t,
+      "cricket.ball",
+      { bowler: "b2", runs: { bat: 1 } },
+      prev,
+      undefined,
+      undefined,
+      { b1: "Ravi Bowler" }, // has b1, not the new bowler b2
+    );
+    expect(result).toBe(
+      'pad.cricket.ribbon.ball.bowlerChanged({"detail":"pad.cricket.ribbon.ball.run","name":"eventCopy.unknownPerson"})',
+    );
+    expect(result).not.toContain("b2");
   });
 
   it("no prev at all (first ball of an innings) does not crash and does not claim a change", () => {
@@ -528,8 +572,8 @@ describe("cricketBallDetail — bowler-changed note (R2b)", () => {
   it("cricket.ball and cricket.superover.ball both count as BALL_EVENT_TYPES for this comparison", () => {
     const prev = ball("b1");
     expect(
-      cricketBallDetail(t, "cricket.superover.ball", { bowler: "b2", runs: { bat: 0 } }, prev),
-    ).toBe('pad.cricket.ribbon.ball.bowlerChanged({"detail":"pad.cricket.ribbon.ball.dot"})');
+      cricketBallDetail(t, "cricket.superover.ball", { bowler: "b2", runs: { bat: 0 } }, prev, undefined, undefined, names),
+    ).toBe('pad.cricket.ribbon.ball.bowlerChanged({"detail":"pad.cricket.ribbon.ball.dot","name":"Sam Spinner"})');
   });
 
   it("an empty-string bowler on either side never counts as a change — the bowling order not populated yet", () => {

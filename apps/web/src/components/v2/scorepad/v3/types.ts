@@ -550,6 +550,30 @@ export interface SkinDefV3<View = unknown> {
    * same "omitting is always safe" posture the owner's ruling on
    * `payload.freeHit` itself established for the dispatched-event side of
    * this exact feature.
+   *
+   * `personNames` (R2b, owner ruling, live-tile audit wave -- "name the
+   * bowler"): `PadHostView.personNames` verbatim -- same shape as `cfg`
+   * immediately above, not a new kind of parameter: a static,
+   * closure-captured data bag `pad-host.tsx`'s own `resolveDetail` closure
+   * forwards alongside `view.cfg`, never a resolver FUNCTION threaded
+   * through the contract (that would be a genuinely new direction for this
+   * method, unlike handing over one more read-only field it already has in
+   * scope). Exists because `cricketBallDetail`'s bowler-changed note used to
+   * be NAME-FREE by design -- it received `t` but no way to turn the raw
+   * `bowler` id on the payload into a display name, so the note read "New
+   * bowler" with nobody named. `ActivityPanel` (activity.tsx) already
+   * carries this exact map (its own `nameOf`), which is what "the resolver
+   * is on the CHASSIS side of the seam" means in practice: no new plumbing
+   * from the DOM down, only one more argument at the same host<->skin
+   * boundary `cfg` already crosses. A skin that resolves a name from this
+   * MUST fall back to something sane (e.g. `t("eventCopy.unknownPerson")`,
+   * the same fallback `bowlerBlockMessage`, cricket.tsx, already uses for
+   * this exact bowler-naming problem elsewhere in the same file) and must
+   * NEVER render the raw id -- unlike `ActivityPanel`'s own `nameOf`
+   * (`personNames[id] ?? id`), which is safe only because its output never
+   * reaches a skin's own composed prose. Optional/additive: every
+   * pre-existing call site, and every skin besides cricket, omits it and
+   * keeps compiling and behaving identically.
    */
   activityDetail?(
     t: (key: string, vars?: Record<string, string | number>) => string,
@@ -558,6 +582,7 @@ export interface SkinDefV3<View = unknown> {
     prev?: { type: string; payload: Record<string, unknown> },
     history?: readonly { type: string; payload: Record<string, unknown> }[],
     cfg?: unknown,
+    personNames?: Readonly<Record<string, string>>,
   ): string | undefined;
   /** Declares this skin's swap-sheet integration (design §2.7) — `null`
    *  when a swap is not applicable right now (e.g. no sub currently legal
