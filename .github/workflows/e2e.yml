@@ -11,22 +11,38 @@ name: E2E
 # applicable" rather than "untested". Separate GitHub Actions jobs have no
 # such chain — each runs and reports regardless of the others' outcome.
 #
-# `e2e-mobile` now also runs the FIVE width/device projects
-# (mobile-320/360/430, tablet-768/834) that `playwright.config.ts` has always
-# defined but that no workflow ever invoked — confirmed by grepping every
-# workflow file for their project names before this change; only mobile-se
-# (375) and mobile-14 (390) ever ran in CI. AGENTS.md calls the seven-width
-# matrix "the enforcement backstop"; it was 2 of 7 in practice. All seven now
-# run in ONE job with `--workers=1` (deliberately NOT one job per width): the
-# global `fullyParallel: true` config means Playwright runs projects
-# concurrently by default, and these seven all exercise mobile.spec.ts
-# against the SAME org minted by the `setup` project within one job — running
-# them concurrently is exactly the "7 width projects race each other over ONE
-# org" flakiness this repo has already hit (a settings-rename hangs 60s on a
-# disabled Save under contention). `--workers=1` serializes them: no race,
-# one DB/server/placement-container boot shared across all seven, at the cost
-# of losing cross-width parallelism — which nothing was actually paying for
-# before this change anyway, since 5 of the 7 never ran at all.
+# `e2e-mobile` also runs the FIVE width/device projects (mobile-320/360/430,
+# tablet-768/834) that `playwright.config.ts` has always defined but that no
+# workflow ever invoked — confirmed by grepping every workflow file for their
+# project names before that change; only mobile-se (375) and mobile-14 (390)
+# ever ran in CI. AGENTS.md calls the seven-width matrix "the enforcement
+# backstop"; it was 2 of 7 in practice.
+#
+# The seven are now spread over THREE matrix jobs (3 + 2 + 2 widths), each
+# still running its own group with `--workers=1`. Read the two constraints
+# separately, because an earlier version of this comment conflated them and
+# concluded "deliberately NOT one job per width":
+#
+#   * WITHIN a job, the widths must stay serialized. `fullyParallel: true` is
+#     global, so Playwright would otherwise run projects concurrently, and all
+#     seven exercise mobile.spec.ts against the SAME org minted by that job's
+#     `setup` project — the documented "7 width projects race each other over
+#     ONE org" flakiness (a settings-rename hangs 60s on a disabled Save under
+#     contention). `--workers=1` is therefore still mandatory per job and must
+#     not be raised.
+#   * ACROSS jobs there is no such race at all, for the reason the next
+#     paragraph already gives: `services:` are job-scoped, so each matrix leg
+#     migrates its own Postgres and mints its own `setup` org. Three legs are
+#     three isolated orgs, not three contenders for one.
+#
+# Why three and not seven: measured on run 32008189967 this job was 508s, of
+# which the Playwright step alone was 362s (7 projects x 21 tests at ~2.5s,
+# serialized). Setup is ~125s and is paid per leg. Three legs put the longest
+# leg at ~280s, which lands just under `e2e-parallel`'s slowest shard (305s on
+# the same run) — and that shard is the workflow's floor, so splitting finer
+# buys NOTHING in wall clock while paying setup seven times over. If
+# `e2e-parallel` ever gets faster, revisit the leg count against its new
+# slowest shard rather than against this job in isolation.
 #
 # Each job independently migrates its own fresh Postgres and mints its own
 # `setup`-project org — GitHub Actions `services:` are job-scoped, so there
@@ -501,17 +517,41 @@ jobs:
           docker rm -f placement-e2e >/dev/null 2>&1 || true
 
   # ---------------------------------------------------------------------
-  # v3/02 §4 viewport gate + #349 responsive matrix, all seven widths, in ONE
-  # job — see this file's header comment for why `--workers=1` and one job
-  # rather than one job per width: all seven run mobile.spec.ts against the
-  # SAME org this job's `setup` project mints, and running them concurrently
-  # is the documented "7 width projects race each other over ONE org"
-  # flakiness. Full suite per width (owner decision, spec §1): every gate
-  # assertion holds at every width; LCP self-pins to 375/390 inside the test.
+  # v3/02 §4 viewport gate + #349 responsive matrix, all seven widths, spread
+  # over three matrix legs. See this file's header comment for the two separate
+  # constraints: `--workers=1` is mandatory WITHIN a leg (the widths in a leg
+  # share that leg's `setup` org), and there is no race ACROSS legs (each gets
+  # its own job-scoped Postgres and its own org). Full suite per width (owner
+  # decision, spec §1): every gate assertion holds at every width; LCP
+  # self-pins to 375/390 inside the test, so no leg needs to own both.
   # ---------------------------------------------------------------------
   e2e-mobile:
-    name: Playwright e2e — mobile/tablet, 7 widths (Postgres container)
+    name: Playwright e2e — ${{ matrix.group }} (Postgres container)
     runs-on: ubuntu-latest
+
+    # Grouped by device class, not round-robin, so a red leg names a coherent
+    # band ("tablets are broken") instead of an arbitrary third of the matrix.
+    # 3/2/2 rather than 3/3/1: the legs are ~21 tests per width, so the longest
+    # leg sets the wall clock and a 3/3/1 split would waste a runner on 21
+    # tests behind ~125s of setup.
+    strategy:
+      fail-fast: false # one width band's failure must not hide another's
+      matrix:
+        # `slug` exists because `group` is display text and reaches
+        # upload-artifact below: actions/upload-artifact@v4 REJECTS a name
+        # containing "/" (and fails the whole job on a duplicate name, which is
+        # what a shared literal across three legs would produce). `slug` is the
+        # artifact-safe half; do not collapse the two back into one field.
+        include:
+          - group: phones-small 320/360/375
+            slug: phones-small
+            projects: --project=mobile-320 --project=mobile-360 --project=mobile-se
+          - group: phones-large 390/430
+            slug: phones-large
+            projects: --project=mobile-14 --project=mobile-430
+          - group: tablets 768/834
+            slug: tablets
+            projects: --project=tablet-768 --project=tablet-834
 
     services:
       postgres:
@@ -644,9 +684,11 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
         working-directory: apps/web
-      # All seven, serialized (--workers=1) — see this job's header comment.
-      - name: Run Playwright e2e (mobile + tablet projects, all 7 widths)
-        run: npx playwright test --project=mobile-se --project=mobile-14 --project=mobile-320 --project=mobile-360 --project=mobile-430 --project=tablet-768 --project=tablet-834 --workers=1
+      # This leg's widths, serialized (--workers=1) — see this job's header
+      # comment. `--workers=1` is per-leg and must not be raised: the widths in
+      # a leg share this leg's `setup` org.
+      - name: Run Playwright e2e (${{ matrix.group }})
+        run: npx playwright test ${{ matrix.projects }} --workers=1
         working-directory: apps/web
         env:
           PLAYWRIGHT_BASE: http://localhost:3000
@@ -655,7 +697,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-mobile
+          name: playwright-report-mobile-${{ matrix.slug }}
           path: apps/web/playwright-report
           retention-days: 7
 
