@@ -209,21 +209,30 @@ Each row is one session, one PR, all four test types.
 F1 is first and independent: a live user-visible defect, no schema change, no
 dependency on the unification.
 
-## 5. Migration
+## 5. Migration — greenfield
 
-**Open — needs a production number.** How many `stages` rows carry
-`qualification` vs `seeding` today?
+**Owner ruling 2026-08-17: there is no production data.** Same stance as the
+registration redesign: **no backfill, no dual-read, no compat shims, no feature
+flags.** Drop `stages.qualification` and `stages.seeding` outright, add the
+unified column, and make its constraints strict from day one — NOT NULL where
+the shape demands it, CHECKs on every enum, no permissive interim state that
+exists only to carry old rows across.
 
-- **If effectively zero** (the feature is young; competitions in flight are
-  few): drop both columns, add the unified one, no backfill — the greenfield
-  stance the registration programme used.
-- **If non-trivial**: additive column, dual-read for one release, backfill both
-  populations into it, then drop. `qualification` maps mechanically
-  (`topN: n` → `rankRange 1..n`); `seeding` maps by construction, since the
-  unified shape is a superset of it.
+The discarded alternative, recorded so it is not re-litigated: an additive
+column with a dual-read release and a backfill of both populations. That is the
+correct shape when live rows exist, and it is strictly more work — a second
+write path, a reconciliation, and a drop that has to wait a release.
 
-Everything else in this design is unaffected by which branch applies. No session
-before F2 is blocked on the answer.
+Two consequences worth stating plainly:
+
+- **The migration is destructive and not reversible by rollback.** Its
+  correctness rests entirely on the zero-rows premise. F2's first step verifies
+  that premise against the target database and **stops** if it finds rows,
+  rather than trusting this paragraph — the premise is dated, and this document
+  will outlive its accuracy.
+- Because nothing has to be carried across, F2 does not need to split. The
+  earlier estimate that it would (F2a/F2b, as RS001 needed RS001b) assumed a
+  backfill. Five sessions stands.
 
 ## 6. Testing
 

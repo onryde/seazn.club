@@ -15,17 +15,17 @@ F4 depends on F3; F5 is last.
 
 | Session | Prompt file | Depends on | Status |
 |---|---|---|---|
-| F1 | `F1-bracket-round-role.md` | — | TODO — plan written: `../../plans/2026-08-17-f1-bracket-round-role.md` |
-| F2 | *(not written — see below)* | — | BLOCKED on production row counts |
-| F3 | *(not written)* | F2 | blocked on F2's field shape |
-| F4 | *(not written)* | F3 | blocked on F2's field shape |
-| F5 | *(not written)* | all | — |
+| F1 | `F1-bracket-round-role.md` | — | TODO — plan written: `../../plans/2026-08-17-f1-bracket-round-role.md`. **Waits for L3/#414 to merge** (shared `stages.ts`) |
+| F2 | `F2-unified-progression-field.md` | — | TODO — unblocked 2026-08-17 by the greenfield ruling |
+| F3 | *(not written)* | F2 **merged** | authored against the shipped shape, not the designed one |
+| F4 | *(not written)* | F3 | same |
+| F5 | *(not written)* | all | written once the earlier sessions' deferred test debt is known |
 
-**Why only F1 is written.** F2's migration is drop-and-recreate or
-additive-with-backfill depending on how many production `stages` rows carry
-`qualification` vs `seeding` — a number the owner owes us. F3/F4/F5 all consume
-F2's field shape, so planning them against a guessed schema means rewriting all
-three. F1 depends on neither and fixes a live defect.
+**Why F3–F5 are not written.** They consume F2's field shape, and this repo has
+a repeated failure where a session authored against a design meets an
+implementation that landed differently — the scoringpad index is full of
+"the prompt's central premise was false" entries. F3 gets written after F2
+**merges**, against real code.
 
 ## Owner rulings (2026-08-17)
 
@@ -35,6 +35,13 @@ three. F1 depends on neither and fixes a live defect.
    per-template fix), building the union of both vocabularies' expressiveness.
 3. **L3/#414 finishes on `qualification`** rather than stopping mid-flight; F2
    migrates its `RoundLosers` union member along with everything else.
+4. **Greenfield — there is no production data** (2026-08-17). F2 drops
+   `stages.qualification` and `stages.seeding` outright: no backfill, no
+   dual-read, no compat shims, no flags; constraints strict from day one. The
+   migration is destructive and its correctness rests entirely on that premise,
+   so **F2 verifies zero rows against the target database and stops if it finds
+   any** — this ruling is dated and will outlive its accuracy. Consequence: F2
+   does not need to split, so five sessions stands.
 
 ## Findings that shaped the design — do not re-derive
 

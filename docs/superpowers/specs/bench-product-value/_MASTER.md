@@ -13,7 +13,7 @@ Last updated: 2026-08-13.
 | Release-2 scheduling | `../2026-08-12-release2-prompts/_INDEX.md` | C0–C8 | C0 done; C1 in flight; C2–C8 open |
 | Product portfolio (D1–D7) | `portfolio-prompts/_INDEX.md` | P1–P11 | authored; build-gated per session (owner green-light) |
 | Scheduler bench | `bench-prompts/_INDEX.md` | B00–B18 | authored; hard-gated (see below) |
-| Format progression | `../2026-08-17-format-progression-prompts/_INDEX.md` | F1–F5 | F1 authored + planned; F2–F5 blocked on prod row counts. **F1 waits for L3/#414 to merge** (shared `stages.ts`) |
+| Format progression | `../2026-08-17-format-progression-prompts/_INDEX.md` | F1–F5 | F1 + F2 authored (F1 also planned); F3–F5 written after F2 **merges**. **F1 waits for L3/#414** (shared `stages.ts`) |
 
 ## Cross-programme gates
 
