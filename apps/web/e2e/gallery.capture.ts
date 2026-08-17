@@ -388,9 +388,25 @@ const SPORTS: GallerySport[] = [
         label: `Gallery Cricket OverTile ${otTag}`,
         sportKey: "cricket",
         variantKey: "t20",
+        // FOUR home batters, not the two a striker/non-striker pair
+        // suggests, and the reason is a live trap rather than a style
+        // preference: all-out is derived from the SQUAD, not from
+        // cfg.playersPerSide alone — `Math.min(cfg.playersPerSide,
+        // order.length) - 1` (allOutWickets, cricket.ts:538-542). A
+        // two-name home squad therefore makes all-out ONE wicket, so the
+        // `wickets: 1` summary below is an all-out innings: `autoClose`
+        // closes it, innings 2 falls due, and the pad correctly renders the
+        // fresh-innings state where the over tile AND the ball tiles are
+        // both legal — failing this hook's own "ball tiles must be gone"
+        // assertion for a reason that has nothing to do with the gate it is
+        // capturing. Four names put all-out at 3, clear of the 1 wicket the
+        // capture posts. (Found 2026-08-17 by running this harness; the
+        // e2e spec never saw it because it enters `wickets: 0` via the UI.)
         home: [
           { fullName: `Gallery Cricket OT Striker ${otTag}` },
           { fullName: `Gallery Cricket OT NonStriker ${otTag}` },
+          { fullName: `Gallery Cricket OT Bat3 ${otTag}` },
+          { fullName: `Gallery Cricket OT Bat4 ${otTag}` },
         ],
         away: [{ fullName: `Gallery Cricket OT Bowler ${otTag}` }],
         // API-driven start (no UI tap needed) — this hook is not
