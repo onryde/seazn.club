@@ -830,7 +830,17 @@ export function PadHostV3(props: PadHostV3Props) {
           // this wave already fixed three times.
           resolveDetail={
             props.skin.activityDetail
-              ? (eventType, payload, prev) => props.skin.activityDetail!(t, eventType, payload, prev)
+              ? // R2b (owner ruling, freeHit chip removal): `history` is
+                // forwarded verbatim from ActivityPanel's own call (it
+                // already resolves per-row history — `priorActivityEvents`,
+                // activity.tsx). `view.cfg` is CAPTURED from this closure's
+                // own enclosing scope, not passed through ActivityPanel's
+                // prop contract at all — cfg is static per render (not a
+                // per-row fact), and this keeps ActivityPanel itself from
+                // ever having to learn cfg exists (SkinDefV3.activityDetail's
+                // own doc explains why).
+                (eventType, payload, prev, history) =>
+                  props.skin.activityDetail!(t, eventType, payload, prev, history, view.cfg)
               : undefined
           }
         />

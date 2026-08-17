@@ -17,7 +17,23 @@ import type { FidelityBand } from "@seazn/engine/sport";
 export type TapModel = "S" | "T";
 export type PadPhase = "pre" | "live" | "post";
 
-export interface StripItem { label?: string; value: string; accent?: boolean }
+/**
+ * R2b (owner ruling, live-tile audit — freeHit chip removal): `id`, an
+ * OPTIONAL/additive identity for a strip item. Every pre-existing item (over
+ * dots, striker/non-striker/bowler names, the chase target) omits it and
+ * renders exactly as before. Exists solely so a Playwright spec has a
+ * stable, localisation-independent `data-*` hook (`scorebug.tsx`'s
+ * `data-strip-item-id`) to target ONE item in what is otherwise a plain,
+ * unindexed list — matching text against a translated `value` is not a
+ * stable hook, and the strip had no per-item identity at all before this.
+ * First (only, as of this change) setter: cricket's free-hit indicator
+ * (`skins/cricket.tsx` `buildScorebug`) — a property of the DELIVERY, so
+ * `strip` (the scorebug's own ambient, always-on delivery status line — the
+ * same bucket as the over dots) is the natural home, not `ContextSlot.
+ * message` below (a PERSON slot's own explanation), which would be a misfit
+ * for a fact that isn't about any one person.
+ */
+export interface StripItem { id?: string; label?: string; value: string; accent?: boolean }
 // Fix round 2 (Task 5 review, Important — controller ruling): servingLabel
 // is a deliberate, additive contract change. The chassis (v3/scorebug.tsx)
 // must never resolve a sport-namespaced i18n key itself — reusing
@@ -502,12 +518,46 @@ export interface SkinDefV3<View = unknown> {
    * entirely and keeps compiling and behaving identically, and the other
    * ten skins that decline to implement `activityDetail` at all are
    * unaffected either way.
+   *
+   * `history` (R2b, owner ruling, freeHit chip removal): every strictly
+   * OLDER, non-voided event before this row, OLDEST FIRST -- the order a
+   * REPLAY-style derivation needs to walk forward through. `prev` above
+   * carries only the immediate neighbour, insufficient for a rule that must
+   * walk back past more than one row (cricket's free hit: a wide never
+   * consumes it, so "was this delivery a free hit" can require looking past
+   * several rows to find the last LEGAL one) -- rather than stretching
+   * `prev`'s own single-item shape, this is a second, separate, additive
+   * parameter. Same division of labour `prev` already establishes: the
+   * caller does not filter by event type, and skips voided rows the same
+   * way -- see `ActivityPanel`'s `priorActivityEvents` (activity.tsx), which
+   * generalizes `previousActivityEvent`'s own voided-skip logic from "the
+   * nearest one" to "every one".
+   *
+   * `cfg` (R2b, same ruling): `PadHostView.cfg` verbatim -- `unknown`, same
+   * as every other view field a skin re-derives its own shape from. Exists
+   * because a per-row derivation can depend on a cfg-level fact no event
+   * payload carries on its own (cricket's free hit only arms at all when
+   * `cfg.ballsPerInnings !== null`, a format property, not a per-ball one).
+   * `ActivityPanel` itself never learns what `cfg` means or that this
+   * parameter exists -- `pad-host.tsx`'s own `resolveDetail` closure
+   * captures `view.cfg` directly and forwards it here, so this stays purely
+   * a skin<->host concern, same "chassis provides the mechanism, skin
+   * decides the policy" split every other optional member here takes.
+   *
+   * Both optional/additive: every pre-R2b caller, and every skin besides
+   * cricket, omits them and keeps compiling and behaving identically.
+   * `undefined` on either means "cannot determine" -- never a guess; the
+   * same "omitting is always safe" posture the owner's ruling on
+   * `payload.freeHit` itself established for the dispatched-event side of
+   * this exact feature.
    */
   activityDetail?(
     t: (key: string, vars?: Record<string, string | number>) => string,
     eventType: string,
     payload: Record<string, unknown>,
     prev?: { type: string; payload: Record<string, unknown> },
+    history?: readonly { type: string; payload: Record<string, unknown> }[],
+    cfg?: unknown,
   ): string | undefined;
   /** Declares this skin's swap-sheet integration (design §2.7) — `null`
    *  when a swap is not applicable right now (e.g. no sub currently legal

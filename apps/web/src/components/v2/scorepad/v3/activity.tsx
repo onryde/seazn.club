@@ -183,6 +183,38 @@ export function previousActivityEvent(
   return undefined;
 }
 
+/**
+ * R2b (owner ruling, freeHit chip removal): generalizes `previousActivityEvent`
+ * (above) from "the nearest older row" to "every older row" — same voided-
+ * skip rule, same "not itself a filter by event type" posture (this file's
+ * own header on `prev`/here). Needed because a skin's derivation can require
+ * walking back past more than one row: cricket's free hit is consumed ONLY
+ * by a LEGAL delivery, so "was this delivery a free hit" can mean walking
+ * past a wide (which never consumes it) to find the last legal one — the
+ * single-item `prev` this function's sibling returns is insufficient for
+ * that, by design (see `SkinDefV3.activityDetail`'s own doc, types.ts, on
+ * why `prev` is not stretched to cover this instead).
+ *
+ * OLDEST FIRST — the opposite of `rows` itself (newest-first) and of
+ * `previousActivityEvent`'s own single-item convention — because a skin
+ * folding this into a "what's true as of this row" answer needs to REPLAY
+ * forward through history, not backward. `rows.length - 1` (the oldest
+ * surviving row) down to `index + 1` (the nearest older row) is exactly that
+ * order.
+ */
+export function priorActivityEvents(
+  rows: readonly ActivityEvent[],
+  index: number,
+): { type: string; payload: Record<string, unknown> }[] {
+  const out: { type: string; payload: Record<string, unknown> }[] = [];
+  for (let i = rows.length - 1; i > index; i--) {
+    const candidate = rows[i]!;
+    const voided = rows.some((v) => v.voids === candidate.id);
+    if (!voided) out.push({ type: candidate.type, payload: (candidate.payload ?? {}) as Record<string, unknown> });
+  }
+  return out;
+}
+
 /** The panel scrolls internally past this many rows instead of growing the
  *  page. Matches the legacy `max-h-96` cap (timeline.tsx:257) — about six
  *  rows at the daylight shell's row height, which is roughly one over of
@@ -225,11 +257,17 @@ export interface ActivityPanelProps {
    * parameters (every one written before R2b) keeps compiling and working
    * unchanged — nothing requires a callee to declare every parameter a
    * caller might pass.
+   *
+   * `history` (R2b, owner ruling, freeHit chip removal): every strictly
+   * older, non-voided row before this one, OLDEST FIRST — `priorActivityEvents`
+   * (above). Optional and additive here too: a `resolveDetail` implementation
+   * written before R2b (only 3 params) keeps compiling and working unchanged.
    */
   resolveDetail?: (
     eventType: string,
     payload: Record<string, unknown>,
     prev?: { type: string; payload: Record<string, unknown> },
+    history?: readonly { type: string; payload: Record<string, unknown> }[],
   ) => string | undefined;
 }
 
@@ -271,7 +309,8 @@ export function ActivityPanel({
             const prev = prevEvent
               ? { type: prevEvent.type, payload: (prevEvent.payload ?? {}) as Record<string, unknown> }
               : undefined;
-            const detail = resolveDetail?.(event.type, payload, prev);
+            const history = priorActivityEvents(rows, index);
+            const detail = resolveDetail?.(event.type, payload, prev, history);
             const caption = buildRibbon(event.type, payload, nameOf, t, detail);
             return (
               <li

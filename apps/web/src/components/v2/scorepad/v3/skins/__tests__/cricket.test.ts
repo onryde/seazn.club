@@ -26,6 +26,7 @@ import {
   cricketBallDetail,
   cricketSkinV3,
   currentInnings,
+  freeHitPending,
   inningsFidelity,
   nextOverNumber,
   oversText,
@@ -302,6 +303,97 @@ describe("overDots", () => {
   });
 });
 
+// R2b (owner ruling, live-tile audit — freeHit chip removal): the ONE shared
+// derivation the read-only indicator (buildScorebug) and the activity label
+// (cricketBallDetail) both fold through, so the two can never answer "was/is
+// this delivery a free hit" two different ways. Mirrors the engine's own
+// transition rule verbatim (cricket.ts finishDelivery, ~line 1363): a
+// white-ball no-ball ARMS it; any LEGAL delivery (not wide, not no-ball)
+// CONSUMES it; a wide (or a non-white-ball no-ball) carries the existing
+// state forward unchanged. The correctness trap this whole feature exists to
+// avoid: "was the previous row a no-ball?" gets no-ball -> wide -> legal
+// wrong (the legal ball IS still a free hit, because a wide never consumes
+// it) — this function instead FOLDS FORWARD over the whole sequence, which
+// gets that right by construction rather than by a special case.
+//
+// Innings-boundary reset: a `FineInnings` always starts `freeHitPending:
+// false` (cricket.ts:650, `createInnings`) — a dangling pending flag at one
+// innings' close must never leak into the next. There is no reliable
+// explicit boundary EVENT to key off (an innings can auto-close, e.g. all
+// out/overs complete, with no dedicated event in the ledger at all), so this
+// detects the boundary the same way `overDots` implicitly tolerates one:
+// each ball's own `(over, ballInOver)` is monotonically non-decreasing
+// WITHIN one innings (illegal balls hold it steady, a legal one advances
+// it) — a ball whose pair is LOWER than the one immediately before it can
+// only mean a fresh innings (or super over) just started, so the fold resets
+// to `false` right there before applying that ball's own transition.
+describe("freeHitPending", () => {
+  it("is false with no ball history at all", () => {
+    expect(freeHitPending([], true)).toBe(false);
+  });
+
+  it("a no-ball arms it for the NEXT ball — the no-ball's own row is not itself pending-before", () => {
+    const events = [ballEvent("e1", { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } })];
+    expect(freeHitPending(events, true)).toBe(true);
+  });
+
+  it("no-ball -> wide -> legal ball: still pending after the wide — a wide never consumes it (the correctness trap)", () => {
+    const events = [
+      ballEvent("e1", { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }),
+      ballEvent("e2", { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "wide", runs: 1 } } }),
+    ];
+    expect(freeHitPending(events, true)).toBe(true);
+  });
+
+  it("consecutive no-balls: still pending — each re-arms it", () => {
+    const events = [
+      ballEvent("e1", { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }),
+      ballEvent("e2", { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }),
+    ];
+    expect(freeHitPending(events, true)).toBe(true);
+  });
+
+  it("a legal delivery consumes it — the ball after is not pending", () => {
+    const events = [
+      ballEvent("e1", { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }),
+      ballEvent("e2", { over: 0, ballInOver: 1, runs: { bat: 1 } }), // the free-hit ball itself, legal
+    ];
+    expect(freeHitPending(events, true)).toBe(false);
+  });
+
+  it("cfg.ballsPerInnings === null (whiteBall false, a real unlimited-overs/test cfg): a no-ball arms nothing", () => {
+    const events = [ballEvent("e1", { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } })];
+    expect(freeHitPending(events, false)).toBe(false);
+  });
+
+  it("a wide with nothing before it never arms anything on its own", () => {
+    const events = [ballEvent("e1", { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "wide", runs: 1 } } })];
+    expect(freeHitPending(events, true)).toBe(false);
+  });
+
+  it("does not leak across an innings boundary — a no-ball pending at the tail of one innings never carries into the next", () => {
+    const events = [
+      // innings 1's last recorded ball: a no-ball, pending afterward.
+      ballEvent("e1", { over: 4, ballInOver: 3, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }),
+      // innings 2's first ball: a WIDE — chosen deliberately over a legal
+      // ball, which would mask the bug under test (a legal ball clears
+      // pending regardless of whether the boundary reset fired). Its
+      // (over, ballInOver) REGRESSES versus e1's, which is what must trip
+      // the reset.
+      ballEvent("e2", { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "wide", runs: 1 } } }),
+    ];
+    expect(freeHitPending(events, true)).toBe(false);
+  });
+
+  it("ignores non-ball event types entirely, same convention as overDots", () => {
+    const events = [
+      ballEvent("e0", {}, "cricket.toss"),
+      ballEvent("e1", { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }),
+    ];
+    expect(freeHitPending(events, true)).toBe(true);
+  });
+});
+
 // D2 fix (Activity panel sign-off review, 2026-08-17): three `cricket.ball`
 // rows in a real screenshot all read identically "Ball recorded" — the
 // chassis ribbon builder resolves a caption per event TYPE and cannot know
@@ -451,6 +543,126 @@ describe("cricketBallDetail — bowler-changed note (R2b)", () => {
     expect(cricketBallDetail(t, "cricket.ball", { bowler: "", runs: { bat: 0 } }, prevReal)).toBe(
       "pad.cricket.ribbon.ball.dot",
     );
+  });
+});
+
+// R2b (owner ruling, live-tile audit — freeHit chip removal): the activity
+// log's own free-hit label, via the SAME `freeHitPending` fold the indicator
+// uses (see that describe block's own header for the correctness trap and
+// the innings-boundary reset). `history` (5th param, optional/additive —
+// every pre-existing 4-arg call site above keeps compiling and behaving
+// identically) is every STRICTLY OLDER, non-voided event, OLDEST FIRST —
+// `ActivityPanel`'s own `priorActivityEvents` (activity.tsx), generalizing
+// `previousActivityEvent` from "the nearest one" to "every one", since
+// walking back to the last LEGAL delivery can require looking past more than
+// just the immediate neighbour (`prev`'s own — insufficient — one-item
+// shape). `cfg` (6th param, also optional/additive) is `PadHostView.cfg`
+// verbatim, re-derived the same `asCfg()` way every other builder in this
+// file already does — needed only for `ballsPerInnings !== null`
+// (whiteBall), a fact no ball payload carries on its own. Both undefined
+// (the pre-existing call shape) means "cannot determine" — never claims a
+// free hit on a guess, same "omitting is always safe" posture the owner's
+// ruling on `payload.freeHit` itself already established.
+describe("cricketBallDetail — free hit note (R2b)", () => {
+  const whiteBallCfg = cfg(); // ballsPerInnings: 120
+  const testCfg = cfg({ inningsPerSide: 2, ballsPerInnings: null }); // the engine's own shipped "test" variant shape
+
+  it("no-ball -> wide -> legal ball: the legal ball's OWN row is labelled a free hit", () => {
+    const history = [
+      { type: "cricket.ball", payload: { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } } },
+      { type: "cricket.ball", payload: { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "wide", runs: 1 } } } },
+    ];
+    const result = cricketBallDetail(
+      t,
+      "cricket.ball",
+      { over: 0, ballInOver: 5, runs: { bat: 1 } },
+      undefined,
+      history,
+      whiteBallCfg,
+    );
+    expect(result).toBe('pad.cricket.ribbon.ball.freeHit({"detail":"pad.cricket.ribbon.ball.run"})');
+  });
+
+  it("consecutive no-balls: the second no-ball's own row is ALSO labelled — it is bowled while still pending", () => {
+    const history = [
+      { type: "cricket.ball", payload: { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } } },
+    ];
+    const result = cricketBallDetail(
+      t,
+      "cricket.ball",
+      { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } },
+      undefined,
+      history,
+      whiteBallCfg,
+    );
+    expect(result).toBe('pad.cricket.ribbon.ball.freeHit({"detail":"extra.noball"})');
+  });
+
+  it("a legal delivery's own row is not labelled when no free hit was pending before it", () => {
+    const result = cricketBallDetail(
+      t,
+      "cricket.ball",
+      { over: 0, ballInOver: 1, runs: { bat: 1 } },
+      undefined,
+      [],
+      whiteBallCfg,
+    );
+    expect(result).toBe("pad.cricket.ribbon.ball.run");
+  });
+
+  it("the ball AFTER the free-hit ball is not labelled — consumed", () => {
+    const history = [
+      { type: "cricket.ball", payload: { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } } },
+      { type: "cricket.ball", payload: { over: 0, ballInOver: 5, runs: { bat: 1 } } }, // the free hit itself
+    ];
+    const result = cricketBallDetail(
+      t,
+      "cricket.ball",
+      { over: 0, ballInOver: 6, runs: { bat: 0 } },
+      undefined,
+      history,
+      whiteBallCfg,
+    );
+    expect(result).toBe("pad.cricket.ribbon.ball.dot");
+  });
+
+  it("cfg.ballsPerInnings === null: never labelled, even right after a no-ball", () => {
+    const history = [
+      { type: "cricket.ball", payload: { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } } },
+    ];
+    const result = cricketBallDetail(
+      t,
+      "cricket.ball",
+      { over: 0, ballInOver: 1, runs: { bat: 1 } },
+      undefined,
+      history,
+      testCfg,
+    );
+    expect(result).toBe("pad.cricket.ribbon.ball.run");
+  });
+
+  it("omitting history and cfg (every pre-existing call site) never claims a free hit — undefined means 'cannot determine', not 'guess'", () => {
+    expect(cricketBallDetail(t, "cricket.ball", { over: 0, ballInOver: 5, runs: { bat: 1 } })).toBe(
+      "pad.cricket.ribbon.ball.run",
+    );
+  });
+
+  it("composes with the bowler-changed note — free hit wraps whatever detail already includes", () => {
+    const prev = {
+      type: "cricket.ball",
+      payload: { bowler: "b1", over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } },
+    };
+    const history = [prev];
+    const result = cricketBallDetail(
+      t,
+      "cricket.ball",
+      { bowler: "b2", over: 0, ballInOver: 5, runs: { bat: 1 } },
+      prev,
+      history,
+      whiteBallCfg,
+    )!;
+    expect(result.startsWith("pad.cricket.ribbon.ball.freeHit(")).toBe(true);
+    expect(result).toContain("pad.cricket.ribbon.ball.bowlerChanged");
   });
 });
 
@@ -634,6 +846,62 @@ describe("buildScorebug", () => {
 
   it("phase mirrors resolvePhase", () => {
     expect(buildScorebug(view({ state: state({ phase: "done" }) }), t).phase).toBe("post");
+  });
+});
+
+// R2b (owner ruling, live-tile audit — freeHit chip removal): the READ-ONLY
+// indicator that replaces the chip. Appended to `strip` — the SAME "ambient,
+// always-on delivery status" surface the over dots/bowler/target already
+// use — rather than `ContextSlot.message` (a PERSON slot's own "why is this
+// chip's affordance blocked" explanation; a free hit is a property of the
+// DELIVERY, not of any one person, so reusing it would be a misfit, not
+// reuse — see this task's own report for the fuller reasoning) or a new
+// chassis surface. `StripItem.id` (types.ts, optional/additive) exists
+// SOLELY so this item has a stable, localisation-independent `data-*` hook
+// (`scorebug.tsx`'s `data-strip-item-id`) a Playwright spec can target —
+// `strip` had no per-item identity before this, and text-matching a
+// translated string is not a stable hook. Driven by the SAME
+// `freeHitPending` fold `cricketBallDetail`'s own note uses (that describe
+// block's header has the full correctness-trap/innings-boundary reasoning).
+describe("buildScorebug — free hit indicator (R2b)", () => {
+  it("appends an accented, identifiable strip item when a free hit is pending", () => {
+    const events = [ballEvent("e1", { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } })];
+    const spec = buildScorebug(view({ events }), t);
+    expect(spec.strip.find((s) => s.id === "freeHit")).toEqual({
+      id: "freeHit",
+      value: "scorepad.skin.cricket.header.freeHit",
+      accent: true,
+    });
+  });
+
+  it("is absent when nothing is pending — the base 4-item strip is untouched", () => {
+    const spec = buildScorebug(view(), t);
+    expect(spec.strip.find((s) => s.id === "freeHit")).toBeUndefined();
+    expect(spec.strip).toHaveLength(4);
+  });
+
+  it("a legal ball after the no-ball clears it — the indicator disappears again", () => {
+    const events = [
+      ballEvent("e1", { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }),
+      ballEvent("e2", { over: 0, ballInOver: 5, runs: { bat: 1 } }),
+    ];
+    const spec = buildScorebug(view({ events }), t);
+    expect(spec.strip.find((s) => s.id === "freeHit")).toBeUndefined();
+  });
+
+  it("respects cfg.ballsPerInnings === null (a real unlimited-overs/test cfg) — no indicator even right after a no-ball", () => {
+    const events = [ballEvent("e1", { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } })];
+    const spec = buildScorebug(
+      view({ cfg: cfg({ inningsPerSide: 2, ballsPerInnings: null }), events }),
+      t,
+    );
+    expect(spec.strip.find((s) => s.id === "freeHit")).toBeUndefined();
+  });
+
+  it("never shown outside live/super-over phase, even if a stale pending state were somehow computed", () => {
+    const events = [ballEvent("e1", { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } })];
+    const spec = buildScorebug(view({ state: state({ phase: "done" }), events }), t);
+    expect(spec.strip.find((s) => s.id === "freeHit")).toBeUndefined();
   });
 });
 
@@ -908,16 +1176,31 @@ describe("buildTiles — minor extras defaults (R2b task 4)", () => {
 // buildDock
 // ---------------------------------------------------------------------------
 
+// R2b (owner ruling, live-tile audit): the freeHit chip is GONE — it was
+// offered unconditionally (never gated on whether a free hit was actually
+// pending) and the engine refused it outright the moment it wasn't,
+// surfacing as a generic rejection the owner hit live (cricket.ts:1224,
+// "freeHit flagged but no free hit is pending"). Replaced by a READ-ONLY
+// indicator (buildScorebug, below) — the scorer no longer declares what the
+// fold already knows. `buildDock` itself stays non-null for every ball event
+// type (never `null` merely because `chips` ends up empty):
+// `e2e/scorepad-v3-cricket.spec.ts`'s undo tests tap a PLAIN run and assert
+// `[data-role="v3-dock"]` becomes visible, using dock presence as a generic
+// "this tap is still in the hold window" proxy — unrelated to free hit
+// specifically. Returning `null` for an empty-chips spec would silently
+// break that already-passing coverage; keeping the spec (title + dismiss +
+// countdown, zero chips) preserves it.
 describe("buildDock", () => {
-  it("offers a Free Hit chip for a ball event", () => {
+  it("offers no chips for a plain ball event — freeHit is gone — but the spec itself stays non-null", () => {
     const dock = buildDock("cricket.ball", t)!;
+    expect(dock).not.toBeNull();
     expect(dock.title).toBe("pad.cricket.dock.title");
-    expect(dock.chips).toHaveLength(1);
-    expect(dock.chips[0]!.id).toBe("freeHit");
-    expect(dock.chips[0]!.mutate({ runs: { bat: 0 } })).toEqual({ runs: { bat: 0 }, freeHit: true });
+    expect(dock.chips).toEqual([]);
   });
-  it("also offers it for a super-over ball", () => {
-    expect(buildDock("cricket.superover.ball", t)).not.toBeNull();
+  it("also stays non-null (with no chips) for a super-over ball", () => {
+    const dock = buildDock("cricket.superover.ball", t)!;
+    expect(dock).not.toBeNull();
+    expect(dock.chips).toEqual([]);
   });
   it("is null for every non-ball event type — never a stray dock on an admin action", () => {
     expect(buildDock("cricket.toss", t)).toBeNull();
@@ -934,20 +1217,20 @@ describe("buildDock", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildDock — payload-aware chips (R2b task 4)", () => {
-  it("omitting payload entirely (every pre-existing 2-arg call site) behaves exactly as before", () => {
+  it("omitting payload entirely (every pre-existing 2-arg call site): no chips, freeHit is gone", () => {
     const dock = buildDock("cricket.ball", t)!;
-    expect(dock.chips.map((c) => c.id)).toEqual(["freeHit"]);
+    expect(dock.chips.map((c) => c.id)).toEqual([]);
   });
 
-  it("a plain run tap's dock is unaffected — no extras field at all", () => {
+  it("a plain run tap's dock has no chips — no extras field at all", () => {
     const dock = buildDock("cricket.ball", t, { runs: { bat: 4 }, boundary: 4 })!;
-    expect(dock.chips.map((c) => c.id)).toEqual(["freeHit"]);
+    expect(dock.chips.map((c) => c.id)).toEqual([]);
   });
 
-  it("a no-ball's dock offers bat-run chips +1/+2/+3/+4/+6, in addition to Free Hit", () => {
+  it("a no-ball's dock offers bat-run chips +1/+2/+3/+4/+6 — freeHit no longer among them", () => {
     const payload = { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } };
     const dock = buildDock("cricket.ball", t, payload)!;
-    expect(dock.chips.map((c) => c.id)).toEqual(["freeHit", "batRun1", "batRun2", "batRun3", "batRun4", "batRun6"]);
+    expect(dock.chips.map((c) => c.id)).toEqual(["batRun1", "batRun2", "batRun3", "batRun4", "batRun6"]);
   });
 
   it("tapping a no-ball's +3 chip sets bat:3, preserving the noball extra verbatim — the WHOLE payload, not just bat", () => {
@@ -966,26 +1249,26 @@ describe("buildDock — payload-aware chips (R2b task 4)", () => {
     expect(chip6.mutate(payload)).toEqual({ runs: { bat: 6, extras: { kind: "noball", runs: 1 } }, boundary: 6 });
   });
 
-  it("bye and leg bye docks offer extra-run chips 2/3/4 that raise the EXTRA's own runs, bat stays 0", () => {
+  it("bye and leg bye docks offer extra-run chips 2/3/4 that raise the EXTRA's own runs, bat stays 0 — freeHit no longer among them", () => {
     for (const kind of ["bye", "legbye"] as const) {
       const payload = { runs: { bat: 0, extras: { kind, runs: 1 } } };
       const dock = buildDock("cricket.ball", t, payload)!;
-      expect(dock.chips.map((c) => c.id)).toEqual(["freeHit", "extraRun2", "extraRun3", "extraRun4"]);
+      expect(dock.chips.map((c) => c.id)).toEqual(["extraRun2", "extraRun3", "extraRun4"]);
       const chip = dock.chips.find((c) => c.id === "extraRun3")!;
       expect(chip.mutate(payload)).toEqual({ runs: { bat: 0, extras: { kind, runs: 3 } } });
     }
   });
 
-  it("a wide's dock offers NO bat-run chips — the engine refuses bat runs off a wide (cricket.ts:1229)", () => {
+  it("a wide's dock offers NO bat-run chips — the engine refuses bat runs off a wide (cricket.ts:1229) — and no freeHit chip either", () => {
     const payload = { runs: { bat: 0, extras: { kind: "wide", runs: 1 } } };
     const dock = buildDock("cricket.ball", t, payload)!;
-    expect(dock.chips.map((c) => c.id)).toEqual(["freeHit"]);
+    expect(dock.chips.map((c) => c.id)).toEqual([]);
   });
 
-  it("a penalty's dock stays Free-Hit-only — only the TILE default changed (5), the owner never asked for dock chips here", () => {
+  it("a penalty's dock has no chips — only the TILE default changed (5); freeHit is gone here too", () => {
     const payload = { runs: { bat: 0, extras: { kind: "penalty", runs: 5 } } };
     const dock = buildDock("cricket.ball", t, payload)!;
-    expect(dock.chips.map((c) => c.id)).toEqual(["freeHit"]);
+    expect(dock.chips.map((c) => c.id)).toEqual([]);
   });
 });
 

@@ -162,6 +162,12 @@ export function Scorebug({ spec, t, onTap }: ScorebugProps) {
           {spec.strip.map((item, i) => (
             <span
               key={i}
+              // R2b (owner ruling, freeHit chip removal): a stable, i18n-
+              // independent hook for a Playwright spec to target ONE strip
+              // item — StripItem.id is optional/additive (types.ts); only
+              // rendered when a skin actually sets it, so every other strip
+              // item (over dots, names, target) is unchanged.
+              {...(item.id ? { "data-strip-item-id": item.id } : {})}
               className={
                 item.accent
                   ? `text-xs font-semibold ${NIGHT_TILE_CLASSES.creamText}`

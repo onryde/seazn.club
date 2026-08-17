@@ -542,6 +542,86 @@ export function overDots(events: readonly EventEnvelope[], bpo: number): string[
   return windowed.slice(start).map((e) => ballOutcomeSymbol(e.payload as Record<string, unknown>));
 }
 
+/** The two fields `freeHitPending` (below) needs off one ball's own payload
+ *  — `over`/`ballInOver` for the innings-boundary check, `extraKind` for the
+ *  arm/consume/carry transition. `null` for anything not ball-shaped enough
+ *  to answer either question (a non-ball event, or a malformed payload
+ *  missing the numeric fields) — silently skipped by the caller, same
+ *  defensive-payload posture `overDots`/`ballOutcomeSymbol` already take. */
+function freeHitBallOf(
+  event: { type: string; payload: unknown },
+): { over: number; ballInOver: number; extraKind?: string } | null {
+  if (!BALL_EVENT_TYPES.has(event.type)) return null;
+  const payload = event.payload as Record<string, unknown> | null | undefined;
+  const over = payload?.over;
+  const ballInOver = payload?.ballInOver;
+  if (typeof over !== "number" || typeof ballInOver !== "number") return null;
+  const runs = payload?.runs as { extras?: { kind?: string } } | undefined;
+  return { over, ballInOver, extraKind: runs?.extras?.kind };
+}
+
+/**
+ * R2b (owner ruling, live-tile audit — freeHit chip removal): the ONE
+ * derivation shared by the read-only indicator (`buildScorebug`, below) and
+ * the activity log's own label (`cricketBallDetail`, below) — they answer
+ * the same question, "is/was a free hit pending", and must not risk drifting
+ * apart into two implementations (the recurring defect class in this repo).
+ * Given the whole ball history of ONE innings (or enough of it — see the
+ * innings-boundary note below), oldest first, folds FORWARD through it and
+ * returns whether a free hit is pending immediately AFTER the last event
+ * given. Mirrors the engine's own transition rule verbatim
+ * (`finishDelivery`, cricket.ts ~line 1363): a white-ball no-ball ARMS it; a
+ * LEGAL delivery (not wide, not no-ball) CONSUMES it; anything else (a wide,
+ * or a non-white-ball no-ball) carries the existing state forward unchanged.
+ *
+ * THE CORRECTNESS TRAP this exists to avoid: "was the previous row a
+ * no-ball?" gets `no-ball -> wide -> legal` silently wrong (the legal ball
+ * IS still a free hit — a wide never consumes it) and misses that
+ * consecutive no-balls each re-arm it. Folding forward over the WHOLE
+ * sequence gets both right by construction, not by a special case: calling
+ * this with everything up to (not including) some ball answers "was THAT
+ * ball itself a free hit"; calling it with everything recorded so far
+ * answers "is a free hit pending right now" — the SAME function, just a
+ * different slice, which is what keeps the indicator and the activity label
+ * from ever answering this two different ways.
+ *
+ * INNINGS-BOUNDARY RESET: a fresh `FineInnings` always starts
+ * `freeHitPending: false` (cricket.ts:650, `createInnings`) — a pending flag
+ * dangling at one innings' close must never leak into the next. There is no
+ * reliable explicit boundary EVENT to key off (an innings can auto-close,
+ * e.g. all out/overs complete, with no dedicated event landing in the
+ * ledger at all), so this detects the boundary the same way `overDots`
+ * already implicitly tolerates one: within one innings, each ball's own
+ * `(over, ballInOver)` is monotonically non-decreasing (an illegal ball
+ * holds it steady, a legal one advances it) — a ball whose pair is LOWER
+ * than the one immediately before it can only mean a fresh innings (or
+ * super over) just started, so the fold resets to `false` right there,
+ * before applying that ball's own transition on top.
+ *
+ * Ignores non-ball event types entirely (`freeHitBallOf` above), same
+ * convention as `prev`/`history` on `SkinDefV3.activityDetail` (types.ts):
+ * no sport vocabulary to filter with belongs at the boundary, only inside
+ * this file.
+ */
+export function freeHitPending(
+  events: readonly { type: string; payload: unknown }[],
+  whiteBall: boolean,
+): boolean {
+  let pending = false;
+  let prevKey: { over: number; ballInOver: number } | null = null;
+  for (const event of events) {
+    const ball = freeHitBallOf(event);
+    if (ball === null) continue;
+    if (prevKey !== null && (ball.over < prevKey.over || (ball.over === prevKey.over && ball.ballInOver < prevKey.ballInOver))) {
+      pending = false; // (over, ballInOver) regressed — a new innings/super over started here
+    }
+    const legal = ball.extraKind !== "wide" && ball.extraKind !== "noball";
+    pending = ball.extraKind === "noball" && whiteBall ? true : legal ? false : pending;
+    prevKey = { over: ball.over, ballInOver: ball.ballInOver };
+  }
+  return pending;
+}
+
 /**
  * D2 fix (Activity panel sign-off review, 2026-08-17): a localised,
  * differentiating detail for one `cricket.ball`/`cricket.superover.ball`
@@ -588,18 +668,32 @@ export function overDots(events: readonly EventEnvelope[], bpo: number): string[
  * NAME-FREE by design, not by oversight: this function receives `t` but no
  * person-name map, so it cannot turn `bowler` (a raw id) into a display
  * name — `SkinDefV3.activityDetail`'s contract stops at `prev: {type,
- * payload}` (types.ts), and reaching for a name would mean widening it
- * further still (e.g. a resolver function bundled alongside `prev`, or a
- * 5th parameter) beyond what this wave's brief authorised. The dictionary
- * copy below reads "New bowler" with no name — a real but smaller
- * usefulness cost than a widened contract every other skin's
- * `activityDetail` would also have to reckon with.
+ * payload}` (types.ts) plus, as of R2b, `history`/`cfg` (below) — and
+ * reaching for a name would mean widening it further still (e.g. a resolver
+ * function bundled alongside `prev`) beyond what this wave's brief
+ * authorised. The dictionary copy below reads "New bowler" with no name — a
+ * real but smaller usefulness cost than a widened contract every other
+ * skin's `activityDetail` would also have to reckon with.
+ *
+ * `history`/`cfg` (R2b, owner ruling — freeHit chip removal): when BOTH are
+ * given, this ALSO appends a free-hit note — via the SAME `freeHitPending`
+ * fold (above) the read-only scorebug indicator uses, so the two can never
+ * disagree — wrapping whatever detail already exists (composes with the
+ * bowler-changed note above it, never replaces either). `history` must be
+ * every strictly-older, non-voided ball in the SAME innings, oldest first
+ * (`SkinDefV3.activityDetail`'s own doc, types.ts); `cfg` is
+ * `PadHostView.cfg` verbatim, re-derived here via `asCfg` like every other
+ * builder in this file. Either missing means "cannot determine" — no note,
+ * never a guess (`freeHitPending` is simply not called at all in that case),
+ * same as every pre-R2b 4-arg call site above.
  */
 export function cricketBallDetail(
   t: TFn,
   eventType: string,
   payload: Record<string, unknown>,
   prev?: { type: string; payload: Record<string, unknown> },
+  history?: readonly { type: string; payload: Record<string, unknown> }[],
+  cfg?: unknown,
 ): string | undefined {
   if (!BALL_EVENT_TYPES.has(eventType)) return undefined;
   const p = payload as {
@@ -607,9 +701,13 @@ export function cricketBallDetail(
     runs?: { bat?: number; extras?: { kind?: string; runs?: number } };
     bowler?: unknown;
   };
-  const detail = baseBallDetail(t, p);
-  if (!bowlerChanged(p.bowler, prev)) return detail;
-  return t("pad.cricket.ribbon.ball.bowlerChanged", { detail });
+  let detail = baseBallDetail(t, p);
+  if (bowlerChanged(p.bowler, prev)) detail = t("pad.cricket.ribbon.ball.bowlerChanged", { detail });
+  if (history !== undefined && cfg !== undefined) {
+    const whiteBall = asCfg(cfg).ballsPerInnings !== null;
+    if (freeHitPending(history, whiteBall)) detail = t("pad.cricket.ribbon.ball.freeHit", { detail });
+  }
+  return detail;
 }
 
 /** The outcome-only detail — wicket, then extras-by-kind, then plain runs
@@ -808,6 +906,25 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
     });
   }
 
+  // R2b (owner ruling, live-tile audit — freeHit chip removal): the
+  // READ-ONLY replacement for the old dock chip — the scorer no longer
+  // declares what the fold already knows. Appended LAST (after target, same
+  // "never reindex the pinned strip[0..3] items" convention the target
+  // block above already established) — `freeHitPending` is the SAME fold
+  // `cricketBallDetail`'s own activity-log note uses (that function's own
+  // doc has the full correctness-trap/innings-boundary reasoning), called
+  // here with EVERYTHING recorded so far, which answers "is a free hit
+  // pending right now". Gated on live/super-over phase (matching
+  // `buildContext`'s own gate) so a stray pending flag can never survive
+  // into a finished match's display. `id: "freeHit"` is the stable,
+  // i18n-independent Playwright hook (`StripItem.id`, types.ts).
+  if (
+    (state.phase === "live" || state.phase === "super_over") &&
+    freeHitPending(view.events, cfg.ballsPerInnings !== null)
+  ) {
+    strip.push({ id: "freeHit", value: t("scorepad.skin.cricket.header.freeHit"), accent: true });
+  }
+
   return {
     context: contextParts.join(" · "),
     phase: resolvePhase(view),
@@ -997,35 +1114,50 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
 }
 
 // ---------------------------------------------------------------------------
-// dock() — needs `t` for DockSpec.title (this file's header). Free hit,
-// unconditionally offered on every ball: "shot type" (design doc §3's
-// cricket row) has no home in `CricketBall`'s `z.strictObject` schema — no
-// field anywhere carries how a shot was played, and a strict-object dock
-// mutation adding an unrecognised key would 422 at send time. Flagged as a
-// real, engine-schema-shaped gap (out of this wave's "no packages/engine
-// work" scope), not a silent scope cut: `freeHit` is the one genuinely
-// optional `CricketBall` field, so it is what this dock always offers. Not
-// gated on `fine.freeHitPending`: by dock-render time the optimistic fold
-// has ALREADY advanced past the just-tapped ball (spec §2.3), so
-// `view.state`'s OWN freeHitPending already reflects AFTER this ball, not
-// before it. Tapping it on an ineligible ball surfaces as a normal
-// rejected-submission error (the fold's own `"freeHit flagged but no free
-// hit is pending"` check), same as any other invalid pick elsewhere in this
-// chassis — not a crash.
+// dock() — needs `t` for DockSpec.title (this file's header).
+//
+// R2b (owner ruling, live-tile audit, 2026-08-17): this dock USED TO offer a
+// `freeHit` chip unconditionally on every ball — "shot type" (design doc
+// §3's cricket row) has no home in `CricketBall`'s `z.strictObject` schema,
+// so `freeHit` (the one genuinely optional `CricketBall` field) was what it
+// always offered instead. That chip is GONE. It was never gated on whether a
+// free hit was actually pending (by dock-render time the optimistic fold has
+// already advanced past the just-tapped ball, so `view.state`'s own
+// `freeHitPending` already reflects AFTER this ball, not before it — there
+// was no cheap way to gate it correctly from here), so tapping it on an
+// ordinary ball surfaced as a bare rejected-submission error (the fold's own
+// `"freeHit flagged but no free hit is pending"` check) — the owner hit this
+// live. `payload.freeHit` was also never load-bearing: the server derives
+// `freeHitPending` purely from the preceding no-ball
+// (`finishDelivery`/`freeHitPending`, cricket.ts), and the free-hit
+// dismissal restriction reads `fine.freeHitPending`, never the payload flag
+// — so the flag was validated but never consumed; its only possible effect
+// was an error. Replaced by a READ-ONLY indicator (`buildScorebug`, above)
+// and an activity-log note (`cricketBallDetail`, above) — the scorer no
+// longer declares what the fold already knows, and the client never sends
+// `freeHit: true` at all any more.
+//
+// `buildDock` itself stays non-null for every ball event type even once
+// `chips` ends up empty (a plain run/wide/penalty tap, now that freeHit is
+// gone) — `e2e/scorepad-v3-cricket.spec.ts`'s undo tests tap a PLAIN run and
+// assert `[data-role="v3-dock"]` becomes visible, using dock PRESENCE as a
+// generic "this tap is still in the hold window" proxy, unrelated to free
+// hit specifically; returning `null` there would silently break that
+// already-passing coverage. The dock still shows its title, dismiss
+// control, and countdown with no chips in that case.
 //
 // R2b task 4 (`_INDEX.md`, owner ruling): `heldPayload`, the optional 3rd
 // argument (the widened chassis contract, `SkinDefV3.dock`, ../types.ts),
 // is what lets THIS dock tell a no-ball apart from a plain single — both
 // dispatch the identical `cricket.ball` event TYPE, so `eventType` alone
 // can never answer "which tile was actually tapped". A no-ball's dock
-// additionally offers bat-run chips (+1/+2/+3/+4/+6 — a no-ball is batted
-// normally, so this is legal; a WIDE is deliberately excluded even though
-// it is also an extra, because the engine refuses any bat run off one,
-// cricket.ts:1229 — "bat runs are impossible off a wide"). A bye/leg-bye's
-// dock instead offers extra-run chips (2/3/4) that raise the EXTRA's own
-// `runs`, never `bat`. Every other case — a plain run tap, a wide, a
-// penalty, or the pre-existing 2-arg call with no payload at all — keeps
-// offering Free Hit only, unchanged from pre-R2b behaviour.
+// offers bat-run chips (+1/+2/+3/+4/+6 — a no-ball is batted normally, so
+// this is legal; a WIDE is deliberately excluded even though it is also an
+// extra, because the engine refuses any bat run off one, cricket.ts:1229 —
+// "bat runs are impossible off a wide"). A bye/leg-bye's dock offers
+// extra-run chips (2/3/4) that raise the EXTRA's own `runs`, never `bat`.
+// Every other case — a plain run tap, a wide, a penalty, or the pre-existing
+// 2-arg call with no payload at all — now offers no chips at all.
 // ---------------------------------------------------------------------------
 
 const BAT_RUN_VALUES = [1, 2, 3, 4, 6] as const;
@@ -1070,9 +1202,7 @@ function extraRunChip(n: (typeof EXTRA_RUN_VALUES)[number]): DockChip {
 
 export function buildDock(eventType: string, t: TFn, heldPayload?: Record<string, unknown>): DockSpec | null {
   if (!BALL_EVENT_TYPES.has(eventType)) return null;
-  const chips: DockChip[] = [
-    { id: "freeHit", label: "pad.cricket.dock.freeHit", mutate: (payload) => ({ ...payload, freeHit: true }) },
-  ];
+  const chips: DockChip[] = [];
   const extraKind = (heldPayload?.runs as { extras?: { kind?: string } } | undefined)?.extras?.kind;
   if (extraKind === "noball") {
     for (const n of BAT_RUN_VALUES) chips.push(batRunChip(n));
