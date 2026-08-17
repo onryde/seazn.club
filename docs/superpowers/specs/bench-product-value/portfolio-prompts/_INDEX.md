@@ -39,8 +39,8 @@ S13-gated. New-branch-in-worktree rule applies to every session.
 | P4 | D1a template catalog + instantiation + wizard | `P04-templates-single-stage.md` | — | green-light | **MERGED** `e35efff1` (#548) |
 | P5 | D4a seeding rules + TBD fixtures + fill engine | `P05-progression-engine.md` | — | green-light | **MERGED** `776ba389` (#554), V360 |
 | P6 | D4b proposal UI + confirm flow | `P06-progression-ui.md` | P5 | green-light | **MERGED** `cdcc3bef` (#568), V362 |
-| P7 | D1b multi-stage templates | `P07-templates-multi-stage.md` | P4, P5 (StageSeeding merged) | green-light | **DONE 2026-08-16**, PR open — 3 templates + seeding persisted + progression map; stages now named not kinded (owner ruling); `validateStageSeeding` shared with instantiation; 2 defects found and reported unfixed (`uniqueSlug` race, modal 320 fold). Status: `docs/superpowers/plans/2026-08-16-p7-session-status.md` |
-| P8 | D5a venues/courts schema + API + org UI | `P08-venues-schema-ui.md` | — | green-light + **release-2 C-chain done** | TODO |
+| P7 | D1b multi-stage templates | `P07-templates-multi-stage.md` | P4, P5 (StageSeeding merged) | green-light | **MERGED `98e95c9e` (#582)** — 3 templates + seeding persisted + progression map; stages now named not kinded (owner ruling); `validateStageSeeding` shared with instantiation; 2 defects found and reported unfixed (`uniqueSlug` race, modal 320 fold). Status: `docs/superpowers/plans/2026-08-16-p7-session-status.md` |
+| P8 | D5a venues/courts schema + API + **Directory** UI | `P08-venues-schema-ui.md` | — | green-light + **release-2 C-chain done** (cleared: C7 `298da0af`, C8 `e9a7c54a`) | **DONE 2026-08-17** — V367 (4 tables, RLS forced, composite FKs, `on delete restrict`), 8 routes, archive at court AND venue level, Directory venues tab (NOT org settings — amendment A2), calendar editor, reusable tag-chip input, 84 i18n keys ×4. Gates: unit 8401/8329/4 (the 4 = pre-existing `schedule-build-honours-locks`), e2e 2/2 + an active-tab guard at 320/430/768, smoke 8/8 venues checks, screenshots 1280/320/768. **Six design amendments A1–A6** corrected in place in the D5 spec with a log at its foot. Status: `docs/superpowers/plans/2026-08-17-p8-session-status.md` |
 | P9 | D5b scheduler integration + stored-config migration | `P09-venues-scheduler.md` | P8 | same as P8 | TODO |
 | P10 | D5c calendars + window compiler | `P10-venues-calendars.md` | P9 | same as P8 | TODO |
 | P11 | D6 batch import | `P11-batch-import.md` | — | green-light + **ScoringPad S13 done** | TODO |
@@ -106,6 +106,51 @@ All owner-ratified 2026-08-13 in the design session:
 
 - 2026-08-13 — programme authored: 7 specs + 11 prompts committed,
   build-gated. C1 + S10 in flight at authoring time; S9 + C0 merged.
+- 2026-08-17 — **P8 (D5a) DONE.** Both hard gates cleared first: release-2
+  C-chain complete (C7 `298da0af`, C8 `e9a7c54a`) and P7 merged `98e95c9e`.
+  Six amendments A1–A6 to the D5 spec, corrected in place with a log at its
+  foot. Three change the product: venues live in the **Directory**, not org
+  settings (A2 — `directory/page.tsx` states the deciding rule in its own
+  header); removal is **delete-OR-archive** rather than one permanent 409 (A3,
+  gate keys on fixture STATUS not date); and `org_id` is denormalized onto the
+  three child tables (A1) because `check-rls.ts` enumerates ONLY tables that
+  have that column — the spec's own DDL shipped three tenant tables the RLS
+  guard skipped silently.
+
+### False premises and defects found by P8 (rulings, do not re-derive)
+
+1. **`court.in_use` / `venue.not_empty` do not match this repo's convention** —
+   the same false premise P1 hit. Typed codes here are ALL_CAPS_SNAKE;
+   dotted-lowercase is the i18n namespace. Shipped as `COURT_IN_USE`,
+   `VENUE_NOT_EMPTY`, `VENUE_IN_USE`, `COURT_NAME_TAKEN`, `COURT_HOURS_OVERLAP`,
+   `COURT_EXCEPTION_DUPLICATE_DATE`, `COURT_NOT_FOUND`.
+2. **The dictionaries are DIRECTORIES**, not four flat files:
+   `src/dictionaries/{en,es,fr,nl}/{common,console,ui,…}.json`.
+3. **Three `tsc` errors were reported as "tsc: clean (3 runs)".** vitest never
+   typechecks, and every existing test passed an explicit `null` where the
+   defect needed the omitted wire form. Only `tsc` could see it.
+4. **`required_court_tags` shipped completely inert** — column in V367, a
+   working picker in the UI, and ZERO mentions in `apps/web/src/server/`. Then
+   a *fourth* layer: the division page hardcoded `[]` on every load, so fixing
+   the API alone still looked broken. Grep the server tier for a new field's
+   name before believing a picker persists.
+5. **A `.scroll-x` tab strip hides its own active tab.** P8's fourth Directory
+   tab pushed "Venues" off-screen at 320. The no-horizontal-scroll gate is
+   structurally blind — the strip is SUPPOSED to scroll, so the body never
+   overflows — and `fullPage` screenshots reset nested scroll containers, so
+   the tab reads as hidden whether the fix works or not. A geometry assertion
+   is the only instrument that fails for the real reason. The settings hub
+   (`settings/page.tsx:252`) uses the identical pattern and has the same latent
+   bug the moment its tabs overflow.
+6. **Running vitest from the worktree ROOT under pnpm under-collects ~2600
+   tests** (`Cannot find package 'server-only'`) while printing a plausible
+   total — 504 instead of 3115. Run it from `apps/web`.
+7. **Five subagents ended their turn parked on background watchers**, reporting
+   nothing; work survived only because they committed as they went. Of three
+   "green" self-reports, one hid 3 tsc errors, one hid two inert seams, and one
+   measured against a stale schema. Re-running the gate at the wave boundary is
+   what caught all three.
+
 - 2026-08-13 — **wave 1 green-lit and started** (P1 ∥ P3, one worktree and
   one dedicated Postgres each). Ratified wave plan for the rest:
   W2 = P2 ∥ P4, W3 = P5 alone (two migrations must never run
