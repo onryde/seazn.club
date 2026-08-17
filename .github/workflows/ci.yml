@@ -538,29 +538,23 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      # buildx + the placement image are hoisted ABOVE the database chain and the
-      # image build is backgrounded, so its ~19s runs underneath Flyway migrate,
-      # the RLS guard, the sport sync and the repo-root scripts tests (~25s
-      # together) instead of in front of them. The steps themselves are unchanged
-      # and their rationale still lives at the join below.
+      # DO NOT hoist buildx + the placement image up here to overlap the database
+      # chain. It was tried and MEASURED WORSE (run 32017294260): this job went
+      # 213s -> 234s and became the workflow floor.
       #
-      # This was left out of #597 on the stated grounds that smoke-db sat below
-      # the workflow floor, so overlapping it would buy no wall clock. #600 made
-      # smoke-db the floor, which is what makes it worth doing now.
-      - uses: docker/setup-buildx-action@v3
-      - name: Build the placement service image
-        id: image
-        background: true
-        uses: docker/build-push-action@v6
-        with:
-          context: services/placement
-          file: services/placement/Dockerfile
-          push: false
-          load: true
-          tags: placement-service:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
+      # The mechanism, because it is not obvious and the change looks free: all
+      # three smoke jobs start at the same wall-clock moment, so hoisting the
+      # image build in all of them put the three builds within 17s of each other
+      # (09:52:00 / 09:52:02 / 09:52:17) and they then contended on the shared
+      # `type=gha` layer cache — with `cache-to: mode=max` writing it — taking
+      # 43s / 45s / 50s instead of the ~18s each they take when staggered.
+      #
+      # What staggers them today is exactly the thing a hoist removes: each job
+      # reaches its image build after a DB chain of a different length. That is
+      # load-bearing, not incidental. smoke-e2e keeps its hoist because it has a
+      # 61s production build to hide the image behind and it is the only one, so
+      # nothing collides.
+      #
       # Flyway CLI is downloaded by scripts/flyway.sh on first use; cache it
       # per pinned version so CI doesn't re-download every run.
       - name: Cache Flyway CLI
@@ -656,10 +650,17 @@ jobs:
       # `integration` job carries the same pair; `cache-from`/`cache-to:
       # type=gha` need it too.
       #
-      # Both steps now live ABOVE the database chain, near `pnpm install`, with
-      # the image build backgrounded. This is their join.
-      - name: Wait for the placement image
-        wait: [image]
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the placement service image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       # A literal, not a repository secret — a throwaway container talking to a
       # throwaway client inside one ephemeral runner. It must nonetheless be
@@ -931,22 +932,13 @@ jobs:
       # with smoke-db, smoke-e2e, e2e.yml and placement-ci.yml through the same
       # gha layer cache, so this is a cache hit and not a fourth full build.
       #
-      # Hoisted above the database chain and backgrounded, so its ~17s runs
-      # underneath Flyway migrate and the sport sync rather than after them.
-      - uses: docker/setup-buildx-action@v3
-      - name: Build the placement service image
-        id: image
-        background: true
-        uses: docker/build-push-action@v6
-        with:
-          context: services/placement
-          file: services/placement/Dockerfile
-          push: false
-          load: true
-          tags: placement-service:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
+      # DO NOT hoist these above the database chain to overlap it. Measured worse
+      # (run 32017294260) — see the long note in smoke-db. In short: all three
+      # smoke jobs start at the same wall-clock moment, so hoisting the image
+      # build in all of them made the three builds concurrent and they contended
+      # on the shared `type=gha` layer cache, 43-50s each against ~18s staggered.
+      # The differing DB-chain lengths are what stagger them, and that is
+      # load-bearing.
       - name: Cache Flyway CLI
         uses: actions/cache@v4
         with:
@@ -962,8 +954,17 @@ jobs:
       - name: Sync sport catalog from the engine registry
         run: npm run sync:sports
 
-      - name: Wait for the placement image
-        wait: [image]
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the placement service image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       # Container name differs from smoke-db's `placement-smoke`: these are
       # separate runners so a collision is impossible, but a distinct name keeps
