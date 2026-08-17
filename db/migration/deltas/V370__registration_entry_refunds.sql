@@ -1,5 +1,14 @@
 -- =============================================================================
--- V368 — per-entry refunds: registrations.refunded_cents
+-- V370 — per-entry refunds: registrations.refunded_cents
+--
+-- Renumbered from V368 after the fact. RS002 (#607) and F1 (#606) both
+-- renumbered to dodge P8's V367 while open, independently landed on V368,
+-- and merged minutes apart — leaving main with two V368 files and a Flyway
+-- that refuses to run at all ("Found more than one migration with version
+-- 368"), so no fresh clone, worktree or CI database could build a schema.
+-- This file moved rather than F1's because it is standalone, whereas F1's
+-- V369 adds columns to the table its V368 creates and the pair cannot be
+-- split. A migration number is only really claimed at merge time.
 --
 -- RS001 moved the whole payment envelope — including refunded_cents — from
 -- registrations to registration_groups (V364). That is exactly right while a

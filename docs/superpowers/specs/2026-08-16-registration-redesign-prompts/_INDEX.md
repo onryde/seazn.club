@@ -256,8 +256,16 @@ or compacted session reads first).
 - Waves: **W1–W5 all CLOSED**, each implementer → reviewer → gaps →
   implementer, with the main thread rerunning the gate itself. Modules
   shipped: `registration-eligibility.ts`, `registration-submit.ts`,
-  `registration-approval.ts`, plus `registrations.ts` and **V368**.
-- **The migration is `V368__registration_entry_refunds.sql`, not V367.**
+  `registration-approval.ts`, plus `registrations.ts` and **V370**.
+- **The migration is `V370__registration_entry_refunds.sql` — renumbered
+  TWICE.** It was V367, then V368, and is now V370. The second collision is
+  the instructive one: RS002 (#607) and F1 (#606) both moved off V367 while
+  open, both independently chose V368, and both merged. `main` then held two
+  V368 files and Flyway refused to run at all — "Found more than one
+  migration with version 368" — so no fresh clone, worktree or CI database
+  could build a schema, while every PR had been green in isolation. The
+  collision existed only in the merge. Dodging a number at write time does
+  not claim it; re-verify against `origin/main` immediately before merging.
   `main` merged `V367__venues_and_courts.sql` (#605) after RS002 forked, and
   **two V367 deltas in one tree is a migration-tool collision that `git
   rebase` reports as success** — nothing flags it until Flyway runs. Only the
