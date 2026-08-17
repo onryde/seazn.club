@@ -14,6 +14,10 @@ import { HardConstraint, type ConflictDetailKind } from "@seazn/engine/schedulin
 // ---------------------------------------------------------------------------
 
 export const Uuid = z.uuid();
+/** A real `courts.id` (V368 cutover) — structurally identical to Uuid;
+ *  named separately so a stored `ScheduleConfig.courts` entry documents what
+ *  it actually references (never a free-text court name post-migration). */
+export const CourtId = Uuid;
 export const Slug = z
   .string()
   .min(1)
@@ -925,7 +929,20 @@ export const ScheduleConfig = z.object({
   endAt: IsoDateTime.nullish(),
   matchMinutes: z.number().int().min(1).max(24 * 60).default(30),
   gapMinutes: z.number().int().min(0).max(24 * 60).default(0),
-  courts: z.array(z.string().min(1).max(100)).min(1).max(50).default(["Court 1"]),
+  /** V368 cutover: real court ids only, no tolerant string union — the
+   *  migration IS the compatibility strategy (design doc "Stored-config
+   *  migration"). The original design named `.min(1)`, dropped here: a
+   *  division that has never configured courts parses `courts` as
+   *  `undefined`, and zod's `.default()` substitutes WITHOUT re-running the
+   *  array's own checks (verified against the installed zod@4.4.3 — an
+   *  explicit `[]` DOES fail `.min(1)`, but a defaulted `[]` does not), so
+   *  `.min(1)` cannot be paired with an empty-array default, and no static
+   *  default can name a real per-org court id. An empty array is therefore a
+   *  legitimate, parseable "no courts configured yet" state; the capacity
+   *  guard already needs to treat zero usable courts as a first-class case
+   *  (`capacity.no_matching_court`, design doc "Scheduler integration") —
+   *  pass 3's job, not this one's. */
+  courts: z.array(CourtId).max(50).default([]),
   perEntrantMinRest: z.number().int().min(0).max(24 * 60).default(0),
   blackouts: z
     .array(z.object({ court: z.string().max(100).optional(), from: IsoDateTime, to: IsoDateTime }))
