@@ -489,105 +489,92 @@ export const CheckinLink = z.object({ url: z.string(), expires_at: z.string() })
 // Stages
 // ---------------------------------------------------------------------------
 
-// PROMPT-59 §4 — typed qualification spec, so a bad shape 400s at the edge
-// instead of throwing deep inside the engine. Mirrors engine
-// `QualificationSpec` (TakePicks | TopN | BestOfRank | CombinedQualification).
-// `take[].pool` matches the pool KEY ("A"); the display name ("Pool A") is
-// also accepted — the engine normalises.
-const PoolRankPickS = z.object({ pool: z.string().min(1), rank: z.number().int().min(1) });
-const TakePicksS = z
-  .object({ from: z.string().optional(), take: z.array(PoolRankPickS).min(1) })
-  .strict();
-const TopNS = z.object({ from: z.string().optional(), topN: z.number().int().min(1) }).strict();
-const BestOfRankS = z
-  .object({
-    from: z.string().optional(),
-    bestOfRank: z.object({
-      rank: z.number().int().min(1),
-      count: z.number().int().min(1),
-      normaliseUnequalPools: z.boolean().optional(),
-    }),
-  })
-  .strict();
-// L3/#414 — losers of a completed bracket round (KO->plate, qualifying-KO
-// wildcards). `round` is a bracket-wiring label, never an arithmetic
-// quantity (rounds number sparsely — see qualification.ts's RoundLosers).
-// `count` is REQUIRED, mirroring the engine exactly (a3ad1953): the engine's
-// `qualificationSize` reads `losersOfRound.count` unconditionally, so an
-// optional count here would let a malformed spec 400 loudly at create time
-// only to 500 later, deep inside a read path that must never throw.
-const RoundLosersS = z
-  .object({
-    from: z.string().optional(),
-    losersOfRound: z.object({
-      round: z.number().int().min(1),
-      count: z.number().int().min(1),
-    }),
-  })
-  .strict();
-export type QualificationSpecInput =
-  | z.infer<typeof TakePicksS>
-  | z.infer<typeof TopNS>
-  | z.infer<typeof BestOfRankS>
-  | z.infer<typeof RoundLosersS>
-  | { from?: string; combine: QualificationSpecInput[] };
-export const QualificationSpecSchema: z.ZodType<QualificationSpecInput> = z.lazy(() =>
-  z.union([
-    TakePicksS,
-    TopNS,
-    BestOfRankS,
-    RoundLosersS,
-    z
-      .object({ from: z.string().optional(), combine: z.array(QualificationSpecSchema).min(2).max(8) })
-      .strict(),
-  ]),
-);
-
-// D4a design doc (P5) — TBD placeholder fixtures + the propose/confirm
-// cross-stage fill flow. Separate from QualificationSpec above: `.seeding` is
-// declared on the TARGET stage, can name ANY earlier stage as its source (not
-// just seq-1), and controls bracket SEEDING (snake / explicit map), neither
-// of which QualificationSpec models. A stage declares ONE of the two — a
-// stage with `.seeding` set goes through the new propose/confirm flow instead
-// of the old auto-seed-on-complete `qualification` path.
+// F2 (unified progression field) — one ProgressionSchema replaces the two
+// prior vocabularies: QualificationSpecSchema (topN | bestOfRank |
+// losersOfRound | take/picks | combine, auto-seed-on-complete only) and
+// StageSeedingSchema (rankRange | topNPerGroup | bestNth, source/take/
+// placement/map, TBD-at-setup + propose/confirm). Mirrors the plain-TS shape
+// in @seazn/engine/competition (TakeRule/ProgressionSource/SeededMapEntry)
+// field-for-field — usecases import THOSE types, not these zod schemas, so a
+// shape drift here would 400 at the edge without tripping tsc. Keep them in
+// lockstep by hand.
 //
-// Mirrors the plain-TS shape in usecases/stage-seeding.ts (TakeRule /
-// Placement / SeededMapEntry) field-for-field — the usecase imports THOSE
-// types, not these zod schemas, so a shape drift here would 400 at the edge
-// without tripping tsc. Keep them in lockstep by hand.
+// Collapse (owner ruling 4, F2 plan Decision 2): `rankRange` survives `topN`
+// (topN:n IS rankRange{from:1,to:n}); `bestNth` survives `bestOfRank`,
+// absorbing its `normaliseUnequalPools` field (Decision 2b — the merged rule
+// still refuses unequal pool sizes by default; setting the flag silences the
+// refusal, carried forward as a documented, production-unreachable gap, not
+// newly closed here). `picks`/`roundLosers` are qualification's
+// TakePicks/RoundLosers, unchanged in meaning, given the kind-tagged shape
+// the rest of this union already uses. `take[].pool` / `picks[].pool` match
+// the pool KEY ("A"); the display name ("Pool A") is also accepted — the
+// engine normalises.
+const PoolRankPickS = z.object({ pool: z.string().min(1), rank: z.number().int().min(1) }).strict();
 const RankRangeTakeS = z
   .object({ kind: z.literal("rankRange"), from: z.number().int().min(1), to: z.number().int().min(1) })
   .strict()
   .refine((t) => t.to >= t.from, { message: "rankRange: to must be >= from", path: ["to"] });
 const TopNPerGroupTakeS = z.object({ kind: z.literal("topNPerGroup"), n: z.number().int().min(1).max(16) }).strict();
 const BestNthTakeS = z
-  .object({ kind: z.literal("bestNth"), nth: z.number().int().min(1), count: z.number().int().min(1) })
+  .object({
+    kind: z.literal("bestNth"),
+    nth: z.number().int().min(1),
+    count: z.number().int().min(1),
+    normaliseUnequalPools: z.boolean().optional(),
+  })
   .strict();
-export const TakeRuleSchema = z.union([RankRangeTakeS, TopNPerGroupTakeS, BestNthTakeS]);
+const PicksTakeS = z.object({ kind: z.literal("picks"), picks: z.array(PoolRankPickS).min(1) }).strict();
+// L3/#414 — losers of a completed bracket round (KO->plate, qualifying-KO
+// wildcards). `round` is a bracket-wiring label, never an arithmetic
+// quantity (rounds number sparsely — see progression.ts's roundLosers).
+// `count` is REQUIRED, mirroring the engine exactly: `progressionSize` reads
+// `roundLosers.count` unconditionally, so an optional count here would let a
+// malformed spec 400 loudly at create time only to 500 later, deep inside a
+// read path that must never throw.
+const RoundLosersTakeS = z
+  .object({ kind: z.literal("roundLosers"), round: z.number().int().min(1), count: z.number().int().min(1) })
+  .strict();
+export const TakeRuleSchema = z.union([RankRangeTakeS, TopNPerGroupTakeS, BestNthTakeS, PicksTakeS, RoundLosersTakeS]);
 
 const SeededMapEntryS = z.object({ slot: z.string().min(1).max(20), source: z.string().min(1).max(40) }).strict();
 
-export const StageSeedingSchema = z
+const ProgressionSourceS = z
   .object({
-    source: z.union([z.literal("previous"), z.object({ stageId: Uuid }).strict()]),
+    stage: z.union([z.literal("previous"), z.object({ stageId: Uuid }).strict()]),
     take: z.array(TakeRuleSchema).min(1).max(8),
+  })
+  .strict();
+
+// Decision 1 (F2 plan) — `timing` is the axis the design doc's own proposed
+// shape omitted: whether this stage's fixtures appear at setup, as TBD
+// placeholders (old `.seeding`), or only once every source stage completes
+// (old `.qualification`). Required, no default — ruling 5's "strict
+// constraints from day one, no permissive interim state". Multi-source
+// `sources[]` (new capability — Finding 1: it never actually worked
+// server-side before F2) is enforced for dedupe at RESOLUTION time
+// (resolveProgression), not at parse time — two sources are both
+// independently well-formed here even if they could later name the same
+// entrant.
+export const ProgressionSchema = z
+  .object({
+    sources: z.array(ProgressionSourceS).min(1).max(8),
     placement: z.enum(["seeded_map", "snake", "rank_order"]),
     map: z.array(SeededMapEntryS).max(64).optional(),
+    timing: z.enum(["setup", "on_complete"]),
   })
   .strict()
   .refine((s) => s.placement !== "seeded_map" || (s.map !== undefined && s.map.length > 0), {
     message: "seeded_map placement needs a non-empty map",
     path: ["map"],
   });
-export type StageSeedingInput = z.infer<typeof StageSeedingSchema>;
+export type ProgressionInput = z.infer<typeof ProgressionSchema>;
 
 export const CreateStage = z.object({
   seq: z.number().int().min(1),
   kind: StageKind,
   name: z.string().min(1).max(200),
   config: z.record(z.string(), z.unknown()).default({}),
-  qualification: QualificationSpecSchema.nullish(),
-  seeding: StageSeedingSchema.nullish(),
+  progression: ProgressionSchema.nullish(),
 });
 
 /** POST /divisions/{id}/stages — the stage graph, one or many (doc 08 §3). */
@@ -859,7 +846,7 @@ export const GenerateResult = z.object({
 export const CompleteResult = z.object({
   completed: z.boolean(),
   events: z.array(z.record(z.string(), z.unknown())),
-  /** Set when completion resolved the next stage's qualification spec. */
+  /** Set when completion resolved the next stage's progression rules. */
   qualified: z.object({ stage_id: Uuid, entrants: z.array(Uuid) }).optional(),
 });
 
