@@ -19,12 +19,19 @@ const F = (
   status = "scheduled",
   homeSlotLabel: SlotLabel | null = null,
   awaySlotLabel: SlotLabel | null = null,
+  // F1 Task 4: the persisted round-role columns (V368/V369) — trailing and
+  // optional so every pre-existing call site above keeps compiling unchanged.
+  lane: "WB" | "LB" | "GF" | null = null,
+  isFinal = false,
+  thirdPlace = false,
+  conditional = false,
 ) => ({
   id, division_id: "d", stage_id: "s", pool_id: null, round_no: round,
   seq_in_round: seq, home_entrant_id: home, away_entrant_id: away,
   home_slot_label: homeSlotLabel, away_slot_label: awaySlotLabel,
   scheduled_at: null, venue: null, court_label: null, status, outcome,
   summary: outcome ? { headline: "2–0" } : null,
+  lane, is_final: isFinal, third_place: thirdPlace, conditional,
 });
 
 const names = { a: "Ants", b: "Bees", c: "Cats", d: "Dogs" };
@@ -234,4 +241,57 @@ describe("public Bracket", () => {
     expect(html).toMatch(/title="Por definir"/);
     expect(html).not.toContain("bracket.tbd");
   });
+
+  // F1 Task 4 — the bug this whole session exists to kill: naming a round by
+  // its match count instead of its position. A well-formed double-elim of 8
+  // takes the DoubleElim TREE branch above (which only labels lanes/GF, not
+  // per-round names), so this shape is deliberately IRREGULAR — LB round
+  // "l1" has 1 game where doubleElimBracket()'s regularity check expects 2 —
+  // to force the SAME column fallback the pre-existing "irregular" test
+  // above already proves is reachable. That is exactly where the count-based
+  // namer used to live (`kind === "double_elim"` fell through to a raw
+  // `Round ${round_no}`, using the persisted LANE-ENCODED number).
+  it("names double-elim rounds by lane, not by match count (irregular fallback shape)", () => {
+    const fixtures = [
+      F("w1", 1, 1, null, null, null, "decided", null, null, "WB"),
+      F("w2", 1, 2, null, null, null, "decided", null, null, "WB"),
+      F("w3", 1, 3, null, null, null, "decided", null, null, "WB"),
+      F("w4", 1, 4, null, null, null, "decided", null, null, "WB"),
+      F("w5", 2, 1, null, null, null, "decided", null, null, "WB"),
+      F("w6", 2, 2, null, null, null, "decided", null, null, "WB"),
+      F("wf", 3, 1, null, null, null, "scheduled", null, null, "WB"),
+      F("l1", 7, 1, null, null, null, "scheduled", null, null, "LB"),
+      F("lf", 8, 1, null, null, null, "scheduled", null, null, "LB"),
+      F("gf", 14, 1, null, null, null, "scheduled", null, null, "GF", true, false, false),
+    ];
+    const html = renderToStaticMarkup(
+      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+    );
+    expect(html).not.toContain('data-bracket="double-elim"'); // confirms the fallback, not the tree
+    expect(html).toContain("Quarter-finals"); // WB round 1 (4 games, 3 rounds out)
+    expect(html).toContain("Semi-finals"); // WB round 2
+    // renderToStaticMarkup HTML-escapes text nodes, so "Winners' final"
+    // comes back as "Winners&#x27; final" — asserting the raw string.
+    expect(html).toContain("Winners&#x27; final"); // WB round 3 — NOT the tournament final
+    expect(html).toContain("Losers&#x27; round 1"); // LB round 7
+    expect(html).toContain("Losers&#x27; final"); // LB round 8
+    expect(html).toContain("Grand final"); // GF round 14
+    // The old bug: double_elim fell through to the raw, lane-encoded
+    // round_no ("Round 7", "Round 14", …) because only "knockout" had a
+    // fromEnd branch. None of those numbers should appear as a round name.
+    expect(html).not.toMatch(/>Round 7</);
+    expect(html).not.toMatch(/>Round 14</);
+    // A double-elim never produces a bare "final" role — only
+    // winners_final/losers_final/grand_final — so the plain word never
+    // appears on its own (only inside "Winners' final" etc).
+    expect(html.match(/>Final</g) ?? []).toHaveLength(0);
+  });
+
+  // Page-playoff naming (Qualifier 1 / Eliminator / Qualifier 2 / Final) is
+  // already covered end to end by "renders the Page-playoff card" above —
+  // that test asserts the exact same four labels this task's PP_ROLE
+  // conversion must keep producing, and it still passes unchanged, which is
+  // the falsifiability proof for this file's other conversion (the
+  // roundName() fallback above gets its own dedicated test since nothing
+  // pre-existing exercised it for double_elim).
 });

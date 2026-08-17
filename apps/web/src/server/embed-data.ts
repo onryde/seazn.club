@@ -90,7 +90,8 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
       select id, division_id, stage_id, pool_id, round_no, seq_in_round,
              home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
              scheduled_at, venue, court_label,
-             status, outcome, summary, last_seq
+             status, outcome, summary, last_seq,
+             lane, is_final, third_place, conditional
       from public_fixtures_v where division_id = ${divisionId}
       order by round_no, seq_in_round`.then((rows) => rows.map(iso)),
     sql<PublicStandings[]>`

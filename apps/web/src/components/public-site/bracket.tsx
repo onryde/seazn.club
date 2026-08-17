@@ -18,7 +18,10 @@ import {
   type BracketNode,
   type DoubleElimLayout,
   type PagePlayoffLayout,
+  type PagePlayoffSlot,
 } from "@seazn/engine/scheduling";
+import type { RoundRole } from "@seazn/engine/competition";
+import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 
 interface Props {
   kind: "knockout" | "double_elim" | "stepladder" | "page_playoff";
@@ -379,22 +382,35 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
     rounds.set(f.round_no, list);
   }
   const ordered = [...rounds.entries()].sort(([a], [b]) => a - b);
-  // Distance from the last round — stable even when byes thin out a round.
-  // Double-elim round numbers encode WB/LB/GF lanes, so keep plain numbers.
-  const maxRound = ordered.length > 0 ? ordered[ordered.length - 1][0] : 0;
-  const roundName = (roundNo: number): string => {
-    if (kind === "stepladder") {
-      // The summit match IS the final — "Rung N" reads wrong at the top
-      // ("the winner plays seed 1 in the final", help copy).
-      return roundNo === maxRound ? "Final" : `Rung ${roundNo}`;
+  // F1 Task 4: name each round by its POSITION (roundRole), never by match
+  // count — a double-elim's losers bracket has repeated round sizes, so a
+  // count-based namer produces several "Semi-finals" and several "Final"s
+  // in one bracket. Ranked per LANE, not across the whole stage: a DE's LB
+  // has more rounds than its WB, and a global rank silently reintroduces
+  // the bug. page_playoff never reaches this fallback with a real shape
+  // (a well-formed 4-fixture set always takes the PagePlayoff tree branch
+  // above), so it keeps the plain "Round N" here, same as before.
+  const laneFixtures = fixtures.map((f) => ({ round_no: f.round_no, lane: f.lane ?? null }));
+  const roundName = (roundNo: number, list: PublicFixture[]): string => {
+    if (kind === "knockout" || kind === "double_elim" || kind === "stepladder") {
+      const first = list[0]!;
+      return roundRoleLabel(
+        lookup,
+        roundRoleFor(
+          laneFixtures,
+          {
+            round_no: roundNo,
+            lane: first.lane ?? null,
+            is_final: first.is_final === true,
+            third_place: first.third_place === true,
+            conditional: first.conditional === true,
+          },
+          kind,
+          null,
+        ),
+      );
     }
-    if (kind === "knockout") {
-      const fromEnd = maxRound - roundNo;
-      if (fromEnd === 0) return "Final";
-      if (fromEnd === 1) return "Semi-finals";
-      if (fromEnd === 2) return "Quarter-finals";
-    }
-    return `Round ${roundNo}`;
+    return roundRoleLabel(lookup, { kind: "plain_round", n: roundNo });
   };
 
   return (
@@ -403,7 +419,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
         {ordered.map(([roundNo, list]) => (
           <div key={roundNo} className="min-w-48">
             <h3 className="mb-2 font-display text-sm font-semibold uppercase tracking-[0.18em] text-ink-muted">
-              {roundName(roundNo)}
+              {roundName(roundNo, list)}
             </h3>
             <div className="flex flex-col justify-around gap-3">
               {list
@@ -429,7 +445,16 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
 // Page playoffs (IPL): Qualifier 1 and the Eliminator on the left, Qualifier 2
 // centre (Q1's loser drops in, the Eliminator's winner advances), the Final on
 // the right fed by both winners. Positions are the classic playoff card.
-const PP_LABEL = { q1: "Qualifier 1", eliminator: "Eliminator", q2: "Qualifier 2", final: "Final" } as const;
+// The layout's own `slot` already IS the fixture's identity (pagePlayoffBracket
+// assigns it positionally from the SAME emission order bracket.ts's ext_key
+// ids encode — F1 Task 4: map it straight to a RoundRole, never re-derive
+// from round size).
+const PP_ROLE: Record<PagePlayoffSlot, RoundRole> = {
+  q1: { kind: "qualifier1" },
+  eliminator: { kind: "eliminator" },
+  q2: { kind: "qualifier2" },
+  final: { kind: "final" },
+};
 
 function PagePlayoff({
   layout,
@@ -478,7 +503,7 @@ function PagePlayoff({
           return (
             <div key={n.fixtureId} data-slot={n.slot} className="absolute" style={{ left: p.x, top: p.y, width: NODE_W }}>
               <p className="mb-1 font-display text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">
-                {PP_LABEL[n.slot]}
+                {roundRoleLabel(lookup, PP_ROLE[n.slot])}
               </p>
               <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} />
             </div>

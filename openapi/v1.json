@@ -18861,12 +18861,7 @@
                               "outcome",
                               "schedule_source",
                               "schedule_locked",
-                              "created_at",
-                              "ext_key",
-                              "lane",
-                              "is_final",
-                              "third_place",
-                              "conditional"
+                              "created_at"
                             ],
                             "additionalProperties": false
                           }
@@ -18919,12 +18914,7 @@
                         "outcome": null,
                         "schedule_source": "none",
                         "schedule_locked": true,
-                        "created_at": "example",
-                        "ext_key": "example",
-                        "lane": "WB",
-                        "is_final": true,
-                        "third_place": true,
-                        "conditional": true
+                        "created_at": "example"
                       }
                     ]
                   },
@@ -20685,12 +20675,7 @@
                               "outcome",
                               "schedule_source",
                               "schedule_locked",
-                              "created_at",
-                              "ext_key",
-                              "lane",
-                              "is_final",
-                              "third_place",
-                              "conditional"
+                              "created_at"
                             ],
                             "additionalProperties": false
                           }
@@ -20743,12 +20728,7 @@
                         "outcome": null,
                         "schedule_source": "none",
                         "schedule_locked": true,
-                        "created_at": "example",
-                        "ext_key": "example",
-                        "lane": "WB",
-                        "is_final": true,
-                        "third_place": true,
-                        "conditional": true
+                        "created_at": "example"
                       }
                     ]
                   },
@@ -28572,12 +28552,7 @@
                         "outcome",
                         "schedule_source",
                         "schedule_locked",
-                        "created_at",
-                        "ext_key",
-                        "lane",
-                        "is_final",
-                        "third_place",
-                        "conditional"
+                        "created_at"
                       ],
                       "additionalProperties": false
                     },
@@ -28617,12 +28592,7 @@
                     "outcome": null,
                     "schedule_source": "none",
                     "schedule_locked": true,
-                    "created_at": "example",
-                    "ext_key": "example",
-                    "lane": "WB",
-                    "is_final": true,
-                    "third_place": true,
-                    "conditional": true
+                    "created_at": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -29300,11 +29270,6 @@
                         "schedule_source",
                         "schedule_locked",
                         "created_at",
-                        "ext_key",
-                        "lane",
-                        "is_final",
-                        "third_place",
-                        "conditional",
                         "conflicts"
                       ],
                       "additionalProperties": false
@@ -29346,11 +29311,6 @@
                     "schedule_source": "none",
                     "schedule_locked": true,
                     "created_at": "example",
-                    "ext_key": "example",
-                    "lane": "WB",
-                    "is_final": true,
-                    "third_place": true,
-                    "conditional": true,
                     "conflicts": [
                       {
                         "fixture_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",

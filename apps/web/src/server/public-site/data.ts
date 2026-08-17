@@ -129,6 +129,22 @@ export interface PublicFixture {
     detail?: unknown;
   } | null;
   last_seq: number | null;
+  /** F1 (2026-08-17): the engine's bracket-position role, exposed on
+   *  public_fixtures_v by V369. `lane` is null for single-lane brackets and
+   *  non-bracket stages. postgres.js's `sql<T>` generic is an assertion,
+   *  not derived from the query text — every explicit SELECT against this
+   *  view that returns `PublicFixture[]` must list these four by hand or
+   *  they silently read `undefined` at runtime despite the TS type (the
+   *  exact trap `home_slot_label`/`away_slot_label` hit at V362, per
+   *  usecases/public.ts's "Fix round 3 (Gap 9)" comment). Optional, not
+   *  because a real row can lack one, but because pre-existing tests build
+   *  a `PublicFixture` literal by hand that predates these four fields
+   *  (e.g. public-site/__tests__/schedule.test.tsx's own `F()` helper) —
+   *  same convention ScheduleSolverInfo's later fields already established. */
+  lane?: "WB" | "LB" | "GF" | null;
+  is_final?: boolean;
+  third_place?: boolean;
+  conditional?: boolean;
 }
 
 export interface PublicStage {
@@ -290,7 +306,8 @@ export async function getPublicCompetition(
                f.seq_in_round, f.home_entrant_id, f.away_entrant_id,
                f.home_slot_label, f.away_slot_label,
                f.scheduled_at, f.venue, f.court_label, f.status, f.outcome,
-               f.summary, f.last_seq
+               f.summary, f.last_seq,
+               f.lane, f.is_final, f.third_place, f.conditional
         from public_fixtures_v f
         join public_divisions_v d on d.id = f.division_id
         where d.competition_id = ${competition.id} and f.status = 'in_play'
@@ -340,7 +357,8 @@ export async function getPublicDivision(
         select id, division_id, stage_id, pool_id, round_no, seq_in_round,
                home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
                scheduled_at, venue, court_label,
-               status, outcome, summary, last_seq
+               status, outcome, summary, last_seq,
+               lane, is_final, third_place, conditional
         from public_fixtures_v where division_id = ${division.id}
         order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixture));
       const standings = await sql<PublicStandings[]>`
@@ -401,7 +419,8 @@ export async function getPublicFixture(
         select id, division_id, stage_id, pool_id, round_no, seq_in_round,
                home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
                scheduled_at, venue, court_label,
-               status, outcome, summary, last_seq
+               status, outcome, summary, last_seq,
+               lane, is_final, third_place, conditional
         from public_fixtures_v
         where id = ${fixtureId} and division_id = ${division.id} limit 1`;
       if (!fixtureRow) return null;

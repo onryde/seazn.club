@@ -126,15 +126,21 @@ export interface FixtureRow {
   created_at: string;
   /** Generator-stable id (idempotent regeneration key). Also the ONE place
    *  a page-playoff fixture's Qualifier-1-vs-Eliminator identity survives —
-   *  both share a round and a match count (F1 Task 4). */
-  ext_key: string | null;
+   *  both share a round and a match count (F1 Task 4). Optional (like the
+   *  four fields below), not because a real row can lack one — FIXTURE_COLS
+   *  always selects it — but because dozens of pre-existing tests hand-build
+   *  a FixtureRow-shaped literal that predates this field (the same
+   *  precedent ScheduleSolverInfo's later fields already established:
+   *  required would break every one of those literals without a full
+   *  apps/web typecheck to find them all). */
+  ext_key?: string | null;
   /** F1 (2026-08-17): the engine's bracket-position role, persisted instead
    *  of re-derived per consumer (db/migration/deltas/V368__fixture_round_role.sql).
    *  `lane` is null for single-lane brackets and non-bracket stages. */
-  lane: "WB" | "LB" | "GF" | null;
-  is_final: boolean;
-  third_place: boolean;
-  conditional: boolean;
+  lane?: "WB" | "LB" | "GF" | null;
+  is_final?: boolean;
+  third_place?: boolean;
+  conditional?: boolean;
 }
 
 export async function listStages(auth: AuthCtx, divisionId: string): Promise<StageRow[]> {
