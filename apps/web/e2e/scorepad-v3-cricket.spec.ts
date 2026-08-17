@@ -341,3 +341,108 @@ test("cricket v3: the device link (/score/[token]) renders the v3 pad, not the l
     await anonCtx.close();
   }
 });
+
+// R2 sign-off review (2026-08-17). The three capabilities the cricket flip
+// dropped and this wave restored. Each assertion below FAILS against the
+// pre-fix pad, which is the whole point: the previous e2e passed with all
+// three missing, because it only checked that the pad worked — never that it
+// still did what the legacy pad did.
+test("cricket v3: the activity panel lists every recorded ball, NOT just the latest", async ({ page }) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket Activity ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 AC Striker ${TAG}` }, { fullName: `V3 AC NonStriker ${TAG}` }],
+    away: [{ fullName: `V3 AC Bowler ${TAG}` }],
+  });
+  await openLiveConsole(page, fx);
+
+  // Three balls, so "shows only the latest" (the v3 ribbon's behaviour, and
+  // the regression) is distinguishable from "shows the history".
+  // One tap at a time, each confirmed onto the ledger before the next. Three
+  // rapid taps race the ~6s soft-commit hold (a later tap flushes the held
+  // one) and land only two balls — which is how the first version of this
+  // test failed, intermittently, against working code.
+  let expected = 0;
+  for (const runs of ["1", "2", "0"]) {
+    await pad(page).getByRole("button", { name: runs, exact: true }).click();
+    expected += 1;
+    await expect
+      .poll(
+        async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
+        { timeout: 30_000 },
+      )
+      .toBe(expected);
+  }
+
+  const panel = pad(page).locator('[data-role="v3-activity-slot"]');
+  await expect(panel).toBeVisible({ timeout: 20_000 });
+  // Every ball has a row — three, not one. A ribbon-only pad shows one.
+  await expect
+    .poll(async () => panel.locator('[data-role="v3-activity-row"]').count(), { timeout: 20_000 })
+    .toBeGreaterThanOrEqual(3);
+  // And a void control for an event the scorer recorded themselves, which is
+  // the correction path the device-link surface otherwise lost entirely.
+  expect(await panel.locator('[data-role="v3-activity-void"]').count()).toBeGreaterThan(0);
+});
+
+test("cricket v3: voiding an OLDER event from the activity panel writes core.void for THAT event", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket OldVoid ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 OV Striker ${TAG}` }, { fullName: `V3 OV NonStriker ${TAG}` }],
+    away: [{ fullName: `V3 OV Bowler ${TAG}` }],
+  });
+  await openLiveConsole(page, fx);
+
+  for (const runs of ["1", "2"]) {
+    await pad(page).getByRole("button", { name: runs, exact: true }).click();
+  }
+  await expect
+    .poll(
+      async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
+      { timeout: 30_000 },
+    )
+    .toBe(2);
+  // Out of the hold window, so this is a real void rather than a drop.
+  await expect(pad(page).locator('[data-role="v3-dock"]')).not.toBeVisible({ timeout: 20_000 });
+
+  const ledgerRows = await ledger(page.request, fx.fixtureId);
+  const balls = ledgerRows.filter((e) => e.type === "cricket.ball");
+  const oldest = balls[0]!;
+
+  const panel = pad(page).locator('[data-role="v3-activity-slot"]');
+  // Target the oldest BALL by its own event id, never by position. The ledger
+  // also carries structural events (core.start), so "the last row" is the
+  // match start, not the oldest ball — and voiding the start is refused, which
+  // is exactly how the first version of this test failed against working code.
+  // Rows are newest-first and the ledger also carries structural events, so
+  // the order is [newer ball, OLDER ball, core.start]. Index 1 is the older
+  // ball — the one the ribbon's single undo can never reach.
+  //
+  // Deliberately NOT located by `data-event-id`: for events this client
+  // submitted, the envelope id the panel renders is the client's own
+  // idempotency key, which is not guaranteed to equal the id the ledger reads
+  // back. Identity is asserted below on the ledger instead, which is where it
+  // is meaningful — a locator that silently matches nothing would make this
+  // test vacuous, and that is the failure mode this whole wave is about.
+  const rows = panel.locator('[data-role="v3-activity-row"]');
+  await expect.poll(async () => rows.count(), { timeout: 20_000 }).toBeGreaterThanOrEqual(3);
+  await rows.nth(1).locator('[data-role="v3-activity-void"]').click();
+
+  await expect
+    .poll(
+      async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "core.void").length,
+      { timeout: 20_000 },
+    )
+    .toBe(1);
+  const voided = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "core.void")!;
+  // The OLDEST ball, not the latest: this is the assertion that separates a
+  // real per-event void from the ribbon's undo-the-last-thing.
+  expect(voided.payload).toMatchObject({ event_id: oldest.id });
+});

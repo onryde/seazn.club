@@ -143,6 +143,12 @@ export function ActivityPanel({
                 className="flex items-center gap-3 px-4 py-2"
                 data-role="v3-activity-row"
                 data-voided={voided}
+                // The row's own event id. Without it a test can only target
+                // rows POSITIONALLY, and position lies: the ledger carries
+                // structural events (core.start) alongside scoring ones, so
+                // "the last row" is not "the oldest ball". Cost one wrong
+                // e2e failure to learn.
+                data-event-id={event.id}
               >
                 <span
                   className={`min-w-0 flex-1 break-words text-sm ${voided ? "text-slate-400 line-through" : "text-slate-700"}`}
