@@ -722,37 +722,62 @@ jobs:
       # nothing later in THIS job needs placement, and teardown at the end of
       # this job is just housekeeping, not a dependency the way it used to be.
 
-      # The `src/app` suites and the DB-gated outliers MOVED to
-      # smoke-db-usecases, purely to balance the two DB jobs. Measured on run
-      # 32017904120 this job was 238s against that one's 161s — a 77s gap,
-      # because this job carries every extra step on top of its usecases half.
-      # Neither moved step needs Redis or Stripe (checked, not assumed), so the
-      # move added no service and no env there.
+      # DB-gated suites that live OUTSIDE src/server / src/lib / src/app, and so
+      # were selected by no step in this job and skipped in the unit job for want
+      # of DATABASE_URL — i.e. they ran nowhere, and reported green by reporting
+      # nothing. Found 2026-08-10.
       #
-      # Read that 238-vs-161 with the variance in mind: this job's main test step
-      # has measured 77s, 101s and 98s on three consecutive runs of the same
-      # code. The gap is real but the exact figure is not.
+      # Named FILE BY FILE, deliberately. Adding `src/components` or `src/demo`
+      # as a path would drag every pure component suite in those trees into a
+      # Postgres job that was never meant to run them — the same over-selection
+      # the comment above records costing 187-vs-185 files on 2026-07-29.
+      # `drift.test.ts` beside these is deliberately NOT DB-gated and already
+      # runs in the unit job; pulling it in would be that mistake in miniature.
+      #
+      # capture.test.ts is here for ONE of its three blocks: its `capture a real
+      # architect run` describe also needs CAPTURING, which is unset, so that
+      # half still skips. The block that runs is the one its own banner calls
+      # "The guard — always on" — which was not on, in any job, until this step.
+      #
+      # db-suite-ci-wiring.test.ts fails if a new DB-gated suite appears outside
+      # those three trees without a line here, so this list cannot silently rot.
+      # It is how capture.test.ts was found, after the first draft of this step
+      # listed only the other two.
+      - name: DB-gated suites outside src/server|lib|app (real Postgres)
+        run: npm test --workspace apps/web -- --reporter=default --reporter=json --outputFile=vitest-results-outliers.json src/components/__tests__/upgrade-gate-pass-features.test.ts src/demo/ai-templates/__capture__/__tests__/seeds.test.ts src/demo/ai-templates/__capture__/capture.test.ts
+
+      # The DB-gated suites under src/app. src/lib is NOT repeated here: the
+      # Engine-db step above already runs it, and running it in both steps shares
+      # one migrated schema across two passes — a suite that writes a fixed
+      # stripe_customer_id (billing-pass-financial-trace) then collides with its
+      # own first pass under V314's partial unique index. src/app is the only
+      # DB-gated tree that step does not cover.
+      #
+      # pass-scoping-guard.test.ts is no longer excluded: the Event Pass scoping
+      # sweep it tracked has landed, so it passes and runs with the rest.
+      - name: Service-layer integration tests outside src/server (real Postgres)
+        run: npm test --workspace apps/web -- --reporter=default --reporter=json --outputFile=vitest-results-app.json src/app
 
       # Collection reconciliation (#339). A run is only evidence about the files
       # it collected, and collection has been observed to vary between runs with
       # identical arguments — 511 files once, 158 three times, all exit 0. This
-      # compares what `vitest list` selects for these paths against what the step
-      # above actually executed, and fails the job when they disagree. Costs one
-      # collection pass, not a second suite run.
+      # compares what `vitest list` selects for these paths against what the two
+      # steps above actually executed, and fails the job when they disagree.
+      # Costs one collection pass, not a second suite run.
       #
-      # It carries the SAME `--exclude` the run above did, so the listing it
-      # reconciles against is this job's half and not the whole tree. Without it
-      # every src/server/usecases/[i-z]* file reads as "listed but not run" — a
-      # red on a correct run, which is how a gate gets deleted instead of fixed.
-      # smoke-db-shard-partition.test.ts proves the two halves are still
+      # The first call carries the SAME `--exclude` the run above did, so the
+      # listing it reconciles against is this job's half and not the whole tree.
+      # Without it every src/server/usecases/[i-z]* file reads as "listed but not
+      # run" — a red on a correct run, which is how a gate gets deleted instead of
+      # fixed. smoke-db-shard-partition.test.ts proves the two halves are still
       # exhaustive and disjoint, so nothing can fall between them unnoticed.
-      #
-      # The `src/app` reconciliation moved with its suite.
       - name: Vitest collection reconciliation
         run: |
           node --experimental-strip-types scripts/check-vitest-collection.ts \
             --results apps/web/vitest-results-lib-server.json \
             --exclude "$USECASES_EXCLUDE" -- src/server src/lib
+          node --experimental-strip-types scripts/check-vitest-collection.ts \
+            --results apps/web/vitest-results-app.json -- src/app
 
       # REDIS_URL is scoped to this step only, and only to this step — never
       # job-wide. Setting it job-wide would switch the entitlement cache
@@ -1032,64 +1057,14 @@ jobs:
             }
           '
 
-      # --- moved here from smoke-db, to balance the two DB jobs ----------------
-      #
-      # smoke-db was 238s against this job's 161s on run 32017904120, because it
-      # carried every extra step on top of its own usecases half. These two need
-      # neither Redis nor Stripe — checked rather than assumed: the src/app
-      # suites touch Stripe only in source-text assertions, and capture.test.ts's
-      # AI block is `skipIf(!CAPTURING || !HAS_DB)` with CAPTURE_AI_DEMO unset in
-      # both jobs — so they moved without this job gaining a service or a secret.
-      #
-      # DB-gated suites that live OUTSIDE src/server / src/lib / src/app, and so
-      # were selected by no step in either DB job and skipped in the unit job for
-      # want of DATABASE_URL — i.e. they ran nowhere, and reported green by
-      # reporting nothing. Found 2026-08-10.
-      #
-      # Named FILE BY FILE, deliberately. Adding `src/components` or `src/demo`
-      # as a path would drag every pure component suite in those trees into a
-      # Postgres job that was never meant to run them — the same over-selection
-      # that once cost 187-vs-185 files on 2026-07-29. `drift.test.ts` beside
-      # these is deliberately NOT DB-gated and already runs in the unit job;
-      # pulling it in would be that mistake in miniature.
-      #
-      # capture.test.ts is here for ONE of its three blocks: its `capture a real
-      # architect run` describe also needs CAPTURING, which is unset, so that
-      # half still skips. The block that runs is the one its own banner calls
-      # "The guard — always on" — which was not on, in any job, until this step.
-      #
-      # db-suite-ci-wiring.test.ts fails if a new DB-gated suite appears outside
-      # those three trees without a line here, so this list cannot silently rot.
-      # It is how capture.test.ts was found, after the first draft listed only
-      # the other two. That guard reads ci.yml as a whole and does not care WHICH
-      # job holds the line, which is what makes this move safe.
-      - name: DB-gated suites outside src/server|lib|app (real Postgres)
-        run: npm test --workspace apps/web -- --reporter=default --reporter=json --outputFile=vitest-results-outliers.json src/components/__tests__/upgrade-gate-pass-features.test.ts src/demo/ai-templates/__capture__/__tests__/seeds.test.ts src/demo/ai-templates/__capture__/capture.test.ts
-
-      # The DB-gated suites under src/app. src/lib is NOT repeated here — and
-      # note the original reason still holds under the split, for a different
-      # cause: running src/lib in two steps of ONE job shares one migrated schema
-      # across two passes, and a suite writing a fixed stripe_customer_id
-      # (billing-pass-financial-trace) then collides with its own first pass under
-      # V314's partial unique index. src/lib now lives in smoke-db, a separate
-      # job with a separate Postgres, so there is no shared schema at all.
-      #
-      # pass-scoping-guard.test.ts is no longer excluded: the Event Pass scoping
-      # sweep it tracked has landed, so it passes and runs with the rest.
-      - name: Service-layer integration tests outside src/server (real Postgres)
-        run: npm test --workspace apps/web -- --reporter=default --reporter=json --outputFile=vitest-results-app.json src/app
-
-      # Same #339 guard smoke-db carries, over this job's half. The first call is
-      # narrowed by the SAME glob the usecases run above used, or every [a-h]
-      # file reads as "listed but not run" — a red on a correct run. The src/app
-      # call moved here with its suite and needs no glob: that tree is not split.
+      # Same #339 guard smoke-db carries, over this job's half. Narrowed by the
+      # SAME glob the run above used, or every [a-h] file reads as "listed but
+      # not run" — a red on a correct run.
       - name: Vitest collection reconciliation
         run: |
           node --experimental-strip-types scripts/check-vitest-collection.ts \
             --results apps/web/vitest-results-usecases.json \
             --exclude "$USECASES_EXCLUDE" -- src/server/usecases
-          node --experimental-strip-types scripts/check-vitest-collection.ts \
-            --results apps/web/vitest-results-app.json -- src/app
 
       - name: Placement service logs and teardown
         if: always()
