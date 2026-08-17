@@ -30,7 +30,7 @@ programme instead.
 | S13 | #422 | `S13-422-w11-cutover.md` | S12 | **DONE** — v1 deleted outright (8 pads, 3 pad tests, both dispatch chains, the `scorepad-v2` flag, the `/score/harness` route, 160 dead dictionary keys across 4 locales); v2 is the only path. Deleting it surfaced FIVE behaviours v1 had that v2 did not: the suspension countdown, the DLS revised-target surface, hockey's escalation hint (whose v1 key `pad.pp.escalation` had never been translated in ANY locale — v1 rendered the raw key to users), person attribution on period suspensions (rendered as a raw UUID textbox because the skin read only `state.squads`, which is populated ONLY after a `core.lineup.*` folds — so every hockey/icehockey card in production asked the scorer to type a UUID), and `ActionForm.handleTap` auto-firing an incomplete payload for any action with no fields but a required attribution (7 declarations across tennis/carrom/generic/setbased). All five implemented on v2 before v1 was removed. An axe scan made reachable for the first time by the re-anchor then found **24 WCAG AA contrast failures** across the whole scorepad tree, worst 1.48:1 — all fixed, ratios computed from the oklch palette, and axe now runs per skin so the gap cannot silently reopen |
 | L1 | #412 | ~~`L1-412-w1-eligibility.md`~~ | — | **SUPERSEDED 2026-08-17 → `RS011`** (see below). Do NOT run this file |
 | L2 | #413 | `L2-413-w2-date-hardening.md` | ~~L1~~ → after RS003 | TODO |
-| L3 | #414 | `L3-414-w3-formats.md` | — | TODO — **unblocked, startable now** |
+| L3 | #414 | `L3-414-w3-formats.md` | — | **DONE** — 3 passes. Five brief premises false (see the L3 note below); `RoundLosers.count` made REQUIRED so `qualificationSize` stays total on a read path; `StageTables.seeds` deleted as unreachable; the two casts that were MASKING the whole drift removed |
 
 Deferred e2e/smoke debt from the engine-only sessions (S1, S3–S8) is discharged
 in **S12** (both entry points, offline) and **S13** (smoke through v2, help tree).
@@ -67,9 +67,43 @@ never in parallel with RS011 (both write `api-v1/schemas.ts`). Note for `L2`:
 refund-lock refine (`api-v1/schemas.ts:1687-1710` — RS001b only removed
 `currency`), so that scope item is still `L2`'s to build, not RS's.
 
-**`L3`/#414 is unblocked and startable today.** Its "single-writer on
-`stages.ts`" warning pointed at P7/#582, which merged as `98e95c9e`. Re-pin
-`components/v2/format-templates.ts` before starting — P7 reshaped it.
+**`L3`/#414 — DONE (3 passes: engine, engine-db, server+UI).** Qualification now
+works out of every stage kind. Five of the brief's premises were false, and the
+last two are the durable lessons:
+
+1. **`packages/engine/src/engine-db/` does not exist** — the real file is
+   `apps/web/src/server/engine-db/competition.ts`, with **two** casts, not one.
+2. **The carry-over guard the brief said to edit in `points.ts` does not
+   exist.** `CarryMode` is mode-driven with no stage-kind check anywhere; the
+   real guard WAS the `TABLE_KINDS` throw the session was told to delete.
+   Deleting it silently makes carry-over reachable from bracket/ladder/americano
+   sources whose placement rows carry no points — the guard was re-added in
+   `seedNextStage`, where it actually belongs.
+3. **No second americano leaderboard existed**, so the brief's "extract rather
+   than duplicate" was prevention, and its acceptance criterion "grep proves the
+   duplicate is gone" was vacuous as written.
+4. **`qualifierCount` (`stages.ts:737`) was a hand-rolled duplicate** knowing
+   only `topN`/`take`; `bestOfRank` and `combine` returned 0, masked by `|| 4`,
+   so the preview silently drew 4 entrants for specs the engine understood. Now
+   delegates to the engine's `qualificationSize`.
+5. **The two `as never` / `as StageCtx["kind"]` casts were MASKING the drift.**
+   Widening `StageKind` did NOT red `apps/web`'s typecheck — the casts absorb
+   any union change — so nothing in CI would ever have caught the missing kinds.
+   A cast that survives a deliberate type widening is load-bearing in the wrong
+   direction.
+
+Also fixed en route: a `thirdPlace` fixture shares the final's `round_no` and
+carries no `winner_to_fixture`, so it was **masquerading as the grand final**;
+and `BracketStage` never carried `seeds`, degrading `bracketRanks`'s tiebreak to
+raw UUID comparison.
+
+**Known gap, owner-ruled 2026-08-17:** the two new templates ship as hardcoded
+English, matching the 12 pre-existing ones — `STAGE_TEMPLATES` renders
+`label`/`help` as literals in `division-settings.tsx` / `division-builder.tsx`.
+Dictionary keys were added and then **reverted** rather than left unread; the
+whole picker-i18n gap is recorded against F3 in
+`../2026-08-17-format-progression-prompts/_INDEX.md`, which opens that file
+anyway.
 
 ### The T lane — PARKED, after S13
 

@@ -3,9 +3,12 @@ import "server-only";
 // personal-points leaderboard. Personal points = the score a player's pair
 // posted, summed across decided fixtures (padel scoring is per-point, not
 // win/loss). A disposable projection of the score ledger — reads only.
+import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
+
+type Tx = postgres.TransactionSql;
 
 export interface AmericanoMatch {
   fixture_id: string;
@@ -29,6 +32,33 @@ export interface AmericanoView {
   mode: "americano" | "mexicano";
   rounds: AmericanoRound[];
   leaderboard: AmericanoLeader[];
+}
+
+/**
+ * Personal points leaderboard for an americano/mexicano stage: each player's
+ * pair score summed across decided fixtures (padel scoring is per-point, not
+ * win/loss) — see the module comment. The ONE implementation: shared by the
+ * live display below and qualification-by-personal-points (usecases/
+ * stages.ts seedNextStage, L3/#414 pass 3), which additionally maps each
+ * `person_id` here to the division's persistent INDIVIDUAL entrant (never
+ * one of this stage's ephemeral per-round `pair` entrants — those don't
+ * survive into the next stage, see pairEntrantsFor in usecases/stages.ts).
+ */
+export async function personalPointsLeaderboard(tx: Tx, stageId: string): Promise<AmericanoLeader[]> {
+  return tx<{ person_id: string; name: string; points: number; games: number }[]>`
+    select em.person_id, p.full_name as name,
+           coalesce(sum(
+             case when f.home_entrant_id = em.entrant_id
+                  then (m.state->'score'->>'home')::numeric
+                  else (m.state->'score'->>'away')::numeric end), 0)::int as points,
+           count(*)::int as games
+    from fixtures f
+    join match_states m on m.fixture_id = f.id
+    join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+    join persons p on p.id = em.person_id
+    where f.stage_id = ${stageId} and f.status in ('decided', 'finalized')
+    group by em.person_id, p.full_name
+    order by points desc, name`;
 }
 
 interface FxRow {
@@ -82,20 +112,7 @@ export async function americanoView(auth: AuthCtx, stageId: string): Promise<Ame
       .map(([round_no, matches]) => ({ round_no, matches }));
 
     // personal points: each player's pair score across decided fixtures.
-    const leaders = await tx<{ person_id: string; name: string; points: number; games: number }[]>`
-      select em.person_id, p.full_name as name,
-             coalesce(sum(
-               case when f.home_entrant_id = em.entrant_id
-                    then (m.state->'score'->>'home')::numeric
-                    else (m.state->'score'->>'away')::numeric end), 0)::int as points,
-             count(*)::int as games
-      from fixtures f
-      join match_states m on m.fixture_id = f.id
-      join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
-      join persons p on p.id = em.person_id
-      where f.stage_id = ${stageId} and f.status in ('decided', 'finalized')
-      group by em.person_id, p.full_name
-      order by points desc, name`;
+    const leaders = await personalPointsLeaderboard(tx, stageId);
 
     return { stage_id: stageId, mode, rounds, leaderboard: leaders };
   });

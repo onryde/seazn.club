@@ -1,7 +1,7 @@
 ---
 title: Add a one-off match
 description: Replays, friendlies and tie-breakers — add a single match to a running league, group or Swiss stage.
-order: 6
+order: 7
 ---
 
 Sometimes the generated schedule isn't the whole story: a void match needs a **replay**, a tie needs a **decider**, or you want a one-off extra. On a league, group or Swiss stage, use **Add match** on the stage header: pick the two entrants (same pool, for groups), optionally a time, done.

@@ -17101,6 +17101,38 @@
                           "from": {
                             "type": "string"
                           },
+                          "losersOfRound": {
+                            "type": "object",
+                            "properties": {
+                              "round": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              "count": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "round",
+                              "count"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "losersOfRound"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "from": {
+                            "type": "string"
+                          },
                           "combine": {
                             "minItems": 2,
                             "maxItems": 8,
@@ -18069,6 +18101,38 @@
                         },
                         "required": [
                           "bestOfRank"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "from": {
+                            "type": "string"
+                          },
+                          "losersOfRound": {
+                            "type": "object",
+                            "properties": {
+                              "round": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              "count": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "round",
+                              "count"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "losersOfRound"
                         ],
                         "additionalProperties": false
                       },

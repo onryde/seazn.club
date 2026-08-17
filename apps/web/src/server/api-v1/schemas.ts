@@ -500,16 +500,34 @@ const BestOfRankS = z
     }),
   })
   .strict();
+// L3/#414 — losers of a completed bracket round (KO->plate, qualifying-KO
+// wildcards). `round` is a bracket-wiring label, never an arithmetic
+// quantity (rounds number sparsely — see qualification.ts's RoundLosers).
+// `count` is REQUIRED, mirroring the engine exactly (a3ad1953): the engine's
+// `qualificationSize` reads `losersOfRound.count` unconditionally, so an
+// optional count here would let a malformed spec 400 loudly at create time
+// only to 500 later, deep inside a read path that must never throw.
+const RoundLosersS = z
+  .object({
+    from: z.string().optional(),
+    losersOfRound: z.object({
+      round: z.number().int().min(1),
+      count: z.number().int().min(1),
+    }),
+  })
+  .strict();
 export type QualificationSpecInput =
   | z.infer<typeof TakePicksS>
   | z.infer<typeof TopNS>
   | z.infer<typeof BestOfRankS>
+  | z.infer<typeof RoundLosersS>
   | { from?: string; combine: QualificationSpecInput[] };
 export const QualificationSpecSchema: z.ZodType<QualificationSpecInput> = z.lazy(() =>
   z.union([
     TakePicksS,
     TopNS,
     BestOfRankS,
+    RoundLosersS,
     z
       .object({ from: z.string().optional(), combine: z.array(QualificationSpecSchema).min(2).max(8) })
       .strict(),

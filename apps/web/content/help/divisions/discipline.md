@@ -1,7 +1,7 @@
 ---
 title: Player discipline & suspensions
 description: Card thresholds fold into a disciplinary ledger, auto-raise pending suspensions you confirm, and flag banned players everywhere.
-order: 7
+order: 8
 ---
 
 Card-sport divisions (football, hockey, ice hockey) get a **Discipline tab** beside Settings. It turns the cards your scorers record into a running disciplinary ledger, raises **pending** suspensions when a player crosses a threshold, and flags banned players across the console, the score pad, the public page and each player's own home. Discipline is a **Pro** feature (cards are already Pro), so free organisations see the upgrade prompt on the tab.

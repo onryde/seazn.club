@@ -84,12 +84,15 @@ describe("SetTeamSquad", () => {
 describe("CreateStage.qualification (PROMPT-59 §4 — typed spec at the edge)", () => {
   const stage = (qualification: unknown) => ({ seq: 2, kind: "knockout", name: "KO", qualification });
 
-  it("accepts each of the four qualification shapes", () => {
+  it("accepts each of the five qualification shapes", () => {
     expect(CreateStage.safeParse(stage({ take: [{ pool: "A", rank: 1 }] })).success).toBe(true);
     expect(CreateStage.safeParse(stage({ topN: 4 })).success).toBe(true);
     expect(
       CreateStage.safeParse(stage({ bestOfRank: { rank: 3, count: 8, normaliseUnequalPools: true } }))
         .success,
+    ).toBe(true);
+    expect(
+      CreateStage.safeParse(stage({ losersOfRound: { round: 1, count: 4 } })).success,
     ).toBe(true);
     expect(
       CreateStage.safeParse(
@@ -103,10 +106,15 @@ describe("CreateStage.qualification (PROMPT-59 §4 — typed spec at the edge)",
     ).toBe(true);
   });
 
-  it("accepts a nested combine and null/absent qualification", () => {
+  it("accepts a nested combine (losersOfRound included) and null/absent qualification", () => {
     expect(
       CreateStage.safeParse(
         stage({ combine: [{ topN: 2 }, { combine: [{ topN: 1 }, { topN: 1 }] }] }),
+      ).success,
+    ).toBe(true);
+    expect(
+      CreateStage.safeParse(
+        stage({ combine: [{ losersOfRound: { round: 1, count: 2 } }, { topN: 2 }] }),
       ).success,
     ).toBe(true);
     expect(CreateStage.safeParse(stage(null)).success).toBe(true);
@@ -118,6 +126,10 @@ describe("CreateStage.qualification (PROMPT-59 §4 — typed spec at the edge)",
     expect(CreateStage.safeParse(stage({ take: [{ pool: "A" }] })).success).toBe(false); // missing rank
     expect(CreateStage.safeParse(stage({ topN: 0 })).success).toBe(false);
     expect(CreateStage.safeParse(stage({ combine: [{ topN: 2 }] })).success).toBe(false); // min 2 children
+    // count is REQUIRED (engine a3ad1953) — a mismatch here is a runtime 422
+    // nobody can debug (qualificationSize would read undefined.count).
+    expect(CreateStage.safeParse(stage({ losersOfRound: { round: 1 } })).success).toBe(false);
+    expect(CreateStage.safeParse(stage({ losersOfRound: { round: 0, count: 1 } })).success).toBe(false);
   });
 });
 

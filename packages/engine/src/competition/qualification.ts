@@ -4,6 +4,7 @@
 // an identical list (property test), so regeneration is deterministic.
 import { EngineError } from "../core/errors.ts";
 import type { EntrantId } from "../core/types.ts";
+import type { BracketFixture } from "./stage.ts";
 import {
   foldResults,
   resultsAmong,
@@ -44,7 +45,27 @@ export interface CombinedQualification {
   from?: string;
   combine: QualificationSpec[];
 }
-export type QualificationSpec = TakePicks | TopN | BestOfRank | CombinedQualification;
+// L3/#414 — losers of a completed bracket round (KO→plate, qualifying-KO
+// wildcards). `round` is a bracket-wiring label, never an arithmetic
+// quantity (spec 05 §2.3/§2.5: rounds number sparsely — 1,2,3 on a winners'
+// side, 7-10 on a losers' side, 14 for a grand final).
+//
+// `count` is REQUIRED, unlike the first cut of this spec. Every sibling spec
+// encodes its own output size (take.length / topN / bestOfRank.count), and
+// `qualificationSize` is called to SIZE a stage — including from
+// `previewDivisionFixtures`, a read path. An optional count forced that
+// function to throw for a spec it could not measure, which turns a missing
+// field into a broken preview rather than a validation message. Producers
+// always know the number: the template that builds a KO→plate knows the
+// entrant count when it writes the spec.
+export interface RoundLosers {
+  from?: string;
+  losersOfRound: {
+    round: number;
+    count: number;
+  };
+}
+export type QualificationSpec = TakePicks | TopN | BestOfRank | CombinedQualification | RoundLosers;
 
 // A completed stage's ranked tables. `results` (pool fixtures) is needed only
 // for best-of-rank normalisation.
@@ -56,6 +77,16 @@ export interface PoolTable {
 export interface StageTables {
   pools: readonly PoolTable[];
   overall?: readonly StandingsRow[]; // league / topN source
+  // L3/#414 — the completed bracket stage's fixtures, present only when
+  // qualification is sourced from a bracket (knockout / double_elim /
+  // stepladder / page_playoff). Only `losersOfRound` reads this; every other
+  // spec ignores it.
+  // `bracket` order IS the qualification order: the caller that assembles it
+  // (engine-db's completion path, from `ext_key`'s lane + slot) is the
+  // ordering authority, and a test there proves the assembly is ordered.
+  // A `seeds` tie-break used to live here; it could never fire, because the
+  // only "position" available to this module is a distinct array index.
+  bracket?: readonly BracketFixture[];
 }
 
 function isTake(spec: QualificationSpec): spec is TakePicks {
@@ -67,13 +98,19 @@ function isTopN(spec: QualificationSpec): spec is TopN {
 function isCombine(spec: QualificationSpec): spec is CombinedQualification {
   return "combine" in spec;
 }
+function isRoundLosers(spec: QualificationSpec): spec is RoundLosers {
+  return "losersOfRound" in spec;
+}
 
 // The seed count a spec must produce — the next stage's generator input size
 // (spec 05 §6 invariant: qualification output size matches next stage input).
+// Total for every spec kind: this is a read path (`previewDivisionFixtures`
+// sizes a stage graph with it), so it must never throw.
 export function qualificationSize(spec: QualificationSpec): number {
   if (isCombine(spec)) return spec.combine.reduce((n, child) => n + qualificationSize(child), 0);
   if (isTake(spec)) return spec.take.length;
   if (isTopN(spec)) return spec.topN;
+  if (isRoundLosers(spec)) return spec.losersOfRound.count;
   return spec.bestOfRank.count;
 }
 
@@ -194,6 +231,45 @@ export function resolveQualification(spec: QualificationSpec, tables: StageTable
       .map((row) => row.entrantId);
   }
 
+  if (isRoundLosers(spec)) {
+    const bracket = tables.bracket;
+    if (bracket === undefined) {
+      throw new EngineError(
+        "STAGE_NOT_READY",
+        "losersOfRound needs the completed stage's bracket fixtures",
+        { round: spec.losersOfRound.round },
+      );
+    }
+    const { round, count } = spec.losersOfRound;
+    // Equality-filter only — never arithmetic on `round` (spec 05 §2.3/§2.5,
+    // sparse numbering). The filtered array's order IS bracket position: the
+    // caller that assembled `tables.bracket` is the ordering authority, not
+    // this function, so there is nothing to sort here.
+    const losers = bracket
+      .filter(
+        (fixture): fixture is BracketFixture & { loser: EntrantId } =>
+          fixture.round === round && fixture.loser !== undefined,
+      )
+      .map((fixture) => fixture.loser);
+
+    if (losers.length === 0) {
+      throw new EngineError(
+        "QUALIFICATION_INVALID",
+        `bracket round ${round} has no losers (not decided yet, or the round does not exist)`,
+        { round },
+      );
+    }
+    const want = count;
+    if (want > losers.length) {
+      throw new EngineError(
+        "QUALIFICATION_INVALID",
+        `losersOfRound wants ${want} losers from round ${round}, found ${losers.length}`,
+        { round, count: want, available: losers.length },
+      );
+    }
+    return losers.slice(0, want);
+  }
+
   // bestOfRank — "the N best rank-R finishers across pools".
   const { rank, count, normaliseUnequalPools } = spec.bestOfRank;
   const candidates = tables.pools.map((pool) => {
@@ -210,4 +286,27 @@ export function resolveQualification(spec: QualificationSpec, tables: StageTable
   return orderCandidates(candidates)
     .slice(0, count)
     .map((row) => row.entrantId);
+}
+
+// L3/#414 — wraps any finish order (a bracket's bracketRanks() output, a
+// ladder's config.ladder_order — anything that is just an ordered
+// EntrantId[], with no pool/bracket structure of its own) as a single-pool
+// PoolTable, so `topN` (and any future rank-keyed spec) resolves over it with
+// NO changes to resolveQualification. Ranks are POSITIONAL (1-based index
+// into `finalRanks`); the counters below don't come from a fold and carry no
+// meaning — only `entrantId` and `rank` are ever read from these rows.
+export function placementTable(finalRanks: readonly EntrantId[]): PoolTable {
+  return {
+    pool: "",
+    rows: finalRanks.map((entrantId, i) => ({
+      entrantId,
+      played: 0,
+      won: 0,
+      drawn: 0,
+      lost: 0,
+      points: 0,
+      metrics: {},
+      rank: i + 1,
+    })),
+  };
 }

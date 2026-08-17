@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 import type { StandingsDelta } from "../core/types.ts";
 import { foldResults, type FixtureResult, type StandingsRow } from "./standings.ts";
 import { rankStandings } from "./tiebreakers.ts";
-import { qualificationSize, resolveQualification, type PoolTable } from "./qualification.ts";
+import {
+  placementTable,
+  qualificationSize,
+  resolveQualification,
+  type PoolTable,
+} from "./qualification.ts";
 
 function fb(home: string, away: string, hg: number, ag: number): FixtureResult {
   const draw = hg === ag;
@@ -220,6 +225,179 @@ describe("pool key/name hardening (PROMPT-59 §3)", () => {
   it("names the available pools when a pick resolves nothing", () => {
     expect(() => resolveQualification({ take: [{ pool: "Z", rank: 1 }] }, tables)).toThrow(
       /available pools: A, B/,
+    );
+  });
+});
+
+// L3/#414 — losers of a bracket round (KO→plate, qualifying-KO wildcards).
+// Bracket rounds number SPARSELY (spec 05 §2.3/§2.5 — 1,2,3 for winners' side,
+// 7-10 for a losers' side, 14 for a grand final) and are display labels, never
+// an arithmetic quantity — resolveQualification only ever compares `round`
+// with `===`. "Bracket position" is the order fixtures for the round appear
+// in `tables.bracket`: the caller (the code that reconstructs the bracket)
+// is the ordering authority, not this function, so this module does not sort
+// at all. `count` is REQUIRED on the spec — see qualificationSize below.
+describe("resolveQualification — losersOfRound (L3/#414)", () => {
+  it("throws STAGE_NOT_READY when the stage's bracket wasn't supplied", () => {
+    expect(() => resolveQualification({ losersOfRound: { round: 1, count: 1 } }, { pools: [] })).toThrow(
+      /bracket/,
+    );
+  });
+
+  it("throws QUALIFICATION_INVALID when the round has no losers yet", () => {
+    const tables = {
+      pools: [],
+      bracket: [{ id: "f1", round: 1, status: "scheduled" as const }],
+    };
+    expect(() => resolveQualification({ losersOfRound: { round: 1, count: 1 } }, tables)).toThrow(
+      /round 1 has no losers/,
+    );
+    // the round simply doesn't exist in this bracket at all
+    expect(() => resolveQualification({ losersOfRound: { round: 99, count: 1 } }, tables)).toThrow(
+      /round 99 has no losers/,
+    );
+  });
+
+  it("orders losers by bracket POSITION (array order) — never by round arithmetic", () => {
+    // rounds 1, 7 and 14 mirror the sparse numbering spec 05 uses across
+    // lanes; equality-filtering to round 7 must ignore 1 and 14 entirely.
+    const tables = {
+      pools: [],
+      bracket: [
+        { id: "r1-a", round: 1, status: "decided" as const, loser: "R1L" },
+        { id: "r7-a", round: 7, status: "decided" as const, loser: "R7-second" },
+        { id: "r7-b", round: 7, status: "decided" as const, loser: "R7-first" },
+        { id: "r14-a", round: 14, status: "decided" as const, loser: "R14L" },
+      ],
+    };
+    // "R7-second" is listed BEFORE "R7-first" in the bracket array — position
+    // order is array order, so it must come out first too.
+    expect(resolveQualification({ losersOfRound: { round: 7, count: 2 } }, tables)).toEqual([
+      "R7-second",
+      "R7-first",
+    ]);
+  });
+
+  it("count slices the first N by position", () => {
+    const tables = {
+      pools: [],
+      bracket: [
+        { id: "a", round: 0, status: "decided" as const, loser: "L1" },
+        { id: "b", round: 0, status: "decided" as const, loser: "L2" },
+        { id: "c", round: 0, status: "decided" as const, loser: "L3" },
+      ],
+    };
+    expect(resolveQualification({ losersOfRound: { round: 0, count: 2 } }, tables)).toEqual([
+      "L1",
+      "L2",
+    ]);
+    // a count equal to the round's loser count takes all of them
+    expect(resolveQualification({ losersOfRound: { round: 0, count: 3 } }, tables)).toEqual([
+      "L1",
+      "L2",
+      "L3",
+    ]);
+  });
+
+  it("throws QUALIFICATION_INVALID when count exceeds the round's losers", () => {
+    const tables = {
+      pools: [],
+      bracket: [{ id: "a", round: 0, status: "decided" as const, loser: "L1" }],
+    };
+    expect(() =>
+      resolveQualification({ losersOfRound: { round: 0, count: 2 } }, tables),
+    ).toThrow(/wants 2 losers from round 0, found 1/);
+  });
+
+  it("composes inside CombinedQualification, in declaration order (reuses the existing dedupe)", () => {
+    const tables = {
+      pools: [],
+      bracket: [
+        { id: "r0-a", round: 0, status: "decided" as const, loser: "R0L1" },
+        { id: "r0-b", round: 0, status: "decided" as const, loser: "R0L2" },
+        { id: "r1-a", round: 1, status: "decided" as const, loser: "R1L1" },
+      ],
+    };
+    const spec = {
+      combine: [{ losersOfRound: { round: 0, count: 2 } }, { losersOfRound: { round: 1, count: 1 } }],
+    };
+    expect(resolveQualification(spec, tables)).toEqual(["R0L1", "R0L2", "R1L1"]);
+  });
+
+  it("rejects an entrant qualifying through both a losersOfRound tier and another tier", () => {
+    // Same dedupe path the existing CombinedQualification suite exercises
+    // with two `take` children — losersOfRound is just another spec shape to
+    // the recursive collision check, no second dedupe implementation.
+    const tables = {
+      pools: [{ pool: "A", rows: [row("R0L1", 1, 9)] }],
+      bracket: [{ id: "r0-a", round: 0, status: "decided" as const, loser: "R0L1" }],
+    };
+    const dupe = {
+      combine: [{ take: [{ pool: "A", rank: 1 }] }, { losersOfRound: { round: 0, count: 1 } }],
+    };
+    expect(() => resolveQualification(dupe, tables)).toThrow(/more than one/);
+  });
+});
+
+describe("qualificationSize — losersOfRound (L3/#414)", () => {
+  it("returns the declared count", () => {
+    expect(qualificationSize({ losersOfRound: { round: 1, count: 4 } })).toBe(4);
+  });
+
+  it("never throws — it is a read path (previewDivisionFixtures sizes with it)", () => {
+    // `count` is required on the spec precisely so this stays total. Every
+    // sibling spec encodes its own size; losersOfRound now does too, so no
+    // caller has to catch a sizing call.
+    for (const round of [0, 1, 7, 14]) {
+      expect(() => qualificationSize({ losersOfRound: { round, count: 2 } })).not.toThrow();
+    }
+  });
+
+  it("sums correctly inside combine when every child declares a count", () => {
+    const spec = {
+      combine: [{ losersOfRound: { round: 0, count: 4 } }, { losersOfRound: { round: 1, count: 2 } }],
+    };
+    expect(qualificationSize(spec)).toBe(6);
+  });
+});
+
+// L3/#414 — placementTable turns any finish order (a bracket's bracketRanks
+// output, or a ladder's config.ladder_order — no pool/bracket structure at
+// all) into a PoolTable, so `topN` qualifies out of it with NO changes to
+// resolveQualification's topN branch.
+describe("placementTable (L3/#414)", () => {
+  it("ranks entrants positionally, 1-based, in the given order", () => {
+    const pt = placementTable(["S1", "S2", "S3", "S4"]);
+    expect(pt.rows.map((r) => [r.entrantId, r.rank])).toEqual([
+      ["S1", 1],
+      ["S2", 2],
+      ["S3", 3],
+      ["S4", 4],
+    ]);
+  });
+
+  it("topN resolves over a bracket's placement table unchanged (single pool)", () => {
+    const pt = placementTable(["S1", "S2", "S3", "S4"]);
+    expect(resolveQualification({ topN: 2 }, { pools: [pt] })).toEqual(["S1", "S2"]);
+  });
+
+  it("topN resolves over a LADDER's finish order — same function, no bracket at all", () => {
+    // a ladder stage has neither pools nor a bracket: finalRanks is just the
+    // rung order once every challenge settles (config.ladder_order, owned by
+    // apps/web pass 3). placementTable must generalise to it unchanged.
+    const ladderOrder = ["p4", "p1", "p3", "p2"];
+    const pt = placementTable(ladderOrder);
+    expect(resolveQualification({ topN: 3 }, { pools: [], overall: pt.rows })).toEqual([
+      "p4",
+      "p1",
+      "p3",
+    ]);
+  });
+
+  it("throws the standard topN-exceeds-field error when asked for more than exist", () => {
+    const pt = placementTable(["only-one"]);
+    expect(() => resolveQualification({ topN: 2 }, { pools: [pt] })).toThrow(
+      /takes the top 2, but the previous stage has only 1 entrant/,
     );
   });
 });

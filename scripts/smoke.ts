@@ -734,6 +734,7 @@ async function main() {
   await jointAiSuite();
 
   await pagePlayoffSuite(admin);
+  await qualifyFromAnyStageSuite(admin);
 
   // --- v16 SPEC-1 discipline: 5-yellow auto ban → confirm → public strip on
   // the Pro org; 402 + PlusReveal on a fresh community owner.
@@ -14477,4 +14478,114 @@ async function pagePlayoffSuite(admin: Session): Promise<void> {
     await v1(admin, `/api/v1/fixtures/${fixtures.find((f) => f.round_no === 3)!.id}`),
   );
   check("pp Final home = Q1 winner", finF.home_entrant_id === byName.get("PP Two"));
+}
+
+/**
+ * L3/#414 pass 3 — a multi-stage format built end to end over real HTTP:
+ * knockout main draw -> plate, seeded from round-1 losers (losersOfRound).
+ * Proves the whole chain a template like ko_plate exercises: generate,
+ * decide every round (regenerating between passes so later rounds' winner
+ * feeds wire up), complete, and the plate seeds in bracket order.
+ */
+async function qualifyFromAnyStageSuite(admin: Session): Promise<void> {
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(admin, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Qfa Cup ${tag}` }),
+  );
+  const div = v1data<{ id: string; slug: string }>(
+    await v1(admin, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Qfa",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  const names = ["A", "B", "C", "D", "E", "F", "G", "H"];
+  await v1(
+    admin,
+    `/api/v1/divisions/${div.id}/entrants`,
+    "POST",
+    names.map((n, i) => ({ kind: "individual", display_name: n, seed: i + 1, members: [] })),
+  );
+  const entrants = v1data<{ id: string; display_name: string; seed: number | null }[]>(
+    await v1(admin, `/api/v1/divisions/${div.id}/entrants`),
+  );
+  const seedOf = new Map(entrants.map((e) => [e.id, e.seed ?? 99]));
+
+  const main = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/divisions/${div.id}/stages`, "POST", {
+      seq: 1,
+      kind: "knockout",
+      name: "Main",
+    }),
+  );
+  const plate = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/divisions/${div.id}/stages`, "POST", {
+      seq: 2,
+      kind: "knockout",
+      name: "Plate",
+      qualification: { losersOfRound: { round: 1, count: 4 } },
+    }),
+  );
+
+  type Fx = {
+    id: string;
+    status: string;
+    round_no: number;
+    seq_in_round: number;
+    home_entrant_id: string | null;
+    away_entrant_id: string | null;
+  };
+  const gen = v1data<{ fixtures: Fx[] }>(await v1(admin, `/api/v1/stages/${main.id}/generate`, "POST"));
+  await v1(admin, `/api/v1/divisions/${div.id}/start`, "POST");
+
+  const round1No = Math.min(...gen.fixtures.map((f) => f.round_no));
+  const round1 = gen.fixtures
+    .filter((f) => f.round_no === round1No)
+    .sort((a, b) => a.seq_in_round - b.seq_in_round);
+  check("qfa main round 1 has 4 fixtures", round1.length === 4);
+  const expectedLosers = round1.map((f) =>
+    (seedOf.get(f.home_entrant_id!) ?? 99) < (seedOf.get(f.away_entrant_id!) ?? 99)
+      ? f.away_entrant_id
+      : f.home_entrant_id,
+  );
+
+  const decide = async (fid: string, a: number, b: number) => {
+    const st = v1data<{ last_seq: number }>(await v1(admin, `/api/v1/fixtures/${fid}/state`));
+    return v1(admin, `/api/v1/fixtures/${fid}/events`, "POST", {
+      expected_seq: st.last_seq ?? 0,
+      type: "generic.result",
+      payload: { p1Score: a, p2Score: b },
+    });
+  };
+
+  // Decide the whole bracket, lower seed always wins — regenerate between
+  // passes so a later round's winner feed is wired before deciding it.
+  for (let guard = 0; guard < 10; guard++) {
+    const rows = v1data<{ fixtures: Fx[] }>(
+      await v1(admin, `/api/v1/stages/${main.id}/generate`, "POST"),
+    ).fixtures;
+    const decidable = rows.filter(
+      (f) => f.home_entrant_id && f.away_entrant_id && !["decided", "finalized"].includes(f.status),
+    );
+    if (decidable.length === 0) break;
+    for (const f of decidable) {
+      const homeWins = (seedOf.get(f.home_entrant_id!) ?? 99) < (seedOf.get(f.away_entrant_id!) ?? 99);
+      await decide(f.id, homeWins ? 2 : 0, homeWins ? 0 : 2);
+    }
+  }
+
+  const done = v1data<{ completed: boolean; qualified?: { stage_id: string; entrants: string[] } }>(
+    await v1(admin, `/api/v1/stages/${main.id}/complete`, "POST"),
+  );
+  check("qfa main stage completes", done.completed === true);
+  check("qfa plate seeded from main", done.qualified?.stage_id === plate.id);
+  check(
+    "qfa plate entrants = round-1 losers, in bracket order",
+    JSON.stringify(done.qualified?.entrants) === JSON.stringify(expectedLosers),
+  );
+
+  const plateGen = v1data<{ created: number; existing: number }>(
+    await v1(admin, `/api/v1/stages/${plate.id}/generate`, "POST"),
+  );
+  check("qfa plate generates a 4-entrant bracket (3 fixtures)", plateGen.created + plateGen.existing === 3);
 }
