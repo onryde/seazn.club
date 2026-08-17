@@ -513,10 +513,13 @@ test.describe("T3 · Event Pass refund revokes the pass", () => {
     // This test used to ALSO prove the entrant cap drops 128 → 64 by
     // submitting entry 65/66 through the public register endpoint. RS001
     // deleted that endpoint (no surviving way to create a registration — see
-    // registrations.ts's "Public: submit — REMOVED" block) and there is no
-    // live code path left that reads this cap (publicRegistrationInfo, the
-    // one surviving public read, never queries entrants.per_division.max —
-    // verified by reading it). PARKED, not weakened: rather than assert
+    // registrations.ts's "Public: submit — REMOVED" block), so the ROUTE to
+    // the cap is gone from here. The cap itself is still enforced —
+    // `usecases/entrants.ts` asserts `entrants.per_division.max` on the
+    // organiser create path — and stays covered by
+    // `pass-scope-entrant-cap.test.ts` and `entitlements-v2.test.ts`; what
+    // died is only this spec's way of reaching it. PARKED, not weakened:
+    // rather than assert
     // something that no longer proves anything, that half is dropped here
     // (same cause as event-pass.spec.ts's deleted U7); T10 keeps the fuller
     // mechanism frozen under test.skip for RS006/RS007 to restore.
