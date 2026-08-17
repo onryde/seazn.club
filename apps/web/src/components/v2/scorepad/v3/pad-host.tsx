@@ -756,6 +756,15 @@ export function PadHostV3(props: PadHostV3Props) {
           t={t}
           onVoid={(eventId) => void handleUndo(eventId)}
           voidingId={voidingId}
+          // Threads the skin's own per-event detail into the panel (D2). The
+          // helper and its tests landed without this line, which made the fix
+          // INERT in the product while green in CI — the exact shape of defect
+          // this wave already fixed three times.
+          resolveDetail={
+            props.skin.activityDetail
+              ? (eventType, payload) => props.skin.activityDetail!(t, eventType, payload)
+              : undefined
+          }
         />
       </div>
     </div>

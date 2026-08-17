@@ -22,6 +22,7 @@ import {
   buildSwap,
   buildTiles,
   chaseTarget,
+  cricketBallDetail,
   cricketSkinV3,
   currentInnings,
   oversText,
@@ -264,6 +265,76 @@ describe("overDots", () => {
     // window size is genuinely read from bpo either way, not ignored.
     expect(overDots(events, 3)).toEqual(["•", "4", "W"]);
     expect(overDots(events, 6)).toEqual(["•", "1", "•", "4", "W"]);
+  });
+});
+
+// D2 fix (Activity panel sign-off review, 2026-08-17): three `cricket.ball`
+// rows in a real screenshot all read identically "Ball recorded" — the
+// chassis ribbon builder resolves a caption per event TYPE and cannot know
+// cricket's payload shape. `cricketBallDetail` is the skin-owned function
+// `ActivityPanel`'s `resolveDetail` prop calls to fill that gap; mirrors
+// `ballOutcomeSymbol`'s own decision order (wicket, then extras-by-kind,
+// then plain runs) but returns WORDS via `t`, not compact symbols.
+describe("cricketBallDetail", () => {
+  it("returns undefined for a non-ball event type — the generic resolveDetail hook must not touch toss/review/retire/etc.", () => {
+    expect(cricketBallDetail(t, "cricket.toss", {})).toBeUndefined();
+    expect(cricketBallDetail(t, "cricket.review", {})).toBeUndefined();
+  });
+
+  it("a dot ball", () => {
+    expect(cricketBallDetail(t, "cricket.ball", { runs: { bat: 0 } })).toBe(
+      "pad.cricket.ribbon.ball.dot",
+    );
+  });
+
+  it("a single run uses the singular copy, not '1 runs'", () => {
+    expect(cricketBallDetail(t, "cricket.ball", { runs: { bat: 1 } })).toBe(
+      "pad.cricket.ribbon.ball.run",
+    );
+  });
+
+  it("plural runs interpolate the count", () => {
+    expect(cricketBallDetail(t, "cricket.ball", { runs: { bat: 4 } })).toBe(
+      'pad.cricket.ribbon.ball.runs({"runs":4})',
+    );
+  });
+
+  it("a wicket reuses the ALREADY-TRANSLATED wicket-kind vocab (ENUM_VOCAB.kind) — no new dictionary key needed", () => {
+    expect(
+      cricketBallDetail(t, "cricket.ball", { wicket: { kind: "bowled" }, runs: { bat: 0 } }),
+    ).toBe("wicket.bowled");
+  });
+
+  it("an extra reuses the ALREADY-TRANSLATED extra-kind vocab", () => {
+    expect(
+      cricketBallDetail(t, "cricket.ball", {
+        runs: { bat: 0, extras: { kind: "wide", runs: 1 } },
+      }),
+    ).toBe("extra.wide");
+  });
+
+  it("wicket takes priority over extras when a dismissal happens to carry one (e.g. a run-out off a no-ball)", () => {
+    expect(
+      cricketBallDetail(t, "cricket.ball", {
+        wicket: { kind: "runout" },
+        runs: { bat: 0, extras: { kind: "noball", runs: 1 } },
+      }),
+    ).toBe("wicket.runout");
+  });
+
+  it("works identically for a super-over ball", () => {
+    expect(cricketBallDetail(t, "cricket.superover.ball", { runs: { bat: 6 } })).toBe(
+      'pad.cricket.ribbon.ball.runs({"runs":6})',
+    );
+  });
+
+  it("three different outcomes produce THREE different detail strings — the actual D2 differentiation this exists for", () => {
+    const dot = cricketBallDetail(t, "cricket.ball", { runs: { bat: 0 } });
+    const four = cricketBallDetail(t, "cricket.ball", { runs: { bat: 4 } });
+    const wide = cricketBallDetail(t, "cricket.ball", {
+      runs: { bat: 0, extras: { kind: "wide", runs: 1 } },
+    });
+    expect(new Set([dot, four, wide]).size).toBe(3);
   });
 });
 

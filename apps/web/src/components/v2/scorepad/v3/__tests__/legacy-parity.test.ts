@@ -80,6 +80,20 @@ describe("legacy parity — capabilities the v3 chassis must not lose", () => {
     expect(padHost).toContain('data-role="v3-headline"');
   });
 
+  it("3b. the skin's per-event detail is WIRED, not merely exported", () => {
+    // D2's helper (`cricketBallDetail`) shipped with 9 passing unit tests
+    // while nothing passed it to the panel, so every activity row still read
+    // "Ball recorded" in the product. Unit tests cannot see that gap: they
+    // call the function directly. Assert the whole chain instead.
+    const cricket = readFileSync(join(V3, "skins", "cricket.tsx"), "utf8");
+    const types = readFileSync(join(V3, "types.ts"), "utf8");
+    expect(types).toContain("activityDetail?(");            // the contract exists
+    expect(cricket).toContain("activityDetail: cricketBallDetail"); // the skin declares it
+    expect(padHost).toContain("resolveDetail=");             // the host passes it
+    expect(padHost).toContain("props.skin.activityDetail");  // ...from the skin, not a direct import
+    expect(activity).toContain("resolveDetail");             // the panel consumes it
+  });
+
   it("4. every restored capability is actually RENDERED, not just imported", () => {
     // Each of the three regressions passed its own unit tests while being
     // invisible on screen. Pin the render markers.

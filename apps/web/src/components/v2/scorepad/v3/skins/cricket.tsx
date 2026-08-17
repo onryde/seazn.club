@@ -347,6 +347,55 @@ export function overDots(events: readonly EventEnvelope[], bpo: number): string[
   return windowed.slice(start).map((e) => ballOutcomeSymbol(e.payload as Record<string, unknown>));
 }
 
+/**
+ * D2 fix (Activity panel sign-off review, 2026-08-17): a localised,
+ * differentiating detail for one `cricket.ball`/`cricket.superover.ball`
+ * row — "Wide" / "Bowled" / "Dot ball" / "4 runs" — for
+ * `ActivityPanel`'s `resolveDetail` prop (activity.tsx). Before this, every
+ * ball row read the identical per-TYPE caption "Ball recorded" regardless
+ * of outcome, because `buildRibbon` (the chassis) resolves a label per
+ * event type and the chassis is deliberately sport-agnostic — it must not
+ * know cricket's payload shape (`runs.bat`, `runs.extras.kind`,
+ * `wicket.kind`). This skin owns that vocabulary instead, mirroring
+ * `ballOutcomeSymbol`'s own decision order (wicket, then extras-by-kind,
+ * then plain runs) but producing WORDS via `t`/`requiredVocabKey` rather
+ * than the compact over-dot symbols that function renders.
+ *
+ * Reuses the WICKET/EXTRA `"kind"` vocab (`ENUM_VOCAB`/`requiredVocabKey`)
+ * already translated for the wicket sheet and the extras tiles — zero new
+ * dictionary keys for those two branches, only the plain-runs branch below
+ * needs new copy (`pad.cricket.ribbon.ball.dot`/`.run`/`.runs`).
+ *
+ * Deliberately coarse, not further sub-differentiated: two wides that
+ * differ only by extra-run count both read "Wide" (the CATEGORY, not the
+ * count) — differentiating dot/single/boundary/wide/no-ball/wicket already
+ * closes the defect a screenshot caught (three identical "Ball recorded"
+ * rows); adding per-count granularity on top is a documented, deliberate
+ * scope boundary, not a gap.
+ *
+ * Returns `undefined` for any non-ball event type, so wiring this as a
+ * generic `resolveDetail` leaves every other cricket row (toss/review/
+ * retire/…) on its existing static caption untouched.
+ */
+export function cricketBallDetail(
+  t: TFn,
+  eventType: string,
+  payload: Record<string, unknown>,
+): string | undefined {
+  if (!BALL_EVENT_TYPES.has(eventType)) return undefined;
+  const p = payload as {
+    wicket?: { kind?: string };
+    runs?: { bat?: number; extras?: { kind?: string; runs?: number } };
+  };
+  if (p.wicket?.kind) return t(requiredVocabKey("kind", p.wicket.kind));
+  const extraKind = p.runs?.extras?.kind;
+  if (extraKind) return t(requiredVocabKey("kind", extraKind));
+  const bat = p.runs?.bat ?? 0;
+  if (bat === 0) return t("pad.cricket.ribbon.ball.dot");
+  if (bat === 1) return t("pad.cricket.ribbon.ball.run");
+  return t("pad.cricket.ribbon.ball.runs", { runs: bat });
+}
+
 /** Runs per `bpo`-ball over, or `null` before any legal ball this innings —
  *  presentation-only, cheaply derived, never folded/stored (plan doc's own
  *  "Also settled by the same scout" note). */
@@ -978,6 +1027,12 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     dock: (eventType) => buildDock(eventType, t),
     context: buildContext,
     sheets: buildSheets,
+    // D2 (R2 sign-off): the skin supplies per-ball detail so the activity
+    // panel's rows differ from one another. Declared HERE rather than the
+    // chassis importing `cricketBallDetail` directly — sport vocabulary stays
+    // skin-owned. Without this line the function exists, its unit tests pass,
+    // and every row still reads "Ball recorded" in the product.
+    activityDetail: cricketBallDetail,
     swap: buildSwap,
   };
 }

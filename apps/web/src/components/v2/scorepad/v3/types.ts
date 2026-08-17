@@ -278,6 +278,18 @@ export interface SkinDefV3<View = unknown> {
    * `useMemo`) for exactly this reason.
    */
   sheets?(view: View): Record<string, GuidedSheetSpec>;
+  /**
+   * Per-event detail for the activity panel's row captions (R2 sign-off
+   * defect D2). `buildRibbon` resolves a caption per event TYPE, so every
+   * `cricket.ball` row read identically "Ball recorded" — useless in a panel
+   * whose whole job is finding ONE ball to correct.
+   *
+   * Lives on the skin, not the chassis: "4 runs" / "wide" / "bowled" is sport
+   * vocabulary, and the chassis must not learn it (the same rule that keeps
+   * `WhoLine.servingLabel` skin-supplied). Returns `undefined` when the skin
+   * has nothing to add, which leaves the static caption untouched.
+   */
+  activityDetail?(t: (key: string, vars?: Record<string, string | number>) => string, eventType: string, payload: Record<string, unknown>): string | undefined;
   /** Declares this skin's swap-sheet integration (design §2.7) — `null`
    *  when a swap is not applicable right now (e.g. no sub currently legal
    *  to OFFER, as opposed to legal-but-refused, which is `policyOk: false`
