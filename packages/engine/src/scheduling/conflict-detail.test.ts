@@ -75,6 +75,7 @@ const ALT_VALUE: { [K in keyof Omit<ConflictDetail, "kind">]-?: NonNullable<Conf
   personIds: ["p9"],
   otherFixtureId: "f-changed",
   court: "C2",
+  courtName: "Centre Court",
   day: "2026-08-11",
   otherDay: "2026-08-12",
   weekday: "SAT",
@@ -115,6 +116,31 @@ describe("canonConflictDetail — per-kind field participation (all 25 kinds)", 
       }
     });
   }
+});
+
+// `courtName` (P9 pass 3a) is deliberately absent from every `FULL_DETAIL`
+// fixture above — the engine itself never sets it (see the field's own doc
+// comment in conflict-detail.ts) — so the per-kind sweep's `fields` list
+// never includes it and cannot exercise it. Tested directly instead, on the
+// two kinds a caller (apps/web) actually attaches it to.
+describe("canonConflictDetail — courtName (P9 pass 3a, caller-attached, never engine-set)", () => {
+  it("participates in the canon for court_double_booking — dropping it would go undetected", () => {
+    const base: ConflictDetail = { kind: "court_double_booking", court: "C1", otherFixtureId: "f-other" };
+    const withName: ConflictDetail = { ...base, courtName: "Centre Court" };
+    expect(withName).not.toEqual(base);
+    expect(canonConflictDetail(withName)).not.toBe(canonConflictDetail(base));
+  });
+
+  it("participates in the canon for locked_slot_clash", () => {
+    const base: ConflictDetail = { kind: "locked_slot_clash", court: "C1" };
+    const withName: ConflictDetail = { ...base, courtName: "Centre Court" };
+    expect(canonConflictDetail(withName)).not.toBe(canonConflictDetail(base));
+  });
+
+  it("an engine-built detail (which never sets courtName) canons identically whether the key is absent or explicitly undefined", () => {
+    const detail: ConflictDetail = { kind: "court_double_booking", court: "C1", otherFixtureId: "f-other" };
+    expect(canonConflictDetail(detail)).toBe(canonConflictDetail({ ...detail, courtName: undefined }));
+  });
 });
 
 describe("canonConflictDetail — insertion-order independence", () => {

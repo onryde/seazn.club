@@ -7,6 +7,24 @@
 // whichever of the scalar/id fields that template needs. The engine stays
 // id-only — it has no display names, and gains none; resolving an id to a
 // name is a client concern, out of scope here.
+//
+// `courtName` (P9 pass 3a, venues/courts cutover) is the one deliberate
+// exception to "id-only", and it does not contradict the ruling above: no
+// engine call site (calendar.ts/build.ts) ever sets it — `court` became a
+// real `courts.id` the moment apps/web started feeding `Assignment.court`
+// with `fixtures.court_id` instead of the legacy free-text `court_label`
+// (see candidate-courts.ts's own header, and the court-id-lattice-
+// equivalence test: the lattice has always treated `court` as an opaque
+// string, so that swap is a pure representation change, invisible here).
+// `court_double_booking` and `locked_slot_clash` are now the two kinds whose
+// `court` is a bare uuid, and `legacyConflictDetail`
+// (apps/web/conflict-detail-legacy.ts) builds ENGLISH PROSE from a
+// `ConflictDetail` alone — no db, no second argument — so a caller with db
+// access (apps/web) has nowhere else to attach a resolved name for that pure
+// function to read. `courtName` is that attachment point: optional, never
+// populated by the engine, populated only by a caller that already resolved
+// `court` to a `courts.name` before handing the (still otherwise
+// engine-built) detail to `legacyConflictDetail` or the wire mapper.
 
 /** One member per family template. Closed at exactly the 25 the design doc's
  *  table enumerates — a 26th needs a design amendment, not a cast. */
@@ -50,6 +68,8 @@ export interface ConflictDetail {
   personIds?: string[];
   otherFixtureId?: string;
   court?: string;
+  /** Caller-attached only — see the module header. Never set by the engine. */
+  courtName?: string;
   day?: string;
   otherDay?: string;
   weekday?: string;
@@ -80,6 +100,7 @@ const FIELD_ORDER_WITNESS: Record<Exclude<keyof ConflictDetail, "kind">, true> =
   personIds: true,
   otherFixtureId: true,
   court: true,
+  courtName: true,
   day: true,
   otherDay: true,
   weekday: true,
