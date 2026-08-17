@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { EventEnvelope, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
 import { answerStep, backStep, currentStep, initialSheetState } from "../../guided-sheet";
-import type { PadHostView } from "../../types";
+import type { GuidedSheetSpec, PadHostView } from "../../types";
 import {
   EXTRA_KINDS,
   FIELDER_ELIGIBLE_KINDS,
@@ -25,6 +25,8 @@ import {
   cricketBallDetail,
   cricketSkinV3,
   currentInnings,
+  inningsFidelity,
+  nextOverNumber,
   oversText,
   overDots,
   resolvePeople,
@@ -164,6 +166,34 @@ describe("currentInnings", () => {
   it("falls back to the last innings once every innings is closed", () => {
     const s = { innings: [innings({ closed: true, runs: 200 }), innings({ closed: true, runs: 180 })] };
     expect(currentInnings(s)?.runs).toBe(180);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// inningsFidelity / nextOverNumber — R2b
+// ---------------------------------------------------------------------------
+
+describe("inningsFidelity", () => {
+  it("is 'unopened' with no innings recorded yet", () => {
+    expect(inningsFidelity(null)).toBe("unopened");
+  });
+  it("is 'coarse' once an over-summary opened it (fine === null)", () => {
+    expect(inningsFidelity(innings({ fine: null }))).toBe("coarse");
+  });
+  it("is 'fine' once a ball opened it", () => {
+    expect(inningsFidelity(innings())).toBe("fine"); // fixture default carries a real `fine` object
+  });
+});
+
+describe("nextOverNumber", () => {
+  it("starts at over 1 for an unopened innings", () => {
+    expect(nextOverNumber(null, 6)).toBe(1);
+  });
+  it("advances by whole overs off legalBalls", () => {
+    expect(nextOverNumber(innings({ legalBalls: 30 }), 6)).toBe(6);
+  });
+  it("uses the given bpo, not a hardcoded 6 (hundred: 5-ball overs)", () => {
+    expect(nextOverNumber(innings({ legalBalls: 20 }), 5)).toBe(5);
   });
 });
 
@@ -657,6 +687,53 @@ describe("buildTiles", () => {
     expect(more.kind).toBe("minor");
     expect(more.phases.sort()).toEqual(["live", "post"]);
   });
+
+  // R2b (Q1 owner ruling, `_INDEX.md`) — over-by-over entry point, gated by
+  // the fold's own fidelity, never a band/config check.
+  it("the over-summary tile is hidden once the innings is ball-level (fine)", () => {
+    // Default `view()` fixture carries a real `fine` innings already.
+    expect(buildTiles(view()).some((tl) => tl.id === "overSummary")).toBe(false);
+  });
+
+  it("the over-summary tile is shown, alongside the run tiles, when no innings is open yet", () => {
+    const tiles = buildTiles(view({ state: state({ innings: [] }) }));
+    const over = tiles.find((tl) => tl.id === "overSummary");
+    expect(over).toMatchObject({ kind: "primary", span: 2, phases: ["live"], action: { sheet: "overSummary" } });
+    expect(tiles.some((tl) => tl.id === "run0")).toBe(true); // Q1: both lanes available pre-commitment
+  });
+
+  it("the over-summary tile is shown, and every ball-derived tile is hidden, once the innings is coarse", () => {
+    const tiles = buildTiles(view({ state: state({ innings: [innings({ fine: null })] }) }));
+    expect(tiles.some((tl) => tl.id === "overSummary")).toBe(true);
+    const ballDerived = [
+      "run0", "run1", "run2", "run3", "run4", "run6",
+      "wide", "wicket", "extra-noball", "extra-bye", "extra-legbye", "extra-penalty",
+    ];
+    for (const id of ballDerived) {
+      expect(tiles.some((tl) => tl.id === id)).toBe(false);
+    }
+  });
+
+  it("non-ball tiles (review/retire/inningsClose) stay visible regardless of fidelity", () => {
+    const tiles = buildTiles(view({ state: state({ innings: [innings({ fine: null })] }) }));
+    for (const id of ["review", "retire", "inningsClose"]) {
+      expect(tiles.some((tl) => tl.id === id)).toBe(true);
+    }
+  });
+
+  it("the over-summary tile's sublabel is the 1-indexed over this entry would complete", () => {
+    const tiles = buildTiles(view({ state: state({ innings: [innings({ fine: null, legalBalls: 30 })] }) }));
+    const over = tiles.find((tl) => tl.id === "overSummary")!;
+    expect(over.sublabel).toBe("6");
+  });
+
+  it("the over-summary tile sits before More in tile order", () => {
+    const tiles = buildTiles(view({ state: state({ innings: [] }) }));
+    const overIdx = tiles.findIndex((tl) => tl.id === "overSummary");
+    const moreIdx = tiles.findIndex((tl) => tl.id === "more");
+    expect(overIdx).toBeGreaterThanOrEqual(0);
+    expect(overIdx).toBeLessThan(moreIdx);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -953,6 +1030,109 @@ describe("buildSheets — toss/review/inningsClose", () => {
     const done = answerStep(spec, initialSheetState(), "weather");
     if (!done.done) throw new Error("expected done");
     expect(done.event).toEqual({ type: "cricket.innings.close", payload: { reason: "weather" } });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSheets — over summary (R2b): the pad's over-by-over entry point.
+// ---------------------------------------------------------------------------
+
+describe("buildSheets — over summary (R2b)", () => {
+  function numberStep(spec: GuidedSheetSpec, id: string) {
+    const step = spec.steps.find((s) => s.id === id)!;
+    if (step.kind !== "number") throw new Error(`expected a number step for "${id}"`);
+    return step;
+  }
+  function overSummaryView() {
+    return view({ state: state({ innings: [innings({ fine: null, runs: 24, wickets: 1, legalBalls: 30 })] }) });
+  }
+  function overSpec() {
+    return buildSheets(overSummaryView()).overSummary;
+  }
+
+  it("dispatches cricket.innings.summary", () => {
+    expect(overSpec().event).toBe("cricket.innings.summary");
+  });
+
+  it("prefills runs/wickets from the fold's current total, balls from current + one full over", () => {
+    const spec = overSpec();
+    expect(numberStep(spec, "runs").initial).toBe(24);
+    expect(numberStep(spec, "wickets").initial).toBe(1);
+    expect(numberStep(spec, "balls").initial).toBe(36); // 30 + bpo(6)
+  });
+
+  it("prefills 0/0/bpo when no innings is open yet", () => {
+    const spec = buildSheets(view({ state: state({ innings: [] }) })).overSummary;
+    expect(numberStep(spec, "runs").initial).toBe(0);
+    expect(numberStep(spec, "wickets").initial).toBe(0);
+    expect(numberStep(spec, "balls").initial).toBe(6);
+  });
+
+  it("uses ballsPerOverOf, never a hardcoded 6 — hundred variant", () => {
+    const spec = buildSheets(
+      view({ cfg: cfg({ ballsPerOver: 5 }), state: state({ innings: [innings({ fine: null, legalBalls: 30 })] }) }),
+    ).overSummary;
+    expect(numberStep(spec, "balls").initial).toBe(35); // 30 + bpo(5)
+  });
+
+  it("each step's min is the fold's CURRENT value — the monotone guard is structurally unreachable through this sheet", () => {
+    const spec = overSpec();
+    expect(numberStep(spec, "runs").min).toBe(24);
+    expect(numberStep(spec, "wickets").min).toBe(1);
+    expect(numberStep(spec, "balls").min).toBe(30);
+  });
+
+  it("hint carries the fold's current score, locale-invariant (no t() needed)", () => {
+    const spec = overSpec();
+    expect(numberStep(spec, "runs").hint).toBe("24/1");
+    expect(numberStep(spec, "wickets").hint).toBe("24/1");
+  });
+
+  it("buildPayload emits a TOTAL with partial:true, never an increment on the fold", () => {
+    const payload = overSpec().buildPayload({ runs: "31", wickets: "2", balls: "36" });
+    expect(payload).toEqual({ runs: 31, wickets: 2, legalBalls: 36, partial: true });
+  });
+
+  it("driven end to end through the real wizard: runs -> wickets -> balls -> a cricket.innings.summary event", () => {
+    const spec = overSpec();
+    const s0 = initialSheetState();
+    expect(currentStep(spec, s0)!.id).toBe("runs");
+    const afterRuns = answerStep(spec, s0, "31");
+    if (afterRuns.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterRuns.state)!.id).toBe("wickets");
+    const afterWickets = answerStep(spec, afterRuns.state, "2");
+    if (afterWickets.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterWickets.state)!.id).toBe("balls");
+    const done = answerStep(spec, afterWickets.state, "36");
+    if (!done.done) throw new Error("expected done");
+    expect(done.event).toEqual({
+      type: "cricket.innings.summary",
+      payload: { runs: 31, wickets: 2, legalBalls: 36, partial: true },
+    });
+  });
+
+  it("a sequence of partial summaries folds to the totals a scorer expects, never tripping the monotone guard", () => {
+    // Over 1: innings unopened, scorer enters 6 runs, 0 wickets, a full over.
+    const spec1 = buildSheets(view({ state: state({ innings: [] }) })).overSummary;
+    const payload1 = spec1.buildPayload({ runs: "6", wickets: "0", balls: "6" });
+    expect(payload1).toEqual({ runs: 6, wickets: 0, legalBalls: 6, partial: true });
+
+    // The engine's own monotone update (cricket.ts:1445-1451) would fold this
+    // verbatim into the innings — hand-construct that next state, matching
+    // this file's own fixture-composition convention (no real fold invoked;
+    // packages/engine is out of this wave's file grant).
+    const foldedAfterOver1 = innings({ fine: null, runs: 6, wickets: 0, legalBalls: 6 });
+    const spec2 = buildSheets(view({ state: state({ innings: [foldedAfterOver1] }) })).overSummary;
+    expect(numberStep(spec2, "runs")).toMatchObject({ initial: 6, min: 6 });
+    expect(numberStep(spec2, "wickets")).toMatchObject({ initial: 0, min: 0 });
+    expect(numberStep(spec2, "balls")).toMatchObject({ initial: 12, min: 6 }); // 6 + bpo(6)
+
+    const payload2 = spec2.buildPayload({ runs: "14", wickets: "1", balls: "12" });
+    expect(payload2).toEqual({ runs: 14, wickets: 1, legalBalls: 12, partial: true });
+    // payload2's totals (14/1/12) are each >= payload1's (6/0/6) — a rising
+    // sequence a scorer would actually produce over-by-over; `spec2`'s own
+    // `min` (asserted above) is what makes a DECREASING entry structurally
+    // unreachable through this sheet in the first place.
   });
 });
 

@@ -209,6 +209,47 @@ export function currentInnings(state: CricketStateShape): CricketInningsShape | 
   return innings.find((i) => !i.closed) ?? innings[innings.length - 1] ?? null;
 }
 
+export type InningsFidelity = "unopened" | "coarse" | "fine";
+
+/**
+ * R2b (Q1 owner ruling, `_INDEX.md`): which entry granularity governs the
+ * CURRENT innings — first-event-wins, read straight off the fold, never
+ * configured (no cfg field, no org band, no picker anywhere). `"unopened"`
+ * when no innings exists yet, so NEITHER lane has locked in; `"coarse"` once
+ * a `cricket.innings.summary` opened it (`fine === null` — `createInnings`,
+ * cricket.ts:661-678, called with `"coarse"` from `applySummary`,
+ * cricket.ts:1406); `"fine"` once a `cricket.ball` opened it instead
+ * (`createInnings(...,"fine")`, cricket.ts:2940). The two lanes are mutually
+ * exclusive WITHIN one innings — the fold refuses ball-on-coarse
+ * (cricket.ts:1128-1131/:2936-2938) AND summary-on-fine (:1402-1404) in both
+ * directions — so `buildTiles`/`buildSheets` below gate on THIS, never on
+ * `view.band`: the brief's own recommendation to band-gate the over-summary
+ * tile was refused by the fold itself (`_INDEX.md`'s "false premises found"
+ * for this wave), not by preference.
+ *
+ * Reuses `bowlerIsReadOnly`'s own narrowing pattern (this file, above) —
+ * read `innings?.fine` directly, no second accessor invented for the same
+ * fact.
+ */
+export function inningsFidelity(innings: CricketInningsShape | null): InningsFidelity {
+  if (innings === null) return "unopened";
+  return innings.fine === null ? "coarse" : "fine";
+}
+
+/**
+ * 1-indexed: the over an over-summary entry, if confirmed unedited, would
+ * complete — matching how a scorer counts overs aloud ("this is over 14"),
+ * not `basePayload`'s own 0-indexed `over` field (that one names the over a
+ * BALL belongs to; this one names the over a SUMMARY closes out). An
+ * unopened innings (`innings === null`) reads as over 1, same as one freshly
+ * opened with 0 `legalBalls` recorded yet — both are "the first over about
+ * to be entered." `bpo` is genuinely load-bearing here, same reason
+ * `ballsPerOverOf`'s own doc gives: `hundred` sets 5, never assume 6.
+ */
+export function nextOverNumber(innings: CricketInningsShape | null, bpo: number): number {
+  return Math.floor((innings?.legalBalls ?? 0) / bpo) + 1;
+}
+
 /** `cricket.ball` normally; `cricket.superover.ball` while the engine is
  *  actually in a super over — v2's own switch, `cricket-skin.tsx:502`. */
 export function ballEventType(state: CricketStateShape): "cricket.ball" | "cricket.superover.ball" {
@@ -586,46 +627,54 @@ export function buildTiles(view: PadHostView): TileSpec[] {
   const base = basePayload(state, bpo, view.contextOverrides);
   const type = ballEventType(state);
   const twoInnings = cfg.inningsPerSide === 2;
+  const innings = currentInnings(state);
+  const fidelity = inningsFidelity(innings);
 
   const tiles: TileSpec[] = [
     { id: "toss", label: "pad.cricket.action.toss", kind: "primary", phases: ["pre"], action: { sheet: "toss" } },
   ];
 
-  for (const r of RUN_VALUES) {
+  // R2b (Q1 owner ruling, `_INDEX.md`): ball-derived tiles only when this
+  // innings can legally take a `cricket.ball` at all — never once it is
+  // coarse, where the fold refuses one outright (cricket.ts:1128-1131/
+  // :2936-2938). Every visible tap stays legal at the moment it is visible.
+  if (fidelity !== "coarse") {
+    for (const r of RUN_VALUES) {
+      tiles.push({
+        id: `run${r}`,
+        label: `pad.cricket.tile.runs.${r}`,
+        kind: PRIMARY_RUNS.has(r) ? "primary" : "standard",
+        phases: ["live"],
+        action: { event: { type, payload: runPayload(base, r) } },
+      });
+    }
+
     tiles.push({
-      id: `run${r}`,
-      label: `pad.cricket.tile.runs.${r}`,
-      kind: PRIMARY_RUNS.has(r) ? "primary" : "standard",
+      id: "wide",
+      label: requiredVocabKey("kind", "wide"),
+      kind: "standard",
       phases: ["live"],
-      action: { event: { type, payload: runPayload(base, r) } },
+      action: { event: { type, payload: extraPayload(base, "wide") } },
     });
-  }
 
-  tiles.push({
-    id: "wide",
-    label: requiredVocabKey("kind", "wide"),
-    kind: "standard",
-    phases: ["live"],
-    action: { event: { type, payload: extraPayload(base, "wide") } },
-  });
-
-  tiles.push({
-    id: "wicket",
-    label: "pad.cricket.action.wicket",
-    kind: "destructive",
-    span: 4,
-    phases: ["live"],
-    action: { sheet: "wicket" },
-  });
-
-  for (const kind of MINOR_EXTRA_KINDS) {
     tiles.push({
-      id: `extra-${kind}`,
-      label: requiredVocabKey("kind", kind),
-      kind: "minor",
+      id: "wicket",
+      label: "pad.cricket.action.wicket",
+      kind: "destructive",
+      span: 4,
       phases: ["live"],
-      action: { event: { type, payload: extraPayload(base, kind) } },
+      action: { sheet: "wicket" },
     });
+
+    for (const kind of MINOR_EXTRA_KINDS) {
+      tiles.push({
+        id: `extra-${kind}`,
+        label: requiredVocabKey("kind", kind),
+        kind: "minor",
+        phases: ["live"],
+        action: { event: { type, payload: extraPayload(base, kind) } },
+      });
+    }
   }
 
   tiles.push({ id: "review", label: "pad.cricket.action.review", kind: "standard", phases: ["live"], action: { sheet: "review" } });
@@ -645,6 +694,36 @@ export function buildTiles(view: PadHostView): TileSpec[] {
       kind: "standard",
       phases: ["live"],
       action: { event: { type: "cricket.innings.declare", payload: {} } },
+    });
+  }
+
+  // R2b (Q1 owner ruling): the over-by-over entry point — hidden once this
+  // innings is ball-level, where the fold refuses `cricket.innings.summary`
+  // just as firmly (cricket.ts:1402-1404), the mirror image of the guard
+  // above. `primary`/span-2 even when it co-occurs with run0/run1 (innings
+  // unopened): a genuine, first-tap fork in how the WHOLE innings gets
+  // scored earns the same weight as the two most-common ball outcomes, not
+  // less — `assertTileHierarchy`'s ">2 primaries" convention (tile-grid.tsx)
+  // is advisory only and not wired to any skin's real output yet (R1 fix
+  // round 1's own note), so this is a deliberate exception, not a defect.
+  if (fidelity !== "fine") {
+    tiles.push({
+      id: "overSummary",
+      label: "pad.cricket.action.endOfOver",
+      // Locale-invariant numeral, same convention `variantCode()` documents
+      // above for T20/ODI/HUNDRED/TEST: a bare over count needs no
+      // translation, and `tile-grid.tsx` (out of this wave's file grant)
+      // resolves `sublabel` as `t(tile.sublabel)` with no `vars` — a key
+      // needing interpolation would have nowhere to receive one. A bare
+      // numeral renders correctly on every locale with zero dictionary
+      // entries because `msgFor`'s own fallback echoes an unregistered key
+      // verbatim (`messages-i18n.test.ts`), which is exactly a numeral's
+      // own "translation."
+      sublabel: String(nextOverNumber(innings, bpo)),
+      kind: "primary",
+      span: 2,
+      phases: ["live"],
+      action: { sheet: "overSummary" },
     });
   }
 
@@ -970,12 +1049,84 @@ function inningsCloseSheet(): GuidedSheetSpec {
   };
 }
 
+/**
+ * R2b — the over-by-over entry point (Q1/Q2 owner rulings, `_INDEX.md`).
+ * Three `SheetNumberStep`s, each PREFILLED from the fold's own current
+ * innings total (Q2: "the scorer edits them up," never an increment form —
+ * an increment would have to add in pad code against a fold that could be
+ * stale by the time it lands, types.ts's own doc on `SheetNumberStep`).
+ *
+ * `min` on each step is the CURRENT fold value for that field, not 0: this
+ * is what keeps the engine's own "summary totals may not decrease" guard
+ * (cricket.ts:1416-1426) structurally UNREACHABLE through this sheet's
+ * stepper/field, rather than merely caught after a rejected submission —
+ * Q2's own "the monotone guard can never fire on a correct entry," enforced
+ * here. No `max` on any of the three: `allOut`/`ballsLimit` are strict,
+ * cfg/squad-derived checks the ENGINE makes (`applySummary`, same file) and
+ * are not exported for this pad to duplicate — same "the fold's own
+ * validation is still the correctness backstop" posture the wicket sheet's
+ * `fielder` step already takes (`wicketSheet`'s own doc, above).
+ *
+ * `balls` prefills to CURRENT + one full `ballsPerOverOf(cfg)` (never a
+ * hardcoded 6 — `hundred` sets 5, cricket.ts:2811) — "assume a full over
+ * unless told otherwise" — and stays EDITABLE, not derived: an innings can
+ * end mid-over (all out, target reached, time), so the balls this entry
+ * closes out are not always a whole extra over.
+ *
+ * `hint` on all three: the fold's CURRENT total as `${runs}/${wickets}` —
+ * the exact notation `buildScorebug`'s own `halves[0].big` already uses, so
+ * it needs no translation (numerals + "/" read identically on every locale)
+ * and this function can stay `t`-free like every OTHER member here except
+ * `scorebug`/`dock` (this file's header). This is the closest HONEST
+ * approximation of the plan's own design note ("a before → after ledger
+ * line... live as the numbers change"): `hint` is baked once when this
+ * record is built (G4, types.ts) and rendered VERBATIM by guided-sheet.tsx
+ * (never through `t()`, that file's own doc on `SheetNumberStep.hint`) — it
+ * cannot react to a scorer's still-in-progress stepper taps on ANY step
+ * (guided-sheet.tsx is out of this wave's file grant, and
+ * `SheetNumberStep.hint` is a plain `string`, not a function of the live
+ * edit value or of answers already given earlier in the SAME wizard run).
+ * What ships instead: a correct, always-fresh "before" anchor — rebuilt
+ * every `sheets(view)` call, per `PadHostView`'s own "never stale"
+ * obligation — sitting directly above the ALREADY-live editable field
+ * (task 2's own `renderNumberStep`), which together is the closest real
+ * approximation of the ledger the design note describes. Flagged here as a
+ * deliberate deviation, not a silent reinterpretation.
+ */
+function overSummarySheet(view: PadHostView): GuidedSheetSpec {
+  const state = asState(view.state);
+  const innings = currentInnings(state);
+  const bpo = ballsPerOverOf(view.cfg);
+  const runs = innings?.runs ?? 0;
+  const wickets = innings?.wickets ?? 0;
+  const legalBalls = innings?.legalBalls ?? 0;
+  const before = `${runs}/${wickets}`;
+
+  const steps: GuidedSheetStep[] = [
+    { id: "runs", kind: "number", title: "pad.cricket.sheet.overSummary.runs.title", initial: runs, min: runs, hint: before },
+    { id: "wickets", kind: "number", title: "pad.cricket.sheet.overSummary.wickets.title", initial: wickets, min: wickets, hint: before },
+    { id: "balls", kind: "number", title: "pad.cricket.sheet.overSummary.balls.title", initial: legalBalls + bpo, min: legalBalls, hint: before },
+  ];
+
+  return {
+    event: "cricket.innings.summary",
+    steps,
+    buildPayload: (answers) => ({
+      runs: Number(answers.runs),
+      wickets: Number(answers.wickets),
+      legalBalls: Number(answers.balls),
+      partial: true,
+    }),
+  };
+}
+
 export function buildSheets(view: PadHostView): Record<string, GuidedSheetSpec> {
   return {
     wicket: wicketSheet(view),
     toss: tossSheet(view),
     review: reviewSheet(view),
     inningsClose: inningsCloseSheet(),
+    overSummary: overSummarySheet(view),
   };
 }
 

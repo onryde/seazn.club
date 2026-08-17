@@ -101,4 +101,25 @@ describe("legacy parity — capabilities the v3 chassis must not lose", () => {
       expect(padHost).toContain(marker);
     }
   });
+
+  it("5. over-by-over entry (R2b) is wired end to end: sheet key resolves, ribbon copy is registered", () => {
+    // The tile's sheet key must resolve to a REAL builder in buildSheets, not
+    // a typo'd or forgotten entry — the exact "unit-tested function nothing
+    // calls" shape 3b guards against, one level down: a dangling sheet key
+    // opens on an empty wizard with no visible failure anywhere in this
+    // chassis.
+    const cricket = readFileSync(join(V3, "skins", "cricket.tsx"), "utf8");
+    expect(cricket).toMatch(/action:\s*\{\s*sheet:\s*"overSummary"\s*\}/);
+    expect(cricket).toMatch(/overSummary:\s*overSummarySheet\(view\)/);
+    // ribbon.ts gates its per-sport lookup on PAD_LABEL_KEYS membership
+    // BEFORE calling padLabel() — a ribbon key present only in the
+    // dictionaries (not here) silently stays on the generic "{event}
+    // recorded" fallback forever, with nothing failing (R1's own standing
+    // item, restated for R2b in the plan/_INDEX.md).
+    const scoringVocab = readFileSync(
+      join(HERE, "..", "..", "..", "..", "..", "lib", "scoring-vocab.ts"),
+      "utf8",
+    );
+    expect(scoringVocab).toContain('"pad.cricket.ribbon.innings.summary"');
+  });
 });
