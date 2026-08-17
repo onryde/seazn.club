@@ -2550,11 +2550,17 @@ export const RestoreCheckpoint = z.object({
 
 export const DivisionLocks = z.object({
   schedule_locked: z.boolean().optional(),
+  // P9 pass-3a-FIX: courts/venues are real ids (V371's locked_scopes
+  // migration; `usecases/schedule.ts`'s `scopeLocked` matches on
+  // court_id/venue_id, not organiser-typed names) — CourtId/VenueId, not a
+  // bare string, mirrors `usecases/history.ts`'s `LockInput` (the schema
+  // that actually validates this route's body; kept identical by hand, same
+  // as before this pass, to avoid the two drifting).
   locked_scopes: z
     .array(
       z.object({
-        courts: z.array(z.string()).optional(),
-        venues: z.array(z.string()).optional(),
+        courts: z.array(CourtId).optional(),
+        venues: z.array(VenueId).optional(),
         pool_ids: z.array(z.string()).optional(),
       }),
     )

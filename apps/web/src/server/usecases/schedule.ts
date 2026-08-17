@@ -437,21 +437,15 @@ export interface FixtureLite {
    *  court-id-lattice-equivalence.test.ts). */
   court_id: string | null;
   venue_id: string | null;
-  /** LEGACY, read-only, KEPT for exactly one purpose: `scopeLocked` below
-   *  matches a division's `locked_scopes.courts` — organiser-typed free-text
-   *  names, never migrated by V371 (that migration touched only
-   *  `schedule_settings.config.courts` and `fixtures.court_id`/`venue_id`) —
-   *  against this column. Nothing writes it any more (`moveFixture`/
-   *  `applySchedule` stopped, per the owner's FULL-cutover ruling), so it is
-   *  frozen at whatever value each fixture already carried; a scope lock
-   *  keyed on a court name degrades gracefully (stays correct until the
-   *  fixture is next moved) rather than breaking outright the day this pass
-   *  ships. A real fix needs `locked_scopes` migrated to court ids too —
-   *  out of scope here; flagged in the pass-3a report. Do NOT use for
-   *  anything else — see `court_id` above. */
+  /** LEGACY, read-only. Nothing writes it any more (`moveFixture`/
+   *  `applySchedule` stopped, per the owner's FULL-cutover ruling) — frozen
+   *  at whatever value each fixture already carried when that pass shipped.
+   *  `scopeLocked` below matched on this column through pass 3a; P9
+   *  pass-3a-FIX migrated `locked_scopes` to real ids (V371, third block) and
+   *  switched the match to `court_id` above, so this field has no remaining
+   *  reader. Do NOT use for anything else. */
   court_label: string | null;
-  /** LEGACY, read-only — same reasoning as `court_label`, `scopeLocked`'s
-   *  `locked_scopes.venues` match. */
+  /** LEGACY, read-only — same reasoning as `court_label` above. */
   venue: string | null;
   status: string;
   schedule_locked: boolean;
@@ -461,20 +455,29 @@ export interface FixtureLite {
 
 // Scope locks (Jul3/03 §4, 22 Jun two-site safety): fixtures matching a
 // division's locked_scopes entry are treated exactly like pinned fixtures.
+//
+// P9 pass-3a-FIX: `courts`/`venues` hold real `courts.id`/`venues.id` values,
+// not organiser-typed names — V371's third migration block rewrote every
+// stored `locked_scopes` row from names to ids the same way pass 1 rewrote
+// `schedule_settings.config.courts`. `scopeLocked` below matches on
+// `court_id`/`venue_id` accordingly, never the legacy `court_label`/`venue`
+// columns.
 export interface LockedScope {
+  /** Real `courts.id` values (V371 cutover). */
   courts?: string[];
+  /** Real `venues.id` values (V371 cutover). */
   venues?: string[];
   pool_ids?: string[];
 }
 
 export function scopeLocked(
-  f: Pick<FixtureLite, "court_label" | "venue" | "pool_id">,
+  f: Pick<FixtureLite, "court_id" | "venue_id" | "pool_id">,
   scopes: readonly LockedScope[],
 ): boolean {
   return scopes.some(
     (s) =>
-      (s.courts !== undefined && f.court_label !== null && s.courts.includes(f.court_label)) ||
-      (s.venues !== undefined && f.venue !== null && s.venues.includes(f.venue)) ||
+      (s.courts !== undefined && f.court_id !== null && s.courts.includes(f.court_id)) ||
+      (s.venues !== undefined && f.venue_id !== null && s.venues.includes(f.venue_id)) ||
       (s.pool_ids !== undefined && f.pool_id !== null && s.pool_ids.includes(f.pool_id)),
   );
 }

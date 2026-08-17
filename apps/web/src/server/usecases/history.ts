@@ -26,6 +26,7 @@ import { withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { CourtId, VenueId } from "@/server/api-v1/schemas";
 import { generateStageFixtures } from "./stages";
 
 type Tx = postgres.TransactionSql;
@@ -676,11 +677,17 @@ export async function clearPoolEntrants(
 
 export const LockInput = z.object({
   schedule_locked: z.boolean().optional(),
+  // P9 pass-3a-FIX: courts/venues are real ids (V371's locked_scopes
+  // migration) — `scopeLocked` (schedule.ts) matches on court_id/venue_id,
+  // not organiser-typed names. Kept identical by hand to api-v1/schemas.ts's
+  // `DivisionLocks` (the OpenAPI doc schema for this same route) — that file
+  // is not the runtime validator here, this one is (see the route handler),
+  // but the two must not drift.
   locked_scopes: z
     .array(
       z.object({
-        courts: z.array(z.string()).optional(),
-        venues: z.array(z.string()).optional(),
+        courts: z.array(CourtId).optional(),
+        venues: z.array(VenueId).optional(),
         pool_ids: z.array(z.string()).optional(),
       }),
     )

@@ -386,3 +386,166 @@ begin
      and f.venue_id is null;
 end $$;
 -- fixture-venue-migration:end
+
+-- =============================================================================
+-- Division scope-locks migration (P9 pass-3a-FIX, owner-authorized this
+-- session): `divisions.locked_scopes[].courts`/`.venues` were left as
+-- organiser-typed free-text names by the two blocks above (out of scope for
+-- pass 1 — see the FixtureLite doc comment on `court_label` in
+-- usecases/schedule.ts, now deleted, that used to flag this). `scopeLocked`
+-- matched them against `fixtures.court_label`/`.venue`, which stayed correct
+-- right up until pass 3a stopped WRITING those columns — from that point a
+-- name-keyed scope lock matches nothing, and an organiser's explicit
+-- court/venue freeze silently stops doing anything, with no error anywhere to
+-- surface it. `scopeLocked` itself now reads `court_id`/`venue_id` (same PR);
+-- this block is what makes `locked_scopes` hold ids for it to read.
+--
+-- REUSES court_mapping/venue_mapping — the two blocks above build them as
+-- session-scoped temp tables (default `CREATE TEMP TABLE` semantics: they
+-- live for the whole session/script, not just their own DO block), so this
+-- is not a third independent "does this name already exist" lookup. Same
+-- "Dry-run/write agreement" discipline as the header above: the write below
+-- re-derives the per-element resolution inline rather than reading a
+-- materialized report table back — the `court_normalize_status` precedent
+-- (step 2b) for why that duplication is safe (a trivial, deterministic
+-- per-element check, not a "pick one among ties" lookup).
+--
+-- UNLIKE `schedule_settings.config.courts` (whose consumer is a solver/
+-- picker that cannot render a dangling name, so step 5 above DROPS an
+-- unresolvable element), a scope lock's only job is to compare — a leftover
+-- name string that maps to nothing is simply inert against real ids from
+-- here on (it can never match again) and is LEFT UNTOUCHED rather than
+-- dropped: silently discarding an organiser's lock entry is a worse failure
+-- mode than an inert one, and the dry-run report below counts it so an
+-- operator can see it and fix the stale name by hand if it matters.
+--
+-- Idempotent, same shape as the two blocks above: an element already equal
+-- to a real court/venue id for the org (a second run, post-migration) passes
+-- through via the same `id::text = <string>` referential check court_mapping/
+-- venue_mapping themselves use (never a uuid-shape regex). A scope object's
+-- `courts`/`venues` key that is ABSENT to begin with is never added (mirrors
+-- the courts block's `? 'courts'` guard); `pool_ids` is untouched throughout
+-- (already ids, never free text).
+-- =============================================================================
+
+-- division-locked-scopes-migration:begin
+do $$
+declare
+  v_org record;
+  v_total_orgs int := 0;
+  v_total_divisions int := 0;
+  v_total_court_entries int := 0;
+  v_total_court_unmapped int := 0;
+  v_total_venue_entries int := 0;
+  v_total_venue_unmapped int := 0;
+begin
+  -- Read-only: every court/venue name-string entry inside every division's
+  -- locked_scopes array, resolved against court_mapping/venue_mapping (or a
+  -- direct real-id passthrough check) — reporting only, see header. An org
+  -- whose only pending change lives here (zero court/venue strings anywhere
+  -- else) would never appear in the two reports above, which is why this is
+  -- its own report rather than folded into either.
+  drop table if exists pg_temp.division_scope_entries;
+  create temp table division_scope_entries as
+    select d.org_id, d.id as division_id, 'court' as kind, celem.val as raw_string,
+           (cm.court_id is not null or c_existing.id is not null) as resolved
+      from divisions d,
+           lateral jsonb_array_elements(d.locked_scopes) as scope(obj),
+           lateral jsonb_array_elements_text(
+             case when jsonb_typeof(scope.obj -> 'courts') = 'array'
+                  then scope.obj -> 'courts' else '[]'::jsonb end
+           ) as celem(val)
+      left join court_mapping cm
+        on cm.org_id = d.org_id and cm.court_string = celem.val
+      left join courts c_existing
+        on c_existing.org_id = d.org_id and c_existing.id::text = celem.val
+     where jsonb_array_length(d.locked_scopes) > 0
+    union all
+    select d.org_id, d.id as division_id, 'venue' as kind, velem.val as raw_string,
+           (vm.venue_id is not null or v_existing.id is not null) as resolved
+      from divisions d,
+           lateral jsonb_array_elements(d.locked_scopes) as scope(obj),
+           lateral jsonb_array_elements_text(
+             case when jsonb_typeof(scope.obj -> 'venues') = 'array'
+                  then scope.obj -> 'venues' else '[]'::jsonb end
+           ) as velem(val)
+      left join venue_mapping vm
+        on vm.org_id = d.org_id and vm.venue_string = velem.val
+      left join venues v_existing
+        on v_existing.org_id = d.org_id and v_existing.id::text = velem.val
+     where jsonb_array_length(d.locked_scopes) > 0;
+
+  -- DRY-RUN REPORT — before any write, same discipline as the two blocks
+  -- above.
+  for v_org in
+    select org_id,
+           count(distinct division_id) as n_divisions,
+           count(*) filter (where kind = 'court') as n_court_entries,
+           count(*) filter (where kind = 'court' and not resolved) as n_court_unmapped,
+           count(*) filter (where kind = 'venue') as n_venue_entries,
+           count(*) filter (where kind = 'venue' and not resolved) as n_venue_unmapped
+      from division_scope_entries
+     group by org_id
+     order by org_id
+  loop
+    raise notice 'V371 division-locked-scopes migration (dry run): org=% divisions_with_scope_entries=% court_scope_entries=% court_entries_left_untouched=% venue_scope_entries=% venue_entries_left_untouched=%',
+      v_org.org_id, v_org.n_divisions, v_org.n_court_entries, v_org.n_court_unmapped, v_org.n_venue_entries, v_org.n_venue_unmapped;
+    v_total_orgs := v_total_orgs + 1;
+    v_total_divisions := v_total_divisions + v_org.n_divisions;
+    v_total_court_entries := v_total_court_entries + v_org.n_court_entries;
+    v_total_court_unmapped := v_total_court_unmapped + v_org.n_court_unmapped;
+    v_total_venue_entries := v_total_venue_entries + v_org.n_venue_entries;
+    v_total_venue_unmapped := v_total_venue_unmapped + v_org.n_venue_unmapped;
+  end loop;
+  raise notice 'V371 division-locked-scopes migration (dry run) TOTAL: orgs=% divisions_with_scope_entries=% court_scope_entries=% court_entries_left_untouched=% venue_scope_entries=% venue_entries_left_untouched=%',
+    v_total_orgs, v_total_divisions, v_total_court_entries, v_total_court_unmapped, v_total_venue_entries, v_total_venue_unmapped;
+
+  -- WRITE: rewrite each division's locked_scopes array in place, element by
+  -- element, order and duplicate cardinality preserved (same discipline as
+  -- schedule_settings.config.courts in step 5 above). `stage`/`rewritten`
+  -- below are computed once per scope object via LATERAL, then reused rather
+  -- than re-evaluated, so the courts- and venues- rewrites cannot land on
+  -- inconsistent snapshots of the same object.
+  update divisions d
+     set locked_scopes = coalesce((
+       select jsonb_agg(rewritten.obj order by scope.ord)
+         from jsonb_array_elements(d.locked_scopes) with ordinality as scope(obj, ord)
+         cross join lateral (
+           select
+             (case when scope.obj ? 'courts' then coalesce((
+                      select jsonb_agg(to_jsonb(coalesce(cm.court_id::text, c_existing.id::text, celem.val)) order by celem.ord)
+                        from jsonb_array_elements_text(
+                               case when jsonb_typeof(scope.obj -> 'courts') = 'array'
+                                    then scope.obj -> 'courts' else '[]'::jsonb end
+                             ) with ordinality as celem(val, ord)
+                        left join court_mapping cm
+                          on cm.org_id = d.org_id and cm.court_string = celem.val
+                        left join courts c_existing
+                          on c_existing.org_id = d.org_id and c_existing.id::text = celem.val
+                    ), '[]'::jsonb) end) as new_courts,
+             (case when scope.obj ? 'venues' then coalesce((
+                      select jsonb_agg(to_jsonb(coalesce(vm.venue_id::text, v_existing.id::text, velem.val)) order by velem.ord)
+                        from jsonb_array_elements_text(
+                               case when jsonb_typeof(scope.obj -> 'venues') = 'array'
+                                    then scope.obj -> 'venues' else '[]'::jsonb end
+                             ) with ordinality as velem(val, ord)
+                        left join venue_mapping vm
+                          on vm.org_id = d.org_id and vm.venue_string = velem.val
+                        left join venues v_existing
+                          on v_existing.org_id = d.org_id and v_existing.id::text = velem.val
+                    ), '[]'::jsonb) end) as new_venues
+         ) stage
+         cross join lateral (
+           select
+             (case when stage.new_courts is not null
+                   then jsonb_set(scope.obj, '{courts}', stage.new_courts)
+                   else scope.obj end)
+             || (case when stage.new_venues is not null
+                      then jsonb_build_object('venues', stage.new_venues)
+                      else '{}'::jsonb end)
+             as obj
+         ) rewritten
+     ), '[]'::jsonb)
+   where jsonb_array_length(d.locked_scopes) > 0;
+end $$;
+-- division-locked-scopes-migration:end
