@@ -62,8 +62,29 @@ vi.mock("@/server/usecases/stages", () => ({ listStages: vi.fn(async () => []) }
 // The one TBD fixture the officials tab has to pick a label for: both
 // entrants unfilled, real V360/V361 slot.winner_group descriptors — the
 // exact shape a KO final carries before the group stage decides who plays.
+// Both readers return the SAME row. The board tab reads through the narrower
+// listDivisionFixturesForBoard projection (F1 — it omits the five bracket
+// round-role columns the board never renders) while the officials tab reads
+// the full row; this test is about slot-label locale resolution, which both
+// paths must do identically. Mocking only one leaves the page importing a
+// name the factory does not export, which vitest rejects at module load.
+// The row is repeated rather than lifted to a const: vi.mock is hoisted above
+// every declaration in this file, so a factory closing over a const would
+// throw on module load.
 vi.mock("@/server/usecases/fixtures", () => ({
   listDivisionFixtures: vi.fn(async () => [
+    {
+      id: "fx-1",
+      home_entrant_id: null,
+      away_entrant_id: null,
+      home_slot_label: { key: "slot.winner_group", params: { g: "A" } },
+      away_slot_label: { key: "slot.winner_group", params: { g: "B" } },
+      scheduled_at: null,
+      status: "scheduled",
+      officials: [],
+    },
+  ]),
+  listDivisionFixturesForBoard: vi.fn(async () => [
     {
       id: "fx-1",
       home_entrant_id: null,

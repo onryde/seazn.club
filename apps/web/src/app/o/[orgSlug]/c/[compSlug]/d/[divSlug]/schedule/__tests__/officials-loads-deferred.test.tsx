@@ -107,8 +107,14 @@ vi.mock("@/server/usecases/competitions", () => ({
   })),
 }));
 vi.mock("@/server/usecases/stages", () => ({ listStages: vi.fn(async () => []) }));
+// Both readers are mocked: the board tab reads through the narrower
+// listDivisionFixturesForBoard projection (F1 — it omits the five bracket
+// round-role columns the board never renders), every other caller still
+// reads the full row. Mocking only one leaves the page importing a name the
+// factory does not export, which vitest rejects at module load.
 vi.mock("@/server/usecases/fixtures", () => ({
   listDivisionFixtures: vi.fn(async () => []),
+  listDivisionFixturesForBoard: vi.fn(async () => []),
 }));
 vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => []) }));
 vi.mock("@/server/usecases/schedule", () => ({
