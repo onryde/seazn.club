@@ -20,6 +20,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { applySchedule, moveFixture, putScheduleSettings, validateSchedule } from "../schedule";
+import { createVenue, createCourt } from "../venues";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -40,8 +41,11 @@ interface Board {
   auth: AuthCtx;
   divisionId: string;
   stageId: string;
-  /** Round-robin over A/B/C/D, one fixture per 60 minutes on Court 1. */
+  /** Round-robin over A/B/C/D, one fixture per 60 minutes on courts[0]. */
   fixtures: { id: string; home: string; away: string; at: string; court: string }[];
+  /** P9 pass 3a: the 3 real courts.id values `["Court 1","Court 2","Court 3"]`
+   *  used to be — `court`/`court_label` everywhere below is one of these. */
+  courts: [string, string, string];
 }
 
 /**
@@ -81,13 +85,22 @@ async function seedBoard(endAt?: string): Promise<Board> {
     name: "League",
     config: {},
   });
+  // P9 pass 3a: 3 real courts — `ScheduleConfig.courts` has been `CourtId[]`
+  // (real uuids) since pass 1, and `fixtures.court_id` carries a composite
+  // FK to `courts(id, org_id)` since V367/368, so a free-text "Court 1"
+  // string is no longer legal on either the config or a write.
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const court1 = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+  const court2 = await createCourt(auth, venue.id, { name: "Court 2", sort: 1, tags: [] });
+  const court3 = await createCourt(auth, venue.id, { name: "Court 3", sort: 2, tags: [] });
+  const courts: [string, string, string] = [court1.id, court2.id, court3.id];
   await putScheduleSettings(auth, division.id, {
     config: {
       startAt: T0,
       ...(endAt !== undefined ? { endAt } : {}),
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 2", "Court 3"],
+      courts,
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -103,22 +116,23 @@ async function seedBoard(endAt?: string): Promise<Board> {
     home: r.home_entrant_id,
     away: r.away_entrant_id,
     at: at(i * 60),
-    court: "Court 1",
+    court: court1.id,
   }));
   const applied = await applySchedule(auth, stage!.id, {
-    assignments: placed.map((p) => ({ fixture_id: p.id, scheduled_at: p.at, court_label: p.court })),
+    assignments: placed.map((p) => ({ fixture_id: p.id, scheduled_at: p.at, court_id: p.court })),
     source: "manual",
   });
   expect(applied.applied).toBe(fixtures.length);
   expect(applied.conflicts.filter((c) => c.blocking)).toHaveLength(0);
-  return { auth, divisionId: division.id, stageId: stage!.id, fixtures: placed };
+  return { auth, divisionId: division.id, stageId: stage!.id, fixtures: placed, courts };
 }
 
 /** Write a slot straight to the row, bypassing every gate — the only way to
- *  manufacture the board a pre-W4 organiser could legitimately be sitting on. */
+ *  manufacture the board a pre-W4 organiser could legitimately be sitting on.
+ *  `court` is a real `courts.id` (P9 pass 3a) — see `Board.courts`. */
 async function forceSlot(fixtureId: string, scheduledAt: string, court: string): Promise<void> {
   await sql`
-    update fixtures set scheduled_at = ${scheduledAt}, court_label = ${court}
+    update fixtures set scheduled_at = ${scheduledAt}, court_id = ${court}
     where id = ${fixtureId}`;
 }
 
@@ -136,7 +150,7 @@ describe.skipIf(!HAS_DB)("delta-based blocking (#399)", () => {
     const board = await seedBoard();
     const [anchor, sharer] = sharingPair(board);
     await expect(
-      moveFixture(board.auth, sharer.id, { scheduled_at: anchor.at, court_label: "Court 2" }),
+      moveFixture(board.auth, sharer.id, { scheduled_at: anchor.at, court_id: board.courts[1] }),
     ).rejects.toSatisfy((err: unknown) => EngineError.is(err, "SCHEDULE_CONFLICT"));
     const [after] = await sql<{ scheduled_at: Date }[]>`
       select scheduled_at from fixtures where id = ${sharer.id}`;
@@ -148,7 +162,7 @@ describe.skipIf(!HAS_DB)("delta-based blocking (#399)", () => {
     const [anchor, sharer] = sharingPair(board);
     const err = await moveFixture(board.auth, sharer.id, {
       scheduled_at: anchor.at,
-      court_label: "Court 2",
+      court_id: board.courts[1],
     }).catch((e: unknown) => e);
     expect(EngineError.is(err, "SCHEDULE_CONFLICT")).toBe(true);
     const conflicts = ((err as EngineError).data as {
@@ -162,7 +176,7 @@ describe.skipIf(!HAS_DB)("delta-based blocking (#399)", () => {
     const board = await seedBoard();
     const [anchor, sharer] = sharingPair(board);
     // The board a pre-W4 organiser is sitting on: the overlap is already there.
-    await forceSlot(sharer.id, anchor.at, "Court 2");
+    await forceSlot(sharer.id, anchor.at, board.courts[1]);
 
     // An unrelated card still moves.
     //
@@ -178,7 +192,7 @@ describe.skipIf(!HAS_DB)("delta-based blocking (#399)", () => {
     const unrelated = board.fixtures.find((f) => f.id !== anchor.id && f.id !== sharer.id)!;
     await moveFixture(board.auth, unrelated.id, {
       scheduled_at: at(-60),
-      court_label: "Court 2",
+      court_id: board.courts[1],
     });
     const [moved] = await sql<{ scheduled_at: Date }[]>`
       select scheduled_at from fixtures where id = ${unrelated.id}`;
@@ -197,13 +211,13 @@ describe.skipIf(!HAS_DB)("delta-based blocking (#399)", () => {
   it("re-applies a dirty board unchanged rather than 409ing on its own history", async () => {
     const board = await seedBoard();
     const [anchor, sharer] = sharingPair(board);
-    await forceSlot(sharer.id, anchor.at, "Court 2");
+    await forceSlot(sharer.id, anchor.at, board.courts[1]);
 
     const out = await applySchedule(board.auth, board.stageId, {
       assignments: board.fixtures.map((f) => ({
         fixture_id: f.id,
         scheduled_at: f.id === sharer.id ? anchor.at : f.at,
-        court_label: f.id === sharer.id ? "Court 2" : f.court,
+        court_id: f.id === sharer.id ? board.courts[1] : f.court,
       })),
       source: "manual",
     });
@@ -214,7 +228,7 @@ describe.skipIf(!HAS_DB)("delta-based blocking (#399)", () => {
   it("REFUSES a change that WORSENS an existing overlap", async () => {
     const board = await seedBoard();
     const [anchor, sharer] = sharingPair(board);
-    await forceSlot(sharer.id, anchor.at, "Court 2");
+    await forceSlot(sharer.id, anchor.at, board.courts[1]);
     // A third fixture with the same entrant dragged onto the same instant: the
     // person was already double-booked, and this makes it three at once.
     const third = board.fixtures.find(
@@ -225,10 +239,11 @@ describe.skipIf(!HAS_DB)("delta-based blocking (#399)", () => {
     );
     // The round robin gives entrant A three opponents, so this always exists.
     expect(third).toBeDefined();
-    // Court 3, so the refusal can only be the person — a third card on Court 2
-    // would be a court clash and would block for a reason this test is not about.
+    // courts[2] ("Court 3"), so the refusal can only be the person — a third
+    // card on courts[1] would be a court clash and would block for a reason
+    // this test is not about.
     await expect(
-      moveFixture(board.auth, third!.id, { scheduled_at: anchor.at, court_label: "Court 3" }),
+      moveFixture(board.auth, third!.id, { scheduled_at: anchor.at, court_id: board.courts[2] }),
     ).rejects.toSatisfy((err: unknown) => EngineError.is(err, "SCHEDULE_CONFLICT"));
   });
 
@@ -238,7 +253,7 @@ describe.skipIf(!HAS_DB)("delta-based blocking (#399)", () => {
     await expect(
       moveFixture(board.auth, target.id, {
         scheduled_at: at(60 * 24 * 5),
-        court_label: "Court 2",
+        court_id: board.courts[1],
       }),
     ).rejects.toSatisfy((err: unknown) => EngineError.is(err, "SCHEDULE_CONFLICT"));
   });
@@ -246,12 +261,12 @@ describe.skipIf(!HAS_DB)("delta-based blocking (#399)", () => {
   it("keeps a board already outside its window editable", async () => {
     const board = await seedBoard(at(60 * 24));
     const stray = board.fixtures[0]!;
-    await forceSlot(stray.id, at(60 * 24 * 5), "Court 2");
+    await forceSlot(stray.id, at(60 * 24 * 5), board.courts[1]);
     // Moving the stray card WITHIN the same out-of-window day is not a new
     // conflict — the same key was already there.
     await moveFixture(board.auth, stray.id, {
       scheduled_at: at(60 * 24 * 5 + 90),
-      court_label: "Court 2",
+      court_id: board.courts[1],
     });
     const [moved] = await sql<{ scheduled_at: Date }[]>`
       select scheduled_at from fixtures where id = ${stray.id}`;
@@ -271,7 +286,7 @@ describe.skipIf(!HAS_DB)("delta-based blocking (#399)", () => {
     await forceSlot(second.id, first.at, first.court);
     // Now drag it onto `third` instead — same court, different victim.
     await expect(
-      moveFixture(board.auth, second.id, { scheduled_at: third.at, court_label: third.court }),
+      moveFixture(board.auth, second.id, { scheduled_at: third.at, court_id: third.court }),
     ).rejects.toSatisfy((err: unknown) => EngineError.is(err, "SCHEDULE_CONFLICT"));
   });
 
@@ -280,7 +295,7 @@ describe.skipIf(!HAS_DB)("delta-based blocking (#399)", () => {
     // fixture, moved to overlap with another. Different clash, same card.
     const board = await seedBoard();
     const [anchor, sharer] = sharingPair(board);
-    await forceSlot(sharer.id, anchor.at, "Court 2");
+    await forceSlot(sharer.id, anchor.at, board.courts[1]);
     const otherSharer = board.fixtures.find(
       (f) =>
         f.id !== anchor.id &&
@@ -290,7 +305,7 @@ describe.skipIf(!HAS_DB)("delta-based blocking (#399)", () => {
     await expect(
       moveFixture(board.auth, sharer.id, {
         scheduled_at: otherSharer.at,
-        court_label: "Court 3",
+        court_id: board.courts[2],
       }),
     ).rejects.toSatisfy((err: unknown) => EngineError.is(err, "SCHEDULE_CONFLICT"));
   });
@@ -300,8 +315,60 @@ describe.skipIf(!HAS_DB)("delta-based blocking (#399)", () => {
     const board = await seedBoard();
     const [a, b] = [board.fixtures[0]!, board.fixtures[1]!];
     await expect(
-      moveFixture(board.auth, b.id, { scheduled_at: a.at, court_label: a.court }),
+      moveFixture(board.auth, b.id, { scheduled_at: a.at, court_id: a.court }),
     ).rejects.toSatisfy((err: unknown) => EngineError.is(err, "SCHEDULE_CONFLICT"));
+  });
+
+  // P9 pass 3a — the dispatch's own regressions, placed here because this
+  // describe block already has the exact machinery they need (a real
+  // multi-court board, forceSlot for "already on the row", the
+  // EngineError.data.conflicts extraction pattern).
+  it("resolves a court double-booking by court_id even when the victim's LEGACY court_label is stale/wrong — readers no longer trust that column", async () => {
+    const board = await seedBoard();
+    const [a, b] = [board.fixtures[0]!, board.fixtures[1]!];
+    // `a` already sits on `board.courts[0]`. Poison its free-text
+    // court_label to a value that names NEITHER real court — nothing
+    // production-side has written this column since P9 pass 3a, so this
+    // simulates exactly the "stale, never-updated label" the dispatch
+    // describes. If any reader still consulted court_label instead of
+    // court_id, this fixture would no longer appear to occupy
+    // `board.courts[0]` at all, and the double-booking below would go
+    // undetected.
+    await sql`update fixtures set court_label = 'a court that does not exist' where id = ${a.id}`;
+    await expect(
+      moveFixture(board.auth, b.id, { scheduled_at: a.at, court_id: a.court }),
+    ).rejects.toSatisfy((err: unknown) => EngineError.is(err, "SCHEDULE_CONFLICT"));
+  });
+
+  it("a court double-booking conflict carries the court id AND renders a human name, never a bare uuid", async () => {
+    const board = await seedBoard();
+    const [a, b] = [board.fixtures[0]!, board.fixtures[1]!];
+    const err = await moveFixture(board.auth, b.id, {
+      scheduled_at: a.at,
+      court_id: a.court,
+    }).catch((e: unknown) => e);
+    expect(EngineError.is(err, "SCHEDULE_CONFLICT")).toBe(true);
+    const conflicts = ((err as EngineError).data as {
+      conflicts: {
+        code: string;
+        blocking: boolean;
+        detail?: string;
+        details?: { kind: string; court?: string; court_name?: string };
+      }[];
+    }).conflicts;
+    const courtConflicts = conflicts.filter((c) => c.code === "conflict.court");
+    expect(courtConflicts.length).toBeGreaterThan(0);
+    for (const c of courtConflicts) {
+      // The id — real, and the actual court_id both fixtures now share.
+      expect(c.details?.court).toBe(a.court);
+      // The DERIVED name (P9 pass 3a) — "Court 1", not the uuid.
+      expect(c.details?.court_name).toBe("Court 1");
+      // The deprecated legacy prose (conflict-detail-legacy.ts) must also
+      // read the name, never the bare id — this is the actual user-facing
+      // text some existing clients still render.
+      expect(c.detail).toContain("Court 1");
+      expect(c.detail).not.toContain(a.court);
+    }
   });
 });
 
@@ -340,7 +407,7 @@ describe.skipIf(!HAS_DB)("round order is part of the delta gate too (C1 fix-loop
     // overlap in time or court with anything already on the board, so the
     // ONLY thing this drag can trip is round order.
     await expect(
-      moveFixture(board.auth, laterRound.id, { scheduled_at: at(-60), court_label: "Court 3" }),
+      moveFixture(board.auth, laterRound.id, { scheduled_at: at(-60), court_id: board.courts[2] }),
     ).rejects.toSatisfy((err: unknown) => EngineError.is(err, "SCHEDULE_CONFLICT"));
     const [after] = await sql<{ scheduled_at: Date }[]>`
       select scheduled_at from fixtures where id = ${laterRound.id}`;
@@ -354,7 +421,7 @@ describe.skipIf(!HAS_DB)("round order is part of the delta gate too (C1 fix-loop
 
     const err = await moveFixture(board.auth, laterRound.id, {
       scheduled_at: at(-60),
-      court_label: "Court 3",
+      court_id: board.courts[2],
     }).catch((e: unknown) => e);
     expect(EngineError.is(err, "SCHEDULE_CONFLICT")).toBe(true);
     const conflicts = ((err as EngineError).data as {
@@ -375,10 +442,10 @@ describe.skipIf(!HAS_DB)("round order is part of the delta gate too (C1 fix-loop
     // baseline gets nothing from the moved fixture itself, only from the
     // widened siblings. The other unit tests above/below all move an
     // already-placed fixture, which takes the ternary's other branch.
-    await sql`update fixtures set scheduled_at = null, court_label = null where id = ${laterRound.id}`;
+    await sql`update fixtures set scheduled_at = null, court_id = null where id = ${laterRound.id}`;
 
     await expect(
-      moveFixture(board.auth, laterRound.id, { scheduled_at: at(-60), court_label: "Court 3" }),
+      moveFixture(board.auth, laterRound.id, { scheduled_at: at(-60), court_id: board.courts[2] }),
     ).rejects.toSatisfy((err: unknown) => EngineError.is(err, "SCHEDULE_CONFLICT"));
     const [after] = await sql<{ scheduled_at: Date | null }[]>`
       select scheduled_at from fixtures where id = ${laterRound.id}`;
@@ -400,7 +467,7 @@ describe.skipIf(!HAS_DB)("round order is part of the delta gate too (C1 fix-loop
     // Bypass every gate — the only way to manufacture the board a pre-fix
     // organiser could legitimately already be sitting on (same idiom as the
     // person-overlap tests above, `forceSlot`).
-    await forceSlot(laterRound.id, at(-60), "Court 3");
+    await forceSlot(laterRound.id, at(-60), board.courts[2]);
 
     // The false-block regression this file exists to catch: if the sibling
     // widening were asymmetric (assignments side only, not the baseline
@@ -413,7 +480,7 @@ describe.skipIf(!HAS_DB)("round order is part of the delta gate too (C1 fix-loop
     // untouched later-round sibling still sitting at its original (much
     // earlier) position, which would be a SECOND, genuine violation this
     // test does not intend to create.
-    await moveFixture(board.auth, otherRound1.id, { scheduled_at: at(-120), court_label: "Court 2" });
+    await moveFixture(board.auth, otherRound1.id, { scheduled_at: at(-120), court_id: board.courts[1] });
     const [moved] = await sql<{ scheduled_at: Date }[]>`
       select scheduled_at from fixtures where id = ${otherRound1.id}`;
     expect(moved!.scheduled_at.toISOString()).toBe(at(-120));
@@ -433,7 +500,7 @@ describe.skipIf(!HAS_DB)("round order is part of the delta gate too (C1 fix-loop
 
     await expect(
       applySchedule(board.auth, board.stageId, {
-        assignments: [{ fixture_id: laterRound.id, scheduled_at: at(-60), court_label: "Court 3" }],
+        assignments: [{ fixture_id: laterRound.id, scheduled_at: at(-60), court_id: board.courts[2] }],
         source: "manual",
       }),
     ).rejects.toSatisfy((err: unknown) => EngineError.is(err, "SCHEDULE_CONFLICT"));
@@ -448,10 +515,10 @@ describe.skipIf(!HAS_DB)("round order is part of the delta gate too (C1 fix-loop
     const round1 = board.fixtures.find((f) => rounds.get(f.id) === 1)!;
     const otherRound1 = board.fixtures.find((f) => f.id !== round1.id && rounds.get(f.id) === 1)!;
     const laterRound = board.fixtures.find((f) => (rounds.get(f.id) ?? 0) > 1)!;
-    await forceSlot(laterRound.id, at(-60), "Court 3");
+    await forceSlot(laterRound.id, at(-60), board.courts[2]);
 
     const out = await applySchedule(board.auth, board.stageId, {
-      assignments: [{ fixture_id: otherRound1.id, scheduled_at: at(-120), court_label: "Court 2" }],
+      assignments: [{ fixture_id: otherRound1.id, scheduled_at: at(-120), court_id: board.courts[1] }],
       source: "manual",
     });
     expect(out.applied).toBe(1);
