@@ -467,14 +467,15 @@ test("cricket v3: voiding an OLDER event from the activity panel writes core.voi
 // than merely disabling one that still looks tappable.
 test(
   "cricket v3: the over-by-over tile posts a partial summary, updates the pad and the ribbon with real " +
-    "copy, prefills its sheet from the fold on reopen, and hides the ball tiles once the innings is coarse",
+    "copy, APPENDS a second over's runs/wickets onto the fold, and hides the ball tiles once the innings is coarse",
   async ({ page }) => {
-    // One real held dispatch (queue.ts HOLD_MS = 6000ms) plus openLiveConsole's
-    // own two 20s-ceiling polls, plus a second (cancelled, no network) sheet
-    // open — the two Undo conversions elsewhere in this file budget 120_000
-    // for the plain "one openLiveConsole + one submit" shape, so the same
-    // ceiling covers this test's extra, network-free step with headroom.
-    test.setTimeout(120_000);
+    // TWO real held dispatches now (queue.ts HOLD_MS = 6000ms each) — the
+    // second over was added when Q2 was reversed, because an append is
+    // unprovable from a single entry against an empty fold. Plus
+    // openLiveConsole's own two 20s-ceiling polls, two 20s ledger polls, and
+    // a third (cancelled, no network) sheet open. The 120_000 that covered
+    // the single-dispatch shape no longer has headroom for that.
+    test.setTimeout(180_000);
     const fx = await seedRosteredFixture(page.request, {
       label: `V3 Cricket OverTile ${TAG}`,
       sportKey: "cricket",
@@ -498,27 +499,29 @@ test(
     const sheet = sheetRoot(page);
     await expect(sheet, "tapping the tile must open the guided sheet").toBeVisible({ timeout: 10_000 });
 
-    // Step 1/3 — "Total runs": prefilled from the fold's CURRENT total (0,
-    // nothing recorded yet), never blank/undefined — R2b Q2's own ruling is
-    // that the sheet PREFILLS a running total, it is not a from-zero
-    // increment form.
-    let field = sheet.getByRole("spinbutton", { name: "Total runs" });
+    // Step 1/3 — "Runs this over": a PER-OVER delta, so it always opens at 0
+    // regardless of the fold (Q2 REVERSED by the owner 2026-08-17, `_INDEX.md`
+    // — the scorer enters this over's runs and the pad appends). Asserting 0
+    // here, against an empty fold, cannot tell "delta" from "total" — the
+    // second over below is what actually proves the append.
+    let field = sheet.getByRole("spinbutton", { name: "Runs this over" });
     await expect(field).toBeVisible({ timeout: 10_000 });
-    await expect(field, "prefill must read the fold's current total, not a hardcoded 0").toHaveValue("0");
+    await expect(field).toHaveValue("0");
     await field.fill("8");
     await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
 
-    // Step 2/3 — "Total wickets": prefilled 0, left unedited.
-    field = sheet.getByRole("spinbutton", { name: "Total wickets" });
+    // Step 2/3 — "Wickets this over": 0, left unedited.
+    field = sheet.getByRole("spinbutton", { name: "Wickets this over" });
     await expect(field).toBeVisible({ timeout: 10_000 });
     await expect(field).toHaveValue("0");
     await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
 
-    // Step 3/3 — "Balls bowled": prefilled to a FULL over past the current
-    // total (0 + t20's own 6-ball bpo, `overSummarySheet`'s own "assume a
-    // full over unless told otherwise") — left unedited; confirming closes
-    // the wizard and dispatches.
-    field = sheet.getByRole("spinbutton", { name: "Balls bowled" });
+    // Step 3/3 — "Balls this over": prefilled to ONE full over (t20's own
+    // 6-ball bpo, never a hardcoded 6 — the Hundred's is 5), because a
+    // completed over is exactly `bpo` LEGAL deliveries however many extras
+    // were bowled alongside it. Left unedited; confirming closes the wizard
+    // and dispatches.
+    field = sheet.getByRole("spinbutton", { name: "Balls this over" });
     await expect(field).toBeVisible({ timeout: 10_000 });
     await expect(field).toHaveValue("6");
     await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
@@ -532,8 +535,11 @@ test(
       )
       .toBe(1);
     const summary = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "cricket.innings.summary")!;
-    // A TOTAL, never an increment (R2b Q2): the payload is exactly what the
-    // scorer saw on screen, unedited past the runs prefill.
+    // The EVENT still carries absolute totals — `cricket.innings.summary`
+    // REPLACES the innings totals (cricket.ts:1445-1451), it was never
+    // additive at the schema level. From an empty fold the delta and the
+    // total coincide (0 + 8 = 8), which is exactly why this assertion alone
+    // is not proof of the append; the second over below supplies that.
     expect(summary.payload).toMatchObject({ runs: 8, wickets: 0, legalBalls: 6, partial: true });
 
     // The pad reflects the posted totals, not a stale 0/0 — "the pad
@@ -572,19 +578,55 @@ test(
     await expect(overTile).toBeVisible();
     await expect(overTile).toContainText("2");
 
-    // Reopen: the wizard PREFILLS from the fold's now-UPDATED total (8, not
-    // reset to 0) — the explicit "record something first, reopen, assert the
-    // prefill reflects it" proof this wave's own e2e gap named.
+    // SECOND OVER, from a NON-ZERO fold — the only assertion in this file
+    // that can tell append from replace. The fold now reads 8/0 off 6; the
+    // scorer enters this over's 5 runs and 1 wicket, so the pad must emit
+    // 13/1 off 12. If `buildPayload` ever dropped its `+ delta` and sent the
+    // raw answers (5/1 off 6), that is a DECREASE and the engine's monotone
+    // guard (cricket.ts:1416-1426) would reject it — but if it dropped the
+    // ANSWER instead and re-sent the base, the ledger would silently stall at
+    // 8/0 with nothing failing. Both directions are covered by pinning the
+    // exact sum below.
     await overTile.click();
     await expect(sheet).toBeVisible({ timeout: 10_000 });
-    field = sheet.getByRole("spinbutton", { name: "Total runs" });
-    await expect(field, "reopen must prefill from the FOLD's current total, not reset to 0").toHaveValue("8");
-    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+
+    field = sheet.getByRole("spinbutton", { name: "Runs this over" });
+    await expect(field, "a per-over delta reopens at 0 — never carrying the fold's 8 forward").toHaveValue("0");
+    await field.fill("5");
+    await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+
+    field = sheet.getByRole("spinbutton", { name: "Wickets this over" });
+    await expect(field).toHaveValue("0");
+    await field.fill("1");
+    await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+
+    field = sheet.getByRole("spinbutton", { name: "Balls this over" });
+    await expect(field).toHaveValue("6");
+    await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
     await expect(sheet).not.toBeVisible({ timeout: 10_000 });
 
-    // Cancel must not dispatch — the ledger's own summary count stays at 1.
+    await expect
+      .poll(
+        async () =>
+          (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.innings.summary").length,
+        { timeout: 20_000 },
+      )
+      .toBe(2);
+    const second = (await ledger(page.request, fx.fixtureId))
+      .filter((e) => e.type === "cricket.innings.summary")
+      .at(-1)!;
+    expect(second.payload, "8+5 runs, 0+1 wickets, 6+6 balls — the SUM, not the delta and not the base").toMatchObject(
+      { runs: 13, wickets: 1, legalBalls: 12, partial: true },
+    );
+    await expect(pad(page).locator('[data-role="v3-scorebug"]')).toContainText("13/1");
+
+    // Cancel must not dispatch — the ledger's own summary count stays at 2.
+    await overTile.click();
+    await expect(sheet).toBeVisible({ timeout: 10_000 });
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(sheet).not.toBeVisible({ timeout: 10_000 });
     const afterCancel = await ledger(page.request, fx.fixtureId);
-    expect(afterCancel.filter((e) => e.type === "cricket.innings.summary")).toHaveLength(1);
+    expect(afterCancel.filter((e) => e.type === "cricket.innings.summary")).toHaveLength(2);
   },
 );
 

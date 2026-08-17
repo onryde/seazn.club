@@ -437,15 +437,22 @@ const SPORTS: GallerySport[] = [
       await expect(sheet, "gallery(cricket): tapping the tile must open the guided sheet").toBeVisible({
         timeout: 10_000,
       });
-      // Left on step 1/3 ("Total runs") and NOT confirmed — same
+      // Left on step 1/3 ("Runs this over") and NOT confirmed — same
       // stop-before-commit posture every other sport's `openDock` takes
-      // above. Prefilled from the fold's CURRENT total (7, just posted),
-      // never a blank/zero form (R2b Q2 owner ruling) — the one assertion
-      // that actually proves this capture shows prefill, not a fresh form.
+      // above. The field is a PER-OVER delta and opens at 0 (Q2 REVERSED
+      // 2026-08-17, `_INDEX.md`), so what this capture has to show is the
+      // "before" anchor: the fold's own 7/1, rendered verbatim above the
+      // control (`SheetNumberStep.hint`, guided-sheet.tsx:374). That anchor
+      // is the ONLY thing on screen telling the scorer what their delta is
+      // being added to — if it ever stops rendering, the sheet still works
+      // and still looks right, which is precisely why the gallery pins it.
       await expect(
-        sheet.getByRole("spinbutton", { name: "Total runs" }),
-        "gallery(cricket): sheet must prefill from the fold, not open blank",
-      ).toHaveValue("7");
+        sheet.getByRole("spinbutton", { name: "Runs this over" }),
+        "gallery(cricket): a per-over delta opens at 0, never carrying the fold forward",
+      ).toHaveValue("0");
+      await expect(sheet, "gallery(cricket): the before-anchor must render, or the delta has no context").toContainText(
+        "7/1",
+      );
       await captureState(page, dir, "07-oversheet", "cricket", measurements);
 
       return [...EXTRA_STATES];

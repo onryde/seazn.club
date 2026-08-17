@@ -292,6 +292,27 @@ scout's re-pin is what surfaced that.
   restricts to the tail). **This was untested** — `cricket.test.ts` has zero
   `core.void` and apps/web's v3 void tests are generic plumbing — so the Q1 gate
   rested entirely on unverified behaviour. R2b ships that regression test.
+- **"THREE granularities" is wrong — cricket has TWO scoring modes.** The R2b
+  row above (and the brief) say cricket needs innings totals, over-by-over and
+  ball-by-ball. The engine models only two: `createInnings(state, fidelity)`
+  (`cricket.ts:661`) takes `"fine"` (ball-by-ball, driven by `cricket.ball`) or
+  `"coarse"` (driven by `cricket.innings.summary`, via `applySummary`,
+  `:1394-1454`). **"Innings totals" is not a third mode** — it is the SAME
+  coarse path with `partial` omitted and the event posted ONCE with the final
+  numbers, which closes the innings immediately; over-by-over is the same event
+  with `partial: true` posted repeatedly, leaving the innings open to
+  auto-close. So R2b's one tile delivers both: tap it once at the end, or once
+  per over. Nothing was ever missing for "innings totals", and there is nothing
+  separate to build or retire for it.
+- **Nothing on screen tells a scorer which mode an innings is in.** It is
+  inferred purely from which tiles are present (over tile vs ball tiles). The
+  fold locks it on the first event and only an undo/void reverses it, so a
+  scorer who does not know the rule cannot discover it from the pad. Not fixed
+  in R2b — no owner ruling exists for what the indicator should say, and
+  inventing one unasked would ship copy on eleven skins' worth of chassis. Open
+  question for the owner, carried to R8's sweep unless ruled sooner.
+  (Unrelated to the 0–3 **fidelity band**, which gates plan entitlements and is
+  a different concept wearing a similar word — do not conflate them.)
 - **The guided-sheet renderer has no numeric step.** `GuidedSheetStep` is
   `choice | person` only (`v3/types.ts:122,152-154`); the generic More-sheet
   `action-form.tsx:141-172` is the only thing in v3 that renders
@@ -299,3 +320,62 @@ scout's re-pin is what surfaced that.
   R3–R7 inherit, so take it from there rather than re-deriving it per sport.
   `buildPayload`'s `answers: Record<string, string>` stays as it is; a number
   step's answer is the decimal string and the SKIN parses it.
+- **A defaulted `t` parameter is a tsc-invisible silent-fallback trap.**
+  `buildTiles(view, t: TFn = (key) => key)` (`v3/skins/cricket.tsx:642`) defaults
+  its translator so ~17 call sites in the skin's own test file compile
+  unchanged. Cost: dropping the second argument at the FACTORY wiring
+  (`cricketSkinV3`'s `tiles: (view) => buildTiles(view, t)`, `:1198`) type-checks,
+  lints, and ships the raw i18n key as the tile's visible label. Review proved
+  it by mutating that line — the whole v3 suite stayed **425/425 green**, because
+  every `labelText` test called `buildTiles` DIRECTLY with an explicit `t`.
+  Closed by a factory-level test (`290f169a8`) mirroring the two-`t` scorebug
+  proof; re-mutating now reds exactly one test with `expected
+  'pad.cricket.action.endOfOver' to be 'A:pad.cricket.action.endOfOver:6'`.
+  `buildScorebug`/`buildDock` (`:531`,`:781`) REQUIRE `t` and have no such gap —
+  the asymmetry is convenience only. **R3–R7 skin authors: require `t`.** A
+  defaulted translator anywhere else reproduces this exact blind spot.
+
+### R2b — Q2 REVERSED by the owner, same day (2026-08-17)
+
+**Supersedes the Q2 ruling recorded above.** The sheet asks **this over's** runs
+and wickets (and balls, defaulting to `bpo`), and the PAD appends them to the
+fold's totals before emitting. It no longer asks the scorer to re-key the
+innings total every over.
+
+- **Owner's reason:** re-keying `113` every over to add `8` is the worse trade,
+  and the scorer thinks in per-over terms, not running totals.
+- **The objection that was raised and overruled:** `cricket.innings.summary`
+  REPLACES totals (`cricket.ts:1445-1451`) behind a "may not decrease" guard
+  (`:1416-1426`), so the pad must compute `base + delta` itself, and an
+  arithmetic bug there produces a total that is still HIGHER than before —
+  it passes the monotone guard and drifts wrong permanently with nothing to
+  catch it. Mitigation shipped instead of the refusal: the `hint` "before"
+  anchor (`24/1`) stays on every step and is now load-bearing rather than
+  decorative — it is the only place the scorer sees what the delta is added
+  to — plus an explicit `buildPayload` test asserting the ABSOLUTE emitted
+  totals, mutation-proved.
+- **Staleness is NOT a new risk introduced by this.** `pad-host.tsx:548` freezes
+  the resolved sheet at tap time, so `buildPayload` closes over the fold as of
+  the tap either way; the old design's `initial: runs` prefill came from the
+  same snapshot. Checked before the change, not assumed.
+- **Extras cannot push the balls field past `bpo`** — owner asked, and the
+  answer is no action needed. The field is `legalBalls`, and wides/no-balls are
+  not legal deliveries by cricket's own definition, so a completed over is
+  always exactly `bpo` legal balls (6 for T20, **5 for the Hundred** —
+  `cricket.ts:2811`) however many extras were bowled alongside. Their runs fold
+  into the single runs number; there is no separate extras field at this
+  fidelity. `max: bpo` on the balls step; below `bpo` stays legal because an
+  innings can end mid-over.
+
+### R2b — unplanned fixes (in scope per the fix-inline rule, recorded for the PR)
+
+- **SwapSheet had no way out** (`966c7ad4c`). Found while preparing the live
+  walkthrough, not by a test: `SwapSheetProps` (`v3/swap-sheet.tsx:136`) declared
+  no `onCancel`, and `pad-host.tsx:683-698` mounted `<SwapSheet>` without one
+  while the sibling `<GuidedSheet>` at `:712` got
+  `onCancel={() => setOpenSheet(null)}`. A scorer who opened cricket's Retire
+  flow by mistake was stuck in it. Fixed on both the off- and on-steps, reusing
+  the existing `pad.sheet.cancel` key (already in all 4 locales — no dictionary
+  edit owed). **No e2e drives SwapSheet at all** — `git grep -a "Retire"
+  apps/web/e2e/` returns 2 hits, both `journey-community.spec.ts` retiring a
+  TOURNAMENT, unrelated. That coverage gap is real and belongs to R8.
