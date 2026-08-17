@@ -3893,6 +3893,7 @@
   "pad.cricket.context.bowler.blocked.noEligible": "Aucun lanceur n'est éligible pour commencer le prochain over.",
   "pad.cricket.context.innings.closed": "Cette manche est terminée.",
   "pad.cricket.sheet.wicket.kind.title": "Que s'est-il passé ?",
+  "pad.cricket.sheet.wicket.kind.freeHitHint": "Free hit — seuls Run out ou Obstruction du terrain s'appliquent.",
   "pad.cricket.sheet.wicket.who.title": "Qui est éliminé ?",
   "pad.cricket.sheet.wicket.fielder.title": "Joueur de champ",
   "pad.cricket.sheet.retire.reason.title": "Pourquoi se retirer ?",

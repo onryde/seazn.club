@@ -2645,6 +2645,7 @@ export type DictionaryKey =
   | "pad.cricket.sheet.toss.elected.title"
   | "pad.cricket.sheet.toss.wonBy.title"
   | "pad.cricket.sheet.wicket.fielder.title"
+  | "pad.cricket.sheet.wicket.kind.freeHitHint"
   | "pad.cricket.sheet.wicket.kind.title"
   | "pad.cricket.sheet.wicket.who.title"
   | "pad.cricket.tile.runs.0"

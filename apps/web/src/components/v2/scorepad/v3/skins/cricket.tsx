@@ -132,6 +132,20 @@ export const FIELDER_ELIGIBLE_KINDS = new Set<WicketKind>(["caught", "runout", "
  *  kind always dismisses the striker, so asking "who's out" there would be
  *  the wasted tap D-15 exists to remove. */
 export const VARIABLE_OUT_KINDS = new Set<WicketKind>(["runout"]);
+/**
+ * R2b-over (review finding — the fourth instance of "the pad must never
+ * offer what the engine will refuse", `_INDEX.md`): dismissals still legal
+ * while a free hit is pending — the engine's own restriction, verbatim
+ * (`cricket.ts:1275-1276`): `if (fine.freeHitPending && wicket.kind !==
+ * "runout" && wicket.kind !== "obstructed") invalid(...)`. Every OTHER
+ * WICKET_KINDS member is refused outright in that state. `wicketSheet`
+ * (below) is the only reader — narrows the "kind" step's `options` to this
+ * set whenever `freeHitPending(view.events, ...)` (the SAME fold
+ * `buildScorebug`'s indicator and `cricketBallDetail`'s activity note
+ * already use) is true, so the sheet can never offer a tap the server would
+ * bounce.
+ */
+export const FREE_HIT_WICKET_KINDS = new Set<WicketKind>(["runout", "obstructed"]);
 const BOWLER_CREDITED_KINDS = new Set<WicketKind>(["bowled", "caught", "lbw", "stumped", "hitwicket"]);
 
 const BALL_EVENT_TYPES = new Set(["cricket.ball", "cricket.superover.ball"]);
@@ -1615,13 +1629,34 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
   // so a not-yet-populated crease offers zero candidates rather than a
   // phantom "" entry `renderCandidateRow` would render as a blank button.
   const outCandidates = [people.striker, people.nonStriker].filter((id): id is string => id !== "");
+  // R2b-over (review finding — same recurring defect class this whole branch
+  // targets): the SAME `freeHitPending` fold buildScorebug's own indicator
+  // and cricketBallDetail's own activity note already use (that function's
+  // own header, above) — called here with the identical two arguments
+  // buildScorebug uses, so this gate can never disagree with what the
+  // scorer is already shown on the scorebug strip.
+  const freeHit = freeHitPending(view.events, cfg.ballsPerInnings !== null);
+  // FREE_HIT_WICKET_KINDS' own doc (above) has the engine restriction this
+  // mirrors (cricket.ts:1275-1276). Filtering WICKET_KINDS (rather than
+  // hardcoding the pair here too) means a future change to either closed
+  // set only has one place to update.
+  const kindOptions = (freeHit ? WICKET_KINDS.filter((k) => FREE_HIT_WICKET_KINDS.has(k)) : WICKET_KINDS).map((k) => ({
+    id: k,
+    label: requiredVocabKey("kind", k),
+  }));
 
   const steps: GuidedSheetStep[] = [
     {
       id: "kind",
       kind: "choice",
       title: "pad.cricket.sheet.wicket.kind.title",
-      options: WICKET_KINDS.map((k) => ({ id: k, label: requiredVocabKey("kind", k) })),
+      options: kindOptions,
+      // Owner ruling (this task's own brief): never leave a silently
+      // shortened list unexplained — a scorer expecting "bowled" and not
+      // finding it needs to know why. `SheetChoiceStep.hint`'s own doc
+      // (types.ts) has the full reasoning for why this is a plain i18n key
+      // rather than SheetNumberStep's pre-resolved convention.
+      hint: freeHit ? "pad.cricket.sheet.wicket.kind.freeHitHint" : undefined,
     },
     {
       id: "out",

@@ -287,21 +287,37 @@ const choiceButtonClass =
  *  reason renderCandidateRow is one: this repo's node-only `_hook-harness`
  *  walks a rendered tree through `.props.children` only, never invoking a
  *  nested custom component's own function — a real `<ChoiceRow/>` would
- *  make every button inside it invisible to `walk()`/`textOf()`. */
-function renderChoiceRow(options: readonly { id: string; label: string }[], t: TFn, onPick: (id: string) => void) {
+ *  make every button inside it invisible to `walk()`/`textOf()`.
+ *
+ *  `hint` (R2b-over, `SheetChoiceStep.hint`'s own doc, types.ts): rendered
+ *  VERBATIM-through-`t()` above the button row, same visual treatment
+ *  (`text-sm text-slate-600`, same wrapping flex-col) as
+ *  `renderNumberStep`'s own hint paragraph below — the two hints differ only
+ *  in whether the chassis or the skin resolves the string (that function's
+ *  own doc explains why), never in how they render. Undefined/omitted
+ *  renders nothing extra, so every pre-existing choice step is unchanged. */
+function renderChoiceRow(
+  options: readonly { id: string; label: string }[],
+  hint: string | undefined,
+  t: TFn,
+  onPick: (id: string) => void,
+) {
   return (
-    <div className="flex flex-wrap gap-2">
-      {options.map((opt) => (
-        <button
-          key={opt.id}
-          type="button"
-          onClick={() => onPick(opt.id)}
-          style={{ minHeight: 44 }}
-          className={choiceButtonClass}
-        >
-          {t(opt.label)}
-        </button>
-      ))}
+    <div className="flex flex-col gap-2">
+      {hint && <p className="text-sm text-slate-600">{t(hint)}</p>}
+      <div className="flex flex-wrap gap-2">
+        {options.map((opt) => (
+          <button
+            key={opt.id}
+            type="button"
+            onClick={() => onPick(opt.id)}
+            style={{ minHeight: 44 }}
+            className={choiceButtonClass}
+          >
+            {t(opt.label)}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -513,7 +529,7 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
       </div>
       <div className="px-4 py-3">
         {step.kind === "choice"
-          ? renderChoiceRow(step.options, t, handleAnswer)
+          ? renderChoiceRow(step.options, step.hint, t, handleAnswer)
           : step.kind === "number"
             ? renderNumberStep(step, numberEditValue, t, setNumberEditValue, () => handleAnswer(String(numberEditValue)))
             : renderCandidateRow(candidatesForStep(step, views[step.side]), personNames, t, handleAnswer, emptyText)}

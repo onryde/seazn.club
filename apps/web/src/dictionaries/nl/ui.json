@@ -3893,6 +3893,7 @@
   "pad.cricket.context.bowler.blocked.noEligible": "Geen enkele bowler mag de volgende over beginnen.",
   "pad.cricket.context.innings.closed": "Deze innings is gesloten.",
   "pad.cricket.sheet.wicket.kind.title": "Wat gebeurde er?",
+  "pad.cricket.sheet.wicket.kind.freeHitHint": "Free hit — alleen Run out of Obstructing the field zijn van toepassing.",
   "pad.cricket.sheet.wicket.who.title": "Wie is uit?",
   "pad.cricket.sheet.wicket.fielder.title": "Velder",
   "pad.cricket.sheet.retire.reason.title": "Waarom terugtrekken?",

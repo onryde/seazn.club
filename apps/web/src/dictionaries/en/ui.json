@@ -3893,6 +3893,7 @@
   "pad.cricket.context.bowler.blocked.noEligible": "No bowler is eligible to open the next over.",
   "pad.cricket.context.innings.closed": "This innings is closed.",
   "pad.cricket.sheet.wicket.kind.title": "What happened?",
+  "pad.cricket.sheet.wicket.kind.freeHitHint": "Free hit — only Run out or Obstructing the field apply.",
   "pad.cricket.sheet.wicket.who.title": "Who's out?",
   "pad.cricket.sheet.wicket.fielder.title": "Fielder",
   "pad.cricket.sheet.retire.reason.title": "Why retire?",

@@ -250,7 +250,30 @@ export interface ContextStripSpec { slots: ContextSlot[] }
  */
 export type StepPredicate = (answers: Readonly<Record<string, string>>) => boolean;
 
-export interface SheetChoiceStep { id: string; kind: "choice"; title: string; options: { id: string; label: string }[]; when?: StepPredicate }
+/**
+ * R2b-over (review finding — the recurring "never offer what the engine
+ * will refuse" defect class, `_INDEX.md`): an OPTIONAL, additive reason line
+ * for a choice step whose `options` the skin has narrowed for the current
+ * fold state. First use: cricket's wicket "kind" step offers only
+ * runout/obstructed while a free hit is pending (`wicketSheet`,
+ * skins/cricket.tsx) — a silently shortened list is better than the bare
+ * rejection it replaces, but still leaves a scorer who expected "bowled"
+ * with no idea why it is missing; `hint` is that explanation. Absent means
+ * "no reason line" — every pre-existing `SheetChoiceStep` (every step
+ * shipped before this) omits it and renders identically.
+ *
+ * A plain i18n KEY, resolved by the chassis exactly like `title`/
+ * `options[].label` already are (`t(step.hint)`, guided-sheet.tsx) — the
+ * same convention `ScorebugHalf.hint` above already establishes for a hint
+ * with nothing to interpolate. Deliberately NOT `SheetNumberStep.hint`'s
+ * pre-resolved-string convention below: that field needed an INTERPOLATED
+ * value baked in before `sheets()` returns, and `SkinDefV3.sheets` (unlike
+ * `tiles`/`scorebug`/`dock`/`context`) never receives a `t` at all
+ * (`sheets()`'s own header, skins/cricket.tsx) — keeping this a bare key
+ * lets a static, translatable sentence stay that way without widening
+ * `sheets()`'s signature for every skin.
+ */
+export interface SheetChoiceStep { id: string; kind: "choice"; title: string; options: { id: string; label: string }[]; when?: StepPredicate; hint?: string }
 /**
  * R2/task A5 (`_INDEX.md` R1 "owed by later waves", closed here): `side` is
  * REQUIRED, not optional-with-a-default. Cricket's wicket flow needs the
