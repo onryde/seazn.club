@@ -28,27 +28,38 @@ env:
 
 jobs:
   # -------------------------------------------------------------------------
-  # Fast, DB-free gate: typecheck + the full unit / property / grid suite.
+  # The DB-free gate used to be ONE job named "Unit + typecheck" that ran
+  # typecheck, every drift gate, eslint, the apps/web suite and the engine
+  # coverage+sim pass in series. Measured on run 32008189908 it was 566s — the
+  # whole workflow's wall clock — and 515s of that was three steps:
+  #
+  #     eslint                              55s
+  #     npm test --workspace apps/web      179s
+  #     npm run test:coverage (engine)     281s
+  #
+  # (turbo typecheck was 13s on a Remote Cache hit, and all four drift gates
+  # were under 3s each — they are NOT where the time is, and parallelising
+  # them would have bought nothing.)
+  #
+  # Those three are now three jobs. Deliberately separate JOBS rather than
+  # concurrent steps inside one: `ubuntu-latest` is 4 cores, apps/web's
+  # typecheck peaks ~2.5 GB RSS, and both vitest invocations fork their own
+  # workers — running them concurrently on one runner buys contention and
+  # heap pressure, and this repo's timing-sensitive suites go red under load.
+  # Separate jobs get separate 4-core runners and cannot contend at all.
+  #
+  # New floor is smoke-db (350s on the same run), so do not split these finer
+  # expecting more wall clock — measure smoke-db first.
   # -------------------------------------------------------------------------
-  test:
-    name: Unit + typecheck
+
+  # -------------------------------------------------------------------------
+  # Typecheck, lint, and every drift gate. No DB, no engine coverage. ~115s.
+  # -------------------------------------------------------------------------
+  gates:
+    name: Typecheck + lint + drift gates
     runs-on: ubuntu-latest
-    # paths-filter reads the PR's changed files via the API; the repo's
-    # default GITHUB_TOKEN is restricted and 403s without this.
-    permissions:
-      contents: read
-      pull-requests: read
     steps:
       - uses: actions/checkout@v5
-      # Engine coverage + sim matrix only run when the engine (or the
-      # dependency graph) changed — most PRs touch apps/web only.
-      - uses: dorny/paths-filter@v3
-        id: engine-changes
-        with:
-          filters: |
-            engine:
-              - 'packages/engine/**'
-              - 'pnpm-lock.yaml'
       - uses: pnpm/action-setup@v4
         with:
           version: 10.34.5
@@ -150,6 +161,25 @@ jobs:
       - name: eslint
         run: npx turbo run lint
 
+  # -------------------------------------------------------------------------
+  # The apps/web unit / property / grid suite. ~215s. Split out of `gates`
+  # (see that job's header) because at 179s it was the second-largest step in
+  # the old single job.
+  # -------------------------------------------------------------------------
+  test:
+    name: Unit tests (apps/web)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
       - run: npm test --workspace apps/web
       # Live-Stripe tier probe (sk_test, test-mode): confirms our plan/tier
       # amounts still round-trip real Stripe. Self-contained (no stripe:sync /
@@ -160,6 +190,44 @@ jobs:
         env:
           BILLING_LIVE: "1"
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+
+  # -------------------------------------------------------------------------
+  # Engine coverage gate + the bounded sim matrix — 281s and 4s respectively,
+  # and the largest single step in the old combined job. Both are gated on the
+  # engine actually having changed, so on an apps/web-only PR this job is just
+  # its own ~35s of setup, in parallel with everything else, costing no wall
+  # clock. The paths-filter stays INSIDE this job on purpose: hoisting it into
+  # a separate `changes` job would make every other job wait on a barrier to
+  # learn something only this job needs.
+  # -------------------------------------------------------------------------
+  engine:
+    name: Engine coverage + sim matrix
+    runs-on: ubuntu-latest
+    # paths-filter reads the PR's changed files via the API; the repo's
+    # default GITHUB_TOKEN is restricted and 403s without this.
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+      # Engine coverage + sim matrix only run when the engine (or the
+      # dependency graph) changed — most PRs touch apps/web only.
+      - uses: dorny/paths-filter@v3
+        id: engine-changes
+        with:
+          filters: |
+            engine:
+              - 'packages/engine/**'
+              - 'pnpm-lock.yaml'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
       # NO placement container here, deliberately — and this note exists so the
       # idea is not retried.
       #

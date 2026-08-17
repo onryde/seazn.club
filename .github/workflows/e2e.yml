@@ -11,22 +11,38 @@ name: E2E
 # applicable" rather than "untested". Separate GitHub Actions jobs have no
 # such chain — each runs and reports regardless of the others' outcome.
 #
-# `e2e-mobile` now also runs the FIVE width/device projects
-# (mobile-320/360/430, tablet-768/834) that `playwright.config.ts` has always
-# defined but that no workflow ever invoked — confirmed by grepping every
-# workflow file for their project names before this change; only mobile-se
-# (375) and mobile-14 (390) ever ran in CI. AGENTS.md calls the seven-width
-# matrix "the enforcement backstop"; it was 2 of 7 in practice. All seven now
-# run in ONE job with `--workers=1` (deliberately NOT one job per width): the
-# global `fullyParallel: true` config means Playwright runs projects
-# concurrently by default, and these seven all exercise mobile.spec.ts
-# against the SAME org minted by the `setup` project within one job — running
-# them concurrently is exactly the "7 width projects race each other over ONE
-# org" flakiness this repo has already hit (a settings-rename hangs 60s on a
-# disabled Save under contention). `--workers=1` serializes them: no race,
-# one DB/server/placement-container boot shared across all seven, at the cost
-# of losing cross-width parallelism — which nothing was actually paying for
-# before this change anyway, since 5 of the 7 never ran at all.
+# `e2e-mobile` also runs the FIVE width/device projects (mobile-320/360/430,
+# tablet-768/834) that `playwright.config.ts` has always defined but that no
+# workflow ever invoked — confirmed by grepping every workflow file for their
+# project names before that change; only mobile-se (375) and mobile-14 (390)
+# ever ran in CI. AGENTS.md calls the seven-width matrix "the enforcement
+# backstop"; it was 2 of 7 in practice.
+#
+# The seven are now spread over THREE matrix jobs (3 + 2 + 2 widths), each
+# still running its own group with `--workers=1`. Read the two constraints
+# separately, because an earlier version of this comment conflated them and
+# concluded "deliberately NOT one job per width":
+#
+#   * WITHIN a job, the widths must stay serialized. `fullyParallel: true` is
+#     global, so Playwright would otherwise run projects concurrently, and all
+#     seven exercise mobile.spec.ts against the SAME org minted by that job's
+#     `setup` project — the documented "7 width projects race each other over
+#     ONE org" flakiness (a settings-rename hangs 60s on a disabled Save under
+#     contention). `--workers=1` is therefore still mandatory per job and must
+#     not be raised.
+#   * ACROSS jobs there is no such race at all, for the reason the next
+#     paragraph already gives: `services:` are job-scoped, so each matrix leg
+#     migrates its own Postgres and mints its own `setup` org. Three legs are
+#     three isolated orgs, not three contenders for one.
+#
+# Why three and not seven: measured on run 32008189967 this job was 508s, of
+# which the Playwright step alone was 362s (7 projects x 21 tests at ~2.5s,
+# serialized). Setup is ~125s and is paid per leg. Three legs put the longest
+# leg at ~280s, which lands just under `e2e-parallel`'s slowest shard (305s on
+# the same run) — and that shard is the workflow's floor, so splitting finer
+# buys NOTHING in wall clock while paying setup seven times over. If
+# `e2e-parallel` ever gets faster, revisit the leg count against its new
+# slowest shard rather than against this job in isolation.
 #
 # Each job independently migrates its own fresh Postgres and mints its own
 # `setup`-project org — GitHub Actions `services:` are job-scoped, so there
@@ -199,7 +215,17 @@ jobs:
       # ("FATAL ERROR: Ineffective mark-compacts near heap limit") before a
       # single spec runs. Types are already gated by `tsc --noEmit` in ci.yml's
       # test job, so nothing is lost here.
+      #
+      # Backgrounded. This is the long pole of the setup phase (52-55s across
+      # all five e2e runners on run 32008189967) and nothing before the `wait:`
+      # below reads its output, so the placement image build and the Chromium
+      # download ride alongside it instead of queueing behind it. Its log
+      # interleaves with theirs — that is the documented cost of `background:`,
+      # and the reason the DB steps above stay in the foreground as their own
+      # named steps rather than being folded into one blob.
       - name: Build (production)
+        id: build
+        background: true
         run: npm run build --workspace apps/web
         env:
           SKIP_TYPECHECK: "1"
@@ -230,7 +256,23 @@ jobs:
       # job and placement-ci.yml's `integration` job; the image build is
       # cached (type=gha) and shared with them.
       - uses: docker/setup-buildx-action@v3
+      #
+      # Backgrounded, alongside the production build above. `background:` on a
+      # `uses:` step is NOT documented anywhere — it was measured on this repo
+      # (probe run 32011114196: a backgrounded actions/cache@v4 plus a
+      # backgrounded `run:` step both completed and the `wait:` resolved).
+      #
+      # One caveat from that same probe, and the reason nothing here reads this
+      # step's outputs: a backgrounded `uses:` step LOSES them. The probe's
+      # cache step printed an EMPTY `cache-hit` after the wait, where
+      # actions/cache sets 'false' on a miss. So do not background a step whose
+      # `outputs` are consumed — ci.yml's dorny/paths-filter is the one such
+      # step in this repo, and it is deliberately left in the foreground.
+      # Nothing consumes this build's imageid/digest; `load: true` puts the
+      # image in the local daemon, which is a side effect, not an output.
       - name: Build the placement service image
+        id: image
+        background: true
         uses: docker/build-push-action@v6
         with:
           context: services/placement
@@ -240,6 +282,36 @@ jobs:
           tags: placement-service:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Moved UP from after "Start server", where it used to sit: nothing about
+      # downloading a browser needs a database, a build or a running server, so
+      # down there it was ~16s of dead serial time. Browsers cached per
+      # Playwright version. The cache RESTORE stays in the foreground (it is
+      # ~3s, and a backgrounded actions/cache loses its outputs — see the note
+      # on the image build above); only the download is backgrounded.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright Chromium
+        id: chromium
+        background: true
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+
+      # The setup phase's join. Everything past this point needs the artefacts
+      # the three background steps produce: the placement container needs the
+      # image, `Start server` needs .next/standalone, and Playwright needs the
+      # browser. A background step's FAILURE also surfaces here rather than
+      # where it happened — so a red on this step means "read the interleaved
+      # log above", not "the wait is broken".
+      #
+      # Serial, these three were ~90s (build 53 + image 18 + browser 16, plus
+      # cache restores) on run 32008189967. Concurrent they cost about what the
+      # build alone costs.
+      - name: Wait for build, placement image and browser
+        wait: [build, image, chromium]
+
       - name: Start the placement service
         run: |
           set -euo pipefail
@@ -292,15 +364,6 @@ jobs:
           fi
           echo "static assets serve ($asset)"
 
-      # Browsers cached per Playwright version.
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
-        working-directory: apps/web
       - name: Run Playwright e2e (parallel project)
         run: npx playwright test --project=parallel --shard=${{ matrix.shard }}/3
         working-directory: apps/web
@@ -405,13 +468,39 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
 
+      #
+      # Backgrounded. This is the long pole of the setup phase (52-55s across
+      # all five e2e runners on run 32008189967) and nothing before the `wait:`
+      # below reads its output, so the placement image build and the Chromium
+      # download ride alongside it instead of queueing behind it. Its log
+      # interleaves with theirs — that is the documented cost of `background:`,
+      # and the reason the DB steps above stay in the foreground as their own
+      # named steps rather than being folded into one blob.
       - name: Build (production)
+        id: build
+        background: true
         run: npm run build --workspace apps/web
         env:
           SKIP_TYPECHECK: "1"
 
       - uses: docker/setup-buildx-action@v3
+      #
+      # Backgrounded, alongside the production build above. `background:` on a
+      # `uses:` step is NOT documented anywhere — it was measured on this repo
+      # (probe run 32011114196: a backgrounded actions/cache@v4 plus a
+      # backgrounded `run:` step both completed and the `wait:` resolved).
+      #
+      # One caveat from that same probe, and the reason nothing here reads this
+      # step's outputs: a backgrounded `uses:` step LOSES them. The probe's
+      # cache step printed an EMPTY `cache-hit` after the wait, where
+      # actions/cache sets 'false' on a miss. So do not background a step whose
+      # `outputs` are consumed — ci.yml's dorny/paths-filter is the one such
+      # step in this repo, and it is deliberately left in the foreground.
+      # Nothing consumes this build's imageid/digest; `load: true` puts the
+      # image in the local daemon, which is a side effect, not an output.
       - name: Build the placement service image
+        id: image
+        background: true
         uses: docker/build-push-action@v6
         with:
           context: services/placement
@@ -421,6 +510,36 @@ jobs:
           tags: placement-service:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Moved UP from after "Start server", where it used to sit: nothing about
+      # downloading a browser needs a database, a build or a running server, so
+      # down there it was ~16s of dead serial time. Browsers cached per
+      # Playwright version. The cache RESTORE stays in the foreground (it is
+      # ~3s, and a backgrounded actions/cache loses its outputs — see the note
+      # on the image build above); only the download is backgrounded.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright Chromium
+        id: chromium
+        background: true
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+
+      # The setup phase's join. Everything past this point needs the artefacts
+      # the three background steps produce: the placement container needs the
+      # image, `Start server` needs .next/standalone, and Playwright needs the
+      # browser. A background step's FAILURE also surfaces here rather than
+      # where it happened — so a red on this step means "read the interleaved
+      # log above", not "the wait is broken".
+      #
+      # Serial, these three were ~90s (build 53 + image 18 + browser 16, plus
+      # cache restores) on run 32008189967. Concurrent they cost about what the
+      # build alone costs.
+      - name: Wait for build, placement image and browser
+        wait: [build, image, chromium]
+
       - name: Start the placement service
         run: |
           set -euo pipefail
@@ -468,14 +587,6 @@ jobs:
           fi
           echo "static assets serve ($asset)"
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
-        working-directory: apps/web
       - name: Run Playwright e2e (serial project)
         run: npx playwright test --project=serial --workers=1
         working-directory: apps/web
@@ -501,17 +612,41 @@ jobs:
           docker rm -f placement-e2e >/dev/null 2>&1 || true
 
   # ---------------------------------------------------------------------
-  # v3/02 §4 viewport gate + #349 responsive matrix, all seven widths, in ONE
-  # job — see this file's header comment for why `--workers=1` and one job
-  # rather than one job per width: all seven run mobile.spec.ts against the
-  # SAME org this job's `setup` project mints, and running them concurrently
-  # is the documented "7 width projects race each other over ONE org"
-  # flakiness. Full suite per width (owner decision, spec §1): every gate
-  # assertion holds at every width; LCP self-pins to 375/390 inside the test.
+  # v3/02 §4 viewport gate + #349 responsive matrix, all seven widths, spread
+  # over three matrix legs. See this file's header comment for the two separate
+  # constraints: `--workers=1` is mandatory WITHIN a leg (the widths in a leg
+  # share that leg's `setup` org), and there is no race ACROSS legs (each gets
+  # its own job-scoped Postgres and its own org). Full suite per width (owner
+  # decision, spec §1): every gate assertion holds at every width; LCP
+  # self-pins to 375/390 inside the test, so no leg needs to own both.
   # ---------------------------------------------------------------------
   e2e-mobile:
-    name: Playwright e2e — mobile/tablet, 7 widths (Postgres container)
+    name: Playwright e2e — ${{ matrix.group }} (Postgres container)
     runs-on: ubuntu-latest
+
+    # Grouped by device class, not round-robin, so a red leg names a coherent
+    # band ("tablets are broken") instead of an arbitrary third of the matrix.
+    # 3/2/2 rather than 3/3/1: the legs are ~21 tests per width, so the longest
+    # leg sets the wall clock and a 3/3/1 split would waste a runner on 21
+    # tests behind ~125s of setup.
+    strategy:
+      fail-fast: false # one width band's failure must not hide another's
+      matrix:
+        # `slug` exists because `group` is display text and reaches
+        # upload-artifact below: actions/upload-artifact@v4 REJECTS a name
+        # containing "/" (and fails the whole job on a duplicate name, which is
+        # what a shared literal across three legs would produce). `slug` is the
+        # artifact-safe half; do not collapse the two back into one field.
+        include:
+          - group: phones-small 320/360/375
+            slug: phones-small
+            projects: --project=mobile-320 --project=mobile-360 --project=mobile-se
+          - group: phones-large 390/430
+            slug: phones-large
+            projects: --project=mobile-14 --project=mobile-430
+          - group: tablets 768/834
+            slug: tablets
+            projects: --project=tablet-768 --project=tablet-834
 
     services:
       postgres:
@@ -573,13 +708,39 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
 
+      #
+      # Backgrounded. This is the long pole of the setup phase (52-55s across
+      # all five e2e runners on run 32008189967) and nothing before the `wait:`
+      # below reads its output, so the placement image build and the Chromium
+      # download ride alongside it instead of queueing behind it. Its log
+      # interleaves with theirs — that is the documented cost of `background:`,
+      # and the reason the DB steps above stay in the foreground as their own
+      # named steps rather than being folded into one blob.
       - name: Build (production)
+        id: build
+        background: true
         run: npm run build --workspace apps/web
         env:
           SKIP_TYPECHECK: "1"
 
       - uses: docker/setup-buildx-action@v3
+      #
+      # Backgrounded, alongside the production build above. `background:` on a
+      # `uses:` step is NOT documented anywhere — it was measured on this repo
+      # (probe run 32011114196: a backgrounded actions/cache@v4 plus a
+      # backgrounded `run:` step both completed and the `wait:` resolved).
+      #
+      # One caveat from that same probe, and the reason nothing here reads this
+      # step's outputs: a backgrounded `uses:` step LOSES them. The probe's
+      # cache step printed an EMPTY `cache-hit` after the wait, where
+      # actions/cache sets 'false' on a miss. So do not background a step whose
+      # `outputs` are consumed — ci.yml's dorny/paths-filter is the one such
+      # step in this repo, and it is deliberately left in the foreground.
+      # Nothing consumes this build's imageid/digest; `load: true` puts the
+      # image in the local daemon, which is a side effect, not an output.
       - name: Build the placement service image
+        id: image
+        background: true
         uses: docker/build-push-action@v6
         with:
           context: services/placement
@@ -589,6 +750,36 @@ jobs:
           tags: placement-service:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Moved UP from after "Start server", where it used to sit: nothing about
+      # downloading a browser needs a database, a build or a running server, so
+      # down there it was ~16s of dead serial time. Browsers cached per
+      # Playwright version. The cache RESTORE stays in the foreground (it is
+      # ~3s, and a backgrounded actions/cache loses its outputs — see the note
+      # on the image build above); only the download is backgrounded.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright Chromium
+        id: chromium
+        background: true
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+
+      # The setup phase's join. Everything past this point needs the artefacts
+      # the three background steps produce: the placement container needs the
+      # image, `Start server` needs .next/standalone, and Playwright needs the
+      # browser. A background step's FAILURE also surfaces here rather than
+      # where it happened — so a red on this step means "read the interleaved
+      # log above", not "the wait is broken".
+      #
+      # Serial, these three were ~90s (build 53 + image 18 + browser 16, plus
+      # cache restores) on run 32008189967. Concurrent they cost about what the
+      # build alone costs.
+      - name: Wait for build, placement image and browser
+        wait: [build, image, chromium]
+
       - name: Start the placement service
         run: |
           set -euo pipefail
@@ -636,17 +827,11 @@ jobs:
           fi
           echo "static assets serve ($asset)"
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
-        working-directory: apps/web
-      # All seven, serialized (--workers=1) — see this job's header comment.
-      - name: Run Playwright e2e (mobile + tablet projects, all 7 widths)
-        run: npx playwright test --project=mobile-se --project=mobile-14 --project=mobile-320 --project=mobile-360 --project=mobile-430 --project=tablet-768 --project=tablet-834 --workers=1
+      # This leg's widths, serialized (--workers=1) — see this job's header
+      # comment. `--workers=1` is per-leg and must not be raised: the widths in
+      # a leg share this leg's `setup` org.
+      - name: Run Playwright e2e (${{ matrix.group }})
+        run: npx playwright test ${{ matrix.projects }} --workers=1
         working-directory: apps/web
         env:
           PLAYWRIGHT_BASE: http://localhost:3000
@@ -655,7 +840,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-mobile
+          name: playwright-report-mobile-${{ matrix.slug }}
           path: apps/web/playwright-report
           retention-days: 7
 
