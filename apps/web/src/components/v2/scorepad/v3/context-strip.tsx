@@ -219,6 +219,26 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
           },
           t("scorepad.attribution.noRoster"),
         )}
+      {/* R2b (owner ruling, bowler-eligibility block, 2026-08-17):
+          ContextSlot.message (types.ts) — a pre-localised raw string,
+          rendered VERBATIM (never through t()). Orthogonal to readOnly
+          (rendered regardless of which chip shape a slot took above) and
+          to the picker (rendered regardless of whether activeSlot is
+          open) — real visible text, never a title/tooltip (invisible on
+          touch), with a stable data-* hook for a Playwright spec. Most
+          slots never set this and this block then renders nothing. */}
+      {spec.slots
+        .filter((slot) => slot.message !== undefined)
+        .map((slot) => (
+          <p
+            key={`${slot.id}-message`}
+            data-role="context-slot-message"
+            data-slot-id={slot.id}
+            className="text-xs font-medium text-red-600"
+          >
+            {slot.message}
+          </p>
+        ))}
     </div>
   );
 }

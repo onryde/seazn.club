@@ -25,10 +25,20 @@
 // skin has no way to pre-resolve those few fields without SOME `t` in
 // scope. R1 shipped no real skin to hit this; this is the first one that
 // does. Resolution, kept to the SMALLEST possible footprint: `cricketSkinV3`
-// is a FACTORY taking `t` once, closing it over ONLY for `scorebug`/`dock`
-// (the two methods with a pre-resolved-string field) — every other member
-// (`tiles`/`context`/`sheets`/`swap`/`phase`) is a plain, `t`-free function
-// of `view` alone, independently exported and testable with no `t` involved.
+// is a FACTORY taking `t` once, closing it over for `scorebug`/`dock`/
+// `context` (the methods with a pre-resolved-string field — `context`
+// joined this list in R2b, `ContextSlot.message`'s own doc in ../types.ts,
+// once the bowler-eligibility block needed an interpolated name/quota baked
+// into a string before it reaches the chassis) — every other member
+// (`tiles`/`sheets`/`swap`/`phase`) is a plain, `t`-free function of `view`
+// alone, independently exported and testable with no `t` involved.
+// (`tiles` is the one exception worth flagging: it also RECEIVES an
+// optional `t` for `TileSpec.labelText`'s own sake, but keeps a working
+// default — `buildTiles`'s own header explains why that one is defaulted
+// rather than required, unlike `buildContext` below which follows the
+// identical defaulted-for-back-compat shape for the SAME reason: dozens of
+// pre-R2b call sites in this file's own test suite pass it only one
+// argument.)
 // `V3_SKINS.cricket` (registry.ts, a LATER task's file) will need
 // `cricketSkinV3(t)` called once with a real `t` in scope (e.g. inside the
 // component that resolves the skin, memoized on `t`) rather than assigned
@@ -367,6 +377,74 @@ export function resolvePeople(
       bowlingOrder.find((id) => isEligibleOverBowler(id, fine, cfg.maxOversPerBowler, bpo)) ??
       "",
   };
+}
+
+export type BowlerBlockReason = "prevOver" | "notInLineup" | "quota" | "noEligible";
+
+/**
+ * R2b live bug PART 2 (owner-reported, reproduced against real data,
+ * 2026-08-17): `resolvePeople`'s own default (above) already stops
+ * PROPOSING an ineligible bowler, but a scorer who MANUALLY overrides the
+ * bowler chip at an over boundary can still end up with an ineligible
+ * `people.bowler` — the context-strip's candidate picker offers BOTH
+ * sides' whole on-field roster with no eligibility narrowing at all
+ * (`buildContext`'s own CANDIDATE-LIST GAP note, below — a pre-existing,
+ * still-open gap this function does not close, only catches the
+ * consequence of). Tapping a run/wicket tile at that point still emits a
+ * `cricket.ball` the client's deliberately non-strict optimistic fold
+ * accepts, only for the server to refuse it moments later as a generic
+ * rejection. This function is the gate that stops the TAP itself, in the
+ * tile-building path — `null` means the ball-emitting tiles stay tappable
+ * as normal; any other value is why they must not be (`buildTiles`/
+ * `buildContext` below, the only two callers).
+ *
+ * MID-OVER (`fine.currentBowler` already set) is never checked — that
+ * bowler is already locked in by the fold unconditionally, regardless of
+ * eligibility data, the same short-circuit `resolvePeople`'s own bowler
+ * branch and `bowlerIsReadOnly` already take.
+ *
+ * Priority mirrors the ENGINE's own real order at an over boundary
+ * verbatim (`applyDelivery`, cricket.ts:1160-1171): consecutive-over
+ * first, then fielding-lineup membership, then quota — each an early
+ * return, exactly like the engine's own sequential `invalid()` calls only
+ * ever throw on the FIRST ground that matches. `isEligibleOverBowler`
+ * (above) already owns two of these three grounds verbatim
+ * (consecutive-over + quota) — reused below for the QUOTA determination
+ * specifically (by the time it is called, consecutive-over is already
+ * ruled out, so a `false` result can only mean quota). It is deliberately
+ * NOT reused for the lineup-membership check: that is the one ground
+ * `isEligibleOverBowler`'s own doc explains is ABSENT from that helper,
+ * because every one of its OTHER callers draws `personId` FROM
+ * `bowlingOrder` itself, so it always already holds — the manual-override
+ * path is the first caller that can break that invariant (a picked name
+ * can be a BATTING-side player), so this function checks lineup membership
+ * directly rather than widening `isEligibleOverBowler`'s signature for
+ * every existing caller's sake.
+ *
+ * `"noEligible"` — the dead-end case the task brief required a decision
+ * on, not a silent block-everything: every fielding-side player is either
+ * the previous over's bowler or already at quota, so NOBODY can legally
+ * open the next over. This does not read as a CRICKET rule (the laws of
+ * the game do not contemplate a fielding side too small to field a legal
+ * bowler) so much as a data/product edge case — see this task's own
+ * report for why that reads as a decision still owed, not resolved here.
+ * `resolvePeople`'s own default already encodes the signal (`""`, never an
+ * illegal name) and this function reads it rather than re-deriving it.
+ */
+export function bowlerBlockReason(
+  state: CricketStateShape,
+  people: ResolvedPeople,
+  cfg: CricketCfgShape,
+): BowlerBlockReason | null {
+  const innings = currentInnings(state);
+  const fine = innings?.fine ?? null;
+  if ((fine?.currentBowler ?? null) !== null) return null;
+  if (people.bowler === "") return "noEligible";
+  if (people.bowler === (fine?.prevOverBowler ?? null)) return "prevOver";
+  const bowlingOrder = state.orders?.[people.bowlingSide] ?? [];
+  if (!bowlingOrder.includes(people.bowler)) return "notInLineup";
+  const bpo = ballsPerOverOf(cfg);
+  return isEligibleOverBowler(people.bowler, fine, cfg.maxOversPerBowler, bpo) ? null : "quota";
 }
 
 function basePayload(state: CricketStateShape, cfg: CricketCfgShape, overrides: Readonly<Record<string, string>>): Record<string, unknown> {
@@ -784,6 +862,13 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   const twoInnings = cfg.inningsPerSide === 2;
   const innings = currentInnings(state);
   const fidelity = inningsFidelity(innings);
+  // R2b (owner ruling, bowler-eligibility block, 2026-08-17): the SAME
+  // resolvePeople() call every other builder in this file uses (G5's own
+  // "one default computed in one place" reasoning) — so a tile that goes
+  // disabled here is blocking exactly the payload `basePayload` above just
+  // built, never a second, possibly-disagreeing computation.
+  const people = resolvePeople(state, view.contextOverrides, cfg);
+  const bowlerBlocked = bowlerBlockReason(state, people, cfg) !== null;
 
   const tiles: TileSpec[] = [
     { id: "toss", label: "pad.cricket.action.toss", kind: "primary", phases: ["pre"], action: { sheet: "toss" } },
@@ -794,41 +879,50 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   // coarse, where the fold refuses one outright (cricket.ts:1128-1131/
   // :2936-2938). Every visible tap stays legal at the moment it is visible.
   if (fidelity !== "coarse") {
+    // R2b (bowler-eligibility block): every tile pushed inside this branch
+    // emits `cricket.ball`/`cricket.superover.ball` — exactly the set
+    // Ruling 1 names ("runs, extras, wicket — everything that emits a
+    // cricket.ball") — so `ballTile` below is the ONLY place `disabled`
+    // gets set in this function; non-ball tiles (review/retire/
+    // inningsClose/declare/overSummary/more, pushed further down, outside
+    // this branch) are untouched.
+    const ballTile = (spec: TileSpec): TileSpec => (bowlerBlocked ? { ...spec, disabled: true } : spec);
+
     for (const r of RUN_VALUES) {
-      tiles.push({
+      tiles.push(ballTile({
         id: `run${r}`,
         label: `pad.cricket.tile.runs.${r}`,
         kind: PRIMARY_RUNS.has(r) ? "primary" : "standard",
         phases: ["live"],
         action: { event: { type, payload: runPayload(base, r) } },
-      });
+      }));
     }
 
-    tiles.push({
+    tiles.push(ballTile({
       id: "wide",
       label: requiredVocabKey("kind", "wide"),
       kind: "standard",
       phases: ["live"],
       action: { event: { type, payload: extraPayload(base, "wide") } },
-    });
+    }));
 
-    tiles.push({
+    tiles.push(ballTile({
       id: "wicket",
       label: "pad.cricket.action.wicket",
       kind: "destructive",
       span: 4,
       phases: ["live"],
       action: { sheet: "wicket" },
-    });
+    }));
 
     for (const kind of MINOR_EXTRA_KINDS) {
-      tiles.push({
+      tiles.push(ballTile({
         id: `extra-${kind}`,
         label: requiredVocabKey("kind", kind),
         kind: "minor",
         phases: ["live"],
         action: { event: { type, payload: extraPayload(base, kind) } },
-      });
+      }));
     }
   }
 
@@ -922,6 +1016,56 @@ export function buildDock(eventType: string, t: TFn): DockSpec | null {
   };
 }
 
+const BOWLER_BLOCK_MESSAGE_KEY: Record<Exclude<BowlerBlockReason, "noEligible">, MessageKey> = {
+  prevOver: "pad.cricket.context.bowler.blocked.prevOver",
+  notInLineup: "pad.cricket.context.bowler.blocked.notInLineup",
+  quota: "pad.cricket.context.bowler.blocked.quota",
+};
+
+/**
+ * R2b (owner ruling, bowler-eligibility block, 2026-08-17): turns a
+ * `bowlerBlockReason` into the pre-localised prose `ContextSlot.message`
+ * carries (`buildContext`, below) — naming the bowler via `personNames`,
+ * NEVER a raw personId (the same posture `use-pad-pipeline.ts`'s own doc
+ * states for why the engine's OWN rejection text must never reach the
+ * scorer: English-only, no server-side i18n, and built around a raw id,
+ * not a display name). Falls back to `eventCopy.unknownPerson` on a
+ * missing name — the SAME fallback `chipLabel` (context-strip.tsx) already
+ * uses for the very chip this message sits beside, so the two can never
+ * name the bowler two different ways.
+ *
+ * `"noEligible"` names nobody — there is no single bowler at fault — and
+ * gets its own dedicated key with no `name` var at all, rather than a
+ * name-shaped hole in the per-reason map above.
+ *
+ * The `"quota"` branch reads `cfg.maxOversPerBowler` directly rather than
+ * threading the number through `BowlerBlockReason` itself: by the time
+ * `bowlerBlockReason` has returned `"quota"`, that field is guaranteed
+ * defined (its own doc — `isEligibleOverBowler` can only fail via the
+ * quota branch when `maxOversPerBowler !== undefined`) — the `throw` below
+ * is `requiredVocabKey`'s own "never a silently-wrong fallback" posture
+ * (this file, above), not a reachable runtime path through either of this
+ * function's two real callers.
+ */
+function bowlerBlockMessage(
+  t: TFn,
+  reason: BowlerBlockReason,
+  bowlerId: string,
+  personNames: Readonly<Record<string, string>>,
+  cfg: CricketCfgShape,
+): string {
+  if (reason === "noEligible") return t("pad.cricket.context.bowler.blocked.noEligible");
+  const name = personNames[bowlerId] ?? t("eventCopy.unknownPerson");
+  if (reason === "quota") {
+    const quota = cfg.maxOversPerBowler;
+    if (quota === undefined) {
+      throw new Error("cricket skin: quota block reason with no cfg.maxOversPerBowler");
+    }
+    return t(BOWLER_BLOCK_MESSAGE_KEY.quota, { name, quota });
+  }
+  return t(BOWLER_BLOCK_MESSAGE_KEY[reason], { name });
+}
+
 // ---------------------------------------------------------------------------
 // context() — §2.4, closes D-14. Fold-and-override-authoritative (same
 // `resolvePeople(state, view.contextOverrides, cfg)` the tiles/sheets use, so
@@ -977,13 +1121,20 @@ export function buildDock(eventType: string, t: TFn): DockSpec | null {
 // editable" convention rather than writing a redundant `readOnly: false`.
 // ---------------------------------------------------------------------------
 
-export function buildContext(view: PadHostView): ContextStripSpec | null {
+export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextStripSpec | null {
   const state = asState(view.state);
   if (state.phase !== "live" && state.phase !== "super_over") return null;
   const innings = currentInnings(state);
   if (innings === null) return null;
-  const people = resolvePeople(state, view.contextOverrides, asCfg(view.cfg));
+  const cfg = asCfg(view.cfg);
+  const people = resolvePeople(state, view.contextOverrides, cfg);
   const bowlerReadOnly = bowlerIsReadOnly(innings);
+  // R2b (owner ruling, bowler-eligibility block, 2026-08-17): the SAME
+  // decision `buildTiles` gates its own `disabled` tiles on — the strip and
+  // the tap can never disagree about WHETHER the bowler is blocked, same
+  // "one default computed in one place" reasoning G5 already established
+  // for WHO the bowler is.
+  const blockReason = bowlerBlockReason(state, people, cfg);
   return {
     slots: [
       {
@@ -1026,12 +1177,21 @@ export function buildContext(view: PadHostView): ContextStripSpec | null {
         // grant (types.ts is a concurrent task's file this wave; see this
         // task's own report). Flagged here rather than silently left
         // unmentioned, per the brief's own ask to report even a null result.
+        //
+        // R2b UPDATE (bowler-eligibility block, 2026-08-17): the picker
+        // itself is STILL unfixed — it still offers an ineligible name —
+        // but the CONSEQUENCE of tapping one is no longer a silent trip to
+        // the server. `blockReason`/`message` below catch it here: the next
+        // render shows this exact slot's `message` and every ball tile
+        // goes `disabled` (`buildTiles`), so an ineligible pick now surfaces
+        // immediately, in the pad, naming the reason — never a bare 422.
         id: "bowler",
         label: "pad.cricket.context.bowler",
         personId: people.bowler || undefined,
         pool: "onfield",
         required: true,
         readOnly: bowlerReadOnly ? true : undefined, // defect 3 — see this file's header above
+        message: blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg) : undefined,
       },
     ],
   };
@@ -1365,7 +1525,7 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     scorebug: (view) => buildScorebug(view, t),
     tiles: (view) => buildTiles(view, t),
     dock: (eventType) => buildDock(eventType, t),
-    context: buildContext,
+    context: (view) => buildContext(view, t),
     sheets: buildSheets,
     // D2 (R2 sign-off): the skin supplies per-ball detail so the activity
     // panel's rows differ from one another. Declared HERE rather than the

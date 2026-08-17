@@ -15,6 +15,7 @@ import {
   WICKET_KINDS,
   ballEventType,
   ballsPerOverOf,
+  bowlerBlockReason,
   buildContext,
   buildDock,
   buildScorebug,
@@ -1110,6 +1111,212 @@ describe("resolvePeople / buildTiles / buildContext — bowler default is ELIGIB
 });
 
 // ---------------------------------------------------------------------------
+// bowlerBlockReason / buildTiles / buildContext — R2b live bug PART 2
+// (owner-reported, 2026-08-17): the fix above stops resolvePeople's own
+// DEFAULT from proposing an ineligible bowler, but a scorer who MANUALLY
+// overrides the bowler chip at an over boundary (context-strip's own
+// candidate-list gap — the picker offers no eligibility narrowing at all,
+// see buildContext's own CANDIDATE-LIST GAP note below) could still tap a
+// run/wicket tile with an ineligible bowler resolved. The client's
+// optimistic fold is deliberately NON-STRICT and never refuses it — the tap
+// looks recorded, then the server refuses it moments later as a generic
+// rejection with the exact cause lost (every bowler violation shares one
+// engine code, INVALID_EVENT). These tests prove the TAP itself is now
+// blocked at the tile-building path, never the fold.
+// ---------------------------------------------------------------------------
+
+describe("bowlerBlockReason", () => {
+  it("mid-over (currentBowler already set): never blocked, regardless of eligibility data", () => {
+    const s = state({
+      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: "a1", prevOverBowler: "a1", bowlerBalls: { a1: 999 } } })],
+    });
+    const cfgWithQuota = cfg({ maxOversPerBowler: 4 });
+    const people = resolvePeople(s, {}, cfgWithQuota);
+    expect(bowlerBlockReason(s, people, cfgWithQuota)).toBeNull();
+  });
+
+  it("the auto-picked eligible default at an over boundary: never blocked", () => {
+    const s = state({
+      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })],
+    });
+    const people = resolvePeople(s); // auto-picks a2, already filtered eligible
+    expect(bowlerBlockReason(s, people, cfg())).toBeNull();
+  });
+
+  it("a manual override naming the PREVIOUS over's bowler: blocked, reason prevOver", () => {
+    const s = state({
+      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })],
+    });
+    const people = resolvePeople(s, { bowler: "a1" });
+    expect(bowlerBlockReason(s, people, cfg())).toBe("prevOver");
+  });
+
+  it("a manual override at quota: blocked, reason quota", () => {
+    const s = state({
+      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: null, bowlerBalls: { a1: 24 } } })],
+    });
+    const cfgWithQuota = cfg({ maxOversPerBowler: 4 });
+    const people = resolvePeople(s, { bowler: "a1" }, cfgWithQuota);
+    expect(bowlerBlockReason(s, people, cfgWithQuota)).toBe("quota");
+  });
+
+  it("maxOversPerBowler ABSENT: no quota block even against a heavily-bowled override — absent means unrestricted, never zero", () => {
+    const s = state({
+      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: null, bowlerBalls: { a1: 999 } } })],
+    });
+    const people = resolvePeople(s, { bowler: "a1" }, cfg()); // cfg() carries no maxOversPerBowler
+    expect(bowlerBlockReason(s, people, cfg())).toBeNull();
+  });
+
+  it("a manual override naming someone from the BATTING side (not in the fielding lineup at all): blocked, reason notInLineup", () => {
+    const s = state({
+      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: null, bowlerBalls: {} } })],
+    });
+    const people = resolvePeople(s, { bowler: "h1" }); // h1 bats for home; away is fielding
+    expect(bowlerBlockReason(s, people, cfg())).toBe("notInLineup");
+  });
+
+  it("no eligible bowler at all (everyone in a 2-strong bowling side is at quota): noEligible", () => {
+    const s = state({
+      orders: { home: ["h1", "h2", "h3"], away: ["a1", "a2"] },
+      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: null, bowlerBalls: { a1: 24, a2: 24 } } })],
+    });
+    const cfgWithQuota = cfg({ maxOversPerBowler: 4 });
+    const people = resolvePeople(s, {}, cfgWithQuota);
+    expect(bowlerBlockReason(s, people, cfgWithQuota)).toBe("noEligible");
+  });
+});
+
+describe("buildTiles — bowler-block disables every ball-emitting tile (R2b live bug part 2)", () => {
+  function boundaryWithPrevOverA1() {
+    return state({
+      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })],
+    });
+  }
+
+  const BALL_TILE_IDS = [
+    "run0", "run1", "run2", "run3", "run4", "run6",
+    "wide", "wicket", "extra-noball", "extra-bye", "extra-legbye", "extra-penalty",
+  ];
+
+  it("an ineligible manual override disables every ball-emitting tile, but leaves them in place", () => {
+    const v = view({ state: boundaryWithPrevOverA1(), contextOverrides: { bowler: "a1" } });
+    const tiles = buildTiles(v);
+    for (const id of BALL_TILE_IDS) {
+      const tile = tiles.find((tl) => tl.id === id)!;
+      expect(tile).toBeDefined(); // still visible — not removed
+      expect(tile.disabled).toBe(true);
+    }
+  });
+
+  it("non-ball tiles (review/retire/inningsClose/more) stay tappable even while bowler-blocked", () => {
+    const v = view({ state: boundaryWithPrevOverA1(), contextOverrides: { bowler: "a1" } });
+    const tiles = buildTiles(v);
+    for (const id of ["review", "retire", "inningsClose", "more"]) {
+      expect(tiles.find((tl) => tl.id === id)!.disabled).toBeUndefined();
+    }
+  });
+
+  it("an eligible bowler (no override, the auto-picked default): no tile is disabled", () => {
+    const tiles = buildTiles(view({ state: boundaryWithPrevOverA1() }));
+    expect(tiles.some((tl) => tl.disabled)).toBe(false);
+  });
+
+  it("mid-over (currentBowler already set) is unaffected, even against an ineligible-on-paper currentBowler", () => {
+    const v = view({
+      state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: "a1", prevOverBowler: "a1", bowlerBalls: { a1: 999 } } })] }),
+    });
+    expect(buildTiles(v).some((tl) => tl.disabled)).toBe(false);
+  });
+
+  it("the dead-end case (no eligible bowler at all) also disables every ball tile", () => {
+    const v = view({
+      state: state({
+        orders: { home: ["h1", "h2", "h3"], away: ["a1", "a2"] },
+        innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: null, bowlerBalls: { a1: 24, a2: 24 } } })],
+      }),
+      cfg: cfg({ maxOversPerBowler: 4 }),
+    });
+    const tiles = buildTiles(v);
+    for (const id of BALL_TILE_IDS) {
+      expect(tiles.find((tl) => tl.id === id)!.disabled).toBe(true);
+    }
+  });
+});
+
+describe("buildContext — bowler-block message, distinguishable per engine condition (R2b live bug part 2)", () => {
+  it("consecutive-over: names the bowler, no quota number involved", () => {
+    const v = view({
+      state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })] }),
+      contextOverrides: { bowler: "a1" },
+    });
+    const bowlerSlot = buildContext(v, t)!.slots.find((s) => s.id === "bowler")!;
+    expect(bowlerSlot.message).toBe(t("pad.cricket.context.bowler.blocked.prevOver", { name: "Away One" }));
+  });
+
+  it("quota: message carries the REAL cfg quota, not a hardcoded number — proved against the Hundred's ballsPerOver 5", () => {
+    const v = view({
+      cfg: cfg({ ballsPerOver: 5, maxOversPerBowler: 4 }),
+      // 20 balls / 5-ball over = exactly 4 overs bowled -> at a 4-over quota.
+      // A hardcoded 6 would compute floor(20/6)=3 < 4 and wrongly call this eligible.
+      state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: null, bowlerBalls: { a1: 20 } } })] }),
+      contextOverrides: { bowler: "a1" },
+    });
+    const bowlerSlot = buildContext(v, t)!.slots.find((s) => s.id === "bowler")!;
+    expect(bowlerSlot.message).toBe(t("pad.cricket.context.bowler.blocked.quota", { name: "Away One", quota: 4 }));
+  });
+
+  it("not in the fielding lineup: names the batting-side player picked by mistake", () => {
+    const v = view({
+      state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: null, bowlerBalls: {} } })] }),
+      contextOverrides: { bowler: "h1" },
+    });
+    const bowlerSlot = buildContext(v, t)!.slots.find((s) => s.id === "bowler")!;
+    expect(bowlerSlot.message).toBe(t("pad.cricket.context.bowler.blocked.notInLineup", { name: "Home One" }));
+  });
+
+  it("no eligible bowler at all: a distinct, unattributed message — nobody is named because nobody is at fault", () => {
+    const v = view({
+      state: state({
+        orders: { home: ["h1", "h2", "h3"], away: ["a1", "a2"] },
+        innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: null, bowlerBalls: { a1: 24, a2: 24 } } })],
+      }),
+      cfg: cfg({ maxOversPerBowler: 4 }),
+    });
+    const bowlerSlot = buildContext(v, t)!.slots.find((s) => s.id === "bowler")!;
+    expect(bowlerSlot.message).toBe(t("pad.cricket.context.bowler.blocked.noEligible"));
+  });
+
+  it("maxOversPerBowler ABSENT: no message even against a heavily-bowled override", () => {
+    const v = view({
+      state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: null, bowlerBalls: { a1: 999 } } })] }),
+      contextOverrides: { bowler: "a1" },
+    });
+    expect(buildContext(v, t)!.slots.find((s) => s.id === "bowler")!.message).toBeUndefined();
+  });
+
+  it("an eligible bowler: no message", () => {
+    const v = view({
+      state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })] }),
+    });
+    expect(buildContext(v, t)!.slots.find((s) => s.id === "bowler")!.message).toBeUndefined();
+  });
+
+  it("mid-over: no message", () => {
+    expect(buildContext(view(), t)!.slots.find((s) => s.id === "bowler")!.message).toBeUndefined();
+  });
+
+  it("with no explicit t (default), a blocked message still resolves via the echo-key default rather than crashing — proves existing 1-arg buildContext(view()) call sites elsewhere in this file keep compiling and running", () => {
+    const v = view({
+      state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })] }),
+      contextOverrides: { bowler: "a1" },
+    });
+    expect(() => buildContext(v)).not.toThrow();
+    expect(buildContext(v)!.slots.find((s) => s.id === "bowler")!.message).toBe("pad.cricket.context.bowler.blocked.prevOver");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildSheets — wicket sheet `when`-skip logic driven through the REAL
 // guided-sheet.tsx step machine (mutation target #1).
 // ---------------------------------------------------------------------------
@@ -1435,6 +1642,22 @@ describe("cricketSkinV3", () => {
     const skinB = cricketSkinV3((k) => `B:${k}`);
     expect(skinA.scorebug(view()).halves[0]!.who[0]!.name).toBe("A:scorepad.skin.cricket.scorebug.batting");
     expect(skinB.scorebug(view()).halves[0]!.who[0]!.name).toBe("B:scorepad.skin.cricket.scorebug.batting");
+  });
+
+  // R2b (bowler-block, 2026-08-17): context() now ALSO needs a real `t` —
+  // ContextSlot.message is a pre-resolved string, same "closes over t" shape
+  // scorebug/dock already had, extended by this task. Proved through the
+  // FACTORY (buildContext's own default t is exercised by the direct-call
+  // tests above; this is the line that would actually regress if the
+  // factory wiring below dropped back to a bare `context: buildContext`).
+  it("context() closes over the given t too — the bowler-block message needs a real t, not buildContext's own bare default", () => {
+    const v = view({
+      state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })] }),
+      contextOverrides: { bowler: "a1" },
+    });
+    const skinA = cricketSkinV3((k, vars) => `A:${k}:${vars?.name ?? ""}`);
+    const bowlerSlot = skinA.context!(v)!.slots.find((s) => s.id === "bowler")!;
+    expect(bowlerSlot.message).toBe("A:pad.cricket.context.bowler.blocked.prevOver:Away One");
   });
 
   // Review finding (bbcb12554): `buildTiles(view, t = (key) => key)` carries a

@@ -115,6 +115,36 @@ export interface TileSpec {
   span?: 1 | 2 | 3 | 4;
   phases: PadPhase[];
   action: { event: TapEvent } | { sheet: string } | { swap: true };
+  /**
+   * R2b (owner ruling, bowler-eligibility block, 2026-08-17): `true` when
+   * this tile's action must NOT fire on a tap right now, while the tile
+   * itself stays fully VISIBLE — never removed. This is deliberately a
+   * DIFFERENT precedent from the over-summary tile's own "gone, not
+   * disabled" history (that one is a PERMANENT property of the innings'
+   * fidelity band): `disabled` exists for a TRANSIENT condition instead —
+   * cricket's run/extra/wicket tiles while the resolved bowler is
+   * ineligible, which clears the moment a legal bowler is picked. Removing
+   * every run tile at each over boundary would read as the pad breaking;
+   * disabling them, with the reason visible elsewhere (see below), does
+   * not.
+   *
+   * `tile-grid.tsx` renders such a tile as a real, native `disabled`
+   * `<button>` — no dispatch, no `onOpenSheet` — plus a stable
+   * `data-tile-disabled` attribute a Playwright spec can assert on without
+   * relying on visual styling (opacity/cursor) alone. Optional/absent
+   * means tappable — every pre-existing skin's tiles keep behaving
+   * identically with zero change, same additive/opt-in posture
+   * `labelText` above and `ContextSlot.readOnly` below already take.
+   *
+   * Deliberately carries NO paired reason-text field of its own: a single
+   * cause (e.g. one ineligible bowler) can disable MANY tiles at once —
+   * every run/extra/wicket tile that would emit `cricket.ball` — and
+   * repeating one long sentence on each of ten-plus tiles is worse UX than
+   * a plain disabled look, not better. The explanation lives once, on
+   * `ContextSlot.message` below, next to the affordance that can actually
+   * fix it (the bowler chip a scorer taps to pick someone eligible).
+   */
+  disabled?: boolean;
 }
 
 export interface DockChip {
@@ -154,6 +184,33 @@ export interface ContextSlot {
    * `context()`, keeps behaving identically with zero change.
    */
   readOnly?: boolean;
+  /**
+   * R2b (owner ruling, bowler-eligibility block, 2026-08-17): a
+   * PRE-LOCALISED raw string, rendered VERBATIM by the chassis
+   * (context-strip.tsx) — never resolved through `t()` itself, same
+   * convention `WhoLine.servingLabel`/`ScorebugSpec.context`/
+   * `TileSpec.labelText` already establish in this file: the chassis never
+   * resolves a sport-namespaced key, and this string needs an
+   * INTERPOLATED person name (and, for cricket's quota case, a cfg-derived
+   * number) baked in before it ever reaches here — `ContextSlot.label`'s
+   * own `t(slot.label)` call takes no `vars` argument, so it cannot carry
+   * this on its own.
+   *
+   * First use: cricket's bowler slot, explaining why `TileSpec.disabled`
+   * is currently true on every run/extra/wicket tile — "why can't I score
+   * a ball right now" and "who is on strike" are different questions, so
+   * this lives on the SLOT that names the person at fault (or, when
+   * nobody in particular is at fault, the slot whose affordance would
+   * normally fix it), not on `ScorebugSpec.context`'s ambient format/over/
+   * run-rate line, and not repeated onto every blocked tile
+   * (`TileSpec.disabled`'s own doc explains why not the latter).
+   *
+   * Optional/additive: every pre-existing `ContextSlot` (every other
+   * sport, and cricket's own striker/non-striker slots) omits this and
+   * renders exactly as before. Orthogonal to `readOnly` — either, both, or
+   * neither may be set on the same slot.
+   */
+  message?: string;
 }
 export interface ContextStripSpec { slots: ContextSlot[] }
 

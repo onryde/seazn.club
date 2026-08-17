@@ -400,6 +400,107 @@ describe("ContextStrip rendering — readOnly slots (blocker 2)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// R2b (owner ruling, bowler-eligibility block, 2026-08-17): `ContextSlot.
+// message` — a pre-localised raw string, rendered VERBATIM (never through
+// `t()`, same convention `WhoLine.servingLabel`/`TileSpec.labelText` already
+// establish). First use: cricket's bowler slot explains WHY the run/wicket
+// tiles are currently disabled, right next to the chip a scorer would tap to
+// fix it. Must be real visible text with a stable `data-*` hook, never a
+// `title`/tooltip (invisible on touch).
+// ---------------------------------------------------------------------------
+
+describe("ContextStrip rendering — slot message (R2b bowler-eligibility block)", () => {
+  const baseSquad = squad([
+    member({ personId: "kannan", onField: true }),
+    member({ personId: "arjun", onField: true }),
+  ]);
+  const names = { kannan: "Kannan", arjun: "Arjun" };
+
+  function messageEl(tree: ReturnType<typeof walk>, slotId: string) {
+    return tree.find(
+      (el) => propsOf(el)["data-role"] === "context-slot-message" && propsOf(el)["data-slot-id"] === slotId,
+    );
+  }
+
+  it("a slot with a message renders it as real visible text with a stable data-* hook", () => {
+    const island = renderIsland(ContextStrip, {
+      spec: {
+        slots: [
+          { id: "striker", label: "pad.context.striker", personId: "kannan", pool: "onfield", required: true },
+          {
+            id: "bowler",
+            label: "pad.context.bowler",
+            pool: "onfield",
+            required: true,
+            message: "Kannan has bowled his 4 overs.",
+          },
+        ],
+      },
+      view: { squad: baseSquad },
+      personNames: names,
+      t,
+      onSelect: () => {},
+    });
+    const el = messageEl(island.tree(), "bowler");
+    expect(el).toBeDefined();
+    expect(textOf(el!)).toBe("Kannan has bowled his 4 overs.");
+    expect(island.text()).toContain("Kannan has bowled his 4 overs.");
+  });
+
+  it("a slot with no message renders no message element for that slot", () => {
+    const island = renderIsland(ContextStrip, {
+      spec: contextSpec(), // neither slot sets `message`
+      view: { squad: baseSquad },
+      personNames: names,
+      t,
+      onSelect: () => {},
+    });
+    expect(messageEl(island.tree(), "striker")).toBeUndefined();
+    expect(messageEl(island.tree(), "bowler")).toBeUndefined();
+  });
+
+  it("only the slot carrying a message gets one — an unset sibling slot stays silent", () => {
+    const island = renderIsland(ContextStrip, {
+      spec: {
+        slots: [
+          { id: "striker", label: "pad.context.striker", personId: "kannan", pool: "onfield", required: true },
+          { id: "bowler", label: "pad.context.bowler", pool: "onfield", required: true, message: "No bowler is eligible." },
+        ],
+      },
+      view: { squad: baseSquad },
+      personNames: names,
+      t,
+      onSelect: () => {},
+    });
+    expect(messageEl(island.tree(), "striker")).toBeUndefined();
+    expect(messageEl(island.tree(), "bowler")).toBeDefined();
+  });
+
+  it("a message renders even on a readOnly slot — the two concerns are orthogonal", () => {
+    const island = renderIsland(ContextStrip, {
+      spec: {
+        slots: [
+          {
+            id: "striker",
+            label: "pad.context.striker",
+            personId: "kannan",
+            pool: "onfield",
+            required: true,
+            readOnly: true,
+            message: "Read-only, with a message too.",
+          },
+        ],
+      },
+      view: { squad: baseSquad },
+      personNames: names,
+      t,
+      onSelect: () => {},
+    });
+    expect(textOf(messageEl(island.tree(), "striker")!)).toBe("Read-only, with a message too.");
+  });
+});
+
 const swapSpec: SwapSheetProps["spec"] = { offLabel: "pad.swap.off", onLabel: "pad.swap.on" };
 
 describe("SwapSheet rendering", () => {

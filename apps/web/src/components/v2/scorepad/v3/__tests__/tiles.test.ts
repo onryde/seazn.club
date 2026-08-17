@@ -375,3 +375,67 @@ describe("Tile action routing (task A1) — {sheet} takes a distinct path, {even
     expect(actioned).toEqual([]);
   });
 });
+
+// R2b (owner ruling, bowler-eligibility block, 2026-08-17): `TileSpec.
+// disabled` — a tile that must stay VISIBLE (never removed — cricket's
+// run/extra/wicket tiles while the resolved bowler is ineligible) but must
+// not accept a tap. Rendered as a real, native `disabled` <button> (never a
+// control that merely LOOKS disabled, same posture ContextSlot.readOnly's
+// own doc takes one file over) plus a stable `data-tile-disabled` hook a
+// Playwright spec can assert on without relying on visual styling alone.
+describe("Tile rendering — disabled (R2b bowler-eligibility block)", () => {
+  function renderTile(spec: TileSpec, handlers: { onAction?: TileGridProps["onAction"]; onOpenSheet?: TileGridProps["onOpenSheet"] } = {}) {
+    const grid = TileGrid({ tiles: [spec], phase: "live", t: (k) => k, ...handlers }) as unknown as RenderedEl<{
+      children: RenderedEl<unknown>[];
+    }>;
+    const [tileEl] = grid.props.children;
+    return tileEl.type(tileEl.props) as unknown as {
+      props: { disabled: boolean; onClick: () => void; className: string } & Record<string, unknown>;
+    };
+  }
+
+  it("a disabled tile's button carries the native disabled attribute and data-tile-disabled=\"true\"", () => {
+    const button = renderTile(tile({ disabled: true }));
+    expect(button.props.disabled).toBe(true);
+    expect(button.props["data-tile-disabled"]).toBe("true");
+  });
+
+  it("an ordinary tile (disabled absent) is NOT native-disabled and carries data-tile-disabled=\"false\"", () => {
+    const button = renderTile(tile());
+    expect(button.props.disabled).toBe(false);
+    expect(button.props["data-tile-disabled"]).toBe("false");
+  });
+
+  it("a disabled {event} tile's tap does not call onAction", () => {
+    const actioned: unknown[] = [];
+    const button = renderTile(tile({ disabled: true, action: { event: { type: "cricket.ball", payload: {} } } }), {
+      onAction: (a) => actioned.push(a),
+    });
+    button.props.onClick();
+    expect(actioned).toEqual([]);
+  });
+
+  it("a disabled {sheet} tile's tap does not call onOpenSheet either", () => {
+    const opened: string[] = [];
+    const button = renderTile(tile({ disabled: true, action: { sheet: "wicket" } }), {
+      onOpenSheet: (key) => opened.push(key),
+    });
+    button.props.onClick();
+    expect(opened).toEqual([]);
+  });
+
+  it("mutation proof: an ENABLED tile with the identical action DOES call onAction — isolates the assertion to the disabled flag, not a broken handler", () => {
+    const actioned: unknown[] = [];
+    const button = renderTile(tile({ action: { event: { type: "cricket.ball", payload: {} } } }), {
+      onAction: (a) => actioned.push(a),
+    });
+    button.props.onClick();
+    expect(actioned).toHaveLength(1);
+  });
+
+  it("a disabled tile still carries its usual className (visible, same kind styling) plus a disabled treatment — never removed from the grid", () => {
+    const button = renderTile(tile({ disabled: true, kind: "primary" }));
+    expect(button.props.className).toContain("bg-violet-600"); // primary kind styling still present
+    expect(button.props.className).toContain("disabled:opacity-40");
+  });
+});
