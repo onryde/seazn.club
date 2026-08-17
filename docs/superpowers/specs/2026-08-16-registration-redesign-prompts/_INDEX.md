@@ -518,6 +518,81 @@ still passes exactly 3 args unchanged).
   `tsc --noEmit -p apps/web` EXIT=0. `lint` 75 warnings / 0 errors, none in
   touched files (unchanged from the RS001b baseline).
 
+**Wave 5 review round** (`cf1b994b5`). 3 blockers + 4 majors, all in
+`registrations.ts` — introducing `rejected` had left a set of PRE-EXISTING
+writers (none of them touched by the first wave-5 commit) with no guard
+against it. Two rulings from the orchestrator disambiguated intent, both
+recorded here because they bind future sessions too:
+
+- **RULING A — `rejected` is terminal from EVERY writer, no exceptions.** No
+  path may move a rejected row to any other status. Closed in
+  `confirmRegistration` (fell through to `materialise` — BLOCKER),
+  `confirmPaidRegistration` (a rejected reg with a live `payment_intent_id`
+  fell to the default branch and was silently confirmed on a late/replayed
+  Stripe webhook — **the worst finding of the session**: money taken AND an
+  entrant materialised for a registration the organiser had explicitly
+  refused; now folded into the same withdrawn/expired dead-registration
+  branch — refund, never confirm), `markRegistrationPaidOffline` and
+  `confirmRegistrationWaived` (explicit guards added; their pre-existing
+  status allowlists already excluded `rejected` implicitly, so this closes a
+  self-documentation/defense-in-depth gap rather than a live hole — the new
+  tests assert the SPECIFIC rejected message, not just the 422, since a
+  revert of the new line alone does not flip the status code), and
+  `withdrawCore` (silently flipped a rejected row to `withdrawn` — reachable
+  from both `withdrawRegistrationOrganiser` and the public
+  `withdrawRegistrationByRef` — MAJOR).
+- **RULING B — manual mode blocks the AUTOMATIC confirmer, not the
+  organiser.** An organiser explicitly clicking confirm/mark-paid/waive IS
+  an approval decision, so `confirmRegistration`/`markRegistrationPaidOffline`/
+  `confirmRegistrationWaived` are UNCHANGED — they still confirm on a manual
+  division. Only `confirmPaidRegistration` (the Stripe webhook — the
+  machine, not a human) got a manual-mode check: a payment landing on a
+  manual-approval division now lands `paid` and stops, waiting for a human
+  via `approveRegistration`. New `PayOutcome` kind
+  `paid_awaiting_approval`: revalidates the public page (status genuinely
+  changed) but deliberately skips the growth-loop `first_paid` earn grant —
+  money moved, but nothing is confirmed yet and a reviewer can still reject
+  it.
+- **`promoteWaitlistedRow`'s clobber fix was still wrong in two ways the
+  first wave-5 commit missed, both closed together:**
+  1. The `pendingSiblings` count took no lock — a genuine TOCTOU race
+     between two concurrent promotions of different waitlisted siblings in
+     the same cart. Fixed by folding the guard INTO the `registration_groups`
+     UPDATE itself (`case when not exists (...) then … else … end`) rather
+     than a separate SELECT — one atomic statement, no window. Postgres's own
+     row lock on the group row does the serializing: a second transaction's
+     `not exists` subquery only evaluates after the first commits.
+  2. Bigger: when the write was SKIPPED (a pending sibling existed), the
+     PROMOTED entry inherited whatever envelope was already there — a
+     card-fee promotion into a cart whose only prior envelope was
+     offline/null got NO checkout link and NO `expires_at`, and because
+     `sweepRegistrations`' overdue query requires `expires_at is not null`,
+     it could never expire: a permanently unpayable, permanently
+     un-expirable promotion. Fixed: `expires_at` is now MONOTONIC, not
+     conditional — `greatest(coalesce(expires_at, now()), now() + 48h)`,
+     always applied when the entry itself needs a Stripe window, so a
+     promotion can only ever EXTEND the cart's deadline, never shorten or
+     null a sibling's. `payment_method` stays `not exists`-guarded (kept
+     conditional on purpose — "extend" has no meaning for a method).
+- **The gap flagged and deliberately NOT fixed in the first wave-5 commit —
+  `materialise`'s unconditional `registration_groups.expires_at = null` on
+  confirm — turned out broader than flagged and WAS fixed this round,** per
+  the orchestrator's explicit "no-new-issues rule applies" ruling: it fired
+  from all FIVE confirm paths (`confirmRegistration`,
+  `markRegistrationPaidOffline`, `confirmRegistrationWaived`,
+  `confirmPaidRegistration`, `approveRegistration`), not just the one this
+  wave added. Same `not exists` pending-sibling guard, keyed on
+  `reg.group_id`; `materialise`'s signature is unchanged.
+- All seven findings proven red by reverting each guard in isolation and
+  rerunning its specific test (Major 2's specifically via a deterministic
+  `statementCount()` delta — 3 statements fixed vs. 4 reverted — rather than
+  a true concurrency test, after a genuine two-transaction lock-staging
+  attempt proved unreliable in this environment; see
+  `registration-approval.test.ts`'s comment on that test for why). Gate after
+  the review round: **2502 total / 2470 passed / 1 failed** (same
+  `org-posts-digest.test.ts`, still not this wave's); narrow suite **91/91**;
+  `tsc` EXIT=0; `lint` 75/0, none in touched files.
+
 ## RS002 entry conditions (RS001 hands these over — do not start without reading)
 
 1. **Cart-level money is flattened onto entry-level rows.** `RegistrationWithGroupRow`
