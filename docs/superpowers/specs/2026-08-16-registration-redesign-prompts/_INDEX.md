@@ -471,6 +471,53 @@ passed / 0 failed, 17 materialise tests, `tsc` EXIT=0.
   org-leak mutation check unfalsifiable by design, not by defect. The explicit
   filter stays as defence in depth.
 
+**Wave 5** (`ab209fdf9`, branch `feat/rs002-registration-usecases`). Approval
+transitions (`registration-approval.ts`, new): `approveRegistration`/
+`rejectRegistration` (manual-mode only, `rejected` terminal, idempotent,
+materialise reused verbatim), `withdrawRegistration` (thin re-export of the
+existing `withdrawRegistrationOrganiser` — approval transitions is meant as
+the whole organiser-facing lifecycle surface, not a reimplementation of an
+already-correct, already-tested withdraw), `promoteFromWaitlist`
+(oldest-first default + explicit-id override, both routed through the same
+fixed core). Plus the two read models: `groupByRef` (constant-time token
+compare, identical 404 for a wrong token and a nonexistent ref) and
+`listRegistrations` extended with competition-wide + kind/free_agent/
+consent_pending/text filters — `divisionId` widened to `string | null`
+(backward compatible; the live `/api/v1/divisions/[id]/registrations` route
+still passes exactly 3 args unchanged).
+
+- **The wave-4-routed promotion clobber, ruling taken:** of the two shapes the
+  brief allowed, chose **scope the write, not the column** — `promoteWaitlistedRow`
+  (factored out of `promoteOldestWaitlisted`) now skips the
+  `registration_groups.payment_method`/`expires_at` write entirely whenever
+  another entry in the same cart is still `pending` (the exact predicate
+  `sweepRegistrations`' own due/overdue queries already use for "still
+  watching this envelope"). Rejected the per-entry-`expires_at`-column
+  alternative outright: it needs a migration, and this wave's file set
+  excludes `db/migration/**`. `payment_method` is scoped the same way as
+  `expires_at` even though wave 4's `assertUniformPaymentMethod` already
+  makes every PAID division in one cart agree at submit time — that
+  invariant is submit-time-only (a division's `payment_method` can still
+  change afterwards), so it narrows the hazard but does not close it. Proven
+  red against the pre-fix unconditional write via a manual mutation
+  round-trip (reverted immediately after): the ROUTED MAJOR test failed with
+  `expected 'offline' to be 'stripe'`, exactly the clobber the fix closes.
+- **Also found and fixed, same file, same session (not separately routed):**
+  none beyond the above — `materialise`'s own unconditional
+  `registration_groups.expires_at = null` on confirm (same clobber CLASS,
+  reachable via `approveRegistration`'s call to `materialise`) was noted but
+  **deliberately left alone**: fixing it touches `materialise` itself, which
+  the wave-5 file scope names only for reuse ("do not reimplement it"), and a
+  multi-entry-cart confirm-time interaction is a big enough surface to want
+  its own reviewed change rather than a rushed addition here. Flagged for
+  whoever picks up cart-level money/expiry work next.
+- Gate: `usecases/__tests__/` + `registration-schema.test.ts` = **2491 total /
+  2459 passed / 1 failed** (the pre-existing `org-posts-digest.test.ts`
+  accumulated-DB sweep timeout, not this wave's); narrow suite
+  (`registration-approval.test.ts` + `registrations.test.ts`) **80/80**.
+  `tsc --noEmit -p apps/web` EXIT=0. `lint` 75 warnings / 0 errors, none in
+  touched files (unchanged from the RS001b baseline).
+
 ## RS002 entry conditions (RS001 hands these over — do not start without reading)
 
 1. **Cart-level money is flattened onto entry-level rows.** `RegistrationWithGroupRow`
