@@ -196,6 +196,64 @@ describe("PublicRegisterGroupRequest", () => {
     ).toContain("entries.0.self_player_index");
   });
 
+  // The resolution below must stay identical to the usecase's own
+  // (registration-submit.ts:383-393). An earlier version of this schema
+  // defaulted a missing index to 0, which validated a TEAM/pair cart that the
+  // usecase then dropped the self declaration from silently — the entry
+  // submits, the registrant is never linked to their own player row, and no
+  // layer errors.
+  //
+  // Only the first case below discriminates: mutated back to `?? 0` it is the
+  // one and only failure (verified, 27 tests / 1 failed). The two after it
+  // hold under BOTH rules — they are characterisation, kept because they pin
+  // the other two arms of the usecase's resolution against a future edit that
+  // moves them, not because they prove this fix.
+  it("rejects registering_self on a TEAM entry that names no self_player_index", () => {
+    expect(
+      issuePaths(
+        cart({
+          contact: contact({ dob: ADULT_DOB }),
+          entries: [
+            entry({
+              entrant_kind: "team",
+              team_name: "The Aces",
+              registering_self: true,
+              players: [{ full_name: "Sam Player" }, { full_name: "Alex Mate" }],
+            }),
+          ],
+        }),
+      ),
+    ).toContain("entries.0.self_player_index");
+  });
+
+  it("rejects registering_self on a free-agent entry carrying no player row", () => {
+    expect(
+      issuePaths(
+        cart({
+          contact: contact({ dob: ADULT_DOB }),
+          entries: [
+            entry({
+              entrant_kind: "team",
+              free_agent: true,
+              registering_self: true,
+              players: [],
+            }),
+          ],
+        }),
+      ),
+    ).toContain("entries.0.self_player_index");
+  });
+
+  it("accepts registering_self with no index on a one-player INDIVIDUAL entry (the usecase's own implied 0)", () => {
+    const r = PublicRegisterGroupRequest.safeParse(
+      cart({
+        contact: contact({ dob: ADULT_DOB }),
+        entries: [entry({ registering_self: true })],
+      }),
+    );
+    expect(r.success).toBe(true);
+  });
+
   it("self_player_index pointing at the last valid row is fine (boundary)", () => {
     const r = PublicRegisterGroupRequest.safeParse(
       cart({

@@ -1949,13 +1949,25 @@ export const PublicRegisterGroupRequest = z
       });
     }
     for (const { e, i } of selfEntries) {
-      const n = e.players?.length ?? 0;
-      const idx = e.self_player_index ?? 0;
-      if (idx >= n) {
+      // This MUST mirror the usecase's own resolution verbatim
+      // (registration-submit.ts:383-393): an explicit index, or the implied 0
+      // that a one-player INDIVIDUAL entry gets — and nothing else. A team,
+      // pair or free-agent entry that claims `registering_self` without
+      // naming the row resolves to `undefined` there and has its self
+      // declaration DROPPED SILENTLY: the entry submits, the registrant is
+      // never linked to their own player row, and nothing anywhere errors.
+      // Defaulting to 0 here instead of `undefined` would validate exactly
+      // that request and hand it to the drop. This layer is the only one that
+      // can tell the registrant their self-link did not take.
+      const players = e.players ?? [];
+      const idx =
+        e.self_player_index ??
+        (e.entrant_kind === "individual" && players.length === 1 ? 0 : undefined);
+      if (idx === undefined || !players[idx]) {
         ctx.addIssue({
           code: "custom",
           path: ["entries", i, "self_player_index"],
-          message: "self_player_index must index a player on this entry",
+          message: "self_player_index must identify which player on this entry is you",
         });
       }
     }
