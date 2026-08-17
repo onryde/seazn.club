@@ -54,6 +54,7 @@ const {
   moveFixture,
   validateSchedule,
 } = await import("../schedule");
+const { createVenue, createCourt } = await import("../venues");
 type AuthCtx = import("@/server/api-v1/auth").AuthCtx;
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -160,13 +161,21 @@ describe.skipIf(!HAS_DB)("a durable constraints.hard rule on the board paths (#4
       { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 1 } } },
     ]);
 
+    // P9 pass 3a: real courts.id values — ScheduleConfig.courts is
+    // CourtId[] since pass 1, fixtures.court_id carries a composite FK
+    // since V367/368.
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const court1 = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    const court2 = await createCourt(auth, venue.id, { name: "Court 2", sort: 1, tags: [] });
+    const courtsById = [court1.id, court2.id];
+
     // --- persist ----------------------------------------------------------
     await putScheduleSettings(auth, division.id, {
       config: {
         startAt: T0,
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: ["Court 1", "Court 2"],
+        courts: courtsById,
         perEntrantMinRest: 0,
         blackouts: [],
         sessionWindows: [],
@@ -237,7 +246,7 @@ describe.skipIf(!HAS_DB)("a durable constraints.hard rule on the board paths (#4
       return {
         fixture_id: c.id,
         scheduled_at: at(rounds.indexOf(c.round_no) * 30),
-        court_label: `Court ${seat + 1}`,
+        court_id: courtsById[seat]!,
       };
     });
     // Non-vacuity of the board itself, both ways: every card really does start
@@ -245,9 +254,7 @@ describe.skipIf(!HAS_DB)("a durable constraints.hard rule on the board paths (#4
     // and it uses only the two courts this division actually has.
     expect(violating).toHaveLength(6);
     expect(violating.filter((v) => v.scheduled_at.slice(11, 16) >= "12:00")).toEqual([]);
-    expect(new Set(violating.map((v) => v.court_label))).toEqual(
-      new Set(["Court 1", "Court 2"]),
-    );
+    expect(new Set(violating.map((v) => v.court_id))).toEqual(new Set(courtsById));
 
     // --- 2. the apply gate ------------------------------------------------
     seen.configs.length = 0;
@@ -291,7 +298,7 @@ describe.skipIf(!HAS_DB)("a durable constraints.hard rule on the board paths (#4
     // (`roundRobinSequenceSiblings`'s own comment), so 08:00 is safe
     // regardless of magnitude; still before noon, so `NOT_BEFORE_NOON`
     // fires exactly as before, and still on an empty court/time.
-    const moved = await moveFixture(auth, card!.id, { scheduled_at: at(-60), court_label: "Court 2" });
+    const moved = await moveFixture(auth, card!.id, { scheduled_at: at(-60), court_id: court2.id });
     expectRuleReachedTheVerifier("moveFixture");
 
     // #461: the drag path hands its own report back rather than dropping it, so
@@ -341,12 +348,15 @@ describe.skipIf(!HAS_DB)("a durable constraints.hard rule on the board paths (#4
     const [groups] = await createStages(auth, division.id, [
       { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 1 } } },
     ]);
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const court1 = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    const court2 = await createCourt(auth, venue.id, { name: "Court 2", sort: 1, tags: [] });
     await putScheduleSettings(auth, division.id, {
       config: {
         startAt: T0,
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: ["Court 1", "Court 2"],
+        courts: [court1.id, court2.id],
         perEntrantMinRest: 0,
         blackouts: [],
         sessionWindows: [],
@@ -372,7 +382,7 @@ describe.skipIf(!HAS_DB)("a durable constraints.hard rule on the board paths (#4
       assignments: proposal.assignments.map((a) => ({
         fixture_id: a.fixture_id,
         scheduled_at: a.scheduled_at,
-        court_label: a.court_label,
+        court_id: a.court_id,
       })),
       source: "auto",
     });
