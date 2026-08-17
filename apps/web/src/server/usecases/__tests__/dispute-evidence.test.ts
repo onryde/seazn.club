@@ -57,15 +57,18 @@ describe.skipIf(!HAS_DB)("dispute evidence pack", () => {
   it("bundles registration, receipt reconstruction and activity log", async () => {
     const { owner, orgId, divisionId, compId } = await seed();
     const ref = `SZ-EV${randomUUID().slice(0, 6).toUpperCase()}`;
-    const [{ id: regId }] = await sql<{ id: string }[]>`
-      insert into registrations
-        (division_id, org_id, status, ref_code, display_name, contact_email,
-         amount_cents, currency, payment_method, payment_intent_id,
-         disputed_at, dispute_id, access_token_hash)
+    // Contact/payment/dispute envelope lives on the cart (registration_groups).
+    const [{ id: groupId }] = await sql<{ id: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, access_token_hash, ref_code,
+         currency, payment_method, payment_intent_id, disputed_at, dispute_id)
       values
-        (${divisionId}, ${orgId}, 'confirmed', ${ref}, 'Alex Example',
-         'alex@example.com', 2500, 'gbp', 'stripe', 'pi_test_123',
-         now(), 'dp_test_1', ${randomUUID()})
+        (${compId}, 'Alex Example', 'alex@example.com', ${randomUUID()}, ${ref},
+         'gbp', 'stripe', 'pi_test_123', now(), 'dp_test_1')
+      returning id`;
+    const [{ id: regId }] = await sql<{ id: string }[]>`
+      insert into registrations (division_id, group_id, status, display_name, amount_cents)
+      values (${divisionId}, ${groupId}, 'confirmed', 'Alex Example', 2500)
       returning id`;
     await sql`
       insert into competition_events (competition_id, org_id, type, payload, actor_id)
@@ -93,12 +96,16 @@ describe.skipIf(!HAS_DB)("dispute evidence pack", () => {
   it("refuses another org's registration", async () => {
     const a = await seed();
     const b = await seed();
+    const [{ id: groupId }] = await sql<{ id: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, amount_cents, currency,
+         payment_method, access_token_hash, ref_code)
+      values (${a.compId}, 'Alex', 'a@example.com', 0, 'gbp', 'offline',
+              ${randomUUID()}, ${`SZ-XO${randomUUID().slice(0, 6).toUpperCase()}`})
+      returning id`;
     const [{ id: regId }] = await sql<{ id: string }[]>`
-      insert into registrations
-        (division_id, org_id, status, ref_code, display_name, contact_email,
-         amount_cents, currency, payment_method, access_token_hash)
-      values (${a.divisionId}, ${a.orgId}, 'confirmed', ${`SZ-XO${randomUUID().slice(0, 6).toUpperCase()}`},
-              'Alex', 'a@example.com', 0, 'gbp', 'offline', ${randomUUID()})
+      insert into registrations (division_id, group_id, status, display_name)
+      values (${a.divisionId}, ${groupId}, 'confirmed', 'Alex')
       returning id`;
     await expect(buildDisputeEvidence(b.owner, regId, "https://test.local")).rejects.toThrow();
   });

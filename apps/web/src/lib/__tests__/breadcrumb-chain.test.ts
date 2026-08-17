@@ -98,13 +98,15 @@ describe("buildCrumbs", () => {
       buildCrumbs({ ...base, pathname: "/o/acme/settings/billing", t: fr }).map((c) => c.label),
     ).toEqual(["Acme Sports", "Paramètres", "Forfait et facturation"]);
 
+    // divTail === "registrations" no longer gets its own crumb — the route
+    // was deleted (RS001 demolition); the chain stops at the division.
     expect(
       buildCrumbs({
         ...base,
         pathname: "/o/acme/c/summer-smash/d/u16-boys/registrations",
         t: fr,
       }).map((c) => c.label),
-    ).toEqual(["Acme Sports", "Summer Smash 2026", "U16 Boys", "Inscriptions"]);
+    ).toEqual(["Acme Sports", "Summer Smash 2026", "U16 Boys"]);
   });
 
   it("without a `t` translator falls back to the plain English catalog lookup — same values the untranslated tests above assert, so buildCrumbs stays pure/testable outside a DictProvider", () => {

@@ -304,13 +304,16 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
     const { division, comp } = await seedDivision(auth);
     await sql`update divisions set player_name_display = 'first_initial' where id = ${division.id}`;
     const suffix = randomUUID().slice(0, 8);
-    const [{ ref_code }] = await sql<{ ref_code: string }[]>`
-      insert into registrations
-        (division_id, org_id, status, display_name, contact_email, access_token_hash, ref_code)
+    // Contact/ref_code envelope lives on the cart (registration_groups) now.
+    const [{ id: groupId, ref_code }] = await sql<{ id: string; ref_code: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, access_token_hash, ref_code)
       values
-        (${division.id}, ${auth.orgId}, 'confirmed', 'Jamie Doe', ${"jamie+" + suffix + "@example.com"},
+        (${comp.id}, 'Jamie Doe', ${"jamie+" + suffix + "@example.com"},
          ${randomUUID()}, ${"TIX-" + suffix})
-      returning ref_code`;
+      returning id, ref_code`;
+    await sql`insert into registrations (division_id, group_id, status, display_name)
+      values (${division.id}, ${groupId}, 'confirmed', 'Jamie Doe')`;
 
     const model = await buildAdmitTicketsDoc(auth, comp.id, {
       printedAt: PRINTED,
