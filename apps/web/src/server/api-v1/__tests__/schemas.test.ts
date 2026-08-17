@@ -147,6 +147,59 @@ describe("CreateStage.progression (F2 — unified field, replaces .qualification
   });
 });
 
+describe("CreateStage — .strict() (F2 Task 5): a legacy key is REJECTED, not silently dropped", () => {
+  // Before this task, CreateStage was a plain z.object — an unknown key (the
+  // old .qualification/.seeding shape, or any typo) parsed successfully with
+  // the key silently STRIPPED: stages-panel.tsx's live "Add stage" POST
+  // (qualification: {topN}) created a stage with progression: null, returned
+  // 201, and generated nobody — no error, no log, ever. `.strict()` converts
+  // that whole class of bug from silent to loud: the same POST now 400s,
+  // naming the offending key, so a test (and an organiser's error toast) can
+  // actually catch it.
+  it("rejects a body carrying the legacy qualification key, naming it in the issue", () => {
+    const r = CreateStage.safeParse({
+      seq: 2,
+      kind: "knockout",
+      name: "KO",
+      qualification: { topN: 4 },
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      const issue = r.error.issues.find((i) => i.code === "unrecognized_keys");
+      expect(issue, "expected an unrecognized_keys issue, not just any failure").toBeDefined();
+      expect((issue as { keys: string[] }).keys).toContain("qualification");
+    }
+  });
+
+  it("rejects the legacy seeding key the same way", () => {
+    const r = CreateStage.safeParse({
+      seq: 2,
+      kind: "knockout",
+      name: "KO",
+      seeding: { source: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }], placement: "rank_order" },
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      const issue = r.error.issues.find((i) => i.code === "unrecognized_keys");
+      expect((issue as { keys: string[] } | undefined)?.keys).toContain("seeding");
+    }
+  });
+
+  it("still accepts a well-formed progression body — strict rejects unknown keys, not known ones", () => {
+    const r = CreateStage.safeParse({
+      seq: 2,
+      kind: "knockout",
+      name: "KO",
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+        placement: "rank_order",
+        timing: "on_complete",
+      },
+    });
+    expect(r.success).toBe(true);
+  });
+});
+
 describe("CreateEntrant.members — inline new persons (PROMPT-60 §2)", () => {
   it("accepts a mix of person_id and new_person members", () => {
     const r = CreateEntrant.safeParse({

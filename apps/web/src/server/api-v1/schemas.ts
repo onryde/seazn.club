@@ -569,13 +569,22 @@ export const ProgressionSchema = z
   });
 export type ProgressionInput = z.infer<typeof ProgressionSchema>;
 
-export const CreateStage = z.object({
-  seq: z.number().int().min(1),
-  kind: StageKind,
-  name: z.string().min(1).max(200),
-  config: z.record(z.string(), z.unknown()).default({}),
-  progression: ProgressionSchema.nullish(),
-});
+// F2 Task 5 — .strict(): before this, an unknown key (the old
+// .qualification/.seeding shape, or any typo) parsed successfully with the
+// key silently STRIPPED — stages-panel.tsx's live "Add stage" POST
+// (qualification: {topN}) created a stage with progression: null, returned
+// 201, and generated nobody. No error, no log, ever. Strict converts that
+// whole class of bug from silent to loud: the same POST now 400s, naming the
+// offending key (zod's unrecognized_keys issue).
+export const CreateStage = z
+  .object({
+    seq: z.number().int().min(1),
+    kind: StageKind,
+    name: z.string().min(1).max(200),
+    config: z.record(z.string(), z.unknown()).default({}),
+    progression: ProgressionSchema.nullish(),
+  })
+  .strict();
 
 /** POST /divisions/{id}/stages — the stage graph, one or many (doc 08 §3). */
 export const CreateStages = z.union([CreateStage, z.array(CreateStage).min(1).max(20)]);
