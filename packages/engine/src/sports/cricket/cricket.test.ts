@@ -846,6 +846,26 @@ describe("cricket: per-innings fidelity lock is bidirectional, and undo recovers
       closed: false,
     });
   });
+
+  // Negative case for the monotone guard above (cricket.ts:1416-1426) — a
+  // grep of this file shows zero refusal coverage for it anywhere, so
+  // dropping the guard entirely would leave every existing test green.
+  // Matches the fold's own message, not a bare "it threw": a mutant that
+  // throws for some OTHER reason (e.g. the strict all-out/ballsLimit checks
+  // just below it) would still pass a bare-throw assertion.
+  it("refuses a partial summary whose totals go backwards from the previous partial", () => {
+    const events = stream(
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 24, wickets: 1, legalBalls: 12, partial: true }],
+      ["cricket.innings.summary", { runs: 20, wickets: 1, legalBalls: 12, partial: true }],
+    );
+    expect(() => fold(t20, events)).toThrowError(
+      expect.objectContaining({
+        code: "INVALID_EVENT",
+        message: expect.stringMatching(/summary totals may not decrease/),
+      }),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
