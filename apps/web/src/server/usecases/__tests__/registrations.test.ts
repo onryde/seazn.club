@@ -1475,11 +1475,29 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
   });
 
   // "a failed checkout mint keeps the registration (pay from status page)"
-  // DELETED (RS001 demolition): this pinned submitRegistration's own
-  // swallow-checkout-errors-and-stay-pending behaviour. The surviving
-  // `resumeRegistrationCheckout` does not swallow — a mint failure propagates
-  // to its caller (the route decides retry UX) — so there is no equivalent
-  // state to seed. RS002/RS003 own re-testing the new mint-failure UX.
+  // was deleted in the RS001 sweep on the theory that it had no equivalent —
+  // `resumeRegistrationCheckout` propagates a mint failure instead of
+  // swallowing it the way submitRegistration used to. That's true, but it
+  // doesn't remove the invariant: the registration and its cart must still
+  // survive the failed attempt untouched (createRegistrationCheckout only
+  // writes checkout_session_id/fee_percent to registration_groups AFTER
+  // checkout.sessions.create resolves), so nothing is deleted or moved to a
+  // terminal status. Assert around the throw instead of a swallowed return.
+  it("a failed checkout mint leaves the registration and its cart untouched", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    stripeMock.checkoutCreate.mockRejectedValueOnce(new Error("stripe down"));
+
+    await expect(
+      resumeRegistrationCheckout(res.registration.id, res.access_token, "http://test.local"),
+    ).rejects.toThrow("stripe down");
+
+    const after = await loadWithGroup(res.registration.id);
+    expect(after).toBeTruthy(); // row not deleted
+    expect(after.status).toBe("pending"); // not flipped to a terminal status
+    expect(after.checkout_session_id).toBeNull(); // no half-written mint
+    expect(after.amount_cents).toBe(res.registration.amount_cents);
+  });
 
   it("offline submits keep no expiry and no checkout", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
