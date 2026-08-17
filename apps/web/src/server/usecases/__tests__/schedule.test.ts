@@ -29,6 +29,7 @@ import {
 } from "../schedule";
 import { draftsToBlackouts } from "@/components/v2/constraints-panel";
 import { zonedDateTimeInput } from "@/lib/zoned-datetime";
+import { createVenue, createCourt } from "../venues";
 import { patchFixture } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { publicSchedule } from "../public";
@@ -81,6 +82,21 @@ async function seedOrg(plan: "community" | "pro"): Promise<{ auth: AuthCtx; orgS
   };
 }
 
+/** P9 pass 3a: `ScheduleConfig.courts` is `CourtId[]` (real `courts.id`
+ *  values, since pass 1's V371 cutover) — a free-text "Court 1" string no
+ *  longer parses. One shared venue, one real court per name given, ids
+ *  returned in the same order so a caller can keep addressing them by
+ *  position the way this file's tests already do. */
+async function seedCourts(auth: AuthCtx, names: string[]): Promise<string[]> {
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const courts: string[] = [];
+  for (let i = 0; i < names.length; i++) {
+    const c = await createCourt(auth, venue.id, { name: names[i]!, sort: i, tags: [] });
+    courts.push(c.id);
+  }
+  return courts;
+}
+
 async function decide(auth: AuthCtx, fixtureId: string, homeScore: number, awayScore: number) {
   await scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
   return scoreEvent(auth, fixtureId, {
@@ -102,10 +118,15 @@ afterAll(async () => {
 // (v4/03 §4). This guards the zod enum widening at schemas.ts ApplyScheduleRequest
 // — it goes red if the "ai" member is reverted, independent of the DB constraint.
 describe("ApplyScheduleRequest schema (v4/03 §4)", () => {
+  // P9 pass 3a: court_id (a real courts.id), not the legacy court_label — the
+  // assignment object is `.strict()` (schemas.ts), so a lingering court_label
+  // key would 400 rather than silently pass through. Pure schema test, no DB:
+  // any uuid-shaped string satisfies CourtId here, nothing resolves it against
+  // a real court.
   const validAssignment = {
     fixture_id: randomUUID(),
     scheduled_at: "2026-08-01T09:00:00.000Z",
-    court_label: "Court 1",
+    court_id: randomUUID(),
   };
 
   it("accepts source 'ai'", () => {
@@ -172,12 +193,13 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     ]);
 
     // Settings: 2 courts + rest constraint (Pro — the override allows it).
+    const [court1, court2] = await seedCourts(auth, ["Court 1", "Court 2"]);
     const settings = await putScheduleSettings(auth, division.id, {
       config: {
         startAt: T0,
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: ["Court 1", "Court 2"],
+        courts: [court1!, court2!],
         perEntrantMinRest: 30,
         blackouts: [],
         sessionWindows: [],
@@ -196,8 +218,8 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     expect(proposal.assignments).toHaveLength(12);
     expect(proposal.conflicts.filter((c) => c.blocking)).toHaveLength(0);
     // Both courts in use; per-entrant rest ≥ 30 min in the proposal.
-    expect(new Set(proposal.assignments.map((a) => a.court_label))).toEqual(
-      new Set(["Court 1", "Court 2"]),
+    expect(new Set(proposal.assignments.map((a) => a.court_id))).toEqual(
+      new Set([court1!, court2!]),
     );
 
     // Propose-only: nothing persisted until apply (doc 12 §4).
@@ -210,7 +232,7 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
       assignments: proposal.assignments.map((a) => ({
         fixture_id: a.fixture_id,
         scheduled_at: a.scheduled_at,
-        court_label: a.court_label,
+        court_id: a.court_id,
       })),
       source: "auto",
     });
@@ -218,13 +240,13 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
 
     const board = await sql<
       {
-        id: string; scheduled_at: Date; court_label: string; home_entrant_id: string;
+        id: string; scheduled_at: Date; court_id: string; home_entrant_id: string;
         away_entrant_id: string; schedule_source: string; pool_id: string | null; round_no: number;
       }[]
     >`
-      select id, scheduled_at, court_label, home_entrant_id, away_entrant_id, schedule_source,
+      select id, scheduled_at, court_id, home_entrant_id, away_entrant_id, schedule_source,
              pool_id, round_no
-      from fixtures where stage_id = ${groups.id} order by scheduled_at, court_label`;
+      from fixtures where stage_id = ${groups.id} order by scheduled_at, court_id`;
     expect(board.every((f) => f.schedule_source === "auto")).toBe(true);
 
     // Rest constraint honoured in the persisted board.
@@ -246,13 +268,13 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     await expect(
       moveFixture(auth, f2.id, {
         scheduled_at: f1.scheduled_at.toISOString(),
-        court_label: f1.court_label,
+        court_id: f1.court_id,
       }),
     ).rejects.toSatisfy((err: unknown) => EngineError.is(err, "SCHEDULE_CONFLICT"));
-    const [f2After] = await sql<{ scheduled_at: Date; court_label: string }[]>`
-      select scheduled_at, court_label from fixtures where id = ${f2.id}`;
+    const [f2After] = await sql<{ scheduled_at: Date; court_id: string }[]>`
+      select scheduled_at, court_id from fixtures where id = ${f2.id}`;
     expect(f2After.scheduled_at.getTime()).toBe(f2.scheduled_at.getTime());
-    expect(f2After.court_label).toBe(f2.court_label);
+    expect(f2After.court_id).toBe(f2.court_id);
 
     // Drag into a rest violation → warned but ALLOWED. Move the fixture that
     // shares an entrant with f1 to 30 minutes after it — the tightest gap
@@ -314,12 +336,12 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
       pushBackAt -= 30 * MIN;
       await moveFixture(auth, f.id, {
         scheduled_at: new Date(pushBackAt).toISOString(),
-        court_label: f.court_label,
+        court_id: f.court_id,
       });
     }
     await moveFixture(auth, shared.id, {
       scheduled_at: new Date(wave2At).toISOString(),
-      court_label: f1.court_label,
+      court_id: f1.court_id,
     });
     const report = await validateSchedule(auth, division.id);
     const restWarnings = report.conflicts.filter((c) => c.code === "warn.rest");
@@ -348,7 +370,7 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     const reflow = await autoSchedule(auth, groups.id, { only_unlocked: true, mode: "reflow" });
     const pinnedOut = new Map(reflow.assignments.map((a) => [a.fixture_id, a]));
     expect(pinnedOut.get(pinA.id)?.scheduled_at).toBe(pinA.scheduled_at.toISOString());
-    expect(pinnedOut.get(pinA.id)?.court_label).toBe(pinA.court_label);
+    expect(pinnedOut.get(pinA.id)?.court_id).toBe(pinA.court_id);
     expect(pinnedOut.get(pinB.id)?.scheduled_at).toBe(pinB.scheduled_at.toISOString());
 
     // C1 fix-loop round 2 (2026-08-12, Item C) — z3 round-order blindness,
@@ -378,7 +400,7 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
         assignments: reflow.assignments.map((a) => ({
           fixture_id: a.fixture_id,
           scheduled_at: a.scheduled_at,
-          court_label: a.court_label,
+          court_id: a.court_id,
         })),
         source: "auto",
       });
@@ -454,17 +476,17 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
       assignments: remaining.map((f, i) => ({
         fixture_id: f.id,
         scheduled_at: at(24 * 60 + i * 35),
-        court_label: "Court 1",
+        court_id: court1!,
       })),
       source: "auto",
     });
     expect(rain.applied).toBe(remaining.length);
     await expect(
-      moveFixture(auth, round1[0]!.id, { scheduled_at: at(24 * 60), court_label: "Court 2" }),
+      moveFixture(auth, round1[0]!.id, { scheduled_at: at(24 * 60), court_id: court2! }),
     ).rejects.toMatchObject({ status: 422 });
     await expect(
       applySchedule(auth, groups.id, {
-        assignments: [{ fixture_id: round1[0]!.id, scheduled_at: at(25 * 60), court_label: "Court 2" }],
+        assignments: [{ fixture_id: round1[0]!.id, scheduled_at: at(25 * 60), court_id: court2! }],
         source: "auto",
       }),
     ).rejects.toMatchObject({ status: 422 });
@@ -502,21 +524,22 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     // Constraint solver fields: stored, not refused (#382). Two courts is what
     // trips `usesConstraints`, and the stored value is read back so a no-op
     // write cannot pass this.
+    const [c1, c2] = await seedCourts(auth, ["C1", "C2"]);
     const constrained = await putScheduleSettings(auth, division.id, {
       config: {
         startAt: T0, matchMinutes: 30, gapMinutes: 0,
-        courts: ["C1", "C2"], // multi-court is the constraint solver
+        courts: [c1!, c2!], // multi-court is the constraint solver
         perEntrantMinRest: 0, blackouts: [], sessionWindows: [],
       },
       tz: "UTC",
     });
-    expect(constrained.config.courts).toEqual(["C1", "C2"]);
+    expect(constrained.config.courts).toEqual([c1!, c2!]);
 
     // Back to a single court for the auto-schedule assertions below.
     await putScheduleSettings(auth, division.id, {
       config: {
         startAt: T0, matchMinutes: 30, gapMinutes: 0,
-        courts: ["C1"], perEntrantMinRest: 0, blackouts: [], sessionWindows: [],
+        courts: [c1!], perEntrantMinRest: 0, blackouts: [], sessionWindows: [],
       },
       tz: "UTC",
     });
@@ -525,7 +548,7 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     expect(proposal.assignments).toHaveLength(6);
     await applySchedule(auth, stage.id, {
       assignments: proposal.assignments.map((a) => ({
-        fixture_id: a.fixture_id, scheduled_at: a.scheduled_at, court_label: a.court_label,
+        fixture_id: a.fixture_id, scheduled_at: a.scheduled_at, court_id: a.court_id,
       })),
       source: "auto",
     });
@@ -569,19 +592,19 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
 
     await patchFixture(auth, fixtures[0]!.id, { schedule_locked: true });
     await applySchedule(auth, stage.id, {
-      assignments: [{ fixture_id: lastRound.id, scheduled_at: parkedAt, court_label: "C1" }],
+      assignments: [{ fixture_id: lastRound.id, scheduled_at: parkedAt, court_id: c1! }],
       source: "manual",
     });
-    const [pinned] = await sql<{ schedule_locked: boolean; court_label: string | null }[]>`
-      select schedule_locked, court_label from fixtures where id = ${fixtures[0]!.id}`;
+    const [pinned] = await sql<{ schedule_locked: boolean; court_id: string | null }[]>`
+      select schedule_locked, court_id from fixtures where id = ${fixtures[0]!.id}`;
     expect(pinned!.schedule_locked).toBe(true);
-    expect(pinned!.court_label).toBe("C1");
+    expect(pinned!.court_id).toBe(c1!);
     // The manual SET landed — read back, so a call that returned quietly
     // without writing cannot pass. This is the half `at(-60)` used to carry.
-    const [moved] = await sql<{ scheduled_at: Date; court_label: string | null }[]>`
-      select scheduled_at, court_label from fixtures where id = ${lastRound.id}`;
+    const [moved] = await sql<{ scheduled_at: Date; court_id: string | null }[]>`
+      select scheduled_at, court_id from fixtures where id = ${lastRound.id}`;
     expect(moved!.scheduled_at.toISOString()).toBe(parkedAt);
-    expect(moved!.court_label).toBe("C1");
+    expect(moved!.court_id).toBe(c1!);
 
     // Quick-start unaffected: start opens scoring immediately.
     const started = await startDivision(auth, division.id);
@@ -604,10 +627,11 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
       { kind: "individual", display_name: "D", seed: 4, members: [] },
     ]);
     await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
+    const [rollingCourt] = await seedCourts(auth, ["C1"]);
     await putScheduleSettings(auth, division.id, {
       config: {
         startAt: T0, matchMinutes: 25, gapMinutes: 0,
-        courts: ["C1"], perEntrantMinRest: 0, blackouts: [], sessionWindows: [],
+        courts: [rollingCourt!], perEntrantMinRest: 0, blackouts: [], sessionWindows: [],
         roundMinutes: 60,
       },
       tz: "UTC",
@@ -642,10 +666,11 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
       { kind: "individual", display_name: "D", seed: 4, members: [] },
     ]);
     const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
+    const [seqC1, seqC2] = await seedCourts(auth, ["C1", "C2"]);
     await putScheduleSettings(auth, division.id, {
       config: {
         startAt: T0, matchMinutes: 30, gapMinutes: 0,
-        courts: ["C1", "C2"], perEntrantMinRest: 0, blackouts: [], sessionWindows: [],
+        courts: [seqC1!, seqC2!], perEntrantMinRest: 0, blackouts: [], sessionWindows: [],
       },
       tz: "UTC",
     });
@@ -661,14 +686,14 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     // Client A loads the board at seq S, writes with expected_seq = S — lands.
     const seq0 = await seqOf();
     await patchFixture(auth, fa!.id, {
-      scheduled_at: at(0), court_label: "C1", expected_seq: seq0,
+      scheduled_at: at(0), court_id: seqC1!, expected_seq: seq0,
     });
 
     // Client B still holds seq S: its write must 409, nothing persisted.
     let conflict: unknown;
     try {
       await patchFixture(auth, fb!.id, {
-        scheduled_at: at(0), court_label: "C2", expected_seq: seq0,
+        scheduled_at: at(0), court_id: seqC2!, expected_seq: seq0,
       });
     } catch (err) {
       conflict = err;
@@ -683,7 +708,7 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
 
     // After resync (fresh seq) the same write goes through.
     await patchFixture(auth, fb!.id, {
-      scheduled_at: at(60), court_label: "C2", expected_seq: await seqOf(),
+      scheduled_at: at(60), court_id: seqC2!, expected_seq: await seqOf(),
     });
 
     // Writes without the token stay accepted (older clients keep working).
@@ -704,10 +729,11 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
       { kind: "individual", display_name: "D", seed: 4, members: [] },
     ]);
     const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
+    const [aiCourt] = await seedCourts(auth, ["C1"]);
     await putScheduleSettings(auth, division.id, {
       config: {
         startAt: T0, matchMinutes: 30, gapMinutes: 0,
-        courts: ["C1", "C2"], perEntrantMinRest: 0, blackouts: [], sessionWindows: [],
+        courts: [aiCourt!], perEntrantMinRest: 0, blackouts: [], sessionWindows: [],
       },
       tz: "UTC",
     });
@@ -718,7 +744,7 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     // so the ledger/analytics can tell AI applies from auto/manual ones.
     const out = await applySchedule(auth, stage!.id, {
       source: "ai",
-      assignments: [{ fixture_id: target.id, scheduled_at: at(0), court_label: "C1" }],
+      assignments: [{ fixture_id: target.id, scheduled_at: at(0), court_id: aiCourt! }],
     });
     expect(out.applied).toBeGreaterThan(0);
     const [row] = await sql<{ schedule_source: string }[]>`
@@ -940,17 +966,26 @@ function windowAt(fromMs: number, toMs: number, tz: string) {
   return globalWindow(zonedDateTimeInput(fromMs, tz), zonedDateTimeInput(toMs, tz), tz);
 }
 
+// P9 pass 3a: `courts` dropped from the base config (real ids only, created
+// per-division by `seedBlackoutDivision` below — a module-level const cannot
+// call the DB). `blackouts[].court` is UNRELATED and untouched by this pass —
+// it stays a free-text label matched by NAME (schemas.ts: `court:
+// z.string().max(100).optional()`, never migrated to CourtId), so
+// `BLACKOUT_DRAFTS`'s `court: "Court 2"` below needs no id.
 const BLACKOUT_BASE_CONFIG = {
   startAt: T0,
   matchMinutes: 30,
   gapMinutes: 0,
-  courts: ["Court 1", "Court 2"],
   perEntrantMinRest: 0,
   sessionWindows: [],
 };
 
 describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time UX P07)", () => {
-  async function seedBlackoutDivision(): Promise<{ auth: AuthCtx; divisionId: string }> {
+  async function seedBlackoutDivision(): Promise<{
+    auth: AuthCtx;
+    divisionId: string;
+    courts: [string, string];
+  }> {
     const { auth } = await seedOrg("pro");
     await sql`update organizations set timezone = ${BLACKOUT_ORG_TZ} where id = ${auth.orgId}`;
     const competition = await createCompetition(auth, {
@@ -966,15 +1001,16 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
       eligibility: [],
     });
-    return { auth, divisionId: division.id };
+    const [c1, c2] = await seedCourts(auth, ["Court 1", "Court 2"]);
+    return { auth, divisionId: division.id, courts: [c1!, c2!] };
   }
 
   it("the editor's own output survives PUT → GET unchanged, and stays ISO on the wire", async () => {
-    const { auth, divisionId } = await seedBlackoutDivision();
+    const { auth, divisionId, courts } = await seedBlackoutDivision();
     const rows = editorRows();
 
     await putScheduleSettings(auth, divisionId, {
-      config: { ...BLACKOUT_BASE_CONFIG, blackouts: rows },
+      config: { ...BLACKOUT_BASE_CONFIG, courts, blackouts: rows },
     });
     const stored = await getScheduleSettings(auth, divisionId);
 
@@ -1001,10 +1037,10 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
   });
 
   it("toSlotConfig hands the engine the exact epoch-ms instants, not a re-zoned copy", async () => {
-    const { auth, divisionId } = await seedBlackoutDivision();
+    const { auth, divisionId, courts } = await seedBlackoutDivision();
     const rows = editorRows();
     await putScheduleSettings(auth, divisionId, {
-      config: { ...BLACKOUT_BASE_CONFIG, blackouts: rows },
+      config: { ...BLACKOUT_BASE_CONFIG, courts, blackouts: rows },
       tz: BLACKOUT_DIVISION_TZ,
     });
 
@@ -1028,7 +1064,7 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
   });
 
   it("the placer and the solver lattice both refuse the stored window", async () => {
-    const { auth, divisionId } = await seedBlackoutDivision();
+    const { auth, divisionId, courts } = await seedBlackoutDivision();
     const w = globalWindow("2026-08-01T12:00", "2026-08-01T13:00", BLACKOUT_ORG_TZ);
     // One court, and the day opens an hour before the window: six 30-minute
     // fixtures laid end to end MUST cross it unless something stops them.
@@ -1036,7 +1072,7 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
       config: {
         ...BLACKOUT_BASE_CONFIG,
         startAt: new Date(w.from - HOUR).toISOString(),
-        courts: ["Court 1"],
+        courts: [courts[0]],
         blackouts: w.rows,
       },
     });
@@ -1142,12 +1178,13 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
         name: "L",
         config: {},
       });
+      const [boardCourt] = await seedCourts(auth, ["Court 1"]);
       await putScheduleSettings(auth, division.id, {
         config: {
           startAt,
           matchMinutes: 30,
           gapMinutes: 0,
-          courts: ["Court 1"],
+          courts: [boardCourt!],
           perEntrantMinRest: 0,
           blackouts,
           sessionWindows: [],
@@ -1261,11 +1298,15 @@ const COURT_GUARD_CONFIG = {
   startAt: T0,
   matchMinutes: 45,
   gapMinutes: 15,
-  courts: ["Court 1", "Court 2"],
   perEntrantMinRest: 0,
   blackouts: [],
   sessionWindows: [],
 };
+// P9 pass 3a: NAMES, not a valid ScheduleConfig.courts (real ids only) —
+// `seedCourtDivision`'s default court set to create, resolved to real ids
+// through its own `courtsByName` map. Every `COURT_GUARD_CONFIG` spread below
+// supplies `courts` explicitly for exactly this reason.
+const COURT_GUARD_COURT_NAMES = ["Court 1", "Court 2"];
 
 describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/time UX P08)", () => {
   /** A 4-entrant single-pool division (6 fixtures) with the two-court config
@@ -1273,7 +1314,7 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
    *  generated fixtures so a case can place and pin one by hand — `autoSchedule`
    *  is deliberately avoided here: it costs a full solve and decides court
    *  placement itself, which is the very thing these cases need to control. */
-  async function seedCourtDivision(courts: string[] = COURT_GUARD_CONFIG.courts) {
+  async function seedCourtDivision(courtNames: string[] = COURT_GUARD_COURT_NAMES) {
     const { auth } = await seedOrg("pro");
     const competition = await createCompetition(auth, {
       ends_on: "2030-12-31",
@@ -1302,32 +1343,43 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
       { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 1 } } },
     ]);
     const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    // P9 pass 3a: real courts, one per name, all on one venue — the guard's
+    // rejection message still names courts by their real `.name`
+    // (`courtNamesById`), so every case below keeps reading/writing "Court 2"
+    // etc., resolved to the id `config.courts`/`patchFixture` now require
+    // through this map.
+    const courtIds = await seedCourts(auth, courtNames);
+    const courtsByName = new Map(courtNames.map((name, i) => [name, courtIds[i]!]));
     await putScheduleSettings(auth, division.id, {
-      config: { ...COURT_GUARD_CONFIG, courts },
+      config: { ...COURT_GUARD_CONFIG, courts: courtIds },
     });
-    return { auth, divisionId: division.id, fixtures };
+    return { auth, divisionId: division.id, fixtures, courtsByName };
   }
 
   /** Place a fixture on a court, optionally pinning it, through the same
    *  console path the board uses (`patchFixture` → `moveFixture`) rather than
    *  a raw UPDATE — so a pin these cases treat as real is a pin the product
-   *  can actually produce. Times are staggered so nothing court-clashes. */
+   *  can actually produce. Times are staggered so nothing court-clashes.
+   *  `courtId` is a real `courts.id` — see `seedCourtDivision`'s
+   *  `courtsByName`. */
   async function place(
     auth: AuthCtx,
     fixtureId: string,
-    court: string,
+    courtId: string,
     minutes: number,
     locked: boolean,
   ) {
     await patchFixture(auth, fixtureId, {
       scheduled_at: at(minutes),
-      court_label: court,
+      court_id: courtId,
       schedule_locked: locked,
     });
   }
 
-  const dropCourt2 = (courts: string[] = ["Court 1"]) => ({
-    config: { ...COURT_GUARD_CONFIG, courts },
+  /** `names` are court NAMES, resolved through the calling test's own
+   *  `courtsByName` (P9 pass 3a) — `config.courts` needs real ids. */
+  const dropCourt2 = (courtsByName: Map<string, string>, names: string[] = ["Court 1"]) => ({
+    config: { ...COURT_GUARD_CONFIG, courts: names.map((n) => courtsByName.get(n)!) },
   });
 
   /** The thrown error, typed, for the cases that assert on more than one of
@@ -1344,10 +1396,10 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
   }
 
   it("rejects removing a court that still has a pinned fixture on it", async () => {
-    const { auth, divisionId, fixtures } = await seedCourtDivision();
-    await place(auth, fixtures[0]!.id, "Court 2", 0, true);
+    const { auth, divisionId, fixtures, courtsByName } = await seedCourtDivision();
+    await place(auth, fixtures[0]!.id, courtsByName.get("Court 2")!, 0, true);
 
-    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2()));
+    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2(courtsByName)));
     expect(err.status).toBe(409);
     expect(err.message).toMatch(/court 2/i);
     // Paired with the completed-fixture case below, which asserts the OPPOSITE
@@ -1362,8 +1414,8 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
    *  for the wrong reason, and it is the only thing standing between the guard
    *  and an over-widening that blocks every populated court. */
   it("allows removing a court whose fixtures are all unlocked and still movable", async () => {
-    const { auth, divisionId, fixtures } = await seedCourtDivision();
-    await place(auth, fixtures[0]!.id, "Court 2", 0, false);
+    const { auth, divisionId, fixtures, courtsByName } = await seedCourtDivision();
+    await place(auth, fixtures[0]!.id, courtsByName.get("Court 2")!, 0, false);
 
     const [seeded] = await sql<{ status: string; schedule_locked: boolean }[]>`
       select status, schedule_locked from fixtures where id = ${fixtures[0]!.id}`;
@@ -1372,9 +1424,11 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
 
     // Read back rather than trusting the return: a resolve alone does not
     // prove a write.
-    const saved = await putScheduleSettings(auth, divisionId, dropCourt2());
-    expect(saved.config.courts).toEqual(["Court 1"]);
-    expect((await getScheduleSettings(auth, divisionId)).config.courts).toEqual(["Court 1"]);
+    const saved = await putScheduleSettings(auth, divisionId, dropCourt2(courtsByName));
+    expect(saved.config.courts).toEqual([courtsByName.get("Court 1")!]);
+    expect((await getScheduleSettings(auth, divisionId)).config.courts).toEqual([
+      courtsByName.get("Court 1")!,
+    ]);
   });
 
   /** The widened half of the rule. A DECIDED fixture is unlocked, so the pin
@@ -1384,8 +1438,8 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
    *  exactly the way a pin does, with no pin anywhere for the organiser to
    *  find — hence the message must NOT say "pinned". */
   it("rejects removing a court that holds a completed fixture, with no pin anywhere", async () => {
-    const { auth, divisionId, fixtures } = await seedCourtDivision();
-    await place(auth, fixtures[0]!.id, "Court 2", 0, false);
+    const { auth, divisionId, fixtures, courtsByName } = await seedCourtDivision();
+    await place(auth, fixtures[0]!.id, courtsByName.get("Court 2")!, 0, false);
     await startDivision(auth, divisionId);
     await decide(auth, fixtures[0]!.id, 2, 1);
 
@@ -1394,7 +1448,7 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
     expect(seeded!.status).toBe("decided");
     expect(seeded!.schedule_locked).toBe(false);
 
-    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2()));
+    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2(courtsByName)));
     expect(err.status).toBe(409);
     expect(err.message).toMatch(/court 2/i);
     // The reason has to be distinguishable, or the organiser goes hunting for a
@@ -1407,17 +1461,17 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
    *  in one save so the per-court breakdown is exercised rather than a single
    *  global reason string. */
   it("names the two blocking reasons separately in one refusal", async () => {
-    const { auth, divisionId, fixtures } = await seedCourtDivision([
+    const { auth, divisionId, fixtures, courtsByName } = await seedCourtDivision([
       "Court 1",
       "Court 2",
       "Court 3",
     ]);
-    await place(auth, fixtures[0]!.id, "Court 2", 0, true);
-    await place(auth, fixtures[1]!.id, "Court 3", 60, false);
+    await place(auth, fixtures[0]!.id, courtsByName.get("Court 2")!, 0, true);
+    await place(auth, fixtures[1]!.id, courtsByName.get("Court 3")!, 60, false);
     await startDivision(auth, divisionId);
     await decide(auth, fixtures[1]!.id, 2, 1);
 
-    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2()));
+    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2(courtsByName)));
     expect(err.status).toBe(409);
     expect(err.message).toMatch(/Court 2 \(1 pinned\)/);
     expect(err.message).toMatch(/Court 3 \(1 in play or completed\)/);
@@ -1427,8 +1481,8 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
    *  status check could easily land after the upsert; deep-equalling the whole
    *  stored config plus `updated_at` is what catches that. */
   it("does not write anything when a completed-fixture save is rejected", async () => {
-    const { auth, divisionId, fixtures } = await seedCourtDivision();
-    await place(auth, fixtures[0]!.id, "Court 2", 0, false);
+    const { auth, divisionId, fixtures, courtsByName } = await seedCourtDivision();
+    await place(auth, fixtures[0]!.id, courtsByName.get("Court 2")!, 0, false);
     await startDivision(auth, divisionId);
     await decide(auth, fixtures[0]!.id, 2, 1);
 
@@ -1437,7 +1491,7 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
       putScheduleSettings(auth, divisionId, {
         config: {
           ...COURT_GUARD_CONFIG,
-          courts: ["Court 1"],
+          courts: [courtsByName.get("Court 1")!],
           matchMinutes: 90,
           gapMinutes: 0,
           perEntrantMinRest: 25,
@@ -1448,16 +1502,16 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
 
     const after = await getScheduleSettings(auth, divisionId);
     expect(after.config).toEqual(before.config);
-    expect(after.config.courts).toEqual(["Court 1", "Court 2"]);
+    expect(after.config.courts).toEqual([courtsByName.get("Court 1")!, courtsByName.get("Court 2")!]);
     expect(after.config.matchMinutes).toBe(45);
     expect(after.updated_at).toEqual(before.updated_at);
   });
 
   it("allows removing a court with no fixtures on it at all", async () => {
-    const { auth, divisionId } = await seedCourtDivision();
+    const { auth, divisionId, courtsByName } = await seedCourtDivision();
 
-    const saved = await putScheduleSettings(auth, divisionId, dropCourt2());
-    expect(saved.config.courts).toEqual(["Court 1"]);
+    const saved = await putScheduleSettings(auth, divisionId, dropCourt2(courtsByName));
+    expect(saved.config.courts).toEqual([courtsByName.get("Court 1")!]);
   });
 
   /** The scope discriminator. An implementation that counts pinned fixtures
@@ -1465,34 +1519,34 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
    *  cases above; this one goes red for it. Court 3 is dropped and is empty,
    *  while the pin sits on Court 2, which survives the save. */
   it("does not block on a pinned fixture that sits on a court being kept", async () => {
-    const { auth, divisionId, fixtures } = await seedCourtDivision([
+    const { auth, divisionId, fixtures, courtsByName } = await seedCourtDivision([
       "Court 1",
       "Court 2",
       "Court 3",
     ]);
-    await place(auth, fixtures[0]!.id, "Court 2", 0, true);
+    await place(auth, fixtures[0]!.id, courtsByName.get("Court 2")!, 0, true);
 
     const saved = await putScheduleSettings(
       auth,
       divisionId,
-      dropCourt2(["Court 1", "Court 2"]),
+      dropCourt2(courtsByName, ["Court 1", "Court 2"]),
     );
-    expect(saved.config.courts).toEqual(["Court 1", "Court 2"]);
+    expect(saved.config.courts).toEqual([courtsByName.get("Court 1")!, courtsByName.get("Court 2")!]);
   });
 
   /** The organiser has to be told WHICH pins to release. One save dropping two
    *  occupied courts must name both, or the second refusal arrives only after
    *  they have fixed the first. */
   it("names every removed court that still holds a pin", async () => {
-    const { auth, divisionId, fixtures } = await seedCourtDivision([
+    const { auth, divisionId, fixtures, courtsByName } = await seedCourtDivision([
       "Court 1",
       "Court 2",
       "Court 3",
     ]);
-    await place(auth, fixtures[0]!.id, "Court 2", 0, true);
-    await place(auth, fixtures[1]!.id, "Court 3", 60, true);
+    await place(auth, fixtures[0]!.id, courtsByName.get("Court 2")!, 0, true);
+    await place(auth, fixtures[1]!.id, courtsByName.get("Court 3")!, 60, true);
 
-    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2()));
+    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2(courtsByName)));
     expect(err.status).toBe(409);
     expect(err.message).toMatch(/court 2/i);
     expect(err.message).toMatch(/court 3/i);
@@ -1502,15 +1556,15 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
    *  placed AFTER the upsert would leave `matchMinutes` at 90 and the stored
    *  courts at one entry. Asserting only "it threw" would not see that. */
   it("does not write anything when the save is rejected", async () => {
-    const { auth, divisionId, fixtures } = await seedCourtDivision();
-    await place(auth, fixtures[0]!.id, "Court 2", 0, true);
+    const { auth, divisionId, fixtures, courtsByName } = await seedCourtDivision();
+    await place(auth, fixtures[0]!.id, courtsByName.get("Court 2")!, 0, true);
 
     const before = await getScheduleSettings(auth, divisionId);
     await expect(
       putScheduleSettings(auth, divisionId, {
         config: {
           ...COURT_GUARD_CONFIG,
-          courts: ["Court 1"],
+          courts: [courtsByName.get("Court 1")!],
           matchMinutes: 90,
           gapMinutes: 0,
           perEntrantMinRest: 25,
@@ -1523,7 +1577,7 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
     expect(after.config).toEqual(before.config);
     // Spelled out as well as compared, so the failure message names the field
     // that leaked rather than dumping two configs.
-    expect(after.config.courts).toEqual(["Court 1", "Court 2"]);
+    expect(after.config.courts).toEqual([courtsByName.get("Court 1")!, courtsByName.get("Court 2")!]);
     expect(after.config.matchMinutes).toBe(45);
     expect(after.config.gapMinutes).toBe(15);
     expect(after.config.perEntrantMinRest).toBe(0);
