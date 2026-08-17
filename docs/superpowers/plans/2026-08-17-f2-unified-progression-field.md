@@ -1805,6 +1805,27 @@ git commit -m "db(F2): drop stages.qualification/seeding, add stages.progression
 
 ### Task 5: Writers — `createStages`, `instantiateTemplate`, the 3 catalogue JSONs, `format-templates.ts`, `mobile.spec.ts`
 
+> **Added 2026-08-18 after Task 3 shipped — two files this plan never assigned
+> to anybody.** Both were found by the Task 3 implementer and confirmed to be
+> real, unowned work. Neither is optional: leave them and F2 ships a UI that
+> reads a column the migration has already dropped.
+>
+> 1. **`apps/web/src/components/v2/template-gallery.tsx`** — a LIVE component
+>    still reading `.seeding`. It appears in no task's file list. The reason it
+>    stayed invisible is worth noting: `TemplateStage` is not `.strict()`, so
+>    the real catalogue JSON's `.seeding` block is silently STRIPPED rather
+>    than rejected, and nothing errors. Task 5 owns it, alongside the catalogue
+>    JSONs it renders.
+> 2. **The `Stage` RESPONSE schema** (`apps/web/src/server/api-v1/schemas.ts`,
+>    around 607-617) still exposes raw `qualification` / `seeding` records.
+>    Task 3 deliberately left it — it is a read-path shape, so it belongs with
+>    the readers in **Task 6**, not here. Recorded in both places so whichever
+>    session runs first cannot assume the other took it.
+>
+> Known-red until Task 5 reshapes the catalogue JSON, and NOT new defects:
+> `catalog.test.ts` (3 failures) and `template-gallery-progression.test.tsx`
+> (2 failures).
+
 **Files:**
 - Modify: `apps/web/src/server/usecases/stages.ts` (`createStages`
   `:137-264`; the mutual-exclusion 422 deleted per Task 3 Step 4)
@@ -2177,6 +2198,14 @@ git commit -m "writers(F2): createStages, instantiateTemplate, the picker and ca
 ---
 
 ### Task 6: Readers — `generateStageFixtures`, `seedNextStage` (multi-source), `computeSeedProposal`/`confirmSeedProposal`, `qualifierCount`, `openapi:gen`, full gate
+
+> **Added 2026-08-18 — the `Stage` RESPONSE schema is yours.**
+> `apps/web/src/server/api-v1/schemas.ts` (around 607-617) still exposes raw
+> `qualification` / `seeding` records to API consumers. Task 3 rewrote the
+> REQUEST schemas and deliberately left this one, because it is a read-path
+> shape. No task owned it until now. It must move to `progression` in this
+> task, and `openapi:gen` re-run — the published contract still advertises two
+> fields the database no longer has.
 
 **Files:**
 - Modify: `apps/web/src/server/usecases/stage-seeding.ts` — shrink to
