@@ -57,7 +57,7 @@
 // Focus rings are NOT hand-rolled here: globals.css's
 // `:where(a,button,summary,[role="tab"]):focus-visible` rule already
 // covers every real <button>, and every tile is one.
-import type { PadPhase, TileKind, TileSpec } from "./types";
+import type { ContextStripSpec, PadPhase, TileKind, TileSpec } from "./types";
 
 /**
  * Tiles whose `phases` include `phase`. The mechanism that stops
@@ -86,6 +86,46 @@ export function assertTileHierarchy(tiles: readonly TileSpec[]): string[] {
     }
   }
   return out;
+}
+
+/**
+ * R2b-cricket-over review fix (item 4, Important finding): a skin can
+ * legally set `disabled: true` (types.ts) on a tile with NO `context()` at
+ * all, or a `context()` whose slots all omit `message` — the chassis then
+ * renders a real `<button disabled>` explaining nothing, and nothing
+ * (type, test, or lint) caught the omission before this. Cricket only
+ * pairs them by convention; nothing enforced it.
+ *
+ * SET-LEVEL, not a per-tile pairing: `TileSpec.disabled`'s own doc is
+ * explicit that a single cause can disable MANY tiles at once and the
+ * explanation lives ONCE, on whichever `ContextSlot` names the person/fact
+ * at fault — never repeated per tile. So the rule here is "if any tile is
+ * disabled, at least one context slot must carry a non-empty message
+ * somewhere", never "every disabled tile needs its own paired slot".
+ * `!!slot.message` (not `!== undefined`) matches item 3's own fix on the
+ * renderer side — an empty-string message must not count as an
+ * explanation either.
+ *
+ * Never a throw — same non-throwing convention as `assertTileHierarchy`
+ * below and `assertScorebugSpec` (../types.ts): a skin author's own test
+ * suite asserts against the returned violation strings. Deliberately kept
+ * OUT of pad-host.tsx's render path for the same reason — a disabled tile
+ * with no explanation is a cosmetic authoring gap, not a correctness bug
+ * that should crash a live pad mid-match. `assertTileHierarchy`/
+ * `assertScorebugSpec` are themselves never wired into a live render
+ * either (confirmed by search, R2b-cricket-over review), so this keeps
+ * the file's one established convention for a structural-invariant
+ * validator rather than inventing a second one.
+ */
+export function assertDisabledTilesExplained(
+  tiles: readonly TileSpec[],
+  context: ContextStripSpec | null,
+): string[] {
+  const disabledIds = tiles.filter((tile) => tile.disabled === true).map((tile) => tile.id);
+  if (disabledIds.length === 0) return [];
+  const hasMessage = (context?.slots ?? []).some((slot) => !!slot.message);
+  if (hasMessage) return [];
+  return disabledIds.map((id) => `tile "${id}": disabled with no context slot message explaining why`);
 }
 
 /** Visual weight by kind — the hierarchy contract itself, table-driven so

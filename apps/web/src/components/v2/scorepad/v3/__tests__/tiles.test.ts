@@ -15,8 +15,8 @@
 // violation strings, same non-throwing convention as `assertScorebugSpec`
 // in ../types.ts (see ../__tests__/types.test.ts).
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { tilesForPhase, assertTileHierarchy, TileGrid, type TileGridProps } from "../tile-grid";
-import type { TileSpec } from "../types";
+import { tilesForPhase, assertTileHierarchy, assertDisabledTilesExplained, TileGrid, type TileGridProps } from "../tile-grid";
+import type { ContextStripSpec, TileSpec } from "../types";
 import type { Dict } from "@/lib/i18n-constants";
 import { t as realT } from "@/lib/i18n-runtime";
 
@@ -106,6 +106,86 @@ describe("assertTileHierarchy", () => {
       tile({ id: "d", kind: "standard", phases: ["live"] }),
     ];
     expect(assertTileHierarchy(tiles)).toEqual([]);
+  });
+});
+
+// R2b-cricket-over review fix (item 4): a skin can legally set
+// `disabled: true` on a tile with NO `context()` at all, or a context()
+// whose slots all omit `message` — the chassis then renders a real
+// `<button disabled>` explaining nothing, and nothing (type, test, lint)
+// catches the omission today. `assertDisabledTilesExplained` is the same
+// kind of validator as `assertTileHierarchy` above — never a throw, a set
+// of violation strings a skin's own test suite (or a later CI gate) can
+// assert against — deliberately test-only, NOT wired into pad-host.tsx's
+// render path: a disabled tile with no explanation is a cosmetic gap, not
+// a correctness bug that should crash a live pad mid-match, same posture
+// `assertTileHierarchy`/`assertScorebugSpec` already take for their own
+// violations (see this file's own header, and ../types.ts's
+// assertScorebugSpec).
+//
+// The doc's own ruling (TileSpec.disabled, ../types.ts) is that ONE cause
+// can disable MANY tiles at once and the reason lives ONCE, on whichever
+// ContextSlot names the person/fact at fault — never repeated per tile.
+// So this validator is a SET-LEVEL check, not a per-tile pairing: "if any
+// tile is disabled, at least one context slot must carry a non-empty
+// message somewhere" — never "every disabled tile needs its OWN slot".
+describe("assertDisabledTilesExplained", () => {
+  const ctx = (slots: ContextStripSpec["slots"]): ContextStripSpec => ({ slots });
+
+  it("no disabled tiles at all: no violations, regardless of context", () => {
+    const tiles = [tile({ id: "a", disabled: false }), tile({ id: "b" })];
+    expect(assertDisabledTilesExplained(tiles, null)).toEqual([]);
+  });
+
+  it("a disabled tile with context() entirely absent (null): one violation naming the tile", () => {
+    const tiles = [tile({ id: "a", disabled: true })];
+    expect(assertDisabledTilesExplained(tiles, null)).toEqual([
+      'tile "a": disabled with no context slot message explaining why',
+    ]);
+  });
+
+  it("a disabled tile with a context() whose every slot omits message: one violation", () => {
+    const tiles = [tile({ id: "a", disabled: true })];
+    const context = ctx([{ id: "bowler", label: "pad.context.bowler", pool: "onfield", required: true }]);
+    expect(assertDisabledTilesExplained(tiles, context)).toEqual([
+      'tile "a": disabled with no context slot message explaining why',
+    ]);
+  });
+
+  it("a disabled tile paired with a slot message: no violation — the reason lives once, not per tile", () => {
+    const tiles = [tile({ id: "a", disabled: true })];
+    const context = ctx([
+      { id: "bowler", label: "pad.context.bowler", pool: "onfield", required: true, message: "No bowler is eligible." },
+    ]);
+    expect(assertDisabledTilesExplained(tiles, context)).toEqual([]);
+  });
+
+  it("MULTIPLE disabled tiles, one shared message: zero violations — a single cause can disable many tiles at once", () => {
+    const tiles = [
+      tile({ id: "a", disabled: true }),
+      tile({ id: "b", disabled: true }),
+      tile({ id: "c" }), // not disabled — irrelevant either way
+    ];
+    const context = ctx([
+      { id: "bowler", label: "pad.context.bowler", pool: "onfield", required: true, message: "No bowler is eligible." },
+    ]);
+    expect(assertDisabledTilesExplained(tiles, context)).toEqual([]);
+  });
+
+  it("MULTIPLE disabled tiles with no message anywhere: one violation PER disabled tile", () => {
+    const tiles = [tile({ id: "a", disabled: true }), tile({ id: "b", disabled: true }), tile({ id: "c" })];
+    expect(assertDisabledTilesExplained(tiles, null)).toEqual([
+      'tile "a": disabled with no context slot message explaining why',
+      'tile "b": disabled with no context slot message explaining why',
+    ]);
+  });
+
+  it('a message: "" (empty string) slot does not count — same truthy rule item 3 fixed on the renderer side', () => {
+    const tiles = [tile({ id: "a", disabled: true })];
+    const context = ctx([{ id: "bowler", label: "pad.context.bowler", pool: "onfield", required: true, message: "" }]);
+    expect(assertDisabledTilesExplained(tiles, context)).toEqual([
+      'tile "a": disabled with no context slot message explaining why',
+    ]);
   });
 });
 
