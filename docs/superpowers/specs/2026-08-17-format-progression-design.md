@@ -90,6 +90,27 @@ rounds when a bye changes the count. Its **only** caller is
 `previewDivisionFixtures` (`stages.ts:833`), so this reaches the marketing
 gallery and help preview, not an organiser's schedule.
 
+The clearest instance is a double elimination of 8, where the count heuristic
+produces **four sections titled "Final" and three titled "Semi-finals" in one
+bracket**, because a losers' bracket has repeated 2-match and 1-match rounds by
+construction:
+
+| rendered | actually |
+|---|---|
+| Quarter-finals | winners' R1 ✓ |
+| Semi-finals | winners' R2 ✓ |
+| Final | **winners' final** |
+| Semi-finals | **losers' R1** |
+| Semi-finals | **losers' R2** |
+| Final | **losers' R3** |
+| Final | **losers' final** |
+| Final | **grand final** |
+
+The wiring underneath is correct — the grand final reads
+`Winner of R3·1 v Winner of R10·1`, i.e. winners' final against losers' final.
+Only the labels are wrong, and every row already knows its lane
+(`bracket: "WB"|"LB"|"GF"`) at generation time.
+
 **The real path has three independent implementations.** All use distance from
 the final rather than match count, so none carries the bye bug — but they have
 drifted from each other:
