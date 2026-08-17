@@ -15,14 +15,12 @@ import "server-only";
 // reused/ported here VERBATIM where the design is unchanged; every place this
 // file's behaviour differs from it is commented at the point of difference.
 import { randomBytes } from "node:crypto";
-import type postgres from "postgres";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { generateRefCode } from "@/lib/ref-code";
 import { LEGAL_VERSION } from "@/lib/legal";
 import { log } from "@/server/logger";
-import type { RegistrationFormField } from "@/server/api-v1/schemas";
 import {
   SPOT_HOLDERS,
   REGISTRATION_TOKEN_PREFIX,
@@ -41,8 +39,6 @@ import {
   formatEligibilityIssues,
   type EligibilityIssue,
 } from "./registration-eligibility";
-
-type Tx = postgres.TransactionSql;
 
 // ---------------------------------------------------------------------------
 // Input / output shapes

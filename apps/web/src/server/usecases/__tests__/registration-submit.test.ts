@@ -3,7 +3,7 @@
 // §3/§4/§6. `submitRegistration` (single-entry) was deleted with RS001; this
 // is its group-shaped replacement. Real Postgres required; skipped without
 // DATABASE_URL.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 // A thin, always-installed wrapper around the REAL generateRefCode — most
