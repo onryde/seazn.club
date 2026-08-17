@@ -70,10 +70,135 @@ async function seedDoubleElimStage(entrantCount: number) {
   return { auth, divisionId: division.id, stageId: stage!.id };
 }
 
+// Review finding #1 (against Tasks 1-2): a double-elim of 8 never produces a
+// third-place fixture, so the test above only ever exercises third_place in
+// its FALSE state — a mutation hardcoding `third_place: false` on every row
+// would have survived every existing assertion. A single-elim stage with
+// `config.thirdPlace: true` is the one shape that actually produces a
+// third-place playoff (generateSingleElim, bracket.ts) — seed one and assert
+// the column reads true on THAT fixture specifically.
+async function seedKnockoutStage(entrantCount: number, config: Record<string, unknown>) {
+  const { auth } = await seedOrg("pro");
+  const comp = await createCompetition(auth, {
+    ends_on: "2030-12-31",
+    name: "Bracket Round Role KO",
+    visibility: "private",
+    branding: {},
+  });
+  const division = await createDivision(auth, comp.id, {
+    name: "Open",
+    slug: "open",
+    sport_key: "generic",
+    variant_key: "score",
+    config: GENERIC_CONFIG,
+    eligibility: [],
+  });
+  await createEntrants(
+    auth,
+    division.id,
+    Array.from({ length: entrantCount }, (_, i) => ({
+      kind: "individual" as const,
+      display_name: `Entrant ${i + 1}`,
+      seed: i + 1,
+      members: [],
+    })),
+  );
+  const [stage] = await createStages(auth, division.id, {
+    seq: 1,
+    kind: "knockout",
+    name: "KO",
+    config,
+  });
+  return { auth, divisionId: division.id, stageId: stage!.id };
+}
+
+// Review finding #2 (against Tasks 1-2): stages.ts has TWO insert sites —
+// generateStageFixtures' plain path (covered above via a real DE) and
+// generateSeededStageFixtures' `.seeding` path (stages.ts ~1550-1571,
+// reached whenever a stage declares `seeding` — generateStageFixtures
+// short-circuits into it, see its own `.seeding` branch). Only the first was
+// covered; a mutation dropping the F1 role columns from the SECOND insert's
+// row object would have survived every existing assertion in this file.
+async function seedSeededDoubleElimStage(entrantCount: number) {
+  const { auth } = await seedOrg("pro");
+  const comp = await createCompetition(auth, {
+    ends_on: "2030-12-31",
+    name: "Bracket Round Role Seeded DE",
+    visibility: "private",
+    branding: {},
+  });
+  const division = await createDivision(auth, comp.id, {
+    name: "Open",
+    slug: "open",
+    sport_key: "generic",
+    variant_key: "score",
+    config: GENERIC_CONFIG,
+    eligibility: [],
+  });
+  await createEntrants(
+    auth,
+    division.id,
+    Array.from({ length: entrantCount }, (_, i) => ({
+      kind: "individual" as const,
+      display_name: `Entrant ${i + 1}`,
+      seed: i + 1,
+      members: [],
+    })),
+  );
+  const stages = await createStages(auth, division.id, [
+    { seq: 1, kind: "league", name: "League", config: { legs: 1 } },
+    {
+      seq: 2,
+      kind: "double_elim",
+      name: "DE",
+      config: { bracketReset: true },
+      seeding: {
+        source: "previous",
+        take: [{ kind: "rankRange", from: 1, to: entrantCount }],
+        placement: "rank_order",
+      },
+    },
+  ]);
+  const de = stages.find((s) => s.kind === "double_elim")!;
+  return { auth, divisionId: division.id, stageId: de.id };
+}
+
 describe.skipIf(!HAS_DB)("generateStageFixtures — persists bracket round role (F1 Task 2)", () => {
   it("persists lane, is_final and third_place for a double-elim bracket", async () => {
     const { auth, stageId } = await seedDoubleElimStage(8);
     await generateStageFixtures(auth, stageId);
+
+    const rows = await sql<RoleRow[]>`
+      select ext_key, round_no, lane, is_final, third_place, conditional
+      from fixtures where stage_id = ${stageId} order by round_no, seq_in_round`;
+
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.lane !== null)).toBe(true);
+    expect(new Set(rows.map((r) => r.lane))).toEqual(new Set(["WB", "LB", "GF"]));
+    expect(rows.filter((r) => r.is_final).length).toBeGreaterThan(0);
+    expect(rows.some((r) => r.conditional)).toBe(true); // the bracket-reset game
+  });
+
+  it("persists third_place=true on the fixture that is actually a third-place playoff (review finding #1)", async () => {
+    const { auth, stageId } = await seedKnockoutStage(8, { thirdPlace: true });
+    await generateStageFixtures(auth, stageId);
+
+    const rows = await sql<RoleRow[]>`
+      select ext_key, round_no, lane, is_final, third_place, conditional
+      from fixtures where stage_id = ${stageId} order by round_no, seq_in_round`;
+
+    const thirdPlaceRows = rows.filter((r) => r.third_place);
+    expect(thirdPlaceRows).toHaveLength(1);
+    expect(thirdPlaceRows[0]!.ext_key).toMatch(/-3p$/);
+    // The column genuinely varies within this stage -- a mutation hardcoding
+    // either constant value would fail one of these two assertions.
+    expect(rows.some((r) => !r.third_place)).toBe(true);
+    expect(rows.every((r) => r.lane === null)).toBe(true); // single-elim: no lane
+  });
+
+  it("persists lane/is_final/third_place/conditional through the SEEDED insert site too (review finding #2)", async () => {
+    const { auth, stageId } = await seedSeededDoubleElimStage(8);
+    await generateStageFixtures(auth, stageId); // routes into generateSeededStageFixtures
 
     const rows = await sql<RoleRow[]>`
       select ext_key, round_no, lane, is_final, third_place, conditional
