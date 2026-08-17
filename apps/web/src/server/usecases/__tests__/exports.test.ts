@@ -10,6 +10,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { patchFixture } from "../fixtures";
+import { createVenue, createCourt } from "../venues";
 import {
   buildDivisionDocModel,
   buildCompetitionTimetable,
@@ -100,9 +101,13 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
   it("timetable model carries title + stage headings; renders to PDF and XLSX bytes", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth);
+    // P9 pass 3a: court_id is the only writable court identity (PatchFixture
+    // is .strict() — a court_label key 400s).
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const court1 = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
     await patchFixture(auth, fixtures[0]!.id, {
       scheduled_at: "2026-07-20T09:00:00.000Z",
-      court_label: "Court 1",
+      court_id: court1.id,
     });
     const model = await buildDivisionDocModel(auth, division.id, "timetable", {
       printedAt: PRINTED,
@@ -117,6 +122,19 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
     expect(xlsx.length).toBeGreaterThan(500);
   });
 
+  // P9 pass-3a-FIX flag (NOT fixed here — exports.ts is pass 3c's file, out
+  // of this pass's scope): `PatchFixture` is `.strict()` now, so `court_id`
+  // is the only writable court identity — but `exports.ts`'s `groupByCourt`
+  // and this doc's rendered subheading both still read `fixtures.court_label`
+  // RAW (grep-verified: no `court_id`/`courtNamesById` reference anywhere in
+  // exports.ts), and nothing writes that column any more since pass 3a's
+  // FULL cutover. This test's whole premise — group by court, one page break
+  // per court change — has no way to reach a non-null `court_label` through
+  // any usecase, so it is expected to go RED at runtime (not just at the
+  // type level) until pass 3c converts exports.ts to resolve court_id the
+  // way schedule.ts's courtNamesById already does. Converted to court_id
+  // below only so the file compiles; the assertions are not expected to
+  // hold until that follow-up lands.
   it("scoresheets pageBreaks=per_pitch: one stack per court, one break between them", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth);
@@ -124,21 +142,24 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
     // both courts, then R2 on both. This is the shape the old code got wrong —
     // it broke a page every time the court changed *in round order*, so it
     // produced three breaks here and grouped nothing.
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const court1 = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    const court2 = await createCourt(auth, venue.id, { name: "Court 2", sort: 1, tags: [] });
     await patchFixture(auth, fixtures[0]!.id, {
       scheduled_at: "2026-07-20T09:00:00.000Z",
-      court_label: "Court 1",
+      court_id: court1.id,
     });
     await patchFixture(auth, fixtures[1]!.id, {
       scheduled_at: "2026-07-20T09:00:00.000Z",
-      court_label: "Court 2",
+      court_id: court2.id,
     });
     await patchFixture(auth, fixtures[2]!.id, {
       scheduled_at: "2026-07-20T09:30:00.000Z",
-      court_label: "Court 1",
+      court_id: court1.id,
     });
     await patchFixture(auth, fixtures[3]!.id, {
       scheduled_at: "2026-07-20T09:30:00.000Z",
-      court_label: "Court 2",
+      court_id: court2.id,
     });
     const model = await buildDivisionDocModel(auth, division.id, "scoresheet", {
       printedAt: PRINTED,
@@ -354,16 +375,25 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
     ).resolves.toBeTruthy();
   });
 
+  // P9 pass-3a-FIX flag (NOT fixed here, same gap as the scoresheets test
+  // above): the `flat.toContain("Court 1")` / `not.toContain("Court 2")`
+  // assertions below read `buildMyRotaDoc`'s rendered `court`, which
+  // `exports.ts` still sources from `fixtures.court_label` — a column
+  // nothing writes any more. Converted to court_id only so the file
+  // compiles; expected RED at runtime until pass 3c converts exports.ts.
   it("Task 14: buildMyRotaDoc is scoped to the caller — never leaks another official's assignments", async () => {
     const { auth } = await seedOrg("pro");
     const { fixtures } = await seedDivision(auth);
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const court1 = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    const court2 = await createCourt(auth, venue.id, { name: "Court 2", sort: 1, tags: [] });
     await patchFixture(auth, fixtures[0]!.id, {
       scheduled_at: new Date(Date.now() + 7 * 86_400_000).toISOString(),
-      court_label: "Court 1",
+      court_id: court1.id,
     });
     await patchFixture(auth, fixtures[1]!.id, {
       scheduled_at: new Date(Date.now() + 8 * 86_400_000).toISOString(),
-      court_label: "Court 2",
+      court_id: court2.id,
     });
 
     async function makeLinkedOfficial(name: string, fixtureId: string) {
