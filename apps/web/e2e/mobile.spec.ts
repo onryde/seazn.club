@@ -184,6 +184,12 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
       allowancePx: test.info().project.name === "mobile-320" ? 6 : undefined,
     },
     { path: "/directory" },
+    // D5/P8 venues & courts — Directory tab, not org settings (A2). Without
+    // this entry the seven width projects never render the venue list or
+    // the per-court calendar editor at all; gallery.capture.ts's own
+    // "venues" capture (320/768/1280) shows the calendar editor OPEN, which
+    // this route-level pass cannot — see that harness for the layout check.
+    { path: "/directory?tab=venues" },
     { path: "/import" },
     { path: "/my-matches" },
     // P4/D1a wizard step 0 — the template gallery. A 6-card grid, which is the
