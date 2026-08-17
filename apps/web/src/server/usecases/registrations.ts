@@ -497,8 +497,10 @@ function windowOpen(s: RegistrationSettingsRow, now: Date): boolean {
  * Materialise a confirmed registration into an entrant (doc 16 §1.1:
  * "Registration → entrant on confirm"). Idempotent: entrant_id is set exactly
  * once under a row lock; a second call is a no-op. Individuals also get a
- * person (dob/gender feed eligibility; consent defaults empty = initials on
- * public surfaces, doc 06 §4.7).
+ * person (dob/gender feed eligibility). New persons are created with
+ * consent.public_name = true (owner ruling 5 — registering is consent to a
+ * public name); a REUSED or user_id-linked person's own consent, including
+ * any opt-out, is left untouched — see findOrCreatePlayerPerson below.
  */
 /**
  * #402 — resolve the registrant's player-lane person, or create it.
@@ -546,6 +548,48 @@ export async function resolvePlayerPerson(
 }
 
 /**
+ * RS002 — person get-or-create for a player row with NO `user_id`.
+ *
+ * The only persons identity index (`persons_org_user_lane_uq`) is scoped to
+ * `user_id is not null`, so it arbitrates nothing for an anonymous player.
+ * Ruling taken this session (design §6, `_INDEX.md` "Person get-or-create
+ * does NOT dedupe on name alone" — there is no `(org, name, dob)` unique
+ * index and this does not add one): reuse an existing person ONLY when the
+ * row carries a `dob` AND exactly one non-merged, player-lane person in this
+ * org matches on `(lower(trim(full_name)), dob)`. No dob, zero matches, or
+ * an AMBIGUOUS (2+) match all mint a new person rather than guess — a
+ * duplicate person is a one-click #404 merge, whereas silently fusing two
+ * different humans (same-named juniors, for instance) is not cleanly
+ * reversible. A small per-org query by design; no index added for it.
+ *
+ * Never touches an EXISTING person's own data (name/dob/gender/consent) —
+ * that person may already carry answers, including a consent opt-out, that a
+ * later same-named entry must not overwrite. New persons are created with
+ * `consent.public_name = true` (owner ruling 5: registering is consent to a
+ * public name; opt-out happens later, on the person, never here).
+ */
+async function findOrCreatePlayerPerson(
+  tx: Tx,
+  orgId: string,
+  fullName: string,
+  dob: string | null,
+  gender: string | null,
+): Promise<string> {
+  if (dob) {
+    const matches = await tx<{ id: string }[]>`
+      select id from persons
+      where org_id = ${orgId} and lane = 'player' and merged_into is null
+        and dob = ${dob} and lower(trim(full_name)) = lower(trim(${fullName}))`;
+    if (matches.length === 1) return matches[0]!.id;
+  }
+  const [created] = await tx<{ id: string }[]>`
+    insert into persons (org_id, full_name, dob, gender, consent)
+    values (${orgId}, ${fullName}, ${dob}, ${gender}, ${tx.json({ public_name: true } as never)})
+    returning id`;
+  return created!.id;
+}
+
+/**
  * Roster reads (RS001 registration demolition): players now come from
  * `registration_players` (design §6) instead of the dropped `registrations.roster`
  * jsonb. `is_captain desc` orders a team's captain first — the closest
@@ -568,10 +612,13 @@ export async function resolvePlayerPerson(
 // interface (as `user_id` briefly did) fails the typecheck instead of drifting
 // quietly — this file has no other consumer of the type to catch it.
 async function loadPlayers(tx: Tx, registrationId: string): Promise<
-  Pick<RegistrationPlayerRow, "id" | "full_name" | "dob" | "gender" | "squad_number" | "user_id">[]
+  Pick<
+    RegistrationPlayerRow,
+    "id" | "full_name" | "dob" | "gender" | "squad_number" | "user_id" | "is_captain"
+  >[]
 > {
   return tx`
-    select id, full_name, dob, gender, squad_number, user_id from registration_players
+    select id, full_name, dob, gender, squad_number, user_id, is_captain from registration_players
     where registration_id = ${registrationId}
     order by is_captain desc, created_at`;
 }
@@ -592,39 +639,45 @@ async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: string): P
     const dob = p?.dob ?? null;
     const gender = p?.gender ?? null;
     // A player row carrying a user_id (#402) resolves into that account's
-    // linked person instead of minting a fresh one — see resolvePlayerPerson.
+    // linked person — see resolvePlayerPerson. Otherwise
+    // findOrCreatePlayerPerson applies the name+dob reuse rule (RS002), which
+    // also covers the no-player-row fallback above: a null dob there always
+    // mints fresh, byte-for-byte the old anonymous path.
     const personId = p?.user_id
       ? await resolvePlayerPerson(tx, reg.org_id, p.user_id, fullName, dob, gender)
-      : (
-          await tx<{ id: string }[]>`
-            insert into persons (org_id, full_name, dob, gender)
-            values (${reg.org_id}, ${fullName}, ${dob}, ${gender})
-            returning id`
-        )[0].id;
+      : await findOrCreatePlayerPerson(tx, reg.org_id, fullName, dob, gender);
     // A RESOLVED person can already sit on this entrant (re-confirm), which the
     // fresh-insert path could never hit — so the membership write is idempotent.
     await tx`
       insert into entrant_members (entrant_id, person_id)
       values (${entrant.id}, ${personId})
       on conflict (entrant_id, person_id) do nothing`;
-  } else if (entrantKind === "team" && players.length > 0) {
-    // Team roster → a person + squad member per player row. Same #402 link
-    // check as the individual branch above, per player.
+    // No player row when the fallback above ran (nothing to stamp).
+    if (p) {
+      await tx`
+        update registration_players set person_id = ${personId}, updated_at = now()
+        where id = ${p.id}`;
+    }
+  } else if ((entrantKind === "team" || entrantKind === "pair") && players.length > 0) {
+    // Team/pair roster → a person + squad member per player row. Same #402
+    // link check as the individual branch above, per player. `pair` (RS002:
+    // registration_players now carries real rows for a pair entry, so it
+    // takes the same per-player path team always has) carries squad_number
+    // and is_captain exactly as team does — both columns already exist on
+    // entrant_members and loadPlayers already selects them.
     for (const p of players) {
       const name = p.full_name.trim();
       if (!name) continue;
       const personId = p.user_id
         ? await resolvePlayerPerson(tx, reg.org_id, p.user_id, name, p.dob, p.gender)
-        : (
-            await tx<{ id: string }[]>`
-              insert into persons (org_id, full_name, dob, gender)
-              values (${reg.org_id}, ${name}, ${p.dob}, ${p.gender})
-              returning id`
-          )[0].id;
+        : await findOrCreatePlayerPerson(tx, reg.org_id, name, p.dob, p.gender);
       await tx`
-        insert into entrant_members (entrant_id, person_id, squad_number)
-        values (${entrant.id}, ${personId}, ${p.squad_number})
+        insert into entrant_members (entrant_id, person_id, squad_number, is_captain)
+        values (${entrant.id}, ${personId}, ${p.squad_number}, ${p.is_captain})
         on conflict (entrant_id, person_id) do nothing`;
+      await tx`
+        update registration_players set person_id = ${personId}, updated_at = now()
+        where id = ${p.id}`;
     }
   }
   await tx`

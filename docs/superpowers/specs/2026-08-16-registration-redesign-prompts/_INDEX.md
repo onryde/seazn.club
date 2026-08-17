@@ -236,6 +236,47 @@ serves its closed/unavailable state during that window.
 
 ### RS002 (2026-08-17) — branch `feat/rs002-registration-usecases`
 
+**LIVE SESSION STATE** (update this block as waves close; it is what a resumed
+or compacted session reads first).
+
+- Worktree `.claude/worktrees/rs002`, rebased onto `main` @ `2bccb8d7`.
+  Nothing pushed, no PR yet — the plan is one PR, opened **draft** once the
+  code waves are in, flipped to ready at the end.
+- **Gate DB is the FRESH one: `postgresql://postgres@127.0.0.1:54612/seazn_rs002v`**
+  (`DATABASE_SSL=disable`). The older `:54669/seazn_rs002` has accumulated orgs
+  and times out `org-posts-digest` — see the sweep-suite note under wave 2.
+- Placement service (needed or `schedule-build-honours-locks` shows 4 false
+  reds): `PLACEMENT_SERVICE_HOST=localhost:50805`,
+  `PLACEMENT_SERVICE_SECRET=local-rs002-secret`. Started via
+  `seazn-env up --label rs002 --placement`. **Tear it down at session end** —
+  a stale placement service makes the NEXT session's run green against code
+  that has changed.
+- Waves: **W1 CLOSED**, **W2 CLOSED**, **W3 IN FLIGHT** (`materialise`), W4 and
+  W5 TODO.
+  - W3 = the four materialisation gaps: name+dob get-or-create for player rows
+    with no `user_id`, `consent.public_name=true` on NEW persons only,
+    `registration_players.person_id` write-back, and the missing `pair` branch.
+  - W4 = `registration-submit.ts`: `submitRegistrationGroup` + `joinTeamEntry`.
+    The long pole — capacity row-lock with a real two-writer race test, GDPR
+    privacy consent (deleted with `submitRegistration`, nothing fails without
+    it today), currency snapshot, waitlisted entries never charged,
+    `registration_players.user_id` set for the submitter's own row.
+  - W5 = `registration-approval.ts`: approve/reject/withdraw/promote, plus
+    `groupByRef` and `listRegistrations` cross-division filters.
+- **Every wave runs implementer → reviewer → gaps → implementer, and the main
+  thread reruns the gate itself.** Both review rounds so far found real
+  defects the implementer's own green run did not: wave 1 a fourth cart-money
+  hazard plus two atomicity blockers, wave 2 a tautological test.
+- **Three implementers have stalled the same way**: they background their own
+  vitest run and return `completed` with "waiting for the monitor
+  notification" and no counts. `ListAgents` says `running`/`completed` and
+  cannot see it. The tell is a final message with no JSON counts and no commit
+  hashes; the liveness probe is transcript byte growth over ~45s combined with
+  `pgrep -fl vitest` (flat AND no vitest = stuck). Two also wrote their first
+  edits into the MAIN checkout; both recovered, main verified clean.
+
+
+
 Worktree `.claude/worktrees/rs002`, DB label `rs002`. Baseline before any edit:
 the four registration suites are **89/89 green** on `main` @ `51ab77a8`
 (`registrations.test.ts`, `registrations-intake-gate.test.ts`,
