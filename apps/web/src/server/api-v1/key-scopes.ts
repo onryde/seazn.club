@@ -195,6 +195,17 @@ const RULES: RouteRule[] = [
   { method: "GET", path: "/persons/:id/stats", scope: "read" },
   { method: "GET", path: "/participants/export", scope: "read" },
 
+  // venues & courts (D5/P8, org-wide facility data — no money/PII reason to
+  // exclude keys the way sponsors is; plain read/manage like clubs/officials)
+  { method: "GET", path: "/orgs/:id/venues", scope: "read" },
+  { method: "POST", path: "/orgs/:id/venues", scope: "manage" },
+  { method: "PATCH", path: "/orgs/:id/venues/:venueId", scope: "manage" },
+  { method: "DELETE", path: "/orgs/:id/venues/:venueId", scope: "manage" },
+  { method: "POST", path: "/orgs/:id/venues/:venueId/courts", scope: "manage" },
+  { method: "PATCH", path: "/orgs/:id/courts/:courtId", scope: "manage" },
+  { method: "DELETE", path: "/orgs/:id/courts/:courtId", scope: "manage" },
+  { method: "PUT", path: "/orgs/:id/courts/:courtId/calendar", scope: "manage" },
+
   // pools / stages
   { method: "POST", path: "/pools/:id/clear-entrants", scope: "manage", pin: "pool" },
   { method: "DELETE", path: "/stages/:id", scope: "manage", pin: "stage" },

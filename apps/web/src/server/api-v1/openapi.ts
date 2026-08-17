@@ -151,6 +151,17 @@ export const ROUTES: RouteSpec[] = [
   { path: "/orgs/{id}/sponsor-orders", method: "post", summary: "Start a package checkout — pending order + Connect destination-charge session + invoice email; 409 when the org isn't Connect-onboarded", tag: "sponsors", request: S.StartSponsorCheckout, response: S.SponsorCheckoutStarted, status: 201, errors: [402, 409, 422] },
   { path: "/orgs/{id}/sponsor-orders/{orderId}/refund", method: "post", summary: "Full refund of a paid order — transfer reversed, platform fee returned, placement deactivated", tag: "sponsors", response: S.SponsorOrder, errors: [422] },
   { path: "/orgs/{id}/sponsor-orders/{orderId}/evidence", method: "get", summary: "Dispute evidence pack as a printable HTML attachment — order record, receipt reconstruction, placement delivery proof, activity log (session console, not key-accessible)", tag: "sponsors", errors: [404] },
+  // Venues & courts (D5/P8): entities replacing the free-text venue/court_label
+  // fields — no consumer switch yet (fixtures.court_id has zero readers this
+  // session; court_label keeps working untouched).
+  { path: "/orgs/{id}/venues", method: "get", summary: "List venues with their courts nested, each court carrying its full weekly-hours/exception calendar — there is no separate GET for a court or its calendar", tag: "venues", response: z.array(S.VenueWithCourts) },
+  { path: "/orgs/{id}/venues", method: "post", summary: "Create a venue", tag: "venues", request: S.CreateVenue, response: S.Venue, status: 201 },
+  { path: "/orgs/{id}/venues/{venueId}", method: "patch", summary: "Update a venue", tag: "venues", request: S.PatchVenue, response: S.Venue, errors: [404] },
+  { path: "/orgs/{id}/venues/{venueId}", method: "delete", summary: "Delete a venue — 409 VENUE_NOT_EMPTY while it still has courts (delete those first, no cascade)", tag: "venues", errors: [404, 409] },
+  { path: "/orgs/{id}/venues/{venueId}/courts", method: "post", summary: "Add a court to a venue. Tags are free-form org-scoped slugs (no global registry) — trimmed, lowercased and deduped on write", tag: "venues", request: S.CreateCourt, response: S.Court, status: 201, errors: [404] },
+  { path: "/orgs/{id}/courts/{courtId}", method: "patch", summary: "Update a court (name, sort, tags)", tag: "venues", request: S.PatchCourt, response: S.Court, errors: [404] },
+  { path: "/orgs/{id}/courts/{courtId}", method: "delete", summary: "Delete a court — 409 COURT_IN_USE while any fixture references it (reassign the fixture's court first, no cascade)", tag: "venues", errors: [404, 409] },
+  { path: "/orgs/{id}/courts/{courtId}/calendar", method: "put", summary: "Replace a court's weekly hours + exceptions in one write — full replace, no per-row PATCH surface. An exception date always wins over that weekday's hours (closed = no windows). 422 COURT_HOURS_OVERLAP when two ranges on the same weekday overlap", tag: "venues", request: S.PutCourtCalendar, response: S.CourtCalendar, errors: [404, 422] },
   // Public (no auth, cacheable, consent-filtered)
   { path: "/public/orgs/{orgSlug}/competitions/{slug}", method: "get", summary: "Public competition: description + divisions", tag: "public", public: true },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/schedule", method: "get", summary: "Public schedule", tag: "public", public: true },
@@ -602,7 +613,7 @@ export function buildOpenApiDocument(
     { name: "persons" }, { name: "stages" }, { name: "fixtures" },
     { name: "scoring" }, { name: "scheduling" }, { name: "scorers" },
     { name: "device-links" }, { name: "api-keys" }, { name: "registration" },
-    { name: "clubs" }, { name: "officials" }, { name: "sponsors" }, { name: "history" },
+    { name: "clubs" }, { name: "officials" }, { name: "sponsors" }, { name: "venues" }, { name: "history" },
     { name: "exports" }, { name: "stats" }, { name: "discipline" }, { name: "news" },
     { name: "public" },
   ].filter((t) => usedTags.has(t.name));

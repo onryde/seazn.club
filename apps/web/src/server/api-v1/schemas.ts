@@ -3391,4 +3391,79 @@ export const MergeLog = z.object({
     }),
   ),
 });
+
+// Venues & courts (D5/P8) -----------------------------------------------------
+// Runtime validation lives in usecases/venues.ts (the actual parseBody
+// schemas the routes use); these mirror that shape for OpenAPI generation
+// only, same split as the Sponsor CRM group above.
+
+export const CourtHoursRangeS = z.object({
+  weekday: z.number().int().min(0).max(6),
+  open_min: z.number().int().min(0).max(1440),
+  close_min: z.number().int().min(0).max(1440),
+});
+
+export const CourtExceptionS = z.object({
+  date: z.string(),
+  closed: z.boolean(),
+  open_min: z.number().int().nullable(),
+  close_min: z.number().int().nullable(),
+});
+
+/** Plain court row — the create/patch response shape. */
+export const Court = z.object({
+  id: Uuid,
+  venue_id: Uuid,
+  name: z.string(),
+  sort: z.number().int(),
+  tags: z.array(z.string()),
+  created_at: z.string(),
+});
+
+/** A court nested under a venue in the list response, its full calendar
+ *  embedded — there is no separate GET for a court or its calendar. */
+export const CourtWithCalendar = Court.extend({
+  hours: z.array(CourtHoursRangeS),
+  exceptions: z.array(CourtExceptionS),
+});
+
+/** Plain venue row — the create/patch response shape. */
+export const Venue = z.object({
+  id: Uuid,
+  name: z.string(),
+  address: z.string().nullable(),
+  sort: z.number().int(),
+  created_at: z.string(),
+});
+
+export const VenueWithCourts = Venue.extend({
+  courts: z.array(CourtWithCalendar),
+});
+
+export const CreateVenue = z.object({
+  name: z.string().min(1).max(200),
+  address: z.string().max(500).nullish(),
+  sort: z.number().int().default(0),
+});
+
+export const PatchVenue = CreateVenue.partial();
+
+export const CreateCourt = z.object({
+  name: z.string().min(1).max(200),
+  sort: z.number().int().default(0),
+  tags: z.array(z.string().min(1).max(40)).max(50).default([]),
+});
+
+export const PatchCourt = CreateCourt.partial();
+
+export const PutCourtCalendar = z.object({
+  hours: z.array(CourtHoursRangeS).max(200).default([]),
+  exceptions: z.array(CourtExceptionS).max(500).default([]),
+});
+
+export const CourtCalendar = z.object({
+  court_id: Uuid,
+  hours: z.array(CourtHoursRangeS),
+  exceptions: z.array(CourtExceptionS),
+});
 export type MergeLog = z.infer<typeof MergeLog>;
