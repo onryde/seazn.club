@@ -12,6 +12,7 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { patchFixture } from "../fixtures";
 import { putScheduleSettings } from "../schedule";
+import { createVenue, createCourt } from "../venues";
 import { PutScheduleSettings } from "@/server/api-v1/schemas";
 import { undoDivision } from "../history";
 import { shiftDivisionSchedule, divisionScheduleReport } from "../schedule-plus";
@@ -97,13 +98,15 @@ describe.skipIf(!HAS_DB)("scheduling constraints v2 (Jul3/04)", () => {
   it("bulk-shift +15m moves all in scope, skips locked, and is undoable (PROMPT-23)", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth);
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
     await patchFixture(auth, fixtures[0]!.id, {
       scheduled_at: at(0),
-      court_label: "C1",
+      court_id: court.id,
     });
     await patchFixture(auth, fixtures[1]!.id, {
       scheduled_at: at(30),
-      court_label: "C1",
+      court_id: court.id,
     });
     await patchFixture(auth, fixtures[1]!.id, { schedule_locked: true });
 
@@ -132,13 +135,15 @@ describe.skipIf(!HAS_DB)("scheduling constraints v2 (Jul3/04)", () => {
       (f: { home_entrant_id: string | null; away_entrant_id: string | null }) =>
         f.home_entrant_id === entrants[0]!.id || f.away_entrant_id === entrants[0]!.id,
     );
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
     await patchFixture(auth, aGames[0]!.id, {
       scheduled_at: at(0),
-      court_label: "C1",
+      court_id: court.id,
     });
     await patchFixture(auth, aGames[1]!.id, {
       scheduled_at: at(300),
-      court_label: "C1",
+      court_id: court.id,
     });
     const report = await divisionScheduleReport(auth, division.id);
     expect(report.worst[0]).toMatchObject({
@@ -155,12 +160,14 @@ describe.skipIf(!HAS_DB)("scheduling constraints v2 (Jul3/04)", () => {
   it("constraint fields on schedule-settings are open to Community (#382)", async () => {
     const { auth: freeAuth } = await seedOrg("community");
     const { division: freeDiv } = await seedDivision(freeAuth);
+    const venue = await createVenue(freeAuth, { name: "Main", sort: 0 });
+    const court = await createCourt(freeAuth, venue.id, { name: "Court 1", sort: 0, tags: [] });
     const saved = await putScheduleSettings(
       freeAuth,
       freeDiv.id,
       PutScheduleSettings.parse({
         config: {
-          courts: ["Court 1"],
+          courts: [court.id],
           constraints: { crossPersonClash: "hard" },
         },
         tz: "UTC",
