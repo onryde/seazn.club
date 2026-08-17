@@ -283,10 +283,14 @@ function toDateStr(d: string | Date): string {
  *  the one read path everything hangs off. Three flat queries + in-memory
  *  assembly rather than N+1 per court.
  *
- *  Archived venues are hidden by default (`opts.includeArchived` — same
- *  parameter name/shape/default as `listDivisions`' opt-in). Courts stay
- *  unconditionally filtered to active-only regardless of this flag —
- *  toggling archived-court visibility here is out of this session's scope. */
+ *  Archived venues AND archived courts are hidden by default, both keyed
+ *  off the same `opts.includeArchived` flag (same parameter name/shape/
+ *  default as `listDivisions`' opt-in; `?archived=1` at the route). Owner
+ *  review finding 1 (2026-08-17): courts used to stay unconditionally
+ *  filtered to active-only regardless of this flag, which made an archived
+ *  court unreachable by any endpoint — there is still no separate GET for a
+ *  single court, so this list is the ONLY way the UI's archived-courts
+ *  toggle (amendment A5) can ever see one. */
 export async function listVenues(
   auth: AuthCtx,
   opts: { includeArchived?: boolean } = {},
@@ -298,7 +302,8 @@ export async function listVenues(
       order by sort, name, id`;
     const courts = await tx<CourtRow[]>`
       select ${tx(COURT_COLS)} from courts
-      where archived_at is null order by sort, name, id`;
+      ${opts.includeArchived ? tx`` : tx`where archived_at is null`}
+      order by sort, name, id`;
     const hours = await tx<(CourtHoursRange & { court_id: string })[]>`
       select court_id, weekday, open_min, close_min from court_hours
       order by court_id, weekday, open_min`;
@@ -370,10 +375,24 @@ export async function patchVenue(
 }
 
 /** Courts must be removed first (soft-block — design doc's "reassign
- *  first"): a venue with courts is 409 VENUE_NOT_EMPTY, never a cascade. */
+ *  first"): a venue with courts is 409 VENUE_NOT_EMPTY, never a cascade.
+ *
+ *  Owner review finding 3 (2026-08-17): the "has no courts" SELECT and the
+ *  DELETE are separate statements, so under READ COMMITTED (`withTenant`
+ *  sets no isolation level) a court created concurrently between the two
+ *  used to be silently cascade-deleted instead of blocking this call — the
+ *  same bug CLASS this repo already shipped once (the `uniqueSlug`
+ *  check-then-insert race). Closed in BOTH layers: `for update` below locks
+ *  the venue row so this call and a concurrent `createCourt` (which takes
+ *  the same lock on its own venue lookup) always serialize on it — whichever
+ *  commits first is the state the other one sees; and `courts.venue_id` is
+ *  now `on delete restrict` (V367), so if this application-level guard is
+ *  ever bypassed some other way the database refuses the delete loudly
+ *  instead of cascading a venue's courts away silently. */
 export async function deleteVenue(auth: AuthCtx, id: string): Promise<void> {
   await withTenant(auth.orgId, async (tx) => {
-    const [existing] = await tx<{ id: string }[]>`select id from venues where id = ${id}`;
+    const [existing] = await tx<{ id: string }[]>`
+      select id from venues where id = ${id} for update`;
     if (!existing) throw new HttpError(404, "venue not found", VENUE_NOT_FOUND_CODE);
     const [court] = await tx<{ id: string }[]>`
       select id from courts where venue_id = ${id} limit 1`;
@@ -423,7 +442,14 @@ export async function archiveVenue(auth: AuthCtx, id: string): Promise<VenueRow>
     const [existing] = await tx<VenueRow[]>`select ${tx(VENUE_COLS)} from venues where id = ${id}`;
     if (!existing) throw new HttpError(404, "venue not found", VENUE_NOT_FOUND_CODE);
     if (existing.archived_at !== null) return existing;
-    const courts = await tx<{ id: string }[]>`select id from courts where venue_id = ${id}`;
+    // `for update` (owner review finding 3, same locking treatment as
+    // `deleteVenue` above): dormant today — nothing writes
+    // `fixtures.court_id` yet this session — but closes half the protocol
+    // ahead of P9's writer, which will need to take a matching lock on a
+    // court row before inserting a fixture that references it for the pair
+    // to actually serialize.
+    const courts = await tx<{ id: string }[]>`
+      select id from courts where venue_id = ${id} for update`;
     if (await anyCourtHasUnplayedFixture(tx, courts.map((c) => c.id))) {
       throw new HttpError(
         409,
@@ -462,6 +488,16 @@ export async function unarchiveVenue(auth: AuthCtx, id: string): Promise<VenueRo
   return row;
 }
 
+/** Owner review finding 3: `for update` on the venue lookup is the other
+ *  half of `deleteVenue`'s lock — the two calls contend for the same venue
+ *  row, so a delete in flight is waited out (and re-checked, not assumed)
+ *  instead of a court landing under a venue that just disappeared.
+ *
+ *  Owner review finding 2: a unique violation on
+ *  `courts_venue_name_active_idx` (a duplicate active name in this venue)
+ *  used to fall through to a raw 500 — caught here the same way
+ *  `unarchiveCourt` already catches its own instance of the identical
+ *  constraint. */
 export async function createCourt(
   auth: AuthCtx,
   venueId: string,
@@ -469,18 +505,34 @@ export async function createCourt(
 ): Promise<CourtRow> {
   const tags = normalizeTags(input.tags);
   const row = await withTenant(auth.orgId, async (tx) => {
-    const [venue] = await tx<{ id: string }[]>`select id from venues where id = ${venueId}`;
+    const [venue] = await tx<{ id: string }[]>`
+      select id from venues where id = ${venueId} for update`;
     if (!venue) throw new HttpError(404, "venue not found", VENUE_NOT_FOUND_CODE);
-    const [c] = await tx<CourtRow[]>`
-      insert into courts (venue_id, org_id, name, sort, tags)
-      values (${venueId}, ${auth.orgId}, ${input.name}, ${input.sort}, ${tx.array(tags)})
-      returning ${tx(COURT_COLS)}`;
-    return c!;
+    try {
+      const [c] = await tx<CourtRow[]>`
+        insert into courts (venue_id, org_id, name, sort, tags)
+        values (${venueId}, ${auth.orgId}, ${input.name}, ${input.sort}, ${tx.array(tags)})
+        returning ${tx(COURT_COLS)}`;
+      return c!;
+    } catch (err) {
+      if (err instanceof Error && "code" in err && err.code === "23505") {
+        throw new HttpError(
+          409,
+          `An active court is already named "${input.name}" in this venue`,
+          COURT_NAME_TAKEN_CODE,
+        );
+      }
+      throw err;
+    }
   });
   log.info({ orgId: auth.orgId, courtId: row.id, venueId }, "court_created");
   return row;
 }
 
+/** Owner review finding 2: same `COURT_NAME_TAKEN` catch as `createCourt`
+ *  above and `unarchiveCourt` below — a rename onto another active court's
+ *  name hits the identical `courts_venue_name_active_idx` violation and
+ *  used to fall through to a raw 500. */
 export async function patchCourt(
   auth: AuthCtx,
   id: string,
@@ -493,9 +545,21 @@ export async function patchCourt(
     ...(patch.tags ? { tags: sql.array(normalizeTags(patch.tags)) } : {}),
   };
   const row = await withTenant(auth.orgId, async (tx) => {
-    const [c] = await tx<CourtRow[]>`
-      update courts set ${tx(dbPatch as never, ...(cols as never[]))}
-      where id = ${id} returning ${tx(COURT_COLS)}`;
+    let c: CourtRow | undefined;
+    try {
+      [c] = await tx<CourtRow[]>`
+        update courts set ${tx(dbPatch as never, ...(cols as never[]))}
+        where id = ${id} returning ${tx(COURT_COLS)}`;
+    } catch (err) {
+      if (err instanceof Error && "code" in err && err.code === "23505") {
+        throw new HttpError(
+          409,
+          `An active court is already named "${patch.name ?? ""}" in this venue`,
+          COURT_NAME_TAKEN_CODE,
+        );
+      }
+      throw err;
+    }
     if (!c) throw new HttpError(404, "court not found", COURT_NOT_FOUND_CODE);
     return c;
   });
@@ -539,7 +603,11 @@ export async function deleteCourt(auth: AuthCtx, id: string): Promise<void> {
  */
 export async function archiveCourt(auth: AuthCtx, id: string): Promise<CourtRow> {
   const row = await withTenant(auth.orgId, async (tx) => {
-    const [existing] = await tx<CourtRow[]>`select ${tx(COURT_COLS)} from courts where id = ${id}`;
+    // `for update` (owner review finding 3, same locking treatment as
+    // `deleteVenue`/`archiveVenue`): dormant today for the same reason —
+    // see `archiveVenue`'s comment on its own courts lookup.
+    const [existing] = await tx<CourtRow[]>`
+      select ${tx(COURT_COLS)} from courts where id = ${id} for update`;
     if (!existing) throw new HttpError(404, "court not found", COURT_NOT_FOUND_CODE);
     if (existing.archived_at !== null) return existing;
     if (await anyCourtHasUnplayedFixture(tx, [id])) {

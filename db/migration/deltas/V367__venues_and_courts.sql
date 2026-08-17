@@ -64,7 +64,15 @@ grant select, insert, update, delete on venues to app_user;
 
 -- Courts: org_id denormalized (see header) and pinned to its venue's org_id
 -- by the composite FK below — an org_id that disagrees with the parent venue
--- cannot be inserted.
+-- cannot be inserted. `on delete restrict` (owner review finding 3,
+-- 2026-08-17 — this shipped with `on delete cascade` initially): deleteVenue's
+-- "has no courts" check-then-act is closed with a `for update` lock at the
+-- application layer (usecases/venues.ts), so this should never fire in the
+-- normal path — this is the backstop if that guard is ever bypassed some
+-- other way, so a venue's courts are refused loudly rather than silently
+-- cascaded away. A caller that bulk-deletes an organization (scripts, test
+-- cleanup) must now delete its courts before the organization itself, same
+-- as fixtures.court_id below.
 create table courts (
   id          uuid primary key default gen_random_uuid(),
   venue_id    uuid not null,
@@ -75,13 +83,17 @@ create table courts (
   archived_at timestamptz,
   created_at  timestamptz not null default now(),
   unique (id, org_id),
-  foreign key (venue_id, org_id) references venues (id, org_id) on delete cascade
+  foreign key (venue_id, org_id) references venues (id, org_id) on delete restrict
 );
 create index courts_venue_idx on courts(venue_id);
 create index courts_org_idx   on courts(org_id);
-create index courts_active_idx on courts(venue_id) where archived_at is null;
 -- Name uniqueness only among ACTIVE courts — archiving frees the name for
 -- reuse (owner ruling; V261:9 is the precedent for this partial-index form).
+-- No separate `(venue_id) where archived_at is null` index (owner review
+-- finding 5, 2026-08-17 — this shipped as `courts_active_idx` initially,
+-- dropped as redundant): it was a strict prefix of this index under the
+-- identical partial predicate, so any plan that could have used it can use
+-- this index's leading column instead.
 create unique index courts_venue_name_active_idx on courts(venue_id, name)
   where archived_at is null;
 -- Tag containment filter (P9: candidate courts for a stage = tags ⊇
@@ -154,6 +166,14 @@ grant select, insert, update, delete on court_exceptions to app_user;
 -- deleteCourt is the friendly message; this is the guarantee that holds
 -- even if a future call site forgets that check.
 --
+-- Composite `(court_id, org_id) references courts (id, org_id)` (owner
+-- review finding 4, 2026-08-17 — this shipped as the single-column
+-- `references courts(id)` initially), matching venues/court_hours/
+-- court_exceptions' own composite FKs (see header) so a cross-org court_id
+-- is unrepresentable in DDL, not just by convention, once P9 wires a writer.
+-- `fixtures.org_id` already exists (pre-dates this migration), so this costs
+-- nothing to add now while the column is still unwritten.
+--
 -- `deferrable initially deferred`: lets an explicit multi-statement
 -- transaction fix up ordering before COMMIT (e.g. delete the fixture, then
 -- the court, then commit) instead of failing on the first statement. A
@@ -169,10 +189,14 @@ grant select, insert, update, delete on court_exceptions to app_user;
 -- to still violate the restrict even deferred — cross-path cascade order
 -- within one statement is not something deferral controls. A caller that
 -- bulk-deletes an organization (scripts, test cleanup) must delete
--- dependent history (here: competitions, which cascades fixtures) before
--- the organization itself; see venues.test.ts's `afterAll` for the pattern.
-alter table fixtures add column court_id uuid
-  references courts(id) on delete restrict deferrable initially deferred;
+-- dependent history (here: competitions, which cascades fixtures, AND
+-- courts directly — courts.venue_id is also `on delete restrict` now, see
+-- above) before the organization itself; see venues.test.ts's `afterAll`
+-- for the pattern.
+alter table fixtures add column court_id uuid;
+alter table fixtures
+  add foreign key (court_id, org_id) references courts (id, org_id)
+  on delete restrict deferrable initially deferred;
 create index fixtures_court_idx on fixtures(court_id);
 
 -- Tag-scoped court requirement per division/stage (P9 consumes: candidate
