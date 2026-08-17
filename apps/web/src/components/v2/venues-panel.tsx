@@ -394,10 +394,16 @@ function VenueCard({
     if (idx < 0 || swapWith < 0 || swapWith >= venue.courts.length) return;
     const a = venue.courts[idx]!;
     const b = venue.courts[swapWith]!;
+    // Target sort = the two ARRAY POSITIONS being swapped, not each other's
+    // existing `sort` value: new courts default to sort 0, so two untouched
+    // courts have equal sort and swapping their values would be a no-op —
+    // clicking "up" and seeing nothing move. Positions are always distinct
+    // and match `venue.courts`' own display order (server: `order by sort,
+    // name, id`), so this also self-heals any earlier ties as it goes.
     run(async () => {
       await Promise.all([
-        apiV1(`/api/v1/orgs/${orgId}/courts/${a.id}`, { method: "PATCH", json: { sort: b.sort } }),
-        apiV1(`/api/v1/orgs/${orgId}/courts/${b.id}`, { method: "PATCH", json: { sort: a.sort } }),
+        apiV1(`/api/v1/orgs/${orgId}/courts/${a.id}`, { method: "PATCH", json: { sort: swapWith } }),
+        apiV1(`/api/v1/orgs/${orgId}/courts/${b.id}`, { method: "PATCH", json: { sort: idx } }),
       ]);
     });
   };
