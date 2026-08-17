@@ -13,7 +13,7 @@
 // The surviving revocation path is a staff `org_entitlement_overrides` deny
 // (abuse, chargeback risk), and that is what the RED cases here use.
 //
-// RS001 registration demolition (#588): the SUBMIT-side 402 gate this file
+// RS001 registration demolition: the SUBMIT-side 402 gate this file
 // used to pin died with `submitRegistration` — see the comment inside the
 // describe block below. Only the read-side gate has coverage here now.
 //
@@ -244,7 +244,7 @@ describe.skipIf(!HAS_DB)("revoked card intake gate (P2-10)", () => {
 
   // "rejects submit with 402 when registration.paid is revoked" and "lets a
   // downgraded org's card submit through — no plan gate left" DELETED (RS001
-  // registration demolition, #588): both pinned `submitRegistration`'s own
+  // registration demolition): both pinned `submitRegistration`'s own
   // 402 entitlement gate at submit time. That function is deleted — the
   // public submit route stays closed until RS002/RS003 ship the new
   // group-shaped flow — and no surviving usecase enforces `registration.paid`
@@ -278,6 +278,6 @@ describe.skipIf(!HAS_DB)("revoked card intake gate (P2-10)", () => {
     expect(d.closed_reason).toBeNull();
     // The trailing "an offline submit still goes through" assertion this test
     // used to carry was submitRegistration's own pass-through — deleted with
-    // it (#588); the gate riding the card method is otherwise unchanged.
+    // it; the gate riding the card method is otherwise unchanged.
   });
 });

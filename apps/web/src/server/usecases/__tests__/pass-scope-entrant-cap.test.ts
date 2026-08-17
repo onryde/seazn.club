@@ -8,7 +8,7 @@
 // `ctx.competition_id` for the paid-intake gate, so an Event Pass never
 // raised the cap on the competition it was bought for.
 //
-// `submitRegistration` is deleted (RS001 registration demolition, #588; the
+// `submitRegistration` is deleted (RS001 registration demolition; the
 // public submit route stays closed until RS002/RS003). The SAME scoping
 // concern survives on a still-wired sibling call site instead:
 // usecases/entrants.ts `createEntrants` resolves the identical

@@ -92,7 +92,7 @@ async function rig(owner: AuthCtx, capacity: number | null) {
 }
 
 /**
- * `submitRegistration` is deleted (RS001 registration demolition, #588) — see
+ * `submitRegistration` is deleted (RS001 registration demolition) — see
  * registrations.test.ts's own `seedRegistration` doc comment for the full
  * rationale. Kept as a SEPARATE, minimal helper here (not imported from that
  * suite) per this file's own header: neither suite may destabilise the

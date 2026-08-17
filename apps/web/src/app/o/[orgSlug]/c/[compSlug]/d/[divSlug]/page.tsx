@@ -221,8 +221,8 @@ export default async function DivisionPage({
               <MonitorPlay className="h-4 w-4" strokeWidth={1.75} />
               <span className="hidden sm:inline">{t(dict, "action.slideshow")} ↗</span>
             </Link>
-            {/* Division-level registration nav link removed (RS001 demolition,
-                #588) — competition-level Registration hub replaces it (RS004). */}
+            {/* Division-level registration nav link removed (RS001 demolition)
+                — competition-level Registration hub replaces it (RS004). */}
             {competition.visibility !== "private" && (
               // G9: straight to this division's public page.
               <a

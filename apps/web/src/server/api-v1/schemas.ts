@@ -1802,7 +1802,7 @@ export const PublicRegistrationInfo = z.object({
 
 // The old single-entry `PublicRegisterRequest`/`PublicRegisterResponse` pair
 // (and the POST route that used them) was deleted in the RS001 registration
-// demolition (#588) — V363/V364 replaced the one-row-per-entry shape with
+// demolition — V363/V364 replaced the one-row-per-entry shape with
 // `registration_groups` (cart) + `registration_players` (per-player rows),
 // which this schema had no way to express. RS003 defines the new group-shaped
 // request/response (design `2026-08-16-registration-redesign-design.md` §4).

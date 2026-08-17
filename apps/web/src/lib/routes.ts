@@ -35,7 +35,7 @@ export const routes = {
   divisionSchedule: (org: Slug, comp: Slug, div: Slug) =>
     `/o/${org}/c/${comp}/d/${div}/schedule`,
   // divisionRegistrations (division-level registration route) removed in the
-  // RS001 registration demolition (#588) — the org IA moves to a
+  // RS001 registration demolition — the org IA moves to a
   // competition-level Registration hub (design section 5); RS004 adds
   // `competitionRegistration` here.
   /** Fixtures are addressed by per-division ordinal — human-quotable ("match 14"). */

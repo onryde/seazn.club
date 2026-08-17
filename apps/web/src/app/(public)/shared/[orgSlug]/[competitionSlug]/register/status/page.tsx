@@ -1,5 +1,5 @@
 export const dynamic = "force-dynamic";
-// Registration status page — CLOSED (RS001 registration demolition, #588).
+// Registration status page — CLOSED (RS001 registration demolition).
 // `publicRegistrationStatus`/`reconcileRegistration` read the old per-entry
 // payment/access-token columns, which V364 moved to `registration_groups`;
 // nothing can submit a registration right now (the old endpoint is deleted,

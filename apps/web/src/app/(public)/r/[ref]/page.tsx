@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 // Public registration status by reference — CLOSED (RS001 registration
-// demolition, #588). `publicRegistrationStatusByRef`/`reconcileRegistrationBySession`
+// demolition). `publicRegistrationStatusByRef`/`reconcileRegistrationBySession`
 // read `ref_code`/`access_token_hash` off `registrations`, which V364 moved
 // to `registration_groups`; nothing can submit a registration right now (the
 // old endpoint is deleted, the new one lands in RS003), so no ref can

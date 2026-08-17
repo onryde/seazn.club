@@ -1,5 +1,5 @@
 export const dynamic = "force-dynamic";
-// Public register flow — CLOSED (RS001 registration demolition, #588). The
+// Public register flow — CLOSED (RS001 registration demolition). The
 // old single-entry form + endpoint are gone; the new cart stepper (design
 // doc `2026-08-16-registration-redesign-design.md` §4) lands in RS006. Until
 // then this route stays live but shows the existing "not open" state

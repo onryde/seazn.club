@@ -52,7 +52,7 @@ async function makeLoginUser(): Promise<string> {
 /**
  * Direct V363/V364 fixture: the group → entry → player-row chain
  * `submitRegistration` used to write in one call (deleted, RS001 demolition
- * #588). `userId` lands on the ONE player row, mimicking what RS002/RS003
+ *). `userId` lands on the ONE player row, mimicking what RS002/RS003
  * (submit) or RS008 (claim) will eventually stamp there — never the group's
  * own `user_id`, which belongs to the contact, not the player.
  */

@@ -290,7 +290,7 @@ async function loadWithGroup(regId: string): Promise<RegistrationWithGroupRow> {
 }
 
 /**
- * `submitRegistration` is deleted (RS001 registration demolition, #588) — the
+ * `submitRegistration` is deleted (RS001 registration demolition) — the
  * public submit route stays closed until RS002/RS003 ship the new
  * group-shaped cart flow (design §4). Every usecase exercised BELOW submit
  * (confirm, refund, waitlist, dispute, sweep, export, .ics…) is untouched and
@@ -748,7 +748,7 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
   it("capacity: withdrawal auto-promotes the oldest waitlisted; auto-refund pre-lock", async () => {
     // Overflow-at-submission (waitlisting a full division) was
     // `submitRegistration`'s own capacity decision — deleted with it (RS001
-    // demolition, #588; RS002/RS003 own re-testing it against the new submit
+    // demolition; RS002/RS003 own re-testing it against the new submit
     // flow). What this test actually pins is auto-promotion + auto-refund on
     // withdrawal — both still-live behaviour of `withdrawCore` — so the
     // waitlisted row is seeded directly in that state.
@@ -840,7 +840,7 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
   });
 
   // "eligibility gate: U16 rejects an adult; a minor needs guardian consent"
-  // DELETED (RS001 demolition, #588): the whole test drove
+  // DELETED (RS001 demolition): the whole test drove
   // `submitRegistration`'s own eligibility-gate enforcement at submit time —
   // no surviving usecase performs that check. `eligibilityIssues` (the pure
   // rule function it called) keeps its own coverage above, unchanged
@@ -848,7 +848,7 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
   // gate against the new submit flow.
 
   // "rejects submissions without privacy consent (GDPR, spec 2026-07-14)"
-  // DELETED (RS001 demolition, #588): submitRegistration's own consent gate;
+  // DELETED (RS001 demolition): submitRegistration's own consent gate;
   // no surviving usecase enforces it. RS002/RS003 own it.
 
   it("team-kind confirm materialises an entrant WITHOUT a person when the roster is empty", async () => {
@@ -876,7 +876,7 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     });
     // The bounded-answers VALIDATION itself (required field, off-list value
     // rejected) was submitRegistration's own integration of `validateAnswers`
-    // — deleted with it (#588); `validateAnswers` keeps its own pure coverage
+    // — deleted with it; `validateAnswers` keeps its own pure coverage
     // above, unchanged. What survives here is that confirmRegistration
     // materialises a team WITHOUT a person when the roster is empty — seeded
     // directly, kept answers already validated/trimmed.
@@ -897,7 +897,7 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     const owner = asOwner(orgId, ownerId);
     const { competition, division } = await rig(owner);
     // The closed-window → submission-REJECTED enforcement lived inside
-    // `submitRegistration` — deleted with it (RS001 demolition, #588).
+    // `submitRegistration` — deleted with it (RS001 demolition).
     // `publicRegistrationInfo`'s own window computation is independent of
     // submit and still enforced below (closed_reason/open).
     await putRegistrationSettings(owner, division.id, {
@@ -1041,7 +1041,7 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
 
   it("/r/[ref] resolves a checksummed SZ ref, dashes/case optional; a typo 404s on checksum", async () => {
     // Ref MINTING was submitRegistration's own call to `generateRefCode()`
-    // (RS001 demolition, #588) — the generator itself is a still-live shared
+    // (RS001 demolition) — the generator itself is a still-live shared
     // primitive (@/lib/ref-code, reused verbatim by RS002/RS003), so it mints
     // the seed's ref here too. What this test actually pins is regByRef's
     // RESOLUTION (checksum, dash/case-insensitivity, typo → 404) — unchanged.
@@ -1142,7 +1142,7 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
       refund_lock_at: null,
     });
     // The eligibility GATE (age/guardian-consent enforcement at submit) was
-    // submitRegistration's own job — deleted with it (#588). This test's
+    // submitRegistration's own job — deleted with it. This test's
     // subject is the name-masking on /r/[ref], independent of that gate, so
     // an eligible player is seeded directly with its dob/guardian on record.
     const { registration } = await seedRegistration(competition.id, division.id, settings, {
@@ -1356,7 +1356,7 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
   it("snapshots the method, opens a 48h window, returns a checkout URL", async () => {
     const { competition, division, settings } = await stripeRig();
     // submitRegistration used to mint the checkout session immediately at
-    // submit (RS001 demolition, #588: deleted, no surviving "submit" call).
+    // submit (RS001 demolition: deleted, no surviving "submit" call).
     // `createRegistrationCheckout` itself is unchanged and still reachable
     // through the surviving `resumeRegistrationCheckout` — seed the pending
     // stripe entry, then resume it to mint the SAME session.
@@ -1475,7 +1475,7 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
   });
 
   // "a failed checkout mint keeps the registration (pay from status page)"
-  // DELETED (RS001 demolition, #588): this pinned submitRegistration's own
+  // DELETED (RS001 demolition): this pinned submitRegistration's own
   // swallow-checkout-errors-and-stay-pending behaviour. The surviving
   // `resumeRegistrationCheckout` does not swallow — a mint failure propagates
   // to its caller (the route decides retry UX) — so there is no equivalent
@@ -1501,7 +1501,7 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     const { orgId, orgSlug, competition, division, settings } = await stripeRig();
     await sql`update organizations set stripe_charges_enabled = false where id = ${orgId}`;
     // submitRegistration's own pre-flight charges_enabled check is gone
-    // (#588), but the surviving resumeRegistrationCheckout carries the SAME
+    //, but the surviving resumeRegistrationCheckout carries the SAME
     // guard (registrations.ts: "Payments are not set up for this organiser
     // yet") — seed the pending stripe entry and resume it to exercise it.
     const res = await seedRegistration(competition.id, division.id, settings);
@@ -1570,7 +1570,7 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     });
     const a = await seedRegistration(competition.id, division.id, settings);
     // Overflow-at-submission was submitRegistration's own capacity decision
-    // (#588) — B is seeded directly waitlisted; promotion is the SURVIVING
+    // — B is seeded directly waitlisted; promotion is the SURVIVING
     // behaviour this test actually pins.
     const b = await seedRegistration(competition.id, division.id, settings, {
       contactEmail: "b@test.local",
@@ -1611,7 +1611,7 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     const { competition, division, settings } = await stripeRig({ capacity: 1 });
     const a = await seedRegistration(competition.id, division.id, settings);
     // Overflow-at-submission was submitRegistration's own capacity decision
-    // (#588) — B is seeded directly waitlisted; the sweep's expire+promote
+    // — B is seeded directly waitlisted; the sweep's expire+promote
     // behaviour is the SURVIVING logic this test actually pins.
     const b = await seedRegistration(competition.id, division.id, settings, {
       contactEmail: "b@test.local",
@@ -1801,7 +1801,7 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
   });
 
   // "waitlisted card submits take no window and no payment" DELETED (RS001
-  // demolition, #588): purely pinned submitRegistration's own
+  // demolition): purely pinned submitRegistration's own
   // capacity-overflow → waitlisted decision at submit time (no checkout
   // minted for the overflow entry). No surviving usecase makes that
   // decision — seeding a row directly as "waitlisted" and asserting no
@@ -2090,7 +2090,7 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
 });
 
 // describe("per-registrant email locale (cycle 47)") DELETED (RS001
-// demolition, #588): both tests pinned submitRegistration's own
+// demolition): both tests pinned submitRegistration's own
 // locale-resolution branch — an explicit registrant pick vs falling back to
 // the org's default_locale — a decision made INSIDE the deleted function
 // with no surviving equivalent to seed against (a seed would just assert

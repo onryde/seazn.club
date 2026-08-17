@@ -5680,7 +5680,7 @@ async function configSnapshotSuite(admin: Session, adminEmail: string): Promise<
  *  view carries a 1-based position and the public register card shows the
  *  queue length behind a full division.
  *
- *  RS001 (registration demolition, #588) deleted the public submit endpoint
+ *  RS001 (registration demolition) deleted the public submit endpoint
  *  (`POST .../register`) this suite drove to build the queue, so every
  *  assertion downstream of a submission — the waitlist position, the "full —
  *  waitlist: N" copy — is gone with it; nothing can create a registration row
@@ -12698,12 +12698,12 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
   // person, the me/persons dedup) submitted through the same deleted public
   // endpoint, so none of it can run until RS006/RS007 restore an entry
   // point. This is a bigger loss than the other registration coverage this
-  // sweep removed: registration-user-link.test.ts's DB-backed
-  // session-capture/resolve-on-confirm tests were ALSO deleted (RS001 sweep,
-  // f43d4393), so unlike confirm/refund/waitlist this specific self-link/
-  // person-resolution flow currently has no unit-level equivalent either —
-  // flagging for whichever RS-session re-wires public submission, since it
-  // is not just a smoke-layer gap.
+  // sweep removed: registration-user-link.test.ts's DB-backed SESSION-CAPTURE
+  // tests went with `submitRegistration`, which owned the capture, and RS002/
+  // RS003 owe them back. The person-RESOLUTION half is still covered — those
+  // tests were restored against `registration_players.user_id`, so confirm
+  // still proves it links and dedupes a person. What has no equivalent here is
+  // the end-to-end path from a public submit to that link.
 
   // --- Free paths on a fresh community owner: device links 402, offline
   // entry fees allowed without Stripe ---

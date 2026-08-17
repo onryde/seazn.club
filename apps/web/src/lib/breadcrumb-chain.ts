@@ -127,7 +127,7 @@ export function buildCrumbs(args: {
   if (divTail === "schedule") {
     crumbs.push({ label: t("breadcrumb.schedule"), href: routes.divisionSchedule(org, comp, div) });
   }
-  // divTail === "registrations": route deleted (RS001 demolition, #588) — the
+  // divTail === "registrations": route deleted (RS001 demolition) — the
   // hub replaces it in RS004, competition-level not division-level.
   return crumbs;
 }

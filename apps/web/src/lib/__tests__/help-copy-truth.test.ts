@@ -2133,7 +2133,7 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     // …and every example it names must be a real caller, so the illustration is
     // not itself a falsehood.
     // "registrations" DROPPED from both this list and the article's own
-    // example sentence (RS001 registration demolition, #588):
+    // example sentence (RS001 registration demolition):
     // components/v2/registrations-panel.tsx is deleted along with the rest of
     // the old org-console registration UI, and nothing replaces it as a
     // freeze-checked caller until RS004/RS005/RS009 ship the new

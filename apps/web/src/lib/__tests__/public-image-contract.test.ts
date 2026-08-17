@@ -31,7 +31,7 @@ interface Case {
 
 const CASES: Case[] = [
   // register-form.tsx (org logo) and the register/page.tsx sponsor-logo call
-  // site were removed by the RS001 registration demolition (#588): the old
+  // site were removed by the RS001 registration demolition: the old
   // form is deleted outright, and the register page is now a minimal
   // closed-state shell with no sponsor masthead. RS006 owns the rebuilt
   // public stepper and reintroduces whatever image contracts it needs.

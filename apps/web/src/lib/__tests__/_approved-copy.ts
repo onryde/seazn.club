@@ -547,7 +547,7 @@ export const APPROVED_ADD_ONS_INVENTORY: string[] = [
   // product, not four screens. Re-read against `server/api-v1/auth.ts`
   // (requireResourceAuth -> requireOrgAuth) and the measured caller walk.
   //
-  // ROUND 8 (RS001 registration demolition, #588). Dropped "registrations"
+  // ROUND 8 (RS001 registration demolition). Dropped "registrations"
   // from the example list — the org-console "registrations panel" component
   // this word named is deleted along with the rest of the old org-console
   // registration UI (design

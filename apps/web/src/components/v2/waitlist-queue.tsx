@@ -6,7 +6,7 @@
 // untouched: Promote calls the existing confirm/waive endpoints.
 import { useMsg } from "@/components/i18n/dict-provider";
 
-// Local shape (RS001 demolition, #588): previously imported from the deleted
+// Local shape (RS001 demolition): previously imported from the deleted
 // registrations-panel.tsx. This component has no other caller left in the
 // tree after that deletion — kept, unwired, for RS005's Registrants tab.
 export interface Registration {

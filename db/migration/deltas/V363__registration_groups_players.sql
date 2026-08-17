@@ -34,7 +34,7 @@
 -- `organizations.currency` and the `REGISTRATION_CURRENCIES` allowlist CHECK
 -- as its own delta (design §2 addendum).
 --
--- RLS (RS001 demolition follow-up, #588): the first cut of this file created
+-- RLS (RS001 demolition follow-up): the first cut of this file created
 -- both tables with no RLS enabled, no tenant policy and no GRANT to
 -- `app_user` — every other tenant-scoped table gets this in the same
 -- migration that creates it (house convention, see V118 and V360's

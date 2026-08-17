@@ -129,7 +129,7 @@ export function isMinor(dobIso: string, now: Date): boolean {
  * The veto lives server-side so a forged request cannot reach the person
  * resolver; the schema's matching rule is only the useful error message.
  *
- * Orphaned by the RS001 registration demolition (#588) — its only caller,
+ * Orphaned by the RS001 registration demolition — its only caller,
  * `submitRegistration`, is deleted (the public submit route is gone until
  * RS003). Kept, with its schema coupling removed, because the #402 rule
  * itself is unchanged and RS002/RS003 need it verbatim for the new
@@ -526,7 +526,7 @@ function windowOpen(s: RegistrationSettingsRow, now: Date): boolean {
  * The tombstone clause is also what lets a merged duplicate release the
  * identity slot so the survivor can hold it.
  *
- * Restored to `materialise`'s call path (RS001 follow-up, #588): the account
+ * Restored to `materialise`'s call path (RS001 follow-up): the account
  * lives on `registration_players.user_id` — set for the submitter's own row
  * at submit (design §4 step 1) or at claim/join (design §2 item 4), never on
  * the group, whose contact is often a rep entering OTHER people's entries
@@ -553,7 +553,7 @@ export async function resolvePlayerPerson(
 }
 
 /**
- * Roster reads (RS001 registration demolition, #588): players now come from
+ * Roster reads (RS001 registration demolition): players now come from
  * `registration_players` (design §6) instead of the dropped `registrations.roster`
  * jsonb. `is_captain desc` orders a team's captain first — the closest
  * available analogue of the old "declared self" row, for callers that only
@@ -1008,7 +1008,7 @@ export async function publicRegistrationInfo(
 }
 
 // ---------------------------------------------------------------------------
-// Public: submit — REMOVED (RS001 registration demolition, #588)
+// Public: submit — REMOVED (RS001 registration demolition)
 // ---------------------------------------------------------------------------
 //
 // `submitRegistration` and its `SubmitResult` return shape inserted a single
@@ -1361,7 +1361,7 @@ export async function handleRegistrationDispute(
           currency: reg.currency ?? "gbp",
           refCode: reg.ref_code,
           recoveredCents: recovery.recoveredCents,
-          // divisionRegistrations route deleted (RS001 demolition, #588) —
+          // divisionRegistrations route deleted (RS001 demolition) —
           // point at the competition page for now; RS004's hub re-points
           // this at the new competition-level Registration hub.
           consoleUrl: fallbackOrigin() + routes.competition(ctx.org_slug, ctx.comp_slug),
@@ -2183,7 +2183,7 @@ export async function exportRegistrationsCsv(auth: AuthCtx, divisionId: string):
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
     // dob/gender/guardian_name/guardian_consent dropped from this export
-    // (RS001 registration demolition, #588): they moved off the entry onto
+    // (RS001 registration demolition): they moved off the entry onto
     // `registration_players` — one-to-many per entry, so there is no single
     // flat value left to print here without inventing a flattening rule.
     // RS005's Registrants tab CSV export owns the per-player-aware version.

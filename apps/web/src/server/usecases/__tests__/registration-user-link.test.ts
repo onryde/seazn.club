@@ -139,8 +139,8 @@ describe("deriveLinkUserId (#402 — the capture rule itself)", () => {
   });
 });
 
-// describe("registration session capture (#402)") DELETED (RS001 demolition,
-// #588): all 7 tests drove `submitRegistration`'s own capture of the
+// describe("registration session capture (#402)") DELETED (RS001 demolition):
+// all 7 tests drove `submitRegistration`'s own capture of the
 // session's user_id onto the row it inserted. The column moved too
 // (`registrations.user_id` → `registration_groups.user_id`, V364), but that
 // is secondary — the write only ever happened INSIDE submitRegistration,

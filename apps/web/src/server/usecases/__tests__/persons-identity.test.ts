@@ -74,7 +74,7 @@ async function seedOpenDivision(auth: AuthCtx): Promise<{
 
 /**
  * The real organiser confirm → `materialise` path. `submitRegistration` is
- * deleted (RS001 registration demolition, #588), so the INPUT (one cart, one
+ * deleted (RS001 registration demolition), so the INPUT (one cart, one
  * entry, one player row) is seeded directly in the V363/V364 shape — but the
  * OUTCOME under test is never hand-inserted: `confirmRegistration` runs for
  * real and the resulting `persons` rows are what every assertion below

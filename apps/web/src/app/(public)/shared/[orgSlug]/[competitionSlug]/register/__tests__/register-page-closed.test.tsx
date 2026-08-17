@@ -1,4 +1,4 @@
-// Register page — closed state (RS001 registration demolition, #588).
+// Register page — closed state (RS001 registration demolition).
 //
 // The old single-entry form + endpoint are deleted; this page now renders
 // the design's "registration intentionally down until RS006" state
