@@ -1661,10 +1661,12 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
       options: kindOptions,
       // Owner ruling (this task's own brief): never leave a silently
       // shortened list unexplained — a scorer expecting "bowled" and not
-      // finding it needs to know why. `SheetChoiceStep.hint`'s own doc
+      // finding it needs to know why. `SheetChoiceStep.hintKey`'s own doc
       // (types.ts) has the full reasoning for why this is a plain i18n key
-      // rather than SheetNumberStep's pre-resolved convention.
-      hint: freeHit ? "pad.cricket.sheet.wicket.kind.freeHitHint" : undefined,
+      // rather than SheetNumberStep's pre-resolved convention. (Field
+      // renamed from `hint` — R2b-cricket-over follow-up, hint-field
+      // naming pass, 2026-08-17.)
+      hintKey: freeHit ? "pad.cricket.sheet.wicket.kind.freeHitHint" : undefined,
     },
     {
       id: "out",
@@ -1834,25 +1836,31 @@ function inningsCloseSheet(): GuidedSheetSpec {
  * itself is the one new failure mode this reversal accepts — a bug there
  * could still emit a total that is higher than before, which passes the
  * guard while drifting wrong permanently with nothing to catch it; the
- * `hint` anchor below is the owner's chosen mitigation, not a fix.)
+ * `hintText` anchor below is the owner's chosen mitigation, not a fix.)
  *
- * `hint` on all three: the fold's CURRENT total as `${runs}/${wickets}` —
- * the exact notation `buildScorebug`'s own `halves[0].big` already uses, so
- * it needs no translation (numerals + "/" read identically on every locale)
- * and this function can stay `t`-free like every OTHER member here except
- * `scorebug`/`dock` (this file's header). Now load-bearing rather than
- * decorative: it is the only place the scorer sees what the delta above is
- * being added to. `hint` is baked once when this record is built (G4,
- * types.ts) and rendered VERBATIM by guided-sheet.tsx (never through `t()`,
- * that file's own doc on `SheetNumberStep.hint`) — it cannot react to a
- * scorer's still-in-progress stepper taps on ANY step (guided-sheet.tsx is
- * out of this wave's file grant, and `SheetNumberStep.hint` is a plain
- * `string`, not a function of the live edit value or of answers already
- * given earlier in the SAME wizard run). What ships instead: a correct,
- * always-fresh "before" anchor — rebuilt every `sheets(view)` call, per
- * `PadHostView`'s own "never stale" obligation — sitting directly above the
- * ALREADY-live editable field (task 2's own `renderNumberStep`). Flagged
- * here as a deliberate deviation, not a silent reinterpretation.
+ * `hintText` on all three: the fold's CURRENT total as `${runs}/${wickets}`
+ * — the exact notation `buildScorebug`'s own `halves[0].big` already uses,
+ * so it needs no translation (numerals + "/" read identically on every
+ * locale) and this function can stay `t`-free like every OTHER member here
+ * except `scorebug`/`dock` (this file's header). Now load-bearing rather
+ * than decorative: it is the only place the scorer sees what the delta
+ * above is being added to. `hintText` is baked once when this record is
+ * built (G4, types.ts) and rendered VERBATIM by guided-sheet.tsx (never
+ * through `t()`, that file's own doc on `SheetNumberStep.hintText`) — it
+ * cannot react to a scorer's still-in-progress stepper taps on ANY step
+ * (guided-sheet.tsx is out of this wave's file grant, and
+ * `SheetNumberStep.hintText` is a plain `string`, not a function of the
+ * live edit value or of answers already given earlier in the SAME wizard
+ * run). What ships instead: a correct, always-fresh "before" anchor —
+ * rebuilt every `sheets(view)` call, per `PadHostView`'s own "never stale"
+ * obligation — sitting directly above the ALREADY-live editable field
+ * (task 2's own `renderNumberStep`). Flagged here as a deliberate
+ * deviation, not a silent reinterpretation.
+ *
+ * Field renamed from `hint` (R2b-cricket-over follow-up, hint-field naming
+ * pass, 2026-08-17) — see `SheetChoiceStep.hintKey`'s doc (types.ts) for
+ * why the bare name, shared with that unrelated KEY-convention field, was
+ * a defect.
  */
 function overSummarySheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
@@ -1869,9 +1877,9 @@ function overSummarySheet(view: PadHostView): GuidedSheetSpec {
   const before = `${runs}/${wickets}`;
 
   const steps: GuidedSheetStep[] = [
-    { id: "runs", kind: "number", title: "pad.cricket.sheet.overSummary.runs.title", initial: 0, min: 0, hint: before },
-    { id: "wickets", kind: "number", title: "pad.cricket.sheet.overSummary.wickets.title", initial: 0, min: 0, hint: before },
-    { id: "balls", kind: "number", title: "pad.cricket.sheet.overSummary.balls.title", initial: bpo, min: 0, max: bpo, hint: before },
+    { id: "runs", kind: "number", title: "pad.cricket.sheet.overSummary.runs.title", initial: 0, min: 0, hintText: before },
+    { id: "wickets", kind: "number", title: "pad.cricket.sheet.overSummary.wickets.title", initial: 0, min: 0, hintText: before },
+    { id: "balls", kind: "number", title: "pad.cricket.sheet.overSummary.balls.title", initial: bpo, min: 0, max: bpo, hintText: before },
   ];
 
   return {

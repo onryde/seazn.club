@@ -289,22 +289,24 @@ const choiceButtonClass =
  *  nested custom component's own function — a real `<ChoiceRow/>` would
  *  make every button inside it invisible to `walk()`/`textOf()`.
  *
- *  `hint` (R2b-over, `SheetChoiceStep.hint`'s own doc, types.ts): rendered
- *  VERBATIM-through-`t()` above the button row, same visual treatment
- *  (`text-sm text-slate-600`, same wrapping flex-col) as
+ *  `hintKey` (R2b-over, `SheetChoiceStep.hintKey`'s own doc, types.ts):
+ *  rendered VERBATIM-through-`t()` above the button row, same visual
+ *  treatment (`text-sm text-slate-600`, same wrapping flex-col) as
  *  `renderNumberStep`'s own hint paragraph below — the two hints differ only
  *  in whether the chassis or the skin resolves the string (that function's
  *  own doc explains why), never in how they render. Undefined/omitted
- *  renders nothing extra, so every pre-existing choice step is unchanged. */
+ *  renders nothing extra, so every pre-existing choice step is unchanged.
+ *  Renamed from `hint` (R2b-cricket-over follow-up, hint-field naming pass,
+ *  2026-08-17) — see `SheetChoiceStep.hintKey`'s doc (types.ts). */
 function renderChoiceRow(
   options: readonly { id: string; label: string }[],
-  hint: string | undefined,
+  hintKey: string | undefined,
   t: TFn,
   onPick: (id: string) => void,
 ) {
   return (
     <div className="flex flex-col gap-2">
-      {hint && <p className="text-sm text-slate-600">{t(hint)}</p>}
+      {hintKey && <p className="text-sm text-slate-600">{t(hintKey)}</p>}
       <div className="flex flex-wrap gap-2">
         {options.map((opt) => (
           <button
@@ -338,9 +340,11 @@ const numberFieldClass =
  * enforced HERE via `clampNumberStep`, on every path that can change
  * `value` — both stepper buttons and the typed field — never left for the
  * skin's own `buildPayload` to catch after the fact (types.ts's own doc on
- * `SheetNumberStep`). `hint`, when present, is rendered VERBATIM above the
- * control (never through `t()` — it is pre-localised, skin-supplied prose,
- * same rule as `WhoLine.servingLabel`).
+ * `SheetNumberStep`). `hintText`, when present, is rendered VERBATIM above
+ * the control (never through `t()` — it is pre-localised, skin-supplied
+ * prose, same rule as `WhoLine.servingLabel`). Renamed from `hint`
+ * (R2b-cricket-over follow-up, hint-field naming pass, 2026-08-17) — see
+ * `SheetChoiceStep.hintKey`'s doc (types.ts).
  *
  * Unlike the other two row renderers, a tap here does NOT itself advance
  * the wizard: `onConfirm` is a separate, explicit action (reusing the
@@ -387,7 +391,7 @@ function renderNumberStep(
   const title = t(step.title);
   return (
     <div className="flex flex-col gap-3">
-      {step.hint && <p className="text-sm text-slate-600">{step.hint}</p>}
+      {step.hintText && <p className="text-sm text-slate-600">{step.hintText}</p>}
       <div className="flex items-center gap-3">
         <button
           type="button"
@@ -529,7 +533,7 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
       </div>
       <div className="px-4 py-3">
         {step.kind === "choice"
-          ? renderChoiceRow(step.options, step.hint, t, handleAnswer)
+          ? renderChoiceRow(step.options, step.hintKey, t, handleAnswer)
           : step.kind === "number"
             ? renderNumberStep(step, numberEditValue, t, setNumberEditValue, () => handleAnswer(String(numberEditValue)))
             : renderCandidateRow(candidatesForStep(step, views[step.side]), personNames, t, handleAnswer, emptyText)}

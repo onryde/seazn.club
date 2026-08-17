@@ -2235,14 +2235,14 @@ describe("buildSheets — wicket kind gated by free hit (R2b-over)", () => {
     const spec = buildSheets(view({ events: freeHitEvents })).wicket;
     const kind = kindStepOf(spec);
     expect(kind.options.map((o) => o.id).sort()).toEqual(["obstructed", "runout"]);
-    expect(kind.hint).toBe("pad.cricket.sheet.wicket.kind.freeHitHint");
+    expect(kind.hintKey).toBe("pad.cricket.sheet.wicket.kind.freeHitHint");
   });
 
   it("no free hit pending: all ten kinds still offered and no hint — without this, the fix could over-restrict permanently and still pass", () => {
     const spec = buildSheets(view()).wicket; // view()'s default events: [] — nothing pending
     const kind = kindStepOf(spec);
     expect(kind.options.map((o) => o.id).sort()).toEqual([...WICKET_KINDS].sort());
-    expect(kind.hint).toBeUndefined();
+    expect(kind.hintKey).toBeUndefined();
   });
 
   it("no-ball -> wide -> legal ball still counts as pending here too — a wide must not un-gate the kind step (same fold as the indicator, never a second, driftable rule)", () => {
@@ -2382,8 +2382,8 @@ describe("buildSheets — over summary (R2b)", () => {
 
   it("hint carries the fold's current score, locale-invariant (no t() needed) — the only place the scorer sees what the delta is added to", () => {
     const spec = overSpec();
-    expect(numberStep(spec, "runs").hint).toBe("24/1");
-    expect(numberStep(spec, "wickets").hint).toBe("24/1");
+    expect(numberStep(spec, "runs").hintText).toBe("24/1");
+    expect(numberStep(spec, "wickets").hintText).toBe("24/1");
   });
 
   it("buildPayload sums the fold's current totals with this over's entered runs/wickets/balls — absolute, not the delta", () => {
@@ -2451,8 +2451,8 @@ describe("buildSheets — over summary (R2b)", () => {
     const spec = buildSheets(
       view({ state: state({ innings: [innings({ closed: true, runs: 187, wickets: 6, legalBalls: 118 })] }) }),
     ).overSummary;
-    expect(numberStep(spec, "runs")).toMatchObject({ initial: 0, hint: "0/0" });
-    expect(numberStep(spec, "wickets")).toMatchObject({ initial: 0, hint: "0/0" });
+    expect(numberStep(spec, "runs")).toMatchObject({ initial: 0, hintText: "0/0" });
+    expect(numberStep(spec, "wickets")).toMatchObject({ initial: 0, hintText: "0/0" });
     expect(numberStep(spec, "balls")).toMatchObject({ initial: 6, max: 6 });
     const payload = spec.buildPayload({ runs: "7", wickets: "1", balls: "6" });
     expect(payload).toEqual({ runs: 7, wickets: 1, legalBalls: 6, partial: true }); // NOT 194/7/124

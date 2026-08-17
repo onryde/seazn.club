@@ -610,7 +610,7 @@ const numberSpec: GuidedSheetSpec = {
       title: "pad.sheet.overSummary.runs.title",
       initial: 24,
       min: 0,
-      hint: "24/1 pre-localised hint",
+      hintText: "24/1 pre-localised hint",
     },
     { id: "wickets", kind: "number", title: "pad.sheet.overSummary.wickets.title", initial: 1, min: 0, max: 10 },
   ],
@@ -812,8 +812,10 @@ describe("GuidedSheet rendering — SheetNumberStep", () => {
   // convention elsewhere — this one had none). Fixed to a STRUCTURAL check:
   // count `<p>` elements. `GuidedSheet` itself always renders exactly one
   // (the step title, in its own JSX, outside renderNumberStep) — a hint
-  // present adds a second, renderNumberStep's own `<p>{step.hint}</p>`; a
-  // hint absent must leave the count at one, not merely at an empty string.
+  // present adds a second, renderNumberStep's own `<p>{step.hintText}</p>`
+  // (field renamed from `hint` — R2b-cricket-over follow-up, hint-field
+  // naming pass, 2026-08-17); a hint absent must leave the count at one, not
+  // merely at an empty string.
   it("a number step declaring no hint renders exactly ONE paragraph (the title) — no hint paragraph at all, not merely an empty one", () => {
     const noHintSpec: GuidedSheetSpec = {
       event: "cricket.summary",
@@ -832,7 +834,7 @@ describe("GuidedSheet rendering — SheetNumberStep", () => {
 
   it("a number step WITH a hint renders exactly TWO paragraphs (title + hint) — proves the count above is measuring the hint, not something incidental", () => {
     const island = renderIsland(GuidedSheet, {
-      spec: numberSpec, // "runs" step declares hint: "24/1 pre-localised hint"
+      spec: numberSpec, // "runs" step declares hintText: "24/1 pre-localised hint"
       views: numberViews,
       personNames: {},
       t,
@@ -946,16 +948,19 @@ describe("GuidedSheet rendering — SheetNumberStep", () => {
   });
 });
 
-// --- R2b-over: SheetChoiceStep.hint — a reason line for a choice step whose
-// options the SKIN has narrowed (first use: cricket's wicket "kind" step
-// during a free hit, skins/cricket.tsx). A plain i18n KEY (types.ts's own
-// doc on the field explains why this is unlike SheetNumberStep.hint's
-// pre-resolved convention above) — resolved here via `t(step.hint)`, same
-// as `title`/`options[].label`. Proved the same STRUCTURAL way the number
-// step's hint is proved above (paragraph count, not a vacuous string
-// probe — this file's own review-fix precedent, right above this block):
-// `GuidedSheet` always renders exactly one `<p>` for the step title; a hint
-// present must add exactly one more.
+// --- R2b-over: SheetChoiceStep.hintKey — a reason line for a choice step
+// whose options the SKIN has narrowed (first use: cricket's wicket "kind"
+// step during a free hit, skins/cricket.tsx). A plain i18n KEY (types.ts's
+// own doc on the field explains why this is unlike SheetNumberStep.
+// hintText's pre-resolved convention above) — resolved here via
+// `t(step.hintKey)`, same as `title`/`options[].label`. Proved the same
+// STRUCTURAL way the number step's hint is proved above (paragraph count,
+// not a vacuous string probe — this file's own review-fix precedent, right
+// above this block): `GuidedSheet` always renders exactly one `<p>` for the
+// step title; a hint present must add exactly one more.
+//
+// Field renamed from `hint` (R2b-cricket-over follow-up, hint-field naming
+// pass, 2026-08-17) — see `SheetChoiceStep.hintKey`'s doc (types.ts).
 // -----------------------------------------------------------------------
 
 const choiceNoHintSpec: GuidedSheetSpec = {
@@ -979,13 +984,13 @@ const choiceWithHintSpec: GuidedSheetSpec = {
       kind: "choice",
       title: "pad.sheet.wicket.kind.title",
       options: [{ id: "runout", label: "pad.sheet.wicket.kind.runout" }],
-      hint: "pad.sheet.wicket.kind.freeHitHint",
+      hintKey: "pad.sheet.wicket.kind.freeHitHint",
     },
   ],
   buildPayload: (answers) => ({ kind: answers.kind }),
 };
 
-describe("GuidedSheet rendering — SheetChoiceStep.hint (R2b-over)", () => {
+describe("GuidedSheet rendering — SheetChoiceStep.hintKey (R2b-over)", () => {
   it("a choice step declaring no hint renders exactly ONE paragraph (the title) — no hint paragraph at all", () => {
     const island = renderIsland(GuidedSheet, {
       spec: choiceNoHintSpec,

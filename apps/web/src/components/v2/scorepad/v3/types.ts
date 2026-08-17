@@ -53,7 +53,12 @@ export interface TapEvent { type: string; payload: Record<string, unknown> }
 export interface ScorebugHalf {
   who: WhoLine[];
   big: string;                    // pre-formatted, tabular-nums rendering
-  hint?: string;                  // i18n key; REQUIRED iff tappable
+  /** i18n KEY, resolved by the chassis (scorebug.tsx, via padLabel()) —
+   *  REQUIRED iff tappable. Renamed from `hint` (R2b-cricket-over
+   *  follow-up, hint-field naming pass, 2026-08-17): shared a bare name
+   *  with `SheetNumberStep.hint`, an opposite, PRE-RESOLVED convention —
+   *  see `SheetChoiceStep.hintKey`'s doc below for the full reasoning. */
+  hintKey?: string;
   tappable?: boolean;             // MODEL-S halves only
   tapEvent?: TapEvent;            // REQUIRED iff tappable
 }
@@ -258,22 +263,35 @@ export type StepPredicate = (answers: Readonly<Record<string, string>>) => boole
  * runout/obstructed while a free hit is pending (`wicketSheet`,
  * skins/cricket.tsx) — a silently shortened list is better than the bare
  * rejection it replaces, but still leaves a scorer who expected "bowled"
- * with no idea why it is missing; `hint` is that explanation. Absent means
- * "no reason line" — every pre-existing `SheetChoiceStep` (every step
+ * with no idea why it is missing; `hintKey` is that explanation. Absent
+ * means "no reason line" — every pre-existing `SheetChoiceStep` (every step
  * shipped before this) omits it and renders identically.
  *
  * A plain i18n KEY, resolved by the chassis exactly like `title`/
- * `options[].label` already are (`t(step.hint)`, guided-sheet.tsx) — the
- * same convention `ScorebugHalf.hint` above already establishes for a hint
- * with nothing to interpolate. Deliberately NOT `SheetNumberStep.hint`'s
- * pre-resolved-string convention below: that field needed an INTERPOLATED
- * value baked in before `sheets()` returns, and `SkinDefV3.sheets` (unlike
- * `tiles`/`scorebug`/`dock`/`context`) never receives a `t` at all
- * (`sheets()`'s own header, skins/cricket.tsx) — keeping this a bare key
- * lets a static, translatable sentence stay that way without widening
+ * `options[].label` already are (`t(step.hintKey)`, guided-sheet.tsx) — the
+ * same convention `ScorebugHalf.hintKey` above already establishes for a
+ * hint with nothing to interpolate. Deliberately NOT `SheetNumberStep.
+ * hintText`'s pre-resolved-string convention below: that field needed an
+ * INTERPOLATED value baked in before `sheets()` returns, and `SkinDefV3.
+ * sheets` (unlike `tiles`/`scorebug`/`dock`/`context`) never receives a `t`
+ * at all (`sheets()`'s own header, skins/cricket.tsx) — keeping this a bare
+ * key lets a static, translatable sentence stay that way without widening
  * `sheets()`'s signature for every skin.
+ *
+ * R2b-cricket-over follow-up (hint-field naming pass, 2026-08-17): renamed
+ * from `hint`. This field and `SheetNumberStep.hint` shared one bare name
+ * for opposite contracts — a key to resolve vs. an already-resolved string
+ * — a coin-flip for any R3-R7 skin author, and wrong in the worst possible
+ * direction either way: a raw key mis-typed into a `hintText`-shaped field
+ * renders literally to a scorer, while a resolved sentence mis-typed into a
+ * `hintKey`-shaped field is re-sent through `t()`, which logs a
+ * missing-key warning yet still renders the original sentence — so it
+ * looks fine in English and only breaks once translated. `ScorebugHalf`
+ * shared this same KEY convention (resolved by the chassis, never
+ * skin-supplied prose) and was renamed to `hintKey` alongside it for the
+ * identical reason, so neither convention is left as an unmarked default.
  */
-export interface SheetChoiceStep { id: string; kind: "choice"; title: string; options: { id: string; label: string }[]; when?: StepPredicate; hint?: string }
+export interface SheetChoiceStep { id: string; kind: "choice"; title: string; options: { id: string; label: string }[]; when?: StepPredicate; hintKey?: string }
 /**
  * R2/task A5 (`_INDEX.md` R1 "owed by later waves", closed here): `side` is
  * REQUIRED, not optional-with-a-default. Cricket's wicket flow needs the
@@ -332,9 +350,12 @@ export interface SheetPersonStep { id: string; kind: "person"; title: string; po
  * bound simply never clamps on that side, same "absent means unrestricted"
  * reading `SheetPersonStep.candidates`'s own absence already gets.
  *
- * `hint` follows `WhoLine.servingLabel`'s already-established rule (this
- * file, above): pre-localised, skin-supplied prose — the chassis never
- * resolves a sport-namespaced key itself.
+ * `hintText` follows `WhoLine.servingLabel`'s already-established rule
+ * (this file, above): pre-localised, skin-supplied prose — the chassis
+ * never resolves a sport-namespaced key itself. Renamed from `hint`
+ * (R2b-cricket-over follow-up, hint-field naming pass, 2026-08-17) — see
+ * `SheetChoiceStep.hintKey`'s doc above for why the shared bare name was a
+ * defect, not a coincidence.
  *
  * Deliberately NOT widening `GuidedSheetSpec.buildPayload`'s `answers:
  * Record<string, string>` to admit a number: a number step's answer is
@@ -355,7 +376,7 @@ export interface SheetNumberStep {
   max?: number;
   /** Pre-localised, skin-supplied (same rule as WhoLine.servingLabel):
    *  the chassis never resolves a sport-namespaced key. */
-  hint?: string;
+  hintText?: string;
   when?: StepPredicate;
 }
 export type GuidedSheetStep = SheetChoiceStep | SheetPersonStep | SheetNumberStep;
@@ -671,7 +692,7 @@ export interface PadHostView {
 export function assertScorebugSpec(spec: ScorebugSpec): string[] {
   const out: string[] = [];
   spec.halves.forEach((h, i) => {
-    if (h.tappable && !h.hint) out.push(`halves[${i}]: tappable requires hint`);
+    if (h.tappable && !h.hintKey) out.push(`halves[${i}]: tappable requires hintKey`);
     if (h.tappable && !h.tapEvent) out.push(`halves[${i}]: tappable requires tapEvent`);
     if (!h.who.length) out.push(`halves[${i}]: who must be non-empty`);
   });
