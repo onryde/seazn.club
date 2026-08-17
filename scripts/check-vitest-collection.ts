@@ -15,6 +15,26 @@
 //   node --experimental-strip-types scripts/check-vitest-collection.ts \
 //     --results apps/web/vitest-results.json -- src/server src/lib
 //
+// `--exclude <glob>` (repeatable) is forwarded verbatim to `vitest list`, and
+// exists because ci.yml splits src/server+src/lib across two jobs by excluding
+// complementary halves of src/server/usecases/__tests__. The listing must be
+// narrowed by the SAME glob the run was narrowed by, or every file the other
+// job owns is reported here as "listed but not run".
+//
+// Why exclude-globs and not `--shard`, which would need no globs at all: in
+// vitest 4.1.9 `vitest run --shard=1/2` genuinely partitions (verified 7 + 7
+// files, zero overlap) but `vitest list --shard=1/2` SILENTLY IGNORES the flag
+// — 247 files for 1/2, for 2/2, and for no shard at all. There is therefore no
+// oracle for what a shard should have contained, and this reconciliation could
+// not be expressed per-job at all. `--exclude` IS honoured by both (verified:
+// 4 files -> 3 on both `list` and `run`), which is the whole reason the split
+// is cut this way. Do not "simplify" it to --shard.
+//
+// CLI `--exclude` ADDS to vitest.config.ts's `exclude` rather than replacing it
+// (verified: 819 files with and without a no-op --exclude, and zero e2e/ entries
+// either way). That matters — a replacing flag would re-admit `e2e/**` and
+// `**/.next/**`, and globbing the .next copies has segfaulted a run before.
+//
 // The paths after `--` must be EXACTLY the paths the run was given. Note what
 // that means for the caller: `npm test --workspace apps/web -- run src/foo`
 // passes THREE filename filters, because the workspace script is already
@@ -34,9 +54,21 @@ const paths = sep === -1 ? [] : argv.slice(sep + 1);
 const resultsIdx = flags.indexOf("--results");
 const resultsPath = resultsIdx === -1 ? null : flags[resultsIdx + 1];
 
+// Every occurrence, so a caller may narrow with more than one glob. An empty
+// string is dropped rather than forwarded: an unset shell variable would
+// otherwise reach vitest as `--exclude ''`, which matches nothing and would
+// silently widen the listing back to the full set while looking configured.
+const excludes: string[] = [];
+for (let i = 0; i < flags.length; i++) {
+  if (flags[i] === "--exclude" && flags[i + 1]) {
+    if (flags[i + 1].trim() !== "") excludes.push(flags[i + 1]);
+    i++;
+  }
+}
+
 if (!resultsPath || paths.length === 0) {
   console.error(
-    "usage: check-vitest-collection --results <vitest json output> -- <path…>",
+    "usage: check-vitest-collection --results <vitest json output> [--exclude <glob>…] -- <path…>",
   );
   process.exit(2);
 }
@@ -81,7 +113,8 @@ const filesFrom = (json: string): Set<string> => {
 // measured here as 185 listed against 345 executed for the same two paths. A
 // file-level question needs a file-level oracle.
 const listJson = join(mkdtempSync(join(tmpdir(), "vitest-collect-")), "list.json");
-execFileSync("npx", ["vitest", "list", "--filesOnly", `--json=${listJson}`, ...paths], {
+const excludeArgs = excludes.flatMap((g) => ["--exclude", g]);
+execFileSync("npx", ["vitest", "list", "--filesOnly", `--json=${listJson}`, ...excludeArgs, ...paths], {
   cwd: "apps/web",
   encoding: "utf8",
   maxBuffer: 64 * 1024 * 1024,
@@ -100,7 +133,8 @@ const missing = [...listed].filter((f) => !executed.has(f)).sort();
 const extra = [...executed].filter((f) => !listed.has(f)).sort();
 
 console.log(
-  `[collection] listed=${listed.size} executed=${executed.size} for: ${paths.join(" ")}`,
+  `[collection] listed=${listed.size} executed=${executed.size} for: ${paths.join(" ")}` +
+    (excludes.length ? ` (excluding ${excludes.join(", ")})` : ""),
 );
 
 if (missing.length || extra.length) {
