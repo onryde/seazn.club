@@ -8,7 +8,7 @@ import type { EntrantId, StageKind } from "../core/types.ts";
 import { foldResults, foldStandings, type FixtureResult } from "./standings.ts";
 import { applyRankLocks, type RankLock } from "./points.ts";
 import type { StandingsDelta } from "../core/types.ts";
-import type { PoolTable, StageTables } from "./qualification.ts";
+import type { PoolTable, SourceTables as StageTables } from "./progression.ts";
 import type { TiebreakerKey } from "../sport/module.ts";
 import { buildSwissTable, rankStandings } from "./tiebreakers.ts";
 

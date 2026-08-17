@@ -216,7 +216,7 @@ export function placeDescriptors(
 
   const total = flat.length;
   const byKey = new Map(flat.map((s) => [descriptorKey(s.descriptor), s] as const));
-  const seats: (SourcedSlot | undefined)[] = new Array(total).fill(undefined);
+  const seats = new Array<SourcedSlot | undefined>(total).fill(undefined);
   const claimed = new Set<string>();
 
   for (const entry of map) {
@@ -268,4 +268,264 @@ export function validateProgressionAgainstShapes(
   if (total < 2) {
     throw new EngineError("SEEDING_RULES_MISSING", "this stage's progression rules produce fewer than 2 qualifiers");
   }
+}
+
+// ---------------------------------------------------------------------------
+// Resolution — a completed source stage's real standings/bracket, resolved
+// against a ProgressionSpec into an ordered seed list (spec 05 §3 successor).
+// ---------------------------------------------------------------------------
+
+export interface PoolTable {
+  pool: string;
+  rows: readonly StandingsRow[];
+  // Only consulted when a best_nth descriptor carries
+  // normaliseUnequalPools:true (Decision 2b) — absent for every caller in
+  // this codebase today, matching production behaviour before this session.
+  results?: readonly FixtureResult[];
+}
+export interface BracketFixtureRow {
+  round: number;
+  loser?: EntrantId;
+}
+export interface SourceTables {
+  pools: readonly PoolTable[];
+  // Carried from the old qualification.ts's StageTables.overall — written by
+  // stage.ts's completeTableStage exactly when pools.length === 1 (its only
+  // write site, confirmed by grep), and read directly by stage.test.ts.
+  // No longer consulted by THIS module's own resolution: rankRange falls
+  // back to "the sole pool, whatever its key" instead (rankRangeSource
+  // below), which covers every case `overall` ever did — the two
+  // conditions were always equivalent, since nothing else ever wrote
+  // `overall`. The field stays only so completeTableStage's return shape
+  // and its existing test are unaffected by this module superseding
+  // qualification.ts.
+  overall?: readonly StandingsRow[];
+  bracket?: readonly BracketFixtureRow[]; // only present for a bracket-kind source; only roundLosers reads it
+}
+export interface ResolvedProgressionEntry {
+  seed: number;
+  sourceIndex: number;
+  descriptor: SlotDescriptor;
+  entrantId: EntrantId;
+  rank: number;
+  tieUnbroken: boolean;
+}
+export interface ProgressionTieFlag {
+  descriptors: SlotDescriptor[];
+  entrantIds: EntrantId[];
+  reason: string;
+}
+
+// Pools carry both a key ("A") and a display name ("Pool A"); progression
+// picks match the KEY, but accept the name form too (strip a leading
+// "Pool " prefix, case-insensitive) so neither silently resolves nothing.
+const normPool = (s: string): string => s.trim().toLowerCase().replace(/^pool\s+/, "");
+
+function findPool(pools: readonly PoolTable[], pool: string): PoolTable {
+  const want = normPool(pool);
+  const table = pools.find((p) => normPool(p.pool) === want);
+  if (!table) {
+    throw new EngineError(
+      "STAGE_NOT_READY",
+      `no pool "${pool || "overall"}" in the source stage — available pools: ${pools.map((p) => p.pool).join(", ")}`,
+      { pool, available: pools.map((p) => p.pool) },
+    );
+  }
+  return table;
+}
+
+/** rankRange's source table: the SOLE pool when there is exactly one —
+ *  regardless of its key — otherwise the pool explicitly keyed "".
+ *  Mirrors the old qualification.ts's isTopN fallback (`tables.overall ??
+ *  (tables.pools.length === 1 ? tables.pools[0].rows : undefined)`) without
+ *  needing the `overall` field: `overall` was written by completeTableStage
+ *  (stage.ts) ONLY when pools.length === 1 — its only write site — so the
+ *  two conditions were always equivalent. A single-pool source's key varies
+ *  by caller: a bare league/swiss stage names it "" (no poolId on its
+ *  fixtures), but e.g. testkit/simulation.ts's group_knockout format always
+ *  assigns a real id ("P1") even when poolCount collapses to 1 for a small
+ *  entrant count — matching on "" alone would regress that shape (verified:
+ *  simulation.test.ts's SIM_RUNS property sweep hits it routinely, since
+ *  drawEntrantCount skews toward low counts). */
+function rankRangeSource(pools: readonly PoolTable[]): PoolTable {
+  if (pools.length === 1) return pools[0]!;
+  return findPool(pools, "");
+}
+
+function rowAtRank(table: PoolTable, rank: number): StandingsRow {
+  const row = table.rows.find((r) => r.rank === rank);
+  if (!row) {
+    throw new EngineError("STAGE_NOT_READY", `pool "${table.pool}" has no entrant ranked ${rank} yet`, {
+      pool: table.pool,
+      rank,
+    });
+  }
+  return row;
+}
+
+// UEFA "drop the lowest-ranked pool member's results" normalisation
+// (Decision 2b) — unchanged from qualification.ts's normalisedRow, moved
+// verbatim. A no-op when `results` is absent or empty, which is every
+// caller in this codebase today.
+function normalisedRow(table: PoolTable, candidateId: EntrantId): StandingsRow {
+  const results = table.results ?? [];
+  const bottom = table.rows[table.rows.length - 1];
+  if (bottom === undefined || bottom.entrantId === candidateId || results.length === 0) {
+    const full = table.rows.find((row) => row.entrantId === candidateId);
+    if (full === undefined) {
+      throw new EngineError("STAGE_NOT_READY", `candidate "${candidateId}" not in its pool table`, { candidateId });
+    }
+    return full;
+  }
+  const survivors = table.rows.map((row) => row.entrantId).filter((id) => id !== bottom.entrantId);
+  const kept = resultsAmong(new Set(survivors), results);
+  const refolded = foldResults(survivors, kept);
+  const row = refolded.find((entry) => entry.entrantId === candidateId);
+  if (!row) {
+    throw new EngineError("STAGE_NOT_READY", `candidate "${candidateId}" not in its pool table`, { candidateId });
+  }
+  return row;
+}
+
+// Same cascade both prior implementations already used verbatim
+// (orderCandidates in qualification.ts, crossGroupOrder in
+// stage-seeding.ts) — unifying it is a rename, not a behaviour change.
+function crossGroupOrder(rows: StandingsRow[]): StandingsRow[] {
+  return rankStandings(rows, { cascade: ["points", "diff", "for", "wins"] }).rows;
+}
+
+function loserAt(bracket: readonly BracketFixtureRow[] | undefined, round: number, position: number): StandingsRow {
+  if (!bracket) {
+    throw new EngineError("STAGE_NOT_READY", "roundLosers needs the completed stage's bracket fixtures", { round });
+  }
+  // Equality-filter only — never arithmetic on `round` (rounds number
+  // sparsely: 1,2,3 on a winners' side, 7-10 on a losers' side). The
+  // filtered array's order IS bracket position; the CALLER that assembled
+  // `bracket` is the ordering authority, not this function.
+  const losers = bracket.filter(
+    (f): f is BracketFixtureRow & { loser: EntrantId } => f.round === round && f.loser !== undefined,
+  );
+  const row = losers[position - 1];
+  if (!row) {
+    throw new EngineError(
+      "QUALIFICATION_INVALID",
+      `bracket round ${round} has no loser at position ${position} (found ${losers.length})`,
+      { round, position, available: losers.length },
+    );
+  }
+  return { entrantId: row.loser, rank: position } as StandingsRow;
+}
+
+export function resolveProgression(
+  spec: ProgressionSpec,
+  shapes: readonly SourceShape[],
+  tables: readonly SourceTables[],
+): { qualifiers: ResolvedProgressionEntry[]; ties: ProgressionTieFlag[] } {
+  const pots = expandSources(spec.sources, (i) => shapes[i]!);
+  const placed = placeDescriptors(pots, spec.placement, spec.map);
+
+  const qualifiers: ResolvedProgressionEntry[] = [];
+  const tieGroups = new Map<string, ProgressionTieFlag>();
+  const seen = new Set<EntrantId>();
+  const bestNthCache = new Map<string, StandingsRow[]>();
+
+  placed.forEach((slot, i) => {
+    const seed = i + 1;
+    const src = tables[slot.sourceIndex];
+    if (!src) {
+      throw new EngineError("STAGE_NOT_READY", `progression source ${slot.sourceIndex} has no tables yet`, {
+        sourceIndex: slot.sourceIndex,
+      });
+    }
+    let row: StandingsRow;
+    const d = slot.descriptor;
+    if (d.kind === "group_rank") {
+      row = rowAtRank(findPool(src.pools, d.pool), d.rank);
+    } else if (d.kind === "rank_range") {
+      row = rowAtRank(rankRangeSource(src.pools), d.rank);
+    } else if (d.kind === "round_loser") {
+      row = loserAt(src.bracket, d.round, d.position);
+    } else {
+      // best_nth — every pool's nth-place row, compared together (once per
+      // distinct nth), exactly like resolveQualification.bestOfRank used to
+      // — never one candidate at a time.
+      const cacheKey = `${slot.sourceIndex}:${d.nth}`;
+      let ordered = bestNthCache.get(cacheKey);
+      if (!ordered) {
+        const candidates = src.pools.map((p) => {
+          const picked = rowAtRank(p, d.nth);
+          return d.normaliseUnequalPools === true ? normalisedRow(p, picked.entrantId) : picked;
+        });
+        if (d.normaliseUnequalPools !== true) {
+          const sizes = new Set(src.pools.map((p) => p.rows.length));
+          if (sizes.size > 1) {
+            throw new EngineError(
+              "SEEDING_BESTNTH_UNEQUAL_POOLS",
+              `bestNth cannot compare rank-${d.nth} finishers across pools of different sizes (${[...sizes]
+                .sort((a, b) => a - b)
+                .join(",")}) — UEFA normalisation for unequal pools isn't implemented`,
+              { nth: d.nth, poolSizes: src.pools.map((p) => ({ pool: p.pool, size: p.rows.length })) },
+            );
+          }
+        }
+        ordered = crossGroupOrder(candidates);
+        bestNthCache.set(cacheKey, ordered);
+      }
+      const candidate = ordered[d.position - 1];
+      if (!candidate) {
+        throw new EngineError(
+          "QUALIFICATION_INVALID",
+          `bestNth needs ${d.position} pools with a rank-${d.nth} finisher, found ${ordered.length}`,
+          { nth: d.nth, position: d.position },
+        );
+      }
+      row = candidate;
+    }
+
+    if (seen.has(row.entrantId)) {
+      throw new EngineError(
+        "QUALIFICATION_INVALID",
+        `entrant ${row.entrantId} qualifies through more than one source or take rule`,
+        { entrantId: row.entrantId },
+      );
+    }
+    seen.add(row.entrantId);
+
+    qualifiers.push({
+      seed,
+      sourceIndex: slot.sourceIndex,
+      descriptor: d,
+      entrantId: row.entrantId,
+      rank: row.rank ?? 0,
+      tieUnbroken: row.tieUnbroken === true,
+    });
+
+    if (row.tieUnbroken === true) {
+      const group = [row.entrantId, ...(row.tieBreak?.with ?? [])].sort();
+      const key = group.join(",");
+      const existing = tieGroups.get(key);
+      if (existing) existing.descriptors.push(d);
+      else tieGroups.set(key, { descriptors: [d], entrantIds: group, reason: row.tieBreak?.key ?? "seed" });
+    }
+  });
+
+  return { qualifiers, ties: [...tieGroups.values()] };
+}
+
+// L3/#414 — wraps any finish order as a single-pool PoolTable, unchanged
+// from qualification.ts.
+export function placementTable(finalRanks: readonly EntrantId[]): PoolTable {
+  return {
+    pool: "",
+    rows: finalRanks.map((entrantId, i) => ({
+      entrantId,
+      played: 0,
+      won: 0,
+      drawn: 0,
+      lost: 0,
+      points: 0,
+      metrics: {},
+      rank: i + 1,
+    })),
+  };
 }
