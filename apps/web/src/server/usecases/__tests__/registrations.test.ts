@@ -2322,3 +2322,380 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
 // with no surviving equivalent to seed against (a seed would just assert
 // back whatever locale it was told to insert, which is vacuous). RS002/RS003
 // own re-testing locale resolution against the new group-shaped submit flow.
+
+// ---------------------------------------------------------------------------
+// RS002 W5 review — RULING A: rejected is terminal from every writer, no
+// exceptions. RULING B: manual mode blocks the AUTOMATIC confirmer
+// (confirmPaidRegistration on a Stripe webhook), not an organiser's explicit
+// confirm/mark-paid/waive.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("RS002 W5 review: rejected is terminal from every writer", () => {
+  it("confirmRegistration refuses a rejected registration (BLOCKER)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      status: "pending",
+    });
+    await sql`update registrations set status = 'rejected' where id = ${registration.id}`;
+
+    let err: HttpError | undefined;
+    try {
+      await confirmRegistration(owner, registration.id);
+    } catch (e) {
+      err = e as HttpError;
+    }
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err?.status).toBe(422);
+    const [row] = await sql<{ status: string; entrant_id: string | null }[]>`
+      select status, entrant_id from registrations where id = ${registration.id}`;
+    expect(row!.status).toBe("rejected"); // untouched
+    expect(row!.entrant_id).toBeNull(); // never materialised
+  });
+
+  it("a Stripe payment landing on a REJECTED registration is refunded, never confirmed (BLOCKER, worst finding of the session)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`
+      update organizations
+      set stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}, stripe_charges_enabled = true
+      where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 1000,
+      payment_method: "stripe",
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      status: "pending",
+    });
+    await sql`update registrations set status = 'rejected' where id = ${registration.id}`;
+
+    // A late/replayed webhook for the checkout session minted before the
+    // organiser rejected the entry.
+    await handleRegistrationCheckoutCompleted(fakeSession(registration.id, 1000));
+
+    const [row] = await sql<{ status: string; entrant_id: string | null }[]>`
+      select status, entrant_id from registrations where id = ${registration.id}`;
+    // Reverting the rejected branch (registrations.ts confirmPaidRegistration)
+    // makes this fail: status would become 'confirmed' and entrant_id would
+    // be set — money taken AND an entrant created for a rejected registration.
+    expect(row!.status).toBe("rejected");
+    expect(row!.entrant_id).toBeNull();
+    expect(stripeMock.refundCreate).toHaveBeenCalled();
+  });
+
+  it("markRegistrationPaidOffline and confirmRegistrationWaived both refuse a rejected registration with a specific message (BLOCKER)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 500,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      status: "pending",
+    });
+    await sql`update registrations set status = 'rejected' where id = ${registration.id}`;
+
+    let paidOfflineErr: HttpError | undefined;
+    try {
+      await markRegistrationPaidOffline(owner, registration.id);
+    } catch (e) {
+      paidOfflineErr = e as HttpError;
+    }
+    // The pre-existing `!== "pending"` guard would ALSO 422 here (rejected is
+    // never pending), so asserting the STATUS alone cannot fail on a revert
+    // of the new explicit check — the specific message is what a revert
+    // actually changes (falls back to the generic "Only pending
+    // registrations..." text).
+    expect(paidOfflineErr?.status).toBe(422);
+    expect(paidOfflineErr?.message).toBe("This registration was rejected and cannot be marked paid");
+
+    let waivedErr: HttpError | undefined;
+    try {
+      await confirmRegistrationWaived(owner, registration.id);
+    } catch (e) {
+      waivedErr = e as HttpError;
+    }
+    expect(waivedErr?.status).toBe(422);
+    expect(waivedErr?.message).toBe("This registration was rejected and cannot be confirmed");
+
+    const [row] = await sql<{ status: string; entrant_id: string | null }[]>`
+      select status, entrant_id from registrations where id = ${registration.id}`;
+    expect(row!.status).toBe("rejected");
+    expect(row!.entrant_id).toBeNull();
+  });
+
+  it("withdrawRegistrationOrganiser and withdrawRegistrationByRef both refuse a rejected registration (MAJOR)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings, {
+      status: "pending",
+      refCode: generateRefCode(),
+    });
+    await sql`update registrations set status = 'rejected' where id = ${registration.id}`;
+
+    let orgErr: HttpError | undefined;
+    try {
+      await withdrawRegistrationOrganiser(owner, registration.id);
+    } catch (e) {
+      orgErr = e as HttpError;
+    }
+    expect(orgErr?.status).toBe(422);
+    const [afterOrg] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${registration.id}`;
+    // Reverting withdrawCore's rejected guard makes this fail: status would
+    // silently flip to 'withdrawn' instead of staying 'rejected'.
+    expect(afterOrg!.status).toBe("rejected");
+
+    let byRefErr: HttpError | undefined;
+    try {
+      await withdrawRegistrationByRef(registration.ref_code!, access_token);
+    } catch (e) {
+      byRefErr = e as HttpError;
+    }
+    expect(byRefErr?.status).toBe(422);
+    const [afterRef] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${registration.id}`;
+    expect(afterRef!.status).toBe("rejected");
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS002 W5 review: RULING B — manual mode blocks the machine, not the organiser", () => {
+  it("a Stripe payment on a MANUAL-approval division lands 'paid' and waits for a human", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`
+      update organizations
+      set stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}, stripe_charges_enabled = true
+      where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 1000,
+      payment_method: "stripe",
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    await sql`update registration_settings set approval = 'manual' where division_id = ${division.id}`;
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      status: "pending",
+    });
+
+    await handleRegistrationCheckoutCompleted(fakeSession(registration.id, 1000));
+
+    const [row] = await sql<{ status: string; entrant_id: string | null }[]>`
+      select status, entrant_id from registrations where id = ${registration.id}`;
+    // Reverting the manual-mode check makes this fail: the webhook would
+    // auto-materialise straight to 'confirmed', bypassing the human review
+    // manual approval exists for.
+    expect(row!.status).toBe("paid");
+    expect(row!.entrant_id).toBeNull();
+  });
+
+  it("an AUTO-approval division still auto-confirms on payment, unchanged", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`
+      update organizations
+      set stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}, stripe_charges_enabled = true
+      where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 1000,
+      payment_method: "stripe",
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    // registration_settings.approval defaults to 'auto' — no override needed.
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      status: "pending",
+    });
+
+    await handleRegistrationCheckoutCompleted(fakeSession(registration.id, 1000));
+
+    const [row] = await sql<{ status: string; entrant_id: string | null }[]>`
+      select status, entrant_id from registrations where id = ${registration.id}`;
+    expect(row!.status).toBe("confirmed");
+    expect(row!.entrant_id).not.toBeNull();
+  });
+
+  it("markRegistrationPaidOffline and confirmRegistrationWaived still confirm on a MANUAL division — an organiser's explicit action IS the approval", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 500,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    await sql`update registration_settings set approval = 'manual' where division_id = ${division.id}`;
+    const { registration: offlineReg } = await seedRegistration(competition.id, division.id, settings, {
+      status: "pending",
+    });
+
+    // markRegistrationPaidOffline confirms in the SAME call (payment =
+    // approval, its own doc comment) — an organiser marking an offline fee
+    // paid on a manual division IS the human decision ruling B carves out,
+    // so this materialises straight to 'confirmed', same as on an auto
+    // division. Only the AUTOMATIC Stripe-webhook path
+    // (confirmPaidRegistration) stops short at 'paid' on manual — see the
+    // sibling describe block above.
+    const paid = await markRegistrationPaidOffline(owner, offlineReg.id);
+    expect(paid.status).toBe("confirmed");
+    expect(paid.entrant_id).not.toBeNull();
+
+    const waivedSettings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 500,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    await sql`update registration_settings set approval = 'manual' where division_id = ${division.id}`;
+    const { registration: waivedReg } = await seedRegistration(competition.id, division.id, waivedSettings, {
+      status: "pending",
+    });
+    const waived = await confirmRegistrationWaived(owner, waivedReg.id);
+    expect(waived.status).toBe("confirmed");
+    expect(waived.entrant_id).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS002 W5 review — MAJOR: materialise() used to clear the WHOLE cart's
+// expires_at unconditionally on every confirm, wiping a still-pending
+// sibling's live Stripe deadline.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("RS002 W5 review: materialise no longer clobbers a pending sibling's expires_at", () => {
+  it("confirming one entry in a multi-entry cart leaves a still-pending sibling's expires_at untouched", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`
+      update organizations
+      set stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}, stripe_charges_enabled = true
+      where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 1000,
+      payment_method: "stripe",
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    // One group, two entries — reproduces a multi-entry cart directly (no
+    // group-submit flow needed for THIS pure two-writer confirm scenario).
+    const { registration: toConfirm } = await seedRegistration(competition.id, division.id, settings, {
+      status: "pending",
+    });
+    const sibling = await seedSecondEntry(toConfirm.group_id, division.id, 1000, "Still Pending Sibling");
+    await sql`update registrations set status = 'pending' where id = ${sibling.id}`;
+
+    const [before] = await sql<{ expires_at: Date | null }[]>`
+      select expires_at from registration_groups where id = ${toConfirm.group_id}`;
+    expect(before!.expires_at).not.toBeNull();
+
+    await confirmRegistrationWaived(owner, toConfirm.id);
+
+    const [after] = await sql<{ expires_at: Date | null }[]>`
+      select expires_at from registration_groups where id = ${toConfirm.group_id}`;
+    // Reverting materialise's guard (the unconditional `expires_at = null`)
+    // makes this fail: the sibling's live deadline would be wiped by an
+    // UNRELATED entry's confirmation.
+    expect(after!.expires_at).not.toBeNull();
+    expect(new Date(after!.expires_at!).getTime()).toBe(new Date(before!.expires_at!).getTime());
+
+    const [siblingRow] = await sql<{ status: string }[]>`select status from registrations where id = ${sibling.id}`;
+    expect(siblingRow!.status).toBe("pending"); // untouched
+  });
+
+  it("confirming the LAST pending entry in a cart clears expires_at — the single-entry case is unchanged", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`
+      update organizations
+      set stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}, stripe_charges_enabled = true
+      where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 1000,
+      payment_method: "stripe",
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      status: "pending",
+    });
+    const [before] = await sql<{ expires_at: Date | null }[]>`
+      select expires_at from registration_groups where id = ${registration.group_id}`;
+    expect(before!.expires_at).not.toBeNull();
+
+    await confirmRegistrationWaived(owner, registration.id);
+
+    const [after] = await sql<{ expires_at: Date | null }[]>`
+      select expires_at from registration_groups where id = ${registration.group_id}`;
+    expect(after!.expires_at).toBeNull();
+  });
+});

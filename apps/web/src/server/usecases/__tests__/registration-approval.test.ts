@@ -4,7 +4,7 @@
 // §3/§4, owner ruling 6. Real Postgres required; skipped without DATABASE_URL.
 import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { sql } from "@/lib/db";
+import { sql, statementCount } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -17,7 +17,12 @@ import {
   withdrawRegistration,
   promoteFromWaitlist,
 } from "../registration-approval";
-import { listRegistrations, groupByRef } from "../registrations";
+import {
+  listRegistrations,
+  groupByRef,
+  promoteWaitlistedRow,
+  getRegistrationSettings,
+} from "../registrations";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 // ---------------------------------------------------------------------------
@@ -431,6 +436,122 @@ describe.skipIf(!HAS_DB)("promoteFromWaitlist", () => {
     const [entryBRow] = await sql<{ status: string }[]>`
       select status from registrations where id = ${entryB.registration_id}`;
     expect(entryBRow!.status).toBe("pending"); // divB's own promotion DID take effect
+  });
+
+  it("MAJOR (review): a card-fee promotion into a cart whose envelope is offline still gets a real, monotonic expires_at — never inherits null", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: divA } = await rig(owner);
+    const divB = await addDivision(owner, competition.id, "Later Priced Division");
+    await seedSettings(divA.id, { entrant_kind: "individual", fee_cents: 500, payment_method: "offline", capacity: null });
+    await seedSettings(divB.id, { entrant_kind: "individual", fee_cents: 0, payment_method: "offline", capacity: 1 });
+
+    // Fill divB's one slot from a DIFFERENT cart so this cart's own divB
+    // entry is born waitlisted.
+    await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      { contact: baseContact(), privacy_consent: true, entries: [{ division_id: divB.id, entrant_kind: "individual", players: [{ full_name: "Filler" }], answers: {} }] },
+    );
+
+    const cart = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [
+          { division_id: divA.id, entrant_kind: "individual", players: [{ full_name: "Offline Payer" }], answers: {} },
+          { division_id: divB.id, entrant_kind: "individual", players: [{ full_name: "Future Card Payer" }], answers: {} },
+        ],
+      },
+    );
+    const entryA = cart.entries.find((e) => e.division_id === divA.id)!;
+    const entryB = cart.entries.find((e) => e.division_id === divB.id)!;
+    expect(entryA.status).toBe("pending");
+    expect(entryB.status).toBe("waitlisted");
+
+    const [beforeGroup] = await sql<{ payment_method: string | null; expires_at: Date | null }[]>`
+      select payment_method, expires_at from registration_groups where id = ${cart.group_id}`;
+    expect(beforeGroup!.payment_method).toBe("offline");
+    expect(beforeGroup!.expires_at).toBeNull();
+
+    // The organiser raises divB's price and switches it to card AFTER this
+    // cart was submitted — wave 4's uniform-at-submit invariant only binds
+    // at submit time; this is the residual gap it does not close.
+    await sql`update organizations set stripe_charges_enabled = true where id = ${orgId}`;
+    await sql`update registration_settings set fee_cents = 1000, payment_method = 'stripe' where division_id = ${divB.id}`;
+
+    const promoted = await promoteFromWaitlist(owner, divB.id, { registrationId: entryB.registration_id });
+    expect(promoted!.status).toBe("pending");
+    expect(promoted!.amount_cents).toBe(1000);
+
+    const [afterGroup] = await sql<{ payment_method: string | null; expires_at: Date | null }[]>`
+      select payment_method, expires_at from registration_groups where id = ${cart.group_id}`;
+    // payment_method: the not-exists guard still protects entryA (still
+    // 'pending') — stays 'offline'. Not this fix's concern.
+    expect(afterGroup!.payment_method).toBe("offline");
+    // expires_at: MUST be real now — this IS the fix. The pre-review
+    // conditional write left this null forever whenever the group's
+    // existing envelope belonged to a still-pending offline sibling, and
+    // sweepRegistrations' `expires_at is not null` overdue filter would
+    // never find it — a permanently unpayable, permanently un-expirable
+    // promotion.
+    expect(afterGroup!.expires_at).not.toBeNull();
+    expect(new Date(afterGroup!.expires_at!).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("MAJOR (review): the group-envelope guard and write are ONE atomic statement, not a separate SELECT-then-UPDATE", async () => {
+    // Deterministic proof (not a timing-dependent race): the old code issued
+    // a SEPARATE `select count(*) as pendingSiblings ...` before its
+    // conditional `update registration_groups` — a real window where two
+    // concurrent promotions could each read "no pending sibling" before
+    // either committed. Counting statements via statementCount() (lib/db.ts
+    // — every query the postgres client sends increments it) proves the
+    // fixed code issues no such separate SELECT: promoteWaitlistedRow's own
+    // work is exactly THREE statements — the registrations UPDATE, the
+    // registration_groups UPDATE (guard folded into its CASE/not-exists,
+    // never a preceding SELECT), and the final re-select. A reverted guard
+    // (back to SELECT-then-conditionally-UPDATE) makes this fail: FOUR.
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations set stripe_charges_enabled = true where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 1000, payment_method: "stripe", capacity: 1 });
+
+    await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      { contact: baseContact(), privacy_consent: true, entries: [{ division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Fills Slot" }], answers: {} }] },
+    );
+    const waiting = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      { contact: baseContact(), privacy_consent: true, entries: [{ division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Waits" }], answers: {} }] },
+    );
+    const entry = waiting.entries[0]!;
+    expect(entry.status).toBe("waitlisted");
+
+    const settings = await getRegistrationSettings(owner, division.id);
+
+    // Baseline: an UNGUARDED update to the exact same row, inside the exact
+    // same sql.begin wrapper, measures ONLY the framework's own BEGIN/COMMIT
+    // overhead — whatever it is, it cancels out of the comparison below.
+    const baselineBefore = statementCount();
+    await sql.begin(async (tx) => {
+      await tx`update registration_groups set updated_at = now() where id = ${waiting.group_id}`;
+    });
+    const frameworkOverhead = statementCount() - baselineBefore - 1; // the 1 update itself
+
+    const before = statementCount();
+    await sql.begin(async (tx) => {
+      await promoteWaitlistedRow(tx, entry.registration_id, waiting.group_id, settings);
+    });
+    const issued = statementCount() - before - frameworkOverhead;
+
+    // promoteWaitlistedRow's OWN work, with the framework's constant
+    // BEGIN/COMMIT overhead subtracted out: the registrations UPDATE, the
+    // registration_groups UPDATE (guard folded into its CASE/not-exists —
+    // never a preceding SELECT), and the final re-select. A reverted guard
+    // (back to a separate `select count(*) as pendingSiblings ...` before a
+    // conditional UPDATE) makes this fail: 4, not 3.
+    expect(issued).toBe(3);
   });
 });
 

@@ -713,12 +713,29 @@ export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: str
     update registrations
     set entrant_id = ${entrant.id}, status = 'confirmed', updated_at = now()
     where id = ${reg.id}`;
-  // expires_at (the pay-by deadline) now lives on the cart, not the entry —
-  // clearing it here matches today's single-entry-per-cart behaviour exactly;
-  // once a cart can hold several entries this needs to stop clearing the
-  // whole cart's deadline on one entry's confirmation (RS002 territory).
+  // expires_at (the pay-by deadline) lives on the cart, shared by every
+  // entry in it (RS002 W5 review MAJOR — this cleared it UNCONDITIONALLY on
+  // every confirm, from all five confirm call sites: confirmRegistration,
+  // markRegistrationPaidOffline, confirmRegistrationWaived,
+  // confirmPaidRegistration, and approveRegistration. A pending SIBLING's
+  // still-live Stripe deadline was wiped whenever ANY other entry in its
+  // cart confirmed; that sibling then never expired via sweepRegistrations
+  // (its `expires_at is not null` filter no longer matched it), and
+  // groupByRef stopped showing a deadline for money still owed on it).
+  // Same not-exists pending-sibling guard as promoteWaitlistedRow's atomic
+  // UPDATE, keyed on reg.group_id: clear only when nothing else in the cart
+  // still needs it. No signature change — this stays a drop-in call for
+  // every existing caller.
   await tx`
-    update registration_groups set expires_at = null, updated_at = now()
+    update registration_groups
+    set expires_at = case
+          when not exists (
+            select 1 from registrations
+            where group_id = ${reg.group_id} and id <> ${reg.id} and status = 'pending'
+          ) then null
+          else expires_at
+        end,
+        updated_at = now()
     where id = ${reg.group_id}`;
   return entrant.id;
 }
@@ -759,46 +776,47 @@ export async function promoteOldestWaitlisted(
  * re-deriving it. Callers own locking the row and confirming it is actually
  * `waitlisted` first.
  *
- * ── ROUTED MAJOR FIX (RS002 W5, wave-4 finding) ─────────────────────────────
+ * ── ROUTED MAJOR FIX (RS002 W5, wave-4 finding; REFINED in review) ─────────
  * `payment_method`/`expires_at` live on the entry's CART (`registration_groups`),
  * shared by every entry in it — see the block comment above
- * `RegistrationWithGroupRow`. The old code unconditionally overwrote both on
- * every promotion, which is exactly right while a group holds only the entry
- * being promoted, and WRONG the instant a SIBLING entry in the same cart is
- * still `pending` (mid-payment, relying on the group's CURRENT payment_method
- * + expires_at to know how and by when to pay): a promotion could null out or
- * redirect that sibling's live Stripe deadline, or silently change which
- * method it believes it's paying by.
+ * `RegistrationWithGroupRow`. The pre-wave-5 code unconditionally overwrote
+ * both on every promotion, which could null out or redirect a SIBLING
+ * entry's live Stripe deadline/method.
  *
- * Shape chosen (of the two the brief allows — the other, a per-entry
- * `expires_at` column, needs a migration and this wave's file set excludes
- * `db/migration/**`): SCOPE THE WRITE, not the column. The group's shared
- * envelope is only written when no OTHER entry in the cart still depends on
- * it — i.e. no sibling is `pending`. `pending` is the right and only
- * dependent status: it is the exact predicate `sweepRegistrations`' own
- * due/overdue queries use for "still watching this envelope" (registrations.ts,
- * the `due`/`overdue` selects a few hundred lines below). A `paid` or
- * `confirmed` sibling no longer reads the group's payment_method/expires_at
- * (paid is already past its deadline; confirmed had it cleared by
- * `materialise`), so neither blocks the write; a `waitlisted` sibling has no
- * envelope commitment yet either. `payment_method` is scoped the SAME way as
- * `expires_at`, in the same conditional, even though wave 4's
- * `assertUniformPaymentMethod` already makes every PAID division in one cart
- * agree on method at submit time — that invariant is submit-time only and a
- * division's own `registration_settings.payment_method` can still change
- * afterwards, so it narrows this hazard but does not close it (flagged in the
- * wave-5 brief, recorded in `_INDEX.md`).
+ * Both writes are folded into ONE atomic UPDATE (review MAJOR: a separate
+ * SELECT-then-conditionally-UPDATE has a race window a lock alone does not
+ * close cheaply — two concurrent promotions of DIFFERENT waitlisted siblings
+ * in the same cart could each read "no pending sibling" before either
+ * commits, reintroducing the clobber). Postgres's own row lock on the
+ * `registration_groups` row serializes two transactions that both try to
+ * update the SAME cart: the second one's `not exists` subquery only
+ * evaluates once it acquires the lock, i.e. after the first commits, so it
+ * correctly sees the first promotion's own `status = 'pending'` write — no
+ * explicit `for update` needed here for that guarantee.
  *
- * When the write IS skipped, the newly-promoted entry simply inherits
- * whatever payment_method/expires_at the cart already carries (set by
- * whichever entry most recently had sole claim on it) rather than getting a
- * fresh one of its own — conservative, and strictly safer than clobbering a
- * live deadline. `registration_groups.amount_cents` (the cart's payable
- * subtotal) is deliberately left untouched here, matching the pre-existing
- * behaviour this function already had — folding a promoted entry's fee back
- * into a shared multi-entry checkout total is a checkout-architecture
- * question (design §4 step 5, "one Stripe checkout pays the whole cart") that
- * belongs with RS003's endpoint work, not this fix.
+ * `payment_method`: NOT-EXISTS-guarded exactly as before — only overwritten
+ * when no OTHER entry in the cart is still `pending` (the same predicate
+ * `sweepRegistrations`' own due/overdue queries use for "still watching this
+ * envelope"). Skipped writes leave the cart's existing method untouched.
+ * Wave 4's `assertUniformPaymentMethod` already makes every PAID division in
+ * one cart agree on method at submit time, so a live divergence here can
+ * only mean a division's `registration_settings.payment_method` changed
+ * AFTER submit — this function does not attempt to reconcile that; it only
+ * guarantees it never clobbers a still-`pending` sibling.
+ *
+ * `expires_at`: MONOTONIC, not conditional (review MAJOR — the conditional
+ * skip above protected a SIBLING's deadline but left the newly-PROMOTED
+ * entry with NO deadline of its own whenever it inherited an offline/null
+ * envelope: a card-fee promotion into a cart whose only other write was
+ * offline got no checkout link and no `expires_at`, and because
+ * `sweepRegistrations`' overdue query requires `expires_at is not null`, it
+ * could never expire — a permanently unpayable, permanently un-expirable
+ * promotion). When THIS promotion itself needs a Stripe window, the
+ * deadline can only ever EXTEND — `greatest(coalesce(expires_at, now()),
+ * now() + 48h)` — never shorten or null a sibling's existing (possibly
+ * later) deadline; same additive pattern the refund paths already use
+ * (`greatest(refunded_cents, …)`). When it does not (free/offline
+ * promotion), the column is left exactly as it was.
  * ───────────────────────────────────────────────────────────────────────── */
 export async function promoteWaitlistedRow(
   tx: Tx,
@@ -814,17 +832,21 @@ export async function promoteWaitlistedRow(
     set status = 'pending', promoted_at = now(), updated_at = now(),
         amount_cents = ${feeCents}
     where id = ${regId}`;
-  const [{ n: pendingSiblings }] = await tx<{ n: number }[]>`
-    select count(*)::int as n from registrations
-    where group_id = ${groupId} and id != ${regId} and status = 'pending'`;
-  if (pendingSiblings === 0) {
-    await tx`
-      update registration_groups
-      set payment_method = ${method},
-          expires_at = ${stripeWindow ? tx`now() + interval '48 hours'` : null},
-          updated_at = now()
-      where id = ${groupId}`;
-  }
+  await tx`
+    update registration_groups
+    set payment_method = case
+          when not exists (
+            select 1 from registrations
+            where group_id = ${groupId} and id <> ${regId} and status = 'pending'
+          ) then ${method}
+          else payment_method
+        end,
+        expires_at = case
+          when ${stripeWindow} then greatest(coalesce(expires_at, now()), now() + interval '48 hours')
+          else expires_at
+        end,
+        updated_at = now()
+    where id = ${groupId}`;
   const [row] = await tx<RegistrationWithGroupRow[]>`
     select ${regGroupCols(tx)}
     from registrations r join registration_groups g on g.id = r.group_id
@@ -1288,6 +1310,12 @@ export async function handleRegistrationCheckoutCompleted(
 
 type PayOutcome =
   | { kind: "confirmed"; divisionId: string; competitionId: string; orgId: string }
+  // RULING B (RS002 W5 review): a Stripe payment is the MACHINE, not the
+  // organiser — on a manual-approval division it leaves the entry at 'paid'
+  // and waits for a human (approveRegistration). Distinct from "confirmed"
+  // so the growth-loop earn grants below (keyed on a genuine confirmation)
+  // never fire for a payment still awaiting review.
+  | { kind: "paid_awaiting_approval"; divisionId: string; competitionId: string }
   | { kind: "late" | "duplicate"; reg: RegistrationWithGroupRow; competitionId: string; intent: string }
   | null;
 
@@ -1314,10 +1342,16 @@ async function confirmPaidRegistration(
       }
       return null;
     }
-    // Money landing on a dead registration (withdrawn/expired, spec issue #1):
-    // record the intent for the audit trail and send it straight back.
+    // Money landing on a dead registration (withdrawn/expired/rejected, spec
+    // issue #1 + RULING A, RS002 W5 review BLOCKER — the worst finding of
+    // the session): record the intent for the audit trail and send it
+    // straight back, NEVER confirm. A rejected reg with a live
+    // payment_intent_id used to fall through to the branch below and be
+    // silently confirmed — with an entrant materialised — on a late or
+    // replayed webhook. Rejected reuses this exact path unchanged: refund,
+    // never confirm, is precisely what "the organiser said no" requires.
     // payment_intent_id lives on the cart now (V364).
-    if (reg.status === "withdrawn" || reg.status === "expired") {
+    if (reg.status === "withdrawn" || reg.status === "expired" || reg.status === "rejected") {
       await tx`update registration_groups
                set payment_intent_id = coalesce(payment_intent_id, ${paymentIntentId}),
                    updated_at = now()
@@ -1357,6 +1391,30 @@ async function confirmPaidRegistration(
         update competitions set fee_percent = ${lockRate}
          where id = ${div.competition_id} and fee_percent is null`;
     }
+    // RULING B (RS002 W5 review): manual approval blocks the AUTOMATIC
+    // confirmation a Stripe payment would otherwise trigger here — the
+    // entry is already 'paid' (written above) and stays there for a human
+    // to review via approveRegistration. Organiser-explicit paths
+    // (confirmRegistration/markRegistrationPaidOffline/confirmRegistrationWaived)
+    // are UNCHANGED by this ruling: an organiser clicking confirm IS the
+    // approval decision. A dedicated one-column query rather than widening
+    // `loadSettings`/`RegistrationSettingsRow` (this wave's ownership keeps
+    // those export-only) — same "local superset, don't touch the shared
+    // type" precedent as registration-submit.ts's SubmitSettingsRow and
+    // registration-approval.ts's ApprovalSettingsRow.
+    const [approvalRow] = await tx<{ approval: "auto" | "manual" }[]>`
+      select approval from registration_settings where division_id = ${reg.division_id}`;
+    if (approvalRow?.approval === "manual") {
+      await audit(tx, div.competition_id, reg.org_id, "registration.paid_awaiting_approval", {
+        registration_id: regId,
+        amount_cents: amountTotal ?? reg.amount_cents,
+      }, null);
+      return {
+        kind: "paid_awaiting_approval",
+        divisionId: reg.division_id,
+        competitionId: div.competition_id,
+      };
+    }
     const entrantId = await materialise(
       tx,
       { ...reg, status: "paid" },
@@ -1377,6 +1435,13 @@ async function confirmPaidRegistration(
   })) as unknown as PayOutcome;
 
   if (!outcome) return;
+  if (outcome.kind === "paid_awaiting_approval") {
+    // Public status page changed (pending -> paid), so still revalidate —
+    // but no growth-loop earn grant: money moved, but nothing is confirmed
+    // yet, and a manual reviewer can still reject it next.
+    fireDivisionRevalidate(outcome.divisionId, outcome.competitionId);
+    return;
+  }
   if (outcome.kind === "confirmed") {
     fireDivisionRevalidate(outcome.divisionId, outcome.competitionId);
     // Growth loop (SPEC-5 §2 C): the organiser's FIRST competition to take a paid
@@ -2051,6 +2116,17 @@ function notifyRefund(reg: RegistrationWithGroupRow, ctx: DivisionCtx, amountCen
 
 async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | null): Promise<void> {
   if (reg.status === "withdrawn") return; // idempotent
+  // RULING A (RS002 W5 review, MAJOR): rejected is terminal from every
+  // writer — reachable here from BOTH withdrawRegistrationOrganiser and the
+  // public token-only withdrawRegistrationByRef. Without this, a rejected
+  // row silently flipped to 'withdrawn' (the only special case this
+  // function checked), which could also wrongly auto-promote a waitlisted
+  // sibling for a spot the organiser had already closed. Fast-path check
+  // (the pre-lock snapshot) mirrors the withdrawn idempotent check above;
+  // the authoritative one is inside the tx, against the LOCKED row, below.
+  if (reg.status === "rejected") {
+    throw new HttpError(422, "This registration was rejected and cannot be withdrawn");
+  }
   const settings = await loadSettings(sql, reg.division_id);
   const ctx = await divisionCtx(sql, reg.division_id);
 
@@ -2062,6 +2138,9 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
       from registrations r join registration_groups g on g.id = r.group_id
       where r.id = ${reg.id} for update`;
     if (!locked || locked.status === "withdrawn") return null;
+    if (locked.status === "rejected") {
+      throw new HttpError(422, "This registration was rejected and cannot be withdrawn");
+    }
     const freedSpot = (SPOT_HOLDERS as readonly string[]).includes(locked.status);
     await tx`
       update registrations
@@ -2366,6 +2445,14 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
   const row = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
     if (reg.status === "confirmed") return reg;
+    // RULING A (RS002 W5 review, BLOCKER): rejected is terminal from EVERY
+    // writer — an organiser explicitly confirming stays allowed on a manual
+    // division (ruling B), but never on a REJECTED row regardless of mode.
+    // Checked before the withdrawn check for the same reason: both are dead
+    // ends, but rejected needs its own message.
+    if (reg.status === "rejected") {
+      throw new HttpError(422, "This registration was rejected and cannot be confirmed");
+    }
     if (reg.status === "withdrawn") throw new HttpError(422, "registration is withdrawn");
     const settings = await loadSettings(tx, reg.division_id);
     if ((settings?.fee_cents ?? 0) > 0 && reg.status !== "paid" && reg.payment_intent_id === null) {
@@ -2402,6 +2489,14 @@ export async function markRegistrationPaidOffline(
   const frozen = await frozenCompetitionIds(auth.orgId);
   const row = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
+    // RULING A (RS002 W5 review, BLOCKER): rejected is terminal from every
+    // writer. Already implied by the `!== "pending"` check below (rejected
+    // is never pending), but explicit and first — self-documenting, and
+    // matches the SAME guard on confirmRegistration/confirmRegistrationWaived
+    // rather than relying on an allowlist to accidentally encode it.
+    if (reg.status === "rejected") {
+      throw new HttpError(422, "This registration was rejected and cannot be marked paid");
+    }
     if (reg.status !== "pending") {
       throw new HttpError(422, `Only pending registrations can be marked paid (this one is ${reg.status})`);
     }
@@ -2447,6 +2542,13 @@ export async function confirmRegistrationWaived(
   const row = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
     if (reg.status === "confirmed") return orgRegAfter(tx, regId);
+    // RULING A (RS002 W5 review, BLOCKER): rejected is terminal from every
+    // writer. Already implied by the allowlist below (rejected is neither
+    // pending nor waitlisted), but explicit and first for the same reason as
+    // markRegistrationPaidOffline's twin guard.
+    if (reg.status === "rejected") {
+      throw new HttpError(422, "This registration was rejected and cannot be confirmed");
+    }
     if (!["pending", "waitlisted"].includes(reg.status)) {
       throw new HttpError(422, `Cannot confirm a ${reg.status} registration`);
     }
