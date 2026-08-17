@@ -89,12 +89,12 @@ describe("AiDiffPanel repair strip", () => {
   it("says nothing when the solver ran and moved nothing", () => {
     // The clean path: the board verified, so there was no work to report. This
     // is the case that would turn the panel into noise on every single run.
-    const html = render({ engine: "z3", solver_ran: true, status: "clean", moved: 0 });
+    const html = render({ engine: "optimized", solver_ran: true, status: "clean", moved: 0 });
     expect(html).not.toContain('data-testid="ai-repair-strip"');
   });
 
   it("reports the move count once the solver actually moved fixtures", () => {
-    const html = render({ engine: "z3", solver_ran: true, status: "repaired", moved: 2 });
+    const html = render({ engine: "optimized", solver_ran: true, status: "repaired", moved: 2 });
     expect(html).toContain('data-testid="ai-repair-strip"');
     expect(html).toContain('data-moved="2"');
     expect(html).toContain(enDict["board.ai.repaired.freeOfCharge"]!);
@@ -102,7 +102,7 @@ describe("AiDiffPanel repair strip", () => {
 
   it("claims minimality only when the engine proved it", () => {
     const proved = render({
-      engine: "z3",
+      engine: "optimized",
       solver_ran: true,
       status: "repaired",
       moved: 2,
@@ -115,7 +115,7 @@ describe("AiDiffPanel repair strip", () => {
     // decomposition found", not "the fewest that exist" — so the sentence must
     // disappear even though the repair itself succeeded identically.
     const upper = render({
-      engine: "z3",
+      engine: "optimized",
       solver_ran: true,
       status: "repaired",
       moved: 2,
@@ -127,7 +127,7 @@ describe("AiDiffPanel repair strip", () => {
 
   it("names what was left for the model", () => {
     const html = render({
-      engine: "z3",
+      engine: "optimized",
       solver_ran: true,
       status: "partial",
       moved: 3,
@@ -139,7 +139,7 @@ describe("AiDiffPanel repair strip", () => {
 
   it("localizes into fr rather than printing English", () => {
     const html = render(
-      { engine: "z3", solver_ran: true, status: "repaired", moved: 2, minimality: "proved" },
+      { engine: "optimized", solver_ran: true, status: "repaired", moved: 2, minimality: "proved" },
       frDict,
       "fr",
     );

@@ -70,7 +70,7 @@ const METRICS = {
   total: 22,
 };
 const SOLVER = {
-  engine: "z3",
+  engine: "optimized",
   status: "infeasible",
   tiers_completed: 2,
   tiers_total: 4,

@@ -377,18 +377,16 @@ export type BuildStatus =
    *  INTRODUCED a blocking conflict. The greedy seed is returned and the
    *  disagreement is logged. */
   | "verifier_rejected"
-  /** The WASM would not boot. A fallback, never an exception. z3-era only —
-   *  additive, not renamed, since Prompt 10 (not this task) removes z3. */
-  | "z3_unavailable"
-  /** The placement era's `z3_unavailable`: the service call resolved but not
-   *  into a trustworthy board — a transport fault, an unmapped/unreadable
-   *  status, or the RPC promise rejecting outright (deadline, unavailable,
-   *  a malformed request) all land here. A DIFFERENT identifier rather than
-   *  reusing `z3_unavailable`, even though the two mean the same thing to an
-   *  organiser and share one i18n key (`board.result.unavailable`):
-   *  `z3_unavailable` is invisible to users today per the design doc, but
-   *  the NAME is misleading once z3 is gone, and carrying a stale name
-   *  forward was judged more expensive than adding one clean value now.
+  /** The service call resolved but not into a trustworthy board — a transport
+   *  fault, an unmapped/unreadable status, or the RPC promise rejecting
+   *  outright (deadline, unavailable, a malformed request) all land here.
+   *
+   *  Added alongside a z3-era `z3_unavailable` that meant the same thing to an
+   *  organiser and shared this member's one i18n key
+   *  (`board.result.unavailable`). The two coexisted only for as long as z3
+   *  could still produce the older name; C7 retired it, so this is now the
+   *  single identifier for "the solver was not available". Nothing was
+   *  reworded — the copy was always shared.
    *
    *  Deliberately NOT what `SOLVER_BUSY` maps to — that is `solver_busy`,
    *  a few members below, because a retry helps there and this copy does
@@ -569,9 +567,12 @@ export interface BuildResult {
    *  otherwise a `no_slot` whose detail says whether a proof backs it. */
   conflicts: readonly Conflict[];
   metrics: BoardMetrics;
-  /** Where the returned board came from, not which solver was consulted: `z3`
-   *  means the board on this result is one z3 produced. */
-  engine: "greedy" | "z3" | "z3+lns" | "optimized";
+  /** Where the returned board came from, not which solver was consulted:
+   *  `optimized` means the board on this result is one the placement service
+   *  produced, `greedy` that it is the seed. The z3-era members left this
+   *  union in C7 — C4 routed REFLOW through the service and C9 moved
+   *  decomposed repair onto CP-SAT, so nothing had assigned them since. */
+  engine: "greedy" | "optimized";
   status: BuildStatus;
   /** Set only when `status === "not_searched"` — see `NotSearchedReason`. */
   notSearchedReason?: NotSearchedReason;

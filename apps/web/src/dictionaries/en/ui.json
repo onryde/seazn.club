@@ -3346,8 +3346,6 @@
   "board.result.metric.scheduled": "Scheduled",
   "board.result.legend": "Longest gap = a team’s longest wait between matches. Court spread = busiest court vs quietest.",
   "board.result.engine.greedy": "Quick pass",
-  "board.result.engine.z3": "Solver",
-  "board.result.engine.z3lns": "Solver, then refined",
   "board.result.engine.optimized": "Solver",
   "board.result.moved.one": "1 match moved",
   "board.result.moved.other": "{count} matches moved",

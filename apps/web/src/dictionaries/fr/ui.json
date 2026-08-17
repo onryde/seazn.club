@@ -3346,8 +3346,6 @@
   "board.result.metric.scheduled": "Programmés",
   "board.result.legend": "Attente la plus longue = la plus longue attente d’une équipe entre deux matchs. Écart entre terrains = terrain le plus chargé face au moins chargé.",
   "board.result.engine.greedy": "Passe rapide",
-  "board.result.engine.z3": "Solveur",
-  "board.result.engine.z3lns": "Solveur, puis affiné",
   "board.result.engine.optimized": "Solveur",
   "board.result.moved.one": "1 match déplacé",
   "board.result.moved.other": "{count} matchs déplacés",

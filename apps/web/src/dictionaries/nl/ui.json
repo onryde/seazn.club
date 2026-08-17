@@ -3346,8 +3346,6 @@
   "board.result.metric.scheduled": "Ingepland",
   "board.result.legend": "Langste wachttijd = de langste wachttijd van een team tussen wedstrijden. Verschil tussen banen = drukste baan tegenover rustigste.",
   "board.result.engine.greedy": "Snelle ronde",
-  "board.result.engine.z3": "Solver",
-  "board.result.engine.z3lns": "Solver, daarna verfijnd",
   "board.result.engine.optimized": "Solver",
   "board.result.moved.one": "1 wedstrijd verplaatst",
   "board.result.moved.other": "{count} wedstrijden verplaatst",

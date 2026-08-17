@@ -1221,12 +1221,15 @@ export type ScheduleMetrics = z.infer<typeof ScheduleMetrics>;
 /** How the proposal was produced — telemetry, not policy. `status` tracks the
  *  engine's BuildStatus union one-for-one. */
 export const ScheduleSolverInfo = z.object({
-  /** `"optimized"` (Task 06b) is listed for the same reason `"not_searched"` is
-   *  documented below: `schedule.ts` assigns the engine's `BuildResult
-   *  ["engine"]` into this field one-for-one, so a member missing here is a
-   *  board the API has no shape for — and this one is not hypothetical: TS
-   *  already refuses `schedule.ts`'s `engine: out.engine` without it. */
-  engine: z.enum(["greedy", "z3", "z3+lns", "optimized"]),
+  /** Mirrors the engine's `BuildResult["engine"]` exactly: `schedule.ts`
+   *  assigns that field into this one one-for-one, so a member missing here is
+   *  a board the API has no shape for — and that is not hypothetical, TS
+   *  already refuses `engine: out.engine` when the two drift.
+   *
+   *  Two members since C7, which retired the z3-era `"z3"` and `"z3+lns"`.
+   *  Nothing had produced either since C4 and C9 moved the last callers onto
+   *  the placement service. */
+  engine: z.enum(["greedy", "optimized"]),
   /** Which solver the request asked for, echoed back.
    *
    *  NOT redundant with `engine`, which names what actually produced the board:
@@ -1250,7 +1253,6 @@ export const ScheduleSolverInfo = z.object({
     "already_optimal",
     "infeasible",
     "verifier_rejected",
-    "z3_unavailable",
     "solver_busy",
     /**
      * The solver could not represent this board on its lattice, so it never
@@ -1269,13 +1271,15 @@ export const ScheduleSolverInfo = z.object({
      */
     "not_searched",
     /**
-     * The placement era's `z3_unavailable` (Task 06b): the service call
-     * resolved but not into a trustworthy board — a transport fault, an
-     * unmapped/unreadable status, or the RPC rejecting outright. Renders
-     * through the SAME `board.result.unavailable` copy `z3_unavailable`
-     * always has, so this is not a new string — but it is a new member,
-     * for the same reason `not_searched` above is listed rather than left
-     * off: `schedule.ts` assigns `BuildStatus` into this object one-for-one.
+     * The service call resolved but not into a trustworthy board — a transport
+     * fault, an unmapped/unreadable status, or the RPC rejecting outright.
+     *
+     * Listed here rather than left off for the same reason `not_searched`
+     * above is: `schedule.ts` assigns `BuildStatus` into this object
+     * one-for-one. It shared `board.result.unavailable` with a z3-era
+     * `z3_unavailable` that meant the same thing to an organiser; C7 retired
+     * that older name, so this is now the only identifier for it. The copy is
+     * unchanged — it was always the same string.
      *
      * Deliberately NOT what a `SOLVER_BUSY` refusal maps to — that stays
      * the existing `"solver_busy"` a few lines up, because a retry helps
@@ -2571,12 +2575,14 @@ const AiConstraintSuggestions = z.object({
  * `engine` is the headline and the rest is why. `"none"` means no repair changed
  * the board — it verified clean, or repair was attempted and nothing was
  * adopted. `"optimized"` means the placement CP-SAT service fixed it, for no
- * credits and no model call (z3 retirement design, stage B, C5 — the repair
- * round's own solver call is `buildSchedule`, not z3's `repairDecomposed`, as
- * of 2026-08-15). `"z3"` stays a valid INPUT value — a board repaired before
- * this cutover still reads back as `"z3"`, and the wire narrows it away only
- * once stage D (C7) lands — but it is no longer produced. `"llm"` means the
- * assistant was asked to repair it.
+ * credits and no model call (z3 retirement design, stage B, shipped by C9 —
+ * the repair round's own solver call is `buildSchedule` via
+ * `repairDecomposedCpsat`). `"llm"` means the assistant was asked to repair it.
+ *
+ * A z3-era `"z3"` member sat here until C7 (stage D) removed it. It was never
+ * persisted — this schema is response-only telemetry, verified across the DDL,
+ * the live schema and every read path — so retiring it needed no data
+ * migration.
  *
  * The rest of the object exists because #401 requires the FALLBACK to be
  * visible, not merely correct: a run where the solver timed out, was queued
@@ -2589,9 +2595,9 @@ const AiConstraintSuggestions = z.object({
  * reason `usage` is shaped this way.
  */
 export const AiRepairReport = z.object({
-  engine: z.enum(["none", "z3", "llm", "optimized"]),
-  /** Did the WASM solver actually run? False on the clean path, and on both
-   *  paths where the attempt was declined before it started. */
+  engine: z.enum(["none", "optimized", "llm"]),
+  /** Did the solver actually run? False on the clean path, and on both paths
+   *  where the attempt was declined before it started. */
   solver_ran: z.boolean(),
   status: z.enum(["clean", "repaired", "partial", "unrepaired"]).optional(),
   /** `k` — the number of fixtures moved. */

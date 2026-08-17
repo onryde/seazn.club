@@ -133,7 +133,7 @@ export function solverEnabled(): boolean {
  *  it as input until C7 narrows it) but is no longer PRODUCED by this module —
  *  `optimized` is written on adoption instead, C4's own vocabulary for a
  *  genuine placement-service win. */
-export type RepairEngine = "none" | "z3" | "llm" | "optimized";
+export type RepairEngine = "none" | "optimized" | "llm";
 
 /**
  * The closed vocabulary `AiRepairReport.status`/`.fallback` already validate
