@@ -13,6 +13,7 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { putScheduleSettings, autoSchedule, applySchedule, lastAiApply } from "../schedule";
 import { schedulingAiModel } from "../schedule-ai";
+import { createVenue, createCourt } from "../venues";
 import { ApplyScheduleRequest, Fixture } from "@/server/api-v1/schemas";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -63,12 +64,16 @@ async function seedPlannableStage(auth: AuthCtx) {
   const [stage] = await createStages(auth, division.id, [
     { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 1 } } },
   ]);
+  // P9 pass 3a: ScheduleConfig.courts is CourtId[] (real courts.id) since
+  // pass 1 — a free-text "Court 1" no longer parses.
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
   await putScheduleSettings(auth, division.id, {
     config: {
       startAt: T0,
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["Court 1"],
+      courts: [court.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -91,10 +96,13 @@ afterAll(async () => {
 // Pure schema contract (no DB): the apply request must accept the optional `ai`
 // provenance block and trim the instruction server-side (v4/03 §10).
 describe("ApplyScheduleRequest.ai (v4/03 §10)", () => {
+  // P9 pass 3a: court_id (real courts.id), not the legacy court_label — the
+  // assignment object is `.strict()`. Pure schema test, no DB: any
+  // uuid-shaped string satisfies CourtId here.
   const validAssignment = {
     fixture_id: randomUUID(),
     scheduled_at: "2026-08-01T09:00:00.000Z",
-    court_label: "Court 1",
+    court_id: randomUUID(),
   };
 
   it("accepts an ai block (trimming is applied server-side at the apply seam)", () => {
@@ -136,7 +144,7 @@ describe.skipIf(!HAS_DB)("AI audit trail in the ledger (v4/03 §10)", () => {
       assignments: proposal.assignments.map((a) => ({
         fixture_id: a.fixture_id,
         scheduled_at: a.scheduled_at,
-        court_label: a.court_label,
+        court_id: a.court_id,
       })),
       source: "ai",
       // The client sends a DIFFERENT model string ("claude-x"); the audit must
@@ -203,7 +211,7 @@ describe.skipIf(!HAS_DB)("AI audit trail in the ledger (v4/03 §10)", () => {
       assignments: proposal.assignments.map((a) => ({
         fixture_id: a.fixture_id,
         scheduled_at: a.scheduled_at,
-        court_label: a.court_label,
+        court_id: a.court_id,
       })),
       source: "auto",
     });
