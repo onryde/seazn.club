@@ -21,6 +21,7 @@ import { Tip } from "@/components/ui/tip";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, type Dict } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
+import { ScrollActiveTabIntoView } from "@/components/ui/scroll-active-tab-into-view";
 import { listVenues } from "@/server/usecases/venues";
 import { VenuesPanel } from "@/components/v2/venues-panel";
 
@@ -51,21 +52,24 @@ export default async function DirectoryPage({
           </p>
         </div>
 
-        <nav className="scroll-x scroll-x-fade mb-6 flex gap-1 whitespace-nowrap border-b border-slate-200">
-          {TABS.map((tabKey) => (
-            <Link
-              key={tabKey}
-              href={`/directory?tab=${tabKey}`}
-              className={`border-b-2 px-4 py-2 text-sm font-medium transition ${
-                tab === tabKey
-                  ? "border-purple-600 text-purple-700"
-                  : "border-transparent text-slate-500 hover:text-slate-800"
-              }`}
-            >
-              {t(ui, `directory.tab.${tabKey}`)}
-            </Link>
-          ))}
-        </nav>
+        <ScrollActiveTabIntoView>
+          <nav className="scroll-x scroll-x-fade mb-6 flex gap-1 whitespace-nowrap border-b border-slate-200">
+            {TABS.map((tabKey) => (
+              <Link
+                key={tabKey}
+                href={`/directory?tab=${tabKey}`}
+                aria-current={tab === tabKey ? "page" : undefined}
+                className={`border-b-2 px-4 py-2 text-sm font-medium transition ${
+                  tab === tabKey
+                    ? "border-purple-600 text-purple-700"
+                    : "border-transparent text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                {t(ui, `directory.tab.${tabKey}`)}
+              </Link>
+            ))}
+          </nav>
+        </ScrollActiveTabIntoView>
 
         {tab === "players" && <PlayersTab ui={ui} />}
         {tab === "clubs" && <ClubsTab ui={ui} />}
