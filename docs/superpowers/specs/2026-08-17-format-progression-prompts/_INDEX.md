@@ -84,6 +84,17 @@ implementation that landed differently — the scoringpad index is full of
   through to the final, unprompted.
 - **`mexicano` maps to engine kind `americano`.** Unresolved: deliberate, or
   drift worth closing in F4.
+- **The format picker is hardcoded English — F3 owns closing it.**
+  `STAGE_TEMPLATES` (`components/v2/format-templates.ts`) carries `label` and
+  `help` as plain string literals, rendered as-is by `division-settings.tsx` and
+  `division-builder.tsx`. **All 14 templates** (12 pre-existing + L3's
+  `ko_plate` and `qualifying_main`) violate the 4-locale rule. L3 added
+  dictionary keys for its two and then **reverted them** on owner ruling
+  2026-08-17, because keys nothing reads are the inert-seam pattern and
+  `i18n:check` stays green against them (it verifies locale parity, not usage).
+  F3 already opens this file, so it wires all 14 through the dictionary in one
+  pass, with a reader. **Watch `feedback_ui_text_breaks_e2e`** — e2e specs pin
+  the English picker labels.
 
 ## Evidence
 
