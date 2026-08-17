@@ -13,6 +13,7 @@ import {
   cricket,
   padSpec,
   CRICKET_EVENT_SCHEMAS,
+  nextBattingSide,
   type CricketBallEv,
   type CricketCfg,
   type CricketEv,
@@ -1046,6 +1047,51 @@ describe("cricket golden (e): two-innings matches", () => {
       { entrantId: "H", line: "300 & 150" },
       { entrantId: "A", line: "250 & 201/5" },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// nextBattingSide (R2b-next) — public mirror of the private battingSideAt/
+// maxInningsCount innings-sequencing rule, exported so apps/web's v3 cricket
+// skin can target a next innings that has not been created yet (see this
+// function's own doc, cricket.ts) instead of hand-copying the rule. Each
+// `it` below covers one cfg SHAPE end to end (every index through the
+// boundary), per the task brief's own ask.
+// ---------------------------------------------------------------------------
+
+describe("nextBattingSide", () => {
+  it("single innings per side: strictly alternates from battingFirst, then null once both sides have batted", () => {
+    const base = { battingFirst: "home" as const, followOnEnforced: false, cfg: { inningsPerSide: 1 as const } };
+    expect(nextBattingSide({ ...base, inningsCount: 0 })).toBe("home");
+    expect(nextBattingSide({ ...base, inningsCount: 1 })).toBe("away");
+    expect(nextBattingSide({ ...base, inningsCount: 2 })).toBeNull(); // nothing further due
+  });
+
+  it("reads battingFirst, not a hardcoded 'home' — an away-first match alternates the other way", () => {
+    const base = { battingFirst: "away" as const, followOnEnforced: false, cfg: { inningsPerSide: 1 as const } };
+    expect(nextBattingSide({ ...base, inningsCount: 0 })).toBe("away");
+    expect(nextBattingSide({ ...base, inningsCount: 1 })).toBe("home");
+  });
+
+  it("two innings per side, no follow-on: strict alternation (index % 2) across all four innings, then null", () => {
+    const base = { battingFirst: "home" as const, followOnEnforced: false, cfg: { inningsPerSide: 2 as const } };
+    expect(nextBattingSide({ ...base, inningsCount: 0 })).toBe("home");
+    expect(nextBattingSide({ ...base, inningsCount: 1 })).toBe("away");
+    expect(nextBattingSide({ ...base, inningsCount: 2 })).toBe("home");
+    expect(nextBattingSide({ ...base, inningsCount: 3 })).toBe("away");
+    expect(nextBattingSide({ ...base, inningsCount: 4 })).toBeNull();
+  });
+
+  it("two innings per side, follow-on enforced: F,S,S,F — diverges from plain alternation at innings 3 (a test only covering simple alternation cannot see this)", () => {
+    const base = { battingFirst: "home" as const, followOnEnforced: true, cfg: { inningsPerSide: 2 as const } };
+    expect(nextBattingSide({ ...base, inningsCount: 0 })).toBe("home");
+    expect(nextBattingSide({ ...base, inningsCount: 1 })).toBe("away");
+    // Plain alternation (index % 2 === 0) would say "home" here — the
+    // follow-on keeps "away" batting again instead (Law: the side asked to
+    // follow on bats immediately, skipping the other side's normal turn).
+    expect(nextBattingSide({ ...base, inningsCount: 2 })).toBe("away");
+    expect(nextBattingSide({ ...base, inningsCount: 3 })).toBe("home");
+    expect(nextBattingSide({ ...base, inningsCount: 4 })).toBeNull();
   });
 });
 
