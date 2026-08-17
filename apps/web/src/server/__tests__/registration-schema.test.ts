@@ -133,17 +133,48 @@ describe.skipIf(!HAS_DB)("V363/V364 registration schema", () => {
       expect(names.has(c), `registrations.${c} should still exist`).toBe(true);
     }
     // Dropped: the roster jsonb, the payment/identity envelope (now the group's),
-    // and the per-person fields (now the player row's).
+    // and the per-person fields (now the player row's). refunded_cents is NOT
+    // in this list: V368 adds it back, but scoped to the entry rather than the
+    // cart — see the dedicated test below.
     for (const c of [
       "roster", "contact_email", "access_token_hash", "ref_code", "locale", "user_id",
       "payment_method", "checkout_session_id", "payment_intent_id", "expires_at",
-      "reminded_at", "refunded_cents", "refunded_at", "disputed_at", "dispute_id",
+      "reminded_at", "refunded_at", "disputed_at", "dispute_id",
       "offline_marked_paid_at", "offline_marked_paid_by", "fee_percent", "currency",
       "privacy_consent_at", "privacy_consent_version",
       "dob", "gender", "guardian_name", "guardian_consent",
     ]) {
       expect(names.has(c), `registrations.${c} should be dropped`).toBe(false);
     }
+  });
+
+  // V368 (RS002): per-entry refunds get their OWN column rather than being
+  // derived from the cart's — registration_groups.refunded_cents stays the
+  // cart's accumulated total, untouched by this migration.
+  it("registrations.refunded_cents (V368): entry-scoped, defaults 0, never negative", async () => {
+    const cols = await sql<{ column_name: string; is_nullable: string; column_default: string | null }[]>`
+      select column_name, is_nullable, column_default from information_schema.columns
+      where table_name = 'registrations' and column_name = 'refunded_cents'`;
+    expect(cols, "registrations.refunded_cents missing").toHaveLength(1);
+    expect(cols[0]!.is_nullable, "refunded_cents should be NOT NULL").toBe("NO");
+    expect(cols[0]!.column_default ?? "").toContain("0");
+
+    const { orgId, compId, divId, tag } = await seedOrgCompDiv();
+    const group = await seedGroup(compId, tag);
+
+    // Omitted at insert → defaults to 0.
+    const reg = await seedEntry(group.id, divId);
+    const [row] = await sql<{ refunded_cents: number }[]>`
+      select refunded_cents from registrations where id = ${reg.id}`;
+    expect(row!.refunded_cents).toBe(0);
+
+    // A negative value is rejected — a refund can only ever add to what has
+    // already gone out.
+    await expect(
+      sql`update registrations set refunded_cents = -1 where id = ${reg.id}`,
+    ).rejects.toThrow();
+
+    await dropOrg(orgId);
   });
 
   it("every entry belongs to a group — group_id is NOT NULL", async () => {
