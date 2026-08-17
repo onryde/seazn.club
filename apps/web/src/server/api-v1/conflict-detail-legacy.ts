@@ -96,7 +96,14 @@ export function withLegacyDetail<C extends { details?: ConflictDetail }>(c: C): 
 // cannot repair — better a loud `TypeError` than a silently wrong sentence.
 const LEGACY_PROSE: Record<ConflictDetailKind, (d: ConflictDetail) => string> = {
   person_double_booking: (d) => `person ${d.personIds![0]} also in ${d.otherFixtureId}`,
-  locked_slot_clash: (d) => `locked slot clashes on ${d.court}`,
+  // P9 pass 3a: `court` is now a real `courts.id` (the venues/courts
+  // cutover — see conflict-detail.ts's own header). `courtName` is the
+  // caller-attached resolution (never set by the engine); `?? d.court`
+  // is the one fallback that keeps this pure function total when a caller
+  // could not resolve one (should not happen — `courts.id` is FK-restricted
+  // from every `fixtures.court_id` that points at it — but a bare id beats
+  // throwing on a miss).
+  locked_slot_clash: (d) => `locked slot clashes on ${d.courtName ?? d.court}`,
   no_slot_start_window: () => "no feasible slot before the start window's notAfter bound",
   no_slot_person_bound: (d) =>
     `no court/time within horizon free of person ${d.personIds![0]} (also in ${d.otherFixtureId})`,
@@ -112,8 +119,10 @@ const LEGACY_PROSE: Record<ConflictDetailKind, (d: ConflictDetail) => string> = 
   // `otherFixtureId` is optional here alone (calendar.ts:1384's fallback: a
   // reportability guard, not a real counterparty — see the design doc's
   // "court_double_booking alone" paragraph). The `?? "another fixture"`
-  // reproduces that literal fallback exactly.
-  court_double_booking: (d) => `court ${d.court} double-booked with ${d.otherFixtureId ?? "another fixture"}`,
+  // reproduces that literal fallback exactly. `courtName ?? court` is the
+  // same P9 pass 3a id-to-name fallback `locked_slot_clash` uses above.
+  court_double_booking: (d) =>
+    `court ${d.courtName ?? d.court} double-booked with ${d.otherFixtureId ?? "another fixture"}`,
   inside_blackout: () => "inside a blackout window",
   outside_session_windows: () => "outside session windows",
   entrant_overlap: (d) => `entrant ${d.entrantIds![0]} overlap with ${d.otherFixtureId}`,

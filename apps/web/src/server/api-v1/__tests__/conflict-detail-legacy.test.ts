@@ -150,6 +150,38 @@ describe("legacyConflictDetail — byte-for-byte pre-C3 English (d0cd9a25)", () 
 });
 
 // ===========================================================================
+// 1b. P9 pass 3a: `court` is now a real `courts.id` (uuid). `courtName` is
+// the caller-attached resolution — never rendered as a bare uuid.
+// ===========================================================================
+
+describe("legacyConflictDetail — courtName (P9 pass 3a, venues/courts cutover)", () => {
+  const courtId = "44444444-4444-4444-4444-444444444444";
+
+  it("court_double_booking prefers courtName over the raw id", () => {
+    expect(
+      legacyConflictDetail({
+        kind: "court_double_booking",
+        court: courtId,
+        courtName: "Centre Court",
+        otherFixtureId: "f2",
+      }),
+    ).toBe("court Centre Court double-booked with f2");
+  });
+
+  it("locked_slot_clash prefers courtName over the raw id", () => {
+    expect(
+      legacyConflictDetail({ kind: "locked_slot_clash", court: courtId, courtName: "Centre Court" }),
+    ).toBe("locked slot clashes on Centre Court");
+  });
+
+  it("falls back to the bare id when courtName is unset — never throws, still not silent", () => {
+    expect(legacyConflictDetail({ kind: "court_double_booking", court: courtId, otherFixtureId: "f2" })).toBe(
+      `court ${courtId} double-booked with f2`,
+    );
+  });
+});
+
+// ===========================================================================
 // 2. Zod round-trip — `details` survives a `.parse()` on both wire schemas
 // ===========================================================================
 

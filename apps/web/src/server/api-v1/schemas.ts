@@ -18,6 +18,10 @@ export const Uuid = z.uuid();
  *  named separately so a stored `ScheduleConfig.courts` entry documents what
  *  it actually references (never a free-text court name post-migration). */
 export const CourtId = Uuid;
+/** A real `venues.id` (V368 cutover — `fixtures.venue_id`, backfilled from
+ *  the legacy free-text `fixtures.venue`). P9 pass 3a's own sibling of
+ *  `CourtId`, same reasoning. */
+export const VenueId = Uuid;
 export const Slug = z
   .string()
   .min(1)
@@ -700,8 +704,12 @@ export type FromTemplateResult = z.infer<typeof FromTemplateResult>;
 export const PatchFixture = z
   .object({
     scheduled_at: z.iso.datetime({ offset: true }).nullable(),
-    venue: z.string().max(200).nullable(),
-    court_label: z.string().max(100).nullable(),
+    // P9 pass 3a (venues/courts cutover, FULL — not a compatibility shim):
+    // `venue`/`court_label` free text leave the wire entirely. A request
+    // names a real venue/court by id; `court_label`/`venue` stay in the DB,
+    // unwritten, until the drop PR.
+    venue_id: VenueId.nullable(),
+    court_id: CourtId.nullable(),
     officials: z.array(z.record(z.string(), z.unknown())),
     /** Pin/lock (doc 12 §2): locked assignments survive re-running auto. */
     schedule_locked: z.boolean(),
@@ -710,6 +718,14 @@ export const PatchFixture = z
     expected_seq: z.number().int().nonnegative(),
   })
   .partial()
+  // P9 pass 3a: `.strict()` so a client still sending the retired
+  // `court_label`/`venue` gets a loud 400 instead of a silent no-op — a
+  // plain (non-strict) object schema STRIPS an unknown key rather than
+  // refusing it, and "I set court_label but the fixture never moved, with
+  // no error" is a far worse failure than a 400 telling the client its
+  // field name is gone. Same reasoning `ApplyCompetitionScheduleRequest`'s
+  // own `.strict()` documents.
+  .strict()
   .refine((p) => Object.keys(p).length > 0, "empty patch");
 export type PatchFixture = z.infer<typeof PatchFixture>;
 
@@ -1145,6 +1161,12 @@ const ScheduleConflictDetail = z.object({
   person_ids: z.array(Uuid).optional(),
   other_fixture_id: Uuid.optional(),
   court: z.string().optional(),
+  /** P9 pass 3a: `court` is now a real `courts.id`; this is the DERIVED,
+   *  read-only display name resolved by the usecase before this leaves the
+   *  server — mirrors the engine's own `ConflictDetail.courtName` (see its
+   *  doc comment). Absent exactly when `court` is, or on the rare miss a
+   *  resolver could not name. */
+  court_name: z.string().optional(),
   day: z.string().optional(),
   other_day: z.string().optional(),
   weekday: z.string().optional(),
@@ -1234,7 +1256,12 @@ export const ScheduleAssignment = z.object({
   fixture_id: Uuid,
   scheduled_at: z.string(),
   ends_at: z.string(),
-  court_label: z.string(),
+  court_id: CourtId,
+  /** DERIVED, read-only (P9 pass 3a) — resolved from `court_id` by the
+   *  usecase. Nullable rather than omitted on a miss: `court_id` itself is
+   *  always present on a real assignment, so a client can always render
+   *  SOMETHING (fall back to the id) without a key-absence check. */
+  court_name: z.string().nullable(),
 });
 export type ScheduleAssignment = z.infer<typeof ScheduleAssignment>;
 
@@ -1642,13 +1669,19 @@ export type AiApplyMeta = z.infer<typeof AiApplyMeta>;
 export const ApplyScheduleRequest = z.object({
   assignments: z
     .array(
-      z.object({
-        fixture_id: Uuid,
-        scheduled_at: IsoDateTime,
-        court_label: z.string().min(1).max(100),
-        venue: z.string().max(200).nullish(),
-        schedule_locked: z.boolean().optional(),
-      }),
+      z
+        .object({
+          fixture_id: Uuid,
+          scheduled_at: IsoDateTime,
+          // P9 pass 3a — see PatchFixture's identical note just above, incl.
+          // why `.strict()` below: a client still sending `court_label`
+          // must get a loud 400, not a silently-stripped-and-then-required-
+          // -field-missing error that names the wrong thing.
+          court_id: CourtId,
+          venue_id: VenueId.nullish(),
+          schedule_locked: z.boolean().optional(),
+        })
+        .strict(),
     )
     .min(1)
     .max(500),
