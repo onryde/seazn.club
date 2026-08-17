@@ -48,13 +48,21 @@ export interface CombinedQualification {
 // L3/#414 — losers of a completed bracket round (KO→plate, qualifying-KO
 // wildcards). `round` is a bracket-wiring label, never an arithmetic
 // quantity (spec 05 §2.3/§2.5: rounds number sparsely — 1,2,3 on a winners'
-// side, 7-10 on a losers' side, 14 for a grand final). `count` omitted takes
-// every loser of the round.
+// side, 7-10 on a losers' side, 14 for a grand final).
+//
+// `count` is REQUIRED, unlike the first cut of this spec. Every sibling spec
+// encodes its own output size (take.length / topN / bestOfRank.count), and
+// `qualificationSize` is called to SIZE a stage — including from
+// `previewDivisionFixtures`, a read path. An optional count forced that
+// function to throw for a spec it could not measure, which turns a missing
+// field into a broken preview rather than a validation message. Producers
+// always know the number: the template that builds a KO→plate knows the
+// entrant count when it writes the spec.
 export interface RoundLosers {
   from?: string;
   losersOfRound: {
     round: number;
-    count?: number;
+    count: number;
   };
 }
 export type QualificationSpec = TakePicks | TopN | BestOfRank | CombinedQualification | RoundLosers;
@@ -73,13 +81,12 @@ export interface StageTables {
   // qualification is sourced from a bracket (knockout / double_elim /
   // stepladder / page_playoff). Only `losersOfRound` reads this; every other
   // spec ignores it.
+  // `bracket` order IS the qualification order: the caller that assembles it
+  // (engine-db's completion path, from `ext_key`'s lane + slot) is the
+  // ordering authority, and a test there proves the assembly is ordered.
+  // A `seeds` tie-break used to live here; it could never fire, because the
+  // only "position" available to this module is a distinct array index.
   bracket?: readonly BracketFixture[];
-  // L3/#414 — entrant seeds, when the caller has them. `losersOfRound` uses
-  // this as a tie-break BEHIND bracket position (the given fixture order);
-  // with a plain array (always distinctly indexed) position alone is already
-  // a total order, so this can't actually fire today — kept for parity with
-  // bracketRanks's own position→seed cascade and as a documented contract.
-  seeds?: ReadonlyMap<EntrantId, number>;
 }
 
 function isTake(spec: QualificationSpec): spec is TakePicks {
@@ -97,24 +104,13 @@ function isRoundLosers(spec: QualificationSpec): spec is RoundLosers {
 
 // The seed count a spec must produce — the next stage's generator input size
 // (spec 05 §6 invariant: qualification output size matches next stage input).
-// L3/#414 — a losersOfRound with no explicit `count` has no statically known
-// size (unlike take/topN/bestOfRank, all of which encode their size in the
-// spec alone): how many losers a round produces is stage data, not spec
-// data. Callers sizing the next stage ahead of time must pass `count`
-// explicitly; callers sizing AFTER the stage completes read
-// resolveQualification's result length instead.
+// Total for every spec kind: this is a read path (`previewDivisionFixtures`
+// sizes a stage graph with it), so it must never throw.
 export function qualificationSize(spec: QualificationSpec): number {
   if (isCombine(spec)) return spec.combine.reduce((n, child) => n + qualificationSize(child), 0);
   if (isTake(spec)) return spec.take.length;
   if (isTopN(spec)) return spec.topN;
-  if (isRoundLosers(spec)) {
-    if (spec.losersOfRound.count !== undefined) return spec.losersOfRound.count;
-    throw new EngineError(
-      "QUALIFICATION_INVALID",
-      "losersOfRound needs an explicit count to size the next stage ahead of resolution — omit it only when sizing after resolveQualification has run",
-      { round: spec.losersOfRound.round },
-    );
-  }
+  if (isRoundLosers(spec)) return spec.losersOfRound.count;
   return spec.bestOfRank.count;
 }
 
@@ -248,18 +244,13 @@ export function resolveQualification(spec: QualificationSpec, tables: StageTable
     // Equality-filter only — never arithmetic on `round` (spec 05 §2.3/§2.5,
     // sparse numbering). The filtered array's order IS bracket position: the
     // caller that assembled `tables.bracket` is the ordering authority, not
-    // this function. `tables.seeds` only breaks a tie between two
-    // same-position losers, which a distinctly-indexed array can't actually
-    // produce — see the StageTables.seeds comment above.
-    const seedOf = (id: EntrantId): number => tables.seeds?.get(id) ?? Number.MAX_SAFE_INTEGER;
-    const decided = bracket.filter(
-      (fixture): fixture is BracketFixture & { loser: EntrantId } =>
-        fixture.round === round && fixture.loser !== undefined,
-    );
-    const losers = decided
-      .map((fixture, position) => ({ id: fixture.loser, position }))
-      .sort((a, b) => a.position - b.position || seedOf(a.id) - seedOf(b.id))
-      .map((entry) => entry.id);
+    // this function, so there is nothing to sort here.
+    const losers = bracket
+      .filter(
+        (fixture): fixture is BracketFixture & { loser: EntrantId } =>
+          fixture.round === round && fixture.loser !== undefined,
+      )
+      .map((fixture) => fixture.loser);
 
     if (losers.length === 0) {
       throw new EngineError(
@@ -268,7 +259,7 @@ export function resolveQualification(spec: QualificationSpec, tables: StageTable
         { round },
       );
     }
-    const want = count ?? losers.length;
+    const want = count;
     if (want > losers.length) {
       throw new EngineError(
         "QUALIFICATION_INVALID",

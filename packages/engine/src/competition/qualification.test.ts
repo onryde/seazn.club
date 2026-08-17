@@ -235,15 +235,11 @@ describe("pool key/name hardening (PROMPT-59 §3)", () => {
 // an arithmetic quantity — resolveQualification only ever compares `round`
 // with `===`. "Bracket position" is the order fixtures for the round appear
 // in `tables.bracket`: the caller (the code that reconstructs the bracket)
-// is the ordering authority, not this function. `tables.seeds` is a L3
-// addition to StageTables — a genuine secondary sort key, though with a
-// plain array (always distinctly indexed) it can never actually break a tie;
-// it exists for parity with bracketRanks's own position→seed cascade and as
-// a documented contract for callers that might not fully guarantee position
-// order.
+// is the ordering authority, not this function, so this module does not sort
+// at all. `count` is REQUIRED on the spec — see qualificationSize below.
 describe("resolveQualification — losersOfRound (L3/#414)", () => {
   it("throws STAGE_NOT_READY when the stage's bracket wasn't supplied", () => {
-    expect(() => resolveQualification({ losersOfRound: { round: 1 } }, { pools: [] })).toThrow(
+    expect(() => resolveQualification({ losersOfRound: { round: 1, count: 1 } }, { pools: [] })).toThrow(
       /bracket/,
     );
   });
@@ -253,11 +249,11 @@ describe("resolveQualification — losersOfRound (L3/#414)", () => {
       pools: [],
       bracket: [{ id: "f1", round: 1, status: "scheduled" as const }],
     };
-    expect(() => resolveQualification({ losersOfRound: { round: 1 } }, tables)).toThrow(
+    expect(() => resolveQualification({ losersOfRound: { round: 1, count: 1 } }, tables)).toThrow(
       /round 1 has no losers/,
     );
     // the round simply doesn't exist in this bracket at all
-    expect(() => resolveQualification({ losersOfRound: { round: 99 } }, tables)).toThrow(
+    expect(() => resolveQualification({ losersOfRound: { round: 99, count: 1 } }, tables)).toThrow(
       /round 99 has no losers/,
     );
   });
@@ -276,26 +272,9 @@ describe("resolveQualification — losersOfRound (L3/#414)", () => {
     };
     // "R7-second" is listed BEFORE "R7-first" in the bracket array — position
     // order is array order, so it must come out first too.
-    expect(resolveQualification({ losersOfRound: { round: 7 } }, tables)).toEqual([
+    expect(resolveQualification({ losersOfRound: { round: 7, count: 2 } }, tables)).toEqual([
       "R7-second",
       "R7-first",
-    ]);
-  });
-
-  it("seed is a tie-break BEHIND position, never ahead of it", () => {
-    const tables = {
-      pools: [],
-      bracket: [
-        { id: "a", round: 0, status: "decided" as const, loser: "Worse" }, // position 0
-        { id: "b", round: 0, status: "decided" as const, loser: "Better" }, // position 1
-      ],
-      // "Better" is the lower (stronger) seed, but it is in the LATER array
-      // position — position must still win.
-      seeds: new Map([["Better", 1], ["Worse", 8]]),
-    };
-    expect(resolveQualification({ losersOfRound: { round: 0 } }, tables)).toEqual([
-      "Worse",
-      "Better",
     ]);
   });
 
@@ -312,8 +291,8 @@ describe("resolveQualification — losersOfRound (L3/#414)", () => {
       "L1",
       "L2",
     ]);
-    // omitted count ⇒ every loser of the round
-    expect(resolveQualification({ losersOfRound: { round: 0 } }, tables)).toEqual([
+    // a count equal to the round's loser count takes all of them
+    expect(resolveQualification({ losersOfRound: { round: 0, count: 3 } }, tables)).toEqual([
       "L1",
       "L2",
       "L3",
@@ -340,7 +319,7 @@ describe("resolveQualification — losersOfRound (L3/#414)", () => {
       ],
     };
     const spec = {
-      combine: [{ losersOfRound: { round: 0 } }, { losersOfRound: { round: 1 } }],
+      combine: [{ losersOfRound: { round: 0, count: 2 } }, { losersOfRound: { round: 1, count: 1 } }],
     };
     expect(resolveQualification(spec, tables)).toEqual(["R0L1", "R0L2", "R1L1"]);
   });
@@ -353,26 +332,25 @@ describe("resolveQualification — losersOfRound (L3/#414)", () => {
       pools: [{ pool: "A", rows: [row("R0L1", 1, 9)] }],
       bracket: [{ id: "r0-a", round: 0, status: "decided" as const, loser: "R0L1" }],
     };
-    const dupe = { combine: [{ take: [{ pool: "A", rank: 1 }] }, { losersOfRound: { round: 0 } }] };
+    const dupe = {
+      combine: [{ take: [{ pool: "A", rank: 1 }] }, { losersOfRound: { round: 0, count: 1 } }],
+    };
     expect(() => resolveQualification(dupe, tables)).toThrow(/more than one/);
   });
 });
 
 describe("qualificationSize — losersOfRound (L3/#414)", () => {
-  it("returns the explicit count when given", () => {
+  it("returns the declared count", () => {
     expect(qualificationSize({ losersOfRound: { round: 1, count: 4 } })).toBe(4);
   });
 
-  it("throws QUALIFICATION_INVALID when count is omitted — the size is unknowable before resolution", () => {
-    // Unlike take/topN/bestOfRank, losersOfRound's size without an explicit
-    // count depends on how many fixtures the round actually produced —
-    // stage data qualificationSize (spec-only, no `tables`) doesn't have.
-    // Callers sizing the next stage ahead of time must pass `count`
-    // explicitly; callers sizing AFTER resolveQualification use its result
-    // length instead.
-    expect(() => qualificationSize({ losersOfRound: { round: 1 } })).toThrow(
-      /needs an explicit count/,
-    );
+  it("never throws — it is a read path (previewDivisionFixtures sizes with it)", () => {
+    // `count` is required on the spec precisely so this stays total. Every
+    // sibling spec encodes its own size; losersOfRound now does too, so no
+    // caller has to catch a sizing call.
+    for (const round of [0, 1, 7, 14]) {
+      expect(() => qualificationSize({ losersOfRound: { round, count: 2 } })).not.toThrow();
+    }
   });
 
   it("sums correctly inside combine when every child declares a count", () => {
