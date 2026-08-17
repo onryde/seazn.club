@@ -195,6 +195,25 @@ serves its closed/unavailable state during that window.
 - **Smoke shipped**: `regQueueSuite` now PUTs `currency: "usd"` at a gbp org and
   asserts the response comes back `gbp` — i.e. a per-division currency is
   ignored and the org's is quoted. That is the reachable RS001b behaviour today.
+- **Unplanned, owner-approved (2026-08-17): the RLS guard was checking nothing.**
+  `scripts/check-rls.ts` filtered on schema `public`; every table in this
+  database lives in `seazn_club`. It selected **zero rows** and printed "RLS
+  guard OK" — in the smoke CI job as much as locally — for its whole life. So
+  the automated backstop for "a new table forgot isolation" has never once been
+  able to fail. Corrected to `DB_SCHEMA ?? "seazn_club"`, it checks **54** tenant
+  tables and named three with no row-level security at all:
+  `org_credit_allocation` (V329), `pass_credit_redemptions` (V335),
+  `pass_mint_refusals` (V342). Owner ruled: fix the script AND close the three
+  here, rather than exempting them or deferring. **V366** enables+FORCEs RLS and
+  adds a tenant policy on each; deliberately NO `app_user` GRANT, because their
+  isolation today rests only on the absence of one — the migration tightens, it
+  does not widen. `SUPERUSER_ONLY` moved to `scripts/rls-exempt.ts` so the
+  script and the new vitest suite read ONE list.
+  New suite `apps/web/src/server/__tests__/rls-coverage.test.ts` duplicates the
+  gate in the ORDINARY test job (the script runs only in the PR-only smoke job)
+  and, first assertion, fails if it is ever looking at fewer than 40 tenant
+  tables — the check that would have caught the dead gate on day one. Proven red
+  by disabling RLS on `pass_mint_refusals` and re-running.
 - **Gate**: full `apps/web` vitest 7995 total / 7923 passed / 4 failed / 68
   pending; the 4 are `schedule-build-honours-locks.test.ts`, the pre-existing
   red on main documented below. `tsc` root EXIT=0, `lint` 0 errors (75 warnings,

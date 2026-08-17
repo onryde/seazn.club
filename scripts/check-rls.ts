@@ -3,6 +3,7 @@
 // forgets isolation. Run against a bootstrapped DB:
 //   node --experimental-strip-types scripts/check-rls.ts
 import postgres from "postgres";
+import { SUPERUSER_ONLY } from "./rls-exempt.ts";
 
 const url = process.env.DATABASE_URL;
 if (!url) {
@@ -10,20 +11,19 @@ if (!url) {
   process.exit(1);
 }
 
-// Tables that carry org_id but are intentionally accessed only via the
-// superuser connection (billing/admin), never as app_user, so they are exempt
-// from RLS. Keep this list tight — everything else with org_id must be isolated.
-const SUPERUSER_ONLY = new Set([
-  "subscriptions",
-  "org_entitlement_overrides",
-  "billing_events",
-  "impersonation_sessions",
-  "activation_events",
-]);
+
+// This repo's tables live in `seazn_club`, never `public` — the same value the
+// app's own client and every script set as `search_path`. The queries below
+// MUST filter on it: `pg_class`/`information_schema` do not honour
+// `search_path`, they need the schema named. Hardcoding 'public' made this
+// guard select ZERO rows and print "RLS guard OK" while checking nothing, in CI
+// as well as locally. A gate that cannot fail is worse than no gate — it is the
+// reason a new table can forget isolation and still ship green.
+const SCHEMA = process.env.DB_SCHEMA ?? "seazn_club";
 
 const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
 const sql = postgres(url, {
-  connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+  connection: { search_path: SCHEMA },
   ssl: process.env.DATABASE_SSL === "disable" ? false : isLocal ? false : "require",
   prepare: !url.includes(":6543"),
   max: 1,
@@ -41,14 +41,14 @@ try {
       c.relrowsecurity                            as rls_enabled,
       c.relforcerowsecurity                       as rls_forced,
       (select count(*)::int from pg_policies p
-        where p.schemaname = 'public' and p.tablename = c.relname) as policies
+        where p.schemaname = ${SCHEMA} and p.tablename = c.relname) as policies
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
-    where n.nspname = 'public'
+    where n.nspname = ${SCHEMA}
       and c.relkind = 'r'
       and exists (
         select 1 from information_schema.columns col
-        where col.table_schema = 'public'
+        where col.table_schema = ${SCHEMA}
           and col.table_name = c.relname
           and col.column_name = 'org_id'
       )
