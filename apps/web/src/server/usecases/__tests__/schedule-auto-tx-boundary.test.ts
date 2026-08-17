@@ -76,6 +76,7 @@ const { createEntrants } = await import("../entrants");
 const { createStages, generateStageFixtures } = await import("../stages");
 const { autoSchedule, putScheduleSettings, applySchedule } =
   await import("../schedule");
+const { createVenue, createCourt } = await import("../venues");
 type AuthCtx = import("@/server/api-v1/auth").AuthCtx;
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -144,12 +145,17 @@ async function seedStage(): Promise<{ auth: AuthCtx; stageId: string }> {
     name: "L",
     config: {},
   });
+  // P9 pass 3a: real courts.id values — ScheduleConfig.courts is CourtId[]
+  // since pass 1.
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const c1 = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
+  const c2 = await createCourt(auth, venue.id, { name: "C2", sort: 1, tags: [] });
   await putScheduleSettings(auth, division.id, {
     config: {
       startAt: T0,
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["C1", "C2"],
+      courts: [c1.id, c2.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -222,12 +228,12 @@ describe.skipIf(!HAS_DB)(
         assignments: first.assignments.map((a) => ({
           fixture_id: a.fixture_id,
           scheduled_at: a.scheduled_at,
-          court_label: a.court_label,
+          court_id: a.court_id,
         })),
         source: "auto",
       });
       await sql`
-        update fixtures set scheduled_at = null, court_label = null
+        update fixtures set scheduled_at = null, court_id = null
         where id = ${first.assignments[0]!.fixture_id}`;
       tx.solveDepths = [];
       tx.opens = 0;
