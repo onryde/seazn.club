@@ -757,6 +757,85 @@ claim below carries its `path:line`.
    sit at `L1803-1871`, org-authed ones at `L1690-1802`. OpenAPI generator entry:
    `api-v1/openapi.ts:10`.
 
+### RS003 (2026-08-18) — branch `feat/rs003-registration-endpoints`
+
+**LIVE SESSION STATE.** Worktree `.claude/worktrees/rs003`, rebased onto `main`
+@ `604767c63`. **W1 CLOSED. W2/W3/W4 not started** — a resumed session starts at
+W2 (routes).
+
+- **Environment is LEFT UP for tomorrow** (owner's call, 2026-08-18): DB label
+  `rs003b` on `127.0.0.1:54671/seazn_rs003b`, schema at **v370**, worktree
+  `node_modules` already installed. The **placement service was stopped** — it
+  goes stale the moment `services/placement/src/**` changes and the next run
+  would dial it and pass against code that no longer exists. Restart it with
+  `seazn-env up --label rs003b --placement` (venv is warm now, ~9s), and
+  re-export `PLACEMENT_SERVICE_HOST` from `seazn-env env --label rs003b`,
+  because the port is re-derived and will NOT be 50633 again.
+- **Before trusting that DB tomorrow, check whether `main` moved.** If a rebase
+  brings any new delta, this DB's Flyway history no longer matches the tree and
+  it must be destroyed and rebuilt, not migrated — that is exactly what happened
+  to its predecessor today (see the V368 collision below).
+- **Wave plan** (sequential — the file sets overlap, so never parallel):
+  W1 schemas → W2 routes (`app/api/v1/public/.../register/**`) → W3 payment
+  orchestration + webhook re-key (`registrations.ts`, `billing-events.ts`) →
+  W4 whole-branch review.
+- **The V-number collision recurred, one merge after RS002 recorded it.** `main`
+  briefly held TWO V368s — F1's `V368__fixture_round_role.sql` (#606) and
+  RS002's `V368__registration_entry_refunds.sql` (#607) — and Flyway refuses to
+  run AT ALL in that state (`Found more than one migration with version 368`),
+  so no fresh clone, worktree or CI Postgres job could build a schema. Both PRs
+  were green in isolation; the collision existed only in the merge, because each
+  renumbered off P8's V367 independently while open. Fixed on `main` by
+  `604767c63` (registration refunds → **V370**; F1 keeps V368+V369 because they
+  are a pair). **RS003's own deltas start at V371.** Consequence for every RS
+  session: a DB built before that rebase has `V368 = registration refunds` in
+  its Flyway history and CANNOT be reused after it — ours was destroyed and
+  rebuilt, not migrated.
+- **A 600s watchdog stall cost a full wave.** W1's first implementer ran `tsc`
+  (~2.8 GB, minutes) and a broad vitest run inside its own loop, stalled
+  mid-TDD-red, and died with ZERO commits — the same failure RS002 recorded
+  three times. What fixed it on the retry: the brief FORBIDS the agent running
+  `tsc`, lint, or the broad suite at all (the orchestrator runs those at the
+  wave boundary), requires foreground-only commands, and requires a commit at
+  red, at green and at contract-regen. Second attempt: three commits, no stall.
+
+**Wave 1 CLOSED** (`c93071a3d` red, `715ce17fe` green, `fc5c6333c` review fix).
+Exports: `PublicRegisterGroupRequest`/`Response`, `PublicJoinRequest`/`Response`,
+plus `PublicRegisterGroupContact`/`Player`/`Entry`/`EntryResult`. Gate rerun by
+the main thread: api-v1 suite **396 total / 396 passed / 0 failed / 0 failed
+suites**; root `turbo typecheck` **2/2 successful**; `openapi:gen` +
+`i18n:gen-keys` → `git status --porcelain` empty.
+
+- **Bounds chosen (the brief asked for a number and said to record it): max 10
+  entries per cart, max 50 players per entry.** The 10 also keeps the W3 Stripe
+  metadata under the 500-char value limit if entry ids are listed there.
+- **`currency` on a public REQUEST is stripped, not rejected** — never declared,
+  and these schemas are not `.strict()`, matching every other public request
+  schema in the file. Recorded because "reject" is the other defensible choice
+  and a future reader will wonder which was meant.
+- **`checkout_url` ships required-but-nullable from W1**, before W3 can fill it,
+  so the wire contract never widens later.
+- **Review fix, found by the orchestrator reading the diff, not by the
+  implementer: the refinement defaulted a missing `self_player_index` to 0.**
+  The usecase resolves `self_player_index ?? (individual && players.length === 1
+  ? 0 : undefined)` and, on `undefined`, leaves `selfIndex` null and DROPS the
+  self declaration silently (`registration-submit.ts:383-393`). So a TEAM or
+  PAIR entry claiming `registering_self` without naming its row validated
+  cleanly and fell straight into that drop — the entry submits, the registrant
+  is never linked to their own player row, and no layer errors. The schema is
+  the only place that can surface it, which is what its own comment claimed it
+  was for. Now mirrors the usecase arm for arm.
+- **Two of the three tests added with that fix do not discriminate.** Mutated
+  back to `?? 0`, exactly ONE of 27 fails (the team case). The free-agent-with-
+  no-players and individual-implied-0 cases hold under both rules and are
+  labelled in the file as characterisation. Written down because three tests
+  beside one fix reads as three proofs.
+- **RS001's entry condition 2 is CLOSED, not outstanding.** The privacy-consent
+  rule that died with the old `submitRegistration` was reimplemented by RS002:
+  `registration-submit.ts:426` throws the identical
+  `422 "Please agree to the privacy policy to register"`, with the guardian
+  gate at `:419`. Verified this session; no RS003 work owed.
+
 ## RS011 — why #412 moved here (2026-08-17)
 
 `L1-412-w1-eligibility.md` in `../2026-08-06-scoringpad-v2-prompts/` was written
