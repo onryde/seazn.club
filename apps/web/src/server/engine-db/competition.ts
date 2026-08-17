@@ -1,14 +1,18 @@
 import "server-only";
 import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
-import { EngineError, type MatchOutcome, type StageCtx } from "@seazn/engine/core";
+import { log } from "@/server/logger";
+import { EngineError, StageKind, type MatchOutcome, type StageCtx } from "@seazn/engine/core";
 import {
   PointsRule,
   applyPointsRule,
+  completeBracketStage,
   completeTableStage,
   isBracketStageComplete,
   isTableStageComplete,
+  placementTable,
   type BracketFixture,
+  type BracketStage,
   type DivisionEvent,
   type FixtureStatus,
   type StandingsRow,
@@ -24,6 +28,36 @@ type Tx = postgres.TransactionSql;
 // americano folds like a table stage (Jul3/08 §3): its pair fixtures feed the
 // standard standings machinery.
 const TABLE_KINDS = new Set(["league", "group", "swiss", "americano"]);
+
+// L3/#414 pass 2 — the bracket-shaped kinds. TABLE_KINDS (4) ∪ {"ladder"} (1)
+// ∪ BRACKET_KINDS (4) = 9 = every StageKind value: completeStageIfReady's
+// branch below is exhaustive by construction, not by the type checker (kind
+// is validated from a raw DB string at the loadStageInputs boundary, so TS
+// can't prove the three branches cover it statically — see parseStageKind).
+const BRACKET_KINDS = ["knockout", "double_elim", "stepladder", "page_playoff"] as const;
+function isBracketKind(kind: StageKind): kind is BracketStage["kind"] {
+  return (BRACKET_KINDS as readonly string[]).includes(kind);
+}
+
+// L3/#414 pass 2 — `stages.kind` arrives from loadStageInputs's row as a raw
+// `string`. The DB CHECK constraint (V298__page_playoff_stage_kind.sql) keeps
+// it in the same 9 values as the engine's StageKind, but nothing upstream of
+// here ever verified that — the two deleted casts (`as StageCtx["kind"]`,
+// `as never`) just told the type checker to trust it. Parse once, reuse the
+// validated value everywhere a kind is needed, and fail loudly instead of
+// silently absorbing a value the engine doesn't recognise (e.g. the CHECK
+// constraint drifting from StageKind again in a future migration).
+export function parseStageKind(raw: string, stageId: string): StageKind {
+  const parsed = StageKind.safeParse(raw);
+  if (!parsed.success) {
+    log.error({ event: "stage_kind_invalid", stageId, kind: raw }, "unknown stage kind from DB");
+    throw new EngineError("CONFIG_INVALID", `stage ${stageId} has unknown kind "${raw}"`, {
+      stageId,
+      kind: raw,
+    });
+  }
+  return parsed.data;
+}
 
 // DB fixtures.status → engine FixtureStatus (spec 05 §1 vocabulary).
 function toEngineStatus(dbStatus: string): FixtureStatus {
@@ -43,6 +77,80 @@ function toEngineStatus(dbStatus: string): FixtureStatus {
   }
 }
 
+// L3/#414 pass 2 — `ext_key` is the only place a bracket fixture's lane
+// (WB/LB/GF, double-elim only) and thirdPlace status survive persistence:
+// bracket.ts mints these ids at generation (`wb-r{r}-i{i}`, `lb-r{r}-i{i}`,
+// `gf`/`gf-reset`, `${idPrefix}-3p`) and stages.ts writes them straight to
+// fixtures.ext_key (PROMPT-09) — there is no separate lane/thirdPlace column.
+// PARSE the id, never re-derive either fact from round/position: a bracket's
+// rounds number sparsely (1,2,3 on a winners' lane, 7-10 on a losers' lane,
+// 14 for a grand final — spec 05 §2.3/§2.5), so no arithmetic on `round` can
+// recover which lane a fixture belongs to.
+export function parseExtKey(extKey: string | null): { bracket?: "WB" | "LB" | "GF"; thirdPlace: boolean } {
+  if (extKey === null) return { thirdPlace: false };
+  const bracket =
+    extKey === "gf" || extKey.startsWith("gf-")
+      ? ("GF" as const)
+      : extKey.startsWith("wb-")
+        ? ("WB" as const)
+        : extKey.startsWith("lb-")
+          ? ("LB" as const)
+          : undefined;
+  return { ...(bracket !== undefined ? { bracket } : {}), thirdPlace: extKey.endsWith("-3p") };
+}
+
+// A decided/walkover bracket fixture's outcome jsonb names its winner/loser
+// (spec 03 §3 MatchOutcome). `win` names both directly; `award` (walkover/
+// forfeit, spec 05 §5) names only the winner — the loser is whichever side
+// isn't them, the same derivation testkit/simulation.ts uses for its own
+// award-outcome replay. draw/tie/no_result never reach a bracket fixture (a
+// stage that forbids draws refuses to finalize one, DRAW_NOT_ALLOWED), so
+// they resolve to neither side rather than guessing.
+export function bracketWinnerLoser(
+  outcome: unknown,
+  home: string | null,
+  away: string | null,
+): { winner?: string; loser?: string } {
+  if (!outcome) return {};
+  const o = outcome as MatchOutcome;
+  if (o.kind === "win") return { winner: o.winner, loser: o.loser };
+  if (o.kind === "award") {
+    const loser = o.winner === home ? away : home;
+    return { winner: o.winner, ...(loser !== null ? { loser } : {}) };
+  }
+  return {};
+}
+
+// Rebuild one DB fixture row into the engine's BracketFixture shape (spec 05
+// §1). `isFinal` starts at `!thirdPlace` and is refined true->false by the
+// caller once it knows which fixtures have an onward winner_to_fixture feed
+// (a second query across the whole stage, not a fact of the row alone) — but
+// NEVER the other way. A thirdPlace playoff decides nothing beyond ranks 3/4,
+// so its winner never feeds forward either, which means the naive
+// "winner_to_fixture is null => isFinal" heuristic marks it isFinal too: with
+// a thirdPlace game sharing the true final's round_no (bracket.ts:
+// `round: se.rounds - 1`, identical to the final's own `rounds - 1`),
+// bracketRanks's `decidedFinals` round-desc sort can then pick either one as
+// the grand final depending on array order. thirdPlace status is structural
+// (parsed from ext_key, never guessed) and settles it unconditionally: a
+// thirdPlace fixture is never the decider, full stop.
+function toBracketFixture(f: FixtureRow): BracketFixture {
+  const { bracket, thirdPlace } = parseExtKey(f.ext_key);
+  const { winner, loser } = bracketWinnerLoser(f.outcome, f.home_entrant_id, f.away_entrant_id);
+  return {
+    id: f.id,
+    round: f.round_no,
+    isFinal: !thirdPlace,
+    status: toEngineStatus(f.status),
+    ...(bracket !== undefined ? { bracket } : {}),
+    ...(thirdPlace ? { thirdPlace: true } : {}),
+    ...(f.home_entrant_id !== null ? { home: f.home_entrant_id } : {}),
+    ...(f.away_entrant_id !== null ? { away: f.away_entrant_id } : {}),
+    ...(winner !== undefined ? { winner } : {}),
+    ...(loser !== undefined ? { loser } : {}),
+  };
+}
+
 interface StageRow {
   id: string;
   division_id: string;
@@ -54,6 +162,12 @@ interface StageRow {
     carry_deltas?: unknown; // Jul3/05 §3 opening deltas
     rank_overrides?: unknown; // Jul3/05 §4 manual rank locks
     h2h_scope?: string; // Jul3/05 §5
+    // L3/#414 pass 2 — Jul3/08 §6: a ladder's finish order. Initialised from
+    // seed order on the FIRST issued challenge (usecases/stages.ts
+    // issueChallenge) and re-swapped in place whenever a challenger beats the
+    // entrant above them (usecases/scoring.ts) — absent until then, so a
+    // ladder stage with zero fixtures ever has no order to complete into.
+    ladder_order?: string[];
   } | null;
   status: string;
 }
@@ -76,10 +190,17 @@ interface FixtureRow {
   /** V347 — the resolved cfg this fixture was SCORED under; null before its
    *  first event. See `fixture-cfg.ts`. */
   config_snapshot: unknown;
+  /** L3/#414 pass 2 — see parseExtKey: the only surviving record of a bracket
+   *  fixture's lane and thirdPlace status. */
+  ext_key: string | null;
 }
 
 interface StageInputs {
   stage: StageRow;
+  /** L3/#414 pass 2 — `stage.kind` validated into the engine's StageKind once
+   *  per load (parseStageKind); every completion branch reads THIS, never
+   *  `stage.kind` (raw string) directly. */
+  kind: StageKind;
   division: DivisionRow;
   module: AnySportModule;
   fixtures: FixtureRow[];
@@ -104,11 +225,12 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   if (!division) throw new EngineError("CONFIG_INVALID", "division not found", { stageId });
 
   const sportModule = resolveModule(division.sport_key, division.module_version);
-  const ctxBase: StageCtx = { kind: stage.kind as StageCtx["kind"] };
+  const kind = parseStageKind(stage.kind, stageId);
+  const ctxBase: StageCtx = { kind };
 
   const fixtures = await tx<FixtureRow[]>`
     select f.id, f.status, f.round_no, f.pool_id, f.home_entrant_id, f.away_entrant_id,
-           f.outcome, f.config_snapshot, m.state
+           f.outcome, f.config_snapshot, f.ext_key, m.state
     from fixtures f left join match_states m on m.fixture_id = f.id
     where f.stage_id = ${stageId}
     order by f.round_no, f.seq_in_round
@@ -179,6 +301,7 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
 
   return {
     stage,
+    kind,
     division,
     module: sportModule,
     // No stage-wide `cfg` field: there is no such thing any more. Each fixture
@@ -301,13 +424,18 @@ export interface CompleteResult {
 
 /**
  * If a stage's completion predicate holds (spec 05 §1), mark it complete, cache
- * its final standings, and record the structural division_events
+ * its final placement snapshot(s), and record the structural division_events
  * (stage_completed + any rank-lock) — all under the division advisory lock and
  * idempotent (a re-run on an already-complete stage is a no-op).
  *
- * Table stages (league/group/swiss) are fully handled. Bracket stages
- * (knockout/double_elim/stepladder) detect completion and emit stage_completed;
- * their next-stage generation lands in PROMPT-09.
+ * L3/#414 pass 2 — every stage kind now writes a placement snapshot on
+ * completion, not just table stages: table kinds (league/group/swiss/
+ * americano) snapshot per pool as before; bracket kinds (knockout/
+ * double_elim/stepladder/page_playoff) rebuild BracketFixture[] from each
+ * fixture's outcome + ext_key and snapshot bracketRanks() wrapped as a single
+ * pool (placementTable); ladder snapshots config.ladder_order once every
+ * challenge fixture is settled. seedNextStage (usecases/stages.ts, pass 3)
+ * reads these snapshots to qualify entrants into the next stage.
  */
 export async function completeStageIfReady(
   orgId: string,
@@ -319,7 +447,7 @@ export async function completeStageIfReady(
 
     if (inputs.stage.status === "complete") return { completed: true, events: [] };
 
-    const isTable = TABLE_KINDS.has(inputs.stage.kind);
+    const isTable = TABLE_KINDS.has(inputs.kind);
     let events: DivisionEvent[] = [];
 
     if (isTable) {
@@ -332,31 +460,82 @@ export async function completeStageIfReady(
       for (const pool of completed.tables.pools) {
         await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq);
       }
-    } else {
-      const bracketFixtures: BracketFixture[] = inputs.fixtures.map((f) => ({
-        id: f.id,
-        round: f.round_no,
-        // A fixture whose winner feeds nowhere is the bracket's deciding game.
-        isFinal: true,
-        status: toEngineStatus(f.status),
-      }));
-      // Refine: only fixtures with no onward winner feed are finals.
+    } else if (inputs.kind === "ladder") {
+      // Jul3/08 §6 — no table/bracket shape of its own: complete once every
+      // challenge fixture is settled (SETTLED per toEngineStatus — decided,
+      // walkover or void), ranked by the ladder position players fought their
+      // way into (usecases/scoring.ts swaps winner/loser on each decided
+      // challenge). Zero fixtures ever issued is NOT complete — same as an
+      // empty table stage (isTableStageComplete) — nothing has happened yet
+      // to rank, and config.ladder_order isn't even set until the first
+      // issueChallenge.
+      const open = inputs.fixtures.some((f) => {
+        const status = toEngineStatus(f.status);
+        return status === "scheduled" || status === "in_play";
+      });
+      if (inputs.fixtures.length === 0 || open) {
+        return { completed: false, events: [] };
+      }
+      const finalRanks = inputs.stage.config?.ladder_order;
+      if (finalRanks === undefined || finalRanks.length === 0) {
+        // Defensive: issueChallenge always sets ladder_order before its first
+        // fixture insert, so settled fixtures with no order is a data bug,
+        // not a "not ready yet" — surface it instead of snapshotting nothing.
+        throw new EngineError(
+          "CONFIG_INVALID",
+          `ladder stage ${stageId} has settled fixtures but no ladder_order`,
+          { stageId },
+        );
+      }
+      events = [{ type: "stage_completed", stageId, finalRanks }];
+      await writeSnapshot(tx, stageId, null, placementTable(finalRanks).rows, inputs.division.seq);
+    } else if (isBracketKind(inputs.kind)) {
+      // Seeds matter here: bracketRanks's rankRest tiebreak cascade is
+      // elimination-round first, seed SECOND (and only then a stable id
+      // fallback) — the exact path a thirdPlace playoff that hasn't been
+      // played yet falls back to for ranks 3/4 (see the "never masquerades"
+      // regression test below). Omitting seeds — the same optional-field
+      // pattern toTableStage already uses — would silently degrade that
+      // tiebreak to raw entrant-id comparison.
+      const bracketStage: BracketStage = {
+        id: stageId,
+        kind: inputs.kind,
+        ...(inputs.seeds.size > 0 ? { seeds: inputs.seeds } : {}),
+      };
+      const bracketFixtures: BracketFixture[] = inputs.fixtures.map((f) => toBracketFixture(f));
+      // Refine: only fixtures with no onward winner feed are finals (a
+      // fixture whose winner feeds nowhere is the bracket's deciding game).
       const feeders = await tx<{ id: string }[]>`
         select id from fixtures where stage_id = ${stageId} and winner_to_fixture is not null
       `;
       const feederIds = new Set(feeders.map((r) => r.id));
       for (const bf of bracketFixtures) if (feederIds.has(bf.id)) bf.isFinal = false;
 
-      if (!isBracketStageComplete({ id: stageId, kind: inputs.stage.kind as never }, bracketFixtures)) {
+      if (!isBracketStageComplete(bracketStage, bracketFixtures)) {
         return { completed: false, events: [] };
       }
-      const final = inputs.fixtures.find((f) => !feederIds.has(f.id) && f.outcome);
-      const finalRanks: string[] = [];
-      if (final?.outcome && (final.outcome as MatchOutcome).kind === "win") {
-        const o = final.outcome as Extract<MatchOutcome, { kind: "win" }>;
-        finalRanks.push(o.winner, o.loser);
-      }
-      events = [{ type: "stage_completed", stageId, finalRanks }];
+      // completeBracketStage = bracketRanks (stage.ts — already handles
+      // losers, third-place, DE-reset and page-playoff with no algorithm
+      // change, per the pass-1 regression tests) + the stage_completed event.
+      const completed = completeBracketStage(bracketStage, bracketFixtures);
+      events = completed.events;
+      await writeSnapshot(
+        tx,
+        stageId,
+        null,
+        placementTable(completed.finalRanks).rows,
+        inputs.division.seq,
+      );
+    } else {
+      // Unreachable: TABLE_KINDS ∪ {"ladder"} ∪ BRACKET_KINDS covers every
+      // StageKind value (see the BRACKET_KINDS comment above). Guards a
+      // future StageKind addition that forgets to extend this file, instead
+      // of silently falling through with no snapshot written.
+      throw new EngineError(
+        "CONFIG_INVALID",
+        `stage ${stageId} kind "${inputs.kind}" has no completion handler`,
+        { stageId, kind: inputs.kind },
+      );
     }
 
     // Persist the structural events, then mark the stage complete and advance
@@ -367,6 +546,7 @@ export async function completeStageIfReady(
     }
     await tx`update stages set status = 'complete' where id = ${stageId}`;
     await tx`update divisions set seq = ${lastSeq} where id = ${inputs.stage.division_id}`;
+    log.info({ event: "stage_completed", stageId, kind: inputs.kind }, "stage_completed");
 
     return { completed: true, events };
   });
