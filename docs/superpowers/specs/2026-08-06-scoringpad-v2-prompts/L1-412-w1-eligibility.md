@@ -1,5 +1,16 @@
 # L1 — #412 (W1): eligibility enforcement — shared usecase, 7 gates, audited override
 
+> **SUPERSEDED 2026-08-17. DO NOT PASTE THIS FILE AS A SESSION OPENER.**
+> Its registration-path half is now RS002/RS003/RS005 scope, and its core
+> premise — that eligibility lives only in `divisions.eligibility` jsonb — was
+> falsified by RS001's first-class `divisions.category`/`age_min`/`age_max`
+> (`db/migration/deltas/V364__registrations_regroup.sql:110-116`). Running it
+> would fork the eligibility model in two.
+> The surviving organiser-side half is
+> `../2026-08-16-registration-redesign-prompts/RS011-organiser-eligibility-gates.md`
+> (depends on RS002; still closes **#412** and #407 WS1). Rationale: the L-lane
+> note in `_INDEX.md`. Kept here for history only.
+
 Paste this whole file as the session opener. Read `_RULES.md`, then `_INDEX.md`,
 then this. Server + UI session, disjoint from the S-chain — run it any time.
 

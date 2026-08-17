@@ -15,6 +15,12 @@ After RS003 two lanes are file-disjoint and may run in either order or
 interleaved: **org lane** RS004 → RS005 → RS009, **public lane** RS006 → RS007
 → RS008. RS010 is last, after both lanes.
 
+**RS011** (organiser-side eligibility gates, re-homed from the scoringpad-v2
+`L1`/#412 on 2026-08-17) depends only on RS002 and is file-disjoint from
+RS004–RS009, so it runs alongside either lane, before RS010. It writes
+`api-v1/schemas.ts`, which `L2`/#413 (date hardening, in the scoringpad-v2
+prompts dir) also writes — those two are **sequential, never parallel**.
+
 | Session | Prompt file | Depends on | Status |
 |---|---|---|---|
 | RS001 | `RS001-schema-and-demolition.md` | — | **DONE** — PR #592 merged `850cc630` (2026-08-17) |
@@ -27,6 +33,7 @@ interleaved: **org lane** RS004 → RS005 → RS009, **public lane** RS006 → R
 | RS007 | `RS007-status-page-join-payments.md` | RS006 | TODO |
 | RS008 | `RS008-consent-claim-optout.md` | RS007 | TODO |
 | RS009 | `RS009-free-agents.md` | RS005, RS003 | TODO |
+| RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | TODO — issue #412, re-homed from `L1` |
 | RS010 | `RS010-closeout-e2e-smoke-help.md` | all | TODO |
 
 Public registration is **intentionally down** between the RS001 and RS006
@@ -267,6 +274,39 @@ serves its closed/unavailable state during that window.
    `REGISTRATION_CURRENCIES` and the org's CURRENT currency before calling
    Stripe (422, no Stripe call) — a snapshot gone stale is exactly the case that
    must not reach a registrant's pay page.
+
+5. **RS011 consumes RS002's evaluator, so its RETURN SHAPE is a contract, not an
+   implementation detail.** `eligibilityIssues()` on `main` today returns
+   `string[]` — human sentences (`usecases/registrations.ts:177-181`). RS011
+   needs machine codes (`AGE_TOO_OLD | AGE_TOO_YOUNG | GENDER_NOT_ALLOWED |
+   CATEGORY_MISMATCH`, warnings `MISSING_DOB | MISSING_GENDER`) to fill a 422's
+   `extra.violations[]` and to let the override dialog list offenders. **RS002
+   should return structured issues and derive display strings at the edge.** If
+   it ships strings, RS011 changes the shape and adapts RS002's call sites — the
+   handover is written down here so that lands as a known cost, not a surprise.
+   Likewise `rosterIssues(division, players[])` should take a plain
+   `{dob, gender}` shape, not a `registration_players` row, so the organiser
+   gates can call it against `persons`. **Two eligibility evaluators is the exact
+   failure the RS011 re-homing exists to prevent.**
+
+## RS011 — why #412 moved here (2026-08-17)
+
+`L1-412-w1-eligibility.md` in `../2026-08-06-scoringpad-v2-prompts/` was written
+2026-08-06 against the pre-RS registration model and is now half-dead: its
+evaluator, its dob/gender-on-player-input, its confirm/waive/mark-paid gates and
+its confirm-panel UI are all RS002/RS003/RS005 scope, and it assumed eligibility
+lived **only** in `divisions.eligibility` jsonb — RS001 made `category`/`age_min`/
+`age_max` first-class columns (`V364__registrations_regroup.sql:110-116`).
+Running it as written would have forked the eligibility model in two.
+
+The surviving half — the **organiser-side** gates (`createEntrants`,
+`insertMembers`, `patchEntrant`, `syncEntrantRosterFromSquad`, `setTeamSquad`,
+imports, `putLineup`), the audited override, and the override dialog — touches no
+file the RS lanes touch and is now `RS011-organiser-eligibility-gates.md`. Issue
+**#412 stays the issue**; the old `L1` row is marked SUPERSEDED with a pointer
+here. `L2`/#413's "needs L1 merged first" dependency was **file-overlap
+sequencing only** and is deleted; `L2` now sequences against RS
+(`api-v1/schemas.ts`), not against `L1`. `L3`/#414 was never related to either.
 
 ## False premises found
 

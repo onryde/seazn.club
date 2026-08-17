@@ -9,7 +9,9 @@ Programme index issue: #411. Design: `../2026-08-03-scoringpad-v2-design.md`.
 ## Order
 
 Main chain is sequential. The `L` lane is a disjoint file set — run it whenever,
-interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
+interleaved or in parallel. ~~`L2` waits on `L1` (shared `schemas.ts`)~~ — see
+the L-lane note below: `L1` is gone, and `L2` now sequences against the RS
+programme instead.
 
 | Session | Issue | Prompt file | Depends on | Status |
 |---|---|---|---|---|
@@ -26,13 +28,48 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 | S11 | #420 | `S11-420-w9-skins.md` | S7, S10 | **DONE** — **five** skins, not three: the prompt's two sport groupings were disproved by building the real specs (tennis is a different kernel from the setbased three; football cannot share with the period pair, but hockey/icehockey are byte-identical to each other). Coverage gate landed RED first and is mutation-proved. Renderer now consults the registry by default — owner ruling, taken because a registry nothing calls is S10's inert-picker defect again. Review caught 5 gaps, 2 of them real: `racquet`/`period` rendered PAID-GATED actions as live controls for 5 of 8 sports (the sweeps could not see it — `grantAllEntitlements` means `locked` never occurs in the suite), and cricket's batter/bowler pickers never resynced to the fold, so a scorer could score against the wrong end. Cricket has NO browser coverage: the harness's lineups are synthetic and every `cricket.ball` needs real roster members — S12 owes it, along with football's goal-with-assist |
 | S12 | #421 | `S12-421-w10-integration-flag.md` | S11 | **DONE** — v2 reaches both real entry points behind `scorepad-v2`, and driving it in a browser against real rosters found **nine** product defects plus two layout defects, none of which `tsc`, ~6000 unit tests, lint or a green production build could see. The chain was sequential — each fix uncovered the next — which is the signature of a path nothing had ever executed: a `"use client"` mapper called from both server loaders (invisible because `[].map(fn)` never invokes `fn`, so it is unreachable until the ledger has one row); the fold throwing on a foreign `core.start`; `ballInOver: 0` making the first ball of every over schema-invalid; the fold not advancing on its own ack, so exactly ONE event was ever scoreable on ANY sport; a duplicate-seq double-count on the ack path; undo swallowed for a just-scored event, and again for one queued across a reload; raw UUIDs in three skins' person pickers; a coach able to open the batting; and the lineup editor silently dropping `role`, which made that last fix unreachable from the product's own UI. The flag needed its own reader (`lib/scorepad-flag.ts`, three-state `SCOREPAD_V2_FORCE`) because `isServerFeatureEnabled` returns `fallback ?? false` with no PostHog client — so the v2 pad was unreachable from EVERY e2e run. Flag-off byte-identity proved two ways and **counted, not asserted**: exactly three non-additive lines across the three files on that path, all inert with the flag off; plus v1's own e2e green against a second server off the SAME build with `SCOREPAD_V2_FORCE=0`. Deferred e2e debt discharged per session with a verdict each (S6 by construction, S3 partially, S4 and S1 re-deferred with cause). Note for S13: the lineup-editor half is NOT flag-gated and ships live |
 | S13 | #422 | `S13-422-w11-cutover.md` | S12 | **DONE** — v1 deleted outright (8 pads, 3 pad tests, both dispatch chains, the `scorepad-v2` flag, the `/score/harness` route, 160 dead dictionary keys across 4 locales); v2 is the only path. Deleting it surfaced FIVE behaviours v1 had that v2 did not: the suspension countdown, the DLS revised-target surface, hockey's escalation hint (whose v1 key `pad.pp.escalation` had never been translated in ANY locale — v1 rendered the raw key to users), person attribution on period suspensions (rendered as a raw UUID textbox because the skin read only `state.squads`, which is populated ONLY after a `core.lineup.*` folds — so every hockey/icehockey card in production asked the scorer to type a UUID), and `ActionForm.handleTap` auto-firing an incomplete payload for any action with no fields but a required attribution (7 declarations across tennis/carrom/generic/setbased). All five implemented on v2 before v1 was removed. An axe scan made reachable for the first time by the re-anchor then found **24 WCAG AA contrast failures** across the whole scorepad tree, worst 1.48:1 — all fixed, ratios computed from the oklch palette, and axe now runs per skin so the gap cannot silently reopen |
-| L1 | #412 | `L1-412-w1-eligibility.md` | — | TODO |
-| L2 | #413 | `L2-413-w2-date-hardening.md` | L1 | TODO |
-| L3 | #414 | `L3-414-w3-formats.md` | — | TODO |
+| L1 | #412 | ~~`L1-412-w1-eligibility.md`~~ | — | **SUPERSEDED 2026-08-17 → `RS011`** (see below). Do NOT run this file |
+| L2 | #413 | `L2-413-w2-date-hardening.md` | ~~L1~~ → after RS003 | TODO |
+| L3 | #414 | `L3-414-w3-formats.md` | — | TODO — **unblocked, startable now** |
 
 Deferred e2e/smoke debt from the engine-only sessions (S1, S3–S8) is discharged
 in **S12** (both entry points, offline) and **S13** (smoke through v2, help tree).
 Any session that defers a test type must say so in its PR body.
+
+### The L lane — re-sequenced 2026-08-17
+
+**`L1`/#412 is SUPERSEDED. Do not run `L1-412-w1-eligibility.md`.** It was
+written 2026-08-06 against a registration model the RS programme has since
+replaced, and half its scope now belongs to RS002/RS003/RS005:
+
+- Eligibility is no longer jsonb-only — RS001 shipped first-class
+  `divisions.category` / `age_min` / `age_max`
+  (`db/migration/deltas/V364__registrations_regroup.sql:110-116`), with
+  `divisions.eligibility` jsonb surviving for custom extras. `L1`'s plan to
+  *replace* the untyped arrays with a typed union covers half the model.
+- dob/gender/guardian moved off `registrations` onto `registration_players`
+  (V363/V364), so `L1`'s confirm/materialise gates read dropped columns.
+- RS002 (`RS002-core-usecases.md:47`) already extends `eligibilityIssues()` to
+  the first-class columns and validates **every** roster player. Running `L1`
+  as written forks the eligibility model in two.
+
+The surviving half — the **organiser-side** gates (`createEntrants`,
+`insertMembers`, `patchEntrant`, `syncEntrantRosterFromSquad`, `setTeamSquad`,
+imports, `putLineup`), the audited override, the override dialog — is re-homed
+as `../2026-08-16-registration-redesign-prompts/RS011-organiser-eligibility-gates.md`,
+depends on RS002, and still closes **#412** and #407 WS1.
+
+**`L2`/#413 no longer depends on `L1`.** That dependency was file-overlap
+sequencing on `schemas.ts` / `registrations.ts`, never logic. `L2` now sequences
+against the RS programme for the same reason: run it **after RS003 merges**, and
+never in parallel with RS011 (both write `api-v1/schemas.ts`). Note for `L2`:
+`PutRegistrationSettings` on `main` still has **no** window-order or
+refund-lock refine (`api-v1/schemas.ts:1687-1710` — RS001b only removed
+`currency`), so that scope item is still `L2`'s to build, not RS's.
+
+**`L3`/#414 is unblocked and startable today.** Its "single-writer on
+`stages.ts`" warning pointed at P7/#582, which merged as `98e95c9e`. Re-pin
+`components/v2/format-templates.ts` before starting — P7 reshaped it.
 
 ### The T lane — PARKED, after S13
 
