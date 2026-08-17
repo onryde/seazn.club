@@ -364,12 +364,15 @@ dedupe are orthogonal to `TakeRule` and apply uniformly across all five kinds
   all `qualification:` emit sites, `detectTemplate`'s `topN`/`losersOfRound`
   reads.
 - **Modify** `apps/web/e2e/mobile.spec.ts:1504` — `seeding:` → `progression:`.
-- **Create** `db/migration/deltas/V369__stage_progression_field.sql` —
+- **Create** `db/migration/deltas/V370__stage_progression_field.sql` —
   **provisional.** V367 is already held by two other unmerged branches
   (`feat/p8-venues-schema-ui`'s `V367__venues_and_courts.sql`,
   `feat/rs002-registration-usecases`'s `V367__registration_entry_refunds.sql`)
-  and V368 was taken this session by `feat/f1-bracket-round-role`'s
-  `V368__fixture_round_role.sql`. Re-verify against `origin/main` immediately
+  and `feat/f1-bracket-round-role` took **two** numbers this session, V368
+  (`V368__fixture_round_role.sql`) and V369
+  (`V369__public_fixtures_round_role.sql`) — this plan was briefly numbered
+  V369 before F1's second migration appeared, which is itself the evidence
+  that picking a number at write time does not hold. Re-verify against `origin/main` immediately
   before opening this session's PR (see Task 4's note) — whichever of these
   branches merges last has to renumber regardless of what was free when its
   plan was written.
@@ -1681,7 +1684,7 @@ git commit -m "schema(F2): one ProgressionSchema replaces QualificationSpecSchem
 ### Task 4: Migration — verify zero rows, drop `qualification`/`seeding`, add `progression jsonb`
 
 **Files:**
-- Create: `db/migration/deltas/V369__stage_progression_field.sql`
+- Create: `db/migration/deltas/V370__stage_progression_field.sql`
 
 **A note on the V-number, because it is already wrong twice over.** At time
 of writing, V367 is claimed by TWO other unmerged branches
@@ -1784,7 +1787,7 @@ present, `qualification`/`seeding` absent.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add db/migration/deltas/V369__stage_progression_field.sql
+git add db/migration/deltas/V370__stage_progression_field.sql
 git commit -m "db(F2): drop stages.qualification/seeding, add stages.progression jsonb"
 ```
 
@@ -2598,4 +2601,4 @@ Global Constraints section.
 - `apps/web/src/server/api-v1/schemas.ts`
 - `apps/web/src/server/usecases/stages.ts`
 - `apps/web/src/server/usecases/stage-seeding.ts`
-- `db/migration/deltas/V369__stage_progression_field.sql`
+- `db/migration/deltas/V370__stage_progression_field.sql`
