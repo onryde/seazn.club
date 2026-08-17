@@ -1519,7 +1519,7 @@ export const ScheduleSolverInfo = z.object({
    *  response from a server one deploy behind, must still parse.
    *
    *  Counts PLACEMENTS, not the division's lock flag: a locked fixture with
-   *  no `scheduled_at`/`court_label` yet has nothing to anchor to and is not
+   *  no `scheduled_at`/`court_id` yet has nothing to anchor to and is not
    *  counted (the same rule the anchor itself uses — see `lockedFixtureIds`
    *  in `schedule.ts`). */
   locked_kept: z.number().int().optional(),
