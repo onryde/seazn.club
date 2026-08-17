@@ -14,6 +14,7 @@ import { createStages, generateStageFixtures } from "../stages";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { patchFixture } from "../fixtures";
+import { createVenue, createCourt } from "../venues";
 import { lockDivisions } from "../competition-schedule-apply";
 import {
   undoDivision,
@@ -97,6 +98,19 @@ async function seedDivision(auth: AuthCtx, stageCfg: Record<string, unknown> = {
 
 const at = (h: number) => new Date(Date.UTC(2026, 6, 12, h, 0, 0)).toISOString();
 
+/** Two real courts (P9 pass 3a — venues/courts cutover): `patchFixture`'s
+ *  `court_id` is a real `courts.id` now (composite FK to `courts(id,
+ *  org_id)`, `on delete restrict` — V367), never a free-text label, so every
+ *  test below that used to write `court_label: "C1"`/`"C2"` needs an actual
+ *  seeded court to point at. Named `courtA`/`courtB` (not `court1`/`court2`)
+ *  to read unambiguously beside `stage`/`division` etc. below. */
+async function seedCourts(auth: AuthCtx): Promise<{ courtA: string; courtB: string }> {
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const a = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
+  const b = await createCourt(auth, venue.id, { name: "C2", sort: 1, tags: [] });
+  return { courtA: a.id, courtB: b.id };
+}
+
 /** Manual save points inserted DIRECTLY, bypassing `createCheckpoint`.
  *
  *  This is the only way to build a division sitting ABOVE its cap, which is
@@ -122,21 +136,22 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
-  it("move ×3 → undo ×3 = original → redo ×3 = moved (golden)", async () => {
+  it("move ×3 → undo ×3 = original → redo ×3 = moved (golden) — round-trips court_id, not a label (P9 pass 3a)", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth);
+    const { courtA, courtB } = await seedCourts(auth);
     const three = fixtures.slice(0, 3);
     // place them first (baseline), then move them (3 edits)
     for (let i = 0; i < 3; i++) {
       await patchFixture(auth, three[i]!.id, {
         scheduled_at: at(9 + i),
-        court_label: "C1",
+        court_id: courtA,
       });
     }
     for (let i = 0; i < 3; i++) {
       await patchFixture(auth, three[i]!.id, {
         scheduled_at: at(14 + i),
-        court_label: "C2",
+        court_id: courtB,
       });
     }
     const placed = async () =>
@@ -144,16 +159,23 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
         {
           id: string;
           scheduled_at: string | null;
-          court_label: string | null;
+          court_id: string | null;
         }[]
       >`
-        select id, scheduled_at::text as scheduled_at, court_label from fixtures
+        select id, scheduled_at::text as scheduled_at, court_id from fixtures
         where id in ${sql(three.map((f) => f.id))} order by id`;
     const moved = await placed();
 
     for (let i = 0; i < 3; i++) await undoDivision(auth, division.id);
     const original = await placed();
-    expect(original.map((f) => f.court_label)).toEqual(["C1", "C1", "C1"]);
+    // THE regression this pass owes: undo restores court_id (a real
+    // courts.id), never a stale label — `fixtures.court_label` is never
+    // written by `patchFixture` any more (owner ruling, FULL cutover), so a
+    // restore that wrote the old free-text column instead would have left
+    // `court_id` untouched here and this assertion would fail loudly rather
+    // than silently — there is no longer a court_label value for it to
+    // coincidentally agree with.
+    expect(original.map((f) => f.court_id)).toEqual([courtA, courtA, courtA]);
 
     for (let i = 0; i < 3; i++) await redoDivision(auth, division.id);
     expect(await placed()).toEqual(moved);
@@ -173,11 +195,12 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
       kind: "group",
       pools: { count: 2 },
     });
+    const { courtA } = await seedCourts(auth);
     // schedule everything
     for (let i = 0; i < fixtures.length; i++) {
       await patchFixture(auth, fixtures[i]!.id, {
         scheduled_at: at(9 + i),
-        court_label: "C1",
+        court_id: courtA,
       });
     }
     const pools = await sql<{ id: string; key: string }[]>`
@@ -214,6 +237,7 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
       kind: "group",
       pools: { count: 2 },
     });
+    const { courtB } = await seedCourts(auth);
     const pools = await sql<{ id: string }[]>`
       select id from pools where stage_id = ${fixtures[0]!.stage_id} order by key`;
     const poolA = pools[0]!.id;
@@ -229,10 +253,15 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
       select count(*)::int as n from fixtures where pool_id = ${poolA}`;
     expect(restored!.n).toBe(cleared.removed);
 
-    // scope lock site B (court C2): edits inside the scope are refused
+    // scope lock site B: edits inside the scope are refused — on the board
+    // APPLY path only (`applySchedule`'s `scopeLocked` check). `moveFixture`
+    // never consulted scope locks at all (see the assertion below), so the
+    // scope value itself is decorative here regardless of what it names —
+    // real or not, courtB is a real seeded court either way (P9 pass 3a:
+    // `court_id` is FK-checked, unlike the old free-text `court_label`).
     await patchFixture(auth, fixtures[0]!.id, {
       scheduled_at: at(9),
-      court_label: "C2",
+      court_id: courtB,
     });
     await setDivisionLocks(auth, division.id, {
       locked_scopes: [{ courts: ["C2"] }],
@@ -240,7 +269,7 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     await expect(
       patchFixture(auth, fixtures[0]!.id, {
         scheduled_at: at(10),
-        court_label: "C2",
+        court_id: courtB,
       }),
     ).resolves.toBeTruthy(); // moveFixture path is separate; board apply path enforces scope
   });
@@ -268,25 +297,26 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
   it("checkpoints: restore rewinds; second checkpoint is Pro", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth);
+    const { courtA, courtB } = await seedCourts(auth);
     await patchFixture(auth, fixtures[0]!.id, {
       scheduled_at: at(9),
-      court_label: "C1",
+      court_id: courtA,
     });
     const cp = await createCheckpoint(auth, division.id, "before reshuffle");
     await patchFixture(auth, fixtures[0]!.id, {
       scheduled_at: at(15),
-      court_label: "C2",
+      court_id: courtB,
     });
     await patchFixture(auth, fixtures[1]!.id, {
       scheduled_at: at(16),
-      court_label: "C2",
+      court_id: courtB,
     });
 
     const restored = await restoreCheckpoint(auth, division.id, cp.id, true);
     expect(restored.steps).toBe(2);
-    const [row] = await sql<{ court_label: string | null }[]>`
-      select court_label from fixtures where id = ${fixtures[0]!.id}`;
-    expect(row!.court_label).toBe("C1");
+    const [row] = await sql<{ court_id: string | null }[]>`
+      select court_id from fixtures where id = ${fixtures[0]!.id}`;
+    expect(row!.court_id).toBe(courtA);
 
     // Community holds two save points (V319 raised the cap 1 → 2). Since #382
     // the third does not 402 — it ROLLS, dropping the oldest and naming it.
@@ -668,7 +698,8 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     // still walks back past the watermark it named.
     const { auth } = await seedOrg("community");
     const { division, fixtures } = await seedDivision(auth);
-    await patchFixture(auth, fixtures[0]!.id, { scheduled_at: at(9), court_label: "C1" });
+    const { courtA } = await seedCourts(auth);
+    await patchFixture(auth, fixtures[0]!.id, { scheduled_at: at(9), court_id: courtA });
     const oldest = await createCheckpoint(auth, division.id, "ai-0", "ai");
     for (let i = 1; i < 4; i++) await createCheckpoint(auth, division.id, `ai-${i}`, "ai");
 
@@ -683,9 +714,10 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
   it("an evicted save point costs its label, not the rewind (#382)", async () => {
     const { auth } = await seedOrg("community");
     const { division, fixtures } = await seedDivision(auth);
-    await patchFixture(auth, fixtures[0]!.id, { scheduled_at: at(9), court_label: "C1" });
+    const { courtA, courtB } = await seedCourts(auth);
+    await patchFixture(auth, fixtures[0]!.id, { scheduled_at: at(9), court_id: courtA });
     const one = await createCheckpoint(auth, division.id, "one");
-    await patchFixture(auth, fixtures[0]!.id, { scheduled_at: at(10), court_label: "C2" });
+    await patchFixture(auth, fixtures[0]!.id, { scheduled_at: at(10), court_id: courtB });
     await createCheckpoint(auth, division.id, "two");
     const third = await createCheckpoint(auth, division.id, "three");
     expect(third.evicted?.label).toBe("one");
@@ -698,9 +730,9 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     // …but the LEDGER is untouched. One undo lands back on the state the
     // evicted save point named, and a second rewinds PAST its watermark.
     await undoDivision(auth, division.id);
-    const [back] = await sql<{ court_label: string | null }[]>`
-      select court_label from fixtures where id = ${fixtures[0]!.id}`;
-    expect(back!.court_label).toBe("C1");
+    const [back] = await sql<{ court_id: string | null }[]>`
+      select court_id from fixtures where id = ${fixtures[0]!.id}`;
+    expect(back!.court_id).toBe(courtA);
     await undoDivision(auth, division.id);
     const after = await divisionHistory(auth, division.id);
     expect(Number(after.watermark)).toBeLessThan(Number(one.seq));
@@ -709,9 +741,10 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
   it("stale optimistic token → SEQ_CONFLICT 409 contract", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth);
+    const { courtA } = await seedCourts(auth);
     await patchFixture(auth, fixtures[0]!.id, {
       scheduled_at: at(9),
-      court_label: "C1",
+      court_id: courtA,
     });
     await expect(undoDivision(auth, division.id, 1)).rejects.toSatisfy((err: unknown) =>
       EngineError.is(err, "SEQ_CONFLICT"),
