@@ -946,6 +946,70 @@ describe("GuidedSheet rendering — SheetNumberStep", () => {
   });
 });
 
+// --- R2b-over: SheetChoiceStep.hint — a reason line for a choice step whose
+// options the SKIN has narrowed (first use: cricket's wicket "kind" step
+// during a free hit, skins/cricket.tsx). A plain i18n KEY (types.ts's own
+// doc on the field explains why this is unlike SheetNumberStep.hint's
+// pre-resolved convention above) — resolved here via `t(step.hint)`, same
+// as `title`/`options[].label`. Proved the same STRUCTURAL way the number
+// step's hint is proved above (paragraph count, not a vacuous string
+// probe — this file's own review-fix precedent, right above this block):
+// `GuidedSheet` always renders exactly one `<p>` for the step title; a hint
+// present must add exactly one more.
+// -----------------------------------------------------------------------
+
+const choiceNoHintSpec: GuidedSheetSpec = {
+  event: "cricket.wicket",
+  steps: [
+    {
+      id: "kind",
+      kind: "choice",
+      title: "pad.sheet.wicket.kind.title",
+      options: [{ id: "runout", label: "pad.sheet.wicket.kind.runout" }],
+    },
+  ],
+  buildPayload: (answers) => ({ kind: answers.kind }),
+};
+
+const choiceWithHintSpec: GuidedSheetSpec = {
+  event: "cricket.wicket",
+  steps: [
+    {
+      id: "kind",
+      kind: "choice",
+      title: "pad.sheet.wicket.kind.title",
+      options: [{ id: "runout", label: "pad.sheet.wicket.kind.runout" }],
+      hint: "pad.sheet.wicket.kind.freeHitHint",
+    },
+  ],
+  buildPayload: (answers) => ({ kind: answers.kind }),
+};
+
+describe("GuidedSheet rendering — SheetChoiceStep.hint (R2b-over)", () => {
+  it("a choice step declaring no hint renders exactly ONE paragraph (the title) — no hint paragraph at all", () => {
+    const island = renderIsland(GuidedSheet, {
+      spec: choiceNoHintSpec,
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: () => {},
+    });
+    expect(paragraphsOf(island.tree())).toHaveLength(1);
+  });
+
+  it("a choice step WITH a hint renders exactly TWO paragraphs (title + hint), the hint resolved through t() like title/options", () => {
+    const island = renderIsland(GuidedSheet, {
+      spec: choiceWithHintSpec,
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: () => {},
+    });
+    expect(paragraphsOf(island.tree())).toHaveLength(2);
+    expect(island.text()).toContain(t("pad.sheet.wicket.kind.freeHitHint"));
+  });
+});
+
 // --- a number step obeys `when`/stepVisible identically to choice/person ---
 // Pure step-machine only — stepVisible/answerStep/backStep never branch on
 // `.kind`, so this is a parity check that the new kind rides the EXISTING

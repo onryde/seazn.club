@@ -2149,6 +2149,86 @@ describe("buildSheets — wicket flow (D-15)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// buildSheets — wicket "kind" step gated by a pending free hit (R2b-over
+// review finding: the fourth instance of "the pad must never offer what the
+// engine will refuse", `docs/superpowers/specs/2026-08-15-scoringpad-v3-
+// prompts/_INDEX.md`). The engine refuses every wicket kind except
+// runout/obstructed while `fine.freeHitPending` is true
+// (packages/engine/src/sports/cricket/cricket.ts:1275-1276) — before this,
+// the "kind" step offered all ten regardless, and a scorer picking e.g.
+// "bowled" on a free hit got a bare server rejection (the same generic-
+// rejection experience this whole branch exists to remove).
+//
+// Driven by the SAME `freeHitPending` fold `buildScorebug`'s own indicator
+// and `cricketBallDetail`'s own activity note already use (that function's
+// own header, above) — reused here rather than a second derivation, which is
+// what stops this gate from ever disagreeing with what the scorer is already
+// shown on the scorebug strip. `FREE_HIT_WICKET_KINDS` (cricket.tsx, beside
+// WICKET_KINDS/FIELDER_ELIGIBLE_KINDS/VARIABLE_OUT_KINDS) is the closed set.
+// ---------------------------------------------------------------------------
+
+describe("buildSheets — wicket kind gated by free hit (R2b-over)", () => {
+  // Mirrors the exact fixture shape `describe("buildScorebug — free hit
+  // indicator (R2b)")` (above) already uses for "a free hit is pending" —
+  // one white-ball no-ball, nothing after it.
+  const freeHitEvents = [
+    ballEvent("e1", { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }),
+  ];
+
+  function kindStepOf(spec: GuidedSheetSpec) {
+    const step = spec.steps[0]!;
+    if (step.kind !== "choice") throw new Error("expected a choice step");
+    return step;
+  }
+
+  it("free hit pending: the kind step offers EXACTLY runout and obstructed, nothing else, and carries a reason hint", () => {
+    const spec = buildSheets(view({ events: freeHitEvents })).wicket;
+    const kind = kindStepOf(spec);
+    expect(kind.options.map((o) => o.id).sort()).toEqual(["obstructed", "runout"]);
+    expect(kind.hint).toBe("pad.cricket.sheet.wicket.kind.freeHitHint");
+  });
+
+  it("no free hit pending: all ten kinds still offered and no hint — without this, the fix could over-restrict permanently and still pass", () => {
+    const spec = buildSheets(view()).wicket; // view()'s default events: [] — nothing pending
+    const kind = kindStepOf(spec);
+    expect(kind.options.map((o) => o.id).sort()).toEqual([...WICKET_KINDS].sort());
+    expect(kind.hint).toBeUndefined();
+  });
+
+  it("no-ball -> wide -> legal ball still counts as pending here too — a wide must not un-gate the kind step (same fold as the indicator, never a second, driftable rule)", () => {
+    const events = [
+      ...freeHitEvents,
+      ballEvent("e2", { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "wide", runs: 1 } } }),
+    ];
+    const spec = buildSheets(view({ events })).wicket;
+    expect(kindStepOf(spec).options.map((o) => o.id).sort()).toEqual(["obstructed", "runout"]);
+  });
+
+  it("buildPayload still emits a valid payload for both allowed kinds during a free hit", () => {
+    const spec = buildSheets(view({ events: freeHitEvents })).wicket;
+
+    const afterKind = answerStep(spec, initialSheetState(), "runout");
+    if (afterKind.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterKind.state)!.id).toBe("out");
+    const afterOut = answerStep(spec, afterKind.state, "h2"); // non-striker run out
+    if (afterOut.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterOut.state)!.id).toBe("fielder");
+    const runoutFinal = answerStep(spec, afterOut.state, "a3");
+    if (!runoutFinal.done) throw new Error("expected done");
+    expect(runoutFinal.event.payload).toMatchObject({
+      wicket: { kind: "runout", out: "h2", fielder: "a3", bowlerCredited: false },
+    });
+
+    const obstructedFinal = answerStep(spec, initialSheetState(), "obstructed");
+    if (!obstructedFinal.done) throw new Error("expected done"); // no `when`-gated step applies to obstructed
+    expect(obstructedFinal.event.payload).toMatchObject({
+      wicket: { kind: "obstructed", out: "h1", bowlerCredited: false },
+    });
+    expect((obstructedFinal.event.payload as { wicket: { fielder?: string } }).wicket.fielder).toBeUndefined();
+  });
+});
+
 describe("buildSheets — toss/review/inningsClose", () => {
   it("toss: who won -> elected, both required, in that order", () => {
     const spec = buildSheets(view()).toss;
