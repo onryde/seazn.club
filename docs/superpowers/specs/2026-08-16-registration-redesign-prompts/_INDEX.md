@@ -25,8 +25,8 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 |---|---|---|---|
 | RS001 | `RS001-schema-and-demolition.md` | — | **DONE** — PR #592 merged `850cc630` (2026-08-17) |
 | RS001b | `RS001b-org-currency-allowlist.md` | RS001 | **DONE** — PR #598 merged `a7cca608` (2026-08-17) |
-| RS002 | `RS002-core-usecases.md` | RS001b | **IN FLIGHT** — branch `feat/rs002-registration-usecases` |
-| RS003 | `RS003-public-endpoints.md` | RS002 | TODO |
+| RS002 | `RS002-core-usecases.md` | RS001b | **DONE** — PR #607 merged `4ff0bf8f` (2026-08-17) |
+| RS003 | `RS003-public-endpoints.md` | RS002 | **IN FLIGHT** — branch `feat/rs003-registration-endpoints` |
 | RS004 | `RS004-hub-settings-tab.md` | RS003 | TODO |
 | RS005 | `RS005-hub-registrants-tab.md` | RS004 | TODO |
 | RS006 | `RS006-public-stepper.md` | RS003 | TODO |
@@ -680,6 +680,82 @@ recorded here because they bind future sessions too:
    `{dob, gender}` shape, not a `registration_players` row, so the organiser
    gates can call it against `persons`. **Two eligibility evaluators is the exact
    failure the RS011 re-homing exists to prevent.**
+
+## RS003 entry conditions (RS002 hands these over — verified 2026-08-17, not asserted)
+
+Written at RS003 kickoff after two scouts read the tree, because the RS002
+close-out believed these were already recorded here and they were not. Every
+claim below carries its `path:line`.
+
+1. **Checkout minting is NOT an empty seam — it is a LIVE per-registration one.**
+   `submitRegistrationGroup`'s own doc comment (`registration-submit.ts:301-303`)
+   correctly says minting is RS003's job, and no group/cart-level session
+   creator exists. But `createRegistrationCheckout`
+   (`registrations.ts:1242-1303`) does exist, charges ONE
+   `RegistrationWithGroupRow`'s `amount_cents`, and is reachable today from
+   `resumeRegistrationCheckout` (`:2107`) and both waitlist-promote paths
+   (`:894`, `:2299`). So RS003 is not adding minting to a blank slate; it is
+   introducing a cart-scoped session alongside a live entry-scoped one. Decide
+   explicitly whether the entry-scoped path is re-pointed at the group or kept,
+   and make the metadata unambiguous either way — see 2.
+2. **The webhook keys by a single registration id.** `billing-events.ts:115-116`
+   dispatches on `session.metadata.kind === "registration"` into
+   `handleRegistrationCheckoutCompleted` (`registrations.ts:1315-1335`), which
+   reads `session.metadata.registration_id` and `metadata.fee_percent`, then
+   calls the private `confirmPaidRegistration` (`:1348`). `createRegistrationCheckout`
+   also stamps `payment_intent_data.metadata = {registration_id, org_id}`
+   (`:1272-1277`, `:1291`). A group session therefore cannot simply reuse
+   `kind: "registration"` with a group id in the same key — the old handler
+   would take the group id for a registration id.
+3. **Currency 422 rule** — unchanged, restated so RS003 does not have to find it
+   under RS002's heading: validate `registration_groups.currency` against BOTH
+   `REGISTRATION_CURRENCIES` and the org's CURRENT `organizations.currency`
+   BEFORE any Stripe call; a stale snapshot is a clean 422 with a stable error
+   shape, never a Stripe error on a registrant's pay page. The snapshot itself
+   is already written correctly at submit — `registration-submit.ts:497` names
+   `currency` from `organizations.currency` (RS001b's NOT NULL, no default).
+4. **What the deleted route actually did**, from `git show 850cc6308^` — the
+   brief says "as the old route did" without the numbers:
+   - buckets: `regsubmit:${ip}` `{max:10, windowSeconds:60}`, then
+     `regsubmit:${ip}:${division_id}` `{max:5, windowSeconds:300}` — the second
+     fired AFTER the honeypot check, and re-keys to the competition for a cart.
+   - honeypot: field **`website`**, `throw new HttpError(400, "Registration failed")`.
+   - locale: `explicitLocale(req)` read cookie **`seazn_locale`**, `hasLocale`-validated,
+     passed as `locale` to the usecase; null means "fall back to org default".
+   - privacy gate: enforced in the USECASE, not the route —
+     `HttpError(422, "Please agree to the privacy policy to register")`.
+     `SubmitGroupInput.privacy_consent` (`registration-submit.ts:91-99`) is the
+     RS002 replacement; confirm it still throws before trusting it.
+   - response was `{registration_id, status, ref_code, access_token, checkout_url}`.
+5. **FALSE PREMISE in the RS003 prompt: "mirror the old route's tests" — there are
+   none to mirror.** `git grep -a` for `honeypot|website|429|rate` across the five
+   deleted e2e specs and `public-register-request.test.ts` returns ZERO hits. The
+   honeypot and both rate-limit buckets lived only in `route.ts` and were never
+   covered at any level. RS003 writes that coverage fresh; restoring a pattern is
+   not an option.
+6. **Status is server-side, so RS003 owes no GET route.** Old and current tree
+   both read status inside the page component (`register/status/page.tsx`,
+   `r/[ref]/page.tsx`) — no HTTP status endpoint ever existed. The read model
+   RS007 will consume is **`groupByRef`, and it is in `registrations.ts:2031`,
+   NOT `registration-approval.ts`** (the RS002 close-out filed it under the
+   wrong module). Its token compare is already correct — `tokenMatchesHash`
+   (`:2014`) is `timingSafeEqual` against `DUMMY_ACCESS_HASH` (`:2003`) even for
+   a nonexistent ref, and both misses throw the identical `404
+   "registration not found"`. **The older `publicRegistrationStatus*` paths
+   (`:1728`, `:1801`) still compare with SQL `=`** — not constant-time, and RS007
+   inherits that if nobody re-points them.
+7. **Entry points RS003 calls:** `submitRegistrationGroup(ctx, input)`
+   (`registration-submit.ts:305`) — `ctx` is `{orgSlug, compSlug, sessionUserId?}`,
+   returns `{group_id, ref_code, access_token, currency, amount_cents (subtotal,
+   non-waitlisted only), entries[]}`; and `joinTeamEntry(ctx, input)`
+   (`registration-submit.ts:710`). The group insert, `ref_code` retry loop,
+   `access_token` minting and per-entry `join_code` (team, non-free-agent only)
+   are all already inside the usecase — the endpoint must not re-do them.
+8. **`schemas.ts` is 3502 lines** and already carries a comment at `L1841-1846`
+   stating the old single-entry public request/response pair was deleted and that
+   RS003 owns defining the group-shaped replacements. Public registration schemas
+   sit at `L1803-1871`, org-authed ones at `L1690-1802`. OpenAPI generator entry:
+   `api-v1/openapi.ts:10`.
 
 ## RS011 — why #412 moved here (2026-08-17)
 
