@@ -3921,5 +3921,21 @@
   "pad.activity.empty": "Rien d'enregistré pour le moment.",
   "pad.activity.void": "Annuler",
   "pad.activity.voiding": "Annulation…",
-  "pad.activity.voided": "Annulé"
+  "pad.activity.voided": "Annulé",
+  "bracket.round.roundOf": "Ronde des {n}",
+  "bracket.round.quarter": "Quarts de finale",
+  "bracket.round.semi": "Demi-finales",
+  "bracket.round.final": "Finale",
+  "bracket.round.winnersFinal": "Finale des vainqueurs",
+  "bracket.round.losersRound": "Ronde des perdants {n}",
+  "bracket.round.losersFinal": "Finale des perdants",
+  "bracket.round.grandFinal": "Grande finale",
+  "bracket.round.grandFinalReset": "Grande finale (revanche)",
+  "bracket.round.thirdPlace": "Troisième place",
+  "bracket.round.qualifier1": "Qualification 1",
+  "bracket.round.eliminator": "Éliminateur",
+  "bracket.round.qualifier2": "Qualification 2",
+  "bracket.round.rung": "Échelon {n}",
+  "bracket.round.plain": "Tour {n}",
+  "bracket.slot.bye": "Bye"
 }

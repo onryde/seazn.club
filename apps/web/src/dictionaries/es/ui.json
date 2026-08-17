@@ -3921,5 +3921,21 @@
   "pad.activity.empty": "Aún no se ha registrado nada.",
   "pad.activity.void": "Anular",
   "pad.activity.voiding": "Anulando…",
-  "pad.activity.voided": "Anulado"
+  "pad.activity.voided": "Anulado",
+  "bracket.round.roundOf": "Ronda de {n}",
+  "bracket.round.quarter": "Cuartos de final",
+  "bracket.round.semi": "Semifinales",
+  "bracket.round.final": "Final",
+  "bracket.round.winnersFinal": "Final de ganadores",
+  "bracket.round.losersRound": "Ronda de perdedores {n}",
+  "bracket.round.losersFinal": "Final de perdedores",
+  "bracket.round.grandFinal": "Gran final",
+  "bracket.round.grandFinalReset": "Gran final (desempate)",
+  "bracket.round.thirdPlace": "Tercer puesto",
+  "bracket.round.qualifier1": "Clasificatorio 1",
+  "bracket.round.eliminator": "Eliminador",
+  "bracket.round.qualifier2": "Clasificatorio 2",
+  "bracket.round.rung": "Peldaño {n}",
+  "bracket.round.plain": "Ronda {n}",
+  "bracket.slot.bye": "Bye"
 }

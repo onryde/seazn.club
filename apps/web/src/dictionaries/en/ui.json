@@ -3921,5 +3921,21 @@
   "pad.activity.empty": "Nothing recorded yet.",
   "pad.activity.void": "Void",
   "pad.activity.voiding": "Voiding…",
-  "pad.activity.voided": "Voided"
+  "pad.activity.voided": "Voided",
+  "bracket.round.roundOf": "Round of {n}",
+  "bracket.round.quarter": "Quarter-finals",
+  "bracket.round.semi": "Semi-finals",
+  "bracket.round.final": "Final",
+  "bracket.round.winnersFinal": "Winners' final",
+  "bracket.round.losersRound": "Losers' round {n}",
+  "bracket.round.losersFinal": "Losers' final",
+  "bracket.round.grandFinal": "Grand final",
+  "bracket.round.grandFinalReset": "Grand final (reset)",
+  "bracket.round.thirdPlace": "Third place",
+  "bracket.round.qualifier1": "Qualifier 1",
+  "bracket.round.eliminator": "Eliminator",
+  "bracket.round.qualifier2": "Qualifier 2",
+  "bracket.round.rung": "Rung {n}",
+  "bracket.round.plain": "Round {n}",
+  "bracket.slot.bye": "Bye"
 }
