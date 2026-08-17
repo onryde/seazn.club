@@ -53,7 +53,7 @@ async function seedOrg(): Promise<AuthCtx> {
 /** A 4-entrant league (round robin -> 6 fixtures), one bounded day, a FULL
  *  day session window so capacity is never the binding constraint here —
  *  only the court-candidate gate is under test. `courtIds` becomes
- *  `ScheduleConfig.courts` verbatim (V368 cutover: real court uuids only). */
+ *  `ScheduleConfig.courts` verbatim (V371 cutover: real court uuids only). */
 async function seedRoundRobin(
   auth: AuthCtx,
   courtIds: string[],

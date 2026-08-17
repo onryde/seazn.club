@@ -14,11 +14,11 @@ import { HardConstraint, type ConflictDetailKind } from "@seazn/engine/schedulin
 // ---------------------------------------------------------------------------
 
 export const Uuid = z.uuid();
-/** A real `courts.id` (V368 cutover) — structurally identical to Uuid;
+/** A real `courts.id` (V371 cutover) — structurally identical to Uuid;
  *  named separately so a stored `ScheduleConfig.courts` entry documents what
  *  it actually references (never a free-text court name post-migration). */
 export const CourtId = Uuid;
-/** A real `venues.id` (V368 cutover — `fixtures.venue_id`, backfilled from
+/** A real `venues.id` (V371 cutover — `fixtures.venue_id`, backfilled from
  *  the legacy free-text `fixtures.venue`). P9 pass 3a's own sibling of
  *  `CourtId`, same reasoning. */
 export const VenueId = Uuid;
@@ -759,7 +759,7 @@ export const Fixture = z.object({
   schedule_locked: z.boolean(),
   created_at: z.string(),
   /** F1 (2026-08-17): the engine's bracket-position role, persisted instead
-   *  of re-derived per consumer (V368/V369). Declared here for the same
+   *  of re-derived per consumer (V371/V369). Declared here for the same
    *  reason as `fixture_no` above — `FIXTURE_COLS` now selects it and every
    *  fixture route returns its row unmapped, so leaving it undocumented
    *  would be a silent gap between the published spec and the real
@@ -946,7 +946,7 @@ export const ScheduleConfig = z.object({
   endAt: IsoDateTime.nullish(),
   matchMinutes: z.number().int().min(1).max(24 * 60).default(30),
   gapMinutes: z.number().int().min(0).max(24 * 60).default(0),
-  /** V368 cutover: real court ids only, no tolerant string union — the
+  /** V371 cutover: real court ids only, no tolerant string union — the
    *  migration IS the compatibility strategy (design doc "Stored-config
    *  migration"). The original design named `.min(1)`, dropped here: a
    *  division that has never configured courts parses `courts` as

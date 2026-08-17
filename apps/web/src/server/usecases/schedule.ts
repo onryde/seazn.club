@@ -439,7 +439,7 @@ export interface FixtureLite {
   venue_id: string | null;
   /** LEGACY, read-only, KEPT for exactly one purpose: `scopeLocked` below
    *  matches a division's `locked_scopes.courts` — organiser-typed free-text
-   *  names, never migrated by V368 (that migration touched only
+   *  names, never migrated by V371 (that migration touched only
    *  `schedule_settings.config.courts` and `fixtures.court_id`/`venue_id`) —
    *  against this column. Nothing writes it any more (`moveFixture`/
    *  `applySchedule` stopped, per the owner's FULL-cutover ruling), so it is

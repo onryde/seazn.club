@@ -1,5 +1,5 @@
 -- =============================================================================
--- V368 — Court entities cutover (P9 pass 1/5): stored-config migration.
+-- V371 — Court entities cutover (P9 pass 1/5): stored-config migration.
 --
 -- V367 (P8) added the venues/courts/court_hours/court_exceptions tables and
 -- `fixtures.court_id`, but touched zero consumers — `schedule_settings.config
@@ -186,14 +186,14 @@ begin
       full outer join court_normalize_status cns on cns.org_id = css.org_id
      order by 1
   loop
-    raise notice 'V368 court migration (dry run): org=% distinct_court_strings=% courts_to_create=% courts_field_to_normalize=%',
+    raise notice 'V371 court migration (dry run): org=% distinct_court_strings=% courts_to_create=% courts_field_to_normalize=%',
       v_org.org_id, v_org.n_strings, v_org.n_to_create, v_org.n_to_normalize;
     v_total_orgs := v_total_orgs + 1;
     v_total_strings := v_total_strings + v_org.n_strings;
     v_total_to_create := v_total_to_create + v_org.n_to_create;
     v_total_to_normalize := v_total_to_normalize + v_org.n_to_normalize;
   end loop;
-  raise notice 'V368 court migration (dry run) TOTAL: orgs=% distinct_court_strings=% courts_to_create=% courts_field_to_normalize=%',
+  raise notice 'V371 court migration (dry run) TOTAL: orgs=% distinct_court_strings=% courts_to_create=% courts_field_to_normalize=%',
     v_total_orgs, v_total_strings, v_total_to_create, v_total_to_normalize;
 
   -- 4) Build the mapping, reusing any existing ACTIVE court that already
@@ -345,13 +345,13 @@ begin
      group by org_id
      order by org_id
   loop
-    raise notice 'V368 fixture-venue migration (dry run): org=% distinct_venue_strings=% venues_to_create=%',
+    raise notice 'V371 fixture-venue migration (dry run): org=% distinct_venue_strings=% venues_to_create=%',
       v_org.org_id, v_org.n_strings, v_org.n_to_create;
     v_total_orgs := v_total_orgs + 1;
     v_total_strings := v_total_strings + v_org.n_strings;
     v_total_to_create := v_total_to_create + v_org.n_to_create;
   end loop;
-  raise notice 'V368 fixture-venue migration (dry run) TOTAL: orgs=% distinct_venue_strings=% venues_to_create=%',
+  raise notice 'V371 fixture-venue migration (dry run) TOTAL: orgs=% distinct_venue_strings=% venues_to_create=%',
     v_total_orgs, v_total_strings, v_total_to_create;
 
   drop table if exists pg_temp.venue_mapping;
