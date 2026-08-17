@@ -94,11 +94,19 @@ async function execute(
 ): Promise<void> {
   const p = event.payload;
   switch (event.type) {
+    // P9 pass 3a: `court`/`.court` on every payload below is a `courts.id`
+    // now (schedule.ts's `moveFixture`/`applySchedule` write it that way —
+    // see their own comments on `schedule_edited`/`schedule_applied`), so
+    // every replay here writes `court_id`, never the legacy `court_label`.
+    // This is the fix the dispatch's regression targets: undo/redo used to
+    // write a STALE FREE-TEXT LABEL back into `court_label` while `court_id`
+    // sat untouched — a real defect (the two columns silently disagreeing
+    // after a restore), not merely a rename.
     case "schedule_applied":
     case "schedule_shifted": {
       const moves = (p.moves as { fixture: string; to: { at: string | null; court: string | null } }[]) ?? [];
       for (const m of moves) {
-        await tx`update fixtures set scheduled_at = ${m.to.at}, court_label = ${m.to.court}
+        await tx`update fixtures set scheduled_at = ${m.to.at}, court_id = ${m.to.court}
                  where id = ${m.fixture} and status <> 'decided'`;
       }
       break;
@@ -106,21 +114,21 @@ async function execute(
     case "schedule_edited": {
       const to = p.to as { at: string | null; court: string | null; locked?: boolean };
       await tx`
-        update fixtures set scheduled_at = ${to.at}, court_label = ${to.court},
+        update fixtures set scheduled_at = ${to.at}, court_id = ${to.court},
                             schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
         where id = ${p.fixture as string} and status <> 'decided'`;
       break;
     }
     case "schedule_cleared": {
       for (const s of (p.cleared as FixtureSnapshot[]) ?? []) {
-        await tx`update fixtures set scheduled_at = null, court_label = null
+        await tx`update fixtures set scheduled_at = null, court_id = null
                  where id = ${s.id} and status <> 'decided'`;
       }
       break;
     }
     case "schedule_restored": {
       for (const s of (p.restored as FixtureSnapshot[]) ?? []) {
-        await tx`update fixtures set scheduled_at = ${s.at ?? null}, court_label = ${s.court ?? null}
+        await tx`update fixtures set scheduled_at = ${s.at ?? null}, court_id = ${s.court ?? null}
                  where id = ${s.id} and status <> 'decided'`;
       }
       break;
@@ -140,7 +148,7 @@ async function execute(
       for (const s of (p.fixtures as FixtureSnapshot[]) ?? []) {
         await tx`
           insert into fixtures (id, stage_id, division_id, pool_id, round_no, seq_in_round,
-                                home_entrant_id, away_entrant_id, scheduled_at, court_label, status)
+                                home_entrant_id, away_entrant_id, scheduled_at, court_id, status)
           values (${s.id}, ${s.stage_id!}, ${divisionId}, ${s.pool_id ?? null},
                   ${s.round_no ?? 1}, ${s.seq_in_round ?? 1}, ${s.home_entrant_id ?? null},
                   ${s.away_entrant_id ?? null}, ${s.at ?? null}, ${s.court ?? null}, 'scheduled')
@@ -199,9 +207,13 @@ async function step(
     if (result.event.type === "fixtures_cleared" && result.event.payload.fixtures === undefined) {
       const ids = (result.event.payload.fixture_ids as string[]) ?? [];
       if (ids.length > 0) {
+        // P9 pass 3a: `court` is a courts.id now (aliased off court_id, not
+        // the legacy court_label) — this snapshot rides on `fixtures_cleared`
+        // and its redo re-inserts these rows verbatim (below), so a label
+        // here would silently write a display string into an id column.
         const rows = await tx<FixtureSnapshot[]>`
           select id, stage_id, pool_id, round_no, seq_in_round, home_entrant_id,
-                 away_entrant_id, scheduled_at::text as at, court_label as court
+                 away_entrant_id, scheduled_at::text as at, court_id as court
           from fixtures where id in ${tx(ids)}`;
         result.event.payload.fixtures = rows;
       }
@@ -219,7 +231,7 @@ async function step(
       for (const s of (result.event.payload.fixtures as FixtureSnapshot[]) ?? []) {
         await tx`
           insert into fixtures (id, stage_id, division_id, pool_id, round_no, seq_in_round,
-                                home_entrant_id, away_entrant_id, scheduled_at, court_label, status)
+                                home_entrant_id, away_entrant_id, scheduled_at, court_id, status)
           values (${s.id}, ${s.stage_id!}, ${divisionId}, ${s.pool_id ?? null},
                   ${s.round_no ?? 1}, ${s.seq_in_round ?? 1}, ${s.home_entrant_id ?? null},
                   ${s.away_entrant_id ?? null}, ${s.at ?? null}, ${s.court ?? null}, 'scheduled')
@@ -548,12 +560,21 @@ export const ClearScheduleInput = z.object({
 });
 export type ClearScheduleInput = z.infer<typeof ClearScheduleInput>;
 
+// P9 pass 3a: `court` on `ClearableFixture`/its `FixtureSnapshot` is a
+// courts.id now, not a free-text label — `@seazn/engine/history`'s own
+// `court: string | null` field has always been opaque (no engine logic
+// inspects its content, only equality — the same "pure representation
+// swap" the scheduling engine's `Assignment.court` already was), so this is
+// a value-only change: `clearableFixtures`/`clearPoolEntrants` below both
+// read `court_id`, and every downstream `schedule_cleared`/
+// `schedule_restored`/`pool_entrants_restored` replay in `execute()` above
+// already expects an id.
 async function clearableFixtures(tx: Tx, divisionId: string): Promise<ClearableFixture[]> {
   const rows = await tx<{
     id: string; stage_id: string; pool_id: string | null; round_no: number | null;
-    court_label: string | null; scheduled_at: string | null; schedule_locked: boolean; status: string;
+    court_id: string | null; scheduled_at: string | null; schedule_locked: boolean; status: string;
   }[]>`
-    select id, stage_id, pool_id, round_no, court_label, scheduled_at::text as scheduled_at,
+    select id, stage_id, pool_id, round_no, court_id, scheduled_at::text as scheduled_at,
            schedule_locked, status
     from fixtures where division_id = ${divisionId}`;
   return rows.map((f) => ({
@@ -561,7 +582,7 @@ async function clearableFixtures(tx: Tx, divisionId: string): Promise<ClearableF
     stageId: f.stage_id,
     poolId: f.pool_id,
     roundNo: f.round_no,
-    court: f.court_label,
+    court: f.court_id,
     at: f.scheduled_at,
     locked: f.schedule_locked,
     decided: f.status === "decided",
@@ -607,10 +628,10 @@ export async function clearPoolEntrants(
     const rows = await tx<{
       id: string; stage_id: string; pool_id: string | null; round_no: number | null;
       seq_in_round: number | null; home_entrant_id: string | null; away_entrant_id: string | null;
-      court_label: string | null; scheduled_at: string | null; schedule_locked: boolean; status: string;
+      court_id: string | null; scheduled_at: string | null; schedule_locked: boolean; status: string;
     }[]>`
       select id, stage_id, pool_id, round_no, seq_in_round, home_entrant_id, away_entrant_id,
-             court_label, scheduled_at::text as scheduled_at, schedule_locked, status
+             court_id, scheduled_at::text as scheduled_at, schedule_locked, status
       from fixtures where pool_id = ${poolId}`;
     let result;
     try {
@@ -620,7 +641,7 @@ export async function clearPoolEntrants(
           stageId: f.stage_id,
           poolId: f.pool_id,
           roundNo: f.round_no,
-          court: f.court_label,
+          court: f.court_id,
           at: f.scheduled_at,
           locked: f.schedule_locked,
           decided: f.status === "decided",
@@ -633,7 +654,7 @@ export async function clearPoolEntrants(
             home_entrant_id: f.home_entrant_id,
             away_entrant_id: f.away_entrant_id,
             at: f.scheduled_at,
-            court: f.court_label,
+            court: f.court_id,
           },
         })),
         poolId,
@@ -688,7 +709,16 @@ export async function setDivisionLocks(
   });
 }
 
-/** State the console renders after undo/redo: the fold at the watermark. */
+/** State the console renders after undo/redo: the fold at the watermark.
+ *
+ *  `court` (P9 pass 3a) is a courts.id now, purely by construction — `fold`
+ *  is a pure engine replay over whatever the ledger's own `court` fields
+ *  hold, and every writer of those (`execute()` above) writes an id since
+ *  this pass. Field NAME unchanged (`court`, not `court_id`) — this is
+ *  outside pass 3a's file scope (a console/UI concern, pass 4) and a rename
+ *  here with no consumer updated to match would be a pointless wire break;
+ *  a caller wanting a display name resolves `court` the same way any other
+ *  P9 caller does (`courtNamesById` in schedule.ts). */
 export async function scheduleStateAt(
   auth: AuthCtx,
   divisionId: string,
