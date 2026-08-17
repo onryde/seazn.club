@@ -44,11 +44,16 @@ import {
   tryEarnGrant,
   walletIdFor,
 } from "@/lib/credits";
+import { ageAt, isMinor, requiresDob, eligibilityIssues } from "./registration-eligibility";
 
 type Tx = postgres.TransactionSql;
 
 // ---------------------------------------------------------------------------
-// Pure helpers — fee math & eligibility (unit-tested directly)
+// Pure helpers — fee math, form validation, #402 submit-linking policy
+// (unit-tested directly). Eligibility itself (age/gender rules, first-class
+// category/age columns, roster composition) lives in
+// `./registration-eligibility` — re-exported below, verbatim, for every
+// existing importer.
 // ---------------------------------------------------------------------------
 
 export const REGISTRATION_TOKEN_PREFIX = "rg_";
@@ -90,22 +95,6 @@ export function applicationFeeCents(feeCents: number, percent: number): number {
 
 export function hashRegistrationToken(secret: string): string {
   return createHash("sha256").update(secret, "utf8").digest("hex");
-}
-
-/** Whole years between dob and `at` (doc 06 §2.1: never approximate). */
-export function ageAt(dobIso: string, at: Date): number {
-  const dob = new Date(`${dobIso}T00:00:00Z`);
-  let age = at.getUTCFullYear() - dob.getUTCFullYear();
-  const beforeBirthday =
-    at.getUTCMonth() < dob.getUTCMonth() ||
-    (at.getUTCMonth() === dob.getUTCMonth() && at.getUTCDate() < dob.getUTCDate());
-  if (beforeBirthday) age -= 1;
-  return age;
-}
-
-/** Guardian consent threshold (doc 06 §4.7 / doc 16 §1.1): under 18 today. */
-export function isMinor(dobIso: string, now: Date): boolean {
-  return ageAt(dobIso, now) < 18;
 }
 
 /**
@@ -152,64 +141,12 @@ export function deriveLinkUserId(
   return sessionUserId;
 }
 
-interface AgeRule {
-  kind: "age";
-  maxAgeAt?: number;
-  minAgeAt?: number;
-  cutoff?: { month: number; day: number; yearOf?: "season_start" | "calendar" };
-}
-interface GenderRule {
-  kind: "gender";
-  allowed: string[];
-}
-
-/** Division has an age rule ⇒ the form must collect DOB. */
-export function requiresDob(rules: unknown[]): boolean {
-  return rules.some((r) => (r as { kind?: string })?.kind === "age");
-}
-
-/**
- * Validate a registrant against the division's eligibility rules (doc 06 §2).
- * Only 'age' and 'gender' are checkable at registration; roster/grade/custom
- * rules are organiser-side. Returns human issues; empty = eligible.
- * `seasonStartYear` anchors cutoff.yearOf='season_start' (doc 06 §2.1).
- */
-export function eligibilityIssues(
-  rules: unknown[],
-  input: { dob?: string | null; gender?: string | null },
-  seasonStartYear: number,
-): string[] {
-  const issues: string[] = [];
-  for (const raw of rules) {
-    const rule = raw as { kind?: string };
-    if (rule.kind === "age") {
-      const r = raw as AgeRule;
-      if (!input.dob) {
-        issues.push("Date of birth is required for this age-restricted division.");
-        continue;
-      }
-      const cutoff = r.cutoff ?? { month: 1, day: 1, yearOf: "calendar" as const };
-      const year =
-        cutoff.yearOf === "season_start" ? seasonStartYear : new Date().getUTCFullYear();
-      const cutoffDate = new Date(Date.UTC(year, (cutoff.month ?? 1) - 1, cutoff.day ?? 1));
-      const age = ageAt(input.dob, cutoffDate);
-      if (r.maxAgeAt !== undefined && age > r.maxAgeAt) {
-        issues.push(`Too old for this division (must be ${r.maxAgeAt} or younger on the cutoff date).`);
-      }
-      if (r.minAgeAt !== undefined && age < r.minAgeAt) {
-        issues.push(`Too young for this division (must be ${r.minAgeAt} or older on the cutoff date).`);
-      }
-    } else if (rule.kind === "gender") {
-      const r = raw as GenderRule;
-      if (!input.gender) {
-        issues.push("Gender is required for this division.");
-      } else if (!r.allowed.includes(input.gender)) {
-        issues.push("This division is not open to your gender category.");
-      }
-    }
-  }
-  return issues;
-}
+// `ageAt`, `isMinor`, `requiresDob`, `eligibilityIssues` moved to
+// `./registration-eligibility` (RS002 wave 2) — imported above for local use
+// (`isMinor` by `deriveLinkUserId`, `requiresDob` by `publicRegistrationInfo`
+// below) and re-exported here verbatim so every existing importer of this
+// file keeps compiling unchanged.
+export { ageAt, isMinor, requiresDob, eligibilityIssues };
 
 /** Validate answers against the bounded form definition; returns the kept
  *  subset (unknown keys dropped — the form is the contract). */
@@ -996,12 +933,16 @@ export async function publicRegistrationInfo(
       slug: string;
       sport_key: string;
       eligibility: unknown[];
+      // V364 first-class columns: `age_min`/`age_max` also drive
+      // `requires_dob` below (a category-only division needs no DOB).
+      age_min: number | null;
+      age_max: number | null;
       youth: boolean;
       active: number;
       waitlisted: number;
     })[]
   >`
-    select rs.*, d.name, d.slug, d.sport_key, d.eligibility, d.youth,
+    select rs.*, d.name, d.slug, d.sport_key, d.eligibility, d.age_min, d.age_max, d.youth,
            (select count(*)::int from registrations r
              where r.division_id = rs.division_id
                and r.status in ${sql([...SPOT_HOLDERS])}) as active,
@@ -1052,7 +993,14 @@ export async function publicRegistrationInfo(
       taken: r.active,
       open,
       closed_reason: reason,
-      requires_dob: requiresDob(r.eligibility ?? []),
+      // V364: a division can require a DOB via the jsonb rules OR via the
+      // first-class age_min/age_max columns alone — requiresDob's
+      // division-shaped overload checks both.
+      requires_dob: requiresDob({
+        eligibility: r.eligibility ?? [],
+        age_min: r.age_min,
+        age_max: r.age_max,
+      }),
       youth: r.youth,
       waitlisted: r.waitlisted,
       form_fields: r.form_fields ?? [],
