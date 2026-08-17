@@ -1825,6 +1825,44 @@ git commit -m "db(F2): drop stages.qualification/seeding, add stages.progression
 > Known-red until Task 5 reshapes the catalogue JSON, and NOT new defects:
 > `catalog.test.ts` (3 failures) and `template-gallery-progression.test.tsx`
 > (2 failures).
+>
+> ### The review sweep found FIVE more unowned files — and one silent write
+>
+> A review of Tasks 1-4 (2026-08-18) swept for every remaining reader and
+> writer of the old fields. The two above were not the whole set. **Every file
+> below is required work in this task and none of it was in any task's file
+> list.** Confirmed by re-running the sweep independently.
+>
+> **First, the change that makes this whole class LOUD instead of silent —
+> do this before the rest.** `CreateStage` (`schemas.ts`, ends `});`) is
+> **not `.strict()`**. So `stages-panel.tsx:961`, the live "Add stage" flow,
+> POSTs `qualification: { topN }`, Zod silently DROPS the unknown key, the
+> stage is created with `progression: null`, the request returns success, and
+> that stage never generates anyone. No error, no log, a real organiser
+> action that quietly does nothing. Add `.strict()` to `CreateStage` and the
+> same silent drop becomes a 400 that names the offending key — and every
+> remaining site in this list turns into a loud failure a test can catch
+> rather than a silent one nobody sees. This is the same non-strict hole that
+> hid `template-gallery.tsx`: `TemplateStage` is not `.strict()` either, so
+> the catalogue JSON's `.seeding` block is stripped rather than rejected.
+>
+> Then convert, all of them writers or readers of the dropped columns:
+> - `components/v2/stages-panel.tsx` (~8 sites, incl. the POST at :961)
+> - `config/format-gallery.tsx` (~13 sites, incl. `qualification: {topN: 4}`
+>   at :289 and :298 — these feed the REAL engine through
+>   `previewDivisionFixtures`, so they are not decorative)
+> - `components/v2/division-settings.tsx` (:136, :166)
+> - `app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx:133` —
+>   `stages.filter(s => s.seeding != null)` degrades to `[]` once the column
+>   is gone, so the P6/D4b seed-proposal panel silently DISAPPEARS from every
+>   division. Another silent one: no error, just a missing feature.
+> - `app/api/.../format-preview/route.ts:14`
+>
+> The pattern worth naming, because it will recur in Task 6: **every one of
+> these fails silently rather than loudly** — a dropped key, a filter that
+> matches nothing, a stripped JSON block. None of them throws. A green test
+> run proves nothing about them, which is exactly why they survived four
+> tasks and two reviews.
 
 **Files:**
 - Modify: `apps/web/src/server/usecases/stages.ts` (`createStages`
@@ -2206,6 +2244,33 @@ git commit -m "writers(F2): createStages, instantiateTemplate, the picker and ca
 > shape. No task owned it until now. It must move to `progression` in this
 > task, and `openapi:gen` re-run — the published contract still advertises two
 > fields the database no longer has.
+>
+> ### Four defects the Tasks 1-4 review found, to close here
+>
+> 1. **`V371`'s CHECK does not enforce "`seeded_map` needs a non-empty `map`"**
+>    — the one invariant this plan's own Gotchas section says to carry
+>    forward. Verified empirically: `placement: "seeded_map"` with no `map`
+>    key PASSES the constraint, and `placeDescriptors`
+>    (`progression.ts:214`) then silently resolves it as `rank_order`. A
+>    wrong-but-plausible draw, no error. Either tighten the CHECK in a
+>    follow-up migration or enforce it in `ProgressionSchema` — decide, and
+>    say which, rather than leaving it to whichever layer someone checks
+>    first.
+> 2. **Tie flagging is untested where it matters.** The sole tie test
+>    (`progression.test.ts:285`) proves only that `ties` stays EMPTY — the
+>    tied rows are never reached. Nothing exercises `ties` actually being
+>    POPULATED. This was the least-proven code in the diff and it is still
+>    the least-proven code.
+> 3. **No test resolves 2+ take rules in ONE source.** That is euro24's real
+>    shape (`topNPerGroup` + `bestNth` together, the old
+>    `CombinedQualification`). Only ordering via `placeDescriptors` is
+>    covered, not resolution and dedupe through `resolveProgression`.
+> 4. **A human-readable error regressed.** `topN` used to tell an organiser
+>    "takes the top N, only M available — lower the count". `rankRange` now
+>    reaches them as `rowAtRank`'s generic "no entrant ranked N yet"
+>    (`progression.ts:358`), untested, and it is NOT in `seeding-error.ts`'s
+>    allowlist so it arrives verbatim (`http.ts:196`). Restore a message that
+>    tells the organiser what to DO.
 
 **Files:**
 - Modify: `apps/web/src/server/usecases/stage-seeding.ts` — shrink to
