@@ -21,8 +21,10 @@ import { Tip } from "@/components/ui/tip";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, type Dict } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
+import { listVenues } from "@/server/usecases/venues";
+import { VenuesPanel } from "@/components/v2/venues-panel";
 
-const TABS = ["players", "clubs", "officials"] as const;
+const TABS = ["players", "clubs", "officials", "venues"] as const;
 type Tab = (typeof TABS)[number];
 
 export default async function DirectoryPage({
@@ -68,6 +70,7 @@ export default async function DirectoryPage({
         {tab === "players" && <PlayersTab ui={ui} />}
         {tab === "clubs" && <ClubsTab ui={ui} />}
         {tab === "officials" && <OfficialsTab ui={ui} />}
+        {tab === "venues" && <VenuesTab ui={ui} />}
       </main>
     </DictProvider>
   );
@@ -192,6 +195,43 @@ async function OfficialsTab({ ui }: { ui: Dict }) {
         }))}
         canEdit={canEdit}
         rolesMultiAllowed={rolesMultiAllowed}
+      />
+    </div>
+  );
+}
+
+// D5/P8: archived VENUES are fetched here (includeArchived: true) so the
+// panel's "Show archived" toggle is a client-side filter, not a refetch —
+// `listVenues` always nests only ACTIVE courts regardless of that option
+// (see venues-panel.tsx's file header for why).
+async function VenuesTab({ ui }: { ui: Dict }) {
+  const { auth, canEdit } = await requirePageAuth();
+  const venues = await listVenues(auth, { includeArchived: true });
+  return (
+    <div className="space-y-4">
+      <p className="max-w-xl text-sm text-slate-500">{t(ui, "directory.venues.desc")}</p>
+      <VenuesPanel
+        venues={venues.map((v) => ({
+          id: v.id,
+          name: v.name,
+          address: v.address,
+          sort: v.sort,
+          archived_at: v.archived_at,
+          created_at: v.created_at,
+          courts: v.courts.map((c) => ({
+            id: c.id,
+            venue_id: c.venue_id,
+            name: c.name,
+            sort: c.sort,
+            tags: c.tags,
+            archived_at: c.archived_at,
+            created_at: c.created_at,
+            hours: c.hours,
+            exceptions: c.exceptions,
+          })),
+        }))}
+        orgId={auth.orgId}
+        canEdit={canEdit}
       />
     </div>
   );
