@@ -27,64 +27,84 @@ function uniqueName(label: string): string {
   return `${label} ${TAG}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-/** The first labelled input (within `root`) whose LIVE value equals `value`,
- *  or null. Deliberately reads `.inputValue()` rather than matching a
- *  `[value="…"]` CSS attribute selector — React never reflects a controlled
- *  input's live value onto the DOM attribute, only the property, so an
- *  attribute selector would silently match nothing. */
-async function findByLabelValue(
+/**
+ * The first `containerSelector` element (within `root`) that owns a
+ * `label`-labelled control whose LIVE value equals `value`, or null.
+ *
+ * Deliberately built via plain Locator chaining (`.locator(css).nth(i)`)
+ * rather than "find the input, then jump to its ancestor via
+ * `xpath=ancestor::…`": measured live against this exact page — a Locator
+ * reached through an xpath ancestor step resolves fine for an `aria-label`
+ * lookup or a role's own text (`getByRole("button", {name:…})`), but a
+ * SUBSEQUENT `getByLabel` for a WRAPPING `<label><span>…</span><select>`
+ * association (no `aria-label`, no `for`/`id` — e.g. the calendar editor's
+ * "Open"/"Close" selects) silently resolves to zero matches even though the
+ * element is plainly present in `innerHTML()` — proven with a throwaway
+ * `.count()`/`.isVisible()` probe before this fix landed. Scanning
+ * CONTAINERS directly and reading each candidate's OWN value avoids the
+ * xpath hop entirely, so every later `getByLabel`/`getByRole` on the
+ * returned Locator composes normally. Reads `.inputValue()` (never a
+ * `[value="…"]` CSS attribute selector) because React never reflects a
+ * controlled input's live value onto the DOM attribute, only the property.
+ */
+async function findContainer(
   root: Page | Locator,
+  containerSelector: string,
   label: string,
   value: string,
 ): Promise<Locator | null> {
-  const inputs = root.getByLabel(label);
-  const n = await inputs.count();
+  const containers = root.locator(containerSelector);
+  const n = await containers.count();
   for (let i = 0; i < n; i++) {
-    if ((await inputs.nth(i).inputValue()) === value) return inputs.nth(i);
+    const candidate = containers.nth(i);
+    const input = candidate.getByLabel(label);
+    if ((await input.count()) > 0 && (await input.inputValue()) === value) return candidate;
   }
   return null;
 }
 
-async function venueCardCount(page: Page, venueName: string): Promise<number> {
-  return (await findByLabelValue(page, "Venue name", venueName)) ? 1 : 0;
+async function findVenueCard(page: Page, venueName: string): Promise<Locator | null> {
+  return findContainer(page, "section.card", "Venue name", venueName);
 }
 
-async function findVenueCard(page: Page, venueName: string): Promise<Locator> {
-  const input = await findByLabelValue(page, "Venue name", venueName);
-  if (!input) throw new Error(`venue card not found for "${venueName}"`);
-  return input.locator("xpath=ancestor::section[contains(@class,'card')][1]");
+async function findCourtRow(
+  page: Page,
+  venueName: string,
+  courtName: string,
+): Promise<Locator | null> {
+  const venueCard = await findVenueCard(page, venueName);
+  if (!venueCard) return null;
+  return findContainer(venueCard, "li", "Court name", courtName);
 }
 
 /** Waits (auto-retrying, so a real red is possible) for the venue card to
  *  exist, then returns it. */
 async function waitForVenueCard(page: Page, venueName: string): Promise<Locator> {
   await expect
-    .poll(() => venueCardCount(page, venueName), { timeout: 15_000 })
+    .poll(async () => ((await findVenueCard(page, venueName)) ? 1 : 0), { timeout: 15_000 })
     .toBe(1);
-  return findVenueCard(page, venueName);
-}
-
-async function courtRowCount(page: Page, courtName: string): Promise<number> {
-  // Court names are unique per test (uniqueName), so scanning the whole page
-  // (rather than one venue's subtree) is enough and also doubles as the
-  // "gone after archive" check without needing to resolve the venue card.
-  return (await findByLabelValue(page, "Court name", courtName)) ? 1 : 0;
-}
-
-async function findCourtRow(page: Page, venueName: string, courtName: string): Promise<Locator> {
-  const venueCard = await findVenueCard(page, venueName);
-  const input = await findByLabelValue(venueCard, "Court name", courtName);
-  if (!input) throw new Error(`court row not found for "${courtName}" in venue "${venueName}"`);
-  return input.locator("xpath=ancestor::li[1]");
+  const card = await findVenueCard(page, venueName);
+  if (!card) throw new Error(`venue card vanished for "${venueName}"`);
+  return card;
 }
 
 async function waitForCourtRow(page: Page, venueName: string, courtName: string): Promise<Locator> {
-  await expect.poll(() => courtRowCount(page, courtName), { timeout: 15_000 }).toBe(1);
-  return findCourtRow(page, venueName, courtName);
+  await expect
+    .poll(async () => ((await findCourtRow(page, venueName, courtName)) ? 1 : 0), { timeout: 15_000 })
+    .toBe(1);
+  const row = await findCourtRow(page, venueName, courtName);
+  if (!row) throw new Error(`court row vanished for "${courtName}" in venue "${venueName}"`);
+  return row;
 }
 
-async function waitForCourtRowGone(page: Page, courtName: string): Promise<void> {
-  await expect.poll(() => courtRowCount(page, courtName), { timeout: 15_000 }).toBe(0);
+async function waitForCourtRowGone(
+  page: Page,
+  venueName: string,
+  courtName: string,
+): Promise<void> {
+  await expect
+    .poll(async () => ((await findCourtRow(page, venueName, courtName)) ? 1 : 0), { timeout: 15_000 })
+    .toBe(0);
 }
 
 test("venue + court CRUD: tags, calendar survives a reload, archive behind the toggle", async ({
@@ -117,12 +137,19 @@ test("venue + court CRUD: tags, calendar survives a reload, archive behind the t
   await expect(courtRow.getByRole("button", { name: "Remove indoor" })).toBeVisible();
 
   // --- weekly hours (Monday, index 1 of the 7 Sun..Sat rows) + one exception day ---
+  // getByRole, not getByLabel: measured live — `getByLabel` resolves zero
+  // matches for these WRAPPING `<label><span>…</span><select/input></label>`
+  // associations (no `aria-label`, no `for`/`id`) even though the element is
+  // plainly present (confirmed via `page.ariaSnapshot()`, which correctly
+  // reports e.g. `combobox "Open"`) — a real `getByLabel` gap for implicit
+  // wrapping-label association in this Playwright version, not a product
+  // defect. `getByRole` against the SAME accessible name works.
   await courtRow.getByRole("button", { name: "Hours", exact: true }).click();
   await courtRow.getByRole("button", { name: "Add a time range", exact: true }).nth(1).click();
-  await courtRow.getByLabel("Open", { exact: true }).selectOption("10:00");
+  await courtRow.getByRole("combobox", { name: "Open", exact: true }).selectOption("10:00");
 
   await courtRow.getByRole("button", { name: "Add an exception date", exact: true }).click();
-  await courtRow.getByLabel("Exception date", { exact: true }).fill("2026-12-25");
+  await courtRow.getByRole("textbox", { name: "Exception date", exact: true }).fill("2026-12-25");
   // Left `closed` checked (the default for a newly added exception) — a
   // holiday closure is the simplest genuine exception and needs no
   // open/close pair.
@@ -134,19 +161,25 @@ test("venue + court CRUD: tags, calendar survives a reload, archive behind the t
   await page.reload();
   courtRow = await waitForCourtRow(page, venueName, courtName);
   await courtRow.getByRole("button", { name: "Hours", exact: true }).click();
-  await expect(courtRow.getByLabel("Open", { exact: true })).toHaveValue("10:00");
-  await expect(courtRow.getByLabel("Exception date", { exact: true })).toHaveValue("2026-12-25");
-  await expect(courtRow.getByLabel("Closed all day", { exact: true })).toBeChecked();
+  await expect(courtRow.getByRole("combobox", { name: "Open", exact: true })).toHaveValue("10:00");
+  await expect(
+    courtRow.getByRole("textbox", { name: "Exception date", exact: true }),
+  ).toHaveValue("2026-12-25");
+  await expect(
+    courtRow.getByRole("checkbox", { name: "Closed all day", exact: true }),
+  ).toBeChecked();
   await expect(courtRow.getByRole("button", { name: "Remove indoor" })).toBeVisible();
 
   // --- archive the court: vanishes from the default (non-archived) view ---
   await courtRow.getByRole("button", { name: "Archive", exact: true }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "Archive court", exact: true }).click();
   await expect(page.getByText("Court archived.")).toBeVisible({ timeout: 15_000 });
-  await waitForCourtRowGone(page, courtName);
+  await waitForCourtRowGone(page, venueName, courtName);
 
   // --- "Show archived" toggle brings it back, greyed with an Unarchive action ---
-  await page.getByLabel("Show archived", { exact: true }).check();
+  // Also a wrapping label (`<label><input type=checkbox/>text</label>`) — getByRole, same reason as above.
+  const showArchived = page.getByRole("checkbox", { name: "Show archived", exact: true });
+  await showArchived.check();
   courtRow = await waitForCourtRow(page, venueName, courtName);
   await expect(courtRow.getByText("Archived", { exact: true })).toBeVisible();
   await expect(courtRow.getByRole("button", { name: "Unarchive", exact: true })).toBeVisible();
@@ -155,7 +188,7 @@ test("venue + court CRUD: tags, calendar survives a reload, archive behind the t
   //     genuinely active again, not merely still shown because the toggle is on) ---
   await courtRow.getByRole("button", { name: "Unarchive", exact: true }).click();
   await expect(page.getByText("Court restored.")).toBeVisible({ timeout: 15_000 });
-  await page.getByLabel("Show archived", { exact: true }).uncheck();
+  await showArchived.uncheck();
   courtRow = await waitForCourtRow(page, venueName, courtName);
   await expect(courtRow).toBeVisible();
   await expect(courtRow.getByText("Archived", { exact: true })).toHaveCount(0);
