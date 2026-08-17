@@ -66,6 +66,15 @@ closes the consent gap for captain-entered rosters, and the money edge cases
 
 ## Gotchas
 
+- **`/r/[ref]` and its `ticket.png` sibling are on the closed state and are
+  yours to restore.** RS001 verified they DO read registrations
+  (`publicRegistrationStatusByRef` + `reconcileRegistrationBySession`) and
+  `ref_code` moved to `registration_groups` — so the ref they resolve is now a
+  CART ref, and the page becomes a cart status page (design §4 "After submit").
+- **Refunds are cart-level until someone fixes them.** RS002 owns the decision
+  (see its "Entry conditions" section); if it has not landed by the time you
+  wire cancel-an-entry, do not ship an entry-level cancel that calls a
+  cart-level refund — it would claw back a sibling entry's money.
 - Two browser contexts in one Playwright test share nothing — correct here;
   but the seven-width projects race over ONE org: tag data per project.
 - Clock control: no `Date.now` freezing on the server — drive expiry via a

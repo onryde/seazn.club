@@ -101,10 +101,57 @@ modules if it passes ~600 lines — it was near that before) and
 - **Regression** — the capacity race; idempotent materialization; waitlist
   never charged.
 
+## Entry conditions RS001 hands over — resolve these, don't discover them
+
+RS001 (PR #592) left three things deliberately unfinished because they need
+decisions that belong to THIS session. `_INDEX.md` has the full write-up; the
+short form:
+
+1. **Cart-level money is flattened onto entry rows, and multi-entry carts are
+   exactly what you are about to build.** `RegistrationWithGroupRow` merges the
+   cart's payment envelope onto one entry, which is exact while carts are 1:1 —
+   all that exists today — and wrong the moment a cart holds two. Three shapes
+   in `usecases/registrations.ts` break, none of them at compile time; each
+   carries an inline pointer to the block comment above
+   `RegistrationWithGroupRow`:
+   - `stripeRefund(intent, undefined)` refunds the cart's FULL remaining
+     balance (withdraw path, late-payment webhook) — refunding ONE entry would
+     claw back its siblings' money. Pass the entry's own `amount_cents`, as
+     `refundRegistration` already does.
+   - `set refunded_cents = <entry fee>` OVERWRITES the cart total instead of
+     accumulating; the correct additive pattern already exists in that file
+     (`greatest(refunded_cents, …)` on the dispute path).
+   - `remaining = reg.amount_cents - reg.refunded_cents` mixes an entry fee
+     with a cart total — a sibling's refund drives it negative and the
+     organiser is told "Already fully refunded" for an untouched entry.
+   **The decision RS001 did not take:** whether per-entry refunds get their own
+   `registrations.refunded_cents` or are derived. Take it explicitly, record it
+   in `_INDEX.md`, and note that the schema half is a one-column delta.
+2. **The submit-time privacy-consent (GDPR) check went out with
+   `submitRegistration`.** Its test ("rejects submissions without privacy
+   consent", spec 2026-07-14) was deleted with it, so NOTHING in the tree fails
+   without the rule. Reimplement it on the group submit path — this is a
+   compliance rule, not a nicety — and ship the regression test that fails
+   without it.
+3. **Materialization now links people through `registration_players.user_id`**
+   (RS001 restored the `resolvePlayerPerson` upsert that the demolition had
+   silently orphaned). The producer is yours: the submitter's own player row
+   must carry `user_id` at submit when they are playing ("I'm playing", design
+   §4 step 1), or the #402/#404 identity dedupe stays dormant for every new
+   registration.
+
 ## Gotchas
 
 - A rejected SQL statement aborts the WHOLE transaction — the old code's
   row-lock pattern matters; don't catch-and-continue inside the tx.
+- Sweep e2e specs by BEHAVIOUR, never by filename. RS001's sweep cleared every
+  `registration*.spec.ts` and still shipped a red CI job, because
+  `payments-hardening.spec.ts` creates registrations in raw SQL and is named
+  for none of it. Use
+  `git grep -a -n -E "insert into registrations|/register|registration_settings" -- apps/web/e2e`.
+- `payments-hardening.spec.ts` T10 is parked under `test.skip` (its mechanism
+  was the deleted public POST). Restoring it belongs to RS006/RS007, not here,
+  but do not delete the frozen body.
 - Persons identity index is scoped `lane='player'` — get-or-create must match
   its semantics or you'll ship duplicate persons.
 - The registration→entrant path is also consumed by scheduling; entrant shape
