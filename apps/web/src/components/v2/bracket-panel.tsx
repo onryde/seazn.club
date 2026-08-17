@@ -21,6 +21,8 @@ import { routes } from "@/lib/routes";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
+import { roundRoleLabel } from "@/lib/round-role-label";
+import type { RoundRole } from "@seazn/engine/competition";
 import {
   doubleElimBracket,
   lbRowUnit,
@@ -31,6 +33,7 @@ import {
   type BracketNode,
   type DoubleElimLayout,
   type PagePlayoffLayout,
+  type PagePlayoffSlot,
 } from "@seazn/engine/scheduling/bracket-layout";
 
 interface FixtureLike {
@@ -420,6 +423,13 @@ function DoubleElimPanel({
               <span key={n.fixtureId} data-lane={n.lane} className="contents">
                 {n.lane === "GF" && (
                   <span className={laneLabel} style={{ left, top: top - LABEL_H + 4 }}>
+                    {/* Paired-node lane annotation (GF directly above Reset),
+                        not a list heading -- same treatment as bracket.winners/
+                        bracket.losers above and the public site's identical
+                        untouched "Grand final"/"Reset" pair (bracket.tsx's
+                        DoubleElim tree): terse "Reset" reads correctly right
+                        under a "Grand final" sibling, where roundRoleLabel's
+                        list-context "Grand final (reset)" would be redundant. */}
                     {n.col === 0 ? msg("bracket.grandFinal") : msg("bracket.reset")}
                   </span>
                 )}
@@ -498,7 +508,7 @@ function StepladderPanel({
         {rungs.map((f, i) => (
           <div key={f.id}>
             <p className="mb-1 font-display text-[10px] font-semibold uppercase tracking-[0.14em] text-[color:var(--app-fg-muted,#94a3b8)]">
-              {i === rungs.length - 1 ? msg("bracket.final") : `${msg("bracket.rung")} ${i + 1}`}
+              {roundRoleLabel(msg, i === rungs.length - 1 ? { kind: "final" } : { kind: "rung", n: i + 1 })}
             </p>
             <Link
               href={routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}
@@ -555,11 +565,11 @@ function PagePlayoffPanel({
   const totalH = LABEL_H + 168 + NODE_H + 8;
   const cy = (slot: string) => pos[slot]!.y + NODE_H / 2;
   const rxx = (slot: string) => pos[slot]!.x + NODE_W;
-  const LABELS: Record<string, string> = {
-    q1: msg("bracket.qualifier1"),
-    eliminator: msg("bracket.eliminator"),
-    q2: msg("bracket.qualifier2"),
-    final: msg("bracket.final"),
+  const PP_ROLE: Record<PagePlayoffSlot, RoundRole> = {
+    q1: { kind: "qualifier1" },
+    eliminator: { kind: "eliminator" },
+    q2: { kind: "qualifier2" },
+    final: { kind: "final" },
   };
   const row = (f: FixtureLike, entrantId: string | null, slotLabel: SlotLabel | null | undefined) => {
     const winner = (f.outcome as { winner?: string } | null)?.winner ?? null;
@@ -612,7 +622,7 @@ function PagePlayoffPanel({
             return (
               <span key={n.fixtureId} data-slot={n.slot} className="contents">
                 <span className="absolute font-display text-[10px] font-semibold uppercase tracking-[0.14em] text-[color:var(--app-fg-muted,#94a3b8)]" style={{ left: p.x, top: p.y - LABEL_H + 4 }}>
-                  {LABELS[n.slot]}
+                  {roundRoleLabel(msg, PP_ROLE[n.slot])}
                 </span>
                 <Link
                   href={routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}
