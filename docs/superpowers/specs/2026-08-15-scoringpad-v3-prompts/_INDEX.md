@@ -18,8 +18,8 @@ one PR per wave, visual sign-off gate on each).
 | Wave | Prompt file | Depends on | Status |
 |---|---|---|---|
 | R1 | `R1-chassis.md` + plan `docs/superpowers/plans/2026-08-15-scorepad-v3-r1-chassis.md` | — | **MERGED #577 `86ce08b3`** (2026-08-16) — chassis behind an EMPTY `V3_SKINS`. Gate: unit 7709/7774 (4 pre-existing, in a file this branch never touched), tsc 0, lint 0 errors, legacy pad e2e 32/32 unedited vs a prod build, gallery 12/12 with 0px overflow at 320. Visual sign-off was the ABSENCE of change — owner acked by merging |
-| R2 | `R2-cricket.md` + plan `docs/superpowers/plans/2026-08-16-scorepad-v3-r2-cricket.md` | R1 | **CODE COMPLETE, AWAITING VISUAL SIGN-OFF** (2026-08-17) — worktree `.claude/worktrees/r2-cricket`, branch `feat/scorepad-v3-r2-cricket`, HEAD `b45f77a0`, rebased onto main `252a073d`. Gate: unit 8155/8227 (the 4 failures are `schedule-build-honours-locks`, REPRODUCED IDENTICALLY on `origin/main 252a073d` in a throwaway worktree with its own `pnpm install` — pre-existing, not this wave), `turbo run typecheck --force` 2/2 tasks 0 errors, `turbo run lint --force` 0 errors / 77 warnings (was 78; no v3 path warns), v3 suites 300/300 across 15 files, cricket e2e + converted specs green, seven-width matrix 9/9, gallery 12/12 sports with 0px overflow at 320. Sign-off sheet published (15 cricket captures, 5 states × 3 widths). **NOT MERGEABLE until the owner rules the three decisions below and the verdicts are recorded here.** |
-| R2b | `R2b-cricket-over-by-over.md` | R2 | **TODO** (owner requirement 2026-08-17) — cricket needs THREE granularities: innings totals, **over-by-over (runs + wickets)**, ball-by-ball. **Over-by-over ALREADY EXISTS in the engine** and v1 exposed it: it is `cricket.innings.summary` with **`partial: true`** (`cricket.ts:225,230-237`) posted once per over, NOT a separate event type. An earlier draft of this row claimed it never existed, off one negative grep for a `cricket.over` event that never needed to exist — wrong, and corrected. So: **no new event, no schema change, no golden re-baseline, no band decision** (already band 0/free; the ladder stays closed 0–3). The real gap is a PAD one — the v3 skin declares no tile for it, so a scorer must open "More" and scroll a generic form once per over. A pad wave, not an engine wave |
+| R2 | `R2-cricket.md` + plan `docs/superpowers/plans/2026-08-16-scorepad-v3-r2-cricket.md` | R1 | **MERGED #599 `5885952f`** (2026-08-17) — visual sign-off given (see the sign-off section below, incl. the caveat that the reviewed captures predate `072656b4`'s three restored capabilities). Pre-merge state, kept for the record: worktree `.claude/worktrees/r2-cricket`, branch `feat/scorepad-v3-r2-cricket`, HEAD `b45f77a0`, rebased onto main `252a073d`. Gate: unit 8155/8227 (the 4 failures are `schedule-build-honours-locks`, REPRODUCED IDENTICALLY on `origin/main 252a073d` in a throwaway worktree with its own `pnpm install` — pre-existing, not this wave), `turbo run typecheck --force` 2/2 tasks 0 errors, `turbo run lint --force` 0 errors / 77 warnings (was 78; no v3 path warns), v3 suites 300/300 across 15 files, cricket e2e + converted specs green, seven-width matrix 9/9, gallery 12/12 sports with 0px overflow at 320. Sign-off sheet published (15 cricket captures, 5 states × 3 widths). **NOT MERGEABLE until the owner rules the three decisions below and the verdicts are recorded here.** |
+| R2b | `R2b-cricket-over-by-over.md` + plan `docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-cricket-over.md` | R2 (MERGED, so unblocked) | **IN FLIGHT** 2026-08-17 — worktree `.claude/worktrees/r2b-cricket-over`, branch `feat/scorepad-v3-r2b-cricket-over` off `5885952f`. Both of the brief's open questions are RULED (see the R2b section below); the first turned out to be answered by the engine rather than by preference. Original row text, still accurate on the premise: cricket needs THREE granularities: innings totals, **over-by-over (runs + wickets)**, ball-by-ball. **Over-by-over ALREADY EXISTS in the engine** and v1 exposed it: it is `cricket.innings.summary` with **`partial: true`** (`cricket.ts:225,230-237`) posted once per over, NOT a separate event type. An earlier draft of this row claimed it never existed, off one negative grep for a `cricket.over` event that never needed to exist — wrong, and corrected. So: **no new event, no schema change, no golden re-baseline, no band decision** (already band 0/free; the ladder stays closed 0–3). The real gap is a PAD one — the v3 skin declares no tile for it, so a scorer must open "More" and scroll a generic form once per over. A pad wave, not an engine wave |
 | R3 | `R3-football.md` | R1 | TODO |
 | R4 | `R4-tennis.md` | R1 | TODO |
 | R5 | `R5-racquet-split.md` | R1 | TODO |
@@ -252,3 +252,48 @@ questions about how the pad looks. It does not settle anything non-visual.
 - **Four e2e specs drive the cricket pad today** (`scorepad-skins`,
   `scorepad-v2`, `scoring`, `scoring-vocab-labels`). Flipping the lane breaks
   all four; updating them is R2 scope, not R8's.
+
+### R2b (2026-08-17) — owner rulings, taken before any code
+
+Both of the brief's "two open questions for the owner" are answered. Question 1
+was not a preference in the end — the engine had already decided it, and the
+scout's re-pin is what surfaced that.
+
+| # | Question | Ruling |
+|---|---|---|
+| Q1 | Which bands show the over-by-over tile? | **Mutually exclusive tiles, band-independent.** Innings unopened → over tile AND run tiles both shown; innings coarse → over tile only; innings fine → run tiles only. Not a band gate: fidelity is a per-INNINGS fact, and the brief's recommended "show it at every band" is refused by the fold (see the false premise below). Every visible tap is legal at the moment it is visible. |
+| Q2 | Prefill or increment? | **Prefilled running total.** The sheet opens with the fold's current `runs`/`wickets` and the scorer edits upward. The payload IS the innings total (`cricket.ts:1445-1451`), so an increment form would have to add in pad code with a stale view as its failure mode; prefilling keeps the arithmetic out of the pad entirely and the monotone guard (`:1416-1426`) can never fire on a correct entry. |
+
+### R2b — false premises found (verified on main `5885952f`, before any code)
+
+- **The brief's recommendation for Q1 was wrong, and the caveat it flagged is
+  real.** It suggested showing the tile at every band so a band-3 org could
+  fall back to over-level mid-match. The fold refuses that: the ball-on-summary
+  refusal (`cricket.ts:1128-1131`, `:2936-2938`) has a **mirror** at
+  `cricket.ts:1402-1404` — "this innings is recorded ball-by-ball — summaries
+  are not allowed for it". Over-level and ball-level are mutually exclusive
+  WITHIN one innings. The brief told this session to confirm the caveat before
+  promising a mixed workflow; it does not hold.
+- **Fidelity is FIRST-EVENT-WINS, not configured.** `createInnings(state,
+  fidelity)` (`cricket.ts:661-678`) is called with `"fine"` from `applyDelivery`
+  (`:2940`) and `"coarse"` from `applySummary` (`:1406`). No cfg field, no org
+  band, no payload flag, no picker — whichever event type arrives first for that
+  innings locks it. Consequence for R3–R8: any sport-fidelity UI must read the
+  fold's own state, never assume a declared setting exists.
+- **Undo DOES recover a mis-tap, because the fold replays.** `handleUndo`
+  (`pad-host.tsx:583-585`) dispatches `core.void`; `append-event.ts:233,266,271`
+  rebuilds the stream and `foldMatch` (`core/events.ts:445-468`) runs
+  `resolveVoids` (`events.ts:165`) then folds from `module.init` every call. Void
+  an innings' only ball and `createInnings(...,"fine")` never runs — the innings
+  is not "reset to coarse", it is never opened. R2's per-event void takes the
+  identical path (`assertUndoTarget`, `server/usecases/scoring.ts:154-174`, never
+  restricts to the tail). **This was untested** — `cricket.test.ts` has zero
+  `core.void` and apps/web's v3 void tests are generic plumbing — so the Q1 gate
+  rested entirely on unverified behaviour. R2b ships that regression test.
+- **The guided-sheet renderer has no numeric step.** `GuidedSheetStep` is
+  `choice | person` only (`v3/types.ts:122,152-154`); the generic More-sheet
+  `action-form.tsx:141-172` is the only thing in v3 that renders
+  `kind: "number"`. R2b adds `SheetNumberStep` to the chassis — a capability
+  R3–R7 inherit, so take it from there rather than re-deriving it per sport.
+  `buildPayload`'s `answers: Record<string, string>` stays as it is; a number
+  step's answer is the decimal string and the SKIN parses it.
