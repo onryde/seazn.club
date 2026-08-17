@@ -58,9 +58,11 @@ export interface DivisionRow {
   logo_url: string | null;
   logo_storage_path: string | null;
   /** D5/P8 candidate-court filter (V367): tags ⊇ required_court_tags, empty
-   *  = any court. Stored and read back only here — scheduling/candidate-
-   *  court filtering is P9's, and `stages.required_court_tags` (the sibling
-   *  V367 column) stays deliberately unwired for the same reason. */
+   *  = any court. CRUD lives here; the READ path that actually FILTERS a
+   *  candidate set is P9 pass 2b's `usecases/court-candidates.ts`
+   *  (`resolveCandidateCourts`/`unionRequiredCourtTags`), unioned with
+   *  `stages.required_court_tags` (the sibling V367 column, wired the same
+   *  pass — CRUD for the stage side still does not exist). */
   required_court_tags: string[];
 }
 

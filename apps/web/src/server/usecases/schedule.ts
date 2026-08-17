@@ -58,6 +58,7 @@ import {
 } from "@/server/api-v1/schemas";
 import { sendOfficialAssignmentChangedEmail } from "@/lib/email";
 import { capacityInputForFixtures, guardCapacity } from "./capacity-guard";
+import { guardNoMatchingCourt, resolveCandidateCourts, unionRequiredCourtTags } from "./court-candidates";
 import { buildEngineConstraints } from "./engine-constraints";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { generateStageFixtures } from "./stages";
@@ -1049,6 +1050,11 @@ interface AutoSchedulePlan {
    *  `withDefaultDaySpread`'s synthetic cap. See the guard call site's
    *  comment for why this is deliberately NOT the same object as `config`. */
   capacityConfig: SlotConfig & VerifyConfig & { courts: string[] };
+  /** P9 pass 2b: the union of tags that produced `capacityConfig.courts` —
+   *  division ∪ stage (`unionRequiredCourtTags`). Carried out of the
+   *  transaction purely for the phase-2 `guardNoMatchingCourt` error
+   *  payload; nothing else reads it. */
+  requiredCourtTags: string[];
   /**
    * The direct winner/loser feed edges of the whole division (#452).
    *
@@ -1119,8 +1125,22 @@ export async function autoSchedule(
 
   // ---- Phase 1: read. The connection goes back to the pool at the `}` below.
   const plan = await withTenant(auth.orgId, async (tx): Promise<AutoSchedulePlan> => {
-    const [stage] = await tx<{ division_id: string; competition_id: string }[]>`
-      select s.division_id, d.competition_id
+    const [stage] = await tx<
+      {
+        division_id: string;
+        competition_id: string;
+        // P9 pass 2b: read straight off the SAME join the rest of this query
+        // already makes rather than a second round trip — division's D5/P8
+        // tags and the stage's own V367 sibling (its READ path, previously
+        // unwired, see court-candidates.ts), unioned below for the
+        // candidate-court resolve.
+        stage_required_court_tags: string[];
+        division_required_court_tags: string[];
+      }[]
+    >`
+      select s.division_id, d.competition_id,
+        s.required_court_tags as stage_required_court_tags,
+        d.required_court_tags as division_required_court_tags
       from stages s join divisions d on d.id = s.division_id
       where s.id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
@@ -1219,7 +1239,31 @@ export async function autoSchedule(
       .filter((f) => pinnedIds.has(f.id))
       .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
 
-    const declaredConfig = toVerifyConfig(settings, all, roundToMinute(Date.now()), siblings.ruleFixtures);
+    // P9 pass 2b: the candidate court set for THIS stage — the organiser's
+    // configured `settings.config.courts`, filtered to non-archived courts
+    // carrying every tag the division OR the stage requires, through the
+    // ONE engine filter (court-candidates.ts's own header explains why a
+    // second, inlined tag-filter loop here is this subsystem's recurring
+    // bug). `settingsForEngine` overrides ONLY `config.courts` — every other
+    // read of `settings` below (matchMinutes, orgTz, …) stays untouched —
+    // so `toVerifyConfig`/`toSlotConfig` need no changes of their own:
+    // `courts: [...c.courts]` already does the right thing once the courts
+    // it's handed already ARE the filtered set.
+    const requiredCourtTags = unionRequiredCourtTags(
+      stage.division_required_court_tags,
+      stage.stage_required_court_tags,
+    );
+    const candidateCourtIds = await resolveCandidateCourts(
+      tx,
+      stage.division_id,
+      settings.config.courts,
+      requiredCourtTags,
+    );
+    const settingsForEngine = {
+      ...settings,
+      config: { ...settings.config, courts: [...candidateCourtIds.ids] },
+    };
+    const declaredConfig = toVerifyConfig(settingsForEngine, all, roundToMinute(Date.now()), siblings.ruleFixtures);
     const windowedConfig = boundSolverWindow(
       declaredConfig,
       schedulable,
@@ -1267,6 +1311,13 @@ export async function autoSchedule(
       // organiser configured, still carrying every rule they actually set
       // (constraints.hard from the Constraints tab).
       capacityConfig: declaredConfig,
+      // P9 pass 2b: the NO_MATCHING_COURT guard (phase 2, no db connection
+      // held) reads `capacityConfig.courts.length` — declaredConfig's, the
+      // same "read declaredConfig, never windowedConfig/config" discipline
+      // guardCapacity's own call site already established just below — and
+      // needs the tags that produced it for the error payload, which is not
+      // otherwise derivable once the transaction has closed.
+      requiredCourtTags,
       board,
       divisionId: stage.division_id,
       orgTz: settings.orgTz,
@@ -1299,6 +1350,19 @@ export async function autoSchedule(
   // `reflowExisting`'s own doc comment for the full rationale, the accepted
   // trade-off, and the reconciliation this makes necessary.
   const { schedulable, config, board, dependencies, total } = plan;
+  // P9 pass 2b: an empty candidate court set makes the solve unwinnable
+  // before it starts — checked FIRST, ahead of capacity, because "no court
+  // matches your tags" is a more specific, more actionable refusal than the
+  // capacity guard would derive from a zero-court config on its own. Reads
+  // `capacityConfig.courts` (declaredConfig, already the FILTERED set —
+  // phase 1 fed it through `resolveCandidateCourts` before building
+  // `declaredConfig`), the same "read declaredConfig" discipline
+  // `guardCapacity` just below follows for the identical reason.
+  guardNoMatchingCourt(plan.capacityConfig.courts, {
+    requiredTags: plan.requiredCourtTags,
+    divisionId: plan.divisionId,
+    stageId,
+  });
   // D2 capacity pre-check: arithmetic-provable impossibility refuses with a
   // typed 422 BEFORE either solver is reached — no db connection is held
   // here (phase 1 already closed), so this costs nothing a real solve
@@ -2652,6 +2716,28 @@ async function validateScheduleIn(
     ...new Set(all.flatMap((f) => [f.home_entrant_id, f.away_entrant_id])),
   ].filter((e): e is string => e !== null);
   const people = await peopleByEntrant(tx, entrantIds);
+  // P9 pass 2b: court identity through the SAME resolveCandidateCourts the
+  // build side calls — never a second, inlined tag-filter loop here. No
+  // stage component (this validates the WHOLE division's board, spanning
+  // however many stages it has, so there is no single stage's tags to union
+  // in) and, deliberately, no guardNoMatchingCourt: this reports on a board
+  // that may already EXIST, and an assignment sitting on a since-archived or
+  // since-retagged court must keep validating clean (ruling 3,
+  // candidate-courts.ts) — see court-candidates.ts's own doc comment on
+  // guardNoMatchingCourt for why calling it here would be wrong, not merely
+  // unnecessary.
+  const [divisionForCourts] = await tx<{ required_court_tags: string[] }[]>`
+    select required_court_tags from divisions where id = ${divisionId}`;
+  const candidateCourtIds = await resolveCandidateCourts(
+    tx,
+    divisionId,
+    settings.config.courts,
+    divisionForCourts?.required_court_tags ?? [],
+  );
+  const settingsForEngine = {
+    ...settings,
+    config: { ...settings.config, courts: [...candidateCourtIds.ids] },
+  };
   // C1 follow-up (2026-08-12, task 3 / G1). This function backs BOTH
   // `validateSchedule` (the board's live conflict report) and, through
   // `assertPublishable`, `publishSchedule`/`startDivision` — the write gate.
@@ -2706,7 +2792,7 @@ async function validateScheduleIn(
         // constraints panel promises them on.
         validateAssignments(
           assignments,
-          toVerifyConfig(settings, all, 0, siblings.ruleFixtures),
+          toVerifyConfig(settingsForEngine, all, 0, siblings.ruleFixtures),
           siblings.assignments,
           feedDependencies(all),
         ),

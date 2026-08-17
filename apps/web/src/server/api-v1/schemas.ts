@@ -183,9 +183,10 @@ export const PatchDivision = z
      *  must carry every one of these tags; empty = any court. Normalised
      *  (trim/lowercase/dedupe) by usecases/divisions.ts via the SAME
      *  normalizeTags() the courts path uses — same shape, same rules, one
-     *  copy. Stored and read back only; not yet read by scheduling or
-     *  candidate-court filtering (P9), and `stages.required_court_tags`
-     *  (V367) stays unwired for the same reason — both are P9's. */
+     *  copy. Read by scheduling as of P9 pass 2b: `usecases/court-
+     *  candidates.ts`'s `resolveCandidateCourts`, unioned with the sibling
+     *  `stages.required_court_tags` (V367) — that column's own CRUD still
+     *  does not exist, only its read into this union. */
     required_court_tags: z.array(z.string().min(1).max(40)).max(50),
   })
   .partial()
