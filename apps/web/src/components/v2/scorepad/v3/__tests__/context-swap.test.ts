@@ -460,6 +460,30 @@ describe("ContextStrip rendering — slot message (R2b bowler-eligibility block)
     expect(messageEl(island.tree(), "bowler")).toBeUndefined();
   });
 
+  // R2b-cricket-over review fix (item 3): `message: ""` must behave like
+  // "no message", not "a real but empty <p>". The renderer used to filter on
+  // `slot.message !== undefined`, so an EMPTY STRING (truthy-false, but not
+  // undefined) still passed the filter and rendered a real, empty
+  // `data-role="context-slot-message"` element — a landmine for a skin
+  // computing `message: someCondition ? text : ""` (a `?? ""` idiom, say)
+  // instead of `undefined`. `StripItem.id` (scorebug.tsx) already gets this
+  // right with a truthy check; this brings `ContextSlot.message` in line.
+  // Not reachable today (cricket never sets `""`) — this is a landmine
+  // fix, not a live-bug fix, which is why it needs its own test rather than
+  // riding along with an existing one.
+  it('a slot with message: "" (empty string) renders NO message element — absent-vs-empty must not diverge', () => {
+    const island = renderIsland(ContextStrip, {
+      spec: {
+        slots: [{ id: "bowler", label: "pad.context.bowler", pool: "onfield", required: true, message: "" }],
+      },
+      view: { squad: baseSquad },
+      personNames: names,
+      t,
+      onSelect: () => {},
+    });
+    expect(messageEl(island.tree(), "bowler")).toBeUndefined();
+  });
+
   it("only the slot carrying a message gets one — an unset sibling slot stays silent", () => {
     const island = renderIsland(ContextStrip, {
       spec: {

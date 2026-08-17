@@ -226,9 +226,18 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
           to the picker (rendered regardless of whether activeSlot is
           open) — real visible text, never a title/tooltip (invisible on
           touch), with a stable data-* hook for a Playwright spec. Most
-          slots never set this and this block then renders nothing. */}
+          slots never set this and this block then renders nothing.
+
+          R2b-cricket-over review fix (item 3): a TRUTHY check, not
+          `!== undefined` — the same convention StripItem.id (scorebug.tsx)
+          already uses. `message: ""` must read as "no message", not as a
+          real, empty, red <p>: a skin computing `message: cond ? text : ""`
+          would otherwise render an empty element that still occupies DOM
+          (and, being a <p>, layout) for nothing. Not reachable today
+          (cricket never sets `""`), but the divergence between "absent"
+          and "empty" was a landmine for the next skin to compute one. */}
       {spec.slots
-        .filter((slot) => slot.message !== undefined)
+        .filter((slot) => !!slot.message)
         .map((slot) => (
           <p
             key={`${slot.id}-message`}
