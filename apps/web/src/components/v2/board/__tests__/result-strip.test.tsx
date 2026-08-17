@@ -54,9 +54,9 @@ const render = (m: ScheduleMetrics, s: ScheduleSolverInfo, onOverrideLocks?: () 
 
 /** The rendered text of the provenance line, comment markers stripped (React
  *  separates adjacent text expressions with `<!-- -->` in SSR output). Reading
- *  the WHOLE line is what lets an engine-label assertion be exact: "Solver" is a
- *  prefix of "Solver, then refined", so a substring check can be satisfied by
- *  the wrong label. */
+ *  the WHOLE line is what lets an engine-label assertion be exact: a substring
+ *  check can be satisfied by a longer label that merely starts the same way,
+ *  which is how the retired "Solver, then refined" used to shadow "Solver". */
 const provenance = (html: string): string => {
   const m = /data-testid="schedule-result-provenance"[^>]*>(.*?)<\/p>/s.exec(html);
   if (!m) throw new Error("no provenance line rendered");
