@@ -1115,6 +1115,7 @@
   "venues.calendar.removeRange": "Tijdvak verwijderen",
   "venues.calendar.copyToAllDays": "Kopiëren naar alle dagen",
   "venues.calendar.overlapWarning": "Deze tijden overlappen — los dit op voordat je opslaat.",
+  "venues.calendar.invalidRangeWarning": "Een van deze tijdvakken heeft een openingstijd die gelijk is aan of na de sluitingstijd valt — los dit op voordat je opslaat.",
   "venues.calendar.openLabel": "Open",
   "venues.calendar.closeLabel": "Sluit",
   "venues.calendar.exceptions": "Uitzonderingen",

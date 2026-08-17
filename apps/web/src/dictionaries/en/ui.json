@@ -1115,6 +1115,7 @@
   "venues.calendar.removeRange": "Remove range",
   "venues.calendar.copyToAllDays": "Copy to all days",
   "venues.calendar.overlapWarning": "These hours overlap — fix them before saving.",
+  "venues.calendar.invalidRangeWarning": "One of these time ranges has an open time at or after its close time — fix it before saving.",
   "venues.calendar.openLabel": "Open",
   "venues.calendar.closeLabel": "Close",
   "venues.calendar.exceptions": "Exceptions",

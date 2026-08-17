@@ -1115,6 +1115,7 @@
   "venues.calendar.removeRange": "Retirer le créneau",
   "venues.calendar.copyToAllDays": "Copier sur tous les jours",
   "venues.calendar.overlapWarning": "Ces horaires se chevauchent — corrigez-les avant d'enregistrer.",
+  "venues.calendar.invalidRangeWarning": "L'un de ces créneaux horaires a une heure d'ouverture égale ou postérieure à sa fermeture — corrigez-le avant d'enregistrer.",
   "venues.calendar.openLabel": "Ouverture",
   "venues.calendar.closeLabel": "Fermeture",
   "venues.calendar.exceptions": "Exceptions",

@@ -3,6 +3,7 @@ import {
   copyHoursToAllDays,
   filterVenuesByArchived,
   hasHoursOverlap,
+  hasInvalidRange,
   rankTagsByCount,
   type Court,
   type CourtHours,
@@ -140,6 +141,24 @@ describe("hasHoursOverlap — client-side immediate feedback", () => {
 
   it("empty input is not an overlap", () => {
     expect(hasHoursOverlap([])).toBe(false);
+  });
+});
+
+describe("hasInvalidRange — a lone range with open at/after close", () => {
+  it("false for a normal range", () => {
+    expect(hasInvalidRange([{ weekday: 1, open_min: 540, close_min: 720 }])).toBe(false);
+  });
+
+  it("true when open equals close", () => {
+    expect(hasInvalidRange([{ weekday: 1, open_min: 600, close_min: 600 }])).toBe(true);
+  });
+
+  it("true when open is after close", () => {
+    expect(hasInvalidRange([{ weekday: 1, open_min: 1020, close_min: 540 }])).toBe(true);
+  });
+
+  it("empty input is not invalid", () => {
+    expect(hasInvalidRange([])).toBe(false);
   });
 });
 

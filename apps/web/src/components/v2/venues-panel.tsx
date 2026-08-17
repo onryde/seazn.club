@@ -136,6 +136,15 @@ export function hasHoursOverlap(hours: readonly CourtHours[]): boolean {
   return false;
 }
 
+/** Also client-side feedback only (server: `CourtHourRangeInput`'s
+ *  `open_min < close_min` refine, server/usecases/venues.ts) — a lone range
+ *  with open at or after close never trips `hasHoursOverlap` (nothing to
+ *  overlap against on an otherwise-empty day), so it needs its own check to
+ *  give feedback before the round trip instead of only after a 422. */
+export function hasInvalidRange(hours: readonly CourtHours[]): boolean {
+  return hours.some((h) => h.open_min >= h.close_min);
+}
+
 /** Tag suggestions "ranked by count" (design doc, "Tag suggestions"): every
  *  tag currently used by any court in the org, most-used first, alphabetical
  *  on a tie. Courts nested under an archived venue still count — their tags
@@ -871,6 +880,7 @@ function CourtCalendarEditor({
   const disabled = !canEdit;
 
   const overlap = hasHoursOverlap(hours);
+  const invalidRange = hasInvalidRange(hours);
   const hasEmptyExceptionDate = exceptions.some((e) => !e.date);
 
   const rangesFor = (weekday: number) =>
@@ -919,6 +929,11 @@ function CourtCalendarEditor({
             {msg("venues.calendar.overlapWarning")}
           </p>
         )}
+        {invalidRange && (
+          <p className="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-xs text-amber-700">
+            {msg("venues.calendar.invalidRangeWarning")}
+          </p>
+        )}
       </div>
 
       <div>
@@ -945,7 +960,7 @@ function CourtCalendarEditor({
       {canEdit && (
         <button
           type="button"
-          disabled={busy || overlap || hasEmptyExceptionDate}
+          disabled={busy || overlap || invalidRange || hasEmptyExceptionDate}
           onClick={saveCalendar}
           className="btn btn-primary text-xs"
         >

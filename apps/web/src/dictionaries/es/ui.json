@@ -1115,6 +1115,7 @@
   "venues.calendar.removeRange": "Quitar tramo",
   "venues.calendar.copyToAllDays": "Copiar a todos los días",
   "venues.calendar.overlapWarning": "Estos horarios se solapan — corrígelos antes de guardar.",
+  "venues.calendar.invalidRangeWarning": "Uno de estos tramos horarios tiene la hora de apertura igual o posterior a la de cierre — corrígelo antes de guardar.",
   "venues.calendar.openLabel": "Apertura",
   "venues.calendar.closeLabel": "Cierre",
   "venues.calendar.exceptions": "Excepciones",
