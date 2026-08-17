@@ -13,10 +13,21 @@ customization and I want to see all fixtures including final from day one."*
 F1 is independent and ships first. F2 is the schema unification; F3 consumes it;
 F4 depends on F3; F5 is last.
 
+**F1 and F2 run in parallel but are NOT file-disjoint.** Both open
+`apps/web/src/server/usecases/stages.ts` — F1 at `bracketToGen` and
+`roundTitle`, F2 at `qualifierCount` and `seedNextStage`. `roundTitle` and
+`qualifierCount` sit about three lines apart, inside git's merge-context
+window, so the conflict is real rather than theoretical. Managed by: separate
+worktrees, **F1 merges first**, F2 rebases onto merged F1 before opening its
+PR. F2 is additionally fenced off `scheduling/bracket.ts`, `exports/build.ts`
+and those two `stages.ts` functions; F1 is fenced off `qualification.ts`,
+`stage-seeding.ts`, `format-templates.ts`, the take-rule region of
+`schemas.ts`, and the catalogue fixtures.
+
 | Session | Prompt file | Depends on | Status |
 |---|---|---|---|
-| F1 | `F1-bracket-round-role.md` | — | TODO — plan written: `../../plans/2026-08-17-f1-bracket-round-role.md`. **Waits for L3/#414 to merge** (shared `stages.ts`) |
-| F2 | `F2-unified-progression-field.md` | — | TODO — unblocked 2026-08-17 by the greenfield ruling |
+| F1 | `F1-bracket-round-role.md` | — | IN FLIGHT 2026-08-17 — `feat/f1-bracket-round-role`. Plan: `../../plans/2026-08-17-f1-bracket-round-role.md`. L3/#414 merged (`11ab0c4e7`), so the `stages.ts` block is lifted |
+| F2 | `F2-unified-progression-field.md` | — | IN FLIGHT 2026-08-17 — `feat/f2-unified-progression-field`, plan being written first. **Rebases onto merged F1 before its own PR** |
 | F3 | *(not written)* | F2 **merged** | authored against the shipped shape, not the designed one |
 | F4 | *(not written)* | F3 | same |
 | F5 | *(not written)* | all | written once the earlier sessions' deferred test debt is known |
@@ -49,6 +60,47 @@ implementation that landed differently — the scoringpad index is full of
    so **F2 verifies zero rows against the target database and stops if it finds
    any** — this ruling is dated and will outlive its accuracy. Consequence: F2
    does not need to split, so five sessions stands.
+
+## Where ruling 4's collapse actually lands (swept 2026-08-17)
+
+The two pairs are **cross-vocabulary** — each pair is one member from
+`qualification` and one from `seeding`. That is *why* they exist, and why F2's
+union is the place they die rather than a separate cleanup.
+
+| Rule | Vocabulary | Type site | Zod site |
+|---|---|---|---|
+| `topN` | qualification | `packages/engine/src/competition/qualification.ts:25-28` | `apps/web/src/server/api-v1/schemas.ts:492` |
+| `rankRange` | seeding | `apps/web/src/server/usecases/stage-seeding.ts:43` | `schemas.ts:549-552` |
+| `bestOfRank` | qualification | `qualification.ts:29-39` | `schemas.ts:493-502` |
+| `bestNth` | seeding | `stage-seeding.ts:45` | `schemas.ts:554-556` |
+
+Runtime consumers: `qualification.ts:95,109,114,190,274-282`;
+`stage-seeding.ts:113` (`case "rankRange"`), `:133` (`case "bestNth"`),
+`:299-338` (`resolveQualifiers` cross-group cascade, `bestNthOrder`).
+
+Emitters F2 must migrate because the shape they emit is being deleted:
+`components/v2/format-templates.ts:39,72,81,156,198` (all five emit `topN`),
+`server/templates/catalog/league-playoff.json:31` (`rankRange`),
+`catalog/euro24.json:34` (`bestNth`).
+
+- **No SQL names any of the four.** `grep -ran` over `db/` returns zero hits;
+  all four live inside the `stages.qualification` / `stages.seeding` JSON
+  columns. Ruling 5's "destructive migration" is a JSON reshape or a drop, not
+  a column rename.
+- **Ruling 4 is wrong that `topN` and `rankRange` are equals.** `rankRange
+  {from,to}` is strictly more expressive; `topN` is its `from:1` case. The
+  survivor should be `rankRange` — which means **F2 owns the five
+  `format-templates.ts` emitters**, not F3.
+- **`bestOfRank` and `bestNth` are not equivalent.** `bestOfRank` carries
+  `normaliseUnequalPools`; `bestNth` has the implemented cross-group cascade
+  `bestOfRank` lacks. The survivor must absorb **both** — a collapse that keeps
+  one name and quietly drops the other's capability is the inert-seam failure
+  this repo keeps repeating.
+- `stage-seeding.ts:19,29` document `bestNth`'s cascade as a KNOWN GAP. F2
+  decides explicitly whether it closes or carries the gap; it must not leave it
+  ambiguous.
+- Do not confuse seeding's `topNPerGroup` with qualification's `topN` —
+  different name, different shape, not part of the collapse.
 
 ## Findings that shaped the design — do not re-derive
 
