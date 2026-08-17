@@ -512,6 +512,13 @@ interface GenFixture {
   awayFrom?: { extKey: string; side: "winner" | "loser" };
   award?: string; // bye: auto-advancing entrant
   poolId?: string; // group stages: which pool this fixture belongs to
+  // F1 (round-role persistence): carried straight from BracketFixtureGen so
+  // the generated round's ROLE survives insertion instead of being
+  // re-derived from round_no/match-count by each consumer (design §2.3).
+  lane?: "WB" | "LB" | "GF";
+  isFinal?: boolean;
+  thirdPlace?: boolean;
+  conditional?: boolean;
 }
 
 interface ActiveEntrant {
@@ -537,6 +544,10 @@ function bracketToGen(bracket: GeneratedBracket, laneDepth: number): GenFixture[
       ...(f.homeFrom ? { homeFrom: { extKey: f.homeFrom.fixtureId, side: f.homeFrom.side } } : {}),
       ...(f.awayFrom ? { awayFrom: { extKey: f.awayFrom.fixtureId, side: f.awayFrom.side } } : {}),
       ...(f.award ? { award: f.award } : {}),
+      ...(f.bracket ? { lane: f.bracket } : {}),
+      ...(f.isFinal ? { isFinal: true } : {}),
+      ...(f.thirdPlace ? { thirdPlace: true } : {}),
+      ...(f.conditional ? { conditional: true } : {}),
     };
   });
 }
@@ -1098,6 +1109,15 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
           ext_key: g.extKey,
           status: g.award !== undefined ? "forfeited" : "scheduled",
           outcome: g.award !== undefined ? JSON.stringify({ kind: "award", winner: g.award }) : null,
+          // F1: the bracket ROLE the engine already computed (BracketFixtureGen
+          // via bracketToGen) — always present with a concrete value (never
+          // `undefined`) so every row in this batch insert shares one column
+          // set; a non-bracket/single-lane fixture keeps lane null, same as
+          // every row does today, so no existing render changes.
+          lane: g.lane ?? null,
+          is_final: g.isFinal === true,
+          third_place: g.thirdPlace === true,
+          conditional: g.conditional === true,
         };
       });
     if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
@@ -1541,6 +1561,13 @@ async function generateSeededStageFixtures(auth: AuthCtx, stageId: string): Prom
         ext_key: g.extKey,
         status: "scheduled",
         outcome: null,
+        // F1: same role columns as the plain generateStageFixtures path —
+        // seeded (placeholder) brackets must persist a role too, or the
+        // day-one preview path F3 depends on renders with no role at all.
+        lane: g.lane ?? null,
+        is_final: g.isFinal === true,
+        third_place: g.thirdPlace === true,
+        conditional: g.conditional === true,
       }));
     if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
     for (const r of newRows) byKey.set(r.ext_key, r.id);
