@@ -5715,14 +5715,27 @@ async function regQueueSuite(admin: Session): Promise<void> {
       eligibility: [],
     }),
   );
-  await v1(admin, `/api/v1/divisions/${div.id}/registration-settings`, "PUT", {
-    enabled: true,
-    entrant_kind: "individual",
-    fee_cents: 0,
-    currency: "gbp",
-    capacity: 1,
-    form_fields: [],
-  });
+  // RS001b: currency is ORG-level. The request schema has no `currency`, so a
+  // per-division one sent here is ignored, and the response echoes the org's.
+  // Sending 'usd' on a gbp org is the probe: if a per-division currency ever
+  // comes back, a multi-division cart stops being payable in one Stripe
+  // session — the exact fault RS001b removed.
+  const regSettings = v1data<{ currency: string; fee_cents: number }>(
+    await v1(admin, `/api/v1/divisions/${div.id}/registration-settings`, "PUT", {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      currency: "usd",
+      capacity: 1,
+      form_fields: [],
+    }),
+  );
+  check(
+    "RS001b: registration settings quote the ORG currency, not a per-division one",
+    // 'gbp' is the org default and this org never set one — the assertion that
+    // matters is that the 'usd' sent above did NOT stick anywhere.
+    regSettings.currency === "gbp",
+  );
 
   const registerPage = await html(newSession(), `/shared/${orgSlug}/${comp.slug}/register`);
   check(
@@ -7712,9 +7725,9 @@ async function seedPaidRegistration(competitionId: string, divisionId: string): 
     const [group] = await sql<{ id: string }[]>`
       insert into registration_groups
         (competition_id, contact_name, contact_email, access_token_hash,
-         amount_cents, payment_method, payment_intent_id, refunded_cents)
+         amount_cents, currency, payment_method, payment_intent_id, refunded_cents)
       values (${competitionId}, 'Smoke Payer', 'payer@x.test', ${crypto.randomUUID()},
-              2000, 'stripe', ${"pi_smoke_" + divisionId.slice(0, 8)}, 0)
+              2000, 'gbp', 'stripe', ${"pi_smoke_" + divisionId.slice(0, 8)}, 0)
       returning id`;
     await sql`
       insert into registrations
@@ -11309,7 +11322,6 @@ async function schedRegV3Suite(
     enabled: true,
     entrant_kind: "individual",
     fee_cents: 0,
-    currency: "gbp",
     form_fields: [],
   };
   const badReg = await v1(admin, `/api/v1/divisions/${orderDiv.id}/registration-settings`, "PUT", {

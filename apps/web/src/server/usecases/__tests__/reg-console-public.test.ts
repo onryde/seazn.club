@@ -81,7 +81,6 @@ async function rig(owner: AuthCtx, capacity: number | null) {
     enabled: true,
     entrant_kind: "individual",
     fee_cents: 0,
-    currency: "usd",
     form_fields: [],
     opens_at: null,
     closes_at: null,
@@ -109,10 +108,11 @@ const seedEntry = async (
 ): Promise<{ id: string; access_token: string }> => {
   const rawToken = REGISTRATION_TOKEN_PREFIX + randomUUID().replace(/-/g, "");
   const [group] = await sql<{ id: string }[]>`
-    insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash)
+    insert into registration_groups
+      (competition_id, contact_name, contact_email, access_token_hash, currency)
     values (
       ${competitionId}, ${name}, ${`${name.toLowerCase().replace(/ /g, ".")}@test.local`},
-      ${hashRegistrationToken(rawToken)}
+      ${hashRegistrationToken(rawToken)}, 'gbp'
     )
     returning id`;
   const [reg] = await sql<{ id: string }[]>`

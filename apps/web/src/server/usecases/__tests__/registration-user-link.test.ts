@@ -67,7 +67,6 @@ async function seedOpenDivision(
     enabled: true,
     entrant_kind: entrantKind,
     fee_cents: 0,
-    currency: "usd",
     form_fields: [],
     opens_at: null,
     closes_at: null,
@@ -216,10 +215,11 @@ async function seedPlayerEntry(
   const [{ competition_id: competitionId }] = await sql<{ competition_id: string }[]>`
     select competition_id from divisions where id = ${divisionId}`;
   const [group] = await sql<{ id: string }[]>`
-    insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash)
+    insert into registration_groups
+      (competition_id, contact_name, contact_email, access_token_hash, currency)
     values (
       ${competitionId}, 'Contact', ${`c-${randomUUID().slice(0, 8)}@test.local`},
-      ${`tok-${randomUUID()}`}
+      ${`tok-${randomUUID()}`}, 'gbp'
     )
     returning id`;
   const [reg] = await sql<{ id: string }[]>`

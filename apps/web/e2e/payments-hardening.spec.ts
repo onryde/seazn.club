@@ -242,10 +242,10 @@ async function fillDivision(divisionId: string, _orgId: string, taken: number): 
     await sql`
       with g as (
         insert into registration_groups
-          (competition_id, contact_name, contact_email, access_token_hash)
+          (competition_id, contact_name, contact_email, access_token_hash, currency)
         select (select competition_id from divisions where id = ${divisionId}),
                'Seed ' || s, 'seed-' || s || '-' || ${tag} || '@test.local',
-               ${tag + "-"} || s
+               ${tag + "-"} || s, 'gbp'
         from generate_series(1, ${taken}) s
         returning id
       )
@@ -417,9 +417,9 @@ test.describe("T1 · competition delete is blocked while money is on file", () =
       const [{ id: groupId }] = await sql<{ id: string }[]>`
         insert into registration_groups
           (competition_id, contact_name, contact_email, access_token_hash,
-           amount_cents, payment_intent_id, refunded_cents)
+           amount_cents, currency, payment_intent_id, refunded_cents)
         values (${cardComp.data!.id}, 'P', ${`p-${TAG}@x.test`}, ${uid("tok")},
-                2000, ${uid("pi")}, 0)
+                2000, 'gbp', ${uid("pi")}, 0)
         returning id`;
       await sql`insert into registrations (division_id, group_id, status, display_name, amount_cents)
         values (${cardDiv.data!.id}, ${groupId}, 'paid', 'P', 2000)`;

@@ -13,6 +13,49 @@ export function isSupportedCurrency(value: unknown): value is Currency {
   return typeof value === "string" && (SUPPORTED_CURRENCIES as readonly string[]).includes(value);
 }
 
+/**
+ * Currencies a registration entry fee may NOT be priced in (RS001b).
+ *
+ * The standing lever for delisting a registration currency without touching
+ * subscriptions, which are a different rule set: a subscription is the platform
+ * charging itself, a registration entry fee is a DESTINATION charge onto the
+ * club's connected account. Starts empty — nothing is excluded today — but the
+ * mechanism exists so a delist is a one-line edit plus a migration, not a
+ * redesign.
+ *
+ * Delisting a code does NOT retract it from carts already submitted: a
+ * `registration_groups.currency` is a snapshot taken at submit and deliberately
+ * carries no allowlist CHECK, so historical groups keep settling in what they
+ * were quoted.
+ */
+export const REGISTRATION_CURRENCY_EXCLUSIONS: readonly Currency[] = [];
+
+/**
+ * The currencies a registration entry fee CAN be priced in.
+ *
+ * DERIVED from `SUPPORTED_CURRENCIES`, never hand-written beside it — one
+ * authority. A second literal list is the drift bug this shape exists to
+ * prevent: the copy the public pay step reads is the one nobody remembers to
+ * edit, and the failure lands on a registrant's card page rather than on the
+ * organiser's settings save.
+ *
+ * Every member must be a 2-decimal currency (`registration-currency.test.ts`) —
+ * the whole fee path does `×100` minor-unit math.
+ *
+ * `organizations.currency` carries a DB CHECK over exactly this set; the drift
+ * test in `org-currency.test.ts` fails if the two ever disagree, so a change
+ * here without a migration goes red.
+ */
+export const REGISTRATION_CURRENCIES: readonly Currency[] = SUPPORTED_CURRENCIES.filter(
+  (c) => !(REGISTRATION_CURRENCY_EXCLUSIONS as readonly string[]).includes(c),
+);
+
+/** Narrower than `isSupportedCurrency`: is this a currency an entry fee may be
+ *  priced, charged and settled in? Codes are stored lowercase. */
+export function isRegistrationCurrency(value: unknown): value is Currency {
+  return typeof value === "string" && (REGISTRATION_CURRENCIES as readonly string[]).includes(value);
+}
+
 /** Narrow Stripe's plain-string currency (any case) for display helpers; usd
  *  fallback keeps formatting total even if an unexpected currency appears. */
 export function asCurrency(value: unknown): Currency {
