@@ -11018,6 +11018,14 @@ async function venuesSuite(admin: Session, orgId: string): Promise<void> {
 
   if (!process.env.DATABASE_URL) {
     console.log("SKIP  venues: COURT_IN_USE check (DATABASE_URL not set)");
+    // Nothing references the court at this point, so a plain delete-then-
+    // delete cleans up fully. Left behind, these two rows trip the run's
+    // OWN cleanup() at the very end with a raw FK violation rather than a
+    // check failure — `courts.venue_id` is ON DELETE RESTRICT (V367 review
+    // fix), so an org-cascade delete that reaches the venue row before the
+    // court row is blocked outright. See the matching cleanup below.
+    await v1(admin, `/api/v1/orgs/${orgId}/courts/${court.id}`, "DELETE");
+    await v1(admin, `/api/v1/orgs/${orgId}/venues/${venue.id}`, "DELETE");
     return;
   }
   const db = smokeDb();
@@ -11050,6 +11058,20 @@ async function venuesSuite(admin: Session, orgId: string): Promise<void> {
       "venues: delete court referenced by a fixture -> 409 COURT_IN_USE",
       delCourt.status === 409 && delCourt.json.error?.code === "COURT_IN_USE",
     );
+
+    // Clean up: `courts.venue_id` is ON DELETE RESTRICT (V367 review fix) —
+    // a venue+court left behind here trips the run's OWN cleanup() at the
+    // very end with a raw FK violation ("update or delete on table venues
+    // violates foreign key constraint courts_venue_id_org_id_fkey"), not a
+    // check failure, so this isn't optional. Clear the artificial
+    // `court_id` link first (this suite's own doing — nothing else writes
+    // `fixtures.court_id` yet, see this file's header), then delete the
+    // court, then the venue, now that neither blocks the other.
+    await db`update fixtures set court_id = null where id = ${fx.fixtureId}`;
+    const cleanCourt = await v1(admin, `/api/v1/orgs/${orgId}/courts/${court.id}`, "DELETE");
+    check("venues: court deletes cleanly once unreferenced", cleanCourt.status === 200);
+    const cleanVenue = await v1(admin, `/api/v1/orgs/${orgId}/venues/${venue.id}`, "DELETE");
+    check("venues: venue deletes cleanly once its court is gone", cleanVenue.status === 200);
   } finally {
     await db.end();
   }
