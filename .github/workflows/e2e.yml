@@ -215,7 +215,17 @@ jobs:
       # ("FATAL ERROR: Ineffective mark-compacts near heap limit") before a
       # single spec runs. Types are already gated by `tsc --noEmit` in ci.yml's
       # test job, so nothing is lost here.
+      #
+      # Backgrounded. This is the long pole of the setup phase (52-55s across
+      # all five e2e runners on run 32008189967) and nothing before the `wait:`
+      # below reads its output, so the placement image build and the Chromium
+      # download ride alongside it instead of queueing behind it. Its log
+      # interleaves with theirs — that is the documented cost of `background:`,
+      # and the reason the DB steps above stay in the foreground as their own
+      # named steps rather than being folded into one blob.
       - name: Build (production)
+        id: build
+        background: true
         run: npm run build --workspace apps/web
         env:
           SKIP_TYPECHECK: "1"
@@ -246,7 +256,23 @@ jobs:
       # job and placement-ci.yml's `integration` job; the image build is
       # cached (type=gha) and shared with them.
       - uses: docker/setup-buildx-action@v3
+      #
+      # Backgrounded, alongside the production build above. `background:` on a
+      # `uses:` step is NOT documented anywhere — it was measured on this repo
+      # (probe run 32011114196: a backgrounded actions/cache@v4 plus a
+      # backgrounded `run:` step both completed and the `wait:` resolved).
+      #
+      # One caveat from that same probe, and the reason nothing here reads this
+      # step's outputs: a backgrounded `uses:` step LOSES them. The probe's
+      # cache step printed an EMPTY `cache-hit` after the wait, where
+      # actions/cache sets 'false' on a miss. So do not background a step whose
+      # `outputs` are consumed — ci.yml's dorny/paths-filter is the one such
+      # step in this repo, and it is deliberately left in the foreground.
+      # Nothing consumes this build's imageid/digest; `load: true` puts the
+      # image in the local daemon, which is a side effect, not an output.
       - name: Build the placement service image
+        id: image
+        background: true
         uses: docker/build-push-action@v6
         with:
           context: services/placement
@@ -256,6 +282,36 @@ jobs:
           tags: placement-service:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Moved UP from after "Start server", where it used to sit: nothing about
+      # downloading a browser needs a database, a build or a running server, so
+      # down there it was ~16s of dead serial time. Browsers cached per
+      # Playwright version. The cache RESTORE stays in the foreground (it is
+      # ~3s, and a backgrounded actions/cache loses its outputs — see the note
+      # on the image build above); only the download is backgrounded.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright Chromium
+        id: chromium
+        background: true
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+
+      # The setup phase's join. Everything past this point needs the artefacts
+      # the three background steps produce: the placement container needs the
+      # image, `Start server` needs .next/standalone, and Playwright needs the
+      # browser. A background step's FAILURE also surfaces here rather than
+      # where it happened — so a red on this step means "read the interleaved
+      # log above", not "the wait is broken".
+      #
+      # Serial, these three were ~90s (build 53 + image 18 + browser 16, plus
+      # cache restores) on run 32008189967. Concurrent they cost about what the
+      # build alone costs.
+      - name: Wait for build, placement image and browser
+        wait: [build, image, chromium]
+
       - name: Start the placement service
         run: |
           set -euo pipefail
@@ -308,15 +364,6 @@ jobs:
           fi
           echo "static assets serve ($asset)"
 
-      # Browsers cached per Playwright version.
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
-        working-directory: apps/web
       - name: Run Playwright e2e (parallel project)
         run: npx playwright test --project=parallel --shard=${{ matrix.shard }}/3
         working-directory: apps/web
@@ -421,13 +468,39 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
 
+      #
+      # Backgrounded. This is the long pole of the setup phase (52-55s across
+      # all five e2e runners on run 32008189967) and nothing before the `wait:`
+      # below reads its output, so the placement image build and the Chromium
+      # download ride alongside it instead of queueing behind it. Its log
+      # interleaves with theirs — that is the documented cost of `background:`,
+      # and the reason the DB steps above stay in the foreground as their own
+      # named steps rather than being folded into one blob.
       - name: Build (production)
+        id: build
+        background: true
         run: npm run build --workspace apps/web
         env:
           SKIP_TYPECHECK: "1"
 
       - uses: docker/setup-buildx-action@v3
+      #
+      # Backgrounded, alongside the production build above. `background:` on a
+      # `uses:` step is NOT documented anywhere — it was measured on this repo
+      # (probe run 32011114196: a backgrounded actions/cache@v4 plus a
+      # backgrounded `run:` step both completed and the `wait:` resolved).
+      #
+      # One caveat from that same probe, and the reason nothing here reads this
+      # step's outputs: a backgrounded `uses:` step LOSES them. The probe's
+      # cache step printed an EMPTY `cache-hit` after the wait, where
+      # actions/cache sets 'false' on a miss. So do not background a step whose
+      # `outputs` are consumed — ci.yml's dorny/paths-filter is the one such
+      # step in this repo, and it is deliberately left in the foreground.
+      # Nothing consumes this build's imageid/digest; `load: true` puts the
+      # image in the local daemon, which is a side effect, not an output.
       - name: Build the placement service image
+        id: image
+        background: true
         uses: docker/build-push-action@v6
         with:
           context: services/placement
@@ -437,6 +510,36 @@ jobs:
           tags: placement-service:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Moved UP from after "Start server", where it used to sit: nothing about
+      # downloading a browser needs a database, a build or a running server, so
+      # down there it was ~16s of dead serial time. Browsers cached per
+      # Playwright version. The cache RESTORE stays in the foreground (it is
+      # ~3s, and a backgrounded actions/cache loses its outputs — see the note
+      # on the image build above); only the download is backgrounded.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright Chromium
+        id: chromium
+        background: true
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+
+      # The setup phase's join. Everything past this point needs the artefacts
+      # the three background steps produce: the placement container needs the
+      # image, `Start server` needs .next/standalone, and Playwright needs the
+      # browser. A background step's FAILURE also surfaces here rather than
+      # where it happened — so a red on this step means "read the interleaved
+      # log above", not "the wait is broken".
+      #
+      # Serial, these three were ~90s (build 53 + image 18 + browser 16, plus
+      # cache restores) on run 32008189967. Concurrent they cost about what the
+      # build alone costs.
+      - name: Wait for build, placement image and browser
+        wait: [build, image, chromium]
+
       - name: Start the placement service
         run: |
           set -euo pipefail
@@ -484,14 +587,6 @@ jobs:
           fi
           echo "static assets serve ($asset)"
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
-        working-directory: apps/web
       - name: Run Playwright e2e (serial project)
         run: npx playwright test --project=serial --workers=1
         working-directory: apps/web
@@ -613,13 +708,39 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
 
+      #
+      # Backgrounded. This is the long pole of the setup phase (52-55s across
+      # all five e2e runners on run 32008189967) and nothing before the `wait:`
+      # below reads its output, so the placement image build and the Chromium
+      # download ride alongside it instead of queueing behind it. Its log
+      # interleaves with theirs — that is the documented cost of `background:`,
+      # and the reason the DB steps above stay in the foreground as their own
+      # named steps rather than being folded into one blob.
       - name: Build (production)
+        id: build
+        background: true
         run: npm run build --workspace apps/web
         env:
           SKIP_TYPECHECK: "1"
 
       - uses: docker/setup-buildx-action@v3
+      #
+      # Backgrounded, alongside the production build above. `background:` on a
+      # `uses:` step is NOT documented anywhere — it was measured on this repo
+      # (probe run 32011114196: a backgrounded actions/cache@v4 plus a
+      # backgrounded `run:` step both completed and the `wait:` resolved).
+      #
+      # One caveat from that same probe, and the reason nothing here reads this
+      # step's outputs: a backgrounded `uses:` step LOSES them. The probe's
+      # cache step printed an EMPTY `cache-hit` after the wait, where
+      # actions/cache sets 'false' on a miss. So do not background a step whose
+      # `outputs` are consumed — ci.yml's dorny/paths-filter is the one such
+      # step in this repo, and it is deliberately left in the foreground.
+      # Nothing consumes this build's imageid/digest; `load: true` puts the
+      # image in the local daemon, which is a side effect, not an output.
       - name: Build the placement service image
+        id: image
+        background: true
         uses: docker/build-push-action@v6
         with:
           context: services/placement
@@ -629,6 +750,36 @@ jobs:
           tags: placement-service:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Moved UP from after "Start server", where it used to sit: nothing about
+      # downloading a browser needs a database, a build or a running server, so
+      # down there it was ~16s of dead serial time. Browsers cached per
+      # Playwright version. The cache RESTORE stays in the foreground (it is
+      # ~3s, and a backgrounded actions/cache loses its outputs — see the note
+      # on the image build above); only the download is backgrounded.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright Chromium
+        id: chromium
+        background: true
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+
+      # The setup phase's join. Everything past this point needs the artefacts
+      # the three background steps produce: the placement container needs the
+      # image, `Start server` needs .next/standalone, and Playwright needs the
+      # browser. A background step's FAILURE also surfaces here rather than
+      # where it happened — so a red on this step means "read the interleaved
+      # log above", not "the wait is broken".
+      #
+      # Serial, these three were ~90s (build 53 + image 18 + browser 16, plus
+      # cache restores) on run 32008189967. Concurrent they cost about what the
+      # build alone costs.
+      - name: Wait for build, placement image and browser
+        wait: [build, image, chromium]
+
       - name: Start the placement service
         run: |
           set -euo pipefail
@@ -676,14 +827,6 @@ jobs:
           fi
           echo "static assets serve ($asset)"
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
-        working-directory: apps/web
       # This leg's widths, serialized (--workers=1) — see this job's header
       # comment. `--workers=1` is per-leg and must not be raised: the widths in
       # a leg share this leg's `setup` org.
