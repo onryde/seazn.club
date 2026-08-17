@@ -239,41 +239,64 @@ serves its closed/unavailable state during that window.
 **LIVE SESSION STATE** (update this block as waves close; it is what a resumed
 or compacted session reads first).
 
-- Worktree `.claude/worktrees/rs002`, rebased onto `main` @ `2bccb8d7`.
-  Nothing pushed, no PR yet — the plan is one PR, opened **draft** once the
-  code waves are in, flipped to ready at the end.
-- **Gate DB is the FRESH one: `postgresql://postgres@127.0.0.1:54612/seazn_rs002v`**
-  (`DATABASE_SSL=disable`). The older `:54669/seazn_rs002` has accumulated orgs
-  and times out `org-posts-digest` — see the sweep-suite note under wave 2.
+- Worktree `.claude/worktrees/rs002`, rebased onto `main` @ `c2cb1f3fb`
+  (P8 venues & courts, #605). **All five waves CLOSED and reviewed.**
+- **A gate DB goes STALE within a session.** Every label here — `rs002v`,
+  `rs002f` — was fresh when made and wrong later: `rs002v` accumulated orgs
+  until `org-posts-digest` timed out, and both predate the venues rebase, so
+  they lack `venues`/`courts` entirely. Make a NEW label after any rebase that
+  brings schema (`seazn-env up --label <x>`), and never diagnose a red against
+  a DB older than the branch.
 - Placement service (needed or `schedule-build-honours-locks` shows 4 false
   reds): `PLACEMENT_SERVICE_HOST=localhost:50805`,
   `PLACEMENT_SERVICE_SECRET=local-rs002-secret`. Started via
   `seazn-env up --label rs002 --placement`. **Tear it down at session end** —
   a stale placement service makes the NEXT session's run green against code
   that has changed.
-- Waves: **W1 CLOSED**, **W2 CLOSED**, **W3 CLOSED**, **W4 IN FLIGHT**
-  (`registration-submit.ts`), W5 TODO.
-  - W3 = the four materialisation gaps: name+dob get-or-create for player rows
-    with no `user_id`, `consent.public_name=true` on NEW persons only,
-    `registration_players.person_id` write-back, and the missing `pair` branch.
-  - W4 = `registration-submit.ts`: `submitRegistrationGroup` + `joinTeamEntry`.
-    The long pole — capacity row-lock with a real two-writer race test, GDPR
-    privacy consent (deleted with `submitRegistration`, nothing fails without
-    it today), currency snapshot, waitlisted entries never charged,
-    `registration_players.user_id` set for the submitter's own row.
-  - W5 = `registration-approval.ts`: approve/reject/withdraw/promote, plus
-    `groupByRef` and `listRegistrations` cross-division filters.
-- **Every wave runs implementer → reviewer → gaps → implementer, and the main
-  thread reruns the gate itself.** Both review rounds so far found real
-  defects the implementer's own green run did not: wave 1 a fourth cart-money
-  hazard plus two atomicity blockers, wave 2 a tautological test.
-- **Three implementers have stalled the same way**: they background their own
-  vitest run and return `completed` with "waiting for the monitor
-  notification" and no counts. `ListAgents` says `running`/`completed` and
-  cannot see it. The tell is a final message with no JSON counts and no commit
-  hashes; the liveness probe is transcript byte growth over ~45s combined with
-  `pgrep -fl vitest` (flat AND no vitest = stuck). Two also wrote their first
-  edits into the MAIN checkout; both recovered, main verified clean.
+- Waves: **W1–W5 all CLOSED**, each implementer → reviewer → gaps →
+  implementer, with the main thread rerunning the gate itself. Modules
+  shipped: `registration-eligibility.ts`, `registration-submit.ts`,
+  `registration-approval.ts`, plus `registrations.ts` and **V368**.
+- **The migration is `V368__registration_entry_refunds.sql`, not V367.**
+  `main` merged `V367__venues_and_courts.sql` (#605) after RS002 forked, and
+  **two V367 deltas in one tree is a migration-tool collision that `git
+  rebase` reports as success** — nothing flags it until Flyway runs. Only the
+  whole-branch review caught it. Any RS session that forks and then rebases
+  owes this check: `ls db/migration/deltas | tail`.
+- **Final gate, main thread, fresh post-rebase schema + placement service:**
+  `apps/web` **8569 total / 8507 passed / 0 failed / 62 pending / 0 failed
+  suites**; `turbo typecheck` 2/2 (the CI gate — `tsc -p apps/web` alone
+  misses `packages/engine`); `lint` ✖ 75 problems, **0 errors**, the same 75
+  warnings `main` carries; `openapi:gen` + `i18n:gen-keys` + `i18n:check` all
+  clean with `git status --porcelain` **empty**.
+- **38 review findings, 37 fixed, 1 deliberately kept.** The keep is
+  `group_refunded_cents`: it is the cart-scoped half of a split `tsc` cannot
+  enforce (both sides are plain `number`), it is asserted by tests, and the
+  dispute write-off writes it. Deleting the alias would leave the next reader
+  of `RegistrationWithGroupRow.refunded_cents` taking the entry's number for
+  the cart's — the exact bug wave 1 existed to fix.
+- **The whole-branch review is not optional, and it is not the per-wave
+  reviews summed.** Five per-wave reviews and a fully green 8477-test suite
+  all missed: the V367 collision, a sweep expiring a free sibling that never
+  had a deadline, and a paid-awaiting-approval entry that could be approved
+  but never declined. Budget one at the end of every multi-wave session.
+- **Agent failure modes this session, all recurring — put these in every
+  brief.** Three implementers stalled by backgrounding their own vitest run
+  and returning `completed` with "waiting for the monitor notification", no
+  counts; `ListAgents` cannot see it, the tell is a final message with no JSON
+  counts and no commit hashes. **Two then died on the 600s watchdog holding
+  450+ uncommitted lines**, so briefs must say "commit after each finding, not
+  at the end". Two wrote their first edits into the MAIN checkout. And one
+  signed off with "stale test DB, not a code defect" over **two real reds in
+  its own new file** — a fixture that seeded a stripe division without
+  `stripe_charges_enabled`, tripping W4's own 503 guard. A fresh DB gave 8569
+  tests with exactly two failures, both ours; a schema mismatch does not look
+  like that.
+- **`--reporter=verbose` is the only way to read a failure here.** Both `rtk`
+  AND a bare `npx vitest --reporter=json` render the message as
+  `STACK_TRACE_ERROR` with a stack into the MAIN checkout's `node_modules`,
+  which additionally impersonates the worktree-resolution trap. That masking
+  hid a 30s sweep timeout AND the two fixture 503s.
 
 
 
