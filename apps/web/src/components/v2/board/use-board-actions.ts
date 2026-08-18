@@ -10,6 +10,8 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { dayKey, PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED } from "@/lib/schedule-board";
 import type { FeedLabelPair } from "@/lib/schedule-board";
+import type { z } from "zod";
+import type { ApplyScheduleRequest } from "@/server/api-v1/schemas";
 import type {
   AutoScheduleRequest,
   ScheduleMetrics,
@@ -414,12 +416,15 @@ export function useBoardActions(
       setBusy(true);
       try {
         type Proposal = {
-          // P9: the server's /schedule/auto returns `court_id` (schedule.ts:1599)
-          // and ApplyScheduleRequest is `.strict()` about it. Reading
-          // `court_label` here forwarded `undefined` and every Auto-schedule
-          // apply 400'd with "Invalid input", leaving the strip reporting a run
-          // the board never received.
-          assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
+          // P9: DERIVED from the schema the server validates against, never
+          // hand-declared. `apiV1<T>` is an unchecked cast, so a hand-written
+          // wire type is an assertion the compiler cannot check — this one
+          // claimed `court_label` after the server moved to `court_id`, so
+          // every Auto-schedule apply POSTed `court_id: undefined`, got a
+          // "Invalid input" 400, and persisted nothing while the strip
+          // reported the run's own in-memory result. Inferring from
+          // ApplyScheduleRequest makes that class of drift a type error.
+          assignments: z.infer<typeof ApplyScheduleRequest>["assignments"];
           conflicts: BoardConflict[];
           metrics?: ScheduleMetrics;
           solver?: ScheduleSolverInfo;
