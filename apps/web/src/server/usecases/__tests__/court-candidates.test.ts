@@ -127,4 +127,34 @@ describe.skipIf(!HAS_DB)("resolveCandidateCourts (DB-backed)", () => {
     );
     spy.mockRestore();
   });
+
+  // P9 pass 3b-FIX (item 2, owner ruling): an empty CONFIGURED list means
+  // UNCONSTRAINED, not "no courts" — mirrors the existing rule that empty
+  // required_court_tags means "any court". A division with no settings row
+  // at all (every board before its first PUT) must still be plannable on
+  // the org's own courts rather than 422ing NO_MATCHING_COURT outright.
+  it("an empty configured list falls back to every org court, then applies the tag filter as usual", async () => {
+    const { orgId, taggedCourtId } = await seedOrgWithCourts();
+    const result = await withTenant(orgId, (tx) => resolveCandidateCourts(tx, "div-99", [], ["clay"]));
+    // taggedCourtId carries "clay" and qualifies; the org's plain (untagged)
+    // court is filtered out same as any explicitly-configured court would be;
+    // the archived "clay" court must stay excluded too — this is NOT a
+    // second, unfiltered copy of the org's courts.
+    expect(result.ids).toEqual([taggedCourtId]);
+  });
+
+  it("an empty configured list with NO required tags falls back to every non-archived org court", async () => {
+    const { orgId, taggedCourtId, plainCourtId } = await seedOrgWithCourts();
+    const result = await withTenant(orgId, (tx) => resolveCandidateCourts(tx, "div-98", [], []));
+    expect(result.ids.sort()).toEqual([plainCourtId, taggedCourtId].sort());
+  });
+
+  it("an empty configured list AND an org with no courts at all resolves to an empty candidate set", async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const [{ id: orgId }] = await sql<{ id: string }[]>`
+      insert into organizations (name, slug) values (${"CC Org Empty " + suffix}, ${"cc-org-empty-" + suffix})
+      returning id`;
+    const result = await withTenant(orgId, (tx) => resolveCandidateCourts(tx, "div-100", [], []));
+    expect(result.ids).toEqual([]);
+  });
 });

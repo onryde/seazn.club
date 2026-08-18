@@ -38,13 +38,22 @@ export const NO_MATCHING_COURT_CODE = "NO_MATCHING_COURT";
  * queue-wait timeout to recover). `autoSchedule`'s three-phase transaction
  * boundary (`schedule.ts`'s own doc comment on `AutoSchedulePlan`) is exactly
  * the discipline this avoids breaking.
+ *
+ * Ordered (`sort, name, id` — `venues.ts`'s own listing convention) so the
+ * EMPTY-CONFIGURED-LIST fallback below (`resolveCandidateCourts`) gets a
+ * deterministic candidate order rather than whatever a plain table scan
+ * happens to return: with an explicit configured list order is the
+ * organiser's own array position (ruling 1, candidate-courts.ts) and this
+ * row order is unused, but the fallback has no organiser-authored order to
+ * preserve, so this is the only order it can offer.
  */
 async function orgCourtMetas(tx: Tx): Promise<CourtMeta[]> {
   return tx<CourtMeta[]>`
     select c.id, c.tags,
       (c.archived_at is not null or v.archived_at is not null) as archived
     from courts c
-    join venues v on v.id = c.venue_id`;
+    join venues v on v.id = c.venue_id
+    order by v.sort, v.name, c.sort, c.name, c.id`;
 }
 
 /**
@@ -73,6 +82,22 @@ export function unionRequiredCourtTags(
  * `schedule_court_filtered` at the filter point (design doc's pino
  * requirement) — mirrors `capacity-guard.ts`'s `logCapacityAssessed`, fired
  * from the server-side consumer, never from a pure lib.
+ *
+ * P9 pass 3b-FIX (item 2, owner ruling): an empty `configuredCourtIds` means
+ * UNCONSTRAINED, not "no courts" — the same reading `candidateCourts` itself
+ * already gives an empty `requiredTags` ("every court qualifies"). A division
+ * with no `schedule_settings` row at all (`loadSettings` parses `{}` through
+ * `ScheduleConfig`, whose `courts` defaults to `[]` — every board before its
+ * first settings PUT) falls back to the org's own courts here rather than
+ * resolving to zero candidates and 422ing NO_MATCHING_COURT for an org that
+ * has simply never configured anything yet. Deliberately in THIS function,
+ * not at each of its three call sites (schedule.ts's build and validate
+ * paths, schedule-ai.ts's buildSchedulePack) — the whole point of routing
+ * everything through one resolver is that those callers cannot diverge on
+ * what "no courts configured" means. The fallback set still goes through
+ * `candidateCourts` exactly like an explicit list would: archived courts and
+ * ones missing a required tag are excluded the same way, so `NO_MATCHING_COURT`
+ * still fires when the org genuinely has no matching court (or none at all).
  */
 export async function resolveCandidateCourts(
   tx: Tx,
@@ -81,7 +106,9 @@ export async function resolveCandidateCourts(
   requiredTags: readonly string[],
 ): Promise<CandidateCourts> {
   const courts = await orgCourtMetas(tx);
-  const result = candidateCourts(configuredCourtIds, courts, requiredTags);
+  const effectiveConfigured =
+    configuredCourtIds.length > 0 ? configuredCourtIds : courts.map((c) => c.id);
+  const result = candidateCourts(effectiveConfigured, courts, requiredTags);
   log.info(
     {
       event: "schedule_court_filtered",

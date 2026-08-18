@@ -596,11 +596,21 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
     expect(await balance(walletId)).toBe(before);
   });
 
-  it("a division with NO settings row is plannable on the default court", async () => {
-    // The other direction of the same gate: an absent row parses to
-    // ScheduleConfig's defaults (one "Court 1"), which is the state of every
-    // board before its first settings PUT. Refusing it would 422 half the
-    // product.
+  it("a division with NO settings row is plannable via the org-courts fallback", async () => {
+    // The other direction of the same gate. `loadSettings` parses an absent
+    // row's config as `{}`, and `ScheduleConfig.courts` defaults to `[]` (P9
+    // pass 1 dropped the old free-text "Court 1" default along with the
+    // label-based court model) — so an empty CONFIGURED list is no longer a
+    // literal court to place on. `resolveCandidateCourts` (court-candidates.ts,
+    // P9 pass 3b-FIX) reads an empty configured list as UNCONSTRAINED, not
+    // "no courts", and falls back to every court the ORG has — same reading
+    // `candidateCourts` already gives an empty `required_court_tags`. Bravo
+    // below gets no `schedule_settings` row at all; `courts: ["Court 1"]`
+    // only registers "Court 1" as an ORG court (`seedDivision`'s `courtIds()`
+    // call runs regardless of `noSettings`) for the fallback to pick up —
+    // nothing writes it into Bravo's own (nonexistent) settings row. Refusing
+    // this division outright would 422 half the product — every board before
+    // its first settings PUT.
     const auth = await seedPlusOrg();
     const { competitionId, divisions } = await seedCompetition(auth, "Defaulted", [
       { name: "Alpha", courts: ["Court 3", "Court 4"] },
@@ -610,6 +620,12 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
     const out = await run(auth, competitionId, divisions.map((d) => d.id));
     expect(out.divisions.map((d) => d.name).sort()).toEqual(["Alpha", "Bravo"]);
     expect(out.proposal).toHaveLength(12);
+    // Bravo's own board specifically — not just the joint total — actually
+    // landed via the fallback, on the org court the mocked plan named.
+    const bravo = divisions.find((d) => d.name === "Bravo")!;
+    const mine = out.proposal.filter((p) => p.division_id === bravo.id);
+    expect(mine.map((p) => p.fixture_id).sort()).toEqual([...bravo.fixtureIds].sort());
+    expect(mine.every((p) => p.court_label === bravo.courts[0])).toBe(true);
   });
 
   it("501 summed movable fixtures → 409 AI_PLAN_TOO_LARGE, wallet untouched", async () => {
