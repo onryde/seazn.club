@@ -581,6 +581,16 @@ export const ENGINE_ERROR_KEY: Record<EngineErrorCode, MessageKey> = {
   EXPEDITE_WRONG_WINNER: "engineError.EXPEDITE_WRONG_WINNER",
   SUB_WINDOW_EXCEEDED: "engineError.SUB_WINDOW_EXCEEDED",
   GAME_AWARD_DURING_TIEBREAK: "engineError.GAME_AWARD_DURING_TIEBREAK",
+  // F2 (unified progression field) — placeDescriptors/
+  // validateProgressionAgainstShapes moved into the engine with these four
+  // codes (packages/engine/src/core/errors.ts); lib/seeding-error.ts already
+  // wired organiser copy for the wire-visible HttpError path (its
+  // SEEDING_ERROR_CODES allowlist has all four), but that is a SEPARATE
+  // resolver keyed off the raw HTTP error code, not this EngineErrorCode map.
+  SEEDING_RULES_MISSING: "engineError.SEEDING_RULES_MISSING",
+  SEEDING_MAP_SLOT_INVALID: "engineError.SEEDING_MAP_SLOT_INVALID",
+  SEEDING_MAP_SOURCE_INVALID: "engineError.SEEDING_MAP_SOURCE_INVALID",
+  SEEDING_BESTNTH_UNEQUAL_POOLS: "engineError.SEEDING_BESTNTH_UNEQUAL_POOLS",
 };
 
 /**
