@@ -311,13 +311,47 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack (v4/03 §2)", () => {
     const base = await buildOfficialsPack(auth, divisionId, { instruction: "x", policy: POLICY });
     const target = base.fixtures[0]!;
     const overrideAt = "2026-08-05T14:00:00.000Z";
+    // P9 review wave 1, finding 8: the dry-run override's `court_label` is a
+    // real court uuid on the wire (the Phase-A proposal — ai-console.tsx
+    // forwards `schedulePlan.proposal[].court_label` verbatim), never a bare
+    // display string — so the fixture under test must send one too.
+    const [court2] = await sql<{ id: string }[]>`
+      select id from courts where org_id = ${auth.orgId} and name = 'Court 2'`;
     const withOverride = await buildOfficialsPack(auth, divisionId, {
       instruction: "x", policy: POLICY,
-      schedule: [{ fixture_id: target.id, scheduled_at: overrideAt, court_label: "Court 2" }],
+      schedule: [{ fixture_id: target.id, scheduled_at: overrideAt, court_label: court2!.id }],
     });
     const moved = withOverride.fixtures.find((f) => f.id === target.id)!;
     expect(new Date(moved.start_at).toISOString()).toBe(overrideAt);
     expect(moved.court).toBe("Court 2");
+  });
+
+  // P9 review wave 1, finding 8 (MEDIUM, MONEY): the override branch used to
+  // pass its uuid straight through while the persisted branch resolved a
+  // name via `courtNames.get(f.court_id)` — one field, two kinds of value.
+  // `officialsAiPlanForDivision`'s quoteRun prices off
+  // `new Set(pack.fixtures.map(f => f.court)).size`, so the SAME physical
+  // court showing once as a raw uuid and once as "Court 1" double-counted
+  // and inflated the credit charge. Fails on a reverted `court` derivation
+  // (the override's id compares unequal to the persisted name).
+  it("an override resolves to the SAME name a persisted assignment on that court shows", async () => {
+    const [court1] = await sql<{ id: string }[]>`
+      select id from courts where org_id = ${auth.orgId} and name = 'Court 1'`;
+    const base = await buildOfficialsPack(auth, divisionId, { instruction: "x", policy: POLICY });
+    const persistedOnCourt1 = base.fixtures.find((f) => f.court === "Court 1")!;
+    const onCourt2 = base.fixtures.find((f) => f.court === "Court 2")!;
+    const withOverride = await buildOfficialsPack(auth, divisionId, {
+      instruction: "x", policy: POLICY,
+      schedule: [
+        { fixture_id: onCourt2.id, scheduled_at: "2026-08-05T15:00:00.000Z", court_label: court1!.id },
+      ],
+    });
+    const moved = withOverride.fixtures.find((f) => f.id === onCourt2.id)!;
+    // Same physical court, same string — this is what lets quoteRun's
+    // `new Set(...)` collapse the two to ONE distinct court instead of
+    // double-counting the override's raw uuid as a second, different court.
+    expect(moved.court).toBe(persistedOnCourt1.court);
+    expect(moved.court).toBe("Court 1");
   });
 
   it("422 NO_OFFICIALS when the roster is empty", async () => {

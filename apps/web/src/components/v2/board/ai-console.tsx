@@ -283,13 +283,21 @@ export function officialsQuoteInput(
   const included = fixtures
     .map((f) => {
       const ov = override.get(f.id);
-      return { f, at: ov?.scheduled_at ?? f.scheduled_at, court: ov?.court_label ?? f.court_label };
+      // P9 review wave 1, finding 7: `f.court_label` is frozen and always
+      // null on a board-sourced fixture (consoleFixtures) — falling back to
+      // it made every PERSISTED court invisible, so this count only ever
+      // saw an AI proposal's override. `f.court_id` is the board's real
+      // identity; `ov.court_label`, despite the legacy name, is ALSO a real
+      // court uuid (the Phase-A proposal — see ai-diff.ts's own doc), so the
+      // two are directly comparable court ids, matching officials-ai.ts's
+      // own server-side count (officialsAiPlanForDivision's quoteRun input).
+      return { f, at: ov?.scheduled_at ?? f.scheduled_at, court: ov?.court_label ?? f.court_id };
     })
     .filter((x) => x.at !== null && x.f.status !== "decided");
   const entrants = new Set(
     included.flatMap((x) => [x.f.home_entrant_id, x.f.away_entrant_id]).filter((e) => e !== null),
   );
-  const courts = new Set(included.map((x) => x.court).filter((c) => c !== null));
+  const courts = new Set(included.map((x) => x.court).filter((c): c is string => c != null));
   return { movableFixtures: included.length, entrants: entrants.size, courts: courts.size };
 }
 

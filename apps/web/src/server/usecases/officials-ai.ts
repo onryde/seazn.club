@@ -193,7 +193,21 @@ export async function buildOfficialsPack(
           const persisted =
             f.scheduled_at !== null ? new Date(f.scheduled_at as string | Date).toISOString() : null;
           const atIso = ov?.scheduled_at ?? persisted;
-          const court = ov?.court_label ?? (f.court_id !== null ? (courtNames.get(f.court_id) ?? null) : null);
+          // P9 review wave 1, finding 8 (MONEY): `ov.court_label` is a real
+          // court uuid on the wire (the Phase-A proposal — see ai-diff.ts's
+          // own doc), not a display string — resolve it through the SAME
+          // `courtNames` map the persisted branch already uses below.
+          // Before this fix the override passed its uuid straight through
+          // while the persisted branch resolved a name, so one physical
+          // court showing once as an override and once as a persisted
+          // assignment compared unequal and double-counted in
+          // `officialsAiPlanForDivision`'s `new Set(pack.fixtures.map(f =>
+          // f.court))` credit-pricing input.
+          const court = ov
+            ? (courtNames.get(ov.court_label) ?? null)
+            : f.court_id !== null
+              ? (courtNames.get(f.court_id) ?? null)
+              : null;
           return { f, atIso, court, startMs: atIso !== null ? new Date(atIso).getTime() : NaN };
         })
         // Fixtures still needing officials — must have a time, and not be over.

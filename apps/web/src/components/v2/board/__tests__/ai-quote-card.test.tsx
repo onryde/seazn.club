@@ -42,6 +42,11 @@ import {
 } from "../ai-console";
 
 /** An AiConsoleFixture with only the fields the officials sizing reads. */
+// P9 review wave 1, finding 7: a board-sourced fixture carries its real
+// identity in `court_id`, with `court_label` frozen null (consoleFixtures,
+// schedule-board.tsx) — the same shape the "P9 pass 4a regression" test
+// above already established for `movableForRun`. `o.court` here stands in
+// for that real court_id, never the legacy label field.
 function fx(
   id: string,
   o: { status: string; at: string | null; court: string | null; home: string; away: string },
@@ -50,7 +55,8 @@ function fx(
     id,
     stage_id: "st-1",
     scheduled_at: o.at,
-    court_label: o.court,
+    court_label: null,
+    court_id: o.court,
     code: id,
     matchup: `${o.home} v ${o.away}`,
     isFinal: false,
@@ -625,5 +631,27 @@ describe("the RungInput the client builds", () => {
         { fixture_id: "d", scheduled_at: "2026-08-01T11:00:00.000Z", court_label: "Court 3" },
       ]),
     ).toEqual({ movableFixtures: 3, entrants: 5, courts: 2 });
+  });
+
+  it("P9 review wave 1, finding 7: counts a persisted court's real identity, not the frozen court_label", () => {
+    // `court_label` is frozen null on every board fixture (consoleFixtures) —
+    // comparing on it (the old code) makes a PERSISTED court invisible unless
+    // an AI proposal happens to override it, undercounting toward zero.
+    const COURT_A = "aaaaaaaa-0000-4000-8000-000000000001";
+    const COURT_B = "bbbbbbbb-0000-4000-8000-000000000002";
+    const fixtures = [
+      fx("a", { status: "scheduled", at: "2026-08-01T09:00:00.000Z", court: COURT_A, home: "e1", away: "e2" }),
+      fx("b", { status: "scheduled", at: "2026-08-01T10:00:00.000Z", court: COURT_B, home: "e3", away: "e4" }),
+    ];
+    // No proposal at all: both real, persisted courts must still be seen.
+    expect(officialsQuoteInput(fixtures, [])).toEqual({ movableFixtures: 2, entrants: 4, courts: 2 });
+
+    // The AI proposal moves "b" onto "a"'s court — one genuinely shared
+    // physical court, override and persisted alike, must count once.
+    expect(
+      officialsQuoteInput(fixtures, [
+        { fixture_id: "b", scheduled_at: "2026-08-01T11:00:00.000Z", court_label: COURT_A },
+      ]),
+    ).toEqual({ movableFixtures: 2, entrants: 4, courts: 1 });
   });
 });
