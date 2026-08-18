@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, divisionPath, expectNoHorizontalScroll, setDateTime } from "./helpers";
+import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, divisionPath, expectNoHorizontalScroll, setDateTime, seedVenueWithCourts } from "./helpers";
 
 // C1 task 2 item 2 — owner-demanded browser e2e. The owner explicitly
 // rejected task 1's real-solver integration runs (schedule-reflow-*.test.ts,
@@ -66,6 +66,7 @@ async function seedRoundRobinBoard(
   await addEntrantsViaApi(request, divisionId, ["Ash", "Brook", "Clay", "Dune"]);
   const { fixtureIds } = await createStageAndGenerate(request, divisionId);
   expect(fixtureIds.length).toBe(6);
+  const { courts } = await seedVenueWithCourts(request, ["Court A", "Court B"]);
 
   const settings = await apiJson(
     request,
@@ -77,7 +78,7 @@ async function seedRoundRobinBoard(
         startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: ["Court A", "Court B"],
+        courts: courts.map((c) => c.id),
         // 0, not a rest floor: a rest shortfall is a warn-only conflict, and
         // this file's ONE claim is round order — a board carrying an
         // unrelated warning is not a cleaner proof of it.
@@ -305,7 +306,7 @@ async function seedJointRoundRobinBoard(request: Parameters<typeof apiJson>[0]):
   });
   const competitionId = comp.data!.id;
 
-  async function seedDivision(name: string, court: string) {
+  async function seedDivision(name: string, courtId: string) {
     const div = await apiJson<{ id: string }>(
       request,
       `/api/v1/competitions/${competitionId}/divisions`,
@@ -331,7 +332,7 @@ async function seedJointRoundRobinBoard(request: Parameters<typeof apiJson>[0]):
           startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
           matchMinutes: 30,
           gapMinutes: 0,
-          courts: [court],
+          courts: [courtId],
           perEntrantMinRest: 0,
           blackouts: [],
           sessionWindows: [],
@@ -342,9 +343,12 @@ async function seedJointRoundRobinBoard(request: Parameters<typeof apiJson>[0]):
     return { divisionId, fixtureIds };
   }
 
-  const alpha = await seedDivision("Alpha", "Court A");
-  const bravo = await seedDivision("Bravo", "Court B");
-  return { competitionId, alpha, bravo };
+  // Each division gets its OWN dedicated court (see doc comment above) — one
+  // venue, two real courts, never a shared one.
+  const { courts } = await seedVenueWithCourts(request, ["Court A", "Court B"]);
+  const alpha = await seedDivision("Alpha", courts[0]!.id);
+  const bravo = await seedDivision("Bravo", courts[1]!.id);
+  return { competitionId, alpha, bravo, courtIds: { alpha: courts[0]!.id, bravo: courts[1]!.id } };
 }
 
 const JOINT_T0 = Date.UTC(2026, 8, 21, 9, 0);
@@ -353,8 +357,15 @@ const jointAt = (minutes: number): string => new Date(JOINT_T0 + minutes * 60_00
 /** Every fixture, round-ascending (`generate`'s own order), a court, and a
  *  starting offset — the joint twin of the single-division tests' `lineUp`
  *  idiom (schedule/apply request shape, not a UI action). */
-const lineUp = (fixtureIds: string[], court: string) =>
-  fixtureIds.map((fixture_id, i) => ({ fixture_id, scheduled_at: jointAt(i * 30), court_label: court }));
+const lineUp = (fixtureIds: string[], courtId: string) =>
+  fixtureIds.map((fixture_id, i) => ({ fixture_id, scheduled_at: jointAt(i * 30), court_id: courtId }));
+
+/** A syntactically valid but never-persisted court id — only used to probe
+ *  `currentDivisionSeq`'s deliberately-wrong `expected_seq: 999_999_999`
+ *  request, which the SEQ_CONFLICT check rejects before `court_id` is ever
+ *  looked up against real rows. `CourtId` (schemas.ts) only checks the
+ *  string is uuid-shaped. */
+const PROBE_COURT_ID = "00000000-0000-4000-8000-000000000000";
 
 /** #350's `expected_seq` has no GET endpoint, and a freshly-seeded division is
  *  NOT reliably seq 0 — `divisions.seq` is a general-purpose event counter
@@ -376,7 +387,7 @@ async function currentDivisionSeq(
       {
         division_id: divisionId,
         expected_seq: 999_999_999,
-        assignments: [{ fixture_id: probeFixtureId, scheduled_at: jointAt(0), court_label: "Probe" }],
+        assignments: [{ fixture_id: probeFixtureId, scheduled_at: jointAt(0), court_id: PROBE_COURT_ID }],
       },
     ],
     source: "ai",
@@ -392,14 +403,14 @@ test("a joint apply lands both divisions in round order the organiser SEES, thro
   page,
   request,
 }) => {
-  const { competitionId, alpha, bravo } = await seedJointRoundRobinBoard(request);
+  const { competitionId, alpha, bravo, courtIds } = await seedJointRoundRobinBoard(request);
 
   const alphaSeq = await currentDivisionSeq(request, competitionId, alpha.divisionId, alpha.fixtureIds[0]!);
   const bravoSeq = await currentDivisionSeq(request, competitionId, bravo.divisionId, bravo.fixtureIds[0]!);
   const res = await apiJson(request, `/api/v1/competitions/${competitionId}/schedule/apply`, "POST", {
     divisions: [
-      { division_id: alpha.divisionId, expected_seq: alphaSeq, assignments: lineUp(alpha.fixtureIds, "Court A") },
-      { division_id: bravo.divisionId, expected_seq: bravoSeq, assignments: lineUp(bravo.fixtureIds, "Court B") },
+      { division_id: alpha.divisionId, expected_seq: alphaSeq, assignments: lineUp(alpha.fixtureIds, courtIds.alpha) },
+      { division_id: bravo.divisionId, expected_seq: bravoSeq, assignments: lineUp(bravo.fixtureIds, courtIds.bravo) },
     ],
     source: "ai",
   });
@@ -442,7 +453,7 @@ test("a joint apply that INTRODUCES a round-order violation is refused, and NOTH
   page,
   request,
 }) => {
-  const { competitionId, alpha, bravo } = await seedJointRoundRobinBoard(request);
+  const { competitionId, alpha, bravo, courtIds } = await seedJointRoundRobinBoard(request);
   // Discovered ONCE: the violating attempt below is refused before it ever
   // reaches the seq check (applyCompetitionSchedule throws SCHEDULE_CONFLICT
   // ahead of the write loop `assertFreshSeq` lives in — see the module
@@ -459,9 +470,9 @@ test("a joint apply that INTRODUCES a round-order violation is refused, and NOTH
   const alphaViolating = alpha.fixtureIds.map((fixture_id, i) => ({
     fixture_id,
     scheduled_at: i === 0 ? jointAt(last * 30) : i === last ? jointAt(0) : jointAt(i * 30),
-    court_label: "Court A",
+    court_id: courtIds.alpha,
   }));
-  const bravoClean = lineUp(bravo.fixtureIds, "Court B");
+  const bravoClean = lineUp(bravo.fixtureIds, courtIds.bravo);
 
   const refused = await apiJson(request, `/api/v1/competitions/${competitionId}/schedule/apply`, "POST", {
     divisions: [
@@ -506,7 +517,7 @@ test("a joint apply that INTRODUCES a round-order violation is refused, and NOTH
   // correct, and a correctly-ordered retry with them must succeed and render.
   const retried = await apiJson(request, `/api/v1/competitions/${competitionId}/schedule/apply`, "POST", {
     divisions: [
-      { division_id: alpha.divisionId, expected_seq: alphaSeq, assignments: lineUp(alpha.fixtureIds, "Court A") },
+      { division_id: alpha.divisionId, expected_seq: alphaSeq, assignments: lineUp(alpha.fixtureIds, courtIds.alpha) },
       { division_id: bravo.divisionId, expected_seq: bravoSeq, assignments: bravoClean },
     ],
     source: "ai",
@@ -530,7 +541,7 @@ test("a joint apply that introduces a round-order violation via a PARTIAL listin
   page,
   request,
 }) => {
-  const { competitionId, alpha, bravo } = await seedJointRoundRobinBoard(request);
+  const { competitionId, alpha, bravo, courtIds } = await seedJointRoundRobinBoard(request);
   const alphaSeq = await currentDivisionSeq(request, competitionId, alpha.divisionId, alpha.fixtureIds[0]!);
   const bravoSeq = await currentDivisionSeq(request, competitionId, bravo.divisionId, bravo.fixtureIds[0]!);
 
@@ -538,8 +549,8 @@ test("a joint apply that introduces a round-order violation via a PARTIAL listin
   // endpoint the "lands both divisions" test above proves renders clean.
   const clean = await apiJson(request, `/api/v1/competitions/${competitionId}/schedule/apply`, "POST", {
     divisions: [
-      { division_id: alpha.divisionId, expected_seq: alphaSeq, assignments: lineUp(alpha.fixtureIds, "Court A") },
-      { division_id: bravo.divisionId, expected_seq: bravoSeq, assignments: lineUp(bravo.fixtureIds, "Court B") },
+      { division_id: alpha.divisionId, expected_seq: alphaSeq, assignments: lineUp(alpha.fixtureIds, courtIds.alpha) },
+      { division_id: bravo.divisionId, expected_seq: bravoSeq, assignments: lineUp(bravo.fixtureIds, courtIds.bravo) },
     ],
     source: "ai",
   });
@@ -555,7 +566,7 @@ test("a joint apply that introduces a round-order violation via a PARTIAL listin
         division_id: alpha.divisionId,
         expected_seq: partialSeq,
         assignments: [
-          { fixture_id: alpha.fixtureIds[0]!, scheduled_at: jointAt(24 * 60), court_label: "Court A" },
+          { fixture_id: alpha.fixtureIds[0]!, scheduled_at: jointAt(24 * 60), court_id: courtIds.alpha },
         ],
       },
     ],
