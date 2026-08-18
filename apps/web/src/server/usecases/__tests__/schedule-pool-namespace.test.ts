@@ -49,6 +49,12 @@ const DIV_A = "11111111-1111-4111-8111-111111111111";
 const POOL_A_ID = "22222222-2222-4222-8222-222222222222";
 /** What `pools.key` holds and what the MODEL is shown as `PackFixture.pool`. */
 const POOL_A_KEY = "A";
+/** P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)`. This file has no
+ *  DB — `settings()` runs its literal through the real `ScheduleConfig.parse`,
+ *  so its `courts` array needs uuid-shaped values; the AI-path `pack()` below
+ *  keeps its own free-text court labels (never zod-parsed) untouched. */
+const COURT_A_ID = "55555555-5555-4555-8555-555555555555";
+const COURT_B_ID = "66666666-6666-4666-8666-666666666666";
 
 // One day, two fixtures in pool A sharing entrant e1, 40 minutes apart. Both a
 // 180-minute pool rest and a 1/day pool cap are breached — by a wide margin, so
@@ -115,7 +121,7 @@ function settings(constraints: Record<string, unknown>): ScheduleSettingsOut {
       startAt: iso(T0),
       matchMinutes: 40,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 2"],
+      courts: [COURT_A_ID, COURT_B_ID],
       perEntrantMinRest: 30,
       constraints,
     }),
