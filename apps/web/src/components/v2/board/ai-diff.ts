@@ -13,6 +13,10 @@ export interface AiFixtureRef {
   /** ISO string (or null when the fixture sits unscheduled in the tray). */
   scheduled_at: string | null;
   court_label: string | null;
+  /** P9 pass 4a: additive real identity, alongside the frozen `court_label`
+   *  above — NOT a rename (that wire shape is a known separate follow-up).
+   *  Optional: several existing builders of this shape predate the field. */
+  court_id?: string | null;
 }
 
 /** A fixture enriched with what a ghost block / diff row shows (design §3): a

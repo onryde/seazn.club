@@ -89,7 +89,9 @@ export function aiPricingInputs(
       .map((f) => ({
         id: f.id,
         scheduled_at: f.scheduled_at ? new Date(f.scheduled_at).toISOString() : null,
-        court_label: f.court_label,
+        // P9 pass 4a: `court_id`, not the frozen `court_label` — `movableForRun`
+        // narrows a repair scope on the real identity now.
+        court_id: f.court_id,
       })),
     // SELECTS the count as well as returning it — deliberately. An earlier
     // version took the number as a parameter, which put the boundary BELOW the
@@ -269,6 +271,9 @@ export function consoleFixtures(
       division_id: f.division_id,
       scheduled_at: f.scheduled_at ? new Date(f.scheduled_at).toISOString() : null,
       court_label: f.court_label,
+      // P9 pass 4a: additive — the real identity, alongside the frozen label
+      // above (kept as-is; ai-diff.ts's wire shapes are a separate follow-up).
+      court_id: f.court_id,
       // P7/F1: was a hand-built `R${...}·${...}` template — now the SAME
       // matchRef() the feed label's {ext} substitution calls (slot-label.ts),
       // so this code chip and a "Winner of …" label naming this same fixture

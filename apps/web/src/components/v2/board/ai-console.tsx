@@ -104,7 +104,12 @@ export interface MovableFixture {
   id: string;
   /** ISO string, or null while the fixture sits in the tray. */
   scheduled_at: string | null;
-  court_label: string | null;
+  /** P9 pass 4a: the real court identity — `inScope` (schedule-ai.ts) now
+   *  matches `scope.courts` against `court_id`, and `court_label` is frozen
+   *  legacy (null for anything scheduled since the cutover), so comparing on
+   *  it never excludes anything and a court-scoped repair silently prices at
+   *  the whole division's size. */
+  court_id: string | null;
 }
 
 /**
@@ -125,7 +130,7 @@ export function movableForRun(
 ): MovableFixture[] {
   if (mode !== "repair" || !scope) return fixtures;
   return fixtures.filter((f) => {
-    if (scope.courts && !(f.court_label === null || scope.courts.includes(f.court_label))) {
+    if (scope.courts && !(f.court_id === null || scope.courts.includes(f.court_id))) {
       return false;
     }
     if (scope.from) {

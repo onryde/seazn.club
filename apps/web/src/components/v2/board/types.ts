@@ -42,6 +42,15 @@ export interface BoardFixture {
   scheduled_at: string | Date | null;
   venue: string | null;
   court_label: string | null;
+  /** P9 pass 4a: the fixture's REAL court identity — `court_label` above is
+   *  frozen legacy (null for anything scheduled since the cutover). Every
+   *  column/scope/swap comparison must key on this, never on `court_label`.
+   *  Mirrors `FixtureRow.court_id`/`court_name` (stages.ts). */
+  court_id: string | null;
+  /** DERIVED display name for `court_id` — never render `court_id` itself
+   *  (a raw uuid) to an organiser. Falls back to `court_label` at the render
+   *  site while no lookup populates this (purely additive; see court_id). */
+  court_name: string | null;
   status: string;
   schedule_source: string;
   schedule_locked: boolean;

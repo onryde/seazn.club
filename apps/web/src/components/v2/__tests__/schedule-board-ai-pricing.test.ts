@@ -24,6 +24,8 @@ const fx = (o: Partial<BoardFixture> & { id: string }): BoardFixture => ({
   scheduled_at: "2026-08-01T10:00:00.000Z",
   venue: null,
   court_label: "Court 1",
+  court_id: "crt-1",
+  court_name: "Court 1",
   status: "scheduled",
   schedule_source: "manual",
   schedule_locked: false,
@@ -52,17 +54,21 @@ describe("aiPricingInputs", () => {
   it("carries the court and time each fixture is at, so a repair can be scoped", () => {
     // These two fields are the whole reason this is a fixture LIST rather than
     // a count: `movableForRun` narrows on them to price a scoped repair.
+    // P9 pass 4a: `court_id` is the field carried — `court_label` is frozen
+    // legacy and null for anything scheduled since the cutover, so a fixture
+    // like "b" below (real court_id, null court_label) is the NORMAL case now,
+    // not an edge case.
     const out = aiPricingInputs(
       [
-        fx({ id: "a", court_label: "Court 9", scheduled_at: "2026-08-01T09:00:00.000Z" }),
-        fx({ id: "b", court_label: null, scheduled_at: null }),
+        fx({ id: "a", court_id: "crt-9", court_label: null, scheduled_at: "2026-08-01T09:00:00.000Z" }),
+        fx({ id: "b", court_id: null, court_label: null, scheduled_at: null }),
       ],
       "d1",
       { d1: 4 },
     );
     expect(out.movableFixtures).toEqual([
-      { id: "a", scheduled_at: "2026-08-01T09:00:00.000Z", court_label: "Court 9" },
-      { id: "b", scheduled_at: null, court_label: null },
+      { id: "a", scheduled_at: "2026-08-01T09:00:00.000Z", court_id: "crt-9" },
+      { id: "b", scheduled_at: null, court_id: null },
     ]);
   });
 
@@ -101,12 +107,12 @@ describe("aiPricingInputs", () => {
   it("reflects a drag immediately — the board's live court, not the server's", () => {
     // `actions.board` applies optimistic overrides before the RSC refresh
     // lands. A fixture dragged INTO the court a repair is scoped to must be in
-    // the quote straight away; quoting it against the stale label under-quotes,
+    // the quote straight away; quoting it against a stale identity under-quotes,
     // and under-quoting is the direction that bills people.
-    const server = fx({ id: "a", court_label: "Court 1" });
-    const dragged = { ...server, court_label: "Court 9" };
-    expect(aiPricingInputs([dragged], "d1", { d1: 4 }).movableFixtures[0].court_label).toBe("Court 9");
-    expect(aiPricingInputs([server], "d1", { d1: 4 }).movableFixtures[0].court_label).toBe("Court 1");
+    const server = fx({ id: "a", court_id: "crt-1" });
+    const dragged = { ...server, court_id: "crt-9" };
+    expect(aiPricingInputs([dragged], "d1", { d1: 4 }).movableFixtures[0].court_id).toBe("crt-9");
+    expect(aiPricingInputs([server], "d1", { d1: 4 }).movableFixtures[0].court_id).toBe("crt-1");
   });
 });
 

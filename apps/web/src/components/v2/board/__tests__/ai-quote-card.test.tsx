@@ -405,7 +405,10 @@ const DIVISION_ID = "00000000-0000-4000-8000-000000000001";
 const movableFixture = (i: number, court: string, at: string | null) => ({
   id: `f${i}`,
   scheduled_at: at,
-  court_label: court,
+  // P9 pass 4a: `court_id`, the real identity `movableForRun` narrows on —
+  // `court_label` is frozen legacy and null for anything scheduled since the
+  // cutover.
+  court_id: court,
 });
 
 /** 250 movable on Court 1, 40 ACTIVE entrants, 4 courts → score 278 → rung 3. */
@@ -555,9 +558,9 @@ describe("the RungInput the client builds", () => {
     const fixtures = [
       movableFixture(1, "Court 1", "2026-08-01T09:00:00.000Z"),
       movableFixture(2, "Court 9", "2026-08-01T10:00:00.000Z"),
-      { id: "tray", scheduled_at: null, court_label: null },
+      { id: "tray", scheduled_at: null, court_id: null },
     ];
-    // A fixture with no court survives a court scope (server: `court_label === null || …`).
+    // A fixture with no court survives a court scope (server: `court_id === null || …`).
     expect(
       movableForRun(fixtures, "repair", { courts: ["Court 9"] }).map((f) => f.id),
     ).toEqual(["f2", "tray"]);
@@ -565,6 +568,36 @@ describe("the RungInput the client builds", () => {
     expect(
       movableForRun(fixtures, "repair", { from: "2026-08-01T10:00:00.000Z" }).map((f) => f.id),
     ).toEqual(["f2", "tray"]);
+  });
+
+  it("P9 pass 4a regression: narrows a court-scoped repair by court_id even when court_label is null (post-cutover fixture)", () => {
+    // Reproduces the real defect exactly: fixtures carry a real court_id but
+    // a frozen, null court_label — the shape every fixture has had since the
+    // P9 cutover. Comparing on court_label (the old code) never excludes
+    // anything, so a repair scoped to one court was quoted at the whole
+    // division's size — a rung-3 card in front of a rung-1 charge.
+    const scopedCourtId = "3d6c2e2a-0000-4000-8000-000000000009";
+    const otherCourtId = "3d6c2e2a-0000-4000-8000-000000000001";
+    const fixtures = [
+      ...Array.from({ length: 245 }, (_, i) => ({
+        id: `f${i}`,
+        scheduled_at: "2026-08-01T10:00:00.000Z",
+        court_id: otherCourtId,
+        court_label: null,
+      })),
+      ...Array.from({ length: 5 }, (_, i) => ({
+        id: `f${500 + i}`,
+        scheduled_at: "2026-08-01T10:00:00.000Z",
+        court_id: scopedCourtId,
+        court_label: null,
+      })),
+    ];
+    const narrowed = movableForRun(fixtures, "repair", { courts: [scopedCourtId] });
+    // THE ASSERTION THAT MATTERS: the narrowed COUNT, since that is what is
+    // priced. Before the fix this is 250 (every fixture survives the null
+    // court_label check) instead of the true 5.
+    expect(narrowed.length).toBe(5);
+    expect(narrowed.map((f) => f.id)).toEqual(["f500", "f501", "f502", "f503", "f504"]);
   });
 
   it("sizes the officials quote from the officials pack, not the division", () => {
