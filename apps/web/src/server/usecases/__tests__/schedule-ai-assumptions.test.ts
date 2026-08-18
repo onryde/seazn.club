@@ -47,6 +47,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
+import { createVenue, createCourt } from "../venues";
 import { aiPlanForDivision } from "../schedule-ai";
 import { aiPlanForCompetition } from "../competition-schedule-ai";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
@@ -86,11 +87,40 @@ interface SeededDivision {
   fixtureIds: string[];
 }
 
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` (real `courts.id`
+// values, since pass 1) — `seedDivision`'s callers keep passing readable
+// labels ("Court 1", "Court 2", …); this resolves (and caches, per org) a
+// real court per label so neither the raw insert below nor `legalPlan`'s
+// mocked model response (which echoes `SeededDivision.courts` back as
+// `court_label`) ever carries a free-text string.
+const courtsByOrg = new Map<string, { venueId: string; byName: Map<string, string> }>();
+
+async function courtIds(auth: AuthCtx, names: readonly string[]): Promise<string[]> {
+  let entry = courtsByOrg.get(auth.orgId);
+  if (!entry) {
+    const venue = await createVenue(auth, { name: "Main venue", sort: 0 });
+    entry = { venueId: venue.id, byName: new Map() };
+    courtsByOrg.set(auth.orgId, entry);
+  }
+  const out: string[] = [];
+  for (const name of names) {
+    const cached = entry.byName.get(name);
+    if (cached !== undefined) {
+      out.push(cached);
+      continue;
+    }
+    const court = await createCourt(auth, entry.venueId, { name, sort: entry.byName.size, tags: [] });
+    entry.byName.set(name, court.id);
+    out.push(court.id);
+  }
+  return out;
+}
+
 async function seedDivision(
   auth: AuthCtx,
   competitionId: string,
   name: string,
-  courts: string[] = ["Court 1", "Court 2"],
+  courtLabels: string[] = ["Court 1", "Court 2"],
 ): Promise<SeededDivision> {
   const slug = `${name.toLowerCase()}-${randomUUID().slice(0, 6)}`;
   const division = await createDivision(auth, competitionId, {
@@ -111,6 +141,7 @@ async function seedDivision(
       members: [],
     })),
   );
+  const courts = await courtIds(auth, courtLabels);
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
     values (${division.id}, ${sql.json(settingsConfig(courts) as never)}, ${TZ}, now())
