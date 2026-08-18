@@ -3958,5 +3958,6 @@
   "bracket.round.qualifier2": "Clasificatorio 2",
   "bracket.round.rung": "Peldaño {n}",
   "bracket.round.plain": "Ronda {n}",
-  "bracket.slot.bye": "Bye"
+  "bracket.slot.bye": "Bye",
+  "calendar.time_tbc": "Hora por confirmar"
 }

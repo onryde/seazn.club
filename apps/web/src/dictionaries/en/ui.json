@@ -3958,5 +3958,6 @@
   "bracket.round.qualifier2": "Qualifier 2",
   "bracket.round.rung": "Rung {n}",
   "bracket.round.plain": "Round {n}",
-  "bracket.slot.bye": "Bye"
+  "bracket.slot.bye": "Bye",
+  "calendar.time_tbc": "Time to be confirmed"
 }

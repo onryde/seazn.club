@@ -3958,5 +3958,6 @@
   "bracket.round.qualifier2": "Kwalificatie 2",
   "bracket.round.rung": "Trede {n}",
   "bracket.round.plain": "Ronde {n}",
-  "bracket.slot.bye": "Bye"
+  "bracket.slot.bye": "Bye",
+  "calendar.time_tbc": "Tijd nog te bepalen"
 }
