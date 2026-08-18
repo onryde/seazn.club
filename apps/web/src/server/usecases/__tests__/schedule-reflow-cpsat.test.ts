@@ -37,6 +37,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { applySchedule, autoSchedule, putScheduleSettings } from "../schedule";
+import { createVenue, createCourt } from "../venues";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 /** See `schedule-solver-telemetry.test.ts`'s identical constant and comment:
@@ -78,11 +79,18 @@ async function seedOrg(): Promise<AuthCtx> {
   return { orgId, via: "session", userId: null, role: "owner", keyId: null };
 }
 
+/** `courtNames` (P9 pass 3a): `ScheduleConfig.courts` is `CourtId[]` (real
+ *  ids) since pass 1 — a free-text "C1"/"C2" string no longer parses. One
+ *  shared venue, one real court per name, returned as a name->id map so
+ *  every call site below can keep addressing courts by name. Separate from
+ *  `config` (which callers use to override sessionWindows etc.) because
+ *  `config.courts` can never hold a real id until the courts it names exist. */
 async function seedStage(
   auth: AuthCtx,
   entrants: number,
   config: Partial<Parameters<typeof putScheduleSettings>[2]["config"]> = {},
-): Promise<{ divisionId: string; stageId: string }> {
+  courtNames: string[] = ["C1", "C2"],
+): Promise<{ divisionId: string; stageId: string; courts: Map<string, string> }> {
   const competition = await createCompetition(auth, {
     ends_on: "2030-12-31",
     name: "C4 " + randomUUID().slice(0, 6),
@@ -112,12 +120,18 @@ async function seedStage(
     name: "L",
     config: {},
   });
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const courts = new Map<string, string>();
+  for (let i = 0; i < courtNames.length; i++) {
+    const c = await createCourt(auth, venue.id, { name: courtNames[i]!, sort: i, tags: [] });
+    courts.set(courtNames[i]!, c.id);
+  }
   await putScheduleSettings(auth, division.id, {
     config: {
       startAt: T0,
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["C1", "C2"],
+      courts: [...courts.values()],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -126,7 +140,7 @@ async function seedStage(
     tz: "UTC",
   });
   await generateStageFixtures(auth, stage.id);
-  return { divisionId: division.id, stageId: stage.id };
+  return { divisionId: division.id, stageId: stage.id, courts };
 }
 
 describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
@@ -159,7 +173,7 @@ describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
         assignments: built.assignments.map((a) => ({
           fixture_id: a.fixture_id,
           scheduled_at: a.scheduled_at,
-          court_label: a.court_label,
+          court_id: a.court_id,
         })),
         source: "auto",
       });
@@ -170,11 +184,11 @@ describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
       // buildSchedule's output" swap this session's finding warns about,
       // ANY of them could silently move.
       const before = await sql<
-        { id: string; scheduled_at: Date; court_label: string }[]
-      >`select id, scheduled_at, court_label from fixtures where stage_id = ${stageId} order by id`;
+        { id: string; scheduled_at: Date; court_id: string }[]
+      >`select id, scheduled_at, court_id from fixtures where stage_id = ${stageId} order by id`;
       const toClear = before[0]!;
       await sql`
-        update fixtures set scheduled_at = null, court_label = null
+        update fixtures set scheduled_at = null, court_id = null
         where id = ${toClear.id}`;
 
       const out = await autoSchedule(auth, stageId, {
@@ -188,7 +202,7 @@ describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
         // Byte-identical: exact instant AND exact court, not merely "still
         // scheduled somewhere".
         expect(proposed.get(row.id)?.scheduled_at).toBe(row.scheduled_at.toISOString());
-        expect(proposed.get(row.id)?.court_label).toBe(row.court_label);
+        expect(proposed.get(row.id)?.court_id).toBe(row.court_id);
       }
 
       // The other half: the run demonstrably did something.
@@ -219,7 +233,7 @@ describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
         assignments: built.assignments.map((a) => ({
           fixture_id: a.fixture_id,
           scheduled_at: a.scheduled_at,
-          court_label: a.court_label,
+          court_id: a.court_id,
         })),
         source: "auto",
       });
@@ -229,12 +243,12 @@ describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
       // — the write gate would (correctly) refuse to create this board, and
       // refusing to create one is not the same as never having to read one
       // (same technique `schedule-reflow-verifier-widening.test.ts` uses).
-      const rows = await sql<{ id: string; scheduled_at: Date; court_label: string }[]>`
-        select id, scheduled_at, court_label from fixtures
+      const rows = await sql<{ id: string; scheduled_at: Date; court_id: string }[]>`
+        select id, scheduled_at, court_id from fixtures
         where stage_id = ${stageId} order by id`;
       const [a, b] = rows;
       await sql`
-        update fixtures set scheduled_at = ${a!.scheduled_at}, court_label = ${a!.court_label}
+        update fixtures set scheduled_at = ${a!.scheduled_at}, court_id = ${a!.court_id}
         where id = ${b!.id}`;
 
       // Ruling under test: REFLOW can no longer rearrange already-placed
@@ -284,24 +298,24 @@ describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
         assignments: built.assignments.map((a) => ({
           fixture_id: a.fixture_id,
           scheduled_at: a.scheduled_at,
-          court_label: a.court_label,
+          court_id: a.court_id,
         })),
         source: "auto",
       });
 
-      const rows = await sql<{ id: string; scheduled_at: Date; court_label: string }[]>`
-        select id, scheduled_at, court_label from fixtures
+      const rows = await sql<{ id: string; scheduled_at: Date; court_id: string }[]>`
+        select id, scheduled_at, court_id from fixtures
         where stage_id = ${stageId} order by id`;
       const [a, b, c] = rows;
       // Same forced collision as test 3.
       await sql`
-        update fixtures set scheduled_at = ${a!.scheduled_at}, court_label = ${a!.court_label}
+        update fixtures set scheduled_at = ${a!.scheduled_at}, court_id = ${a!.court_id}
         where id = ${b!.id}`;
       // The addition: a THIRD, distinct card loses its slot entirely, so
       // `known` no longer covers every schedulable fixture and the
       // fully-frozen fast path's guard does not fire.
       await sql`
-        update fixtures set scheduled_at = null, court_label = null
+        update fixtures set scheduled_at = null, court_id = null
         where id = ${c!.id}`;
 
       const out = await autoSchedule(auth, stageId, {
@@ -355,10 +369,12 @@ describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
       // ship. CP-SAT, which enforces round order pin-vs-movable (C1), can
       // place at most one of the two respecting order and must leave the
       // other genuinely unplaced (`no_slot`) rather than violate order.
-      const { stageId } = await seedStage(auth, 4, {
-        courts: ["C1"],
-        sessionWindows: [{ from: T0, to: at(600) }],
-      });
+      const { stageId, courts } = await seedStage(
+        auth,
+        4,
+        { sessionWindows: [{ from: T0, to: at(600) }] },
+        ["C1"],
+      );
 
       const rows = await sql<{ id: string; round_no: number }[]>`
         select id, round_no from fixtures where stage_id = ${stageId} order by round_no, id`;
@@ -375,10 +391,10 @@ describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
       // the single court for round 1's two free fixtures.
       await applySchedule(auth, stageId, {
         assignments: [
-          { fixture_id: pin!, scheduled_at: at(30), court_label: "C1" },
-          { fixture_id: round2Other!, scheduled_at: at(90), court_label: "C1" },
-          { fixture_id: round3a!, scheduled_at: at(300), court_label: "C1" },
-          { fixture_id: round3b!, scheduled_at: at(330), court_label: "C1" },
+          { fixture_id: pin!, scheduled_at: at(30), court_id: courts.get("C1")! },
+          { fixture_id: round2Other!, scheduled_at: at(90), court_id: courts.get("C1")! },
+          { fixture_id: round3a!, scheduled_at: at(300), court_id: courts.get("C1")! },
+          { fixture_id: round3b!, scheduled_at: at(330), court_id: courts.get("C1")! },
         ],
         source: "auto",
       });
@@ -461,14 +477,14 @@ describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
         assignments: built.assignments.map((a) => ({
           fixture_id: a.fixture_id,
           scheduled_at: a.scheduled_at,
-          court_label: a.court_label,
+          court_id: a.court_id,
         })),
         source: "auto",
       });
 
       const before = await sql<
-        { id: string; scheduled_at: Date; court_label: string }[]
-      >`select id, scheduled_at, court_label from fixtures where stage_id = ${stageId} order by id`;
+        { id: string; scheduled_at: Date; court_id: string }[]
+      >`select id, scheduled_at, court_id from fixtures where stage_id = ${stageId} order by id`;
 
       // Every fixture is already placed and legal — nothing unlocked and
       // unscheduled remains. `only_unlocked: true` still asks reflow to
@@ -483,7 +499,7 @@ describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
       const proposed = new Map(out.assignments.map((x) => [x.fixture_id, x]));
       for (const row of before) {
         expect(proposed.get(row.id)?.scheduled_at).toBe(row.scheduled_at.toISOString());
-        expect(proposed.get(row.id)?.court_label).toBe(row.court_label);
+        expect(proposed.get(row.id)?.court_id).toBe(row.court_id);
       }
       expect(out.solver.moved).toBe(0);
     },
