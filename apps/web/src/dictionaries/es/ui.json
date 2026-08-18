@@ -2548,6 +2548,7 @@
   "pay.methodHint": "Preseleccionado cuando configuras la inscripción en una nueva división; cada división aún puede elegir la suya.",
   "pay.methodOffline": "Pagar al organizador",
   "pay.methodStripe": "Tarjeta al inscribirse",
+  "pay.methodStripeNeedsConnect": "Conecta Stripe arriba para ofrecer pagos con tarjeta — mientras tanto, los inscritos pagan al organizador.",
   "pay.cashTitle": "Instrucciones de pago en efectivo / transferencia bancaria",
   "pay.cashHintPre": "Se muestran a los inscritos de las divisiones de pago al organizador y se incluyen en su correo de confirmación. Las divisiones pueden anularlas. Se admite el formato, y ",
   "pay.cashHintPost": " se convierte en el número de referencia generado de cada inscrito, p. ej. «indica {{reference}} en tu transferencia».",

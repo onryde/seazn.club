@@ -2593,6 +2593,7 @@
   "pay.methodHint": "Présélectionné lorsque vous configurez l'inscription sur une nouvelle division — chaque division peut toujours choisir la sienne.",
   "pay.methodOffline": "Payer l'organisateur",
   "pay.methodStripe": "Carte à l'inscription",
+  "pay.methodStripeNeedsConnect": "Connectez Stripe ci-dessus pour proposer les paiements par carte — en attendant, les inscrits paient l'organisateur.",
   "pay.cashTitle": "Instructions pour espèces / virement bancaire",
   "pay.cashHintPre": "Affichées aux inscrits des divisions « payer l'organisateur » et incluses dans leur e-mail de confirmation. Les divisions peuvent les remplacer. La mise en forme est prise en charge, et ",
   "pay.cashHintPost": " devient le numéro de référence généré de chaque inscrit — p. ex. « indiquez {{reference}} sur votre virement ».",

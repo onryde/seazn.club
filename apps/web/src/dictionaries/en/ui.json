@@ -2593,6 +2593,7 @@
   "pay.methodHint": "Preselected when you set up registration on a new division — each division can still choose its own.",
   "pay.methodOffline": "Pay the organiser",
   "pay.methodStripe": "Card at sign-up",
+  "pay.methodStripeNeedsConnect": "Connect Stripe above to offer card payments — until then, entrants pay the organiser.",
   "pay.cashTitle": "Cash / bank transfer instructions",
   "pay.cashHintPre": "Shown to registrants of pay-the-organiser divisions and included in their confirmation email. Divisions can override these. Formatting is supported, and ",
   "pay.cashHintPost": " becomes each registrant's generated reference number — e.g. “quote {{reference}} on your transfer”.",
