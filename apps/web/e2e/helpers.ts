@@ -772,8 +772,10 @@ export async function activeOrg(page: Page): Promise<OrgInfo> {
 /** Same lookup as {@link activeOrg}, for a helper that only has an
  *  `APIRequestContext` (no `Page` to read cookies off of) — an
  *  `APIRequestContext` shares the browser context's cookie jar, readable via
- *  `storageState()` instead of `page.context().cookies()`. */
-async function activeOrgIdFromRequest(request: APIRequestContext): Promise<string> {
+ *  `storageState()` instead of `page.context().cookies()`. Exported for a
+ *  spec that needs the raw org id itself (e.g. to create a court carrying
+ *  specific tags — {@link seedVenueWithCourts} has no per-court tags param). */
+export async function activeOrgIdFromRequest(request: APIRequestContext): Promise<string> {
   const { data: orgs } = await apiJson<OrgInfo[]>(request, "/api/orgs");
   if (!orgs?.length) throw new Error("no org memberships for the current user");
   const state = await request.storageState();
