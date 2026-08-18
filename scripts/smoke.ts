@@ -12424,13 +12424,13 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
     // clash. Courts are entities now and a fixture can only sit on a real one,
     // so the edit has to be made non-clashing HONESTLY: same court, a slot an
     // hour past the last thing the solver placed, which nothing else occupies.
-    const lastStart = assignments.reduce(
-      (max, a) => (Date.parse(a.scheduled_at) > max ? Date.parse(a.scheduled_at) : max),
-      0,
-    );
+    // An hour past the last slot was the first attempt and it 409s too — it
+    // lands outside the competition window. The edit that is clash-free BY
+    // CONSTRUCTION is unplacing the card: `PatchFixture.court_id` is nullable
+    // (schemas.ts), a tray card occupies no slot, and the point of the check
+    // is only that the board still accepts a change after refusing one.
     const legal = await v1(admin, `/api/v1/fixtures/${sharer.fixture_id}`, "PATCH", {
-      scheduled_at: new Date(lastStart + 60 * 60_000).toISOString(),
-      court_id: otherCourtId,
+      court_id: null,
     });
     check("v1 W4: an unrelated edit on the same board still applies", legal.status === 200);
   }
@@ -14664,6 +14664,10 @@ async function cleanup(tag: string): Promise<void> {
     // constraint that exists to protect real data.
     const doomedOrgs = sql`select id from organizations
                            where created_by in (select id from users where email = any(${emails}))`;
+    // `fixtures.court_id` is ON DELETE RESTRICT as well (same A3 reasoning), so
+    // the cards have to let go of their courts before the courts can go.
+    await sql`update fixtures set court_id = null, venue_id = null
+              where org_id in (${doomedOrgs})`;
     await sql`delete from court_exceptions where org_id in (${doomedOrgs})`;
     await sql`delete from court_hours where org_id in (${doomedOrgs})`;
     await sql`delete from courts where org_id in (${doomedOrgs})`;
