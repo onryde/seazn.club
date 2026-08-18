@@ -360,6 +360,46 @@ describe("joint apply — pure contracts", () => {
     ).toThrow();
   });
 
+  it("accepts court_id and rejects the legacy court_label outright (P9 pass 3b)", () => {
+    // The regression this pass exists to close: jointApplyDivisions()
+    // (ai-competition-console.tsx) and ai-joint-apply.ts used to send
+    // court_label, and this schema — .strict() since pass 3a's per-stage
+    // twin, converted to court_id in this same pass (4ae08b573) — would
+    // 400 every one of those requests rather than silently accept them.
+    const base = {
+      division_id: "11111111-0000-4000-8000-000000000001",
+      expected_seq: 0,
+      assignments: [
+        {
+          fixture_id: "22222222-0000-4000-8000-000000000002",
+          scheduled_at: "2026-08-01T09:00:00.000Z",
+        },
+      ],
+    };
+    expect(() =>
+      ApplyCompetitionScheduleRequest.parse({
+        divisions: [{ ...base, assignments: [{ ...base.assignments[0]!, court_id: randomUUID() }] }],
+        source: "ai",
+      }),
+    ).not.toThrow();
+    // .strict() means a leftover court_label key is a loud 400, never a
+    // silently-stripped-and-then-required-field-missing error that names
+    // the wrong thing.
+    expect(() =>
+      ApplyCompetitionScheduleRequest.parse({
+        divisions: [{ ...base, assignments: [{ ...base.assignments[0]!, court_label: "Court 1" }] }],
+        source: "ai",
+      }),
+    ).toThrow();
+    // Not merely a format check: a non-uuid court_id must ALSO be refused.
+    expect(() =>
+      ApplyCompetitionScheduleRequest.parse({
+        divisions: [{ ...base, assignments: [{ ...base.assignments[0]!, court_id: "Court 1" }] }],
+        source: "ai",
+      }),
+    ).toThrow();
+  });
+
   it("orders equal-rank, same-reason conflicts by their canonical detail, not by fixtureId (C3 review finding 6)", () => {
     // An empty `order` sends every conflict through the identical UNRANKED
     // fallback, so the comparator falls straight through rank and reason to
