@@ -13,6 +13,7 @@
 // reversed range and turn its schedule page into a 500. The last test here is
 // the one that keeps that distinction from being "tidied away".
 import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 import {
   ENDS_BEFORE_STARTS,
   PutScheduleSettings,
@@ -20,10 +21,18 @@ import {
   WINDOW_ENDS_BEFORE_STARTS,
 } from "@/server/api-v1/schemas";
 
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` (real
+// `courts.id` uuids). This suite is pure schema validation — no DB, no
+// `HAS_DB` gate — so a random uuid satisfies the shape without a live
+// courts row to seed against. NOTE: `blackouts[].court` (below) is a
+// SEPARATE, free-text `z.string().max(100).optional()` field (schemas.ts)
+// — it stays a plain label and is deliberately left untouched.
+const COURT_1 = randomUUID();
+
 const BASE = {
   matchMinutes: 30,
   gapMinutes: 0,
-  courts: ["Court 1"],
+  courts: [COURT_1],
   perEntrantMinRest: 0,
   blackouts: [],
   sessionWindows: [],
