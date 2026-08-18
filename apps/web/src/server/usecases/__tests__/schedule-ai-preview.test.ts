@@ -78,28 +78,35 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
+import { createVenue, createCourt } from "../venues";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const TZ = "Europe/London";
 
-const SETTINGS_CONFIG = {
-  startAt: "2026-08-01T09:00:00.000Z",
-  matchMinutes: 30,
-  gapMinutes: 0,
-  courts: ["Court 1", "Court 2"],
-  perEntrantMinRest: 20,
-  blackouts: [],
-  sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T18:00:00.000Z" }],
-  constraints: {
-    restMin: 20,
-    noBackToBack: false,
-    startWindows: [],
-    fieldFairness: "balance",
-    parallelism: "mixed",
-    crossPersonClash: "hard",
-  },
-};
+// P9 pass 3b: `courts` filled in per call — `ScheduleConfig.courts` is
+// `z.array(CourtId)` (real `courts.id` values, since pass 1), and nothing in
+// this file asserts on a court's identity, so a fresh pair per `seedDivision`
+// call is simpler than a cached name->id resolver.
+function settingsConfig(courts: string[]) {
+  return {
+    startAt: "2026-08-01T09:00:00.000Z",
+    matchMinutes: 30,
+    gapMinutes: 0,
+    courts,
+    perEntrantMinRest: 20,
+    blackouts: [],
+    sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T18:00:00.000Z" }],
+    constraints: {
+      restMin: 20,
+      noBackToBack: false,
+      startWindows: [],
+      fieldFairness: "balance",
+      parallelism: "mixed",
+      crossPersonClash: "hard",
+    },
+  };
+}
 
 const INSTRUCTION = "at most 2 matches a day and keep mornings relaxed, and moar vibes pls";
 
@@ -165,9 +172,12 @@ async function seedDivision(
       members: [],
     })),
   );
+  const venue = await createVenue(auth, { name: "Main venue", sort: 0 });
+  const court1 = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+  const court2 = await createCourt(auth, venue.id, { name: "Court 2", sort: 1, tags: [] });
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${division.id}, ${sql.json(SETTINGS_CONFIG)}, ${TZ}, now())
+    values (${division.id}, ${sql.json(settingsConfig([court1.id, court2.id]))}, ${TZ}, now())
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
   const [stage] = await createStages(auth, division.id, {
     seq: 1,
