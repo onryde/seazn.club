@@ -152,10 +152,14 @@ async function seedSeededDoubleElimStage(entrantCount: number) {
       kind: "double_elim",
       name: "DE",
       config: { bracketReset: true },
-      seeding: {
-        source: "previous",
-        take: [{ kind: "rankRange", from: 1, to: entrantCount }],
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: entrantCount }] }],
         placement: "rank_order",
+        // F2: was `.seeding` (the old propose/confirm-at-setup vocabulary,
+        // implicit in which field was set) — "setup" reproduces that
+        // behaviour exactly. This test only cares about bracket structure
+        // (round role persistence), not when slots resolve.
+        timing: "setup",
       },
     },
   ]);

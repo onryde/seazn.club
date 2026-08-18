@@ -16,7 +16,7 @@ vi.mock("@/components/ui/confirm-provider", () => ({
 // round" and misnames it. roundRoleFor ranks each round within its own lane.
 const STAGE = {
   id: "s1", seq: 0, kind: "double_elim", name: "DE",
-  config: {}, qualification: null, status: "active",
+  config: {}, progression: null, status: "active",
 };
 const baseProps = {
   divisionId: "d1", divisionSeq: 5, competitionId: "c1", orgSlug: "org", compSlug: "comp", divSlug: "div",

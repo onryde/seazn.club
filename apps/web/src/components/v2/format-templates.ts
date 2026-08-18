@@ -2,12 +2,33 @@
 // division Settings tab so "format" means the same thing in both places —
 // League / Knockout / Groups + Knockout…, i.e. the stage structure.
 // Match rules live in match-rules.tsx; this file is only the graph.
+//
+// F2 (unified progression field): `qualification` is gone — every template
+// below emits `progression` (mirrors api-v1/schemas.ts's ProgressionSchema
+// field-for-field: sources[].take[]/placement/map?/timing). Collapse (owner
+// ruling 4, F2 plan Decision 2): `topN: n` is now `rankRange{from:1,to:n}`;
+// `losersOfRound` is now `roundLosers`. Every writer here sets
+// `timing: "on_complete"` — Decision 1's explicit statement that no writer's
+// default timing changes in this session; the picker still waits for its
+// source stage to complete before generating, exactly as before.
+//
+// `take`'s element type reuses the engine's own TakeRule (rather than a
+// hand-rolled `unknown[]`/`{kind:string}[]` restated here) so this file and
+// detectTemplate's own parameter type below can't drift apart the way
+// api-v1/schemas.ts's zod TakeRuleSchema and this plain-TS shape already
+// have to be kept in lockstep by hand (see that file's own comment).
+import type { TakeRule } from "@seazn/engine/competition";
 
 export interface StageDraft {
   kind: string;
   name: string;
   config: Record<string, unknown>;
-  qualification: Record<string, unknown> | null;
+  progression: {
+    sources: { stage: "previous"; take: TakeRule[] }[];
+    placement: "rank_order" | "snake" | "seeded_map";
+    map?: { slot: string; source: string }[];
+    timing: "setup" | "on_complete";
+  } | null;
 }
 
 export interface TemplateKnobs {
@@ -28,15 +49,19 @@ export const STAGE_TEMPLATES: {
     key: "league",
     label: "League",
     help: "Single round robin, table decides.",
-    build: () => [{ kind: "league", name: "League", config: { legs: 1 }, qualification: null }],
+    build: () => [{ kind: "league", name: "League", config: { legs: 1 }, progression: null }],
   },
   {
     key: "league_ko",
     label: "League + Finals",
     help: "Round robin, then top N knockout.",
     build: (q) => [
-      { kind: "league", name: "League", config: { legs: 1 }, qualification: null },
-      { kind: "knockout", name: "Finals", config: {}, qualification: { topN: q } },
+      { kind: "league", name: "League", config: { legs: 1 }, progression: null },
+      { kind: "knockout", name: "Finals", config: {}, progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
+        placement: "rank_order",
+        timing: "on_complete",
+      } },
     ],
   },
   {
@@ -48,17 +73,29 @@ export const STAGE_TEMPLATES: {
         kind: "group",
         name: "Group stage",
         config: { legs: 1, pools: { count: 2 } },
-        qualification: null,
+        progression: null,
       },
       {
         kind: "knockout",
         name: "Knockout",
         config: {},
-        qualification: {
-          take: Array.from({ length: q }, (_, i) => ({
-            pool: i % 2 === 0 ? "A" : "B",
-            rank: Math.floor(i / 2) + 1,
-          })),
+        progression: {
+          sources: [
+            {
+              stage: "previous",
+              take: [
+                {
+                  kind: "picks",
+                  picks: Array.from({ length: q }, (_, i) => ({
+                    pool: i % 2 === 0 ? "A" : "B",
+                    rank: Math.floor(i / 2) + 1,
+                  })),
+                },
+              ],
+            },
+          ],
+          placement: "rank_order",
+          timing: "on_complete",
         },
       },
     ],
@@ -68,8 +105,12 @@ export const STAGE_TEMPLATES: {
     label: "Group + Stepladder",
     help: "Round robin, then a stepladder final — lowest seed climbs.",
     build: (q) => [
-      { kind: "league", name: "League", config: { legs: 1 }, qualification: null },
-      { kind: "stepladder", name: "Stepladder finals", config: {}, qualification: { topN: q } },
+      { kind: "league", name: "League", config: { legs: 1 }, progression: null },
+      { kind: "stepladder", name: "Stepladder finals", config: {}, progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
+        placement: "rank_order",
+        timing: "on_complete",
+      } },
     ],
   },
   {
@@ -77,8 +118,12 @@ export const STAGE_TEMPLATES: {
     label: "Group + Playoffs (IPL style)",
     help: "Round robin, then Qualifier 1, Eliminator, Qualifier 2 and the Final — the top two get a second life.",
     build: () => [
-      { kind: "league", name: "League", config: { legs: 1 }, qualification: null },
-      { kind: "page_playoff", name: "Playoffs", config: {}, qualification: { topN: 4 } },
+      { kind: "league", name: "League", config: { legs: 1 }, progression: null },
+      { kind: "page_playoff", name: "Playoffs", config: {}, progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+        placement: "rank_order",
+        timing: "on_complete",
+      } },
     ],
   },
   {
@@ -86,35 +131,35 @@ export const STAGE_TEMPLATES: {
     label: "Swiss",
     help: "Score-group pairings, fixed rounds.",
     build: () => [
-      { kind: "swiss", name: "Swiss", config: { rounds: 5 }, qualification: null },
+      { kind: "swiss", name: "Swiss", config: { rounds: 5 }, progression: null },
     ],
   },
   {
     key: "knockout",
     label: "Knockout",
     help: "Single elimination bracket.",
-    build: () => [{ kind: "knockout", name: "Knockout", config: {}, qualification: null }],
+    build: () => [{ kind: "knockout", name: "Knockout", config: {}, progression: null }],
   },
   {
     key: "double_elim",
     label: "Double elimination",
     help: "Losers bracket + grand final (Pro).",
     build: () => [
-      { kind: "double_elim", name: "Double elimination", config: {}, qualification: null },
+      { kind: "double_elim", name: "Double elimination", config: {}, progression: null },
     ],
   },
   {
     key: "triple_rr",
     label: "Triple round robin",
     help: "Everyone plays everyone three times.",
-    build: () => [{ kind: "league", name: "Triple RR", config: { legs: 3 }, qualification: null }],
+    build: () => [{ kind: "league", name: "Triple RR", config: { legs: 3 }, progression: null }],
   },
   {
     key: "americano",
     label: "Americano (padel)",
     help: "Individuals rotate partners each round; personal points (Pro).",
     build: () => [
-      { kind: "americano", name: "Americano", config: { mode: "americano", courtCount: 2, rounds: 7 }, qualification: null },
+      { kind: "americano", name: "Americano", config: { mode: "americano", courtCount: 2, rounds: 7 }, progression: null },
     ],
   },
   {
@@ -122,7 +167,7 @@ export const STAGE_TEMPLATES: {
     label: "Mexicano (padel)",
     help: "Re-rank each round: 1+4 vs 2+3 from live points (Pro).",
     build: () => [
-      { kind: "americano", name: "Mexicano", config: { mode: "mexicano", courtCount: 2, rounds: 7 }, qualification: null },
+      { kind: "americano", name: "Mexicano", config: { mode: "mexicano", courtCount: 2, rounds: 7 }, progression: null },
     ],
   },
   {
@@ -130,7 +175,7 @@ export const STAGE_TEMPLATES: {
     label: "Ladder",
     help: "Open standings; players challenge upward over a long window (Pro).",
     build: () => [
-      { kind: "ladder", name: "Ladder", config: { challengeRange: 3 }, qualification: null },
+      { kind: "ladder", name: "Ladder", config: { challengeRange: 3 }, progression: null },
     ],
   },
   {
@@ -138,12 +183,16 @@ export const STAGE_TEMPLATES: {
     label: "Knockout + Plate",
     help: "Main knockout draw; round-1 losers play a plate bracket for a second chance.",
     build: (q) => [
-      { kind: "knockout", name: "Main draw", config: {}, qualification: null },
+      { kind: "knockout", name: "Main draw", config: {}, progression: null },
       {
         kind: "knockout",
         name: "Plate",
         config: {},
-        qualification: { losersOfRound: { round: 1, count: q } },
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: q }] }],
+          placement: "rank_order",
+          timing: "on_complete",
+        },
       },
     ],
   },
@@ -152,8 +201,12 @@ export const STAGE_TEMPLATES: {
     label: "Qualifying + Main draw",
     help: "A smaller knockout decides who advances into the main knockout draw.",
     build: (q) => [
-      { kind: "knockout", name: "Qualifying", config: {}, qualification: null },
-      { kind: "knockout", name: "Main draw", config: {}, qualification: { topN: q } },
+      { kind: "knockout", name: "Qualifying", config: {}, progression: null },
+      { kind: "knockout", name: "Main draw", config: {}, progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
+        placement: "rank_order",
+        timing: "on_complete",
+      } },
     ],
   },
 ];
@@ -175,7 +228,12 @@ export function detectTemplate(
   stages: {
     kind: string;
     config?: Record<string, unknown> | null;
-    qualification?: Record<string, unknown> | null;
+    // Reuses StageDraft's own progression shape rather than a second
+    // hand-rolled partial (was `{ sources: { take: { kind: string }[] }[] }`)
+    // — that partial drifting one level behind StageDraft's real shape (no
+    // `stage`, then no `placement`/`timing`) is what made every
+    // buildTemplateStages() round-trip below fail to typecheck.
+    progression?: StageDraft["progression"];
   }[],
 ): string | null {
   const kinds = stages.map((s) => s.kind).join("+");
@@ -191,11 +249,12 @@ export function detectTemplate(
   if (kinds === "knockout") return "knockout";
   if (kinds === "double_elim") return "double_elim";
   if (kinds === "knockout+knockout") {
-    // Same kind sequence, disambiguated by the second stage's qualification
-    // shape — losersOfRound (KO+Plate) vs topN (Qualifying+Main draw).
-    const q2 = stages[1]?.qualification;
-    if (q2 && "losersOfRound" in q2) return "ko_plate";
-    if (q2 && "topN" in q2) return "qualifying_main";
+    // Same kind sequence, disambiguated by the second stage's progression
+    // take-rule kind — roundLosers (KO+Plate) vs rankRange (Qualifying+Main
+    // draw). F2: was losersOfRound/topN key-presence on `.qualification`.
+    const take = stages[1]?.progression?.sources[0]?.take ?? [];
+    if (take.some((t) => t.kind === "roundLosers")) return "ko_plate";
+    if (take.some((t) => t.kind === "rankRange")) return "qualifying_main";
     return null;
   }
   if (kinds === "americano") {

@@ -129,11 +129,17 @@ function entrantsFor(kind: "individual" | "team" | "pair", n: number) {
 }
 
 // ── stage templates (mirror division-builder) ───────────────────────────────
+// F2 (unified progression field): was `qualification` — mirrors
+// components/v2/format-templates.ts's own conversion field-for-field.
+// `topN: n` collapses onto `rankRange{from:1,to:n}` (owner ruling 4); the
+// bare `{take: [...]}` (picks) shape becomes a kind-tagged `picks` TakeRule.
+// `timing: "on_complete"` throughout — every one of these templates
+// reproduces today's auto-seed-on-complete behaviour unchanged (Decision 1).
 type StageSpec = {
   kind: string;
   name: string;
   config: Record<string, unknown>;
-  qualification: Record<string, unknown> | null;
+  progression: Record<string, unknown> | null;
 };
 const TEMPLATES: Record<string, (q: number) => StageSpec[]> = {
   league: () => [
@@ -141,7 +147,7 @@ const TEMPLATES: Record<string, (q: number) => StageSpec[]> = {
       kind: "league",
       name: "League",
       config: { legs: 1 },
-      qualification: null,
+      progression: null,
     },
   ],
   league_ko: (q) => [
@@ -149,13 +155,17 @@ const TEMPLATES: Record<string, (q: number) => StageSpec[]> = {
       kind: "league",
       name: "League",
       config: { legs: 1 },
-      qualification: null,
+      progression: null,
     },
     {
       kind: "knockout",
       name: "Finals",
       config: {},
-      qualification: { topN: q },
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
+        placement: "rank_order",
+        timing: "on_complete",
+      },
     },
   ],
   groups_ko: (q) => [
@@ -163,17 +173,29 @@ const TEMPLATES: Record<string, (q: number) => StageSpec[]> = {
       kind: "group",
       name: "Group stage",
       config: { legs: 1, pools: { count: 2 } },
-      qualification: null,
+      progression: null,
     },
     {
       kind: "knockout",
       name: "Knockout",
       config: {},
-      qualification: {
-        take: Array.from({ length: q }, (_, i) => ({
-          pool: i % 2 === 0 ? "A" : "B",
-          rank: Math.floor(i / 2) + 1,
-        })),
+      progression: {
+        sources: [
+          {
+            stage: "previous",
+            take: [
+              {
+                kind: "picks",
+                picks: Array.from({ length: q }, (_, i) => ({
+                  pool: i % 2 === 0 ? "A" : "B",
+                  rank: Math.floor(i / 2) + 1,
+                })),
+              },
+            ],
+          },
+        ],
+        placement: "rank_order",
+        timing: "on_complete",
       },
     },
   ],
@@ -182,16 +204,16 @@ const TEMPLATES: Record<string, (q: number) => StageSpec[]> = {
       kind: "swiss",
       name: "Swiss",
       config: { rounds: 5 },
-      qualification: null,
+      progression: null,
     },
   ],
-  knockout: () => [{ kind: "knockout", name: "Knockout", config: {}, qualification: null }],
+  knockout: () => [{ kind: "knockout", name: "Knockout", config: {}, progression: null }],
   double_elim: () => [
     {
       kind: "double_elim",
       name: "Double elimination",
       config: {},
-      qualification: null,
+      progression: null,
     },
   ],
   group_stepladder: (q) => [
@@ -199,13 +221,17 @@ const TEMPLATES: Record<string, (q: number) => StageSpec[]> = {
       kind: "league",
       name: "League",
       config: { legs: 1 },
-      qualification: null,
+      progression: null,
     },
     {
       kind: "stepladder",
       name: "Stepladder finals",
       config: {},
-      qualification: { topN: q },
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
+        placement: "rank_order",
+        timing: "on_complete",
+      },
     },
   ],
   // Jul3/08 formats
@@ -214,7 +240,7 @@ const TEMPLATES: Record<string, (q: number) => StageSpec[]> = {
       kind: "league",
       name: "Triple RR",
       config: { legs: 3 },
-      qualification: null,
+      progression: null,
     },
   ],
 };
@@ -955,7 +981,7 @@ async function main() {
       })();
       let note = `${first.played}/${first.total}`;
       // Second stage only when the first fully decided. Completing stage 1
-      // FIRST is what resolves qualification (topN/take) into the next
+      // FIRST is what resolves progression (rankRange/picks) into the next
       // stage's config.qualified — generating without it would bracket every
       // division entrant instead of the qualifiers.
       if (stages[1] && first.played === first.total) {
@@ -1107,10 +1133,11 @@ async function seedArchivedSlotHolder(competitionName: string): Promise<void> {
  * point of seeding this is the CONTRAST between real group fixtures and the
  * later two stages still sitting in their TBD/seeded state. Instantiation
  * itself never generates fixtures for ANY stage (P7 ruling — see
- * templates.ts's comment on `stageResults.push`: a `.seeding` stage mints
- * synthetic entrants at generate time, so generating eagerly at
- * instantiation, before real entrants exist, would format-lock the
- * division at birth). Fixtures come from the existing Generate action
+ * templates.ts's comment on `stageResults.push`: a setup-timing
+ * (propose/confirm) stage mints synthetic entrants at generate time, so
+ * generating eagerly at instantiation, before real entrants exist, would
+ * format-lock the division at birth). Fixtures come from the existing
+ * Generate action
  * (`playStageAfterStart` below), same as every other division in this file.
  *
  * Resume-safe by NAME, checked before creating — unlike the PLAN loop's
@@ -1177,7 +1204,8 @@ async function seedTemplateCompetition(): Promise<void> {
   }
   if (stage1.status === "pending") {
     // ratio 0: generate + publish the schedule, decide nothing. Stage 1
-    // shows real fixtures; stages 2/3 stay TBD off their `.seeding` rules.
+    // shows real fixtures; stages 2/3 stay TBD off their setup-timing
+    // progression rules.
     const { total } = await playStageAfterStart(division.id, stage1.id, "cricket", "t20", 0);
     console.log(
       `${NAME} / ${division.name} (from template t20-super8): ${stages.length} stages, stage 1 generated ${total} fixtures, 0 played`,

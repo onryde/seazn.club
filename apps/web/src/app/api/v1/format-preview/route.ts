@@ -11,8 +11,14 @@ const Body = z.object({
         kind: z.string().min(1),
         name: z.string().min(1).max(80),
         config: z.record(z.string(), z.unknown()).default({}),
-        qualification: z.unknown().nullable().default(null),
-      }),
+        progression: z.unknown().nullable().default(null),
+      })
+      // Strict for the same reason CreateStage is (F2): a legacy
+      // `qualification`/`seeding` key used to be dropped in silence here, so an
+      // old client got a 200 and a preview of a format it had not asked for —
+      // the most misleading possible answer, since a preview exists precisely
+      // to show an organiser what they are about to commit to.
+      .strict(),
     )
     .min(1)
     .max(4),

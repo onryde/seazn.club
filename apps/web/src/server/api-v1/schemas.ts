@@ -489,106 +489,135 @@ export const CheckinLink = z.object({ url: z.string(), expires_at: z.string() })
 // Stages
 // ---------------------------------------------------------------------------
 
-// PROMPT-59 §4 — typed qualification spec, so a bad shape 400s at the edge
-// instead of throwing deep inside the engine. Mirrors engine
-// `QualificationSpec` (TakePicks | TopN | BestOfRank | CombinedQualification).
-// `take[].pool` matches the pool KEY ("A"); the display name ("Pool A") is
-// also accepted — the engine normalises.
-const PoolRankPickS = z.object({ pool: z.string().min(1), rank: z.number().int().min(1) });
-const TakePicksS = z
-  .object({ from: z.string().optional(), take: z.array(PoolRankPickS).min(1) })
-  .strict();
-const TopNS = z.object({ from: z.string().optional(), topN: z.number().int().min(1) }).strict();
-const BestOfRankS = z
-  .object({
-    from: z.string().optional(),
-    bestOfRank: z.object({
-      rank: z.number().int().min(1),
-      count: z.number().int().min(1),
-      normaliseUnequalPools: z.boolean().optional(),
-    }),
-  })
-  .strict();
-// L3/#414 — losers of a completed bracket round (KO->plate, qualifying-KO
-// wildcards). `round` is a bracket-wiring label, never an arithmetic
-// quantity (rounds number sparsely — see qualification.ts's RoundLosers).
-// `count` is REQUIRED, mirroring the engine exactly (a3ad1953): the engine's
-// `qualificationSize` reads `losersOfRound.count` unconditionally, so an
-// optional count here would let a malformed spec 400 loudly at create time
-// only to 500 later, deep inside a read path that must never throw.
-const RoundLosersS = z
-  .object({
-    from: z.string().optional(),
-    losersOfRound: z.object({
-      round: z.number().int().min(1),
-      count: z.number().int().min(1),
-    }),
-  })
-  .strict();
-export type QualificationSpecInput =
-  | z.infer<typeof TakePicksS>
-  | z.infer<typeof TopNS>
-  | z.infer<typeof BestOfRankS>
-  | z.infer<typeof RoundLosersS>
-  | { from?: string; combine: QualificationSpecInput[] };
-export const QualificationSpecSchema: z.ZodType<QualificationSpecInput> = z.lazy(() =>
-  z.union([
-    TakePicksS,
-    TopNS,
-    BestOfRankS,
-    RoundLosersS,
-    z
-      .object({ from: z.string().optional(), combine: z.array(QualificationSpecSchema).min(2).max(8) })
-      .strict(),
-  ]),
-);
-
-// D4a design doc (P5) — TBD placeholder fixtures + the propose/confirm
-// cross-stage fill flow. Separate from QualificationSpec above: `.seeding` is
-// declared on the TARGET stage, can name ANY earlier stage as its source (not
-// just seq-1), and controls bracket SEEDING (snake / explicit map), neither
-// of which QualificationSpec models. A stage declares ONE of the two — a
-// stage with `.seeding` set goes through the new propose/confirm flow instead
-// of the old auto-seed-on-complete `qualification` path.
+// F2 (unified progression field) — one ProgressionSchema replaces the two
+// prior vocabularies: QualificationSpecSchema (topN | bestOfRank |
+// losersOfRound | take/picks | combine, auto-seed-on-complete only) and
+// StageSeedingSchema (rankRange | topNPerGroup | bestNth, source/take/
+// placement/map, TBD-at-setup + propose/confirm). Mirrors the plain-TS shape
+// in @seazn/engine/competition (TakeRule/ProgressionSource/SeededMapEntry)
+// field-for-field — usecases import THOSE types, not these zod schemas, so a
+// shape drift here would 400 at the edge without tripping tsc. Keep them in
+// lockstep by hand.
 //
-// Mirrors the plain-TS shape in usecases/stage-seeding.ts (TakeRule /
-// Placement / SeededMapEntry) field-for-field — the usecase imports THOSE
-// types, not these zod schemas, so a shape drift here would 400 at the edge
-// without tripping tsc. Keep them in lockstep by hand.
+// Collapse (owner ruling 4, F2 plan Decision 2): `rankRange` survives `topN`
+// (topN:n IS rankRange{from:1,to:n}); `bestNth` survives `bestOfRank`,
+// absorbing its `normaliseUnequalPools` field (Decision 2b — the merged rule
+// still refuses unequal pool sizes by default; setting the flag silences the
+// refusal, carried forward as a documented, production-unreachable gap, not
+// newly closed here). `picks`/`roundLosers` are qualification's
+// TakePicks/RoundLosers, unchanged in meaning, given the kind-tagged shape
+// the rest of this union already uses. `take[].pool` / `picks[].pool` match
+// the pool KEY ("A"); the display name ("Pool A") is also accepted — the
+// engine normalises.
+const PoolRankPickS = z.object({ pool: z.string().min(1), rank: z.number().int().min(1) }).strict();
 const RankRangeTakeS = z
   .object({ kind: z.literal("rankRange"), from: z.number().int().min(1), to: z.number().int().min(1) })
   .strict()
   .refine((t) => t.to >= t.from, { message: "rankRange: to must be >= from", path: ["to"] });
 const TopNPerGroupTakeS = z.object({ kind: z.literal("topNPerGroup"), n: z.number().int().min(1).max(16) }).strict();
 const BestNthTakeS = z
-  .object({ kind: z.literal("bestNth"), nth: z.number().int().min(1), count: z.number().int().min(1) })
+  .object({
+    kind: z.literal("bestNth"),
+    nth: z.number().int().min(1),
+    count: z.number().int().min(1),
+    normaliseUnequalPools: z.boolean().optional(),
+  })
   .strict();
-export const TakeRuleSchema = z.union([RankRangeTakeS, TopNPerGroupTakeS, BestNthTakeS]);
+const PicksTakeS = z.object({ kind: z.literal("picks"), picks: z.array(PoolRankPickS).min(1) }).strict();
+// L3/#414 — losers of a completed bracket round (KO->plate, qualifying-KO
+// wildcards). `round` is a bracket-wiring label, never an arithmetic
+// quantity (rounds number sparsely — see progression.ts's roundLosers).
+// `count` is REQUIRED, mirroring the engine exactly: `progressionSize` reads
+// `roundLosers.count` unconditionally, so an optional count here would let a
+// malformed spec 400 loudly at create time only to 500 later, deep inside a
+// read path that must never throw.
+const RoundLosersTakeS = z
+  .object({ kind: z.literal("roundLosers"), round: z.number().int().min(1), count: z.number().int().min(1) })
+  .strict();
+export const TakeRuleSchema = z.union([RankRangeTakeS, TopNPerGroupTakeS, BestNthTakeS, PicksTakeS, RoundLosersTakeS]);
 
 const SeededMapEntryS = z.object({ slot: z.string().min(1).max(20), source: z.string().min(1).max(40) }).strict();
 
-export const StageSeedingSchema = z
+const ProgressionSourceS = z
   .object({
-    source: z.union([z.literal("previous"), z.object({ stageId: Uuid }).strict()]),
+    stage: z.union([z.literal("previous"), z.object({ stageId: Uuid }).strict()]),
     take: z.array(TakeRuleSchema).min(1).max(8),
+  })
+  .strict();
+
+// Decision 1 (F2 plan) — `timing` is the axis the design doc's own proposed
+// shape omitted: whether this stage's fixtures appear at setup, as TBD
+// placeholders (old `.seeding`), or only once every source stage completes
+// (old `.qualification`). Required, no default — ruling 5's "strict
+// constraints from day one, no permissive interim state". Multi-source
+// `sources[]` (new capability — Finding 1: it never actually worked
+// server-side before F2) is enforced for dedupe at RESOLUTION time
+// (resolveProgression), not at parse time — two sources are both
+// independently well-formed here even if they could later name the same
+// entrant.
+export const ProgressionSchema = z
+  .object({
+    sources: z.array(ProgressionSourceS).min(1).max(8),
     placement: z.enum(["seeded_map", "snake", "rank_order"]),
     map: z.array(SeededMapEntryS).max(64).optional(),
+    timing: z.enum(["setup", "on_complete"]),
+    // Carry prior points/metrics into the qualified stage's opening
+    // standings (Jul3/05 §3) — like `timing`, an apps/web/DB-orchestration
+    // concept the engine's pure ProgressionSpec has no notion of (take-rule
+    // expansion/placement/resolution math never reads it). Restored from
+    // the old QualificationSpec.carry: this plan's own grounding said no
+    // shipped writer sets it (true for format-templates.ts/the catalogue),
+    // but custom-points.test.ts exercises it end to end against a
+    // hand-built stage graph, and it backs a MARKETED Pro entitlement
+    // (standings.carry_over — feature-copy.ts's paywall copy,
+    // pricing.matrix.standings.carry_over in all 4 marketing dictionaries).
+    // Deleting it would silently break a paid, advertised feature —
+    // meaningful only when timing is "on_complete" (seedNextStage,
+    // stages.ts); a "setup"-timing stage's propose/confirm flow never reads
+    // it, same as `.seeding` never carried a field like this before F2.
+    // Enforced below (not just documented): the refine rejects the
+    // combination outright rather than letting it silently no-op.
+    carry: z.enum(["none", "points", "full"]).optional(),
   })
   .strict()
   .refine((s) => s.placement !== "seeded_map" || (s.map !== undefined && s.map.length > 0), {
     message: "seeded_map placement needs a non-empty map",
     path: ["map"],
+  })
+  // F2 full-branch review — product question: pre-F2 `carry` lived only on
+  // `.qualification`, which was always `on_complete`, so this combination
+  // was inexpressible. Unification newly admits `{timing: "setup", carry:
+  // "points"|"full"}`, which parses fine and passes createStages' entitlement
+  // gate (stages.ts reads `progression?.carry` regardless of timing, so it
+  // charges the org's `standings.carry_over` Pro entitlement) — but `carry`
+  // is only ever read inside seedNextStage (stages.ts), which returns early
+  // unless `timing === "on_complete"`; the `setup` fixture generator never
+  // looks at it. That combination gates a paid feature on a no-op, which is
+  // worse than either rejecting it or ignoring it silently — so it is
+  // rejected here, at the edge, with a message naming the actual problem.
+  .refine((s) => s.timing === "on_complete" || s.carry === undefined || s.carry === "none", {
+    message:
+      'carry is only meaningful when timing is "on_complete" — a "setup"-timing stage seeds placeholders independently of source completion and never reads carry',
+    path: ["carry"],
   });
-export type StageSeedingInput = z.infer<typeof StageSeedingSchema>;
+export type ProgressionInput = z.infer<typeof ProgressionSchema>;
 
-export const CreateStage = z.object({
-  seq: z.number().int().min(1),
-  kind: StageKind,
-  name: z.string().min(1).max(200),
-  config: z.record(z.string(), z.unknown()).default({}),
-  qualification: QualificationSpecSchema.nullish(),
-  seeding: StageSeedingSchema.nullish(),
-});
+// F2 Task 5 — .strict(): before this, an unknown key (the old
+// .qualification/.seeding shape, or any typo) parsed successfully with the
+// key silently STRIPPED — stages-panel.tsx's live "Add stage" POST
+// (qualification: {topN}) created a stage with progression: null, returned
+// 201, and generated nobody. No error, no log, ever. Strict converts that
+// whole class of bug from silent to loud: the same POST now 400s, naming the
+// offending key (zod's unrecognized_keys issue).
+export const CreateStage = z
+  .object({
+    seq: z.number().int().min(1),
+    kind: StageKind,
+    name: z.string().min(1).max(200),
+    config: z.record(z.string(), z.unknown()).default({}),
+    progression: ProgressionSchema.nullish(),
+  })
+  .strict();
 
 /** POST /divisions/{id}/stages — the stage graph, one or many (doc 08 §3). */
 export const CreateStages = z.union([CreateStage, z.array(CreateStage).min(1).max(20)]);
@@ -604,6 +633,14 @@ export const AddFixture = z.object({
 export type AddFixture = z.infer<typeof AddFixture>;
 export type CreateStages = z.infer<typeof CreateStages>;
 
+// F2 — READ-path shape (Task 6): the two old columns this response used to
+// expose (qualification/seeding) were dropped by V371; API consumers now
+// see the one unified field. Deliberately `z.record(...).nullable()`, not
+// `ProgressionSchema.nullable()` — a response schema should not 400 a row
+// this API itself wrote (defence-in-depth against a shape ProgressionSchema
+// would reject slipping in through a future direct-SQL writer), matching
+// this field's pre-F2 precedent (`qualification`/`seeding` were never
+// validated on the way OUT either).
 export const Stage = z.object({
   id: Uuid,
   division_id: Uuid,
@@ -611,8 +648,7 @@ export const Stage = z.object({
   kind: StageKind,
   name: z.string(),
   config: z.record(z.string(), z.unknown()),
-  qualification: z.record(z.string(), z.unknown()).nullable(),
-  seeding: z.record(z.string(), z.unknown()).nullable(),
+  progression: z.record(z.string(), z.unknown()).nullable(),
   status: z.enum(["pending", "active", "complete"]),
 });
 
@@ -859,7 +895,7 @@ export const GenerateResult = z.object({
 export const CompleteResult = z.object({
   completed: z.boolean(),
   events: z.array(z.record(z.string(), z.unknown())),
-  /** Set when completion resolved the next stage's qualification spec. */
+  /** Set when completion resolved the next stage's progression rules. */
   qualified: z.object({ stage_id: Uuid, entrants: z.array(Uuid) }).optional(),
 });
 

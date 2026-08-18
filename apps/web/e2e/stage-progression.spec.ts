@@ -3,8 +3,9 @@ import { apiJson, TAG } from "./helpers";
 
 // D4a (P5) — API-level e2e (browser flow is P6): groups -> complete ->
 // proposal -> confirm -> KO entrants filled, schedule intact. Pure
-// placement/take-kind coverage lives in stage-seeding.test.ts (vitest, no
-// DB); the DB-plumbing byte-identity regression lives in
+// placement/take-kind coverage lives in packages/engine's
+// competition/progression.test.ts (vitest, no DB); the DB-plumbing
+// byte-identity regression lives in server/usecases/__tests__/
 // stage-progression.test.ts (vitest, real Postgres). This spec is the one
 // place that proves the SAME flow works over the real HTTP boundary end to
 // end — request-only, no `page`, matching fixture-config-snapshot.spec.ts's
@@ -44,8 +45,8 @@ test("groups -> complete -> proposal -> confirm -> KO entrants filled, schedule 
   expect(entrants.status, JSON.stringify(entrants.error)).toBe(201);
 
   // Two stages in one call: groups (4 pools of 2) feed a knockout via
-  // `.seeding` (topNPerGroup(2), rank_order) instead of the older
-  // `qualification` field.
+  // F2's unified `progression` field (timing: "setup" — topNPerGroup(2),
+  // rank_order), replacing the old `.seeding` field this spec used before.
   const stages = await apiJson<{ id: string; kind: string }[]>(
     request,
     `/api/v1/divisions/${divisionId}/stages`,
@@ -57,7 +58,11 @@ test("groups -> complete -> proposal -> confirm -> KO entrants filled, schedule 
         kind: "knockout",
         name: "KO",
         config: {},
-        seeding: { source: "previous", take: [{ kind: "topNPerGroup", n: 2 }], placement: "rank_order" },
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
       },
     ],
   );

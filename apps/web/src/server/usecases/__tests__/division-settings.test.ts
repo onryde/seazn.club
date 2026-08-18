@@ -258,18 +258,32 @@ describe.skipIf(!HAS_DB)("replaceStages — format structure swap (v8)", () => {
         kind: "group",
         name: "Group stage",
         config: { legs: 1, pools: { count: 2 } },
-        qualification: null,
+        progression: null,
       },
       {
         seq: 2,
         kind: "knockout",
         name: "Knockout",
         config: {},
-        qualification: {
-          take: [
-            { pool: "A", rank: 1 },
-            { pool: "B", rank: 1 },
+        // F2: was `.qualification` (auto-seed-on-complete) — "on_complete"
+        // reproduces that behaviour exactly.
+        progression: {
+          sources: [
+            {
+              stage: "previous",
+              take: [
+                {
+                  kind: "picks",
+                  picks: [
+                    { pool: "A", rank: 1 },
+                    { pool: "B", rank: 1 },
+                  ],
+                },
+              ],
+            },
           ],
+          placement: "rank_order",
+          timing: "on_complete",
         },
       },
     ]);
@@ -286,7 +300,7 @@ describe.skipIf(!HAS_DB)("replaceStages — format structure swap (v8)", () => {
 
     await expect(
       replaceStages(owner, division.id, [
-        { seq: 1, kind: "league", name: "L", config: {}, qualification: null },
+        { seq: 1, kind: "league", name: "L", config: {}, progression: null },
       ]),
     ).rejects.toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
   });
@@ -314,8 +328,8 @@ describe.skipIf(!HAS_DB)(
       const { division } = await rig(owner);
 
       const stages = await createStages(owner, division.id, [
-        { seq: 1, kind: "league", name: "L1", config: {}, qualification: null },
-        { seq: 2, kind: "league", name: "L2 (never played)", config: {}, qualification: null },
+        { seq: 1, kind: "league", name: "L1", config: {}, progression: null },
+        { seq: 2, kind: "league", name: "L2 (never played)", config: {}, progression: null },
       ]);
       const stage1 = stages.find((s) => s.seq === 1)!;
       const stage2 = stages.find((s) => s.seq === 2)!;
@@ -333,8 +347,8 @@ describe.skipIf(!HAS_DB)(
       // replaceStages on the whole graph — including the untouched stage 2 — 409s.
       await expect(
         replaceStages(owner, division.id, [
-          { seq: 1, kind: "league", name: "L1", config: {}, qualification: null },
-          { seq: 2, kind: "knockout", name: "L2 changed", config: {}, qualification: null },
+          { seq: 1, kind: "league", name: "L1", config: {}, progression: null },
+          { seq: 2, kind: "knockout", name: "L2 changed", config: {}, progression: null },
         ]),
       ).rejects.toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
 

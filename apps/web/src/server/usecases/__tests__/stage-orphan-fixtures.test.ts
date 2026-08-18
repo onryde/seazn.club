@@ -84,7 +84,7 @@ async function seedDivisionWithFixtures(auth: AuthCtx): Promise<{ divisionId: st
     kind: "league",
     name: "L",
     config: {},
-    qualification: null,
+    progression: null,
   });
   await generateStageFixtures(auth, stage!.id);
   return { divisionId: division.id, stageId: stage!.id };
@@ -105,7 +105,7 @@ describe.skipIf(!HAS_DB)("F2 — the orphaned-fixture hazard P6 recorded is unre
 
     try {
       await replaceStages(auth, divisionId, [
-        { seq: 1, kind: "league", name: "L2", config: {}, qualification: null },
+        { seq: 1, kind: "league", name: "L2", config: {}, progression: null },
       ]);
       expect.unreachable("expected replaceStages to throw FORMAT_LOCKED");
     } catch (err) {

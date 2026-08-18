@@ -91,7 +91,7 @@ test("settings tab: sections render, rename works, format locks with fixtures", 
   expect(((await res.json()) as { error?: { code?: string } }).error?.code).toBe("FORMAT_LOCKED");
 
   const swap = await page.request.put(`/api/v1/divisions/${rig.divisionId}/stages`, {
-    data: [{ seq: 1, kind: "league", name: "L", config: {}, qualification: null }],
+    data: [{ seq: 1, kind: "league", name: "L", config: {}, progression: null }],
   });
   expect(swap.status()).toBe(409);
   expect(((await swap.json()) as { error?: { code?: string } }).error?.code).toBe("FORMAT_LOCKED");

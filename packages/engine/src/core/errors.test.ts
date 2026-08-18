@@ -52,6 +52,15 @@ describe("EngineError", () => {
       "SUB_WINDOW_EXCEEDED",
       // S5 (#431) — tennis game-penalty awards, appended last, existing order frozen
       "GAME_AWARD_DURING_TIEBREAK",
+      // F2 (unified progression field) — placeDescriptors/
+      // validateProgressionAgainstShapes moved from apps/web's
+      // stage-seeding.ts into the engine; these four codes moved with them,
+      // string-for-string, so the wire-visible error.code an existing client
+      // sees is unchanged. Appended last, existing order frozen.
+      "SEEDING_RULES_MISSING",
+      "SEEDING_MAP_SLOT_INVALID",
+      "SEEDING_MAP_SOURCE_INVALID",
+      "SEEDING_BESTNTH_UNEQUAL_POOLS",
     ]);
   });
 });

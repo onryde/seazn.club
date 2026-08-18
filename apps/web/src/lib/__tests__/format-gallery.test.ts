@@ -6,7 +6,7 @@
 //     2 courts / 4 hours.
 import { describe, expect, it } from "vitest";
 import { StageKind } from "@/server/api-v1/schemas";
-import { FORMAT_FAMILIES, familyForKind } from "@/config/format-gallery";
+import { FORMAT_FAMILIES, familyForKind, formatFamily } from "@/config/format-gallery";
 import { previewDivisionFixtures } from "@/server/usecases/stages";
 import { recommendFormats } from "@/lib/format-recommend";
 import { helpUrl } from "@/lib/help";
@@ -35,6 +35,66 @@ describe("format gallery enumeration", () => {
           phase.sections.length > 0 || (phase.note ?? "").length > 10,
           `${f.slug} / ${phase.title} rendered empty`,
         ).toBe(true);
+      }
+    }
+  });
+});
+
+// F2 (unified progression field): cannedStages' `qualification:` sites
+// (":289" stepladder, ":298" page_playoff, plus groups-knockout's `take`)
+// were NOT decorative — they feed the real engine through
+// previewDivisionFixtures (dispatch note). Converted onto `progression`
+// (rankRange collapses topN, picks is unchanged), timing: "on_complete" —
+// same auto-seed-on-complete behaviour as format-templates.ts's equivalent
+// templates (Decision 1: no default timing changes this session).
+describe("cannedStages emit progression, not qualification (F2)", () => {
+  it("groups-knockout's knockout stage carries a picks TakeRule, on_complete", () => {
+    const family = formatFamily("groups-knockout")!;
+    expect(family.cannedStages[0]!.progression).toBeNull();
+    expect(family.cannedStages[1]!.progression).toEqual({
+      sources: [
+        {
+          stage: "previous",
+          take: [
+            {
+              kind: "picks",
+              picks: [
+                { pool: "A", rank: 1 },
+                { pool: "B", rank: 1 },
+                { pool: "A", rank: 2 },
+                { pool: "B", rank: 2 },
+              ],
+            },
+          ],
+        },
+      ],
+      placement: "rank_order",
+      timing: "on_complete",
+    });
+  });
+
+  it("stepladder's finals stage carries rankRange(1,4), on_complete — the topN:4 replacement", () => {
+    const family = formatFamily("stepladder")!;
+    expect(family.cannedStages[1]!.progression).toEqual({
+      sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+      placement: "rank_order",
+      timing: "on_complete",
+    });
+  });
+
+  it("page_playoff's playoffs stage carries rankRange(1,4), on_complete — the topN:4 replacement", () => {
+    const family = formatFamily("page_playoff")!;
+    expect(family.cannedStages[1]!.progression).toEqual({
+      sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+      placement: "rank_order",
+      timing: "on_complete",
+    });
+  });
+
+  it("no family's cannedStages carries the old qualification key", () => {
+    for (const f of FORMAT_FAMILIES) {
+      for (const stage of f.cannedStages) {
+        expect(stage).not.toHaveProperty("qualification");
       }
     }
   });

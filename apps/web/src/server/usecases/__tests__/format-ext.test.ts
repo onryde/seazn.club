@@ -249,7 +249,11 @@ describe.skipIf(!HAS_DB)("format extensions (Jul3/08)", () => {
         kind: "knockout",
         name: "Final",
         config: {},
-        qualification: { topN: 2 } as never,
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+          placement: "rank_order",
+          timing: "on_complete",
+        },
       },
     ]);
     const { fixtures } = await generateStageFixtures(auth, group!.id);

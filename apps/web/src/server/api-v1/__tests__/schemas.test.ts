@@ -81,55 +81,122 @@ describe("SetTeamSquad", () => {
   });
 });
 
-describe("CreateStage.qualification (PROMPT-59 §4 — typed spec at the edge)", () => {
-  const stage = (qualification: unknown) => ({ seq: 2, kind: "knockout", name: "KO", qualification });
+describe("CreateStage.progression (F2 — unified field, replaces .qualification/.seeding)", () => {
+  // F2 collapsed the two prior vocabularies (topN/bestOfRank/losersOfRound/
+  // take+combine, and rankRange/topNPerGroup/bestNth/source+placement+map)
+  // onto one `progression` field: { sources: [{stage,take}], placement,
+  // map?, timing }. Full ProgressionSchema branch coverage (every take-rule
+  // kind, every rejection path, with issue codes) lives in the dedicated
+  // progression-schema.test.ts; these assertions only pin that CreateStage
+  // wires the field through correctly (name, nullish, pass-through parse).
+  const stage = (progression: unknown) => ({ seq: 2, kind: "knockout", name: "KO", progression });
+  const source = (take: unknown) => ({ sources: [{ stage: "previous", take: [take] }], placement: "rank_order", timing: "on_complete" });
 
-  it("accepts each of the five qualification shapes", () => {
-    expect(CreateStage.safeParse(stage({ take: [{ pool: "A", rank: 1 }] })).success).toBe(true);
-    expect(CreateStage.safeParse(stage({ topN: 4 })).success).toBe(true);
+  it("accepts each of the five take-rule kinds, and a multi-source progression", () => {
+    expect(CreateStage.safeParse(stage(source({ kind: "rankRange", from: 1, to: 4 }))).success).toBe(true);
+    expect(CreateStage.safeParse(stage(source({ kind: "topNPerGroup", n: 2 }))).success).toBe(true);
     expect(
-      CreateStage.safeParse(stage({ bestOfRank: { rank: 3, count: 8, normaliseUnequalPools: true } }))
+      CreateStage.safeParse(stage(source({ kind: "bestNth", nth: 3, count: 8, normaliseUnequalPools: true })))
         .success,
     ).toBe(true);
+    expect(CreateStage.safeParse(stage(source({ kind: "picks", picks: [{ pool: "A", rank: 1 }] }))).success).toBe(
+      true,
+    );
     expect(
-      CreateStage.safeParse(stage({ losersOfRound: { round: 1, count: 4 } })).success,
+      CreateStage.safeParse(stage(source({ kind: "roundLosers", round: 1, count: 4 }))).success,
     ).toBe(true);
+    // Multi-source — the capability the old `.qualification.combine`/`.from`
+    // never actually resolved server-side (F2 plan Finding 1); dedupe is
+    // enforced at resolveProgression, not at parse time.
     expect(
       CreateStage.safeParse(
         stage({
-          combine: [
-            { take: [{ pool: "A", rank: 1 }, { pool: "B", rank: 1 }] },
-            { bestOfRank: { rank: 3, count: 2 } },
+          sources: [
+            { stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] },
+            { stage: { stageId: "11111111-1111-4111-8111-111111111111" }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
           ],
+          placement: "rank_order",
+          timing: "on_complete",
         }),
       ).success,
     ).toBe(true);
   });
 
-  it("accepts a nested combine (losersOfRound included) and null/absent qualification", () => {
-    expect(
-      CreateStage.safeParse(
-        stage({ combine: [{ topN: 2 }, { combine: [{ topN: 1 }, { topN: 1 }] }] }),
-      ).success,
-    ).toBe(true);
-    expect(
-      CreateStage.safeParse(
-        stage({ combine: [{ losersOfRound: { round: 1, count: 2 } }, { topN: 2 }] }),
-      ).success,
-    ).toBe(true);
+  it("accepts null/absent progression", () => {
     expect(CreateStage.safeParse(stage(null)).success).toBe(true);
     expect(CreateStage.safeParse({ seq: 1, kind: "league", name: "L" }).success).toBe(true);
   });
 
-  it("rejects malformed specs at the edge (400, not deep engine throw)", () => {
+  it("rejects malformed progressions at the edge (400, not deep engine throw)", () => {
     expect(CreateStage.safeParse(stage({ bogus: 1 })).success).toBe(false);
-    expect(CreateStage.safeParse(stage({ take: [{ pool: "A" }] })).success).toBe(false); // missing rank
-    expect(CreateStage.safeParse(stage({ topN: 0 })).success).toBe(false);
-    expect(CreateStage.safeParse(stage({ combine: [{ topN: 2 }] })).success).toBe(false); // min 2 children
-    // count is REQUIRED (engine a3ad1953) — a mismatch here is a runtime 422
-    // nobody can debug (qualificationSize would read undefined.count).
-    expect(CreateStage.safeParse(stage({ losersOfRound: { round: 1 } })).success).toBe(false);
-    expect(CreateStage.safeParse(stage({ losersOfRound: { round: 0, count: 1 } })).success).toBe(false);
+    expect(CreateStage.safeParse(stage(source({ kind: "picks", picks: [{ pool: "A" }] }))).success).toBe(false); // missing rank
+    expect(CreateStage.safeParse(stage(source({ kind: "rankRange", from: 4, to: 1 }))).success).toBe(false); // to < from
+    expect(CreateStage.safeParse(stage({ sources: [], placement: "rank_order", timing: "on_complete" })).success).toBe(
+      false,
+    ); // min 1 source
+    // count is REQUIRED (engine progressionSize reads it unconditionally) —
+    // a mismatch here is a runtime 500 nobody can debug otherwise.
+    expect(CreateStage.safeParse(stage(source({ kind: "roundLosers", round: 1 }))).success).toBe(false);
+    expect(CreateStage.safeParse(stage(source({ kind: "roundLosers", round: 0, count: 1 }))).success).toBe(false);
+    // timing is required, no default (ruling 5).
+    expect(
+      CreateStage.safeParse(
+        stage({ sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }], placement: "rank_order" }),
+      ).success,
+    ).toBe(false);
+  });
+});
+
+describe("CreateStage — .strict() (F2 Task 5): a legacy key is REJECTED, not silently dropped", () => {
+  // Before this task, CreateStage was a plain z.object — an unknown key (the
+  // old .qualification/.seeding shape, or any typo) parsed successfully with
+  // the key silently STRIPPED: stages-panel.tsx's live "Add stage" POST
+  // (qualification: {topN}) created a stage with progression: null, returned
+  // 201, and generated nobody — no error, no log, ever. `.strict()` converts
+  // that whole class of bug from silent to loud: the same POST now 400s,
+  // naming the offending key, so a test (and an organiser's error toast) can
+  // actually catch it.
+  it("rejects a body carrying the legacy qualification key, naming it in the issue", () => {
+    const r = CreateStage.safeParse({
+      seq: 2,
+      kind: "knockout",
+      name: "KO",
+      qualification: { topN: 4 },
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      const issue = r.error.issues.find((i) => i.code === "unrecognized_keys");
+      expect(issue, "expected an unrecognized_keys issue, not just any failure").toBeDefined();
+      expect((issue as { keys: string[] }).keys).toContain("qualification");
+    }
+  });
+
+  it("rejects the legacy seeding key the same way", () => {
+    const r = CreateStage.safeParse({
+      seq: 2,
+      kind: "knockout",
+      name: "KO",
+      seeding: { source: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }], placement: "rank_order" },
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      const issue = r.error.issues.find((i) => i.code === "unrecognized_keys");
+      expect((issue as { keys: string[] } | undefined)?.keys).toContain("seeding");
+    }
+  });
+
+  it("still accepts a well-formed progression body — strict rejects unknown keys, not known ones", () => {
+    const r = CreateStage.safeParse({
+      seq: 2,
+      kind: "knockout",
+      name: "KO",
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+        placement: "rank_order",
+        timing: "on_complete",
+      },
+    });
+    expect(r.success).toBe(true);
   });
 });
 

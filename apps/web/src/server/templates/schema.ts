@@ -20,43 +20,47 @@
 // commit 51f1db9c, so "the wire schema" and "the DB-checked kinds" are one
 // and the same set.
 //
-// `seeding` (P7, D4's StageSeeding) is declared below as an OPTIONAL field on
-// TemplateStage, imported verbatim from api-v1/schemas.ts's
-// StageSeedingSchema/TakeRuleSchema — never redeclared, copied, or forked.
-// It is narrowed to `source: "previous"` only (TemplateStageSeeding, just
-// below the imports): a catalog JSON has no live stage UUIDs for the
-// `{stageId}` branch to reference — they only exist once instantiation
-// creates the real stage rows. wc32's knockout stage predates this and still
-// carries no seeding wiring to its group stage (documented in
-// catalog/wc32.json) — retrofitting it is out of scope here; the 5 P4
-// entries' output must stay byte-stable.
+// `progression` (P7, D4's StageSeeding; unified onto ONE field by F2 —
+// QualificationSpecSchema and StageSeedingSchema no longer exist) is
+// declared below as an OPTIONAL field on TemplateStage, imported verbatim
+// from api-v1/schemas.ts's ProgressionSchema/TakeRuleSchema — never
+// redeclared, copied, or forked. Every source is narrowed to
+// `stage: "previous"` only (TemplateStageProgression, just below the
+// imports): a catalog JSON has no live stage UUIDs for the `{stageId}`
+// branch to reference — they only exist once instantiation creates the real
+// stage rows. wc32's knockout stage predates this and still carries no
+// progression wiring to its group stage (documented in catalog/wc32.json)
+// — retrofitting it is out of scope here; the 5 P4 entries' output must
+// stay byte-stable.
 import "server-only";
 import { z } from "zod";
-import { StageKind, StageSeedingSchema, type StageSeedingInput } from "@/server/api-v1/schemas";
+import { StageKind, ProgressionSchema, type ProgressionInput } from "@/server/api-v1/schemas";
 import { PointsRule } from "@seazn/engine/competition";
 
-/** StageSeedingSchema narrowed to the ONE branch a static catalog entry can
- *  ever express: `source: "previous"`. `.refine()`'s type-predicate overload
- *  both enforces this at runtime (a `{stageId}` source throws at parse
- *  time) and narrows the INFERRED type to the literal, so a future
- *  instantiation usecase reading `TemplateStage.seeding.source` sees
- *  `"previous"` only — never has to defensively handle the live-stage-id
- *  branch that can't occur here. This is the `.refine`-style narrowing the
- *  P7 dispatch calls for: constrain the imported schema, don't fork it —
- *  `.omit`/`.extend` aren't options here because the exported
- *  `StageSeedingSchema` binding is already the POST-`.refine()` ZodEffects
- *  (schemas.ts's own `seeded_map needs a non-empty map` check), and
- *  ZodEffects doesn't carry `.omit`/`.extend` — only the ZodObject before
- *  that refine would have, and schemas.ts doesn't export it separately. */
-export const TemplateStageSeeding = StageSeedingSchema.refine(
-  (s): s is StageSeedingInput & { source: "previous" } => s.source === "previous",
+/** ProgressionSchema narrowed to the ONE shape a static catalog entry can
+ *  ever express: every `sources[]` entry's `stage` is the literal
+ *  `"previous"`. `.refine()`'s type-predicate overload both enforces this at
+ *  runtime (a `{stageId}` source throws at parse time) and narrows the
+ *  INFERRED type, so a future instantiation usecase reading
+ *  `TemplateStage.progression.sources[].stage` sees `"previous"` only —
+ *  never has to defensively handle the live-stage-id branch that can't occur
+ *  here. This is the `.refine`-style narrowing the P7 dispatch calls for:
+ *  constrain the imported schema, don't fork it — `.omit`/`.extend` aren't
+ *  options here because the exported `ProgressionSchema` binding is already
+ *  the POST-`.refine()` ZodEffects (schemas.ts's own `seeded_map needs a
+ *  non-empty map` check), and ZodEffects doesn't carry `.omit`/`.extend` —
+ *  only the ZodObject before that refine would have, and schemas.ts doesn't
+ *  export it separately. */
+export const TemplateStageProgression = ProgressionSchema.refine(
+  (p): p is ProgressionInput & { sources: (ProgressionInput["sources"][number] & { stage: "previous" })[] } =>
+    p.sources.every((s) => s.stage === "previous"),
   {
     message:
-      'template stage seeding must use source: "previous" — a catalog template has no live stage id to reference yet',
-    path: ["source"],
+      'template stage progression must use stage: "previous" for every source — a catalog template has no live stage id to reference yet',
+    path: ["sources"],
   },
 );
-export type TemplateStageSeeding = z.infer<typeof TemplateStageSeeding>;
+export type TemplateStageProgression = z.infer<typeof TemplateStageProgression>;
 
 export const TemplateEntrantKind = z.enum(["team", "pair", "individual"]);
 export type TemplateEntrantKind = z.infer<typeof TemplateEntrantKind>;
@@ -78,6 +82,14 @@ export const ScheduleDefaults = z.object({
   suggestedCourtTags: z.array(z.string()).optional(),
 });
 
+// F2 full-branch review, Blocker 2 — .strict(): before this, an unknown key
+// (the old .qualification/.seeding shape, or any typo) parsed successfully
+// with the key silently STRIPPED, producing `progression: undefined` with no
+// error — a catalog JSON could carry a stray key and never fail its
+// module-init parse (catalog.ts:42-44). Same failure class CreateStage was
+// already fixed for (F2 Task 5, api-v1/schemas.ts's CreateStage.strict()):
+// strict converts it from silent to loud, naming the offending key in the
+// zod unrecognized_keys issue.
 export const TemplateStage = z.object({
   i18nNameKey: z.string().min(1),
   kind: StageKind,
@@ -99,17 +111,17 @@ export const TemplateStage = z.object({
    *  the sugar. */
   config: z.record(z.string(), z.unknown()).optional(),
   scheduleDefaults: ScheduleDefaults.optional(),
-  /** Cross-stage seed wiring (P7, D4's StageSeeding) for a stage that
-   *  qualifies from an EARLIER stage in the same division — euro24's R16
-   *  (best-thirds), t20-super8's Super 8 and SF/F (a two-link chain),
-   *  league-playoff's page_playoff. Absent on a stage nothing feeds (the
-   *  division's first stage) or on a stage that just advances winners
-   *  within its own bracket (QF/SF/F rounds inside one `knockout` stage are
-   *  NOT separate TemplateStages, so they need no seeding of their own).
-   *  See TemplateStageSeeding above for why `source` is narrowed to
-   *  `"previous"`. */
-  seeding: TemplateStageSeeding.optional(),
-});
+  /** Cross-stage progression wiring (P7, D4's StageSeeding; unified onto one
+   *  field by F2) for a stage that qualifies from an EARLIER stage in the
+   *  same division — euro24's R16 (best-thirds), t20-super8's Super 8 and
+   *  SF/F (a two-link chain), league-playoff's page_playoff. Absent on a
+   *  stage nothing feeds (the division's first stage) or on a stage that
+   *  just advances winners within its own bracket (QF/SF/F rounds inside one
+   *  `knockout` stage are NOT separate TemplateStages, so they need no
+   *  progression of their own). See TemplateStageProgression above for why
+   *  every source's `stage` is narrowed to `"previous"`. */
+  progression: TemplateStageProgression.optional(),
+}).strict();
 export type TemplateStage = z.infer<typeof TemplateStage>;
 
 export const TemplateDivision = z.object({

@@ -27,11 +27,15 @@
           "i18nNameKey": "templates.stage.knockout",
           "kind": "knockout",
           "size": 16,
-          "seeding": {
-            "source": "previous",
-            "take": [
-              { "kind": "topNPerGroup", "n": 2 },
-              { "kind": "bestNth", "nth": 3, "count": 4 }
+          "progression": {
+            "sources": [
+              {
+                "stage": "previous",
+                "take": [
+                  { "kind": "topNPerGroup", "n": 2 },
+                  { "kind": "bestNth", "nth": 3, "count": 4 }
+                ]
+              }
             ],
             "placement": "seeded_map",
             "map": [
@@ -39,7 +43,8 @@
               { "slot": "14", "source": "best:2" },
               { "slot": "15", "source": "best:3" },
               { "slot": "16", "source": "best:4" }
-            ]
+            ],
+            "timing": "setup"
           },
           "scheduleDefaults": {
             "matchMinutes": 90,

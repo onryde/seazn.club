@@ -13,8 +13,17 @@ describe("previewDivisionFixtures — bye label (F1 Task 5)", () => {
     // two, so buildSingleElim pads to 8 slots and awards 2 byes in round 0.
     const phases = previewDivisionFixtures(
       [
-        { kind: "league", name: "League", config: {}, qualification: null },
-        { kind: "knockout", name: "KO", config: {}, qualification: { topN: 6 } },
+        { kind: "league", name: "League", config: {}, progression: null },
+        {
+          kind: "knockout",
+          name: "KO",
+          config: {},
+          progression: {
+            sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 6 }] }],
+            placement: "rank_order",
+            timing: "on_complete",
+          },
+        },
       ],
       12,
     );
@@ -26,8 +35,17 @@ describe("previewDivisionFixtures — bye label (F1 Task 5)", () => {
   it("never renders a bye's real side as Bye (only the phantom opponent)", () => {
     const phases = previewDivisionFixtures(
       [
-        { kind: "league", name: "League", config: {}, qualification: null },
-        { kind: "knockout", name: "KO", config: {}, qualification: { topN: 6 } },
+        { kind: "league", name: "League", config: {}, progression: null },
+        {
+          kind: "knockout",
+          name: "KO",
+          config: {},
+          progression: {
+            sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 6 }] }],
+            placement: "rank_order",
+            timing: "on_complete",
+          },
+        },
       ],
       12,
     );
@@ -47,12 +65,23 @@ describe("format catalogue — shape regression (F1 Task 5)", () => {
   // change to what a format produces (a new round namer, a reordered
   // stage) has to update this snapshot deliberately, not drift silently.
   it("every shipped format produces its known shape", () => {
+    // F2 T5b collateral fix (not a task-owned file — see stages: line
+    // below): format-templates.ts's StageDraft carries `progression` now,
+    // never `qualification` — reading the old field here would silently
+    // read undefined for every stage and always emit "-", masking real
+    // shape drift. This ONE line is fixed so the marker stays meaningful;
+    // the test as a whole stays red (snapshot mismatch) until Task 6
+    // converts previewDivisionFixtures/qualifierCount to read
+    // `.progression` — every later-stage entrant count currently falls
+    // back to qualifierCount's `|| 4` default regardless of the real
+    // take-rule count, which is a real (if silent) behaviour gap this file
+    // cannot close on its own. Do not regenerate this snapshot until then.
     const summary = STAGE_TEMPLATES.map((t) => {
       const stages = t.build(4);
       const phases = previewDivisionFixtures(stages, 8);
       return {
         key: t.key,
-        stages: stages.map((s) => `${s.kind}:${s.qualification ? "Q" : "-"}`).join(">"),
+        stages: stages.map((s) => `${s.kind}:${s.progression ? "Q" : "-"}`).join(">"),
         rounds: phases.map((p) => p.sections.map((sec) => sec.title)),
       };
     });
