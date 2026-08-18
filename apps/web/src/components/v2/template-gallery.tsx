@@ -25,6 +25,7 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { Modal } from "@/components/modal";
 import { CompetitionWizard } from "@/components/v2/competition-wizard";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import { doubleElimFormatReason } from "@/lib/feature-copy";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { routes } from "@/lib/routes";
 import { useT } from "@/components/i18n/dict-provider";
@@ -171,6 +172,42 @@ export function templateProgressionLines(msg: Msg, template: CompetitionTemplate
   return lines;
 }
 
+/**
+ * Turns a `/api/v1/competitions/from-template` failure into paywall state —
+ * pure, so the decision can be tested directly (no jsdom in this workspace;
+ * TemplateDetailSheet's real submit() is an async click handler this file
+ * can't drive without one, same reasoning as templateProgressionLines
+ * above). Returns `null` for anything that isn't a 402, exactly like the
+ * inline check this replaces.
+ *
+ * Bug fix 2026-08-18: `formats.double_elim` gates both a real
+ * double-elimination bracket AND a Page playoff (format-gates.ts's
+ * stageNeedsDoubleElimGate — untouched by this fix, the shared entitlement
+ * is correct on purpose). The server's 402 only carries the feature KEY, not
+ * which of the two kinds actually triggered it, so the generic
+ * featureReason("formats.double_elim") text always named
+ * double-elimination — wrong for "League + Playoffs" (catalog key
+ * league-playoff), whose only gated stage is page_playoff. This component
+ * already has the full template, including every stage's kind, so it
+ * re-derives the answer locally rather than widening the 402 wire shape
+ * (PaymentRequiredError/requireFeature) that ~20 other call sites share for
+ * one display string. Every OTHER feature key's `reason` stays undefined,
+ * unchanged from before — <UpgradeGate> falls back to its own
+ * featureReason(feature) exactly as it always has.
+ */
+export function paywallFromError(
+  err: unknown,
+  template: CompetitionTemplate,
+): { feature: string; reason?: string } | null {
+  if (!(err instanceof ApiV1Error) || err.code !== "PAYMENT_REQUIRED") return null;
+  const feature = String(err.extra.feature_key ?? "");
+  if (feature !== "formats.double_elim") return { feature };
+  const gatedStage = template.divisions
+    .flatMap((division) => division.stages)
+    .find((stage) => stage.kind === "double_elim" || stage.kind === "page_playoff");
+  return { feature, reason: doubleElimFormatReason(gatedStage?.kind ?? "double_elim") };
+}
+
 export function TemplateCard({
   template,
   msg,
@@ -254,11 +291,9 @@ export function TemplateDetailSheet({
       });
       router.push(routes.competition(orgSlug, created.slug));
     } catch (err) {
-      if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
-        setPaywall({
-          feature: String(err.extra.feature_key ?? ""),
-          reason: typeof err.extra.reason === "string" ? err.extra.reason : undefined,
-        });
+      const nextPaywall = paywallFromError(err, template);
+      if (nextPaywall) {
+        setPaywall(nextPaywall);
       } else {
         setError(err instanceof Error ? err.message : msg("comp.wizard.failed"));
       }
@@ -371,7 +406,7 @@ export function TemplateDetailSheet({
           </div>
         )}
 
-        {paywall && <UpgradeGate feature={paywall.feature} />}
+        {paywall && <UpgradeGate feature={paywall.feature} reason={paywall.reason} />}
         {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
       </form>
     </Modal>

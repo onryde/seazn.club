@@ -724,3 +724,27 @@ describe("UpgradeGate — the pass CTA still appears where it should", () => {
     expect(html).not.toContain("data-pass-owned");
   });
 });
+
+// Bug fix (2026-08-18): a "formats.double_elim" gate on a Page playoff
+// template read "Double-elimination brackets are a Pro format." — wrong
+// format name for the same shared entitlement (feature-copy.ts's
+// doubleElimFormatReason). The gate itself always derived its sentence from
+// `featureReason(feature)` alone, with no way for a caller who already knows
+// the actual gated STAGE KIND (template-gallery.tsx) to say so — this `reason`
+// override is that seam.
+describe("UpgradeGate — reason override", () => {
+  it("uses the passed reason instead of featureReason(feature) when given one", () => {
+    pathname = "/o/riverside/settings/billing";
+    const html = render(
+      <UpgradeGate feature="formats.double_elim" reason="Page playoffs are a Pro format." />,
+    );
+    expect(html).toContain("Page playoffs are a Pro format.");
+    expect(html).not.toMatch(/double-elimination/i);
+  });
+
+  it("falls back to featureReason(feature) when no override is passed (every pre-existing call site)", () => {
+    pathname = "/o/riverside/settings/billing";
+    const html = render(<UpgradeGate feature="formats.double_elim" />);
+    expect(html).toContain("Double-elimination brackets are a Pro format.");
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { featurePlan, featureReason } from "@/lib/feature-copy";
+import { doubleElimFormatReason, featurePlan, featureReason } from "@/lib/feature-copy";
 
 /**
  * The vocabulary a price claim has to reach for. The ruling on the
@@ -97,5 +97,33 @@ describe("feature-copy V290", () => {
     expect(featurePlan("discipline.enforced")).toBe("pro");
     expect(featurePlan("officials.marks")).toBe("pro");
     expect(featurePlan("news.auto")).toBe("pro");
+  });
+});
+
+// Bug fix (2026-08-18): the "League + Playoffs" template's Pro gate read
+// "Double-elimination brackets are a Pro format." even though its only
+// gated stage is a Page playoff (kind "page_playoff"), not an actual
+// double-elimination bracket. `formats.double_elim` legitimately gates BOTH
+// kinds (owner ruling: sharing the entitlement is correct and intentional —
+// a Page playoff is the four-team double-chance shape — see
+// format-gates.ts's stageNeedsDoubleElimGate, which this does NOT change),
+// so the fix is this per-kind wording resolver, not the gate condition.
+describe("doubleElimFormatReason — formats.double_elim names the ACTUAL gated kind", () => {
+  it("names the Page playoff format for a page_playoff stage, never double-elimination", () => {
+    const reason = doubleElimFormatReason("page_playoff");
+    expect(reason).toMatch(/page playoff/i);
+    expect(reason).not.toMatch(/double.elimination/i);
+  });
+
+  it("keeps the existing double-elimination wording, byte-for-byte, for a double_elim stage", () => {
+    // "a double-elim template keeps its current wording" (owner ruling) —
+    // pinned against the live FEATURE_REASONS entry, not a copy of the
+    // string, so the two can never quietly drift apart.
+    expect(doubleElimFormatReason("double_elim")).toBe(featureReason("formats.double_elim"));
+    expect(doubleElimFormatReason("double_elim")).toMatch(/double-elimination/i);
+  });
+
+  it("falls back to the double-elimination wording for any other kind (defensive default)", () => {
+    expect(doubleElimFormatReason("knockout")).toBe(featureReason("formats.double_elim"));
   });
 });

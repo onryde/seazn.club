@@ -126,6 +126,29 @@ export function featureReason(featureKey: string): string {
   return FEATURE_REASONS[featureKey] ?? "This feature needs a plan upgrade.";
 }
 
+/**
+ * `formats.double_elim` (doc 10 §1) gates TWO stage kinds under one
+ * entitlement on purpose — a real double-elimination bracket, and a Page
+ * playoff (the four-team double-chance shape), which share the Pro tier by
+ * design (format-gates.ts's `stageNeedsDoubleElimGate`; this function does
+ * not change, and must never change, which kinds that gates). The generic
+ * `FEATURE_REASONS["formats.double_elim"]` sentence above names
+ * double-elimination unconditionally, which is wrong for a page_playoff
+ * stage — bug fix 2026-08-18, "League + Playoffs" template.
+ *
+ * A caller that already knows which STAGE KIND actually triggered the gate
+ * (the template being created, or the stage form just submitted) should ask
+ * this for the reason instead of calling `featureReason("formats.double_elim")`
+ * directly, so a Page playoff template never claims to contain a format it
+ * doesn't. Only the WORDING branches here — the entitlement key both kinds
+ * share is untouched.
+ */
+export function doubleElimFormatReason(stageKind: string): string {
+  return stageKind === "page_playoff"
+    ? "Page playoffs are a Pro format."
+    : featureReason("formats.double_elim");
+}
+
 // Cheapest plan that unlocks each feature (mirrors plan_entitlements,
 // V112 + V240 + V290 + V291 + V302). Everything not listed unlocks on Pro —
 // only the above-Pro (Pro Plus) exceptions need rows. (The AI run cap that

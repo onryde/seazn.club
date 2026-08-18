@@ -11,6 +11,7 @@ import { STAGE_TEMPLATES, buildTemplateStages, type StageDraft } from "./format-
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { routes } from "@/lib/routes";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import { doubleElimFormatReason } from "@/lib/feature-copy";
 import { venueNoun, venueLabel, pluralizeVenue } from "@/lib/venue";
 import { defaultMatchMinutes } from "@/lib/match-length";
 import { FormatExplainerPanel } from "@/components/v2/format-explainer-panel";
@@ -126,6 +127,33 @@ export function buildScheduleSeed(
   };
 }
 
+/**
+ * The `formats.double_elim` gate's per-kind wording (feature-copy.ts's
+ * `doubleElimFormatReason`), given the stage drafts THIS wizard is about to
+ * submit — bug-fix follow-up 2026-08-18 (gate-copy): this wizard's own
+ * "Group + Playoffs (IPL style)" card (`format-templates.ts`'s
+ * `group_playoffs` template) builds a `page_playoff` stage exactly the way
+ * the catalog "League + Playoffs" template does, and reached the SAME wrong
+ * "Double-elimination brackets are a Pro format." wording, because
+ * `<UpgradeGate feature={paywallFeature} />` only ever had the bare feature
+ * key to go on.
+ *
+ * Pure, and takes the ALREADY-RESOLVED feature key (not the raw error) —
+ * `submit()`'s catch block already extracts it once for `setPaywallFeature`,
+ * so this reuses that rather than re-deriving it. Mirrors
+ * template-gallery.tsx's `paywallFromError`, adapted to this component's own
+ * `paywallFeature` (a plain string) plus a PARALLEL `paywallReason` state —
+ * not one combined object — so every existing `paywallFeature` string
+ * comparison (e.g. the archived-slot explainer below) stays untouched.
+ * Returns undefined for every other feature key, exactly as before —
+ * `<UpgradeGate>` then falls back to its own `featureReason(feature)`.
+ */
+export function paywallReasonForStages(featureKey: string, stages: StageDraft[]): string | undefined {
+  if (featureKey !== "formats.double_elim") return undefined;
+  const gatedStage = stages.find((s) => s.kind === "double_elim" || s.kind === "page_playoff");
+  return doubleElimFormatReason(gatedStage?.kind ?? "double_elim");
+}
+
 // ---------------------------------------------------------------------------
 export function DivisionBuilder({
   competitionId,
@@ -221,6 +249,11 @@ export function DivisionBuilder({
 
   const [error, setError] = useState<string | null>(null);
   const [paywallFeature, setPaywallFeature] = useState<string | null>(null);
+  // Parallel to paywallFeature rather than folded into one object, so every
+  // existing `paywallFeature === "..."` comparison (the archived-slot
+  // explainer below) is untouched. undefined outside the formats.double_elim
+  // case — <UpgradeGate> then falls back to its own featureReason(feature).
+  const [paywallReason, setPaywallReason] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
 
   function selectSport(key: string) {
@@ -264,6 +297,7 @@ export function DivisionBuilder({
     if (tab !== "scheduling") return;
     setError(null);
     setPaywallFeature(null);
+    setPaywallReason(undefined);
 
     // A backwards range IS refused server-side now (`PutScheduleSettings`,
     // #498) — but that refusal arrives on the schedule-settings SEED PUT
@@ -285,6 +319,13 @@ export function DivisionBuilder({
     const overrides = buildRuleOverride(sportKey, ruleValues);
 
     setBusy(true);
+    // Declared here, outside try{}, purely so the catch block below can
+    // still read WHICH stage kinds were submitted (`const` inside try{} is
+    // block-scoped to try{} alone). buildStages() is a pure, synchronous
+    // read of wizard state — no network dependency — so hoisting only the
+    // BINDING changes nothing about when it runs or what it POSTs; the
+    // assignment below still happens at the exact same point it always did.
+    let stages: StageDraft[] = [];
     try {
       const division = await apiV1<{ id: string; slug: string }>(
         `/api/v1/competitions/${competitionId}/divisions`,
@@ -299,7 +340,7 @@ export function DivisionBuilder({
           },
         },
       );
-      const stages = buildStages().map((s, i) => ({ ...s, seq: i + 1 }));
+      stages = buildStages().map((s, i) => ({ ...s, seq: i + 1 }));
       await apiV1(`/api/v1/divisions/${division.id}/stages`, {
         method: "POST",
         json: stages,
@@ -335,7 +376,9 @@ export function DivisionBuilder({
       router.push(routes.division(orgSlug, compSlug, division.slug));
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
-        setPaywallFeature(String(err.extra.feature_key ?? ""));
+        const feature = String(err.extra.feature_key ?? "");
+        setPaywallFeature(feature);
+        setPaywallReason(paywallReasonForStages(feature, stages));
       } else if (err instanceof ApiV1Error && err.code === "COMPETITION_ENDED") {
         // A finished competition does not grow (#376 part D). The server's
         // message is English-only, so the refusal is localised here rather
@@ -892,7 +935,7 @@ export function DivisionBuilder({
 
       {paywallFeature && (
         <div className="space-y-2">
-          <UpgradeGate feature={paywallFeature} />
+          <UpgradeGate feature={paywallFeature} reason={paywallReason} />
           {/* The invisible cause. The gate itself says "you are at your
               division limit" and the console shows the org fewer divisions
               than that limit, because an archived-but-played one keeps its
