@@ -21,6 +21,7 @@ const { createDivision } = await import("../divisions");
 const { createEntrants } = await import("../entrants");
 const { createStages, generateStageFixtures } = await import("../stages");
 const { autoSchedule, putScheduleSettings } = await import("../schedule");
+const { seedCourts } = await import("./_seed");
 type AuthCtx = import("@/server/api-v1/auth").AuthCtx;
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -86,13 +87,14 @@ async function seedStage(entrantCount: number): Promise<{ auth: AuthCtx; stageId
     name: "L",
     config: {},
   });
+  const courts = await seedCourts(orgId, 2);
   await putScheduleSettings(auth, division.id, {
     config: {
       startAt: SESSION_WINDOWS[0]!.from,
       endAt: SESSION_WINDOWS.at(-1)!.to,
       matchMinutes: 30,
       gapMinutes: 10,
-      courts: ["C1", "C2"],
+      courts,
       perEntrantMinRest: 10,
       blackouts: [],
       sessionWindows: SESSION_WINDOWS,
