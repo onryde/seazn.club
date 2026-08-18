@@ -118,6 +118,7 @@ import {
 // string[] shortcut — exactly what the deleted wrapper did internally.
 import { divisionEligibilityIssues } from "../registration-eligibility";
 import { isValidRefCode, generateRefCode } from "@/lib/ref-code";
+import { REGISTRATION_CURRENCIES, type Currency } from "@/lib/currency";
 import { LEGAL_VERSION } from "@/lib/legal";
 import { resolveNameDisplay } from "@/lib/name-display";
 
@@ -3248,6 +3249,156 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS0
       res.access_token,
     );
     expect(url).toBeNull();
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS003 W4 — per-currency matrix over REGISTRATION_CURRENCIES, minted through
+// mintGroupCheckout (the group-scoped entry point this whole wave is about),
+// against the Stripe mock. Owner ruling 10: INR settles offline/display-only
+// on this GB platform in practice (a connected org's charge currency always
+// equals its Connect account's settlement currency) — that does not exempt
+// it from this matrix, which asserts what OUR code SENDS to Stripe for every
+// allowlisted currency, not just the ones reachable end-to-end today.
+// ---------------------------------------------------------------------------
+
+/** Same shape as stripeRig (above), but pins the org's CURRENT currency to an
+ *  explicit value instead of leaving it at V365's 'gbp' default, so the
+ *  matrix below can seed a group whose snapshot matches ctx.currency for
+ *  every member of REGISTRATION_CURRENCIES. Kept as its own helper rather
+ *  than adding a currency opt to stripeRig, so this fixture carries zero
+ *  risk to stripeRig's ~30 existing callers. */
+async function currencyRig(currency: Currency) {
+  const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+  const owner = asOwner(orgId, ownerId);
+  const stripeAccountId = "acct_" + randomUUID().slice(0, 8);
+  await sql`update organizations
+            set stripe_charges_enabled = true, stripe_account_id = ${stripeAccountId}, currency = ${currency}
+            where id = ${orgId}`;
+  const { competition, division } = await rig(owner);
+  return { orgId, orgSlug, owner, competition, division, stripeAccountId };
+}
+
+describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)", () => {
+  // The it.each below is driven by the REGISTRATION_CURRENCIES IMPORT
+  // itself, never a hand-copied literal — so an added/removed/reordered
+  // currency changes what this loop iterates. But that alone doesn't make a
+  // silent widening go RED: a newly-added, well-supported currency would
+  // just quietly start passing, with nothing forcing anyone to notice the
+  // list grew. This pin is what actually goes red on that change — a
+  // `toEqual` against a frozen literal has no knowledge of the new/removed/
+  // reordered entry, so any drift between the live export and this literal
+  // is a deep-equality mismatch, reported as a failing assertion, before
+  // anyone even looks at whether the it.each results are correct. Mutation
+  // mechanism note (see task report): proved by temporarily drifting the
+  // expected literal against the real export (not by editing the shared
+  // production currency.ts in this shared worktree) — toEqual can't tell
+  // which side moved, so this reproduces exactly the diff a real
+  // currency.ts edit would leave.
+  it("pins REGISTRATION_CURRENCIES to the five currencies this matrix covers", () => {
+    expect(REGISTRATION_CURRENCIES).toEqual(["usd", "eur", "gbp", "inr", "aud"]);
+  });
+
+  it.each(REGISTRATION_CURRENCIES)(
+    "mints a two-entry %s cart: exact per-entry + summed amounts, fee over the sum, destination charge, snapshot currency charged",
+    async (currency: Currency) => {
+      const { competition, division, stripeAccountId } = await currencyRig(currency);
+      const first = await seedRegistration(
+        competition.id,
+        division.id,
+        { fee_cents: 733, currency, payment_method: "stripe" },
+        { displayName: "Entry One" },
+      );
+      const second = await seedSecondEntry(first.registration.group_id, division.id, 866, "Entry Two");
+
+      const url = await mintGroupCheckout(
+        first.registration.group_id,
+        division.id,
+        "http://test.local",
+        first.access_token,
+      );
+      expect(url).toBe("https://checkout.stripe.test/session");
+
+      const args = stripeMock.checkoutCreate.mock.calls[0][0];
+      expect(args.line_items).toHaveLength(2);
+      // Every line item carries the GROUP's snapshot currency (g.currency,
+      // regGroupCols) — the same value ctx.currency was forced to equal by
+      // createRegistrationCheckout's guard before Stripe was ever reached.
+      // Under today's schema the guard makes the two indistinguishable BY
+      // VALUE at this point (see
+      // reference_currency_dual_check_not_independently_provable.md for the
+      // same structural fact one level up, on the guard's own two
+      // conditions) — so this pins observed behaviour precisely, without
+      // claiming an independent proof of "sourced from the snapshot, not a
+      // re-read", which isn't mutation-discriminable while the guard holds.
+      const lineItems = args.line_items as { price_data: { currency: string; unit_amount: number } }[];
+      for (const li of lineItems) {
+        expect(li.price_data.currency).toBe(currency);
+      }
+      const amounts = lineItems.map((li) => li.price_data.unit_amount).sort((a: number, b: number) => a - b);
+      expect(amounts).toEqual([733, 866]); // exact per-entry, no drift
+      expect(amounts[0] + amounts[1]).toBe(1599); // exact summed total, no drift
+
+      // Pro plan (currencyRig seeds "pro") is 2% — over the SUM (1599),
+      // never one entry alone: applicationFeeCents(733,2)=15,
+      // applicationFeeCents(866,2)=17, neither equals the correct 32 below.
+      expect(args.payment_intent_data.application_fee_amount).toBe(applicationFeeCents(1599, 2));
+      // Destination charge preserved: the org's connected account, not the
+      // platform's own.
+      expect(args.payment_intent_data.transfer_data.destination).toBe(stripeAccountId);
+      expect((args.metadata.registration_ids as string).split(",").sort()).toEqual(
+        [first.registration.id, second.id].sort(),
+      );
+
+      const group = await loadWithGroup(first.registration.id);
+      expect(group.checkout_session_id).toMatch(/^cs_test_/);
+    },
+  );
+
+  // Owner ruling 4's guard already has full coverage under "card submit path
+  // (spec §3)" above, via resumeRegistrationCheckout — a DIFFERENT public
+  // entry point onto the same shared createRegistrationCheckout. Re-asserted
+  // here through mintGroupCheckout (the entry point this whole wave is
+  // about) so the guard is proven uniform across both callers, not just the
+  // older one.
+  it("422s per the matrix when the group's currency isn't allowlisted, and never calls Stripe", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const res = await seedRegistration(competition.id, division.id, {
+      fee_cents: 500,
+      currency: "jpy",
+      payment_method: "stripe",
+    });
+    await expect(
+      mintGroupCheckout(res.registration.group_id, division.id, "http://test.local", res.access_token),
+    ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_CURRENCY_UNAVAILABLE" });
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("422s per the matrix when the group's snapshot no longer matches the org's CURRENT currency, and never calls Stripe", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    // organizations.currency defaults to 'gbp' (V365) and is left untouched
+    // here — the group below snapshots 'usd', individually valid but
+    // mismatched, reproducing an org that changed its preferred currency
+    // after this cart was submitted.
+    const { competition, division } = await rig(owner);
+    const res = await seedRegistration(competition.id, division.id, {
+      fee_cents: 500,
+      currency: "usd",
+      payment_method: "stripe",
+    });
+    await expect(
+      mintGroupCheckout(res.registration.group_id, division.id, "http://test.local", res.access_token),
+    ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_CURRENCY_UNAVAILABLE" });
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
   });
 });
