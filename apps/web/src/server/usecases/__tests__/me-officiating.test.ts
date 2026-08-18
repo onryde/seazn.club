@@ -207,6 +207,44 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
     expect(doneRow.report_status).toBeNull();
   });
 
+  // F4 fix-wave finding 2: `completed` selected none of the three fields
+  // (home_slot_label/away_slot_label/org_default_locale) that
+  // MyOfficiatingAssignment makes non-optional — every completed row carried
+  // `undefined` where TS promised `string` (raw-SQL generics are unchecked,
+  // so tsc never caught it). FINISHED_STATUSES includes 'cancelled', so a
+  // day-one placeholder cancelled before its slots ever resolve reaches this
+  // exact query still unresolved — exactly what the old "a completed fixture
+  // has filled entrants by definition" comment claimed could not happen.
+  it("completed rows for a cancelled day-one placeholder still carry slot labels and org locale", async () => {
+    const { auth } = await seedOrg();
+    const ref = await makeUser("ref");
+    const { fixtures } = await seedFutureDivision(auth);
+    const official = await createOfficial(auth, {
+      display_name: "Ref Cancel",
+      role_keys: ["referee"],
+    });
+    const invited = await inviteOfficial(auth, official.id, ref.email);
+    await claimPerson(invited.secret, ref.id, ref.email);
+    const fixtureId = fixtures[0]!.id;
+    await patchFixtureOfficials(auth, fixtureId, {
+      set: [{ official_id: official.id, role_key: "referee", locked: false }],
+    });
+    await sql`
+      update fixtures
+      set home_slot_label = ${sql.json({ key: "slot.winner_group", params: { g: "A" } })},
+          away_slot_label = ${sql.json({ key: "slot.runner_up_group", params: { g: "B" } })},
+          home_entrant_id = null, away_entrant_id = null,
+          status = 'cancelled'
+      where id = ${fixtureId}`;
+
+    const mine = await getMyOfficiating(ref.id);
+    const row = mine.completed.find((a) => a.fixture_id === fixtureId);
+    expect(row).toBeTruthy();
+    expect(row!.home_slot_label).toEqual({ key: "slot.winner_group", params: { g: "A" } });
+    expect(row!.away_slot_label).toEqual({ key: "slot.runner_up_group", params: { g: "B" } });
+    expect(row!.org_default_locale).toBe("en");
+  });
+
   it("guards response transitions and scopes writes to the assigned official", async () => {
     const { auth } = await seedOrg();
     const ref = await makeUser("ref");

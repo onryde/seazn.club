@@ -120,9 +120,12 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
     limit 100`;
 
   // Finished matches — most recent first — for the collapsed "completed"
-  // panel. Deliberately NOT widened with home_slot_label/away_slot_label/
-  // org_default_locale (F4/Task 3): a completed fixture has filled entrants
-  // by definition, so a placeholder label can never reach this query.
+  // panel. Same slot-label / org-locale columns as `assignments` above (fix-
+  // wave finding 2): FINISHED_STATUSES includes 'cancelled' and 'abandoned',
+  // and a day-one placeholder can be cancelled before its slots ever
+  // resolve, so this query can return unfilled home/away rows too — the
+  // interface makes all three fields non-optional, and this query used to
+  // select none of them.
   const completed = await sql<MyOfficiatingAssignment[]>`
     select fo.fixture_id, fo.id as fixture_official_id, f.fixture_no, o.id as official_id,
            org.name as org_name, org.slug as org_slug,
@@ -130,6 +133,8 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
            c.visibility as competition_visibility,
            d.name as division_name, d.slug as division_slug, d.sport_key,
            h.display_name as home_name, a.display_name as away_name,
+           f.home_slot_label, f.away_slot_label,
+           org.default_locale as org_default_locale,
            f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz, f.venue, f.court_label,
            f.status as fixture_status,
            fo.role_key, fo.response, fo.decline_reason, fo.responded_at,
