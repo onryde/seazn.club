@@ -28,7 +28,10 @@ import {
   type BoardFixture,
 } from "./types";
 
-type Override = { scheduled_at: string | null; court_label: string | null; schedule_locked: boolean };
+// P9 pass 4a: court_id — the merge `{...f, ...o}` (below) has to overwrite
+// the field board-grid/movableForRun/etc. actually key on, or an optimistic
+// drag shows the card in its OLD column until the next server refresh.
+type Override = { scheduled_at: string | null; court_id: string | null; schedule_locked: boolean };
 
 /**
  * A publish/start refusal from the server-side validation gate, carried back to
@@ -345,7 +348,7 @@ export function useBoardActions(
         ...o,
         [fixtureId]: {
           scheduled_at: atIso,
-          court_label: court,
+          court_id: court,
           schedule_locked: prev.schedule_locked,
         },
       }));
@@ -354,7 +357,10 @@ export function useBoardActions(
           method: "PATCH",
           json: {
             scheduled_at: atIso,
-            court_label: court,
+            // P9 pass 4a: PatchFixture (schemas.ts) is `.strict()` and dropped
+            // court_label from its shape when the cutover landed — sending the
+            // old key 400s every drag instead of moving the fixture.
+            court_id: court,
             expected_seq: seqRef.current[prev.division_id],
           },
         });
@@ -604,11 +610,15 @@ export function useBoardActions(
         for (const f of board) {
           if (f.scheduled_at === null || f.status !== "scheduled") continue;
           if (dayKey(f.scheduled_at as string) !== day) continue;
-          const target = f.court_label === a ? b : f.court_label === b ? a : null;
+          // P9 pass 4a: court_id — court_label is frozen legacy and null for
+          // anything scheduled since the cutover, so this could no longer
+          // match either side; `a`/`b` are court ids (BoardConfig.courts).
+          const target = f.court_id === a ? b : f.court_id === b ? a : null;
           if (!target) continue;
           await apiV1(`/api/v1/fixtures/${f.id}`, {
             method: "PATCH",
-            json: { court_label: target, expected_seq: seqRef.current[f.division_id] },
+            // PatchFixture (schemas.ts) is `.strict()` — court_label 400s.
+            json: { court_id: target, expected_seq: seqRef.current[f.division_id] },
           });
           seqRef.current[f.division_id] = (seqRef.current[f.division_id] ?? 0) + 1;
         }
