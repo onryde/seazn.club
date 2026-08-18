@@ -4,10 +4,10 @@ description: The classic two-sided tree — on the console, the public page, the
 order: 6
 ---
 
-Knockout stages render as the classic **two-sided bracket**: quarter-finals on the outside, converging on a centre Final, the third-place match tucked underneath. One shared layout drives every surface, so they never disagree:
+Knockout stages render as the classic **two-sided bracket**: quarter-finals on the outside, converging on a centre Final, the third-place match tucked underneath. Every round carries its name — *Quarter-finals*, *Semi-finals*, *Final*, *Third place* — read from the round's position in the bracket rather than from how many matches it holds, so a round is never mislabelled. One shared layout drives every surface, so they never disagree:
 
 - **Console** — the division's Fixtures tab shows the tree above the match list; each node links to its scoring page, live matches pulse.
-- **Public page** — the shared division page draws the same connected tree, filled from live results (`TBD` until a feed resolves).
+- **Public page** — the shared division page draws the same connected tree, filled from live results. A slot waiting on an earlier match reads `TBD`; a **bye** says *Bye*, because a bye is settled at setup and never resolves into anyone.
 - **Big screen** — the [slideshow](/help/sharing/slideshow) and [presentation mode](/help/sharing/presentation-mode) get a bracket slide — the tree, the double-elim lanes, or the stepladder rungs, whichever the stage is.
 - **Poster** — Documents → *Bracket poster* exports a landscape PDF scaled to one sheet — all three shapes — with your branding on Pro or under an [Event Pass](/help/billing/event-pass).
 
