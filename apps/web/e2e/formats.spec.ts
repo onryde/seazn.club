@@ -36,9 +36,21 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
   await expectNoHorizontalScroll(page);
 });
 
-// L3/#414 pass 3: create a ko_plate competition from the template picker,
-// complete the main draw, see the plate seeded from round-1 losers.
-test("ko_plate template: completing the main draw seeds the plate", async ({ page, request }) => {
+// L3/#414 pass 3 / F3 review item 5: create a ko_plate competition from the
+// template picker, complete the main draw, propose + confirm the plate's
+// seed proposal, see the plate seeded from round-1 losers.
+//
+// F3 flipped every picker template's progression to `timing: "setup"` (day-
+// one fixtures — the plate's TBD bracket exists before Main is even
+// generated). Owner ruling 12 (2026-08-18, F3 index): seeding stays
+// PROPOSE-AND-CONFIRM under `setup` timing, never auto-confirm — completing
+// Main computes a draft seed proposal and returns it (`seed_proposal` on the
+// completion response); `POST /generate` alone never seeds the plate, and
+// nothing fills its TBD slots until an explicit propose + confirm. This spec
+// used to assert the OLD `on_complete` wire shape (plain `qualified` on the
+// completion response, auto-filled), which no picker template has emitted
+// since that flip.
+test("ko_plate template: completing the main draw computes a seed proposal; confirming it seeds the plate", async ({ page, request }) => {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `KoPlate ${TAG}`,
@@ -80,14 +92,14 @@ test("ko_plate template: completing the main draw seeds the plate", async ({ pag
   expect(main.kind).toBe("knockout");
   expect(plate.kind).toBe("knockout");
   // ko_plate preset (format-templates.ts): plate's progression sources the
-  // main draw's round-1 losers, on_complete timing (F2 kept every template
-  // writer's default timing unchanged — Decision 1). `q` (round-1 loser
-  // count) defaults to 4 (division-builder.tsx's `qualified` knob), never
-  // touched by this test.
+  // main draw's round-1 losers. `timing: "setup"` since F3 flipped every
+  // picker template to day-one fixtures. `q` (round-1 loser count) defaults
+  // to 4 (division-builder.tsx's `qualified` knob), never touched by this
+  // test.
   expect(plate.progression).toMatchObject({
     sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 4 }] }],
     placement: "rank_order",
-    timing: "on_complete",
+    timing: "setup",
   });
 
   const { ids } = await addEntrantsViaApi(request, divisionId, [
@@ -108,6 +120,20 @@ test("ko_plate template: completing the main draw seeds the plate", async ({ pag
     home_entrant_id: string | null;
     away_entrant_id: string | null;
   };
+
+  // Day-one: the plate's TBD bracket exists before Main has even generated,
+  // let alone been played — `timing: "setup"`'s whole point. Placeholder
+  // slots only, no real entrants yet.
+  const plateDayOne = await apiJson<{ created: number; fixtures: Fx[] }>(
+    request,
+    `/api/v1/stages/${plate.id}/generate`,
+    "POST",
+  );
+  expect(plateDayOne.data!.created).toBe(3); // 4-entrant single elim
+  expect(
+    plateDayOne.data!.fixtures.every((f) => f.home_entrant_id === null && f.away_entrant_id === null),
+  ).toBe(true);
+
   const gen = await apiJson<{ fixtures: Fx[] }>(
     request,
     `/api/v1/stages/${main.id}/generate`,
@@ -145,14 +171,37 @@ test("ko_plate template: completing the main draw seeds the plate", async ({ pag
     }
   }
 
-  const done = await apiJson<{ completed: boolean; qualified?: { entrants: string[] } }>(
+  // "complete": setup timing never auto-fills — completeStage computes a
+  // DRAFT seed proposal instead and returns it (owner ruling 12). The plate
+  // stays exactly as TBD as it was on day one until an organiser confirms.
+  const done = await apiJson<{ completed: boolean; seed_proposal?: { id: string; status: string } }>(
     request,
     `/api/v1/stages/${main.id}/complete`,
     "POST",
   );
   expect(done.data!.completed).toBe(true);
-  expect(done.data!.qualified?.entrants).toHaveLength(4);
-  await apiJson(request, `/api/v1/stages/${plate.id}/generate`, "POST");
+  expect(done.data!.seed_proposal?.status).toBe("draft");
+
+  // "propose": explicit recompute — the real endpoint the progression panel
+  // calls (completeStage's own auto-compute above is best-effort and gets
+  // marked stale by this call).
+  const proposal = await apiJson<{
+    id: string;
+    computed: { qualifiers: { entrantId: string; destinationSlot: string }[]; ties: unknown[] };
+  }>(request, `/api/v1/stages/${plate.id}/seed-proposal`, "POST");
+  expect(proposal.data!.computed.qualifiers).toHaveLength(4);
+  expect(proposal.data!.computed.ties).toEqual([]);
+
+  // "confirm": fills the plate's TBD fixtures through the same fillSlot
+  // pathway intra-bracket advancement uses — `POST /generate` alone (already
+  // called above, day one) never seeds it.
+  const confirmed = await apiJson<{ filled: number }>(
+    request,
+    `/api/v1/stages/${plate.id}/seed-proposal/confirm`,
+    "POST",
+    { proposalId: proposal.data!.id },
+  );
+  expect(confirmed.data!.filled).toBe(4);
 
   // See the plate seeded: at least one round-1 loser's name renders on the
   // division page (desktop first, then 375px — no horizontal scroll at
