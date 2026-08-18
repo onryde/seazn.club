@@ -76,6 +76,7 @@ import {
   descriptorLabel,
   destinationSlotsBySeed,
   expandSources,
+  expandTake,
   placeDescriptors,
   resolveProgressionSource,
   sourceShapeOf,
@@ -841,11 +842,54 @@ function alphaLabel(i: number): string {
 // source's count would double-count entrants a REAL resolve would dedupe.
 // This is a READ path fed straight from a DB column — never let a malformed
 // value reach `progressionSize`.
-function qualifierCount(progression: unknown): number {
+//
+// F3 Task 2b (regression fix, commit 6351fd2ce): `progressionSize`
+// deliberately contributes 0 for `topNPerGroup` (its own comment:
+// "group-count-dependent; callers with a real shape use expandTake
+// instead") — groups_ko's switch to `topNPerGroup` made every
+// group-into-knockout preview collapse through the `|| 4` guard below
+// regardless of the real qualifier count (4 pools x 4 qualifiers/pool
+// previewed a 4-team bracket, not 16). `previewDivisionFixtures` has the
+// whole stage array, so the previous stage's real pool count is knowable
+// with no DB read — `previewSourceShape` derives it the same way
+// stage-seeding.ts's `sourceShapeOf` does for a preset (non-DB) source.
+// Only a take that actually contains `topNPerGroup` pays for this: every
+// rankRange/bestNth/picks/roundLosers-only take (league_ko,
+// group_stepladder, group_playoffs, ko_plate, qualifying_main) still goes
+// straight through `progressionSize`, unchanged — `expandTake` would
+// compute the identical total for those kinds, so there is no reason to
+// risk it on the common path.
+function previewSourceShape(prev: PreviewStageInput | undefined): SourceShape {
+  // A non-"group" (or absent) previous stage has no pools. Matches
+  // sourceShapeOf's own convention: topNPerGroup then degenerates to one
+  // implicit pool (expandOne's `pools.length > 0 ? shape.poolKeys : [""]`),
+  // the same "ungrouped source" fallback getStandings/seedNextStage use.
+  if (!prev || prev.kind !== "group") return { poolKeys: [] };
+  const cfg = (prev.config ?? {}) as { pools?: { count?: unknown } };
+  const raw = cfg.pools?.count;
+  // Mirrors poolCount()'s own default-to-1, but never throws on an
+  // out-of-range value — this is a preview read path (malformed knob data
+  // must fall back to 1 pool, not 422 a gallery render).
+  const count = typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= POOL_KEYS.length ? raw : 1;
+  return { poolKeys: POOL_KEYS.slice(0, count).split("") };
+}
+
+function qualifierCount(progression: unknown, prevStage?: PreviewStageInput): number {
   if (!progression || typeof progression !== "object") return 0;
   const spec = progression as { sources?: { take?: unknown }[] };
   const take = spec.sources?.[0]?.take;
-  return Array.isArray(take) ? progressionSize(take as TakeRule[]) : 0;
+  if (!Array.isArray(take)) return 0;
+  const rules = take as TakeRule[];
+  if (rules.some((r) => (r as { kind?: unknown } | null)?.kind === "topNPerGroup")) {
+    try {
+      return expandTake(rules, previewSourceShape(prevStage)).reduce((sum, pot) => sum + pot.length, 0);
+    } catch {
+      // A malformed sibling rule despite the topNPerGroup check above —
+      // fall through to progressionSize's own graceful degradation; this
+      // read path must never throw.
+    }
+  }
+  return progressionSize(rules);
 }
 
 /** Preview a whole stage graph. Stage 1 uses A,B,C… entrants; later (qualifier)
@@ -860,7 +904,14 @@ export function previewDivisionFixtures(
 
   return stages.map((stage, stageIdx) => {
     const firstStage = stageIdx === 0;
-    const entrantCount = firstStage ? n : Math.max(2, qualifierCount(stage.progression) || 4);
+    // `|| 4` is now genuinely unknowable only: an absent/malformed
+    // progression, or a take whose rules all resolve to 0 real qualifiers.
+    // A real topNPerGroup/rankRange/bestNth/picks/roundLosers take is sized
+    // exactly by qualifierCount (shape-aware for topNPerGroup via the
+    // previous array entry, progressionSize otherwise — see its comment).
+    const entrantCount = firstStage
+      ? n
+      : Math.max(2, qualifierCount(stage.progression, stages[stageIdx - 1]) || 4);
     const label = (i: number) => (firstStage ? alphaLabel(i) : `Seed ${i + 1}`);
 
     // Formats whose pairings depend on live results — no static draw exists.
