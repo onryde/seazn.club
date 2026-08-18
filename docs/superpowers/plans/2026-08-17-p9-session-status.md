@@ -239,3 +239,84 @@ in the session to notice the cutover's additive cost.
 Fix (owed before merge): a slim court directory prop for the board, and drop
 the frozen text columns from `BOARD_FIXTURE_COLS` once
 `courtDisplayName`'s legacy fallback no longer needs them.
+
+---
+
+# RESUME HERE (written 2026-08-18, before a context compaction)
+
+## State
+
+Branch `p9-venues-scheduler`, ~193 commits, rebased onto origin/main (0 behind
+at time of writing), clean tree. **No PR yet.** Env label `p9post` (Postgres +
+placement); `p9e2e` has the prod build on :3387.
+
+## Owner rulings that shape everything
+
+1. **FULL spec-literal cutover** — all `court_label` readers switched, not a
+   compatibility shim.
+2. **NO DATA IN PRODUCTION** (owner, 2026-08-18). Backfill of legacy data is
+   therefore unnecessary; runtime correctness still is. The V374
+   `division_events` backfill was dropped for this reason.
+3. Payload budget re-baselined 250KB → 300KB with rationale, AFTER fixing the
+   two real wastes (see board-v3.spec.ts comment).
+4. P9.5 carved out between P9 and P10; prompt written, index updated.
+
+## Gates, all measured by me
+
+- server `src/server` sequential + placement live: 3504 tests / 3466 pass
+- `packages/engine`: 3961 / 3955 pass
+- both typecheckers: 0 errors · `db:apply` from scratch: **v374**
+- **smoke: 832 / 0 fail** (incl. `twoVenueScheduleSuite` — both venues used)
+- widths 320 + 768: 46 / 0 fail
+- e2e: 3 real defects found and fixed; all other failures isolated as
+  cross-worker interference or environmental (Stripe/Resend; `ai-architect`
+  needs `SCHEDULING_AI_BASE_URL` pointing at e2e/ai-fixture-server.ts)
+
+## OPEN: `/code-review` high found 14, and they are NOT all fixed yet
+
+Two implementers were running when this was written:
+- **wave 1a** (`history.ts`, V374, `schemas.ts` lock shapes): defensive replay
+  skip for a non-uuid court; unmappable blackout/locked-scope entries dropped
+  in the migration so every stored config parses; guard mismatch at V374:666.
+  Backfill block DROPPED per ruling 2.
+- **wave 1b** (`board/ai-*.{ts,tsx}`, `officials-ai.ts`): `sameSlot` comparing
+  a frozen `court_label` so every AI proposal reads as "moved" (HIGH); uuids
+  rendered in the AI review panel and the joint divergent-courts warning; the
+  client quote and the server charge counting courts differently (MONEY).
+
+**Wave 2 NOT STARTED** — needs `schemas.ts`/`schedule.ts` once wave 1 releases:
+- **#10** `court_tag_mismatch` is `reason: "court"` → blocking → backs
+  `assertPublishable`, so adding a tag requirement to a division with an
+  existing board hard-refuses publish with no override. This contradicts
+  ruling 3 (archiving must not retroactively red a board) one field over. MINE
+  to correct — my ruling created it.
+- **#11** validate uses division tags only; the placer unions division ∪ stage.
+- **#9** `MyFixture`/`AssignedFixture` still declare `venue`/`court_label`
+  required while `me.ts`/`scorers.ts` stopped selecting them → `/me/fixtures`
+  returns undefined for two documented fields. Published-contract drift.
+- **#6** `resolveCourtNames` builds from `courtGroups(venues)`, which drops
+  archived — defeating the `listVenues(includeArchived: true)` fetch added so
+  an archived court still renders a name.
+- **#13** the picker's selected-order strip is not venue-qualified.
+
+## Then, to close
+
+1. Re-run gates after wave 1 + 2 (server, engine, smoke, widths).
+2. Rebase, re-check V-number uniqueness (main took V368 then V371; ours is
+   V374 — a clean rebase does NOT surface a duplicate).
+3. Open the PR — body drafted at `/tmp/p9-pr-body.md`; if that is gone,
+   rebuild it from the "Defects found" and "Deferred" sections above.
+4. Deferrals for the PR body: demo-template JSON re-capture
+   (`CAPTURE_AI_DEMO=1`), 73 hand-declared `apiV1<>` wire types, `court_label`
+   field rename on AI wire shapes, stage-tag divergence, `ParserContext.courts`
+   unwired, V-c column drop.
+5. Tear down env labels `p9post`, `p9e2e` (and any stray `p9*`).
+
+## The one lesson to carry
+
+17+ defects, one mechanism: **court identity changed from a display string to
+a uuid, and code that read it inherited the new meaning silently.** Everything
+the compiler could see, it caught. Everything behind an unchecked cast
+(`apiV1<T>`), a hand-synced column list (`BOARD_FIXTURE_COLS`), or a
+hand-declared wire type, it could not — and that is where every wire-only
+defect lived. Hence: production apply payloads now infer from their zod schema.
