@@ -2394,6 +2394,23 @@ export interface SeedProposalOut {
   };
 }
 
+/** F3 round-3 review, Task 2 (MAJOR) — engine `descriptorKey` renders
+ *  `best_nth` as `best:${position}`, deliberately dropping `nth` (it is also
+ *  the `seeded_map.source` wire vocabulary, which stays narrow on purpose —
+ *  see progression.ts's own doc comment; NOT widened here). Two bestNth take
+ *  rules on the SAME source at the same position but a DIFFERENT nth (e.g.
+ *  `{nth:3,count:2}` and `{nth:4,count:2}`, both producing positions 1,2)
+ *  therefore collide on that bare key within one source index — a `Map`
+ *  keyed by it silently keeps whichever qualifier was inserted LAST. This
+ *  local, wider key folds `nth` in for `best_nth` only (every other
+ *  descriptor kind is unaffected — `descriptorKey` already fully determines
+ *  them); used on BOTH the seedOfKey build and the tie-lookup read below so
+ *  the two sides can never drift apart. */
+function seedProposalKey(sourceIndex: number, d: SlotDescriptor): string {
+  const base = d.kind === "best_nth" ? `best:${d.nth}:${d.position}` : descriptorKey(d);
+  return `${sourceIndex}:${base}`;
+}
+
 /**
  * Compute (or recompute) a DRAFT seed proposal for a `timing: "setup"`
  * stage (design's API contract: POST /stages/{id}/seed-proposal). Never
@@ -2462,9 +2479,13 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // progression-aware gate (format-gates.ts checks kind/byes/cross_feeds/
     // placements only); progression-multi-source.test.ts exercises it end to
     // end.
-    const seedOfKey = new Map(
-      qualifiers.map((q) => [`${q.sourceIndex}:${descriptorKey(q.descriptor)}`, q.seed] as const),
-    );
+    //
+    // F3 round-3 review, Task 2 — that alone still collides for two bestNth
+    // rules on the SAME source at the same position but a different nth
+    // (descriptorKey's `best:${position}` drops `nth`); seedProposalKey folds
+    // `nth` in for best_nth so this map (and the tie lookup below) can tell
+    // them apart. See its own doc comment.
+    const seedOfKey = new Map(qualifiers.map((q) => [seedProposalKey(q.sourceIndex, q.descriptor), q.seed] as const));
 
     const computedQualifiers = qualifiers.map((q) => ({
       rank: q.seed,
@@ -2491,7 +2512,11 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     }
     const computedTies = ties.map((t) => ({
       slots: t.descriptors.map((sourced) => {
-        const seed = seedOfKey.get(`${sourced.sourceIndex}:${descriptorKey(sourced.descriptor)}`);
+        // seedProposalKey on the read side too (Task 2) — must match the
+        // build side above exactly, or a best_nth tie resolves to whichever
+        // OTHER same-position/different-nth qualifier happened to be
+        // inserted last.
+        const seed = seedOfKey.get(seedProposalKey(sourced.sourceIndex, sourced.descriptor));
         return (seed !== undefined ? slotBySeed.get(seed)?.[0] : undefined) ?? descriptorKey(sourced.descriptor);
       }),
       entrantIds: t.entrantIds,
