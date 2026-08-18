@@ -23,9 +23,13 @@ import "server-only";
 //     filter cannot tell "division B's fixture re-served to me" from "excluded
 //     division C happens to sit on the same court at the same instant", and
 //     deleting the second is deleting a hard constraint with no trace.
-//   * courts are matched across divisions by LABEL and nothing else, so the
-//     pack names the labels that do not appear in every selected division
-//     (`divergentCourts`) for the board to warn on.
+//   * courts are matched across divisions by simple string equality — safe
+//     since P9: `PackSettings.courts` has carried each division's real,
+//     org-wide-unique `courts.id` values since pass 1 (never an
+//     organiser-typed label two DIFFERENT physical courts could collide on),
+//     so an equal string now IS the same court. The pack names the ids that
+//     do not appear in every selected division (`divergentCourts`) for the
+//     board to warn on.
 //   * the shared-player map is rebuilt over the whole run. A per-division map
 //     keeps only persons in >= 2 of ITS OWN entrants, so someone in one entrant
 //     of A and one of B is in neither — invisible to a union of the two. H4
@@ -302,11 +306,12 @@ export interface CompetitionPack {
   sessionHours: { start: string; end: string };
   /** Sorted by name, then slug. */
   divisions: CompetitionPackDivision[];
-  /** Union of every selected division's court labels, sorted. */
+  /** Union of every selected division's court ids (real `courts.id` values,
+   *  P9), sorted. */
   courts: string[];
-  /** Court labels that do NOT appear in every selected division — the board
-   *  warns on these, because cross-division court identity is a string match
-   *  and nothing else. */
+  /** Court ids that do NOT appear in every selected division — the board
+   *  warns on these, so an organiser sees the run does not offer every
+   *  division the same physical courts. */
   divergentCourts: string[];
   entrants: (PackEntrant & { division_id: string })[];
   people: PackPerson[];
@@ -485,12 +490,17 @@ export async function buildCompetitionPack(
     // deliberately excluded: their current placements are exactly what is being
     // re-planned, and constraining against them would pin the schedule to where
     // it already is.
+    // P9 pass 3b: `court_id`, not the legacy `court_label` — the latter is
+    // frozen and null on every fixture scheduled since the cutover, which
+    // silently dropped every real fixed placement from the run's own
+    // "already occupying a court" set (every OTHER division's greedy draft
+    // would then double-book straight through it).
     const fixedRows = await tx<
       {
         id: string;
         division_id: string;
         scheduled_at: string | Date;
-        court_label: string;
+        court_id: string;
         home_entrant_id: string | null;
         away_entrant_id: string | null;
         round_no: number;
@@ -499,7 +509,7 @@ export async function buildCompetitionPack(
         config: unknown;
       }[]
     >`
-      select f.id, f.division_id, f.scheduled_at, f.court_label,
+      select f.id, f.division_id, f.scheduled_at, f.court_id,
              f.home_entrant_id, f.away_entrant_id, f.round_no, f.seq_in_round, f.ext_key,
              s.config
       from fixtures f
@@ -507,7 +517,7 @@ export async function buildCompetitionPack(
       where f.division_id in ${tx(requested)}
         and f.status in ${tx(FIXED_OCCUPYING)}
         and f.scheduled_at is not null
-        and f.court_label is not null`;
+        and f.court_id is not null`;
     // …and the run's PEOPLE, entrant by entrant, over every entrant named on any
     // of its fixtures.
     //
@@ -624,7 +634,7 @@ export async function buildCompetitionPack(
       const startAt = new Date(r.scheduled_at).getTime();
       return {
         fixtureId: r.id,
-        court: r.court_label,
+        court: r.court_id,
         startAt,
         endAt: startAt + (fixedMinutes.get(r.division_id) ?? 0) * MS_PER_MIN,
         entrants: [r.home_entrant_id, r.away_entrant_id].filter((e): e is string => e !== null),
@@ -864,7 +874,9 @@ export async function buildCompetitionPack(
     ),
   };
 
-  // Courts: a label is THE SAME COURT across divisions iff the string matches.
+  // Courts: `b.pack.settings.courts` is each division's OWN already-filtered
+  // candidate set (buildSchedulePack's own resolveCandidateCourts call), so
+  // an id equal across divisions IS the same physical court.
   const courtSets = built.map((b) => new Set(b.pack.settings.courts));
   const courts = [...new Set(built.flatMap((b) => b.pack.settings.courts))].sort(cmp);
   const divergentCourts = courts.filter((c) => !courtSets.every((s) => s.has(c)));
@@ -2344,8 +2356,10 @@ export interface AiCompetitionPlanRequest {
 export interface AiCompetitionPlanResponse
   extends Omit<CompetitionPlanResult, "usage" | "constraint_suggestions">,
     Omit<RunMeterStamp, "divisions"> {
-  /** Court labels not shared by every solved division — same-named courts are
-   *  the SAME court and differently-named ones are not, so the board warns. */
+  /** Court ids (real `courts.id` values, P9) not shared by every solved
+   *  division, so the board can warn on them. NOT display-ready — a
+   *  consumer must resolve each id to a court name before rendering it;
+   *  never render a bare uuid. */
   divergent_courts: string[];
   /**
    * One row per SOLVED division, in pack order: what it is AND what it cost.
