@@ -79,19 +79,19 @@
 // rather than silently deviating from the literal brief text.
 "use client";
 import type { EventEnvelope } from "@seazn/engine/core";
-// R2b-next (owner-sanctioned exception to R2b's "no engine src changes"
-// rule, 2026-08-17): the ONE genuine import from packages/engine in this
-// file. Every other engine rule this file needs (`isEligibleOverBowler`,
-// `eligibleBowlers`) is MIRRORED rather than imported (that function's own
-// doc explains why: packages/engine's cricket module has no reason to
-// export it) — `nextBattingSide` is different because hand-copying its
-// alternation/follow-on branches would fork a real decision rule across a
-// package boundary, the recurring defect class this repo has hit before.
-// Exported specifically for this call site (packages/engine PR, same wave).
-import { nextBattingSide } from "@seazn/engine/sports/cricket";
+// Engine rules this file uses rather than re-states. R2b imported exactly one
+// (`nextBattingSide`) and MIRRORED the over-bowler eligibility rule as a local
+// `isEligibleOverBowler`, because the export had not been granted — which cost
+// that wave's review a byte-for-byte verification to trust, and left a rule
+// free to drift across a package boundary. R2c needs the eligible LIST (to
+// narrow the bowler chip's candidates, not merely to test one name), which is
+// exactly what the engine's own filter already is, so the mirror is DELETED
+// and the rule imported. Same reasoning `nextBattingSide` was granted on.
+import { eligibleBowlers, nextBattingSide, reviewsRemaining } from "@seazn/engine/sports/cricket";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
+  type Blocked,
   MORE_SHEET_KEY,
   type ActivityDetailContext,
   type ContextStripSpec,
@@ -170,6 +170,9 @@ interface CricketCfgShape {
    *  check (cricket.ts:1166-1171) rather than proposing an exhausted
    *  bowler. */
   maxOversPerBowler?: number;
+  /** R2c / C3 — the per-innings player-review allowance. ABSENT means
+   *  uncapped, never zero (the engine's own `reviewsRemaining` reading). */
+  reviews?: { perInnings?: number } | undefined;
 }
 interface CricketFineShape {
   striker?: string | null;
@@ -191,6 +194,12 @@ interface CricketInningsShape {
   legalBalls?: number;
   closed?: boolean;
   fine?: CricketFineShape | null;
+  /** R2c / C3 — the per-side review ledger the engine's own `reviewsRemaining`
+   *  reads. Absent from this shape until C3 needed it, the same way
+   *  `prevOverBowler`/`bowlerBalls` were absent until R2b needed them: this
+   *  shape carries only what the skin has had a reason to read. `lost`, not
+   *  `taken`, is the counter that spends an allowance. */
+  reviews?: Record<"home" | "away", { taken: number; lost: number }> | undefined;
 }
 interface CricketStateShape {
   phase?: "pre" | "live" | "super_over" | "done" | "final";
@@ -367,39 +376,6 @@ export interface ResolvedPeople {
   bowler: string;
 }
 
-/**
- * Bug fix (owner-reported, reproduced against real data, 2026-08-17): whether
- * `personId` may legally OPEN a new over — mirrors the engine's own two
- * checks at an over boundary (`fine.currentBowler === null`) verbatim:
- * `applyDelivery`, cricket.ts:1160-1171, and the identical filter its own
- * random-stream generator uses internally, `eligibleBowlers`, cricket.ts:
- * 1784-1795 (private to that module; mirrored here, not imported — this
- * file's own header now documents the ONE deliberate exception,
- * `nextBattingSide`, granted specifically because that rule was worth an
- * engine export rather than a second fork; `eligibleBowlers` was not
- * granted one). No consecutive overs
- * (`personId === fine.prevOverBowler`), and — only when the cfg actually
- * caps it — the per-bowler quota (`floor(bowlerBalls[id] / bpo) >=
- * maxOversPerBowler`). The engine's THIRD refusal ground ("not in the
- * fielding lineup", cricket.ts:1163) needs no check here: every caller below
- * draws `personId` FROM `bowlingOrder` itself, so it always already holds.
- *
- * `bpo` must be the cfg's real `ballsPerOver` (`ballsPerOverOf`), never a
- * hardcoded 6 — the Hundred sets 5 (cricket.ts:2811), and the quota
- * arithmetic silently mis-divides against the wrong divisor otherwise.
- */
-export function isEligibleOverBowler(
-  personId: string,
-  fine: CricketFineShape | null | undefined,
-  maxOversPerBowler: number | undefined,
-  bpo: number,
-): boolean {
-  if (personId === (fine?.prevOverBowler ?? null)) return false;
-  if (maxOversPerBowler === undefined) return true;
-  const bowled = Math.floor((fine?.bowlerBalls?.[personId] ?? 0) / bpo);
-  return bowled < maxOversPerBowler;
-}
-
 /** Striker/non-striker/bowler, fold-authoritative (`fine.*`) with the SAME
  *  default v2's `ThisOverGroup` used before any manual pick existed:
  *  `battingOrder[0]`/`[1]` for striker/non-striker — stateless here (no
@@ -423,7 +399,7 @@ export function isEligibleOverBowler(
  *  engine would refuse outright, and the scorer could not start the next
  *  over at all (see this file's own test suite for the exact live
  *  reproduction). Now the first ELIGIBLE name in `bowlingOrder`
- *  (`isEligibleOverBowler`, above) — `""` (never an illegal name) when
+ *  (the engine's own `eligibleBowlers`) — `""` (never an illegal name) when
  *  nobody qualifies, forcing the scorer to choose via the context strip
  *  rather than silently shipping a payload the engine will reject. `cfg`
  *  (new 3rd param, defaulted to `{}`) is what this needs: every pre-fix call
@@ -464,7 +440,7 @@ export function resolvePeople(
     bowler:
       overrides.bowler ??
       fine?.currentBowler ??
-      bowlingOrder.find((id) => isEligibleOverBowler(id, fine, cfg.maxOversPerBowler, bpo)) ??
+      eligibleBowlers(bowlingOrder, fine, cfg.maxOversPerBowler, bpo)[0] ??
       "",
   };
 }
@@ -497,19 +473,19 @@ export type BowlerBlockReason = "prevOver" | "notInLineup" | "quota" | "noEligib
  * verbatim (`applyDelivery`, cricket.ts:1160-1171): consecutive-over
  * first, then fielding-lineup membership, then quota — each an early
  * return, exactly like the engine's own sequential `invalid()` calls only
- * ever throw on the FIRST ground that matches. `isEligibleOverBowler`
- * (above) already owns two of these three grounds verbatim
+ * ever throw on the FIRST ground that matches. The engine's own
+ * `eligibleBowlers` already owns two of these three grounds verbatim
  * (consecutive-over + quota) — reused below for the QUOTA determination
  * specifically (by the time it is called, consecutive-over is already
  * ruled out, so a `false` result can only mean quota). It is deliberately
  * NOT reused for the lineup-membership check: that is the one ground
- * `isEligibleOverBowler`'s own doc explains is ABSENT from that helper,
+ * `eligibleBowlers`'s own doc explains is ABSENT from that filter,
  * because every one of its OTHER callers draws `personId` FROM
  * `bowlingOrder` itself, so it always already holds — the manual-override
  * path is the first caller that can break that invariant (a picked name
  * can be a BATTING-side player), so this function checks lineup membership
- * directly rather than widening `isEligibleOverBowler`'s signature for
- * every existing caller's sake.
+ * directly rather than asking the engine's filter to take on a ground it
+ * deliberately does not carry.
  *
  * `"noEligible"` — the dead-end case the task brief required a decision
  * on, not a silent block-everything: every fielding-side player is either
@@ -538,7 +514,9 @@ export function bowlerBlockReason(
   const bowlingOrder = state.orders?.[people.bowlingSide] ?? [];
   if (!bowlingOrder.includes(people.bowler)) return "notInLineup";
   const bpo = ballsPerOverOf(cfg);
-  return isEligibleOverBowler(people.bowler, fine, cfg.maxOversPerBowler, bpo) ? null : "quota";
+  // Consecutive-over and lineup membership are both already ruled out above,
+  // so the engine filter rejecting this name can only mean the quota.
+  return eligibleBowlers([people.bowler], fine, cfg.maxOversPerBowler, bpo).length > 0 ? null : "quota";
 }
 
 function basePayload(state: CricketStateShape, cfg: CricketCfgShape, overrides: Readonly<Record<string, string>>): Record<string, unknown> {
@@ -1206,20 +1184,16 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   }
 
   tiles.push(closedTile({ id: "review", label: "pad.cricket.action.review", kind: "standard", phases: ["live"], action: { sheet: "review" } }));
-  // R2b (owner ruling, live-tile audit defect 4, 2026-08-17): the dedicated
-  // Retire tile is GONE — its own SwapSheet scoped "off" to the whole
-  // batting side (never just the crease, engine backstops it at
-  // cricket.ts:1676) and hardcoded reason:"other", while the generic
-  // More-sheet's `cricket.retire` action (padSpec's own `retireAction`,
-  // engine cricket.ts) was ALSO reachable with a real reason enum — two
-  // divergent entry points for the one event. `pad-host.tsx`'s own
-  // `dedicatedEventTypes` never counted this tile's `{swap:true}` action
-  // toward the dedicated set anyway (its own header: a swap tile "builds its
-  // event dynamically... contributes nothing"), so `cricket.retire` was
-  // ALREADY reachable via the generic More sheet before this change and
-  // stays reachable the same way now — nothing to add here, only to remove.
-  // See `buildSwap`'s own former header (this section, now deleted) and
-  // `cricketSkinV3`'s factory below for the rest of the removal.
+  // R2c / C2 (owner-approved amendment to R2b's defect-4 ruling, 2026-08-18):
+  // Retire is a tile again, but a `{sheet}` one rather than the `{swap:true}`
+  // tile R2b removed. Both faults that justified the removal are gone — the
+  // sheet carries the real reason enum and narrows to the crease — and the
+  // duplicate-entry-point problem solves itself: a `{swap:true}` action
+  // contributed NOTHING to `dedicatedEventTypes` (pad-host.tsx), which is
+  // exactly why the generic More-sheet `cricket.retire` stayed reachable
+  // alongside it, whereas a sheet's own `event` IS counted, so declaring
+  // `retireSheet` removes the generic entry with no extra wiring.
+  tiles.push(closedTile({ id: "retire", label: "pad.cricket.action.retire", kind: "standard", phases: ["live"], action: { sheet: "retire" } }));
   tiles.push(closedTile({
     id: "inningsClose",
     label: "pad.cricket.action.inningsClose",
@@ -1408,8 +1382,9 @@ const BOWLER_BLOCK_MESSAGE_KEY: Record<Exclude<BowlerBlockReason, "noEligible">,
  * The `"quota"` branch reads `cfg.maxOversPerBowler` directly rather than
  * threading the number through `BowlerBlockReason` itself: by the time
  * `bowlerBlockReason` has returned `"quota"`, that field is guaranteed
- * defined (its own doc — `isEligibleOverBowler` can only fail via the
- * quota branch when `maxOversPerBowler !== undefined`) — the `throw` below
+ * defined (its own doc — `eligibleBowlers` can only reject a
+ * lineup-resident, non-consecutive name via its quota branch, which is
+ * unreachable when `maxOversPerBowler === undefined`) — the `throw` below
  * is `requiredVocabKey`'s own "never a silently-wrong fallback" posture
  * (this file, above), not a reachable runtime path through either of this
  * function's two real callers.
@@ -1431,6 +1406,88 @@ function bowlerBlockMessage(
     return t(BOWLER_BLOCK_MESSAGE_KEY.quota, { name, quota });
   }
   return t(BOWLER_BLOCK_MESSAGE_KEY[reason], { name });
+}
+
+/**
+ * R2c / C1 — the bowler picker's per-candidate blocks: every name in the
+ * fielding side that cannot legally open the next over, each mapped to the
+ * reason, ready for `ContextSlot.blocked` (types.ts).
+ *
+ * The candidate list itself is the fielding side (`ContextSlot.candidates`,
+ * set alongside this in `buildContext`) — SCOPE, which removes. This is
+ * ELIGIBILITY, which does not: an ineligible bowler stays visible with the
+ * reason beside their name, per R2b's binding "visible, blocked, and
+ * REASONED — not removed" ruling. Removing them would leave a scorer hunting
+ * for a bowler who is simply gone.
+ *
+ * Wording comes from `bowlerBlockMessage` above — the SAME function, and
+ * therefore the same four `blocked.*` keys in all four locales, that already
+ * words the slot-level message. The picker and the message can never phrase
+ * one fact two ways, and R2c owes no new dictionary entries for it.
+ *
+ * `notInLineup` is structurally unreachable here (every id comes FROM
+ * `bowlingOrder`), and `noEligible` is a SLOT-level statement rather than a
+ * per-candidate one — when nobody qualifies, every candidate carries its own
+ * individual reason instead, which is strictly more informative.
+ *
+ * Returns `{}` mid-over: the fold has locked that bowler in regardless of
+ * eligibility, and the slot is read-only, so there is no picker to narrow —
+ * the same short-circuit `resolvePeople` and `bowlerBlockReason` already take.
+ */
+/**
+ * The same three grounds as `bowlerBlockMessage`, worded WITHOUT the person's
+ * name — for the picker, where the reason renders directly beside the name it
+ * would otherwise repeat.
+ *
+ * Found by looking at the sign-off capture, not by a test: every test asserted
+ * the string matched, and it did. The rendered chip read "G R2c BowlerA … G
+ * R2c BowlerA bowled the last over and cannot bowl this one too", which is
+ * both silly and, at 320px on a touch surface, expensive in the one dimension
+ * there is least of.
+ *
+ * The name-bearing wording is still correct where it is used — the SLOT
+ * message stands alone and must name who is at fault — so this is a second
+ * variant rather than a replacement, and the two cannot drift apart on the
+ * FACT they state because both are driven by the same `BowlerBlockReason`.
+ */
+function bowlerBlockShortMessage(
+  t: TFn,
+  // Narrower than `BowlerBlockReason` on purpose. Only these two are
+  // reachable per candidate: every id comes FROM `bowlingOrder`, so
+  // "notInLineup" cannot arise, and "noEligible" is a statement about the
+  // WHOLE list rather than about one name. Typing the two real cases is
+  // honest and leaves no unreachable branch to rot (tsc caught the dead one).
+  reason: "prevOver" | "quota",
+  cfg: CricketCfgShape,
+): string {
+  if (reason === "prevOver") return t("pad.cricket.context.bowler.blocked.prevOver.short");
+  const quota = cfg.maxOversPerBowler;
+  if (quota === undefined) {
+    throw new Error("cricket skin: quota block reason with no cfg.maxOversPerBowler");
+  }
+  return t("pad.cricket.context.bowler.blocked.quota.short", { quota });
+}
+
+export function bowlerBlocked(
+  t: TFn,
+  state: CricketStateShape,
+  people: ResolvedPeople,
+  cfg: CricketCfgShape,
+): Blocked {
+  const innings = scoringInnings(state, cfg);
+  const fine = innings?.fine ?? null;
+  if ((fine?.currentBowler ?? null) !== null) return {};
+  const bowlingOrder = state.orders?.[people.bowlingSide] ?? [];
+  const eligible = new Set(
+    eligibleBowlers(bowlingOrder, fine, cfg.maxOversPerBowler, ballsPerOverOf(cfg)),
+  );
+  const out: Record<string, string> = {};
+  for (const id of bowlingOrder) {
+    if (eligible.has(id)) continue;
+    const reason = id === (fine?.prevOverBowler ?? null) ? ("prevOver" as const) : ("quota" as const);
+    out[id] = bowlerBlockShortMessage(t, reason, cfg);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -1578,6 +1635,14 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         personId: people.bowler || undefined,
         pool: "onfield",
         required: true,
+        // R2c / C1 — closes the CANDIDATE-LIST GAP recorded above. SCOPE:
+        // the fielding side only, so the engine's "not in the fielding
+        // lineup" refusal is now structurally unreachable from the picker
+        // rather than merely caught after the fact. ELIGIBILITY: the
+        // fielding side's own ineligible bowlers stay visible, each with
+        // its reason (bowlerBlocked, above).
+        candidates: state.orders?.[people.bowlingSide] ?? [],
+        blocked: inningsClosed ? {} : bowlerBlocked(t, state, people, cfg),
         // defect 3 (readOnly) / defect 2 (closure) — see this file's header
         // above for both. Closure forces readOnly too: there is no "over
         // boundary" concept once the innings itself is over.
@@ -1746,8 +1811,114 @@ function tossSheet(view: PadHostView): GuidedSheetSpec {
  *  step for an optional field would force a tap the engine itself does not
  *  require — the opposite of what this wave exists to fix. Left reachable
  *  only via the generic "More" sheet, same as before this skin existed. */
-function reviewSheet(view: PadHostView): GuidedSheetSpec {
+/**
+ * R2c / C2 — cricket's own Retire flow, replacing the generic More-sheet
+ * `cricket.retire` form. AMENDS R2b's defect-4 ruling (owner-approved
+ * 2026-08-18): that audit dropped the dedicated tile because it hardcoded
+ * `reason: "other"` and scoped its picker to the whole batting side, and kept
+ * the generic form because it at least had a real reason enum. Neither fault
+ * survives here — the enum AND the crease — so the reason the tile was
+ * dropped no longer applies.
+ *
+ * Still ONE entry point, with nothing extra to remove: `dedicatedEventTypes`
+ * (pad-host.tsx) folds every sheet's own `event` into the dedicated set, so
+ * declaring this sheet is itself what drops `cricket.retire` from the More
+ * sheet. That is the same mechanism the old `{swap:true}` tile could NOT
+ * trigger, which is precisely how the two divergent entry points arose.
+ *
+ * `incoming` is deliberately NOT asked. The engine's own payload marks it
+ * optional and defaults it to the next batter in the order
+ * (`CricketRetire`), which is the ordinary case, so asking would add a tap
+ * to every retirement to restate what the fold already knows — the same
+ * "never re-ask what the fold already knows" rule the chassis is built on,
+ * and the same fewer-taps-on-the-common-case trade the R2b dock ruling made.
+ * A sport that later needs an explicit incoming batter adds a third step.
+ *
+ * The crease is `fine.striker`/`fine.nonStriker` — verbatim what the engine
+ * itself checks (`applyRetire`: `"… is not at the crease"`). Empty-string
+ * placeholders are filtered for the same reason `wicketSheet`'s own
+ * `outCandidates` filters them: `resolvePeople` yields `""` before the order
+ * is populated, and `renderCandidateRow` would draw that as a blank button.
+ */
+function retireSheet(view: PadHostView): GuidedSheetSpec {
+  const state = asState(view.state);
+  const cfg = asCfg(view.cfg);
+  const people = resolvePeople(state, view.contextOverrides, cfg);
+  const creaseCandidates = [people.striker, people.nonStriker].filter((id): id is string => id !== "");
+  return {
+    event: "cricket.retire",
+    steps: [
+      {
+        id: "person",
+        kind: "person",
+        title: "pad.cricket.sheet.retire.person.title",
+        pool: "onfield",
+        side: people.battingSide,
+        candidates: creaseCandidates,
+      },
+      {
+        id: "reason",
+        kind: "choice",
+        title: "pad.cricket.sheet.retire.reason.title",
+        options: [
+          { id: "hurt", label: "pad.cricket.sheet.retire.reason.hurt" },
+          { id: "out", label: "pad.cricket.sheet.retire.reason.out" },
+          { id: "other", label: "pad.cricket.sheet.retire.reason.other" },
+        ],
+      },
+    ],
+    buildPayload: (answers) => ({ person: answers.person, reason: answers.reason }),
+  };
+}
+
+/**
+ * R2c / C3 — the `by` step refuses a side that has spent its player-review
+ * allowance, instead of letting the scorer finish the sheet and meet a
+ * generic 422 from `applyReview`.
+ *
+ * `t` is REQUIRED, never defaulted: R2b proved a defaulted translator is a
+ * tsc-invisible silent-fallback trap (dropping the argument at the factory
+ * type-checks, lints, and ships a raw i18n key to a scorer), and _INDEX.md
+ * carries "R3-R7 skin authors: require `t`" as a standing instruction.
+ *
+ * WHY THIS IS NOT A STEP-ORDERING PROBLEM, since the brief said it was. Both
+ * sides' quotas are readable from `view` here, at build time. The only fact
+ * that arrives later is `kind` — and `kind` is step 1 while `by` is step 3,
+ * so `blocked(answers)` already has it. A reorder would have been worse than
+ * unnecessary: it would ask the side even for an UMPIRE review, which the
+ * engine never caps at all.
+ *
+ * The quota arithmetic itself is the engine's `reviewsRemaining`, not a local
+ * copy — that rule was already forked twice inside cricket.ts and a third
+ * copy here is exactly the drift this wave exists to stop. Two subtleties it
+ * owns so this file does not restate them: only an UNSUCCESSFUL player review
+ * is spent (the counter is `lost`, never `taken`), and an absent allowance
+ * means uncapped rather than zero.
+ */
+function reviewSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
   const squads = view.squads;
+  const state = asState(view.state);
+  const cfg = asCfg(view.cfg);
+  const innings = scoringInnings(state, cfg);
+  const sideOfEntrant: Record<string, "home" | "away"> = {
+    [squads.home.entrantId]: "home",
+    [squads.away.entrantId]: "away",
+  };
+  const blockedSides = (answers: Readonly<Record<string, string>>): Blocked => {
+    // Umpire reviews are never capped (the engine gates the quota on
+    // `kind === "player"`), so nothing is blocked until that is the answer.
+    if (answers.kind !== "player") return {};
+    if (innings === null || innings === undefined) return {};
+    const out: Record<string, string> = {};
+    for (const [entrantId, side] of Object.entries(sideOfEntrant)) {
+      if (reviewsRemaining(innings, cfg.reviews?.perInnings, side) !== 0) continue;
+      // Name-free: the option's own label already says which side this is,
+      // so repeating it here just spends width. Same finding as
+      // `bowlerBlockShortMessage` (above) — caught in the capture, not a test.
+      out[entrantId] = t("pad.cricket.sheet.review.by.blocked.noneLeft.short");
+    }
+    return out;
+  };
   return {
     event: "cricket.review",
     steps: [
@@ -1774,6 +1945,7 @@ function reviewSheet(view: PadHostView): GuidedSheetSpec {
         id: "by",
         kind: "choice",
         title: "pad.cricket.sheet.review.by.title",
+        blocked: blockedSides,
         options: [
           { id: squads.home.entrantId, label: "scorepad.attribution.home" },
           { id: squads.away.entrantId, label: "scorepad.attribution.away" },
@@ -1894,11 +2066,12 @@ function overSummarySheet(view: PadHostView): GuidedSheetSpec {
   };
 }
 
-export function buildSheets(view: PadHostView): Record<string, GuidedSheetSpec> {
+export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
   return {
     wicket: wicketSheet(view),
     toss: tossSheet(view),
-    review: reviewSheet(view),
+    retire: retireSheet(view),
+    review: reviewSheet(view, t),
     inningsClose: inningsCloseSheet(),
     overSummary: overSummarySheet(view),
   };
@@ -1934,7 +2107,7 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     tiles: (view) => buildTiles(view, t),
     dock: (eventType, _view, payload) => buildDock(eventType, t, payload),
     context: (view) => buildContext(view, t),
-    sheets: buildSheets,
+    sheets: (view) => buildSheets(view, t),
     // D2 (R2 sign-off): the skin supplies per-ball detail so the activity
     // panel's rows differ from one another. Declared HERE rather than the
     // chassis importing `cricketBallDetail` directly — sport vocabulary stays

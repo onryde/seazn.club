@@ -175,6 +175,39 @@ export interface DockChip {
 }
 export interface DockSpec { title: string; chips: DockChip[] }
 
+/**
+ * R2c — a person/option id -> the PRE-LOCALISED reason it is not selectable
+ * RIGHT NOW. An ABSENT key means selectable; the map is never exhaustive, and
+ * a key naming someone already out of scope is simply never rendered rather
+ * than an error (the two narrowing operations compose, see below).
+ *
+ * Pre-localised, skin-supplied prose — the same rule `WhoLine.servingLabel`,
+ * `TileSpec.labelText`, `ContextSlot.message` and `SheetNumberStep.hintText`
+ * already establish in this file: the chassis never resolves a
+ * sport-namespaced key, and these strings need an interpolated person name
+ * (and sometimes a cfg-derived number) baked in before they arrive. A skin
+ * has `t` for this — the skin FACTORY takes it (`cricketSkinV3(t)`) and every
+ * builder closes over it.
+ *
+ * NARROWING HAS TWO CAUSES AND THEY WANT OPPOSITE TREATMENTS. This type is
+ * only the second one:
+ *
+ * - SCOPE — the person is not in question at all (a batter in a bowler
+ *   picker). REMOVED, via `candidates`. Nobody expects them, and rendering
+ *   eleven greyed names is noise on a touch-first surface at 320px.
+ * - ELIGIBILITY — in scope, but blocked right now (bowled the previous over,
+ *   at quota, side has no reviews left). RENDERED, disabled, WITH ITS REASON.
+ *   This is R2b's binding ruling ("visible, blocked, and REASONED — not
+ *   removed"; `TileSpec.disabled`'s own doc above) applied to a candidate
+ *   list rather than a tile, and it is what stops a silently shortened list
+ *   leaving a scorer who expected a name with no idea why it is gone.
+ *
+ * Named `Blocked` rather than `Disabled` deliberately: `TileSpec.disabled` is
+ * a bare boolean on one tile, and reusing that word for a per-id map would
+ * invite a skin author to expect the same shape.
+ */
+export type Blocked = Readonly<Record<string, string>>;
+
 export interface ContextSlot {
   id: string;                     // "striker" | "bowler" | …
   label: string;                  // i18n key
@@ -232,6 +265,44 @@ export interface ContextSlot {
    * neither may be set on the same slot.
    */
   message?: string;
+  /**
+   * R2c — SCOPE. When present, SUPERSEDES `pool` entirely: the identical
+   * contract, wording and semantics `SheetPersonStep.candidates` (G6) already
+   * ships, extended to the strip, and honoured by the same
+   * `candidates ?? resolvePool(...)` line guided-sheet.tsx already uses.
+   *
+   * An EMPTY array means "nobody is eligible" and renders the empty-pool
+   * text — it must never read as "no narrowing" and fall back to `pool`.
+   * That absent-vs-empty divergence is the trap `ContextSlot.message` already
+   * hit (R2b review item 3); here the two states have genuinely different
+   * meanings, so the check is presence, not truthiness.
+   *
+   * `pool` stays REQUIRED regardless — every slot that does not narrow (every
+   * other sport, and cricket's own striker/non-striker) still needs it, and
+   * keeps behaving identically with zero change.
+   *
+   * First use: cricket's bowler chip, narrowed to the FIELDING side. That
+   * also makes the engine's "not in the fielding lineup" refusal structurally
+   * unreachable from the picker rather than merely checked afterwards.
+   */
+  candidates?: readonly string[];
+  /**
+   * R2c — ELIGIBILITY. Applied AFTER `candidates`/`pool` resolves, so scope
+   * and eligibility never fight. See `Blocked` above for why these are two
+   * operations and not one.
+   *
+   * A plain VALUE here while `SheetChoiceStep.blocked` is a METHOD, and the
+   * asymmetry is load-bearing rather than sloppiness: a strip slot has no
+   * answers to depend on and is rebuilt every render from the live `view`, so
+   * a value is already current. A sheet step is built once per render but
+   * read across several answer transitions within one sheet, so its verdict
+   * must be a function of `answers` or it goes stale mid-wizard.
+   *
+   * First use: cricket's bowler chip — the previous over's bowler and anyone
+   * at quota, each named with the reason. Orthogonal to `message`, which says
+   * why the TILES are blocked; this says why a CANDIDATE is.
+   */
+  blocked?: Blocked;
 }
 export interface ContextStripSpec { slots: ContextSlot[] }
 
@@ -291,7 +362,24 @@ export type StepPredicate = (answers: Readonly<Record<string, string>>) => boole
  * skin-supplied prose) and was renamed to `hintKey` alongside it for the
  * identical reason, so neither convention is left as an unmarked default.
  */
-export interface SheetChoiceStep { id: string; kind: "choice"; title: string; options: { id: string; label: string }[]; when?: StepPredicate; hintKey?: string }
+/**
+ * R2c — `blocked(answers)`, the choice-step counterpart to
+ * `ContextSlot.blocked` (see `Blocked` above). A METHOD, not a value: the
+ * deciding fact is frequently not known when `sheets(view)` builds the spec,
+ * because it depends on an answer given EARLIER IN THE SAME SHEET. Same
+ * evaluation point and same single-argument signature `when`
+ * (`StepPredicate`) already uses, so a skin author meets one convention
+ * rather than two. Absent means every option is selectable, and every
+ * pre-R2c choice step is unchanged.
+ *
+ * The motivating case is cricket's review sheet, and it doubles as the proof
+ * that this needed no step REORDERING: the per-innings review quota is fully
+ * known from `view` at build time, and the only late-bound fact is whether
+ * the review is a player one (umpire reviews are never capped) — which is
+ * already step 1, while the side being asked is step 3. A reorder would have
+ * been strictly worse, since it would ask the side even for the uncapped case.
+ */
+export interface SheetChoiceStep { id: string; kind: "choice"; title: string; options: { id: string; label: string }[]; when?: StepPredicate; hintKey?: string; blocked?(answers: Readonly<Record<string, string>>): Blocked }
 /**
  * R2/task A5 (`_INDEX.md` R1 "owed by later waves", closed here): `side` is
  * REQUIRED, not optional-with-a-default. Cricket's wicket flow needs the
