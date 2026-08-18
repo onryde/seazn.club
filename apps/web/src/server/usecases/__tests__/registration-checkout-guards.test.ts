@@ -273,6 +273,51 @@ describe.skipIf(!HAS_DB)(
         mintGroupCheckout(first.registration.group_id, division.id, "http://test.local", first.access_token),
       ).rejects.toMatchObject({ status: 422, message: "This registration has no entry fee" });
       expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
-    });
+    
+});
   },
 );
+
+describe.skipIf(!HAS_DB)("createRegistrationCheckout — Stripe error translation (RS003 live-probe finding)", () => {
+  // Found by the LIVE per-currency probe, not by any mocked test: Stripe
+  // refuses a session whose total converts to under its platform minimum
+  // (~30p here). Reachable in gbp with a fee set too low — the registrant
+  // would otherwise meet a raw Stripe error on the public pay page, the exact
+  // outcome owner ruling 4's currency check exists to prevent.
+  it("translates Stripe's amount_too_small into a clean 422, not a raw Stripe error", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const first = await seedRegistration(competition.id, division.id, settings);
+    stripeMock.checkoutCreate.mockRejectedValueOnce(
+      Object.assign(
+        new Error("The Checkout Session's total amount must convert to at least 30 pence."),
+        { code: "amount_too_small" },
+      ),
+    );
+    await expect(
+      mintGroupCheckout(
+        first.registration.group_id,
+        division.id,
+        "https://x.test",
+        first.access_token,
+      ),
+    ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_AMOUNT_TOO_SMALL" });
+  });
+
+  // The translation must stay narrow: a blanket catch would hide real
+  // integration failures behind a friendly message.
+  it("does NOT translate an unrelated Stripe failure", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const first = await seedRegistration(competition.id, division.id, settings);
+    stripeMock.checkoutCreate.mockRejectedValueOnce(
+      Object.assign(new Error("api key expired"), { code: "api_key_expired" }),
+    );
+    await expect(
+      mintGroupCheckout(
+        first.registration.group_id,
+        division.id,
+        "https://x.test",
+        first.access_token,
+      ),
+    ).rejects.toThrow("api key expired");
+  });
+});

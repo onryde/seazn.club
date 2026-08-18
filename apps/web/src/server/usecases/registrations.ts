@@ -1238,6 +1238,30 @@ export async function publicRegistrationInfo(
 // whole-branch review — zero production callers repo-wide, dead since W2).
 
 /**
+ * Runs a Checkout Session create and translates Stripe's `amount_too_small`
+ * refusal into a clean 422 with a stable code. Everything else rethrows
+ * untouched — a blanket catch here would hide real integration failures behind
+ * a friendly message, which is worse than the raw error.
+ */
+async function mintOrTranslate(
+  create: () => Promise<Stripe.Checkout.Session>,
+): Promise<Stripe.Checkout.Session> {
+  try {
+    return await create();
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code;
+    if (code === "amount_too_small") {
+      throw new HttpError(
+        422,
+        "This entry fee is below the minimum a card payment can charge",
+        "REGISTRATION_AMOUNT_TOO_SMALL",
+      );
+    }
+    throw err;
+  }
+}
+
+/**
  * ONE Stripe checkout session for a SET of a cart's entries (RS003 W3a,
  * owner ruling 1) — not necessarily the whole cart: a waitlist promotion
  * pays for a single entry while its siblings may already be paid, so the
@@ -1316,7 +1340,16 @@ async function createRegistrationCheckout(
   // mid-competition plan change could have moved.
   const feePercent = await effectiveFeePercentFor(ctx.competition_id, ctx.org_id);
   const idsJoined = registrationIds.join(",");
-  const session = await getStripe().checkout.sessions.create({
+  // Stripe refuses a session whose total converts to less than its minimum
+  // charge in the PLATFORM's currency (~30p on this GB platform). That is an
+  // organiser misconfiguration — an entry fee set too low — but it lands here,
+  // at the moment a registrant tries to pay, and an unmapped Stripe error on a
+  // public pay page is precisely what owner ruling 4's currency check exists to
+  // prevent. Found by the live per-currency probe: a 500+700 cart is £12.00 in
+  // gbp but ₹12.00 in inr, which converts to about 9p and is rejected outright.
+  // Mapped narrowly: only `amount_too_small` becomes a clean 422, so any other
+  // Stripe failure still surfaces as itself rather than being swallowed.
+  const session = await mintOrTranslate(() => getStripe().checkout.sessions.create({
     mode: "payment",
     customer_email: firstEntry.contact_email,
     // fee_percent rides the session so the paid transition can stamp the
@@ -1353,7 +1386,7 @@ async function createRegistrationCheckout(
     },
     success_url: `${returnBase}&checkout=success&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${returnBase}&checkout=cancelled`,
-  });
+  }));
   if (!session.url) throw new HttpError(502, "Stripe did not return a checkout URL");
   // checkout_session_id/fee_percent live on the cart (V364) — one row to
   // stamp regardless of how many entries this session covers.
