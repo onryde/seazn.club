@@ -116,7 +116,7 @@ const props: Parameters<typeof AiConsole>[0] = {
     windows: 1,
     blackouts: 0,
     constraintsSet: false,
-    movableFixtures: [{ id: "f0", scheduled_at: "2026-08-01T10:00:00.000Z", court_label: "Court 1" }],
+    movableFixtures: [{ id: "f0", scheduled_at: "2026-08-01T10:00:00.000Z", court_id: "crt-1" }],
     pinned: 0,
     entrants: [
       { id: "e1", name: "Team A" },

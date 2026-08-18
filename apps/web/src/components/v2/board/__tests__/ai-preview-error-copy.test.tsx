@@ -66,7 +66,7 @@ const brief = {
   blackouts: 0,
   constraintsSet: false,
   movableFixtures: [
-    { id: "f1", scheduled_at: "2026-08-01T10:00:00.000Z", court_label: "Court 1" },
+    { id: "f1", scheduled_at: "2026-08-01T10:00:00.000Z", court_id: "crt-1" },
   ],
   pinned: 0,
   entrants: [
