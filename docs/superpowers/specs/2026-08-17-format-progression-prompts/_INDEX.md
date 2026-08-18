@@ -232,6 +232,22 @@ prompts for F3, F5 and two standalone product fixes.
     strength rank), so a reversed wildcard pot seeds the weakest wildcard best.
     Never snake a `bestNth`-sourced pot.
 
+14. **Seeding stays PROPOSE-AND-CONFIRM; no auto-confirm** (2026-08-18).
+    Flipping to `timing: "setup"` also changes how a downstream stage FILLS,
+    which the F3 design never states: `completeStage` (`stages.ts:1920`)
+    computes a seed proposal and returns it, while `seedNextStage`'s automatic
+    fill runs only on the `on_complete` branch (`:1933`). So every multi-stage
+    picker format now needs the organiser to confirm a proposal before real
+    names replace the placeholders. Auto-confirming unambiguous proposals was
+    considered and **rejected** by the owner: every seeding decision stays
+    explicitly the organiser's, and a tie must never resolve without someone
+    looking at it.
+    Two consequences F3 owes: the `ko_plate` e2e (`e2e/formats.spec.ts:41`)
+    must drive propose→confirm rather than expecting `/generate` to seed, and
+    the organiser needs a VISIBLE prompt that a proposal is waiting — without
+    one, "always confirm" means a published bracket sits full of placeholders
+    after the results are already in.
+
 ## F4's brief contains one false premise (found 2026-08-18)
 
 The F3–F5 design §7 P5 and its §8 pickup prompt both state that
