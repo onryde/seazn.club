@@ -107,6 +107,7 @@ import { createStages, generateStageFixtures } from "../stages";
 import { aiPlanForCompetition } from "../competition-schedule-ai";
 import { aiPlanForDivision, buildSchedulePack } from "../schedule-ai";
 import { aiMarginReport, listAiRuns } from "../ai-runs-admin";
+import { createVenue, createCourt } from "../venues";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { balance, recordPackPurchase, walletIdFor } from "@/lib/credits";
@@ -116,6 +117,36 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const TZ = "Europe/London";
 const MIN = 60_000;
 const T0 = Date.parse("2026-08-01T09:00:00.000Z");
+
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` (real `courts.id`
+// values) — this whole file's DivSpec DSL was written against the pre-cutover
+// free-text label ("Court 1", "Court 2", …), and many specs deliberately
+// SHARE a label across two divisions (e.g. "Court 2" below) to mean "the same
+// physical court" for divergent/shared-court assertions. Same idiom as
+// competition-schedule-pack.test.ts: resolve (and cache) each label to a REAL
+// court exactly once per org, so a label named twice — in one spec or across
+// two `seedDivision` calls sharing one `auth` — resolves to the SAME row.
+const courtsByOrg = new Map<string, { venueId: string; byName: Map<string, string> }>();
+
+async function courtId(auth: AuthCtx, name: string): Promise<string> {
+  let entry = courtsByOrg.get(auth.orgId);
+  if (!entry) {
+    const venue = await createVenue(auth, { name: "Main venue", sort: 0 });
+    entry = { venueId: venue.id, byName: new Map() };
+    courtsByOrg.set(auth.orgId, entry);
+  }
+  const cached = entry.byName.get(name);
+  if (cached !== undefined) return cached;
+  const court = await createCourt(auth, entry.venueId, { name, sort: entry.byName.size, tags: [] });
+  entry.byName.set(name, court.id);
+  return court.id;
+}
+
+async function courtIds(auth: AuthCtx, names: readonly string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const name of names) out.push(await courtId(auth, name));
+  return out;
+}
 
 function settingsConfig(courts: string[], blackouts: { from: string; to: string }[] = []) {
   return {
@@ -162,7 +193,7 @@ async function seedDivision(
   competitionId: string,
   spec: DivSpec,
 ): Promise<SeededDivision> {
-  const courts = spec.courts ?? ["Court 1", "Court 2"];
+  const courts = await courtIds(auth, spec.courts ?? ["Court 1", "Court 2"]);
   const slug = `${spec.name.toLowerCase()}-${randomUUID().slice(0, 6)}`;
   const division = await createDivision(auth, competitionId, {
     name: spec.name,
@@ -235,7 +266,7 @@ async function seedBigDivision(auth: AuthCtx, competitionId: string, n: number):
   });
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${division.id}, ${sql.json(settingsConfig(["Court 9"]))}, ${TZ}, now())`;
+    values (${division.id}, ${sql.json(settingsConfig(await courtIds(auth, ["Court 9"])))}, ${TZ}, now())`;
   const [stage] = await createStages(auth, division.id, {
     seq: 1,
     kind: "league",
@@ -554,7 +585,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
       {
         name: "Bravo",
         courts: ["Court 3"],
-        rawConfig: { ...settingsConfig(["Court 3"]), matchMinutes: 0 },
+        rawConfig: { ...settingsConfig(await courtIds(auth, ["Court 3"])), matchMinutes: 0 },
       },
     ]);
     await expect(run(auth, competitionId, divisions.map((d) => d.id))).rejects.toMatchObject({
@@ -990,7 +1021,11 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition results (#350 Task 4)", () => {
     ]);
     parse.mockResolvedValue(planResponse(jointPlan(divisions)));
     const out = await run(auth, competitionId, divisions.map((d) => d.id));
-    expect(out.divergent_courts).toEqual(["Court 1", "Court 3"]);
+    // Sorted on the id STRING (cmp) — real uuids do not sort in "Court 1" <
+    // "Court 3" order, so the expectation must be sorted the same way rather
+    // than written in spec order (same convention as
+    // competition-schedule-pack.test.ts's `divergentCourts` assertions).
+    expect(out.divergent_courts).toEqual((await courtIds(auth, ["Court 1", "Court 3"])).sort());
   });
 
   it("returns warnings IN FULL — a non-blocking violation is never swallowed (R13)", async () => {
