@@ -14,6 +14,7 @@ import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { publishDivisionUpdate } from "@/lib/realtime";
 import { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED, REASON_CODE } from "@/lib/schedule-board";
 import { resolveVenueTz } from "@/lib/tz";
+import { buildCourtDirectory } from "@/lib/court-directory";
 import { log } from "@/server/logger";
 import { EngineError } from "@seazn/engine/core";
 import {
@@ -606,8 +607,24 @@ export async function divisionFixtures(tx: Tx, divisionId: string): Promise<Fixt
  *  Relies on `withTenant`'s RLS context for org scoping — the same
  *  convention `court-candidates.ts`'s `orgCourtMetas` already uses. */
 export async function courtNamesById(tx: Tx): Promise<Map<string, string>> {
-  const rows = await tx<{ id: string; name: string }[]>`select id, name from courts`;
-  return new Map(rows.map((r) => [r.id, r.name]));
+  // P9 review wave 2: VENUE-QUALIFIED, not the bare `courts.name`. A court name
+  // is unique only WITHIN its venue (`courts_venue_name_active_idx` is scoped
+  // per venue), so two venues may legally each name one "Court 1" — and every
+  // consumer of this map was then showing them identically. That is not only a
+  // display defect: `officials-ai.ts` prices a run on the count of DISTINCT
+  // court values in its pack, so two same-named courts collapsed into one and
+  // the credit rung came out under the run the organiser actually got.
+  //
+  // `buildCourtDirectory` is the one implementation of that rule (the board,
+  // the picker and the AI pack already go through it) and it also settles the
+  // residual ties — including an archived and an active court sharing a venue
+  // AND a name, which the partial index permits once a name is freed.
+  const rows = await tx<{ id: string; name: string; venue_name: string; tags: string[] }[]>`
+    select c.id, c.name, v.name as venue_name, c.tags
+    from courts c
+    join venues v on v.id = c.venue_id
+    order by v.sort, v.name, c.sort, c.name, c.id`;
+  return new Map([...buildCourtDirectory(rows)].map(([id, info]) => [id, info.label]));
 }
 
 /** id -> name for every venue this org has configured (P9 pass 3a) — the

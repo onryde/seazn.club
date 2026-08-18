@@ -181,6 +181,41 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack (v4/03 §2)", () => {
     ({ auth, divisionId } = await seedOfficialsBoard());
   });
 
+  it("distinguishes two courts that share a bare name in different venues", async () => {
+    // P9 review wave 2. `courtNamesById` returned the bare `courts.name`, but a
+    // court name is unique only WITHIN its venue
+    // (`courts_venue_name_active_idx` is scoped per venue), so two venues may
+    // legally each name one "Court 1". The pack then showed the same physical
+    // slot under one identity twice — and this is a MONEY path, not only a
+    // display one: `quoteRun` prices on the count of DISTINCT court values in
+    // the pack, so the two collapsed into one and the credit rung came out
+    // under the run the organiser actually got.
+    const board = await seedOfficialsBoard();
+    const [{ id: venue2 }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${board.auth.orgId}, 'Second venue') returning id`;
+    // Deliberately the SAME bare name a court on the first venue already has.
+    const [{ id: court2 }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venue2}, ${board.auth.orgId}, 'Court 1', ${sql.array([])}) returning id`;
+    const [moved] = await sql<{ id: string }[]>`
+      select id from fixtures where division_id = ${board.divisionId}
+        and court_id is not null order by scheduled_at limit 1`;
+    await sql`update fixtures set court_id = ${court2} where id = ${moved!.id}`;
+
+    const pack = await buildOfficialsPack(board.auth, board.divisionId, {
+      instruction: "x", policy: POLICY,
+    });
+    const named = pack.fixtures.filter((f) => f.court !== null && f.court !== undefined);
+    const moving = named.find((f) => f.id === moved!.id)!;
+    const staying = named.find((f) => f.id !== moved!.id && f.court !== moving.court);
+    // Both resolve to a name (never a bare uuid)…
+    expect(moving.court).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+    // …and the two "Court 1"s are TOLD APART, which is the whole point.
+    expect(staying).toBeDefined();
+    expect(moving.court).toContain("Second venue");
+    expect(moving.court).not.toBe(staying!.court);
+  });
+
   it("rebuilds byte-identical for an identical board reseeded with fresh UUIDs", async () => {
     const boardA = await seedOfficialsBoard();
     const boardB = await seedOfficialsBoard();
