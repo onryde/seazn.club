@@ -298,6 +298,7 @@ async function seedJointRoundRobinBoard(request: Parameters<typeof apiJson>[0]):
   competitionId: string;
   alpha: { divisionId: string; fixtureIds: string[] };
   bravo: { divisionId: string; fixtureIds: string[] };
+  courtIds: { alpha: string; bravo: string };
 }> {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
