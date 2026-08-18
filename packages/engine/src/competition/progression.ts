@@ -352,13 +352,31 @@ function rankRangeSource(pools: readonly PoolTable[]): PoolTable {
   return findPool(pools, "");
 }
 
+// F2 Task 6 review (defect 4): `rankRange` replaced `topN`, whose old
+// message told an organiser what to DO ("takes the top N, only M
+// available — lower the qualifier count or add entrants" —
+// qualification.ts's isTopN branch, pre-F2). This function is the ONLY
+// place a shortfall like that can be discovered now (both `group_rank` via
+// findPool+rowAtRank and `rank_range` via rankRangeSource+rowAtRank funnel
+// through it), and a generic "no entrant ranked N yet" regressed that —
+// restored here, generalised to name the pool when there is one (the
+// group_rank case) the way topN's flat single-table message never needed
+// to. Still STAGE_NOT_READY (same code topN always used — this message was
+// never in seeding-error.ts's 13-code allowlist either, before or after
+// F2, so it has always reached the organiser via the raw-message fallback,
+// not a wired locale key; wiring one is a separate, scoped effort per
+// lib/seeding-error.ts's own "Do NOT audit or wire other unwired codes"
+// note).
 function rowAtRank(table: PoolTable, rank: number): StandingsRow {
   const row = table.rows.find((r) => r.rank === rank);
   if (!row) {
-    throw new EngineError("STAGE_NOT_READY", `pool "${table.pool}" has no entrant ranked ${rank} yet`, {
-      pool: table.pool,
-      rank,
-    });
+    const available = table.rows.length;
+    const label = table.pool ? `pool "${table.pool}"` : "the previous stage";
+    throw new EngineError(
+      "STAGE_NOT_READY",
+      `${label} takes rank ${rank}, but only ${available} entrant${available === 1 ? "" : "s"} ${available === 1 ? "is" : "are"} available — lower the qualifier count or add entrants`,
+      { pool: table.pool, rank, available },
+    );
   }
   return row;
 }

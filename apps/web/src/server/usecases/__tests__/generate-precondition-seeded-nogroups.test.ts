@@ -118,14 +118,17 @@ describe.skipIf(!HAS_DB)(
       const { auth } = await seedOrg();
       const division = await seedStagedDivision(auth);
       const stages = await createStages(auth, division.id, [
-        { seq: 1, kind: "league", name: "Source", config: {}, qualification: null },
+        { seq: 1, kind: "league", name: "Source", config: {} },
         {
           seq: 2,
           kind: "knockout",
           name: "KO",
           config: {},
-          qualification: null,
-          seeding: { source: "previous", take: [{ kind: "rankRange", from: 1, to: 3 }], placement: "rank_order" },
+          progression: {
+            sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 3 }] }],
+            placement: "rank_order",
+            timing: "setup",
+          },
         },
       ]);
       const target = stages.find((s) => s.seq === 2)!;

@@ -155,7 +155,11 @@ describe.skipIf(!HAS_DB)("qualification from any stage kind (L3/#414 pass 3)", (
         kind: "knockout",
         name: "Plate",
         config: {},
-        qualification: { losersOfRound: { round: 1, count: 4 } } as never,
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 4 }] }],
+          placement: "rank_order",
+          timing: "on_complete",
+        },
       },
     ]);
     await generateStageFixtures(auth, main!.id);
@@ -188,7 +192,17 @@ describe.skipIf(!HAS_DB)("qualification from any stage kind (L3/#414 pass 3)", (
     const seedOf = new Map(entrants.map((e) => [e.id, e.seed ?? 99]));
     const [qualifying, main] = await createStages(auth, division.id, [
       { seq: 1, kind: "knockout", name: "Qualifying", config: {} },
-      { seq: 2, kind: "knockout", name: "Main", config: {}, qualification: { topN: 2 } as never },
+      {
+        seq: 2,
+        kind: "knockout",
+        name: "Main",
+        config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+          placement: "rank_order",
+          timing: "on_complete",
+        },
+      },
     ]);
     await generateStageFixtures(auth, qualifying!.id);
     await startDivision(auth, division.id);
@@ -216,7 +230,17 @@ describe.skipIf(!HAS_DB)("qualification from any stage kind (L3/#414 pass 3)", (
         name: "Americano",
         config: { mode: "americano", courtCount: 1, rounds: 3 },
       },
-      { seq: 2, kind: "knockout", name: "KO", config: {}, qualification: { topN: 2 } as never },
+      {
+        seq: 2,
+        kind: "knockout",
+        name: "KO",
+        config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+          placement: "rank_order",
+          timing: "on_complete",
+        },
+      },
     ]);
     const { fixtures } = await generateStageFixtures(auth, americano!.id);
     expect(fixtures).toHaveLength(3); // 1 court x 3 rounds, all 4 players every round
@@ -280,7 +304,17 @@ describe.skipIf(!HAS_DB)("qualification from any stage kind (L3/#414 pass 3)", (
     const { division, entrants } = await seedDivision(auth, ["L1", "L2", "L3", "L4", "L5"]);
     const [ladder, ko] = await createStages(auth, division.id, [
       { seq: 1, kind: "ladder" as never, name: "Ladder", config: { challengeRange: 3 } },
-      { seq: 2, kind: "knockout", name: "KO", config: {}, qualification: { topN: 4 } as never },
+      {
+        seq: 2,
+        kind: "knockout",
+        name: "KO",
+        config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+          placement: "rank_order",
+          timing: "on_complete",
+        },
+      },
     ]);
     await generateStageFixtures(auth, ladder!.id); // no-op: ladder fixtures are on-demand
     await startDivision(auth, division.id).catch(() => undefined); // ladder may not need start
@@ -307,7 +341,23 @@ describe.skipIf(!HAS_DB)("qualification from any stage kind (L3/#414 pass 3)", (
       const { division } = await seedDivision(auth, ["A", "B"]);
       const [ko] = await createStages(auth, division.id, [
         { seq: 1, kind: "knockout", name: "KO", config: {} },
-        { seq: 2, kind: "knockout", name: "Next", config: {}, qualification: { topN: 1, carry: "points" } as never },
+        {
+          seq: 2,
+          kind: "knockout",
+          name: "Next",
+          config: {},
+          progression: {
+            // to:2, not to:1 — validateProgressionAgainstShapes (F2, engine)
+            // now enforces a uniform "at least 2 qualifiers" floor across
+            // BOTH timings (previously only .seeding had it); the carry
+            // refusal this test targets fires downstream in seedNextStage,
+            // so the source stage just needs 2+ real entrants to reach it.
+            sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+            placement: "rank_order",
+            timing: "on_complete",
+            carry: "points",
+          },
+        },
       ]);
       const { fixtures } = await generateStageFixtures(auth, ko!.id);
       await startDivision(auth, division.id);
@@ -326,7 +376,17 @@ describe.skipIf(!HAS_DB)("qualification from any stage kind (L3/#414 pass 3)", (
           kind: "knockout",
           name: "Next",
           config: {},
-          qualification: { topN: 1, carry: "points" } as never,
+          progression: {
+            // to:2, not to:1 — validateProgressionAgainstShapes (F2, engine)
+            // now enforces a uniform "at least 2 qualifiers" floor across
+            // BOTH timings (previously only .seeding had it); the carry
+            // refusal this test targets fires downstream in seedNextStage,
+            // so the source stage just needs 2+ real entrants to reach it.
+            sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+            placement: "rank_order",
+            timing: "on_complete",
+            carry: "points",
+          },
         },
       ]);
       await generateStageFixtures(auth, ladder!.id);
@@ -355,7 +415,17 @@ describe.skipIf(!HAS_DB)("qualification from any stage kind (L3/#414 pass 3)", (
           kind: "knockout",
           name: "Next",
           config: {},
-          qualification: { topN: 1, carry: "points" } as never,
+          progression: {
+            // to:2, not to:1 — validateProgressionAgainstShapes (F2, engine)
+            // now enforces a uniform "at least 2 qualifiers" floor across
+            // BOTH timings (previously only .seeding had it); the carry
+            // refusal this test targets fires downstream in seedNextStage,
+            // so the source stage just needs 2+ real entrants to reach it.
+            sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+            placement: "rank_order",
+            timing: "on_complete",
+            carry: "points",
+          },
         },
       ]);
       const { fixtures } = await generateStageFixtures(auth, americano!.id);

@@ -51,7 +51,7 @@ import {
 } from "./competitions";
 import { fireDivisionCreated } from "./divisions";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
-import { validateSeedingAgainstShape, type SourceShape } from "./stage-seeding";
+import { validateStageProgression } from "./stage-seeding";
 import { getTemplate } from "@/server/templates/catalog";
 import type { CompetitionTemplate, TemplateStage } from "@/server/templates/schema";
 
@@ -71,24 +71,6 @@ function effectiveStageConfig(stage: TemplateStage): Record<string, unknown> {
   if (stage.points !== undefined) cfg.points = stage.points;
   Object.assign(cfg, stage.config ?? {});
   return cfg;
-}
-
-/** The inverse of `effectiveStageConfig` above, read back from a persisted
- *  row: a `.seeding` rule's `SourceShape` (pool KEYS, [] for a non-group
- *  kind). Mirrors stages.ts's module-private `sourceShapeOf`'s
- *  config-derived branch ONLY — never its existing-pools-ROWS branch, which
- *  is unreachable here: nothing in this transaction has generated
- *  fixtures/pools for ANY stage yet (§2's no-fixtures-at-instantiation
- *  ruling — see the comment on `stageResults.push` below), so a sibling
- *  stage can never already own pool rows the way a live, played-in
- *  division's source stage might by the time someone adds a later stage to
- *  it. `validateSeedingAgainstShape` (stage-seeding.ts) is what actually
- *  validates the rule against this shape — this only builds the shape. */
-function sourceShapeOfRow(row: { kind: string; config: Record<string, unknown> }): SourceShape {
-  if (row.kind !== "group") return { poolKeys: [] };
-  const pools = row.config.pools as { count?: unknown } | undefined;
-  const count = typeof pools?.count === "number" ? pools.count : 1;
-  return { poolKeys: "ABCDEFGHIJKLMNOPQRSTUVWXYZ".slice(0, count).split("") };
 }
 
 export async function createFromTemplate(
@@ -288,62 +270,66 @@ export async function instantiateTemplate(
           if (templateStage.points !== undefined) {
             validatePointsRule(templateStage.points, sportModule.metrics);
           }
-          // D4a (P5, T3): `.seeding.source` is narrowed to the literal
-          // "previous" for every template stage (TemplateStageSeeding, T1)
-          // — a catalog JSON has no live stage UUID for the `{stageId}`
-          // branch. "previous" means "the stage immediately before this one
-          // in the SAME division" (stages.ts's resolveSeedingSource,
-          // :1313-1317 — run later, at save/generate time, by P5's own
-          // code; NOT resolved here), so a stage at this division's index 0
-          // can never have one: there is no earlier stage, now or ever (a
-          // stage's position is fixed once instantiation writes it). Caught
-          // here rather than left to surface downstream at proposal/
-          // generate time — the same "a catalog bug 422s now, not later"
-          // contract this function already applies to sport/variant/config/
-          // points above.
-          if (templateStage.seeding !== undefined) {
+          // D4a (P5, T3) / F2: `progression.sources[].stage` is narrowed to
+          // the literal "previous" for every template stage
+          // (TemplateStageProgression) — a catalog JSON has no live stage
+          // UUID for the `{stageId}` branch. "previous" means "the stage
+          // immediately before this one in the SAME division"
+          // (stage-seeding.ts's resolveProgressionSource — run later, at
+          // save/generate time; NOT resolved here), so a stage at this
+          // division's index 0 can never have one: there is no earlier
+          // stage, now or ever (a stage's position is fixed once
+          // instantiation writes it). Caught here rather than left to
+          // surface downstream at proposal/generate time — the same "a
+          // catalog bug 422s now, not later" contract this function already
+          // applies to sport/variant/config/points above.
+          if (templateStage.progression !== undefined) {
             if (si === 0) {
-              throw new Error("seeding.source is 'previous' but this is the division's first stage");
+              throw new Error("progression.sources[].stage is 'previous' but this is the division's first stage");
             }
             // Shape-aware validation (reviewer follow-up on the T3 commit):
             // a `.take`/`.map` that disagrees with the source stage's REAL
             // shape must 422 HERE, not persist silently and only surface
-            // downstream at generate time (generateSeededStageFixtures) —
-            // the exact "at save time" contract createStages/replaceStages
-            // already give a manually-built stage graph
-            // (stages.ts's validateStageSeeding), via the SAME shared
-            // function (stage-seeding.ts's validateSeedingAgainstShape) so
-            // the two callers can never drift apart. `source` is always
-            // "previous" for a template stage (TemplateStageSeeding, T1) —
-            // always the immediately-preceding stage in THIS loop, already
-            // inserted into `stageResults` a moment ago, in this same
-            // transaction.
+            // downstream at generate time
+            // (generateProgressionSetupFixtures) — the exact "at save
+            // time" contract createStages/replaceStages already give a
+            // manually-built stage graph, via the SAME shared function
+            // (stage-seeding.ts's validateStageProgression) so the two
+            // callers can never drift apart. `presetSources` hands it the
+            // sibling row this loop already fetched a moment ago (in this
+            // same transaction) rather than re-resolving "previous" from
+            // the DB a second time — `source` is always "previous" for a
+            // template stage, always the immediately-preceding stage in
+            // THIS loop.
             const [sourceRow] = await tx<{ kind: string; config: Record<string, unknown> }[]>`
               select kind, config from stages where id = ${stageResults[si - 1]!.id}`;
-            validateSeedingAgainstShape(sourceShapeOfRow(sourceRow!), templateStage.seeding);
+            await validateStageProgression(tx, { division_id: divisionId, seq: si + 1 }, templateStage.progression, [
+              { kind: sourceRow!.kind, config: sourceRow!.config },
+            ]);
           }
           const stageName = t(dict, templateStage.i18nNameKey);
           const [stage] = await tx<{ id: string }[]>`
-            insert into stages (division_id, seq, kind, name, config, seeding)
+            insert into stages (division_id, seq, kind, name, config, progression)
             values (${divisionId}, ${si + 1}, ${templateStage.kind}, ${stageName},
                     ${tx.json(effectiveStageConfig(templateStage) as never)},
-                    ${templateStage.seeding ? tx.json(templateStage.seeding as never) : null})
+                    ${templateStage.progression ? tx.json(templateStage.progression as never) : null})
             returning id`;
-          // Seeding rules ARE persisted here (T3, D4a/P5's StageSeeding) —
-          // the row above carries `templateStage.seeding` verbatim, same
-          // column/shape/serialisation `createStages` uses
-          // (usecases/stages.ts). Fixtures are still NOT generated at
-          // instantiation time, by design: entrants don't exist yet (design
-          // doc §UI — "wizard routes into the entrant-add step with
-          // placeholder counts... no fake entrants created"), so
-          // generateStageFixtures never runs here — a `.seeding` stage's
-          // TBD fixtures come later from the existing Generate action
-          // (stages.ts's generateSeededStageFixtures, which already handles
-          // `.seeding` stages). This split matters, not just defers work: a
-          // fixture row anywhere in the division trips replaceStages'/
-          // patchDivision's FORMAT_LOCKED guard (stages.ts :276-281,
-          // divisions.ts :563) — generating eagerly here would freeze the
-          // division's format/variant before a single entrant exists.
+          // Progression rules ARE persisted here (T3, D4a/P5's
+          // ProgressionSchema) — the row above carries
+          // `templateStage.progression` verbatim, same column/shape/
+          // serialisation `createStages` uses (usecases/stages.ts).
+          // Fixtures are still NOT generated at instantiation time, by
+          // design: entrants don't exist yet (design doc §UI — "wizard
+          // routes into the entrant-add step with placeholder counts... no
+          // fake entrants created"), so generateStageFixtures never runs
+          // here — a `timing: "setup"` stage's TBD fixtures come later from
+          // the existing Generate action (stages.ts's
+          // generateProgressionSetupFixtures, which already handles them).
+          // This split matters, not just defers work: a fixture row
+          // anywhere in the division trips replaceStages'/patchDivision's
+          // FORMAT_LOCKED guard (stages.ts :276-281, divisions.ts :563) —
+          // generating eagerly here would freeze the division's
+          // format/variant before a single entrant exists.
           stageResults.push({ id: stage!.id, fixtureCount: 0 });
         }
         divisionResults.push({ id: divisionId, stages: stageResults });

@@ -561,6 +561,21 @@ export const ProgressionSchema = z
     placement: z.enum(["seeded_map", "snake", "rank_order"]),
     map: z.array(SeededMapEntryS).max(64).optional(),
     timing: z.enum(["setup", "on_complete"]),
+    // Carry prior points/metrics into the qualified stage's opening
+    // standings (Jul3/05 §3) — like `timing`, an apps/web/DB-orchestration
+    // concept the engine's pure ProgressionSpec has no notion of (take-rule
+    // expansion/placement/resolution math never reads it). Restored from
+    // the old QualificationSpec.carry: this plan's own grounding said no
+    // shipped writer sets it (true for format-templates.ts/the catalogue),
+    // but custom-points.test.ts exercises it end to end against a
+    // hand-built stage graph, and it backs a MARKETED Pro entitlement
+    // (standings.carry_over — feature-copy.ts's paywall copy,
+    // pricing.matrix.standings.carry_over in all 4 marketing dictionaries).
+    // Deleting it would silently break a paid, advertised feature —
+    // meaningful only when timing is "on_complete" (seedNextStage,
+    // stages.ts); a "setup"-timing stage's propose/confirm flow never reads
+    // it, same as `.seeding` never carried a field like this before F2.
+    carry: z.enum(["none", "points", "full"]).optional(),
   })
   .strict()
   .refine((s) => s.placement !== "seeded_map" || (s.map !== undefined && s.map.length > 0), {
@@ -600,6 +615,14 @@ export const AddFixture = z.object({
 export type AddFixture = z.infer<typeof AddFixture>;
 export type CreateStages = z.infer<typeof CreateStages>;
 
+// F2 — READ-path shape (Task 6): the two old columns this response used to
+// expose (qualification/seeding) were dropped by V371; API consumers now
+// see the one unified field. Deliberately `z.record(...).nullable()`, not
+// `ProgressionSchema.nullable()` — a response schema should not 400 a row
+// this API itself wrote (defence-in-depth against a shape ProgressionSchema
+// would reject slipping in through a future direct-SQL writer), matching
+// this field's pre-F2 precedent (`qualification`/`seeding` were never
+// validated on the way OUT either).
 export const Stage = z.object({
   id: Uuid,
   division_id: Uuid,
@@ -607,8 +630,7 @@ export const Stage = z.object({
   kind: StageKind,
   name: z.string(),
   config: z.record(z.string(), z.unknown()),
-  qualification: z.record(z.string(), z.unknown()).nullable(),
-  seeding: z.record(z.string(), z.unknown()).nullable(),
+  progression: z.record(z.string(), z.unknown()).nullable(),
   status: z.enum(["pending", "active", "complete"]),
 });
 

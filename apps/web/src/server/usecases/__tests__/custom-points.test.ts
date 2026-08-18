@@ -250,7 +250,12 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
         kind: "league",
         name: "Super pool",
         config: {},
-        qualification: { topN: 3, carry: "points" } as never,
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 3 }] }],
+          placement: "rank_order",
+          timing: "on_complete",
+          carry: "points",
+        },
       },
     ]);
     const { fixtures } = await generateStageFixtures(auth, g!.id);
@@ -300,7 +305,12 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
           kind: "league",
           name: "S",
           config: {},
-          qualification: { topN: 1, carry: "points" } as never,
+          progression: {
+            sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 1 }] }],
+            placement: "rank_order",
+            timing: "on_complete",
+            carry: "points",
+          },
         },
       ]),
     ).rejects.toMatchObject({ featureKey: "standings.carry_over" });

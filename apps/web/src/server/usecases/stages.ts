@@ -2,7 +2,7 @@ import "server-only";
 // Stage use-cases (doc 08 §3): define the stage graph, generate fixtures
 // (idempotent — regeneration diffs against what exists, keyed by the pure
 // generator's stable ids), guarded completion, standings reads.
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
@@ -34,14 +34,17 @@ import {
   PointsRule,
   carryDeltas,
   placementTable,
-  qualificationSize,
-  resolveQualification,
+  progressionSize,
+  resolveProgression,
   validatePointsRule,
   type BracketFixture,
   type FixtureStatus,
   type PoolTable,
-  type QualificationSpec,
+  type ProgressionSpec,
+  type SourceShape,
+  type SourceTables,
   type StandingsRow,
+  type TakeRule,
 } from "@seazn/engine/competition";
 import { completeStageIfReady, recomputeStandings, type CompleteResult } from "@/server/engine-db";
 import { resolveModule } from "@/server/engine-db";
@@ -52,7 +55,7 @@ import { resolveModule } from "@/server/engine-db";
 import { parseExtKey, bracketWinnerLoser } from "@/server/engine-db/competition";
 import { personalPointsLeaderboard } from "./americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { CreateStages, StageSeedingInput } from "@/server/api-v1/schemas";
+import type { CreateStages, ProgressionInput } from "@/server/api-v1/schemas";
 import { z } from "zod";
 import { CreateStage } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
@@ -63,14 +66,17 @@ import { validateSchedule } from "./schedule";
 import {
   descriptorKey,
   descriptorLabel,
-  expandTake,
+  destinationSlotsBySeed,
+  expandSources,
   placeDescriptors,
-  resolveQualifiers,
-  validateSeedingAgainstShape,
-  type PoolTableRows,
+  resolveProgressionSource,
+  sourceShapeOf,
+  sourcesToTables,
+  standingsHash,
+  poolTableRowsAcrossSources,
+  validateStageProgression,
   type SlotDescriptor,
   type SlotLabel,
-  type SourceShape,
 } from "./stage-seeding";
 
 type Tx = postgres.TransactionSql;
@@ -83,14 +89,17 @@ export interface StageRow {
   kind: string;
   name: string;
   config: Record<string, unknown>;
-  qualification: Record<string, unknown> | null;
-  /** D4a (P5) — StageSeeding rule; mutually exclusive with `qualification` in
-   *  practice (a stage declares one flow or the other). See stage-seeding.ts. */
-  seeding: Record<string, unknown> | null;
+  /** F2 — the union of the old `qualification` (auto-seed-on-complete) and
+   *  `seeding` (propose/confirm-at-setup) columns; `null` for a stage with no
+   *  upstream source (a division's first stage). `progression.timing`
+   *  ("setup" | "on_complete") is the axis that used to be implicit in
+   *  "which column is set" — see @seazn/engine/competition's ProgressionSpec
+   *  and this session's F2 plan, Decision 1. */
+  progression: Record<string, unknown> | null;
   status: string;
 }
 
-const STAGE_COLS = ["id", "division_id", "seq", "kind", "name", "config", "qualification", "seeding", "status"] as const;
+const STAGE_COLS = ["id", "division_id", "seq", "kind", "name", "config", "progression", "status"] as const;
 
 export const FIXTURE_COLS = [
   "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "fixture_no",
@@ -206,8 +215,8 @@ export async function createStages(
       for (const f of feeds ?? []) {
         edges.push({ from: String(s.seq), to: String(f.to_stage_seq) });
       }
-      if (s.qualification !== undefined && s.qualification !== null) {
-        // qualification always flows from an earlier stage
+      if (s.progression !== undefined && s.progression !== null) {
+        // progression always flows from an earlier stage (every source names one)
         edges.push({ from: String(s.seq - 1), to: String(s.seq) });
       }
     }
@@ -226,8 +235,7 @@ export async function createStages(
     if (cfg?.h2h_scope === "overall") {
       await requireFeature(auth.orgId, "tiebreakers.custom");
     }
-    const q = s.qualification as { carry?: string } | null | undefined;
-    if (q?.carry !== undefined && q.carry !== "none") {
+    if (s.progression?.carry !== undefined && s.progression.carry !== "none") {
       await requireFeature(auth.orgId, "standings.carry_over");
     }
   }
@@ -264,37 +272,26 @@ export async function createStages(
 
     const rows: StageRow[] = [];
     for (const s of inputs) {
-      // D4a (P5): a stage declares ONE cross-stage-fill mechanism — the OLD
-      // auto-seed-on-complete `qualification`, or the NEW propose/confirm
-      // `.seeding` — never both (undefined precedence otherwise).
-      if (s.qualification != null && s.seeding != null) {
-        throw new HttpError(
-          422,
-          "a stage declares either 'qualification' or 'seeding', not both",
-          "SEEDING_RULES_MISSING",
-        );
-      }
       const [dupe] = await tx`
         select 1 from stages where division_id = ${divisionId} and seq = ${s.seq}`;
       if (dupe) throw new HttpError(409, `stage seq ${s.seq} already exists`);
       const [row] = await tx<StageRow[]>`
-        insert into stages (division_id, seq, kind, name, config, qualification, seeding)
+        insert into stages (division_id, seq, kind, name, config, progression)
         values (${divisionId}, ${s.seq}, ${s.kind}, ${s.name}, ${tx.json(s.config as never)},
-                ${s.qualification ? tx.json(s.qualification as never) : null},
-                ${s.seeding ? tx.json(s.seeding as never) : null})
+                ${s.progression ? tx.json(s.progression as never) : null})
         returning ${tx(STAGE_COLS)}`;
       rows.push(row);
     }
-    // Seeding rules validated AFTER every stage in this batch is inserted, so
-    // `source: "previous"` / `{stageId}` resolves against sibling stages in
-    // THIS batch too, regardless of input array order (resolution is by seq,
+    // Progression rules validated AFTER every stage in this batch is
+    // inserted, so `source: "previous"` / `{stageId}` resolves against
+    // sibling stages in THIS batch too, regardless of input array order (resolution is by seq,
     // not insertion order) — a bad seeded_map or an unreachable source 422s
     // here at rule-save time, never discovered later at proposal time
     // (design's Edge inventory).
     for (const s of inputs) {
-      if (!s.seeding) continue;
+      if (!s.progression) continue;
       const row = rows.find((r) => r.seq === s.seq)!;
-      await validateStageSeeding(tx, row, s.seeding as StageSeedingInput);
+      await validateStageProgression(tx, row, s.progression);
     }
     // Adding a stage to a completed division (e.g. finals after the league
     // wrapped the graph) reopens it — 'completed' must mean "nothing left".
@@ -673,9 +670,12 @@ export function snakeDistribute<T>(ordered: readonly T[], count: number): T[][] 
   return pools;
 }
 
-const POOL_KEYS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+// Exported: stage-seeding.ts's sourceShapeOf (relocated there, F2 Task 6)
+// needs the same pool-count derivation this file's own generation path uses,
+// so the two can never drift onto different pool-count rules.
+export const POOL_KEYS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-function poolCount(cfg: Record<string, unknown>): number {
+export function poolCount(cfg: Record<string, unknown>): number {
   const pools = cfg.pools as { count?: unknown } | undefined;
   const count = typeof pools?.count === "number" ? pools.count : 1;
   if (!Number.isInteger(count) || count < 1 || count > POOL_KEYS.length) {
@@ -783,7 +783,7 @@ export interface PreviewStageInput {
   kind: string;
   name: string;
   config: Record<string, unknown>;
-  qualification: unknown;
+  progression: unknown;
 }
 
 /** 0 → A, 25 → Z, 26 → AA … */
@@ -798,21 +798,19 @@ function alphaLabel(i: number): string {
   return s;
 }
 
-// L3/#414 pass 3 — delegates to the engine's `qualificationSize` (TOTAL for
-// every spec shape, never throws) instead of re-deriving per-shape counts by
-// hand. The old version only understood topN/take: bestOfRank and combine
-// silently fell through to 0, masked by the `|| 4` at the call site below —
-// previewDivisionFixtures drew a fake 4-entrant bracket for those specs
-// instead of the real (often larger) qualifier count. The `isSpec` guard
-// stays local: `qualificationSize` assumes a shape it can recognise, and this
-// is a READ path fed straight from a DB column — never let a malformed value
-// reach it.
-function qualifierCount(qualification: unknown): number {
-  if (!qualification || typeof qualification !== "object") return 0;
-  const spec = qualification as Record<string, unknown>;
-  const isSpec =
-    "take" in spec || "topN" in spec || "bestOfRank" in spec || "combine" in spec || "losersOfRound" in spec;
-  return isSpec ? qualificationSize(qualification as QualificationSpec) : 0;
+// F2 — delegates to the engine's `progressionSize` (TOTAL across every
+// TakeRule kind, never throws) instead of re-deriving per-shape counts by
+// hand. previewDivisionFixtures never sees a multi-source progression (no
+// writer in this session emits one — Task 1's SourcedSlot doc comment), so
+// reading only `sources[0]` is complete, not a simplification: summing every
+// source's count would double-count entrants a REAL resolve would dedupe.
+// This is a READ path fed straight from a DB column — never let a malformed
+// value reach `progressionSize`.
+function qualifierCount(progression: unknown): number {
+  if (!progression || typeof progression !== "object") return 0;
+  const spec = progression as { sources?: { take?: unknown }[] };
+  const take = spec.sources?.[0]?.take;
+  return Array.isArray(take) ? progressionSize(take as TakeRule[]) : 0;
 }
 
 /** Preview a whole stage graph. Stage 1 uses A,B,C… entrants; later (qualifier)
@@ -827,7 +825,7 @@ export function previewDivisionFixtures(
 
   return stages.map((stage, stageIdx) => {
     const firstStage = stageIdx === 0;
-    const entrantCount = firstStage ? n : Math.max(2, qualifierCount(stage.qualification) || 4);
+    const entrantCount = firstStage ? n : Math.max(2, qualifierCount(stage.progression) || 4);
     const label = (i: number) => (firstStage ? alphaLabel(i) : `Seed ${i + 1}`);
 
     // Formats whose pairings depend on live results — no static draw exists.
@@ -966,19 +964,22 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
   // yet: seed it now when the previous stage is complete (stage added after
   // the fact), otherwise refuse — generating early would bracket everyone.
   //
-  // D4a (P5): a `.seeding`-declared stage is a DIFFERENT mechanism (see
-  // stage-seeding.ts) — it generates fully-TBD placeholder fixtures at
-  // division SETUP time, with NO wait on its source stage's completion
-  // (owner ruling: "ALL stages' fixtures are generated at setup time with
-  // placeholder slots"), so it short-circuits before this gate rather than
-  // going through it.
+  // F2 (Decision 1) — a `timing: "setup"` progression is a DIFFERENT
+  // mechanism (see stage-seeding.ts) — it generates fully-TBD placeholder
+  // fixtures at division SETUP time, with NO wait on its source stage's
+  // completion (owner ruling: "ALL stages' fixtures are generated at setup
+  // time with placeholder slots"), so it short-circuits before this gate
+  // rather than going through it. `timing: "on_complete"` reproduces the OLD
+  // `.qualification` behaviour exactly.
   {
     const pre = await withTenant(auth.orgId, async (tx) => {
       const [stage] = await tx<StageRow[]>`
         select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
       if (!stage) throw new HttpError(404, "stage not found");
-      if (stage.seeding) return { seeded: true as const };
-      if (!stage.qualification || Array.isArray(stage.config.qualified)) return null;
+      if (!stage.progression) return null;
+      const progression = stage.progression as unknown as ProgressionSpec & { timing: "setup" | "on_complete" };
+      if (progression.timing === "setup") return { seeded: true as const };
+      if (Array.isArray(stage.config.qualified)) return null;
       const [prev] = await tx<{ id: string; status: string }[]>`
         select id, status from stages
         where division_id = ${stage.division_id} and seq < ${stage.seq}
@@ -986,7 +987,7 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
       return prev ? { seeded: false as const, prev } : null;
     });
     if (pre?.seeded) {
-      const outcome = await generateSeededStageFixtures(auth, stageId);
+      const outcome = await generateProgressionSetupFixtures(auth, stageId);
       void fireStageRevalidate(auth.orgId, stageId);
       if (outcome.created > 0) {
         await captureServer({
@@ -1119,7 +1120,7 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
     // "slot.winner_match" | "slot.loser_match", params: { round, seq } },
     // numbers, NEVER a rendered fragment (resolveSlotLabel composes the ref
     // text at render time via slot.match_ref, so every locale/surface can
-    // differ). This is the SAME {key,params} shape the .seeding path
+    // differ). This is the SAME {key,params} shape the `timing:"setup"` path
     // (descriptorLabel, stage-seeding.ts — untouched) already writes for its
     // own kind of TBD slot; only the descriptor differs. `refByExt` mirrors
     // the preview helper's own map above (extKey → the SOURCE fixture's
@@ -1280,8 +1281,8 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
       // home/away_entrant_id writer in this file that bypasses fillSlot, so
       // unlike every other entrant-write here it does NOT clear a matching
       // *_slot_label. Verified harmless today only because a PLAIN
-      // (non-`.seeding`) stage's fixtures never carry a label to begin with
-      // — only generateSeededStageFixtures' own third pass (above) stamps
+      // (non-`timing:"setup"`) stage's fixtures never carry a label to begin
+      // with — only generateProgressionSetupFixtures' own third pass (above) stamps
       // one, and that path never reaches this bulk UPDATE. Nothing enforces
       // that stays true, so refuse loudly if it ever stops holding, rather
       // than silently filling the entrant and leaving the label stale
@@ -1396,10 +1397,11 @@ async function wireCrossFeeds(tx: Tx, divisionId: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// D4a (P5) — TBD-shape generation for a `.seeding`-declared stage. Runs at
-// division setup time, independent of the source stage's completion; count/
-// shape derive purely from the seeding rules (stage-seeding.ts). See
-// generateStageFixtures' `.seeding` short-circuit above.
+// D4a (P5) / F2 — TBD-shape generation for a `timing: "setup"` progression.
+// Runs at division setup time, independent of the source stage's
+// completion; count/shape derive purely from the progression's take rules
+// (@seazn/engine/competition). See generateStageFixtures'
+// `timing === "setup"` short-circuit above.
 // ---------------------------------------------------------------------------
 
 // Persisted labels carry an internal `seed` alongside the rendered
@@ -1415,106 +1417,47 @@ type SeededGenFixture = GenFixture & {
   awardLabel?: StoredSlotLabel;
 };
 
-/** "slot:7" -> 7 — the synthetic entrant id generateSeededStageFixtures mints
- *  for placement seat i (1-based), and the only place that format is parsed. */
+/** "slot:7" -> 7 — the synthetic entrant id generateProgressionSetupFixtures
+ *  mints for placement seat i (1-based), and the only place that format is parsed. */
 function seedOfSlotId(id: string): number {
   return Number(id.slice("slot:".length));
 }
 
-/** Resolve `.seeding.source` to a concrete, EARLIER stage in the same
- *  division. `"previous"` = the immediately-preceding stage by seq; an
- *  explicit `{stageId}` may name any earlier stage — unlike the old
- *  `qualification` mechanism, which is always implicitly seq-1. */
-async function resolveSeedingSource(
-  tx: Tx,
-  target: { division_id: string; seq: number },
-  source: StageSeedingInput["source"],
-): Promise<{ id: string; kind: string; status: string }> {
-  if (source === "previous") {
-    const [prev] = await tx<{ id: string; kind: string; status: string }[]>`
-      select id, kind, status from stages
-      where division_id = ${target.division_id} and seq < ${target.seq}
-      order by seq desc limit 1`;
-    if (!prev) {
-      throw new HttpError(
-        422,
-        "seeding.source is 'previous' but this is the division's first stage",
-        "SEEDING_RULES_MISSING",
-      );
-    }
-    return prev;
-  }
-  const [row] = await tx<{ id: string; seq: number; kind: string; status: string }[]>`
-    select id, seq, kind, status from stages where id = ${source.stageId} and division_id = ${target.division_id}`;
-  if (!row) {
-    throw new HttpError(422, "seeding.source names a stage that isn't in this division", "SEEDING_RULES_MISSING", {
-      stageId: source.stageId,
-    });
-  }
-  if (row.seq >= target.seq) {
-    throw new HttpError(
-      422,
-      "seeding.source must be an earlier stage (by seq) than the stage declaring it",
-      "SEEDING_RULES_MISSING",
-      { stageId: source.stageId },
-    );
-  }
-  return row;
-}
+// F2 — the source-resolution/shape/validation helpers this file used to
+// define privately now live in stage-seeding.ts (resolveProgressionSource,
+// sourceShapeOf, validateStageProgression), imported at the top of this
+// file, so createStages/replaceStages/templates.ts's instantiateTemplate
+// share ONE implementation instead of two.
 
-/** The source stage's pool KEYS in stable order — [] for an ungrouped
- *  (league/swiss/…) source, where `topNPerGroup` degenerates to a single
- *  implicit pool (key ""), the same overall-snapshot convention getStandings/
- *  seedNextStage already use. Reads `pools` if the source already generated
- *  them, else derives the count from its OWN config the way
- *  generateStageFixtures' poolCount() does — so shape is knowable from the
- *  moment the source stage is CREATED, no generation required there either. */
-async function sourceShapeOf(tx: Tx, source: { id: string; kind: string }): Promise<SourceShape> {
-  if (source.kind !== "group") return { poolKeys: [] };
-  const pools = await tx<{ key: string }[]>`select key from pools where stage_id = ${source.id} order by key`;
-  if (pools.length > 0) return { poolKeys: pools.map((p) => p.key) };
-  const [row] = await tx<{ config: Record<string, unknown> }[]>`select config from stages where id = ${source.id}`;
-  const count = poolCount(row?.config ?? {});
-  return { poolKeys: POOL_KEYS.slice(0, count).split("") };
-}
-
-/** Validate a StageSeeding rule at SAVE time (createStages/replaceStages) —
- *  a bad `seeded_map` reference or a too-small shape 422s there, never
- *  discovered later at proposal time (design's Edge inventory). Cheap: only
- *  needs the source's SHAPE (pool keys / count), not its standings. */
-async function validateStageSeeding(
-  tx: Tx,
-  target: { division_id: string; seq: number },
-  seeding: StageSeedingInput,
-): Promise<void> {
-  const source = await resolveSeedingSource(tx, target, seeding.source);
-  const shape = await sourceShapeOf(tx, source);
-  validateSeedingAgainstShape(shape, seeding);
-}
-
-async function generateSeededStageFixtures(auth: AuthCtx, stageId: string): Promise<GenerateOutcome> {
+async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string): Promise<GenerateOutcome> {
   return withTenant(auth.orgId, async (tx) => {
     const [stage] = await tx<StageRow[]>`
       select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
-    const seeding = stage.seeding as unknown as StageSeedingInput;
+    // `timing` is read by the CALLER (generateStageFixtures' pre-check) —
+    // this function only ever runs for timing === "setup", so it is not
+    // needed again here.
+    const progression = stage.progression as unknown as ProgressionSpec;
 
-    const source = await resolveSeedingSource(tx, stage, seeding.source);
-    const shape = await sourceShapeOf(tx, source);
-    const pots = expandTake(seeding.take, shape);
-    const placed = placeDescriptors(pots, seeding.placement, seeding.map);
+    const shapes: SourceShape[] = [];
+    for (const s of progression.sources) {
+      const source = await resolveProgressionSource(tx, stage, s.stage);
+      shapes.push(await sourceShapeOf(tx, source));
+    }
+    const pots = expandSources(progression.sources, (i) => shapes[i]!);
+    const placed = placeDescriptors(pots, progression.placement, progression.map);
     if (placed.length < 2) {
-      throw new EngineError("STAGE_NOT_READY", "this stage's seeding rules produce fewer than 2 qualifiers", {
+      throw new EngineError("STAGE_NOT_READY", "this stage's progression rules produce fewer than 2 qualifiers", {
         stageId,
         count: placed.length,
       });
     }
 
     const slotOf = new Map<string, SlotDescriptor>();
-    const entrants: ActiveEntrant[] = placed.map((d, i) => {
+    const entrants: ActiveEntrant[] = placed.map((slot, i) => {
       const id = `slot:${i + 1}`;
-      slotOf.set(id, d);
+      slotOf.set(id, slot.descriptor);
       return { id, seed: i + 1 };
     });
 
@@ -1538,15 +1481,15 @@ async function generateSeededStageFixtures(auth: AuthCtx, stageId: string): Prom
     const existing = await tx<{ id: string; ext_key: string | null }[]>`
       select id, ext_key from fixtures where stage_id = ${stageId}`;
 
-    // `.seeding` stages generate off SYNTHETIC entrants — score-dependent
-    // formats (swiss/americano/ladder) have no seed-order shape to draw
-    // before results exist, same restriction the plain path has; `generate()`
-    // covers every bracket/table kind that DOES have one.
+    // A `timing: "setup"` progression generates off SYNTHETIC entrants —
+    // score-dependent formats (swiss/americano/ladder) have no seed-order
+    // shape to draw before results exist, same restriction the plain path
+    // has; `generate()` covers every bracket/table kind that DOES have one.
     const gen: SeededGenFixture[] = generate(stage.kind, stage.config, entrants, poolIds);
 
     // F2a (P7 follow-up, 2026-08-14): the plain path's `group_too_few_entrants`
-    // guard (:990-999) only fires when `gen.length === 0` — but a `.seeding`
-    // group stage's `entrants` here are the PLACED SEEDS, snake-distributed
+    // guard (:990-999) only fires when `gen.length === 0` — but a
+    // `timing: "setup"` group stage's `entrants` here are the PLACED SEEDS, snake-distributed
     // into `pools.count` pools the same way the plain path distributes real
     // entrants. Too few seeds for the configured pool count doesn't
     // necessarily zero out `gen` overall — it can leave INDIVIDUAL pools with
@@ -1795,7 +1738,7 @@ const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_pl
 // DB fixtures.status -> engine FixtureStatus (spec 05 §1 vocabulary). Needed
 // only to satisfy BracketFixture's required `status` field when rebuilding a
 // completed bracket's own fixtures for `losersOfRound` below —
-// resolveQualification's isRoundLosers branch never actually reads status
+// resolveProgression's round_loser branch never actually reads status
 // (round + loser only), but the type does.
 function toBracketFixtureStatus(dbStatus: string): FixtureStatus {
   switch (dbStatus) {
@@ -1814,8 +1757,8 @@ function toBracketFixtureStatus(dbStatus: string): FixtureStatus {
   }
 }
 
-// Rebuild the completed bracket's own BracketFixture[] for `losersOfRound`
-// (qualification.ts) — never re-derived from `standings_snapshots`, which
+// Rebuild the completed bracket's own BracketFixture[] for `roundLosers`
+// (@seazn/engine/competition's progression.ts) — never re-derived from `standings_snapshots`, which
 // only ever carries FINAL ranks, not which round a fixture belongs to.
 // Before F1 (2026-08-17), `ext_key` was the only place a bracket fixture's
 // lane/thirdPlace survived persistence, so this parsed it via engine-db/
@@ -1827,7 +1770,7 @@ function toBracketFixtureStatus(dbStatus: string): FixtureStatus {
 // way, never re-derive bracket position from round/seq_in_round: a
 // bracket's rounds number sparsely (1,2,3 winners' side, 7-10 losers' side,
 // 14 grand final).
-// resolveQualification's isRoundLosers trusts ITS CALLER for bracket-position
+// resolveProgression's round_loser branch trusts ITS CALLER for bracket-position
 // order (there is nothing left for it to sort by) — `order by round_no,
 // seq_in_round` below is what makes THIS the ordering authority.
 async function loadBracketFixtures(tx: Tx, stageId: string): Promise<BracketFixture[]> {
@@ -1868,29 +1811,30 @@ export interface SeededStage {
 }
 
 export interface CompleteStageResult extends CompleteResult {
-  /** Set when completion resolved the next stage's qualification spec (the
-   *  OLD `stages.qualification` auto-seed flow). */
+  /** Set when completion resolved the next stage's progression (a
+   *  `timing: "on_complete"` progression — the OLD `stages.qualification`
+   *  auto-seed flow). */
   qualified?: SeededStage;
   /** Fixtures auto-generated for the seeded next stage. */
   next_stage_fixtures?: number;
   /** True when this was the last stage — the division is now completed. */
   division_completed?: boolean;
   /** D4a (P5) — set when completion computed a draft seed proposal for a
-   *  `.seeding`-declared next stage. Propose + confirm, never fully
-   *  automatic (owner ruling): unlike `qualified` above, this never fills
-   *  anything by itself. */
+   *  `timing: "setup"` next stage's progression. Propose + confirm, never
+   *  fully automatic (owner ruling): unlike `qualified` above, this never
+   *  fills anything by itself. */
   seed_proposal?: { id: string; status: string };
 }
 
 /**
  * Guarded progression (doc 08 §3): no-op unless the completion predicate
  * holds. On completion:
- *  - a `.seeding`-declared next stage (D4a/P5) gets a DRAFT seed proposal
+ *  - a `timing: "setup"` next stage (D4a/P5) gets a DRAFT seed proposal
  *    computed (never auto-filled — propose + confirm); its fixtures already
  *    exist as TBD placeholders, generated at division setup time.
- *  - a `.qualification`-declared next stage (the OLDER mechanism) keeps its
- *    existing auto-seed-then-generate behaviour, idempotent — an
- *    already-seeded stage is not re-seeded.
+ *  - a `timing: "on_complete"` next stage (the OLDER `.qualification`
+ *    mechanism) keeps its existing auto-seed-then-generate behaviour,
+ *    idempotent — an already-seeded stage is not re-seeded.
  */
 export async function completeStage(auth: AuthCtx, stageId: string): Promise<CompleteStageResult> {
   const current = await withTenant(auth.orgId, async (tx) => {
@@ -1903,28 +1847,29 @@ export async function completeStage(auth: AuthCtx, stageId: string): Promise<Com
   if (!result.completed) return result;
 
   const next = await withTenant(auth.orgId, async (tx) => {
-    const [row] = await tx<{ id: string; seeding: Record<string, unknown> | null; qualification: Record<string, unknown> | null }[]>`
-      select id, seeding, qualification from stages
+    const [row] = await tx<{ id: string; progression: Record<string, unknown> | null }[]>`
+      select id, progression from stages
       where division_id = ${current.division_id} and seq > ${current.seq}
       order by seq limit 1`;
     return row ?? null;
   });
+  const nextProgression = next?.progression as (ProgressionSpec & { timing: "setup" | "on_complete" }) | null | undefined;
 
   void fireStageRevalidate(auth.orgId, stageId);
 
-  if (next?.seeding) {
-    // Best-effort, same spirit as the qualification path's generation step
+  if (nextProgression?.timing === "setup") {
+    // Best-effort, same spirit as the on_complete path's generation step
     // below: completion stands even if the proposal compute trips (e.g. the
     // source stage this points at isn't THIS one and isn't ready yet).
     try {
-      const proposal = await computeSeedProposal(auth, next.id);
+      const proposal = await computeSeedProposal(auth, next!.id);
       return { ...result, seed_proposal: { id: proposal.id, status: proposal.status } };
     } catch {
       return result;
     }
   }
 
-  const qualified = next?.qualification ? await seedNextStage(auth, stageId) : null;
+  const qualified = nextProgression?.timing === "on_complete" ? await seedNextStage(auth, stageId) : null;
   if (!qualified) {
     // No stage follows: the division itself is done (doc 02 lifecycle
     // setup → active → completed). Idempotent — re-completing is a no-op.
@@ -1964,19 +1909,75 @@ export async function completeStage(auth: AuthCtx, stageId: string): Promise<Com
   return { ...result, qualified, ...(generated !== undefined ? { next_stage_fixtures: generated } : {}) };
 }
 
-// Resolve the next pending stage's qualification against the completed
-// stage's placements. L3/#414 pass 3 — every stage kind now completes with a
+// Resolve the next pending stage's progression against its source(s)' real
+// placements. L3/#414 pass 3 — every stage kind now completes with a
 // placement snapshot (pass 2's completeStageIfReady): table kinds (league/
 // group/swiss) write REAL per-pool standings; bracket/ladder write a single
 // placementTable-wrapped row (pool_id null). Both read the SAME way below —
-// a null pool_id resolves to the unnamed pool "" / `overall`, so topN/take/
-// bestOfRank/losersOfRound all just work once the old throw is gone.
-// Americano is the one exception: its OWN standings_snapshot folds over
-// ephemeral per-round PAIR entrants (Jul3/08 §3), not the persistent
-// individual entrants the next stage draws from, so it re-ranks fresh from
-// the personal-points leaderboard instead (usecases/americano.ts). Pool
-// names in specs are the pools.key letters ('A'…); a single-table stage is
-// the unnamed pool '' / `overall`.
+// a null pool_id resolves to the unnamed pool "" / `overall`, so rankRange/
+// topNPerGroup/bestNth/picks/roundLosers all just work. Americano is the one
+// exception: its OWN standings_snapshot folds over ephemeral per-round PAIR
+// entrants (Jul3/08 §3), not the persistent individual entrants the next
+// stage draws from, so it re-ranks fresh from the personal-points
+// leaderboard instead (usecases/americano.ts). Pool names in specs are the
+// pools.key letters ('A'…); a single-table stage is the unnamed pool '' /
+// `overall`.
+
+/** Build the SourceTables (pools + bracket) a COMPLETED stage offers a
+ *  downstream progression — factored out of seedNextStage's own inline
+ *  construction (unchanged logic: the americano/table/bracket branches
+ *  below are byte-identical to what this function replaces) so it can run
+ *  once per DISTINCT source a multi-source progression names (Decision 4),
+ *  not just the one stage that just completed. */
+async function tablesForCompletedStage(
+  tx: Tx,
+  stage: { id: string; kind: string },
+  divisionId: string,
+): Promise<SourceTables> {
+  let pools: PoolTable[];
+  if (stage.kind === "americano") {
+    // Rank by personal points, then map each ranked person to the
+    // division's persistent INDIVIDUAL entrant — never the ephemeral
+    // `pair` entrant a fixture actually ran on (pairEntrantsFor above); the
+    // next stage's generator only ever draws from real, registered
+    // division entrants (generateStageFixtures's `active` query).
+    const leaderboard = await personalPointsLeaderboard(tx, stage.id);
+    const memberRows = await tx<{ entrant_id: string; person_id: string }[]>`
+      select e.id as entrant_id, em.person_id
+      from entrants e
+      join entrant_members em on em.entrant_id = e.id
+      where e.division_id = ${divisionId} and e.kind = 'individual'`;
+    const entrantOf = new Map(memberRows.map((r) => [r.person_id, r.entrant_id]));
+    const ordered = leaderboard
+      .map((row) => entrantOf.get(row.person_id))
+      .filter((id): id is string => id !== undefined);
+    pools = [placementTable(ordered)];
+  } else {
+    // Ranked tables from the completion snapshot(s); translate pool uuids
+    // back to their spec-facing keys.
+    const poolRows = await tx<{ id: string; key: string }[]>`
+      select id, key from pools where stage_id = ${stage.id}`;
+    const keyOf = new Map(poolRows.map((p) => [p.id, p.key]));
+    const snapshots = await tx<{ pool_id: string | null; rows: StandingsRow[] }[]>`
+      select pool_id, rows from standings_snapshots where stage_id = ${stage.id}`;
+    if (snapshots.length === 0) {
+      throw new EngineError("STAGE_NOT_READY", "completed stage has no standings snapshots", {
+        stageId: stage.id,
+      });
+    }
+    pools = snapshots.map((s) => ({
+      pool: s.pool_id ? (keyOf.get(s.pool_id) ?? s.pool_id) : "",
+      rows: s.rows,
+    }));
+  }
+  // roundLosers (a bracket-kind source's take rule) reads the completed
+  // bracket's OWN fixtures, never the standings_snapshot (final ranks only,
+  // not per-round results) — only a bracket-kind source has any, so this is
+  // a cheap no-op query result for every other kind.
+  const bracket = BRACKET_KINDS.has(stage.kind) ? await loadBracketFixtures(tx, stage.id) : undefined;
+  return { pools, ...(bracket ? { bracket } : {}) };
+}
+
 async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<SeededStage | null> {
   return withTenant(auth.orgId, async (tx) => {
     const [current] = await tx<{ division_id: string; seq: number; kind: string }[]>`
@@ -1988,100 +1989,85 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
       select ${tx(STAGE_COLS)} from stages
       where division_id = ${current.division_id} and seq > ${current.seq}
       order by seq limit 1`;
-    if (!next || !next.qualification) return null;
+    if (!next || !next.progression) return null;
+    const progression = next.progression as unknown as ProgressionSpec & {
+      timing: "setup" | "on_complete";
+      carry?: "none" | "points" | "full";
+    };
+    if (progression.timing !== "on_complete") return null;
     if (Array.isArray(next.config.qualified)) {
       // Already seeded (idempotent re-complete).
       return { stage_id: next.id, entrants: next.config.qualified as string[] };
     }
 
-    const spec = next.qualification as unknown;
-    const isSpec =
-      typeof spec === "object" && spec !== null &&
-      ("take" in spec || "topN" in spec || "bestOfRank" in spec || "combine" in spec || "losersOfRound" in spec);
-    if (!isSpec) {
-      throw new EngineError("CONFIG_INVALID", "unrecognised qualification spec", {
-        stageId: next.id,
-      });
-    }
+    // The just-completed stage's OWN tables — built once, reused below if
+    // it's named as (one of) the progression's sources, never re-queried.
+    const currentTables = await tablesForCompletedStage(
+      tx,
+      { id: completedStageId, kind: current.kind },
+      current.division_id,
+    );
 
-    let pools: PoolTable[];
-    let overall: readonly StandingsRow[] | undefined;
-
-    if (current.kind === "americano") {
-      // Rank by personal points, then map each ranked person to the
-      // division's persistent INDIVIDUAL entrant — never the ephemeral
-      // `pair` entrant a fixture actually ran on (pairEntrantsFor above);
-      // the next stage's generator only ever draws from real, registered
-      // division entrants (generateStageFixtures's `active` query).
-      const leaderboard = await personalPointsLeaderboard(tx, completedStageId);
-      const memberRows = await tx<{ entrant_id: string; person_id: string }[]>`
-        select e.id as entrant_id, em.person_id
-        from entrants e
-        join entrant_members em on em.entrant_id = e.id
-        where e.division_id = ${current.division_id} and e.kind = 'individual'`;
-      const entrantOf = new Map(memberRows.map((r) => [r.person_id, r.entrant_id]));
-      const ordered = leaderboard
-        .map((row) => entrantOf.get(row.person_id))
-        .filter((id): id is string => id !== undefined);
-      const table = placementTable(ordered);
-      pools = [table];
-      overall = table.rows;
-    } else {
-      // Ranked tables from the completion snapshot(s); translate pool uuids
-      // back to their spec-facing keys.
-      const poolRows = await tx<{ id: string; key: string }[]>`
-        select id, key from pools where stage_id = ${completedStageId}`;
-      const keyOf = new Map(poolRows.map((p) => [p.id, p.key]));
-      const snapshots = await tx<{ pool_id: string | null; rows: StandingsRow[] }[]>`
-        select pool_id, rows from standings_snapshots where stage_id = ${completedStageId}`;
-      if (snapshots.length === 0) {
-        throw new EngineError("STAGE_NOT_READY", "completed stage has no standings snapshots", {
-          stageId: completedStageId,
-        });
+    const shapes: SourceShape[] = [];
+    const sourceTables: SourceTables[] = [];
+    const resolvedSources: { id: string; kind: string }[] = [];
+    for (const s of progression.sources) {
+      const source = await resolveProgressionSource(tx, next, s.stage);
+      resolvedSources.push(source);
+      shapes.push(await sourceShapeOf(tx, source));
+      // ANY OTHER named source must be complete NOW too, or this throws
+      // STAGE_NOT_READY — caught by completeStage's existing best-effort
+      // try/catch (Decision 4), same as today's single-source contract.
+      if (source.id === completedStageId) {
+        sourceTables.push(currentTables);
+      } else {
+        const [srcRow] = await tx<{ status: string }[]>`select status from stages where id = ${source.id}`;
+        if (srcRow?.status !== "complete") {
+          throw new EngineError("STAGE_NOT_READY", "a progression source stage is not complete yet", {
+            stageId: source.id,
+          });
+        }
+        sourceTables.push(await tablesForCompletedStage(tx, source, current.division_id));
       }
-      pools = snapshots.map((s) => ({
-        pool: s.pool_id ? (keyOf.get(s.pool_id) ?? s.pool_id) : "",
-        rows: s.rows,
-      }));
-      overall = pools.find((p) => p.pool === "")?.rows;
     }
-
-    // losersOfRound (including nested inside a combine) reads the completed
-    // bracket's OWN fixtures, never the standings_snapshot (final ranks
-    // only, not per-round results) — only a bracket-kind source has any, so
-    // this is a cheap no-op query result for every other kind.
-    const bracket = BRACKET_KINDS.has(current.kind)
-      ? await loadBracketFixtures(tx, completedStageId)
-      : undefined;
-
-    const entrants = resolveQualification(spec as QualificationSpec, {
-      pools,
-      ...(overall ? { overall } : {}),
-      ...(bracket ? { bracket } : {}),
-    });
+    const { qualifiers } = resolveProgression(progression, shapes, sourceTables);
+    const entrants = qualifiers.map((q) => q.entrantId);
     log.info(
       { event: "qualification_resolved", stageId: completedStageId, nextStageId: next.id, kind: current.kind, count: entrants.length },
       "qualification_resolved",
     );
 
     // Carry-over (Jul3/05 §3): seed the next stage with opening deltas from
-    // the completed tables — prior points/metrics arrive as data, prior H2H
+    // its source(s)' tables — prior points/metrics arrive as data, prior H2H
     // is never replayed. Only a REAL table source has real points to carry
-    // (REAL_TABLE_KINDS above); a bracket/ladder/americano source is refused
-    // outright rather than silently carrying fabricated zeros.
-    const carryMode = (spec as { carry?: "none" | "points" | "full" }).carry ?? "none";
+    // (REAL_TABLE_KINDS); a bracket/ladder/americano source is refused
+    // outright rather than silently carrying fabricated zeros. Generalised
+    // from "the one implicit source" to "every named source" (Decision 4).
+    //
+    // NOT deleted despite this plan's Decision (Task 5 Step 3 / Task 6 Step
+    // 6): grounding said "no shipped writer sets `.carry`", true for
+    // format-templates.ts/the catalogue but not for the whole codebase —
+    // custom-points.test.ts exercises it end to end against a hand-built
+    // stage graph, and it backs a MARKETED Pro entitlement
+    // (standings.carry_over — feature-copy.ts's paywall copy,
+    // pricing.matrix.standings.carry_over in all 4 marketing dictionaries).
+    // Deleting it would silently break a paid, advertised feature. `carry`
+    // is, like `timing`, an apps/web/DB-orchestration concept the engine's
+    // pure ProgressionSpec has no notion of — see ProgressionSchema.
+    const carryMode = progression.carry ?? "none";
     let carriedDeltas: unknown[] | undefined;
     if (carryMode !== "none") {
-      if (!REAL_TABLE_KINDS.has(current.kind)) {
+      const nonReal = resolvedSources.find((s) => !REAL_TABLE_KINDS.has(s.kind));
+      if (nonReal) {
         throw new EngineError(
           "CONFIG_INVALID",
-          `carry-over needs a table-stage source (league/group/swiss) — a "${current.kind}" completion has no real points to carry`,
-          { stageId: completedStageId, kind: current.kind, carry: carryMode },
+          `carry-over needs a table-stage source (league/group/swiss) — a "${nonReal.kind}" completion has no real points to carry`,
+          { stageId: nonReal.id, kind: nonReal.kind, carry: carryMode },
         );
       }
       const qualifiedSet = new Set(entrants);
-      const sourceRows = pools
-        .flatMap((p) => p.rows)
+      const sourceRows = sourceTables
+        .flatMap((t) => t.pools.flatMap((p) => p.rows))
         .filter((r) => qualifiedSet.has(r.entrantId));
       carriedDeltas = carryDeltas(sourceRows, carryMode);
     }
@@ -2192,8 +2178,8 @@ export async function overrideStandings(
   });
   // pinned ranks land in the snapshots immediately
   await recomputeStandings(auth.orgId, stageId);
-  // D4a (P5): a correction here invalidates any dependent `.seeding` stage's
-  // draft proposal — mark it stale and recompute a fresh one.
+  // D4a (P5): a correction here invalidates any dependent `timing:"setup"`
+  // stage's draft proposal — mark it stale and recompute a fresh one.
   await markDependentSeedProposalsStale(auth, stageId);
   return out;
 }
@@ -2204,63 +2190,9 @@ export async function overrideStandings(
 // wraps with DB reads (standings, TBD fixtures) and the fillSlot write.
 // ---------------------------------------------------------------------------
 
-/** Deterministic order-independent digest of a set of standings tables — the
- *  `standingsHash` a proposal is derived from (design's Fill algorithm step
- *  1: confirm re-checks this and refuses on drift, 409 SEEDING_PROPOSAL_STALE). */
-function standingsHash(tables: readonly PoolTableRows[]): string {
-  const material = [...tables]
-    .sort((a, b) => a.pool.localeCompare(b.pool))
-    .map((t) => `${t.pool}:${[...t.rows].map((r) => `${r.entrantId}=${r.rank ?? 0}`).join(",")}`)
-    .join("|");
-  return createHash("sha256").update(material).digest("hex").slice(0, 16);
-}
-
-/** The source stage's standings, as PoolTableRows keyed by pool KEY ('A'…, ""
- *  for the overall/ungrouped table) — mirrors seedNextStage's own pool-uuid
- *  → key translation. Throws SEEDING_SOURCE_INCOMPLETE if nothing has been
- *  snapshotted yet (the source stage may exist but have no results). */
-async function sourceStandingsTables(tx: Tx, source: { id: string }): Promise<PoolTableRows[]> {
-  const poolRows = await tx<{ id: string; key: string }[]>`
-    select id, key from pools where stage_id = ${source.id}`;
-  const keyOf = new Map(poolRows.map((p) => [p.id, p.key]));
-  const snapshots = await tx<{ pool_id: string | null; rows: StandingsRow[] }[]>`
-    select pool_id, rows from standings_snapshots where stage_id = ${source.id}`;
-  if (snapshots.length === 0) {
-    throw new HttpError(409, "the source stage has no standings snapshots yet", "SEEDING_SOURCE_INCOMPLETE", {
-      sourceStageId: source.id,
-    });
-  }
-  return snapshots.map((s) => ({ pool: s.pool_id ? (keyOf.get(s.pool_id) ?? s.pool_id) : "", rows: s.rows }));
-}
-
-/** seed -> every "<fixtureId>:home" | "<fixtureId>:away" slot carrying that
- *  seed's label, read off the TBD fixtures' own slot_label
- *  (generateSeededStageFixtures stamps an internal `seed` alongside
- *  {key,params} for exactly this lookup — renderers destructure
- *  {key,params} and ignore it). Usually a singleton list, but a BYE seed
- *  owns TWO: its own bye fixture's slot AND the winner-feed target's slot
- *  (both get the SAME seed stamped — see the third pass in
- *  generateSeededStageFixtures). #554: this used to collapse to a single
- *  `Map<number,string>` (last-write-wins over an unordered SELECT), which
- *  silently stranded whichever slot the DB didn't return last. `order by
- *  id` makes the returned list's order — not just its membership —
- *  reproducible across calls against the same fixture rows. */
-async function destinationSlotsBySeed(tx: Tx, stageId: string): Promise<Map<number, string[]>> {
-  const fixtures = await tx<
-    { id: string; home_slot_label: { seed?: number } | null; away_slot_label: { seed?: number } | null }[]
-  >`select id, home_slot_label, away_slot_label from fixtures where stage_id = ${stageId} order by id`;
-  const bySeed = new Map<number, string[]>();
-  const add = (seed: number, slot: string) => {
-    const list = bySeed.get(seed);
-    if (list) list.push(slot);
-    else bySeed.set(seed, [slot]);
-  };
-  for (const f of fixtures) {
-    if (typeof f.home_slot_label?.seed === "number") add(f.home_slot_label.seed, `${f.id}:home`);
-    if (typeof f.away_slot_label?.seed === "number") add(f.away_slot_label.seed, `${f.id}:away`);
-  }
-  return bySeed;
-}
+// F2 — standingsHash/destinationSlotsBySeed (and sourcesToTables, which
+// wraps the source-standings read this file used to call directly) moved
+// to stage-seeding.ts (unchanged bodies), imported at the top of this file.
 
 export interface SeedProposalOut {
   id: string;
@@ -2279,15 +2211,15 @@ export interface SeedProposalOut {
 }
 
 /**
- * Compute (or recompute) a DRAFT seed proposal for a `.seeding`-declared
+ * Compute (or recompute) a DRAFT seed proposal for a `timing: "setup"`
  * stage (design's API contract: POST /stages/{id}/seed-proposal). Never
  * fills anything — propose + confirm, owner ruling. At most one 'draft' row
  * per stage (DB partial unique index backs this too): any existing draft is
  * marked 'stale' first.
  *
- * Errors: 422 SEEDING_RULES_MISSING (no `.seeding`, or its rules can't
+ * Errors: 422 SEEDING_RULES_MISSING (no progression, or its rules can't
  * resolve against this stage's generated TBD fixtures — generate them
- * first); 409 SEEDING_SOURCE_INCOMPLETE (source stage not complete, or has
+ * first); 409 SEEDING_SOURCE_INCOMPLETE (a source stage not complete, or has
  * no standings yet); 409 SEEDING_ALREADY_CONFIRMED (this stage's slots are
  * already filled — recompute is refused, not just a no-op, so the caller
  * doesn't mistake a stale draft for something actionable).
@@ -2296,10 +2228,10 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
   return withTenant(auth.orgId, async (tx) => {
     const [stage] = await tx<StageRow[]>`select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
-    if (!stage.seeding) {
+    if (!stage.progression) {
       throw new HttpError(422, "this stage has no seeding rules declared", "SEEDING_RULES_MISSING");
     }
-    const seeding = stage.seeding as unknown as StageSeedingInput;
+    const progression = stage.progression as unknown as ProgressionSpec;
 
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
 
@@ -2313,18 +2245,13 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
       );
     }
 
-    const source = await resolveSeedingSource(tx, stage, seeding.source);
-    if (source.status !== "complete") {
-      throw new HttpError(409, "the source stage isn't complete yet", "SEEDING_SOURCE_INCOMPLETE", {
-        sourceStageId: source.id,
-      });
-    }
-    const tables = await sourceStandingsTables(tx, source);
-
-    const shape = await sourceShapeOf(tx, source);
-    const pots = expandTake(seeding.take, shape);
-    const placed = placeDescriptors(pots, seeding.placement, seeding.map);
-    const { qualifiers, ties } = resolveQualifiers(placed, tables);
+    // sourcesToTables resolves EVERY named source (Decision 4 — genuinely
+    // multi-source, though no writer in this session emits a multi-source
+    // `timing:"setup"` progression), requiring each complete before reading
+    // its standings — same 409 SEEDING_SOURCE_INCOMPLETE contract this
+    // function has always had, generalised from one source to N.
+    const { shapes, tables, resolved } = await sourcesToTables(tx, stage, progression.sources);
+    const { qualifiers, ties } = resolveProgression(progression, shapes, tables);
 
     const slotBySeed = await destinationSlotsBySeed(tx, stageId);
     if (slotBySeed.size === 0) {
@@ -2340,7 +2267,7 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     const computedQualifiers = qualifiers.map((q) => ({
       rank: q.seed,
       source: {
-        stageId: source.id,
+        stageId: resolved[q.sourceIndex]!.id,
         ...(q.descriptor.kind === "group_rank" ? { group: q.descriptor.pool } : {}),
         rank: q.rank,
       },
@@ -2369,7 +2296,11 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
       reason: t.reason,
     }));
 
-    const computed = { qualifiers: computedQualifiers, ties: computedTies, standingsHash: standingsHash(tables) };
+    const computed = {
+      qualifiers: computedQualifiers,
+      ties: computedTies,
+      standingsHash: standingsHash(poolTableRowsAcrossSources(tables)),
+    };
 
     await tx`update stage_seed_proposals set status = 'stale' where stage_id = ${stageId} and status = 'draft'`;
     const [row] = await tx<{ id: string }[]>`
@@ -2438,8 +2369,8 @@ export async function confirmSeedProposal(
   const committed = await withTenant(auth.orgId, async (tx) => {
     const [stage] = await tx<StageRow[]>`select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
-    if (!stage.seeding) throw new HttpError(422, "this stage has no seeding rules declared", "SEEDING_RULES_MISSING");
-    const seeding = stage.seeding as unknown as StageSeedingInput;
+    if (!stage.progression) throw new HttpError(422, "this stage has no seeding rules declared", "SEEDING_RULES_MISSING");
+    const progression = stage.progression as unknown as ProgressionSpec;
 
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
 
@@ -2460,9 +2391,8 @@ export async function confirmSeedProposal(
     // Step 1 — freshness. A standings override could have landed between the
     // draft's compute and this request; re-derive the hash rather than trust
     // the row's status alone.
-    const source = await resolveSeedingSource(tx, stage, seeding.source);
-    const tables = await sourceStandingsTables(tx, source);
-    if (standingsHash(tables) !== proposal.computed.standingsHash) {
+    const { tables } = await sourcesToTables(tx, stage, progression.sources);
+    if (standingsHash(poolTableRowsAcrossSources(tables)) !== proposal.computed.standingsHash) {
       await tx`update stage_seed_proposals set status = 'stale' where id = ${proposal.id}`;
       throw new HttpError(409, "standings changed since this proposal was computed — recompute it first", "SEEDING_PROPOSAL_STALE");
     }
@@ -2589,8 +2519,8 @@ export async function confirmSeedProposal(
 }
 
 /** A standings change on `sourceStageId` invalidates any dependent
- *  `.seeding` stage's draft proposal — mark it stale and recompute a fresh
- *  one against the corrected table (design: overrideStandings "marks
+ *  `timing: "setup"` stage's draft proposal — mark it stale and recompute a
+ *  fresh one against the corrected table (design: overrideStandings "marks
  *  dependent draft proposals stale and recomputes"). Best-effort throughout:
  *  a dependent whose recompute now trips (e.g. rules unsatisfiable, or
  *  already confirmed) is left as-is rather than blocking the write that
@@ -2606,16 +2536,30 @@ export async function markDependentSeedProposalsStale(auth: AuthCtx, sourceStage
   const dependents = await withTenant(auth.orgId, async (tx) => {
     const [src] = await tx<{ division_id: string }[]>`select division_id from stages where id = ${sourceStageId}`;
     if (!src) return [];
-    const rows = await tx<{ id: string; seq: number; seeding: Record<string, unknown> | null }[]>`
-      select id, seq, seeding from stages where division_id = ${src.division_id} and seeding is not null`;
+    // Restricted to timing==='setup' in SQL (not just `progression is not
+    // null`): an `on_complete` stage never has a stage_seed_proposals row,
+    // so including it here would only cost wasted resolveProgressionSource
+    // calls below, never a real match.
+    const rows = await tx<{ id: string; seq: number; progression: Record<string, unknown> | null }[]>`
+      select id, seq, progression from stages
+      where division_id = ${src.division_id}
+        and progression is not null
+        and progression ->> 'timing' = 'setup'`;
     const matches: string[] = [];
     for (const row of rows) {
-      const seeding = row.seeding as unknown as StageSeedingInput;
-      try {
-        const source = await resolveSeedingSource(tx, { division_id: src.division_id, seq: row.seq }, seeding.source);
-        if (source.id === sourceStageId) matches.push(row.id);
-      } catch {
-        // an unresolvable source can't depend on this stage
+      const progression = row.progression as unknown as ProgressionSpec;
+      // A dependent may name MULTIPLE sources (Decision 4) — it depends on
+      // sourceStageId if ANY of them resolves to it.
+      for (const s of progression.sources) {
+        try {
+          const source = await resolveProgressionSource(tx, { division_id: src.division_id, seq: row.seq }, s.stage);
+          if (source.id === sourceStageId) {
+            matches.push(row.id);
+            break;
+          }
+        } catch {
+          // an unresolvable source can't depend on this stage
+        }
       }
     }
     if (matches.length > 0) {

@@ -87,19 +87,31 @@ describe.skipIf(!HAS_DB)("combined qualification round-trip (PROMPT-59)", () => 
         kind: "group",
         name: "Groups",
         config: { pools: { count: 4 } },
-        qualification: null,
       },
       {
         seq: 2,
         kind: "knockout",
         name: "KO",
         config: { slotOrder },
-        qualification: {
-          combine: [
-            { take: ["A", "B", "C", "D"].map((pool) => ({ pool, rank: 1 })) },
-            { bestOfRank: { rank: 2, count: 4 } },
+        // F2: the old QualificationSpec's `combine` (multiple take rules,
+        // ONE implicit source) is now just multiple TakeRule entries in one
+        // ProgressionSource's `take[]` — dedupe/ordering across them is
+        // resolveProgression's job now (progression.ts), not a `combine`
+        // wrapper's. `take: [{pool,rank}]` -> `{kind:"picks",picks:[...]}`;
+        // `bestOfRank: {rank,count}` -> `{kind:"bestNth",nth,count}`.
+        progression: {
+          sources: [
+            {
+              stage: "previous",
+              take: [
+                { kind: "picks", picks: ["A", "B", "C", "D"].map((pool) => ({ pool, rank: 1 })) },
+                { kind: "bestNth", nth: 2, count: 4 },
+              ],
+            },
           ],
-        } as never,
+          placement: "rank_order",
+          timing: "on_complete",
+        },
       },
     ]);
     const group = stages.find((s) => s.kind === "group")!;

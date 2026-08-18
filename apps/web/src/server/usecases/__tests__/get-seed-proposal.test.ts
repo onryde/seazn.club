@@ -65,7 +65,11 @@ async function setup() {
       kind: "knockout",
       name: "KO",
       config: {},
-      seeding: { source: "previous", take: [{ kind: "topNPerGroup", n: 1 }], placement: "rank_order" },
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] }],
+        placement: "rank_order",
+        timing: "setup",
+      },
     },
   ]);
   const groupStageId = stages.find((s) => s.kind === "group")!.id;
@@ -105,7 +109,11 @@ describe.skipIf(!HAS_DB)("getSeedProposal — read-only, P6/D4b task B", () => {
         kind: "knockout",
         name: "KO",
         config: {},
-        seeding: { source: "previous", take: [{ kind: "topNPerGroup", n: 1 }], placement: "rank_order" },
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
       },
     ]);
     const koStageId = stages.find((s) => s.kind === "knockout")!.id;
@@ -165,7 +173,11 @@ describe.skipIf(!HAS_DB)("getSeedProposal — read-only, P6/D4b task B", () => {
         kind: "knockout",
         name: "KO",
         config: {},
-        seeding: { source: "previous", take: [{ kind: "topNPerGroup", n: 1 }], placement: "rank_order" },
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
       },
     ]);
     const koStageId = stages.find((s) => s.kind === "knockout")!.id;
@@ -223,7 +235,11 @@ describe.skipIf(!HAS_DB)("getSeedProposal — read-only, P6/D4b task B", () => {
         kind: "knockout",
         name: "KO",
         config: {},
-        seeding: { source: "previous", take: [{ kind: "topNPerGroup", n: 1 }], placement: "rank_order" },
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
       },
     ]);
     const koStageId = stages.find((s) => s.kind === "knockout")!.id;
