@@ -83,7 +83,11 @@ import {
   publicRegistrationStatusByRef,
   withdrawRegistrationByRef,
   handleRegistrationCheckoutCompleted,
-  handleRegistrationCheckoutAsyncPaymentFailed,
+  // handleRegistrationCheckoutAsyncPaymentFailed is deliberately NOT imported:
+  // its test drives `processStripeEvent` with a real
+  // `checkout.session.async_payment_failed` event instead of calling the
+  // handler directly, which also proves the dispatch wiring and the
+  // HANDLED_EVENT_TYPES entry — a direct call would prove neither.
   handleRegistrationDispute,
   syncRegistrationRefund,
   reconcileRegistration,
