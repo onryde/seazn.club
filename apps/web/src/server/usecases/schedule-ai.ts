@@ -19,6 +19,10 @@ import {
   type AiTurn,
 } from "@/server/ai/provider";
 import { withTenant } from "@/lib/db";
+// P9 pass 4d: the court-name disambiguation rule, lifted to a client-safe
+// module (see the doc comment at this file's own re-export below) — imported
+// (not a bare `export … from`) because buildSchedulePack calls it directly.
+import { buildCourtDirectory, type PackCourtInfo } from "@/lib/court-directory";
 import { log } from "@/server/logger";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
@@ -293,46 +297,18 @@ export interface PackObstacle {
  *  `label` is what it must echo back (the SAME string `toModelPayload` puts
  *  in `settings.courts`); `venue`/`tags` are shown alongside it (courtDetails)
  *  so the model can reason about which court suits a fixture, something it
- *  had no way to do while `settings.courts` carried opaque uuids. */
-export interface PackCourtInfo {
-  label: string;
-  venue: string;
-  tags: string[];
-}
-
-/**
- * Builds a display label for every court, venue-qualifying a bare name
- * shared by courts in different venues so the model is never shown two
- * candidates it cannot tell apart (a venue's own courts are unique by name —
- * V367's `courts_venue_name_active_idx` — but nothing stops two DIFFERENT
- * venues from each naming one "Court 1").
+ *  had no way to do while `settings.courts` carried opaque uuids.
  *
- * Deterministic on (name, venue name) alone. An id breaks a tie only as an
- * ultimate, stable last resort — for the residual case of an archived and an
- * active court sharing both a venue and a name (the unique index frees a
- * name once its court is archived) — never as the primary rule: this session
- * traced five separate defects back to "resolve by uuid ordering", and a
- * per-seed-random label would make the model's own choice non-reproducible
- * across reseeds of an otherwise identical board.
- */
-export function buildCourtDirectory(
-  rows: readonly { id: string; name: string; venue_name: string; tags: readonly string[] }[],
-): Map<string, PackCourtInfo> {
-  const countByName = new Map<string, number>();
-  for (const r of rows) countByName.set(r.name, (countByName.get(r.name) ?? 0) + 1);
-  const seenLabel = new Set<string>();
-  const out = new Map<string, PackCourtInfo>();
-  const ordered = [...rows].sort(
-    (a, b) => cmp(a.name, b.name) || cmp(a.venue_name, b.venue_name) || cmp(a.id, b.id),
-  );
-  for (const r of ordered) {
-    let label = (countByName.get(r.name) ?? 0) > 1 ? `${r.name} (${r.venue_name})` : r.name;
-    while (seenLabel.has(label)) label = `${label} #${r.id.slice(0, 8)}`;
-    seenLabel.add(label);
-    out.set(r.id, { label, venue: r.venue_name, tags: [...r.tags] });
-  }
-  return out;
-}
+ *  P9 pass 4d: `buildCourtDirectory`/`PackCourtInfo` themselves moved to
+ *  `@/lib/court-directory` (CLIENT-SAFE — this file imports "server-only",
+ *  imported at this file's top) so the schedule board could reuse the exact
+ *  same "Name (Venue)" rule for its column headers/swap button/captions
+ *  instead of a second implementation. Re-exported here so every
+ *  pre-existing import from "./schedule-ai" (competition-schedule-ai.ts,
+ *  both golden-pack tests, schedule-ai-court-directory.test.ts) keeps
+ *  working unchanged. See the lib module for the disambiguation rule's own
+ *  doc comment. */
+export { buildCourtDirectory, type PackCourtInfo };
 
 export interface PackEntrant {
   id: string;
