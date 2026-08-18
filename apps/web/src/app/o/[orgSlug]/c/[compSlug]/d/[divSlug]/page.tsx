@@ -125,12 +125,19 @@ export default async function DivisionPage({
   const entrantNames = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
   const BRACKET_STAGE_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
   const hasKnockout = stages.some((s) => BRACKET_STAGE_KINDS.has(s.kind));
-  // P6/D4b task B — the proposal panel, one per `.seeding`-declared stage.
-  // getSeedProposal is read-only (no route: stage_seed_proposals has no GET,
-  // see its docstring) and organiser-only, so it's fetched only on the
-  // fixtures tab for an editable (canEdit, not frozen) division — same
-  // conditional-fetch shape as entrantLogos/headlines just above/below.
-  const seedingStages = stages.filter((s) => s.seeding != null);
+  // P6/D4b task B — the proposal panel, one per propose/confirm-at-setup
+  // stage. F2 (unified progression field): was `s.seeding != null`; the
+  // naive rename `s.progression != null` would ALSO catch on_complete
+  // (auto-seed) stages, which never go through propose/confirm (Decision
+  // 3 — the two DB-level flows stay separate) — timing: "setup" is the
+  // real signal, not mere presence. getSeedProposal is read-only (no
+  // route: stage_seed_proposals has no GET, see its docstring) and
+  // organiser-only, so it's fetched only on the fixtures tab for an
+  // editable (canEdit, not frozen) division — same conditional-fetch shape
+  // as entrantLogos/headlines just above/below.
+  const seedingStages = stages.filter(
+    (s) => (s.progression as { timing?: string } | null)?.timing === "setup",
+  );
   const seedProposals =
     tab === "fixtures" && editable && seedingStages.length > 0
       ? await Promise.all(seedingStages.map((s) => getSeedProposal(auth, s.id)))
@@ -339,7 +346,7 @@ export default async function DivisionPage({
                   />
                 </div>
               ))}
-            {/* P6/D4b task B — one proposal panel per `.seeding`-declared
+            {/* P6/D4b task B — one proposal panel per propose/confirm-at-setup
                 stage, above StagesPanel: propose/edit/confirm who fills the
                 stage's TBD slots before the stage's own timetable card. */}
             {seedingStages.map((st, i) => (
@@ -518,7 +525,7 @@ export default async function DivisionPage({
               name: st.name,
               kind: st.kind,
               config: (st.config ?? null) as Record<string, unknown> | null,
-              qualification: (st.qualification ?? null) as Record<string, unknown> | null,
+              progression: (st.progression ?? null) as Record<string, unknown> | null,
             }))}
             canEdit={editable}
             entrantModel={entrantModel}
