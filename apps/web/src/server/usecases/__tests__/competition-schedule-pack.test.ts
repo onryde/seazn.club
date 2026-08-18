@@ -264,6 +264,99 @@ async function seedBigDivision(
   return division.id;
 }
 
+/** A fresh random UUID whose FIRST hex digit is `lead` — so two courts can be
+ *  seeded whose ids sort opposite ways from the organiser's own configured
+ *  order, making "ordered on the raw UUID" a deterministic failure rather
+ *  than a coin flip. Same helper as schedule-ai-pack.test.ts's own
+ *  (file-local there too — never shared, small enough not to be worth it). */
+function uuidLeading(lead: string): string {
+  return lead + randomUUID().slice(1);
+}
+
+/** A real court whose id is CALLER-CHOSEN, not Postgres-minted — `createCourt`
+ *  always lets the DB pick `id`. Mirrors schedule-ai-pack.test.ts's helper of
+ *  the same name. */
+async function insertCourt(auth: AuthCtx, venueId: string, id: string, name: string): Promise<void> {
+  await sql`insert into courts (id, venue_id, org_id, name, sort, tags)
+            values (${id}, ${venueId}, ${auth.orgId}, ${name}, 0, '{}')`;
+}
+
+/**
+ * #14 sibling (obstacle-order reproducibility): two SELECTED divisions, each
+ * with exactly one candidate court, forced to ids that sort OPPOSITE their
+ * `courtRank` order (first appearance across `built`, in the division order
+ * passed to `buildCompetitionPack`) — Alpha (built first) gets `courtHi`
+ * (id leads 'f'), Bravo (built second) gets `courtLo` (id leads '0'), so
+ * `courtOrder = {courtHi: 0, courtLo: 1}` while `courtHi > courtLo`
+ * lexically: a raw-uuid sort would invert them. Each division's own FIXED
+ * (decided) fixture sits on its own court at the SAME instant, so the
+ * `from`/`to`/`label` tiebreaks below `courtRank` in the comparator cannot be
+ * what decides the obstacle order either — only `courtRank` can. Each
+ * division also keeps a second, unscheduled entrant pairing so `generate`
+ * still has a non-empty movable set (mirrors schedule-ai-pack.test.ts's
+ * `seedObstacleCourtOrderBoard`, one level up at the joint scope).
+ */
+async function seedJointObstacleCourtOrderBoard(): Promise<{
+  auth: AuthCtx;
+  competitionId: string;
+  divAId: string;
+  divBId: string;
+  courtHi: string;
+  courtLo: string;
+}> {
+  const { auth } = await seedOrg("pro");
+  await sql`update organizations set timezone = ${TZ} where id = ${auth.orgId}`;
+  const comp = await createCompetition(auth, {
+    ends_on: "2030-12-31",
+    name: `Joint ObstOrder ${randomUUID().slice(0, 6)}`,
+    visibility: "public",
+    branding: {},
+  });
+  const venue = await createVenue(auth, { name: "Joint obstacle venue", sort: 0 });
+  const courtHi = uuidLeading("f");
+  const courtLo = uuidLeading("0");
+  await insertCourt(auth, venue.id, courtHi, "Hi Court");
+  await insertCourt(auth, venue.id, courtLo, "Lo Court");
+
+  const at = new Date(T0).toISOString();
+
+  const divA = await createDivision(auth, comp.id, {
+    name: "Alpha", slug: `alpha-${randomUUID().slice(0, 6)}`, sport_key: "generic",
+    variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
+  });
+  await createEntrants(
+    auth,
+    divA.id,
+    ["A1", "A2", "A3"].map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })),
+  );
+  await sql`
+    insert into schedule_settings (division_id, config, tz, updated_at)
+    values (${divA.id}, ${sql.json(settingsConfig([courtHi], 30))}, ${TZ}, now())`;
+  const [stageA] = await createStages(auth, divA.id, { seq: 1, kind: "league", name: "League", config: {} });
+  const { fixtures: fxA } = await generateStageFixtures(auth, stageA!.id);
+  await sql`update fixtures set scheduled_at = ${at}, court_id = ${courtHi}, status = 'decided'
+            where id = ${fxA[0]!.id}`;
+
+  const divB = await createDivision(auth, comp.id, {
+    name: "Bravo", slug: `bravo-${randomUUID().slice(0, 6)}`, sport_key: "generic",
+    variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
+  });
+  await createEntrants(
+    auth,
+    divB.id,
+    ["B1", "B2", "B3"].map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })),
+  );
+  await sql`
+    insert into schedule_settings (division_id, config, tz, updated_at)
+    values (${divB.id}, ${sql.json(settingsConfig([courtLo], 30))}, ${TZ}, now())`;
+  const [stageB] = await createStages(auth, divB.id, { seq: 1, kind: "league", name: "League", config: {} });
+  const { fixtures: fxB } = await generateStageFixtures(auth, stageB!.id);
+  await sql`update fixtures set scheduled_at = ${at}, court_id = ${courtLo}, status = 'decided'
+            where id = ${fxB[0]!.id}`;
+
+  return { auth, competitionId: comp.id, divAId: divA.id, divBId: divB.id, courtHi, courtLo };
+}
+
 /** The shared 3-division board: A and B are selected, C is the excluded one. */
 const BOARD: DivSpec[] = [
   { name: "Alpha", courts: ["Court 1", "Court 2"], matchMinutes: 30, entrants: 4, place: true, startOffsetMin: 0 },
@@ -848,6 +941,38 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
     );
     expect(JSON.stringify(again.pack)).toBe(JSON.stringify(packA.pack));
   }, 120_000);
+
+  // #14 sibling: the joint obstacle sort used to key on the raw court uuid
+  // (`cmp(a.court, b.court)`) — a fresh permutation every reseed, identical
+  // defect to the one schedule-ai-pack.test.ts's "obstacles order on the
+  // organiser's court order, not the raw court id" test pins for the
+  // single-division path. A reseed/byte-identical comparison (the test
+  // above) is NOT a guaranteed red for this: a raw-uuid sort is deterministic
+  // WITHIN one build, so whether two independent reseeds happen to disagree
+  // depends on which random uuids got minted — a coin flip, not coverage.
+  // This pins the uuids instead, mirroring schedule-ai-pack.test.ts's own
+  // technique exactly, so the failure is guaranteed rather than lucky.
+  it("joint obstacles order on the organiser's court order, not the raw court id", async () => {
+    const { auth, competitionId, divAId, divBId, courtHi, courtLo } =
+      await seedJointObstacleCourtOrderBoard();
+    const { pack } = await buildCompetitionPack(auth, competitionId, [divAId, divBId], {
+      now: NOW_W2,
+      mode: "generate",
+      instruction: "x",
+    });
+    // Both courts are real candidates — Alpha's own courtHi, Bravo's own
+    // courtLo — so courtRank ranks them by first appearance across `built`
+    // (Alpha built first), not by uuid.
+    expect(pack.courts).toEqual([courtHi, courtLo]);
+    const obstaclesAtT0 = pack.fixtures.obstacles.filter((o) => Date.parse(o.from) === T0);
+    expect(obstaclesAtT0.length).toBe(2);
+    // Same instant — so the from/to tiebreaks below courtRank in the
+    // comparator cannot be what decides this ordering.
+    expect(new Set(obstaclesAtT0.map((o) => o.from)).size).toBe(1);
+    // The premise: a raw-id sort would invert them.
+    expect(courtHi > courtLo).toBe(true);
+    expect(obstaclesAtT0.map((o) => o.court)).toEqual([courtHi, courtLo]);
+  }, 60_000);
 });
 
 describe.skipIf(!HAS_DB)("buildCompetitionPack ordering (#350)", () => {
