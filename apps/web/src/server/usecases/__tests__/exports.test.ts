@@ -615,4 +615,105 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
     expect(text).toContain("Winner of Group A vs Runner-up of Group B");
     expect(text).not.toContain("TBD vs TBD");
   });
+
+  // NEW SCOPE (owner-approved): the bracket poster arm runs its OWN fixture
+  // query and never went through exportFixtures, which is why wave A missed
+  // it. For a knockout division the bracket poster IS the day-one printed
+  // draw — the single most valuable artifact this whole session exists to
+  // produce.
+  it("a placeholder slot in the bracket poster resolves its label, not a blank", async () => {
+    const { auth } = await seedOrg();
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Bracket Poster Cup",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    await createEntrants(
+      auth,
+      division.id,
+      Array.from({ length: 8 }, (_, i) => ({
+        kind: "individual" as const,
+        display_name: `E${i + 1}`,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "knockout",
+      name: "KO",
+      config: {},
+    });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    // Force one slot into an unfilled, labeled state directly (same pattern
+    // as Task 1/2/3) — proves the READ path resolves whatever it finds,
+    // independent of how a real knockout naturally seeds later rounds.
+    await sql`
+      update fixtures
+      set home_slot_label = ${sql.json({ key: "slot.winner_group", params: { g: "A" } })},
+          away_slot_label = ${sql.json({ key: "slot.runner_up_group", params: { g: "B" } })},
+          home_entrant_id = null, away_entrant_id = null
+      where id = ${fixtures[0]!.id}`;
+    const model = await buildDivisionDocModel(auth, division.id, "bracket", {
+      printedAt: PRINTED,
+    });
+    const text = JSON.stringify(model);
+    expect(text).toContain("Winner of Group A");
+    expect(text).toContain("Runner-up of Group B");
+  });
+
+  it("bracket poster chrome is localized for a French org, not the English literal", async () => {
+    const { auth } = await seedOrg("pro"); // formats.double_elim is Pro-gated
+    await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Bracket Poster Cup FR",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    await createEntrants(
+      auth,
+      division.id,
+      Array.from({ length: 8 }, (_, i) => ({
+        kind: "individual" as const,
+        display_name: `E${i + 1}`,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "double_elim",
+      name: "DE",
+      config: { bracketReset: true },
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const model = await buildDivisionDocModel(auth, division.id, "bracket", {
+      printedAt: PRINTED,
+    });
+    const text = JSON.stringify(model);
+    // "Tableau principal" is fr's bracket.winners (bracket-panel.tsx and
+    // public-site/bracket.tsx already render it for the live HTML lane
+    // header) — proves the poster's chrome is wired to the org's own
+    // locale via a real, already-translated key, not English left in.
+    expect(text).toContain("Tableau principal");
+    expect(text).not.toContain("Winners bracket");
+  });
 });

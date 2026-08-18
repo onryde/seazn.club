@@ -26,7 +26,6 @@ import {
 } from "@seazn/engine/exports";
 import { roundRole, type StandingsRow } from "@seazn/engine/competition";
 import { roundRoleLabel } from "@/lib/round-role-label";
-import { msg } from "@/lib/messages";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
@@ -476,10 +475,12 @@ export async function buildDivisionDocModel(
           {
             id: string; round_no: number; seq_in_round: number;
             home_entrant_id: string | null; away_entrant_id: string | null;
+            home_slot_label: SlotLabel | null; away_slot_label: SlotLabel | null;
             outcome: unknown; headline: string | null;
           }[]
         >`
           select f.id, f.round_no, f.seq_in_round, f.home_entrant_id, f.away_entrant_id,
+                 f.home_slot_label, f.away_slot_label,
                  f.outcome, ms.summary->>'headline' as headline
           from fixtures f
           left join match_states ms on ms.fixture_id = f.id
@@ -495,37 +496,77 @@ export async function buildDivisionDocModel(
           id: f.id,
           round_no: f.round_no,
           seq_in_round: f.seq_in_round,
-          home: f.home_entrant_id ? (nameById.get(f.home_entrant_id) ?? null) : null,
-          away: f.away_entrant_id ? (nameById.get(f.away_entrant_id) ?? null) : null,
+          // A filled side wins; an empty one falls back to its placeholder
+          // label — same fallback chain as toExportFixture/the scoresheet
+          // loop, but "bracket.tbd" is THIS surface's own established
+          // fallback key: bracket-panel.tsx, public-site/bracket.tsx and
+          // slideshow.tsx already resolve every other bracket-shaped view
+          // through it, never schedule.tbd. `nameById.get(...) ?? null`
+          // (entrant_id set but the name lookup somehow missed) is left as
+          // a bare null on purpose — that is a data-integrity edge case,
+          // not a day-one placeholder, and out of this scope.
+          home: f.home_entrant_id
+            ? (nameById.get(f.home_entrant_id) ?? null)
+            : resolveSlotLabel(f.home_slot_label, slotLookup, "bracket.tbd"),
+          away: f.away_entrant_id
+            ? (nameById.get(f.away_entrant_id) ?? null)
+            : resolveSlotLabel(f.away_slot_label, slotLookup, "bracket.tbd"),
           headline: f.headline,
           decided: f.outcome !== null,
         }));
         const buildOpts = { ...common, ...(liveUrl !== undefined ? { liveUrl } : {}) };
         if (stage.kind === "double_elim") {
           return buildBracketDe(title, exportFixtures, {
-            winners: "Winners bracket", losers: "Losers bracket",
-            grandFinal: "Grand final", reset: "Reset",
+            // bracket.winners/losers/grandFinal/reset are the SAME keys
+            // bracket-panel.tsx and public-site/bracket.tsx already render
+            // for the live double-elim lane headers — reused rather than
+            // duplicated under a new bracket.poster.* prefix, so the
+            // printed poster and the live page say the exact same word in
+            // every locale instead of drifting onto a second vocabulary.
+            winners: slotLookup("bracket.winners"),
+            losers: slotLookup("bracket.losers"),
+            grandFinal: slotLookup("bracket.grandFinal"),
+            reset: slotLookup("bracket.reset"),
           }, buildOpts);
         }
         if (stage.kind === "page_playoff") {
           return buildPagePoster(title, exportFixtures, {
-            q1: "Qualifier 1", eliminator: "Eliminator", q2: "Qualifier 2", final: "Final",
+            // Same reuse: these are the exact round-name keys
+            // roundRoleLabel() already resolves for qualifier1/eliminator/
+            // qualifier2/final everywhere else in the product.
+            q1: slotLookup("bracket.round.qualifier1"),
+            eliminator: slotLookup("bracket.round.eliminator"),
+            q2: slotLookup("bracket.round.qualifier2"),
+            final: slotLookup("bracket.round.final"),
           }, { ...buildOpts, description: "The Page playoffs — the top two get a second chance." });
         }
         if (stage.kind === "stepladder") {
-          return buildLadderPoster(title, exportFixtures, (i) => (i === exportFixtures.length - 1 ? "Final" : `Rung ${i + 1}`), buildOpts);
+          return buildLadderPoster(
+            title,
+            exportFixtures,
+            (i) =>
+              i === exportFixtures.length - 1
+                ? slotLookup("bracket.round.final")
+                : slotLookup("bracket.round.rung", { n: i + 1 }),
+            buildOpts,
+          );
         }
-        // F1 Task 4: buildBracket takes the round-name resolution as an
-        // injected callback now (the engine cannot carry English) -- same
-        // client-safe msg() default the sibling calls above (laneLabels,
-        // Page-playoff/ladder labels) already use, since this export
-        // surface has never been locale-aware.
+        // F1 Task 4 / F4 bracket-poster scope (owner-approved): buildBracket
+        // takes the round-name resolution as an injected callback — the
+        // engine cannot carry English (round-role.ts's header). This whole
+        // case arm used to pass hardcoded English text directly (the
+        // laneLabels/Page-playoff/ladder chrome above were raw string
+        // literals, not even routed through msg()) because "this export
+        // surface has never been locale-aware". Wave A made the rest of the
+        // export path locale-aware, so the bracket poster's chrome and round
+        // names now resolve through the same org-locale slotLookup instead
+        // of the client-safe English default.
         return buildBracket(
           title,
           exportFixtures,
           (fromEnd) =>
             roundRoleLabel(
-              msg,
+              slotLookup,
               roundRole({
                 stageKind: "knockout",
                 lane: null,
