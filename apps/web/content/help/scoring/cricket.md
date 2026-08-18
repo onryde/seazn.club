@@ -10,6 +10,8 @@ Cricket divisions score ball by ball: one tap per delivery, with the striker, no
 
 Above the run buttons sit three chips: **striker**, **non-striker** and **bowler**. Set them once at the start of the over and every ball you tap carries them automatically. Tap a chip to change it — at the end of an over the pad asks for the next bowler, and the strike swaps itself on odd runs.
 
+The bowler chip only offers your fielding side, and anyone who cannot legally bowl the next over is shown greyed out with the reason next to their name — whether they bowled the previous over, or have already bowled their maximum. You are told before you tap, rather than after.
+
 ## A ball at a time
 
 Tap the runs scored: **0** through **6**. **Wide** and the other extras — no-ball, bye, leg-bye, penalty — sit alongside, and each one records as that ball with the extra attached rather than as a separate entry.
@@ -20,7 +22,7 @@ Every tap answers in plain words along the bottom of the pad — *FOUR · Kannan
 
 **Wicket** asks only what changes. Pick how the batter went — bowled, caught, LBW, run out, stumped and the rest — and the pad asks who was out only when that isn't obvious, and for the fielder only when the dismissal involves one. Credit to the bowler follows from the dismissal, so it is never a question.
 
-After a wicket the pad prompts for the incoming batter. **Retire** handles a batter leaving without being dismissed, including retired hurt.
+After a wicket the pad prompts for the incoming batter. **Retire** handles a batter leaving without being dismissed: it offers only the two batters currently at the crease, then asks why — hurt, out, or another reason. The incoming batter follows your batting order.
 
 ## Undo
 
@@ -28,7 +30,7 @@ For about six seconds after a tap, **Undo** removes the entry outright — it ne
 
 ## The rest of the innings
 
-Toss, reviews, innings close and — in Test formats — declarations, the follow-on and the close of the match are all on the pad. The commonest sit as their own buttons; the rest are under **More actions**, which always offers exactly what the format and the current state of the match allow.
+If a side has used up its reviews for the innings, that side is greyed out when you record the next one, with the reason shown — an umpire review is never limited. Toss, reviews, innings close and — in Test formats — declarations, the follow-on and the close of the match are all on the pad. The commonest sit as their own buttons; the rest are under **More actions**, which always offers exactly what the format and the current state of the match allow.
 
 ## Recording level
 

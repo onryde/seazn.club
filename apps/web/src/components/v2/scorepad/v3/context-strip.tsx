@@ -47,7 +47,7 @@
 import { useState } from "react";
 import type { SideSquad } from "@seazn/engine/core";
 import { onFieldPersons, playingSquad } from "@seazn/engine/core";
-import type { ContextSlot, ContextStripSpec } from "./types";
+import type { Blocked, ContextSlot, ContextStripSpec } from "./types";
 
 export interface PoolView {
   readonly squad: SideSquad;
@@ -95,23 +95,43 @@ export function renderCandidateRow(
   t: TFn,
   onPick: (personId: string) => void,
   emptyText: string,
+  blocked?: Blocked,
 ) {
   if (ids.length === 0) {
     return <p className="text-xs text-slate-600">{emptyText}</p>;
   }
   return (
     <div className="flex flex-wrap gap-2">
-      {ids.map((id) => (
-        <button
-          key={id}
-          type="button"
-          onClick={() => onPick(id)}
-          style={{ minHeight: 44 }}
-          className={candidateButtonClass}
-        >
-          {personNames[id] ?? t("eventCopy.unknownPerson")}
-        </button>
-      ))}
+      {ids.map((id) => {
+        // R2c: a blocked candidate stays VISIBLE and states its reason
+        // (types.ts's `Blocked`) — a real native `disabled` button, never a
+        // control that merely looks dimmed, and never a `title`/tooltip,
+        // which is invisible on the touch surface this pad is built for.
+        // `data-candidate-id`/`data-blocked` give a Playwright spec something
+        // stable to assert on that is not styling.
+        const reason = blocked?.[id];
+        return (
+          <button
+            key={id}
+            type="button"
+            data-candidate-id={id}
+            {...(reason ? { "data-blocked": "true" } : {})}
+            disabled={reason !== undefined}
+            onClick={reason !== undefined ? undefined : () => onPick(id)}
+            style={{ minHeight: 44 }}
+            className={
+              reason !== undefined
+                ? `${candidateButtonClass} cursor-not-allowed opacity-60`
+                : candidateButtonClass
+            }
+          >
+            <span className="break-words">{personNames[id] ?? t("eventCopy.unknownPerson")}</span>
+            {reason !== undefined && (
+              <span className="ml-2 break-words text-xs font-normal text-red-600">{reason}</span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -210,7 +230,13 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
       </div>
       {activeSlot &&
         renderCandidateRow(
-          resolvePool(activeSlot, view),
+          // R2c SCOPE: `candidates` supersedes `pool` entirely — the same
+          // `?? resolvePool(...)` line guided-sheet.tsx already uses for
+          // SheetPersonStep (G6), so the two surfaces narrow identically.
+          // Deliberately `??`, not a truthiness check: an EMPTY candidates
+          // list means "nobody is eligible" and must render the empty-pool
+          // text, never fall back to the whole pool.
+          activeSlot.candidates ?? resolvePool(activeSlot, view),
           personNames,
           t,
           (personId) => {
@@ -218,6 +244,7 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
             setActiveSlotId(null);
           },
           t("scorepad.attribution.noRoster"),
+          activeSlot.blocked,
         )}
       {/* R2b (owner ruling, bowler-eligibility block, 2026-08-17):
           ContextSlot.message (types.ts) — a pre-localised raw string,

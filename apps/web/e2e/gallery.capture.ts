@@ -12,6 +12,7 @@ import {
   TAG,
   type RosterSlotSpec,
   type RosteredFixture,
+  setDivisionConfigSql,
 } from "./helpers";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../src/lib/consent";
 
@@ -89,7 +90,18 @@ type GalleryState = (typeof STATES)[number];
  * these two states from all twelve sports, not just the one whose wave
  * added them.
  */
-const EXTRA_STATES = ["06-overtile", "07-oversheet"] as const;
+const EXTRA_STATES = [
+  "06-overtile",
+  "07-oversheet",
+  // R2c (2026-08-18) — the three candidate-narrowing surfaces. None of the
+  // five shared STATES opens a picker or a sheet, so without these the
+  // sign-off gate is structurally blind to this whole wave: every R2c change
+  // is a change to what a picker OFFERS, and a closed picker looks identical
+  // before and after. The owner has to see a blocked candidate to rule on it.
+  "08-bowlerpicker",
+  "09-retiresheet",
+  "10-reviewblocked",
+] as const;
 type ExtraGalleryState = (typeof EXTRA_STATES)[number];
 
 function pad(page: Page) {
@@ -470,6 +482,110 @@ const SPORTS: GallerySport[] = [
         "7/1",
       );
       await captureState(page, dir, "07-oversheet", "cricket", measurements);
+
+      // --- R2c: a FINE innings with one complete over bowled, so the pad
+      // sits at an over boundary with a genuinely ineligible bowler present.
+      const fx3 = await seedRosteredFixture(page.request, {
+        label: `Gallery cricket R2c ${TAG}`,
+        sportKey: "cricket",
+        variantKey: "t20",
+        home: [{ fullName: `G R2c Striker ${TAG}` }, { fullName: `G R2c NonStriker ${TAG}` }],
+        away: [{ fullName: `G R2c BowlerA ${TAG}` }, { fullName: `G R2c BowlerB ${TAG}` }],
+        emitCoreStart: true,
+      });
+      for (let ball = 1; ball <= 6; ball++) {
+        const res = await apiJson(page.request, `/api/v1/fixtures/${fx3.fixtureId}/events`, "POST", {
+          expected_seq: ball,
+          type: "cricket.ball",
+          payload: {
+            over: 0,
+            ballInOver: ball,
+            striker: fx3.personIds[`G R2c Striker ${TAG}`]!,
+            nonStriker: fx3.personIds[`G R2c NonStriker ${TAG}`]!,
+            bowler: fx3.personIds[`G R2c BowlerA ${TAG}`]!,
+            runs: { bat: 0 },
+          },
+        });
+        if (res.status >= 300) {
+          throw new Error(`gallery(cricket): R2c seed ball ${ball} -> ${res.status} ${JSON.stringify(res.error)}`);
+        }
+      }
+      await page.goto(await fixturePath(page.request, fx3.fixtureId));
+      await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+
+      // 08 — the bowler picker OPEN. What the owner rules on: the list is the
+      // fielding side only, and the bowler who just bowled is SHOWN with his
+      // reason rather than silently missing.
+      const strip = pad(page).locator('[data-role="context-strip"]');
+      await strip.getByRole("button", { name: /^Bowler(:|$)/ }).click();
+      await expect(
+        strip.locator(`[data-candidate-id="${fx3.personIds[`G R2c BowlerA ${TAG}`]!}"]`),
+        "gallery(cricket): the previous over's bowler must render blocked, not vanish",
+      ).toHaveAttribute("data-blocked", "true");
+      await captureState(page, dir, "08-bowlerpicker", "cricket", measurements);
+
+      // 09 — the Retire sheet, a tile again (R2c amendment to defect 4).
+      await page.goto(await fixturePath(page.request, fx3.fixtureId));
+      await pad(page).locator('[data-tile-id="retire"]').click();
+      await expect(
+        pad(page).locator('[data-role="v3-sheet"]'),
+        "gallery(cricket): the retire tile must open the skin's own sheet",
+      ).toBeVisible({ timeout: 10_000 });
+      await captureState(page, dir, "09-retiresheet", "cricket", measurements);
+
+      // 10 — a review the engine would refuse, refused in the pad instead.
+      const fx4 = await seedRosteredFixture(page.request, {
+        label: `Gallery cricket R2c reviews ${TAG}`,
+        sportKey: "cricket",
+        variantKey: "t20",
+        home: [{ fullName: `G RV Striker ${TAG}` }, { fullName: `G RV NonStriker ${TAG}` }],
+        away: [{ fullName: `G RV Bowler ${TAG}` }],
+      });
+      const divRes = await apiJson<{ config: Record<string, unknown> }>(
+        page.request,
+        `/api/v1/divisions/${fx4.divisionId}`,
+      );
+      if (divRes.status !== 200 || !divRes.data) {
+        throw new Error(`gallery(cricket): GET division -> ${divRes.status}`);
+      }
+      await setDivisionConfigSql(fx4.divisionId, { ...divRes.data.config, reviews: { perInnings: 1 } });
+      const seeds: [string, Record<string, unknown>][] = [
+        ["core.start", {}],
+        [
+          "cricket.ball",
+          {
+            over: 0,
+            ballInOver: 1,
+            striker: fx4.personIds[`G RV Striker ${TAG}`]!,
+            nonStriker: fx4.personIds[`G RV NonStriker ${TAG}`]!,
+            bowler: fx4.personIds[`G RV Bowler ${TAG}`]!,
+            runs: { bat: 0 },
+          },
+        ],
+        ["cricket.review", { by: fx4.homeEntrantId, kind: "player", outcome: "struck_down" }],
+      ];
+      for (let i = 0; i < seeds.length; i++) {
+        const [type, payload] = seeds[i]!;
+        const res = await apiJson(page.request, `/api/v1/fixtures/${fx4.fixtureId}/events`, "POST", {
+          expected_seq: i,
+          type,
+          payload,
+        });
+        if (res.status >= 300) {
+          throw new Error(`gallery(cricket): R2c review seed ${type} -> ${res.status} ${JSON.stringify(res.error)}`);
+        }
+      }
+      await page.goto(await fixturePath(page.request, fx4.fixtureId));
+      await pad(page).locator('[data-tile-id="review"]').click();
+      const rvSheet = pad(page).locator('[data-role="v3-sheet"]');
+      await expect(rvSheet).toBeVisible({ timeout: 10_000 });
+      await rvSheet.locator('[data-choice-option-id="player"]').click();
+      await rvSheet.getByRole("button", { name: "Upheld", exact: true }).click();
+      await expect(
+        rvSheet.locator(`[data-choice-option-id="${fx4.homeEntrantId}"]`),
+        "gallery(cricket): the exhausted side must render blocked with its reason",
+      ).toHaveAttribute("data-blocked", "true");
+      await captureState(page, dir, "10-reviewblocked", "cricket", measurements);
 
       return [...EXTRA_STATES];
     },
