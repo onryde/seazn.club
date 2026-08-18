@@ -462,8 +462,27 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
     const text = JSON.stringify(model);
     expect(text).toContain("Winner of Group A");
     expect(text).toContain("Runner-up of Group B");
-    // Regression: the pair that used to render as the SQL literal.
-    expect(text).not.toContain("TBD vs TBD");
+    // Regression, fixed round 1 (reviewer): `home`/`away` serialize as
+    // separate table cells for the "timetable" kind (fixtureRows() in
+    // engine/exports/build.ts never joins them into one "X vs Y" string —
+    // that only happens for the officials-rota/my-rota "opponents" field),
+    // so a substring probe for "TBD vs TBD" is vacuous here: that exact
+    // shape can never appear in this doc kind's JSON even when the fallback
+    // is completely broken. Assert on the actual row instead — BOTH cells
+    // of the placeholder fixture's row must carry the resolved label, not
+    // the literal TBD text a half-applied fix would leave on one side.
+    // Cells are [time, court, home, result-or-"vs", away, stage] (see
+    // TIMETABLE_COLUMNS/fixtureRows() in engine/exports/build.ts) — scoped
+    // to indices 2/4 specifically, NOT the whole row: this fixture has no
+    // scheduled_at, so cell 0 (time) legitimately reads "TBD" too, via
+    // timeOf()'s own unrelated fallback, and would false-positive a
+    // whole-row check.
+    const row = model.sections
+      .flatMap((s) => s.table?.rows ?? [])
+      .find((r) => r.includes("Winner of Group A") || r.includes("Runner-up of Group B"));
+    expect(row).toEqual(expect.arrayContaining(["Winner of Group A", "Runner-up of Group B"]));
+    expect(row?.[2]).not.toBe(msgFor("en", "schedule.tbd"));
+    expect(row?.[4]).not.toBe(msgFor("en", "schedule.tbd"));
   });
 
   it("a filled fixture still exports entrant names", async () => {
@@ -502,6 +521,33 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
       printedAt: PRINTED,
     });
     expect(JSON.stringify(model)).toContain(msgFor("fr", "schedule.tbd"));
+  });
+
+  // Fix round 1 (reviewer, Important): the "scoresheet" case arm's own
+  // resolveSlotLabel fallback (exports.ts, forced by Task 1's FixtureExportRow
+  // nullability change — the generic sport has no exportTemplates.scoresheet,
+  // so this exercises the `heading`/`signatures` fallback path directly) had
+  // zero coverage. scoresheet-per-pitch.test.ts only ever exercises filled
+  // fixtures — tsc-clean plus that suite staying green was never evidence the
+  // branch actually resolves.
+  it("a placeholder fixture's scoresheet shows its slot label in the heading and signatures", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures } = await seedDivision(auth);
+    await sql`
+      update fixtures
+      set home_slot_label = ${sql.json({ key: "slot.winner_group", params: { g: "A" } })},
+          away_slot_label = ${sql.json({ key: "slot.runner_up_group", params: { g: "B" } })},
+          home_entrant_id = null, away_entrant_id = null
+      where id = ${fixtures[0]!.id}`;
+    const model = await buildDivisionDocModel(auth, division.id, "scoresheet", {
+      printedAt: PRINTED,
+    });
+    const section = model.sections.find((s) => s.heading?.includes("Winner of Group A"));
+    expect(section).toBeTruthy();
+    expect(section!.heading).toBe("Winner of Group A vs Runner-up of Group B");
+    expect(section!.signatures).toEqual(
+      expect.arrayContaining(["Captain — Winner of Group A", "Captain — Runner-up of Group B"]),
+    );
   });
 
   // F4/Task 2: officialDutyRows joined entrants only, and the rota assembly
