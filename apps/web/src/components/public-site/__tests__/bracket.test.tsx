@@ -484,17 +484,24 @@ describe("public Bracket", () => {
     expect(columns).toMatch(/class="[^"]*\bbracket-bleed\b[^"]*"[^>]*data-bracket="columns"/);
   });
 
-  it("`.bracket-bleed` breaks the wrapper out of the page shell, not just its own padding", () => {
+  it("`.bracket-bleed` pins the left edge to the content column and grows width only, rightward", () => {
     // Source-level assertion, same reasoning as modal-viewport-units.test.ts
     // (adjacent __tests__ dir): renderToStaticMarkup has no layout engine —
-    // nothing here can compute a real clientWidth/scrollWidth — so this
-    // reads the CSS rule body a revert would actually break. `left: 50%` is
-    // an offset in percent of the CONTAINING block (whatever ancestor —
-    // main's max-w-5xl content box included); `margin-left` is a REAL,
-    // flow-affecting shift in percent of the VIEWPORT. Only this pairing
-    // cancels an ancestor's inset regardless of how many wrap it — a bare
-    // `max-width`, `w-screen` alone, or a plain `-mx-*` would not reach past
-    // `main`.
+    // nothing here can compute a real clientWidth/left — so this reads the
+    // CSS rule body a revert would actually break.
+    //
+    // Coordinator's rebuild-measured correction: the first cut bled the
+    // wrapper out symmetrically (`left: 50%` + `margin-left: calc(-50vw +
+    // 1rem)`), which closed the clip but over-corrected — it pulled the
+    // LEFT edge off the page's own content column (144px at a 1280
+    // viewport) out to a flat 16px, so the tree hung ~128px left of its own
+    // "KO" heading. The fix must leave the static left edge untouched (no
+    // `position`, no `left`, no `margin-left` at all — any of those
+    // reappearing is the over-correction creeping back) and grow `width`
+    // only: `100%` (the containing block it already fills) plus
+    // `max(0px, (100vw - 64rem) / 2)`, the shell's own half-margin past its
+    // 64rem (max-w-5xl) breakpoint, clamped to 0px below it so this stays a
+    // no-op under the breakpoint exactly like before.
     const css = readFileSync(
       fileURLToPath(new URL("../../../app/globals.css", import.meta.url)),
       "utf8",
@@ -502,9 +509,11 @@ describe("public Bracket", () => {
     const start = css.indexOf("\n  .bracket-bleed {");
     expect(start).toBeGreaterThan(-1);
     const rule = css.slice(start, css.indexOf("\n  .bottom-bar {", start));
-    expect(rule).toMatch(/position:\s*relative/);
-    expect(rule).toMatch(/left:\s*50%/);
-    expect(rule).toMatch(/width:\s*calc\(100vw - 2rem\)/);
-    expect(rule).toMatch(/margin-left:\s*calc\(-50vw \+ 1rem\)/);
+    expect(rule).toMatch(/width:\s*calc\(100% \+ max\(0px, \(100vw - 64rem\) \/ 2\)\)/);
+    // Pins the left edge as unmoved: none of the properties the symmetric
+    // over-correction relied on may reappear in this rule.
+    expect(rule).not.toMatch(/\bleft\s*:/);
+    expect(rule).not.toMatch(/margin-left\s*:/);
+    expect(rule).not.toMatch(/position\s*:\s*relative/);
   });
 });
