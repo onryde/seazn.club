@@ -959,6 +959,82 @@ suites**; `turbo typecheck` **2/2**; `openapi:gen` + `i18n:gen-keys` →
   `422 "Please agree to the privacy policy to register"`, with the guardian
   gate at `:419`. Verified this session; no RS003 work owed.
 
+**Waves 4-5 CLOSED** — the per-currency matrix, then an approved deep-dive that
+added 36 tests across five new files. Commits `27d12bda4` (W4 matrix),
+`ec1c51d77` (fixture extraction), `629495a7a` (webhook fulfilment),
+`b1f2a2c85`+`74dcd1dcf` (checkout guards), `ebb1dcc4f` (concurrency),
+`c340fbb36`+`769834dae` (status reads). Gate rerun by the main thread with
+placement up: **3030 total / 2999 passed / 0 failed / 0 failed suites /
+31 pending**; `turbo typecheck` **2/2**; lint **75 warnings / 0 errors**
+(main's baseline); `openapi:gen` + `i18n:gen-keys` clean.
+
+- **New files** (fixtures now shared in `__tests__/_registration-fixtures.ts`,
+  leading underscore so vitest does not collect it):
+  `registration-webhook-fulfilment.test.ts` (12),
+  `registration-checkout-guards.test.ts` (8),
+  `registration-concurrency.test.ts` (5),
+  `registration-status-read.test.ts` (11).
+- **The webhook family is tested TOGETHER on purpose.** The same failure class
+  hit this dispatcher twice in consecutive sessions — RS002's replayed webhook
+  confirming a `rejected` registration, and W3b's missing `payment_status`
+  gate. Both are "money and materialisation move on an event that does not mean
+  what the code assumed". One file now holds `rejected` + `payment_status` +
+  replay + async succeeded/failed + mid-loop abort, so the next change here
+  cannot fix one and regress the other.
+- **`groupByRef`'s doc comment made three SECURITY claims that nothing
+  asserted** — identical 404 for wrong-token vs nonexistent ref, token compare
+  runs either way, no existence disclosure. Now pinned: splitting the combined
+  `!group || !tokenOk` guard into a distinct "invalid access token" branch reds
+  the indistinguishability test. Two traps found writing it: refs carry a
+  **CHECKSUM**, so an arbitrary "valid-looking" ref is rejected before any
+  lookup and proves nothing (use `generateRefCode()`, which also makes the
+  absent ref checksum-valid-but-unassigned — the real enumeration case); and
+  hardcoded ref literals collide on rerun because the DB persists and
+  `ref_code` is globally unique. A parallel agent hit the second trap
+  independently, so it is a property of the fixture, not of either author.
+- **Both reconcile `catch` arms had no coverage.** They run when Stripe is
+  unreachable at the moment a registrant returns from checkout; without them
+  the status page 500s for someone who has just paid. Proven by making both
+  rethrow — exactly two tests red, one per function.
+- **Real two-actor concurrency IS achievable here**, contra the RS002 note that
+  it "proved unreliable in this environment" (that verdict was about ONE
+  staging attempt). Races 1 and 2 are fully real on both actors by exploiting
+  the caller-supplied `tx`; race 3 uses a NAMED single-column proxy, documented
+  in the file header, because neither function accepts an external `tx`.
+  Removing `skip locked` hangs its test to a 30s timeout — an unusual but
+  genuine kill signal. The sweep-vs-webhook comment at `:2454-2456` is now
+  verified in BOTH orders rather than asserted in prose.
+- **ORCHESTRATOR MISTAKE, recorded so it is not repeated: three waves were run
+  in parallel on "provably disjoint file sets" — but only the TEST files were
+  disjoint.** All three mutation-tested the SAME production files
+  (`registrations.ts`, `billing-events.ts`), so each agent's mutate/revert
+  cycle ran inside the others' measurement windows. One wave lost a proof to an
+  interrupted cycle and reported it; a live `for update skip locked` -> `for
+  update` mutation was visible in `git status` mid-run. **Mutation testing is a
+  shared-resource operation on the production tree — serialise it even when the
+  test files differ.** Every critical proof (payment_status gate, RULING A
+  rejected branch, `mintGroupCheckout`'s own 503) was re-run SERIALLY afterwards
+  and each killed exactly its own test.
+- **Mutations that did NOT discriminate, reported rather than counted:**
+  dropping `regIds.length === 0` changes nothing (postgres.js tolerates an empty
+  `IN ()`) — the real guard is `.filter(Boolean)` in `checkoutRegistrationIds`;
+  and `entrant_id` alone cannot detect a double-confirm because `materialise`'s
+  own idempotency check masks it — the audit-row count is what catches it.
+- **Two checkout guards are structurally unreachable in a single
+  non-concurrent call** (`entries.length === 0`, `subtotal <= 0`): both callers
+  re-derive the value they pass down. They are reachable only through the real
+  TOCTOU window between `mintGroupCheckout`'s `payable` read and
+  `createRegistrationCheckout`'s re-query, which is how the tests drive them.
+  Sound defensive code — previously untestable rather than merely untested.
+- **`token === null` in `createRegistrationCheckout` is reached from
+  `sweepRegistrations`, NOT from `mintGroupCheckout`/`resumeRegistrationCheckout`**
+  — both of those declare `token: string`. The dispatch brief said otherwise and
+  was wrong about the call graph.
+- **Owner rule (2026-08-18): E2E and smoke get their own BRAINSTORM session
+  before either is written.** Applies to RS006/RS007's e2e and RS010's smoke.
+  A checklist line like "add an e2e for the paid flow" reliably yields one
+  happy-path spec while the failure classes that actually shipped go uncovered.
+
 ## RS011 — why #412 moved here (2026-08-17)
 
 `L1-412-w1-eligibility.md` in `../2026-08-06-scoringpad-v2-prompts/` was written
