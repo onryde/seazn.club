@@ -415,7 +415,8 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
       same.divisions.map((d) => d.id),
       { now: NOW_W2, mode: "generate", instruction: "x" },
     );
-    expect(flat.pack.courts).toEqual((await courtIds(auth, ["Court 1", "Court 2"])).sort());
+    // P9: first-appearance order across divisions, never a uuid sort.
+    expect(flat.pack.courts).toEqual(await courtIds(auth, ["Court 1", "Court 2"]));
     expect(flat.pack.divergentCourts).toEqual([]);
   }, 60_000);
 

@@ -1037,11 +1037,11 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition results (#350 Task 4)", () => {
     ]);
     parse.mockResolvedValue(planResponse(jointPlan(divisions)));
     const out = await run(auth, competitionId, divisions.map((d) => d.id));
-    // Sorted on the id STRING (cmp) — real uuids do not sort in "Court 1" <
-    // "Court 3" order, so the expectation must be sorted the same way rather
-    // than written in spec order (same convention as
-    // competition-schedule-pack.test.ts's `divergentCourts` assertions).
-    expect(out.divergent_courts).toEqual((await courtIds(auth, ["Court 1", "Court 3"])).sort());
+    // P9: `courts`/`divergentCourts` are ordered by FIRST APPEARANCE across
+    // divisions (structural — divisions are themselves name/slug ordered), not
+    // by the id string. Sorting uuids is meaningless, and an expectation that
+    // sorted them too agreed with the code only about half the time.
+    expect(out.divergent_courts).toEqual(await courtIds(auth, ["Court 1", "Court 3"]));
   });
 
   it("returns warnings IN FULL — a non-blocking violation is never swallowed (R13)", async () => {
