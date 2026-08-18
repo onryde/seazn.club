@@ -43,7 +43,7 @@ import {
   type CompetitionApplyDivision,
   type CompetitionApplyOut,
 } from "../competition-schedule-apply";
-import { seedOrg } from "./_seed";
+import { seedCourts, seedOrg } from "./_seed";
 
 /**
  * Every `afterScheduleWrite` this module fires, in order.
@@ -120,6 +120,10 @@ interface Board {
   competitionId: string;
   alpha: SeededDivision;
   bravo: SeededDivision;
+  /** P9 pass 3b: the real courts.id values this board's two divisions were
+   *  configured with — court1 shared by both (what makes a cross-division
+   *  clash expressible), court2 Alpha's own, court3 Bravo's own. */
+  courts: { court1: string; court2: string; court3: string };
 }
 
 async function seedDivision(
@@ -165,9 +169,11 @@ async function seedDivision(
   return { id: division.id, name, fixtureIds: ordered.map((f) => f.id) };
 }
 
-/** Alpha: 4 entrants -> 6 round-robin fixtures. Bravo: 3 -> 3. Both own
- *  "Court 1", which is what makes a cross-division clash expressible at all
- *  (court identity across divisions is a string match and nothing else). */
+/** Alpha: 4 entrants -> 6 round-robin fixtures. Bravo: 3 -> 3. Both own the
+ *  SAME first court (a real courts.id, P9) — what makes a cross-division
+ *  clash expressible at all: cross-division court identity is now a real,
+ *  org-wide-unique entity, never a organiser-typed label two physically
+ *  different courts could collide on by accident. */
 async function seedBoard(auth: AuthCtx): Promise<Board> {
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -175,9 +181,10 @@ async function seedBoard(auth: AuthCtx): Promise<Board> {
     visibility: "public",
     branding: {},
   });
-  const alpha = await seedDivision(auth, comp.id, "Alpha", 4, ["Court 1", "Court 2"]);
-  const bravo = await seedDivision(auth, comp.id, "Bravo", 3, ["Court 1", "Court 3"]);
-  return { competitionId: comp.id, alpha, bravo };
+  const [court1, court2, court3] = await seedCourts(auth.orgId, 3);
+  const alpha = await seedDivision(auth, comp.id, "Alpha", 4, [court1!, court2!]);
+  const bravo = await seedDivision(auth, comp.id, "Bravo", 3, [court1!, court3!]);
+  return { competitionId: comp.id, alpha, bravo, courts: { court1: court1!, court2: court2!, court3: court3! } };
 }
 
 /** Patch a division's stored `constraints` — the family the joint verifier reads
@@ -233,15 +240,15 @@ async function slots(
   divisionId: string,
 ): Promise<{ id: string; at: string | null; court: string | null; source: string | null }[]> {
   const rows = await sql<
-    { id: string; scheduled_at: Date | null; court_label: string | null; schedule_source: string | null }[]
+    { id: string; scheduled_at: Date | null; court_id: string | null; schedule_source: string | null }[]
   >`
-    select id, scheduled_at, court_label, schedule_source from fixtures
+    select id, scheduled_at, court_id, schedule_source from fixtures
     where division_id = ${divisionId}
     order by round_no, seq_in_round, id`;
   return rows.map((r) => ({
     id: r.id,
     at: r.scheduled_at === null ? null : new Date(r.scheduled_at).toISOString(),
-    court: r.court_label,
+    court: r.court_id,
     source: r.schedule_source,
   }));
 }
@@ -263,7 +270,7 @@ function lineUp(
     assignments: division.fixtureIds.map((fixture_id, i) => ({
       fixture_id,
       scheduled_at: at(startMin + i * 30),
-      court_label: court,
+      court_id: court,
     })),
   };
 }
@@ -331,7 +338,10 @@ describe("joint apply — pure contracts", () => {
         {
           fixture_id: "22222222-0000-4000-8000-000000000002",
           scheduled_at: "2026-08-01T09:00:00.000Z",
-          court_label: "Court 1",
+          // Pure schema test, no DB — any uuid-shaped string satisfies
+          // CourtId here (P9 pass 3b: court_id, not the legacy court_label
+          // this schema no longer accepts at all).
+          court_id: randomUUID(),
         },
       ],
     };
@@ -392,8 +402,8 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
   }, 90_000);
 
   const clean = async (): Promise<{ alpha: CompetitionApplyDivision; bravo: CompetitionApplyDivision }> => ({
-    alpha: lineUp(board.alpha, await divisionSeq(board.alpha.id), "Court 1", 0),
-    bravo: lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0),
+    alpha: lineUp(board.alpha, await divisionSeq(board.alpha.id), board.courts.court1, 0),
+    bravo: lineUp(board.bravo, await divisionSeq(board.bravo.id), board.courts.court3, 0),
   });
 
   it("writes every division's assignments in one go", async () => {
@@ -409,13 +419,13 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
 
     const alphaRows = await slots(board.alpha.id);
     expect(alphaRows.map((r) => r.at)).toEqual(alpha.assignments.map((a) => a.scheduled_at));
-    expect(alphaRows.map((r) => r.court)).toEqual(alpha.assignments.map(() => "Court 1"));
+    expect(alphaRows.map((r) => r.court)).toEqual(alpha.assignments.map(() => board.courts.court1));
     expect(alphaRows.map((r) => r.source)).toEqual(alpha.assignments.map(() => "ai"));
 
     const bravoRows = await slots(board.bravo.id);
     expect(bravoRows).toHaveLength(3);
     expect(bravoRows.map((r) => r.at)).toEqual(bravo.assignments.map((a) => a.scheduled_at));
-    expect(bravoRows.map((r) => r.court)).toEqual(bravo.assignments.map(() => "Court 3"));
+    expect(bravoRows.map((r) => r.court)).toEqual(bravo.assignments.map(() => board.courts.court3));
     expect(bravoRows.map((r) => r.source)).toEqual(bravo.assignments.map(() => "ai"));
 
     // A clean, well-spaced board: no conflict is invented.
@@ -457,7 +467,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
   it("a cross-division court clash is a 409 and writes nothing", async () => {
     const { alpha } = await clean();
     // Bravo lands on Court 1 at exactly Alpha's first three slots.
-    const bravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 1", 0);
+    const bravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), board.courts.court1, 0);
     let caught: unknown;
     try {
       await applyCompetitionSchedule(auth, board.competitionId, {
@@ -506,9 +516,9 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // the competition is fixed occupancy nobody in this apply can move. Drop it
     // from the board and a joint apply cheerfully double-books a real, already
     // scheduled fixture — and reports success.
-    const charlie = await seedDivision(auth, board.competitionId, "Charlie", 3, ["Court 1"]);
+    const charlie = await seedDivision(auth, board.competitionId, "Charlie", 3, [board.courts.court1]);
     await sql`
-      update fixtures set scheduled_at = ${at(0)}, court_label = 'Court 1'
+      update fixtures set scheduled_at = ${at(0)}, court_id = ${board.courts.court1}
       where id = ${charlie.fixtureIds[0]!}`;
     const { alpha, bravo } = await clean();
     await expect(
@@ -527,9 +537,9 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // because this apply is not moving it.
     const held = board.alpha.fixtureIds[5]!;
     await sql`
-      update fixtures set scheduled_at = ${at(0)}, court_label = 'Court 2'
+      update fixtures set scheduled_at = ${at(0)}, court_id = ${board.courts.court2}
       where id = ${held}`;
-    const bravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0);
+    const bravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), board.courts.court3, 0);
     const alpha: CompetitionApplyDivision = {
       division_id: board.alpha.id,
       expected_seq: await divisionSeq(board.alpha.id),
@@ -539,7 +549,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
         .map((fixture_id, i) => ({
           fixture_id,
           scheduled_at: at(i * 30),
-          court_label: "Court 2",
+          court_id: board.courts.court2,
         })),
     };
     await expect(
@@ -625,12 +635,12 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     await sql`
       update schedule_settings
       set config = ${sql.json({
-        ...settingsConfig(["Court 1", "Court 3"]),
+        ...settingsConfig([board.courts.court1, board.courts.court3]),
         blackouts: [{ from: at(120), to: at(180) }],
       })}
       where division_id = ${board.bravo.id}`;
-    const alpha = lineUp(board.alpha, await divisionSeq(board.alpha.id), "Court 2", 120);
-    const bravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 120);
+    const alpha = lineUp(board.alpha, await divisionSeq(board.alpha.id), board.courts.court2, 120);
+    const bravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), board.courts.court3, 120);
     const out = await applyCompetitionSchedule(auth, board.competitionId, {
       divisions: [alpha, bravo],
       source: "ai",
@@ -671,7 +681,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     const target = board.alpha.fixtureIds[5]!;
     await sql`
       update fixtures set winner_to_fixture = ${target} where id = ${feeder}`;
-    const bravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0);
+    const bravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), board.courts.court3, 0);
     const alpha: CompetitionApplyDivision = {
       division_id: board.alpha.id,
       expected_seq: await divisionSeq(board.alpha.id),
@@ -679,7 +689,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
         fixture_id,
         // The target starts while its feeder is still playing.
         scheduled_at: fixture_id === target ? at(0) : at((i + 1) * 30),
-        court_label: fixture_id === target ? "Court 2" : "Court 1",
+        court_id: fixture_id === target ? board.courts.court2 : board.courts.court1,
       })),
     };
     let caught: unknown;
@@ -716,8 +726,8 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     const { auth: community } = await seedOrg("community");
     const free = await seedBoard(community);
     const divisions = [
-      lineUp(free.alpha, await divisionSeq(free.alpha.id), "Court 1", 0),
-      lineUp(free.bravo, await divisionSeq(free.bravo.id), "Court 3", 0),
+      lineUp(free.alpha, await divisionSeq(free.alpha.id), free.courts.court1, 0),
+      lineUp(free.bravo, await divisionSeq(free.bravo.id), free.courts.court3, 0),
     ];
     await expect(
       applyCompetitionSchedule(community, free.competitionId, {
@@ -747,11 +757,11 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
       assignments: board.alpha.fixtureIds.map((fixture_id, i) => ({
         fixture_id,
         scheduled_at: i < 2 ? at(0) : at(i * 30),
-        court_label: i === 1 ? "Court 2" : "Court 1",
+        court_id: i === 1 ? board.courts.court2 : board.courts.court1,
       })),
     });
     const bravoOf = async (): Promise<CompetitionApplyDivision> =>
-      lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0);
+      lineUp(board.bravo, await divisionSeq(board.bravo.id), board.courts.court3, 0);
 
     // A CLEAN A/B: both arms carry a constraints row and differ on
     // `crossPersonClash` alone. Bravo is pinned to "warn" in both arms so it can
@@ -760,11 +770,11 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
       ({ auth } = await seedOrg("pro"));
       board = await seedBoard(auth);
       await sharePerson(auth.orgId, [board.alpha.fixtureIds[0]!, board.alpha.fixtureIds[1]!]);
-      await setConstraints(board.alpha.id, ["Court 1", "Court 2"], {
+      await setConstraints(board.alpha.id, [board.courts.court1, board.courts.court2], {
         ...BASE_CONSTRAINTS,
         crossPersonClash: clash,
       });
-      await setConstraints(board.bravo.id, ["Court 1", "Court 3"], {
+      await setConstraints(board.bravo.id, [board.courts.court1, board.courts.court3], {
         ...BASE_CONSTRAINTS,
         crossPersonClash: "warn",
       });
@@ -792,24 +802,24 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // nothing they could do about it — the board is already dirty, and every
     // edit is refused for the dirt.
     await sharePerson(auth.orgId, [board.alpha.fixtureIds[0]!, board.alpha.fixtureIds[1]!]);
-    await setConstraints(board.alpha.id, ["Court 1", "Court 2"], {
+    await setConstraints(board.alpha.id, [board.courts.court1, board.courts.court2], {
       ...BASE_CONSTRAINTS,
       crossPersonClash: "warn",
     });
-    await setConstraints(board.bravo.id, ["Court 1", "Court 3"], {
+    await setConstraints(board.bravo.id, [board.courts.court1, board.courts.court3], {
       ...BASE_CONSTRAINTS,
       crossPersonClash: "hard",
     });
     const alphaAssignments = board.alpha.fixtureIds.map((fixture_id, i) => ({
       fixture_id,
       scheduled_at: i < 2 ? at(0) : at(i * 30),
-      court_label: i === 1 ? "Court 2" : "Court 1",
+      court_id: i === 1 ? board.courts.court2 : board.courts.court1,
     }));
     // Write the overlap straight to the rows, bypassing every gate — the only
     // way to manufacture the board a pre-#399 organiser could be sitting on.
     for (const a of alphaAssignments) {
       await sql`
-        update fixtures set scheduled_at = ${a.scheduled_at}, court_label = ${a.court_label}
+        update fixtures set scheduled_at = ${a.scheduled_at}, court_id = ${a.court_id}
         where id = ${a.fixture_id}`;
     }
     const out = await applyCompetitionSchedule(auth, board.competitionId, {
@@ -819,7 +829,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
           expected_seq: await divisionSeq(board.alpha.id),
           assignments: alphaAssignments,
         },
-        lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0),
+        lineUp(board.bravo, await divisionSeq(board.bravo.id), board.courts.court3, 0),
       ],
       source: "ai",
       ai: AI,
@@ -839,7 +849,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // therefore never be broken.
     await sql`
       update schedule_settings
-      set config = ${sql.json({ ...settingsConfig(["Court 1", "Court 2"]), endAt: at(600) } as never)}
+      set config = ${sql.json({ ...settingsConfig([board.courts.court1, board.courts.court2]), endAt: at(600) } as never)}
       where division_id = ${board.alpha.id}`;
     const strayDay = new Date(T0 + 9 * 24 * 60 * MIN).toISOString();
     await expect(
@@ -851,10 +861,10 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
             assignments: board.alpha.fixtureIds.map((fixture_id, i) => ({
               fixture_id,
               scheduled_at: i === 0 ? strayDay : at(i * 30),
-              court_label: "Court 1",
+              court_id: board.courts.court1,
             })),
           },
-          lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0),
+          lineUp(board.bravo, await divisionSeq(board.bravo.id), board.courts.court3, 0),
         ],
         source: "ai",
         ai: AI,
@@ -870,7 +880,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // — and "hard if any involved division opted in" is the safe direction for
     // an org that explicitly asked not to double-book its people.
     await sharePerson(auth.orgId, [board.alpha.fixtureIds[0]!, board.bravo.fixtureIds[0]!]);
-    await setConstraints(board.alpha.id, ["Court 1", "Court 2"], {
+    await setConstraints(board.alpha.id, [board.courts.court1, board.courts.court2], {
       ...BASE_CONSTRAINTS,
       crossPersonClash: "hard",
     });
@@ -878,7 +888,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // 409 can only come from Alpha's pass seeing Bravo's slot on the merged
     // board. Spelled out rather than left as an absent row, so the two arms
     // differ by the setting alone.
-    await setConstraints(board.bravo.id, ["Court 1", "Court 3"], {
+    await setConstraints(board.bravo.id, [board.courts.court1, board.courts.court3], {
       ...BASE_CONSTRAINTS,
       crossPersonClash: "warn",
     });
@@ -898,7 +908,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // `verifyConfigFor` used to hardcode startWindows: [], so `start_window` was
     // a conflict class the whole joint product was blind to while the per-stage
     // apply reported it. Warnings only: `isBlocking` does not cover it.
-    await setConstraints(board.bravo.id, ["Court 1", "Court 3"], {
+    await setConstraints(board.bravo.id, [board.courts.court1, board.courts.court3], {
       ...BASE_CONSTRAINTS,
       // Division-targeted, which only works because the joint path stamps
       // `divisionId` on every proposed assignment.
@@ -927,7 +937,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
       Array.from({ length: n }, () => ({
         fixture_id: randomUUID(),
         scheduled_at: at(0),
-        court_label: "Court 1",
+        court_id: board.courts.court1,
       }));
     const over = {
       divisions: [
@@ -1021,7 +1031,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
         ...alpha,
         assignments: [
           ...alpha.assignments,
-          { fixture_id: foreignId, scheduled_at: at(600), court_label: "Court 2" },
+          { fixture_id: foreignId, scheduled_at: at(600), court_id: board.courts.court2 },
         ],
       };
       // Bravo must NOT also list it. Leaving it in both places trips the
@@ -1076,7 +1086,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
       const { alpha, bravo } = await clean();
       // The extra entry sits on a court and slot nothing else uses, so a court
       // clash cannot stand in for the guard under test.
-      const again = { fixture_id: dupId, scheduled_at: at(600), court_label: "Court 2" };
+      const again = { fixture_id: dupId, scheduled_at: at(600), court_id: board.courts.court2 };
       const divisions: CompetitionApplyDivision[] =
         shape === "twice in one division"
           ? [{ ...alpha, assignments: [...alpha.assignments, again] }, bravo]
@@ -1271,14 +1281,14 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     const alphaAssignments = alphaIds.map((fixture_id, i) => ({
       fixture_id,
       scheduled_at: i === 0 ? at(last * 30) : i === last ? at(0) : at(i * 30),
-      court_label: "Court 1",
+      court_id: board.courts.court1,
     }));
     const alpha: CompetitionApplyDivision = {
       division_id: board.alpha.id,
       expected_seq: await divisionSeq(board.alpha.id),
       assignments: alphaAssignments,
     };
-    const bravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0);
+    const bravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), board.courts.court3, 0);
     let caught: unknown;
     try {
       await applyCompetitionSchedule(auth, board.competitionId, {
@@ -1312,11 +1322,11 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     const alphaAssignments = alphaIds.map((fixture_id, i) => ({
       fixture_id,
       scheduled_at: i === 0 ? at(last * 30) : i === last ? at(0) : at(i * 30),
-      court_label: "Court 1",
+      court_id: board.courts.court1,
     }));
     for (const a of alphaAssignments) {
       await sql`
-        update fixtures set scheduled_at = ${a.scheduled_at}, court_label = ${a.court_label}
+        update fixtures set scheduled_at = ${a.scheduled_at}, court_id = ${a.court_id}
         where id = ${a.fixture_id}`;
     }
     const out = await applyCompetitionSchedule(auth, board.competitionId, {
@@ -1330,7 +1340,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
         },
         // Bravo gets a REAL apply in the same call — the joint write must
         // not be refused for Alpha's pre-existing dirt.
-        lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0),
+        lineUp(board.bravo, await divisionSeq(board.bravo.id), board.courts.court3, 0),
       ],
       source: "ai",
       ai: AI,
@@ -1349,8 +1359,8 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // divisionId), Alpha's round 1 landing after Bravo's round 3 would read
     // exactly like a same-sequence violation. Different courts throughout,
     // so the only thing this apply could possibly report is round order.
-    const alpha = lineUp(board.alpha, await divisionSeq(board.alpha.id), "Court 1", 400);
-    const bravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0);
+    const alpha = lineUp(board.alpha, await divisionSeq(board.alpha.id), board.courts.court1, 400);
+    const bravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), board.courts.court3, 0);
     const out = await applyCompetitionSchedule(auth, board.competitionId, {
       divisions: [alpha, bravo],
       source: "ai",
@@ -1385,14 +1395,14 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
       // fixture[0]: 0-30. Every other pair >=70 min clear, well past
       // Alpha's own 45-min floor, so no INTERNAL rest conflict rides along.
       scheduled_at: at(i * 100),
-      court_label: "Court 1",
+      court_id: board.courts.court1,
     }));
     const bravoAssignments = board.bravo.fixtureIds.map((fixture_id, i) => ({
       fixture_id,
       // fixture[0]: 50-80 — a 20-minute gap after Alpha's fixture[0] ends
       // at 30. Below Alpha's 45-min floor; comfortably above Bravo's own 0.
       scheduled_at: i === 0 ? at(50) : at(300 + i * 180),
-      court_label: "Court 3",
+      court_id: board.courts.court3,
     }));
     const out = await applyCompetitionSchedule(auth, board.competitionId, {
       divisions: [
@@ -1452,9 +1462,9 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     const partialAlpha: CompetitionApplyDivision = {
       division_id: board.alpha.id,
       expected_seq: await divisionSeq(board.alpha.id),
-      assignments: [{ fixture_id: alphaIds[0]!, scheduled_at: at(999), court_label: "Court 2" }],
+      assignments: [{ fixture_id: alphaIds[0]!, scheduled_at: at(999), court_id: board.courts.court2 }],
     };
-    const freshBravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0);
+    const freshBravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), board.courts.court3, 0);
     let caught: unknown;
     try {
       await applyCompetitionSchedule(auth, board.competitionId, {
@@ -1477,7 +1487,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // Atomic: the attempted move never landed — fixture[0] is still exactly
     // where the first (valid) apply above left it.
     const alphaSlots = await slots(board.alpha.id);
-    expect(alphaSlots.find((s) => s.id === alphaIds[0])).toMatchObject({ at: at(0), court: "Court 1" });
+    expect(alphaSlots.find((s) => s.id === alphaIds[0])).toMatchObject({ at: at(0), court: board.courts.court1 });
   }, 60_000);
 
   it("a partial apply stays editable over a PRE-EXISTING round-order violation among its own unlisted siblings — the symmetry regression (C1 final-review)", async () => {
@@ -1503,9 +1513,9 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
       // unambiguously after both the healthy AND the corrupted fixtures
       // above, so THIS move introduces no violation of its own. Only
       // whether the PRE-EXISTING one wrongly blocks it is in play.
-      assignments: [{ fixture_id: alphaIds[4]!, scheduled_at: at(999), court_label: "Court 2" }],
+      assignments: [{ fixture_id: alphaIds[4]!, scheduled_at: at(999), court_id: board.courts.court2 }],
     };
-    const freshBravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0);
+    const freshBravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), board.courts.court3, 0);
     const out = await applyCompetitionSchedule(auth, board.competitionId, {
       divisions: [partialAlpha, freshBravo],
       source: "ai",
@@ -1515,10 +1525,10 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     const alphaSlots = await slots(board.alpha.id);
     // The corrupted pair is untouched by this apply — neither fixed nor
     // worsened, exactly #399's "a dirty board stays editable" contract.
-    expect(alphaSlots.find((s) => s.id === alphaIds[1])).toMatchObject({ at: at(60), court: "Court 1" });
-    expect(alphaSlots.find((s) => s.id === alphaIds[2])).toMatchObject({ at: at(30), court: "Court 1" });
+    expect(alphaSlots.find((s) => s.id === alphaIds[1])).toMatchObject({ at: at(60), court: board.courts.court1 });
+    expect(alphaSlots.find((s) => s.id === alphaIds[2])).toMatchObject({ at: at(30), court: board.courts.court1 });
     // The actually-listed fixture DID move.
-    expect(alphaSlots.find((s) => s.id === alphaIds[4])).toMatchObject({ at: at(999), court: "Court 2" });
+    expect(alphaSlots.find((s) => s.id === alphaIds[4])).toMatchObject({ at: at(999), court: board.courts.court2 });
   }, 60_000);
 
   it("cross-division independence: each division's own widened-sibling check never leaks into the other's (C1 final-review)", async () => {
@@ -1535,12 +1545,12 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     const partialAlpha: CompetitionApplyDivision = {
       division_id: board.alpha.id,
       expected_seq: await divisionSeq(board.alpha.id),
-      assignments: [{ fixture_id: alphaIds[0]!, scheduled_at: at(999), court_label: "Court 2" }],
+      assignments: [{ fixture_id: alphaIds[0]!, scheduled_at: at(999), court_id: board.courts.court2 }],
     };
     const partialBravo: CompetitionApplyDivision = {
       division_id: board.bravo.id,
       expected_seq: await divisionSeq(board.bravo.id),
-      assignments: [{ fixture_id: bravoIds[0]!, scheduled_at: at(999), court_label: "Court 3" }],
+      assignments: [{ fixture_id: bravoIds[0]!, scheduled_at: at(999), court_id: board.courts.court3 }],
     };
     let caught: unknown;
     try {
@@ -1566,7 +1576,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // Atomic — neither division's board moved from the clean baseline.
     const alphaSlots = await slots(board.alpha.id);
     const bravoSlots = await slots(board.bravo.id);
-    expect(alphaSlots.find((s) => s.id === alphaIds[0])).toMatchObject({ at: at(0), court: "Court 1" });
-    expect(bravoSlots.find((s) => s.id === bravoIds[0])).toMatchObject({ at: at(0), court: "Court 3" });
+    expect(alphaSlots.find((s) => s.id === alphaIds[0])).toMatchObject({ at: at(0), court: board.courts.court1 });
+    expect(bravoSlots.find((s) => s.id === bravoIds[0])).toMatchObject({ at: at(0), court: board.courts.court3 });
   }, 60_000);
 });
