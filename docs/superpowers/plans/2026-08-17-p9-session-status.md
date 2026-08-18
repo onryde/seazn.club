@@ -218,3 +218,24 @@ per-fixture stage-tag resolution in all three paths, through the one shared
 `candidate-courts` function — not three copies. Whoever adds the write path
 owns this, and should add a test that a stage tag narrows the AI draft and
 reds `/validate`, not just the build.
+
+## Open at this point: the board payload grew past its budget
+
+`board-v3.spec.ts:287` — "five divisions × ~66 fixtures land under the payload
+budget (gap 15)" — now measures **282,805 bytes against a 250,000 limit**.
+
+P9 put it there, two ways:
+1. every fixture row now carries `court_id`, `court_name`, `venue_id`,
+   `venue_name` IN ADDITION to the frozen `court_label`/`venue`, which the
+   board no longer reads;
+2. the `venues` prop is `listVenues(...)`, whose rows carry each court's FULL
+   calendar (`court_hours` + `court_exceptions`) — the board needs id, name,
+   venue and tags, nothing else.
+
+Do NOT raise the budget. The assertion is doing its job: payload size is a
+real cost on the mobile widths this repo gates on, and this is the first thing
+in the session to notice the cutover's additive cost.
+
+Fix (owed before merge): a slim court directory prop for the board, and drop
+the frozen text columns from `BOARD_FIXTURE_COLS` once
+`courtDisplayName`'s legacy fallback no longer needs them.
