@@ -6,6 +6,7 @@ import { submitRegistrationGroup } from "@/server/usecases/registration-submit";
 import { mintGroupCheckout } from "@/server/usecases/registrations";
 import { getCurrentUser } from "@/lib/auth";
 import { baseUrl } from "@/lib/oauth";
+import { log } from "@/server/logger";
 import { hasLocale, type Locale } from "@/lib/i18n-constants";
 
 /** The registrant's explicit locale pick (footer switcher → seazn_locale cookie),
@@ -78,15 +79,37 @@ export async function POST(req: Request, { params }: Ctx) {
     // zero-subtotal cart: no DB round trip needed to know there is nothing
     // to charge, and this keeps every all-free/all-waitlisted submit (the
     // common no-DB-mock test path) from touching Stripe at all.
-    const checkout_url =
-      result.amount_cents > 0
-        ? await mintGroupCheckout(
-            result.group_id,
-            result.entries[0]!.division_id,
-            baseUrl(req),
-            result.access_token,
-          )
-        : null;
+    //
+    // A mint failure must NOT fail the submit. `submitRegistrationGroup` has
+    // already COMMITTED the cart by the time we get here, so throwing would
+    // return an error for a registration that exists: the entries keep their
+    // capacity/waitlist slots, and the registrant never receives the ref_code
+    // or access_token, which are the only ways back to the status page to pay.
+    // The observable result would be a duplicate cart on their retry.
+    // Every throw mintGroupCheckout can raise is recoverable LATER by the
+    // organiser (Connect not live yet, a currency snapshot gone stale) or by
+    // Stripe itself, and the status page's resume-checkout path re-mints on
+    // demand — so the honest response is "you are registered, there is no
+    // payment link yet", not "your registration failed".
+    // mintGroupCheckout still THROWS for its direct callers (resume-checkout,
+    // waitlist promotion), where there is no committed-and-lost work to
+    // protect and a 422/503 is exactly what the caller should see.
+    let checkout_url: string | null = null;
+    if (result.amount_cents > 0) {
+      try {
+        checkout_url = await mintGroupCheckout(
+          result.group_id,
+          result.entries[0]!.division_id,
+          baseUrl(req),
+          result.access_token,
+        );
+      } catch (err) {
+        log.error(
+          { err, group_id: result.group_id, org_slug: orgSlug, comp_slug: slug },
+          "registration group submitted but checkout mint failed; returning 201 with no payment link",
+        );
+      }
+    }
     return reply(201, { ...result, checkout_url });
   });
 }

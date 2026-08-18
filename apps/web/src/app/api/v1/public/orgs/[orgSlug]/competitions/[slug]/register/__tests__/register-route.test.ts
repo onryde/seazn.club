@@ -405,4 +405,53 @@ describe.skipIf(!HAS_DB)("POST .../register — DB-backed", () => {
     expect(body.data?.checkout_url).toBe("https://checkout.stripe.test/session");
     expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
   });
+
+  // submitRegistrationGroup COMMITS before the route mints. If a mint failure
+  // propagated, the response would be an error for a registration that exists:
+  // the entries keep their capacity/waitlist slots and the registrant never
+  // receives the ref_code or access_token, which are the only routes back to
+  // the status page to pay. Their retry then duplicates the whole cart.
+  // Every mint failure is recoverable later (organiser finishes Connect, fixes
+  // a stale currency snapshot; resume-checkout re-mints), so the cart must
+  // survive with no payment link rather than be reported as failed.
+  it("a Stripe failure after submit still returns 201 and PERSISTS the cart, with no payment link", async () => {
+    const { orgSlug, orgId, ownerId } = await seedOrg();
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'individual', 500, 'stripe', 'auto', false)`;
+    stripeMock.checkoutCreate.mockRejectedValueOnce(new Error("stripe is down"));
+
+    const res = await registerRoute(
+      req(
+        URL_(orgSlug, competition.slug),
+        groupBody({
+          entries: [
+            {
+              division_id: division.id,
+              entrant_kind: "individual",
+              players: [{ full_name: "Payer" }],
+              answers: {},
+            },
+          ],
+        }),
+        { "x-forwarded-for": "9.9.9.22" },
+      ),
+      ctx(orgSlug, competition.slug),
+    );
+    const { status, body } = await read(res);
+    expect(status).toBe(201);
+    expect(body.data?.checkout_url).toBeNull();
+    // The registrant keeps everything they need to come back and pay.
+    expect(body.data?.ref_code).toBeTruthy();
+    expect(body.data?.access_token).toBeTruthy();
+    const rows = await sql<{ id: string }[]>`
+      select id from registrations where group_id = ${String(body.data!.group_id)}`;
+    expect(rows).toHaveLength(1);
+  });
 });
