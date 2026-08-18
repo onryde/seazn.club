@@ -37,7 +37,8 @@ import { courtGroups, resolveCourtNames } from "@/components/v2/shared/court-mul
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import type { PatchFixture } from "@/server/api-v1/schemas";
 import { zonedTimeInput } from "@/lib/zoned-datetime";
-import type { ScheduleMetrics, ScheduleSolverInfo } from "@/server/api-v1/schemas";
+import type { z } from "zod";
+import type { ApplyScheduleRequest, ScheduleMetrics, ScheduleSolverInfo } from "@/server/api-v1/schemas";
 // D2 capacity pre-check — client-safe leaves only, see capacity-input.ts's
 // header for why this file must never reach @seazn/engine/scheduling (the
 // solver barrel) or capacity-guard.ts (server-only).
@@ -414,8 +415,11 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
     setBusy(stageId);
     try {
       type Proposal = {
-        // P9: /schedule/auto returns `court_id`; the apply schema requires it.
-        assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
+        // P9: INFERRED from the schema the server validates against. A hand
+        // written wire type is an assertion `apiV1<T>` never checks — that is
+        // exactly how the board's apply shipped `court_label` and 400'd every
+        // Auto-schedule run for the whole cutover.
+        assignments: z.infer<typeof ApplyScheduleRequest>["assignments"];
         metrics?: ScheduleMetrics;
         solver?: ScheduleSolverInfo;
       };
