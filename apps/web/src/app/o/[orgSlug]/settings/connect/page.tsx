@@ -29,9 +29,13 @@ export default async function ConnectSettingsPage({
   const navCtx = await navContext(org.id);
 
   const [row] = await sql<
-    { payment_instructions: string | null; default_payment_method: "offline" | "stripe" }[]
+    {
+      payment_instructions: string | null;
+      default_payment_method: "offline" | "stripe";
+      charges_enabled: boolean;
+    }[]
   >`
-    select payment_instructions, default_payment_method
+    select payment_instructions, default_payment_method, stripe_charges_enabled as charges_enabled
     from organizations where id = ${org.id}`;
 
   return (
@@ -55,6 +59,7 @@ export default async function ConnectSettingsPage({
           orgId={org.id}
           initialValue={row?.payment_instructions ?? null}
           initialDefaultMethod={row?.default_payment_method ?? "offline"}
+          chargesEnabled={row?.charges_enabled ?? false}
           isOwner={isOwner}
         />
       </section>

@@ -2548,6 +2548,7 @@
   "pay.methodHint": "Voorgeselecteerd wanneer je inschrijving instelt voor een nieuwe divisie — elke divisie kan nog steeds zijn eigen keuze maken.",
   "pay.methodOffline": "Betaal de organisator",
   "pay.methodStripe": "Kaart bij inschrijving",
+  "pay.methodStripeNeedsConnect": "Verbind Stripe hierboven om kaartbetalingen aan te bieden — tot die tijd betalen deelnemers de organisator.",
   "pay.cashTitle": "Instructies voor contant / bankoverschrijving",
   "pay.cashHintPre": "Getoond aan inschrijvers van divisies waar de organisator wordt betaald en opgenomen in hun bevestigingsmail. Divisies kunnen dit overschrijven. Opmaak wordt ondersteund, en ",
   "pay.cashHintPost": " wordt het gegenereerde referentienummer van elke inschrijver — bijv. “vermeld {{reference}} bij je overschrijving”.",

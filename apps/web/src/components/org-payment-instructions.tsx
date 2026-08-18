@@ -23,11 +23,13 @@ export function OrgPaymentInstructions({
   orgId,
   initialValue,
   initialDefaultMethod = "offline",
+  chargesEnabled = false,
   isOwner = false,
 }: {
   orgId: string;
   initialValue: string | null;
   initialDefaultMethod?: "offline" | "stripe";
+  chargesEnabled?: boolean;
   isOwner?: boolean;
 }) {
   const msg = useMsg();
@@ -138,7 +140,10 @@ export function OrgPaymentInstructions({
 
   return (
     <div className="space-y-5">
-      {/* Stripe Connect (owners only — the API enforces it too). */}
+      {/* Setup panels — Stripe onboarding (owners only), then the org's own
+          cash/bank instructions, each its own full-width row. Two independent
+          things to configure; the actual default-method choice lives in the
+          fieldset below. */}
       {isOwner && (
         <div data-tour="connect-stripe" className="rounded-lg border border-slate-200 p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -295,39 +300,8 @@ export function OrgPaymentInstructions({
         </div>
       )}
 
-      {/* Default method for new divisions. */}
-      <fieldset>
-        <legend className="label">{msg("pay.methodLegend")}</legend>
-        <p className="mb-2 text-xs text-slate-500">{msg("pay.methodHint")}</p>
-        <div className="flex gap-2">
-          {(
-            [
-              { key: "offline", label: msg("pay.methodOffline") },
-              { key: "stripe", label: msg("pay.methodStripe") },
-            ] as const
-          ).map((opt) => (
-            <label
-              key={opt.key}
-              className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition ${
-                method === opt.key
-                  ? "border-purple-300 bg-purple-50 text-slate-900"
-                  : "border-slate-200 text-slate-600 hover:border-slate-300"
-              }`}
-            >
-              <input
-                type="radio"
-                name="org_default_method"
-                checked={method === opt.key}
-                onChange={() => void saveMethod(opt.key)}
-              />
-              {opt.label}
-            </label>
-          ))}
-        </div>
-      </fieldset>
-
       {/* Org-wide offline instructions. */}
-      <label className="block">
+      <div className="rounded-lg border border-slate-200 p-4">
         <span className="label">{msg("pay.cashTitle")}</span>
         <p className="mb-2 text-xs text-slate-500">
           {msg("pay.cashHintPre")}
@@ -353,9 +327,49 @@ export function OrgPaymentInstructions({
             {busy ? msg("pay.saving") : msg("pay.save")}
           </button>
           {error && <span className="text-xs text-red-600">{error}</span>}
-          {saved && !error && <span className="text-xs text-green-600">{msg("pay.saved")}</span>}
+          {saved && !error && (
+            <span className="text-xs text-green-600">{msg("pay.saved")}</span>
+          )}
         </div>
-      </label>
+      </div>
+
+      {/* Default method for new divisions. */}
+      <fieldset>
+        <legend className="label">{msg("pay.methodLegend")}</legend>
+        <p className="mb-2 text-xs text-slate-500">{msg("pay.methodHint")}</p>
+        <div className="flex gap-2">
+          {(
+            [
+              { key: "offline", label: msg("pay.methodOffline"), disabled: false },
+              { key: "stripe", label: msg("pay.methodStripe"), disabled: !chargesEnabled },
+            ] as const
+          ).map((opt) => (
+            <label
+              key={opt.key}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition ${
+                opt.disabled
+                  ? "cursor-not-allowed border-slate-200 text-slate-400"
+                  : method === opt.key
+                    ? "cursor-pointer border-purple-300 bg-purple-50 text-slate-900"
+                    : "cursor-pointer border-slate-200 text-slate-600 hover:border-slate-300"
+              }`}
+            >
+              <input
+                type="radio"
+                name="org_default_method"
+                data-testid={`method-${opt.key}`}
+                checked={method === opt.key}
+                disabled={opt.disabled}
+                onChange={() => void saveMethod(opt.key)}
+              />
+              {opt.label}
+            </label>
+          ))}
+        </div>
+        {!chargesEnabled && (
+          <p className="mt-2 text-xs text-slate-500">{msg("pay.methodStripeNeedsConnect")}</p>
+        )}
+      </fieldset>
     </div>
   );
 }

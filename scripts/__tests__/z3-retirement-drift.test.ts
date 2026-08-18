@@ -252,6 +252,9 @@ const ACCURATE_TODAY = [
   "packages/engine/src/scheduling/repair-domain.test.ts",
   "packages/engine/src/scheduling/z3-dependency-retired.test.ts",
   "packages/engine/src/scheduling/repair-domain.ts",
+  // A test-name regex matching golden fixture names from the z3 era
+  // ("without booting the z3 WASM") — quoting history, not using the solver.
+  "scripts/ci-local.sh",
   "scripts/repro-ai-bracket-frozen-feeder.ts",
   "scripts/smoke.ts",
   "services/placement/src/placement/model.py",
