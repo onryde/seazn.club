@@ -85,6 +85,14 @@ const CASES: Record<ConflictDetailKind, { detail: ConflictDetail; expected: stri
     detail: { kind: "court_double_booking", court: "Court 1", otherFixtureId: "f2" },
     expected: "court Court 1 double-booked with f2",
   },
+  // P9 pass 2c — postdates the d0cd9a25 baseline this describe block
+  // otherwise reproduces byte-for-byte; there is no historical English for
+  // this kind, so this is new prose (see conflict-detail-legacy.ts's own
+  // comment on this entry).
+  court_tag_mismatch: {
+    detail: { kind: "court_tag_mismatch", court: "Court 1" },
+    expected: "court Court 1 does not carry a required tag",
+  },
   inside_blackout: {
     detail: { kind: "inside_blackout" },
     expected: "inside a blackout window",
@@ -172,6 +180,18 @@ describe("legacyConflictDetail — courtName (P9 pass 3a, venues/courts cutover)
     expect(
       legacyConflictDetail({ kind: "locked_slot_clash", court: courtId, courtName: "Centre Court" }),
     ).toBe("locked slot clashes on Centre Court");
+  });
+
+  it("court_tag_mismatch (P9 pass 2c) prefers courtName over the raw id", () => {
+    expect(
+      legacyConflictDetail({ kind: "court_tag_mismatch", court: courtId, courtName: "Centre Court" }),
+    ).toBe("court Centre Court does not carry a required tag");
+  });
+
+  it("court_tag_mismatch falls back to the bare id when courtName is unset", () => {
+    expect(legacyConflictDetail({ kind: "court_tag_mismatch", court: courtId })).toBe(
+      `court ${courtId} does not carry a required tag`,
+    );
   });
 
   it("falls back to the bare id when courtName is unset — never throws, still not silent", () => {

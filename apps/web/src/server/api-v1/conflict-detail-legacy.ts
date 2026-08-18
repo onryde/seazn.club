@@ -123,6 +123,11 @@ const LEGACY_PROSE: Record<ConflictDetailKind, (d: ConflictDetail) => string> = 
   // same P9 pass 3a id-to-name fallback `locked_slot_clash` uses above.
   court_double_booking: (d) =>
     `court ${d.courtName ?? d.court} double-booked with ${d.otherFixtureId ?? "another fixture"}`,
+  // P9 pass 2c — postdates the d0cd9a25 byte-for-byte baseline (this kind did
+  // not exist pre-C3), so there is no historical English to reproduce; this
+  // is new prose, styled to match its `court_double_booking` neighbour
+  // above, including the same `courtName ?? court` id-to-name fallback.
+  court_tag_mismatch: (d) => `court ${d.courtName ?? d.court} does not carry a required tag`,
   inside_blackout: () => "inside a blackout window",
   outside_session_windows: () => "outside session windows",
   entrant_overlap: (d) => `entrant ${d.entrantIds![0]} overlap with ${d.otherFixtureId}`,

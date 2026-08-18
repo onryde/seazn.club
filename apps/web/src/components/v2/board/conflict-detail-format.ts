@@ -179,6 +179,11 @@ export function formatConflictDetail(d: ConflictDetail, ctx: ConflictDetailCtx):
             other: fixtureLabel(d.otherFixtureId, fixtureTitles),
           })
         : msg("board.conflict.detail.court_double_booking.unknown", { court: d.court ?? "" });
+    case "court_tag_mismatch":
+      // P9 pass 2c. No counterparty fixture — this is a property of the
+      // court itself, not a clash with another card — so unlike
+      // court_double_booking there is no otherFixtureId branch.
+      return msg("board.conflict.detail.court_tag_mismatch", { court: d.court ?? "" });
     case "inside_blackout":
       return msg("board.conflict.detail.inside_blackout");
     case "outside_session_windows":

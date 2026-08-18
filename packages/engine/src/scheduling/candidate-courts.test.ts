@@ -140,8 +140,18 @@ describe(
         courtTagQualifiedIds: [],
       };
       const conflicts = validateAssignments([assignment("clay-court")], config, [], []);
+      // `rule: "H2"` is `withRule`'s own stamp (RULE_BY_REASON.court === "H2"),
+      // applied generically by REASON at the end of validateAssignments — the
+      // same rule code court_double_booking carries, since both share
+      // `reason: "court"` (this file's own note on reusing the coarse reason
+      // while `kind` carries the fine-grained identity).
       expect(conflicts).toEqual([
-        { fixtureId: "f1", reason: "court", details: { kind: "court_tag_mismatch", court: "clay-court" } },
+        {
+          fixtureId: "f1",
+          reason: "court",
+          details: { kind: "court_tag_mismatch", court: "clay-court" },
+          rule: "H2",
+        },
       ]);
     });
 

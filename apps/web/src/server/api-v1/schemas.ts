@@ -1145,6 +1145,7 @@ const CONFLICT_DETAIL_KIND_WITNESS: Record<ConflictDetailKind, true> = {
   outside_competition_window: true,
   outside_start_window: true,
   court_double_booking: true,
+  court_tag_mismatch: true,
   inside_blackout: true,
   outside_session_windows: true,
   entrant_overlap: true,
