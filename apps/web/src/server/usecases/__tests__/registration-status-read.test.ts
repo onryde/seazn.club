@@ -153,3 +153,109 @@ describe.skipIf(!HAS_DB)("groupByRef — token gate", () => {
     expect(view.entries).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Reconcile-on-return. These run when the registrant lands back from Stripe
+// before the webhook did (or when it never arrives — local dev, a dropped
+// delivery). Both are documented "best-effort; never throws", and 6 of their 8
+// branches had no coverage: every early `return false`, and BOTH `catch` arms,
+// which is precisely what runs when Stripe is unreachable at the moment the
+// registrant returns. A reconcile that threw there would surface a 500 on the
+// page of someone who has just successfully paid.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("reconcileRegistration — token-gated return", () => {
+  async function pendingStripeCart() {
+    const { competition, division } = await stripeSettingsRig();
+    const seeded = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+    await sql`update registration_groups set checkout_session_id = ${"cs_test_" + randomUUID().slice(0, 8)}
+              where id = ${seeded.registration.group_id}`;
+    return seeded;
+  }
+
+  it("returns false for a wrong token, without ever calling Stripe", async () => {
+    const { registration } = await pendingStripeCart();
+    expect(await reconcileRegistration(registration.id, "rg_" + randomUUID())).toBe(false);
+    expect(stripeMock.retrieve).not.toHaveBeenCalled();
+  });
+
+  it("returns false when the cart has no checkout session yet, without calling Stripe", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+    expect(await reconcileRegistration(registration.id, access_token)).toBe(false);
+    expect(stripeMock.retrieve).not.toHaveBeenCalled();
+  });
+
+  it("returns false when the entry is no longer pending", async () => {
+    const { registration, access_token } = await pendingStripeCart();
+    await sql`update registrations set status = 'withdrawn' where id = ${registration.id}`;
+    expect(await reconcileRegistration(registration.id, access_token)).toBe(false);
+    expect(stripeMock.retrieve).not.toHaveBeenCalled();
+  });
+
+  it("returns false when Stripe reports the session still unpaid", async () => {
+    const { registration, access_token } = await pendingStripeCart();
+    stripeMock.retrieve.mockResolvedValueOnce({
+      id: "cs_test_x",
+      payment_status: "unpaid",
+      metadata: { kind: "registration_group", registration_ids: registration.id },
+    });
+    expect(await reconcileRegistration(registration.id, access_token)).toBe(false);
+    const [row] = await sql<{ status: string }[]>`select status from registrations where id = ${registration.id}`;
+    expect(row!.status).toBe("pending");
+  });
+
+  // The documented "never throws" contract. Without the catch this returns a
+  // rejected promise and the status page 500s for someone who has just paid.
+  it("swallows a Stripe outage and returns false rather than throwing", async () => {
+    const { registration, access_token } = await pendingStripeCart();
+    stripeMock.retrieve.mockRejectedValueOnce(new Error("stripe unreachable"));
+    await expect(reconcileRegistration(registration.id, access_token)).resolves.toBe(false);
+  });
+});
+
+describe.skipIf(!HAS_DB)("reconcileRegistrationBySession — token-free /r/[ref] return", () => {
+  it("returns false when the session does not name this registration", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const refCode = freshRef();
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode },
+    );
+    // A paid session for somebody ELSE's cart. The ref is only a lookup; the
+    // session's own metadata is the proof, so this must not confirm.
+    stripeMock.retrieve.mockResolvedValueOnce({
+      id: "cs_test_other",
+      payment_status: "paid",
+      metadata: { kind: "registration_group", registration_ids: randomUUID() },
+    });
+    expect(await reconcileRegistrationBySession(refCode, "cs_test_other")).toBe(false);
+    const [row] = await sql<{ status: string }[]>`select status from registrations where id = ${registration.id}`;
+    expect(row!.status).toBe("pending");
+  });
+
+  it("swallows a Stripe outage and returns false rather than throwing", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const refCode = freshRef();
+    await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode },
+    );
+    stripeMock.retrieve.mockRejectedValueOnce(new Error("stripe unreachable"));
+    await expect(reconcileRegistrationBySession(refCode, "cs_test_boom")).resolves.toBe(false);
+  });
+});
