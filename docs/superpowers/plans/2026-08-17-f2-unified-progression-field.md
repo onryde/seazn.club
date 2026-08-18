@@ -1858,6 +1858,39 @@ git commit -m "db(F2): drop stages.qualification/seeding, add stages.progression
 >   division. Another silent one: no error, just a missing feature.
 > - `app/api/.../format-preview/route.ts:14`
 >
+> ### The 5a sweep found THREE MORE, and they are scripts, not components
+>
+> Recorded 2026-08-18 after Task 5a's `.strict()` sweep. None of these were in
+> any file list, and none is a component, which is why every component-scoped
+> sweep so far missed them:
+>
+> - **`scripts/seed-demo.ts`** (~18 references, `TEMPLATES` map around lines
+>   131-217, POSTed at 946/1078/1224/1267). **`seed:demo` is fully broken**
+>   until this is converted. That matters beyond this session: demo data is a
+>   standing project rule, and every session that stands up a demo environment
+>   depends on it.
+> - **`scripts/smoke.ts`** (~12 references, notably `:6289` PUT
+>   `qualification:null`, `:6629-6637` POST `seeding:{}`, `:14651`
+>   `roundLosers`). Smoke runs on PRs, so **F2's own PR will go red here**
+>   until these are converted. Not optional, and not deferrable to a follow-up.
+> - **`scripts/seed-fifa2026.ts`** (~5 references, `:412`, `:422`).
+>
+> ### Two facts about the tests themselves, learned the hard way
+>
+> **The component tests CANNOT catch the `CreateStage` silent-drop bug.** All
+> seven components/v2 suites plus `seed-proposal-stage-pairing` stayed green
+> (25/25) through the whole episode, because none of them invokes the real
+> server-only `CreateStage` schema. The production defect was invisible to
+> every test that looked like it covered the area. That is why `.strict()` had
+> to be the fix rather than a test.
+>
+> **`catalog.test.ts:68` is tautological.** It asserts wc32's knockout stage
+> has `seeding === undefined` on a template that carries NEITHER `seeding` nor
+> `progression` — verified, zero occurrences of either. It passed before the
+> rename, passes after it, and would pass if the field were deleted entirely.
+> Rewrite it to assert what is actually true of wc32, or delete it; leaving it
+> is a test that can never fail.
+>
 > The pattern worth naming, because it will recur in Task 6: **every one of
 > these fails silently rather than loudly** — a dropped key, a filter that
 > matches nothing, a stripped JSON block. None of them throws. A green test
