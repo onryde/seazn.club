@@ -18,6 +18,7 @@ import {
   buildMyRotaDoc,
 } from "../exports";
 import { docModelToPdf, docModelToXlsx } from "@/server/doc-render";
+import { msgFor } from "@/lib/messages-i18n";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -436,5 +437,70 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
       printedAt: PRINTED,
     });
     expect(model.bracket!.roundLabels).toEqual(["Quarter-finals", "Semi-finals", "Final"]);
+  });
+
+  // F4/Task 1: the exported draw used to coalesce unfilled slots to the SQL
+  // literal 'TBD' and never selected home_slot_label/away_slot_label, so a
+  // printed day-one timetable said "TBD vs TBD" while every HTML surface
+  // already said "Winner of Group A" for the identical fixture.
+  it("a placeholder fixture exports its slot label, not TBD", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures } = await seedDivision(auth);
+    // Force an unfilled, labeled slot directly (same pattern as
+    // public-slot-labels.test.ts) — how it got there in production is P5's
+    // stage-seeding.ts, which is out of scope here; this proves the export
+    // READ path resolves whatever it finds.
+    await sql`
+      update fixtures
+      set home_slot_label = ${sql.json({ key: "slot.winner_group", params: { g: "A" } })},
+          away_slot_label = ${sql.json({ key: "slot.runner_up_group", params: { g: "B" } })},
+          home_entrant_id = null, away_entrant_id = null
+      where id = ${fixtures[0]!.id}`;
+    const model = await buildDivisionDocModel(auth, division.id, "timetable", {
+      printedAt: PRINTED,
+    });
+    const text = JSON.stringify(model);
+    expect(text).toContain("Winner of Group A");
+    expect(text).toContain("Runner-up of Group B");
+    // Regression: the pair that used to render as the SQL literal.
+    expect(text).not.toContain("TBD vs TBD");
+  });
+
+  it("a filled fixture still exports entrant names", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures } = await seedDivision(auth);
+    const [names] = await sql<{ home_label: string | null; away_label: string | null }[]>`
+      select he.display_name as home_label, ae.display_name as away_label
+      from fixtures f
+      left join entrants he on he.id = f.home_entrant_id
+      left join entrants ae on ae.id = f.away_entrant_id
+      where f.id = ${fixtures[0]!.id}`;
+    // A league's round-1 fixtures are filled from creation — sanity-check the
+    // arrangement actually gives this test real entrant names to look for.
+    expect(names?.home_label).toBeTruthy();
+    expect(names?.away_label).toBeTruthy();
+    const model = await buildDivisionDocModel(auth, division.id, "timetable", {
+      printedAt: PRINTED,
+    });
+    const text = JSON.stringify(model);
+    expect(text).toContain(names!.home_label!);
+    expect(text).toContain(names!.away_label!);
+  });
+
+  it("a fixture with neither entrant nor label falls back to localized TBD", async () => {
+    const { auth } = await seedOrg();
+    // org.default_locale = 'fr' for this org; fr's schedule.tbd is not the
+    // English literal, which is what proves the lookup is wired to the org.
+    await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+    const { division, fixtures } = await seedDivision(auth);
+    await sql`
+      update fixtures
+      set home_entrant_id = null, home_slot_label = null,
+          away_entrant_id = null, away_slot_label = null
+      where id = ${fixtures[0]!.id}`;
+    const model = await buildDivisionDocModel(auth, division.id, "timetable", {
+      printedAt: PRINTED,
+    });
+    expect(JSON.stringify(model)).toContain(msgFor("fr", "schedule.tbd"));
   });
 });

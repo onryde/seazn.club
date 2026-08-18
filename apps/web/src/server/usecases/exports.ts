@@ -40,8 +40,24 @@ import { resolveSponsors } from "./sponsors";
 import { getMyOfficiating } from "./me-officiating";
 import { eventRecorderNames, type AuditLedger } from "./fixtures";
 import { siteOrigin } from "@/lib/site-origin";
+import { toLocale } from "@/lib/i18n-constants";
+import { msgFor } from "@/lib/messages-i18n";
+import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
 type Tx = postgres.TransactionSql;
+
+/** Copy locale for a document nobody is "viewing".
+ *
+ *  An exported PDF is printed and pinned to a wall, or mailed to clubs — it
+ *  has no single reader whose cookie could be consulted, so it uses the org's
+ *  own default locale. This mirrors `calendar.ics/route.ts:32-33` exactly;
+ *  the reasoning is recorded at that file's :24-30 and is the same reasoning
+ *  here. Do NOT swap this for resolveLocale(). */
+function exportLookup(defaultLocale: string): SlotLabelLookup {
+  const locale = toLocale(defaultLocale);
+  return (key, vars) => msgFor(locale, key, vars);
+}
 
 export interface ExportOpts {
   pageBreaks?: PageBreaks;
@@ -56,6 +72,7 @@ interface DivisionMeta {
   org_id: string;
   org_name: string;
   org_slug: string;
+  default_locale: string;
   competition_id: string;
   competition_name: string;
   comp_slug: string;
@@ -70,6 +87,7 @@ interface DivisionMeta {
 async function divisionMeta(tx: Tx, divisionId: string): Promise<DivisionMeta> {
   const [row] = await tx<DivisionMeta[]>`
     select d.id, d.name, d.org_id, org.name as org_name, org.slug as org_slug,
+           org.default_locale,
            d.competition_id, c.name as competition_name, c.slug as comp_slug,
            c.visibility, d.slug as div_slug,
            c.branding, d.sport_key, d.module_version, d.config
@@ -194,8 +212,10 @@ interface FixtureExportRow {
   court_label: string | null;
   round_no: number | null;
   stage_name: string;
-  home_label: string;
-  away_label: string;
+  home_label: string | null;
+  away_label: string | null;
+  home_slot_label: SlotLabel | null;
+  away_slot_label: SlotLabel | null;
   home_color: string | null;
   away_color: string | null;
   summary: { sides?: { line: string }[] } | null;
@@ -206,8 +226,9 @@ async function exportFixtures(tx: Tx, divisionId: string): Promise<FixtureExport
   return tx<FixtureExportRow[]>`
     select f.id, f.scheduled_at::text as scheduled_at, f.court_label, f.round_no,
            s.name as stage_name,
-           coalesce(he.display_name, 'TBD') as home_label,
-           coalesce(ae.display_name, 'TBD') as away_label,
+           he.display_name as home_label,
+           ae.display_name as away_label,
+           f.home_slot_label, f.away_slot_label,
            htd.colors->>'primary' as home_color,
            atd.colors->>'primary' as away_color,
            m.summary, f.status
@@ -222,7 +243,11 @@ async function exportFixtures(tx: Tx, divisionId: string): Promise<FixtureExport
     order by s.seq, f.round_no, f.seq_in_round`;
 }
 
-function toExportFixture(f: FixtureExportRow, divisionName: string): ExportFixture {
+function toExportFixture(
+  f: FixtureExportRow,
+  divisionName: string,
+  lookup: SlotLabelLookup,
+): ExportFixture {
   const sides = f.summary?.sides;
   return {
     id: f.id,
@@ -230,8 +255,10 @@ function toExportFixture(f: FixtureExportRow, divisionName: string): ExportFixtu
     court: f.court_label,
     stageName: f.stage_name,
     round: f.round_no,
-    home: f.home_label,
-    away: f.away_label,
+    // A filled side wins; an empty one falls back to its placeholder label,
+    // and only a side with neither reaches the localized TBD.
+    home: f.home_label ?? resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd"),
+    away: f.away_label ?? resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd"),
     ...(f.home_color !== null ? { homeColor: f.home_color } : {}),
     ...(f.away_color !== null ? { awayColor: f.away_color } : {}),
     divisionName,
@@ -271,6 +298,7 @@ export async function buildDivisionDocModel(
   const participants = kind === "participants" ? await participantRows(auth, { divisionId }) : null;
   return withTenant(auth.orgId, async (tx) => {
     const meta = await divisionMeta(tx, divisionId);
+    const slotLookup = exportLookup(meta.default_locale);
     const branding = layerDivisionBranding(baseBranding, meta);
     const title = `${meta.competition_name} — ${meta.name}`;
     const common = {
@@ -286,7 +314,7 @@ export async function buildDivisionDocModel(
     switch (kind) {
       case "timetable": {
         const fixtures = await exportFixtures(tx, divisionId);
-        return buildTimetable(title, fixtures.map((f) => toExportFixture(f, meta.name)), {
+        return buildTimetable(title, fixtures.map((f) => toExportFixture(f, meta.name, slotLookup)), {
           ...common,
           ...(liveUrl !== undefined ? { liveUrl } : {}),
         });
@@ -389,9 +417,16 @@ export async function buildDivisionDocModel(
           // than at a section index — indexing sections against the fixture
           // list reads courts off the wrong fixture as soon as one does.
           const firstSection = sections.length;
+          // Same fallback chain as toExportFixture: a filled side wins, an
+          // empty one falls back to its placeholder label. ScoresheetInput.home
+          // is a required string ("TBD feeds arrive pre-rendered" per its own
+          // doc comment) — home_label/away_label are nullable now that the SQL
+          // coalesce is gone, so this resolution can't be skipped here either.
+          const homeLabel = f.home_label ?? resolveSlotLabel(f.home_slot_label, slotLookup, "schedule.tbd");
+          const awayLabel = f.away_label ?? resolveSlotLabel(f.away_slot_label, slotLookup, "schedule.tbd");
           const input = {
-            home: f.home_label,
-            away: f.away_label,
+            home: homeLabel,
+            away: awayLabel,
             ...(f.home_color !== null ? { homeColor: f.home_color } : {}),
             ...(f.away_color !== null ? { awayColor: f.away_color } : {}),
             ...(f.scheduled_at !== null ? { at: f.scheduled_at } : {}),
@@ -405,12 +440,12 @@ export async function buildDivisionDocModel(
           } else {
             // sport without a bespoke sheet: a generic result form
             sections.push({
-              heading: `${f.home_label} vs ${f.away_label}`,
+              heading: `${homeLabel} vs ${awayLabel}`,
               subheading: [f.scheduled_at, f.court_label, f.stage_name]
                 .filter((x): x is string => x !== null)
                 .join(" · "),
               formLines: ["Result: ________________", "Notes: ________________"],
-              signatures: ["Referee", `Captain — ${f.home_label}`, `Captain — ${f.away_label}`],
+              signatures: ["Referee", `Captain — ${homeLabel}`, `Captain — ${awayLabel}`],
             });
           }
           const start = sections[firstSection];
@@ -526,17 +561,21 @@ export async function buildCompetitionTimetable(
     ? await orgBranding(compRef.org_id, compRef.org_name, competitionId)
     : undefined;
   return withTenant(auth.orgId, async (tx) => {
-    const [comp] = await tx<{ name: string; org_id: string; org_name: string }[]>`
-      select c.name, c.org_id, org.name as org_name
+    const [comp] = await tx<{ name: string; org_id: string; org_name: string; default_locale: string }[]>`
+      select c.name, c.org_id, org.name as org_name, org.default_locale
       from competitions c join organizations org on org.id = c.org_id
       where c.id = ${competitionId}`;
     if (!comp) throw new HttpError(404, "competition not found");
+    // Own org row, own lookup — this function reads a different meta row than
+    // divisionMeta (a competition can outlive/outspan any one division), so it
+    // cannot reuse buildDivisionDocModel's slotLookup.
+    const slotLookup = exportLookup(comp.default_locale);
     const divisions = await tx<{ id: string; name: string }[]>`
       select id, name from divisions where competition_id = ${competitionId} order by name`;
     const all: ExportFixture[] = [];
     for (const d of divisions) {
       const fixtures = await exportFixtures(tx, d.id);
-      all.push(...fixtures.map((f) => toExportFixture(f, d.name)));
+      all.push(...fixtures.map((f) => toExportFixture(f, d.name, slotLookup)));
     }
     return buildTimetable(comp.name, all, {
       printedAt: opts.printedAt,
