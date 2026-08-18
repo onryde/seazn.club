@@ -485,6 +485,82 @@ describe.skipIf(!HAS_DB)("buildSchedulePack size limits", () => {
   });
 });
 
+// P9 pass 3d: the AI pack must speak court NAMES again — settings.courts held
+// raw uuids since the V374 cutover (H1: "court_label must be exactly one of
+// settings.courts"), so the model could only ever choose a court blind to its
+// name, venue or tags. See schedule-ai-court-directory.test.ts for the pure
+// buildCourtDirectory/resolveModelCourtLabels coverage; this proves the same
+// property end to end against a real seeded pack, including the venue-
+// qualified disambiguation rule firing for real (not just on hand-built rows).
+describe.skipIf(!HAS_DB)("P9 pass 3d: the model payload speaks court names, never a bare uuid", () => {
+  it("relabels every court-shaped field, adds courtDetails, and venue-qualifies a name two real courts share", async () => {
+    const { auth } = await seedOrg("pro");
+    // A second venue whose own court shares "Court 1"'s bare name with the
+    // division's court of that name in `courtId()`'s "Main venue" — the
+    // real-world ambiguity buildCourtDirectory must resolve deterministically.
+    const annex = await createVenue(auth, { name: "Annex", sort: 1 });
+    const court1 = await courtId(auth, "Court 1"); // "Main venue"
+    const court2 = await courtId(auth, "Court 2"); // "Main venue"
+    const sameNameElsewhere = await createCourt(auth, annex.id, {
+      name: "Court 1", sort: 0, tags: ["indoor"],
+    });
+
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31", name: `CourtNames ${randomUUID().slice(0, 6)}`,
+      visibility: "public", branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open", slug: `open-${randomUUID().slice(0, 6)}`, sport_key: "generic",
+      variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
+    });
+    await setSettings(division.id, court1, court2);
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
+    await createEntrants(auth, division.id, [
+      { kind: "individual" as const, display_name: "A", seed: 1, members: [] },
+      { kind: "individual" as const, display_name: "B", seed: 2, members: [] },
+    ]);
+    const ents = await sql<{ id: string }[]>`
+      select id from entrants where division_id = ${division.id} order by seed`;
+    await sql`
+      insert into fixtures
+        (stage_id, division_id, org_id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status)
+      values
+        (${stage!.id}, ${division.id}, ${auth.orgId}, 1, 0, ${ents[0]!.id}, ${ents[1]!.id}, 'scheduled')`;
+
+    const { pack, courtDirectory } = await buildSchedulePack(auth, division.id, {
+      now: NOW_W2, mode: "generate", instruction: "x",
+    });
+    // The real ambiguity, proven on the real (whole-org) directory this
+    // build produced — not a hand-built row set.
+    expect(courtDirectory[court1]?.label).toBe("Court 1 (Main venue)");
+    expect(courtDirectory[sameNameElsewhere.id]?.label).toBe("Court 1 (Annex)");
+    expect(courtDirectory[court2]?.label).toBe("Court 2");
+
+    const payload = toModelPayload(pack, courtDirectory);
+    const json = JSON.stringify(payload);
+
+    // No bare uuid anywhere a court is expected — neither candidate court's
+    // real id appears anywhere in what the model is sent.
+    expect(json).not.toContain(court1);
+    expect(json).not.toContain(court2);
+
+    // The model gets names — venue-qualified where real ambiguity exists —
+    // and, new this pass, each candidate court's venue and tags.
+    expect([...payload.settings.courts].sort()).toEqual(["Court 1 (Main venue)", "Court 2"]);
+    expect(payload.courtDetails.map((c) => c.label).sort()).toEqual(["Court 1 (Main venue)", "Court 2"]);
+    const mainCourt1 = payload.courtDetails.find((c) => c.label === "Court 1 (Main venue)");
+    expect(mainCourt1?.venue).toBe("Main venue");
+    expect(Array.isArray(mainCourt1?.tags)).toBe(true);
+
+    // Every court-shaped field in the wire payload — the draft the greedy
+    // solver produced included — carries a name, never the raw id.
+    for (const d of payload.draft) {
+      expect([court1, court2]).not.toContain(d.court_label);
+      expect(["Court 1 (Main venue)", "Court 2"]).toContain(d.court_label);
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Elimination-bracket seeders (#396). A round-robin board names both slots of
 // every fixture, so it cannot exercise the advancer recursion at all — these
