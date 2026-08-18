@@ -2573,3 +2573,87 @@ describe("closed vocabularies", () => {
     expect([...VARIABLE_OUT_KINDS]).toEqual(["runout"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// R2c / C1 — the bowler chip's own candidate list.
+//
+// R2b moved the REFUSAL in front of the tap (the delivery tiles go disabled
+// and the slot states why), but left the PICKER itself untouched: it still
+// offered both squads' whole on-field roster, so a scorer could pick a
+// batting-side player, or a bowler at quota, and only then meet the block.
+// buildContext's own CANDIDATE-LIST GAP note recorded that as out of R2b's
+// reach because ContextSlot had no candidates/side field. It has one now.
+//
+// SCOPE removes the batting side; ELIGIBILITY keeps the fielding side's own
+// ineligible bowlers visible WITH their reason, which is the same ruling that
+// governs the tiles. No new i18n: the four blocked.* keys R2b shipped are
+// reused verbatim, so the picker and the slot message can never word the same
+// fact two different ways.
+// ---------------------------------------------------------------------------
+
+describe("buildContext — R2c: the bowler picker's candidates and per-candidate blocks", () => {
+  const overBoundary = (fine: Record<string, unknown> = {}) =>
+    innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: null, bowlerBalls: {}, ...fine } });
+
+  const bowlerSlot = (v: PadHostView) => buildContext(v, t)!.slots.find((s) => s.id === "bowler")!;
+
+  it("offers the FIELDING side only — no batting-side player is a candidate at all", () => {
+    const slot = bowlerSlot(view({ state: state({ innings: [overBoundary()] }) }));
+    expect(slot.candidates).toEqual(["a1", "a2", "a3"]);
+    for (const id of ["h1", "h2", "h3"]) expect(slot.candidates).not.toContain(id);
+  });
+
+  it("blocks the previous over's bowler IN PLACE, with the same wording the slot message uses", () => {
+    const slot = bowlerSlot(view({ state: state({ innings: [overBoundary({ prevOverBowler: "a1" })] }) }));
+    // Still offered — visible, blocked and reasoned, never silently dropped.
+    expect(slot.candidates).toContain("a1");
+    expect(slot.blocked?.a1).toBe(t("pad.cricket.context.bowler.blocked.prevOver", { name: "Away One" }));
+  });
+
+  it("blocks a bowler at quota, carrying the REAL cfg quota — proved against the Hundred's 5-ball over", () => {
+    // 20 balls / 5 per over = exactly 4 overs. A hardcoded 6 computes 3 and
+    // would wrongly leave this bowler selectable.
+    const slot = bowlerSlot(
+      view({
+        cfg: cfg({ ballsPerOver: 5, maxOversPerBowler: 4 }),
+        state: state({ innings: [overBoundary({ bowlerBalls: { a1: 20 } })] }),
+      }),
+    );
+    expect(slot.blocked?.a1).toBe(t("pad.cricket.context.bowler.blocked.quota", { name: "Away One", quota: 4 }));
+  });
+
+  it("leaves an eligible bowler unblocked — the map is never exhaustive", () => {
+    const slot = bowlerSlot(
+      view({ cfg: cfg({ maxOversPerBowler: 4 }), state: state({ innings: [overBoundary({ prevOverBowler: "a1" })] }) }),
+    );
+    expect(slot.blocked?.a2).toBeUndefined();
+    expect(slot.blocked?.a3).toBeUndefined();
+  });
+
+  it("an ABSENT maxOversPerBowler blocks nobody on quota grounds — absent is uncapped, not zero", () => {
+    const slot = bowlerSlot(view({ state: state({ innings: [overBoundary({ bowlerBalls: { a1: 600 } })] }) }));
+    expect(slot.blocked?.a1).toBeUndefined();
+  });
+
+  it("blocks EVERY candidate when nobody can legally open the over — the dead-end state stays visible and explained", () => {
+    const slot = bowlerSlot(
+      view({
+        cfg: cfg({ maxOversPerBowler: 1 }),
+        state: state({ innings: [overBoundary({ prevOverBowler: "a1", bowlerBalls: { a2: 6, a3: 6 } })] }),
+      }),
+    );
+    expect(slot.candidates).toEqual(["a1", "a2", "a3"]);
+    for (const id of ["a1", "a2", "a3"]) expect(slot.blocked?.[id]).toBeTruthy();
+  });
+
+  it("mid-over the slot is read-only and blocks nobody — the fold has already locked that bowler in", () => {
+    const slot = bowlerSlot(
+      view({
+        cfg: cfg({ maxOversPerBowler: 4 }),
+        state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: "a1", prevOverBowler: "a2", bowlerBalls: { a1: 30 } } })] }),
+      }),
+    );
+    expect(slot.readOnly).toBe(true);
+    expect(slot.blocked ?? {}).toEqual({});
+  });
+});
