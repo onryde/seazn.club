@@ -212,4 +212,154 @@ describe.skipIf(!HAS_DB)("multi-source progression (F2 Decision 4 / Finding 1)",
     ]);
     expect(bRow!.status).toBe("complete");
   });
+
+  // F2 Task 6 review, finding 1: seedNextStage's call inside completeStage
+  // had NO try/catch, but a comment a few lines below it claimed
+  // STAGE_NOT_READY was "caught by completeStage's existing best-effort
+  // try/catch" — false. Multi-source makes that reachable for real: B is
+  // seq-adjacent to Final and fires the seed attempt on its own completion,
+  // but A (the OTHER named source) is deliberately left undecided here, so
+  // seedNextStage's per-source completeness check throws STAGE_NOT_READY.
+  // Before the fix this propagated out of completeStage uncaught, so the
+  // API returned a 422 that read as "completing B failed" even though B's
+  // own completion (predicate + standings + status write) had already
+  // committed durably.
+  it("completing a source stage while another named source isn't ready does not fail the completion (STAGE_NOT_READY is best-effort)", async () => {
+    const { auth } = await seedOrg();
+    const { division, entrants, a, b } = await seedDivisionWithTwoLeagues(auth);
+    const [, e2] = entrants;
+
+    const [final] = await createStages(auth, division.id, {
+      seq: 3,
+      kind: "knockout",
+      name: "Final",
+      config: {},
+      progression: {
+        sources: [
+          { stage: { stageId: a.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+          { stage: { stageId: b.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+        ],
+        placement: "rank_order",
+        timing: "on_complete",
+      },
+    });
+    void final;
+
+    await generateStageFixtures(auth, a.id);
+    await generateStageFixtures(auth, b.id);
+    // Only B is decided. A is left with no results at all — its own
+    // completion predicate isn't satisfied, so it stays incomplete.
+    await decideLeagueWithWinner(auth, b.id, e2!.id);
+
+    const completedB = await completeStage(auth, b.id);
+    expect(completedB.completed).toBe(true);
+    expect(completedB.qualified).toBeUndefined();
+
+    const [bRow] = await sql<{ status: string }[]>`select status from stages where id = ${b.id}`;
+    expect(bRow!.status).toBe("complete");
+    const [finalRow] = await sql<{ config: { qualified?: string[] } }[]>`
+      select config from stages where id = ${final!.id}`;
+    expect(finalRow!.config.qualified).toBeUndefined();
+  });
+
+  // F2 Task 6 review, finding 2: seedNextStage's carry-over step IS already
+  // multi-source-aware in production (it unions qualified rows across every
+  // resolved source, then guards each source's kind via CONFIG_INVALID) but
+  // nothing exercised `carry` together with 2+ sources before this test — a
+  // regression in the union (e.g. carrying only the last-resolved source's
+  // rows, or only the just-completed stage's own table) would have shipped
+  // silently. `carry` backs the marketed standings.carry_over Pro
+  // entitlement; custom-points.test.ts already covers the single-source
+  // shape plus the Community 402 gate.
+  //
+  // A and B are given DISJOINT 2-entrant rosters via an explicit
+  // config.qualified on each (the same "a seeded stage draws from
+  // config.qualified, not the whole division" mechanism generateStageFixtures
+  // already uses for any downstream stage — stages.ts's plain-generation
+  // path) — sharing ONE 4-entrant roster across both stages (as
+  // seedDivisionWithTwoLeagues does above) would leave every qualifier with
+  // a SECOND, non-qualifying row in the other source's own table (everyone
+  // plays in both round robins), making a single entrantId->points map
+  // order-dependent on which duplicate the union visits last. Disjoint
+  // rosters keep this test's answer unambiguous while still genuinely
+  // exercising two distinct source tables.
+  it("carries points from BOTH named sources, not just one, when carry != none (multi-source + carry combination)", async () => {
+    const { auth } = await seedOrg();
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Ms Carry Cup " + randomUUID().slice(0, 6),
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    const entrants = await createEntrants(
+      auth,
+      division.id,
+      ["A1", "A2", "B1", "B2"].map((name, i) => ({
+        kind: "individual" as const,
+        display_name: name,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [a1, a2, b1, b2] = entrants;
+
+    const [a, b] = await createStages(auth, division.id, [
+      { seq: 1, kind: "league", name: "A", config: { qualified: [a1!.id, a2!.id] } },
+      { seq: 2, kind: "league", name: "B", config: { qualified: [b1!.id, b2!.id] } },
+    ]);
+    const [final] = await createStages(auth, division.id, {
+      seq: 3,
+      kind: "league",
+      name: "Final",
+      config: {},
+      progression: {
+        sources: [
+          { stage: { stageId: a!.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+          { stage: { stageId: b!.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+        ],
+        placement: "rank_order",
+        timing: "on_complete",
+        carry: "points",
+      },
+    });
+
+    await generateStageFixtures(auth, a!.id);
+    await generateStageFixtures(auth, b!.id);
+    // Single fixture per stage (2 entrants each) — a1 beats a2 2-0 (1 win x
+    // 3pts); b1 beats b2 2-0, same shape, same points, from a DIFFERENT
+    // table.
+    await decideLeagueWithWinner(auth, a!.id, a1!.id);
+    await decideLeagueWithWinner(auth, b!.id, b1!.id);
+
+    await completeStage(auth, a!.id); // no-op for Final, same as the tests above
+    const completedB = await completeStage(auth, b!.id);
+    expect(completedB.qualified?.entrants).toEqual([a1!.id, b1!.id]);
+
+    const [row] = await sql<{ config: { carry_deltas?: { entrantId: string; points: number }[] } }[]>`
+      select config from stages where id = ${final!.id}`;
+    expect(row!.config.carry_deltas).toBeDefined();
+    const carried = row!.config.carry_deltas!;
+    // A test that would still pass if the union dropped one source's rows
+    // is not good enough (the review finding's own wording) — assert BOTH
+    // entrants' carried points AND that the set is exactly these two, so
+    // dropping either source's contribution fails this, whether by a
+    // missing entry or a wrong length.
+    const byEntrant = new Map(carried.map((d) => [d.entrantId, d.points]));
+    expect(byEntrant.get(a1!.id)).toBe(3); // from A's table
+    expect(byEntrant.get(b1!.id)).toBe(3); // from B's table
+    expect(carried).toHaveLength(2);
+
+    const [ev] = await sql<{ n: number }[]>`
+      select count(*)::int as n from division_events
+      where division_id = ${division.id} and type = 'standings_carried'`;
+    expect(ev!.n).toBe(1);
+  });
 });

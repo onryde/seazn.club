@@ -1869,7 +1869,29 @@ export async function completeStage(auth: AuthCtx, stageId: string): Promise<Com
     }
   }
 
-  const qualified = nextProgression?.timing === "on_complete" ? await seedNextStage(auth, stageId) : null;
+  let qualified: SeededStage | null = null;
+  if (nextProgression?.timing === "on_complete") {
+    try {
+      qualified = await seedNextStage(auth, stageId);
+    } catch (err) {
+      // Best-effort ONLY for "a named source isn't complete yet"
+      // (STAGE_NOT_READY) — same spirit as the setup-timing branch above:
+      // Decision 4's multi-source progressions can legitimately have OTHER
+      // named sources still incomplete when THIS stage completes, and
+      // completeStageIfReady already committed this stage's own completion
+      // above, so a downstream seed attempt tripping on that must not read
+      // back to the caller as "the completion failed" (F2 Task 6 review,
+      // finding 1 — this call had NO catch at all, while the comment a few
+      // lines below already, wrongly, claimed one existed). Every OTHER
+      // EngineError still propagates — QUALIFICATION_INVALID in particular
+      // is a genuine progression-config bug (an entrant qualifying through
+      // two sources), and progression-multi-source.test.ts's "rejects an
+      // entrant qualifying through two sources" case depends on that NOT
+      // being swallowed here.
+      if (!EngineError.is(err, "STAGE_NOT_READY")) throw err;
+      qualified = null;
+    }
+  }
   if (!qualified) {
     // No stage follows: the division itself is done (doc 02 lifecycle
     // setup → active → completed). Idempotent — re-completing is a no-op.
