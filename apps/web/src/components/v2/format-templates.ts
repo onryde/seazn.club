@@ -11,13 +11,20 @@
 // `timing: "on_complete"` — Decision 1's explicit statement that no writer's
 // default timing changes in this session; the picker still waits for its
 // source stage to complete before generating, exactly as before.
+//
+// `take`'s element type reuses the engine's own TakeRule (rather than a
+// hand-rolled `unknown[]`/`{kind:string}[]` restated here) so this file and
+// detectTemplate's own parameter type below can't drift apart the way
+// api-v1/schemas.ts's zod TakeRuleSchema and this plain-TS shape already
+// have to be kept in lockstep by hand (see that file's own comment).
+import type { TakeRule } from "@seazn/engine/competition";
 
 export interface StageDraft {
   kind: string;
   name: string;
   config: Record<string, unknown>;
   progression: {
-    sources: { stage: "previous"; take: unknown[] }[];
+    sources: { stage: "previous"; take: TakeRule[] }[];
     placement: "rank_order" | "snake" | "seeded_map";
     map?: { slot: string; source: string }[];
     timing: "setup" | "on_complete";
@@ -221,7 +228,12 @@ export function detectTemplate(
   stages: {
     kind: string;
     config?: Record<string, unknown> | null;
-    progression?: { sources: { take: { kind: string }[] }[] } | null;
+    // Reuses StageDraft's own progression shape rather than a second
+    // hand-rolled partial (was `{ sources: { take: { kind: string }[] }[] }`)
+    // — that partial drifting one level behind StageDraft's real shape (no
+    // `stage`, then no `placement`/`timing`) is what made every
+    // buildTemplateStages() round-trip below fail to typecheck.
+    progression?: StageDraft["progression"];
   }[],
 ): string | null {
   const kinds = stages.map((s) => s.kind).join("+");

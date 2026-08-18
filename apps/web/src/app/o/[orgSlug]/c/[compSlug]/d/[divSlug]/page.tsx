@@ -25,6 +25,7 @@ import { withTenant } from "@/lib/db";
 import { DivisionDangerZone } from "@/components/v2/division-danger-zone";
 import { EmbedSnippet } from "@/components/v2/embed-snippet";
 import { DivisionSettings } from "@/components/v2/division-settings";
+import type { StageDraft } from "@/components/v2/format-templates";
 import { formatLocked } from "@/lib/format-lock";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
@@ -525,7 +526,12 @@ export default async function DivisionPage({
               name: st.name,
               kind: st.kind,
               config: (st.config ?? null) as Record<string, unknown> | null,
-              progression: (st.progression ?? null) as Record<string, unknown> | null,
+              // StageRow.progression is untyped JSONB (Record<string,
+              // unknown> | null) — this is the DB-read boundary where that
+              // gets asserted into DivisionSettings's stricter shape,
+              // mirroring stages.ts's own `as unknown as ProgressionSpec`
+              // read-site precedent rather than casting again downstream.
+              progression: (st.progression ?? null) as unknown as StageDraft["progression"],
             }))}
             canEdit={editable}
             entrantModel={entrantModel}

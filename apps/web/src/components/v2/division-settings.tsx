@@ -10,7 +10,7 @@ import { useRouter } from "next/navigation";
 import { apiV1 } from "@/lib/client-v1";
 import { divisionAccent, monogram } from "@/lib/division-hue";
 import { MatchRuleFields, buildRuleOverride } from "./match-rules";
-import { STAGE_TEMPLATES, buildTemplateStages, detectTemplate } from "./format-templates";
+import { STAGE_TEMPLATES, buildTemplateStages, detectTemplate, type StageDraft } from "./format-templates";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
@@ -162,7 +162,16 @@ export function DivisionSettings({
   locked: boolean;
   /** Stage structure (kind + name) — shown so group/top sections are visible
    *  here; structure itself is edited on the Fixtures tab. */
-  stages: { name: string; kind: string; config: Record<string, unknown> | null; progression: Record<string, unknown> | null }[];
+  stages: {
+    name: string;
+    kind: string;
+    config: Record<string, unknown> | null;
+    /** F2 — shaped enough for detectTemplate/currentQualifiedFromStages to
+     *  read take-rule kinds without a cast at either call site below; the
+     *  page passes this through from StageRow's untyped JSONB column, so the
+     *  narrowing cast belongs there, at the actual DB-read boundary. */
+    progression: StageDraft["progression"];
+  }[];
   canEdit: boolean;
   /** "/o/{org}/c/{comp}/d/" — renames regenerate the slug, and the client
    *  must follow it without losing the settings tab. */
