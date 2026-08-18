@@ -627,3 +627,33 @@ surfaces, and one owner ruling amended. Line pins in that document are against
 - Corollary worth not re-deriving: only an UNSUCCESSFUL player review spends
   one (`outcome === "struck_down"`, `cricket.ts:1810`), so the counter the pad
   must read is `lost`, never `taken`.
+
+### R2c — the gallery is BLIND to a narrowing wave unless it adds states
+
+Found while preparing R2c's sign-off, and it generalises to R3-R7.
+
+The five shared `STATES` in `gallery.capture.ts` (`01-pre`, `02-live`,
+`03-scored`, `04-dock`, `05-devicelink`) never open a candidate picker and
+never open a guided sheet. R2c's ENTIRE change is what a picker OFFERS — and
+a closed picker is pixel-identical before and after. So the wave would have
+published a sign-off sheet on which literally nothing it changed was visible,
+and the owner would have been asked to rule on screenshots that could not
+show the thing being ruled on.
+
+This is the same failure shape as R2's "the captures the owner reviewed
+PREDATE the three restored capabilities" caveat, one step earlier: there, the
+right screens were captured too soon; here, the right screens are not in the
+list at all. A rebuild does not fix the second one.
+
+R2b already built the escape hatch — `EXTRA_STATES` + a sport's own
+`captureExtra` hook, added for `06-overtile`/`07-oversheet`. R2c uses the same
+hook for `08-bowlerpicker` (the picker OPEN, showing the fielding side only
+with the previous over's bowler blocked and reasoned), `09-retiresheet` (the
+reinstated tile's sheet) and `10-reviewblocked` (the exhausted side, refused
+in the pad).
+
+**Standing instruction for R3-R7:** before publishing a sign-off sheet, ask
+which of your wave's changes is visible in the five shared states. Anything
+that lives behind a tap — a picker, a sheet, a dock, a disabled control and
+its reason — is not, and needs its own `EXTRA_STATES` entry or the gate is
+theatre.
