@@ -111,6 +111,36 @@ describe("ICS feed (doc 09 §2)", () => {
     expect(uidOf(tentative)).toBe("UID:fix-1@seazn.club");
     expect(uidOf(timed)).toBe(uidOf(tentative));
   });
+
+  // Fix-wave finding 3: DTSTAMP alone can't order the tentative→timed
+  // transition — it's derived from the event's own date, not a wall clock —
+  // so scheduling a fixture BEFORE the placeholder's anchor date moves
+  // DTSTAMP backward. Concretely: a competition ending 2026-09-20 emits the
+  // tentative placeholder with DTSTAMP 20260920T000000Z; the same fixture
+  // scheduled for 2026-09-18 emits the timed event with DTSTAMP
+  // 20260918T100000Z — earlier than the tentative copy. A client ordering
+  // revisions by DTSTAMP would keep the stale "TBD" placeholder over the real
+  // fixture. SEQUENCE fixes this: monotonically increasing across the
+  // transition, independent of any clock. Old code (no SEQUENCE line at all)
+  // fails both `toContain` assertions below.
+  it("SEQUENCE increments across the tentative-to-timed transition, independent of DTSTAMP", () => {
+    const tentative = buildIcs("Cup", [
+      { uid: "fix-1", allDayOn: "2026-09-20", summary: "Winner of Group A vs Runner-up of Group B" },
+    ]);
+    const timed = buildIcs("Cup", [
+      { uid: "fix-1", start: new Date("2026-09-18T10:00:00Z"), durationMinutes: 90, summary: "Lions vs Tigers" },
+    ]);
+    // Confirms the regression scenario itself: DTSTAMP really does move
+    // backward here, so SEQUENCE is doing real work, not guarding a case
+    // that could not otherwise arise.
+    expect(tentative).toContain("DTSTAMP:20260920T000000Z");
+    expect(timed).toContain("DTSTAMP:20260918T100000Z");
+
+    expect(tentative).toContain("SEQUENCE:0");
+    expect(timed).toContain("SEQUENCE:1");
+    const seqOf = (s: string) => Number(s.split("\r\n").find((l) => l.startsWith("SEQUENCE:"))?.slice("SEQUENCE:".length));
+    expect(seqOf(timed)).toBeGreaterThan(seqOf(tentative));
+  });
 });
 
 describe("SportsEvent JSON-LD (doc 09 §3)", () => {

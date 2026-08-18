@@ -44,7 +44,13 @@ export type IcsEvent = {
        *  for a fixture that exists but has no time yet. Emitted TENTATIVE so
        *  subscribers see it as provisional; it becomes a timed CONFIRMED event
        *  under the SAME UID once scheduled, and therefore updates in place in
-       *  calendars people have already subscribed to. */
+       *  calendars people have already subscribed to. DTSTAMP alone can't be
+       *  trusted to order that transition — it's derived from the event's own
+       *  date, not wall-clock generation time, so it moves BACKWARD whenever a
+       *  fixture is scheduled earlier than the placeholder's anchor date.
+       *  SEQUENCE (0 tentative → 1 timed, in buildIcs below) is what a
+       *  compliant client actually orders revisions by — deterministic, no
+       *  clock involved. */
       allDayOn: string;
     }
 );
@@ -100,12 +106,14 @@ export function buildIcs(calendarName: string, events: IcsEvent[]): string {
             `DTSTART;VALUE=DATE:${icsDateOnly(ev.allDayOn)}`,
             `DTEND;VALUE=DATE:${icsDateOnly(nextDay(ev.allDayOn))}`,
             "STATUS:TENTATIVE",
+            "SEQUENCE:0",
           ]
         : [
             `DTSTAMP:${icsDate(ev.start)}`,
             `DTSTART:${icsDate(ev.start)}`,
             `DTEND:${icsDate(new Date(ev.start.getTime() + ev.durationMinutes * 60_000))}`,
             "STATUS:CONFIRMED",
+            "SEQUENCE:1",
           ];
     lines.push(
       "BEGIN:VEVENT",
