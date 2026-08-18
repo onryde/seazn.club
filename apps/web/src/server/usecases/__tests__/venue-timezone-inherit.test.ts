@@ -13,6 +13,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { getScheduleSettings, putScheduleSettings } from "../schedule";
+import { seedCourts } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -23,15 +24,20 @@ const DIVISION_CONFIG = {
   progressScore: false,
 };
 
-const CONFIG = {
-  startAt: "2026-08-01T09:00:00.000Z",
-  matchMinutes: 30,
-  gapMinutes: 0,
-  courts: ["Court 1"],
-  perEntrantMinRest: 0,
-  blackouts: [],
-  sessionWindows: [],
-};
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` — real `courts.id`
+// values. Nothing in this file asserts on a court's identity, so `makeConfig`
+// just takes whatever `seedCourts` handed back.
+function makeConfig(courts: string[]) {
+  return {
+    startAt: "2026-08-01T09:00:00.000Z",
+    matchMinutes: 30,
+    gapMinutes: 0,
+    courts,
+    perEntrantMinRest: 0,
+    blackouts: [],
+    sessionWindows: [],
+  };
+}
 
 async function seedOrg(timezone: string | null): Promise<AuthCtx> {
   const suffix = randomUUID().slice(0, 8);
@@ -50,7 +56,7 @@ async function seedOrg(timezone: string | null): Promise<AuthCtx> {
   return { orgId, via: "session", userId: null, role: "owner", keyId: null };
 }
 
-async function seedDivision(auth: AuthCtx): Promise<string> {
+async function seedDivision(auth: AuthCtx): Promise<{ divisionId: string; courts: string[] }> {
   const competition = await createCompetition(auth, {
     ends_on: "2030-12-31",
     name: "TZ Cup",
@@ -64,7 +70,8 @@ async function seedDivision(auth: AuthCtx): Promise<string> {
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
     eligibility: [],
   });
-  return division.id;
+  const courts = await seedCourts(auth.orgId, 1);
+  return { divisionId: division.id, courts };
 }
 
 afterAll(async () => {
@@ -78,13 +85,13 @@ afterAll(async () => {
 describe.skipIf(!HAS_DB)("venue timezone inheritance (V305)", () => {
   it("inherits the org timezone when the division stores none", async () => {
     const auth = await seedOrg("Europe/Madrid");
-    const divisionId = await seedDivision(auth);
+    const { divisionId, courts } = await seedDivision(auth);
 
     // No settings row at all.
     expect((await getScheduleSettings(auth, divisionId)).tz).toBe("Europe/Madrid");
 
     // …and still after a settings save, which never sends tz.
-    const saved = await putScheduleSettings(auth, divisionId, { config: CONFIG });
+    const saved = await putScheduleSettings(auth, divisionId, { config: makeConfig(courts) });
     expect(saved.tz).toBe("Europe/Madrid");
     const [row] = await sql<{ tz: string | null }[]>`
       select tz from schedule_settings where division_id = ${divisionId}`;
@@ -93,15 +100,15 @@ describe.skipIf(!HAS_DB)("venue timezone inheritance (V305)", () => {
 
   it("keeps a division's pre-existing tz through a save that omits tz", async () => {
     const auth = await seedOrg("Europe/Madrid");
-    const divisionId = await seedDivision(auth);
+    const { divisionId, courts } = await seedDivision(auth);
 
     // Pin the division the way a pre-V305 division would have been.
-    await putScheduleSettings(auth, divisionId, { config: CONFIG, tz: "Asia/Kolkata" });
+    await putScheduleSettings(auth, divisionId, { config: makeConfig(courts), tz: "Asia/Kolkata" });
     expect((await getScheduleSettings(auth, divisionId)).tz).toBe("Asia/Kolkata");
 
     // The console's save shape: config only, no tz key.
     const saved = await putScheduleSettings(auth, divisionId, {
-      config: { ...CONFIG, matchMinutes: 45 },
+      config: { ...makeConfig(courts), matchMinutes: 45 },
     });
     expect(saved.config.matchMinutes).toBe(45);
     expect(saved.tz).toBe("Asia/Kolkata"); // NOT reset to the org's zone
@@ -109,15 +116,15 @@ describe.skipIf(!HAS_DB)("venue timezone inheritance (V305)", () => {
 
   it("clears back to inheriting when tz is explicitly null", async () => {
     const auth = await seedOrg("Europe/Madrid");
-    const divisionId = await seedDivision(auth);
-    await putScheduleSettings(auth, divisionId, { config: CONFIG, tz: "Asia/Kolkata" });
-    const cleared = await putScheduleSettings(auth, divisionId, { config: CONFIG, tz: null });
+    const { divisionId, courts } = await seedDivision(auth);
+    await putScheduleSettings(auth, divisionId, { config: makeConfig(courts), tz: "Asia/Kolkata" });
+    const cleared = await putScheduleSettings(auth, divisionId, { config: makeConfig(courts), tz: null });
     expect(cleared.tz).toBe("Europe/Madrid");
   });
 
   it("falls back to UTC when neither the division nor the org has a zone", async () => {
     const auth = await seedOrg(null);
-    const divisionId = await seedDivision(auth);
+    const { divisionId } = await seedDivision(auth);
     expect((await getScheduleSettings(auth, divisionId)).tz).toBe("UTC");
   });
 });
