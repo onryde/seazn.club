@@ -6426,7 +6426,15 @@ async function scheduleCourtRemovalGuardSuite(): Promise<void> {
  */
 async function capacityPrecheckSuite(): Promise<void> {
   const free = newSession();
-  await signIn(free, `dtx_free_${tag}@example.com`);
+  const capacityOrgId = (await signIn(free, `dtx_free_${tag}@example.com`)).org_id;
+  const capacityVenue = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${capacityOrgId}/venues`, "POST", { name: `Capacity Venue ${tag}` }),
+  );
+  const capacityCourt = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${capacityOrgId}/venues/${capacityVenue.id}/courts`, "POST", {
+      name: "Court 1",
+    }),
+  );
   const comp = v1data<{ id: string }>(
     await v1(free, "/api/v1/competitions", "POST", {
       ends_on: "2030-12-31",
@@ -6463,7 +6471,7 @@ async function capacityPrecheckSuite(): Promise<void> {
         endAt: "2026-08-01T23:59:00.000Z",
         matchMinutes: 60,
         gapMinutes: 0,
-        courts: ["Court 1"],
+        courts: [capacityCourt.id],
         perEntrantMinRest: 0,
         sessionWindows,
       },
@@ -8091,6 +8099,20 @@ async function seedPlannableAiDivision(
   label: string,
   startAt: string | null = "2026-10-01T09:00:00.000Z",
 ): Promise<{ compId: string; divId: string; stageId: string }> {
+  const plannableOrgId = s.cookies["seazn_org"]!;
+  const plannableVenue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${plannableOrgId}/venues`, "POST", { name: `${label} Venue ${tag}` }),
+  );
+  const plannableCourtA = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${plannableOrgId}/venues/${plannableVenue.id}/courts`, "POST", {
+      name: "A",
+    }),
+  );
+  const plannableCourtB = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${plannableOrgId}/venues/${plannableVenue.id}/courts`, "POST", {
+      name: "B",
+    }),
+  );
   const comp = v1data<{ id: string }>(
     await v1(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `${label} ${tag}` }),
   );
@@ -8124,7 +8146,7 @@ async function seedPlannableAiDivision(
       ...(startAt !== null ? { startAt } : {}),
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["A", "B"],
+      courts: [plannableCourtA.id, plannableCourtB.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -11922,6 +11944,22 @@ async function schedRegV3Suite(
 // competitionEnd with no URL override — smoke has no browser, so it only
 // ever sees whatever day the SSR'd page opens on by default.
 async function boardRedesignSuite(admin: Session, orgSlug: string): Promise<void> {
+  const redesignOrgId = admin.cookies["seazn_org"]!;
+  const redesignVenue = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${redesignOrgId}/venues`, "POST", {
+      name: `Board Redesign Venue ${tag}`,
+    }),
+  );
+  const redesignCourtA = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${redesignOrgId}/venues/${redesignVenue.id}/courts`, "POST", {
+      name: "A",
+    }),
+  );
+  const redesignCourtB = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${redesignOrgId}/venues/${redesignVenue.id}/courts`, "POST", {
+      name: "B",
+    }),
+  );
   const comp = v1data<{ id: string; slug: string }>(
     await v1(admin, "/api/v1/competitions", "POST", {
       starts_on: "2026-10-05",
@@ -11955,9 +11993,15 @@ async function boardRedesignSuite(admin: Session, orgSlug: string): Promise<void
       startAt: "2026-10-05T09:00:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["A", "B"],
+      courts: [redesignCourtA.id, redesignCourtB.id],
       perEntrantMinRest: 0,
-      blackouts: [{ court: "A", from: "2026-10-05T09:00:00.000Z", to: "2026-10-05T09:30:00.000Z" }],
+      blackouts: [
+        {
+          court: redesignCourtA.id,
+          from: "2026-10-05T09:00:00.000Z",
+          to: "2026-10-05T09:30:00.000Z",
+        },
+      ],
       sessionWindows: [],
     },
   });
@@ -11968,7 +12012,7 @@ async function boardRedesignSuite(admin: Session, orgSlug: string): Promise<void
   // FixtureBlock renders on the initial page load for the pin-icon check.
   await v1(admin, `/api/v1/fixtures/${genA.fixtures[0]!.id}`, "PATCH", {
     scheduled_at: "2026-10-05T09:00:00.000Z",
-    court_label: "B",
+    court_id: redesignCourtB.id,
   });
 
   // Division B exists purely so the division-filter legend has 2+ divisions
@@ -12166,6 +12210,19 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
     "v1 scoring before start → 422 WRONG_PHASE",
     early.status === 422 && early.json.error?.code === "WRONG_PHASE",
   );
+  // No explicit schedule-settings PUT for this division — relies on the
+  // "empty configured list falls back to the org's non-archived courts"
+  // default, so two real courts just need to EXIST in the org before the
+  // auto call, not be wired into this division's own config.
+  const v1Venue = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `v1 Venue ${tag}` }),
+  );
+  const v1Court1 = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${orgId}/venues/${v1Venue.id}/courts`, "POST", { name: "Court 1" }),
+  );
+  const v1Court9 = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${orgId}/venues/${v1Venue.id}/courts`, "POST", { name: "Court 9" }),
+  );
   const auto = await v1(admin, `/api/v1/stages/${stageId}/schedule/auto`, "POST", {});
   check(
     "v1 schedule/auto proposes all fixtures",
@@ -12178,13 +12235,13 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
   // board it left behind is still editable.
   {
     const assignments = v1data<
-      { assignments: { fixture_id: string; scheduled_at: string; court_label: string }[] }
+      { assignments: { fixture_id: string; scheduled_at: string; court_id: string }[] }
     >(auto).assignments;
     const applyRes = await v1(admin, `/api/v1/stages/${stageId}/schedule/apply`, "POST", {
       assignments: assignments.map((a) => ({
         fixture_id: a.fixture_id,
         scheduled_at: a.scheduled_at,
-        court_label: a.court_label,
+        court_id: a.court_id,
       })),
       // "auto", not "manual": a manual apply is board editing and needs the Pro
       // `scheduling.board` key, and this section runs on a community org.
@@ -12200,12 +12257,15 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
     // Four entrants, one round robin. Round 1's two fixtures cover all four
     // entrants, so ANY later-round fixture shares an entrant with each of them.
     // The auto pass emits in round order, so [0] and [2] are always such a pair.
-    // Same instant, DIFFERENT court — the only defect is the human.
+    // Same instant, DIFFERENT court — the only defect is the human. Whichever
+    // of the two real courts the solver put the anchor on, the OTHER one is
+    // what proves this — not a hardcoded id that might collide with it.
     const anchor = assignments[0]!;
     const sharer = assignments[2]!;
+    const otherCourtId = anchor.court_id === v1Court1.id ? v1Court9.id : v1Court1.id;
     const clash = await v1(admin, `/api/v1/fixtures/${sharer.fixture_id}`, "PATCH", {
       scheduled_at: anchor.scheduled_at,
-      court_label: "Court 9",
+      court_id: otherCourtId,
     });
     check(
       "v1 W4: a move that introduces a clash → 409 SCHEDULE_CONFLICT",
@@ -12217,7 +12277,7 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
     );
     // And the board still moves: the refusal was about the change, not the board.
     const legal = await v1(admin, `/api/v1/fixtures/${sharer.fixture_id}`, "PATCH", {
-      court_label: "Court 9",
+      court_id: otherCourtId,
     });
     check("v1 W4: an unrelated edit on the same board still applies", legal.status === 200);
   }
@@ -12238,7 +12298,7 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
       endAt: "2030-01-02T23:00:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 9"],
+      courts: [v1Court1.id, v1Court9.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -12586,9 +12646,15 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
   check("jul3 officials manual assign", patchOff.status === 200);
 
   // -- PROMPT-24: bulk shift + wait report ------------------------------
+  const jul3Venue = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `Jul3 Venue ${tag}` }),
+  );
+  const jul3Court = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${orgId}/venues/${jul3Venue.id}/courts`, "POST", { name: "C1" }),
+  );
   await v1(admin, `/api/v1/fixtures/${fixtures[0]!.id}`, "PATCH", {
     scheduled_at: "2026-07-20T09:00:00.000Z",
-    court_label: "C1",
+    court_id: jul3Court.id,
   });
   const shift = await v1(admin, "/api/v1/schedule/shift", "POST", {
     division_id: divId,
