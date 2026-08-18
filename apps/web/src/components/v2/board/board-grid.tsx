@@ -44,7 +44,8 @@ export function BoardGrid({
   day: string;
   slots: number[];
   slotMinutes: number;
-  /** Configured court labels; empty → single unassigned column. */
+  /** Configured court ids (P9); empty → single unassigned column. Ordered by
+   *  the organiser's own configured list — never re-sorted here. */
   courts: string[];
   /** Fixtures scheduled on this day (court may be null → unassigned column). */
   fixtures: BoardFixture[];
@@ -161,8 +162,12 @@ export function BoardGrid({
               {columns.map((court) => {
                 const inSlot = (at: number) => at >= t && at < t + slotMinutes * MIN;
                 const sameCol = (c: string | null) => (court === null ? c === null : c === court);
+                // P9 pass 4a: column identity is court_id — court_label is
+                // frozen legacy (null for anything scheduled since the
+                // cutover), so filtering on it collapsed every court into
+                // the unassigned column.
                 const cell = fixtures.filter(
-                  (f) => sameCol(f.court_label) && inSlot(new Date(f.scheduled_at as string).getTime()),
+                  (f) => sameCol(f.court_id) && inSlot(new Date(f.scheduled_at as string).getTime()),
                 );
                 const cellGhosts = showGhosts
                   ? ghosts!.filter((g) => sameCol(g.court) && inSlot(g.at))
