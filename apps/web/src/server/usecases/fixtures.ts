@@ -6,7 +6,7 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { PatchFixture, PutLineup, ScheduleConflict } from "@/server/api-v1/schemas";
-import { FIXTURE_COLS, BOARD_FIXTURE_COLS, type FixtureRow } from "./stages";
+import { BOARD_FIXTURE_COLS, type FixtureRow } from "./stages";
 import { moveFixture } from "./schedule";
 import { scoresViaAssignment } from "./scorers";
 
@@ -18,11 +18,30 @@ function rejectDeviceLink(auth: AuthCtx): void {
   }
 }
 
-export async function getFixture(auth: AuthCtx, id: string): Promise<FixtureRow> {
+/** The fixture shape GET/PATCH /fixtures/{id} actually serve (P9 pass
+ *  3c-2): court_id/venue_id + derived court_name/venue_name, WITHOUT the
+ *  frozen venue/court_label text columns. This is the one fixture read
+ *  path that makes a clean break rather than adding alongside — it's the
+ *  highest-visibility surface (the published v1 API contract), and #461's
+ *  own PatchedFixtureOut precedent already documents this endpoint's result
+ *  IS the wire, unmapped. Every other FixtureRow reader (listDivisionFixtures
+ *  below, generateStageFixtures, ...) keeps venue/court_label for callers
+ *  not yet migrated off them. */
+export type FixtureOut = Omit<FixtureRow, "venue" | "court_label">;
+
+export async function getFixture(auth: AuthCtx, id: string): Promise<FixtureOut> {
   rejectDeviceLink(auth);
   return withTenant(auth.orgId, async (tx) => {
-    const [row] = await tx<FixtureRow[]>`
-      select ${tx(FIXTURE_COLS)} from fixtures where id = ${id}`;
+    const [row] = await tx<FixtureOut[]>`
+      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.court_id, crt.name as court_name, f.venue_id, ven.name as venue_name,
+             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+      from fixtures f
+      left join courts crt on crt.id = f.court_id
+      left join venues ven on ven.id = f.venue_id
+      where f.id = ${id}`;
     if (!row) throw new HttpError(404, "fixture not found");
     return row;
   });
@@ -34,9 +53,17 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
     const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
     return tx<FixtureRow[]>`
-      select ${tx(FIXTURE_COLS)} from fixtures
-      where division_id = ${divisionId}
-      order by stage_id, round_no, seq_in_round`;
+      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.venue, f.court_label, f.court_id, crt.name as court_name,
+             f.venue_id, ven.name as venue_name,
+             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+      from fixtures f
+      left join courts crt on crt.id = f.court_id
+      left join venues ven on ven.id = f.venue_id
+      where f.division_id = ${divisionId}
+      order by f.stage_id, f.round_no, f.seq_in_round`;
   });
 }
 
@@ -67,7 +94,7 @@ export async function listDivisionFixturesForBoard(
  *  would have widened GET too, where there is no move and nothing to report.
  *  Mirrored by `PatchedFixture` in `api-v1/schemas.ts`, which is what the
  *  published spec is generated from. */
-export type PatchedFixtureOut = FixtureRow & { conflicts: ScheduleConflict[] };
+export type PatchedFixtureOut = FixtureOut & { conflicts: ScheduleConflict[] };
 
 export async function patchFixture(
   auth: AuthCtx,
@@ -90,8 +117,16 @@ export async function patchFixture(
       await tx`
         update fixtures set officials = ${tx.json(officials as never)} where id = ${id}`;
     }
-    const [row] = await tx<FixtureRow[]>`
-      select ${tx(FIXTURE_COLS)} from fixtures where id = ${id}`;
+    const [row] = await tx<FixtureOut[]>`
+      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.court_id, crt.name as court_name, f.venue_id, ven.name as venue_name,
+             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+      from fixtures f
+      left join courts crt on crt.id = f.court_id
+      left join venues ven on ven.id = f.venue_id
+      where f.id = ${id}`;
     if (!row) throw new HttpError(404, "fixture not found");
     return { ...row, conflicts };
   });

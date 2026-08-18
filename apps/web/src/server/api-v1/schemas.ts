@@ -758,8 +758,18 @@ export const Fixture = z.object({
   home_slot_label: z.object({ key: z.string(), params: z.record(z.string(), z.unknown()) }).nullable(),
   away_slot_label: z.object({ key: z.string(), params: z.record(z.string(), z.unknown()) }).nullable(),
   scheduled_at: z.string().nullable(),
-  venue: z.string().nullable(),
-  court_label: z.string().nullable(),
+  // P9 pass 3c-2: court_id/venue_id + derived, read-only court_name/
+  // venue_name — same shape as ScheduleAssignment. The frozen `venue`/
+  // `court_label` text columns leave the wire entirely here (unlike the
+  // general internal FixtureRow, which keeps them for callers not yet
+  // migrated): this is the published v1 API contract, the highest-visibility
+  // reader, and the one place P9 makes a clean break rather than adding
+  // alongside. A client still reading `court_label` off this response
+  // needs to move to `court_name` — there is no compatibility shim.
+  court_id: CourtId.nullable(),
+  court_name: z.string().nullable(),
+  venue_id: VenueId.nullable(),
+  venue_name: z.string().nullable(),
   officials: z.array(z.unknown()),
   status: z.enum(["scheduled", "in_play", "decided", "finalized", "abandoned", "forfeited", "cancelled"]),
   outcome: z.unknown().nullable(),

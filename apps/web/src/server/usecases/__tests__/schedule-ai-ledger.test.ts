@@ -128,7 +128,10 @@ describe("ApplyScheduleRequest.ai (v4/03 §10)", () => {
       round_no: 1, seq_in_round: 1, fixture_no: 1, home_entrant_id: null, away_entrant_id: null,
       // D4a (P5): home/away_slot_label, null on a filled/plain fixture.
       home_slot_label: null, away_slot_label: null,
-      scheduled_at: null, venue: null, court_label: null, officials: [], status: "scheduled",
+      // P9 pass 3c-2: court_id/court_name/venue_id/venue_name, not the
+      // retired venue/court_label — Fixture no longer declares those.
+      scheduled_at: null, court_id: null, court_name: null, venue_id: null, venue_name: null,
+      officials: [], status: "scheduled",
       outcome: null, schedule_source: "ai", schedule_locked: false, created_at: T0,
     };
     expect(Fixture.parse(row).schedule_source).toBe("ai");
@@ -190,11 +193,14 @@ describe.skipIf(!HAS_DB)("AI audit trail in the ledger (v4/03 §10)", () => {
     // Binding #1 (integration): the persisted fixtures read back through the
     // Fixture response schema with schedule_source "ai".
     const rows = await sql`
-      select id, stage_id, division_id, pool_id, round_no, seq_in_round, fixture_no,
-             home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
-             scheduled_at, venue, court_label,
-             officials, status, outcome, schedule_source, schedule_locked, created_at
-      from fixtures where stage_id = ${stage.id} and scheduled_at is not null limit 1`;
+      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.court_id, crt.name as court_name, f.venue_id, ven.name as venue_name,
+             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at
+      from fixtures f
+      left join courts crt on crt.id = f.court_id
+      left join venues ven on ven.id = f.venue_id
+      where f.stage_id = ${stage.id} and f.scheduled_at is not null limit 1`;
     const parsed = Fixture.parse({
       ...rows[0],
       scheduled_at: rows[0]!.scheduled_at ? new Date(rows[0]!.scheduled_at as string).toISOString() : null,

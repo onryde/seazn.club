@@ -152,8 +152,10 @@ export const ROUTES: RouteSpec[] = [
   { path: "/orgs/{id}/sponsor-orders/{orderId}/refund", method: "post", summary: "Full refund of a paid order — transfer reversed, platform fee returned, placement deactivated", tag: "sponsors", response: S.SponsorOrder, errors: [422] },
   { path: "/orgs/{id}/sponsor-orders/{orderId}/evidence", method: "get", summary: "Dispute evidence pack as a printable HTML attachment — order record, receipt reconstruction, placement delivery proof, activity log (session console, not key-accessible)", tag: "sponsors", errors: [404] },
   // Venues & courts (D5/P8): entities replacing the free-text venue/court_label
-  // fields — no consumer switch yet (fixtures.court_id has zero readers this
-  // session; court_label keeps working untouched).
+  // fields. P9 cutover in progress across several passes — GET/PATCH
+  // /fixtures/{id} above already serve court_id/venue_id + derived
+  // court_name/venue_name instead (pass 3c-2); court_label/venue are frozen
+  // (no longer written) pending a later drop PR.
   { path: "/orgs/{id}/venues", method: "get", summary: "List venues with their courts nested, each court carrying its full weekly-hours/exception calendar — there is no separate GET for a court or its calendar", tag: "venues", response: z.array(S.VenueWithCourts) },
   { path: "/orgs/{id}/venues", method: "post", summary: "Create a venue", tag: "venues", request: S.CreateVenue, response: S.Venue, status: 201 },
   { path: "/orgs/{id}/venues/{venueId}", method: "patch", summary: "Update a venue", tag: "venues", request: S.PatchVenue, response: S.Venue, errors: [404] },

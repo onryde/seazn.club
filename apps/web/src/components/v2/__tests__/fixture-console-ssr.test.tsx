@@ -21,8 +21,8 @@ describe("FixtureConsole SSR determinism", () => {
           id: "f1",
           status: "in_progress",
           scheduled_at: "2026-07-13T18:30:00.000Z",
-          venue: "Centre Court",
-          court_label: "1",
+          venue_name: "Centre Court",
+          court_name: "1",
           round_no: 2,
         }}
         sport={{
