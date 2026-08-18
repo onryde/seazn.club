@@ -1615,6 +1615,7 @@ export function ScheduleBoard({
           currency={currency}
           fixtures={aiFixtures}
           entrantNames={entrantNames}
+          courtNames={courtNamesById}
           onClose={() => {
             setAiOpen(false);
             setAiProposal(null);

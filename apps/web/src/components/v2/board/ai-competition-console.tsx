@@ -492,6 +492,7 @@ export function JointReviewStep({
   onReRun,
   msg,
   entrantNames = {},
+  courtNames = {},
 }: {
   plan: AiCompetitionPlanResponse;
   divisions: JointDivision[];
@@ -506,6 +507,14 @@ export function JointReviewStep({
    *  other/direct-construction caller keeps today's degrade-to-short-id
    *  behaviour unchanged. */
   entrantNames?: Record<string, string>;
+  /** Court id -> venue-qualified display label (`resolveCourtNames`/
+   *  `buildCourtDirectory` — the SAME "Name (Venue)" directory the board and
+   *  the AI pack build). P9 review wave 1, finding 5: `plan.divergent_courts`
+   *  holds real court uuids, and two different venues may legally share a
+   *  bare court name (`courts_venue_name_active_idx` is scoped per venue),
+   *  so a bare name alone is still ambiguous. Optional/additive; a miss
+   *  degrades to `courtPicker.unknownCourt`, never the bare id. */
+  courtNames?: Record<string, string>;
   applying: boolean;
   outcome: JointApplyOutcome | null;
   undoing: boolean;
@@ -745,7 +754,15 @@ export function JointReviewStep({
           )}
           {plan.divergent_courts.length > 0 && (
             <ScopeNote title={msg("board.ai.joint.courtsDivergentTitle")}>
-              {msg("board.ai.joint.courtsDivergent", { courts: plan.divergent_courts.join(", ") })}
+              {/* P9 review wave 1, finding 5: `divergent_courts` entries are
+                  real court uuids ("NOT display-ready" per the field's own
+                  server doc) — resolve each through the venue-qualifying
+                  directory rather than joining raw ids. */}
+              {msg("board.ai.joint.courtsDivergent", {
+                courts: plan.divergent_courts
+                  .map((id) => courtNames[id] ?? msg("courtPicker.unknownCourt"))
+                  .join(", "),
+              })}
             </ScopeNote>
           )}
         </div>
@@ -904,6 +921,7 @@ export function AiCompetitionConsole({
   onRefetch,
   onProposalChange,
   entrantNames = {},
+  courtNames = {},
 }: {
   competitionId: string;
   /** Every division on the board, in board order. */
@@ -930,6 +948,9 @@ export function AiCompetitionConsole({
   onRefetch?: () => void;
   /** Mirrors the current proposal to the board so it can paint grid ghosts. */
   onProposalChange?: (plan: JointProposalMirror | null) => void;
+  /** Court id -> venue-qualified display label — P9 review wave 1, finding 5.
+   *  Threaded straight through to `JointReviewStep`; see its own doc. */
+  courtNames?: Record<string, string>;
 }) {
   const msg = useMsg();
   const plural = usePlural();
@@ -1318,6 +1339,7 @@ export function AiCompetitionConsole({
       onReRun={() => void run(plan)}
       msg={msg}
       entrantNames={entrantNames}
+      courtNames={courtNames}
     />
   ) : (
     brief

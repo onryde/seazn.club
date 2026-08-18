@@ -671,12 +671,17 @@ describe("what the joint review says there is to review", () => {
   // The ruling was to demote them, not to count them: folding them in would
   // make one number mean two different units.
   it("keeps the division-level notes out of the counted amber band", () => {
+    // P9 review wave 1, finding 5: `divergent_courts` carries real court
+    // uuids, not the bare name this test used to hand it directly — resolved
+    // here through `courtNames`, same as production.
+    const COURT_3 = "ffffffff-ffff-ffff-ffff-ffffffffffff";
     const html = review({
       plan: plan({
         warnings: [{ fixtureId: "f1", reason: "rest", detail: "20 minutes" }],
         skipped_divisions: [{ id: "d3", name: "Under 16s", reason: "no_movable_fixtures" }],
-        divergent_courts: ["Court 3"],
+        divergent_courts: [COURT_3],
       } as Partial<AiCompetitionPlanResponse>),
+      courtNames: { [COURT_3]: "Court 3" },
     });
     // Still said, and still where the ledger they are about is.
     expect(html).toContain(tEn("board.ai.joint.skipped", { divisions: "Under 16s" }));
@@ -689,6 +694,42 @@ describe("what the joint review says there is to review", () => {
     // …and not counted, because a court-name mismatch is not a fixture.
     expect(html).toContain('data-review-count="1"');
     expect(html.match(/data-review-count="/g) ?? []).toHaveLength(1);
+  });
+
+  // P9 review wave 1, finding 5 (MEDIUM): `plan.divergent_courts` holds real
+  // court uuids — the server's own doc on the field says it is "NOT
+  // display-ready — never render a bare uuid". Two different venues may
+  // legally share a bare court name (`courts_venue_name_active_idx` is
+  // scoped per venue, not global), so the id must resolve through the same
+  // venue-qualifying directory the rest of the app uses
+  // (buildCourtDirectory/resolveCourtNames), not a raw join. Fails on a
+  // reverted `courtNames` lookup (joins the raw ids instead).
+  describe("divergent-courts name resolution", () => {
+    const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-/;
+    const COURT_X = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+    const COURT_Y = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+
+    it("shows venue-qualified names, never raw uuids, for divergent courts", () => {
+      const html = review({
+        plan: plan({ divergent_courts: [COURT_X, COURT_Y] } as Partial<AiCompetitionPlanResponse>),
+        courtNames: { [COURT_X]: "Court 1 (Main Courts)", [COURT_Y]: "Court 1 (Riverside)" },
+      });
+      expect(html).toContain(
+        tEn("board.ai.joint.courtsDivergent", { courts: "Court 1 (Main Courts), Court 1 (Riverside)" }),
+      );
+      expect(html).not.toMatch(UUID_RE);
+    });
+
+    it("falls back to the unknown-court label, never a bare uuid, for an id missing from the directory", () => {
+      const html = review({
+        plan: plan({ divergent_courts: [COURT_X] } as Partial<AiCompetitionPlanResponse>),
+        courtNames: {},
+      });
+      expect(html).toContain(
+        tEn("board.ai.joint.courtsDivergent", { courts: enText["courtPicker.unknownCourt"]! }),
+      );
+      expect(html).not.toMatch(UUID_RE);
+    });
   });
 
   // Must-fix 1. `plan.proposal` and `plan.unschedulable` are mutually exclusive
