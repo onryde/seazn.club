@@ -10759,21 +10759,7 @@
                             },
                             "additionalProperties": {}
                           },
-                          "qualification": {
-                            "anyOf": [
-                              {
-                                "type": "object",
-                                "propertyNames": {
-                                  "type": "string"
-                                },
-                                "additionalProperties": {}
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "seeding": {
+                          "progression": {
                             "anyOf": [
                               {
                                 "type": "object",
@@ -10803,8 +10789,7 @@
                           "kind",
                           "name",
                           "config",
-                          "qualification",
-                          "seeding",
+                          "progression",
                           "status"
                         ],
                         "additionalProperties": false
@@ -10826,8 +10811,7 @@
                       "kind": "league",
                       "name": "example",
                       "config": {},
-                      "qualification": {},
-                      "seeding": {},
+                      "progression": {},
                       "status": "pending"
                     }
                   ],
@@ -11259,6 +11243,14 @@
                                   "setup",
                                   "on_complete"
                                 ]
+                              },
+                              "carry": {
+                                "type": "string",
+                                "enum": [
+                                  "none",
+                                  "points",
+                                  "full"
+                                ]
                               }
                             },
                             "required": [
@@ -11544,6 +11536,14 @@
                                     "setup",
                                     "on_complete"
                                   ]
+                                },
+                                "carry": {
+                                  "type": "string",
+                                  "enum": [
+                                    "none",
+                                    "points",
+                                    "full"
+                                  ]
                                 }
                               },
                               "required": [
@@ -11639,21 +11639,7 @@
                               },
                               "additionalProperties": {}
                             },
-                            "qualification": {
-                              "anyOf": [
-                                {
-                                  "type": "object",
-                                  "propertyNames": {
-                                    "type": "string"
-                                  },
-                                  "additionalProperties": {}
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "seeding": {
+                            "progression": {
                               "anyOf": [
                                 {
                                   "type": "object",
@@ -11683,8 +11669,7 @@
                             "kind",
                             "name",
                             "config",
-                            "qualification",
-                            "seeding",
+                            "progression",
                             "status"
                           ],
                           "additionalProperties": false
@@ -11733,21 +11718,7 @@
                                 },
                                 "additionalProperties": {}
                               },
-                              "qualification": {
-                                "anyOf": [
-                                  {
-                                    "type": "object",
-                                    "propertyNames": {
-                                      "type": "string"
-                                    },
-                                    "additionalProperties": {}
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "seeding": {
+                              "progression": {
                                 "anyOf": [
                                   {
                                     "type": "object",
@@ -11777,8 +11748,7 @@
                               "kind",
                               "name",
                               "config",
-                              "qualification",
-                              "seeding",
+                              "progression",
                               "status"
                             ],
                             "additionalProperties": false
@@ -11801,8 +11771,7 @@
                     "kind": "league",
                     "name": "example",
                     "config": {},
-                    "qualification": {},
-                    "seeding": {},
+                    "progression": {},
                     "status": "pending"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -12277,6 +12246,14 @@
                                   "setup",
                                   "on_complete"
                                 ]
+                              },
+                              "carry": {
+                                "type": "string",
+                                "enum": [
+                                  "none",
+                                  "points",
+                                  "full"
+                                ]
                               }
                             },
                             "required": [
@@ -12562,6 +12539,14 @@
                                     "setup",
                                     "on_complete"
                                   ]
+                                },
+                                "carry": {
+                                  "type": "string",
+                                  "enum": [
+                                    "none",
+                                    "points",
+                                    "full"
+                                  ]
                                 }
                               },
                               "required": [
@@ -12657,21 +12642,7 @@
                             },
                             "additionalProperties": {}
                           },
-                          "qualification": {
-                            "anyOf": [
-                              {
-                                "type": "object",
-                                "propertyNames": {
-                                  "type": "string"
-                                },
-                                "additionalProperties": {}
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "seeding": {
+                          "progression": {
                             "anyOf": [
                               {
                                 "type": "object",
@@ -12701,8 +12672,7 @@
                           "kind",
                           "name",
                           "config",
-                          "qualification",
-                          "seeding",
+                          "progression",
                           "status"
                         ],
                         "additionalProperties": false
@@ -12724,8 +12694,7 @@
                       "kind": "league",
                       "name": "example",
                       "config": {},
-                      "qualification": {},
-                      "seeding": {},
+                      "progression": {},
                       "status": "pending"
                     }
                   ],
