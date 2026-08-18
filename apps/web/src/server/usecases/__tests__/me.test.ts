@@ -371,4 +371,43 @@ describe.skipIf(!HAS_DB)("player home /me (PROMPT-53)", () => {
     expect(parsed.venue_tz).toBe(withCourt.venue_tz);
     expect(parsed.venue_tz).not.toBeUndefined();
   });
+
+  // #14: listMyFixtures is a SUPERUSER, cross-org read (no withTenant/RLS) —
+  // a court name is unique only WITHIN its venue, so it must venue-qualify
+  // via the same rule the board/AI pack use, not show two indistinguishable
+  // "Court 1" entries for two different physical courts.
+  it("#14: disambiguates two same-named courts across two venues; never renders a bare uuid", async () => {
+    const { owner, orgId } = await seedOrg("court-disambig");
+    const { persons } = await rig(owner);
+    const player = await makeUser("player");
+    await sql`update persons set user_id = ${player} where id = ${persons[0].id}`;
+
+    const before = await listMyFixtures(player);
+    expect(before.upcoming.length).toBeGreaterThanOrEqual(2);
+    const [f1, f2] = before.upcoming;
+
+    const [{ id: venueA }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${orgId}, ${"Riverside"}) returning id`;
+    const [{ id: venueB }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${orgId}, ${"Lakeside"}) returning id`;
+    const [{ id: courtA }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueA}, ${orgId}, ${"Court 1"}, ${sql.array([])}) returning id`;
+    const [{ id: courtB }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueB}, ${orgId}, ${"Court 1"}, ${sql.array([])}) returning id`;
+    await sql`update fixtures set venue_id = ${venueA}, court_id = ${courtA} where id = ${f1!.id}`;
+    await sql`update fixtures set venue_id = ${venueB}, court_id = ${courtB} where id = ${f2!.id}`;
+
+    const mine = await listMyFixtures(player);
+    for (const f of mine.upcoming) MyFixture.parse(f);
+    const c1 = mine.upcoming.find((f) => f.id === f1!.id)!;
+    const c2 = mine.upcoming.find((f) => f.id === f2!.id)!;
+    expect(c1.court_name).toBe("Court 1 (Riverside)");
+    expect(c2.court_name).toBe("Court 1 (Lakeside)");
+    // Every fixture's own id/person_id/etc. are legitimately uuids — only the
+    // NAME field is under test here.
+    const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-/i;
+    for (const f of mine.upcoming) expect(f.court_name ?? "").not.toMatch(uuidRe);
+  });
 });

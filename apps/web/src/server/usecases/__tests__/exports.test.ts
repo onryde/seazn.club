@@ -122,19 +122,11 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
     expect(xlsx.length).toBeGreaterThan(500);
   });
 
-  // P9 pass-3a-FIX flag (NOT fixed here — exports.ts is pass 3c's file, out
-  // of this pass's scope): `PatchFixture` is `.strict()` now, so `court_id`
-  // is the only writable court identity — but `exports.ts`'s `groupByCourt`
-  // and this doc's rendered subheading both still read `fixtures.court_label`
-  // RAW (grep-verified: no `court_id`/`courtNamesById` reference anywhere in
-  // exports.ts), and nothing writes that column any more since pass 3a's
-  // FULL cutover. This test's whole premise — group by court, one page break
-  // per court change — has no way to reach a non-null `court_label` through
-  // any usecase, so it is expected to go RED at runtime (not just at the
-  // type level) until pass 3c converts exports.ts to resolve court_id the
-  // way schedule.ts's courtNamesById already does. Converted to court_id
-  // below only so the file compiles; the assertions are not expected to
-  // hold until that follow-up lands.
+  // STALE NOTE, corrected while fixing #14 (2026-08-18): this comment used to
+  // say exports.ts read `fixtures.court_label` raw and had no `court_id`/
+  // `courtNamesById` reference, so these assertions were "not expected to
+  // hold". `exportFixtures`/`groupByCourt` resolve `court_name` off
+  // `court_id` via `courtNamesById` (schedule.ts) now — this test passes.
   it("scoresheets pageBreaks=per_pitch: one stack per court, one break between them", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth);
@@ -183,6 +175,50 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
 
     // generic sport falls back to the result form with signatures
     expect(model.sections[0]!.signatures).toContain("Referee");
+  });
+
+  // #14: a court name is unique only WITHIN its venue
+  // (courts_venue_name_active_idx) — two DIFFERENT venues may legally share
+  // one bare name. The officials rota PDF and the timetable export must
+  // disambiguate through the SAME venue-qualifying rule the board/AI pack
+  // use (courtNamesById -> buildCourtDirectory), not show two
+  // indistinguishable "Court 1" entries — and never render a bare uuid.
+  it("#14: officials rota + timetable disambiguate two same-named courts across two venues", async () => {
+    const { auth } = await seedOrg("pro");
+    const { division, fixtures } = await seedDivision(auth);
+    const venueA = await createVenue(auth, { name: "Riverside", sort: 0 });
+    const venueB = await createVenue(auth, { name: "Lakeside", sort: 1 });
+    const courtA = await createCourt(auth, venueA.id, { name: "Court 1", sort: 0, tags: [] });
+    const courtB = await createCourt(auth, venueB.id, { name: "Court 1", sort: 0, tags: [] });
+    await patchFixture(auth, fixtures[0]!.id, {
+      scheduled_at: "2026-07-20T09:00:00.000Z",
+      court_id: courtA.id,
+    });
+    await patchFixture(auth, fixtures[1]!.id, {
+      scheduled_at: "2026-07-20T09:30:00.000Z",
+      court_id: courtB.id,
+    });
+    const [{ id: officialId }] = await sql<{ id: string }[]>`
+      insert into officials (org_id, display_name) values (${auth.orgId}, 'Sam Ref')
+      returning id`;
+    await sql`
+      insert into fixture_officials (fixture_id, official_id, role_key, response)
+      values (${fixtures[0]!.id}, ${officialId}, 'referee', 'accepted'),
+             (${fixtures[1]!.id}, ${officialId}, 'referee', 'accepted')`;
+
+    const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-/i;
+
+    const rota = await buildOfficialsRotaDoc(auth, division.id, { printedAt: PRINTED });
+    const rotaText = JSON.stringify(rota);
+    expect(rotaText).toContain("Court 1 (Riverside)");
+    expect(rotaText).toContain("Court 1 (Lakeside)");
+    expect(rotaText).not.toMatch(uuidRe);
+
+    const timetable = await buildDivisionDocModel(auth, division.id, "timetable", { printedAt: PRINTED });
+    const timetableText = JSON.stringify(timetable);
+    expect(timetableText).toContain("Court 1 (Riverside)");
+    expect(timetableText).toContain("Court 1 (Lakeside)");
+    expect(timetableText).not.toMatch(uuidRe);
   });
 
   it("participants export keeps Empty-Spot rows; roster lists teams", async () => {

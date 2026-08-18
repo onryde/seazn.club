@@ -732,9 +732,31 @@ export async function buildSchedulePack(
     // just below: a repair scope may still need to reference a fixture
     // already sitting on a since-archived or since-retagged court (ruling 3,
     // candidate-courts.ts — an existing placement must keep validating clean).
+    //
+    // #8 fix: `courts.includes(c)` alone rejected the exact scope the "a
+    // court was removed, repair the board" nudge sends — the client's
+    // `goneCourts` (use-disruption-signals.ts) is built from court ids that
+    // are NOT in configuredCourts BY CONSTRUCTION (a court dropped from
+    // config entirely, not merely archived/retagged — that case already
+    // passes via `courts.includes` above, since config.courts keeps
+    // whatever was configured when the board was built regardless of later
+    // archival). So the nudge the product itself offers always 400'd. Accept
+    // a scope court that EITHER is still configured OR is a court this
+    // division's fixtures actually reference (past or present placement) —
+    // still rejects a court with no relationship to this division at all (a
+    // typo, a foreign-org id, or a court this division never used).
     if (opts.scope?.courts) {
+      const referencedCourtIds = new Set(
+        (
+          await tx<{ court_id: string }[]>`
+            select distinct court_id from fixtures
+            where division_id = ${divisionId} and court_id is not null`
+        ).map((r) => r.court_id),
+      );
       for (const c of opts.scope.courts) {
-        if (!courts.includes(c)) throw new HttpError(400, `unknown scope court "${c}"`);
+        if (!courts.includes(c) && !referencedCourtIds.has(c)) {
+          throw new HttpError(400, `unknown scope court "${c}"`);
+        }
       }
     }
 

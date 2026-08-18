@@ -9,6 +9,11 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { ScorerScopeType } from "@/lib/types";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
+// #14: this read is a SUPERUSER, cross-org query (no `withTenant`/RLS — a
+// scorer/official is usually not an org member) — `courtLabelsByOrg` is the
+// cross-org twin of schedule.ts's `courtNamesById`; see that helper's own
+// doc comment.
+import { courtLabelsByOrg } from "./cross-org-court-labels";
 
 export interface FixtureScope {
   id: string;
@@ -178,7 +183,7 @@ export async function listAssignedFixtures(
 ): Promise<AssignedFixture[]> {
   const dayFrom = date ? new Date(`${date}T00:00:00Z`) : null;
   const dayTo = dayFrom ? new Date(dayFrom.getTime() + 24 * 60 * 60 * 1000) : null;
-  return sql<AssignedFixture[]>`
+  const raw = await sql<Omit<AssignedFixture, "court_name">[]>`
     select distinct on (scheduled_at, id) * from (
       select f.id, f.fixture_no, f.org_id, o.name as org_name, o.slug as org_slug,
              c.id as competition_id, c.name as competition_name, c.slug as competition_slug,
@@ -189,7 +194,7 @@ export async function listAssignedFixtures(
              he.display_name as home_name, ae.display_name as away_name,
              f.home_slot_label, f.away_slot_label,
              f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
-             f.venue_id, ven.name as venue_name, f.court_id, crt.name as court_name, f.status
+             f.venue_id, ven.name as venue_name, f.court_id, f.status
       from scorer_assignments sa
       join fixtures f on (
            (sa.scope_type = 'fixture'     and f.id = sa.scope_id)
@@ -197,7 +202,6 @@ export async function listAssignedFixtures(
         or (sa.scope_type = 'competition' and f.division_id in
               (select id from divisions where competition_id = sa.scope_id))
       ) and f.org_id = sa.org_id
-      left join courts crt on crt.id = f.court_id
       left join venues ven on ven.id = f.venue_id
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
@@ -219,12 +223,11 @@ export async function listAssignedFixtures(
              he.display_name as home_name, ae.display_name as away_name,
              f.home_slot_label, f.away_slot_label,
              f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
-             f.venue_id, ven.name as venue_name, f.court_id, crt.name as court_name, f.status
+             f.venue_id, ven.name as venue_name, f.court_id, f.status
       from fixture_officials fo
       join officials ofc on ofc.id = fo.official_id
       join persons p on p.id = ofc.person_id
       join fixtures f on f.id = fo.fixture_id
-      left join courts crt on crt.id = f.court_id
       left join venues ven on ven.id = f.venue_id
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
@@ -244,6 +247,15 @@ export async function listAssignedFixtures(
       )
     order by scheduled_at nulls last, id
     limit 200`;
+  // #14: venue-qualified label, resolved per-org (this read spans every org
+  // the caller scores/officiates for) — same fallback convention as
+  // FixtureRow's own doc comment: fall back to the id on a miss (should not
+  // happen; FK-restricted).
+  const courtNames = await courtLabelsByOrg(raw);
+  return raw.map((r) => ({
+    ...r,
+    court_name: r.court_id !== null ? (courtNames.get(r.court_id) ?? r.court_id) : null,
+  }));
 }
 
 /** True when the user holds ONLY scorer memberships (doc 13 §4 — their

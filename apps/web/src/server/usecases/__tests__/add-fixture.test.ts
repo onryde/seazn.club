@@ -245,4 +245,52 @@ describe.skipIf(!HAS_DB)("addFixture (PROMPT-66)", () => {
       }),
     ).rejects.toMatchObject({ status: 422 }); // complete stage refuses
   });
+
+  // #8 sibling fix: court_id/venue_id are FK-restricted, but the FK is
+  // `deferrable initially deferred` (V367) — an id that isn't a real court/
+  // venue of this org used to only fail at COMMIT time as a raw Postgres
+  // foreign_key_violation (500), not a clean 4xx.
+  it("rejects a court_id/venue_id that is not a real court/venue of this org (404, not a commit-time FK violation)", async () => {
+    const { auth } = await seedOrg();
+    const { division, entrants } = await seedDivision(auth, 3);
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "league",
+      name: "League",
+      config: {},
+      progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+
+    await expect(
+      addFixture(auth, stage!.id, {
+        home_entrant_id: entrants[0]!,
+        away_entrant_id: entrants[1]!,
+        court_id: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ status: 404, code: "COURT_NOT_FOUND" });
+
+    await expect(
+      addFixture(auth, stage!.id, {
+        home_entrant_id: entrants[0]!,
+        away_entrant_id: entrants[1]!,
+        venue_id: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ status: 404, code: "VENUE_NOT_FOUND" });
+
+    // A real court/venue of this org, meanwhile, still succeeds.
+    const [{ id: venueId }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${auth.orgId}, ${"Riverside"}) returning id`;
+    const [{ id: courtId }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueId}, ${auth.orgId}, ${"Court A"}, ${sql.array([])})
+      returning id`;
+    const { fixture_id } = await addFixture(auth, stage!.id, {
+      home_entrant_id: entrants[0]!,
+      away_entrant_id: entrants[1]!,
+      venue_id: venueId,
+      court_id: courtId,
+    });
+    expect(fixture_id).toBeTruthy();
+  });
 });

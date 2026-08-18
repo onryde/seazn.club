@@ -26,6 +26,12 @@ import { countMatchesByDivision } from "./player-stats";
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
+// #14: this read is a SUPERUSER, cross-org query (no `withTenant`/RLS — a
+// claimed player is usually not an org member) — `courtLabelsByOrg` is the
+// cross-org twin of schedule.ts's `courtNamesById` (which needs a
+// single-org tenant tx this file never opens); see that helper's own doc
+// comment.
+import { courtLabelsByOrg } from "./cross-org-court-labels";
 
 export type AvailabilityStatus = "in" | "out" | "maybe";
 
@@ -99,17 +105,17 @@ export async function listMyFixtures(userId: string): Promise<{
   results: MyResult[];
   teams: MyTeam[];
 }> {
-  const upcoming = await sql<MyFixture[]>`
+  const upcomingRaw = await sql<(Omit<MyFixture, "court_name"> & { org_id: string })[]>`
     select distinct on (f.scheduled_at, f.id, p.id)
            f.id, f.fixture_no, p.id as person_id, p.full_name as person_name,
-           o.name as org_name, o.slug as org_slug,
+           f.org_id, o.name as org_name, o.slug as org_slug,
            c.name as competition_name, c.slug as competition_slug,
            c.visibility as competition_visibility,
            d.name as division_name, d.slug as division_slug, d.sport_key,
            f.round_no, e.display_name as entrant_name,
            opp.display_name as opponent_name,
            f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
-           f.venue_id, ven.name as venue_name, f.court_id, crt.name as court_name, f.status,
+           f.venue_id, ven.name as venue_name, f.court_id, f.status,
            case when fa.status is null then null
                 else jsonb_build_object('status', fa.status, 'note', fa.note) end
              as availability,
@@ -118,7 +124,6 @@ export async function listMyFixtures(userId: string): Promise<{
     join entrant_members em on em.person_id = p.id
     join entrants e on e.id = em.entrant_id and e.status in ${sql(ROSTERED)}
     join fixtures f on (f.home_entrant_id = e.id or f.away_entrant_id = e.id)
-    left join courts crt on crt.id = f.court_id
     left join venues ven on ven.id = f.venue_id
     join divisions d on d.id = f.division_id
     join competitions c on c.id = d.competition_id
@@ -133,6 +138,18 @@ export async function listMyFixtures(userId: string): Promise<{
       and (f.scheduled_at is null or f.scheduled_at >= date_trunc('day', now()))
     order by f.scheduled_at nulls last, f.id, p.id
     limit 100`;
+  // #14: venue-qualified label, resolved per-org (this read spans every org
+  // the caller has a claimed player in) — same fallback convention as
+  // FixtureRow's own doc comment: fall back to the id on a miss (should not
+  // happen; FK-restricted).
+  const courtNames = await courtLabelsByOrg(upcomingRaw);
+  const upcoming: MyFixture[] = upcomingRaw.map((r) => {
+    const { org_id: _orgId, ...rest } = r;
+    return {
+      ...rest,
+      court_name: rest.court_id !== null ? (courtNames.get(rest.court_id) ?? rest.court_id) : null,
+    };
+  });
 
   const results = await sql<MyResult[]>`
     select distinct on (f.scheduled_at, f.id)

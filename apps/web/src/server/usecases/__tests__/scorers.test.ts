@@ -449,6 +449,40 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
     }
   });
 
+  // #14: listAssignedFixtures is a SUPERUSER, cross-org read (no
+  // withTenant/RLS) — a court name is unique only WITHIN its venue, so it
+  // must venue-qualify via the same rule the board/AI pack use, not show two
+  // indistinguishable "Court 1" entries for two different physical courts.
+  it("#14: disambiguates two same-named courts across two venues; never renders a bare uuid", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asRole(orgId, ownerId, "owner");
+    const { division, fixtures } = await rig(owner);
+    const scorerId = await addMember(orgId, "scorer");
+    await createAssignment(orgId, scorerId, { type: "division", id: division.id }, ownerId);
+
+    const [{ id: venueA }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${orgId}, ${"Riverside"}) returning id`;
+    const [{ id: venueB }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${orgId}, ${"Lakeside"}) returning id`;
+    const [{ id: courtA }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueA}, ${orgId}, ${"Court 1"}, ${sql.array([])}) returning id`;
+    const [{ id: courtB }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueB}, ${orgId}, ${"Court 1"}, ${sql.array([])}) returning id`;
+    await sql`update fixtures set venue_id = ${venueA}, court_id = ${courtA} where id = ${fixtures[0].id}`;
+    await sql`update fixtures set venue_id = ${venueB}, court_id = ${courtB} where id = ${fixtures[1].id}`;
+
+    const mine = await listAssignedFixtures(scorerId);
+    for (const f of mine) AssignedFixture.parse(f);
+    const c1 = mine.find((f) => f.id === fixtures[0].id)!;
+    const c2 = mine.find((f) => f.id === fixtures[1].id)!;
+    expect(c1.court_name).toBe("Court 1 (Riverside)");
+    expect(c2.court_name).toBe("Court 1 (Lakeside)");
+    const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-/i;
+    for (const f of mine) expect(f.court_name ?? "").not.toMatch(uuidRe);
+  });
+
   it("accept, existing viewer × scorer invite: scope added, role kept, no scorer seat", async () => {
     const { orgId, ownerId } = await seedOrg(); // community: scorers.max 1
     const owner = asRole(orgId, ownerId, "owner");

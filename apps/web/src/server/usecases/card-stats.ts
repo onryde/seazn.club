@@ -4,6 +4,10 @@ import "server-only";
 // Read-only; RLS scopes everything through withTenant.
 import { withTenant } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
+// #14: `courtNamesById` is the venue-qualified label map (via
+// `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
+// venues that legally share one court name.
+import { courtNamesById } from "./schedule";
 
 export interface NextFixture {
   home: string | null;
@@ -11,6 +15,23 @@ export interface NextFixture {
   court_label: string | null;
   scheduled_at: string | null;
   in_play: boolean;
+}
+
+/** The lateral subquery's raw shape — `court_id`, not the resolved label;
+ *  `resolveNextCourtLabel` below turns this into the public `NextFixture`
+ *  once a `courtNames` map is in hand. */
+type NextFixtureRaw = Omit<NextFixture, "court_label"> & { court_id: string | null };
+
+/** #14: same fallback convention as FixtureRow's own doc comment (stages.ts)
+ *  — fall back to the id itself on a miss (should not happen; FK-restricted
+ *  from `fixtures.court_id`). Shared by both card queries below. */
+function resolveNextCourtLabel(
+  next: NextFixtureRaw | null,
+  courtNames: ReadonlyMap<string, string>,
+): NextFixture | null {
+  if (!next) return null;
+  const { court_id, ...rest } = next;
+  return { ...rest, court_label: court_id !== null ? (courtNames.get(court_id) ?? court_id) : null };
 }
 
 export interface CompetitionCardStats {
@@ -42,8 +63,8 @@ const PLAYED = ["decided", "finalized"] as const;
 export async function listCompetitionCardStats(
   auth: AuthCtx,
 ): Promise<Map<string, CompetitionCardStats>> {
-  const rows = await withTenant(auth.orgId, (tx) =>
-    tx<(CompetitionCardStats & { next: NextFixture | null })[]>`
+  const rows = await withTenant(auth.orgId, async (tx) => {
+    const raw = await tx<(Omit<CompetitionCardStats, "next"> & { next: NextFixtureRaw | null })[]>`
       select c.id as competition_id,
         (select count(*)::int from divisions d
           where d.competition_id = c.id and d.archived_at is null) as divisions,
@@ -65,19 +86,18 @@ export async function listCompetitionCardStats(
         nf.next
       from competitions c
       left join lateral (
-        -- P9 cutover: court_label is frozen since pass 3a — crt.name (via
-        -- court_id) is the live value; the JSON key stays 'court_label'
-        -- because nextLine() below (same file) reads it by that name and
-        -- has no other consumer to keep in sync.
+        -- #14: the JSON carries court_id, not a bare joined courts.name
+        -- (two venues may legally share one court name) — resolved to the
+        -- venue-qualified court_label by resolveNextCourtLabel below,
+        -- which is what nextLine() (same file) actually reads.
         select jsonb_build_object(
             'home', he.display_name, 'away', ae.display_name,
-            'court_label', crt.name, 'scheduled_at', f.scheduled_at,
+            'court_id', f.court_id, 'scheduled_at', f.scheduled_at,
             'in_play', f.status = 'in_play') as next
         from fixtures f
         join divisions d on d.id = f.division_id
         left join entrants he on he.id = f.home_entrant_id
         left join entrants ae on ae.id = f.away_entrant_id
-        left join courts crt on crt.id = f.court_id
         where d.competition_id = c.id and d.archived_at is null
           and f.status in ('scheduled','in_play')
           -- D4a (P5): a TBD/seeded fixture (either slot still unfilled) is
@@ -90,8 +110,10 @@ export async function listCompetitionCardStats(
         order by (f.status = 'in_play') desc,
                  f.scheduled_at asc nulls last, f.round_no, f.seq_in_round
         limit 1
-      ) nf on true`,
-  );
+      ) nf on true`;
+    const courtNames = await courtNamesById(tx);
+    return raw.map((r) => ({ ...r, next: resolveNextCourtLabel(r.next, courtNames) }));
+  });
   return new Map(rows.map((r) => [r.competition_id, r]));
 }
 
@@ -99,8 +121,8 @@ export async function listDivisionCardStats(
   auth: AuthCtx,
   competitionId: string,
 ): Promise<Map<string, DivisionCardStats>> {
-  const rows = await withTenant(auth.orgId, (tx) =>
-    tx<DivisionCardStats[]>`
+  const rows = await withTenant(auth.orgId, async (tx) => {
+    const raw = await tx<(Omit<DivisionCardStats, "next"> & { next: NextFixtureRaw | null })[]>`
       select d.id as division_id,
         (select count(*)::int from entrants e
           where e.division_id = d.id
@@ -119,16 +141,15 @@ export async function listDivisionCardStats(
       from divisions d
       left join registration_settings rs on rs.division_id = d.id
       left join lateral (
-        -- P9 cutover: same court_label -> crt.name swap as
-        -- listCompetitionCardStats above; JSON key stays 'court_label'.
+        -- #14: same court_id -> resolveNextCourtLabel swap as
+        -- listCompetitionCardStats above.
         select jsonb_build_object(
             'home', he.display_name, 'away', ae.display_name,
-            'court_label', crt.name, 'scheduled_at', f.scheduled_at,
+            'court_id', f.court_id, 'scheduled_at', f.scheduled_at,
             'in_play', f.status = 'in_play') as next
         from fixtures f
         left join entrants he on he.id = f.home_entrant_id
         left join entrants ae on ae.id = f.away_entrant_id
-        left join courts crt on crt.id = f.court_id
         where f.division_id = d.id and f.status in ('scheduled','in_play')
           -- D4a (P5): see listCompetitionCardStats above — a TBD/seeded slot
           -- is never a real "next" answer.
@@ -137,8 +158,10 @@ export async function listDivisionCardStats(
                  f.scheduled_at asc nulls last, f.round_no, f.seq_in_round
         limit 1
       ) nf on true
-      where d.competition_id = ${competitionId} and d.archived_at is null`,
-  );
+      where d.competition_id = ${competitionId} and d.archived_at is null`;
+    const courtNames = await courtNamesById(tx);
+    return raw.map((r) => ({ ...r, next: resolveNextCourtLabel(r.next, courtNames) }));
+  });
   return new Map(rows.map((r) => [r.division_id, r]));
 }
 

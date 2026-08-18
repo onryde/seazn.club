@@ -62,7 +62,15 @@ import { log } from "@/server/logger";
 import { msg } from "@/lib/messages";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
-import { validateSchedule } from "./schedule";
+// #14: `courtNamesById` is the venue-qualified label map (via
+// `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
+// venues that legally share one court name.
+import { validateSchedule, courtNamesById } from "./schedule";
+// #8 sibling fix: reuse the SAME not-found codes `venues.ts` already
+// throws for a bad court_id/venue_id, instead of minting new ones, so
+// addFixture's error is indistinguishable from every other "not a real
+// court/venue in this org" 404 in the product.
+import { VENUE_NOT_FOUND_CODE, COURT_NOT_FOUND_CODE } from "./venues";
 import {
   descriptorKey,
   descriptorLabel,
@@ -1352,17 +1360,25 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
       await tx`update stages set status = 'active' where id = ${stageId}`;
     }
 
-    const fixtures = await tx<FixtureRow[]>`
+    const fixtureRows = await tx<Omit<FixtureRow, "court_name">[]>`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
              f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
-             f.scheduled_at, f.venue, f.court_label, f.court_id, crt.name as court_name,
+             f.scheduled_at, f.venue, f.court_label, f.court_id,
              f.venue_id, ven.name as venue_name,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
              f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
       from fixtures f
-      left join courts crt on crt.id = f.court_id
       left join venues ven on ven.id = f.venue_id
       where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
+    // #14: venue-qualified label (a bare joined `courts.name` can't tell two
+    // same-named courts in different venues apart) — same fallback
+    // convention as FixtureRow's own doc comment: fall back to the id
+    // itself on a miss (should not happen; FK-restricted).
+    const courtNames = await courtNamesById(tx);
+    const fixtures = fixtureRows.map((f) => ({
+      ...f,
+      court_name: f.court_id !== null ? (courtNames.get(f.court_id) ?? f.court_id) : null,
+    }));
     // Cross-format feeds (Jul3/08 §4): winner_to/loser_to may target another
     // stage (CL loser → EL slot). Wire every entry whose source and target
     // both exist; the per-decided-fixture fillSlot then follows them like any
@@ -1715,17 +1731,25 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
       await tx`update stages set status = 'active' where id = ${stageId}`;
     }
 
-    const fixtures = await tx<FixtureRow[]>`
+    const fixtureRows = await tx<Omit<FixtureRow, "court_name">[]>`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
              f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
-             f.scheduled_at, f.venue, f.court_label, f.court_id, crt.name as court_name,
+             f.scheduled_at, f.venue, f.court_label, f.court_id,
              f.venue_id, ven.name as venue_name,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
              f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
       from fixtures f
-      left join courts crt on crt.id = f.court_id
       left join venues ven on ven.id = f.venue_id
       where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
+    // #14: venue-qualified label (a bare joined `courts.name` can't tell two
+    // same-named courts in different venues apart) — same fallback
+    // convention as FixtureRow's own doc comment: fall back to the id
+    // itself on a miss (should not happen; FK-restricted).
+    const courtNames = await courtNamesById(tx);
+    const fixtures = fixtureRows.map((f) => ({
+      ...f,
+      court_name: f.court_id !== null ? (courtNames.get(f.court_id) ?? f.court_id) : null,
+    }));
 
     if (created > 0) {
       const [{ seq: last }] = await tx<{ seq: number }[]>`
@@ -2558,17 +2582,25 @@ export async function confirmSeedProposal(
     }
     await tx`update stage_seed_proposals set status = 'confirmed', confirmed_at = now() where id = ${proposal.id}`;
 
-    const fixtures = await tx<FixtureRow[]>`
+    const fixturesRaw = await tx<Omit<FixtureRow, "court_name">[]>`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
              f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
-             f.scheduled_at, f.venue, f.court_label, f.court_id, crt.name as court_name,
+             f.scheduled_at, f.venue, f.court_label, f.court_id,
              f.venue_id, ven.name as venue_name,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
              f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
       from fixtures f
-      left join courts crt on crt.id = f.court_id
       left join venues ven on ven.id = f.venue_id
       where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
+    // #14: venue-qualified label (a bare joined `courts.name` can't tell two
+    // same-named courts in different venues apart) — same fallback
+    // convention as FixtureRow's own doc comment: fall back to the id
+    // itself on a miss (should not happen; FK-restricted).
+    const courtNames = await courtNamesById(tx);
+    const fixtures = fixturesRaw.map((f) => ({
+      ...f,
+      court_name: f.court_id !== null ? (courtNames.get(f.court_id) ?? f.court_id) : null,
+    }));
     return { filled: expandedEntries.length, fixtures, divisionId: stage.division_id };
   });
 
@@ -2754,6 +2786,20 @@ export async function addFixture(
         and id in (${input.home_entrant_id}, ${input.away_entrant_id})`;
     if (entrants.length !== 2) {
       throw new HttpError(422, "both entrants must belong to this stage's division");
+    }
+    // #14 sibling fix: `court_id`/`venue_id` are FK-restricted but the FK is
+    // `deferrable initially deferred` (V367) — an id that isn't a real court/
+    // venue of this org would otherwise only fail at COMMIT time, as a raw
+    // Postgres foreign_key_violation (500), not a clean 4xx. `tx` is already
+    // RLS-scoped to this org, so existence here IS the ownership check —
+    // same pattern venues.ts's own writers use for the same tables.
+    if (input.court_id) {
+      const [court] = await tx<{ id: string }[]>`select id from courts where id = ${input.court_id}`;
+      if (!court) throw new HttpError(404, "court not found", COURT_NOT_FOUND_CODE);
+    }
+    if (input.venue_id) {
+      const [venue] = await tx<{ id: string }[]>`select id from venues where id = ${input.venue_id}`;
+      if (!venue) throw new HttpError(404, "venue not found", VENUE_NOT_FOUND_CODE);
     }
     // Group stages: the match must land in the entrants' pool so the right
     // table folds it. Inferred from the stage's existing fixtures — no

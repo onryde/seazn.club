@@ -385,6 +385,49 @@ describe.skipIf(!HAS_DB)("buildSchedulePack (v4/01 §2)", () => {
     ).rejects.toMatchObject({ status: 400 });
   });
 
+  // #8: the "a court was removed, repair the board" nudge (use-disruption-
+  // signals.ts's `goneCourts`) sends a scope naming a court that is NOT in
+  // settings.courts BY CONSTRUCTION — that check alone made the nudge the
+  // product itself offers always 400. Fixed to also accept a court this
+  // division's fixtures actually reference, while still rejecting a court
+  // with no relationship to the division at all.
+  it("#8: accepts a scope court removed from config but still referenced by a fixture; still rejects an unrelated court", async () => {
+    // A fresh, isolated board — the shared `divisionId`/beforeAll board is
+    // reused by every other test in this describe block, so mutating its
+    // config here would leak between tests.
+    const board = await seedRrBoard();
+    // Simulate "the court was removed from config": court2 keeps its
+    // already-scheduled fixtures (seedRrBoard placed half the board on it),
+    // but the division's configured court list no longer names it.
+    await setConfig(board.divisionId, {
+      ...settingsConfig(board.court1, board.court2),
+      courts: [board.court1],
+    });
+
+    const { pack, movableIds } = await buildSchedulePack(board.auth, board.divisionId, {
+      now: NOW_W2,
+      mode: "repair",
+      instruction: "court removed, repair",
+      scope: { courts: [board.court2] },
+    });
+    expect(movableIds.size).toBeGreaterThan(0);
+    for (const f of pack.fixtures.movable) {
+      expect(f.current.court === board.court2 || f.current.court === null).toBe(true);
+    }
+
+    // A court with NO relationship to this division — never configured,
+    // never placed on — still 400s. Proves the fix widened the check to
+    // "configured OR referenced", not removed it outright.
+    await expect(
+      buildSchedulePack(board.auth, board.divisionId, {
+        now: NOW_W2,
+        mode: "repair",
+        instruction: "x",
+        scope: { courts: [randomUUID()] },
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
   it("repair scope matching nothing is 422 AI_PLAN_EMPTY_SCOPE", async () => {
     await expect(
       buildSchedulePack(auth, divisionId, {

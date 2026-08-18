@@ -1120,7 +1120,14 @@ export async function buildCompetitionPack(
     })
     .sort(
       (a, b) =>
-        cmp(a.court, b.court) ||
+        // #14 sibling fix: was `cmp(a.court, b.court)` — a raw court uuid,
+        // freshly minted per seed, so that sort was a fresh permutation on
+        // every reseed (identical defect to the single-division path's own
+        // `courtOrderKey` fix, schedule-ai.ts). `courtRank` (defined above,
+        // already used for `draft` ordering for the exact same reason) is
+        // the joint-scope structural order instead: reproducible across two
+        // identically-seeded competitions.
+        courtRank(a.court) - courtRank(b.court) ||
         ms(a.from) - ms(b.from) ||
         ms(a.to) - ms(b.to) ||
         cmp(a.label, b.label),

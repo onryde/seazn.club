@@ -125,4 +125,62 @@ describe.skipIf(!HAS_DB)("card-stats: TBD fixtures never surface as 'next' (D4a/
     const divisionStats = await listDivisionCardStats(auth, comp.id);
     expect(divisionStats.get(division.id)?.next).toBeNull();
   });
+
+  // #14: a court name is unique only WITHIN its venue
+  // (courts_venue_name_active_idx) — two DIFFERENT venues may legally share
+  // one bare name. The card's "next" widget must disambiguate through the
+  // SAME venue-qualifying rule the board/AI pack use, not show a bare
+  // "Court 1" that could be either physical court — and never a bare uuid.
+  it("#14: 'next' disambiguates a court name shared by two venues; never a bare uuid", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Card Stats Court " + randomUUID().slice(0, 6),
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    await createEntrants(auth, division.id, [
+      { kind: "individual", display_name: "Real A", seed: 1, members: [] },
+      { kind: "individual", display_name: "Real B", seed: 2, members: [] },
+    ]);
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "league",
+      name: "League",
+      config: {},
+    });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    expect(fixtures).toHaveLength(1);
+
+    // Two venues, each with a court bare-named "Court 1" — legal per the
+    // partial unique index, which is scoped per venue.
+    const venueA = await createVenue(auth, { name: "Riverside", sort: 0 });
+    const venueB = await createVenue(auth, { name: "Lakeside", sort: 1 });
+    const courtA = await createCourt(auth, venueA.id, { name: "Court 1", sort: 0, tags: [] });
+    await createCourt(auth, venueB.id, { name: "Court 1", sort: 0, tags: [] });
+    await sql`
+      update fixtures set scheduled_at = ${new Date(Date.now() + 3_600_000).toISOString()},
+        court_id = ${courtA.id}
+      where id = ${fixtures[0]!.id}`;
+
+    const divisionStats = await listDivisionCardStats(auth, comp.id);
+    const divNext = divisionStats.get(division.id)?.next;
+    expect(divNext, JSON.stringify(divNext)).not.toBeNull();
+    expect(divNext!.court_label).toBe("Court 1 (Riverside)");
+
+    const competitionStats = await listCompetitionCardStats(auth);
+    const compNext = competitionStats.get(comp.id)?.next;
+    expect(compNext, JSON.stringify(compNext)).not.toBeNull();
+    expect(compNext!.court_label).toBe("Court 1 (Riverside)");
+
+    expect(divNext!.court_label ?? "").not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/i);
+  });
 });

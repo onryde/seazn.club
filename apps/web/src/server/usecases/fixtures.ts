@@ -7,7 +7,10 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { PatchFixture, PutLineup, ScheduleConflict } from "@/server/api-v1/schemas";
 import { BOARD_FIXTURE_COLS, type BoardFixtureRow, type FixtureRow } from "./stages";
-import { moveFixture } from "./schedule";
+// #14: `courtNamesById` is the venue-qualified label map (via
+// `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
+// venues that legally share one court name.
+import { moveFixture, courtNamesById } from "./schedule";
 import { scoresViaAssignment } from "./scorers";
 
 /** Doc 13 §7: a device link reads fixture state/events ONLY — every other
@@ -32,18 +35,25 @@ export type FixtureOut = Omit<FixtureRow, "venue" | "court_label">;
 export async function getFixture(auth: AuthCtx, id: string): Promise<FixtureOut> {
   rejectDeviceLink(auth);
   return withTenant(auth.orgId, async (tx) => {
-    const [row] = await tx<FixtureOut[]>`
+    const [row] = await tx<Omit<FixtureOut, "court_name">[]>`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
              f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
-             f.scheduled_at, f.court_id, crt.name as court_name, f.venue_id, ven.name as venue_name,
+             f.scheduled_at, f.court_id, f.venue_id, ven.name as venue_name,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
              f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
       from fixtures f
-      left join courts crt on crt.id = f.court_id
       left join venues ven on ven.id = f.venue_id
       where f.id = ${id}`;
     if (!row) throw new HttpError(404, "fixture not found");
-    return row;
+    // #14: venue-qualified label (a bare joined `courts.name` can't tell two
+    // same-named courts in different venues apart) — see FixtureRow's own
+    // doc comment: fall back to the id itself if a lookup somehow misses
+    // (should not happen; courts.id is FK-restricted from fixtures.court_id).
+    const courtNames = await courtNamesById(tx);
+    return {
+      ...row,
+      court_name: row.court_id !== null ? (courtNames.get(row.court_id) ?? row.court_id) : null,
+    };
   });
 }
 
@@ -52,18 +62,23 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
   return withTenant(auth.orgId, async (tx) => {
     const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
-    return tx<FixtureRow[]>`
+    const rows = await tx<Omit<FixtureRow, "court_name">[]>`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
              f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
-             f.scheduled_at, f.venue, f.court_label, f.court_id, crt.name as court_name,
+             f.scheduled_at, f.venue, f.court_label, f.court_id,
              f.venue_id, ven.name as venue_name,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
              f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
       from fixtures f
-      left join courts crt on crt.id = f.court_id
       left join venues ven on ven.id = f.venue_id
       where f.division_id = ${divisionId}
       order by f.stage_id, f.round_no, f.seq_in_round`;
+    // #14: venue-qualified label, same fallback convention as getFixture above.
+    const courtNames = await courtNamesById(tx);
+    return rows.map((r) => ({
+      ...r,
+      court_name: r.court_id !== null ? (courtNames.get(r.court_id) ?? r.court_id) : null,
+    }));
   });
 }
 
@@ -133,18 +148,23 @@ export async function patchFixture(
       await tx`
         update fixtures set officials = ${tx.json(officials as never)} where id = ${id}`;
     }
-    const [row] = await tx<FixtureOut[]>`
+    const [row] = await tx<Omit<FixtureOut, "court_name">[]>`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
              f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
-             f.scheduled_at, f.court_id, crt.name as court_name, f.venue_id, ven.name as venue_name,
+             f.scheduled_at, f.court_id, f.venue_id, ven.name as venue_name,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
              f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
       from fixtures f
-      left join courts crt on crt.id = f.court_id
       left join venues ven on ven.id = f.venue_id
       where f.id = ${id}`;
     if (!row) throw new HttpError(404, "fixture not found");
-    return { ...row, conflicts };
+    // #14: venue-qualified label, same fallback convention as getFixture above.
+    const courtNames = await courtNamesById(tx);
+    return {
+      ...row,
+      court_name: row.court_id !== null ? (courtNames.get(row.court_id) ?? row.court_id) : null,
+      conflicts,
+    };
   });
 }
 
