@@ -1442,14 +1442,18 @@ function checkoutRegistrationIds(session: Stripe.Checkout.Session): string[] {
  * "Webhooks and fulfillment") would have confirmed and materialised an
  * entrant before any money actually moved.
  *
- * `amountTotal` is passed as `null`, always, from here — never
- * `session.amount_total`. That field is the CART's total across every named
- * entry; feeding it into `confirmPaidRegistration` per-entry would smear the
- * whole cart's sum onto each entry's own `amount_cents` (and, worse, onto a
- * late/duplicate refund, which reads the very same value — see the entry-level
- * refund comment inside confirmPaidRegistration). Passing `null` makes each
- * entry fall back to coalesce's other half: its OWN already-recorded
- * `amount_cents`, exactly the value `createRegistrationCheckout` charged it.
+ * `session.amount_total` is deliberately NOT forwarded to
+ * `confirmPaidRegistration`, and that function no longer takes an amount at
+ * all. `amount_total` is the CART's total across every named entry, so
+ * feeding it in per-entry would smear the whole cart's sum onto each entry's
+ * own `amount_cents` — and, worse, onto a late/duplicate refund, which reads
+ * that same value. Each entry's own `amount_cents` is already exactly what
+ * `createRegistrationCheckout` charged it, so it is the only correct source.
+ *
+ * The parameter was removed rather than passed `null`: this is its only
+ * non-test caller, so every `amountTotal ?? …` fallback had an unreachable
+ * non-null side, three of them in refund math. Left in place it reads like
+ * "the amount actually charged" and invites precisely the smear above back.
  */
 export async function handleRegistrationCheckoutCompleted(
   session: Stripe.Checkout.Session,
@@ -1474,7 +1478,7 @@ export async function handleRegistrationCheckoutCompleted(
   // event as "processed" while that one entry stays paid-for and unconfirmed
   // forever, with nothing left to retry it.
   for (const regId of regIds) {
-    await confirmPaidRegistration(regId, paymentIntent, null, chargedFeePercent);
+    await confirmPaidRegistration(regId, paymentIntent, chargedFeePercent);
   }
 }
 
@@ -1523,7 +1527,6 @@ type PayOutcome =
 async function confirmPaidRegistration(
   regId: string,
   paymentIntentId: string | null,
-  amountTotal: number | null,
   chargedFeePercent: number | null = null,
 ): Promise<void> {
   const outcome = (await sql.begin(async (tx) => {
@@ -1569,7 +1572,6 @@ async function confirmPaidRegistration(
     await tx`
       update registrations
       set status = 'paid',
-          amount_cents = coalesce(${amountTotal}, amount_cents),
           updated_at = now()
       where id = ${regId}`;
     // payment_intent_id lives on the cart now (V364).
@@ -1608,7 +1610,7 @@ async function confirmPaidRegistration(
     if (approvalRow?.approval === "manual") {
       await audit(tx, div.competition_id, reg.org_id, "registration.paid_awaiting_approval", {
         registration_id: regId,
-        amount_cents: amountTotal ?? reg.amount_cents,
+        amount_cents: reg.amount_cents,
       }, null);
       return {
         kind: "paid_awaiting_approval",
@@ -1625,7 +1627,7 @@ async function confirmPaidRegistration(
       registration_id: regId,
       entrant_id: entrantId,
       paid: true,
-      amount_cents: amountTotal ?? reg.amount_cents,
+      amount_cents: reg.amount_cents,
     }, null);
     return {
       kind: "confirmed",
@@ -1681,7 +1683,7 @@ async function confirmPaidRegistration(
     // cart's whole remaining balance — a sibling entry's money must never
     // move on a late/duplicate refund for this one (block comment above
     // RegistrationWithGroupRow, hazard 1).
-    const entryRefundCents = amountTotal ?? outcome.reg.amount_cents;
+    const entryRefundCents = outcome.reg.amount_cents;
     // Webhook redelivery guard (review fixup): Stripe delivers "at least
     // once", so the SAME stale checkout session can complete more than once
     // for a withdrawn/expired registration. withdrawCore avoids a double
@@ -1717,12 +1719,12 @@ async function confirmPaidRegistration(
     }
     await audit(sql, outcome.competitionId, outcome.reg.org_id, "registration.refunded", {
       registration_id: regId,
-      amount_cents: amountTotal ?? outcome.reg.amount_cents,
+      amount_cents: outcome.reg.amount_cents,
       mode: outcome.kind === "late" ? "late_payment" : "duplicate",
       stripe_refund_id: refund.id,
     }, null);
     const ctxLate = await divisionCtx(sql, outcome.reg.division_id);
-    notifyRefund(outcome.reg, ctxLate, amountTotal ?? outcome.reg.amount_cents);
+    notifyRefund(outcome.reg, ctxLate, outcome.reg.amount_cents);
   } catch {
     await audit(sql, outcome.competitionId, outcome.reg.org_id, "registration.refund_failed", {
       registration_id: regId,
