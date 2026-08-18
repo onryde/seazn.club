@@ -1,5 +1,12 @@
 import { test, expect } from "@playwright/test";
-import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, type OrgInfo } from "./helpers";
+import {
+  TAG,
+  apiJson,
+  addEntrantsViaApi,
+  createStageAndGenerate,
+  seedVenueWithCourts,
+  type OrgInfo,
+} from "./helpers";
 
 // F4/P2 (wave B): a subscribed calendar is a surface an organiser hands out
 // to other people, so the day-one final has to be IN it, served as real
@@ -101,4 +108,94 @@ test("the public .ics carries an unscheduled final as a tentative all-day event"
   // calendar update the same event in place once the fixture is scheduled,
   // rather than duplicating it.
   expect(body).toContain(`UID:${final!.id}@seazn.club`);
+});
+
+// P9 review wave 2, finding #5 — the widest-reaching defect in either review
+// pass, and the one with NO end-to-end coverage until now.
+//
+// `applySchedule` wrote `court_id` but left `venue_id = coalesce(<absent>,
+// venue_id)`, and no client sends `venue_id`. Since the cutover every
+// player-facing venue string derives from `fixtures.venue_id`, so a scheduled
+// fixture carried NO venue: the .ics lost its LOCATION line entirely, and /me,
+// /my-matches and the public fixture page showed nothing. A unit test on the
+// column proves the write; only this proves the bytes a subscriber's calendar
+// actually receives.
+//
+// Deliberately over HTTP against the real route, for the same reason the case
+// above is: a calendar is a surface an organiser hands to other people.
+test("the public .ics carries the venue and court a fixture was scheduled onto", async ({
+  request,
+}) => {
+  const { courts, venueId } = await seedVenueWithCourts(request, ["Centre Court"], {
+    venueName: `ICS Venue ${TAG}`,
+  });
+  expect(venueId, "seeded a real venue").toBeTruthy();
+
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Cal Venue ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+    visibility: "public",
+  });
+  const compId = comp.data!.id;
+  const div = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${compId}/divisions`,
+    "POST",
+    {
+      name: "League",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  const divisionId = div.data!.id;
+
+  await addEntrantsViaApi(request, divisionId, ["A", "B"]);
+  const { stageId, fixtureIds } = await createStageAndGenerate(request, divisionId, {
+    kind: "league",
+    name: "League",
+  });
+  expect(fixtureIds.length).toBeGreaterThan(0);
+
+  // Schedule through the SAME apply path the board uses. Note it sends
+  // `court_id` ONLY — exactly like every real client, which is what made the
+  // old coalesce leave `venue_id` null.
+  const applied = await apiJson(request, `/api/v1/stages/${stageId}/schedule/apply`, "POST", {
+    assignments: [
+      {
+        fixture_id: fixtureIds[0]!,
+        scheduled_at: "2030-06-01T09:00:00.000Z",
+        court_id: courts[0]!.id,
+      },
+    ],
+  });
+  expect(applied.status, "apply the schedule").toBeLessThan(300);
+
+  await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST", {});
+
+  const compData = await apiJson<{ org_id: string; slug: string }>(
+    request,
+    `/api/v1/competitions/${compId}`,
+  );
+  const divData = await apiJson<{ slug: string }>(request, `/api/v1/divisions/${divisionId}`);
+  const orgs = await apiJson<OrgInfo[]>(request, "/api/orgs");
+  const orgSlug = orgs.data!.find((o) => o.id === compData.data!.org_id)?.slug;
+
+  const res = await request.get(
+    `/shared/${orgSlug}/${compData.data!.slug}/${divData.data!.slug}/calendar.ics`,
+  );
+  expect(res.status()).toBe(200);
+  const body = await res.text();
+
+  // The venue reaches the subscriber. Anchored on the LOCATION line itself,
+  // not merely on the venue name appearing anywhere in the payload — the
+  // name also occurs nowhere else here, but an unanchored check would start
+  // passing the day it does.
+  expect(body, "no LOCATION line at all — this is exactly what finding #5 caused").toMatch(
+    /LOCATION:.*ICS Venue/,
+  );
+  // …and the court rides with it.
+  expect(body).toMatch(/LOCATION:.*Centre Court/);
+  // Never the raw identity.
+  expect(body).not.toMatch(/LOCATION:.*[0-9a-f]{8}-[0-9a-f]{4}-/i);
 });
