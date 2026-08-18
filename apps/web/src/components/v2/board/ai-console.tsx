@@ -799,7 +799,12 @@ export function AiConsole({
           scheduleAssignments: plan.proposal.map((p) => ({
             fixture_id: p.fixture_id,
             scheduled_at: p.scheduled_at,
-            court_label: p.court_label,
+            // P9 pass 3b: the wire KEY is `court_id` on the apply route
+            // (`ApplyScheduleRequest`'s `.strict()` item, schemas.ts) —
+            // `p.court_label` is still the AI plan response's OWN field
+            // name (schemas.ts's `AiPlanResponse`, unconverted by design),
+            // and it already carries a real `courts.id` value.
+            court_id: p.court_label,
             stage_id: stageOf.get(p.fixture_id) ?? "",
           })),
           scheduleAudit,

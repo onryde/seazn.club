@@ -37,11 +37,15 @@ export function aiCheckpointLabel(at: Date = new Date()): string {
 }
 
 /** One proposed placement, tagged with its stage (the apply route is
- *  stage-scoped and rejects cross-stage fixtures). */
+ *  stage-scoped and rejects cross-stage fixtures).
+ *
+ *  P9 pass 3b: `court_id` — the apply route's own `ApplyScheduleRequest`
+ *  item is `.strict()` and requires `court_id` (schemas.ts), so a payload
+ *  still keyed `court_label` 400s outright rather than silently applying. */
 export interface ScheduleAssignmentInput {
   fixture_id: string;
   scheduled_at: string;
-  court_label: string;
+  court_id: string;
   stage_id: string;
 }
 
@@ -214,7 +218,7 @@ export async function applyAiPlans(input: ApplyAiInput, api: ApplyApi = apiV1): 
           assignments: group.map((a) => ({
             fixture_id: a.fixture_id,
             scheduled_at: a.scheduled_at,
-            court_label: a.court_label,
+            court_id: a.court_id,
           })),
           source: "ai",
           expected_seq: seq,
