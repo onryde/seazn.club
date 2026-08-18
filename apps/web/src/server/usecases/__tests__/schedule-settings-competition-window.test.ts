@@ -27,6 +27,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { putScheduleSettings } from "../schedule";
+import { seedCourts } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -37,14 +38,19 @@ const DIVISION_CONFIG = {
   progressScore: false,
 };
 
-const BASE = {
-  matchMinutes: 30,
-  gapMinutes: 0,
-  courts: ["Court 1"],
-  perEntrantMinRest: 0,
-  blackouts: [],
-  sessionWindows: [],
-};
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` — real `courts.id`
+// values, seeded per org (`seedCourts`, below) since a court belongs to one
+// org's venue and cannot be shared across the fresh org each test creates.
+function makeBase(courts: string[]) {
+  return {
+    matchMinutes: 30,
+    gapMinutes: 0,
+    courts,
+    perEntrantMinRest: 0,
+    blackouts: [],
+    sessionWindows: [],
+  };
+}
 
 const COMP_FROM = "2026-08-10";
 const COMP_TO = "2026-08-20";
@@ -108,8 +114,8 @@ async function seedDivision(
   return division.id;
 }
 
-const put = (auth: AuthCtx, divisionId: string, config: Record<string, unknown>) =>
-  putScheduleSettings(auth, divisionId, { config: { ...BASE, ...config } as never });
+const put = (auth: AuthCtx, divisionId: string, courts: string[], config: Record<string, unknown>) =>
+  putScheduleSettings(auth, divisionId, { config: { ...makeBase(courts), ...config } as never });
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -122,8 +128,9 @@ afterAll(async () => {
 describe.skipIf(!HAS_DB)("a division's window must sit inside its competition", () => {
   it("accepts a range wholly inside the competition dates", async () => {
     const auth = await seedOrg("Europe/London");
+    const courts = await seedCourts(auth.orgId, 2);
     const divisionId = await seedDivision(auth, { starts_on: COMP_FROM, ends_on: COMP_TO });
-    const saved = await put(auth, divisionId, {
+    const saved = await put(auth, divisionId, courts, {
       startAt: "2026-08-12T09:00:00.000Z",
       endAt: "2026-08-15T22:59:00.000Z",
     });
@@ -132,28 +139,31 @@ describe.skipIf(!HAS_DB)("a division's window must sit inside its competition", 
 
   it("refuses a start before the competition opens, and says which date", async () => {
     const auth = await seedOrg("Europe/London");
+    const courts = await seedCourts(auth.orgId, 2);
     const divisionId = await seedDivision(auth, { starts_on: COMP_FROM, ends_on: COMP_TO });
     await expect(
-      put(auth, divisionId, { startAt: "2026-08-01T09:00:00.000Z", endAt: "2026-08-15T22:59:00.000Z" }),
+      put(auth, divisionId, courts, { startAt: "2026-08-01T09:00:00.000Z", endAt: "2026-08-15T22:59:00.000Z" }),
     ).rejects.toMatchObject({ status: 422 });
     await expect(
-      put(auth, divisionId, { startAt: "2026-08-01T09:00:00.000Z", endAt: "2026-08-15T22:59:00.000Z" }),
+      put(auth, divisionId, courts, { startAt: "2026-08-01T09:00:00.000Z", endAt: "2026-08-15T22:59:00.000Z" }),
     ).rejects.toThrow(new RegExp(`starts before the competition opens on ${COMP_FROM}`));
   });
 
   it("refuses an end after the competition closes, and says which date", async () => {
     const auth = await seedOrg("Europe/London");
+    const courts = await seedCourts(auth.orgId, 2);
     const divisionId = await seedDivision(auth, { starts_on: COMP_FROM, ends_on: COMP_TO });
     await expect(
-      put(auth, divisionId, { startAt: "2026-08-12T09:00:00.000Z", endAt: "2026-08-25T22:59:00.000Z" }),
+      put(auth, divisionId, courts, { startAt: "2026-08-12T09:00:00.000Z", endAt: "2026-08-25T22:59:00.000Z" }),
     ).rejects.toThrow(new RegExp(`ends after the competition closes on ${COMP_TO}`));
   });
 
   it("reports BOTH ends when both are outside, not just the first", async () => {
     const auth = await seedOrg("Europe/London");
+    const courts = await seedCourts(auth.orgId, 2);
     const divisionId = await seedDivision(auth, { starts_on: COMP_FROM, ends_on: COMP_TO });
     await expect(
-      put(auth, divisionId, { startAt: "2026-08-01T09:00:00.000Z", endAt: "2026-08-25T22:59:00.000Z" }),
+      put(auth, divisionId, courts, { startAt: "2026-08-01T09:00:00.000Z", endAt: "2026-08-25T22:59:00.000Z" }),
     ).rejects.toThrow(/starts before .* and ends after /);
   });
 
@@ -166,9 +176,10 @@ describe.skipIf(!HAS_DB)("a division's window must sit inside its competition", 
   // which is why they are asserted here and not only there.
   it("carries the SCHEDULE_OUTSIDE_COMPETITION code and which bound was crossed", async () => {
     const auth = await seedOrg("Europe/London");
+    const courts = await seedCourts(auth.orgId, 2);
     const divisionId = await seedDivision(auth, { starts_on: COMP_FROM, ends_on: COMP_TO });
     await expect(
-      put(auth, divisionId, { startAt: "2026-08-01T09:00:00.000Z", endAt: "2026-08-15T22:59:00.000Z" }),
+      put(auth, divisionId, courts, { startAt: "2026-08-01T09:00:00.000Z", endAt: "2026-08-15T22:59:00.000Z" }),
     ).rejects.toMatchObject({
       status: 422,
       code: "SCHEDULE_OUTSIDE_COMPETITION",
@@ -183,19 +194,21 @@ describe.skipIf(!HAS_DB)("a division's window must sit inside its competition", 
 
   it("marks endsAfter alone when only the end overhangs, and both when both do", async () => {
     const auth = await seedOrg("Europe/London");
+    const courts = await seedCourts(auth.orgId, 2);
     const divisionId = await seedDivision(auth, { starts_on: COMP_FROM, ends_on: COMP_TO });
     await expect(
-      put(auth, divisionId, { startAt: "2026-08-12T09:00:00.000Z", endAt: "2026-08-25T22:59:00.000Z" }),
+      put(auth, divisionId, courts, { startAt: "2026-08-12T09:00:00.000Z", endAt: "2026-08-25T22:59:00.000Z" }),
     ).rejects.toMatchObject({ extra: { startsBefore: false, endsAfter: true } });
     await expect(
-      put(auth, divisionId, { startAt: "2026-08-01T09:00:00.000Z", endAt: "2026-08-25T22:59:00.000Z" }),
+      put(auth, divisionId, courts, { startAt: "2026-08-01T09:00:00.000Z", endAt: "2026-08-25T22:59:00.000Z" }),
     ).rejects.toMatchObject({ extra: { startsBefore: true, endsAfter: true } });
   });
 
   it("applies no containment when the competition carries no dates", async () => {
     const auth = await seedOrg("Europe/London");
+    const courts = await seedCourts(auth.orgId, 2);
     const divisionId = await seedDivision(auth, {});
-    const saved = await put(auth, divisionId, {
+    const saved = await put(auth, divisionId, courts, {
       startAt: "2020-01-01T09:00:00.000Z",
       endAt: "2031-12-31T22:59:00.000Z",
     });
@@ -210,10 +223,11 @@ describe.skipIf(!HAS_DB)("a division's window must sit inside its competition", 
   // wrong by a whole day for every venue east of Greenwich.
   it("resolves the bound on the ORG clock, not in UTC", async () => {
     const auth = await seedOrg("Pacific/Auckland");
+    const courts = await seedCourts(auth.orgId, 2);
     const divisionId = await seedDivision(auth, { starts_on: COMP_FROM, ends_on: COMP_TO });
 
     const insideLocally = "2026-08-09T13:00:00.000Z"; // 2026-08-10 01:00 NZST
-    const saved = await put(auth, divisionId, {
+    const saved = await put(auth, divisionId, courts, {
       startAt: insideLocally,
       endAt: "2026-08-15T11:59:00.000Z",
     });
@@ -225,55 +239,62 @@ describe.skipIf(!HAS_DB)("a division's window must sit inside its competition", 
     // must still be refused. Without this the test would pass against a guard
     // that had simply stopped checking.
     await expect(
-      put(auth, divisionId, { startAt: "2026-08-09T11:00:00.000Z", endAt: "2026-08-15T11:59:00.000Z" }),
+      put(auth, divisionId, courts, { startAt: "2026-08-09T11:00:00.000Z", endAt: "2026-08-15T11:59:00.000Z" }),
     ).rejects.toMatchObject({ status: 422 });
   });
 
   describe("divisions already stored outside their competition stay editable", () => {
-    const OUTSIDE = {
-      ...BASE,
+    const outsideOf = (courts: string[]) => ({
+      ...makeBase(courts),
       startAt: "2026-01-01T09:00:00.000Z",
       endAt: "2026-01-05T22:59:00.000Z",
-    };
+    });
 
     it("accepts a save that leaves the offending range untouched", async () => {
       const auth = await seedOrg("Europe/London");
+      const courts = await seedCourts(auth.orgId, 2);
+      const outside = outsideOf(courts);
       const divisionId = await seedDivision(
         auth,
         { starts_on: COMP_FROM, ends_on: COMP_TO },
-        OUTSIDE,
+        outside,
       );
       // Same dates, different courts — the organiser fixing something unrelated.
+      const newCourts = await seedCourts(auth.orgId, 2);
       const saved = await putScheduleSettings(auth, divisionId, {
-        config: { ...OUTSIDE, courts: ["Court 1", "Court 2"] } as never,
+        config: { ...outside, courts: newCourts } as never,
       });
-      expect(saved.config.courts).toEqual(["Court 1", "Court 2"]);
+      expect(saved.config.courts).toEqual(newCourts);
     });
 
     it("still refuses a save that MOVES the range and is outside", async () => {
       const auth = await seedOrg("Europe/London");
+      const courts = await seedCourts(auth.orgId, 2);
+      const outside = outsideOf(courts);
       const divisionId = await seedDivision(
         auth,
         { starts_on: COMP_FROM, ends_on: COMP_TO },
-        OUTSIDE,
+        outside,
       );
       await expect(
         putScheduleSettings(auth, divisionId, {
-          config: { ...OUTSIDE, startAt: "2026-02-01T09:00:00.000Z" } as never,
+          config: { ...outside, startAt: "2026-02-01T09:00:00.000Z" } as never,
         }),
       ).rejects.toMatchObject({ status: 422 });
     });
 
     it("lets the organiser move an outside range back INSIDE", async () => {
       const auth = await seedOrg("Europe/London");
+      const courts = await seedCourts(auth.orgId, 2);
+      const outside = outsideOf(courts);
       const divisionId = await seedDivision(
         auth,
         { starts_on: COMP_FROM, ends_on: COMP_TO },
-        OUTSIDE,
+        outside,
       );
       const saved = await putScheduleSettings(auth, divisionId, {
         config: {
-          ...OUTSIDE,
+          ...outside,
           startAt: "2026-08-12T09:00:00.000Z",
           endAt: "2026-08-15T22:59:00.000Z",
         } as never,
