@@ -1919,6 +1919,33 @@ git commit -m "db(F2): drop stages.qualification/seeding, add stages.progression
 > dropped columns) in a way this session was explicitly told not to attempt
 > to stand up.
 >
+> ### A FOURTH wave: four e2e specs, found by Task 5b's sweep
+>
+> Recorded 2026-08-18. `apps/web/e2e/` still carries 21 references to the old
+> fields across four specs, and **e2e is LIVE on pull requests**, so F2's PR
+> reds here until they are converted:
+>
+> - `mobile.spec.ts` (12 refs, incl. :1470, :1609)
+> - `stage-progression.spec.ts` (5 refs, incl. :60)
+> - `formats.spec.ts` (3 refs, :73, :82)
+> - `division-settings.spec.ts` (1 ref, :94)
+>
+> These need a running server to verify, so they are blocked behind Task 6's
+> `stages.ts` fix like everything else live. Treat them as the LAST piece of
+> F2, not an optional follow-up — merging F2 with them unconverted means
+> merging a red PR.
+>
+> **Count the waves, because the lesson is in the sequence.** The unowned work
+> was found in four passes: two files (Task 3), then five more (the Tasks 1-4
+> review), then three scripts (Task 5a's `.strict()` sweep), then four e2e
+> specs (Task 5b's sweep). Each sweep was scoped to what the previous author
+> was touching — components, then usecases, then scripts, then specs — and
+> each one found files the last had no reason to look at. The plan's original
+> file lists were not merely incomplete; they were incomplete in a way that
+> only a differently-scoped sweep could reveal. Any future field rename in
+> this repo should start by grepping ALL of `apps/web/src`, `scripts/`,
+> `apps/web/e2e/` and `db/` in one pass, before writing any task list.
+>
 > ### Two facts about the tests themselves, learned the hard way
 >
 > **The component tests CANNOT catch the `CreateStage` silent-drop bug.** All
