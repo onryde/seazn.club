@@ -6,7 +6,7 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { PatchFixture, PutLineup, ScheduleConflict } from "@/server/api-v1/schemas";
-import { BOARD_FIXTURE_COLS, type FixtureRow } from "./stages";
+import { BOARD_FIXTURE_COLS, type BoardFixtureRow, type FixtureRow } from "./stages";
 import { moveFixture } from "./schedule";
 import { scoresViaAssignment } from "./scorers";
 
@@ -77,24 +77,24 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
 export async function listDivisionFixturesForBoard(
   auth: AuthCtx,
   divisionId: string,
-): Promise<FixtureRow[]> {
+): Promise<BoardFixtureRow[]> {
   return withTenant(auth.orgId, async (tx) => {
     const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
-    // P9: written out rather than `tx(BOARD_FIXTURE_COLS)` because the derived
-    // court/venue NAMES need joins, and an unqualified column list goes
-    // ambiguous the moment `courts`/`venues` (which also have `id`,
-    // `created_at`) are joined. BOARD_FIXTURE_COLS stays the projection
-    // contract this list is checked against by board-fixture-projection.test.
-    return tx<FixtureRow[]>`
+    // P9: IDENTITY ONLY. The board resolves a court's display name client-side
+    // from the venues prop (`resolveCourtNames`, which covers every org court
+    // including archived), so shipping `court_name`/`venue_name` on every row
+    // duplicated data the client already holds — and `court_label`/`venue` are
+    // the frozen legacy columns nothing writes. Six court/venue fields per row
+    // across ~330 fixtures is what put this page 33KB over its RSC payload
+    // budget (board-v3.spec.ts:287); the calendar trim before it was the wrong
+    // suspect and saved 583 bytes.
+    return tx<BoardFixtureRow[]>`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
              f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
-             f.scheduled_at, f.venue, f.court_label, f.court_id, crt.name as court_name,
-             f.venue_id, ven.name as venue_name,
+             f.scheduled_at, f.court_id, f.venue_id,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at
       from fixtures f
-      left join courts crt on crt.id = f.court_id
-      left join venues ven on ven.id = f.venue_id
       where f.division_id = ${divisionId}
       order by f.stage_id, f.round_no, f.seq_in_round`;
   });

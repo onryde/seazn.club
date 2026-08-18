@@ -132,6 +132,13 @@ export const FIXTURE_COLS = [
  *  its capacity precheck; this restores that invariant rather than
  *  breaking new ground. Same as FIXTURE_COLS minus those five columns —
  *  keep the two in sync by hand if FIXTURE_COLS's other columns change. */
+/** P9: what the BOARD actually receives — identity, no derived names and no
+ *  frozen legacy text. The board resolves display names client-side from the
+ *  venues prop; sending them per row duplicated ~330 rows' worth of bytes.
+ *  Distinct from `FixtureRow` (GET/PATCH /fixtures/{id}), which DOES carry the
+ *  derived names because its consumers have no venue list to resolve from. */
+export type BoardFixtureRow = Omit<FixtureRow, "venue" | "court_label" | "court_name" | "venue_name">;
+
 export const BOARD_FIXTURE_COLS = [
   "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "fixture_no",
   "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label",

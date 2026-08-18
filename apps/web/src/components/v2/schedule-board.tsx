@@ -275,9 +275,10 @@ export function consoleFixtures(
       // which are absent from the proposal it used to be read from.
       division_id: f.division_id,
       scheduled_at: f.scheduled_at ? new Date(f.scheduled_at).toISOString() : null,
-      court_label: f.court_label,
-      // P9 pass 4a: additive — the real identity, alongside the frozen label
-      // above (kept as-is; ai-diff.ts's wire shapes are a separate follow-up).
+      // P9: the frozen label is no longer sent to the board, so this carries
+      // whatever a non-board caller happened to include (usually nothing).
+      // `court_id` below is the identity every consumer actually keys on.
+      court_label: f.court_label ?? null,
       court_id: f.court_id,
       // P7/F1: was a hand-built `R${...}·${...}` template — now the SAME
       // matchRef() the feed label's {ext} substitution calls (slot-label.ts),

@@ -40,8 +40,14 @@ export interface BoardFixture {
   away_slot_label?: SlotLabel | null;
   /** ISO string over the wire, Date when it crosses straight from an RSC. */
   scheduled_at: string | Date | null;
-  venue: string | null;
-  court_label: string | null;
+  /** LEGACY and OPTIONAL. Frozen since the P9 cutover — nothing writes them,
+   *  and the board query stopped SENDING them (identity only; six court/venue
+   *  fields per row is what blew the RSC payload budget). Kept on the type,
+   *  optional, because non-board callers still pass richer rows and
+   *  `courtDisplayName` keeps them as a last-resort fallback for a
+   *  pre-cutover fixture whose court string never mapped to a real court. */
+  venue?: string | null;
+  court_label?: string | null;
   /** P9 pass 4a: the fixture's REAL court identity — `court_label` above is
    *  frozen legacy (null for anything scheduled since the cutover). Every
    *  column/scope/swap comparison must key on this, never on `court_label`.
@@ -50,7 +56,9 @@ export interface BoardFixture {
   /** DERIVED display name for `court_id` — never render `court_id` itself
    *  (a raw uuid) to an organiser. Falls back to `court_label` at the render
    *  site while no lookup populates this (purely additive; see court_id). */
-  court_name: string | null;
+  /** OPTIONAL: the board resolves this client-side from the venues prop
+   *  (`resolveCourtNames`), so the server no longer ships it per row. */
+  court_name?: string | null;
   status: string;
   schedule_source: string;
   schedule_locked: boolean;
