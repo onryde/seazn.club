@@ -1371,9 +1371,10 @@ async function createRegistrationCheckout(
  * itself (registration-submit.ts, RS002) stays payment-agnostic — it never
  * imports Stripe. Re-reads `payment_method` and the payable entry ids
  * straight from the DB rather than trusting the caller's copy of
- * `SubmitGroupResult` (which carries no `payment_method` field by design —
- * see its own doc comment): this keeps "should this mint, and for which
- * entries" logic in exactly one place. Returns null, never throws, for a
+ * `SubmitGroupResult` (which has no `payment_method` field at all — it
+ * predates this session, when the submit path had no Stripe concern to
+ * expose): this keeps "should this mint, and for which entries" logic in
+ * exactly one place. Returns null, never throws, for a
  * zero-payable or non-stripe cart (owner ruling 5: an all-waitlisted,
  * all-free, or offline-payment-method group mints nothing) — it only
  * throws for a genuine failure (Connect not live, currency gone stale, a
