@@ -99,7 +99,6 @@ describe.skipIf(!HAS_DB)(
         kind: "group",
         name: "Group stage",
         config: { pools: { count: 4 } },
-        qualification: null,
       });
 
       await expect(generateStageFixtures(auth, stage!.id)).rejects.toMatchObject({
@@ -132,7 +131,6 @@ describe.skipIf(!HAS_DB)(
         kind: "group",
         name: "Group stage",
         config: { pools: { count: 4 } },
-        qualification: null,
       });
 
       const { created } = await generateStageFixtures(auth, stage!.id);
@@ -180,7 +178,7 @@ describe.skipIf(!HAS_DB)(
       const { auth } = await seedOrg();
       const division = await seedStagedDivision(auth);
       const stages = await createStages(auth, division.id, [
-        { seq: 1, kind: "league", name: "Source", config: {}, qualification: null },
+        { seq: 1, kind: "league", name: "Source", config: {} },
         {
           seq: 2,
           kind: "group",
@@ -191,8 +189,11 @@ describe.skipIf(!HAS_DB)(
           // (C and D DO produce fixtures) — the exact partial-fill case a
           // naive `gen.length === 0` check would miss.
           config: { pools: { count: 4 } },
-          qualification: null,
-          seeding: { source: "previous", take: [{ kind: "rankRange", from: 1, to: 6 }], placement: "rank_order" },
+          progression: {
+            sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 6 }] }],
+            placement: "rank_order",
+            timing: "setup",
+          },
         },
       ]);
       const target = stages.find((s) => s.seq === 2)!;
@@ -231,14 +232,17 @@ describe.skipIf(!HAS_DB)(
       const { auth } = await seedOrg();
       const division = await seedStagedDivision(auth);
       const stages = await createStages(auth, division.id, [
-        { seq: 1, kind: "league", name: "Source", config: {}, qualification: null },
+        { seq: 1, kind: "league", name: "Source", config: {} },
         {
           seq: 2,
           kind: "group",
           name: "Groups",
           config: { pools: { count: 4 } },
-          qualification: null,
-          seeding: { source: "previous", take: [{ kind: "rankRange", from: 1, to: 8 }], placement: "rank_order" },
+          progression: {
+            sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 8 }] }],
+            placement: "rank_order",
+            timing: "setup",
+          },
         },
       ]);
       const target = stages.find((s) => s.seq === 2)!;

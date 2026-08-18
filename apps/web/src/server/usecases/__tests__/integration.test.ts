@@ -134,7 +134,12 @@ describe.skipIf(!HAS_DB)("/api/v1 service layer", () => {
     expect(divisionStatus).toBe("completed");
     // Adding a follow-up stage reopens it.
     const [finals] = await createStages(auth, division.id, {
-      seq: 2, kind: "knockout", name: "Finals", config: {}, qualification: { topN: 2 },
+      seq: 2, kind: "knockout", name: "Finals", config: {},
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+        placement: "rank_order",
+        timing: "on_complete",
+      },
     });
     const [{ status: reopened }] = await sql<{ status: string }[]>`
       select status from divisions where id = ${division.id}`;
@@ -267,10 +272,17 @@ describe.skipIf(!HAS_DB)("/api/v1 service layer", () => {
       { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
       {
         seq: 2, kind: "knockout", name: "KO", config: {},
-        qualification: { take: [
-          { pool: "A", rank: 1 }, { pool: "B", rank: 2 },
-          { pool: "B", rank: 1 }, { pool: "A", rank: 2 },
-        ] },
+        progression: {
+          sources: [{
+            stage: "previous",
+            take: [{ kind: "picks", picks: [
+              { pool: "A", rank: 1 }, { pool: "B", rank: 2 },
+              { pool: "B", rank: 1 }, { pool: "A", rank: 2 },
+            ] }],
+          }],
+          placement: "rank_order",
+          timing: "on_complete",
+        },
       },
     ]);
     const [groups, knockout] = stages;
@@ -393,7 +405,14 @@ describe.skipIf(!HAS_DB)("/api/v1 service layer", () => {
     ]);
     const [league, finals] = await createStages(auth, division.id, [
       { seq: 1, kind: "league", name: "League", config: {} },
-      { seq: 2, kind: "knockout", name: "Finals", config: {}, qualification: { topN: 2 } },
+      {
+        seq: 2, kind: "knockout", name: "Finals", config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+          placement: "rank_order",
+          timing: "on_complete",
+        },
+      },
     ]);
 
     // Not the last stage → refused; the graph would lose its middle.

@@ -87,11 +87,11 @@ async function setupGroupsToKnockout(
       kind: "knockout",
       name: "KO",
       config: {},
-      seeding: {
-        source: "previous",
-        take: [{ kind: "topNPerGroup", n: 2 }],
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }],
         placement,
         ...(map ? { map } : {}),
+        timing: "setup",
       },
     },
   ]);
@@ -370,7 +370,11 @@ describe.skipIf(!HAS_DB)("D4a/P5 — confirm validation (double-assignment, fore
         kind: "knockout",
         name: "KO",
         config: {},
-        seeding: { source: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }], placement: "rank_order" },
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
       },
     ]);
     const league = stages.find((s) => s.kind === "league")!;
@@ -450,7 +454,11 @@ async function setupGroupsToKnockoutWithBye(): Promise<Setup> {
       kind: "knockout",
       name: "KO",
       config: {},
-      seeding: { source: "previous", take: [{ kind: "topNPerGroup", n: 1 }], placement: "rank_order" },
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] }],
+        placement: "rank_order",
+        timing: "setup",
+      },
     },
   ]);
   const groupStage = stages.find((s) => s.kind === "group")!;
@@ -656,7 +664,11 @@ describe.skipIf(!HAS_DB)("D4a/P5 — standings override marks a draft stale", ()
         kind: "knockout",
         name: "KO",
         config: {},
-        seeding: { source: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }], placement: "rank_order" },
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
       },
     ]);
     const league = stages.find((s) => s.kind === "league")!;

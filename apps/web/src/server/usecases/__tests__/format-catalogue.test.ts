@@ -13,8 +13,17 @@ describe("previewDivisionFixtures — bye label (F1 Task 5)", () => {
     // two, so buildSingleElim pads to 8 slots and awards 2 byes in round 0.
     const phases = previewDivisionFixtures(
       [
-        { kind: "league", name: "League", config: {}, qualification: null },
-        { kind: "knockout", name: "KO", config: {}, qualification: { topN: 6 } },
+        { kind: "league", name: "League", config: {}, progression: null },
+        {
+          kind: "knockout",
+          name: "KO",
+          config: {},
+          progression: {
+            sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 6 }] }],
+            placement: "rank_order",
+            timing: "on_complete",
+          },
+        },
       ],
       12,
     );
@@ -26,8 +35,17 @@ describe("previewDivisionFixtures — bye label (F1 Task 5)", () => {
   it("never renders a bye's real side as Bye (only the phantom opponent)", () => {
     const phases = previewDivisionFixtures(
       [
-        { kind: "league", name: "League", config: {}, qualification: null },
-        { kind: "knockout", name: "KO", config: {}, qualification: { topN: 6 } },
+        { kind: "league", name: "League", config: {}, progression: null },
+        {
+          kind: "knockout",
+          name: "KO",
+          config: {},
+          progression: {
+            sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 6 }] }],
+            placement: "rank_order",
+            timing: "on_complete",
+          },
+        },
       ],
       12,
     );
