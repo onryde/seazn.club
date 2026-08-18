@@ -8,6 +8,7 @@ import {
   loginUi,
   TAG,
   divisionPath,
+  seedVenueWithCourts,
 } from "./helpers";
 
 // v11.1 follow-up: officials roster management (add / invite / bulk-invite)
@@ -186,13 +187,17 @@ test.describe.serial("officiating: accept, score, and access boundaries", () => 
     fixtureA = fixtureIds[0]!;
     fixtureB = fixtureIds[1]!;
 
-    // Future kickoffs with distinct court labels — the /me assignment cards
-    // are otherwise indistinguishable (same entrant pool on every fixture).
+    // Future kickoffs with distinct courts — the /me assignment cards are
+    // otherwise indistinguishable (same entrant pool on every fixture).
+    const { courts } = await seedVenueWithCourts(
+      request,
+      fixtureIds.map((_, i) => `Court ${i + 1}`),
+    );
     const base = Date.now() + 7 * 86_400_000;
     for (let i = 0; i < fixtureIds.length; i++) {
       await apiJson(request, `/api/v1/fixtures/${fixtureIds[i]}`, "PATCH", {
         scheduled_at: new Date(base + i * 3_600_000).toISOString(),
-        court_label: `Court ${i + 1}`,
+        court_id: courts[i]!.id,
       });
     }
     await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
