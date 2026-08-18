@@ -1006,6 +1006,7 @@ export type DictionaryKey =
   | "breadcrumb.registrations"
   | "breadcrumb.schedule"
   | "breadcrumb.settings"
+  | "calendar.time_tbc"
   | "card.actions"
   | "card.empty.competitions"
   | "card.empty.competitions.cta"
