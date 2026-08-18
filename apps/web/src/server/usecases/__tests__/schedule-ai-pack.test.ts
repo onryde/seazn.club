@@ -89,6 +89,15 @@ async function courtId(auth: AuthCtx, name: string): Promise<string> {
   return court.id;
 }
 
+/** A raw insert, deliberately NOT `courtId()`'s cache: the determinism
+ *  regression below (`seedCourtTieBoard`) needs the court's raw id under
+ *  caller control, the same way `uuidLeading` already forces fixture ids —
+ *  `createCourt` always lets Postgres mint `id`, with no override. */
+async function insertCourt(auth: AuthCtx, venueId: string, id: string, name: string): Promise<void> {
+  await sql`insert into courts (id, venue_id, org_id, name, sort, tags)
+            values (${id}, ${venueId}, ${auth.orgId}, ${name}, 0, '{}')`;
+}
+
 // UUIDs are random per seed run; redact them to stable, first-seen placeholders
 // so the structural snapshot survives re-seeding while ordering stays asserted.
 //
@@ -573,6 +582,44 @@ async function seedSmallBracket(fixtureIds?: {
 }
 
 /**
+ * P9 regression (`byAssignment`'s court tie-break). Two movable fixtures at
+ * the SAME `scheduled_at`, on two different courts whose raw ids are forced
+ * to sort OPPOSITE the fixtures' own board order (round_no, seq_in_round):
+ * `first` (round 1, seq 0) sits on the LEXICALLY-LARGER court id, `second`
+ * (round 1, seq 1) on the smaller one. A `pack.draft` comparator that
+ * (re-)falls back to the court id/label therefore emits [second, first] —
+ * deterministically wrong, rather than the 50/50 coin flip a same-instant
+ * collision would otherwise be, since which of two random per-seed court
+ * UUIDs sorts first is itself a coin flip across reseeds.
+ */
+async function seedCourtTieBoard(): Promise<{
+  auth: AuthCtx;
+  divisionId: string;
+  first: string;
+  second: string;
+}> {
+  const { auth, divisionId, stageId } = await seedKoDivision("CourtTie");
+  const venue = await createVenue(auth, { name: "Tie venue", sort: 0 });
+  const courtHi = uuidLeading("f");
+  const courtLo = uuidLeading("0");
+  await insertCourt(auth, venue.id, courtHi, "Hi Court");
+  await insertCourt(auth, venue.id, courtLo, "Lo Court");
+  await setSettings(divisionId, courtHi, courtLo);
+  const at = new Date(T0).toISOString();
+  const first = uuidLeading("a");
+  const second = uuidLeading("b");
+  await sql`
+    insert into fixtures (id, stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
+                          scheduled_at, court_id)
+    values (${first}, ${stageId}, ${divisionId}, ${auth.orgId}, 1, 0, 'first', 'scheduled', ${at}, ${courtHi})`;
+  await sql`
+    insert into fixtures (id, stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
+                          scheduled_at, court_id)
+    values (${second}, ${stageId}, ${divisionId}, ${auth.orgId}, 1, 1, 'second', 'scheduled', ${at}, ${courtLo})`;
+  return { auth, divisionId, first, second };
+}
+
+/**
  * C1 follow-up (2026-08-12, task 2 item 1). The SAME 4-entrant bracket shape
  * as `seedSmallBracket`, but on a stage whose `kind` is actually
  * `"knockout"` — `seedKoDivision` (which `seedSmallBracket` builds on)
@@ -1033,6 +1080,26 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
     // …in the feeders' domain order, not their UUID order.
     expect(finalA.feeds.after).toEqual([a.ids.fixtureIds.semi1, a.ids.fixtureIds.semi2]);
     expect(redact(packA.pack)).toEqual(redact(packB.pack));
+  });
+
+  it("repair draft ties same-instant assignments on board position, not the court id", async () => {
+    // P9: `byAssignment` used to tie-break on `court_label`, which since the
+    // V371 cutover carries the real per-seed court UUID — so two cards
+    // sharing an instant on different courts sorted in coin-flip order
+    // across reseeds. `seedCourtTieBoard` forces the disagreement so the
+    // regression is a deterministic red, not a 50/50 flake: `first` (board
+    // position 0) sits on the LEXICALLY LARGER court id, so a comparator
+    // that (re-)falls back to `cmp(court_label)` emits [second, first].
+    const { auth, divisionId, first, second } = await seedCourtTieBoard();
+    const { pack } = await buildSchedulePack(auth, divisionId, {
+      now: NOW_W2,
+      mode: "repair", instruction: "x",
+    });
+    expect(pack.draft.length).toBe(2);
+    // Same instant, different courts — the premise this test exercises.
+    expect(pack.draft.every((d) => d.scheduled_at === pack.draft[0]!.scheduled_at)).toBe(true);
+    expect(new Set(pack.draft.map((d) => d.court_label)).size).toBe(2);
+    expect(pack.draft.map((d) => d.fixture_id)).toEqual([first, second]);
   });
 
   it("stripped-feeder assumptions order on the board, not on the UUID a null ext_key leaves in the text", async () => {

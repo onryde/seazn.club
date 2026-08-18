@@ -565,17 +565,6 @@ function inScope(f: FixtureLite, scope: BuildPackOptions["scope"]): boolean {
   return true;
 }
 
-// Widened to the draft's row shape (#397): an unplaced draft row carries a null
-// time. Null sorts as "" — ahead of every placed card, as one stable block —
-// so the ordering stays total and the pack stays byte-reproducible.
-function byAssignment(a: PackDraftAssignment, b: PackDraftAssignment): number {
-  return (
-    cmp(a.scheduled_at ?? "", b.scheduled_at ?? "") ||
-    cmp(a.court_label, b.court_label) ||
-    cmp(a.fixture_id, b.fixture_id)
-  );
-}
-
 /** The fields the pack's ONE fixture order reads. `PackFixture` satisfies it;
  *  a `FixtureLite` gets there through {@link boardOrderOf}. */
 interface BoardOrdered {
@@ -593,8 +582,9 @@ const boardOrderOf = (f: FixtureLite): BoardOrdered => ({
 });
 
 /**
- * THE fixture order for the whole pack — `participants` keys, `fixtures.movable`
- * and every `feeds.after` list alike.
+ * THE fixture order for the whole pack — `participants` keys, `fixtures.movable`,
+ * every `feeds.after` list, and (via `byFixtureOrder`, then `byAssignment`'s own
+ * court tie-break) `draft`'s same-instant ordering, alike.
  *
  * It must stay a SINGLE comparator. `participants` serialises before `fixtures`,
  * so its key order is what assigns every fixture-id placeholder in the golden
@@ -873,6 +863,33 @@ export async function buildSchedulePack(
       const b = liteById.get(y);
       if (a === undefined || b === undefined) return cmp(x, y);
       return byBoardOrder(boardOrderOf(a), boardOrderOf(b));
+    };
+
+    // Determinism (defect fix, P9): `draft`'s own same-instant tie-break used
+    // to be `cmp(court_label)`. Pre-cutover, `court_label` was a stable,
+    // organiser-authored string ("Court 1", "Court 2"); since V371,
+    // `PackDraftAssignment.court_label` carries the real court UUID in every
+    // mode (see the three `draft = …` branches below: the solver's own
+    // `a.court`, a prior proposal's `court_label`, or `f.court_id` directly)
+    // — a fresh per-seed random value, so two cards sharing an instant on
+    // different courts sorted in coin-flip order across reseeds. Reusing
+    // `byFixtureOrder` on each entry's OWN `fixture_id` ties on board
+    // position instead — the SAME domain key `feeds.after` above already
+    // trusts, and neither the (per-seed) court id nor the (organiser-
+    // editable) court name, either of which would just swap one instability
+    // for another. Local, not module-level, because it closes over
+    // `byFixtureOrder`/`liteById`.
+    //
+    // Widened to the draft's row shape (#397): an unplaced draft row carries a
+    // null time. Null sorts as "" — ahead of every placed card, as one stable
+    // block — so the ordering stays total and the pack stays
+    // byte-reproducible.
+    const byAssignment = (a: PackDraftAssignment, b: PackDraftAssignment): number => {
+      return (
+        cmp(a.scheduled_at ?? "", b.scheduled_at ?? "") ||
+        byFixtureOrder(a.fixture_id, b.fixture_id) ||
+        cmp(a.fixture_id, b.fixture_id)
+      );
     };
 
     // #396: who could stand in each fixture, advancers behind a null slot

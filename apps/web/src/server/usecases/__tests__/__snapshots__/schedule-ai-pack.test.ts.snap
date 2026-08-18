@@ -110,23 +110,23 @@ exports[`buildSchedulePack (v4/01 §2) > pack is deterministic and matches the 0
       "scheduled_at": "2026-08-01T16:10:00+01:00",
     },
     {
-      "court_label": "Court 1",
-      "fixture_id": "<id:28>",
-      "scheduled_at": "2026-08-01T17:00:00+01:00",
-    },
-    {
       "court_label": "Court 2",
       "fixture_id": "<id:27>",
       "scheduled_at": "2026-08-01T17:00:00+01:00",
     },
     {
       "court_label": "Court 1",
-      "fixture_id": "<id:34>",
-      "scheduled_at": "2026-08-01T17:50:00+01:00",
+      "fixture_id": "<id:28>",
+      "scheduled_at": "2026-08-01T17:00:00+01:00",
     },
     {
       "court_label": "Court 2",
       "fixture_id": "<id:29>",
+      "scheduled_at": "2026-08-01T17:50:00+01:00",
+    },
+    {
+      "court_label": "Court 1",
+      "fixture_id": "<id:34>",
       "scheduled_at": "2026-08-01T17:50:00+01:00",
     },
     {
