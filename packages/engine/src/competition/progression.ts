@@ -214,18 +214,42 @@ function snakeMerge(pots: readonly SourcedSlot[][]): SourcedSlot[] {
  *  this bug). This was unreachable from the picker before F3: every writer
  *  in this codebase emits a single-source progression; multi-source is new
  *  capability this module unlocked (SourcedSlot's own doc comment). */
+// Bracket-kind targets — mirrors apps/web's BRACKET_KINDS
+// (server/usecases/stages.ts:1813, server/engine-db/competition.ts:37) and
+// BracketStage.kind's Extract union (./stage.ts). Kept as a loose
+// `ReadonlySet<string>`, not core's `StageKind`, so BOTH apps/web callers
+// (stages.ts, stage-seeding.ts) can pass their DB row's `kind: string`
+// verbatim — no cast, no new parse/throw path. An unrecognised value simply
+// isn't in the set, which is the same "don't refuse" outcome as omitting
+// `targetKind` altogether (see placeDescriptors' doc comment) — this module
+// stays tolerant of loose caller data the way progressionSize/
+// previewSourceShape already are elsewhere. Keep the four names in sync with
+// those two apps/web sites if a new bracket stage kind ever ships.
+const BRACKET_STAGE_KINDS: ReadonlySet<string> = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
+
 export function placeDescriptors(
   pots: readonly SourcedSlot[][],
   placement: "rank_order" | "snake" | "seeded_map",
   map?: readonly SeededMapEntry[],
+  // F3 round-3 review, Task 1 — the target stage's raw `kind` (apps/web's
+  // stages.kind column), OPTIONAL: absent/unrecognised means "unknown,
+  // don't refuse" rather than "always refuse", so a caller that hasn't been
+  // taught to pass it yet (or is validating a shape with no real target in
+  // hand) doesn't regress into an always-throwing guard.
+  targetKind?: string,
 ): SourcedSlot[] {
-  // F3 review corollary (owner ruling 11, F3 programme index): snakeMerge
-  // reverses a pot's ARRAY ORDER but never touches each descriptor's own
-  // `position` (its cross-group strength rank), so reversing a bestNth pot
-  // would seed the WEAKEST wildcard into the STRONGEST bracket slot. `snake`
-  // is only ever correct for a group_rank pot (a group/pool TARGET, per
-  // ruling 11) — refuse the combination outright rather than silently
-  // mis-seed a wildcard.
+  // Ruling 13 (F3 programme index, round-3 review): snake is chosen by the
+  // TARGET stage's kind, not the source's. Rule of record: "snake for a
+  // group/pool target, rank_order for a bracket target." Two refusals
+  // enforce it, both snake-specific:
+  //
+  // (1) The bestNth corollary (caught in the same review as ruling 13):
+  // snakeMerge reverses a pot's ARRAY ORDER but never touches each
+  // descriptor's own `position` (its cross-group strength rank), so
+  // reversing a bestNth pot would seed the WEAKEST wildcard into the
+  // STRONGEST bracket slot. There is no target for which that reversal is
+  // ever correct, so this refuses unconditionally — target-kind known or
+  // not.
   if (placement === "snake") {
     const potIndex = pots.findIndex((pot) => pot.some((s) => s.descriptor.kind === "best_nth"));
     if (potIndex !== -1) {
@@ -234,6 +258,32 @@ export function placeDescriptors(
         `placement "snake" cannot be combined with a bestNth-sourced pot (pot ${potIndex}) — snakeMerge reverses a pot's array order without moving each descriptor's cross-group strength rank ("position"), so the weakest wildcard would seed into the strongest slot; use "rank_order" for a bestNth take`,
         { placement, potIndex },
       );
+    }
+    // (2) The rule itself (Task 1 — the corollary above is not the rule,
+    // it's one instance of it). A WAVE-major pot (topNPerGroup's shape —
+    // expandOne's own comment: "every group's winner (wave 1) before any
+    // group's runner-up (wave 2)"; >1 descriptor, every one `group_rank`;
+    // `picks`' singleton group_rank pots are immune — reversing a 1-element
+    // pot is a no-op) placed into a bracket-kind TARGET is refused: snakeMerge
+    // reverses alternate waves, and a single-elimination seed fold then pairs
+    // seed i against seed N+1-i (scheduling/bracket.ts:52-63,156-163) — which
+    // lands every pool's OWN wave-1 qualifier against its OWN wave-2
+    // qualifier in round 1 (ruling 13's worked example: 4 pools,
+    // topNPerGroup(2) => round 1 is A1 v A2, B1 v B2 — every group replaying
+    // its own final). `targetKind` unknown/not a bracket kind => this check
+    // is skipped entirely (see the param's own doc comment); t20-super8's
+    // real usage (a GROUP target) is exactly the skip case.
+    if (targetKind !== undefined && BRACKET_STAGE_KINDS.has(targetKind)) {
+      const waveIndex = pots.findIndex(
+        (pot) => pot.length > 1 && pot.every((s) => s.descriptor.kind === "group_rank"),
+      );
+      if (waveIndex !== -1) {
+        throw new EngineError(
+          "CONFIG_INVALID",
+          `placement "snake" cannot target a bracket-kind stage ("${targetKind}") together with a multi-pool wave (pot ${waveIndex}) — snakeMerge reverses alternate waves, and a single-elimination seed fold then pairs each pool's OWN qualifiers against each other in round 1 (e.g. group A's winner meets group A's runner-up); use "rank_order" for a bracket target — snake is only correct for a group/pool target`,
+          { placement, targetKind, potIndex: waveIndex },
+        );
+      }
     }
   }
   const flat = placement === "snake" ? snakeMerge(pots) : pots.flat();
@@ -331,13 +381,18 @@ export function placeDescriptors(
  *  must run before trusting it (createStages/replaceStages, and
  *  templates.ts's instantiateTemplate): expand every source's take against
  *  its real shape, let placeDescriptors validate a seeded_map's
- *  slot/source references, then require at least 2 qualifiers total. */
+ *  slot/source references AND (F3 round-3 review, Task 1) an illegal
+ *  snake-into-a-bracket-target combo, then require at least 2 qualifiers
+ *  total. `targetKind` is this progression's OWN stage's raw `kind` —
+ *  optional, forwarded verbatim to placeDescriptors (see its doc comment for
+ *  the "unknown => don't refuse" default). */
 export function validateProgressionAgainstShapes(
   shapes: readonly SourceShape[],
   progression: Pick<ProgressionSpec, "sources" | "placement" | "map">,
+  targetKind?: string,
 ): void {
   const pots = expandSources(progression.sources, (i) => shapes[i]!);
-  placeDescriptors(pots, progression.placement, progression.map); // throws on a bad seeded_map
+  placeDescriptors(pots, progression.placement, progression.map, targetKind); // throws on a bad seeded_map or an illegal snake/bracket-target combo
   const total = pots.reduce((n, p) => n + p.length, 0);
   if (total < 2) {
     throw new EngineError("SEEDING_RULES_MISSING", "this stage's progression rules produce fewer than 2 qualifiers");

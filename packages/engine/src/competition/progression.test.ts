@@ -304,7 +304,7 @@ describe("placeDescriptors", () => {
     }
   });
 
-  // Corollary caught in the same review as F3's ruling 11 (F3 programme
+  // Corollary caught in the same review as F3's ruling 13 (F3 programme
   // index): snakeMerge reverses a bestNth pot's ARRAY ORDER but never
   // touches each descriptor's own `position` (its cross-group strength
   // rank), so a reversed wildcard pot would seed the WEAKEST wildcard into
@@ -353,6 +353,61 @@ describe("placeDescriptors", () => {
   it("snake without any bestNth pot does not throw — ordinary group-target snake (t20-super8's shape) keeps working", () => {
     const pots = expandSources([{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }], () => GROUPED);
     expect(() => placeDescriptors(pots, "snake")).not.toThrow();
+  });
+
+  // F3 round-3 review, Task 1 (BLOCKER) — the bestNth corollary above is not
+  // THE rule, it's one instance of it. Rule of record (ruling 13): snake for
+  // a group/pool TARGET, rank_order for a bracket target — regardless of
+  // what's in the pot. `topNPerGroup`'s wave-major pot (>1 descriptor, every
+  // one `group_rank`) is the shape that actually breaks: snakeMerge reverses
+  // alternate waves, and generateSingleElim's seed fold (seed i vs seed
+  // N+1-i, scheduling/bracket.ts:52-63,156-163) then pairs each pool's OWN
+  // wave-1 qualifier against its OWN wave-2 qualifier in round 1 — every
+  // group replaying its own final (this exact 4-pool/topNPerGroup(2) example
+  // is the worked case in ruling 13). `targetKind` is a new, OPTIONAL 4th
+  // arg — apps/web's two writers (stages.ts, stage-seeding.ts) pass their
+  // stage row's raw `kind` string; an absent/unrecognised value means
+  // "unknown, don't refuse" (see the two skip-cases below), not "always
+  // refuse".
+  it("snake placement over a wave-major (topNPerGroup) pot INTO A BRACKET-KIND TARGET throws CONFIG_INVALID", () => {
+    const pots = expandSources([{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }], () => GROUPED);
+    expect(() => placeDescriptors(pots, "snake", undefined, "knockout")).toThrow(/bracket/);
+    try {
+      placeDescriptors(pots, "snake", undefined, "knockout");
+      expect.fail("expected placeDescriptors to throw");
+    } catch (err) {
+      expect(EngineError.is(err, "CONFIG_INVALID")).toBe(true);
+    }
+  });
+
+  it("the same wave-major pot under snake into every other bracket kind (double_elim, stepladder, page_playoff) also throws", () => {
+    const pots = expandSources([{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }], () => GROUPED);
+    for (const targetKind of ["double_elim", "stepladder", "page_playoff"]) {
+      expect(() => placeDescriptors(pots, "snake", undefined, targetKind)).toThrow(/bracket/);
+    }
+  });
+
+  it("snake into a GROUP-kind target does not throw — t20-super8's actual shape (ruling 13's legitimate case)", () => {
+    const pots = expandSources([{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }], () => GROUPED);
+    expect(() => placeDescriptors(pots, "snake", undefined, "group")).not.toThrow();
+  });
+
+  it("snake with an UNRECOGNISED targetKind does not throw — degrades to 'unknown, don't refuse' rather than always-throwing", () => {
+    const pots = expandSources([{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }], () => GROUPED);
+    expect(() => placeDescriptors(pots, "snake", undefined, "not_a_real_kind")).not.toThrow();
+  });
+
+  it("rank_order over the same wave-major pot into a bracket target does not throw — the new guard is snake-specific too", () => {
+    const pots = expandSources([{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }], () => GROUPED);
+    expect(() => placeDescriptors(pots, "rank_order", undefined, "knockout")).not.toThrow();
+  });
+
+  it("a single-element group_rank pot (picks' shape) into a bracket target does not throw — reversing a 1-element pot is a no-op, never wave-major", () => {
+    const pots = expandSources(
+      [{ stage: "previous", take: [{ kind: "picks", picks: [{ pool: "B", rank: 1 }, { pool: "A", rank: 1 }] }] }],
+      () => GROUPED,
+    );
+    expect(() => placeDescriptors(pots, "snake", undefined, "knockout")).not.toThrow();
   });
 });
 

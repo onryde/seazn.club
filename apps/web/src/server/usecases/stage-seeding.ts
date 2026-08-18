@@ -142,20 +142,28 @@ export async function sourceShapeOf(
 }
 
 /** Validate a progression rule at SAVE time (createStages/replaceStages,
- *  templates.ts's instantiateTemplate) — a bad `seeded_map` reference or a
- *  too-small shape 422s here, never discovered later at proposal/generate
- *  time (design's Edge inventory). Cheap: only needs every source's SHAPE
- *  (pool keys / count), not its standings.
+ *  templates.ts's instantiateTemplate) — a bad `seeded_map` reference, an
+ *  illegal snake-into-a-bracket-target combo (F3 round-3 review, Task 1,
+ *  ruling 13), or a too-small shape 422s here, never discovered later at
+ *  proposal/generate time (design's Edge inventory). Cheap: only needs every
+ *  source's SHAPE (pool keys / count), not its standings.
  *
  *  `presetSources[i]`, when given, is used INSTEAD of resolving
  *  `progression.sources[i].stage` against the DB — templates.ts already has
  *  the just-inserted sibling stage's `{kind, config}` in hand (from the SAME
  *  transaction, a moment ago) and passes it directly rather than re-querying
  *  for a row it already has. Absent entries (or an absent array entirely)
- *  fall back to the normal DB resolution. */
+ *  fall back to the normal DB resolution.
+ *
+ *  `target.kind` (optional — see progression.ts's `placeDescriptors` doc
+ *  comment for the "unknown => don't refuse" default) is THIS progression's
+ *  OWN stage's kind, forwarded to the engine as the snake/bracket-target
+ *  check's `targetKind`. Both call sites already have it in hand (createStages'
+ *  freshly-inserted row, instantiateTemplate's TemplateStage) — passed
+ *  straight through, no DB read added. */
 export async function validateStageProgression(
   tx: Tx,
-  target: { division_id: string; seq: number },
+  target: { division_id: string; seq: number; kind?: string },
   progression: Pick<ProgressionSpec, "sources" | "placement" | "map">,
   presetSources?: readonly ({ kind: string; config: Record<string, unknown> } | undefined)[],
 ): Promise<void> {
@@ -166,7 +174,7 @@ export async function validateStageProgression(
     shapes.push(await sourceShapeOf(tx, source));
   }
   try {
-    validateProgressionAgainstShapes(shapes, progression);
+    validateProgressionAgainstShapes(shapes, progression, target.kind);
   } catch (err) {
     if (EngineError.is(err)) throw new HttpError(422, err.message, err.code, err.data as never);
     throw err;

@@ -189,21 +189,24 @@ describe.skipIf(!HAS_DB)("D4a/P5 — propose + confirm (groups -> complete -> pr
     expect(confirmed.fixtures.filter((f) => f.round_no === 1).every((f) => f.home_slot_label === null && f.away_slot_label === null)).toBe(true);
   });
 
-  it("snake placement interleaves waves — different bracket than rank_order for the SAME standings", async () => {
-    const { auth, groupStageId, koStageId, entrantBySeed } = await setupGroupsToKnockout("snake");
-    await generateStageFixtures(auth, koStageId);
-    await generateStageFixtures(auth, groupStageId);
-    await decideAllGroupFixtures(auth, groupStageId, entrantBySeed);
-    await completeStage(auth, groupStageId);
-    const [proposal] = await sql<{ id: string }[]>`select id from stage_seed_proposals where stage_id = ${koStageId} and status = 'draft'`;
-    const confirmed = await confirmSeedProposal(auth, koStageId, { proposalId: proposal.id });
-    // snake: seed order [E1,E2,E3,E4,E5,E6,E7,E8] (wave2 reversed back to
-    // ascending) -> seedPositions pairs (1,8)=(E1,E8), (5,4)=(E5,E4),
-    // (3,6)=(E3,E6), (7,2)=(E7,E2) — E1 now meets E8 in round 1, NOT E5 as
-    // rank_order produced above.
-    const e = entrantBySeed;
-    const pairs = confirmed.fixtures.filter((f) => f.home_entrant_id !== null).map((f) => new Set([f.home_entrant_id, f.away_entrant_id]));
-    expect(pairs).toContainEqual(new Set([e.get(1), e.get(8)]));
+  // F3 round-3 review, Task 1 (BLOCKER) — this case used to assert the
+  // self-pairing draw (E1 v E8, both pool A) as CORRECT: snake over
+  // topNPerGroup(2) reverses wave 2 back to ascending order
+  // ([E1,E2,E3,E4,E5,E6,E7,E8]), and seedPositions(8)'s fold then pairs
+  // seed1 v seed8 = E1 v E8 — pool A's OWN winner against pool A's OWN
+  // runner-up in round 1 (ruling 13's worked example, verbatim shape: 4
+  // pools, topNPerGroup(2), snake). Every one of this setup's 4 round-1
+  // pairs is a group replaying its own final, not just the one this test
+  // happened to assert. Inverted, not deleted: createStages now REFUSES this
+  // progression at save time (placeDescriptors' new bracket-target guard,
+  // targetKind="knockout") rather than silently producing the broken draw.
+  // The correct cross-pool draw for this exact standings shape (E1 v E5, not
+  // E1 v E8) is already covered by rank_order above (lines 174-186).
+  it("snake placement over a topNPerGroup wave into a bracket-kind (knockout) target is refused at save time — ruling 13's self-pairing draw, not silently produced", async () => {
+    const err = await setupGroupsToKnockout("snake").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as { code?: string }).code).toBe("CONFIG_INVALID");
+    expect((err as Error).message).toMatch(/bracket-kind stage \("knockout"\)/);
   });
 
   it("non-destructive guarantee: confirm leaves scheduled_at/court/pins BYTE-IDENTICAL on already-scheduled TBD fixtures", async () => {

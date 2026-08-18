@@ -1563,7 +1563,14 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
       shapes.push(await sourceShapeOf(tx, source));
     }
     const pots = expandSources(progression.sources, (i) => shapes[i]!);
-    const placed = placeDescriptors(pots, progression.placement, progression.map);
+    // F3 round-3 review, Task 1 — `stage.kind` is THIS stage's own kind (the
+    // progression's target), threaded through so placeDescriptors can refuse
+    // an illegal snake-into-a-bracket-target combo (ruling 13) here too, not
+    // just at createStages/replaceStages' save-time validateStageProgression
+    // call — a `.setup` progression generates from a synthetic seed order
+    // with no live standings, so this direct call is the day-one path ruling
+    // 13's self-pairing draw actually reaches.
+    const placed = placeDescriptors(pots, progression.placement, progression.map, stage.kind);
     if (placed.length < 2) {
       throw new EngineError("STAGE_NOT_READY", "this stage's progression rules produce fewer than 2 qualifiers", {
         stageId,
