@@ -18,7 +18,7 @@ import { createStages, generateStageFixtures } from "../stages";
 import { claimPerson } from "../person-claims";
 import { createOfficial, inviteOfficial, patchFixtureOfficials } from "../officials";
 import { buildOfficialsPack } from "../officials-ai";
-import { makeUser, seedOrg } from "./_seed";
+import { makeUser, seedCourts, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -33,15 +33,23 @@ const T0 = Date.parse("2026-08-01T09:00:00.000Z");
 const MIN = 60_000;
 const TZ = "Europe/London";
 
-const SETTINGS_CONFIG = {
-  startAt: "2026-08-01T09:00:00.000Z",
-  matchMinutes: 30,
-  gapMinutes: 0,
-  courts: ["Court 1", "Court 2"],
-  perEntrantMinRest: 20,
-  blackouts: [],
-  sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T23:00:00.000Z" }],
-};
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` — real
+// `courts.id` values, seeded per org below. Nothing in this file reads
+// `pack.settings.courts` or otherwise cares WHICH courts these are — the
+// per-fixture court officials-ai.ts shows in the pack comes from the legacy
+// `fixtures.court_label` column (still, see the seeding below), unrelated to
+// this array; it exists purely to satisfy the schema.
+function settingsConfig(courts: string[]) {
+  return {
+    startAt: "2026-08-01T09:00:00.000Z",
+    matchMinutes: 30,
+    gapMinutes: 0,
+    courts,
+    perEntrantMinRest: 20,
+    blackouts: [],
+    sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T23:00:00.000Z" }],
+  };
+}
 
 const POLICY: AssignPolicy = {
   roles: ["referee"],
@@ -66,10 +74,11 @@ function redact(pack: unknown): unknown {
   );
 }
 
-async function setSettings(divisionId: string): Promise<void> {
+async function setSettings(auth: AuthCtx, divisionId: string): Promise<void> {
+  const courts = await seedCourts(auth.orgId, 2);
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${divisionId}, ${sql.json(SETTINGS_CONFIG)}, ${TZ}, now())
+    values (${divisionId}, ${sql.json(settingsConfig(courts))}, ${TZ}, now())
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
 }
 
@@ -96,7 +105,7 @@ async function seedOfficialsBoard(opts?: {
       kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [],
     })),
   );
-  await setSettings(divisionId);
+  await setSettings(auth, divisionId);
   const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "League", config: {} });
   const { fixtures } = await generateStageFixtures(auth, stage!.id);
 
@@ -220,7 +229,7 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack (v4/03 §2)", () => {
         kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [],
       })),
     );
-    await setSettings(div.id);
+    await setSettings(tieAuth, div.id);
     const [stage] = await createStages(tieAuth, div.id, { seq: 1, kind: "league", name: "L", config: {} });
     const ents = await sql<{ id: string }[]>`select id from entrants where division_id = ${div.id} order by seed`;
     // Unique per run, but Court 1 always draws the HIGHER of the two UUIDs.
@@ -310,7 +319,7 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack (v4/03 §2)", () => {
       name: "Bare", slug: "bare", sport_key: "generic", variant_key: "score",
       config: GENERIC_CONFIG, eligibility: [],
     });
-    await setSettings(div.id);
+    await setSettings(emptyAuth, div.id);
     await expect(
       buildOfficialsPack(emptyAuth, div.id, { instruction: "x", policy: POLICY }),
     ).rejects.toMatchObject({ status: 422, message: "NO_OFFICIALS" });
