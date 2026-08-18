@@ -1876,18 +1876,26 @@ async function smokePlanMatrix(): Promise<void> {
     "2026-07-12T01:00:00.000Z",
     "2026-07-12T03:00:00.000Z",
   ];
+  const capVenue = v1data<{ id: string }>(
+    await v1(plus, `/api/v1/orgs/${plusOrg}/venues`, "POST", { name: `Cap Venue ${tag}` }),
+  );
+  const capCourt = v1data<{ id: string }>(
+    await v1(plus, `/api/v1/orgs/${plusOrg}/venues/${capVenue.id}/courts`, "POST", {
+      name: "Court 1",
+    }),
+  );
   const capIds = plusFixtures.slice(0, 4).map((f) => f.id);
   for (const [i, id] of capIds.entries()) {
     await v1(plus, `/api/v1/fixtures/${id}`, "PATCH", {
       scheduled_at: localSaturday[i],
-      court_label: "Court 1",
+      court_id: capCourt.id,
     });
   }
   // Park every other fixture far away so it cannot compete for the capped ref.
   for (const [i, f] of plusFixtures.slice(4).entries()) {
     await v1(plus, `/api/v1/fixtures/${f.id}`, "PATCH", {
       scheduled_at: `2026-09-${String(i + 1).padStart(2, "0")}T18:00:00.000Z`,
-      court_label: "Court 1",
+      court_id: capCourt.id,
     });
   }
 
@@ -3745,9 +3753,17 @@ async function officialOnboardingSuite(
   const kickoffDate = new Date(Date.now() + 7 * 86_400_000);
   kickoffDate.setUTCHours(10, 0, 0, 0);
   const kickoff = kickoffDate.toISOString();
+  const onboardVenue = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `Whistle Venue ${tag}` }),
+  );
+  const onboardCourt = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${orgId}/venues/${onboardVenue.id}/courts`, "POST", {
+      name: "Court 9",
+    }),
+  );
   await v1(admin, `/api/v1/fixtures/${fixtures[0]!.id}`, "PATCH", {
     scheduled_at: kickoff,
-    court_label: "Court 9",
+    court_id: onboardCourt.id,
   });
 
   // Create + assign BEFORE the invite: the fresh assignment must be pending.
@@ -3995,9 +4011,17 @@ async function officialOnboardingSuite(
   // Same calendar day as this org's fixtures[0] kickoff, a few hours later —
   // the warning is a same-day match, not an exact-instant one.
   const busyKickoff = new Date(new Date(kickoff).getTime() + 3 * 3_600_000).toISOString();
+  const busyVenue = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${busyOrg.id}/venues`, "POST", { name: `Busy Venue ${tag}` }),
+  );
+  const busyCourt = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${busyOrg.id}/venues/${busyVenue.id}/courts`, "POST", {
+      name: "Court 5",
+    }),
+  );
   await v1(admin, `/api/v1/fixtures/${busyFixtures[0]!.id}`, "PATCH", {
     scheduled_at: busyKickoff,
-    court_label: "Court 5",
+    court_id: busyCourt.id,
   });
   await v1(admin, `/api/v1/fixtures/${busyFixtures[0]!.id}/officials`, "PATCH", {
     set: [{ official_id: busyOffId, role_key: "referee", locked: false }],
@@ -8854,6 +8878,19 @@ async function z3AutoScheduleSuite(): Promise<void> {
   const SLOT_MIN = 30;
   const slotAt = (n: number) =>
     new Date(Date.parse(START) + n * SLOT_MIN * 60_000).toISOString();
+
+  // ScheduleConfig.courts is real court ids now (V371 cutover), not display
+  // labels — one venue, two courts, same shape venuesSuite() already uses.
+  const venue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `Z3 Venue ${tag}` }),
+  );
+  const courtA = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${venue.id}/courts`, "POST", { name: "Court A" }),
+  );
+  const courtB = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${venue.id}/courts`, "POST", { name: "Court B" }),
+  );
+
   // `perEntrantMinRest: 0` on purpose: a rest shortfall is warn-only, and a
   // board carrying warnings would make "the solver produced a legal board" and
   // "the solver produced something it had to apologise for" look alike.
@@ -8863,7 +8900,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
       startAt: START,
       matchMinutes: SLOT_MIN,
       gapMinutes: 0,
-      courts: ["Court A", "Court B"],
+      courts: [courtA.id, courtB.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -8883,7 +8920,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
     lost?: number;
   }
   interface AutoRun {
-    assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+    assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
     metrics?: {
       makespan_minutes: number;
       worst_idle_gap_minutes: number;
@@ -8896,10 +8933,10 @@ async function z3AutoScheduleSuite(): Promise<void> {
   const auto = async (body: Record<string, unknown>): Promise<AutoRun | undefined> =>
     v1data<AutoRun>(await v1(s, `/api/v1/stages/${stage.id}/schedule/auto`, "POST", body));
   const fixtureSlot = async (id: string): Promise<string> => {
-    const f = v1data<{ scheduled_at: string | null; court_label: string | null }>(
+    const f = v1data<{ scheduled_at: string | null; court_id: string | null }>(
       await v1(s, `/api/v1/fixtures/${id}`),
     );
-    return `${f?.scheduled_at ?? "-"}@${f?.court_label ?? "-"}`;
+    return `${f?.scheduled_at ?? "-"}@${f?.court_id ?? "-"}`;
   };
 
   // ======================================================================
@@ -8956,7 +8993,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
     (build?.assignments ?? []).length === 6 &&
       build?.metrics?.placed === 6 &&
       build.metrics.total === 6 &&
-      new Set((build.assignments ?? []).map((a) => a.court_label)).size === 2,
+      new Set((build.assignments ?? []).map((a) => a.court_id)).size === 2,
   );
   check(
     // Telemetry POPULATED, not merely present: a strip full of structural zeros
@@ -8977,7 +9014,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
     assignments: (build?.assignments ?? []).map((a) => ({
       fixture_id: a.fixture_id,
       scheduled_at: a.scheduled_at,
-      court_label: a.court_label,
+      court_id: a.court_id,
     })),
     source: "auto",
   });
@@ -9019,7 +9056,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
   check(
     "z3 reflow: the pinned card is handed back on exactly the slot it already held",
     !!pinnedProposed &&
-      `${pinnedProposed.scheduled_at}@${pinnedProposed.court_label}` === pinnedBefore,
+      `${pinnedProposed.scheduled_at}@${pinnedProposed.court_id}` === pinnedBefore,
   );
 
   // ======================================================================
@@ -9035,7 +9072,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
     assignments: generated.map((f, i) => ({
       fixture_id: f.id,
       scheduled_at: slotAt(i),
-      court_label: "Court A",
+      court_id: courtA.id,
     })),
     source: "manual",
   });
@@ -9066,7 +9103,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
   check(
     "z3 polish: the locked card keeps its exact time AND court",
     !!lockedProposed &&
-      `${lockedProposed.scheduled_at}@${lockedProposed.court_label}` === lockedBefore,
+      `${lockedProposed.scheduled_at}@${lockedProposed.court_id}` === lockedBefore,
   );
   check(
     // The other half. A polish that froze the whole board would satisfy the
@@ -9075,7 +9112,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
     (polish?.assignments ?? []).length === 6 &&
       polish?.metrics?.placed === 6 &&
       (polish.metrics.makespan_minutes ?? POOR_MAKESPAN_MIN) < POOR_MAKESPAN_MIN &&
-      new Set((polish.assignments ?? []).map((a) => a.court_label)).size === 2,
+      new Set((polish.assignments ?? []).map((a) => a.court_id)).size === 2,
   );
 }
 
