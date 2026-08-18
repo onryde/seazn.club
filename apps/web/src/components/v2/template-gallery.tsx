@@ -86,23 +86,32 @@ export function templateStructureChain(msg: Msg, division: CompetitionTemplate["
 
 // --- Progression map (P7 D1b T4) -------------------------------------------
 //
-// A stage carrying `.seeding` qualifies from an earlier stage in the same
-// division (schema.ts's TemplateStage.seeding doc comment). This renders
-// that as one line per seeded stage: what feeds it (its `seeding.take`
-// rules, ALL of them — euro24's knockout stage carries two, top-2-per-group
-// AND the 4 best third-placed teams, and rendering only the first would
-// silently under-describe exactly the template this feature exists for) and
-// where it lands (the stage's own name). Pure functions, exported for direct
-// unit testing — component-ui-i18n memory: no jsdom in this workspace, so
-// derivation logic is tested as plain functions rather than through a
-// rendered tree wherever it can be pulled out that far.
+// A stage carrying `.progression` qualifies from an earlier stage in the
+// same division (F2 unified this from the old `.seeding` — schema.ts's
+// TemplateStage.progression doc comment). This renders that as one line per
+// fed stage: what feeds it (every source's `take` rules, ALL of them —
+// euro24's knockout stage carries two, top-2-per-group AND the 4 best
+// third-placed teams, and rendering only the first would silently
+// under-describe exactly the template this feature exists for) and where it
+// lands (the stage's own name). A catalog entry's `progression.sources`
+// always narrows to exactly one "previous" source (TemplateStageProgression,
+// schema.ts) — the flatMap below stays correct if that ever widens. Pure
+// functions, exported for direct unit testing — component-ui-i18n memory: no
+// jsdom in this workspace, so derivation logic is tested as plain functions
+// rather than through a rendered tree wherever it can be pulled out that far.
 
-type TakeRule = NonNullable<TemplateStage["seeding"]>["take"][number];
+type TakeRule = NonNullable<TemplateStage["progression"]>["sources"][number]["take"][number];
 
-/** One `seeding.take` rule -> its own translated phrase. Each rule kind is
- *  ONE dictionary key with parameters, never fragments concatenated at the
- *  call site — see StageSeedingSchema/TakeRuleSchema (api-v1/schemas.ts) for
- *  the field shapes this switches on. */
+/** One take rule -> its own translated phrase. Each rule kind is ONE
+ *  dictionary key with parameters, never fragments concatenated at the call
+ *  site — see ProgressionSchema/TakeRuleSchema (api-v1/schemas.ts) for the
+ *  field shapes this switches on. F2 unified TakeRuleSchema onto 5 kinds
+ *  (rankRange/topNPerGroup/bestNth/picks/roundLosers); only the 3 below are
+ *  reachable from catalog data today (verified: no catalog entry emits
+ *  picks/roundLosers — those are picker-only, format-templates.ts, which
+ *  never renders through this component) so `rule` no longer narrows to
+ *  `never` in the default branch, but the fallback (raw kind string) is
+ *  unchanged and still correct if that ever stops being true. */
 export function takeRuleText(msg: Msg, rule: TakeRule): string {
   switch (rule.kind) {
     case "topNPerGroup":
@@ -112,11 +121,7 @@ export function takeRuleText(msg: Msg, rule: TakeRule): string {
     case "rankRange":
       return msg("templates.detail.take.rankRange", { from: rule.from, to: rule.to });
     default:
-      // Belt and suspenders, same spirit as stageKindLabel's fallback above
-      // — no TakeRule variant reaches this today (TakeRuleSchema is exactly
-      // the 3 cases above), so `rule` narrows to `never` here; the cast is
-      // needed only because tsc rejects a bare property read on `never`.
-      return (rule as { kind: string }).kind;
+      return rule.kind;
   }
 }
 
@@ -143,20 +148,20 @@ export function templateProgressionLines(msg: Msg, template: CompetitionTemplate
   for (const division of template.divisions) {
     for (let i = 0; i < division.stages.length; i++) {
       const stage = division.stages[i];
-      if (!stage.seeding) continue;
-      // seeding.source is schema-narrowed to "previous" only (schema.ts's
-      // TemplateStageSeeding) — always the stage immediately before this
-      // one in THIS division's own array, never a different division or a
-      // live stage id (a catalog entry has none yet). Guard defensively
-      // anyway: nothing in the Zod shape stops a future catalog entry from
-      // setting `.seeding` on a division's first stage even though
-      // schema.ts's own comment says that never happens — skip such a line
-      // rather than crash the whole sheet on `undefined.i18nNameKey`.
+      if (!stage.progression) continue;
+      // Every source's `stage` is schema-narrowed to "previous" only
+      // (schema.ts's TemplateStageProgression) — always the stage
+      // immediately before this one in THIS division's own array, never a
+      // different division or a live stage id (a catalog entry has none
+      // yet). Guard defensively anyway: nothing stops a future catalog
+      // entry from setting `.progression` on a division's first stage even
+      // though schema.ts's own comment says that never happens — skip such
+      // a line rather than crash the whole sheet on `undefined.i18nNameKey`.
       const sourceStage: TemplateStage | undefined = division.stages[i - 1];
       if (!sourceStage) continue;
       const take = joinTakeTexts(
         msg,
-        stage.seeding.take.map((rule) => takeRuleText(msg, rule)),
+        stage.progression.sources.flatMap((s) => s.take).map((rule) => takeRuleText(msg, rule)),
       );
       const target = msg(stage.i18nNameKey);
       lines.push({
