@@ -1711,6 +1711,15 @@ export const ApplyScheduleRequest = z.object({
           court_id: CourtId,
           venue_id: VenueId.nullish(),
           schedule_locked: z.boolean().optional(),
+          // ECHOED, ignored. `/schedule/auto` returns these two alongside the
+          // assignment, and posting its response straight back to /apply is the
+          // documented round-trip (the board does it, and so does
+          // auto-schedule.spec.ts). `.strict()` below turned that into a 400 on
+          // an unknown key, which is a contract break dressed as validation —
+          // the strictness exists to reject a client still sending
+          // `court_label`, not to reject this endpoint's own output.
+          ends_at: IsoDateTime.optional(),
+          court_name: z.string().nullish(),
         })
         .strict(),
     )
