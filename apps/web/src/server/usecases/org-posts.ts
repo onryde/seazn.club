@@ -412,6 +412,8 @@ export interface FixtureCtx {
   home_name: string | null;
   away_name: string | null;
   scheduled_at: Date | null;
+  /** P9 cutover: DERIVED from `venues.name` via `fixtures.venue_id` — the
+   *  frozen `fixtures.venue` text column is never written since pass 3a. */
   venue: string | null;
   venue_tz: string | null;
   division_name: string;
@@ -446,12 +448,17 @@ export async function draftPostsForDecidedFixture(
   fixtureId: string,
   newsAuto: boolean,
 ): Promise<void> {
+  // P9 cutover: venue is DERIVED from venues.name via fixtures.venue_id —
+  // fixtures.venue (the frozen free-text column) is never written since pass
+  // 3a, so a fixture decided after the cutover drafted its result/recap post
+  // with a blank venue line regardless of what venue it was actually played
+  // at (draftResult below renders `venue` verbatim into the post body).
   const [fx] = await tx<FixtureCtx[]>`
     select f.id as fixture_id, f.org_id, f.division_id, d.competition_id, f.stage_id,
            st.kind as stage_kind, f.round_no, f.status,
            f.home_entrant_id, f.away_entrant_id,
            h.display_name as home_name, a.display_name as away_name,
-           f.scheduled_at, f.venue, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
+           f.scheduled_at, ven.name as venue, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
            d.name as division_name, c.name as competition_name,
            d.sport_key, d.module_version, d.auto_posts, o.default_locale
     from fixtures f
@@ -463,6 +470,7 @@ export async function draftPostsForDecidedFixture(
     left join organizations vorg on vorg.id = d.org_id
     left join entrants h on h.id = f.home_entrant_id
     left join entrants a on a.id = f.away_entrant_id
+    left join venues ven on ven.id = f.venue_id
     where f.id = ${fixtureId}`;
   // Cheap probe: opt-in division only, and Pro news.auto live (a community org
   // whose toggle somehow reads true still gets no draft).
