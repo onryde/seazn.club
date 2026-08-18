@@ -208,7 +208,7 @@ describe("runAiPlan (v4/00 §3-4)", () => {
 
     const body = parse.mock.calls[0]![0] as { messages: { role: string; content: string }[] };
     expect(body.messages[0]!.role).toBe("user");
-    expect(JSON.parse(body.messages[0]!.content)).toEqual(toModelPayload(loaded));
+    expect(JSON.parse(body.messages[0]!.content)).toEqual(toModelPayload(loaded, {}));
     expect(body.messages[0]!.content).not.toContain("participants");
     expect(body.messages[0]!.content).not.toContain("assumptions");
     expect(body.messages[0]!.content).not.toContain("name:");

@@ -379,7 +379,7 @@ export interface CompetitionPack {
  * joint pack is several boards: the run is capped at 500 movable fixtures
  * across every division against the same 60,000-token ceiling, so the pack that
  * exactly fills the cap is the one that fails first. Send
- * `toJointModelPayload(pack)` — never `pack`.
+ * `toJointModelPayload(pack, courtDirectory)` — never `pack`.
  *
  * Written field-by-field rather than as a rest-spread on purpose: the return
  * type makes `tsc` fail HERE the moment `CompetitionPack` gains a field, so
@@ -404,7 +404,11 @@ export function toJointModelPayload(
   /** id -> display info, from the SAME `buildCompetitionPack` call that
    *  built `pack`. Defaults to empty — see `toModelPayload` (schedule-ai.ts)
    *  for why that is a safe, behaviour-preserving default. */
-  courtDirectory: Record<string, PackCourtInfo> = {},
+  // P9 pass 3d: REQUIRED, not defaulted. With a default of `{}` every label
+  // silently fell back to the court's UUID — which is the exact regression
+  // this function exists to prevent — and a caller that forgot it compiled
+  // clean. Callers that genuinely want no directory pass `{}` on purpose.
+  courtDirectory: Record<string, PackCourtInfo>,
 ): Omit<CompetitionPack, "participants" | "assumptions" | "poolIds" | "stageIds" | "roundNos"> & {
   courtDetails: { label: string; venue: string; tags: string[] }[];
 } {

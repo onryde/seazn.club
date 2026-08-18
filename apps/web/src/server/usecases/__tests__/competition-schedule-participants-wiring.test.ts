@@ -502,7 +502,7 @@ describe.skipIf(!HAS_DB)("CompetitionPack.participants is wired into both joint 
 
     // The synthetic key is a scheduling-only device: it never reaches the model,
     // and nothing was merged in the database.
-    expect(JSON.stringify(toJointModelPayload(pack))).not.toContain("name:");
+    expect(JSON.stringify(toJointModelPayload(pack, {}))).not.toContain("name:");
     const rows = await sql<{ id: string }[]>`
       select id from persons where id in ${sql([board.personIds[0], board.personIds[1]])}`;
     expect(rows).toHaveLength(2);
@@ -562,13 +562,16 @@ describe.skipIf(!HAS_DB)("CompetitionPack.participants is wired into both joint 
 
   it("toJointModelPayload strips participants and assumptions, and that is what keeps the joint pack inside the token budget", async () => {
     const board = await seedMeasurementBoard(20);
-    const { pack } = await buildCompetitionPack(
+    const { pack, courtDirectory } = await buildCompetitionPack(
       board.auth,
       board.competitionId,
       board.divisionIds,
       { now: NOW_W2, mode: "generate", instruction: "Pack the day." },
     );
-    const payload = toJointModelPayload(pack) as Record<string, unknown>;
+    // The REAL directory, exactly as the production call site passes it — so
+    // the "no uuid reaches the model" assertion below tests the real path
+    // rather than an empty-map fixture.
+    const payload = toJointModelPayload(pack, courtDirectory) as Record<string, unknown>;
     expect("participants" in payload).toBe(false);
     expect("assumptions" in payload).toBe(false);
     expect(JSON.stringify(payload)).not.toContain("participants");
@@ -582,15 +585,36 @@ describe.skipIf(!HAS_DB)("CompetitionPack.participants is wired into both joint 
     // it reads instead.
     expect("stageIds" in payload).toBe(false);
     expect("roundNos" in payload).toBe(false);
-    // Everything else survives the trim byte-for-byte.
-    expect(payload).toEqual(
-      Object.fromEntries(
-        Object.entries(pack).filter(
-          ([k]) =>
+    // P9 pass 3d: `courtDirectory` is the internal id -> {label, venue, tags}
+    // map. It is stripped for the same reason as the twins above — the model
+    // never sees a court UUID — and its human-readable projection rides
+    // instead as `courtDetails`, which is model-facing by design.
+    expect("courtDirectory" in payload).toBe(false);
+    expect(Array.isArray(payload.courtDetails)).toBe(true);
+    expect(JSON.stringify(payload.courtDetails)).not.toMatch(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/,
+    );
+    // Everything else survives the trim — as a KEY SET. It is no longer
+    // byte-for-byte, and pretending otherwise would hide the point of P9 pass
+    // 3d: court identity is RELABELLED on the way out (ids in the pack, names
+    // in the payload), so `settings.courts`, the draft and the obstacles
+    // legitimately differ in VALUE while the shape is unchanged.
+    expect(
+      Object.keys(payload).filter((k) => k !== "courtDetails").sort(),
+    ).toEqual(
+      Object.keys(pack)
+        .filter(
+          (k) =>
             k !== "participants" && k !== "assumptions" && k !== "poolIds" &&
-            k !== "stageIds" && k !== "roundNos",
-        ),
-      ),
+            k !== "stageIds" && k !== "roundNos" && k !== "courtDirectory",
+        )
+        .sort(),
+    );
+    // The relabelling itself, asserted rather than assumed: every court the
+    // model is shown is a NAME the organiser would recognise, and no court
+    // uuid survives anywhere in the payload.
+    expect(JSON.stringify(payload)).not.toMatch(
+      new RegExp(pack.courts.map((id) => id).join("|")),
     );
     // …while the map the placer and the referee read is still complete.
     expect(Object.keys(pack.participants)).toEqual(pack.fixtures.movable.map((f) => f.id));

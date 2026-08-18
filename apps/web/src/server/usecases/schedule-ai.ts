@@ -499,7 +499,7 @@ export interface SchedulePack {
  * them is 51,341. (Even the flat 500-fixture league board saves 5,258: an empty
  * participant list per fixture is still 500 uuid keys.) Inlining the pack here
  * again re-breaks the budget on every bracket board, so send
- * `toModelPayload(pack)` — never `pack`.
+ * `toModelPayload(pack, courtDirectory)` — never `pack`.
  *
  * Written field-by-field rather than as a rest-spread on purpose: the return
  * type makes `tsc` fail here the moment `SchedulePack` gains a field, so what
@@ -527,7 +527,11 @@ export function toModelPayload(
    *  pass — so a caller with no directory to offer (chiefly the test suite,
    *  which often builds its own pack with human-readable "ids") is
    *  unaffected. */
-  courtDirectory: Record<string, PackCourtInfo> = {},
+  // P9 pass 3d: REQUIRED, not defaulted. With a default of `{}` every label
+  // silently fell back to the court's UUID — which is the exact regression
+  // this function exists to prevent — and a caller that forgot it compiled
+  // clean. Callers that genuinely want no directory pass `{}` on purpose.
+  courtDirectory: Record<string, PackCourtInfo>,
 ): Omit<SchedulePack, "participants" | "assumptions" | "poolIds" | "stageIds" | "roundNos"> & {
   courtDetails: { label: string; venue: string; tags: string[] }[];
 } {

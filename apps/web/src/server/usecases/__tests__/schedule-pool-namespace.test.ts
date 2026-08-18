@@ -285,7 +285,7 @@ describe("one pool namespace across the engine boundary (#449)", () => {
     // uuid. Scoped to `fixtures` on purpose — `settings.constraints` genuinely
     // does carry pool uuids on the wire (a stored `restByGroup` key, a stored
     // rule's scope), and that predates this change.
-    const payload = toModelPayload(pack(POOL_A_ID)) as Record<string, unknown>;
+    const payload = toModelPayload(pack(POOL_A_ID), {}) as Record<string, unknown>;
     expect("poolIds" in payload).toBe(false);
     expect(JSON.stringify(payload.fixtures)).not.toContain(POOL_A_ID);
     expect(JSON.stringify(payload.fixtures)).toContain(`"pool":"${POOL_A_KEY}"`);

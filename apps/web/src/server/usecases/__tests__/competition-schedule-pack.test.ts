@@ -357,7 +357,7 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
     expect(stageA).not.toBe(stageB);
 
     // Through the LLM shape: neither field reaches the model.
-    const payload = toJointModelPayload(pack) as Record<string, unknown>;
+    const payload = toJointModelPayload(pack, {}) as Record<string, unknown>;
     expect("roundNos" in payload).toBe(false);
     expect("stageIds" in payload).toBe(false);
 

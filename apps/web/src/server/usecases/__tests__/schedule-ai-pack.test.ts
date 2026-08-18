@@ -473,7 +473,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack size limits", () => {
     // Rough chars/4 heuristic proxy; the live AI_EVAL=1 test uses count_tokens.
     // Measures the PAYLOAD, not the pack: `participants`/`assumptions` are
     // enforcement inputs and never reach the model (see `toModelPayload`).
-    expect(JSON.stringify(toModelPayload(pack)).length / 4).toBeLessThan(60_000);
+    expect(JSON.stringify(toModelPayload(pack, {})).length / 4).toBeLessThan(60_000);
   });
 
   it("more than 500 movable fixtures is 422 AI_PLAN_TOO_LARGE", async () => {
@@ -1041,7 +1041,7 @@ describe.skipIf(!HAS_DB)("scheduling-only same-name guard (#396)", () => {
     // `people` (the wire array) keeps REAL person ids — the synthetic key lives
     // only in `participants`, which never leaves the server.
     expect(pack.people.filter((p) => p.person_id.startsWith("name:"))).toEqual([]);
-    expect(JSON.stringify(toModelPayload(pack))).not.toContain("name:");
+    expect(JSON.stringify(toModelPayload(pack, {}))).not.toContain("name:");
   });
 
   it("two people with different names are never collapsed", async () => {
@@ -1280,7 +1280,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
     // for the owner's decision to keep participants server-side: 500 bracket
     // fixtures with 500 named entrants already sit at 86% of the ceiling before
     // this wave adds anything.
-    expect(JSON.stringify(toModelPayload(pack)).length / 4).toBeLessThan(60_000);
+    expect(JSON.stringify(toModelPayload(pack, {})).length / 4).toBeLessThan(60_000);
   });
 
   it("participants and assumptions never reach the model, and stay complete on the pack", async () => {
@@ -1291,7 +1291,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
       now: NOW_W2,
       mode: "generate", instruction: "Two rounds.",
     });
-    const payload = toModelPayload(pack) as Record<string, unknown>;
+    const payload = toModelPayload(pack, {}) as Record<string, unknown>;
     expect("participants" in payload).toBe(false);
     expect("assumptions" in payload).toBe(false);
     expect(JSON.stringify(payload)).not.toContain("participants");
@@ -1403,7 +1403,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
     expect([...stageIdValues][0]).toBeTruthy();
 
     // Through the LLM shape: neither field reaches the model.
-    const payload = toModelPayload(pack) as Record<string, unknown>;
+    const payload = toModelPayload(pack, {}) as Record<string, unknown>;
     expect("roundNos" in payload).toBe(false);
     expect("stageIds" in payload).toBe(false);
 
@@ -1613,7 +1613,7 @@ describe.skipIf(!HAS_DB)("pack calendar anchor (#397)", () => {
   it("sends the anchor to the model but never the enforcement inputs", async () => {
     const { auth, divisionId } = await seedRrBoard();
     const { pack } = await buildSchedulePack(auth, divisionId, OPTS);
-    const payload = toModelPayload(pack) as Record<string, unknown>;
+    const payload = toModelPayload(pack, {}) as Record<string, unknown>;
     expect(payload.tz).toBe("Europe/London");
     expect(payload.clock).toEqual(pack.clock);
     expect(payload.window).toEqual(pack.window);
