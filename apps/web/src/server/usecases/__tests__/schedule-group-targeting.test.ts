@@ -34,6 +34,12 @@ const POOL_A = "22222222-2222-4222-8222-222222222222";
 /** What `pools.key` holds — the display label `PackFixture.pool` carries (#449). */
 const POOL_A_KEY = "A";
 const COURT_A = "33333333-3333-4333-8333-333333333333";
+/** P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)`. This file has no
+ *  DB — `settings()` runs its literal through the real `ScheduleConfig.parse`,
+ *  so its `courts` array needs uuid-shaped values; a second, non-parsed one
+ *  lives on `pack()` below purely as the AI wire's own free-text court label
+ *  and stays untouched. */
+const COURT_B = "44444444-4444-4444-8444-444444444444";
 
 // A fixtures row exactly as `FIXTURE_LITE_COLS` selects it.
 function row(over: Partial<FixtureLite> = {}): FixtureLite {
@@ -71,7 +77,7 @@ function settings(constraints: Record<string, unknown>): ScheduleSettingsOut {
       startAt: iso(T0),
       matchMinutes: 40,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 2"],
+      courts: [COURT_A, COURT_B],
       perEntrantMinRest: 30,
       constraints,
     }),
