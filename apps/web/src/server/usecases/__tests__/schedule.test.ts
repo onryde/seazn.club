@@ -934,8 +934,13 @@ const HOUR = 60 * MIN;
 
 /** Exactly what the editor holds mid-edit: `<input type="datetime-local">`
  *  values plus a court, `""` meaning the whole division. */
+/** P9 pass 4c: `blackouts[].court` is a CourtId now, not a display label.
+ *  These drafts exercise the config round-trip (JSONB, no FK), so a fixed
+ *  id is enough — the point is that the shape survives PUT -> GET. */
+const BLACKOUT_COURT_ID = "c0000000-0000-4000-8000-0000000000c2";
+
 const BLACKOUT_DRAFTS = [
-  { court: "Court 2", from: "2026-08-01T12:00", to: "2026-08-01T13:00" },
+  { court: BLACKOUT_COURT_ID, from: "2026-08-01T12:00", to: "2026-08-01T13:00" },
   { court: "", from: "2026-08-02T09:00", to: "2026-08-02T10:30" },
 ];
 
@@ -968,10 +973,11 @@ function windowAt(fromMs: number, toMs: number, tz: string) {
 
 // P9 pass 3a: `courts` dropped from the base config (real ids only, created
 // per-division by `seedBlackoutDivision` below — a module-level const cannot
-// call the DB). `blackouts[].court` is UNRELATED and untouched by this pass —
+// call the DB). `blackouts[].court` became a CourtId in P9 pass 4c —
 // it stays a free-text label matched by NAME (schemas.ts: `court:
 // z.string().max(100).optional()`, never migrated to CourtId), so
-// `BLACKOUT_DRAFTS`'s `court: "Court 2"` below needs no id.
+// P9 (pass 4c): `blackouts[].court` is now a CourtId, so the draft below
+// carries a real court id rather than a display label.
 const BLACKOUT_BASE_CONFIG = {
   startAt: T0,
   matchMinutes: 30,
@@ -1032,7 +1038,7 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
     // `court` KEY — not a `court: undefined` — because `courtBlocked` skips on
     // `bo.court !== undefined`, so a serialised `undefined` would scope the
     // window to a court literally named "undefined" and block nothing.
-    expect(stored.config.blackouts[0]!.court).toBe("Court 2");
+    expect(stored.config.blackouts[0]!.court).toBe(BLACKOUT_COURT_ID);
     expect("court" in stored.config.blackouts[1]!).toBe(false);
   });
 
@@ -1054,7 +1060,7 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
     // the server must parse it absolutely and re-zone it through neither clock.
     const config = toSlotConfig(settings, 0);
     expect(config.blackouts).toEqual([
-      { court: "Court 2", from: Date.parse(rows[0]!.from), to: Date.parse(rows[0]!.to) },
+      { court: BLACKOUT_COURT_ID, from: Date.parse(rows[0]!.from), to: Date.parse(rows[0]!.to) },
       { from: Date.parse(rows[1]!.from), to: Date.parse(rows[1]!.to) },
     ]);
     // `toEqual` treats an absent key and an `undefined` one as equal, so the

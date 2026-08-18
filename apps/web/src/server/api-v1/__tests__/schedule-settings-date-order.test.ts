@@ -115,7 +115,8 @@ describe("PutScheduleSettings — a reversed range is refused on the way in", ()
           ...BASE,
           blackouts: [
             { from: AUG_11, to: AUG_22 },
-            { court: "Court 1", from: AUG_22, to: AUG_11 },
+            // P9: `blackouts[].court` is a CourtId since the cutover.
+            { court: "c0000000-0000-4000-8000-0000000000c2", from: AUG_22, to: AUG_11 },
           ],
         },
       }),
