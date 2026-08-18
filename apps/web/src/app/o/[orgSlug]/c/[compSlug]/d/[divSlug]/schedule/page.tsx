@@ -14,6 +14,11 @@ import { listStages } from "@/server/usecases/stages";
 import { listDivisionFixturesForBoard } from "@/server/usecases/fixtures";
 import { listEntrants } from "@/server/usecases/entrants";
 import { getScheduleSettings } from "@/server/usecases/schedule";
+// P9 scope item 5: org venues+courts feed the court multi-picker (both the
+// board's inline settings card and the standalone settings tab) plus
+// MovePanel's court-id -> name lookup — see ScheduleBoard's own
+// `courtNamesById` comment.
+import { listVenues } from "@/server/usecases/venues";
 import { hasFeature } from "@/lib/entitlements";
 import { preferredCurrency } from "@/lib/currency-server";
 import { withTenant } from "@/lib/db";
@@ -112,6 +117,7 @@ export default async function DivisionSchedulePage({
     blackouts,
     busy,
     currency,
+    venues,
   ] = await Promise.all([
     getCompetition(auth, division.competition_id),
     listStages(auth, id),
@@ -128,6 +134,9 @@ export default async function DivisionSchedulePage({
     wantsBlackouts ? listOfficialBlackouts(auth) : notLoaded<OfficialBlackoutRow>(),
     wantsOfficials ? listOfficialBusyElsewhere(auth) : notLoaded<OfficialBusyRow>(),
     preferredCurrency(auth.orgId),
+    // Unconditional like `settings`/`stages` above (board AND settings tabs
+    // both need it; not worth a per-tab gate for one cheap query set).
+    listVenues(auth),
   ]);
 
   // Feed wiring for TBD card labels ("Winner of R1·2" — doc 12 §2).
@@ -284,6 +293,7 @@ export default async function DivisionSchedulePage({
               competitionStart={competition.starts_on}
               competitionEnd={competition.ends_on}
               venueCap={venueLabel(division.sport_key)}
+              venues={venues}
               showSettings={false}
               officialsWithBlackout={new Set(blackouts.map((b) => b.official_id)).size}
             />
@@ -362,6 +372,7 @@ export default async function DivisionSchedulePage({
             canEdit={editable}
             constraintsAllowed={constraints}
             venueCap={venueLabel(division.sport_key)}
+            venues={venues}
             orgTz={orgTz}
             // The competition's own dates — already in scope for the board's
             // day range above. The panel's date pickers carry them as

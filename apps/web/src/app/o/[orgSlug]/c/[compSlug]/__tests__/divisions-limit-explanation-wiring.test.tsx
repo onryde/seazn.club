@@ -65,6 +65,12 @@ vi.mock("@/server/usecases/division-slots", () => ({
   archivedSlotsExplainRefusal: async () => h.explain,
 }));
 
+// P9 scope item 5: the wizard now also fetches org venues for the court
+// multi-picker — irrelevant to THIS test (archived-slot wiring), and the
+// hand-rolled `@/lib/db` fake below has no real venues/courts rows to
+// return, so left unmocked it 500s inside listVenues's own date formatting.
+vi.mock("@/server/usecases/venues", () => ({ listVenues: async () => [] }));
+
 // `importOriginal` rather than a bare stub: competition settings reaches
 // entitlements twice — `hasFeature` directly and `passLockReason` through the
 // status nudge — and a hand-written object turns the second arrival into an
