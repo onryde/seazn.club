@@ -52,6 +52,40 @@ describe("ScheduleConfig.courts (V371 shape)", () => {
   });
 });
 
+// P9 pass 4c item 3: `blackouts[].court` was still `z.string().max(100)` — a
+// court NAME — while `courts` above already moved to real ids. A court-
+// scoped blackout could no longer match the court it named. Same "the
+// migration IS the compatibility strategy" stance as `courts` above.
+describe("ScheduleConfig.blackouts[].court (V371 shape)", () => {
+  it("blackouts key absent parses to an empty array via default, not a throw", () => {
+    expect(ScheduleConfig.parse({}).blackouts).toEqual([]);
+  });
+
+  it("a venue-wide blackout (no court) still parses with court undefined", () => {
+    const out = ScheduleConfig.parse({
+      blackouts: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
+    });
+    expect(out.blackouts).toHaveLength(1);
+    expect(out.blackouts[0]!.court).toBeUndefined();
+  });
+
+  it("rejects a pre-migration free-text court name on a blackout (not a real court id)", () => {
+    expect(() =>
+      ScheduleConfig.parse({
+        blackouts: [{ court: "Court 1", from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
+      }),
+    ).toThrow();
+  });
+
+  it("accepts a real court id on a blackout", () => {
+    const id = "8db1d737-249f-4b54-8ba6-d9f72a9a35ef";
+    const out = ScheduleConfig.parse({
+      blackouts: [{ court: id, from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
+    });
+    expect(out.blackouts[0]!.court).toBe(id);
+  });
+});
+
 const GENERIC_CONFIG = {
   resultMode: "score",
   allowDraws: true,

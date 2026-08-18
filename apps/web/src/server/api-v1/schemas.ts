@@ -979,8 +979,20 @@ export const ScheduleConfig = z.object({
    *  pass 3's job, not this one's. */
   courts: z.array(CourtId).max(50).default([]),
   perEntrantMinRest: z.number().int().min(0).max(24 * 60).default(0),
+  /** P9 pass 4c: real court id, like `courts` above — was
+   *  `z.string().max(100)` (a court NAME). `courts` moved to real ids in
+   *  pass 1 while this field stayed free text, so a court-scoped blackout
+   *  could no longer match the court it named (silently went global or
+   *  inert depending on the reader). V371 rewrites every stored
+   *  `blackouts[].court` name -> id on migration, reusing the same
+   *  court_mapping `courts` itself is rewritten through; an entry that
+   *  cannot be mapped is left untouched rather than dropped (a blackout's
+   *  only job is to compare, same stance V371's locked_scopes block takes —
+   *  see that block's own comment for why "leave inert" beats "silently
+   *  discard an organiser's blackout"), and counted in the migration's
+   *  dry-run report so an operator can see and fix it by hand. */
   blackouts: z
-    .array(z.object({ court: z.string().max(100).optional(), from: IsoDateTime, to: IsoDateTime }))
+    .array(z.object({ court: CourtId.optional(), from: IsoDateTime, to: IsoDateTime }))
     .max(200)
     .default([]),
   sessionWindows: z
