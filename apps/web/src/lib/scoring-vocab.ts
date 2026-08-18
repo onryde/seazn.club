@@ -591,6 +591,12 @@ export const ENGINE_ERROR_KEY: Record<EngineErrorCode, MessageKey> = {
   SEEDING_MAP_SLOT_INVALID: "engineError.SEEDING_MAP_SLOT_INVALID",
   SEEDING_MAP_SOURCE_INVALID: "engineError.SEEDING_MAP_SOURCE_INVALID",
   SEEDING_BESTNTH_UNEQUAL_POOLS: "engineError.SEEDING_BESTNTH_UNEQUAL_POOLS",
+  // F3 Task 3 (P6) — placeDescriptors' new ambiguous-seeded_map refusal
+  // (progression.ts). Same "this file's typecheck fails until copy exists"
+  // forcing function as the four F2 codes above; unlike lib/seeding-error.ts's
+  // closed 13-code allowlist, THIS map has no such ruling — every
+  // EngineErrorCode needs an entry here regardless.
+  SEEDING_MAP_SOURCE_AMBIGUOUS: "engineError.SEEDING_MAP_SOURCE_AMBIGUOUS",
 };
 
 /**

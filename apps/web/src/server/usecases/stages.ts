@@ -1556,6 +1556,15 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
       });
     }
 
+    // P6 (F3 Task 3) verified: this map does NOT need sourceIndex-qualified
+    // keys. It's keyed by the synthetic per-SEAT id `slot:${i+1}` (i = array
+    // position in `placed`, already unique — never `descriptorKey`), so two
+    // same-keyed descriptors from different sources (the multi-source
+    // collision placeDescriptors now guards, progression.ts) already survive
+    // here untouched: each gets its own seat regardless of what its
+    // descriptor's key is. The actual fix for that collision lives entirely
+    // in placeDescriptors (SEEDING_MAP_SOURCE_AMBIGUOUS) — see its doc
+    // comment and _INDEX.md's P6 entry.
     const slotOf = new Map<string, SlotDescriptor>();
     const entrants: ActiveEntrant[] = placed.map((slot, i) => {
       const id = `slot:${i + 1}`;
@@ -2402,6 +2411,21 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
         { stageId },
       );
     }
+    // P6 (F3 Task 3) residual, NOT fixed here: this map IS keyed by bare
+    // descriptorKey (discarding sourceIndex), same anti-pattern
+    // placeDescriptors used to have — a tie spanning two sources that share
+    // a descriptorKey would resolve computedTies' slot for the WRONG one.
+    // Not fixed because the fix is blocked one layer up: `ties[].descriptors`
+    // (ProgressionTieFlag, progression.ts) is `SlotDescriptor[]`, which has
+    // no sourceIndex to key by — the caller has nothing to disambiguate
+    // with. Widening that type is a real engine API change (ripples through
+    // resolveProgression's tie-group logic and this function's wire
+    // contract), out of this session's authorized file set. Currently
+    // UNREACHABLE regardless: every writer in this codebase emits a
+    // single-source progression (multi-source is new capability this
+    // session's placeDescriptors fix unlocked, per SourcedSlot's own doc
+    // comment), so no tie can span two sources today. Recorded in
+    // _INDEX.md's P6 entry for whoever adds a multi-source writer next.
     const seedOfKey = new Map(qualifiers.map((q) => [descriptorKey(q.descriptor), q.seed] as const));
 
     const computedQualifiers = qualifiers.map((q) => ({

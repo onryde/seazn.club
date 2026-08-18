@@ -3242,6 +3242,7 @@
   "engineError.SEEDING_RULES_MISSING": "Deze fase heeft geen plaatsingsregels, of de gegenereerde wedstrijden komen er niet meer mee overeen. Voeg plaatsingsregels toe of genereer de wedstrijden van deze fase opnieuw.",
   "engineError.SEEDING_MAP_SLOT_INVALID": "De plaatsingstabel van deze fase bevat een ongeldige positie. Corrigeer de plaatsingsregels en probeer het opnieuw.",
   "engineError.SEEDING_MAP_SOURCE_INVALID": "De plaatsingstabel van deze fase verwijst naar een geplaatste die niet bestaat. Corrigeer de plaatsingsregels en probeer het opnieuw.",
+  "engineError.SEEDING_MAP_SOURCE_AMBIGUOUS": "De plaatsingstabel van deze fase verwijst naar een geplaatste die op meer dan één plek bestaat. Corrigeer de plaatsingsregels en probeer het opnieuw.",
   "engineError.SEEDING_BESTNTH_UNEQUAL_POOLS": "Deze groepen hebben een verschillend aantal wedstrijden gespeeld, dus hun standen kunnen nog niet met elkaar worden vergeleken.",
   "scoring.position.set": "Set",
   "scoring.position.game": "Game",

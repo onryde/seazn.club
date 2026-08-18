@@ -21,6 +21,7 @@ import { describe, expect, it, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { EngineError } from "@seazn/engine/core";
@@ -361,5 +362,80 @@ describe.skipIf(!HAS_DB)("multi-source progression (F2 Decision 4 / Finding 1)",
       select count(*)::int as n from division_events
       where division_id = ${division.id} and type = 'standings_carried'`;
     expect(ev!.n).toBe(1);
+  });
+
+  // P6 (F3 Task 3) — createStages validates a seeded_map at SAVE time
+  // (stage-seeding.ts's validateStageProgression -> the engine's
+  // validateProgressionAgainstShapes -> placeDescriptors), the "422 at rule
+  // save, not at proposal time" contract placeDescriptors' own doc comment
+  // names. Two independent league sources both using rankRange{from:1,to:1}
+  // produce the SAME descriptorKey ("rank:1") regardless of shape — this
+  // needs no completed results or standings, proving the ambiguity check
+  // fires purely from the two sources' SHAPES, before either stage has even
+  // generated fixtures. validateStageProgression converts the engine's
+  // EngineError into an HttpError (its own catch block), so — unlike the
+  // pure engine test in progression.test.ts — the code arrives as
+  // HttpError.code here, not via EngineError.is.
+  it("createStages rejects a seeded_map whose source is ambiguous across two real DB-backed sources", async () => {
+    const { auth } = await seedOrg();
+    const { division, a, b } = await seedDivisionWithTwoLeagues(auth);
+
+    let caught: unknown;
+    try {
+      await createStages(auth, division.id, {
+        seq: 3,
+        kind: "knockout",
+        name: "Final",
+        config: {},
+        progression: {
+          sources: [
+            { stage: { stageId: a.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+            { stage: { stageId: b.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+          ],
+          placement: "seeded_map",
+          map: [{ slot: "1", source: "rank:1" }],
+          timing: "on_complete",
+        },
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HttpError);
+    const err = caught as HttpError;
+    expect(err.status).toBe(422);
+    expect(err.code).toBe("SEEDING_MAP_SOURCE_AMBIGUOUS");
+    expect(err.message).toContain("rank:1");
+
+    // Nothing was left half-created — the whole stage graph is one
+    // transaction, so the ambiguous Final never landed and A/B are
+    // unaffected (still exactly the two league stages from the fixture).
+    const rows = await sql<{ id: string }[]>`select id from stages where division_id = ${division.id}`;
+    expect(rows.map((r) => r.id).sort()).toEqual([a.id, b.id].sort());
+  });
+
+  // Same shape, but the seeded_map references a key ONLY ONE source
+  // produces (rank:1 from A alone; B contributes rank:2 via a distinct
+  // rankRange) — createStages must accept it: an ambiguous key existing
+  // elsewhere in the progression must not poison an unrelated reference.
+  it("createStages still accepts a seeded_map whose source is unambiguous, even alongside a same-shaped sibling source", async () => {
+    const { auth } = await seedOrg();
+    const { division, a, b } = await seedDivisionWithTwoLeagues(auth);
+
+    const [final] = await createStages(auth, division.id, {
+      seq: 3,
+      kind: "knockout",
+      name: "Final",
+      config: {},
+      progression: {
+        sources: [
+          { stage: { stageId: a.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+          { stage: { stageId: b.id }, take: [{ kind: "rankRange", from: 2, to: 2 }] },
+        ],
+        placement: "seeded_map",
+        map: [{ slot: "1", source: "rank:1" }],
+        timing: "on_complete",
+      },
+    });
+    expect(final!.id).toBeDefined();
   });
 });
