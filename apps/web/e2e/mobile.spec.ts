@@ -881,6 +881,7 @@ test("z3 schedule actions + result strip hold at phone width", async ({ page, re
   await addEntrantsViaApi(request, solverDivisionId, ["Ash M", "Brook M", "Clay M", "Dune M"]);
   const { fixtureIds } = await createStageAndGenerate(request, solverDivisionId);
   expect(fixtureIds.length).toBe(6);
+  const { courts: solverCourts } = await seedVenueWithCourts(request, ["Court A", "Court B"]);
   const settings = await apiJson(
     request,
     `/api/v1/divisions/${solverDivisionId}/schedule-settings`,
@@ -891,7 +892,7 @@ test("z3 schedule actions + result strip hold at phone width", async ({ page, re
         startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: ["Court A", "Court B"],
+        courts: solverCourts.map((c) => c.id),
         perEntrantMinRest: 0,
         blackouts: [],
         sessionWindows: [],
@@ -1024,13 +1025,14 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
   // impossible, and a generator change that produced fewer would leave this
   // test measuring a card that never appears.
   expect(capGen.data!.fixtures.length).toBe(28);
+  const { courts: capCourts } = await seedVenueWithCourts(request, ["Court 1"]);
   const capSettings = await apiJson(request, `/api/v1/divisions/${capDivisionId}/schedule-settings`, "PUT", {
     config: {
       startAt: "2026-09-12T00:00:00.000Z",
       endAt: "2026-09-12T23:59:00.000Z",
       matchMinutes: 60,
       gapMinutes: 0,
-      courts: ["Court 1"],
+      courts: [capCourts[0]!.id],
       perEntrantMinRest: 0,
     },
   });

@@ -570,6 +570,7 @@ test("two fixtures sharing only a person, under different entrants, are never pl
   }
   expect(fixtureIds.length).toBe(SHARED_PERSON_FIXTURE_COUNT);
 
+  const { courts: sharedPersonCourts } = await seedVenueWithCourts(request, ["Court A", "Court B"]);
   const settings = await apiJson(
     request,
     `/api/v1/divisions/${divisionId}/schedule-settings`,
@@ -580,7 +581,7 @@ test("two fixtures sharing only a person, under different entrants, are never pl
         startAt: SHARED_PERSON_START,
         matchMinutes: SHARED_PERSON_MATCH_MIN,
         gapMinutes: 0,
-        courts: ["Court A", "Court B"],
+        courts: sharedPersonCourts.map((c) => c.id),
         perEntrantMinRest: 0,
         blackouts: [],
         // Exactly two ticks -- four (court, tick) slots for two fixtures.
