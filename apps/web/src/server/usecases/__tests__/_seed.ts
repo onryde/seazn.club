@@ -141,3 +141,22 @@ export async function seedFutureDivision(auth: AuthCtx) {
   }
   return { division, fixtures, venue, court };
 }
+
+/** `count` real courts under one shared venue, org-scoped (P9 pass 3b) — for
+ *  suites that only have an org id in hand (not a full `AuthCtx`) and just
+ *  need N distinct, real `courts.id` values, e.g. to give two divisions of
+ *  one competition a shared court plus a court each of their own. Named
+ *  "Court 1".."Court N" for a readable failure message; nothing reads the
+ *  name back. `via`/`role` mirror `seedOrg`'s own synthetic auth shape;
+ *  `userId: null` is safe here — court creation carries no actor-specific
+ *  logic. */
+export async function seedCourts(orgId: string, count: number): Promise<string[]> {
+  const auth: AuthCtx = { orgId, via: "session", userId: null, role: "owner", keyId: null };
+  const venue = await createVenue(auth, { name: "Main venue", sort: 0 });
+  const ids: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const court = await createCourt(auth, venue.id, { name: `Court ${i + 1}`, sort: i, tags: [] });
+    ids.push(court.id);
+  }
+  return ids;
+}
