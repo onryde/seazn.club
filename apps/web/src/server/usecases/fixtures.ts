@@ -6,7 +6,7 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { PatchFixture, PutLineup, ScheduleConflict } from "@/server/api-v1/schemas";
-import { BOARD_FIXTURE_COLS, type BoardFixtureRow, type FixtureRow } from "./stages";
+import { type BoardFixtureRow, type FixtureRow } from "./stages";
 // #14: `courtNamesById` is the venue-qualified label map (via
 // `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
 // venues that legally share one court name.
