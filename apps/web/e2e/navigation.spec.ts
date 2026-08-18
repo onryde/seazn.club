@@ -110,11 +110,13 @@ test.describe("settings shell", () => {
     // Previously visible only from Billing and Credits — the two pages an
     // owner is not on when they run out of credits mid-schedule.
     await page.goto("/settings/billing");
-    // Scoped to the rail's own landmark: the billing PAGE also links to
-    // credits ("Manage AI credits"), and an unscoped match resolves to both.
-    // The point of this case is that the rail carries it, not the page.
+    // Scoped to the rail's own landmark, and matched EXACTLY. Two other links
+    // to the same route are in play — the billing page's own "Manage AI
+    // credits" and the rail's own "AI Credits" nav item — and Playwright's
+    // `name` is a substring match, so anything looser resolves to several.
     const rail = page.getByRole("complementary");
-    await expect(rail.getByRole("link", { name: /AI credits$/ })).toBeVisible();
+    // Anchored, because the balance is whatever this environment's org has.
+    await expect(rail.getByRole("link", { name: /^\d+ AI credits$/ })).toBeVisible();
     await expect(rail).toContainText("Pro");
   });
 
