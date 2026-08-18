@@ -70,6 +70,7 @@ import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
+import { HANDLED_EVENT_TYPES, processStripeEvent } from "../billing-events";
 import {
   ageAt,
   applicationFeeCents,
@@ -82,8 +83,10 @@ import {
   publicRegistrationStatusByRef,
   withdrawRegistrationByRef,
   handleRegistrationCheckoutCompleted,
+  handleRegistrationCheckoutAsyncPaymentFailed,
   handleRegistrationDispute,
   syncRegistrationRefund,
+  reconcileRegistration,
   reconcileRegistrationBySession,
   sweepRegistrations,
   withdrawRegistrationPublic,
@@ -405,21 +408,28 @@ async function seedRegistration(
   return { registration: row, access_token: rawToken, checkout_url: null };
 }
 
+/** Builds a group checkout session (RS003 W3a/W3b metadata shape). Accepts
+ *  either a single registration id (the common single-entry case — nearly
+ *  every existing call site) or an array for a multi-entry cart; either way
+ *  `metadata.registration_ids` is the comma-joined list
+ *  `handleRegistrationCheckoutCompleted` actually reads. */
 function fakeSession(
-  regId: string,
+  regId: string | string[],
   amount: number,
   feePercent?: number,
 ): Stripe.Checkout.Session {
+  const ids = Array.isArray(regId) ? regId : [regId];
   return {
-    id: "cs_test_" + regId.slice(0, 8),
-    payment_intent: "pi_test_" + regId.slice(0, 8),
+    id: "cs_test_" + ids[0].slice(0, 8),
+    payment_intent: "pi_test_" + ids[0].slice(0, 8),
     payment_status: "paid",
     amount_total: amount,
     // The session carries the rate it was billed at, exactly as
     // createRegistrationCheckout stamps it (V312).
     metadata: {
-      kind: "registration",
-      registration_id: regId,
+      kind: "registration_group",
+      registration_group_id: "rg_group_test_" + ids[0].slice(0, 8),
+      registration_ids: ids.join(","),
       ...(feePercent === undefined ? {} : { fee_percent: String(feePercent) }),
     },
   } as unknown as Stripe.Checkout.Session;
@@ -1782,15 +1792,36 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     const ref = res.registration.ref_code as string;
     const session = fakeSession(res.registration.id, 500);
 
-    // Mismatched session (different registration) → no-op.
+    // Mismatched session (different registration, none of it this ref's) →
+    // no-op.
     stripeMock.checkoutRetrieve.mockResolvedValueOnce({
       ...session,
-      metadata: { kind: "registration", registration_id: randomUUID() },
+      metadata: { kind: "registration_group", registration_ids: randomUUID() },
     });
     expect(await reconcileRegistrationBySession(ref, session.id)).toBe(false);
 
     stripeMock.checkoutRetrieve.mockResolvedValueOnce(session);
     expect(await reconcileRegistrationBySession(ref, session.id)).toBe(true);
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("confirmed");
+  });
+
+  it("reconciles by token: membership in registration_ids, not equality on the old singular key", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    await sql`update registration_groups set checkout_session_id = 'cs_test_placeholder'
+              where id = ${res.registration.group_id}`;
+    const session = fakeSession(res.registration.id, 500);
+
+    // Session names a DIFFERENT registration only → no-op.
+    stripeMock.checkoutRetrieve.mockResolvedValueOnce({
+      ...session,
+      metadata: { kind: "registration_group", registration_ids: randomUUID() },
+    });
+    expect(await reconcileRegistration(res.registration.id, res.access_token)).toBe(false);
+
+    stripeMock.checkoutRetrieve.mockResolvedValueOnce(session);
+    expect(await reconcileRegistration(res.registration.id, res.access_token)).toBe(true);
     const row = await loadWithGroup(res.registration.id);
     expect(row.status).toBe("confirmed");
   });
@@ -2382,6 +2413,210 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     // (registrations.ts ~handleRegistrationDispute, "lost" branch) makes
     // this fail: it would read back 1000 or 700, never 1700.
     expect(after.group_refunded_cents).toBe(1700);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS003 W3b: the webhook re-keyed from a single registration_id to the
+// GROUP's registration_ids (comma-joined, W3a's createRegistrationCheckout),
+// plus the payment_status gate + async event pair the same wave closed
+// (owner's no-new-issues rule — every OTHER kind in billing-events.ts's
+// dispatch already gated on payment_status; the registration branch didn't).
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("RS003 W3b: group checkout webhook", () => {
+  it("confirms every entry named in registration_ids; a pending sibling outside the list and a waitlisted sibling are both untouched, and no entry's amount_cents is smeared by the cart total", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const a = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Entry A",
+      amountCents: 1000,
+    });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, 700, "Entry B");
+    // A sibling THIS session does not cover, and the ordinary waitlisted
+    // sibling — neither is named in registration_ids below.
+    const d = await seedSecondEntry(a.registration.group_id, division.id, 300, "Entry D");
+    const w = await seedSecondEntry(
+      a.registration.group_id, division.id, 0, "Entry W", "waitlisted",
+    );
+
+    // The cart TOTAL (1700) must never land on either listed entry's own
+    // amount_cents — that would be the multi-entry smear this wave closes.
+    await handleRegistrationCheckoutCompleted(fakeSession([a.registration.id, b.id], 1700));
+
+    const aAfter = await loadWithGroup(a.registration.id);
+    const bAfter = await loadWithGroup(b.id);
+    const dAfter = await loadWithGroup(d.id);
+    const wAfter = await loadWithGroup(w.id);
+    expect(aAfter.status).toBe("confirmed");
+    expect(aAfter.amount_cents).toBe(1000); // NOT the 1700 cart total
+    expect(bAfter.status).toBe("confirmed");
+    expect(bAfter.amount_cents).toBe(700); // NOT the 1700 cart total
+    expect(dAfter.status).toBe("pending"); // untouched — not named in this session
+    expect(wAfter.status).toBe("waitlisted"); // untouched
+  });
+
+  it("RULING A holds through the group path: a rejected entry in the list is refunded its own amount and never confirmed; its sibling still confirms", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const a = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Entry A",
+      amountCents: 1000,
+    });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, 700, "Entry B");
+    await sql`update registrations set status = 'rejected' where id = ${a.registration.id}`;
+    stripeMock.refundCreate.mockClear();
+
+    await handleRegistrationCheckoutCompleted(fakeSession([a.registration.id, b.id], 1700));
+
+    const aAfter = await loadWithGroup(a.registration.id);
+    const bAfter = await loadWithGroup(b.id);
+    expect(aAfter.status).toBe("rejected"); // never confirmed
+    expect(aAfter.entrant_id).toBeNull();
+    expect(stripeMock.refundCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 1000 }), // A's own amount, not the 1700 cart total
+    );
+    expect(bAfter.status).toBe("confirmed"); // sibling unaffected
+  });
+
+  it("RULING B holds through the group path: a manual-approval division leaves every listed entry paid-awaiting-approval, none confirmed", async () => {
+    const { competition, division, settings } = await stripeRig();
+    await sql`update registration_settings set approval = 'manual' where division_id = ${division.id}`;
+    const a = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Entry A",
+      amountCents: 1000,
+    });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, 700, "Entry B");
+
+    await handleRegistrationCheckoutCompleted(fakeSession([a.registration.id, b.id], 1700));
+
+    const aAfter = await loadWithGroup(a.registration.id);
+    const bAfter = await loadWithGroup(b.id);
+    expect(aAfter.status).toBe("paid");
+    expect(aAfter.entrant_id).toBeNull();
+    expect(aAfter.amount_cents).toBe(1000);
+    expect(bAfter.status).toBe("paid");
+    expect(bAfter.entrant_id).toBeNull();
+    expect(bAfter.amount_cents).toBe(700);
+  });
+
+  it("a PAID checkout.session.completed confirms when dispatched through billing-events (proves the dispatch branch's kind check, re-keyed to registration_group)", async () => {
+    // Unlike the unpaid case below, this one distinguishes "the dispatch
+    // routed correctly" from "nothing happened for the wrong reason": the old
+    // kind === "registration" check has no producer left, so if it were
+    // never re-keyed this session would fall through billing-events' OTHER
+    // branches (size_pack/credit_pack/event-pass, then the bare org_id gate)
+    // and also confirm nothing — a false green for the unpaid test alone.
+    const { competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    const session = fakeSession(res.registration.id, 500); // payment_status: "paid"
+
+    await processStripeEvent({
+      id: "evt_" + randomUUID().slice(0, 8),
+      type: "checkout.session.completed",
+      data: { object: session },
+    } as unknown as Stripe.Event);
+
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("confirmed");
+    expect(row.entrant_id).not.toBeNull();
+  });
+
+  it("payment_status: unpaid on checkout.session.completed confirms and materialises nothing", async () => {
+    // Delayed-notification methods fire checkout.session.completed while the
+    // session is still unpaid (Stripe skill, "Webhooks and fulfillment").
+    const { competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    const session = {
+      ...fakeSession(res.registration.id, 500),
+      payment_status: "unpaid",
+    } as unknown as Stripe.Checkout.Session;
+
+    await processStripeEvent({
+      id: "evt_" + randomUUID().slice(0, 8),
+      type: "checkout.session.completed",
+      data: { object: session },
+    } as unknown as Stripe.Event);
+
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("pending");
+    expect(row.entrant_id).toBeNull();
+  });
+
+  it("checkout.session.async_payment_succeeded runs the same fulfilment as a paid completion", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    const session = fakeSession(res.registration.id, 500); // payment_status: "paid"
+
+    await processStripeEvent({
+      id: "evt_" + randomUUID().slice(0, 8),
+      type: "checkout.session.async_payment_succeeded",
+      data: { object: session },
+    } as unknown as Stripe.Event);
+
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("confirmed");
+    expect(row.entrant_id).not.toBeNull();
+  });
+
+  it("checkout.session.async_payment_failed never confirms, records a payment_failed audit entry per named registration, and leaves every entry payable", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const a = await seedRegistration(competition.id, division.id, settings, { displayName: "Entry A" });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, 500, "Entry B");
+    const session = {
+      ...fakeSession([a.registration.id, b.id], 1000),
+      payment_status: "unpaid",
+    } as unknown as Stripe.Checkout.Session;
+
+    await processStripeEvent({
+      id: "evt_" + randomUUID().slice(0, 8),
+      type: "checkout.session.async_payment_failed",
+      data: { object: session },
+    } as unknown as Stripe.Event);
+
+    const aAfter = await loadWithGroup(a.registration.id);
+    const bAfter = await loadWithGroup(b.id);
+    expect(aAfter.status).toBe("pending"); // untouched — still payable
+    expect(aAfter.entrant_id).toBeNull();
+    expect(bAfter.status).toBe("pending");
+
+    const auditCount = async (id: string) => {
+      const [row] = await sql<{ n: string }[]>`
+        select count(*)::text as n from competition_events
+        where type = 'registration.payment_failed' and payload->>'registration_id' = ${id}`;
+      return Number(row.n);
+    };
+    expect(await auditCount(a.registration.id)).toBe(1);
+    expect(await auditCount(b.id)).toBe(1);
+  });
+
+  it("a redelivered async_payment_succeeded for a multi-entry cart confirms once, not twice", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const a = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Entry A",
+      amountCents: 1000,
+    });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, 700, "Entry B");
+    const session = fakeSession([a.registration.id, b.id], 1700);
+
+    await handleRegistrationCheckoutCompleted(session);
+    const aEntrant = (await loadWithGroup(a.registration.id)).entrant_id;
+    const bEntrant = (await loadWithGroup(b.id)).entrant_id;
+
+    // Stripe's "at least once" redelivery of the SAME session.
+    await handleRegistrationCheckoutCompleted(session);
+    const aAfter = await loadWithGroup(a.registration.id);
+    const bAfter = await loadWithGroup(b.id);
+    expect(aAfter.entrant_id).toBe(aEntrant); // idempotent, not a second entrant
+    expect(bAfter.entrant_id).toBe(bEntrant);
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from entrants where division_id = ${division.id}`;
+    expect(n).toBe(2); // exactly A and B, no duplicates
+  });
+});
+
+describe("RS003 W3b: HANDLED_EVENT_TYPES (pure)", () => {
+  it("includes both delayed-notification checkout events (registered, not silently ACKed)", () => {
+    expect(HANDLED_EVENT_TYPES).toContain("checkout.session.async_payment_succeeded");
+    expect(HANDLED_EVENT_TYPES).toContain("checkout.session.async_payment_failed");
   });
 });
 
