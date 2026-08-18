@@ -192,3 +192,29 @@ Both cost real time and both looked exactly like code defects:
    that and is KILLED mid-run — which looks like a hang, not a cap. Run it
    with `run_in_background: true` and have the command write its own
    `EXIT=$?` to a file, because a killed background command reports 0.
+
+## Deferred with reason: stage-level required_court_tags
+
+Three paths resolve required court tags and they do NOT agree:
+
+| Path | Tags used |
+|---|---|
+| `autoSchedule` build (`schedule.ts:1373`) | division ∪ stage (`unionRequiredCourtTags`) |
+| AI draft (`buildSchedulePack`) | division only |
+| `/validate` (`validateScheduleIn`, P9 pass 2c) | division only |
+
+This is NOT reachable in production: `stages.required_court_tags` (V367) has
+**no write path** — the column exists, `divisions` has the CRUD, stages do
+not. So no stage can carry a tag for the three paths to disagree about.
+
+It is deliberately not "fixed" here, because the correct semantics are not a
+blanket union: a division's fixtures span multiple stages, so a union across
+all of them would over-constrain every fixture by every stage's tags. Each
+fixture must be judged against ITS OWN stage's tags, which is per-fixture
+resolution the verifier does not currently do.
+
+**Owed when `stages.required_court_tags` gains a write path** (P10 or later):
+per-fixture stage-tag resolution in all three paths, through the one shared
+`candidate-courts` function — not three copies. Whoever adds the write path
+owns this, and should add a test that a stage tag narrows the AI draft and
+reds `/validate`, not just the build.
