@@ -51,7 +51,7 @@ import { createStages, generateStageFixtures } from "../stages";
 import { aiPlanForDivision } from "../schedule-ai";
 import { aiPlanForCompetition } from "../competition-schedule-ai";
 import { officialsAiPlanForDivision } from "../officials-ai";
-import { GENERIC_CONFIG, seedOrg } from "./_seed";
+import { GENERIC_CONFIG, seedCourts, seedOrg } from "./_seed";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { recordPackPurchase, walletIdFor } from "@/lib/credits";
 import { QUOTE_MISMATCH_EVENT } from "../ai-quote-mismatch";
@@ -104,7 +104,11 @@ async function seedDivision(
   competitionId: string,
   opts: { courts?: string[]; officials?: number } = {},
 ): Promise<SeededDivision> {
-  const courts = opts.courts ?? ["Court 1", "Court 2"];
+  // P9 pass 3b: real `courts.id` values — `seedCourts` mints a fresh pair per
+  // call, so two divisions in the joint tests below (each calling this with
+  // its own `courts` override) always land on disjoint courts, same as the
+  // old "Court 1/2" vs "Court 3/4" labels did.
+  const courts = opts.courts ?? (await seedCourts(auth.orgId, 2));
   const slug = `d-${randomUUID().slice(0, 8)}`;
   const division = await createDivision(auth, competitionId, {
     name: slug,
@@ -345,8 +349,8 @@ describe.skipIf(!HAS_DB)("quote/charge mismatch — the joint solve (#387)", () 
   it("records it on the competition path too", async () => {
     const auth = await seedPlusOrg();
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "QM joint", visibility: "public", branding: {} });
-    const a = await seedDivision(auth, comp.id, { courts: ["Court 1", "Court 2"] });
-    const b = await seedDivision(auth, comp.id, { courts: ["Court 3", "Court 4"] });
+    const a = await seedDivision(auth, comp.id, { courts: await seedCourts(auth.orgId, 2) });
+    const b = await seedDivision(auth, comp.id, { courts: await seedCourts(auth.orgId, 2) });
     chat.mockResolvedValueOnce(chatResponse(legalPlan([a, b])));
 
     // Two rung-1 divisions price at max(1, 2 - 1) = 1; the card said 4.
@@ -370,8 +374,8 @@ describe.skipIf(!HAS_DB)("quote/charge mismatch — the joint solve (#387)", () 
   it("records nothing when the joint quote agrees", async () => {
     const auth = await seedPlusOrg();
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "QM joint ok", visibility: "public", branding: {} });
-    const a = await seedDivision(auth, comp.id, { courts: ["Court 1", "Court 2"] });
-    const b = await seedDivision(auth, comp.id, { courts: ["Court 3", "Court 4"] });
+    const a = await seedDivision(auth, comp.id, { courts: await seedCourts(auth.orgId, 2) });
+    const b = await seedDivision(auth, comp.id, { courts: await seedCourts(auth.orgId, 2) });
     chat.mockResolvedValueOnce(chatResponse(legalPlan([a, b])));
 
     const plan = await aiPlanForCompetition(auth, comp.id, {
