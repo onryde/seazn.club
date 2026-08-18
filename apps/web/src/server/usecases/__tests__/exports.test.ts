@@ -581,8 +581,17 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
   // F4/Task 3: buildMyRotaDoc reads getMyOfficiating(userId), which selected
   // entrant names only — cross-org and SEAZN-neutral, so there is no single
   // org locale and each row must carry its own.
+  //
+  // Fix-wave finding 4: this test used to assert only the ENGLISH slot-label
+  // string, which stays byte-identical whether buildMyRotaDoc's per-duty
+  // lookup is exportLookup(a.org_default_locale) (correct) or a
+  // mutated exportLookup("en") (the headline bug this test exists to catch)
+  // — a French-locale org is the only way "localized per owning org" is
+  // actually exercised, mirroring the fr bracket tests elsewhere in this
+  // file (e.g. "bracket export names knockout rounds in French…" above).
   it("my rota shows slot labels, localized per owning org", async () => {
     const { auth } = await seedOrg("pro");
+    await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
     const { fixtures } = await seedDivision(auth);
     await sql`
       update fixtures
@@ -612,7 +621,14 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
 
     const model = await buildMyRotaDoc(userId, { printedAt: PRINTED });
     const text = JSON.stringify(model);
-    expect(text).toContain("Winner of Group A vs Runner-up of Group B");
+    // fr's own translated strings (dictionaries/fr/ui.json) — "Vainqueur du
+    // Groupe A vs Deuxième du Groupe B" — not the English literal. Old code
+    // (exportLookup("en")) can only ever produce the English string here,
+    // regardless of the org's default_locale, so this fails against it.
+    expect(text).toContain(
+      `${msgFor("fr", "slot.winner_group", { g: "A" })} vs ${msgFor("fr", "slot.runner_up_group", { g: "B" })}`,
+    );
+    expect(text).not.toContain("Winner of Group A vs Runner-up of Group B");
     expect(text).not.toContain("TBD vs TBD");
   });
 
