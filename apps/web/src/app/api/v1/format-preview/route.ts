@@ -11,7 +11,7 @@ const Body = z.object({
         kind: z.string().min(1),
         name: z.string().min(1).max(80),
         config: z.record(z.string(), z.unknown()).default({}),
-        qualification: z.unknown().nullable().default(null),
+        progression: z.unknown().nullable().default(null),
       }),
     )
     .min(1)
