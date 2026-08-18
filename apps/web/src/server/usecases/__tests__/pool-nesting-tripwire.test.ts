@@ -29,6 +29,7 @@ import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, deleteStage } from "@/server/usecases/stages";
 import { putScheduleSettings } from "@/server/usecases/schedule";
 import { buildDivisionDocModel } from "@/server/usecases/exports";
+import { seedCourts } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -298,6 +299,10 @@ describe.skipIf(!HAS_DB)("connection-pool nesting tripwire", () => {
 
   it("putScheduleSettings completes against a one-slot pool", async () => {
     const { auth, divisionId } = await seedDivision();
+    // Seeded under the NORMAL pool, before the swap — same reasoning as
+    // `seedDivision`'s own doc comment: only the call under test runs
+    // one-slot.
+    const [court] = await seedCourts(auth.orgId, 1);
 
     const settings = await withOneSlotPool("putScheduleSettings", () =>
       putScheduleSettings(auth, divisionId, {
@@ -305,7 +310,7 @@ describe.skipIf(!HAS_DB)("connection-pool nesting tripwire", () => {
           startAt: "2026-08-01T09:00:00.000Z",
           matchMinutes: 30,
           gapMinutes: 0,
-          courts: ["C1"],
+          courts: [court!],
           perEntrantMinRest: 0,
           blackouts: [],
           sessionWindows: [],
@@ -314,7 +319,7 @@ describe.skipIf(!HAS_DB)("connection-pool nesting tripwire", () => {
       }),
     );
 
-    expect(settings.config.courts).toEqual(["C1"]);
+    expect(settings.config.courts).toEqual([court]);
   });
 
   // A DIFFERENT nester from the freeze family: `buildDivisionDocModel` awaited
