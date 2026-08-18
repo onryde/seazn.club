@@ -26,10 +26,18 @@ import { t } from "@/lib/i18n-runtime";
 
 const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
 
-/** The 13 codes this pass wires — verbatim list from the brief. Do NOT add
- *  more here without a fresh owner ruling (P6/D4b task B's scope note: "Do
- *  NOT audit or wire other unwired codes — that is a separate session's
- *  scope"). Three of these (MAP_SLOT_INVALID, MAP_SOURCE_INVALID,
+/** The 13 codes this pass wires — verbatim list from the brief — plus ONE
+ *  more (F3 review item 4, 2026-08-18 dispatch ruling): SEEDING_MAP_SOURCE_
+ *  AMBIGUOUS is a `.seeding`-rule-validation HttpError exactly like the three
+ *  MAP_SLOT_INVALID/MAP_SOURCE_INVALID/BESTNTH_UNEQUAL_POOLS entries below it
+ *  (thrown by validateStageProgression's EngineError->HttpError conversion,
+ *  stage-seeding.ts) — it shipped with locale copy under `ui.json`'s
+ *  `engineError.*` namespace (scoring-vocab.ts's ENGINE_ERROR_KEY, forced by
+ *  that map's exhaustiveness check) but NO reader on this path, so an
+ *  organiser saw raw English regardless of locale. Do NOT add more here
+ *  without a fresh owner ruling (P6/D4b task B's scope note: "Do NOT audit or
+ *  wire other unwired codes — that is a separate session's scope"). Four of
+ *  these (MAP_SLOT_INVALID, MAP_SOURCE_INVALID, MAP_SOURCE_AMBIGUOUS,
  *  BESTNTH_UNEQUAL_POOLS) are save-time `.seeding` rule-validation errors —
  *  there is no seeding-rules editor UI yet to surface them from, so the copy
  *  exists and is tested but currently has no call site; a future rules
@@ -37,6 +45,7 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
 export const SEEDING_ERROR_CODES = [
   "SEEDING_MAP_SLOT_INVALID",
   "SEEDING_MAP_SOURCE_INVALID",
+  "SEEDING_MAP_SOURCE_AMBIGUOUS",
   "SEEDING_RULES_MISSING",
   "SEEDING_SOURCE_INCOMPLETE",
   "SEEDING_BESTNTH_UNEQUAL_POOLS",

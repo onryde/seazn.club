@@ -28,10 +28,11 @@ describe("seedingErrorMessage — mechanics", () => {
     expect(out).not.toBe("fallback");
   });
 
-  it("SEEDING_ERROR_CODES lists exactly the 13 shipped codes (brief's list, verbatim)", () => {
+  it("SEEDING_ERROR_CODES lists exactly the 13 shipped codes plus F3 review item 4's SEEDING_MAP_SOURCE_AMBIGUOUS (14 total)", () => {
     const expected: SeedingErrorCode[] = [
       "SEEDING_MAP_SLOT_INVALID",
       "SEEDING_MAP_SOURCE_INVALID",
+      "SEEDING_MAP_SOURCE_AMBIGUOUS",
       "SEEDING_RULES_MISSING",
       "SEEDING_SOURCE_INCOMPLETE",
       "SEEDING_BESTNTH_UNEQUAL_POOLS",
