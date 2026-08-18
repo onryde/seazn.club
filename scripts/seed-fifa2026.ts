@@ -409,23 +409,44 @@ async function main() {
         kind: "group",
         name: "Group stage",
         config: { legs: 1, pools: { count: 12 } },
-        qualification: null,
+        progression: null,
       },
       // v13: the canonical cup shape as ONE spec — the engine computes the best
-      // thirds itself (normaliseUnequalPools) instead of hand-flattened picks —
-      // plus an explicit round-one slot map (see DEMO_SLOT_ORDER's caveat).
+      // thirds itself instead of hand-flattened picks — plus an explicit
+      // round-one slot map (see DEMO_SLOT_ORDER's caveat).
+      //
+      // F2 (unified progression field): was qualification's `combine`
+      // (3 elements: 2 `{take}` picks-groups + 1 `bestOfRank`) — `combine`
+      // itself is gone (Finding 1: multi-source never worked server-side
+      // before F2 anyway); its role is now `sources[0].take[]` holding
+      // multiple TakeRule entries, unioned exactly like euro24's catalog
+      // entry (topNPerGroup + bestNth in one take array). `bestOfRank`
+      // collapses onto `bestNth` (owner ruling 4) — `rank` renames to `nth`.
+      // 12 groups of 4 are already equal-sized, so `normaliseUnequalPools`
+      // is correctly omitted (the old call carried no equivalent flag
+      // either). `placement: "rank_order"` matches every other writer this
+      // session migrates off `.qualification` — that vocabulary never had
+      // a placement concept; the real slot assignment here is
+      // `config.slotOrder` (DEMO_SLOT_ORDER), untouched by this change.
       {
         seq: 2,
         kind: "knockout",
         name: "Knockout",
         config: { shootout: true, slotOrder: DEMO_SLOT_ORDER },
-        qualification: {
-          combine: [
-            { take: GROUPS.map((g) => ({ pool: g, rank: 1 })) },
-            { take: GROUPS.map((g) => ({ pool: g, rank: 2 })) },
-            // FIFA 2026: equal pools — thirds rank on FULL results (no UEFA drop-bottom).
-            { bestOfRank: { rank: 3, count: 8 } },
+        progression: {
+          sources: [
+            {
+              stage: "previous",
+              take: [
+                { kind: "picks", picks: GROUPS.map((g) => ({ pool: g, rank: 1 })) },
+                { kind: "picks", picks: GROUPS.map((g) => ({ pool: g, rank: 2 })) },
+                // FIFA 2026: equal pools — thirds rank on FULL results (no UEFA drop-bottom).
+                { kind: "bestNth", nth: 3, count: 8 },
+              ],
+            },
           ],
+          placement: "rank_order",
+          timing: "on_complete",
         },
       },
     ]);
