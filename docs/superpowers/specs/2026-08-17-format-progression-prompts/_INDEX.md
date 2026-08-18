@@ -181,27 +181,29 @@ prompts for F3, F5 and two standalone product fixes.
    slot labels are already unmasked by V362 itself.
 
 10. **F3 flip scope: the six picker templates PLUS the format gallery**
-   (2026-08-18). `config/format-gallery.tsx:277,308,321` carries its own
-   `cannedStages` with `timing: "on_complete"` — a second user-reachable format
-   surface the F3 brief did not name. Flipping only `format-templates.ts` would
-   leave a gallery-created division with no day-one fixtures, which is the
-   owner's ask leaking on a live surface. `stages-panel.tsx`'s ad-hoc
-   `AddStageForm` (`:944`) and the seed scripts STAY on `on_complete`: that form
-   POSTs and immediately calls `/generate`, which is on_complete semantics by
-   construction, and moving it onto the propose/confirm flow is a different
-   session's work.
+    (2026-08-18). `config/format-gallery.tsx:277,308,321` carries its own
+    `cannedStages` with `timing: "on_complete"` — a second user-reachable format
+    surface the F3 brief did not name. Flipping only `format-templates.ts` would
+    leave a gallery-created division with no day-one fixtures, which is the
+    owner's ask leaking on a live surface. `stages-panel.tsx`'s ad-hoc
+    `AddStageForm` (`:944`) and the seed scripts STAY on `on_complete`: that form
+    POSTs and immediately calls `/generate`, which is on_complete semantics by
+    construction, and moving it onto the propose/confirm flow is a different
+    session's work.
 
-11. **`groups_ko` converts `picks` → `topNPerGroup` + `snake`** (2026-08-18).
-   Design §2.3 said the picker emits a flat ranked list that lets group-mates
-   meet in the quarter-final. That is NOT the mechanism — `groups_ko`'s take is
-   `picks` alternating `A1,B1,A2,B2…`, a hand-rolled 2-pool snake that is
-   correct for two pools. The LIVE defect is different and worse: the builder
-   offers a **pools 2–8 knob** (`division-builder.tsx:694-706`) that
-   `buildTemplateStages` applies to the group stage, while the knockout's
-   `picks` stay pinned to pools A and B — **with 4 pools, groups C and D
-   qualify nobody**. The fix is `topNPerGroup n` (+ `bestNth` for the
-   remainder, euro24's shape) with `placement: "snake"`, which is pool-count
-   agnostic. A fresh session reading §2.3 alone will re-derive this wrongly.
+11. **`groups_ko` converts `picks` → `topNPerGroup`** (2026-08-18; this
+    ruling originally said "+ `snake`" and **ruling 13 overrode that** — the
+    knockout target takes `rank_order`).
+    Design §2.3 said the picker emits a flat ranked list that lets group-mates
+    meet in the quarter-final. That is NOT the mechanism — `groups_ko`'s take is
+    `picks` alternating `A1,B1,A2,B2…`, a hand-rolled 2-pool snake that is
+    correct for two pools. The LIVE defect is different and worse: the builder
+    offers a **pools 2–8 knob** (`division-builder.tsx:694-706`) that
+    `buildTemplateStages` applies to the group stage, while the knockout's
+    `picks` stay pinned to pools A and B — **with 4 pools, groups C and D
+    qualify nobody**. The fix is `topNPerGroup n` (+ `bestNth` for the
+    remainder, euro24's shape) with `placement: "snake"`, which is pool-count
+    agnostic. A fresh session reading §2.3 alone will re-derive this wrongly.
 
 12. **`timing: "setup"` + `carry` is rejected by the schema** — an OPEN product
     decision, not a defect (2026-08-18). `ProgressionSchema`'s second `.refine`
@@ -363,7 +365,7 @@ Emitters F2 must migrate because the shape they emit is being deleted:
 
 ## F3 Task 2b + Task 3 — findings during implementation (2026-08-18)
 
-- **Ruling 9's `topNPerGroup` switch (Task 2, commit `6351fd2ce`) shipped a
+- **Ruling 11's `topNPerGroup` switch (Task 2, commit `6351fd2ce`) shipped a
   NEW preview regression**, caught and fixed same-session as Task 2b:
   `qualifierCount` (`stages.ts:809`) sized a later stage from the engine's
   `progressionSize`, which deliberately returns 0 for `topNPerGroup`
