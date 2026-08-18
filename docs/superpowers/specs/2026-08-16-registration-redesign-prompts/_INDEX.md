@@ -1035,6 +1035,64 @@ placement up: **3030 total / 2999 passed / 0 failed / 0 failed suites /
   A checklist line like "add an e2e for the paid flow" reliably yields one
   happy-path spec while the failure classes that actually shipped go uncovered.
 
+**Wave 6 CLOSED — live Stripe probe, e2e, and the whole-branch review.** Branch
+rebased onto `main` @ `ca3a4357a` (34 commits). Gate after the rebase:
+**3046 total / 3009 passed / 0 failed / 0 failed suites / 37 pending**
+(pre-rebase baseline was 3045/3008 — the +1 is main's own test, not drift);
+`turbo typecheck` **2/2**; lint **75/0**; `openapi:gen` + `i18n:gen-keys` clean;
+e2e **11/11** local against a prod build; live Stripe **6/6** in test mode.
+
+- **The live probe found what four waves of mocked tests could not: amounts are
+  currency-blind.** A 500+700 cart is £12.00 in gbp but ₹12.00 in inr — about
+  9p — and Stripe refuses any session below its platform minimum (~30p on this
+  GB platform). INR is offline-only per ruling 10, but **the same refusal is
+  reachable in gbp** with an entry fee set too low, and it would surface as a
+  raw Stripe error on a registrant's pay page. Now translated to a clean 422
+  `REGISTRATION_AMOUNT_TOO_SMALL`, narrowly — every other Stripe failure
+  rethrows, because a blanket catch hides real integration faults.
+- **Live-probe constraints, both recorded in the file**:
+  `organizations_stripe_account_idx` is UNIQUE, so one connected account
+  attaches to exactly ONE org (an org per currency 23505s on the second) — the
+  probe uses one org and rewrites its currency; and it detaches the account from
+  any org a previous run left it on, because a probe that only passes on a
+  virgin DB is one nobody runs twice.
+- **E2E: the deferral did not survive scrutiny.** RS003's prompt deferred e2e to
+  RS006/RS007 for "no UI yet", but `RULES.md:63-65` requires one anyway, and
+  `payments-hardening.spec.ts` already drives money flows purely through
+  `page.request`. `registration-public-api.spec.ts` ships 9 API-level cases.
+  **RS006/RS007 still owe the UI-driven flows** — this is not a substitute.
+- **Two e2e cases deliberately NOT written, because they would be vacuous:**
+  rate limits (`e2e.yml:130` sets no `REDIS_URL` ON PURPOSE, so the limiter is
+  inert and any 429 assertion passes regardless) and real `checkout_url`s (no
+  `STRIPE_MOCK_HOST`, key is `sk_test_ci_e2e_dummy`, so a mint always fails —
+  asserting a URL would assert the environment). Both live in the mocked unit
+  suites where they can actually fail.
+- **Three e2e fixture facts, each of which first presented as a code failure:**
+  `sport_variants`' key is `(sport_key, key, org_scope)` so `ON CONFLICT` must
+  be bare; the base-url env var is `PLAYWRIGHT_BASE`, not `PLAYWRIGHT_BASE_URL`;
+  and `generic`'s lineup is `size 1`, so a team entry carrying a captain is
+  ALREADY FULL and a join correctly 422s — the rep registers the team with no
+  roster and shares the link, which is design §4's actual flow.
+- **`next build` type-checks the whole app and caught what the wave gate had not
+  been re-run to catch**: wrapping the session params in `mintOrTranslate`'s
+  closure discards the narrowing from the `!org?.stripe_account_id` guard (TS
+  cannot prove `org` is not reassigned). `turbo typecheck` would have caught it
+  too — it simply was not re-run after that edit. Bind to a const before the
+  closure.
+- **Whole-branch review: 1 blocker + 3 minors, all closed.** The blocker was the
+  e2e gap above. The minors: the OpenAPI summary still told integrators
+  `checkout_url` is null "until wave 3 wires Stripe" (wave 3 wired it, and the
+  stale text shipped in both committed contract files); `errors` listed 402,
+  which nothing throws, and omitted 400, which the honeypot does; and
+  `_registration-fixtures.ts` claimed `loadWithGroup` is kept "in exact
+  column-list sync" with `regGroupCols` by the schema tests — it is not, that
+  suite only asserts each column EXISTS against its own hand-typed array.
+- **A landmine defused for RS006/RS007**: `payments-hardening.spec.ts`'s parked
+  T10 told the next reader to "delete this test.skip line once the endpoint
+  exists again". It exists again — but `submitPublicRegistration` still posts
+  the OLD flat body, so following that instruction yields a 400 that reads
+  exactly like a capacity regression. The comment now names both blockers.
+
 ## RS011 — why #412 moved here (2026-08-17)
 
 `L1-412-w1-eligibility.md` in `../2026-08-06-scoringpad-v2-prompts/` was written
