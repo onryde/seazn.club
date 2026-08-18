@@ -325,6 +325,26 @@ afterAll(async () => {
   // divisions, entrants, fixtures, schedule_settings — cascades with the org,
   // which is the same shape `scripts/smoke.ts`'s cleanup(tag) relies on.
   if (guardOrgIds.length > 0) {
+    // P9: courts must go BEFORE venues, and both before the org. P8 made
+    // `courts.venue_id` ON DELETE RESTRICT deliberately (a venue with courts
+    // must not vanish through the API), and a RESTRICT sitting inside the
+    // organizations cascade path blocks the whole delete:
+    //   update or delete on table "venues" violates foreign key constraint
+    //   "courts_venue_id_org_id_fkey" on table "courts"
+    // Deferral does not help: a RESTRICT is checked immediately even when the
+    // constraint is DEFERRABLE, and this is one statement's own cascade
+    // fan-out, not a multi-statement ordering the deferral could rescue.
+    // No product code deletes an organisation, so this is harness-only
+    // ordering — same fix as `scripts/smoke.ts`'s cleanup and
+    // `usecases/__tests__/venues.test.ts`.
+    // `fixtures.court_id` is ON DELETE RESTRICT for the same reason, so the
+    // cards have to let go of their courts first.
+    await sql`update fixtures set court_id = null, venue_id = null
+              where org_id in ${sql(guardOrgIds)}`;
+    await sql`delete from court_exceptions where org_id in ${sql(guardOrgIds)}`;
+    await sql`delete from court_hours where org_id in ${sql(guardOrgIds)}`;
+    await sql`delete from courts where org_id in ${sql(guardOrgIds)}`;
+    await sql`delete from venues where org_id in ${sql(guardOrgIds)}`;
     await sql`delete from organizations where id in ${sql(guardOrgIds)}`;
   }
   if (guardUserIds.length > 0) {
