@@ -30,6 +30,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
+import { createVenue, createCourt } from "../venues";
 import { createCheckpoint } from "../history";
 import { applyCompetitionSchedule } from "../competition-schedule-apply";
 import { JOINT_APPLY_EVENT } from "../competition-schedule-ai";
@@ -137,11 +138,39 @@ function settingsConfig(courts: string[]) {
 interface SeededDivision {
   id: string;
   name: string;
-  /** Its own court — courts are matched across divisions by string, so two
-   *  divisions sharing one make a joint apply 409 on a cross-division clash. */
+  /** Its own real court id — courts are matched across divisions by this real,
+   *  org-wide-unique id (P9), so two divisions sharing one make a joint apply
+   *  409 on a cross-division clash. */
   court: string;
   /** Fixture ids in (round_no, seq_in_round) order. */
   fixtureIds: string[];
+}
+
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` (real `courts.id`
+// values, since pass 1) — callers keep passing readable labels; this
+// resolves (and caches, per org) a real court per label. Mirrors
+// schedule-ai-assumptions.test.ts's identical helper.
+const courtsByOrg = new Map<string, { venueId: string; byName: Map<string, string> }>();
+
+async function courtIds(auth: AuthCtx, names: readonly string[]): Promise<string[]> {
+  let entry = courtsByOrg.get(auth.orgId);
+  if (!entry) {
+    const venue = await createVenue(auth, { name: "Main venue", sort: 0 });
+    entry = { venueId: venue.id, byName: new Map() };
+    courtsByOrg.set(auth.orgId, entry);
+  }
+  const out: string[] = [];
+  for (const name of names) {
+    const cached = entry.byName.get(name);
+    if (cached !== undefined) {
+      out.push(cached);
+      continue;
+    }
+    const court = await createCourt(auth, entry.venueId, { name, sort: entry.byName.size, tags: [] });
+    entry.byName.set(name, court.id);
+    out.push(court.id);
+  }
+  return out;
 }
 
 async function seedDivision(
@@ -149,7 +178,7 @@ async function seedDivision(
   competitionId: string,
   name: string,
   entrants: number,
-  courts: string[],
+  courtLabels: string[],
 ): Promise<SeededDivision> {
   const slug = name.toLowerCase();
   const division = await createDivision(auth, competitionId, {
@@ -170,6 +199,7 @@ async function seedDivision(
       members: [],
     })),
   );
+  const courts = await courtIds(auth, courtLabels);
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
     values (${division.id}, ${sql.json(settingsConfig(courts))}, ${TZ}, now())
@@ -196,13 +226,16 @@ async function divisionSeq(divisionId: string): Promise<number> {
 async function slots(
   divisionId: string,
 ): Promise<{ at: string | null; court: string | null }[]> {
-  const rows = await sql<{ scheduled_at: Date | null; court_label: string | null }[]>`
-    select scheduled_at, court_label from fixtures
+  // P9 pass 3b: `court_id` — the frozen, unwritten `court_label` would read
+  // null on every row this suite's own `applyCompetitionSchedule` calls
+  // place, making `unplaced()` below vacuously true for a placed board.
+  const rows = await sql<{ scheduled_at: Date | null; court_id: string | null }[]>`
+    select scheduled_at, court_id from fixtures
     where division_id = ${divisionId}
     order by round_no, seq_in_round, id`;
   return rows.map((r) => ({
     at: r.scheduled_at === null ? null : new Date(r.scheduled_at).toISOString(),
-    court: r.court_label,
+    court: r.court_id,
   }));
 }
 
@@ -225,7 +258,7 @@ async function jointApply(
       assignments: d.fixtureIds.map((fixture_id, j) => ({
         fixture_id,
         scheduled_at: at(j * 30),
-        court_label: d.court,
+        court_id: d.court,
       })),
     });
   }
