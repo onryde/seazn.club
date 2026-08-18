@@ -96,6 +96,7 @@ declare
   v_total_strings int := 0;
   v_total_to_create int := 0;
   v_total_to_normalize int := 0;
+  v_name_matches int := 0;
 begin
   -- 1) Collect distinct (org_id, string, venue_hint) TRIPLES from both
   -- sources, blank-filtered, excluding any string that already equals a
@@ -265,10 +266,20 @@ begin
     primary key (org_id, court_string, venue_hint)
   );
 
+  -- REVIEW WAVE 2: hinted rows are processed BEFORE the '' bucket for the
+  -- same (org, name). `existing_court_id` was precomputed pre-write, so it
+  -- cannot see a court minted earlier in THIS loop — which is what split a
+  -- division's config from its own fixtures: `config.courts`'s "Court 1"
+  -- (always venue_hint = '') minted one court under "Main venue", then the
+  -- fixtures' ("Court 1", "Hall A") row minted a SECOND one under Hall A and
+  -- step 6 pointed the fixtures at it. Post-migration `config.courts` no
+  -- longer contained the court its own fixtures sat on: the solver was
+  -- offered the Main-venue court while the board drew the other as an extra
+  -- column. Ordering the real venue first lets the '' row reuse it below.
   for v_row in
     select org_id, court_string, venue_hint, existing_court_id
       from court_strings_status
-     order by org_id, court_string, venue_hint
+     order by org_id, court_string, (venue_hint = '') asc, venue_hint
   loop
     v_court_id := v_row.existing_court_id;
 
@@ -283,9 +294,43 @@ begin
            and archived_at is null
          order by created_at asc, id asc
          limit 1;
+
+        -- REVIEW WAVE 2: mint the venue the DATA named, rather than dropping
+        -- into "Main venue". The venues table is not populated from
+        -- `fixtures.venue` until the fixture-venue block further down, so on
+        -- an org with no P8 venues every hint missed here — and two fixtures
+        -- reading ("Court 1", "Hall A") and ("Court 1", "Hall B") both tried
+        -- to insert "Court 1" into the SAME Main venue.
+        -- `courts_venue_name_active_idx` is UNIQUE on (venue_id, name) among
+        -- active courts, so the second insert raised and the WHOLE migration
+        -- aborted. Following the hint keeps them in different venues, which
+        -- is also what the data actually said.
+        if v_venue_id is null then
+          insert into venues (org_id, name) values (v_row.org_id, v_row.venue_hint)
+            returning id into v_venue_id;
+        end if;
+      else
+        -- The '' bucket (always `config.courts[]`, which carries no venue).
+        -- Reuse a court this loop already minted for the same name under a
+        -- real venue, so config and fixtures land on ONE court. Only when
+        -- exactly one candidate exists: two same-named courts in two venues
+        -- is the genuinely ambiguous case this file's header documents, and
+        -- guessing there would silently merge two real courts.
+        select count(*) into v_name_matches
+          from courts c
+         where c.org_id = v_row.org_id
+           and c.name = v_row.court_string
+           and c.archived_at is null;
+        if v_name_matches = 1 then
+          select c.id into v_court_id
+            from courts c
+           where c.org_id = v_row.org_id
+             and c.name = v_row.court_string
+             and c.archived_at is null;
+        end if;
       end if;
 
-      if v_venue_id is null then
+      if v_court_id is null and v_venue_id is null then
         select id into v_venue_id
           from venues
          where org_id = v_row.org_id
@@ -299,9 +344,11 @@ begin
         end if;
       end if;
 
-      insert into courts (venue_id, org_id, name, tags)
-        values (v_venue_id, v_row.org_id, v_row.court_string, '{}')
-        returning id into v_court_id;
+      if v_court_id is null then
+        insert into courts (venue_id, org_id, name, tags)
+          values (v_venue_id, v_row.org_id, v_row.court_string, '{}')
+          returning id into v_court_id;
+      end if;
     end if;
 
     insert into court_mapping (org_id, court_string, venue_hint, court_id)

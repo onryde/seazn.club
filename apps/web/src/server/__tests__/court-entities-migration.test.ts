@@ -354,6 +354,85 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
     expect(courtsForOrg).toBe("2");
   });
 
+  // REVIEW WAVE 2. The case above pre-creates both venues, which is exactly
+  // the case that AVOIDS the defect. With no P8 venues at all — the common
+  // shape for an org that never opened Directory > Venues — every venue_hint
+  // missed its lookup and both "Court 1"s were inserted into the SAME
+  // fallback "Main venue". `courts_venue_name_active_idx` is UNIQUE on
+  // (venue_id, name) among active courts, so the second insert raised and the
+  // WHOLE migration aborted: a deploy-time failure, not a data smell.
+  it("mints the venue the data named when it does not exist yet, instead of colliding in 'Main venue'", async () => {
+    const { orgId, divisionId } = await seedOrgWithDivision();
+    orgIds.push(orgId);
+    const stageId = await seedStage(orgId, divisionId);
+
+    // Deliberately NO pre-existing venues for this org.
+    const [{ n: venuesBefore }] = await sql<{ n: string }[]>`
+      select count(*)::text as n from venues where org_id = ${orgId}`;
+    expect(venuesBefore).toBe("0");
+
+    const [{ id: f1 }] = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, court_label, venue)
+      values (${stageId}, ${divisionId}, ${orgId}, 1, 1, 'Court 1', 'Hall A')
+      returning id`;
+    const [{ id: f2 }] = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, court_label, venue)
+      values (${stageId}, ${divisionId}, ${orgId}, 1, 2, 'Court 1', 'Hall B')
+      returning id`;
+
+    // Would throw 23505 on courts_venue_name_active_idx before the fix.
+    await sql.unsafe(migrationBlock("courts-migration"));
+
+    const rows = await sql<{ id: string; court_id: string | null }[]>`
+      select id, court_id from fixtures where id in (${f1}, ${f2}) order by seq_in_round`;
+    expect(rows[0]!.court_id).not.toBeNull();
+    expect(rows[1]!.court_id).not.toBeNull();
+    // Two DIFFERENT courts — parallel play in two halls must not collapse
+    // into one court, which would read as a double booking forever after.
+    expect(rows[0]!.court_id).not.toBe(rows[1]!.court_id);
+
+    // …under the venues the fixtures themselves named.
+    const venues = await sql<{ name: string }[]>`
+      select v.name from venues v where v.org_id = ${orgId} order by v.name`;
+    expect(venues.map((v) => v.name)).toEqual(["Hall A", "Hall B"]);
+  });
+
+  // REVIEW WAVE 2: `config.courts[]` carries no venue, so its rows are the
+  // '' bucket. Processed before the hinted rows, the config string minted its
+  // own court under "Main venue" while the fixtures' identically-named court
+  // was minted under the real hall — leaving a division whose `config.courts`
+  // did not contain the court its own fixtures sat on. The solver was then
+  // offered one court and the board drew the other as an extra column.
+  it("points config.courts and the fixtures at the SAME court when only one court carries that name", async () => {
+    const { orgId, divisionId } = await seedOrgWithDivision();
+    orgIds.push(orgId);
+    const stageId = await seedStage(orgId, divisionId);
+
+    await sql`
+      insert into schedule_settings (division_id, config, tz, updated_at)
+      values (${divisionId}, ${sql.json({ courts: ["Court 1"] })}, 'UTC', now())
+      on conflict (division_id) do update set config = excluded.config`;
+    const [{ id: f1 }] = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, court_label, venue)
+      values (${stageId}, ${divisionId}, ${orgId}, 1, 1, 'Court 1', 'Hall A')
+      returning id`;
+
+    // Step 5 (the config.courts string[] -> uuid[] rewrite) lives inside this
+    // same block, so one call covers both halves.
+    await sql.unsafe(migrationBlock("courts-migration"));
+
+    const [fixture] = await sql<{ court_id: string | null }[]>`
+      select court_id from fixtures where id = ${f1}`;
+    const [settings] = await sql<{ config: { courts: string[] } }[]>`
+      select config from schedule_settings where division_id = ${divisionId}`;
+    expect(fixture!.court_id).not.toBeNull();
+    // The whole point: one court, referenced by both.
+    expect(settings!.config.courts).toEqual([fixture!.court_id]);
+    const [{ n }] = await sql<{ n: string }[]>`
+      select count(*)::text as n from courts where org_id = ${orgId}`;
+    expect(n).toBe("1");
+  });
+
   it("fixtures.venue_id is backfilled from fixtures.venue; free-text venue stays populated", async () => {
     const { orgId, divisionId } = await seedOrgWithDivision();
     orgIds.push(orgId);
