@@ -83,6 +83,12 @@ import {
   type RepairReport,
   type SolverTelemetry,
 } from "@/server/usecases/schedule-ai-solver";
+// P9 pass 3b: the SAME candidate filter autoSchedule/validateScheduleIn go
+// through (court-candidates.ts's own header explains why a second, inlined
+// tag-filter loop here would be this subsystem's recurring bug) — the AI
+// draft placer must never be able to choose an archived or tag-mismatched
+// court just because a second copy of the filter was missing.
+import { resolveCandidateCourts } from "@/server/usecases/court-candidates";
 import { consumePreview, PREVIEW_STALE, releasePreview } from "@/server/usecases/schedule-ai-preview";
 import {
   assignOfficials,
@@ -538,10 +544,15 @@ export interface BuildPackOptions {
 
 /** Movable fixtures respect a repair `scope`: a fixture stays movable if it is
  *  unscheduled (needs a home) or matches every provided predicate. Anything
- *  out of scope keeps its court and becomes an obstacle. */
+ *  out of scope keeps its court and becomes an obstacle.
+ *
+ *  P9 pass 3b: matches on `court_id`, the fixture's REAL court identity —
+ *  `court_label` is frozen, read-only legacy (FixtureLite's own doc comment)
+ *  and null on every fixture scheduled since the cutover, so matching on it
+ *  silently excluded every real placement from ever being "in scope". */
 function inScope(f: FixtureLite, scope: BuildPackOptions["scope"]): boolean {
   if (!scope) return true;
-  if (scope.courts && !(f.court_label === null || scope.courts.includes(f.court_label))) {
+  if (scope.courts && !(f.court_id === null || scope.courts.includes(f.court_id))) {
     return false;
   }
   if (scope.pool_ids && !(f.pool_id !== null && scope.pool_ids.includes(f.pool_id))) {
@@ -619,9 +630,15 @@ export async function buildSchedulePack(
 
   return withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<
-      { id: string; name: string; sport_key: string; competition_id: string }[]
+      {
+        id: string;
+        name: string;
+        sport_key: string;
+        competition_id: string;
+        required_court_tags: string[];
+      }[]
     >`
-      select id, name, sport_key, competition_id
+      select id, name, sport_key, competition_id, required_court_tags
       from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
     const settings = await loadSettings(tx, divisionId);
@@ -636,12 +653,33 @@ export async function buildSchedulePack(
     const courts = [...config.courts];
     const matchMinutes = config.matchMinutes;
 
-    // A scope may only reference courts the division actually has.
+    // A scope may only reference courts the division actually has configured
+    // — deliberately the FULL configured list, not the filtered candidate set
+    // just below: a repair scope may still need to reference a fixture
+    // already sitting on a since-archived or since-retagged court (ruling 3,
+    // candidate-courts.ts — an existing placement must keep validating clean).
     if (opts.scope?.courts) {
       for (const c of opts.scope.courts) {
         if (!courts.includes(c)) throw new HttpError(400, `unknown scope court "${c}"`);
       }
     }
+
+    // P9 pass 3b: the candidate court set for this AI draft — the division's
+    // configured courts, filtered to non-archived courts carrying every
+    // required tag, through the ONE engine filter `autoSchedule`/
+    // `validateScheduleIn` also go through (schedule.ts's own reference
+    // wiring). No stage component: this pack spans the whole division's
+    // movable set, the same reasoning `validateScheduleIn` documents for its
+    // own call. Everything the model is SHOWN and everything the draft
+    // placer may CHOOSE reads this filtered set from here on — `courts`
+    // above stays the raw configured list, used only for the scope-validation
+    // check just above.
+    const candidateCourtIds = await resolveCandidateCourts(
+      tx,
+      divisionId,
+      courts,
+      division.required_court_tags,
+    );
 
     const all = await divisionFixtures(tx, divisionId);
     const candidates = all.filter((f) => f.status === MOVABLE_STATUS);
@@ -748,13 +786,21 @@ export async function buildSchedulePack(
     // compiled rule cannot carry a person scope at all. A map there would be a
     // second producer guarding nothing.
     const guardedHard = resolvePersonScopes(config.constraints?.hard ?? [], identity.keyOf);
-    const guardedSettings: ScheduleSettingsOut =
-      config.constraints === undefined
-        ? settings
-        : {
-            ...settings,
-            config: { ...config, constraints: { ...config.constraints, hard: guardedHard } },
-          };
+    // P9 pass 3b: `config.courts` overridden to the FILTERED candidate set
+    // unconditionally (never the raw configured list) — this is the ONE
+    // config the draft placer's `toSlotConfig` call below reads, so an
+    // archived or tag-mismatched court must never reach it. Mirrors
+    // `autoSchedule`'s own `settingsForEngine` (schedule.ts) exactly.
+    const guardedSettings: ScheduleSettingsOut = {
+      ...settings,
+      config: {
+        ...config,
+        courts: [...candidateCourtIds.ids],
+        ...(config.constraints !== undefined
+          ? { constraints: { ...config.constraints, hard: guardedHard } }
+          : {}),
+      },
+    };
 
     // Pool id → key ('A', 'B', …) across this division's stages.
     const poolRows = await tx<{ id: string; key: string }[]>`
@@ -765,8 +811,12 @@ export async function buildSchedulePack(
 
     // Obstacles: this division's fixed court time (decided fixtures + anything
     // scoped out of a repair) plus sibling divisions' timetables.
+    // P9 pass 3b: `court_id`, not the legacy `court_label` — the latter is
+    // null on every fixture scheduled since the cutover, which silently
+    // dropped every real placement from the obstacle set the greedy draft and
+    // the model are both shown.
     const obstacleFixtures = all.filter(
-      (f) => !movableSet.has(f.id) && f.scheduled_at !== null && f.court_label !== null,
+      (f) => !movableSet.has(f.id) && f.scheduled_at !== null && f.court_id !== null,
     );
     const obstacleAssignments = obstacleFixtures.map((f) => toAssignment(f, matchMinutes, guardedPeople));
     // `.assignments` only (#462): this list becomes `pack.fixtures.obstacles`,
@@ -977,12 +1027,15 @@ export async function buildSchedulePack(
     // single writer of the pack's window strings.
     const resolved =
       opts.resolved ??
-      // `courts` lets resolveParsed verify a court-scoped break against labels
-      // the model was actually shown; an unrecognised one defers the whole
-      // break rather than silently widening it to every court.
+      // `courts` lets resolveParsed verify a court-scoped break against the
+      // ids the model was actually shown — the FILTERED candidate set
+      // (P9 pass 3b), never the raw configured list: an instruction naming a
+      // court that resolveCandidateCourts already excluded must defer that
+      // break rather than compile a rule against a court `settings.courts`
+      // does not carry.
       resolveParsed(opts.raw ?? null, clock, orgTz, {
         fixtureCount: movable.length,
-        courts,
+        courts: [...candidateCourtIds.ids],
         parseFailed: opts.parseFailed === true,
       });
     const window =
@@ -1060,8 +1113,12 @@ export async function buildSchedulePack(
         // hands the referee a board the referee will reject.
         people: participants[f.id] ?? [],
         // Pinned/scope-locked cards stay put — feed them to the solver as-is.
+        // P9 pass 3b: `court_id`, the fixture's real identity — `court_label`
+        // is frozen legacy and null on anything scheduled since the cutover,
+        // which would have handed the greedy placer a `locked.court: undefined`
+        // for every real pinned fixture.
         ...(lockedIds.has(f.id)
-          ? { locked: { court: f.court_label as string, startAt: new Date(f.scheduled_at as string | Date).getTime() } }
+          ? { locked: { court: f.court_id as string, startAt: new Date(f.scheduled_at as string | Date).getTime() } }
           : {}),
       }));
       const result = slotFixtures({
@@ -1104,12 +1161,16 @@ export async function buildSchedulePack(
           court_label: a.court_label,
         }));
     } else {
+      // "repair": the movable set's current persisted slots. P9 pass 3b:
+      // `court_id`, not the legacy `court_label` — matching on the frozen
+      // column silently dropped every fixture scheduled since the cutover
+      // from the repair draft, which the model then saw as unplaced.
       draft = movable
-        .filter((f) => f.scheduled_at !== null && f.court_label !== null)
+        .filter((f) => f.scheduled_at !== null && f.court_id !== null)
         .map((f) => ({
           fixture_id: f.id,
           scheduled_at: zonedIso(f.scheduled_at as string | Date, orgTz),
-          court_label: f.court_label as string,
+          court_label: f.court_id as string,
         }));
     }
     // Sentinel kill (#397). A time that predates 1971 is not a fixture time — it
@@ -1152,7 +1213,11 @@ export async function buildSchedulePack(
             !isEpochSentinel(new Date(f.scheduled_at as string | Date).getTime())
               ? zonedIso(f.scheduled_at, orgTz)
               : null,
-          court: f.court_label,
+          // P9 pass 3b: `court_id` — `court_label` is frozen legacy and null
+          // on anything scheduled since the cutover, which read as "not on a
+          // court yet" for every real placement (structuralCheck's pin check
+          // and computeDiff both read this field).
+          court: f.court_id,
         },
         pinned: lockedIds.has(f.id),
       }))
@@ -1163,7 +1228,11 @@ export async function buildSchedulePack(
       ...obstacleFixtures.map((f) => {
         const start = new Date(f.scheduled_at as string | Date).getTime();
         return {
-          court: f.court_label as string,
+          // P9 pass 3b: `court_id` — `obstacleFixtures` is now filtered on
+          // `court_id !== null` above, so `court_label` (still legacy, still
+          // possibly null on the same row) is no longer the field that cast
+          // is sound against.
+          court: f.court_id as string,
           from: zonedIso(start, orgTz),
           to: zonedIso(start + matchMinutes * MS_PER_MIN, orgTz),
           label: `${division.name} · R${f.round_no}`,
@@ -1276,9 +1345,13 @@ export async function buildSchedulePack(
       matchMinutes,
       gapMinutes: config.gapMinutes,
       perEntrantMinRest: config.perEntrantMinRest,
-      // v15 venues: when venue_courts lands, this builder is the single
-      // place court_label strings become venue-scoped (design/v15-venue).
-      courts,
+      // P9 pass 3b: the FILTERED candidate set, never the raw configured
+      // list — the model must only ever be shown, and therefore can only
+      // ever propose, a court that is actually a legal placement today
+      // (non-archived, carrying every required tag). Same set the draft
+      // placer's `guardedSettings` and `resolveParsed` above were given, so
+      // the pack cannot show the model a court its own placer disagrees with.
+      courts: [...candidateCourtIds.ids],
       sessionWindows: config.sessionWindows
         .map((w) => ({ from: zonedIso(w.from, orgTz), to: zonedIso(w.to, orgTz) }))
         .sort((a, b) => cmp(a.from, b.from) || cmp(a.to, b.to)),

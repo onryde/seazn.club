@@ -169,7 +169,16 @@ export interface CompetitionApplyDivision {
    *  that skipped the check on one division would let a stale board silently
    *  overwrite a concurrent edit there while every other division was guarded. */
   expected_seq: number;
-  assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+  /** P9 pass 3b: `court_id` (a real `courts.id`), not the legacy `court_label`
+   *  — mirrors `ApplyCompetitionScheduleRequest`'s wire shape (schemas.ts) and
+   *  `applySchedule`'s (schedule.ts) already-converted single-division twin.
+   *  `venue_id` optional, same coalesce-over-unchanged semantics as there. */
+  assignments: {
+    fixture_id: string;
+    scheduled_at: string;
+    court_id: string;
+    venue_id?: string | null;
+  }[];
 }
 
 export interface CompetitionApplyInput {
@@ -497,7 +506,7 @@ export async function applyCompetitionSchedule(
         const startAt = ms(a.scheduled_at);
         return {
           fixtureId: a.fixture_id,
-          court: a.court_label,
+          court: a.court_id,
           startAt,
           endAt: startAt + d.settings.config.matchMinutes * MS_PER_MIN,
           entrants: [f.home_entrant_id, f.away_entrant_id].filter((e): e is string => e !== null),
@@ -526,9 +535,12 @@ export async function applyCompetitionSchedule(
     // Fixtures of the run's own divisions that this apply is NOT moving: fixed
     // occupancy, carrying their entrants and people, exactly as the
     // single-division apply treats them.
+    // P9 pass 3b: `court_id`, not the legacy `court_label` — the latter is
+    // null on every fixture scheduled since the cutover, which silently
+    // dropped every real placement from the "already occupying a court" set.
     const untouched: Assignment[] = order.flatMap((d) =>
       d.fixtures
-        .filter((f) => !seenFixture.has(f.id) && f.scheduled_at !== null && f.court_label !== null)
+        .filter((f) => !seenFixture.has(f.id) && f.scheduled_at !== null && f.court_id !== null)
         .map((f) => toAssignment(f, d.settings.config.matchMinutes, people, roundRobinByDivision.get(d.id))),
     );
     // Divisions of this competition that are NOT in the run. One call: passing
@@ -571,7 +583,8 @@ export async function applyCompetitionSchedule(
     const current: Assignment[] = order.flatMap((d) =>
       d.input.assignments
         .map((a) => d.byId.get(a.fixture_id)!)
-        .filter((f) => f.scheduled_at !== null && f.court_label !== null)
+        // P9 pass 3b: `court_id`, the fixture's real pre-apply identity.
+        .filter((f) => f.scheduled_at !== null && f.court_id !== null)
         // `toAssignment` stamps `divisionId` from the fixture's own
         // `division_id` (#446), so this pass does NOT re-write it from `d.id`.
         // The two agree — `d.byId` only holds that division's fixtures — and
@@ -735,19 +748,30 @@ export async function applyCompetitionSchedule(
       const moves: { fixture: string; from: unknown; to: unknown }[] = [];
       for (const a of d.input.assignments) {
         const f = d.byId.get(a.fixture_id)!;
+        // P9 pass 3a ruling, applied here in pass 3b: writers stop writing
+        // court_label/venue (owner ruling, FULL cutover) — court_id/venue_id
+        // only. Mirrors `applySchedule`'s (schedule.ts) identical write
+        // exactly, including `venue_id`'s coalesce-over-unchanged semantics.
+        // This was the ONE place in the P9 cutover that had NOT switched: a
+        // joint apply reported `applied > 0` while silently writing the
+        // court identity into the frozen, unread `court_label` column and
+        // leaving `court_id` untouched.
         await tx`
           update fixtures set
             scheduled_at = ${a.scheduled_at},
-            court_label = ${a.court_label},
+            court_id = ${a.court_id},
+            venue_id = coalesce(${a.venue_id ?? null}, venue_id),
             schedule_source = ${input.source}
           where id = ${a.fixture_id}`;
+        // `court` here is a courts.id, not a label — see `applySchedule`'s
+        // identical note on its own `moves` ledger payload.
         moves.push({
           fixture: a.fixture_id,
           from: {
             at: f.scheduled_at !== null ? iso(ms(f.scheduled_at)) : null,
-            court: f.court_label,
+            court: f.court_id,
           },
-          to: { at: a.scheduled_at, court: a.court_label },
+          to: { at: a.scheduled_at, court: a.court_id },
         });
       }
       // The same `schedule_applied` row the per-stage apply writes, so the

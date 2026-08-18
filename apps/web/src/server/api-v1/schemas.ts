@@ -2669,7 +2669,13 @@ export const AiPlanRequest = z.object({
   scope: z
     .object({
       from: IsoDateTime.optional(),
-      courts: z.array(z.string()).optional(),
+      // P9 pass 3b: real `courts.id` values — `buildSchedulePack`'s own
+      // `inScope()` matches this against a fixture's `court_id`, and its
+      // scope-validation check compares it against `ScheduleConfig.courts`
+      // (`CourtId[]` since pass 1), so a bare `z.string()` here let a
+      // free-text label through the parse only to silently never match
+      // anything downstream.
+      courts: z.array(CourtId).optional(),
       pool_ids: z.array(Uuid).optional(),
     })
     .optional(),
@@ -3284,7 +3290,15 @@ export const ApplyCompetitionScheduleRequest = z.object({
               .object({
                 fixture_id: Uuid,
                 scheduled_at: IsoDateTime,
-                court_label: z.string().min(1).max(100),
+                // P9 pass 3b: a real `courts.id`, not the legacy free-text
+                // label — mirrors `ApplyScheduleRequest`'s identical field
+                // (the per-stage apply's own `.strict()` reasoning above
+                // applies verbatim here: a client still sending `court_label`
+                // must get a loud 400). `venue_id` is optional, same
+                // coalesce-over-unchanged semantics `applySchedule`
+                // (schedule.ts) already gives it.
+                court_id: CourtId,
+                venue_id: VenueId.nullish(),
               })
               /**
                * `.strict()`, because the plan's own output is WIDER than this.
