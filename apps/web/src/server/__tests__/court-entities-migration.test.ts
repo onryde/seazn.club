@@ -20,7 +20,8 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "@/server/usecases/competitions";
@@ -97,8 +98,16 @@ const GENERIC_CONFIG = {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function migrationBlock(marker: string): string {
+  // Anchored on THIS FILE, not process.cwd(). Resolving the delta relative to
+  // the working directory made the whole suite ENOENT when vitest was launched
+  // from the repo root instead of apps/web -- 15 failures that read as a
+  // migration regression and were only ever a cwd.
   const delta = readFileSync(
-    join(process.cwd(), "..", "..", "db", "migration", "deltas", "V374__court_entities_cutover.sql"),
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "..","..","..","..","..",
+      "db","migration","deltas","V374__court_entities_cutover.sql",
+    ),
     "utf8",
   );
   const re = new RegExp(`-- ${marker}:begin([\\s\\S]*?)-- ${marker}:end`);
