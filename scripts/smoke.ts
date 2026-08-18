@@ -12418,7 +12418,18 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
       (clash.json.error?.conflicts ?? []).some((c) => !!c.rule && c.blocking === true),
     );
     // And the board still moves: the refusal was about the change, not the board.
+    //
+    // P9: this used to move the card to `court_label: "Court 9"` — a free-text
+    // label for a court that was not on the board at all, so it could never
+    // clash. Courts are entities now and a fixture can only sit on a real one,
+    // so the edit has to be made non-clashing HONESTLY: same court, a slot an
+    // hour past the last thing the solver placed, which nothing else occupies.
+    const lastStart = assignments.reduce(
+      (max, a) => (Date.parse(a.scheduled_at) > max ? Date.parse(a.scheduled_at) : max),
+      0,
+    );
     const legal = await v1(admin, `/api/v1/fixtures/${sharer.fixture_id}`, "PATCH", {
+      scheduled_at: new Date(lastStart + 60 * 60_000).toISOString(),
       court_id: otherCourtId,
     });
     check("v1 W4: an unrelated edit on the same board still applies", legal.status === 200);
@@ -14642,6 +14653,21 @@ async function cleanup(tag: string): Promise<void> {
       delete from sponsor_orders
       where org_id in (select id from organizations
                        where created_by in (select id from users where email = any(${emails})))`;
+    // P9: courts must go BEFORE venues, and both before the org. P8 made
+    // `courts.venue_id` ON DELETE RESTRICT on purpose (amendment A3 — a venue
+    // with courts must not vanish through the API), and a RESTRICT sitting
+    // inside the organizations cascade path blocks the whole delete:
+    //   update or delete on table "venues" violates foreign key constraint
+    //   "courts_venue_id_org_id_fkey" on table "courts"
+    // No product code deletes an organisation — this is a harness-only
+    // ordering problem, so it is fixed here rather than by weakening a
+    // constraint that exists to protect real data.
+    const doomedOrgs = sql`select id from organizations
+                           where created_by in (select id from users where email = any(${emails}))`;
+    await sql`delete from court_exceptions where org_id in (${doomedOrgs})`;
+    await sql`delete from court_hours where org_id in (${doomedOrgs})`;
+    await sql`delete from courts where org_id in (${doomedOrgs})`;
+    await sql`delete from venues where org_id in (${doomedOrgs})`;
     const orgs = await sql`
       delete from organizations
       where created_by in (select id from users where email = any(${emails}))`;
