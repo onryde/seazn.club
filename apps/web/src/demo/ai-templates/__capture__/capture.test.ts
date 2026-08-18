@@ -228,12 +228,13 @@ async function boardFor(t: SeededTemplate, pack: unknown): Promise<AiDemoFixture
         round_no: number;
         scheduled_at: Date | null;
         court_label: string | null;
+        court_id: string | null;
         status: string;
         home_entrant_id: string | null;
         away_entrant_id: string | null;
       }[]
     >`
-      select id, stage_id, fixture_no, round_no, scheduled_at, court_label, status,
+      select id, stage_id, fixture_no, round_no, scheduled_at, court_label, court_id, status,
              home_entrant_id, away_entrant_id
         from fixtures
        where division_id = ${divisionId} and status in ${sql(OCCUPYING)}
@@ -252,6 +253,7 @@ async function boardFor(t: SeededTemplate, pack: unknown): Promise<AiDemoFixture
         division_id: divisionId,
         scheduled_at: f.scheduled_at ? new Date(f.scheduled_at).toISOString() : null,
         court_label: f.court_label,
+        court_id: f.court_id,
         code: `F${f.fixture_no}`,
         matchup: `${nameOf.get(f.home_entrant_id ?? "") ?? "TBC"} vs ${
           nameOf.get(f.away_entrant_id ?? "") ?? "TBC"
