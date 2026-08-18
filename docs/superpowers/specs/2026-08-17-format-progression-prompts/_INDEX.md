@@ -214,6 +214,24 @@ prompts for F3, F5 and two standalone product fixes.
     Making both work means carrying points at `confirmSeedProposal` time on the
     setup path. Owner decision pending.
 
+13. **`snake` is chosen by the TARGET stage's kind, not the source's**
+    (2026-08-18, found by review before it shipped). Design §2.3 says "a
+    group-stage source implies `snake`". That rule is wrong and produces a
+    materially broken draw. `snakeMerge` reverses alternate wave-major pots, so
+    `topNPerGroup n:2` over pools A–D yields seeds `A1,B1,C1,D1,D2,C2,B2,A2`;
+    `generateSingleElim` then folds seed *i* against seed *N+1-i*
+    (`scheduling/bracket.ts:52-63,156-163`), so round 1 is **A1 v A2, B1 v B2**
+    — every group replaying its own final. Plain `rank_order` over the same
+    wave-major pots gives `A1 v D2, B1 v C2, C1 v B2, D1 v A2`, which is the
+    correct cross-pool draw. `t20-super8.json` uses `snake` legitimately because
+    its target is a GROUP stage, where reversal distributes strength across
+    pools; a knockout target must not reverse. Rule of record: **snake for a
+    group/pool target, rank_order for a bracket target.**
+    Corollary caught in the same review: `snakeMerge` reverses a `bestNth` pot's
+    array order without moving each descriptor's `position` (its cross-group
+    strength rank), so a reversed wildcard pot seeds the weakest wildcard best.
+    Never snake a `bestNth`-sourced pot.
+
 ## F4's brief contains one false premise (found 2026-08-18)
 
 The F3–F5 design §7 P5 and its §8 pickup prompt both state that
@@ -326,6 +344,64 @@ Emitters F2 must migrate because the shape they emit is being deleted:
   F3 already opens this file, so it wires all 14 through the dictionary in one
   pass, with a reader. **Watch `feedback_ui_text_breaks_e2e`** — e2e specs pin
   the English picker labels.
+
+## F3 Task 2b + Task 3 — findings during implementation (2026-08-18)
+
+- **Ruling 9's `topNPerGroup` switch (Task 2, commit `6351fd2ce`) shipped a
+  NEW preview regression**, caught and fixed same-session as Task 2b:
+  `qualifierCount` (`stages.ts:809`) sized a later stage from the engine's
+  `progressionSize`, which deliberately returns 0 for `topNPerGroup`
+  ("group-count-dependent; callers with a real shape use expandTake
+  instead" — its own comment). Every `groups_ko`-shaped preview therefore
+  fell through the `|| 4` guard to a 4-team bracket regardless of the real
+  qualifier count (4 pools x 4/pool previewed 4, not 16) — silent, every
+  test green, live on the builder's Format tab before an organiser even
+  creates the division. Fixed: `qualifierCount` now expands the take
+  against the PREVIOUS array stage's real shape (`previewSourceShape` — no
+  DB read; the preview already has the whole stage array) whenever the
+  take contains `topNPerGroup`. Every other take kind
+  (rankRange/bestNth/picks/roundLosers-only — `league_ko`,
+  `group_stepladder`, `group_playoffs`, `ko_plate`, `qualifying_main`) is
+  untouched, still `progressionSize` alone — verified unchanged by test.
+- **P6 (multi-source `seeded_map` key collision) was real, is now RESOLVED,
+  and was never reachable from the picker.** `descriptorKey`
+  (`` `${pool}${rank}` ``) does not encode which `sources[]` entry produced
+  it; a `seeded_map` entry whose `source` string matched descriptors from
+  two different sources used to resolve silently to whichever one a plain
+  `Map` construction visited last — the wrong team's placeholder in the
+  wrong bracket seat, every test green. `placeDescriptors`
+  (`packages/engine/src/competition/progression.ts`) now throws
+  `SEEDING_MAP_SOURCE_AMBIGUOUS` (422 — wired in `apps/web/src/server/api-v1/
+  http.ts`'s `ENGINE_HTTP` and `lib/scoring-vocab.ts`'s `ENGINE_ERROR_KEY`;
+  deliberately NOT added to `lib/seeding-error.ts`'s closed 13-code
+  allowlist, per that file's own "no fresh owner ruling" note — an
+  organiser sees the raw engine message, same fallback path
+  `STAGE_NOT_READY` already uses) instead of silently mis-seating. A key
+  shared between sources but never referenced by a `seeded_map` entry is
+  not an error — both copies still flow through untouched, same as
+  `rank_order`/`snake` always did (plain array ops, never a `descriptorKey`-
+  keyed Map). Unreachable today: every writer in this codebase emits a
+  single-source progression (`SourcedSlot`'s own doc comment) — multi-source
+  is new capability this fix unlocked, not a live organiser-facing defect
+  until a multi-source writer ships.
+  - `apps/web/src/server/usecases/stages.ts`'s `slotOf`
+    (`generateProgressionSetupFixtures`) needed NO code change on
+    inspection — it's keyed by the synthetic per-seat id `slot:${i+1}`
+    (array position), never by `descriptorKey`, so it was already immune to
+    this collision. The task brief named `slotOf` as a fix site; traced and
+    verified safe instead of changed, documented in place (`stages.ts`
+    comment above the `slotOf` map).
+  - One residual, deliberately NOT fixed: `computeSeedProposal`'s
+    `seedOfKey` (same file) still keys by bare `descriptorKey` for the
+    ties-display lookup — genuinely the same bug class, but
+    `ProgressionTieFlag.descriptors` (`progression.ts`) is
+    `SlotDescriptor[]` with no `sourceIndex` to disambiguate with, so
+    fixing it means widening that engine type (ripples through
+    `resolveProgression`'s tie-group logic and the wire contract) — a
+    bigger blast radius than this session's authorized file set. Also
+    unreachable today (same single-source-only reason). Documented in
+    place (`stages.ts` comment above `seedOfKey`); whoever ships a
+    multi-source writer next needs this too.
 
 ## Evidence
 
