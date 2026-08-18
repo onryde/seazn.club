@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { apiJson, TAG, divisionPath } from "./helpers";
+import { apiJson, TAG, divisionPath, seedVenueWithCourts } from "./helpers";
 
 // D3 schedule health (design doc bench-product-value/designs/2026-08-13-
 // schedule-health-design.md). What a unit/integration test cannot pin: the
@@ -65,6 +65,9 @@ async function seedAppliedLeague(request: import("@playwright/test").APIRequestC
   const gen = await apiJson<{ fixtures: GenFixture[] }>(request, `/api/v1/stages/${stageId}/generate`, "POST");
   const fixtures = gen.data!.fixtures;
 
+  const { courts } = await seedVenueWithCourts(request, ["Court 1", "Court 2"]);
+  const courtIdByName = new Map(courts.map((c) => [c.name, c.id]));
+
   await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
     tz: "UTC",
     config: {
@@ -72,7 +75,7 @@ async function seedAppliedLeague(request: import("@playwright/test").APIRequestC
       endAt: `${DAY}T23:59:00.000Z`,
       matchMinutes: 60,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 2"],
+      courts: courts.map((c) => c.id),
       perEntrantMinRest: 0,
       sessionWindows: [{ from: `${DAY}T09:00:00.000Z`, to: `${DAY}T21:00:00.000Z` }],
     },
@@ -104,7 +107,7 @@ async function seedAppliedLeague(request: import("@playwright/test").APIRequestC
   ].map(({ f, at, court }) => ({
     fixture_id: f.id,
     scheduled_at: `${DAY}T${at}:00.000Z`,
-    court_label: court,
+    court_id: courtIdByName.get(court)!,
   }));
 
   const applied = await apiJson(request, `/api/v1/stages/${stageId}/schedule/apply`, "POST", {
@@ -223,11 +226,13 @@ test("schedule health (joint): one applied + one unscheduled division both repor
   const stage1Id = stage1.data!.id;
   const gen1 = await apiJson<{ fixtures: GenFixture[] }>(request, `/api/v1/stages/${stage1Id}/generate`, "POST");
   const fx1 = gen1.data!.fixtures;
+  const { courts: jointCourts } = await seedVenueWithCourts(request, ["Court 1", "Court 2"]);
+  const jointCourtIdByName = new Map(jointCourts.map((c) => [c.name, c.id]));
   await apiJson(request, `/api/v1/divisions/${div1Id}/schedule-settings`, "PUT", {
     tz: "UTC",
     config: {
       startAt: `${DAY}T00:00:00.000Z`, endAt: `${DAY}T23:59:00.000Z`,
-      matchMinutes: 60, gapMinutes: 0, courts: ["Court 1", "Court 2"], perEntrantMinRest: 0,
+      matchMinutes: 60, gapMinutes: 0, courts: jointCourts.map((c) => c.id), perEntrantMinRest: 0,
       sessionWindows: [{ from: `${DAY}T09:00:00.000Z`, to: `${DAY}T21:00:00.000Z` }],
     },
   });
@@ -241,7 +246,11 @@ test("schedule health (joint): one applied + one unscheduled division both repor
     { f: findFixture(fx1, j2, j4), at: "10:15", court: "Court 2" },
     { f: findFixture(fx1, j1, j2), at: "15:00", court: "Court 1" },
     { f: findFixture(fx1, j3, j4), at: "15:00", court: "Court 2" },
-  ].map(({ f, at, court }) => ({ fixture_id: f.id, scheduled_at: `${DAY}T${at}:00.000Z`, court_label: court }));
+  ].map(({ f, at, court }) => ({
+    fixture_id: f.id,
+    scheduled_at: `${DAY}T${at}:00.000Z`,
+    court_id: jointCourtIdByName.get(court)!,
+  }));
   const applied1 = await apiJson(request, `/api/v1/stages/${stage1Id}/schedule/apply`, "POST", { assignments: assignments1, source: "manual" });
   expect(applied1.status).toBeLessThan(300);
 
