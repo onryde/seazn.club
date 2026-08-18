@@ -50,6 +50,44 @@ describe("ICS feed (doc 09 §2)", () => {
     expect(folded).toBeDefined();
     expect(long.split("\r\n").every((l) => l.length <= 74)).toBe(true);
   });
+
+  it("an all-day event emits DATE-typed bounds and TENTATIVE status", () => {
+    const ics = buildIcs("Cup", [
+      { uid: "fix-1", allDayOn: "2026-09-13", summary: "Winner of Group A vs Runner-up of Group B" },
+    ]);
+    expect(ics).toContain("DTSTART;VALUE=DATE:20260913");
+    // RFC 5545 §3.6.1: the DATE-typed DTEND is EXCLUSIVE, so a one-day event
+    // ends on the following day. Ending on the same date renders as zero-length.
+    expect(ics).toContain("DTEND;VALUE=DATE:20260914");
+    expect(ics).toContain("STATUS:TENTATIVE");
+  });
+
+  it("a timed event stays timed and is marked confirmed", () => {
+    const ics = buildIcs("Cup", [
+      {
+        uid: "fix-1",
+        start: new Date("2026-09-13T14:00:00Z"),
+        durationMinutes: 90,
+        summary: "Lions vs Tigers",
+      },
+    ]);
+    expect(ics).toContain("DTSTART:20260913T140000Z");
+    expect(ics).toContain("DTEND:20260913T153000Z");
+    expect(ics).toContain("STATUS:CONFIRMED");
+    expect(ics).not.toContain("VALUE=DATE");
+  });
+
+  it("UID is byte-identical across the tentative-to-timed transition", () => {
+    const tentative = buildIcs("Cup", [
+      { uid: "fix-1", allDayOn: "2026-09-13", summary: "Winner of Group A vs Runner-up of Group B" },
+    ]);
+    const timed = buildIcs("Cup", [
+      { uid: "fix-1", start: new Date("2026-09-13T14:00:00Z"), durationMinutes: 90, summary: "Lions vs Tigers" },
+    ]);
+    const uidOf = (s: string) => s.split("\r\n").find((l) => l.startsWith("UID:"));
+    expect(uidOf(tentative)).toBe("UID:fix-1@seazn.club");
+    expect(uidOf(timed)).toBe(uidOf(tentative));
+  });
 });
 
 describe("SportsEvent JSON-LD (doc 09 §3)", () => {
