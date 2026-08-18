@@ -45,6 +45,7 @@ import {
   TIERS_TOTAL,
 } from "../schedule";
 import { patchFixture } from "../fixtures";
+import { createVenue, createCourt } from "../venues";
 import {
   AutoScheduleResult,
   ScheduleSolverInfo,
@@ -115,12 +116,19 @@ async function seedOrg(): Promise<AuthCtx> {
 }
 
 /** A league division with `entrants` players and NO end date — the ordinary
- *  organiser config, and the one whose `applyWindow` is half-infinite. */
+ *  organiser config, and the one whose `applyWindow` is half-infinite.
+ *  `courtNames` (P9 pass 3a): `ScheduleConfig.courts` is `CourtId[]` (real
+ *  ids) since pass 1 — one shared venue, one real court per name, returned
+ *  as a name->id map so every call site below can keep addressing courts by
+ *  name. Separate from `config` (sessionWindows/etc overrides) because
+ *  `config.courts` can never hold a real id until the courts it names
+ *  exist. */
 async function seedStage(
   auth: AuthCtx,
   entrants: number,
   config: Partial<Parameters<typeof putScheduleSettings>[2]["config"]> = {},
-): Promise<{ divisionId: string; stageId: string; created: number }> {
+  courtNames: string[] = ["C1", "C2"],
+): Promise<{ divisionId: string; stageId: string; created: number; courts: Map<string, string> }> {
   const competition = await createCompetition(auth, {
     // #376: an end date is mandatory — a competition with no end can never
     // cross the pass line, so the schema requires one.
@@ -152,12 +160,18 @@ async function seedStage(
     name: "L",
     config: {},
   });
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const courts = new Map<string, string>();
+  for (let i = 0; i < courtNames.length; i++) {
+    const c = await createCourt(auth, venue.id, { name: courtNames[i]!, sort: i, tags: [] });
+    courts.set(courtNames[i]!, c.id);
+  }
   await putScheduleSettings(auth, division.id, {
     config: {
       startAt: T0,
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["C1", "C2"],
+      courts: [...courts.values()],
       perEntrantMinRest: 30,
       blackouts: [],
       sessionWindows: [],
@@ -170,6 +184,7 @@ async function seedStage(
     divisionId: division.id,
     stageId: stage.id,
     created: generated.created,
+    courts,
   };
 }
 
@@ -179,14 +194,14 @@ const applyAll = (
   assignments: {
     fixture_id: string;
     scheduled_at: string;
-    court_label: string;
+    court_id: string;
   }[],
 ) =>
   applySchedule(auth, stageId, {
     assignments: assignments.map((a) => ({
       fixture_id: a.fixture_id,
       scheduled_at: a.scheduled_at,
-      court_label: a.court_label,
+      court_id: a.court_id,
     })),
     source: "auto",
   });
@@ -362,11 +377,13 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
    *  would pass everything above. */
   it("reports placed BELOW total when the board cannot hold every fixture", async () => {
     const auth = await seedOrg();
-    const { stageId, created } = await seedStage(auth, 6, {
-      courts: ["C1"],
+    const { stageId, created } = await seedStage(
+      auth,
+      6,
       // Two hours on one court is four 30-minute slots for fifteen fixtures.
-      sessionWindows: [{ from: T0, to: at(120) }],
-    });
+      { sessionWindows: [{ from: T0, to: at(120) }] },
+      ["C1"],
+    );
     const out = await autoSchedule(auth, stageId, {
       only_unlocked: false,
       mode: "build",
@@ -394,7 +411,7 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
    */
   it("reflow leaves an already-legal board untouched, including a card parked late", async () => {
     const auth = await seedOrg();
-    const { stageId } = await seedStage(auth, 6);
+    const { stageId, courts } = await seedStage(auth, 6);
 
     const first = await autoSchedule(auth, stageId, {
       only_unlocked: false,
@@ -443,7 +460,7 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
     const parkedAt = new Date(boardEnd!.latest!.getTime() + 600 * 60_000).toISOString();
     await applySchedule(auth, stageId, {
       assignments: [
-        { fixture_id: parked.id, scheduled_at: parkedAt, court_label: "C1" },
+        { fixture_id: parked.id, scheduled_at: parkedAt, court_id: courts.get("C1")! },
       ],
       source: "manual",
     });
@@ -460,9 +477,9 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
     // …and the rest of the board is where the organiser left it too, not merely
     // the parked card.
     const onBoard = await sql<
-      { id: string; scheduled_at: Date; court_label: string }[]
+      { id: string; scheduled_at: Date; court_id: string }[]
     >`
-      select id, scheduled_at, court_label from fixtures
+      select id, scheduled_at, court_id from fixtures
       where stage_id = ${stageId} order by id`;
     const proposed = new Map(reflow.assignments.map((a) => [a.fixture_id, a]));
     expect(proposed.size).toBe(onBoard.length);
@@ -470,7 +487,7 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
       expect(proposed.get(row.id)?.scheduled_at).toBe(
         row.scheduled_at.toISOString(),
       );
-      expect(proposed.get(row.id)?.court_label).toBe(row.court_label);
+      expect(proposed.get(row.id)?.court_id).toBe(row.court_id);
     }
 
     // The corner, proved rather than assumed: a re-place does NOT leave it
@@ -515,7 +532,7 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
       });
       const stillParked = full.assignments.find((a) => a.fixture_id === parked.id);
       expect(stillParked?.scheduled_at).toBe(parkedAt);
-      expect(stillParked?.court_label).toBe("C1");
+      expect(stillParked?.court_id).toBe(courts.get("C1"));
     }
   }, 180_000);
 
@@ -564,7 +581,7 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
   // true there and this loses no coverage.
   it.skipIf(!HAS_SOLVER)("build honours a locked anchor and schedules the rest around it", async () => {
     const auth = await seedOrg();
-    const { stageId, created } = await seedStage(auth, 4);
+    const { stageId, created, courts } = await seedStage(auth, 4);
     expect(created).toBe(6);
 
     // C1 fix-loop (G2/3rd instance). `order by round_no desc, seq_in_round
@@ -588,7 +605,7 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
     // greedy happening to agree with the pin.
     await applySchedule(auth, stageId, {
       assignments: [
-        { fixture_id: pinned.id, scheduled_at: at(600), court_label: "C2" },
+        { fixture_id: pinned.id, scheduled_at: at(600), court_id: courts.get("C2")! },
       ],
       source: "manual",
     });
@@ -606,7 +623,7 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
 
     const proposed = out.assignments.find((a) => a.fixture_id === pinned.id);
     expect(proposed?.scheduled_at).toBe(at(600));
-    expect(proposed?.court_label).toBe("C2");
+    expect(proposed?.court_id).toBe(courts.get("C2"));
     // …and the solver worked AROUND the anchor rather than freezing onto it.
     // Keyed on fixture id, not on the timestamp: another card may legitimately
     // sit at 19:00 on the OTHER court, and an assertion that counted timestamps
@@ -615,7 +632,7 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
     expect(others).toHaveLength(created - 1);
     // Nothing double-booked onto the anchor's own slot.
     expect(
-      others.some((a) => a.scheduled_at === at(600) && a.court_label === "C2"),
+      others.some((a) => a.scheduled_at === at(600) && a.court_id === courts.get("C2")),
     ).toBe(false);
     // The board is spread over time rather than collapsed onto the pin.
     expect(new Set(others.map((a) => a.scheduled_at)).size).toBeGreaterThan(1);
@@ -632,10 +649,10 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
     await applyAll(auth, stageId, first.assignments);
 
     const rows = await sql<
-      { id: string; scheduled_at: Date; court_label: string }[]
+      { id: string; scheduled_at: Date; court_id: string }[]
     >`
-      select id, scheduled_at, court_label from fixtures
-      where stage_id = ${stageId} order by scheduled_at, court_label, id`;
+      select id, scheduled_at, court_id from fixtures
+      where stage_id = ${stageId} order by scheduled_at, court_id, id`;
     const locked = [rows[0]!, rows[3]!];
     for (const f of locked)
       await patchFixture(auth, f.id, { schedule_locked: true });
@@ -652,7 +669,7 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
     for (const f of locked) {
       const proposed = out.assignments.find((a) => a.fixture_id === f.id);
       expect(proposed?.scheduled_at).toBe(f.scheduled_at.toISOString());
-      expect(proposed?.court_label).toBe(f.court_label);
+      expect(proposed?.court_id).toBe(f.court_id);
     }
     expect(out.solver.tiers_total).toBe(TIERS_TOTAL);
     // POLISH goes to the TIER solver, not the repair solver. `reflowExisting`
@@ -712,7 +729,8 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
    */
   it("forwards the pinned set an infeasible proof is about, when the engine names one", async () => {
     const auth = await seedOrg();
-    const { stageId } = await seedStage(auth, 4, { courts: ["C1", "C2"] });
+    // Default courtNames is already ["C1", "C2"] — no override needed.
+    const { stageId, courts } = await seedStage(auth, 4);
 
     const rows = await sql<
       { id: string; round_no: number; home_entrant_id: string; away_entrant_id: string }[]
@@ -739,8 +757,8 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
     // to WRITE (rest is a warning) and impossible to KEEP.
     await applySchedule(auth, stageId, {
       assignments: [
-        { fixture_id: first.id, scheduled_at: at(0), court_label: "C1" },
-        { fixture_id: sharing.id, scheduled_at: at(30), court_label: "C2" },
+        { fixture_id: first.id, scheduled_at: at(0), court_id: courts.get("C1")! },
+        { fixture_id: sharing.id, scheduled_at: at(30), court_id: courts.get("C2")! },
       ],
       source: "manual",
     });
