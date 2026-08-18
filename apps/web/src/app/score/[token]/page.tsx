@@ -60,8 +60,12 @@ export default async function ScorePadPage({
       {
         id: string;
         round_no: number;
-        venue: string | null;
-        court_label: string | null;
+        /** P9 cutover: DERIVED from `venues`/`courts` via `fixtures.venue_id`/
+         *  `court_id` — the frozen `fixtures.venue`/`court_label` text columns
+         *  are no longer written, so reading them blanks any fixture touched
+         *  post-cutover. Same pattern as usecases/me.ts. */
+        venue_name: string | null;
+        court_name: string | null;
         scheduled_at: string | null;
         home_entrant_id: string | null;
         away_entrant_id: string | null;
@@ -74,12 +78,14 @@ export default async function ScorePadPage({
         competition_branding: unknown;
       }[]
     >`
-      select f.id, f.round_no, f.venue, f.court_label, f.scheduled_at,
-             f.home_entrant_id, f.away_entrant_id,
+      select f.id, f.round_no, ven.name as venue_name, crt.name as court_name,
+             f.scheduled_at, f.home_entrant_id, f.away_entrant_id,
              d.sport_key, d.module_version, d.config,
              c.id as competition_id, c.name as competition_name, d.name as division_name,
              c.branding as competition_branding
       from fixtures f
+      left join courts crt on crt.id = f.court_id
+      left join venues ven on ven.id = f.venue_id
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
       where f.id = ${link.fixture_id}`;
@@ -148,8 +154,8 @@ export default async function ScorePadPage({
         fixture={{
           id: fixture.id,
           round_no: fixture.round_no,
-          venue: fixture.venue,
-          court_label: fixture.court_label,
+          venue: fixture.venue_name,
+          court_label: fixture.court_name,
           competition_name: fixture.competition_name,
           division_name: fixture.division_name,
         }}
