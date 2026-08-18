@@ -15,6 +15,14 @@ import { randomUUID } from "node:crypto";
 
 vi.mock("@/lib/rate-limit", () => ({ rateLimit: vi.fn(async () => {}) }));
 
+// RS003 W3a — the route now mints a real checkout for a payable cart, so
+// this file needs the same Stripe mock shape registrations.test.ts uses
+// (checkout.sessions.create only; nothing else is reachable from here).
+const stripeMock = vi.hoisted(() => ({ checkoutCreate: vi.fn() }));
+vi.mock("@/lib/stripe", () => ({
+  getStripe: () => ({ checkout: { sessions: { create: stripeMock.checkoutCreate } } }),
+}));
+
 vi.mock("@/server/usecases/registration-submit", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/usecases/registration-submit")>();
   return { ...actual, submitRegistrationGroup: vi.fn(actual.submitRegistrationGroup) };
@@ -107,6 +115,10 @@ beforeEach(() => {
   rl.mockClear();
   submitSpy.mockClear();
   authState.userId = null;
+  stripeMock.checkoutCreate.mockReset().mockImplementation(async () => ({
+    id: "cs_test_" + randomUUID().slice(0, 8),
+    url: "https://checkout.stripe.test/session",
+  }));
 });
 
 afterAll(async () => {
@@ -355,5 +367,42 @@ describe.skipIf(!HAS_DB)("POST .../register — DB-backed", () => {
       select status, group_id from registrations where id = ${entries[0]!.registration_id}`;
     expect(row!.status).toBe("confirmed");
     expect(row!.group_id).toBe(body.data!.group_id);
+  });
+
+  // RS003 W3a: the route now wires mintGroupCheckout's result through for a
+  // payable cart, instead of hardcoding null.
+  it("a paid entry mints a real checkout session and returns its url", async () => {
+    const { orgSlug, orgId, ownerId } = await seedOrg();
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'individual', 500, 'stripe', 'auto', false)`;
+
+    const res = await registerRoute(
+      req(
+        URL_(orgSlug, competition.slug),
+        groupBody({
+          entries: [
+            {
+              division_id: division.id,
+              entrant_kind: "individual",
+              players: [{ full_name: "Payer" }],
+              answers: {},
+            },
+          ],
+        }),
+        { "x-forwarded-for": "9.9.9.21" },
+      ),
+      ctx(orgSlug, competition.slug),
+    );
+    const { status, body } = await read(res);
+    expect(status).toBe(201);
+    expect(body.data?.checkout_url).toBe("https://checkout.stripe.test/session");
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
   });
 });

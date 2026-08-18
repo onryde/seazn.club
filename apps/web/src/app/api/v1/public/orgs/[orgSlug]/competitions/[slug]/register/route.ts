@@ -3,7 +3,9 @@ import { rateLimit } from "@/lib/rate-limit";
 import { HttpError } from "@/lib/errors";
 import { PublicRegisterGroupRequest } from "@/server/api-v1/schemas";
 import { submitRegistrationGroup } from "@/server/usecases/registration-submit";
+import { mintGroupCheckout } from "@/server/usecases/registrations";
 import { getCurrentUser } from "@/lib/auth";
+import { baseUrl } from "@/lib/oauth";
 import { hasLocale, type Locale } from "@/lib/i18n-constants";
 
 /** The registrant's explicit locale pick (footer switcher → seazn_locale cookie),
@@ -28,7 +30,11 @@ type Ctx = { params: Promise<{ orgSlug: string; slug: string }> };
  * honeypot, then a narrower bucket) — the narrower bucket is now keyed to
  * the COMPETITION rather than a division_id: a multi-division cart has no
  * single division value left to key on the way the old single-entry route
- * did. `checkout_url` is null this wave — wave 3 wires Stripe checkout.
+ * did. `checkout_url` is null for an unpayable cart (all-waitlisted,
+ * all-free, or offline payment method) — RS003 W3a mints a real one
+ * otherwise via `mintGroupCheckout`, which owns the payment_method/subtotal
+ * gate and the currency validation; this route only wires the result
+ * through.
  */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
@@ -67,9 +73,20 @@ export async function POST(req: Request, { params }: Ctx) {
         entries: input.entries,
       },
     );
-    // `SubmitGroupResult` carries no `checkout_url` — wave 3 mints the Stripe
-    // session and starts returning a real one; until then the wire contract
-    // is already shaped for it so it never has to widen.
-    return reply(201, { ...result, checkout_url: null });
+    // `SubmitGroupResult` carries no `checkout_url` (registration-submit.ts
+    // stays payment-agnostic) — the route adds it. Skipped entirely for a
+    // zero-subtotal cart: no DB round trip needed to know there is nothing
+    // to charge, and this keeps every all-free/all-waitlisted submit (the
+    // common no-DB-mock test path) from touching Stripe at all.
+    const checkout_url =
+      result.amount_cents > 0
+        ? await mintGroupCheckout(
+            result.group_id,
+            result.entries[0]!.division_id,
+            baseUrl(req),
+            result.access_token,
+          )
+        : null;
+    return reply(201, { ...result, checkout_url });
   });
 }
