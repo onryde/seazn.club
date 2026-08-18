@@ -878,7 +878,24 @@ export async function buildCompetitionPack(
   // candidate set (buildSchedulePack's own resolveCandidateCourts call), so
   // an id equal across divisions IS the same physical court.
   const courtSets = built.map((b) => new Set(b.pack.settings.courts));
-  const courts = [...new Set(built.flatMap((b) => b.pack.settings.courts))].sort(cmp);
+  // P9: court ids are UUIDs minted per org, so sorting them lexicographically
+  // orders the list differently for two identically-seeded competitions — the
+  // same defect `byDivision` above already calls out ("Never the UUID"). Order
+  // by FIRST APPEARANCE across divisions instead: `built` is already in
+  // division name/slug order and each division's `settings.courts` is its own
+  // organiser-authored candidate order, so this is structural and reproduces
+  // across seeds.
+  const courtOrder = new Map<string, number>();
+  for (const b of built) {
+    for (const id of b.pack.settings.courts) {
+      if (!courtOrder.has(id)) courtOrder.set(id, courtOrder.size);
+    }
+  }
+  const courtRank = (id: string | null): number =>
+    id === null ? Number.MAX_SAFE_INTEGER : (courtOrder.get(id) ?? Number.MAX_SAFE_INTEGER - 1);
+  const courts = [...new Set(built.flatMap((b) => b.pack.settings.courts))].sort(
+    (a, b) => courtRank(a) - courtRank(b),
+  );
   const divergentCourts = courts.filter((c) => !courtSets.every((s) => s.has(c)));
 
   const movable: CompetitionPackFixture[] = built
@@ -1045,7 +1062,9 @@ export async function buildCompetitionPack(
     b: CompetitionPackDraftAssignment,
   ): number =>
     byJointTime(a, b) ||
-    cmp(a.court_label, b.court_label) ||
+    // P9: `court_label` carries a court UUID now; ranking by the structural
+    // court order keeps two identically-seeded competitions byte-identical.
+    courtRank(a.court_label) - courtRank(b.court_label) ||
     byDivision(a.division_id, b.division_id) ||
     cmp(a.fixture_id, b.fixture_id);
 

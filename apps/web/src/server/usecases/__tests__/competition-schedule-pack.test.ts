@@ -388,10 +388,11 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
       mode: "generate",
       instruction: "x",
     });
-    // `pack.courts` is sorted on the ID string (cmp) — real uuids do not sort
-    // in "Court 1" < "Court 2" < "Court 3" order, so the expectation must be
-    // sorted the same way rather than written in spec order.
-    expect(pack.courts).toEqual((await courtIds(auth, ["Court 1", "Court 2", "Court 3"])).sort());
+    // P9: `pack.courts` is ordered by FIRST APPEARANCE across divisions (which
+    // are themselves in name/slug order), NOT by the id string. Sorting uuids
+    // is meaningless and — because the expectation sorted them too — made this
+    // assertion agree with the code only about half the time.
+    expect(pack.courts).toEqual(await courtIds(auth, ["Court 1", "Court 2", "Court 3"]));
   }, 60_000);
 
   it("divergentCourts names the labels that are not in every division", async () => {
@@ -400,7 +401,8 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
       mode: "generate",
       instruction: "x",
     });
-    expect(pack.divergentCourts).toEqual((await courtIds(auth, ["Court 1", "Court 3"])).sort());
+    // Same first-appearance ordering as `pack.courts` above — never a uuid sort.
+    expect(pack.divergentCourts).toEqual(await courtIds(auth, ["Court 1", "Court 3"]));
 
     // Identical court lists → nothing divergent.
     const same = await seedCompetition(auth, "Same Courts", [

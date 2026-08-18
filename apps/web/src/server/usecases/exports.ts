@@ -121,7 +121,15 @@ export function groupByCourt<T extends { court_id: string | null; court_name: st
     if (a.court_id === b.court_id) return 0;
     if (a.court_id === null) return 1;
     if (b.court_id === null) return -1;
-    return (a.court_name ?? "").localeCompare(b.court_name ?? "", undefined, { numeric: true });
+    // Name first (human order: "Court 2" before "Court 10"), then the id as a
+    // TOTAL tie-break. Without the id, two same-named courts in different
+    // venues compare equal, the sort leaves them interleaved, and their
+    // fixtures never gather into one stack each — the exact merge that keying
+    // on `court_id` exists to prevent.
+    return (
+      (a.court_name ?? "").localeCompare(b.court_name ?? "", undefined, { numeric: true }) ||
+      (a.court_id < b.court_id ? -1 : a.court_id > b.court_id ? 1 : 0)
+    );
   });
   let lastCourt: string | null | undefined;
   return ordered.map((fixture, i) => {

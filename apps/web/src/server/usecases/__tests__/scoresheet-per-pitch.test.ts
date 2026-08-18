@@ -82,4 +82,21 @@ describe("groupByCourt", () => {
     groupByCourt(rounds);
     expect(rounds.map((x) => x.id)).toEqual(["r1c2", "r1c1"]);
   });
+
+  // P9, added after review: every case above mints ONE id per court NAME, so
+  // none of them can tell `court_id` grouping apart from `court_name` grouping
+  // — reverting groupByCourt to compare names would pass them all. Entities
+  // make same-named courts in different venues representable for the first
+  // time, and merging those into one printed stack is the defect the id-keying
+  // exists to prevent. This is the only case that discriminates.
+  it("keeps two SAME-NAMED courts in different venues apart (name-keying would merge them)", () => {
+    const venueACourt1 = { id: "a1", court_id: "c0000000-0000-4000-8000-0000000000a1", court_name: "Court 1" };
+    const venueBCourt1 = { id: "b1", court_id: "c0000000-0000-4000-8000-0000000000b1", court_name: "Court 1" };
+    const plan = groupByCourt([venueACourt1, venueBCourt1, { ...venueACourt1, id: "a2" }]);
+    // Grouped by identity: both of venue A's fixtures land together, venue B's
+    // starts a new stack.
+    expect(plan.map((p) => p.fixture.id)).toEqual(["a1", "a2", "b1"]);
+    expect(plan.map((p) => p.startsNewCourt)).toEqual([false, false, true]);
+  });
+
 });
