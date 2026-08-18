@@ -6,6 +6,7 @@ import {
   createStageAndGenerate,
   divisionPath,
   expectNoHorizontalScroll,
+  seedVenueWithCourts,
 } from "./helpers";
 
 /**
@@ -61,7 +62,13 @@ async function seedDivision(
 }
 
 interface AutoResult {
-  assignments: { fixture_id: string; scheduled_at: string; ends_at: string; court_label: string }[];
+  assignments: {
+    fixture_id: string;
+    scheduled_at: string;
+    ends_at: string;
+    court_id: string;
+    court_name: string | null;
+  }[];
   solver: { engine: string; status: string };
 }
 
@@ -129,6 +136,7 @@ test.describe("blackout window constrains the board (case a)", () => {
     // settings.orgTz, and this makes orgTz unambiguous).
     const DAY = Date.UTC(2026, 9, 19); // Mon 2026-10-19T00:00:00Z
     const MIN = 60_000;
+    const { courts: blackoutCourts } = await seedVenueWithCourts(request, ["Court A"]);
 
     async function putCourtConfig(blackouts: { from: string; to: string }[]): Promise<void> {
       const res = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
@@ -137,7 +145,7 @@ test.describe("blackout window constrains the board (case a)", () => {
           startAt: new Date(DAY).toISOString(),
           matchMinutes: 30,
           gapMinutes: 0,
-          courts: ["Court A"],
+          courts: [blackoutCourts[0]!.id],
           perEntrantMinRest: 0,
           sessionWindows: [],
           blackouts,
@@ -265,24 +273,28 @@ test.describe("court removal guard (case b)", () => {
     const { fixtureIds } = await createStageAndGenerate(request, divisionId);
     expect(fixtureIds.length).toBe(6);
 
-    const putCourts = (courts: string[]) =>
+    // ScheduleConfig.courts is CourtId[] (P9) — real courts first, ids below.
+    const { courts } = await seedVenueWithCourts(request, ["Court 1", "Court 2"]);
+    const [court1, court2] = courts;
+
+    const putCourts = (courtIds: string[]) =>
       apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
         tz: "UTC",
         config: {
           startAt: new Date(Date.UTC(2026, 9, 19, 9, 0)).toISOString(),
           matchMinutes: 30,
           gapMinutes: 0,
-          courts,
+          courts: courtIds,
         },
       });
 
-    const seeded = await putCourts(["Court 1", "Court 2"]);
+    const seeded = await putCourts([court1!.id, court2!.id]);
     expect(seeded.status).toBe(200);
 
     const targetId = fixtureIds[0]!;
     const placed = await apiJson(request, `/api/v1/fixtures/${targetId}`, "PATCH", {
       scheduled_at: new Date(Date.UTC(2026, 9, 19, 9, 0)).toISOString(),
-      court_label: "Court 2",
+      court_id: court2!.id,
     });
     expect(placed.status).toBe(200);
     const pinned = await apiJson(request, `/api/v1/fixtures/${targetId}`, "PATCH", {
@@ -291,8 +303,10 @@ test.describe("court removal guard (case b)", () => {
     expect(pinned.status).toBe(200);
 
     // ---- Refused: Court 2 still holds a pinned fixture. If the guard
-    // regressed to a no-op, this PUT would come back 200 instead of 409.
-    const refused = await putCourts(["Court 1"]);
+    // regressed to a no-op, this PUT would come back 200 instead of 409. The
+    // message names the court by NAME (putScheduleSettings resolves
+    // court_id -> name via courtNamesById before throwing), never a bare id.
+    const refused = await putCourts([court1!.id]);
     expect(refused.status).toBe(409);
     expect(refused.error?.message ?? "").toMatch(/Court 2/);
     expect(refused.error?.message ?? "").toMatch(/pinned/i);
@@ -303,7 +317,7 @@ test.describe("court removal guard (case b)", () => {
       request,
       `/api/v1/divisions/${divisionId}/schedule-settings`,
     );
-    expect(afterRefusal.data!.config.courts).toEqual(["Court 1", "Court 2"]);
+    expect(afterRefusal.data!.config.courts).toEqual([court1!.id, court2!.id]);
 
     // ---- Allowed: unpin it. The guard must stay narrower than "any fixture
     // on the court" — if it over-widened, THIS save would still 409.
@@ -322,13 +336,13 @@ test.describe("court removal guard (case b)", () => {
     expect(check.data!.status).toBe("scheduled");
     expect(check.data!.schedule_locked).toBe(false);
 
-    const allowed = await putCourts(["Court 1"]);
+    const allowed = await putCourts([court1!.id]);
     expect(allowed.status).toBe(200);
     const afterAllowed = await apiJson<{ config: { courts: string[] } }>(
       request,
       `/api/v1/divisions/${divisionId}/schedule-settings`,
     );
-    expect(afterAllowed.data!.config.courts).toEqual(["Court 1"]);
+    expect(afterAllowed.data!.config.courts).toEqual([court1!.id]);
   });
 });
 
@@ -358,6 +372,7 @@ test.describe("board renders cleanly at 375px under the new segmentation (case c
   }) => {
     const { divisionId } = await seedDivision(request, "BoardCompact");
     const { stageId } = await createStageAndGenerate(request, divisionId);
+    const { courts } = await seedVenueWithCourts(request, ["Court A", "Court B"]);
 
     const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
       tz: "UTC",
@@ -365,13 +380,13 @@ test.describe("board renders cleanly at 375px under the new segmentation (case c
         startAt: new Date(Date.UTC(2026, 9, 19, 9, 0)).toISOString(),
         matchMinutes: 45,
         gapMinutes: 5,
-        courts: ["Court A", "Court B"],
+        courts: courts.map((c) => c.id),
       },
     });
     expect(settings.status).toBe(200);
 
     const auto = await apiJson<{
-      assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+      assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
     }>(request, `/api/v1/stages/${stageId}/schedule/auto`, "POST", {});
     expect(auto.status).toBe(200);
     expect(auto.data!.assignments.length).toBe(6);
@@ -383,7 +398,7 @@ test.describe("board renders cleanly at 375px under the new segmentation (case c
         assignments: auto.data!.assignments.map((a) => ({
           fixture_id: a.fixture_id,
           scheduled_at: a.scheduled_at,
-          court_label: a.court_label,
+          court_id: a.court_id,
         })),
         source: "auto",
       },
@@ -628,6 +643,7 @@ test("a 40/0 board offers 09:40 through the fixture When control, not quarter ho
   const { divisionId } = await seedDivision(request, "BoardSlotWhen");
   const { fixtureIds } = await createStageAndGenerate(request, divisionId);
   expect(fixtureIds.length).toBe(6);
+  const { courts } = await seedVenueWithCourts(request, ["Court A"]);
 
   const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
     tz: "UTC",
@@ -635,7 +651,7 @@ test("a 40/0 board offers 09:40 through the fixture When control, not quarter ho
       startAt: new Date(Date.UTC(2026, 9, 19, 9, 0)).toISOString(),
       matchMinutes: 40,
       gapMinutes: 0,
-      courts: ["Court A"],
+      courts: [courts[0]!.id],
     },
   });
   expect(settings.status).toBe(200);
@@ -646,7 +662,7 @@ test("a 40/0 board offers 09:40 through the fixture When control, not quarter ho
   // a locator off.
   const placed = await apiJson(request, `/api/v1/fixtures/${fixtureIds[0]!}`, "PATCH", {
     scheduled_at: new Date(Date.UTC(2026, 9, 19, 9, 0)).toISOString(),
-    court_label: "Court A",
+    court_id: courts[0]!.id,
   });
   expect(placed.status).toBe(200);
 
