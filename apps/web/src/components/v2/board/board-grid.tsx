@@ -22,6 +22,7 @@ export function BoardGrid({
   slots,
   slotMinutes,
   courts,
+  courtNames,
   fixtures,
   divisionNames,
   entrantNames,
@@ -47,6 +48,12 @@ export function BoardGrid({
   /** Configured court ids (P9); empty → single unassigned column. Ordered by
    *  the organiser's own configured list — never re-sorted here. */
   courts: string[];
+  /** P9 pass 4c item 1: id -> display name for every entry in `courts`
+   *  (schedule-board.tsx's own `courtNamesById`, built from `venues` — reuse
+   *  it, never build a second map). A column's own id is never rendered raw:
+   *  falls back to the raw id only when a caller omits this prop or a court
+   *  isn't in the map, same fallback MovePanel's dropdown already uses. */
+  courtNames?: Record<string, string>;
   /** Fixtures scheduled on this day (court may be null → unassigned column). */
   fixtures: BoardFixture[];
   divisionNames: Record<string, string>;
@@ -144,7 +151,7 @@ export function BoardGrid({
                 key={c ?? UNASSIGNED}
                 className="app-display sticky top-0 z-10 min-w-36 border-b-2 border-purple-200 border-l border-l-slate-200 bg-slate-50 px-2 py-2 text-left text-[11px] font-bold text-slate-800"
               >
-                {c ?? msg("board.grid.unassignedCol", { venue: venueCap.toLowerCase() })}
+                {c ? (courtNames?.[c] ?? c) : msg("board.grid.unassignedCol", { venue: venueCap.toLowerCase() })}
               </th>
             ))}
           </tr>
@@ -228,10 +235,16 @@ export function BoardGrid({
                         aria-label={
                           blackout
                             ? blackout.court
-                              ? msg("board.grid.blackoutAriaCourt", { time: timeLabel(t), court: blackout.court })
+                              ? msg("board.grid.blackoutAriaCourt", {
+                                  time: timeLabel(t),
+                                  court: courtNames?.[blackout.court] ?? blackout.court,
+                                })
                               : msg("board.grid.blackoutAriaVenue", { time: timeLabel(t) })
                             : court
-                              ? msg("board.grid.placeAriaCourt", { time: timeLabel(t), court })
+                              ? msg("board.grid.placeAriaCourt", {
+                                  time: timeLabel(t),
+                                  court: courtNames?.[court] ?? court,
+                                })
                               : msg("board.grid.placeAriaUnassigned", { time: timeLabel(t) })
                         }
                         className={`h-full ${placeHeight} w-full rounded text-[8px] font-bold uppercase tracking-wide transition ${

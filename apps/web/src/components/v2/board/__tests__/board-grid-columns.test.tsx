@@ -109,3 +109,22 @@ describe("BoardGrid column identity", () => {
     expect(html).not.toContain("Ada");
   });
 });
+
+describe("BoardGrid column headers (P9 pass 4c item 1)", () => {
+  it("resolves a column's header through courtNames, never the raw id", () => {
+    const html = renderToStaticMarkup(
+      <BoardGrid {...baseProps} courts={["crt-a"]} fixtures={[]} entrantNames={{}} courtNames={{ "crt-a": "Center Court" }} />,
+    );
+    expect(html).toContain("Center Court");
+    expect(html).not.toContain("crt-a");
+  });
+
+  it("falls back to the raw id when courtNames has no entry for it (caller omitted the map)", () => {
+    // Same fallback MovePanel's own dropdown already uses — not a regression,
+    // the established idiom for an unresolved id in this codebase.
+    const html = renderToStaticMarkup(
+      <BoardGrid {...baseProps} courts={["crt-a"]} fixtures={[]} entrantNames={{}} />,
+    );
+    expect(html).toContain("crt-a");
+  });
+});

@@ -41,6 +41,7 @@ import { flattenCourts } from "@/components/v2/shared/court-multi-picker";
 import type { Venue } from "@/components/v2/venues-panel";
 import {
   cardTitle,
+  courtDisplayName,
   DENSITY_STORAGE_KEY,
   type BoardConfig,
   type BoardDivision,
@@ -349,6 +350,36 @@ export function ghostBlocks(
         : null,
     };
   });
+}
+
+/**
+ * The board's court-COLUMN list for the day/week views: configured courts
+ * first, then any court a scheduled fixture or an AI ghost carries that
+ * isn't in it yet, so a legacy or proposed placement always gets a column.
+ *
+ * IDS ONLY (P9 pass 4c) — this used to merge in `f.court_label`, a
+ * fixture's frozen legacy NAME, right alongside `cfg.courts`'s real ids.
+ * `BoardGrid` matches a column against `f.court_id` (`sameCol`, pass 4a), so
+ * a label entry could never match any fixture there, and a mixed list meant
+ * one column could match a neighbour's fixture instead of its own. Keyed on
+ * id throughout — including here — so two courts that happen to share a
+ * NAME (different venues, the same case that exposed a real bug in
+ * `groupByCourt` server-side) never collapse into one column; resolve the
+ * display name at the render site (`courtNamesById`), never inside this list.
+ */
+export function boardCourtColumns(
+  configuredCourts: string[],
+  scheduled: Pick<BoardFixture, "court_id">[],
+  ghosts: Pick<GhostBlock, "court">[] | null,
+): string[] {
+  const list = [...configuredCourts];
+  for (const f of scheduled) {
+    if (f.court_id && !list.includes(f.court_id)) list.push(f.court_id);
+  }
+  for (const g of ghosts ?? []) {
+    if (g.court && !list.includes(g.court)) list.push(g.court);
+  }
+  return list;
 }
 
 interface Props {
@@ -858,17 +889,12 @@ export function ScheduleBoard({
   }, [scheduled, competitionStart, competitionEnd, cfg.startAt, cfg.endAt]);
 
   // Courts: configured list plus anything already used on the board or proposed
-  // by a ghost, so a proposal's court always has a column.
-  const courts = useMemo(() => {
-    const list = [...cfg.courts];
-    for (const f of scheduled) {
-      if (f.court_label && !list.includes(f.court_label)) list.push(f.court_label);
-    }
-    for (const g of ghosts ?? []) {
-      if (g.court && !list.includes(g.court)) list.push(g.court);
-    }
-    return list;
-  }, [cfg.courts, scheduled, ghosts]);
+  // by a ghost, so a proposal's court always has a column. Pure/exported (see
+  // `boardCourtColumns` above) so its id-only invariant is unit-tested directly.
+  const courts = useMemo(
+    () => boardCourtColumns(cfg.courts, scheduled, ghosts),
+    [cfg.courts, scheduled, ghosts],
+  );
 
   // P9 scope item 5: `courts` above is keyed by whatever `cfg.courts` holds
   // (real ids since P9 pass 1) — never safe to render RAW to an organiser.
@@ -881,6 +907,17 @@ export function ScheduleBoard({
     for (const c of flattenCourts(venues)) map[c.id] = c.name;
     return map;
   }, [venues]);
+
+  // P9 pass 4c item 1: the swap button's own copy names two real courts —
+  // never the raw ids `courts[0]`/`courts[1]` themselves. The click handler
+  // still sends the raw ids (the server's swapCourts identity), only the
+  // button's title/label text is resolved.
+  const swapCourtNames = useMemo(() => {
+    if (courts.length < 2) return null;
+    const a = courts[0] as string;
+    const b = courts[1] as string;
+    return { a: courtNamesById[a] ?? a, b: courtNamesById[b] ?? b };
+  }, [courts, courtNamesById]);
 
   // ------------------------------------------- pick-then-place (gap 11)
   const [pickedId, setPickedId] = useState<string | null>(null);
@@ -1319,15 +1356,15 @@ export function ScheduleBoard({
             {msg("board.shiftDay")}
             <button type="button" disabled={actions.busy} onClick={() => void actions.shiftDay(day, -15)} className="btn btn-ghost px-2 py-1 text-xs">−15m</button>
             <button type="button" disabled={actions.busy} onClick={() => void actions.shiftDay(day, 15)} className="btn btn-ghost px-2 py-1 text-xs">+15m</button>
-            {courts.length >= 2 && (
+            {courts.length >= 2 && swapCourtNames && (
               <button
                 type="button"
                 disabled={actions.busy}
                 onClick={() => void actions.swapCourts(day, courts[0] as string, courts[1] as string)}
                 className="btn btn-ghost px-2 py-1 text-xs"
-                title={msg("board.swapTitle", { a: courts[0] as string, b: courts[1] as string })}
+                title={msg("board.swapTitle", swapCourtNames)}
               >
-                {msg("board.swap", { a: courts[0] as string, b: courts[1] as string })}
+                {msg("board.swap", swapCourtNames)}
               </button>
             )}
           </span>
@@ -1375,6 +1412,7 @@ export function ScheduleBoard({
               slots={slots}
               slotMinutes={slotMinutes}
               courts={courts}
+              courtNames={courtNamesById}
               fixtures={dayFixtures}
               divisionNames={divisionNames}
               entrantNames={entrantNames}
@@ -1749,7 +1787,11 @@ function WeekView({
                     >
                       <div className="flex items-center justify-between text-[10px] text-slate-500">
                         <span>{timeLabel(f.scheduled_at as string)}</span>
-                        <span>{f.court_label}</span>
+                        {/* P9 pass 4c item 1: court_label is frozen legacy (null
+                            for anything scheduled since the cutover) — resolve
+                            NAME first, same helper FixtureBlock's sibling
+                            surfaces use, never the raw court_id. */}
+                        <span>{courtDisplayName(f)}</span>
                       </div>
                       <p title={cardTitle(f, entrantNames, feedLabels, msg)} className="truncate font-medium text-slate-700">
                         {cardTitle(f, entrantNames, feedLabels, msg)}
