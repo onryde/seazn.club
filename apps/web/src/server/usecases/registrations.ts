@@ -20,6 +20,7 @@ import { HttpError } from "@/lib/errors";
 import { getLimit, hasFeature, requireFeature } from "@/lib/entitlements";
 import { platformFeeDefault } from "@/lib/platform-settings";
 import { getStripe } from "@/lib/stripe";
+import { isRegistrationCurrency } from "@/lib/currency";
 import {
   sendPaymentReminderEmail,
   sendRegistrationPromotedEmail,
@@ -464,12 +465,14 @@ export interface DivisionCtx {
   default_locale: string | null;
   payment_instructions: string | null;
   charges_enabled: boolean;
-  // No `currency` (RS001b): every currency read left in this file resolves from
-  // the CART's snapshot (`RegistrationGroupRow.currency`), which is what the
-  // registrant was actually quoted. RS002/RS003 need the org's CURRENT currency
-  // — to stamp a new group at submit, and to 422 a stale snapshot before
-  // calling Stripe — and this is the right place to add it, with its reader.
-  // Carrying it here unread now would be a seam that ships untested.
+  /** The org's CURRENT currency (RS001b/RS003) — read fresh on every call so
+   *  `createRegistrationCheckout` can 422 a group whose snapshot has gone
+   *  stale (the org's currency moved since submit) BEFORE any Stripe call,
+   *  never as a Stripe-side error on a registrant's pay page. Every OTHER
+   *  currency read in this file still resolves from the cart's own snapshot
+   *  (`RegistrationGroupRow.currency`) — this field exists only to compare
+   *  against that snapshot, never to replace it. */
+  currency: string;
 }
 
 export async function divisionCtx(db: AnySql, divisionId: string): Promise<DivisionCtx> {
@@ -478,7 +481,7 @@ export async function divisionCtx(db: AnySql, divisionId: string): Promise<Divis
            c.name as comp_name, c.slug as comp_slug, c.visibility as comp_visibility,
            c.starts_on, c.ends_on,
            o.slug as org_slug, o.name as org_name, o.default_locale, o.payment_instructions,
-           o.stripe_charges_enabled as charges_enabled
+           o.stripe_charges_enabled as charges_enabled, o.currency
     from divisions d
     join competitions c on c.id = d.competition_id
     join organizations o on o.id = c.org_id
