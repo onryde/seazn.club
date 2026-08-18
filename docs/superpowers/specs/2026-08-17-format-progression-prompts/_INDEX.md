@@ -28,7 +28,7 @@ and those two `stages.ts` functions; F1 is fenced off `qualification.ts`,
 |---|---|---|---|
 | F1 | `F1-bracket-round-role.md` | — | **MERGED** as #606 (2026-08-18), plus #613 which named the knockout tree's rounds — the one bracket shape F1 left with no captions at all |
 | F2 | `F2-unified-progression-field.md` | — | **MERGED** as #616 (2026-08-18, `ef473f586`), 60 commits. One `progression` field; `qualification` and `seeding` dropped. Migrations V371-V373, no version collision on main |
-| F3 | **prompt ready** — `../2026-08-18-format-progression-f3-f5-design.md` §8 | F2 **merged** ✅ | design written 2026-08-18 against the shipped shape. Paste §8's F3 block as a whole prompt |
+| F3 | plan: `../../plans/2026-08-18-f3-day-one-fixtures.md` | F2 **merged** ✅ | **IN FLIGHT** 2026-08-18, worktree `f3-day-one`, branch `feat/f3-day-one-fixtures`. Plan written against real code; four findings below changed its scope |
 | F4 | **MERGED** as #619 (2026-08-18, `27af0f30d`), 16 commits. Export path + `.ics` feed + bracket poster | — | premise RETIRED (no sport/format-kind gap in either direction; its mexicano comment folds into F3). Slot **repurposed** to the export + calendar day-one leaks (§7 P5, P2). Does NOT wait for F3 — three catalogue templates already emit `timing: "setup"`. Owner CONFIRMED the repurpose 2026-08-18 |
 | F5 | **prompt ready** — same doc §8 | all | scope fixed by the §5 table |
 
@@ -179,6 +179,40 @@ prompts for F3, F5 and two standalone product fixes.
    image), not just the calendar. Accepted consequence: during `setup` the whole
    feed is tentative all-day and converts at publish. Nothing new is exposed —
    slot labels are already unmasked by V362 itself.
+
+10. **F3 flip scope: the six picker templates PLUS the format gallery**
+   (2026-08-18). `config/format-gallery.tsx:277,308,321` carries its own
+   `cannedStages` with `timing: "on_complete"` — a second user-reachable format
+   surface the F3 brief did not name. Flipping only `format-templates.ts` would
+   leave a gallery-created division with no day-one fixtures, which is the
+   owner's ask leaking on a live surface. `stages-panel.tsx`'s ad-hoc
+   `AddStageForm` (`:944`) and the seed scripts STAY on `on_complete`: that form
+   POSTs and immediately calls `/generate`, which is on_complete semantics by
+   construction, and moving it onto the propose/confirm flow is a different
+   session's work.
+
+11. **`groups_ko` converts `picks` → `topNPerGroup` + `snake`** (2026-08-18).
+   Design §2.3 said the picker emits a flat ranked list that lets group-mates
+   meet in the quarter-final. That is NOT the mechanism — `groups_ko`'s take is
+   `picks` alternating `A1,B1,A2,B2…`, a hand-rolled 2-pool snake that is
+   correct for two pools. The LIVE defect is different and worse: the builder
+   offers a **pools 2–8 knob** (`division-builder.tsx:694-706`) that
+   `buildTemplateStages` applies to the group stage, while the knockout's
+   `picks` stay pinned to pools A and B — **with 4 pools, groups C and D
+   qualify nobody**. The fix is `topNPerGroup n` (+ `bestNth` for the
+   remainder, euro24's shape) with `placement: "snake"`, which is pool-count
+   agnostic. A fresh session reading §2.3 alone will re-derive this wrongly.
+
+12. **`timing: "setup"` + `carry` is rejected by the schema** — an OPEN product
+    decision, not a defect (2026-08-18). `ProgressionSchema`'s second `.refine`
+    (`api-v1/schemas.ts`) rejects the combination, so once F3 flips every picker
+    format to `setup`, the marketed Pro entitlement `standings.carry_over`
+    (`feature-copy.ts:51`, priced in all four marketing dictionaries) is
+    unreachable on every picker format — via the API too, since no UI writes
+    `carry` today. Nothing regresses for any current organiser (no template,
+    gallery entry or catalogue file emits `carry`), so F3 does NOT change it.
+    Making both work means carrying points at `confirmSeedProposal` time on the
+    setup path. Owner decision pending.
 
 ## F4's brief contains one false premise (found 2026-08-18)
 
