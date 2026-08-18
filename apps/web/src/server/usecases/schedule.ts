@@ -644,7 +644,12 @@ export async function venueNamesById(tx: Tx): Promise<Map<string, string>> {
  *  fixture, and its venue_id must still resolve. Relies on `withTenant`'s
  *  RLS context for org scoping, same convention as `courtNamesById`/
  *  `venueNamesById`. */
-async function courtVenueIds(tx: Tx): Promise<Map<string, string>> {
+/** court id -> its venue id. The venue a fixture sits in is DERIVED from the
+ *  court it is on, never taken from the client: `courts.venue_id` and the
+ *  composite FK already guarantee the two agree, so a supplied `venue_id`
+ *  could only ever disagree. Exported for the JOINT apply path
+ *  (competition-schedule-apply.ts), which must resolve it identically. */
+export async function courtVenueIds(tx: Tx): Promise<Map<string, string>> {
   const rows = await tx<{ id: string; venue_id: string }[]>`select id, venue_id from courts`;
   return new Map(rows.map((r) => [r.id, r.venue_id]));
 }

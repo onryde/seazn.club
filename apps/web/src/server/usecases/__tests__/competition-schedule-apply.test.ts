@@ -446,6 +446,49 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     bravo: lineUp(board.bravo, await divisionSeq(board.bravo.id), board.courts.court3, 0),
   });
 
+  it("derives venue_id from the court, and follows it across venues", async () => {
+    // Review wave 2. The single-division `applySchedule` was fixed to derive
+    // `venue_id` from `courts.venue_id`; this joint twin still carried
+    // `coalesce(<absent>, venue_id)`, and NO client sends `venue_id` — so a
+    // joint apply that moved a fixture to a court in a DIFFERENT venue left
+    // the old venue on the row. Every player-facing venue string reads that
+    // column (ICS LOCATION, /me, /my-matches, the public fixture page and its
+    // JSON-LD), so the fixture named the wrong hall.
+    const [{ id: venueB }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${auth.orgId}, 'Second Hall') returning id`;
+    const [{ id: courtB }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueB}, ${auth.orgId}, 'Far Court', ${sql.array([])}) returning id`;
+
+    const venueOf = async (divisionId: string): Promise<(string | null)[]> => {
+      const rows = await sql<{ venue_id: string | null }[]>`
+        select venue_id from fixtures where division_id = ${divisionId}
+        order by round_no, seq_in_round, id`;
+      return rows.map((r) => r.venue_id);
+    };
+    const [{ venue_id: venueA }] = await sql<{ venue_id: string }[]>`
+      select venue_id from courts where id = ${board.courts.court1}`;
+    // The premise: the two courts really are in different venues.
+    expect(venueA).not.toBe(venueB);
+
+    // First apply — onto venue A's court.
+    await applyCompetitionSchedule(auth, board.competitionId, {
+      divisions: [lineUp(board.alpha, await divisionSeq(board.alpha.id), board.courts.court1, 0)],
+      source: "ai",
+      ai: AI,
+    });
+    expect((await venueOf(board.alpha.id)).every((v) => v === venueA)).toBe(true);
+
+    // Second apply — same fixtures, a court in ANOTHER venue. This is the
+    // assertion that fails on the coalesce: the rows keep venue A.
+    await applyCompetitionSchedule(auth, board.competitionId, {
+      divisions: [lineUp(board.alpha, await divisionSeq(board.alpha.id), courtB, 0)],
+      source: "ai",
+      ai: AI,
+    });
+    expect((await venueOf(board.alpha.id)).every((v) => v === venueB)).toBe(true);
+  });
+
   it("writes every division's assignments in one go", async () => {
     const { alpha, bravo } = await clean();
     const out = await applyCompetitionSchedule(auth, board.competitionId, {

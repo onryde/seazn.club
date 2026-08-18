@@ -117,6 +117,7 @@ import {
   applyWindow,
   assertFreshSeq,
   divisionFixtures,
+  courtVenueIds,
   divisionLockState,
   feedDependencies,
   loadSettings,
@@ -740,6 +741,9 @@ export async function applyCompetitionSchedule(
     }
 
     // ---- write ------------------------------------------------------------
+    // Resolved ONCE for the whole joint apply: the venue is derived from the
+    // court, never accepted from the client (see `courtVenueIds`' own note).
+    const courtVenues = await courtVenueIds(tx);
     let applied = 0;
     for (const d of order) {
       // Interleaved with the writes on purpose — see the module header. A
@@ -750,17 +754,23 @@ export async function applyCompetitionSchedule(
         const f = d.byId.get(a.fixture_id)!;
         // P9 pass 3a ruling, applied here in pass 3b: writers stop writing
         // court_label/venue (owner ruling, FULL cutover) — court_id/venue_id
-        // only. Mirrors `applySchedule`'s (schedule.ts) identical write
-        // exactly, including `venue_id`'s coalesce-over-unchanged semantics.
-        // This was the ONE place in the P9 cutover that had NOT switched: a
-        // joint apply reported `applied > 0` while silently writing the
-        // court identity into the frozen, unread `court_label` column and
-        // leaving `court_id` untouched.
+        // only. Mirrors `applySchedule`'s (schedule.ts) identical write.
+        //
+        // Review wave 2: `venue_id` is DERIVED from the court, exactly as
+        // `applySchedule` now does. It used to be
+        // `coalesce(${a.venue_id ?? null}, venue_id)`, and no client sends
+        // `venue_id` (`jointApplyDivisions` emits fixture_id/scheduled_at/
+        // court_id only) — so a joint apply that moved a fixture from one
+        // venue's court to another's LEFT the old venue in place, and every
+        // player-facing venue string (ICS LOCATION, /me, /my-matches, the
+        // public fixture page and its JSON-LD) then named the wrong one. The
+        // single-division path was fixed first and this twin was missed,
+        // which is the same second-call-site shape this cutover kept hitting.
         await tx`
           update fixtures set
             scheduled_at = ${a.scheduled_at},
             court_id = ${a.court_id},
-            venue_id = coalesce(${a.venue_id ?? null}, venue_id),
+            venue_id = ${a.court_id !== null ? (courtVenues.get(a.court_id) ?? null) : null},
             schedule_source = ${input.source}
           where id = ${a.fixture_id}`;
         // `court` here is a courts.id, not a label — see `applySchedule`'s
