@@ -29,7 +29,7 @@ and those two `stages.ts` functions; F1 is fenced off `qualification.ts`,
 | F1 | `F1-bracket-round-role.md` | — | **MERGED** as #606 (2026-08-18), plus #613 which named the knockout tree's rounds — the one bracket shape F1 left with no captions at all |
 | F2 | `F2-unified-progression-field.md` | — | **MERGED** as #616 (2026-08-18, `ef473f586`), 60 commits. One `progression` field; `qualification` and `seeding` dropped. Migrations V371-V373, no version collision on main |
 | F3 | **prompt ready** — `../2026-08-18-format-progression-f3-f5-design.md` §8 | F2 **merged** ✅ | design written 2026-08-18 against the shipped shape. Paste §8's F3 block as a whole prompt |
-| F4 | **IN FLIGHT** — plan `../../plans/2026-08-18-f4-handout-surfaces.md`, branch `feat/f4-day-one-handout-surfaces`, worktree `.claude/worktrees/f4-handout`, DB label `f4` | — | premise RETIRED (no sport/format-kind gap in either direction; its mexicano comment folds into F3). Slot **repurposed** to the export + calendar day-one leaks (§7 P5, P2). Does NOT wait for F3 — three catalogue templates already emit `timing: "setup"`. Owner CONFIRMED the repurpose 2026-08-18 |
+| F4 | **MERGED** as #619 (2026-08-18, `27af0f30d`), 16 commits. Export path + `.ics` feed + bracket poster | — | premise RETIRED (no sport/format-kind gap in either direction; its mexicano comment folds into F3). Slot **repurposed** to the export + calendar day-one leaks (§7 P5, P2). Does NOT wait for F3 — three catalogue templates already emit `timing: "setup"`. Owner CONFIRMED the repurpose 2026-08-18 |
 | F5 | **prompt ready** — same doc §8 | all | scope fixed by the §5 table |
 
 **Why F3–F5 are not written.** They consume F2's field shape, and this repo has
@@ -37,6 +37,63 @@ a repeated failure where a session authored against a design meets an
 implementation that landed differently — the scoringpad index is full of
 "the prompt's central premise was false" entries. F3 gets written after F2
 **merges**, against real code.
+
+## F4 closeout (MERGED #619, 2026-08-18) — what it changed and what it left
+
+Delivered: the exported/printed draw (timetable, scoresheet, **bracket poster**)
+and BOTH officials rotas resolve `home_slot_label`/`away_slot_label` through
+`resolveSlotLabel` with the ORG's default locale; the public `.ics` feed emits
+unscheduled day-one fixtures as all-day `STATUS:TENTATIVE` VEVENTs anchored on
+`competitions.ends_on ?? starts_on`, with `SEQUENCE:0`/`SEQUENCE:1` and the UID
+keyed on the fixture id so they update IN PLACE.
+
+**Three things a fresh session will otherwise re-derive wrongly:**
+
+- **`ticketRegistrationRows` was never part of P5.** The F3–F5 design §7 P5 and
+  its §8 pickup prompt both claim it coalesces fixture participants to `"TBD"`
+  "the same" as `officialDutyRows`. It does not — it selects
+  `registrations.display_name`/`ref_code` and never joins `fixtures` or
+  `entrants`. Verified twice, by two reviewers. Do not "fix" it.
+- **The bracket poster runs its OWN fixture query** (`exports.ts` bracket arm),
+  bypassing `exportFixtures` entirely. F4's first pass missed it for exactly
+  that reason. Anything that changes how exported fixtures resolve must touch
+  BOTH paths or it silently covers only one.
+- **Adding a dictionary key is not finished until `npm run i18n:gen-keys` is run
+  and `apps/web/src/lib/i18n-keys.ts` is committed.** `i18n:check` and the
+  parity script BOTH stay green while that file is stale, because they compare
+  the locales to each other. Only CI's drift gate sees it. F4 lost a CI cycle
+  to this; #618 hit it the same day (`315ef26c0`).
+
+**Left for F5** (found by F4's final review, none blocking at merge):
+- `packages/engine/src/exports/build.ts:40` — `timeOf()` returns the literal
+  `"TBD"` for every fixture with no `at`, i.e. **every day-one fixture**, so a
+  French poster row reads `TBD | … | Vainqueur du Groupe A`. Column headers
+  (`:53,:173`) are English too, and `home ?? "TBD"` (`:275,313,346,374`) IS
+  reachable through the bracket arm. An earlier F4 note calling this
+  "dead-not-wrong" was WRONG on both counts.
+- `exports.ts` — scoresheet form lines and signatures ("Referee", "Captain — "),
+  the Page-playoff description, and every section description are still
+  hardcoded English on the very documents whose bracket chrome F4 localized.
+- `calendar.ics/route.ts:37,80` — `?? "TBD"` and `?? "Entrant"` hardcoded;
+  reachable when a fixture cites an entrant absent from `data.entrants`.
+- `calendar.ics/route.ts:49-52` — **the `?entrant=` feed drops every day-one
+  fixture by construction**: an unresolved fixture has both entrant ids null, so
+  the predicate excludes it. "A player can subscribe to their own route through
+  the draw" is NOT delivered and should not be claimed.
+- Bare `?? "TBD"` of the same shape survives at `schedule.ts:2598`,
+  `org-posts.ts:522,569,1357`, `officials.ts:600`, `match-reports.ts:224` —
+  untriaged for placeholder-reachability.
+- `registrations.ts:3001-3024` hand-rolls a second VCALENDAR builder that does
+  not use `buildIcs`, and applies no `icsText` escaping — a comma or semicolon
+  in a competition name emits a malformed TEXT value.
+- `poster.pdf` still renders QR and branding only. A day-one full-draw poster is
+  the product opportunity F4 makes possible for the first time.
+
+**The one defect F4 itself created, and fixed before merge:** resolving slot
+labels on the printed rota while `officiating-lane.tsx` still rendered "TBD"
+left the screen and the PDF disagreeing — worse than the matching "TBD"s they
+showed before. Caught only by the final whole-branch review; no test asserted
+that screen and print agree, and none does now either.
 
 ## F3–F5 design (2026-08-18) — read before picking any of them up
 
