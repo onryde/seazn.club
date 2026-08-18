@@ -219,6 +219,23 @@ export function placeDescriptors(
   placement: "rank_order" | "snake" | "seeded_map",
   map?: readonly SeededMapEntry[],
 ): SourcedSlot[] {
+  // F3 review corollary (owner ruling 11, F3 programme index): snakeMerge
+  // reverses a pot's ARRAY ORDER but never touches each descriptor's own
+  // `position` (its cross-group strength rank), so reversing a bestNth pot
+  // would seed the WEAKEST wildcard into the STRONGEST bracket slot. `snake`
+  // is only ever correct for a group_rank pot (a group/pool TARGET, per
+  // ruling 11) — refuse the combination outright rather than silently
+  // mis-seed a wildcard.
+  if (placement === "snake") {
+    const potIndex = pots.findIndex((pot) => pot.some((s) => s.descriptor.kind === "best_nth"));
+    if (potIndex !== -1) {
+      throw new EngineError(
+        "CONFIG_INVALID",
+        `placement "snake" cannot be combined with a bestNth-sourced pot (pot ${potIndex}) — snakeMerge reverses a pot's array order without moving each descriptor's cross-group strength rank ("position"), so the weakest wildcard would seed into the strongest slot; use "rank_order" for a bestNth take`,
+        { placement, potIndex },
+      );
+    }
+  }
   const flat = placement === "snake" ? snakeMerge(pots) : pots.flat();
   if (placement !== "seeded_map" || !map || map.length === 0) return flat;
 

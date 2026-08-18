@@ -260,6 +260,57 @@ describe("placeDescriptors", () => {
     expect(rest.every((s) => descriptorKey(s.descriptor) === "A1")).toBe(true);
     expect(rest.map((s) => s.sourceIndex).sort()).toEqual([0, 1]);
   });
+
+  // Corollary caught in the same review as F3's ruling 11 (F3 programme
+  // index): snakeMerge reverses a bestNth pot's ARRAY ORDER but never
+  // touches each descriptor's own `position` (its cross-group strength
+  // rank), so a reversed wildcard pot would seed the WEAKEST wildcard into
+  // the STRONGEST bracket slot. No shipped writer combines snake with
+  // bestNth today (groups_ko takes rank_order — see format-templates.ts),
+  // but the hazard is live for anyone who writes one; refuse it outright
+  // rather than silently mis-seed.
+  it("snake placement combined with a bestNth-sourced pot throws CONFIG_INVALID", () => {
+    const pots = expandSources(
+      [
+        {
+          stage: "previous",
+          take: [
+            { kind: "topNPerGroup", n: 1 },
+            { kind: "bestNth", nth: 2, count: 2 },
+          ],
+        },
+      ],
+      () => GROUPED,
+    );
+    expect(() => placeDescriptors(pots, "snake")).toThrow(/bestNth/);
+    try {
+      placeDescriptors(pots, "snake");
+      expect.fail("expected placeDescriptors to throw");
+    } catch (err) {
+      expect(EngineError.is(err, "CONFIG_INVALID")).toBe(true);
+    }
+  });
+
+  it("the same bestNth-sourced pot under rank_order does not throw — the guard is snake-specific", () => {
+    const pots = expandSources(
+      [
+        {
+          stage: "previous",
+          take: [
+            { kind: "topNPerGroup", n: 1 },
+            { kind: "bestNth", nth: 2, count: 2 },
+          ],
+        },
+      ],
+      () => GROUPED,
+    );
+    expect(() => placeDescriptors(pots, "rank_order")).not.toThrow();
+  });
+
+  it("snake without any bestNth pot does not throw — ordinary group-target snake (t20-super8's shape) keeps working", () => {
+    const pots = expandSources([{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }], () => GROUPED);
+    expect(() => placeDescriptors(pots, "snake")).not.toThrow();
+  });
 });
 
 describe("descriptorKey / descriptorLabel", () => {
