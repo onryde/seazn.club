@@ -138,8 +138,16 @@ describe("every route that mounts the board seeds the config (#385)", () => {
   function tsxFiles(dir: string, out: string[] = []): string[] {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, e.name);
-      if (e.isDirectory()) tsxFiles(full, out);
-      else if (e.name.endsWith(".tsx")) out.push(full);
+      // ROUTES only. A colocated `__tests__` file that mounts the board is not
+      // a route — it supplies its own provider (or deliberately omits one to
+      // prove `useRungConfig` throws), so holding it to a route's wrapping
+      // rule fails a test for doing its job. This fired the moment a spec was
+      // added beside a board route for the first time.
+      if (e.isDirectory()) {
+        if (e.name !== "__tests__") tsxFiles(full, out);
+      } else if (e.name.endsWith(".tsx") && !e.name.endsWith(".test.tsx")) {
+        out.push(full);
+      }
     }
     return out;
   }

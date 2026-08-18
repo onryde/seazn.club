@@ -318,8 +318,19 @@ describe("CourtMultiPicker — render", () => {
         onChange={() => {}}
       />,
     );
-    expect(html).toContain("Court 1 (North Sports Centre)");
-    expect(html).toContain("Court 1 (South Leisure Park)");
+    // The strip renders the venue on its OWN line rather than inside the
+    // label, so that a 320px viewport truncates the two independently — a
+    // single "Court 1 (North Sports Centre)" span clips to "Court 1 (North…"
+    // and two venues sharing a prefix become identical text again. Scoped to
+    // the <ol> deliberately: both venue names also appear as the checkbox
+    // list's group headings, so an unscoped `toContain` would pass even with
+    // the strip's qualification removed entirely.
+    const strip = /<ol[^>]*>([\s\S]*?)<\/ol>/.exec(html)?.[1] ?? "";
+    expect(strip).not.toBe("");
+    expect(strip).toContain("North Sports Centre");
+    expect(strip).toContain("South Leisure Park");
+    // And the two entries are genuinely distinguishable from one another.
+    expect(strip.indexOf("North Sports Centre")).not.toBe(strip.indexOf("South Leisure Park"));
   });
 
   it("falls back to the unknown-court label for a selected id with no matching court", () => {
