@@ -25,9 +25,20 @@
 // populated by the engine, populated only by a caller that already resolved
 // `court` to a `courts.name` before handing the (still otherwise
 // engine-built) detail to `legacyConflictDetail` or the wire mapper.
+//
+// `court_tag_mismatch` (P9 pass 2c, venues/courts cutover, owner ruling) is a
+// 26th kind added post-doc — the design doc's table enumerates 25 and this
+// one postdates it, the same way `courtName` above postdates the doc's
+// original field list. It closes the placer/verifier fork P9 introduced:
+// the placer restricts NEW placements to courts whose tags satisfy a
+// division's/stage's `required_court_tags` (candidate-courts.ts), but
+// nothing on the verify side read that constraint, so a fixture landed on a
+// tag-mismatched court by any other path (a hand-drag, an AI draft) validated
+// clean. `court` is its uuid, same convention as `court_double_booking`.
 
-/** One member per family template. Closed at exactly the 25 the design doc's
- *  table enumerates — a 26th needs a design amendment, not a cast. */
+/** One member per family template. The design doc's own table enumerates 25;
+ *  a 26th (`court_tag_mismatch`, above) has since been added by owner ruling
+ *  — closed at exactly these 26, and a 27th needs the same, not a cast. */
 export type ConflictDetailKind =
   | "person_double_booking"
   | "locked_slot_clash"
@@ -42,6 +53,7 @@ export type ConflictDetailKind =
   | "outside_competition_window"
   | "outside_start_window"
   | "court_double_booking"
+  | "court_tag_mismatch"
   | "inside_blackout"
   | "outside_session_windows"
   | "entrant_overlap"
