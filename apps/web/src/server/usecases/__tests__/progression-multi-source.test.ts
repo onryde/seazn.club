@@ -212,4 +212,53 @@ describe.skipIf(!HAS_DB)("multi-source progression (F2 Decision 4 / Finding 1)",
     ]);
     expect(bRow!.status).toBe("complete");
   });
+
+  // F2 Task 6 review, finding 1: seedNextStage's call inside completeStage
+  // had NO try/catch, but a comment a few lines below it claimed
+  // STAGE_NOT_READY was "caught by completeStage's existing best-effort
+  // try/catch" — false. Multi-source makes that reachable for real: B is
+  // seq-adjacent to Final and fires the seed attempt on its own completion,
+  // but A (the OTHER named source) is deliberately left undecided here, so
+  // seedNextStage's per-source completeness check throws STAGE_NOT_READY.
+  // Before the fix this propagated out of completeStage uncaught, so the
+  // API returned a 422 that read as "completing B failed" even though B's
+  // own completion (predicate + standings + status write) had already
+  // committed durably.
+  it("completing a source stage while another named source isn't ready does not fail the completion (STAGE_NOT_READY is best-effort)", async () => {
+    const { auth } = await seedOrg();
+    const { division, entrants, a, b } = await seedDivisionWithTwoLeagues(auth);
+    const [, e2] = entrants;
+
+    const [final] = await createStages(auth, division.id, {
+      seq: 3,
+      kind: "knockout",
+      name: "Final",
+      config: {},
+      progression: {
+        sources: [
+          { stage: { stageId: a.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+          { stage: { stageId: b.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+        ],
+        placement: "rank_order",
+        timing: "on_complete",
+      },
+    });
+    void final;
+
+    await generateStageFixtures(auth, a.id);
+    await generateStageFixtures(auth, b.id);
+    // Only B is decided. A is left with no results at all — its own
+    // completion predicate isn't satisfied, so it stays incomplete.
+    await decideLeagueWithWinner(auth, b.id, e2!.id);
+
+    const completedB = await completeStage(auth, b.id);
+    expect(completedB.completed).toBe(true);
+    expect(completedB.qualified).toBeUndefined();
+
+    const [bRow] = await sql<{ status: string }[]>`select status from stages where id = ${b.id}`;
+    expect(bRow!.status).toBe("complete");
+    const [finalRow] = await sql<{ config: { qualified?: string[] } }[]>`
+      select config from stages where id = ${final!.id}`;
+    expect(finalRow!.config.qualified).toBeUndefined();
+  });
 });
