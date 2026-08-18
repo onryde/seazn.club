@@ -107,6 +107,22 @@ raw `guardedSettings.config.courts`, bypassing the shared filter entirely, so
 an AI draft can place on an archived or tag-mismatched court. Pass 3b owns it
 as required scope.
 
+## Cutover debt ledger (pass-3a review, FIX-FIRST)
+
+Pass 3a's own files reviewed clean. What follows is the front half of the
+cutover having landed while live callers still speak the old shape. This
+ships as ONE PR, so every row must close before merge. Assigned, not
+optional:
+
+| Site | Breaks how | Owner |
+|---|---|---|
+| `board/ai-competition-console.tsx:335-337,887` | builds apply-assignments with `court_label`; `ApplyScheduleRequest` item is now `.strict()` + requires `court_id` → joint AI-apply POSTs 400 | 3b |
+| `board/ai-console.tsx:107,128,275,645,694,802,1519`, `ai-diff.ts:15,65`, `ai-diff-panel.tsx:71-73` | AI console family typed/keyed on `court_label`; `scope.courts.includes(f.court_label)` can never match | 3b |
+| `app/score/[token]/page.tsx:64,77,152` | live scoring page SELECTs abandoned `venue`/`court_label` → blank court/venue for any fixture touched after this pass | 3c |
+| `usecases/stages.ts:98,122,126-143` (`FixtureRow`/`FIXTURE_COLS`) → `fixtures.ts:9,21-93` (`PatchedFixtureOut`) | GET/PATCH `/fixtures/{id}` has NO `court_id` field at all — blind, not stale | 3c |
+| `calendar.ics/route.ts:51`, `fixtures/[fixtureId]/page.tsx:126`, `app/me/page.tsx:160`, `app/my-matches/page.tsx:122`, `components/me/officiating-lane.tsx:142,277` | six user-facing renders of the abandoned columns | 3c |
+| `usecases/stages.ts:2705-2765` (`addFixture`) | still ACCEPTS and INSERTs free-text `venue` — a writer "writers stop writing venue" never reached | 3c |
+
 ## Passes
 
 | # | Scope | State |
@@ -117,3 +133,62 @@ as required scope.
 | 3 | Server reader/writer cutover + OpenAPI regen | pending |
 | 4 | UI cutover (court multi-picker, venue picker, stage tags) + i18n ×4 | pending |
 | 5 | e2e / smoke / demo fixtures / snapshots, both-ways gate | pending |
+
+## The cutover's sharpest trap: a field whose MEANING changed, not its name
+
+`fixtures.court_label` → `court_id` was mechanical. What was not mechanical:
+code that had been written against the *properties* of the old value and
+silently inherited the new one.
+
+- **`schedule-ai.ts` `byAssignment` (~:574)** tie-breaks a sort with
+  `cmp(a.court_label, b.court_label)`. Pre-cutover that field held a stable
+  organiser string ("Court 1"); post-cutover it holds a per-seed UUID. Two
+  draft entries at the same `scheduled_at` on different courts therefore
+  sorted in **coin-flip order** — the isolated test, rerun 4× with zero code
+  changes, gave 2 passes / 2 failures. It feeds the model payload and the
+  byte-identity snapshots. A 50%-flaky test proves nothing on one green run;
+  the fix's acceptance criterion was ≥5 consecutive runs, not one.
+- Same root cause, different shape: the **court-removal guard** compared a
+  uuid against `court_label` and so never matched; **`scopeLocked`** matched
+  a column writers had abandoned; **`unplaced()`** in
+  `competition-schedule-restore.test.ts` became vacuously true.
+
+Four defects, one mechanism, none visible to a passing suite. Any future
+column-meaning change in this repo should budget for a deliberate sweep of
+*comparators and sort keys* touching the field, not just its readers.
+
+## Environment faults that produced false signals this session
+
+Both cost real time and both looked exactly like code defects:
+
+1. **V371 did not apply AT ALL** on a fresh DB (42P01: comma-`FROM` mixed
+   with an explicit `LEFT JOIN` referencing the target alias). Hidden because
+   agents are barred from `db:apply` (600s watchdog) while the orchestrator's
+   gate runs reused a database still holding the pre-`locked_scopes` V371 —
+   a stale-schema green on both sides. Re-apply from scratch after ANY
+   migration edit.
+2. **A hardcoded placement secret reads as `solver_unavailable`.** The
+   secret is PER LABEL (`local-p9v2-secret`, not `dev-secret`). With the
+   wrong one, 4 lock tests + 6 solver tests fail in ways indistinguishable
+   from a solver regression. Always take both vars from
+   `seazn-env env --label <l>`; never hand-set them.
+
+## Two more measurement traps (P9, orchestrator-side)
+
+3. **A parallel vitest run over the DB-backed suites returns a MOVING
+   failure set.** Gate 7 reported 2 failures (both real); gate 8, on a diff
+   that touched only export/read paths, reported 6 — in billing,
+   stage-progression, start-gate, reflow and quote-mismatch, none of which
+   the diff touches, with `suitesFailed: 12` against 6 failed tests and the
+   total dropping by 9 (i.e. suites that never collected). Re-run in
+   isolation: **27/27 green, unredacted**. These suites share one schema and
+   vitest runs files in parallel. Any number quoted from a parallel run is
+   provisional; the wave-boundary gate runs with file parallelism disabled.
+4. **`rtk` redacts real assertions as `STACK_TRACE_ERROR` inside the JSON
+   report**, and the hook rewrites a plain `npx vitest` invocation, so the
+   redaction applies even when you did not type `rtk`. Diagnosing a failure
+   needs `rtk proxy npx vitest … --reporter=verbose`.
+5. **The Bash tool caps at 10 minutes.** A full `src/server` gate exceeds
+   that and is KILLED mid-run — which looks like a hang, not a cap. Run it
+   with `run_in_background: true` and have the command write its own
+   `EXIT=$?` to a file, because a killed background command reports 0.
