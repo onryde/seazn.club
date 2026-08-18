@@ -14,6 +14,7 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { validateAssignments } from "@seazn/engine/scheduling";
 import { buildSchedulePack, isBlocking, toEngineAssignments, toModelPayload, verifyConfig } from "../schedule-ai";
+import { createVenue, createCourt } from "../venues";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -37,13 +38,11 @@ const T0 = Date.parse("2026-08-01T09:00:00.000Z");
 const MIN = 60_000;
 const TZ = "Europe/London";
 
-const SETTINGS_CONFIG = {
+const BASE_SETTINGS_CONFIG = {
   startAt: "2026-08-01T09:00:00.000Z",
   matchMinutes: 30,
   gapMinutes: 0,
-  courts: ["Court 1", "Court 2"],
   perEntrantMinRest: 20,
-  blackouts: [{ court: "Court 2", from: "2026-08-01T12:00:00.000Z", to: "2026-08-01T13:00:00.000Z" }],
   sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T18:00:00.000Z" }],
   constraints: {
     restMin: 20,
@@ -54,6 +53,37 @@ const SETTINGS_CONFIG = {
     crossPersonClash: "hard",
   },
 };
+
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` (real `courts.id`
+// values, since pass 1) — `courts`/`blackouts[].court` can no longer be
+// literal "Court 1"/"Court 2" strings, so they are resolved (and cached) per
+// org rather than baked into a static constant. See `courtId`/`courtIds`.
+function settingsConfig(court1: string, court2: string) {
+  return {
+    ...BASE_SETTINGS_CONFIG,
+    courts: [court1, court2],
+    blackouts: [{ court: court2, from: "2026-08-01T12:00:00.000Z", to: "2026-08-01T13:00:00.000Z" }],
+  };
+}
+
+const courtsByOrg = new Map<string, { venueId: string; byName: Map<string, string> }>();
+
+/** A real court, resolved (and cached) by name within one org — see
+ *  `settingsConfig`'s own doc comment. Mirrors
+ *  `competition-schedule-pack.test.ts`'s identical helper. */
+async function courtId(auth: AuthCtx, name: string): Promise<string> {
+  let entry = courtsByOrg.get(auth.orgId);
+  if (!entry) {
+    const venue = await createVenue(auth, { name: "Main venue", sort: 0 });
+    entry = { venueId: venue.id, byName: new Map() };
+    courtsByOrg.set(auth.orgId, entry);
+  }
+  const cached = entry.byName.get(name);
+  if (cached !== undefined) return cached;
+  const court = await createCourt(auth, entry.venueId, { name, sort: entry.byName.size, tags: [] });
+  entry.byName.set(name, court.id);
+  return court.id;
+}
 
 // UUIDs are random per seed run; redact them to stable, first-seen placeholders
 // so the structural snapshot survives re-seeding while ordering stays asserted.
@@ -68,10 +98,10 @@ function redact(pack: unknown): unknown {
   );
 }
 
-async function setSettings(divisionId: string): Promise<void> {
+async function setSettings(divisionId: string, court1: string, court2: string): Promise<void> {
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${divisionId}, ${sql.json(SETTINGS_CONFIG)}, ${TZ}, now())
+    values (${divisionId}, ${sql.json(settingsConfig(court1, court2))}, ${TZ}, now())
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
 }
 
@@ -105,9 +135,12 @@ async function fixtureIds(divisionId: string): Promise<string[]> {
 }
 
 /** Unschedule the whole board — the state a division is in before its first
- *  auto-schedule, and the one that used to produce 1970 draft times. */
+ *  auto-schedule, and the one that used to produce 1970 draft times.
+ *  P9 pass 3b: nulls `court_id`, the real identity `buildSchedulePack` now
+ *  reads — nulling only the legacy `court_label` left every fixture reading
+ *  as still placed. */
 async function clearBoard(divisionId: string): Promise<void> {
-  await sql`update fixtures set scheduled_at = null, court_label = null
+  await sql`update fixtures set scheduled_at = null, court_id = null
             where division_id = ${divisionId}`;
 }
 
@@ -115,7 +148,15 @@ async function clearBoard(divisionId: string): Promise<void> {
 // roster) in a FRESH pro org. Everything is persisted on STABLE domain keys —
 // never fixture UUIDs — so re-seeding an identical board yields the same logical
 // pack. Returns the org auth + division so a caller can reseed for determinism.
-async function seedRrBoard(): Promise<{ auth: AuthCtx; divisionId: string }> {
+// P9 pass 3b: also returns the two real court ids this board's own config was
+// built with, so a caller building its OWN config (e.g. NO_ANCHOR_CONFIG)
+// against the same org can reuse them.
+async function seedRrBoard(): Promise<{
+  auth: AuthCtx;
+  divisionId: string;
+  court1: string;
+  court2: string;
+}> {
   const { auth } = await seedOrg("pro");
   // The pack's ONE clock is the ORGANISATION zone (#397). This board has always
   // been a London board — it just said so on the division row. Saying it on the
@@ -136,7 +177,9 @@ async function seedRrBoard(): Promise<{ auth: AuthCtx; divisionId: string }> {
       kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [],
     })),
   );
-  await setSettings(divisionId);
+  const court1 = await courtId(auth, "Court 1");
+  const court2 = await courtId(auth, "Court 2");
+  await setSettings(divisionId, court1, court2);
   const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "League", config: {} });
   const { fixtures } = await generateStageFixtures(auth, stage!.id);
   expect(fixtures.length).toBe((8 * 7) / 2);
@@ -151,7 +194,7 @@ async function seedRrBoard(): Promise<{ auth: AuthCtx; divisionId: string }> {
     await sql`
       update fixtures set
         scheduled_at = ${new Date(T0 + i * 30 * MIN).toISOString()},
-        court_label = ${i % 2 === 0 ? "Court 1" : "Court 2"},
+        court_id = ${i % 2 === 0 ? court1 : court2},
         schedule_source = 'auto'
       where id = ${ordered[i]!.id}`;
   }
@@ -178,7 +221,7 @@ async function seedRrBoard(): Promise<{ auth: AuthCtx; divisionId: string }> {
     insert into official_availability (org_id, official_id, date, status, note)
     values (${auth.orgId}, ${o1!.id}, '2026-08-02', 'unavailable', 'holiday')`;
 
-  return { auth, divisionId };
+  return { auth, divisionId, court1, court2 };
 }
 
 afterAll(async () => {
@@ -192,10 +235,12 @@ afterAll(async () => {
 describe.skipIf(!HAS_DB)("buildSchedulePack (v4/01 §2)", () => {
   let auth: AuthCtx;
   let divisionId: string;
+  let court1: string;
+  let court2: string;
   const RR = (8 * 7) / 2; // 28 round-robin fixtures
 
   beforeAll(async () => {
-    ({ auth, divisionId } = await seedRrBoard());
+    ({ auth, divisionId, court1, court2 } = await seedRrBoard());
   });
 
   it("rebuilds byte-identical for an identical board reseeded with fresh UUIDs", async () => {
@@ -239,7 +284,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack (v4/01 §2)", () => {
       .filter((t): t is number => t !== undefined)
       .sort((x, y) => x - y);
     expect(sharedStarts.length).toBeGreaterThan(1);
-    const apart = SETTINGS_CONFIG.matchMinutes + SETTINGS_CONFIG.perEntrantMinRest;
+    const apart = BASE_SETTINGS_CONFIG.matchMinutes + BASE_SETTINGS_CONFIG.perEntrantMinRest;
     expect(sharedStarts.slice(1).filter((t, i) => t - sharedStarts[i]! < apart * MIN)).toEqual([]);
     expect(a.pack.officials.length).toBeGreaterThan(0);
     // Officials availability wired through: blackout date + entrant links.
@@ -260,24 +305,24 @@ describe.skipIf(!HAS_DB)("buildSchedulePack (v4/01 §2)", () => {
   it("repair scope excludes out-of-scope fixtures from movable and adds them as obstacles", async () => {
     const { pack, movableIds } = await buildSchedulePack(auth, divisionId, {
       now: NOW_W2,
-      mode: "repair", instruction: "Court 2 flooded", scope: { courts: ["Court 2"] },
+      mode: "repair", instruction: "Court 2 flooded", scope: { courts: [court2] },
     });
     for (const f of pack.fixtures.movable) {
-      expect(f.current.court === "Court 2" || f.current.court === null).toBe(true);
+      expect(f.current.court === court2 || f.current.court === null).toBe(true);
     }
     expect(movableIds.size).toBeLessThan(RR);
     expect(movableIds.size).toBeGreaterThan(0);
     // Court 1 fixtures are now fixed obstacles.
-    expect(pack.fixtures.obstacles.some((o) => o.court === "Court 1")).toBe(true);
+    expect(pack.fixtures.obstacles.some((o) => o.court === court1)).toBe(true);
   });
 
   it("repair draft is the movable set's current persisted slots", async () => {
     const { pack } = await buildSchedulePack(auth, divisionId, {
       now: NOW_W2,
-      mode: "repair", instruction: "reflow", scope: { courts: ["Court 2"] },
+      mode: "repair", instruction: "reflow", scope: { courts: [court2] },
     });
     expect(pack.draft.length).toBe(pack.fixtures.movable.length);
-    expect(pack.draft.every((d) => d.court_label === "Court 2")).toBe(true);
+    expect(pack.draft.every((d) => d.court_label === court2)).toBe(true);
   });
 
   it("refine mode uses the prior proposal verbatim as the draft", async () => {
@@ -358,6 +403,12 @@ describe.skipIf(!HAS_DB)("buildSchedulePack (v4/01 §2)", () => {
   });
 });
 
+// P9 pass 3b regression coverage (archived/tag-mismatched court excluded via
+// resolveCandidateCourts; inScope() matches court_id, ignores a frozen,
+// misleading court_label) lives in schedule-ai-candidate-courts.test.ts, a
+// separate self-contained file — deliberately not here, so it needs no
+// dependency on this suite's own SETTINGS_CONFIG/seedRrBoard.
+
 // Bulk fixture seeder — direct inserts (no generator) to hit the size limits.
 async function seedBigDivision(auth: AuthCtx, n: number): Promise<string> {
   const comp = await createCompetition(auth, {
@@ -368,7 +419,7 @@ async function seedBigDivision(auth: AuthCtx, n: number): Promise<string> {
     name: "Big", slug: `big-${randomUUID().slice(0, 6)}`, sport_key: "generic",
     variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
   });
-  await setSettings(division.id);
+  await setSettings(division.id, await courtId(auth, "Court 1"), await courtId(auth, "Court 2"));
   const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
   await sql`
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
@@ -421,7 +472,7 @@ async function seedKoDivision(
     name, slug: `${name.toLowerCase()}-${tag}`, sport_key: "generic",
     variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
   });
-  await setSettings(division.id);
+  await setSettings(division.id, await courtId(auth, "Court 1"), await courtId(auth, "Court 2"));
   const [stage] = await createStages(auth, division.id, {
     seq: 1, kind: "league", name: "KO", config: {},
   });
@@ -522,7 +573,7 @@ async function seedSmallKnockoutBracket(): Promise<{
     name: "KO", slug: `ko-${tag}`, sport_key: "generic",
     variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
   });
-  await setSettings(division.id);
+  await setSettings(division.id, await courtId(auth, "Court 1"), await courtId(auth, "Court 2"));
   const [stage] = await createStages(auth, division.id, {
     seq: 1, kind: "knockout", name: "KO", config: {},
   });
@@ -560,7 +611,7 @@ async function seedSmallBracketWithFinishedSemi(): Promise<{ auth: AuthCtx; divi
   const { auth, divisionId, ids } = await seedSmallBracket();
   await sql`
     update fixtures set status = 'finalized',
-      scheduled_at = ${new Date(T0).toISOString()}, court_label = 'Court 1'
+      scheduled_at = ${new Date(T0).toISOString()}, court_id = ${await courtId(auth, "Court 1")}
     where id = ${ids.fixtureIds.semi1}`;
   return { auth, divisionId };
 }
@@ -594,14 +645,15 @@ async function seedNullExtKeyDanglingFeeders(): Promise<{
     values (${stageId}, ${divisionId}, ${auth.orgId}, 2, 0, 'final', 'scheduled') returning id`;
   // semi-A sorts ABOVE semi-B as a raw string, but BELOW it on (round, seq).
   const ids = [uuidLeading("f"), uuidLeading("0")];
+  const court1 = await courtId(auth, "Court 1");
   for (let i = 0; i < 2; i++) {
     await sql`
       insert into fixtures (id, stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
                             home_entrant_id, away_entrant_id, winner_to_fixture, winner_to_slot,
-                            scheduled_at, court_label)
+                            scheduled_at, court_id)
       values (${ids[i]!}, ${stageId}, ${divisionId}, ${auth.orgId}, 1, ${i}, null, 'finalized',
               ${ents[i * 2]!.id}, ${ents[i * 2 + 1]!.id}, ${final!.id}, ${i + 1},
-              ${new Date(T0 + i * 30 * MIN).toISOString()}, 'Court 1')`;
+              ${new Date(T0 + i * 30 * MIN).toISOString()}, ${court1})`;
   }
   return { auth, divisionId, semiA: ids[0]!, semiB: ids[1]! };
 }
@@ -643,11 +695,11 @@ async function seedSharedFeederTwoDependents(fixtureIds: {
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
                           home_entrant_id, away_entrant_id,
                           winner_to_fixture, winner_to_slot, loser_to_fixture, loser_to_slot,
-                          scheduled_at, court_label)
+                          scheduled_at, court_id)
     values (${stageId}, ${divisionId}, ${auth.orgId}, 1, 0, 'sf', 'finalized',
             ${ents[0]!.id}, ${ents[1]!.id},
             ${fixtureIds.winners}, 1, ${fixtureIds.losers}, 1,
-            ${new Date(T0).toISOString()}, 'Court 1')`;
+            ${new Date(T0).toISOString()}, ${await courtId(auth, "Court 1")})`;
   return { auth, divisionId, winners: fixtureIds.winners, losers: fixtureIds.losers };
 }
 
@@ -1186,7 +1238,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
     const [assignment] = toEngineAssignments(
       {
         assignments: [
-          { fixture_id: first.id, scheduled_at: first.current.at ?? new Date(T0).toISOString(), court_label: "Court 1" },
+          { fixture_id: first.id, scheduled_at: first.current.at ?? new Date(T0).toISOString(), court_label: pack.settings.courts[0]! },
         ],
         unschedulable: [],
         explanations: [],
@@ -1226,18 +1278,19 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
 const NOW = NOW_W2;
 const OPTS = { mode: "generate" as const, instruction: "", now: NOW };
 
-// SETTINGS_CONFIG with no startAt and no sessionWindows — the state that
-// produced the 1970 drafts. Everything else is unchanged, so only the anchor
-// moves.
-const NO_ANCHOR_CONFIG = (() => {
-  const { startAt: _startAt, ...rest } = SETTINGS_CONFIG;
+// settingsConfig(court1, court2) with no startAt and no sessionWindows — the
+// state that produced the 1970 drafts. Everything else is unchanged, so only
+// the anchor moves. A function, not a constant (P9 pass 3b): courts are real
+// per-org ids, resolved by whichever seedRrBoard() call the test already ran.
+function noAnchorConfig(court1: string, court2: string) {
+  const { startAt: _startAt, ...rest } = settingsConfig(court1, court2);
   return { ...rest, sessionWindows: [] };
-})();
+}
 
 describe.skipIf(!HAS_DB)("pack calendar anchor (#397)", () => {
   it("carries the ORG zone, a clock, a window and session hours", async () => {
-    const { auth, divisionId } = await seedRrBoard();
-    await setConfig(divisionId, NO_ANCHOR_CONFIG);
+    const { auth, divisionId, court1, court2 } = await seedRrBoard();
+    await setConfig(divisionId, noAnchorConfig(court1, court2));
     await clearBoard(divisionId);
     const { pack } = await buildSchedulePack(auth, divisionId, OPTS);
 
@@ -1258,9 +1311,9 @@ describe.skipIf(!HAS_DB)("pack calendar anchor (#397)", () => {
   // very defect this wave exists to surface goes invisible again. A configured
   // sessionWindow is the same input by another door and must be filtered too.
   it("does not let an epoch sessionWindow drag the window back to 1970", async () => {
-    const { auth, divisionId } = await seedRrBoard();
+    const { auth, divisionId, court1, court2 } = await seedRrBoard();
     await setConfig(divisionId, {
-      ...NO_ANCHOR_CONFIG,
+      ...noAnchorConfig(court1, court2),
       sessionWindows: [{ from: "1970-01-01T00:00:00.000Z", to: "1970-01-01T18:00:00.000Z" }],
     });
     await clearBoard(divisionId);
@@ -1289,8 +1342,8 @@ describe.skipIf(!HAS_DB)("pack calendar anchor (#397)", () => {
   it("no longer emits 1970 draft times for a division with no configured start", async () => {
     // The bug #397 exists to kill: toSlotConfig(settings, 0) anchored the greedy
     // draft at the epoch, so the model was handed 1970-01-01 for every fixture.
-    const { auth, divisionId } = await seedRrBoard();
-    await setConfig(divisionId, NO_ANCHOR_CONFIG);
+    const { auth, divisionId, court1, court2 } = await seedRrBoard();
+    await setConfig(divisionId, noAnchorConfig(court1, court2));
     await clearBoard(divisionId);
     const { pack } = await buildSchedulePack(auth, divisionId, OPTS);
 
@@ -1309,8 +1362,8 @@ describe.skipIf(!HAS_DB)("pack calendar anchor (#397)", () => {
     // A compiled date range replaces the inferred window. Anchored on the
     // inferred start, every drafted card arrives outside `pack.window` — the
     // model is then asked to repair a board we drew wrong.
-    const { auth, divisionId } = await seedRrBoard();
-    await setConfig(divisionId, NO_ANCHOR_CONFIG);
+    const { auth, divisionId, court1, court2 } = await seedRrBoard();
+    await setConfig(divisionId, noAnchorConfig(court1, court2));
     await clearBoard(divisionId);
     const { pack } = await buildSchedulePack(auth, divisionId, {
       ...OPTS,
@@ -1358,12 +1411,12 @@ describe.skipIf(!HAS_DB)("pack calendar anchor (#397)", () => {
   it("widens the window to cover a board already scheduled beyond the horizon", async () => {
     // A repair round must not report every card it was asked to keep. Widening
     // is one-directional: the default horizon can only grow.
-    const { auth, divisionId } = await seedRrBoard();
-    await setConfig(divisionId, NO_ANCHOR_CONFIG);
+    const { auth, divisionId, court1, court2 } = await seedRrBoard();
+    await setConfig(divisionId, noAnchorConfig(court1, court2));
     await clearBoard(divisionId);
     const ids = await fixtureIds(divisionId);
     await sql`update fixtures
-              set scheduled_at = '2026-09-20T10:00:00Z', court_label = 'Court 1'
+              set scheduled_at = '2026-09-20T10:00:00Z', court_id = ${court1}
               where id = ${ids[0]!}`;
 
     const { pack } = await buildSchedulePack(auth, divisionId, { ...OPTS, mode: "repair" });
