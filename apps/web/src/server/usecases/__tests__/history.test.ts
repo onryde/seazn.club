@@ -1,7 +1,7 @@
 // Integration tests for PROMPT-23 (Jul3/03): undo/redo over the division
 // ledger, scoped clear, pool clear-entrants, checkpoints, locks. Real
 // Postgres required; skipped without DATABASE_URL.
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { EngineError } from "@seazn/engine/core";
 import { sql } from "@/lib/db";
@@ -136,6 +136,18 @@ afterAll(async () => {
   await client?.end();
 });
 
+// P9 dispatch #9: THREE tests in this file now `vi.spyOn(log, "warn")` (the
+// pre-existing UPDATE-path test plus two new INSERT-path ones). None of them
+// used to restore it — harmless with only one such test, since there was
+// nothing to accumulate against, but `vi.spyOn` on an already-spied method
+// returns the SAME mock instance rather than a fresh one, so a second test's
+// `warnSpy.mock.calls` silently carried the first test's call(s) forward too
+// (a `toHaveBeenCalledTimes(1)` in test 2 saw 2, test 3 saw 3). Restoring
+// after every test is the standard vitest hygiene for exactly this.
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
   it("move ×3 → undo ×3 = original → redo ×3 = moved (golden) — round-trips court_id, not a label (P9 pass 3a)", async () => {
     const { auth } = await seedOrg();
@@ -245,6 +257,99 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     expect(after!.scheduled_at).not.toBe(before!.scheduled_at);
     // ...but court_id was left exactly as it was.
     expect(after!.court_id).toBe(courtA);
+  });
+
+  // P9 dispatch #9: the guard above only covers the UPDATE sites inside
+  // execute()'s schedule_applied/schedule_shifted/schedule_edited/
+  // schedule_restored cases (review wave 1, finding 1's actual scope). The
+  // two `insert into fixtures (… court_id …)` sites — pool_entrants_restored
+  // (execute()) and fixtures_generated-with-snapshots (step(), a re-insert
+  // that bypasses execute() entirely) — still bind `${s.court ?? null}`
+  // directly and raise the SAME 22P02, aborting the whole undo transaction,
+  // on a stale snapshot naming neither a real nor an existing fixture row.
+  it("undo restoring cleared pool entrants skips a non-uuid court in a stale snapshot — inserts the fixture anyway, never aborts", async () => {
+    const { auth } = await seedOrg();
+    const { division, stage } = await seedDivision(auth, { kind: "group", pools: { count: 1 } });
+    const fxId = randomUUID();
+
+    // A pre-cutover-shaped `pool_entrants_cleared` event, inserted directly
+    // (bypassing clearPoolEntrants/the engine — same technique as the test
+    // above; no real row exists for fxId, matching "this fixture was
+    // already cleared"). undo() inverts this into pool_entrants_restored
+    // (REVERSIBLE.pool_entrants_cleared.invert — packages/engine/src/
+    // history/history.ts), whose execute() case is the INSERT this dispatch
+    // item targets.
+    const [{ seq: nextSeq }] = await sql<{ seq: number }[]>`
+      select coalesce(max(seq), 0)::int + 1 as seq from division_events
+      where division_id = ${division.id}`;
+    await sql`
+      insert into division_events (division_id, seq, type, payload, actor_id)
+      values (${division.id}, ${nextSeq}, 'pool_entrants_cleared',
+              ${sql.json({
+                pool_id: null,
+                fixtures: [
+                  {
+                    id: fxId, stage_id: stage.id, round_no: 1, seq_in_round: 1,
+                    home_entrant_id: null, away_entrant_id: null, at: null, court: "Court 1",
+                  },
+                ],
+              })}, null)`;
+
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+
+    await expect(undoDivision(auth, division.id)).resolves.toBeDefined();
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toMatchObject({ court: "Court 1", divisionId: division.id });
+
+    const [row] = await sql<{ id: string; court_id: string | null }[]>`
+      select id, court_id from fixtures where id = ${fxId}`;
+    expect(row).toBeDefined(); // the fixture WAS restored...
+    expect(row!.court_id).toBeNull(); // ...just never with the bad court
+  });
+
+  it("undo of a cleared-with-snapshots event skips a non-uuid court when re-inserting via fixtures_generated, never aborts", async () => {
+    const { auth } = await seedOrg();
+    const { division, stage } = await seedDivision(auth);
+    const fxId = randomUUID();
+
+    // A pre-cutover-shaped `fixtures_cleared` event carrying FULL row
+    // snapshots — the enriched shape `step()` itself builds (reading LIVE
+    // court_id, always real) right before a genuine undo of
+    // fixtures_generated deletes the rows; inserted directly here so its
+    // `fixtures[]` can carry a stale non-uuid court instead. Undoing THIS
+    // event inverts it into `fixtures_generated` WITH `fixtures` present
+    // (REVERSIBLE.fixtures_cleared.invert), which `step()` re-inserts
+    // DIRECTLY — history.ts's second insert site, never reached through
+    // execute() at all.
+    const [{ seq: nextSeq }] = await sql<{ seq: number }[]>`
+      select coalesce(max(seq), 0)::int + 1 as seq from division_events
+      where division_id = ${division.id}`;
+    await sql`
+      insert into division_events (division_id, seq, type, payload, actor_id)
+      values (${division.id}, ${nextSeq}, 'fixtures_cleared',
+              ${sql.json({
+                stage_id: stage.id,
+                fixture_ids: [fxId],
+                fixtures: [
+                  {
+                    id: fxId, stage_id: stage.id, round_no: 1, seq_in_round: 1,
+                    home_entrant_id: null, away_entrant_id: null, at: null, court: "Court 1",
+                  },
+                ],
+              })}, null)`;
+
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+
+    await expect(undoDivision(auth, division.id)).resolves.toBeDefined();
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toMatchObject({ court: "Court 1", divisionId: division.id });
+
+    const [row] = await sql<{ id: string; court_id: string | null }[]>`
+      select id, court_id from fixtures where id = ${fxId}`;
+    expect(row).toBeDefined();
+    expect(row!.court_id).toBeNull();
   });
 
   it("scoped clear of pool A leaves pool B and locked fixtures intact; undo restores", async () => {

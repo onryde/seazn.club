@@ -3,10 +3,22 @@
 // db/migration/deltas/V374__court_entities_cutover.sql, run once by Flyway);
 // it re-derives the same counts the migration's own dry-run RAISE NOTICE
 // printed and logs them via pino so they survive past the migration's
-// terminal output, and doubles as an ongoing health check (the last query
-// below should always read zero — a non-zero means some stored
-// schedule_settings.config.courts[] still holds a pre-migration free-text
-// name, i.e. the read-path trap this migration exists to close has reopened).
+// terminal output, and doubles as an ongoing health check.
+//
+// P9 review: the courts[]-shape check below is real but GUARANTEED by
+// construction — V374's own step 5 rewrite either resolves every stored
+// `courts[]` element to a uuid or drops it, so no code path this migration
+// ships can ever leave a non-uuid element behind. It can never actually
+// fail, so it caught nothing a regression could trip. `assessCourtMigrationHealth`
+// is the assertion that CAN fail: it checks the per-row IMPLICATION the
+// backfill promises (`court_label is not null` -> `court_id is not null`,
+// and the `venue`/`venue_id` sibling), not merely comparing the two totals
+// (which a coincidental cancellation could pass while individual rows are
+// still missing their backfill) — a fixture created AFTER the cutover can
+// legitimately carry `court_id` with no `court_label` at all (P9 stopped
+// writing it), so `with_id >= with_label` alone is neither necessary nor
+// sufficient; "no label-carrying row is missing its id" is the actual
+// invariant the migration exists to hold.
 //
 // pino lives only in apps/web/package.json (absent from the repo root, and
 // scripts/backfill-pass-credit-redemptions.ts's own header notes root
@@ -23,6 +35,49 @@
 //   npm run db:verify-court-migration   # same thing, from apps/web
 import postgres from "postgres";
 import pino from "pino";
+
+export interface CourtMigrationCounts {
+  venuesTotal: number;
+  courtsTotal: number;
+  fixturesCourtLabelPopulated: number;
+  fixturesCourtIdPopulated: number;
+  fixturesCourtLabelWithoutId: number;
+  fixturesVenuePopulated: number;
+  fixturesVenueIdPopulated: number;
+  fixturesVenueTextWithoutId: number;
+  scheduleSettingsWithUnmigratedCourts: number;
+}
+
+export interface CourtMigrationHealth {
+  ok: boolean;
+  reasons: string[];
+}
+
+/**
+ * Pure — no DB, no I/O — so it is unit-testable without a live Postgres
+ * connection, unlike the script around it. Every reason here is a
+ * FALSIFIABLE assertion the counts either satisfy or do not; `ok` is false
+ * the moment any of them fails.
+ */
+export function assessCourtMigrationHealth(counts: CourtMigrationCounts): CourtMigrationHealth {
+  const reasons: string[] = [];
+  if (counts.fixturesCourtLabelWithoutId > 0) {
+    reasons.push(
+      `${counts.fixturesCourtLabelWithoutId} fixture(s) carry court_label but no court_id — the step-6 backfill missed them`,
+    );
+  }
+  if (counts.fixturesVenueTextWithoutId > 0) {
+    reasons.push(
+      `${counts.fixturesVenueTextWithoutId} fixture(s) carry a free-text venue but no venue_id — the fixture-venue-migration backfill missed them`,
+    );
+  }
+  if (counts.scheduleSettingsWithUnmigratedCourts > 0) {
+    reasons.push(
+      `${counts.scheduleSettingsWithUnmigratedCourts} schedule_settings row(s) still hold a pre-migration free-text name in courts[]`,
+    );
+  }
+  return { ok: reasons.length === 0, reasons };
+}
 
 const log = pino({ name: "db.court-migration-verify", level: process.env.LOG_LEVEL ?? "info" });
 
@@ -44,16 +99,19 @@ const sql = postgres(url, {
 try {
   const [venues] = await sql<{ n: number }[]>`select count(*)::int as n from venues`;
   const [courts] = await sql<{ n: number }[]>`select count(*)::int as n from courts`;
-  const [fixturesCourt] = await sql<{ with_label: number; with_id: number }[]>`
+  const [fixturesCourt] = await sql<{ with_label: number; with_id: number; label_without_id: number }[]>`
     select count(*) filter (where court_label is not null)::int as with_label,
-           count(*) filter (where court_id is not null)::int    as with_id
+           count(*) filter (where court_id is not null)::int    as with_id,
+           count(*) filter (where court_label is not null and court_id is null)::int as label_without_id
       from fixtures`;
-  const [fixturesVenue] = await sql<{ with_text: number; with_id: number }[]>`
+  const [fixturesVenue] = await sql<{ with_text: number; with_id: number; text_without_id: number }[]>`
     select count(*) filter (where venue is not null)::int    as with_text,
-           count(*) filter (where venue_id is not null)::int as with_id
+           count(*) filter (where venue_id is not null)::int as with_id,
+           count(*) filter (where venue is not null and venue_id is null)::int as text_without_id
       from fixtures`;
-  // Health check: a stored courts[] entry that is not uuid-shaped means some
-  // row never went through the migration's rewrite — should always be 0.
+  // A stored courts[] entry that is not uuid-shaped means some row never
+  // went through the migration's rewrite — see the header on why this
+  // specific check can never actually fire.
   const [unmigrated] = await sql<{ n: number }[]>`
     select count(*)::int as n
       from schedule_settings ss
@@ -63,25 +121,23 @@ try {
           where elem !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
        )`;
 
-  log.info(
-    {
-      event: "court_migration_verified",
-      venuesTotal: venues!.n,
-      courtsTotal: courts!.n,
-      fixturesCourtLabelPopulated: fixturesCourt!.with_label,
-      fixturesCourtIdPopulated: fixturesCourt!.with_id,
-      fixturesVenuePopulated: fixturesVenue!.with_text,
-      fixturesVenueIdPopulated: fixturesVenue!.with_id,
-      scheduleSettingsWithUnmigratedCourts: unmigrated!.n,
-    },
-    "V374 court migration verification",
-  );
+  const counts: CourtMigrationCounts = {
+    venuesTotal: venues!.n,
+    courtsTotal: courts!.n,
+    fixturesCourtLabelPopulated: fixturesCourt!.with_label,
+    fixturesCourtIdPopulated: fixturesCourt!.with_id,
+    fixturesCourtLabelWithoutId: fixturesCourt!.label_without_id,
+    fixturesVenuePopulated: fixturesVenue!.with_text,
+    fixturesVenueIdPopulated: fixturesVenue!.with_id,
+    fixturesVenueTextWithoutId: fixturesVenue!.text_without_id,
+    scheduleSettingsWithUnmigratedCourts: unmigrated!.n,
+  };
 
-  if (unmigrated!.n > 0) {
-    log.warn(
-      { scheduleSettingsWithUnmigratedCourts: unmigrated!.n },
-      "found schedule_settings rows whose courts[] still holds a pre-migration free-text name",
-    );
+  log.info({ event: "court_migration_verified", ...counts }, "V374 court migration verification");
+
+  const health = assessCourtMigrationHealth(counts);
+  if (!health.ok) {
+    log.warn({ reasons: health.reasons, ...counts }, "V374 court migration verification found an incomplete backfill");
     process.exitCode = 1;
   }
 } catch (err) {

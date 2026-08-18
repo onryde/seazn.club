@@ -634,6 +634,21 @@ export async function venueNamesById(tx: Tx): Promise<Map<string, string>> {
   return new Map(rows.map((r) => [r.id, r.name]));
 }
 
+/** id -> venue_id for every court this org has configured (P9 review #5) —
+ *  the SERVER-SIDE source of truth for which venue a court belongs to, so a
+ *  fixture's `venue_id` can be DERIVED from its `court_id` rather than
+ *  trusted from client input (see `applySchedule`/`moveFixture`'s writes). A
+ *  supplied `venue_id` must never be able to disagree with the court's own
+ *  venue. Deliberately NOT filtered to non-archived — same reasoning as
+ *  `courtNamesById`: an archived court can still carry an already-placed
+ *  fixture, and its venue_id must still resolve. Relies on `withTenant`'s
+ *  RLS context for org scoping, same convention as `courtNamesById`/
+ *  `venueNamesById`. */
+async function courtVenueIds(tx: Tx): Promise<Map<string, string>> {
+  const rows = await tx<{ id: string; venue_id: string }[]>`select id, venue_id from courts`;
+  return new Map(rows.map((r) => [r.id, r.venue_id]));
+}
+
 // person ids per entrant, for cross-division overlap warnings (doc 06 §4.3).
 export async function peopleByEntrant(tx: Tx, entrantIds: string[]): Promise<Map<string, string[]>> {
   const map = new Map<string, string[]>();
@@ -2271,6 +2286,9 @@ export async function applySchedule(
     const all = await divisionFixtures(tx, stage.division_id);
     // P9 pass 3a — resolved once, used by the conflict mapping below.
     const courtNames = await courtNamesById(tx);
+    // #5 fix — resolved once, used to DERIVE venue_id from each assignment's
+    // court_id below (never trusted from the client's own a.venue_id).
+    const courtVenues = await courtVenueIds(tx);
     const lockState = await divisionLockState(tx, stage.division_id);
     if (lockState.frozen) {
       throw new HttpError(422, "the division schedule is locked — unlock it to edit");
@@ -2422,14 +2440,26 @@ export async function applySchedule(
     for (const a of input.assignments) {
       const f = byId.get(a.fixture_id) as FixtureLite;
       // P9 pass 3a: writers stop writing court_label/venue (owner ruling,
-      // FULL cutover) — court_id/venue_id only. `venue_id`'s coalesce
-      // mirrors the legacy `venue` column's own optionality exactly: an
-      // assignment need not repeat a venue that hasn't changed.
+      // FULL cutover) — court_id/venue_id only.
+      //
+      // #5 fix (P9 review): venue_id is DERIVED from a.court_id server-side,
+      // via courts.venue_id — never trusted from the client's own a.venue_id.
+      // No caller (use-board-actions.ts/ai-apply.ts/move-panel.tsx) has ever
+      // sent venue_id; the old `coalesce(a.venue_id, venue_id)` therefore
+      // left every freshly-scheduled fixture's venue_id NULL and, after a
+      // move to a court in a different venue, stuck on the OLD venue — every
+      // player-facing venue string (ICS LOCATION, /me, /my-matches, the
+      // public fixture page + its JSON-LD) derives from this column.
+      // a.court_id is a required field here (ApplyScheduleRequest's
+      // Assignment, never nullable), and courts.venue_id is NOT NULL, so
+      // this always resolves for a real, same-org court; a bogus court_id is
+      // already rejected by fixtures' composite (court_id, org_id) FK before
+      // venue_id's own correctness could matter.
       await tx`
         update fixtures set
           scheduled_at = ${a.scheduled_at},
           court_id = ${a.court_id},
-          venue_id = coalesce(${a.venue_id ?? null}, venue_id),
+          venue_id = ${courtVenues.get(a.court_id) ?? null},
           schedule_source = ${input.source},
           schedule_locked = ${a.schedule_locked ?? f.schedule_locked}
         where id = ${a.fixture_id}`;
@@ -2624,6 +2654,9 @@ export async function moveFixture(
     // transaction closes — see `change` at the end of this callback.
     const courtNames = await courtNamesById(tx);
     const venueNames = await venueNamesById(tx);
+    // #5 fix — resolved once, used to DERIVE venue_id from the target
+    // court_id below.
+    const courtVenues = await courtVenueIds(tx);
     const nextAt = patch.scheduled_at !== undefined ? patch.scheduled_at : (fixture.scheduled_at !== null ? iso(ms(fixture.scheduled_at)) : null);
     const nextCourtId = patch.court_id !== undefined ? patch.court_id : fixture.court_id;
 
@@ -2747,11 +2780,27 @@ export async function moveFixture(
       conflicts = mapConflicts(found.filter((c) => !siblingIds.has(c.fixtureId)), courtNames);
     }
 
-    const nextVenueId = patch.venue_id !== undefined ? patch.venue_id : fixture.venue_id;
+    // #5 fix (P9 review): venue_id is DERIVED from the court, server side —
+    // never trusted from client input, which must never be able to disagree
+    // with the court's own venue (courts.venue_id, composite-FK-guaranteed
+    // to agree with org). `patch.venue_id` is intentionally never read
+    // below; keeping it in MoveInput/PatchFixture's own type is harmless — a
+    // caller sending it just has it silently ignored. Untouched (`fixture.
+    // venue_id`) when court_id itself is untouched; derived from the target
+    // court when set; cleared to null alongside a cleared court_id — there
+    // is nothing left to derive a venue from once there is no court.
+    const nextVenueId =
+      patch.court_id !== undefined
+        ? patch.court_id !== null
+          ? (courtVenues.get(patch.court_id) ?? null)
+          : null
+        : fixture.venue_id;
     const values: Record<string, unknown> = {};
     if (patch.scheduled_at !== undefined) values.scheduled_at = patch.scheduled_at;
-    if (patch.court_id !== undefined) values.court_id = patch.court_id;
-    if (patch.venue_id !== undefined) values.venue_id = patch.venue_id;
+    if (patch.court_id !== undefined) {
+      values.court_id = patch.court_id;
+      values.venue_id = nextVenueId;
+    }
     if (patch.schedule_locked !== undefined) values.schedule_locked = patch.schedule_locked;
     if (movesTimetable) values.schedule_source = "manual";
     if (Object.keys(values).length > 0) {
@@ -2785,11 +2834,17 @@ export async function moveFixture(
     // v11: officials who agreed to a slot must hear when it moves. Only real
     // timetable/venue changes notify, only non-declined assignments, only
     // officials with an email — assembled in-tx, sent after commit.
+    //
+    // #5 fix: the OLD second disjunct (`patch.venue_id !== undefined &&
+    // patch.venue_id !== fixture.venue_id`) is now dead code, deliberately
+    // removed rather than left misleading — venue_id can no longer change
+    // independently of court_id (see nextVenueId's own comment above), and
+    // any court_id change is already covered by the `fixture.court_id !==
+    // nextCourtId` clause below.
     const timetableChanged =
-      (movesTimetable &&
-        ((fixture.scheduled_at !== null ? iso(ms(fixture.scheduled_at)) : null) !== nextAt ||
-          fixture.court_id !== nextCourtId)) ||
-      (patch.venue_id !== undefined && patch.venue_id !== fixture.venue_id);
+      movesTimetable &&
+      ((fixture.scheduled_at !== null ? iso(ms(fixture.scheduled_at)) : null) !== nextAt ||
+        fixture.court_id !== nextCourtId);
     let changeNotices: {
       email: string; display_name: string; role_key: string; org_name: string;
       home_name: string | null; away_name: string | null; venue_tz: string | null;

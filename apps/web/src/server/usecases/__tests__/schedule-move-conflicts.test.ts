@@ -279,3 +279,98 @@ describe.skipIf(!HAS_DB)("a move returns the conflicts it computes (#461)", () =
     expect(out.conflicts[0]!.details?.day).toBe(DAY);
   }, 120_000);
 });
+
+// P9 review #5 — venue_id must be DERIVED from the assigned court, server
+// side, never trusted from the caller. Before this fix, applySchedule wrote
+// `venue_id = coalesce(a.venue_id ?? null, venue_id)` — since no real client
+// (use-board-actions.ts/ai-apply.ts/move-panel.tsx) ever sends venue_id, a
+// freshly-scheduled fixture kept venue_id NULL forever, and a move to a court
+// in a DIFFERENT venue left venue_id stuck on the OLD one. Every player-facing
+// venue string (ICS LOCATION, /me, /my-matches, the public fixture page + its
+// JSON-LD) derives from fixtures.venue_id, so this is user-visible, not
+// cosmetic. `moveFixture` had the identical hole via `patch.venue_id`.
+describe.skipIf(!HAS_DB)("venue_id is derived from the court, never trusted from the caller (#5)", () => {
+  async function seedTwoVenues(slug: string) {
+    const { auth } = await seedOrg("pro");
+    const tag = randomUUID().slice(0, 6);
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: `Venue Derive ${slug} ${tag}`,
+      visibility: "public",
+      branding: {},
+    });
+    const venueA = await createVenue(auth, { name: "Hall A", sort: 0 });
+    const venueB = await createVenue(auth, { name: "Hall B", sort: 1 });
+    const courtA = await createCourt(auth, venueA.id, { name: "Court 1", sort: 0, tags: [] });
+    const courtB = await createCourt(auth, venueB.id, { name: "Court 1", sort: 0, tags: [] });
+    const d = await makeDivision(
+      auth, comp.id, `${slug}-${tag}`, [courtA.id, courtB.id], ["X-1", "X-2"], [],
+    );
+    return { auth, d, venueA, venueB, courtA, courtB };
+  }
+
+  it("applySchedule stamps the assigned court's own venue_id, ignoring a disagreeing client-supplied one", async () => {
+    const { auth, d, venueA, venueB, courtA, courtB } = await seedTwoVenues("apply");
+    const f = await addFixture(auth, d, 0, "v-f1", "X-1", "X-2", null);
+
+    // A client-supplied venue_id that DISAGREES with the court must be
+    // ignored — this is the crux of the bug: the schema still accepts the
+    // field (ApplyScheduleRequest's Assignment.venue_id is nullish), so a
+    // caller CAN send a wrong one, and the server must win regardless.
+    await applySchedule(auth, d.stageId, {
+      assignments: [
+        { fixture_id: f, scheduled_at: at(DAY, "09:00"), court_id: courtA.id, venue_id: venueB.id },
+      ],
+      source: "manual",
+    });
+    const [afterA] = await sql<{ court_id: string; venue_id: string | null }[]>`
+      select court_id, venue_id from fixtures where id = ${f}`;
+    expect(afterA!.court_id).toBe(courtA.id);
+    expect(afterA!.venue_id).toBe(venueA.id);
+
+    // Re-applying onto a court in a DIFFERENT venue must UPDATE venue_id —
+    // the other half of the bug: the old `coalesce(a.venue_id, venue_id)`
+    // left a fixture stuck on its stale venue after a cross-venue move.
+    await applySchedule(auth, d.stageId, {
+      assignments: [{ fixture_id: f, scheduled_at: at(DAY, "10:00"), court_id: courtB.id }],
+      source: "manual",
+    });
+    const [afterB] = await sql<{ court_id: string; venue_id: string | null }[]>`
+      select court_id, venue_id from fixtures where id = ${f}`;
+    expect(afterB!.court_id).toBe(courtB.id);
+    expect(afterB!.venue_id).toBe(venueB.id);
+  }, 120_000);
+
+  it("moveFixture stamps the target court's own venue_id, updates it on a cross-venue move, leaves it alone when the court is untouched, and clears it with the court", async () => {
+    const { auth, d, venueA, venueB, courtA, courtB } = await seedTwoVenues("move");
+    const f = await addFixture(
+      auth, d, 0, "v-f2", "X-1", "X-2", { at: at(DAY, "09:00"), court: courtA.id },
+    );
+    // Seeded via a raw INSERT (like every other fixture in this file) —
+    // venue_id starts NULL, untouched by moveFixture/applySchedule so far.
+    const [before] = await sql<{ venue_id: string | null }[]>`select venue_id from fixtures where id = ${f}`;
+    expect(before!.venue_id).toBeNull();
+
+    await moveFixture(auth, f, { court_id: courtA.id });
+    const [afterA] = await sql<{ venue_id: string | null }[]>`select venue_id from fixtures where id = ${f}`;
+    expect(afterA!.venue_id).toBe(venueA.id);
+
+    await moveFixture(auth, f, { court_id: courtB.id });
+    const [afterB] = await sql<{ venue_id: string | null }[]>`select venue_id from fixtures where id = ${f}`;
+    expect(afterB!.venue_id).toBe(venueB.id);
+
+    // A move that never touches court_id (time-only) must not disturb venue_id.
+    await moveFixture(auth, f, { scheduled_at: at(DAY, "12:00") });
+    const [afterTimeOnly] = await sql<{ venue_id: string | null }[]>`
+      select venue_id from fixtures where id = ${f}`;
+    expect(afterTimeOnly!.venue_id).toBe(venueB.id);
+
+    // Clearing the court must clear the derived venue too — never a stale
+    // leftover once there is no court to derive it from.
+    await moveFixture(auth, f, { court_id: null });
+    const [afterClear] = await sql<{ court_id: string | null; venue_id: string | null }[]>`
+      select court_id, venue_id from fixtures where id = ${f}`;
+    expect(afterClear!.court_id).toBeNull();
+    expect(afterClear!.venue_id).toBeNull();
+  }, 120_000);
+});

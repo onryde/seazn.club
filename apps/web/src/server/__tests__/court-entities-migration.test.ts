@@ -27,6 +27,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { LockInput } from "@/server/usecases/history";
+import { createVenue, createCourt } from "@/server/usecases/venues";
 import { ScheduleConfig, CourtId } from "@/server/api-v1/schemas";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -304,6 +305,55 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
     expect(rows[0]!.court_id).not.toBe(rows[1]!.court_id);
   });
 
+  // P9 dispatch #6: court names are unique only PER VENUE
+  // (courts_venue_name_active_idx, V367), so an org with "Court 1" in two
+  // halls used to collapse both legacy labels onto whichever one Postgres's
+  // unordered `limit 1` happened to return first — historic fixtures that
+  // ran in parallel in two venues became the same court and read as
+  // double-booked. The fix resolves via each FIXTURE's own recorded venue
+  // (`fixtures.venue`) when it names a real, active venue that owns a
+  // same-named active court — deterministic and correct, not merely
+  // deterministic — falling back to the org-wide (deterministic,
+  // oldest-first) lookup only when no venue signal disambiguates.
+  it("resolves a court_label collision across two venues both owning a 'Court 1' to the FIXTURE's own venue, not one arbitrary court", async () => {
+    const { auth, orgId, divisionId } = await seedOrgWithDivision();
+    orgIds.push(orgId);
+    const stageId = await seedStage(orgId, divisionId);
+
+    // Two REAL, pre-existing venues (as if from the P8 Directory > Venues
+    // UI), each with its OWN "Court 1" — this is the exact ambiguity the
+    // dispatch names: two real active courts share a name across venues.
+    const hallA = await createVenue(auth, { name: "Hall A", sort: 0 });
+    const hallB = await createVenue(auth, { name: "Hall B", sort: 1 });
+    const courtA = await createCourt(auth, hallA.id, { name: "Court 1", sort: 0, tags: [] });
+    const courtB = await createCourt(auth, hallB.id, { name: "Court 1", sort: 0, tags: [] });
+
+    // Two historic fixtures, SAME court_label, DIFFERENT recorded venue —
+    // exactly what "ran in parallel in two venues" looks like pre-cutover.
+    const [{ id: f1 }] = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, court_label, venue)
+      values (${stageId}, ${divisionId}, ${orgId}, 1, 1, 'Court 1', 'Hall A')
+      returning id`;
+    const [{ id: f2 }] = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, court_label, venue)
+      values (${stageId}, ${divisionId}, ${orgId}, 1, 2, 'Court 1', 'Hall B')
+      returning id`;
+
+    await sql.unsafe(migrationBlock("courts-migration"));
+
+    const rows = await sql<{ id: string; court_id: string | null }[]>`
+      select id, court_id from fixtures where id in (${f1}, ${f2}) order by seq_in_round`;
+    expect(rows).toHaveLength(2);
+    // Each fixture resolves to ITS OWN venue's court — not the same one.
+    expect(rows[0]!.court_id).toBe(courtA.id);
+    expect(rows[1]!.court_id).toBe(courtB.id);
+    expect(rows[0]!.court_id).not.toBe(rows[1]!.court_id);
+    // Neither pre-existing court was duplicated — both REUSED, not recreated.
+    const [{ n: courtsForOrg }] = await sql<{ n: string }[]>`
+      select count(*)::text as n from courts where org_id = ${orgId}`;
+    expect(courtsForOrg).toBe("2");
+  });
+
   it("fixtures.venue_id is backfilled from fixtures.venue; free-text venue stays populated", async () => {
     const { orgId, divisionId } = await seedOrgWithDivision();
     orgIds.push(orgId);
@@ -477,18 +527,22 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       expect(parsed.blackouts[0]!.court).toBe(fixtureRow!.court_id);
     });
 
-    // Review wave 1, finding 2: the block used to LEAVE an unmappable court
-    // name in place, on the theory that a blackout only ever COMPARES its
-    // `court` (never renders it) so a dangling name is "inert". It is not
-    // inert — `blackouts[].court` is `CourtId` (schemas.ts), so a stale name
-    // fails `ScheduleConfig.parse` at `loadSettings`, 500ing the board,
-    // auto-schedule, apply, validate and publish for that division. Turning
-    // the entry into a venue-wide (global) blackout by dropping just the
-    // `court` key was considered and rejected: that WIDENS the constraint —
-    // it would block every court during that window instead of the one the
-    // organiser could no longer identify. Dropping the whole entry is the
-    // only option that neither 500s nor blocks more than intended.
-    it("drops an unmappable blackout court entry entirely — never left in place, never widened to global", async () => {
+    // P9 dispatch #7 (supersedes review wave 1, finding 2's "drop"): the
+    // block used to LEAVE an unmappable court name in place, which fails
+    // `ScheduleConfig.parse` at `loadSettings` (500s the whole board), then
+    // wave 1 fixed that by dropping the whole entry instead. Dropping is
+    // itself worse than it looks: a maintenance closure just disappears,
+    // silently, and the next solve can book the court it was meant to keep
+    // clear. Turning it into a venue-wide blackout by dropping just the
+    // `court` key is still rejected (WIDENS the constraint — blocks every
+    // court, not just the one that went unidentifiable). The fix instead
+    // REDIRECTS the entry to a lazily-created, per-org placeholder court: a
+    // real court (so `court` is still a real CourtId — no 500) that no
+    // fixture is ever placed on and no division's `config.courts` ever
+    // contains (so it can never retroactively conflict an existing board —
+    // ruling 3, candidate-courts.ts) — the entry SURVIVES, visibly, instead
+    // of vanishing.
+    it("redirects an unmappable blackout court entry to a placeholder — never left in place, never widened to global, never silently dropped", async () => {
       const { orgId, divisionId } = await seedOrgWithDivision();
       orgIds.push(orgId);
 
@@ -500,31 +554,43 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       await sql.unsafe(migrationBlock("courts-migration"));
       await sql.unsafe(migrationBlock("blackouts-court-migration"));
 
-      const [row] = await sql<{ config: { blackouts: { court?: string }[] } }[]>`
+      const [row] = await sql<{ config: { blackouts: { court?: string; from: string; to: string }[] } }[]>`
         select config from schedule_settings where division_id = ${divisionId}`;
-      // Entry gone entirely — not left with the stale name, not silently
-      // turned global by dropping only the `court` key.
-      expect(row!.config.blackouts).toEqual([]);
+      // Entry SURVIVES — same from/to, court redirected to a real id, never
+      // left with the stale name and never silently dropped.
+      expect(row!.config.blackouts).toHaveLength(1);
+      expect(row!.config.blackouts[0]!.from).toBe("2026-08-01T09:00:00.000Z");
+      expect(row!.config.blackouts[0]!.to).toBe("2026-08-01T10:00:00.000Z");
+      expect(row!.config.blackouts[0]!.court).toMatch(UUID_RE);
+
+      // The placeholder is a real, distinctly-named court an operator can
+      // find and re-target — not a court silently minted with the stale
+      // name (which would look like a real, resolved reference).
+      const [placeholder] = await sql<{ id: string; name: string; venue_name: string }[]>`
+        select c.id, c.name, v.name as venue_name from courts c join venues v on v.id = c.venue_id
+        where c.org_id = ${orgId} and c.name = 'Unresolved legacy reference'`;
+      expect(placeholder).toBeDefined();
+      expect(placeholder!.venue_name).toBe("Unmapped legacy references");
+      expect(row!.config.blackouts[0]!.court).toBe(placeholder!.id);
       const [{ n: courtsForOrg }] = await sql<{ n: string }[]>`
         select count(*)::text as n from courts where org_id = ${orgId}`;
-      expect(courtsForOrg).toBe("0"); // no court silently minted for it either
+      expect(courtsForOrg).toBe("1"); // exactly the placeholder — nothing named "Ghost Court"
       // The invariant this migration exists to hold: every stored config
       // parses, always, after V374 runs.
       expect(() => ScheduleConfig.parse(row!.config)).not.toThrow();
     });
 
-    // Review wave 1, finding 14: the write guarded on `barr.obj ? 'court'`
-    // (key exists) while the dry-run report guarded on `val is not null and
-    // val <> ''` — for `"court": null` the two disagreed. `jsonb_set` is
-    // STRICT, so `jsonb_set(obj, '{court}', to_jsonb(null::text))` returns
-    // SQL NULL for that element, and `jsonb_agg` then emits a JSON `null`
-    // into `blackouts` — which itself fails `ScheduleConfig.parse` (a `null`
-    // is not a valid blackout object). A null court is unmappable by
-    // construction (it can never match a real court), so it falls out of the
-    // same drop rule as an unmappable name — same fix, same test shape as
-    // the previous test, distinguishing it from a venue-wide sibling entry
-    // (no `court` key at all) which must still survive untouched.
-    it("drops a blackout entry whose court is JSON null, instead of leaking a JSON null into the array", async () => {
+    // P9 dispatch #7 (supersedes review wave 1, finding 14's "drop"): the
+    // write used to guard on `barr.obj ? 'court'` (key exists) while the
+    // dry-run report guarded on `val is not null and val <> ''` — for
+    // `"court": null` the two disagreed, and `jsonb_set`'s STRICT null
+    // handling leaked a bare JSON `null` into the array. Wave 1 fixed the
+    // leak by dropping the entry; now a null court is treated exactly like
+    // an unmappable NAME — redirected to the org's placeholder rather than
+    // dropped, same as the previous test — distinguishing it from a
+    // venue-wide sibling entry (no `court` key at all) which must still
+    // survive byte-identical.
+    it("redirects a blackout entry whose court is JSON null to the placeholder, instead of leaking a JSON null or dropping the entry", async () => {
       const { orgId, divisionId } = await seedOrgWithDivision();
       orgIds.push(orgId);
 
@@ -539,15 +605,16 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       await sql.unsafe(migrationBlock("courts-migration"));
       await sql.unsafe(migrationBlock("blackouts-court-migration"));
 
-      const [row] = await sql<{ config: { blackouts: unknown[] } }[]>`
+      const [row] = await sql<{ config: { blackouts: { court?: string }[] } }[]>`
         select config from schedule_settings where division_id = ${divisionId}`;
-      // The null-court entry is gone; the venue-wide (no `court` key)
-      // sibling survives byte-identical — proves the guard tells "explicit
-      // null" apart from "no court key at all".
-      expect(row!.config.blackouts).toHaveLength(1);
+      // BOTH entries survive: the null-court one redirected to a real id,
+      // the venue-wide (no `court` key) sibling untouched — proves the
+      // guard tells "explicit null" apart from "no court key at all".
+      expect(row!.config.blackouts).toHaveLength(2);
       const parsed = ScheduleConfig.parse(row!.config);
-      expect(parsed.blackouts).toHaveLength(1);
-      expect(parsed.blackouts[0]!.court).toBeUndefined();
+      expect(parsed.blackouts).toHaveLength(2);
+      expect(parsed.blackouts[0]!.court).toMatch(UUID_RE);
+      expect(parsed.blackouts[1]!.court).toBeUndefined();
     });
 
     it("a venue-wide blackout (no court key) is untouched, byte-identical", async () => {
@@ -630,16 +697,19 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       expect(() => LockInput.parse({ locked_scopes: row!.locked_scopes })).not.toThrow();
     });
 
-    // Review wave 1, finding 12: history.ts's LockInput / schemas.ts's
-    // DivisionLocks tightened `courts`/`venues` to CourtId/VenueId, but this
-    // block used to leave an unmappable name in place ("a scope lock's only
-    // job is to compare, a leftover name is simply inert"). It is not inert:
-    // the console echoes a division's existing locked_scopes back into the
-    // body of every lock PUT, so that PUT now 400s on the stale name — with
-    // no UI path to ever clear it. Same rule as the blackout block: drop the
-    // unresolvable element (here, an array element, not a whole entry — the
-    // parallel to step 5's `schedule_settings.config.courts` rewrite).
-    it("drops an unmappable court name inside locked_scopes.courts, not left in place", async () => {
+    // P9 dispatch #7-adjacent ("treat the locked-scopes item like #7";
+    // supersedes review wave 1, finding 12's "drop"): history.ts's
+    // LockInput / schemas.ts's DivisionLocks tightened `courts`/`venues` to
+    // CourtId/VenueId, and the console echoes a division's existing
+    // locked_scopes back into the body of every lock PUT, so a stale name
+    // 400s that PUT with no UI path to clear it. Wave 1 fixed that by
+    // dropping the element — but a scope object that named ONLY `courts`,
+    // now empty, is indistinguishable from one with no court restriction at
+    // all: the organiser's freeze goes silently quieter. The fix instead
+    // redirects the unresolvable element to the SAME lazily-created,
+    // per-org placeholder court the blackout block uses — the array element
+    // (and the fact that something here needs attention) survives.
+    it("redirects an unmappable court name inside locked_scopes.courts to the placeholder, instead of dropping it", async () => {
       const { orgId, divisionId } = await seedOrgWithDivision();
       orgIds.push(orgId);
 
@@ -653,19 +723,23 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       const [row] = await sql<{ locked_scopes: { courts?: string[]; pool_ids?: string[] }[] }[]>`
         select locked_scopes from divisions where id = ${divisionId}`;
       expect(row!.locked_scopes).toHaveLength(1); // the scope object itself survives
-      expect(row!.locked_scopes[0]!.courts).toEqual([]); // just the dangling name is gone
+      // The element survives too — redirected to a real id, not dropped.
+      expect(row!.locked_scopes[0]!.courts).toHaveLength(1);
+      expect(row!.locked_scopes[0]!.courts![0]).toMatch(UUID_RE);
+      const [placeholder] = await sql<{ id: string }[]>`
+        select id from courts where org_id = ${orgId} and name = 'Unresolved legacy reference'`;
+      expect(row!.locked_scopes[0]!.courts![0]).toBe(placeholder!.id);
       expect(row!.locked_scopes[0]!.pool_ids).toEqual([]);
       expect(() => LockInput.parse({ locked_scopes: row!.locked_scopes })).not.toThrow();
     });
 
-    // Review wave 1, finding 14 ("same shape in the locked-scopes rewrite for
-    // a [null] element"): a `[null]` array element used to survive as a JSON
-    // null inside `courts` (`coalesce(cm.court_id::text, c_existing.id::text,
+    // P9 dispatch #7-adjacent (supersedes review wave 1, finding 14's
+    // "drop"): a `[null]` array element used to survive as a JSON null
+    // inside `courts` (`coalesce(cm.court_id::text, c_existing.id::text,
     // celem.val)` with all three NULL -> `to_jsonb(NULL)` -> a null array
-    // entry), which fails `z.array(CourtId)`. Same drop rule handles it: a
-    // null element can never resolve, so it is filtered out before
-    // aggregation exactly like an unmappable name is.
-    it("drops a null element inside locked_scopes.courts, instead of leaking a JSON null", async () => {
+    // entry), which fails `z.array(CourtId)`. Now treated exactly like an
+    // unresolvable name: redirected to the placeholder, not dropped.
+    it("redirects a null element inside locked_scopes.courts to the placeholder, instead of leaking a JSON null or dropping it", async () => {
       const { orgId, divisionId } = await seedOrgWithDivision();
       orgIds.push(orgId);
 
@@ -678,8 +752,73 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
 
       const [row] = await sql<{ locked_scopes: { courts?: (string | null)[] }[] }[]>`
         select locked_scopes from divisions where id = ${divisionId}`;
-      expect(row!.locked_scopes[0]!.courts).toEqual([]);
+      expect(row!.locked_scopes[0]!.courts).toHaveLength(1);
+      expect(row!.locked_scopes[0]!.courts![0]).toMatch(UUID_RE);
       expect(() => LockInput.parse({ locked_scopes: row!.locked_scopes })).not.toThrow();
+    });
+
+    // New coverage (P9 dispatch #7-adjacent): the venues[] half of the same
+    // redirect — no existing test covered it before this fix (only courts[]
+    // did), and the write path is a structurally separate CASE branch.
+    it("redirects an unmappable venue name inside locked_scopes.venues to the placeholder, instead of dropping it", async () => {
+      const { orgId, divisionId } = await seedOrgWithDivision();
+      orgIds.push(orgId);
+
+      await sql`update divisions set locked_scopes = ${sql.json([{ venues: ["Ghost Venue"], pool_ids: [] }])}
+        where id = ${divisionId}`;
+
+      await sql.unsafe(migrationBlock("courts-migration"));
+      await sql.unsafe(migrationBlock("fixture-venue-migration"));
+      await sql.unsafe(migrationBlock("division-locked-scopes-migration"));
+
+      const [row] = await sql<{ locked_scopes: { venues?: string[]; pool_ids?: string[] }[] }[]>`
+        select locked_scopes from divisions where id = ${divisionId}`;
+      expect(row!.locked_scopes).toHaveLength(1);
+      expect(row!.locked_scopes[0]!.venues).toHaveLength(1);
+      expect(row!.locked_scopes[0]!.venues![0]).toMatch(UUID_RE);
+      const [placeholder] = await sql<{ id: string }[]>`
+        select id from venues where org_id = ${orgId} and name = 'Unmapped legacy references'`;
+      expect(row!.locked_scopes[0]!.venues![0]).toBe(placeholder!.id);
+      expect(() => LockInput.parse({ locked_scopes: row!.locked_scopes })).not.toThrow();
+    });
+
+    // New coverage (P9 dispatch #7-adjacent): the placeholder is lazily
+    // created ONCE per org and REUSED — not recreated per unresolvable
+    // element, and not left dangling if a second, unrelated division in the
+    // same org also needs one.
+    it("reuses ONE placeholder per org across multiple unresolvable entries, never minting a duplicate", async () => {
+      const { orgId, divisionId: d1 } = await seedOrgWithDivision();
+      orgIds.push(orgId);
+
+      await sql`update divisions set locked_scopes = ${sql.json([{ courts: ["Ghost A", "Ghost B"], pool_ids: [] }])}
+        where id = ${d1}`;
+      await sql`insert into schedule_settings (division_id, org_id, config)
+        values (${d1}, ${orgId}, ${sql.json({
+          blackouts: [{ court: "Ghost C", from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
+        })})`;
+
+      await sql.unsafe(migrationBlock("courts-migration"));
+      await sql.unsafe(migrationBlock("fixture-venue-migration"));
+      await sql.unsafe(migrationBlock("division-locked-scopes-migration"));
+      await sql.unsafe(migrationBlock("blackouts-court-migration"));
+
+      const [{ n: placeholderCourts }] = await sql<{ n: string }[]>`
+        select count(*)::text as n from courts where org_id = ${orgId} and name = 'Unresolved legacy reference'`;
+      const [{ n: placeholderVenues }] = await sql<{ n: string }[]>`
+        select count(*)::text as n from venues where org_id = ${orgId} and name = 'Unmapped legacy references'`;
+      expect(placeholderCourts).toBe("1");
+      expect(placeholderVenues).toBe("1");
+
+      // All three unresolvable references (two locked_scopes courts + one
+      // blackout court) redirect to the SAME placeholder id.
+      const [scopeRow] = await sql<{ locked_scopes: { courts?: string[] }[] }[]>`
+        select locked_scopes from divisions where id = ${d1}`;
+      const [settingsRow] = await sql<{ config: { blackouts: { court?: string }[] } }[]>`
+        select config from schedule_settings where division_id = ${d1}`;
+      const [placeholder] = await sql<{ id: string }[]>`
+        select id from courts where org_id = ${orgId} and name = 'Unresolved legacy reference'`;
+      expect(scopeRow!.locked_scopes[0]!.courts).toEqual([placeholder!.id, placeholder!.id]);
+      expect(settingsRow!.config.blackouts[0]!.court).toBe(placeholder!.id);
     });
   });
 });

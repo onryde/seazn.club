@@ -14585,6 +14585,11 @@ async function cleanup(tag: string): Promise<void> {
     // T14 z3AutoScheduleSuite — its own Pro org (one competition, one division
     // and its six fixtures all cascade with it).
     `smoke-z3-solver-${tag}@example.com`,
+    // P9 review: twoVenueSuite's own Pro org (its two venues and their
+    // courts) — was missing from this list entirely, so every smoke run
+    // leaked the org along with its venues/courts (the courts/venues purge
+    // below is keyed off this SAME `emails` array via `doomedOrgs`).
+    `smoke-two-venue-${tag}@example.com`,
     `p72comm_${tag}@example.com`,
     `smoke-community-${tag}@example.com`,
     `smoke-pro-${tag}@example.com`,

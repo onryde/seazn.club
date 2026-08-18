@@ -197,13 +197,21 @@ async function execute(
       break;
     }
     case "pool_entrants_restored": {
+      // P9 dispatch #9: this INSERT bypassed resolveCourtWrite entirely
+      // (review wave 1, finding 1 only touched the UPDATE sites above) — a
+      // stale pre-cutover snapshot's non-uuid court raised the same 22P02
+      // here, aborting the whole undo/redo transaction. Same guard, same
+      // "unresolvable -> insert without a court, log it" fallback; there is
+      // no existing row to "leave untouched" the way an UPDATE can, so the
+      // safe fallback for a fresh INSERT is court_id = null.
       for (const s of (p.fixtures as FixtureSnapshot[]) ?? []) {
+        const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType: event.type });
         await tx`
           insert into fixtures (id, stage_id, division_id, pool_id, round_no, seq_in_round,
                                 home_entrant_id, away_entrant_id, scheduled_at, court_id, status)
           values (${s.id}, ${s.stage_id!}, ${divisionId}, ${s.pool_id ?? null},
                   ${s.round_no ?? 1}, ${s.seq_in_round ?? 1}, ${s.home_entrant_id ?? null},
-                  ${s.away_entrant_id ?? null}, ${s.at ?? null}, ${s.court ?? null}, 'scheduled')
+                  ${s.away_entrant_id ?? null}, ${s.at ?? null}, ${court.write ? court.value : null}, 'scheduled')
           on conflict (id) do nothing`;
       }
       break;
@@ -279,14 +287,21 @@ async function step(
         ? ((result.event.payload.stage_id as string) ?? undefined)
         : undefined;
     // A fixtures_generated with snapshots re-inserts directly.
+    //
+    // P9 dispatch #9: this is history.ts's SECOND raw insert — it never
+    // routes through execute() at all, so it also bypassed resolveCourtWrite
+    // (review wave 1, finding 1 only touched execute()'s own UPDATE sites).
+    // Same guard, same "unresolvable -> insert without a court, log it"
+    // fallback as pool_entrants_restored above.
     if (result.event.type === "fixtures_generated" && result.event.payload.fixtures !== undefined) {
       for (const s of (result.event.payload.fixtures as FixtureSnapshot[]) ?? []) {
+        const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType: result.event.type });
         await tx`
           insert into fixtures (id, stage_id, division_id, pool_id, round_no, seq_in_round,
                                 home_entrant_id, away_entrant_id, scheduled_at, court_id, status)
           values (${s.id}, ${s.stage_id!}, ${divisionId}, ${s.pool_id ?? null},
                   ${s.round_no ?? 1}, ${s.seq_in_round ?? 1}, ${s.home_entrant_id ?? null},
-                  ${s.away_entrant_id ?? null}, ${s.at ?? null}, ${s.court ?? null}, 'scheduled')
+                  ${s.away_entrant_id ?? null}, ${s.at ?? null}, ${court.write ? court.value : null}, 'scheduled')
           on conflict (id) do nothing`;
       }
     }
