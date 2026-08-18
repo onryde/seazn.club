@@ -106,3 +106,69 @@ describe("currentQualifiedFromStages — pre-fills Top-N-advance from progressio
     ).toBe(2);
   });
 });
+
+// A3 (round-4 review, MAJOR): groups_ko emits topNPerGroup (+ a bestNth
+// remainder), never `picks`, since ruling 11's F3 conversion — this function
+// still only recognised rankRange/picks/roundLosers, so it fell through the
+// `for` loop untouched and hit the `return 4` fallback for EVERY groups_ko
+// division. Settings then showed "4" regardless of the real qualifier count,
+// and one unrelated edit + Apply (applyStructure, division-settings.tsx)
+// would silently rewrite the stored progression down to a 4-qualifier
+// knockout — destroying a draw the organiser may have already shared.
+describe("currentQualifiedFromStages — topNPerGroup / bestNth (groups_ko, A3 fix)", () => {
+  it("topNPerGroup alone: n × the group stage's pool count — the exact 8-qualifiers/4-pools shape the review reported reading back as 4", () => {
+    expect(
+      currentQualifiedFromStages([
+        { kind: "group", config: { pools: { count: 4 } }, progression: null },
+        {
+          kind: "knockout",
+          progression: {
+            sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }],
+            placement: "rank_order",
+            timing: "setup",
+          },
+        },
+      ]),
+    ).toBe(8);
+  });
+
+  it("bestNth alone (the n===0 collapse: fewer qualifiers than pools): just its count", () => {
+    expect(
+      currentQualifiedFromStages([
+        { kind: "group", config: { pools: { count: 8 } }, progression: null },
+        {
+          kind: "knockout",
+          progression: {
+            sources: [{ stage: "previous", take: [{ kind: "bestNth", nth: 1, count: 2 }] }],
+            placement: "rank_order",
+            timing: "setup",
+          },
+        },
+      ]),
+    ).toBe(2);
+  });
+
+  it("topNPerGroup + bestNth remainder SUM to the real qualifier count — groups_ko's actual cross-pool shape", () => {
+    expect(
+      currentQualifiedFromStages([
+        { kind: "group", config: { pools: { count: 6 } }, progression: null },
+        {
+          kind: "knockout",
+          progression: {
+            sources: [
+              {
+                stage: "previous",
+                take: [
+                  { kind: "topNPerGroup", n: 2 },
+                  { kind: "bestNth", nth: 3, count: 4 },
+                ],
+              },
+            ],
+            placement: "rank_order",
+            timing: "setup",
+          },
+        },
+      ]),
+    ).toBe(16); // 2*6 + 4 — matches the qualified:16, poolCount:6 template fixture exactly.
+  });
+});

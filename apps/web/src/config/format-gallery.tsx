@@ -265,7 +265,7 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
           // not the hand-rolled A/B `picks` interleave that used to live
           // here, which could not generalise past 2 pools.
           //
-          // Placement is `rank_order`, NOT `snake` (owner ruling 11, found
+          // Placement is `rank_order`, NOT `snake` (owner ruling 13, found
           // by review before it shipped): `snake` is chosen by the TARGET
           // stage's kind, not the source's, and this entry's target is a
           // KNOCKOUT. generateSingleElim's seedPositions fold

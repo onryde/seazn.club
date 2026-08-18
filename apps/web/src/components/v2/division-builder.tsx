@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { MatchRuleFields, SPORT_RULES, buildRuleOverride } from "./match-rules";
-import { STAGE_TEMPLATES, buildTemplateStages, type StageDraft } from "./format-templates";
+import { STAGE_TEMPLATES, buildTemplateStages, clampKnob, type StageDraft } from "./format-templates";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { routes } from "@/lib/routes";
 import { UpgradeGate } from "@/components/upgrade-gate";
@@ -299,7 +299,20 @@ export function DivisionBuilder({
   }
 
   function buildStages(): StageDraft[] {
-    return buildTemplateStages(template, { qualified, swissRounds, poolCount, legs });
+    // B (round-4 review): poolCount is a free `<input type="number" min={2}
+    // max={8}>` — HTML `min` doesn't stop a cleared field reading as
+    // Number("")===0, which mints groups_ko's take rule with n:Infinity
+    // (serialises as n:null over the wire) instead of a clean validation
+    // message. qualified is a fixed <select> here (always one of a known-good
+    // set) so this is defence-in-depth for it, not a live gap — same guard as
+    // division-settings.tsx's free-text qualified input, for one shared
+    // clampKnob (format-templates.ts) rather than two divergent ones.
+    return buildTemplateStages(template, {
+      qualified: clampKnob(qualified, 2, 32),
+      swissRounds,
+      poolCount: clampKnob(poolCount, 2, 8),
+      legs,
+    });
   }
 
   async function submit() {

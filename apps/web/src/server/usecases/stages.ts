@@ -2023,10 +2023,38 @@ export async function completeStage(auth: AuthCtx, stageId: string): Promise<Com
     // Best-effort, same spirit as the on_complete path's generation step
     // below: completion stands even if the proposal compute trips (e.g. the
     // source stage this points at isn't THIS one and isn't ready yet).
+    // Narrowed the same INTENT as the on_complete branch just below (A4,
+    // round-4 review): this used to be a bare `catch { return result }`, no
+    // narrowing, no logging, despite this comment already claiming
+    // "best-effort, same spirit" — so a genuine progression-config bug (e.g.
+    // A1's SEEDING_BESTNTH_UNEQUAL_POOLS, or QUALIFICATION_INVALID) reached
+    // an organiser as "nothing happened": the stage completed, no
+    // seed_proposal, no error anywhere.
+    //
+    // The exact TYPE this checks differs from the on_complete sibling below
+    // on purpose, not by oversight: that branch's own completeness gate
+    // (seedNextStage, this file) throws EngineError STAGE_NOT_READY
+    // directly, but THIS path's completeness gate is computeSeedProposal ->
+    // sourcesToTables (stage-seeding.ts), which throws HttpError 409
+    // SEEDING_SOURCE_INCOMPLETE instead — confirmed by a real red test
+    // (progression-multi-source.test.ts) that first tried mirroring the
+    // sibling's EngineError check verbatim and broke the legitimate
+    // "another named source isn't complete yet" case, which is exactly the
+    // regression this fix must not introduce. By the time resolveProgression
+    // runs in this path, sourcesToTables has already gated every source on
+    // DB-status "complete", so an EngineError STAGE_NOT_READY reaching this
+    // catch (e.g. rowAtRank's "not enough entrants ranked yet") is a genuine
+    // misconfiguration, not a "wait for it" case, and must propagate — same
+    // as QUALIFICATION_INVALID does.
     try {
       const proposal = await computeSeedProposal(auth, next!.id);
       return { ...result, seed_proposal: { id: proposal.id, status: proposal.status } };
-    } catch {
+    } catch (err) {
+      if (!(err instanceof HttpError && err.code === "SEEDING_SOURCE_INCOMPLETE")) throw err;
+      log.warn(
+        { event: "seed_proposal_compute_skipped", stageId, nextStageId: next!.id, err: String(err) },
+        "seed proposal compute skipped: a named progression source is not ready yet",
+      );
       return result;
     }
   }
@@ -2214,7 +2242,11 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
         sourceTables.push(await tablesForCompletedStage(tx, source, current.division_id));
       }
     }
-    const { qualifiers } = resolveProgression(progression, shapes, sourceTables);
+    // A2 (round-4 review) — `next` here IS the progression's own target
+    // (seedNextStage seeds INTO it), so `next.kind` is the real targetKind
+    // ruling 13's snake/bracket-target guard needs on this resolution path
+    // too, not just at createStages' save-time validateStageProgression call.
+    const { qualifiers } = resolveProgression(progression, shapes, sourceTables, next.kind);
     const entrants = qualifiers.map((q) => q.entrantId);
     log.info(
       { event: "qualification_resolved", stageId: completedStageId, nextStageId: next.id, kind: current.kind, count: entrants.length },
@@ -2452,7 +2484,12 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // its standings — same 409 SEEDING_SOURCE_INCOMPLETE contract this
     // function has always had, generalised from one source to N.
     const { shapes, tables, resolved } = await sourcesToTables(tx, stage, progression.sources);
-    const { qualifiers, ties } = resolveProgression(progression, shapes, tables);
+    // A2 (round-4 review) — `stage` here IS the progression's own target
+    // (computeSeedProposal proposes seeds INTO it), so `stage.kind` is the
+    // real targetKind ruling 13's snake/bracket-target guard needs to fire
+    // on this resolution path too, not just at createStages' save-time
+    // validateStageProgression call.
+    const { qualifiers, ties } = resolveProgression(progression, shapes, tables, stage.kind);
 
     const slotBySeed = await destinationSlotsBySeed(tx, stageId);
     if (slotBySeed.size === 0) {

@@ -81,7 +81,7 @@ export const STAGE_TEMPLATES: {
       // doesn't divide evenly across pools. topNPerGroup already expands
       // wave-major (every pool's winner, then every pool's runner-up, …).
       //
-      // Placement is `rank_order`, NOT `snake` (owner ruling 11, found by
+      // Placement is `rank_order`, NOT `snake` (owner ruling 13, found by
       // review before it shipped — F3 programme index). `snake` is chosen
       // by the TARGET stage's kind, not the source's: t20-super8's `snake`
       // (server/templates/catalog/*.json) is correct because ITS target is
@@ -111,7 +111,25 @@ export const STAGE_TEMPLATES: {
       const r = q - n * poolCount;
       const take: TakeRule[] = [];
       if (n > 0) take.push({ kind: "topNPerGroup", n });
-      if (r > 0) take.push({ kind: "bestNth", nth: n + 1, count: r });
+      // normaliseUnequalPools:true (round-4 review, MAJOR — A1): pools are
+      // built by snakeDistribute (stages.ts), which produces unequal-sized
+      // pools whenever entrants don't divide evenly by poolCount — the
+      // common case, not an edge case. Without this flag, bestNth's
+      // cross-pool compare throws SEEDING_BESTNTH_UNEQUAL_POOLS the moment
+      // pool sizes differ (progression.ts) — silently, at SEEDING time on
+      // real rows, long after day-one fixture generation (which runs on
+      // SHAPES, never on real row counts) looked healthy. The normalisation
+      // itself is already implemented (normalisedRow, progression.ts) — this
+      // only had to ask for it. See format-templates.test.ts and
+      // progression.test.ts for the end-to-end proof.
+      //
+      // NOT covered by this flag: nth (= n+1) can still exceed a genuinely
+      // SHORT pool's row count (e.g. a pool with fewer than n+1 entrants at
+      // all) — rowAtRank looks up rank `nth` on every pool before
+      // normalisation ever runs, so that still throws STAGE_NOT_READY
+      // regardless of this flag. Deliberately not fixed here — see
+      // progression.test.ts's "the sibling hazard" test.
+      if (r > 0) take.push({ kind: "bestNth", nth: n + 1, count: r, normaliseUnequalPools: true });
       return [
         {
           kind: "group",
@@ -242,6 +260,24 @@ export const STAGE_TEMPLATES: {
     ],
   },
 ];
+
+/** Clamps a knob (poolCount, qualified) into [min,max] — called at both UI
+ *  call sites (division-builder.tsx, division-settings.tsx) right before
+ *  buildTemplateStages, not on every keystroke. A `<input type="number"
+ *  min={2}>`'s HTML `min` does NOT stop a CLEARED field from reading as
+ *  `Number("") === 0`: with poolCount:0, groups_ko's `Math.floor(q/poolCount)`
+ *  mints `n:Infinity` (serialises over the wire as `n:null` — Infinity has no
+ *  JSON form) and `r` becomes `q - Infinity*0 = q - NaN = NaN`, so the
+ *  organiser gets a raw schema 422 instead of a knob validation message
+ *  (round-4 review, B). `buildTemplateStages` itself stays trusting — its
+ *  `TemplateKnobs` type already promises real numbers — this is the guard at
+ *  the boundary where untrusted `Number(e.target.value)` input actually
+ *  enters. Non-finite (0 from a cleared field, NaN from a bad read) clamps to
+ *  `min`, same as any other out-of-range value. */
+export function clampKnob(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
 
 /** Template + knob values → the stage specs the API accepts. */
 export function buildTemplateStages(templateKey: string, knobs: TemplateKnobs): StageDraft[] {

@@ -16,9 +16,17 @@
 // alongside `qualified` to draw from every pool, not just A/B), not the
 // bare qualified count.
 import { describe, expect, it } from "vitest";
-import { STAGE_TEMPLATES, buildTemplateStages, detectTemplate } from "../format-templates";
+import { STAGE_TEMPLATES, buildTemplateStages, clampKnob, detectTemplate } from "../format-templates";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
-import { descriptorKey, expandSources, expandTake, placeDescriptors } from "@seazn/engine/competition";
+import {
+  descriptorKey,
+  expandSources,
+  expandTake,
+  placeDescriptors,
+  resolveProgression,
+  type SourceTables,
+  type StandingsRow,
+} from "@seazn/engine/competition";
 import { generateSingleElim } from "@seazn/engine/scheduling";
 
 describe("ko_plate template", () => {
@@ -203,7 +211,7 @@ describe("format-templates emit progression, not qualification", () => {
 // with poolCount > 2 (the builder's own pools knob goes up to 8), groups C
 // onward produced zero qualifiers. Replaced with the engine's own
 // topNPerGroup (+ a bestNth remainder) take. Placement is `rank_order`, NOT
-// `snake` (owner ruling 11, found by review before it shipped): `snake` is
+// `snake` (owner ruling 13, found by review before it shipped): `snake` is
 // chosen by the TARGET stage's kind, not the source's — t20-super8's `snake`
 // is legitimate because its target is a GROUP stage, where reversing
 // alternate wave-major pots distributes strength across pools, but a
@@ -212,7 +220,7 @@ describe("format-templates emit progression, not qualification", () => {
 // N+1-i, so a reversed pot puts every pool's winner back against its own
 // runner-up in round 1 — see the "round 1 never pairs a group against
 // itself" describe block below for the draw this used to produce.
-describe("groups_ko — cross-pool draw (F3 owner ruling R5, placement per ruling 11)", () => {
+describe("groups_ko — cross-pool draw (F3 owner ruling R5, placement per ruling 13)", () => {
   it("qualified:8, poolCount:4 -> topNPerGroup(2) only (evenly divisible), rank_order", () => {
     const stages = buildTemplateStages("groups_ko", { qualified: 8, swissRounds: 5, poolCount: 4, legs: 1 });
     expect(stages[1]!.progression).toEqual({
@@ -230,7 +238,17 @@ describe("groups_ko — cross-pool draw (F3 owner ruling R5, placement per rulin
           stage: "previous",
           take: [
             { kind: "topNPerGroup", n: 2 },
-            { kind: "bestNth", nth: 3, count: 4 },
+            // A1 (round-4 review, MAJOR): normaliseUnequalPools MUST be set
+            // — snakeDistribute (stages.ts) puts unequal entrant counts into
+            // unequal-sized pools whenever entrants don't divide evenly by
+            // poolCount (the common case), and bestNth's cross-pool compare
+            // throws SEEDING_BESTNTH_UNEQUAL_POOLS without it (progression.ts)
+            // — silently, at SEEDING time on real rows, long after the
+            // day-one preview looked healthy (previewDivisionFixtures runs
+            // on SHAPES, never hits this). See progression.test.ts's
+            // "groups_ko's real bestNth remainder resolves against unequal
+            // pools" for the end-to-end proof.
+            { kind: "bestNth", nth: 3, count: 4, normaliseUnequalPools: true },
           ],
         },
       ],
@@ -247,7 +265,7 @@ describe("groups_ko — cross-pool draw (F3 owner ruling R5, placement per rulin
           stage: "previous",
           take: [
             { kind: "topNPerGroup", n: 1 },
-            { kind: "bestNth", nth: 2, count: 1 },
+            { kind: "bestNth", nth: 2, count: 1, normaliseUnequalPools: true },
           ],
         },
       ],
@@ -267,7 +285,7 @@ describe("groups_ko — cross-pool draw (F3 owner ruling R5, placement per rulin
     // (topNPerGroup 1) truncated to the qualified count.
     const stages = buildTemplateStages("groups_ko", { qualified: 2, swissRounds: 5, poolCount: 8, legs: 1 });
     expect(stages[1]!.progression).toEqual({
-      sources: [{ stage: "previous", take: [{ kind: "bestNth", nth: 1, count: 2 }] }],
+      sources: [{ stage: "previous", take: [{ kind: "bestNth", nth: 1, count: 2, normaliseUnequalPools: true }] }],
       placement: "rank_order",
       timing: "setup",
     });
@@ -285,9 +303,33 @@ describe("groups_ko — cross-pool draw (F3 owner ruling R5, placement per rulin
     const pools = new Set(pots.flat().flatMap((d) => (d.kind === "group_rank" ? [d.pool] : [])));
     expect(pools).toEqual(new Set(["A", "B", "C", "D"]));
   });
+
+  it("A1 fix: the emitted bestNth remainder actually resolves against unequal pools, not just an unequal-membership shape check", () => {
+    // The shape-check tests above only prove the JSON now carries
+    // normaliseUnequalPools:true. This pipes groups_ko's REAL output through
+    // the real engine resolver against pool sizes snakeDistribute (stages.ts)
+    // actually produces for an entrant count that doesn't divide evenly by
+    // poolCount (10 entrants / 4 pools -> [3,3,2,2], sizes.size > 1) — before
+    // A1's fix, the missing flag makes this throw SEEDING_BESTNTH_UNEQUAL_
+    // POOLS: the organiser-facing bug ("sees a full bracket on day one, runs
+    // the whole group stage, and the knockout silently never fills"). See
+    // progression.test.ts's resolveProgression tests for the isolated
+    // engine-level proof (including the sibling hazard this does NOT fix).
+    const stages = buildTemplateStages("groups_ko", { qualified: 7, swissRounds: 5, poolCount: 4, legs: 1 });
+    const progression = stages[1]!.progression!;
+    const pool = (key: string, size: number) => ({
+      pool: key,
+      rows: Array.from({ length: size }, (_, i) => ({ entrantId: `${key}${i + 1}`, rank: i + 1 }) as StandingsRow),
+    });
+    const tables: SourceTables = { pools: [pool("A", 3), pool("B", 3), pool("C", 2), pool("D", 2)] };
+    const shape = { poolKeys: ["A", "B", "C", "D"] };
+    expect(() => resolveProgression(progression, [shape], [tables])).not.toThrow();
+    const { qualifiers } = resolveProgression(progression, [shape], [tables]);
+    expect(qualifiers).toHaveLength(7);
+  });
 });
 
-// Owner ruling 11 (F3 programme index, found by review before it shipped):
+// Owner ruling 13 (F3 programme index, found by review before it shipped):
 // the tests above only check pool MEMBERSHIP of the expanded pots as a Set,
 // which is exactly what a draw that pairs every pool against itself in round
 // 1 would still pass — snake placement over a knockout target does exactly
@@ -391,5 +433,56 @@ describe("F3 — every progression-bearing template/family emits timing: setup",
       }
     }
     expect(failures).toEqual([]);
+  });
+});
+
+// B (round-4 review): division-builder.tsx and division-settings.tsx both
+// read poolCount/qualified off a free `<input type="number">` with an HTML
+// `min` — which does NOT block a CLEARED field from reading as
+// Number("") === 0. groups_ko's Math.floor(q/poolCount) with poolCount:0
+// mints n:Infinity, which JSON.stringify serialises as n:null over the
+// wire (Infinity has no JSON representation), and r becomes q-Infinity*0 =
+// q-NaN = NaN, so `r > 0` is false and the bestNth remainder is silently
+// dropped too — the organiser gets a raw schema 422 instead of a knob
+// validation message. clampKnob is called at both call sites, right before
+// buildTemplateStages, rather than on every keystroke (which would fight
+// the organiser mid-edit) — same "pure extraction sidesteps needing to open
+// the Format group" testability reasoning as currentQualifiedFromStages
+// (division-settings-progression.test.tsx's own header comment).
+describe("clampKnob — guards poolCount/qualified before buildTemplateStages (B fix)", () => {
+  it("a cleared field (0) clamps to the minimum, not Infinity/NaN downstream", () => {
+    expect(clampKnob(0, 2, 8)).toBe(2);
+  });
+
+  it("NaN (a non-numeric read) clamps to the minimum too", () => {
+    expect(clampKnob(NaN, 2, 8)).toBe(2);
+  });
+
+  it("a negative value clamps to the minimum", () => {
+    expect(clampKnob(-5, 2, 8)).toBe(2);
+  });
+
+  it("a value above the max clamps down to the max", () => {
+    expect(clampKnob(100, 2, 8)).toBe(8);
+  });
+
+  it("a value already inside the range passes through unchanged", () => {
+    expect(clampKnob(5, 2, 8)).toBe(5);
+  });
+
+  it("end to end: a cleared poolCount (0) no longer mints an Infinity/null topNPerGroup — groups_ko stays a valid, wire-safe shape", () => {
+    const stages = buildTemplateStages("groups_ko", {
+      qualified: 8,
+      swissRounds: 5,
+      poolCount: clampKnob(0, 2, 8), // simulates the cleared-field value flowing through the same guard the two UI call sites now apply
+      legs: 1,
+    });
+    const take = stages[1]!.progression!.sources[0]!.take;
+    for (const rule of take) {
+      for (const [key, value] of Object.entries(rule)) {
+        if (key === "kind") continue;
+        expect(Number.isFinite(value), `${key} must be a finite number, got ${value}`).toBe(true);
+      }
+    }
   });
 });

@@ -282,6 +282,95 @@ describe.skipIf(!HAS_DB)("multi-source progression (F2 Decision 4 / Finding 1)",
     expect(finalRow!.config.qualified).toBeUndefined();
   });
 
+  // A4 (round-4 review, MAJOR) — the SAME two cases as the two on_complete
+  // tests above (F2 Task 6 review, finding 1, and this file's earlier
+  // QUALIFICATION_INVALID test), but for the `timing: "setup"` branch in
+  // completeStage (stages.ts): computeSeedProposal, not seedNextStage. That
+  // branch used to be a bare `catch { return result }` — no narrowing, no
+  // logging — despite its OWN comment already claiming "best-effort, same
+  // spirit as the on_complete path" below it. So a genuine
+  // QUALIFICATION_INVALID (or A1's SEEDING_BESTNTH_UNEQUAL_POOLS, or
+  // anything else) reached an organiser as "nothing happened": the stage
+  // completed, no seed_proposal, no error anywhere. Narrowed the same way
+  // seedNextStage's call is narrowed a few lines below it in stages.ts.
+  it("timing:setup — an entrant qualifying through two sources REJECTS the completion, not swallowed (A4 fix — was silently absorbed pre-fix)", async () => {
+    const { auth } = await seedOrg();
+    const { division, entrants, a, b } = await seedDivisionWithTwoLeagues(auth);
+    const [e1] = entrants;
+
+    const [final] = await createStages(auth, division.id, {
+      seq: 3,
+      kind: "knockout",
+      name: "Final",
+      config: {},
+      progression: {
+        sources: [
+          { stage: { stageId: a.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+          { stage: { stageId: b.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+        ],
+        placement: "rank_order",
+        timing: "setup",
+      },
+    });
+
+    await generateStageFixtures(auth, final!.id); // TBD fixtures up front, .setup convention
+    await generateStageFixtures(auth, a.id);
+    await generateStageFixtures(auth, b.id);
+    // SAME entrant (e1) wins BOTH A and B — same duplicate-qualifier shape
+    // as the on_complete test above, now against a setup-timing target.
+    await decideLeagueWithWinner(auth, a.id, e1!.id);
+    await decideLeagueWithWinner(auth, b.id, e1!.id);
+
+    await completeStage(auth, a.id); // no-op for Final: A's own seq-adjacent successor is B
+    await expect(completeStage(auth, b.id)).rejects.toSatisfy((err: unknown) =>
+      EngineError.is(err, "QUALIFICATION_INVALID"),
+    );
+    // Same non-destructive guarantee as the on_complete sibling: B's OWN
+    // completion is unaffected by the downstream seed-proposal failure.
+    const [bRow] = await sql<{ status: string }[]>`select status from stages where id = ${b.id}`;
+    expect(bRow!.status).toBe("complete");
+    // And no draft proposal was left behind from the failed attempt.
+    const proposals = await sql<{ id: string }[]>`select id from stage_seed_proposals where stage_id = ${final!.id}`;
+    expect(proposals).toHaveLength(0);
+  });
+
+  it("timing:setup — completing a source stage while another named source isn't ready does not fail the completion (STAGE_NOT_READY is still best-effort, unchanged by the A4 fix)", async () => {
+    const { auth } = await seedOrg();
+    const { division, entrants, a, b } = await seedDivisionWithTwoLeagues(auth);
+    const [, e2] = entrants;
+
+    const [final] = await createStages(auth, division.id, {
+      seq: 3,
+      kind: "knockout",
+      name: "Final",
+      config: {},
+      progression: {
+        sources: [
+          { stage: { stageId: a.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+          { stage: { stageId: b.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+        ],
+        placement: "rank_order",
+        timing: "setup",
+      },
+    });
+
+    await generateStageFixtures(auth, final!.id);
+    await generateStageFixtures(auth, a.id);
+    await generateStageFixtures(auth, b.id);
+    // Only B is decided. A is left with no results at all — its own
+    // completion predicate isn't satisfied, so it stays incomplete, and
+    // computeSeedProposal's sourcesToTables hits that incompleteness and
+    // throws STAGE_NOT_READY — the legitimate case the try/catch exists for.
+    await decideLeagueWithWinner(auth, b.id, e2!.id);
+
+    const completedB = await completeStage(auth, b.id);
+    expect(completedB.completed).toBe(true);
+    expect(completedB.seed_proposal).toBeUndefined();
+
+    const [bRow] = await sql<{ status: string }[]>`select status from stages where id = ${b.id}`;
+    expect(bRow!.status).toBe("complete");
+  });
+
   // F2 Task 6 review, finding 2: seedNextStage's carry-over step IS already
   // multi-source-aware in production (it unions qualified rows across every
   // resolved source, then guards each source's kind via CONFIG_INVALID) but

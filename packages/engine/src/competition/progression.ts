@@ -225,7 +225,16 @@ function snakeMerge(pots: readonly SourcedSlot[][]): SourcedSlot[] {
 // stays tolerant of loose caller data the way progressionSize/
 // previewSourceShape already are elsewhere. Keep the four names in sync with
 // those two apps/web sites if a new bracket stage kind ever ships.
-const BRACKET_STAGE_KINDS: ReadonlySet<string> = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
+// Exported (round-4 review, B) so apps/web's bracket-kinds-sync.test.ts can
+// pin this literal against its two hand-copied siblings — see that test's
+// own header comment for why an unsynced 5th bracket kind is a silent,
+// fail-open hazard rather than a loud one.
+export const BRACKET_STAGE_KINDS: ReadonlySet<string> = new Set([
+  "knockout",
+  "double_elim",
+  "stepladder",
+  "page_playoff",
+]);
 
 export function placeDescriptors(
   pots: readonly SourcedSlot[][],
@@ -364,6 +373,22 @@ export function placeDescriptors(
       throw new EngineError("SEEDING_MAP_SLOT_INVALID", `seeded_map assigns seed ${seat} more than once`, {
         slot: seat,
       });
+    }
+    // B (round-4 review) — two DIFFERENT entries naming the SAME source both
+    // resolve `candidates[0]` to this identical SourcedSlot object; `claimed`
+    // already exists to keep it out of the auto-fill pool below, so it also
+    // doubles as the duplicate-source check here for free: a second entry
+    // reusing an already-claimed source would otherwise silently duplicate
+    // that seat's descriptor into a second seed and leave the real qualifier
+    // for the now-orphaned seat unplaced — surfacing far downstream as a
+    // confusing QUALIFICATION_INVALID at resolve time instead of refusing
+    // the malformed map right here.
+    if (claimed.has(slot)) {
+      throw new EngineError(
+        "SEEDING_MAP_SLOT_INVALID",
+        `seeded_map source "${entry.source}" is already assigned to another seed — each source may be named by at most one seeded_map entry`,
+        { source: entry.source, slot: seat },
+      );
     }
     seats[seat - 1] = slot;
     claimed.add(slot);
@@ -575,9 +600,17 @@ export function resolveProgression(
   spec: ProgressionSpec,
   shapes: readonly SourceShape[],
   tables: readonly SourceTables[],
+  // A2 (round-4 review, MAJOR) — this stage's own raw `kind`, forwarded
+  // verbatim to placeDescriptors so ruling 13's bracket-target snake guard
+  // can fire on the actual seed-RESOLUTION path, not just at save-time
+  // validation (validateProgressionAgainstShapes). OPTIONAL, same "unknown,
+  // don't refuse" default as placeDescriptors' own targetKind param (see its
+  // doc comment) — an old caller that hasn't been taught to pass one yet
+  // does not regress into an always-throwing guard.
+  targetKind?: string,
 ): { qualifiers: ResolvedProgressionEntry[]; ties: ProgressionTieFlag[] } {
   const pots = expandSources(spec.sources, (i) => shapes[i]!);
-  const placed = placeDescriptors(pots, spec.placement, spec.map);
+  const placed = placeDescriptors(pots, spec.placement, spec.map, targetKind);
 
   const qualifiers: ResolvedProgressionEntry[] = [];
   const tieGroups = new Map<string, ProgressionTieFlag>();
@@ -618,7 +651,7 @@ export function resolveProgression(
               "SEEDING_BESTNTH_UNEQUAL_POOLS",
               `bestNth cannot compare rank-${d.nth} finishers across pools of different sizes (${[...sizes]
                 .sort((a, b) => a - b)
-                .join(",")}) — UEFA normalisation for unequal pools isn't implemented`,
+                .join(",")}) without normaliseUnequalPools — set normaliseUnequalPools: true on this take rule to compare them via UEFA drop-the-bottom-result normalisation`,
               { nth: d.nth, poolSizes: src.pools.map((p) => ({ pool: p.pool, size: p.rows.length })) },
             );
           }
