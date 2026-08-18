@@ -37,6 +37,7 @@ import { Tip } from "@/components/ui/tip";
 import Link from "@/components/ui/console-link";
 import { BillingGroupPanel } from "@/components/billing-group-panel";
 import { OperatorConsole } from "@/components/operator-console";
+import { SettingsShell } from "../_components/settings-nav";
 import { allocationConsole } from "@/server/usecases/operator-allocation";
 import { IncomingTransferOffers } from "@/components/incoming-transfer-offers";
 import { routes } from "@/lib/routes";
@@ -249,7 +250,7 @@ export default async function BillingPage({
         properties={{ plan_key: sub?.plan_key ?? "community" }}
       />
       {orgId && <BillingBanner orgId={orgId} />}
-      <main className="mx-auto max-w-3xl px-4 py-8">
+      <SettingsShell orgSlug={orgSlug} active="billing" dict={dict} showNav={!viaPayer}>
         {/* The apron chevron alone was not found: 16px at 70% opacity on the
             dark bar, label hidden until hover. #190 removed the labelled link
             as duplication; reported twice as missing, so it is back. */}
@@ -708,7 +709,7 @@ export default async function BillingPage({
             </div>
           </section>
         )}
-      </main>
+      </SettingsShell>
     </>
   );
 }

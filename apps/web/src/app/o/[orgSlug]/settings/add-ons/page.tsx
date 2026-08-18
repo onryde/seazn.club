@@ -21,6 +21,7 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { ExtraOrgsControl } from "@/components/extra-orgs-control";
 import { Tip } from "@/components/ui/tip";
+import { SettingsShell } from "../_components/settings-nav";
 
 export default async function AddOnsSettingsPage({
   params,
@@ -46,7 +47,7 @@ export default async function AddOnsSettingsPage({
       : t(dict, "addOns.cap.summary", { count: view.liveOrgCount, cap: view.orgCap });
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-8">
+    <SettingsShell orgSlug={orgSlug} active="add-ons" dict={dict} showNav={!viaPayer}>
       {/* The org's own Settings index is member-gated, so a payer who is not a
           member of this club would only 404 on it (v17 gap #333). They arrived
           from the bill, not from the club, and have nothing to go back to
@@ -98,6 +99,6 @@ export default async function AddOnsSettingsPage({
           locale={locale}
         />
       )}
-    </main>
+    </SettingsShell>
   );
 }

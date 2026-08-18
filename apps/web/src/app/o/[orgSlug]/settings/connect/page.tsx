@@ -12,6 +12,7 @@ import { OrgPaymentInstructions } from "@/components/org-payment-instructions";
 import { BackLink } from "@/components/back-link";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
+import { SettingsShell } from "../_components/settings-nav";
 
 export default async function ConnectSettingsPage({
   params,
@@ -31,7 +32,7 @@ export default async function ConnectSettingsPage({
     from organizations where id = ${org.id}`;
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-8">
+    <SettingsShell orgSlug={orgSlug} active="connect" dict={dict}>
       {/* Same reason as the billing page: the apron chevron was not found. */}
       <BackLink
         href={routes.orgSettings(orgSlug)}
@@ -61,6 +62,6 @@ export default async function ConnectSettingsPage({
         </Link>
         .
       </p>
-    </main>
+    </SettingsShell>
   );
 }

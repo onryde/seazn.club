@@ -43,10 +43,41 @@ test.describe("settings shell", () => {
     );
   });
 
-  test("account tab carries the Privacy & cookies section (merged from old page)", async ({ page }) => {
-    await page.goto("/settings?tab=account");
+  test("preferences tab carries the Privacy & cookies section", async ({ page }) => {
+    // Merged off the old standalone page onto Account, then moved again to
+    // Preferences with the rest of the "how the product reads" controls.
+    await page.goto("/settings?tab=preferences");
     await expect(page.getByRole("heading", { name: "Privacy & cookies" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Cookie settings" })).toBeVisible();
+  });
+
+  test("preferences gathers both timezones, language and currency", async ({ page }) => {
+    await page.goto("/settings?tab=preferences");
+    await expect(page.getByRole("combobox", { name: "Your timezone" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Organisation defaults" })).toBeVisible();
+    // …and the Account tab kept none of them.
+    await page.goto("/settings?tab=account");
+    await expect(page.getByRole("combobox", { name: "Your timezone" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Cookie settings" })).toHaveCount(0);
+  });
+
+  // The sidebar used to disappear the moment you left the tabbed index.
+  test("the sidebar is present on the route-owning Settings pages", async ({ page }) => {
+    // Only /settings/billing and /settings/connect have legacy redirects; the
+    // other two are org-scoped only, so reach them through the sidebar itself.
+    await page.goto("/settings?tab=organization");
+    const orgSettings = new URL(page.url()).pathname.replace(/\/settings$/, "");
+    for (const path of [
+      "/settings/billing",
+      `${orgSettings}/settings/credits`,
+      `${orgSettings}/settings/add-ons`,
+    ]) {
+      await page.goto(path);
+      await expect(
+        page.getByRole("link", { name: "Preferences", exact: true }),
+        `no sidebar on ${path}`,
+      ).toBeVisible();
+    }
   });
 
   test("old standalone /settings/account route is gone (404)", async ({ page }) => {

@@ -13,11 +13,23 @@ const LABELS: Record<Currency, string> = {
 
 /** Pricing-page currency switcher (v3/07 §4): writes the cookie the checkout
  *  routes honour, then re-renders the server page in the chosen currency. */
-export function CurrencySwitcher({ current }: { current: Currency }) {
+export function CurrencySwitcher({
+  current,
+  /**
+   * `false` where the surface already prints its own "Currency" heading
+   * (Settings → Preferences). The word still ships to assistive tech — it is
+   * the select's only accessible name — it just stops appearing twice on
+   * screen, one line under the other.
+   */
+  showLabel = true,
+}: {
+  current: Currency;
+  showLabel?: boolean;
+}) {
   const router = useRouter();
   return (
     <label className="inline-flex items-center gap-2 text-sm text-slate-500">
-      <span className="sr-only sm:not-sr-only">Currency</span>
+      <span className={showLabel ? "sr-only sm:not-sr-only" : "sr-only"}>Currency</span>
       <select
         value={current}
         data-currency-switcher

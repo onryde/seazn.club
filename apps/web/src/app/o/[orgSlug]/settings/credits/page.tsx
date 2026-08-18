@@ -13,6 +13,7 @@ import { creditPackOptions } from "@/lib/currency";
 import { preferredCurrency } from "@/lib/currency-server";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
+import { SettingsShell } from "../_components/settings-nav";
 
 export default async function CreditsSettingsPage({
   params,
@@ -32,7 +33,7 @@ export default async function CreditsSettingsPage({
   const creditsView = await getCreditsTab(orgId);
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-8">
+    <SettingsShell orgSlug={orgSlug} active="credits" dict={dict} showNav={!viaPayer}>
       {/* The org's own Settings index is member-gated, so a payer who is not a
           member of this club would only 404 on it (v17 gap #333). They arrived
           from the bill, not from the club, and have nothing to go back to
@@ -56,6 +57,6 @@ export default async function CreditsSettingsPage({
         packs={creditPackOptions(currency)}
         currency={currency}
       />
-    </main>
+    </SettingsShell>
   );
 }
