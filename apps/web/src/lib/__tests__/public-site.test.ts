@@ -62,6 +62,29 @@ describe("ICS feed (doc 09 §2)", () => {
     expect(ics).toContain("STATUS:TENTATIVE");
   });
 
+  // Reviewer finding (Minor, public-site.ts:63-67): every all-day DTEND case
+  // above stays mid-month, so nextDay()'s month/year rollover (Date's own
+  // UTC carry, not string arithmetic) was never exercised. Values below were
+  // computed independently with `new Date(...).setUTCDate(...)`, not copied
+  // from a spec.
+  it("all-day DTEND rolls over a month boundary — September has 30 days", () => {
+    const ics = buildIcs("Cup", [{ uid: "fix-1", allDayOn: "2026-09-30", summary: "Final" }]);
+    expect(ics).toContain("DTSTART;VALUE=DATE:20260930");
+    expect(ics).toContain("DTEND;VALUE=DATE:20261001");
+  });
+
+  it("all-day DTEND rolls over a year boundary", () => {
+    const ics = buildIcs("Cup", [{ uid: "fix-1", allDayOn: "2026-12-31", summary: "Final" }]);
+    expect(ics).toContain("DTSTART;VALUE=DATE:20261231");
+    expect(ics).toContain("DTEND;VALUE=DATE:20270101");
+  });
+
+  it("all-day DTEND rolls a leap day into March (2028 is a leap year; 2026 is not)", () => {
+    const ics = buildIcs("Cup", [{ uid: "fix-1", allDayOn: "2028-02-29", summary: "Final" }]);
+    expect(ics).toContain("DTSTART;VALUE=DATE:20280229");
+    expect(ics).toContain("DTEND;VALUE=DATE:20280301");
+  });
+
   it("a timed event stays timed and is marked confirmed", () => {
     const ics = buildIcs("Cup", [
       {

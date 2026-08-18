@@ -174,14 +174,29 @@ describe("GET .../calendar.ics — day-one fixtures (F4 wave B)", () => {
     expect(text).toContain("DTSTART;VALUE=DATE:20260901");
   });
 
-  it("skips an unscheduled fixture when the competition has no dates at all", async () => {
+  it("skips an unscheduled fixture when the competition has no dates at all, while a co-present SCHEDULED fixture still gets its VEVENT (proves selective exclusion, not an empty feed)", async () => {
+    // A single-fixture feed can't tell "this fixture was excluded" apart
+    // from "the feed is empty for an unrelated reason" — both read as no
+    // BEGIN:VEVENT anywhere. A second, scheduled fixture that carries its
+    // own DTSTART (and so needs no competition anchor) must survive the
+    // same filter that drops the unscheduled one, which is what proves the
+    // exclusion is selective.
+    const scheduledSemi = F({
+      id: "fix-scheduled-semi",
+      home_entrant_id: "e1",
+      away_slot_label: { key: "slot.runner_up_group", params: { g: "C" } },
+    });
     getPublicDivision.mockResolvedValue(
-      baseData("en", [unscheduledFinal()], { starts_on: null, ends_on: null }),
+      baseData("en", [unscheduledFinal(), scheduledSemi], { starts_on: null, ends_on: null }),
     );
     const { text } = await get();
-    // No anchor date exists, so no defensible DTSTART exists either. Emitting
-    // a VEVENT with a guessed date is worse than omitting it.
-    expect(text).not.toContain("BEGIN:VEVENT");
+    // No anchor date exists, so no defensible DTSTART exists for the
+    // unscheduled fixture either. Emitting a VEVENT with a guessed date is
+    // worse than omitting it.
+    expect(text).not.toContain("UID:fix-final@seazn.club");
+    // The scheduled fixture needs no anchor and must still be emitted.
+    expect(text).toContain("UID:fix-scheduled-semi@seazn.club");
+    expect(text).toMatch(/SUMMARY:Real Team vs Runner-up of Group C/);
   });
 
   it("REGRESSION: the UID is byte-identical before and after the fixture resolves", async () => {
