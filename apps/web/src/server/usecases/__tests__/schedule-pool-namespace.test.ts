@@ -83,6 +83,10 @@ function row(over: Partial<FixtureLite> = {}): FixtureLite {
     home_entrant_id: "e1",
     away_entrant_id: "e2",
     scheduled_at: iso(T0),
+    // P9 cutover: `court_id` is the real identity the engine reads; the two
+    // legacy text fields below are frozen and read-only.
+    court_id: "33333333-3333-4333-8333-333333333333",
+    venue_id: null,
     court_label: "Court 1",
     venue: null,
     status: "scheduled",

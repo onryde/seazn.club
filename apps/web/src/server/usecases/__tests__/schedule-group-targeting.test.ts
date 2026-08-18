@@ -33,6 +33,7 @@ const DIV_A = "11111111-1111-4111-8111-111111111111";
 const POOL_A = "22222222-2222-4222-8222-222222222222";
 /** What `pools.key` holds — the display label `PackFixture.pool` carries (#449). */
 const POOL_A_KEY = "A";
+const COURT_A = "33333333-3333-4333-8333-333333333333";
 
 // A fixtures row exactly as `FIXTURE_LITE_COLS` selects it.
 function row(over: Partial<FixtureLite> = {}): FixtureLite {
@@ -47,6 +48,10 @@ function row(over: Partial<FixtureLite> = {}): FixtureLite {
     home_entrant_id: "e1",
     away_entrant_id: "e2",
     scheduled_at: iso(T0),
+    // P9 cutover: `court_id` is the real identity the engine reads; the two
+    // legacy text fields below are frozen and read-only.
+    court_id: COURT_A,
+    venue_id: null,
     court_label: "Court 1",
     venue: null,
     status: "scheduled",
