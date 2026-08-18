@@ -332,9 +332,14 @@ export function jointApplyDivisions(
   const seqOf = new Map(divisions.map((d) => [d.id, d.seq]));
   const byDivision = new Map<string, JointApplyDivision["assignments"]>();
   for (const p of plan.proposal) {
-    if (!p.court_label) continue; // the wire requires a court label
+    if (!p.court_label) continue; // the wire requires a court id
     const list = byDivision.get(p.division_id);
-    const row = { fixture_id: p.fixture_id, scheduled_at: p.scheduled_at, court_label: p.court_label };
+    // P9 pass 3b: outgoing key is `court_id` (`JointApplyDivision`/
+    // `ApplyCompetitionScheduleRequest`, schemas.ts) — `p.court_label` is the
+    // AI plan response's own field name, which has carried a real `courts.id`
+    // value (never a display label) since pass 1; this is a key rename at
+    // the wire boundary, not a value lookup.
+    const row = { fixture_id: p.fixture_id, scheduled_at: p.scheduled_at, court_id: p.court_label };
     if (list) list.push(row);
     else byDivision.set(p.division_id, [row]);
   }

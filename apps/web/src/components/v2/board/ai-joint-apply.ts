@@ -22,11 +22,16 @@ import { aiCheckpointLabel } from "./ai-apply";
 
 /** One division's slice of the joint write. `expectedSeq` is REQUIRED by the
  *  endpoint — a joint write that skipped the check on one division would let a
- *  stale board silently overwrite a concurrent edit there. */
+ *  stale board silently overwrite a concurrent edit there.
+ *
+ *  P9 pass 3b: `court_id` (a real `courts.id`), not the legacy `court_label`
+ *  — `ApplyCompetitionScheduleRequest`'s assignment item is `.strict()` and
+ *  requires `court_id` (schemas.ts), so a `court_label` key here 400s the
+ *  whole joint apply rather than silently applying nothing. */
 export interface JointApplyDivision {
   divisionId: string;
   expectedSeq: number;
-  assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+  assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
 }
 
 export interface JointApplyInput {
