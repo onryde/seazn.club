@@ -1286,7 +1286,15 @@ export function FixtureLine({
   const [courtId, setCourtId] = useState(fixture.court_id ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const courtById = new Map(courtGroups(venues).flatMap(({ courts }) => courts).map((c) => [c.id, c] as const));
+  // P9 review wave 3 ("Also yours"): archived-INCLUSIVE on purpose, unlike
+  // `courtGroups(venues)` (used below for the SELECTABLE option list, which
+  // must stay archived-filtered — you cannot newly pick an archived court).
+  // This map's only job is resolving `courtId`'s venue_id for the save below,
+  // and `courtId` can legitimately be an already-archived court's id (this
+  // fixture was scheduled onto it before it was archived) — `courtGroups`
+  // dropping that row silently cleared `venue_id` on every such save, even
+  // though `court_id` itself was preserved.
+  const courtById = new Map(venues.flatMap((venue) => venue.courts).map((c) => [c.id, c] as const));
 
   const home = fixture.home_entrant_id
     ? (entrantNames[fixture.home_entrant_id] ?? "?")

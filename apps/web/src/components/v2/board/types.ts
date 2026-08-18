@@ -108,6 +108,14 @@ export interface BoardConflictDetail {
   person_ids?: string[];
   other_fixture_id?: string;
   court?: string;
+  /** P9 review wave 3, finding #3: the server's resolved, venue-qualified
+   *  display name for `court` (schemas.ts's ScheduleConflictDetail.court_name,
+   *  via courtNamesById -> buildCourtDirectory — see toWireConflictDetail).
+   *  `court` itself is a raw `courts.id` uuid for every kind that carries it
+   *  (court_double_booking, locked_slot_clash, court_tag_mismatch) and must
+   *  never render directly — conflict-detail-format.ts is the one place that
+   *  reads this field, and degrades a miss to courtPicker.unknownCourt. */
+  court_name?: string;
   day?: string;
   other_day?: string;
   weekday?: string;

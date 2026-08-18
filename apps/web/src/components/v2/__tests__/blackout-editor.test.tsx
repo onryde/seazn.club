@@ -20,6 +20,7 @@ import type { ReactElement } from "react";
 import {
   blackoutRowError,
   ConstraintsPanel,
+  courtOptionLabel,
   draftsToBlackouts,
   toBlackoutDrafts,
   type BlackoutDraft,
@@ -34,6 +35,7 @@ import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import type { BoardConfig } from "@/components/v2/board/types";
+import type { Venue } from "@/components/v2/shared/court-multi-picker";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -205,12 +207,15 @@ function config(over: Record<string, unknown> = {}): Record<string, unknown> {
   return { courts: COURTS, matchMinutes: 30, gapMinutes: 0, ...over };
 }
 
-function panelProps(over: { config?: Record<string, unknown>; canEdit?: boolean } = {}) {
+function panelProps(
+  over: { config?: Record<string, unknown>; canEdit?: boolean; venues?: Venue[] } = {},
+) {
   return {
     divisionId: "d1",
     initialSettings: { division_id: "d1", config: over.config ?? config() },
     canEdit: over.canEdit ?? true,
     orgTz: ORG_TZ,
+    venues: over.venues ?? [],
   };
 }
 
@@ -523,6 +528,87 @@ describe("blackout editor — markup and accessibility", () => {
     const removes = html.match(/<button[^>]*aria-label="Remove blackout[^"]*"[^>]*>/g) ?? [];
     expect(removes).toHaveLength(2);
     for (const tag of removes) expect(tag).toContain("min-h-11");
+  });
+});
+
+describe("courtOptionLabel — id vs legacy free-text scope (P9 review wave 3, finding #12)", () => {
+  it("resolves a real court id through courtNames", () => {
+    expect(courtOptionLabel("court-1", { "court-1": "Court 1 (Riverside Centre)" }, "Unknown court")).toBe(
+      "Court 1 (Riverside Centre)",
+    );
+  });
+
+  it("a uuid-shaped miss degrades to the shared unknown-court string — never the raw id", () => {
+    const UUID = "6be47174-7f41-4030-9c1a-1e2f3a4b5c6d";
+    expect(courtOptionLabel(UUID, {}, "Unknown court")).toBe("Unknown court");
+  });
+
+  it("a non-uuid miss renders as-is — a genuine legacy free-text scope from before the P9 cutover, not an id", () => {
+    expect(courtOptionLabel("Old Court", {}, "Unknown court")).toBe("Old Court");
+  });
+});
+
+describe("blackout editor — the scope picker shows court NAMES, not raw uuids (P9 review wave 3, finding #12)", () => {
+  // Two DIFFERENT venues each naming a court "Court 1" — legal (P8's
+  // uniqueness is per-venue) — proving the two stay distinguishable rather
+  // than both rendering identical text. `Venue`'s own `Court` type carries no
+  // `hours`/`exceptions` (the board never reads a calendar — see
+  // court-multi-picker.tsx's own header), so this fixture omits them too.
+  const COURT_1 = "11111111-1111-4111-8111-111111111111";
+  const COURT_2 = "22222222-2222-4222-8222-222222222222";
+  const DELETED_COURT = "99999999-9999-4999-8999-999999999999";
+  const VENUES: Venue[] = [
+    {
+      id: "venue-1", name: "Riverside Centre", address: null, sort: 0, archived_at: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      courts: [{ id: COURT_1, venue_id: "venue-1", name: "Court 1", sort: 0, tags: [], archived_at: null, created_at: "2026-01-01T00:00:00.000Z" }],
+    },
+    {
+      id: "venue-2", name: "Downtown Hall", address: null, sort: 1, archived_at: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      courts: [{ id: COURT_2, venue_id: "venue-2", name: "Court 1", sort: 0, tags: [], archived_at: null, created_at: "2026-01-01T00:00:00.000Z" }],
+    },
+  ];
+
+  it("names two same-named courts from different venues distinguishably, never a bare uuid", () => {
+    const html = renderPanel(
+      panelProps({
+        config: config({ courts: [COURT_1, COURT_2], blackouts: [{ court: COURT_1, from: FROM_ISO, to: TO_ISO }] }),
+        venues: VENUES,
+      }),
+    );
+    expect(html).toContain(">Court 1 (Riverside Centre)</option>");
+    expect(html).toContain(">Court 1 (Downtown Hall)</option>");
+    // `value="<uuid>"` is legitimate (it's the real id, wired to onChange) —
+    // only the VISIBLE option text must never be the bare id.
+    expect(html).not.toContain(`>${COURT_1}</option>`);
+    expect(html).not.toContain(`>${COURT_2}</option>`);
+  });
+
+  it("a court id with no matching venue (deleted) degrades to the shared unknown-court string, never the raw id", () => {
+    const html = renderPanel(
+      panelProps({
+        config: config({ courts: [], blackouts: [{ court: DELETED_COURT, from: FROM_ISO, to: TO_ISO }] }),
+        venues: VENUES,
+      }),
+    );
+    expect(html).toContain(`>${escapeHtml(label("courtPicker.unknownCourt"))}</option>`);
+    // The option's VALUE keeps the real (deleted) id — same "stale scope
+    // stays selectable" contract the pre-existing "Old Court" test pins —
+    // only its visible TEXT must degrade.
+    expect(html).toContain(`value="${DELETED_COURT}"`);
+    expect(html).not.toContain(`>${DELETED_COURT}</option>`);
+  });
+
+  it("keeps resolving the SELECTED value's option text too — not just the list (selected stays on the real id)", () => {
+    const html = renderPanel(
+      panelProps({
+        config: config({ courts: [COURT_1], blackouts: [{ court: COURT_1, from: FROM_ISO, to: TO_ISO }] }),
+        venues: VENUES,
+      }),
+    );
+    expect(html).toContain(`value="${COURT_1}" selected=""`);
+    expect(html).toContain(">Court 1 (Riverside Centre)</option>");
   });
 });
 

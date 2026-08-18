@@ -21,6 +21,9 @@ const enDict = en as Record<string, string>;
 const MOVED = "11111111-1111-1111-1111-111111111111";
 const COURT_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const COURT_UNKNOWN = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+// The fixture's CURRENT court (`fixtures[0].court_id` below) — the ORIGIN
+// side of a "moved" row (P9 review wave 3, finding #13).
+const COURT_ORIGIN = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 // A bare-uuid probe, not tied to any one fixture — any 8-4 hex run anywhere
 // in the panel's HTML means an id leaked into user-facing text.
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-/;
@@ -31,7 +34,7 @@ const fixtures: AiConsoleFixture[] = [
     stage_id: "st-1",
     scheduled_at: "2026-08-01T09:00:00.000Z",
     court_label: null,
-    court_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    court_id: COURT_ORIGIN,
     code: "SF1",
     matchup: "A vs B",
     isFinal: false,
@@ -81,6 +84,30 @@ describe("AiDiffPanel court-name resolution (P9 review wave 1, finding 4)", () =
 
   it("falls back to the unknown-court label, never a bare uuid, when the id is not in the directory", () => {
     const html = renderPanel(COURT_UNKNOWN, {});
+    expect(html).toContain(enDict["courtPicker.unknownCourt"]);
+    expect(html).not.toMatch(UUID_RE);
+  });
+});
+
+// P9 review wave 3, finding #13: `ai-diff.ts`'s `moved.from`/`unscheduled.from`
+// used to read the board's frozen (always-null) `court_label` instead of the
+// real `court_id`, so a "moved" row's from→to line always showed the
+// destination court and silently dropped to time-only for the ORIGIN — the
+// bug the tests above never caught because they only asserted the
+// destination side.
+describe("AiDiffPanel names the ORIGIN court on a moved row too (P9 review wave 3, finding #13)", () => {
+  it("resolves BOTH the origin and destination court names on a moved row's from→to line", () => {
+    const html = renderPanel(COURT_A, { [COURT_ORIGIN]: "Court 2", [COURT_A]: "Court 3" });
+    expect(html).toContain("Court 2"); // the FROM side — this is finding #13's fix
+    expect(html).toContain("Court 3"); // the TO side — already worked (finding 4)
+    expect(html).not.toMatch(UUID_RE);
+  });
+
+  it("the origin degrades to the unknown-court label on its OWN miss, independent of whether the destination resolved", () => {
+    // Destination resolves; origin does not — proves the two sides are
+    // resolved independently, not by one shared success/failure.
+    const html = renderPanel(COURT_A, { [COURT_A]: "Court 3" });
+    expect(html).toContain("Court 3");
     expect(html).toContain(enDict["courtPicker.unknownCourt"]);
     expect(html).not.toMatch(UUID_RE);
   });

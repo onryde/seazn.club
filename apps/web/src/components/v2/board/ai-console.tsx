@@ -929,6 +929,7 @@ export function AiConsole({
           onFill={fillInstruction}
           lastRun={lastRun}
           scheduleFrozen={scheduleFrozen}
+          courtNames={courtNames}
         />
       )}
       {state.step === "schedule" && (
@@ -973,6 +974,7 @@ export function AiConsole({
             void runOfficials({ instruction: state.officialsPriorInstruction, priorAssignments: patched });
           }}
           onPulse={(ids) => onPulseRef.current?.(ids)}
+          courtNames={courtNames}
         />
       )}
       {state.step === "apply" && (
@@ -1128,6 +1130,7 @@ export function BriefStep({
   onFill,
   lastRun,
   scheduleFrozen,
+  courtNames = {},
 }: {
   state: AiConsoleState;
   dispatch: (a: Parameters<typeof aiConsoleReducer>[1]) => void;
@@ -1146,6 +1149,12 @@ export function BriefStep({
   onWishes: (next: Wish[]) => void;
   onFill: (value: string) => void;
   lastRun: AiLastResult | null;
+  /** Court id -> display label (`resolveCourtNames`/`buildCourtDirectory`) —
+   *  threaded straight through to AiWishChips' final_last picker/pill (P9
+   *  review wave 3, finding #11). Optional/defaulted to `{}`, matching
+   *  ScheduleStep's own `courtNames` — existing test call sites construct
+   *  this step without it. */
+  courtNames?: Record<string, string>;
 }) {
   const plural = usePlural();
   // #385: the CTA and the confirm card price through the SAME server-resolved
@@ -1249,7 +1258,13 @@ export function BriefStep({
       {lastRun?.last && <AiLastRun last={lastRun.last} onReuse={onFill} />}
 
       {/* Wish chips compile into the instruction below. */}
-      <AiWishChips wishes={wishes} onChange={onWishes} entrants={brief.entrants} courts={brief.courts} />
+      <AiWishChips
+        wishes={wishes}
+        onChange={onWishes}
+        entrants={brief.entrants}
+        courts={brief.courts}
+        courtNames={courtNames}
+      />
 
       <div>
         <label htmlFor="ai-instruction" className="label">
@@ -1528,6 +1543,7 @@ export function OfficialsStep({
   onReplan,
   onAdopt,
   onPulse,
+  courtNames = {},
 }: {
   state: AiConsoleState;
   dispatch: (a: Parameters<typeof aiConsoleReducer>[1]) => void;
@@ -1543,6 +1559,12 @@ export function OfficialsStep({
   onReplan: () => void;
   onAdopt: (fixtureId: string, roleKey: string, candidateId: string) => void;
   onPulse: (ids: string[]) => void;
+  /** Court id -> display label (`resolveCourtNames`/`buildCourtDirectory`) —
+   *  threaded to AiOfficialsReview's grid, whose rows carry a dry-run
+   *  placement's court AS AN ID since the P9 cutover, despite the field's
+   *  legacy name (P9 review wave 3, finding #10). Optional/defaulted to
+   *  `{}`, matching ScheduleStep's own `courtNames`. */
+  courtNames?: Record<string, string>;
 }) {
   const placements = (state.schedulePlan?.proposal ?? []).map((p) => ({
     fixture_id: p.fixture_id,
@@ -1563,6 +1585,7 @@ export function OfficialsStep({
       hasPrior={hadPrior}
       busy={busy}
       traceNonce={traceNonce}
+      courtNames={courtNames}
       error={state.run === "error" ? state.error : null}
       instruction={state.officialsInstruction}
       // The second spend path's instruction, so the card can ask the server's

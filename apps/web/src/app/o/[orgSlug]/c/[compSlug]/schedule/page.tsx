@@ -12,6 +12,11 @@ import { listStages } from "@/server/usecases/stages";
 import { listDivisionFixturesForBoard } from "@/server/usecases/fixtures";
 import { listEntrants } from "@/server/usecases/entrants";
 import { getScheduleSettings } from "@/server/usecases/schedule";
+// P9 review wave 3, finding #4: the joint board never fetched venues at all,
+// so ScheduleBoard's courtNamesById was empty EVERYWHERE on this page (column
+// headers, the swap button, MovePanel's court select, the settings card's
+// picker). Same call the division board makes — see its own comment.
+import { listVenues } from "@/server/usecases/venues";
 import { hasFeature } from "@/lib/entitlements";
 import { preferredCurrency } from "@/lib/currency-server";
 import { withTenant } from "@/lib/db";
@@ -87,12 +92,23 @@ export default async function CompetitionSchedulePage({
     );
   }
 
-  const [boardEditable, constraints, aiAllowed, currency] = await Promise.all([
+  const [boardEditable, constraints, aiAllowed, currency, venues] = await Promise.all([
     hasFeature(auth.orgId, "scheduling.board"),
     hasFeature(auth.orgId, "scheduling.constraints"),
     hasFeature(auth.orgId, "scheduling.ai"),
     preferredCurrency(auth.orgId),
+    // P9 review wave 3, finding #4 — archived INCLUDED deliberately, matching
+    // the division board: a fixture placed before its court was archived
+    // must still render that court's NAME, not fall back to a bare uuid.
+    listVenues(auth, { includeArchived: true }),
   ]);
+  // Same RSC-payload trim the division board applies (board-v3.spec.ts:287) —
+  // the board never reads a court's weekly hours/dated exceptions, and a
+  // joint board can span more divisions than a single-division one.
+  const boardVenues = venues.map((v) => ({
+    ...v,
+    courts: v.courts.map(({ hours: _hours, exceptions: _exceptions, ...court }) => court),
+  }));
   const perDivision = await Promise.all(
     divisions.map(async (d) => ({
       division: d,
@@ -196,6 +212,8 @@ export default async function CompetitionSchedulePage({
           canEdit={canEdit && !frozen && boardEditable}
           constraintsAllowed={constraints}
           canManage={canEdit && !frozen}
+          // P9 review wave 3, finding #4.
+          venues={boardVenues}
           aiAllowed={aiAllowed}
           currency={currency}
           // What un-gates the JOINT AI console (#350). One prop, so the id

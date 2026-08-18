@@ -146,7 +146,13 @@ export function computeAiDiff(
     } else {
       diff.moved.push({
         fixture_id: p.fixture_id,
-        from: { scheduled_at: now.scheduled_at, court_label: now.court_label },
+        // P9 review wave 3, finding #13: `now.court_label` is frozen and
+        // always null on a board-sourced AiFixtureRef (sameSlot's own doc
+        // comment above) — the board query stopped sending it. `court_id` is
+        // the real identity, the same field sameSlot already compares; using
+        // it here is what lets AiDiffPanel's `slot()` resolve a NAME for the
+        // origin side instead of silently dropping to time-only.
+        from: { scheduled_at: now.scheduled_at, court_label: now.court_id ?? null },
         to,
       });
     }
@@ -156,7 +162,8 @@ export function computeAiDiff(
     if (f.scheduled_at !== null && !proposedIds.has(f.id)) {
       diff.unscheduled.push({
         fixture_id: f.id,
-        from: { scheduled_at: f.scheduled_at, court_label: f.court_label },
+        // Same fix as `moved.from` just above.
+        from: { scheduled_at: f.scheduled_at, court_label: f.court_id ?? null },
       });
     }
   }

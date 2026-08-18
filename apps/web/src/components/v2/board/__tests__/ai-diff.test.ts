@@ -74,10 +74,17 @@ describe("computeAiDiff", () => {
     expect(diff.unchanged.map((u) => u.fixture_id).sort()).toEqual([...plan.diff.unchanged].sort());
   });
 
-  it("carries from→to provenance on a move", () => {
+  it("carries from→to provenance on a move — the ORIGIN court too (P9 review wave 3, finding #13)", () => {
+    // Before the fix this read `from.court_label: null` — `now.court_label`
+    // is frozen and always null on a board-sourced AiFixtureRef; `court_id`
+    // (COURT_B, MOVE's current court above) is the real identity, and using
+    // it here is what lets AiDiffPanel's `slot()` resolve an ORIGIN name
+    // instead of silently dropping to time-only (the exact symptom finding
+    // #13 reported: "every 'moved' row shows the destination court but
+    // never where it came from").
     expect(diff.moved[0]).toEqual({
       fixture_id: MOVE,
-      from: { scheduled_at: "2026-08-01T13:30:00+01:00", court_label: null },
+      from: { scheduled_at: "2026-08-01T13:30:00+01:00", court_label: COURT_B },
       to: { scheduled_at: "2026-08-01T14:00:00+01:00", court_label: COURT_A },
     });
   });
@@ -89,10 +96,11 @@ describe("computeAiDiff", () => {
     });
   });
 
-  it("an unscheduled fixture carries only where it left", () => {
+  it("an unscheduled fixture carries only where it left — the ORIGIN court too (P9 review wave 3, finding #13)", () => {
+    // Same fix as `moved.from` above: DROP's court_id is COURT_A.
     expect(diff.unscheduled[0]).toEqual({
       fixture_id: DROP,
-      from: { scheduled_at: "2026-08-01T15:00:00+01:00", court_label: null },
+      from: { scheduled_at: "2026-08-01T15:00:00+01:00", court_label: COURT_A },
     });
   });
 

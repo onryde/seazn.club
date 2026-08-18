@@ -29,8 +29,11 @@ const KIND_LABEL: Record<Kind, MessageKey> = {
 };
 
 /** Localized pill caption for a confirmed wish (distinct from the English
- *  compiled sentence — the pill is UI, the compiled text feeds the LLM). */
-function pillLabel(msg: ReturnType<typeof useMsg>, w: Wish): string {
+ *  compiled sentence — the pill is UI, the compiled text feeds the LLM).
+ *  `w.court` (final_last only) is a real `courts.id` uuid since the P9
+ *  cutover, never a name — `courtNames` resolves it the same way the picker
+ *  below does; a miss degrades to courtPicker.unknownCourt, never the id. */
+function pillLabel(msg: ReturnType<typeof useMsg>, w: Wish, courtNames: Record<string, string>): string {
   switch (w.kind) {
     case "finish_by":
       return msg("board.ai.wish.pill.finishBy", { time: w.time });
@@ -43,7 +46,9 @@ function pillLabel(msg: ReturnType<typeof useMsg>, w: Wish): string {
     case "keep_apart":
       return msg("board.ai.wish.pill.keepApart", { a: w.aName, b: w.bName });
     case "final_last":
-      return msg("board.ai.wish.pill.finalLast", { court: w.court });
+      return msg("board.ai.wish.pill.finalLast", {
+        court: courtNames[w.court] ?? msg("courtPicker.unknownCourt"),
+      });
     case "pin_entrant":
       return msg("board.ai.wish.pill.pinEntrant", { name: w.name });
   }
@@ -54,11 +59,17 @@ export function AiWishChips({
   onChange,
   entrants,
   courts,
+  courtNames = {},
 }: {
   wishes: Wish[];
   onChange: (next: Wish[]) => void;
   entrants: Entrant[];
   courts: string[];
+  /** Court id -> display label (`resolveCourtNames`/`buildCourtDirectory`,
+   *  venue-qualified). Optional/defaulted to `{}`: existing test call sites
+   *  construct this without it, and a miss degrades to courtPicker.
+   *  unknownCourt rather than the raw id (P9 review wave 3, finding #11). */
+  courtNames?: Record<string, string>;
 }) {
   const msg = useMsg();
   const [active, setActive] = useState<Kind | null>(null);
@@ -88,7 +99,7 @@ export function AiWishChips({
       {wishes.length > 0 && (
         <ul className="flex flex-wrap gap-1.5">
           {wishes.map((w, i) => {
-            const label = pillLabel(msg, w);
+            const label = pillLabel(msg, w, courtNames);
             return (
               <li key={`${w.kind}-${i}`}>
                 <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 py-1 pl-2.5 pr-1 text-xs font-medium text-amber-900">
@@ -146,6 +157,7 @@ export function AiWishChips({
           kind={active}
           entrants={entrants}
           courts={courts}
+          courtNames={courtNames}
           onAdd={add}
           onCancel={() => setActive(null)}
         />
@@ -161,12 +173,14 @@ function WishPicker({
   kind,
   entrants,
   courts,
+  courtNames,
   onAdd,
   onCancel,
 }: {
   kind: Kind;
   entrants: Entrant[];
   courts: string[];
+  courtNames: Record<string, string>;
   onAdd: (w: Wish) => void;
   onCancel: () => void;
 }) {
@@ -252,7 +266,7 @@ function WishPicker({
           <select className="input" value={court} onChange={(e) => setCourt(e.target.value)}>
             {courts.map((c) => (
               <option key={c} value={c}>
-                {c}
+                {courtNames[c] ?? msg("courtPicker.unknownCourt")}
               </option>
             ))}
           </select>

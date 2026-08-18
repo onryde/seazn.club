@@ -410,6 +410,10 @@ export default async function DivisionSchedulePage({
           }}
           canEdit={canEdit && !frozen && constraints}
           orgTz={orgTz}
+          // P9 review wave 3, finding #12: same `boardVenues` the board and
+          // settings tabs already get above — resolves the blackout scope
+          // picker's court ids to names instead of the uuids it showed before.
+          venues={boardVenues}
         />
         )}
 
