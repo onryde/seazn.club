@@ -19,7 +19,8 @@ one PR per wave, visual sign-off gate on each).
 |---|---|---|---|
 | R1 | `R1-chassis.md` + plan `docs/superpowers/plans/2026-08-15-scorepad-v3-r1-chassis.md` | — | **MERGED #577 `86ce08b3`** (2026-08-16) — chassis behind an EMPTY `V3_SKINS`. Gate: unit 7709/7774 (4 pre-existing, in a file this branch never touched), tsc 0, lint 0 errors, legacy pad e2e 32/32 unedited vs a prod build, gallery 12/12 with 0px overflow at 320. Visual sign-off was the ABSENCE of change — owner acked by merging |
 | R2 | `R2-cricket.md` + plan `docs/superpowers/plans/2026-08-16-scorepad-v3-r2-cricket.md` | R1 | **MERGED #599 `5885952f`** (2026-08-17) — visual sign-off given (see the sign-off section below, incl. the caveat that the reviewed captures predate `072656b4`'s three restored capabilities). Pre-merge state, kept for the record: worktree `.claude/worktrees/r2-cricket`, branch `feat/scorepad-v3-r2-cricket`, HEAD `b45f77a0`, rebased onto main `252a073d`. Gate: unit 8155/8227 (the 4 failures are `schedule-build-honours-locks`, REPRODUCED IDENTICALLY on `origin/main 252a073d` in a throwaway worktree with its own `pnpm install` — pre-existing, not this wave), `turbo run typecheck --force` 2/2 tasks 0 errors, `turbo run lint --force` 0 errors / 77 warnings (was 78; no v3 path warns), v3 suites 300/300 across 15 files, cricket e2e + converted specs green, seven-width matrix 9/9, gallery 12/12 sports with 0px overflow at 320. Sign-off sheet published (15 cricket captures, 5 states × 3 widths). **NOT MERGEABLE until the owner rules the three decisions below and the verdicts are recorded here.** |
-| R2b | `R2b-cricket-over-by-over.md` + plan `docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-cricket-over.md` | R2 (MERGED, so unblocked) | **IN FLIGHT** 2026-08-17 — worktree `.claude/worktrees/r2b-cricket-over`, branch `feat/scorepad-v3-r2b-cricket-over` off `5885952f`. Both of the brief's open questions are RULED (see the R2b section below); the first turned out to be answered by the engine rather than by preference. Original row text, still accurate on the premise: cricket needs THREE granularities: innings totals, **over-by-over (runs + wickets)**, ball-by-ball. **Over-by-over ALREADY EXISTS in the engine** and v1 exposed it: it is `cricket.innings.summary` with **`partial: true`** (`cricket.ts:225,230-237`) posted once per over, NOT a separate event type. An earlier draft of this row claimed it never existed, off one negative grep for a `cricket.over` event that never needed to exist — wrong, and corrected. So: **no new event, no schema change, no golden re-baseline, no band decision** (already band 0/free; the ladder stays closed 0–3). The real gap is a PAD one — the v3 skin declares no tile for it, so a scorer must open "More" and scroll a generic form once per over. A pad wave, not an engine wave |
+| R2b | `R2b-cricket-over-by-over.md` + plan `docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-cricket-over.md` | R2 (MERGED, so unblocked) | **MERGED #610 `78191611a`** (tip `896c8e608`, 2026-08-18) — approval-on-merge, see the sign-off section below. Pre-merge state, kept for the record: **IN FLIGHT** 2026-08-17 — worktree `.claude/worktrees/r2b-cricket-over`, branch `feat/scorepad-v3-r2b-cricket-over` off `5885952f`. Both of the brief's open questions are RULED (see the R2b section below); the first turned out to be answered by the engine rather than by preference. Original row text, still accurate on the premise: cricket needs THREE granularities: innings totals, **over-by-over (runs + wickets)**, ball-by-ball. **Over-by-over ALREADY EXISTS in the engine** and v1 exposed it: it is `cricket.innings.summary` with **`partial: true`** (`cricket.ts:225,230-237`) posted once per over, NOT a separate event type. An earlier draft of this row claimed it never existed, off one negative grep for a `cricket.over` event that never needed to exist — wrong, and corrected. So: **no new event, no schema change, no golden re-baseline, no band decision** (already band 0/free; the ladder stays closed 0–3). The real gap is a PAD one — the v3 skin declares no tile for it, so a scorer must open "More" and scroll a generic form once per over. A pad wave, not an engine wave |
+| R2c | `R2c-candidate-narrowing.md` + design `R2c-task1-design.md` | R2b (MERGED, so unblocked) | **IN FLIGHT** 2026-08-18 — worktree `.claude/worktrees/r2c-candidates`, branch `feat/scorepad-v3-r2c-candidate-narrowing` off `main` `7023502a3`. Task 1 (the chassis capability) is DESIGNED and owner-approved before code — see the R2c section below. Closes C1/C2/C3 from `R2b-remaining.md` §C, the three surviving instances of "the pad offers what the engine will refuse" |
 | R3 | `R3-football.md` | R1 | TODO |
 | R4 | `R4-tennis.md` | R1 | TODO |
 | R5 | `R5-racquet-split.md` | R1 | TODO |
@@ -595,3 +596,34 @@ get an individually recorded answer — carry them into R8's closing walkthrough
 merge on an explicit owner instruction in place of per-screen verdicts, and
 when it does, the decision log says so in these terms. It does not make the
 sheet optional, and it does not convert "CI green" into visual sign-off.
+
+### R2c (2026-08-18) — Task 1 design rulings, taken before any code
+
+Full design: `R2c-task1-design.md` (this directory). Three consumers, two
+surfaces, and one owner ruling amended. Line pins in that document are against
+`main` `7023502a3`.
+
+| # | Ruling | Reason |
+|---|---|---|
+| 1 | **The narrowing capability is chassis-only. Nothing is added to `PadSpec`.** | `PadSpec` is DATA ONLY — no functions anywhere in the tree (`sport/module.ts:84-95`), enforced by a conformance property that `JSON.stringify`s `padSpec(cfg)` and demands byte-identity. A predicate on `PadAttributionItem` is not additive; it breaks a shipped invariant. |
+| 2 | **Scope REMOVES, eligibility DISABLES-with-reason.** Two operations, not one. | Wrong-side candidates (11 batters in a bowler picker) are noise nobody expects — remove. In-scope-but-blocked candidates are exactly R2b's binding "visible, blocked, and REASONED — not removed" ruling, applied to a candidate list instead of a tile. Collapsing them forces a bad answer either way: remove-all loses the reason, disable-all renders 22 chips of which 20 are dead at 320px. |
+| 3 | **Defect 4's ruling is AMENDED.** A Retire TILE comes back, opening a `GuidedSheetSpec`. | R2b ruled "drop the dedicated Retire tile, keep the generic More-sheet flow" because the tile hardcoded `reason: "other"` and scoped "off" to the whole batting side, while the generic form at least had a real reason enum. Neither fault survives here: the new flow has the reason enum AND crease-narrowed candidates, and stays ONE entry point because `dedicatedEventTypes` (`pad-host.tsx:141-151`) drops the generic one automatically. The audit compared two flawed flows and kept the less-bad one; this is the option neither was. Owner amended explicitly. |
+| 4 | **Two engine exports, not two more forks.** | Authorised by the R2c brief itself, not a new grant. `eligibleBowlers` (`cricket.ts:1825-1836`) is private and is exactly `order.filter(<the skin's isEligibleOverBowler mirror>)`; R2b declined the export and paid for it with a byte-for-byte review verification. `reviewsRemaining` is new — the quota rule is ALREADY forked twice inside the engine (`applyReview` `:1805-1807`, generator `:3484-3486`), and a pad copy would be the third. |
+
+### R2c — false premise found (verified on `main` `7023502a3`, before any code)
+
+- **Task 4 is NOT a step-ordering problem.** The brief says the reviewing side
+  "is not known until a LATER step of the sheet, so the quota cannot be checked
+  when the first step is built […] If the answer is to reorder the sheet's
+  steps, say so and get it ruled before building." Three counts against it:
+  both sides' quotas are readable from `view` at `sheets(view)` time
+  (`innings.reviews[side].lost` vs `cfg.reviews.perInnings`); the only
+  late-bound fact is `kind`, which is already step 1 while `by` is step 3
+  (`skins/cricket.tsx:1749-1780`); and `StepPredicate` (`when`) is the shipped
+  precedent for an answers-dependent step decision. **No reorder, no ruling
+  owed** — and a reorder would have been WORSE, since it would ask the side
+  even for umpire reviews, which are never capped (`cricket.ts:1806` gates the
+  quota on `kind === "player"`).
+- Corollary worth not re-deriving: only an UNSUCCESSFUL player review spends
+  one (`outcome === "struck_down"`, `cricket.ts:1810`), so the counter the pad
+  must read is `lost`, never `taken`.
