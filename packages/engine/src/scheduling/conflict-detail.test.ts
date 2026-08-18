@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { canonConflictDetail, type ConflictDetail, type ConflictDetailKind } from "./conflict-detail.ts";
 import { conflictKey, type Conflict } from "./calendar.ts";
 
-// The 25-kind table, field-for-field, written out explicitly rather than
+// The 26-kind table, field-for-field, written out explicitly rather than
 // generated so it reads beside the design doc's table and a missing kind is a
 // `Record<ConflictDetailKind, …>` type error rather than a silently skipped
 // row — the same reasoning `RULE_BY_REASON` uses for `ConflictReason`.
@@ -40,6 +40,10 @@ const FULL_DETAIL: Record<ConflictDetailKind, ConflictDetail> = {
   outside_competition_window: { kind: "outside_competition_window" },
   outside_start_window: { kind: "outside_start_window" },
   court_double_booking: { kind: "court_double_booking", court: "C1", otherFixtureId: "f-other" },
+  // P9 pass 2c's 26th kind. `court` is the court's uuid, same convention as
+  // court_double_booking above; there is no `otherFixtureId` because the
+  // clash is with a declared tag requirement, not with another fixture.
+  court_tag_mismatch: { kind: "court_tag_mismatch", court: "C1" },
   inside_blackout: { kind: "inside_blackout" },
   outside_session_windows: { kind: "outside_session_windows" },
   entrant_overlap: { kind: "entrant_overlap", entrantIds: ["e1", "e2"], otherFixtureId: "f-other" },
