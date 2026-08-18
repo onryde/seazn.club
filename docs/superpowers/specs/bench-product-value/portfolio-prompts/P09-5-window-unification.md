@@ -107,3 +107,45 @@ Run per workspace.
   branch produced a `git reset HEAD~1` that swept a sibling's file.
 - `git stash` is forbidden in a worktree here (shared stash stack).
 - Re-pin every `file:line` in this prompt before trusting it.
+
+## Edge matrix — court availability vs schedule settings (OWNER-RAISED)
+
+Raised by the owner during P9: *"a venue's court is only available 15:00–20:00
+but the schedule setting is 09:00–18:00 — what happens?"*
+
+**Today: nothing.** `court_hours`/`court_exceptions` (V367, P8) are read by
+exactly one file — `venues.ts`, the CRUD behind the calendar editor. No
+scheduling path consumes them, so the scheduler places at 09:00 on a court
+that does not open until 15:00. P8 shipped an editor whose data is inert.
+Closing that is the point of this session plus P10.
+
+Every row below is an acceptance criterion. A `usableWindows` that does not
+have a test per row is not done.
+
+| # | Situation | Required behaviour |
+|---|---|---|
+| 1 | Court 15:00–20:00, session 09:00–18:00 | Usable = **15:00–18:00** (intersection), not either side alone |
+| 2 | Court 15:00–20:00, session 09:00–13:00 | Intersection is **empty** → that court is unusable THAT DAY; it must leave the day's candidate set, not silently accept fixtures |
+| 3 | Every court's intersection empty for a day | Typed refusal (the `NO_MATCHING_COURT` family), never a silent zero-slot lattice — P9 already set this precedent for the tag filter |
+| 4 | `court_exceptions` row `closed: true` | Court unusable that DATE only; weekday hours untouched either side |
+| 5 | Exception with different hours | Exception wins **outright** over the weekday rows (D5 normative step 1) — not merged, not intersected |
+| 6 | Multi-range day (09:00–12:00, 14:00–18:00) | Two windows; the 12:00–14:00 gap is NOT usable and no match may straddle it |
+| 7 | Match duration exceeds the tail of a window | 60-min match cannot start 17:30 against an 18:00 close. The lattice must not offer the slot — this is where a "fits the window" test differs from a "starts in the window" one |
+| 8 | Blackout ∩ court hours | Blackout subtracts AFTER the intersection; a court-scoped blackout affects only its court, an unscoped one every court (all three current impls already agree on this) |
+| 9 | DST day (23h or 25h civil) | Civil local times on `settings.orgTz` (#448 — `settings.tz` is DISPLAY only). A 23-hour day simply yields a shorter window; no UTC arithmetic anywhere |
+| 10 | Two venues, different hours, one division allowed both | Windows are PER COURT, never per division — the union must not leak one venue's hours onto another's court |
+| 11 | Schedule spans Mon–Sat | Weekday hours differ per date; a multi-day run resolves per date, not once |
+| 12 | No calendar declared for a court | Full day usable — status quo ante. Calendars strictly SUBTRACT (D5 normative step 4). A court with no hours must not become unschedulable |
+| 13 | Fixture already placed outside the new hours | STRANDED. P8 returns an advisory count only (amendment A6); the real conflict code is **P10's**, through the same entity-aware `/validate` that P9 gave `court_tag_mismatch` |
+| 14 | Court archived mid-event | Already settled by P9: leaves candidates for NEW placement, existing assignments still validate clean |
+
+**Explicit non-goals** (D5 "Non-goals", do not let them creep in): no
+travel/turnaround time between venues, no per-venue timezone (org tz governs —
+if a club ever runs venues in two zones, that is a new design question, not a
+window bug).
+
+**The parity trap this session exists to prevent**: every row above must give
+the SAME answer in the lattice build and in `/validate`. P9's `court_tag_mismatch`
+is the worked example — the placer honoured a constraint the verifier could not
+see, and a hand-dragged fixture sailed through. Windows are the same shape of
+risk, with more edges.
