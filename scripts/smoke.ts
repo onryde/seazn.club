@@ -9250,6 +9250,15 @@ async function placementOptimizedSuite(): Promise<void> {
   const s = newSession();
   const orgId = (await signIn(s, `smoke-placement-opt-${tag}@example.com`)).org_id;
   await setPlan(orgId, "pro", s);
+  const optVenue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `Optimized Venue ${tag}` }),
+  );
+  const optCourtA = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${optVenue.id}/courts`, "POST", { name: "Court A" }),
+  );
+  const optCourtB = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${optVenue.id}/courts`, "POST", { name: "Court B" }),
+  );
 
   const comp = v1data<{ id: string }>(
     await v1(s, "/api/v1/competitions", "POST", {
@@ -9313,7 +9322,7 @@ async function placementOptimizedSuite(): Promise<void> {
       startAt: "2026-09-21T09:00:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["Court A", "Court B"],
+      courts: [optCourtA.id, optCourtB.id],
       perEntrantMinRest: 45,
       blackouts: [],
       sessionWindows: [],
@@ -9321,7 +9330,7 @@ async function placementOptimizedSuite(): Promise<void> {
   });
 
   interface OptRun {
-    assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+    assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
     metrics?: { placed: number; total: number };
     solver?: { engine: string; status: string };
   }
@@ -9344,7 +9353,7 @@ async function placementOptimizedSuite(): Promise<void> {
     (build?.assignments ?? []).length === 9 &&
       build?.metrics?.placed === 9 &&
       build.metrics.total === 9 &&
-      new Set((build.assignments ?? []).map((a) => a.court_label)).size === 2,
+      new Set((build.assignments ?? []).map((a) => a.court_id)).size === 2,
   );
 }
 
@@ -9385,6 +9394,15 @@ async function placementPerCourtBlackoutSuite(): Promise<void> {
   const s = newSession();
   const orgId = (await signIn(s, `smoke-placement-pcg-${tag}@example.com`)).org_id;
   await setPlan(orgId, "pro", s);
+  const perCourtVenue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `PerCourt Venue ${tag}` }),
+  );
+  const perCourtC1 = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${perCourtVenue.id}/courts`, "POST", { name: "C1" }),
+  );
+  const perCourtC2 = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${perCourtVenue.id}/courts`, "POST", { name: "C2" }),
+  );
 
   const comp = v1data<{ id: string }>(
     await v1(s, "/api/v1/competitions", "POST", {
@@ -9445,14 +9463,16 @@ async function placementPerCourtBlackoutSuite(): Promise<void> {
       startAt: new Date(startAtMs).toISOString(),
       matchMinutes: 30,
       gapMinutes: 10,
-      courts: ["C1", "C2"],
+      courts: [perCourtC1.id, perCourtC2.id],
       perEntrantMinRest: 40,
       // C2 alone loses its back half; C1 is untouched -- the two courts'
       // offered start times now genuinely differ, the exact shape that used
-      // to be refused before ever reaching placement.
+      // to be refused before ever reaching placement. blackouts[].court is
+      // matched verbatim against an assignment's own court id (calendar.ts),
+      // not resolved through a name, so this must be the real id too.
       blackouts: [
         {
-          court: "C2",
+          court: perCourtC2.id,
           from: new Date(startAtMs + 90 * 60_000).toISOString(),
           to: new Date(startAtMs + 180 * 60_000).toISOString(),
         },
@@ -9462,7 +9482,7 @@ async function placementPerCourtBlackoutSuite(): Promise<void> {
   });
 
   interface PerCourtRun {
-    assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+    assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
     metrics?: { placed: number; total: number };
     solver?: { engine: string; status: string; not_searched_reason?: string };
   }
@@ -9485,7 +9505,7 @@ async function placementPerCourtBlackoutSuite(): Promise<void> {
     (build?.assignments ?? []).length === 2 &&
       build?.metrics?.placed === 2 &&
       build.metrics.total === 2 &&
-      new Set((build.assignments ?? []).map((a) => a.court_label)).size === 2,
+      new Set((build.assignments ?? []).map((a) => a.court_id)).size === 2,
   );
 }
 
