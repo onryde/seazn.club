@@ -2617,7 +2617,10 @@ describe("buildContext — R2c: the bowler picker's candidates and per-candidate
     const slot = bowlerSlot(view({ state: state({ innings: [overBoundary({ prevOverBowler: "a1" })] }) }));
     // Still offered — visible, blocked and reasoned, never silently dropped.
     expect(slot.candidates).toContain("a1");
-    expect(slot.blocked?.a1).toBe(t("pad.cricket.context.bowler.blocked.prevOver", { name: "Away One" }));
+    // Name-free ON PURPOSE: this renders beside the name, and the
+    // name-bearing wording is what the SLOT message still uses.
+    expect(slot.blocked?.a1).toBe(t("pad.cricket.context.bowler.blocked.prevOver.short"));
+    expect(slot.blocked?.a1, "must not repeat the name it renders next to").not.toContain("Away One");
   });
 
   it("blocks a bowler at quota, carrying the REAL cfg quota — proved against the Hundred's 5-ball over", () => {
@@ -2629,7 +2632,9 @@ describe("buildContext — R2c: the bowler picker's candidates and per-candidate
         state: state({ innings: [overBoundary({ bowlerBalls: { a1: 20 } })] }),
       }),
     );
-    expect(slot.blocked?.a1).toBe(t("pad.cricket.context.bowler.blocked.quota", { name: "Away One", quota: 4 }));
+    expect(slot.blocked?.a1).toBe(t("pad.cricket.context.bowler.blocked.quota.short", { quota: 4 }));
+    expect(slot.blocked?.a1, "the real cfg quota, never a hardcoded number").toContain("4");
+    expect(slot.blocked?.a1).not.toContain("Away One");
   });
 
   it("leaves an eligible bowler unblocked — the map is never exhaustive", () => {
@@ -2754,9 +2759,7 @@ describe("reviewSheet — R2c: a side with no reviews left cannot be picked", ()
 
   it("blocks the exhausted side for a PLAYER review, naming it", () => {
     const blocked = byStep(withReviews(2, 0, 2)).blocked!({ kind: "player" });
-    expect(blocked["home-1"]).toBe(
-      t("pad.cricket.sheet.review.by.blocked.noneLeft", { name: t("scorepad.attribution.home") }),
-    );
+    expect(blocked["home-1"]).toBe(t("pad.cricket.sheet.review.by.blocked.noneLeft.short"));
   });
 
   it("leaves the side that still holds reviews selectable", () => {
@@ -2802,11 +2805,15 @@ describe("cricketSkinV3 — sheets() closes over the factory's own t (R2c)", () 
       cfg: cfg({ reviews: { perInnings: 1 } }),
       state: state({ innings: [innings({ reviews: { home: { taken: 0, lost: 1 }, away: { taken: 0, lost: 0 } } })] }),
     });
-    const step = cricketSkinV3(t).sheets!(v).review!.steps.find((s) => s.id === "by")!;
+    // A MARKER translator, not this file's `t`. The shared fake returns the
+    // bare key when a message takes no interpolation — and this message no
+    // longer takes any (the name-free variant) — so asserting "not the raw
+    // key" could no longer tell a threaded translator from a dropped one.
+    // A marker can: if the factory ever stops passing its own `t` down, the
+    // value loses the prefix and this reds.
+    const marker: TFn = (key, vars) => `MARK:${key}${vars ? JSON.stringify(vars) : ""}`;
+    const step = cricketSkinV3(marker).sheets!(v).review!.steps.find((s) => s.id === "by")!;
     const blocked = (step as { blocked?: (a: Readonly<Record<string, string>>) => Readonly<Record<string, string>> }).blocked!({ kind: "player" });
-    expect(blocked["home-1"]).toBe(
-      t("pad.cricket.sheet.review.by.blocked.noneLeft", { name: t("scorepad.attribution.home") }),
-    );
-    expect(blocked["home-1"]).not.toBe("pad.cricket.sheet.review.by.blocked.noneLeft");
+    expect(blocked["home-1"]).toBe("MARK:pad.cricket.sheet.review.by.blocked.noneLeft.short");
   });
 });

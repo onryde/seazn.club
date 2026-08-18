@@ -962,8 +962,12 @@ test(
     await expect(blockedCandidate, "blocked must mean genuinely unclickable, not merely dimmed").toBeDisabled();
     await expect(
       blockedCandidate,
-      "the reason must be visible text naming the bowler — never a title/tooltip, which is invisible on touch",
+      "the blocked chip still shows WHO it is — the name is its own label",
     ).toContainText(`V3 BB BowlerA ${TAG}`);
+    await expect(
+      blockedCandidate,
+      "and the reason is visible text beside it — never a title/tooltip, invisible on touch",
+    ).toContainText("Bowled the last over");
 
     // SCOPE: no batting-side player is offered at all. Before C1 the picker
     // drew from combinedPool(squads) and listed both squads, so a scorer
@@ -1298,7 +1302,7 @@ test("cricket v3 (R2c/C3): a side with no reviews left cannot be picked, but an 
   await expect(homeOption).toBeVisible({ timeout: 10_000 });
   await expect(homeOption).toHaveAttribute("data-blocked", "true");
   await expect(homeOption).toBeDisabled();
-  await expect(homeOption, "the reason must be visible text, not a tooltip").toContainText("no reviews left");
+  await expect(homeOption, "the reason must be visible text, not a tooltip").toContainText("No reviews left");
   await expect(
     sheet.locator(`[data-choice-option-id="${fx.awayEntrantId}"]`),
     "the side that still holds a review stays selectable",

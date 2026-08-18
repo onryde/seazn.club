@@ -1434,12 +1434,45 @@ function bowlerBlockMessage(
  * eligibility, and the slot is read-only, so there is no picker to narrow —
  * the same short-circuit `resolvePeople` and `bowlerBlockReason` already take.
  */
+/**
+ * The same three grounds as `bowlerBlockMessage`, worded WITHOUT the person's
+ * name — for the picker, where the reason renders directly beside the name it
+ * would otherwise repeat.
+ *
+ * Found by looking at the sign-off capture, not by a test: every test asserted
+ * the string matched, and it did. The rendered chip read "G R2c BowlerA … G
+ * R2c BowlerA bowled the last over and cannot bowl this one too", which is
+ * both silly and, at 320px on a touch surface, expensive in the one dimension
+ * there is least of.
+ *
+ * The name-bearing wording is still correct where it is used — the SLOT
+ * message stands alone and must name who is at fault — so this is a second
+ * variant rather than a replacement, and the two cannot drift apart on the
+ * FACT they state because both are driven by the same `BowlerBlockReason`.
+ */
+function bowlerBlockShortMessage(
+  t: TFn,
+  // Narrower than `BowlerBlockReason` on purpose. Only these two are
+  // reachable per candidate: every id comes FROM `bowlingOrder`, so
+  // "notInLineup" cannot arise, and "noEligible" is a statement about the
+  // WHOLE list rather than about one name. Typing the two real cases is
+  // honest and leaves no unreachable branch to rot (tsc caught the dead one).
+  reason: "prevOver" | "quota",
+  cfg: CricketCfgShape,
+): string {
+  if (reason === "prevOver") return t("pad.cricket.context.bowler.blocked.prevOver.short");
+  const quota = cfg.maxOversPerBowler;
+  if (quota === undefined) {
+    throw new Error("cricket skin: quota block reason with no cfg.maxOversPerBowler");
+  }
+  return t("pad.cricket.context.bowler.blocked.quota.short", { quota });
+}
+
 export function bowlerBlocked(
   t: TFn,
   state: CricketStateShape,
   people: ResolvedPeople,
   cfg: CricketCfgShape,
-  personNames: Readonly<Record<string, string>>,
 ): Blocked {
   const innings = scoringInnings(state, cfg);
   const fine = innings?.fine ?? null;
@@ -1451,8 +1484,8 @@ export function bowlerBlocked(
   const out: Record<string, string> = {};
   for (const id of bowlingOrder) {
     if (eligible.has(id)) continue;
-    const reason: BowlerBlockReason = id === (fine?.prevOverBowler ?? null) ? "prevOver" : "quota";
-    out[id] = bowlerBlockMessage(t, reason, id, personNames, cfg);
+    const reason = id === (fine?.prevOverBowler ?? null) ? ("prevOver" as const) : ("quota" as const);
+    out[id] = bowlerBlockShortMessage(t, reason, cfg);
   }
   return out;
 }
@@ -1609,7 +1642,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         // fielding side's own ineligible bowlers stay visible, each with
         // its reason (bowlerBlocked, above).
         candidates: state.orders?.[people.bowlingSide] ?? [],
-        blocked: inningsClosed ? {} : bowlerBlocked(t, state, people, cfg, view.personNames),
+        blocked: inningsClosed ? {} : bowlerBlocked(t, state, people, cfg),
         // defect 3 (readOnly) / defect 2 (closure) — see this file's header
         // above for both. Closure forces readOnly too: there is no "over
         // boundary" concept once the innings itself is over.
@@ -1879,9 +1912,10 @@ function reviewSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
     const out: Record<string, string> = {};
     for (const [entrantId, side] of Object.entries(sideOfEntrant)) {
       if (reviewsRemaining(innings, cfg.reviews?.perInnings, side) !== 0) continue;
-      out[entrantId] = t("pad.cricket.sheet.review.by.blocked.noneLeft", {
-        name: t(side === "home" ? "scorepad.attribution.home" : "scorepad.attribution.away"),
-      });
+      // Name-free: the option's own label already says which side this is,
+      // so repeating it here just spends width. Same finding as
+      // `bowlerBlockShortMessage` (above) — caught in the capture, not a test.
+      out[entrantId] = t("pad.cricket.sheet.review.by.blocked.noneLeft.short");
     }
     return out;
   };
