@@ -74,27 +74,39 @@ export const STAGE_TEMPLATES: {
   {
     key: "groups_ko",
     label: "Groups + Knockout",
-    help: "Two pools, top of each cross over.",
+    help: "Round robin in pools (2-8), top finishers cross into a knockout.",
     build: ({ qualified: q, poolCount }) => {
       // Cross-pool draw (owner ruling R5): take the top `n` finisher from
       // EVERY pool, plus a `bestNth` remainder for the qualifier count that
       // doesn't divide evenly across pools. topNPerGroup already expands
-      // wave-major (every pool's winner, then every pool's runner-up, …),
-      // which is what makes `snake` placement meaningful. Matches euro24's
-      // take shape and t20-super8's snake placement
-      // (server/templates/catalog/*.json) rather than inventing a third
-      // convention — replaces the old hand-rolled `picks` interleave, which
-      // hardcoded pools "A"/"B" and silently produced zero qualifiers from
-      // any pool beyond the second.
+      // wave-major (every pool's winner, then every pool's runner-up, …).
       //
-      // n === 0 (q < poolCount — reachable: the Settings tab's qualified
-      // input is a free 2-32 integer with no ratio constraint against
-      // poolCount, division-settings.tsx) collapses to a no-op
-      // topNPerGroup(0) — the engine's expandOne loops `wave <= rule.n`, so
-      // n=0 contributes zero pots — so it's omitted here, and the whole
-      // take becomes bestNth(nth:1, count:q): the best q pool-winners by
-      // cross-pool rank, i.e. "topNPerGroup 1" (every pool's winner)
-      // truncated to q.
+      // Placement is `rank_order`, NOT `snake` (owner ruling 11, found by
+      // review before it shipped — F3 programme index). `snake` is chosen
+      // by the TARGET stage's kind, not the source's: t20-super8's `snake`
+      // (server/templates/catalog/*.json) is correct because ITS target is
+      // a group stage, where reversing alternate wave-major pots
+      // distributes strength across pools. This template's target is a
+      // KNOCKOUT, which must not reverse — generateSingleElim's
+      // seedPositions fold (scheduling/bracket.ts:52-63, used at :156-163)
+      // pairs seed i against seed N+1-i, so snake's reversal would put seed
+      // N/2+1 (a pool's OWN runner-up) opposite seed N/2 (that same pool's
+      // winner) in round 1: every pool replaying its own final. Plain
+      // rank_order over the same wave-major pots pairs each pool's winner
+      // against a DIFFERENT pool's runner-up instead — see
+      // format-templates.test.ts's "round 1 never pairs a group against
+      // itself" for the worked example. Replaces the old hand-rolled
+      // `picks` interleave, which hardcoded pools "A"/"B" and silently
+      // produced zero qualifiers from any pool beyond the second.
+      //
+      // n === 0 (q < poolCount) collapses to a no-op topNPerGroup(0) — the
+      // engine's expandOne loops `wave <= rule.n`, so n=0 contributes zero
+      // pots — so it's omitted here, and the whole take becomes
+      // bestNth(nth:1, count:q): the best q pool-winners by cross-pool
+      // rank, i.e. "topNPerGroup 1" (every pool's winner) truncated to q.
+      // Reachable from EITHER the Settings tab's free 2-32 qualified input
+      // (division-settings.tsx) OR the builder's own dropdown (qualified 2,
+      // pools >= 3, division-builder.tsx) — not the Settings tab alone.
       const n = Math.floor(q / poolCount);
       const r = q - n * poolCount;
       const take: TakeRule[] = [];
@@ -113,7 +125,7 @@ export const STAGE_TEMPLATES: {
           config: {},
           progression: {
             sources: [{ stage: "previous", take }],
-            placement: "snake",
+            placement: "rank_order",
             timing: "setup",
           },
         },
