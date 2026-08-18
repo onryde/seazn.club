@@ -769,6 +769,55 @@ export async function activeOrg(page: Page): Promise<OrgInfo> {
   return orgs.find((o) => o.id === activeId) ?? orgs[0]!;
 }
 
+/** Same lookup as {@link activeOrg}, for a helper that only has an
+ *  `APIRequestContext` (no `Page` to read cookies off of) — an
+ *  `APIRequestContext` shares the browser context's cookie jar, readable via
+ *  `storageState()` instead of `page.context().cookies()`. */
+async function activeOrgIdFromRequest(request: APIRequestContext): Promise<string> {
+  const { data: orgs } = await apiJson<OrgInfo[]>(request, "/api/orgs");
+  if (!orgs?.length) throw new Error("no org memberships for the current user");
+  const state = await request.storageState();
+  const activeId = state.cookies.find((c) => c.name === "seazn_org")?.value;
+  return orgs.find((o) => o.id === activeId)?.id ?? orgs[0]!.id;
+}
+
+/**
+ * P9: create a venue with N named courts via the real API and return their
+ * ids. Every e2e org starts with ZERO venues/courts, so anything that seeds
+ * a schedule by `court_id` — `PATCH /fixtures/{id}`, `ScheduleConfig.courts`,
+ * `POST /stages/{id}/schedule/apply` assignments — must create at least one
+ * court first; `court_label` free text is gone from every one of those wire
+ * shapes (a `.strict()` schema 400s a client still sending it).
+ *
+ * `opts.orgId` is optional — omit it to resolve the caller's own active org
+ * the same way {@link activeOrg} does, so a plain `seedVenueWithCourts(request,
+ * ["Court 1", "Court 2"])` right after `loginUi` just works.
+ */
+export async function seedVenueWithCourts(
+  request: APIRequestContext,
+  names: string[] = ["Court 1"],
+  opts: { orgId?: string; venueName?: string } = {},
+): Promise<{ venueId: string; courts: { id: string; name: string }[] }> {
+  const orgId = opts.orgId ?? (await activeOrgIdFromRequest(request));
+  const venueName =
+    opts.venueName ?? `E2E Venue ${TAG}-${Math.random().toString(36).slice(2, 6)}`;
+  const venue = await apiJson<{ id: string }>(request, `/api/v1/orgs/${orgId}/venues`, "POST", {
+    name: venueName,
+  });
+  const venueId = venue.data!.id;
+  const courts: { id: string; name: string }[] = [];
+  for (const name of names) {
+    const court = await apiJson<{ id: string }>(
+      request,
+      `/api/v1/orgs/${orgId}/venues/${venueId}/courts`,
+      "POST",
+      { name },
+    );
+    courts.push({ id: court.data!.id, name });
+  }
+  return { venueId, courts };
+}
+
 /* ------------------------------------------------------------------ *
  * Slug-chain paths for a resource a test only holds the id of.
  *
@@ -1229,12 +1278,13 @@ export async function seedScoredDivision(
   // court — auto-assign only sees timed, undecided fixtures. Scored callers are
   // left untouched (no schedule events) so their assertions are unchanged.
   if (!decide) {
+    const { courts } = await seedVenueWithCourts(request, ["Court 1", "Court 2"]);
     const base = Date.UTC(2026, 8, 15, 9, 0, 0); // 2026-09-15 09:00Z
     for (let i = 0; i < gen.data!.fixtures.length; i++) {
       const at = new Date(base + i * 90 * 60_000).toISOString();
       await apiJson(request, `/api/v1/fixtures/${gen.data!.fixtures[i]!.id}`, "PATCH", {
         scheduled_at: at,
-        court_label: String((i % 2) + 1),
+        court_id: courts[i % 2]!.id,
       });
     }
   }
