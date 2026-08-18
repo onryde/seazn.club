@@ -7157,7 +7157,28 @@ async function scheduleRestFloorSuite(): Promise<void> {
  */
 async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
   const free = newSession();
-  await signIn(free, `dtx_roundorder_${tag}@example.com`);
+  const roundOrderOrgId = (await signIn(free, `dtx_roundorder_${tag}@example.com`)).org_id;
+  const roundOrderVenue = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${roundOrderOrgId}/venues`, "POST", {
+      name: `Round Order Venue ${tag}`,
+    }),
+  );
+  const roundOrderCourt1 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${roundOrderOrgId}/venues/${roundOrderVenue.id}/courts`, "POST", {
+      name: "Court 1",
+    }),
+  );
+  const roundOrderCourt2 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${roundOrderOrgId}/venues/${roundOrderVenue.id}/courts`, "POST", {
+      name: "Court 2",
+    }),
+  );
+  const roundOrderCourt3 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${roundOrderOrgId}/venues/${roundOrderVenue.id}/courts`, "POST", {
+      name: "Court 3",
+    }),
+  );
+  const roundOrderCourts = [roundOrderCourt1, roundOrderCourt2, roundOrderCourt3];
   const comp = v1data<{ id: string }>(
     await v1(free, "/api/v1/competitions", "POST", {
       ends_on: "2030-12-31",
@@ -7201,7 +7222,7 @@ async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
       startAt: at(0),
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 2", "Court 3"],
+      courts: roundOrderCourts.map((c) => c.id),
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -7213,7 +7234,7 @@ async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
     assignments: gen.fixtures.map((f, i) => ({
       fixture_id: f.id,
       scheduled_at: at(i * 60),
-      court_label: "Court 1",
+      court_id: roundOrderCourt1.id,
     })),
     source: "manual",
   });
@@ -7226,7 +7247,7 @@ async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
   const beforeAt = (before.json.data as { scheduled_at: string }).scheduled_at;
   const refused = await v1(free, `/api/v1/fixtures/${laterRoundId}`, "PATCH", {
     scheduled_at: at(-60),
-    court_label: "Court 3",
+    court_id: roundOrderCourt3.id,
   });
   // `/api/v1`'s error envelope (server/api-v1/http.ts) spreads `extra`
   // straight onto `error` — `error: { code, message, ...extra }` — not
@@ -7252,7 +7273,7 @@ async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
   // some incidental clash on Court 3.
   const allowed = await v1(free, `/api/v1/fixtures/${laterRoundId}`, "PATCH", {
     scheduled_at: at(600),
-    court_label: "Court 3",
+    court_id: roundOrderCourt3.id,
   });
   check("round order: the identically-shaped legal move is allowed (200)", allowed.status === 200);
 
@@ -7299,6 +7320,15 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
       name: `DTX Joint Round Order ${tag}`,
     }),
   );
+  const jointVenue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `Joint Round Order Venue ${tag}` }),
+  );
+  const jointCourt1 = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${jointVenue.id}/courts`, "POST", { name: "Court 1" }),
+  );
+  const jointCourt3 = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${jointVenue.id}/courts`, "POST", { name: "Court 3" }),
+  );
 
   const T0 = Date.UTC(2026, 10, 9, 9, 0);
   const at = (minutes: number) => new Date(T0 + minutes * 60_000).toISOString();
@@ -7306,7 +7336,7 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
   async function seedRrDivision(
     name: string,
     entrantNames: string[],
-    court: string,
+    courtId: string,
   ): Promise<{ id: string; fixtureIds: string[] }> {
     const div = v1data<{ id: string }>(
       await v1(s, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
@@ -7339,7 +7369,7 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
         startAt: at(0),
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: [court],
+        courts: [courtId],
         perEntrantMinRest: 0,
         blackouts: [],
         sessionWindows: [],
@@ -7348,8 +7378,8 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
     return { id: div.id, fixtureIds: gen.fixtures.map((f) => f.id) };
   }
 
-  const alpha = await seedRrDivision("Alpha", ["A", "B", "C", "D"], "Court 1");
-  const bravo = await seedRrDivision("Bravo", ["X", "Y", "Z"], "Court 3");
+  const alpha = await seedRrDivision("Alpha", ["A", "B", "C", "D"], jointCourt1.id);
+  const bravo = await seedRrDivision("Bravo", ["X", "Y", "Z"], jointCourt3.id);
   check(
     "joint round order: Alpha generated a 4-entrant round robin (6 fixtures)",
     alpha.fixtureIds.length === 6,
@@ -7367,12 +7397,12 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
   const alphaViolating = alpha.fixtureIds.map((fixture_id, i) => ({
     fixture_id,
     scheduled_at: i === 0 ? at(last * 30) : i === last ? at(0) : at(i * 30),
-    court_label: "Court 1",
+    court_id: jointCourt1.id,
   }));
   const bravoClean = bravo.fixtureIds.map((fixture_id, i) => ({
     fixture_id,
     scheduled_at: at(i * 30),
-    court_label: "Court 3",
+    court_id: jointCourt3.id,
   }));
 
   const seqs1 = await divisionSeqs([alpha.id, bravo.id]);
@@ -7408,7 +7438,7 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
   const alphaClean = alpha.fixtureIds.map((fixture_id, i) => ({
     fixture_id,
     scheduled_at: at(i * 30),
-    court_label: "Court 1",
+    court_id: jointCourt1.id,
   }));
   const seqs2 = await divisionSeqs([alpha.id, bravo.id]);
   const cleanApply = await v1(s, `/api/v1/competitions/${comp.id}/schedule/apply`, "POST", {
@@ -7424,7 +7454,7 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
   try {
     for (const a of alphaViolating) {
       await sql`
-        update fixtures set scheduled_at = ${a.scheduled_at}, court_label = ${a.court_label}
+        update fixtures set scheduled_at = ${a.scheduled_at}, court_id = ${a.court_id}
         where id = ${a.fixture_id}`;
     }
   } finally {
@@ -7477,7 +7507,7 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
         // every other Alpha fixture, including round 3's (still at
         // `at(last*30)` from `alphaClean` above), stays right where it is
         // and is never named here.
-        assignments: [{ fixture_id: alpha.fixtureIds[0]!, scheduled_at: at(24 * 60), court_label: "Court 1" }],
+        assignments: [{ fixture_id: alpha.fixtureIds[0]!, scheduled_at: at(24 * 60), court_id: jointCourt1.id }],
       },
     ],
     source: "ai",
