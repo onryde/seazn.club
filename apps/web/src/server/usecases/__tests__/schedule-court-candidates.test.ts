@@ -230,3 +230,86 @@ describe.skipIf(!HAS_DB)("validateSchedule — does NOT throw NO_MATCHING_COURT 
     expect(result.conflicts).toBeDefined();
   });
 });
+
+// ===========================================================================
+// P9 pass 2c: the verifier's own view of the placer/verifier fork this
+// session's court-tags work introduced. `autoSchedule` only ever proposes a
+// tag-matching court (the suite above); this suite proves a fixture that
+// lands on a WRONG court by any OTHER path — the hand-drag this dispatch
+// names — is no longer invisible to `/validate`.
+// ===========================================================================
+describe.skipIf(!HAS_DB)("validateSchedule — court_tag_mismatch (P9 pass 2c)", () => {
+  it(
+    "a hand-moved fixture on an untagged court reports court_tag_mismatch, keyed on court_id, " +
+      "with a resolved court name in both the wire details and the legacy prose",
+    async () => {
+      const auth = await seedOrg();
+      const venue = await createVenue(auth, { name: "Main", sort: 0 });
+      const untaggedCourt = await createCourt(auth, venue.id, { name: "Hard 1", sort: 0, tags: [] });
+      const { divisionId } = await seedRoundRobin(auth, [untaggedCourt.id]);
+      await patchDivision(auth, divisionId, { required_court_tags: ["clay"] });
+      // The hand-drag: PATCH a fixture directly onto the untagged court,
+      // bypassing autoSchedule (and its tag filter) entirely — never through
+      // the placer, so nothing upstream of validateScheduleIn could have
+      // caught this.
+      const [fixture] = await sql<{ id: string }[]>`
+        select id from fixtures where division_id = ${divisionId} limit 1`;
+      await sql`
+        update fixtures set scheduled_at = '2026-08-01T10:00:00.000Z', court_id = ${untaggedCourt.id}
+        where id = ${fixture!.id}`;
+      const { validateSchedule } = await import("../schedule");
+      const result = await validateSchedule(auth, divisionId);
+      const mismatch = result.conflicts.find((c) => c.details?.kind === "court_tag_mismatch");
+      expect(mismatch).toBeDefined();
+      expect(mismatch!.fixture_id).toBe(fixture!.id);
+      expect(mismatch!.blocking).toBe(true);
+      // Keyed on court_id: the wire `details.court` field carries the id...
+      expect(mismatch!.details?.court).toBe(untaggedCourt.id);
+      // ...and a caller gets the resolved NAME too, both structured and in
+      // the deprecated prose — never a bare uuid in user-facing text.
+      expect(mismatch!.details?.court_name).toBe("Hard 1");
+      expect(mismatch!.detail).toContain("Hard 1");
+      expect(mismatch!.detail).not.toContain(untaggedCourt.id);
+    },
+  );
+
+  it("a fixture on a court whose tags DO satisfy the requirement reports no court_tag_mismatch", async () => {
+    const auth = await seedOrg();
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const clayCourt = await createCourt(auth, venue.id, { name: "Clay 1", sort: 0, tags: ["clay"] });
+    const { divisionId } = await seedRoundRobin(auth, [clayCourt.id]);
+    await patchDivision(auth, divisionId, { required_court_tags: ["clay"] });
+    const [fixture] = await sql<{ id: string }[]>`
+      select id from fixtures where division_id = ${divisionId} limit 1`;
+    await sql`
+      update fixtures set scheduled_at = '2026-08-01T10:00:00.000Z', court_id = ${clayCourt.id}
+      where id = ${fixture!.id}`;
+    const { validateSchedule } = await import("../schedule");
+    const result = await validateSchedule(auth, divisionId);
+    expect(result.conflicts.some((c) => c.details?.kind === "court_tag_mismatch")).toBe(false);
+  });
+
+  it(
+    "a fixture on an ARCHIVED court whose tags satisfy the requirement reports no court_tag_mismatch " +
+      "(ruling 3: archiving must not retroactively invalidate a board — proven end to end through " +
+      "resolveTagQualifiedCourtIds against a real DB, not just the engine-level Set membership check)",
+    async () => {
+      const auth = await seedOrg();
+      const venue = await createVenue(auth, { name: "Main", sort: 0 });
+      const clayCourt = await createCourt(auth, venue.id, { name: "Clay 1", sort: 0, tags: ["clay"] });
+      const { divisionId } = await seedRoundRobin(auth, [clayCourt.id]);
+      await patchDivision(auth, divisionId, { required_court_tags: ["clay"] });
+      const [fixture] = await sql<{ id: string }[]>`
+        select id from fixtures where division_id = ${divisionId} limit 1`;
+      await sql`
+        update fixtures set scheduled_at = '2026-08-01T10:00:00.000Z', court_id = ${clayCourt.id}
+        where id = ${fixture!.id}`;
+      // Archive AFTER the fixture is already sitting on it — same "board
+      // existed before the archive" shape as the suite above.
+      await sql`update courts set archived_at = now() where id = ${clayCourt.id}`;
+      const { validateSchedule } = await import("../schedule");
+      const result = await validateSchedule(auth, divisionId);
+      expect(result.conflicts.some((c) => c.details?.kind === "court_tag_mismatch")).toBe(false);
+    },
+  );
+});
