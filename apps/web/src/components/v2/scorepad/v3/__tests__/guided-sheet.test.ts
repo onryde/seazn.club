@@ -40,7 +40,7 @@ import {
   initialSheetState,
   type GuidedSheetProps,
 } from "../guided-sheet";
-import type { GuidedSheetSpec } from "../types";
+import type { Blocked, GuidedSheetSpec, TapEvent } from "../types";
 
 function member(over: Partial<SquadMember> = {}): SquadMember {
   return {
@@ -1055,5 +1055,135 @@ describe("currentStep / answerStep / backStep — a number step obeys `when` ide
     const outcome = answerStep(numberConditionalSpec, initialSheetState(), "partial");
     if (outcome.done) throw new Error("expected step 1 (runs), not done");
     expect(currentStep(numberConditionalSpec, outcome.state)?.id).toBe("runs");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R2c — SheetChoiceStep.blocked. The counterpart to ContextSlot.blocked, and
+// a METHOD rather than a value because the deciding fact is not known when
+// `sheets(view)` builds the spec: it depends on answers accumulated SO FAR.
+// Same evaluation point and same single-argument signature `when`
+// (StepPredicate) already uses.
+//
+// The motivating case is cricket's review sheet, and it is also the proof
+// that Task 4's brief was wrong to call it a step-ORDERING problem: `kind` is
+// step 1 and `by` is step 3, so by the time `by` renders the answer that
+// decides the quota already exists. No reorder needed.
+// ---------------------------------------------------------------------------
+
+describe("GuidedSheet rendering — R2c SheetChoiceStep.blocked", () => {
+  const squads = { home: { squad: squad([member({ personId: "kannan" })]) }, away: { squad: squad([member({ personId: "bowler1" })]) } };
+  const names = { kannan: "Kannan", bowler1: "Bowler One" };
+
+  // kind -> by, exactly the shape of cricket's review sheet.
+  function reviewLike(blocked?: (a: Readonly<Record<string, string>>) => Readonly<Record<string, string>>): GuidedSheetSpec {
+    return {
+      event: "cricket.review",
+      steps: [
+        {
+          id: "kind",
+          kind: "choice",
+          title: "sheet.review.kind",
+          options: [
+            { id: "player", label: "opt.player" },
+            { id: "umpire", label: "opt.umpire" },
+          ],
+        },
+        {
+          id: "by",
+          kind: "choice",
+          title: "sheet.review.by",
+          options: [
+            { id: "HOME", label: "opt.home" },
+            { id: "AWAY", label: "opt.away" },
+          ],
+          ...(blocked ? { blocked } : {}),
+        },
+      ],
+      buildPayload: (a) => ({ ...a }),
+    };
+  }
+
+  function openBy(spec: GuidedSheetSpec, kind: "player" | "umpire") {
+    const island = renderIsland(GuidedSheet, { spec, views: squads, personNames: names, t, onComplete: () => {} });
+    click(findByText(buttonsOf(island.tree()), kind === "player" ? "opt.player" : "opt.umpire"));
+    return island;
+  }
+
+  const quota = (a: Readonly<Record<string, string>>): Blocked =>
+    a.kind === "player" ? { AWAY: "Australia has no reviews left in this innings." } : {};
+
+  /** By the stable data hook, not by text — a blocked option's text now also
+   *  carries its reason, which is the whole point of the feature. */
+  const optionEl = (island: { tree: () => ReturnType<typeof walk> }, id: string) => {
+    const found = buttonsOf(island.tree()).find((b) => propsOf(b)["data-choice-option-id"] === id);
+    if (!found) throw new Error(`no option button ${id}`);
+    return found;
+  };
+
+  it("absent blocked leaves every option selectable — every pre-R2c choice step is unchanged", () => {
+    const island = openBy(reviewLike(), "player");
+    for (const id of ["HOME", "AWAY"]) {
+      expect(propsOf(optionEl(island, id)).disabled).toBeFalsy();
+    }
+  });
+
+  it("a blocked option is still RENDERED, disabled, and does not advance the sheet", () => {
+    let completed = false;
+    const island = renderIsland(GuidedSheet, {
+      spec: reviewLike(quota),
+      views: squads,
+      personNames: names,
+      t,
+      onComplete: () => {
+        completed = true;
+      },
+    });
+    click(findByText(buttonsOf(island.tree()), "opt.player"));
+    const away = optionEl(island, "AWAY");
+    expect(propsOf(away).disabled).toBe(true);
+    expect(propsOf(away).onClick).toBeUndefined();
+    expect(completed).toBe(false);
+  });
+
+  it("the reason renders as visible text beside the option, never a tooltip", () => {
+    const island = openBy(reviewLike(quota), "player");
+    expect(island.text()).toContain("Australia has no reviews left in this innings.");
+    expect(textOf(optionEl(island, "AWAY"))).toContain("Australia has no reviews left in this innings.");
+    expect(propsOf(optionEl(island, "AWAY")).title).toBeUndefined();
+  });
+
+  it("is RE-EVALUATED against the answers so far — an umpire review is never capped, so nothing blocks", () => {
+    // The whole reason this is a method and not a value: the same step, the
+    // same fold, a different earlier answer, a different verdict.
+    const island = openBy(reviewLike(quota), "umpire");
+    expect(propsOf(optionEl(island, "AWAY")).disabled).toBeFalsy();
+    expect(island.text()).not.toContain("no reviews left");
+  });
+
+  it("an unblocked sibling still answers normally", () => {
+    let completed: TapEvent | null = null;
+    const island = renderIsland(GuidedSheet, {
+      spec: reviewLike(quota),
+      views: squads,
+      personNames: names,
+      t,
+      onComplete: (event) => {
+        completed = event;
+      },
+    });
+    click(findByText(buttonsOf(island.tree()), "opt.player"));
+    click(optionEl(island, "HOME"));
+    expect(completed).toEqual({ type: "cricket.review", payload: { kind: "player", by: "HOME" } });
+  });
+
+  it("carries stable data-* hooks for Playwright", () => {
+    const island = openBy(reviewLike(quota), "player");
+    const home = optionEl(island, "HOME");
+    const away = optionEl(island, "AWAY");
+    expect(propsOf(home)["data-choice-option-id"]).toBe("HOME");
+    expect(propsOf(away)["data-choice-option-id"]).toBe("AWAY");
+    expect(propsOf(away)["data-blocked"]).toBe("true");
+    expect(propsOf(home)["data-blocked"]).toBeUndefined();
   });
 });

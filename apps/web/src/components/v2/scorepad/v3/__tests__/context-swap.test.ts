@@ -729,3 +729,132 @@ describe("SwapSheet — cancel (defect fix)", () => {
     expect(swapped).toBeNull(); // never finalized by a cancel
   });
 });
+
+// ---------------------------------------------------------------------------
+// R2c — candidate narrowing on the context strip. TWO operations, because
+// there are two causes (design: `R2c-task1-design.md` §3.0):
+//
+//   SCOPE       `candidates` — the person is not in question at all (a batter
+//               in a bowler picker). Removed; nobody expects them and eleven
+//               greyed names is noise at 320px.
+//   ELIGIBILITY `blocked`    — in scope but blocked right now. Kept VISIBLE,
+//               disabled, and REASONED, which is R2b's binding "visible,
+//               blocked, and REASONED — not removed" ruling (_INDEX.md,
+//               2026-08-17) applied to a candidate list instead of a tile.
+// ---------------------------------------------------------------------------
+
+describe("ContextStrip — R2c scope narrowing (ContextSlot.candidates)", () => {
+  const bothSquads = squad([
+    member({ personId: "kannan", onField: true }),
+    member({ personId: "arjun", onField: true }),
+    member({ personId: "root", onField: true }),
+  ]);
+  const names = { kannan: "Kannan", arjun: "Arjun", root: "Root" };
+
+  function open(slot: Record<string, unknown>) {
+    const island = renderIsland(ContextStrip, {
+      spec: { slots: [{ id: "bowler", label: "pad.context.bowler", pool: "onfield", required: true, ...slot }] },
+      view: { squad: bothSquads },
+      personNames: names,
+      t,
+      onSelect: () => {},
+    });
+    click(buttonsOf(island.tree())[0]!);
+    return island;
+  }
+
+  it("candidates SUPERSEDES pool entirely — the same contract SheetPersonStep.candidates already ships", () => {
+    const island = open({ candidates: ["arjun"] });
+    const picker = buttonsOf(island.tree()).slice(1);
+    expect(picker.map((b) => textOf(b))).toEqual(["Arjun"]);
+  });
+
+  it("an EMPTY candidates list means nobody is eligible — it must not fall back to the pool", () => {
+    // The `""`-vs-absent trap ContextSlot.message already hit (R2b review
+    // item 3): "no candidates" and "no narrowing" are different states.
+    const island = open({ candidates: [] });
+    expect(buttonsOf(island.tree()).slice(1)).toHaveLength(0);
+    expect(island.text()).toContain("scorepad.attribution.noRoster");
+  });
+
+  it("absent candidates keeps today's pool behaviour exactly — every pre-R2c slot is unchanged", () => {
+    const island = open({});
+    expect(buttonsOf(island.tree()).slice(1).map((b) => textOf(b))).toEqual(["Kannan", "Arjun", "Root"]);
+  });
+});
+
+describe("ContextStrip — R2c eligibility blocking (ContextSlot.blocked)", () => {
+  const bowlingSide = squad([
+    member({ personId: "kannan", onField: true }),
+    member({ personId: "arjun", onField: true }),
+  ]);
+  const names = { kannan: "Kannan", arjun: "Arjun" };
+
+  function open(slot: Record<string, unknown>, onSelect: (s: string, p: string) => void = () => {}) {
+    const island = renderIsland(ContextStrip, {
+      spec: { slots: [{ id: "bowler", label: "pad.context.bowler", pool: "onfield", required: true, ...slot }] },
+      view: { squad: bowlingSide },
+      personNames: names,
+      t,
+      onSelect,
+    });
+    click(buttonsOf(island.tree())[0]!);
+    return island;
+  }
+
+  it("a blocked candidate is still RENDERED — removed is the wrong answer, per R2b's ruling", () => {
+    const island = open({ blocked: { kannan: "Kannan bowled the last over." } });
+    const ids = buttonsOf(island.tree())
+      .slice(1)
+      .map((b) => propsOf(b)["data-candidate-id"]);
+    expect(ids).toEqual(["kannan", "arjun"]);
+  });
+
+  it("a blocked candidate is a real native disabled button and does NOT fire onSelect", () => {
+    let picked: string | null = null;
+    const island = open({ blocked: { kannan: "Kannan bowled the last over." } }, (_s, p) => {
+      picked = p;
+    });
+    const kannan = buttonsOf(island.tree()).find((b) => propsOf(b)["data-candidate-id"] === "kannan")!;
+    expect(propsOf(kannan).disabled).toBe(true);
+    // No handler at all, not merely a dimmed control: there is nothing for a
+    // tap to invoke, so onSelect cannot fire however the button is reached.
+    expect(propsOf(kannan).onClick).toBeUndefined();
+    expect(picked).toBeNull();
+  });
+
+  it("the reason renders as VISIBLE TEXT, never a title/tooltip — this is a touch-first surface", () => {
+    const island = open({ blocked: { kannan: "Kannan bowled the last over." } });
+    expect(island.text()).toContain("Kannan bowled the last over.");
+    const kannan = buttonsOf(island.tree()).find((b) => propsOf(b)["data-candidate-id"] === "kannan")!;
+    expect(propsOf(kannan).title).toBeUndefined();
+  });
+
+  it("carries stable data-* hooks a Playwright spec can assert on without reading styling", () => {
+    const island = open({ blocked: { kannan: "Kannan bowled the last over." } });
+    const picker = buttonsOf(island.tree()).slice(1);
+    const kannan = picker.find((b) => textOf(b).includes("Kannan"))!;
+    const arjun = picker.find((b) => textOf(b).includes("Arjun"))!;
+    expect(textOf(kannan)).toContain("Kannan bowled the last over.");
+    expect(propsOf(kannan)["data-candidate-id"]).toBe("kannan");
+    expect(propsOf(arjun)["data-candidate-id"]).toBe("arjun");
+    expect(propsOf(kannan)["data-blocked"]).toBe("true");
+    expect(propsOf(arjun)["data-blocked"]).toBeUndefined();
+  });
+
+  it("an unblocked candidate still selects normally while a sibling is blocked", () => {
+    let picked: string | null = null;
+    const island = open({ blocked: { kannan: "nope" } }, (_s, p) => {
+      picked = p;
+    });
+    click(buttonsOf(island.tree()).find((b) => propsOf(b)["data-candidate-id"] === "arjun")!);
+    expect(picked).toBe("arjun");
+  });
+
+  it("a blocked key naming someone out of SCOPE is ignored, not an error — the two operations compose", () => {
+    const island = open({ candidates: ["arjun"], blocked: { kannan: "not even offered" } });
+    const picker = buttonsOf(island.tree()).slice(1);
+    expect(picker.map((b) => propsOf(b)["data-candidate-id"])).toEqual(["arjun"]);
+    expect(island.text()).not.toContain("not even offered");
+  });
+});

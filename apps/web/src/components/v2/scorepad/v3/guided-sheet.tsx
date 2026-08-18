@@ -69,7 +69,7 @@
 // `destructive` in the TileGrid sense, so violet/red have no place here.
 import { useState } from "react";
 import { renderCandidateRow, resolvePool, type PoolView, type TFn } from "./context-strip";
-import type { GuidedSheetSpec, GuidedSheetStep, SheetNumberStep, SheetPersonStep, TapEvent } from "./types";
+import type { Blocked, GuidedSheetSpec, GuidedSheetStep, SheetNumberStep, SheetPersonStep, TapEvent } from "./types";
 
 export interface GuidedSheetState {
   readonly stepIndex: number;
@@ -303,22 +303,37 @@ function renderChoiceRow(
   hintKey: string | undefined,
   t: TFn,
   onPick: (id: string) => void,
+  blocked?: Blocked,
 ) {
   return (
     <div className="flex flex-col gap-2">
       {hintKey && <p className="text-sm text-slate-600">{t(hintKey)}</p>}
       <div className="flex flex-wrap gap-2">
-        {options.map((opt) => (
-          <button
-            key={opt.id}
-            type="button"
-            onClick={() => onPick(opt.id)}
-            style={{ minHeight: 44 }}
-            className={choiceButtonClass}
-          >
-            {t(opt.label)}
-          </button>
-        ))}
+        {options.map((opt) => {
+          // R2c: same treatment renderCandidateRow gives a blocked person —
+          // visible, natively disabled, reason as real text, stable data-*.
+          // See types.ts's `Blocked` for why blocking beats removing here.
+          const reason = blocked?.[opt.id];
+          return (
+            <button
+              key={opt.id}
+              type="button"
+              data-choice-option-id={opt.id}
+              {...(reason ? { "data-blocked": "true" } : {})}
+              disabled={reason !== undefined}
+              onClick={reason !== undefined ? undefined : () => onPick(opt.id)}
+              style={{ minHeight: 44 }}
+              className={
+                reason !== undefined ? `${choiceButtonClass} cursor-not-allowed opacity-60` : choiceButtonClass
+              }
+            >
+              <span className="break-words">{t(opt.label)}</span>
+              {reason !== undefined && (
+                <span className="ml-2 break-words text-xs font-normal text-red-600">{reason}</span>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -533,7 +548,7 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
       </div>
       <div className="px-4 py-3">
         {step.kind === "choice"
-          ? renderChoiceRow(step.options, step.hintKey, t, handleAnswer)
+          ? renderChoiceRow(step.options, step.hintKey, t, handleAnswer, step.blocked?.(state.answers))
           : step.kind === "number"
             ? renderNumberStep(step, numberEditValue, t, setNumberEditValue, () => handleAnswer(String(numberEditValue)))
             : renderCandidateRow(candidatesForStep(step, views[step.side]), personNames, t, handleAnswer, emptyText)}
