@@ -11,6 +11,7 @@ import {
   getAiScheduleApply,
   getFixtureScheduleSources,
   divisionPath,
+  seedVenueWithCourts,
 } from "./helpers";
 import {
   startAiFixtureServer,
@@ -90,7 +91,17 @@ async function activateFreshProPlusOrgWithSlug(
 async function seedAiDivision(
   request: APIRequestContext,
   opts: { officials?: boolean; settings?: boolean } = {},
-): Promise<{ competitionId: string; divisionId: string; stageId: string; fixtureIds: string[] }> {
+): Promise<{
+  competitionId: string;
+  divisionId: string;
+  stageId: string;
+  fixtureIds: string[];
+  /** The 2 real courts backing `config.courts` — [] when `settings: false`.
+   *  Reuse these (never a fresh `seedVenueWithCourts` call) in a test that
+   *  PUTs its own follow-up schedule-settings for the SAME division, or the
+   *  new venue's courts fall outside the division's configured list. */
+  courts: { id: string; name: string }[];
+}> {
   const { officials = false, settings = true } = opts;
   const rand = Math.random().toString(36).slice(2, 6);
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
@@ -129,14 +140,16 @@ async function seedAiDivision(
   );
   const fixtureIds = (gen.data?.fixtures ?? []).map((f) => f.id);
 
+  let courts: { id: string; name: string }[] = [];
   if (settings) {
+    courts = (await seedVenueWithCourts(request, ["Court A", "Court B"])).courts;
     await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
       tz: "UTC",
       config: {
         startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
         matchMinutes: 45,
         gapMinutes: 5,
-        courts: ["Court A", "Court B"],
+        courts: courts.map((c) => c.id),
         sessionWindows: [
           {
             from: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
@@ -154,7 +167,7 @@ async function seedAiDivision(
       });
     }
   }
-  return { competitionId, divisionId, stageId, fixtureIds };
+  return { competitionId, divisionId, stageId, fixtureIds, courts };
 }
 
 /** Open the docked console from the board's launch button. */
@@ -394,13 +407,14 @@ async function seedRungTwoDivision(
     kind: "league",
     name: "League",
   });
+  const { courts } = await seedVenueWithCourts(request, ["Court A", "Court B"]);
   await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
     tz: "UTC",
     config: {
       startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
       matchMinutes: 20,
       gapMinutes: 0,
-      courts: ["Court A", "Court B"],
+      courts: courts.map((c) => c.id),
       sessionWindows: [
         {
           from: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
@@ -637,19 +651,19 @@ test("a move re-prices the open console before the server has even answered", as
   request,
 }) => {
   await activateFreshProPlusOrg(page, request);
-  const { divisionId, stageId } = await seedAiDivision(request);
+  const { divisionId, stageId, courts } = await seedAiDivision(request);
 
   // Give every fixture a slot, then black out a MID-DAY window. The repair
   // scope is `from` = the earliest disrupted fixture, so the fixtures before it
   // are out of scope — which is what makes moving one INTO the scope observable.
   const auto = await apiJson<{
-    assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+    assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
   }>(request, `/api/v1/stages/${stageId}/schedule/auto`, "POST", {});
   await apiJson(request, `/api/v1/stages/${stageId}/schedule/apply`, "POST", {
     assignments: auto.data!.assignments.map((a) => ({
       fixture_id: a.fixture_id,
       scheduled_at: a.scheduled_at,
-      court_label: a.court_label,
+      court_id: a.court_id,
     })),
     source: "auto",
   });
@@ -659,7 +673,7 @@ test("a move re-prices the open console before the server has even answered", as
       startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
       matchMinutes: 45,
       gapMinutes: 5,
-      courts: ["Court A", "Court B"],
+      courts: courts.map((c) => c.id),
       sessionWindows: [
         {
           from: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
@@ -759,6 +773,9 @@ async function seedJointCompetition(
   });
   const competitionId = comp.data!.id;
   const divisionIds: string[] = [];
+  // ONE venue, shared by both divisions — a joint pack's whole point is
+  // divisions competing for the SAME court set, not two disjoint ones.
+  const { courts } = await seedVenueWithCourts(request, ["Court A", "Court B", "Court C"]);
   for (const [name, entrantCount] of [
     ["Joint Big", 12],
     ["Joint Small", 4],
@@ -797,7 +814,7 @@ async function seedJointCompetition(
         startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
         matchMinutes: 20,
         gapMinutes: 0,
-        courts: ["Court A", "Court B", "Court C"],
+        courts: courts.map((c) => c.id),
         sessionWindows: [
           {
             from: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
@@ -1298,17 +1315,17 @@ test("blackout injected over a scheduled fixture surfaces the repair nudge", asy
   page,
   request,
 }) => {
-  const { divisionId, stageId } = await seedAiDivision(request);
+  const { divisionId, stageId, courts } = await seedAiDivision(request);
 
   // Give the fixtures real slots inside the window …
   const auto = await apiJson<{
-    assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+    assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
   }>(request, `/api/v1/stages/${stageId}/schedule/auto`, "POST", {});
   await apiJson(request, `/api/v1/stages/${stageId}/schedule/apply`, "POST", {
     assignments: auto.data!.assignments.map((a) => ({
       fixture_id: a.fixture_id,
       scheduled_at: a.scheduled_at,
-      court_label: a.court_label,
+      court_id: a.court_id,
     })),
     source: "auto",
   });
@@ -1320,7 +1337,7 @@ test("blackout injected over a scheduled fixture surfaces the repair nudge", asy
       startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
       matchMinutes: 45,
       gapMinutes: 5,
-      courts: ["Court A", "Court B"],
+      courts: courts.map((c) => c.id),
       sessionWindows: [
         {
           from: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
