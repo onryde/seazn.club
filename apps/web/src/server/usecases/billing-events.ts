@@ -58,6 +58,7 @@ import {
 } from "@/lib/email";
 import type { StaffDisputeAlertArgs } from "@/lib/email-templates";
 import {
+  handleRegistrationCheckoutAsyncPaymentFailed,
   handleRegistrationCheckoutCompleted,
   handleRegistrationDispute,
   syncRegistrationRefund,
@@ -76,6 +77,11 @@ import { EVENTS } from "@/lib/analytics-events";
  *  console asks Stripe for. Anything else is silently ACKed. */
 export const HANDLED_EVENT_TYPES = [
   "checkout.session.completed",
+  // Delayed-notification payment methods (registrations, W3b): the completed
+  // event can arrive while the session is still unpaid, so these two carry
+  // the actual outcome. Stripe skill, "Webhooks and fulfillment".
+  "checkout.session.async_payment_succeeded",
+  "checkout.session.async_payment_failed",
   "customer.subscription.created",
   "customer.subscription.updated",
   "customer.subscription.deleted",
@@ -112,7 +118,13 @@ async function ownerDistinctId(orgId: string): Promise<string> {
 
 async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   // Entry-fee checkouts (PROMPT-20a) share the endpoint; kind disambiguates.
-  if (session.metadata?.kind === "registration") {
+  // Re-keyed to the GROUP (RS003 W3a mint / W3b webhook): a session now
+  // carries registration_ids, plural — kind: "registration" (singular) has
+  // no producer left. Deliberately NOT re-gated on payment_status here too —
+  // handleRegistrationCheckoutCompleted is the one place that checks it,
+  // shared with the async_payment_succeeded branch below and both
+  // reconcile-on-return paths, so there is exactly one gate that can drift.
+  if (session.metadata?.kind === "registration_group") {
     await handleRegistrationCheckoutCompleted(session);
     return;
   }
@@ -2020,6 +2032,28 @@ export async function processStripeEvent(event: Stripe.Event): Promise<void> {
     case "checkout.session.completed":
       await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
       break;
+    case "checkout.session.async_payment_succeeded": {
+      // Delayed-notification success (registrations only, so far — the only
+      // kind minted here that can carry one of these methods): same
+      // fulfilment path as a same-request paid completion.
+      // handleRegistrationCheckoutCompleted's own payment_status gate makes
+      // this safe unconditionally even though this event's session is always
+      // "paid" by the time Stripe sends it.
+      const session = event.data.object as Stripe.Checkout.Session;
+      if (session.metadata?.kind === "registration_group") {
+        await handleRegistrationCheckoutCompleted(session);
+      }
+      break;
+    }
+    case "checkout.session.async_payment_failed": {
+      // The delayed-notification counterpart failed — never confirm; record
+      // it and leave every named entry payable.
+      const session = event.data.object as Stripe.Checkout.Session;
+      if (session.metadata?.kind === "registration_group") {
+        await handleRegistrationCheckoutAsyncPaymentFailed(session);
+      }
+      break;
+    }
     case "customer.subscription.created":
     case "customer.subscription.updated": {
       const stripeSub = event.data.object as Stripe.Subscription;

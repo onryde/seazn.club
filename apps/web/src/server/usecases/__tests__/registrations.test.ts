@@ -67,9 +67,7 @@ vi.mock("@/lib/credits", async (importOriginal) => {
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
-import type { AuthCtx } from "@/server/api-v1/auth";
-import { createCompetition } from "../competitions";
-import { createDivision } from "../divisions";
+import { HANDLED_EVENT_TYPES, processStripeEvent } from "../billing-events";
 import {
   ageAt,
   applicationFeeCents,
@@ -82,8 +80,14 @@ import {
   publicRegistrationStatusByRef,
   withdrawRegistrationByRef,
   handleRegistrationCheckoutCompleted,
+  // handleRegistrationCheckoutAsyncPaymentFailed is deliberately NOT imported:
+  // its test drives `processStripeEvent` with a real
+  // `checkout.session.async_payment_failed` event instead of calling the
+  // handler directly, which also proves the dispatch wiring and the
+  // HANDLED_EVENT_TYPES entry — a direct call would prove neither.
   handleRegistrationDispute,
   syncRegistrationRefund,
+  reconcileRegistration,
   reconcileRegistrationBySession,
   sweepRegistrations,
   withdrawRegistrationPublic,
@@ -97,10 +101,7 @@ import {
   exportRegistrationsCsv,
   registrationIcs,
   resumeRegistrationCheckout,
-  hashRegistrationToken,
-  REGISTRATION_TOKEN_PREFIX,
-  type RegistrationRow,
-  type RegistrationWithGroupRow,
+  mintGroupCheckout,
 } from "../registrations";
 // The legacy `eligibilityIssues` string[] wrapper these pure tests used to
 // call was deleted at its source (RS002 W5 whole-branch review — zero
@@ -110,10 +111,24 @@ import {
 // string[] shortcut — exactly what the deleted wrapper did internally.
 import { divisionEligibilityIssues } from "../registration-eligibility";
 import { isValidRefCode, generateRefCode } from "@/lib/ref-code";
+import { REGISTRATION_CURRENCIES, type Currency } from "@/lib/currency";
 import { LEGAL_VERSION } from "@/lib/legal";
 import { resolveNameDisplay } from "@/lib/name-display";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import {
+  makeUser,
+  seedOrg,
+  asOwner,
+  rig,
+  loadWithGroup,
+  seedSecondEntry,
+  seedRegistration,
+  fakeSession,
+  SETTINGS_BASE,
+  stripeRig,
+  currencyRig,
+} from "./_registration-fixtures";
 import { FIRST_PAID_EARN, LIFETIME_EARN_CAP, REFERRAL_EARN, balance, walletIdFor } from "@/lib/credits";
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -216,212 +231,6 @@ describe("validateAnswers (pure)", () => {
 // ---------------------------------------------------------------------------
 // DB-backed flows
 // ---------------------------------------------------------------------------
-
-async function makeUser(name: string): Promise<string> {
-  const [{ id }] = await sql<{ id: string }[]>`
-    insert into users (email, display_name, email_verified)
-    values (${`${name}-${randomUUID().slice(0, 8)}@test.local`}, ${name}, true)
-    returning id`;
-  return id;
-}
-
-async function seedOrg(plan: "community" | "pro" = "pro"): Promise<{
-  orgId: string;
-  orgSlug: string;
-  ownerId: string;
-}> {
-  const suffix = randomUUID().slice(0, 8);
-  const ownerId = await makeUser("owner");
-  const orgSlug = "reg-org-" + suffix;
-  const [{ id: orgId }] = await sql<{ id: string }[]>`
-    insert into organizations (name, slug, created_by)
-    values (${"Reg Org " + suffix}, ${orgSlug}, ${ownerId}) returning id`;
-  await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${ownerId}, 'owner')`;
-  if (plan !== "community") {
-    await setOrgPlan(orgId, plan);
-  }
-  await sql`
-    insert into sports (key, name, module_version, position_catalog)
-    values ('generic', 'Generic', '1.0.0', ${sql.json({ groups: [], lineup: { size: 1, benchMax: 0 } })})
-    on conflict (key) do nothing`;
-  await sql`
-    insert into sport_variants (sport_key, key, name, config, is_system)
-    values ('generic', 'score', 'Score',
-            ${sql.json({ resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false })},
-            true)
-    on conflict do nothing`;
-  return { orgId, orgSlug, ownerId };
-}
-
-const asOwner = (orgId: string, userId: string): AuthCtx => ({
-  orgId,
-  via: "session",
-  userId,
-  role: "owner",
-  keyId: null,
-});
-
-async function rig(
-  owner: AuthCtx,
-  opts: { eligibility?: Record<string, unknown>[]; startsOn?: string } = {},
-) {
-  const competition = await createCompetition(owner, {
-    name: "Reg Cup " + randomUUID().slice(0, 6),
-    visibility: "public",
-    branding: {},
-    starts_on: opts.startsOn ?? "2026-09-15",
-    ends_on: "2026-09-20",
-  });
-  const division = await createDivision(owner, competition.id, {
-    name: "Open",
-    sport_key: "generic",
-    variant_key: "score",
-    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    eligibility: opts.eligibility ?? [],
-  });
-  return { competition, division };
-}
-
-/** r.* ∪ g.* — same join `regGroupCols` builds internally (not exported).
- *  Kept in exact column-list sync with it by the schema tests in
- *  registration-schema.test.ts, which pin every column on both tables.
- *  `g.refunded_cents` is aliased to `group_refunded_cents` (V368) so it never
- *  collides with `r.refunded_cents` — see the block comment above
- *  `RegistrationWithGroupRow` in registrations.ts. */
-async function loadWithGroup(regId: string): Promise<RegistrationWithGroupRow> {
-  const [row] = await sql<RegistrationWithGroupRow[]>`
-    select r.id, r.division_id, r.org_id, r.status, r.display_name, r.answers,
-           r.amount_cents, r.refunded_cents, r.entrant_id, r.promoted_at, r.withdrawn_at,
-           r.group_id, r.join_code, r.free_agent, r.created_at, r.updated_at,
-           g.contact_name, g.contact_email, g.user_id, g.locale, g.ref_code,
-           g.access_token_hash, g.currency, g.payment_method, g.checkout_session_id,
-           g.payment_intent_id, g.expires_at, g.reminded_at,
-           g.refunded_cents as group_refunded_cents,
-           g.refunded_at, g.disputed_at, g.dispute_id, g.offline_marked_paid_at,
-           g.offline_marked_paid_by, g.fee_percent, g.privacy_consent_at,
-           g.privacy_consent_version
-    from registrations r join registration_groups g on g.id = r.group_id
-    where r.id = ${regId}`;
-  return row;
-}
-
-/** Attaches a SECOND entry to an existing cart (group) — reproduces what a
- *  multi-entry cart will look like once RS002/RS003 ship group submit
- *  (design §3). No such flow exists yet, so this seeds directly, the same
- *  way seedRegistration reproduces submitRegistration's single-entry write. */
-async function seedSecondEntry(
-  groupId: string,
-  divisionId: string,
-  amountCents: number,
-  displayName: string,
-): Promise<RegistrationWithGroupRow> {
-  const [reg] = await sql<{ id: string }[]>`
-    insert into registrations (group_id, division_id, display_name, status, amount_cents)
-    values (${groupId}, ${divisionId}, ${displayName}, 'pending', ${amountCents})
-    returning id`;
-  return loadWithGroup(reg.id);
-}
-
-/**
- * `submitRegistration` is deleted (RS001 registration demolition) — the
- * public submit route stays closed until RS002/RS003 ship the new
- * group-shaped cart flow (design §4). Every usecase exercised BELOW submit
- * (confirm, refund, waitlist, dispute, sweep, export, .ics…) is untouched and
- * still needs its regression coverage, so this seeds an equivalent
- * single-entry cart DIRECTLY — registration_groups → registrations →
- * registration_players, the V363/V364 shape — reproducing exactly what
- * `submitRegistration` used to write for one entry. It does NOT reproduce
- * submitRegistration's OWN decision logic (eligibility gate, form-answer
- * validation, privacy-consent gate, window/capacity checks, ref minting) —
- * those are gone with it; RS002/RS003 own re-testing them against the new
- * flow. `checkout_url` is always null here — a test that needs a live Stripe
- * session calls the surviving `resumeRegistrationCheckout` explicitly.
- */
-async function seedRegistration(
-  competitionId: string,
-  divisionId: string,
-  settings: { fee_cents: number; currency: string; payment_method: "offline" | "stripe" },
-  over: {
-    displayName?: string;
-    contactEmail?: string;
-    status?: RegistrationRow["status"];
-    amountCents?: number;
-    answers?: Record<string, unknown>;
-    players?: {
-      name: string;
-      dob?: string | null;
-      gender?: string | null;
-      squadNumber?: number | null;
-    }[];
-    locale?: string | null;
-    refCode?: string | null;
-  } = {},
-): Promise<{ registration: RegistrationWithGroupRow; access_token: string; checkout_url: null }> {
-  const rawToken = REGISTRATION_TOKEN_PREFIX + randomUUID().replace(/-/g, "");
-  const status = over.status ?? "pending";
-  // Waitlisted rows hold amount 0 and no pay window — same invariant
-  // `promoteOldestWaitlisted` relies on (registrations.ts:624).
-  const waitlisted = status === "waitlisted";
-  const amountCents = waitlisted ? 0 : (over.amountCents ?? settings.fee_cents);
-  const method = waitlisted ? null : settings.payment_method;
-  const stripeWindow = !waitlisted && method === "stripe" && amountCents > 0 && status === "pending";
-  const displayName = over.displayName ?? "Alex Test";
-
-  const [group] = await sql<{ id: string }[]>`
-    insert into registration_groups
-      (competition_id, contact_name, contact_email, access_token_hash,
-       amount_cents, currency, payment_method, expires_at, locale, ref_code,
-       privacy_consent_at, privacy_consent_version)
-    values (
-      ${competitionId}, ${displayName}, ${over.contactEmail ?? "alex@test.local"},
-      ${hashRegistrationToken(rawToken)},
-      ${amountCents}, ${settings.currency}, ${method},
-      ${stripeWindow ? sql`now() + interval '48 hours'` : null},
-      ${over.locale ?? null}, ${over.refCode ?? null},
-      now(), ${LEGAL_VERSION}
-    )
-    returning id`;
-
-  const [reg] = await sql<{ id: string }[]>`
-    insert into registrations (group_id, division_id, display_name, status, amount_cents, answers)
-    values (
-      ${group.id}, ${divisionId}, ${displayName}, ${status}, ${amountCents},
-      ${sql.json((over.answers ?? {}) as never)}
-    )
-    returning id`;
-
-  for (const p of over.players ?? []) {
-    await sql`
-      insert into registration_players (registration_id, full_name, dob, gender, squad_number, source)
-      values (
-        ${reg.id}, ${p.name}, ${p.dob ?? null}, ${p.gender ?? null},
-        ${p.squadNumber ?? null}, 'captain_entered'
-      )`;
-  }
-
-  const row = await loadWithGroup(reg.id);
-  return { registration: row, access_token: rawToken, checkout_url: null };
-}
-
-function fakeSession(
-  regId: string,
-  amount: number,
-  feePercent?: number,
-): Stripe.Checkout.Session {
-  return {
-    id: "cs_test_" + regId.slice(0, 8),
-    payment_intent: "pi_test_" + regId.slice(0, 8),
-    payment_status: "paid",
-    amount_total: amount,
-    // The session carries the rate it was billed at, exactly as
-    // createRegistrationCheckout stamps it (V312).
-    metadata: {
-      kind: "registration",
-      registration_id: regId,
-      ...(feePercent === undefined ? {} : { fee_percent: String(feePercent) }),
-    },
-  } as unknown as Stripe.Checkout.Session;
-}
 
 beforeEach(() => {
   stripeMock.checkoutCreate.mockReset().mockImplementation(async () => ({
@@ -1186,17 +995,6 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
 // Payment method settings (spec 2026-07-12 §3)
 // ---------------------------------------------------------------------------
 
-const SETTINGS_BASE = {
-  enabled: true,
-  entrant_kind: "individual" as const,
-  opens_at: null,
-  closes_at: null,
-  capacity: null,
-  currency: "gbp",
-  refund_lock_at: null,
-  form_fields: [],
-};
-
 describe.skipIf(!HAS_DB)("payment method settings (spec §3)", () => {
   it("stripe method requires charges_enabled and a viable minimum fee", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
@@ -1348,22 +1146,6 @@ describe.skipIf(!HAS_DB)("organiser payment actions (spec T7)", () => {
 // ---------------------------------------------------------------------------
 // Card submit path (spec §3): checkout at submit + 48h pay window
 // ---------------------------------------------------------------------------
-
-async function stripeRig(opts: { capacity?: number | null; feeCents?: number } = {}) {
-  const { orgId, orgSlug, ownerId } = await seedOrg("pro");
-  const owner = asOwner(orgId, ownerId);
-  await sql`update organizations
-            set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
-            where id = ${orgId}`;
-  const { competition, division } = await rig(owner);
-  const settings = await putRegistrationSettings(owner, division.id, {
-    ...SETTINGS_BASE,
-    payment_method: "stripe",
-    fee_cents: opts.feeCents ?? 500,
-    capacity: opts.capacity ?? null,
-  });
-  return { orgId, orgSlug, ownerId, owner, competition, division, settings };
-}
 
 describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
   it("snapshots the method, opens a 48h window, returns a checkout URL", async () => {
@@ -1546,6 +1328,57 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(div.payment_method).toBe("stripe");
   });
 
+  // RS003 W3a owner ruling 4: the group's currency snapshot must be
+  // validated BEFORE any Stripe call — both that it is still an allowlisted
+  // registration currency, AND that it still matches the org's CURRENT
+  // currency (the same-currency lock pins that to the connected account's
+  // settlement currency; a stale snapshot must never surface as a Stripe
+  // error on a registrant's pay page). Both branches seed the mismatch
+  // directly via `seedRegistration`'s raw `currency` param — bypassing
+  // `putRegistrationSettings`, which always sources currency live from the
+  // org and so could never reproduce a STALE snapshot.
+  it("422s with a stable code when the group's currency has gone stale (not an allowlisted currency), and never calls Stripe", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    // "jpy" is not in REGISTRATION_CURRENCIES (usd/eur/gbp/inr/aud) — a
+    // snapshot minted before a delisting, or simply corrupt data.
+    const res = await seedRegistration(competition.id, division.id, {
+      fee_cents: 500,
+      currency: "jpy",
+      payment_method: "stripe",
+    });
+    await expect(
+      resumeRegistrationCheckout(res.registration.id, res.access_token, "http://test.local"),
+    ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_CURRENCY_UNAVAILABLE" });
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("422s with the same stable code when the group's snapshot no longer matches the org's CURRENT currency, and never calls Stripe", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    // organizations.currency defaults to 'gbp' (V365) and is left untouched
+    // here — the group below snapshots 'usd', a DIFFERENT but individually
+    // valid currency, reproducing an org that changed its preferred currency
+    // after this cart was submitted.
+    const { competition, division } = await rig(owner);
+    const res = await seedRegistration(competition.id, division.id, {
+      fee_cents: 500,
+      currency: "usd",
+      payment_method: "stripe",
+    });
+    await expect(
+      resumeRegistrationCheckout(res.registration.id, res.access_token, "http://test.local"),
+    ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_CURRENCY_UNAVAILABLE" });
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+
   it("late payment on a withdrawn registration is auto-refunded", async () => {
     const { competition, division, settings } = await stripeRig();
     const res = await seedRegistration(competition.id, division.id, settings);
@@ -1651,11 +1484,15 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(b.registration.status).toBe("waitlisted");
 
     // Checkout sessions minted for OUR registration only — the sweep mints one per
-    // due row platform-wide, and each carries metadata.registration_id.
+    // due row platform-wide, and each carries a comma-joined
+    // metadata.registration_ids (RS003 W3a: group-scoped, one id per call site
+    // here since each due row is reminded/promoted individually).
     const checkoutsFor = (id: string) =>
-      stripeMock.checkoutCreate.mock.calls.filter(
-        ([args]) => (args as { metadata?: { registration_id?: string } })
-          ?.metadata?.registration_id === id,
+      stripeMock.checkoutCreate.mock.calls.filter(([args]) =>
+        (args as { metadata?: { registration_ids?: string } })
+          ?.metadata?.registration_ids
+          ?.split(",")
+          .includes(id),
       ).length;
     const regRow = (id: string) => loadWithGroup(id);
     const auditCount = async (type: string, id: string) => {
@@ -1725,15 +1562,36 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     const ref = res.registration.ref_code as string;
     const session = fakeSession(res.registration.id, 500);
 
-    // Mismatched session (different registration) → no-op.
+    // Mismatched session (different registration, none of it this ref's) →
+    // no-op.
     stripeMock.checkoutRetrieve.mockResolvedValueOnce({
       ...session,
-      metadata: { kind: "registration", registration_id: randomUUID() },
+      metadata: { kind: "registration_group", registration_ids: randomUUID() },
     });
     expect(await reconcileRegistrationBySession(ref, session.id)).toBe(false);
 
     stripeMock.checkoutRetrieve.mockResolvedValueOnce(session);
     expect(await reconcileRegistrationBySession(ref, session.id)).toBe(true);
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("confirmed");
+  });
+
+  it("reconciles by token: membership in registration_ids, not equality on the old singular key", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    await sql`update registration_groups set checkout_session_id = 'cs_test_placeholder'
+              where id = ${res.registration.group_id}`;
+    const session = fakeSession(res.registration.id, 500);
+
+    // Session names a DIFFERENT registration only → no-op.
+    stripeMock.checkoutRetrieve.mockResolvedValueOnce({
+      ...session,
+      metadata: { kind: "registration_group", registration_ids: randomUUID() },
+    });
+    expect(await reconcileRegistration(res.registration.id, res.access_token)).toBe(false);
+
+    stripeMock.checkoutRetrieve.mockResolvedValueOnce(session);
+    expect(await reconcileRegistration(res.registration.id, res.access_token)).toBe(true);
     const row = await loadWithGroup(res.registration.id);
     expect(row.status).toBe("confirmed");
   });
@@ -2328,6 +2186,210 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
   });
 });
 
+// ---------------------------------------------------------------------------
+// RS003 W3b: the webhook re-keyed from a single registration_id to the
+// GROUP's registration_ids (comma-joined, W3a's createRegistrationCheckout),
+// plus the payment_status gate + async event pair the same wave closed
+// (owner's no-new-issues rule — every OTHER kind in billing-events.ts's
+// dispatch already gated on payment_status; the registration branch didn't).
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("RS003 W3b: group checkout webhook", () => {
+  it("confirms every entry named in registration_ids; a pending sibling outside the list and a waitlisted sibling are both untouched, and no entry's amount_cents is smeared by the cart total", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const a = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Entry A",
+      amountCents: 1000,
+    });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, 700, "Entry B");
+    // A sibling THIS session does not cover, and the ordinary waitlisted
+    // sibling — neither is named in registration_ids below.
+    const d = await seedSecondEntry(a.registration.group_id, division.id, 300, "Entry D");
+    const w = await seedSecondEntry(
+      a.registration.group_id, division.id, 0, "Entry W", "waitlisted",
+    );
+
+    // The cart TOTAL (1700) must never land on either listed entry's own
+    // amount_cents — that would be the multi-entry smear this wave closes.
+    await handleRegistrationCheckoutCompleted(fakeSession([a.registration.id, b.id], 1700));
+
+    const aAfter = await loadWithGroup(a.registration.id);
+    const bAfter = await loadWithGroup(b.id);
+    const dAfter = await loadWithGroup(d.id);
+    const wAfter = await loadWithGroup(w.id);
+    expect(aAfter.status).toBe("confirmed");
+    expect(aAfter.amount_cents).toBe(1000); // NOT the 1700 cart total
+    expect(bAfter.status).toBe("confirmed");
+    expect(bAfter.amount_cents).toBe(700); // NOT the 1700 cart total
+    expect(dAfter.status).toBe("pending"); // untouched — not named in this session
+    expect(wAfter.status).toBe("waitlisted"); // untouched
+  });
+
+  it("RULING A holds through the group path: a rejected entry in the list is refunded its own amount and never confirmed; its sibling still confirms", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const a = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Entry A",
+      amountCents: 1000,
+    });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, 700, "Entry B");
+    await sql`update registrations set status = 'rejected' where id = ${a.registration.id}`;
+    stripeMock.refundCreate.mockClear();
+
+    await handleRegistrationCheckoutCompleted(fakeSession([a.registration.id, b.id], 1700));
+
+    const aAfter = await loadWithGroup(a.registration.id);
+    const bAfter = await loadWithGroup(b.id);
+    expect(aAfter.status).toBe("rejected"); // never confirmed
+    expect(aAfter.entrant_id).toBeNull();
+    expect(stripeMock.refundCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 1000 }), // A's own amount, not the 1700 cart total
+    );
+    expect(bAfter.status).toBe("confirmed"); // sibling unaffected
+  });
+
+  it("RULING B holds through the group path: a manual-approval division leaves every listed entry paid-awaiting-approval, none confirmed", async () => {
+    const { competition, division, settings } = await stripeRig();
+    await sql`update registration_settings set approval = 'manual' where division_id = ${division.id}`;
+    const a = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Entry A",
+      amountCents: 1000,
+    });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, 700, "Entry B");
+
+    await handleRegistrationCheckoutCompleted(fakeSession([a.registration.id, b.id], 1700));
+
+    const aAfter = await loadWithGroup(a.registration.id);
+    const bAfter = await loadWithGroup(b.id);
+    expect(aAfter.status).toBe("paid");
+    expect(aAfter.entrant_id).toBeNull();
+    expect(aAfter.amount_cents).toBe(1000);
+    expect(bAfter.status).toBe("paid");
+    expect(bAfter.entrant_id).toBeNull();
+    expect(bAfter.amount_cents).toBe(700);
+  });
+
+  it("a PAID checkout.session.completed confirms when dispatched through billing-events (proves the dispatch branch's kind check, re-keyed to registration_group)", async () => {
+    // Unlike the unpaid case below, this one distinguishes "the dispatch
+    // routed correctly" from "nothing happened for the wrong reason": the old
+    // kind === "registration" check has no producer left, so if it were
+    // never re-keyed this session would fall through billing-events' OTHER
+    // branches (size_pack/credit_pack/event-pass, then the bare org_id gate)
+    // and also confirm nothing — a false green for the unpaid test alone.
+    const { competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    const session = fakeSession(res.registration.id, 500); // payment_status: "paid"
+
+    await processStripeEvent({
+      id: "evt_" + randomUUID().slice(0, 8),
+      type: "checkout.session.completed",
+      data: { object: session },
+    } as unknown as Stripe.Event);
+
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("confirmed");
+    expect(row.entrant_id).not.toBeNull();
+  });
+
+  it("payment_status: unpaid on checkout.session.completed confirms and materialises nothing", async () => {
+    // Delayed-notification methods fire checkout.session.completed while the
+    // session is still unpaid (Stripe skill, "Webhooks and fulfillment").
+    const { competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    const session = {
+      ...fakeSession(res.registration.id, 500),
+      payment_status: "unpaid",
+    } as unknown as Stripe.Checkout.Session;
+
+    await processStripeEvent({
+      id: "evt_" + randomUUID().slice(0, 8),
+      type: "checkout.session.completed",
+      data: { object: session },
+    } as unknown as Stripe.Event);
+
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("pending");
+    expect(row.entrant_id).toBeNull();
+  });
+
+  it("checkout.session.async_payment_succeeded runs the same fulfilment as a paid completion", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    const session = fakeSession(res.registration.id, 500); // payment_status: "paid"
+
+    await processStripeEvent({
+      id: "evt_" + randomUUID().slice(0, 8),
+      type: "checkout.session.async_payment_succeeded",
+      data: { object: session },
+    } as unknown as Stripe.Event);
+
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("confirmed");
+    expect(row.entrant_id).not.toBeNull();
+  });
+
+  it("checkout.session.async_payment_failed never confirms, records a payment_failed audit entry per named registration, and leaves every entry payable", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const a = await seedRegistration(competition.id, division.id, settings, { displayName: "Entry A" });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, 500, "Entry B");
+    const session = {
+      ...fakeSession([a.registration.id, b.id], 1000),
+      payment_status: "unpaid",
+    } as unknown as Stripe.Checkout.Session;
+
+    await processStripeEvent({
+      id: "evt_" + randomUUID().slice(0, 8),
+      type: "checkout.session.async_payment_failed",
+      data: { object: session },
+    } as unknown as Stripe.Event);
+
+    const aAfter = await loadWithGroup(a.registration.id);
+    const bAfter = await loadWithGroup(b.id);
+    expect(aAfter.status).toBe("pending"); // untouched — still payable
+    expect(aAfter.entrant_id).toBeNull();
+    expect(bAfter.status).toBe("pending");
+
+    const auditCount = async (id: string) => {
+      const [row] = await sql<{ n: string }[]>`
+        select count(*)::text as n from competition_events
+        where type = 'registration.payment_failed' and payload->>'registration_id' = ${id}`;
+      return Number(row.n);
+    };
+    expect(await auditCount(a.registration.id)).toBe(1);
+    expect(await auditCount(b.id)).toBe(1);
+  });
+
+  it("a redelivered async_payment_succeeded for a multi-entry cart confirms once, not twice", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const a = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Entry A",
+      amountCents: 1000,
+    });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, 700, "Entry B");
+    const session = fakeSession([a.registration.id, b.id], 1700);
+
+    await handleRegistrationCheckoutCompleted(session);
+    const aEntrant = (await loadWithGroup(a.registration.id)).entrant_id;
+    const bEntrant = (await loadWithGroup(b.id)).entrant_id;
+
+    // Stripe's "at least once" redelivery of the SAME session.
+    await handleRegistrationCheckoutCompleted(session);
+    const aAfter = await loadWithGroup(a.registration.id);
+    const bAfter = await loadWithGroup(b.id);
+    expect(aAfter.entrant_id).toBe(aEntrant); // idempotent, not a second entrant
+    expect(bAfter.entrant_id).toBe(bEntrant);
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from entrants where division_id = ${division.id}`;
+    expect(n).toBe(2); // exactly A and B, no duplicates
+  });
+});
+
+describe("RS003 W3b: HANDLED_EVENT_TYPES (pure)", () => {
+  it("includes both delayed-notification checkout events (registered, not silently ACKed)", () => {
+    expect(HANDLED_EVENT_TYPES).toContain("checkout.session.async_payment_succeeded");
+    expect(HANDLED_EVENT_TYPES).toContain("checkout.session.async_payment_failed");
+  });
+});
+
 // describe("per-registrant email locale (cycle 47)") DELETED (RS001
 // demolition): both tests pinned submitRegistration's own
 // locale-resolution branch — an explicit registrant pick vs falling back to
@@ -2808,5 +2870,283 @@ describe.skipIf(!HAS_DB)("RS002 W5 whole-branch review: clearing a stale expires
     // Reverting the sweep's clearExpiresIfNoLongerNeeded call makes this
     // fail: same stale-deadline gap as withdrawCore, same fix.
     expect(group!.expires_at).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS003 W3a — group-scoped checkout minting (owner rulings 1, 2, 3, 5).
+// Currency validation (ruling 4) is covered above, in "card submit path
+// (spec §3)" — the check lives in createRegistrationCheckout, shared by
+// every caller including mintGroupCheckout, so it is proven once.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS003 W3a)", () => {
+  it("mints ONE session for a multi-entry cart: N line items, amount = sum, application fee over the sum, group-keyed metadata on both session and intent", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const first = await seedRegistration(competition.id, division.id, settings, { displayName: "Team A" });
+    const second = await seedSecondEntry(first.registration.group_id, division.id, 700, "Team B");
+
+    const url = await mintGroupCheckout(
+      first.registration.group_id,
+      division.id,
+      "http://test.local",
+      first.access_token,
+    );
+    expect(url).toBe("https://checkout.stripe.test/session");
+
+    const args = stripeMock.checkoutCreate.mock.calls[0][0];
+    expect(args.line_items).toHaveLength(2);
+    expect(
+      args.line_items
+        .map((li: { price_data: { unit_amount: number } }) => li.price_data.unit_amount)
+        .sort(),
+    ).toEqual([500, 700]);
+    // Pro plan (stripeRig seeds "pro") is 2% — over the SUM (1200), never
+    // either entry alone.
+    expect(args.payment_intent_data.application_fee_amount).toBe(applicationFeeCents(1200, 2));
+
+    expect(args.metadata.kind).toBe("registration_group");
+    expect(args.metadata.registration_group_id).toBe(first.registration.group_id);
+    expect(args.metadata.registration_ids.split(",").sort()).toEqual(
+      [first.registration.id, second.id].sort(),
+    );
+    expect(args.payment_intent_data.metadata.registration_group_id).toBe(first.registration.group_id);
+    expect(args.payment_intent_data.metadata.registration_ids.split(",").sort()).toEqual(
+      [first.registration.id, second.id].sort(),
+    );
+    // Greenfield conversion (owner ruling 3) — no reader should ever find
+    // the old entry-scoped shape on a freshly minted session.
+    expect(args.metadata.registration_id).toBeUndefined();
+    expect(args.payment_intent_data.metadata.registration_id).toBeUndefined();
+
+    // checkout_session_id/fee_percent have always lived on the GROUP
+    // (V364) — the mint stamps the cart, not either entry.
+    const group = await loadWithGroup(first.registration.id);
+    expect(group.checkout_session_id).toMatch(/^cs_test_/);
+  });
+
+  it("a partial-waitlist cart charges only the non-waitlisted entries", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const paid = await seedRegistration(competition.id, division.id, settings, { displayName: "Paid Entry" });
+    const waitlisted = await seedSecondEntry(
+      paid.registration.group_id,
+      division.id,
+      0,
+      "Waitlisted Entry",
+      "waitlisted",
+    );
+
+    const url = await mintGroupCheckout(
+      paid.registration.group_id,
+      division.id,
+      "http://test.local",
+      paid.access_token,
+    );
+    expect(url).not.toBeNull();
+
+    const args = stripeMock.checkoutCreate.mock.calls[0][0];
+    expect(args.line_items).toHaveLength(1);
+    expect(args.line_items[0].price_data.unit_amount).toBe(500);
+    expect(args.metadata.registration_ids).toBe(paid.registration.id);
+    expect(args.metadata.registration_ids).not.toContain(waitlisted.id);
+  });
+
+  it("a maximal 10-entry cart keeps the joined registration_ids metadata value under Stripe's 500-char limit", async () => {
+    // Must track schemas.ts's PublicRegisterGroupRequest.entries.max(10)
+    // (RS003 W1) — so a future cap raise fails HERE, not in production
+    // (owner ruling 2).
+    const { competition, division, settings } = await stripeRig();
+    const first = await seedRegistration(competition.id, division.id, settings, { displayName: "Entry 0" });
+    const ids = [first.registration.id];
+    for (let i = 1; i < 10; i++) {
+      const entry = await seedSecondEntry(first.registration.group_id, division.id, 100, `Entry ${i}`);
+      ids.push(entry.id);
+    }
+    expect(ids).toHaveLength(10);
+
+    const url = await mintGroupCheckout(
+      first.registration.group_id,
+      division.id,
+      "http://test.local",
+      first.access_token,
+    );
+    expect(url).not.toBeNull();
+
+    const args = stripeMock.checkoutCreate.mock.calls[0][0];
+    expect(args.line_items).toHaveLength(10);
+    const joined = args.metadata.registration_ids as string;
+    expect(joined.split(",").sort()).toEqual([...ids].sort());
+    expect(joined.length).toBeLessThan(500);
+    expect((args.payment_intent_data.metadata.registration_ids as string).length).toBeLessThan(500);
+  });
+
+  it("an all-waitlisted cart mints nothing (owner ruling 5)", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings, { status: "waitlisted" });
+    expect(res.registration.payment_method).toBeNull();
+
+    const url = await mintGroupCheckout(
+      res.registration.group_id,
+      division.id,
+      "http://test.local",
+      res.access_token,
+    );
+    expect(url).toBeNull();
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("an offline payment-method cart mints nothing (owner ruling 5)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      payment_method: "offline",
+      fee_cents: 500,
+    });
+    const res = await seedRegistration(competition.id, division.id, settings);
+    expect(res.registration.payment_method).toBe("offline");
+
+    const url = await mintGroupCheckout(
+      res.registration.group_id,
+      division.id,
+      "http://test.local",
+      res.access_token,
+    );
+    expect(url).toBeNull();
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS003 W4 — per-currency matrix over REGISTRATION_CURRENCIES, minted through
+// mintGroupCheckout (the group-scoped entry point this whole wave is about),
+// against the Stripe mock. Owner ruling 10: INR settles offline/display-only
+// on this GB platform in practice (a connected org's charge currency always
+// equals its Connect account's settlement currency) — that does not exempt
+// it from this matrix, which asserts what OUR code SENDS to Stripe for every
+// allowlisted currency, not just the ones reachable end-to-end today.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)", () => {
+  // The it.each below is driven by the REGISTRATION_CURRENCIES IMPORT
+  // itself, never a hand-copied literal — so an added/removed/reordered
+  // currency changes what this loop iterates. But that alone doesn't make a
+  // silent widening go RED: a newly-added, well-supported currency would
+  // just quietly start passing, with nothing forcing anyone to notice the
+  // list grew. This pin is what actually goes red on that change — a
+  // `toEqual` against a frozen literal has no knowledge of the new/removed/
+  // reordered entry, so any drift between the live export and this literal
+  // is a deep-equality mismatch, reported as a failing assertion, before
+  // anyone even looks at whether the it.each results are correct. Mutation
+  // mechanism note (see task report): proved by temporarily drifting the
+  // expected literal against the real export (not by editing the shared
+  // production currency.ts in this shared worktree) — toEqual can't tell
+  // which side moved, so this reproduces exactly the diff a real
+  // currency.ts edit would leave.
+  it("pins REGISTRATION_CURRENCIES to the five currencies this matrix covers", () => {
+    expect(REGISTRATION_CURRENCIES).toEqual(["usd", "eur", "gbp", "inr", "aud"]);
+  });
+
+  it.each(REGISTRATION_CURRENCIES)(
+    "mints a two-entry %s cart: exact per-entry + summed amounts, fee over the sum, destination charge, snapshot currency charged",
+    async (currency: Currency) => {
+      const { competition, division, stripeAccountId } = await currencyRig(currency);
+      const first = await seedRegistration(
+        competition.id,
+        division.id,
+        { fee_cents: 733, currency, payment_method: "stripe" },
+        { displayName: "Entry One" },
+      );
+      const second = await seedSecondEntry(first.registration.group_id, division.id, 866, "Entry Two");
+
+      const url = await mintGroupCheckout(
+        first.registration.group_id,
+        division.id,
+        "http://test.local",
+        first.access_token,
+      );
+      expect(url).toBe("https://checkout.stripe.test/session");
+
+      const args = stripeMock.checkoutCreate.mock.calls[0][0];
+      expect(args.line_items).toHaveLength(2);
+      // Every line item carries the GROUP's snapshot currency (g.currency,
+      // regGroupCols) — the same value ctx.currency was forced to equal by
+      // createRegistrationCheckout's guard before Stripe was ever reached.
+      // Under today's schema the guard makes the two indistinguishable BY
+      // VALUE at this point (see
+      // reference_currency_dual_check_not_independently_provable.md for the
+      // same structural fact one level up, on the guard's own two
+      // conditions) — so this pins observed behaviour precisely, without
+      // claiming an independent proof of "sourced from the snapshot, not a
+      // re-read", which isn't mutation-discriminable while the guard holds.
+      const lineItems = args.line_items as { price_data: { currency: string; unit_amount: number } }[];
+      for (const li of lineItems) {
+        expect(li.price_data.currency).toBe(currency);
+      }
+      const amounts = lineItems.map((li) => li.price_data.unit_amount).sort((a: number, b: number) => a - b);
+      expect(amounts).toEqual([733, 866]); // exact per-entry, no drift
+      expect(amounts[0] + amounts[1]).toBe(1599); // exact summed total, no drift
+
+      // Pro plan (currencyRig seeds "pro") is 2% — over the SUM (1599),
+      // never one entry alone: applicationFeeCents(733,2)=15,
+      // applicationFeeCents(866,2)=17, neither equals the correct 32 below.
+      expect(args.payment_intent_data.application_fee_amount).toBe(applicationFeeCents(1599, 2));
+      // Destination charge preserved: the org's connected account, not the
+      // platform's own.
+      expect(args.payment_intent_data.transfer_data.destination).toBe(stripeAccountId);
+      expect((args.metadata.registration_ids as string).split(",").sort()).toEqual(
+        [first.registration.id, second.id].sort(),
+      );
+
+      const group = await loadWithGroup(first.registration.id);
+      expect(group.checkout_session_id).toMatch(/^cs_test_/);
+    },
+  );
+
+  // Owner ruling 4's guard already has full coverage under "card submit path
+  // (spec §3)" above, via resumeRegistrationCheckout — a DIFFERENT public
+  // entry point onto the same shared createRegistrationCheckout. Re-asserted
+  // here through mintGroupCheckout (the entry point this whole wave is
+  // about) so the guard is proven uniform across both callers, not just the
+  // older one.
+  it("422s per the matrix when the group's currency isn't allowlisted, and never calls Stripe", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const res = await seedRegistration(competition.id, division.id, {
+      fee_cents: 500,
+      currency: "jpy",
+      payment_method: "stripe",
+    });
+    await expect(
+      mintGroupCheckout(res.registration.group_id, division.id, "http://test.local", res.access_token),
+    ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_CURRENCY_UNAVAILABLE" });
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("422s per the matrix when the group's snapshot no longer matches the org's CURRENT currency, and never calls Stripe", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    // organizations.currency defaults to 'gbp' (V365) and is left untouched
+    // here — the group below snapshots 'usd', individually valid but
+    // mismatched, reproducing an org that changed its preferred currency
+    // after this cart was submitted.
+    const { competition, division } = await rig(owner);
+    const res = await seedRegistration(competition.id, division.id, {
+      fee_cents: 500,
+      currency: "usd",
+      payment_method: "stripe",
+    });
+    await expect(
+      mintGroupCheckout(res.registration.group_id, division.id, "http://test.local", res.access_token),
+    ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_CURRENCY_UNAVAILABLE" });
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
   });
 });

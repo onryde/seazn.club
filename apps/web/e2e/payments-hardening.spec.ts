@@ -944,8 +944,20 @@ test.describe("T10 · a pass lifts the entrant cap on its own comp only", () => 
     // hard-coding, not prove the cap actually moved with the pass. The body
     // below (including the ~line-951 register-page nav, which now renders the
     // CLOSED state and would need its own re-decision) is left intact,
-    // unexecuted, for RS006/RS007 to restore — delete this test.skip line
-    // once the endpoint exists again.
+    // unexecuted, for RS006/RS007 to restore.
+    //
+    // RS003 UPDATE: the endpoint EXISTS again — but do NOT simply delete the
+    // skip. Two things changed under it:
+    //   1. `submitPublicRegistration` below still posts the OLD flat body
+    //      ({division_id, display_name, contact_email, privacy_consent}).
+    //      The route now takes `PublicRegisterGroupRequest` — a cart:
+    //      {contact:{name,email,...}, privacy_consent, entries:[{division_id,
+    //      entrant_kind, players:[...]}]}. Un-skipping without rewriting the
+    //      helper yields a 400 that looks like a capacity regression.
+    //   2. the register PAGE still renders its closed state until RS006, so
+    //      the nav below needs the re-decision noted above.
+    // Restoring this is real work, and it belongs with the session that owns
+    // the UI. See _INDEX.md's RS003 entry for the e2e debt it records.
     test.skip(true, "RS001 deleted the public register POST — owed back by RS006/RS007");
     // Connect stays LIVE; only the paid entitlement lapsed (community plan). V310
     // made registration.paid true on every plan, so card intake no longer closes

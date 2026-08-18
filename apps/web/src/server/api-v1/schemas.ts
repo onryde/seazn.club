@@ -1860,6 +1860,167 @@ export const PublicRegistrationInfo = z.object({
 // which this schema had no way to express. RS003 defines the new group-shaped
 // request/response (design `2026-08-16-registration-redesign-design.md` §4).
 
+/** Contact captured once, cart-wide — every entry's self-declaration and the
+ *  guardian-consent gate both read from this one shape (`SubmitGroupContact`
+ *  mirror, registration-submit.ts:47-58). */
+export const PublicRegisterGroupContact = z.object({
+  name: z.string().min(1).max(120),
+  email: z.email().max(200),
+  dob: z.iso.date().nullish(),
+  gender: z.enum(["m", "f", "x"]).nullish(),
+  guardian_name: z.string().max(120).nullish(),
+  guardian_consent: z.boolean().optional(),
+});
+
+/** One player row on an entry (`SubmitGroupPlayerInput` mirror, registration-
+ *  submit.ts:60-67). Reused unchanged by the join request below — a joiner
+ *  IS a player row, just for an entry that already exists. */
+export const PublicRegisterGroupPlayer = z.object({
+  full_name: z.string().min(1).max(120),
+  dob: z.iso.date().nullish(),
+  gender: z.enum(["m", "f", "x"]).nullish(),
+  email: z.email().max(200).nullish(),
+  squad_number: z.number().int().min(0).max(999).nullish(),
+  is_captain: z.boolean().optional(),
+});
+
+/** One cart line (`SubmitGroupEntryInput` mirror, registration-submit.ts:69-89). */
+export const PublicRegisterGroupEntry = z.object({
+  division_id: Uuid,
+  entrant_kind: EntrantKind,
+  team_name: z.string().max(120).nullish(),
+  partner_name: z.string().max(120).nullish(),
+  free_agent: z.boolean().optional(),
+  players: z.array(PublicRegisterGroupPlayer).max(50).optional(),
+  answers: z.record(z.string(), z.unknown()).optional(),
+  /** True when the CONTACT themselves is one of this entry's players. */
+  registering_self: z.boolean().optional(),
+  /** 0-based index into `players` identifying which row IS the contact. */
+  self_player_index: z.number().int().min(0).optional(),
+});
+
+/**
+ * Full cart submit (`SubmitGroupInput` mirror, registration-submit.ts:91-98).
+ * No `currency` field on purpose — it is server-resolved from
+ * `organizations.currency` and snapshotted by the usecase (registration-
+ * submit.ts:497); a client-supplied one is simply never declared here, so
+ * Zod's default (non-`.strict()`) object mode strips it rather than
+ * rejecting the whole request — same as every other public request schema
+ * in this file.
+ *
+ * #402 lineage: the pre-redesign single-entry `PublicRegisterRequest` had
+ * the same self-declaration coherence rule, expressed per-player-row (a
+ * top-level `registering_self` PLUS a `players[].self` flag — see this
+ * file's history at `850cc6308^` and `public-register-request.test.ts` at
+ * that revision). The group shape collapses the two flags into one
+ * per-entry pair (`registering_self` + `self_player_index`); the superRefine
+ * below is that rule's cart-wide replacement: at most one self row across
+ * every entry, a contact dob whenever one is claimed, and the claimed index
+ * must land on a real player row (registration-submit.ts:384-390 silently
+ * DROPS an unresolvable self declaration rather than erroring, so this is
+ * the only place that tells the registrant their link didn't take).
+ */
+export const PublicRegisterGroupRequest = z
+  .object({
+    contact: PublicRegisterGroupContact,
+    locale: z.string().max(10).nullish(),
+    privacy_consent: z.boolean(),
+    entries: z.array(PublicRegisterGroupEntry).min(1).max(10),
+    /** Honeypot (v3/05 §4): hidden on the real form; the ROUTE decides what
+     *  to do with a filled one, not this schema. */
+    website: z.string().max(200).optional(),
+  })
+  .superRefine((v, ctx) => {
+    const selfEntries = v.entries
+      .map((e, i) => ({ e, i }))
+      .filter(({ e }) => e.registering_self);
+    if (selfEntries.length > 1) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["entries"],
+        message: "Only one entry cart-wide may be marked as yourself",
+      });
+    }
+    if (selfEntries.length > 0 && !v.contact.dob) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["contact", "dob"],
+        message: "A date of birth is required when you're registering yourself",
+      });
+    }
+    for (const { e, i } of selfEntries) {
+      // This MUST mirror the usecase's own resolution verbatim
+      // (registration-submit.ts:383-393): an explicit index, or the implied 0
+      // that a one-player INDIVIDUAL entry gets — and nothing else. A team,
+      // pair or free-agent entry that claims `registering_self` without
+      // naming the row resolves to `undefined` there and has its self
+      // declaration DROPPED SILENTLY: the entry submits, the registrant is
+      // never linked to their own player row, and nothing anywhere errors.
+      // Defaulting to 0 here instead of `undefined` would validate exactly
+      // that request and hand it to the drop. This layer is the only one that
+      // can tell the registrant their self-link did not take.
+      const players = e.players ?? [];
+      const idx =
+        e.self_player_index ??
+        (e.entrant_kind === "individual" && players.length === 1 ? 0 : undefined);
+      if (idx === undefined || !players[idx]) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["entries", i, "self_player_index"],
+          message: "self_player_index must identify which player on this entry is you",
+        });
+      }
+    }
+  });
+export type PublicRegisterGroupRequest = z.infer<typeof PublicRegisterGroupRequest>;
+
+/** One entry's outcome (`SubmitGroupEntryResult` mirror, registration-
+ *  submit.ts:112-119). */
+export const PublicRegisterGroupEntryResult = z.object({
+  registration_id: Uuid,
+  division_id: Uuid,
+  status: RegistrationStatus,
+  amount_cents: z.number().int(),
+  join_code: z.string().nullable(),
+  free_agent: z.boolean(),
+});
+
+/** Cart-level outcome (`SubmitGroupResult` mirror, registration-
+ *  submit.ts:121-130). `checkout_url` is required-but-nullable: wave 3 wires
+ *  Stripe and starts returning a real URL when a payment is due now, but the
+ *  field exists from this wave on so the wire contract never has to widen. */
+export const PublicRegisterGroupResponse = z.object({
+  group_id: Uuid,
+  ref_code: z.string().nullable(),
+  access_token: z.string(),
+  currency: z.string(),
+  amount_cents: z.number().int(),
+  checkout_url: z.string().nullable(),
+  entries: z.array(PublicRegisterGroupEntryResult),
+});
+
+/** Join an existing team entry via its `join_code` link (`JoinTeamEntryInput`
+ *  mirror, registration-submit.ts:136-141). A joiner is one player row, so
+ *  this reuses the same player shape submit uses. */
+export const PublicJoinRequest = z.object({
+  join_code: z.string().min(1).max(80),
+  player: PublicRegisterGroupPlayer,
+  guardian_name: z.string().max(120).nullish(),
+  guardian_consent: z.boolean().optional(),
+});
+export type PublicJoinRequest = z.infer<typeof PublicJoinRequest>;
+
+/** (`JoinTeamEntryResult` mirror, registration-submit.ts:143-147).
+ *  `consent_status` is deliberately the 2-value subset this path actually
+ *  returns — 'pending' is `registration_players`' 3rd DB-level value, and a
+ *  join never produces it (registration-submit.ts:761 only ever picks
+ *  granted or guardian). */
+export const PublicJoinResponse = z.object({
+  registration_id: Uuid,
+  player_id: Uuid,
+  consent_status: z.enum(["granted", "guardian"]),
+});
+
 /** Registrant-facing status view (token-gated; no dob, no payment ids). */
 export const PublicRegistrationStatus = z.object({
   id: Uuid,
