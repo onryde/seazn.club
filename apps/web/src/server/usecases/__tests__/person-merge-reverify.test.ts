@@ -20,6 +20,7 @@ import { createEntrants } from "../entrants";
 import { mergePersons } from "../person-merge";
 import { publishSchedule } from "../schedule";
 import { createStages, generateStageFixtures } from "../stages";
+import { createCourt, createVenue } from "../venues";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -39,6 +40,17 @@ interface BoardRow {
   id: string;
   home_entrant_id: string;
   away_entrant_id: string;
+}
+
+/** Two real, distinct courts (P9: `fixtures.court_id` is a real FK into
+ *  `courts`, so "different courts" can no longer be faked with two
+ *  `court_label` strings — `reverifyBoards` reads `court_id`, per
+ *  person-merge.ts's own comment on the filter this file exercises). */
+async function twoCourts(auth: AuthCtx): Promise<{ a: string; b: string }> {
+  const venue = await createVenue(auth, { name: "Reverify Venue " + rnd(), sort: 0 });
+  const a = await createCourt(auth, venue.id, { name: "Court 1 " + rnd(), sort: 0, tags: [] });
+  const b = await createCourt(auth, venue.id, { name: "Court 2 " + rnd(), sort: 1, tags: [] });
+  return { a: a.id, b: b.id };
 }
 
 /**
@@ -100,8 +112,12 @@ async function seedBoard(
   expect(second, "no disjoint second fixture in the generated league").toBeTruthy();
 
   const second_at = new Date(T0.getTime() + opts.minutesApart * MS_PER_MIN);
-  await sql`update fixtures set scheduled_at = ${T0}, court_label = 'Court 1' where id = ${first.id}`;
-  await sql`update fixtures set scheduled_at = ${second_at}, court_label = 'Court 2' where id = ${second.id}`;
+  // P9: `court_label` is frozen (never written post-cutover) — `court_id` is
+  // what `reverifyBoards`/`toAssignment` read, so the "different courts" half
+  // of this scenario has to be real court rows now, not two label strings.
+  const courts = await twoCourts(auth);
+  await sql`update fixtures set scheduled_at = ${T0}, court_id = ${courts.a} where id = ${first.id}`;
+  await sql`update fixtures set scheduled_at = ${second_at}, court_id = ${courts.b} where id = ${second.id}`;
 
   if (opts.publish) await publishSchedule(auth, division.id);
   return { divisionId: division.id, first, second };
@@ -111,6 +127,19 @@ async function joinEntrant(entrantId: string, personId: string): Promise<void> {
   await sql`insert into entrant_members (entrant_id, person_id) values (${entrantId}, ${personId})`;
 }
 
+// P9 sweep (pass 3c-4): `reverifyBoards`'s assignment filter (person-merge.ts)
+// used to gate on `court_label`, which nothing has written since pass 3a — a
+// fixture scheduled with a real `court_id` but a NULL `court_label` (the only
+// state a post-cutover fixture can be in; the column is frozen, never a stale
+// non-null value) was silently dropped from `assignments`, so the whole board
+// skipped re-verification. `court_label` is a presence check there, not a
+// value comparison, so a *disagreeing* non-null label cannot distinguish old
+// code from new — a non-null stale label still satisfies the old
+// `court_label !== null`. NULL is the only input that discriminates, which is
+// exactly what `seedBoard` below now seeds (real `court_id` via `twoCourts`,
+// `court_label` never written). The first test below and the round-order one
+// further down both go red if person-merge.ts's filter is reverted to
+// `court_label !== null` — that is this scenario's regression coverage.
 describe.skipIf(!HAS_DB)("#404 re-verify published boards after a merge", () => {
   it("reports the person overlap the merge created on a published board", async () => {
     const { auth } = await seedOrg("pro");
@@ -251,9 +280,10 @@ describe.skipIf(!HAS_DB)("#404 re-verify published boards after a merge", () => 
     // reached with a straight SQL edit instead of a merge, since merging
     // people cannot change a fixture's time or round (only reveal what
     // time/round already made true — see this test's own header comment).
-    await sql`update fixtures set scheduled_at = ${T0}, court_label = 'Court 1' where id = ${round1.id}`;
+    const courts = await twoCourts(auth);
+    await sql`update fixtures set scheduled_at = ${T0}, court_id = ${courts.a} where id = ${round1.id}`;
     await sql`
-      update fixtures set scheduled_at = ${new Date(T0.getTime() + 60 * MS_PER_MIN)}, court_label = 'Court 2'
+      update fixtures set scheduled_at = ${new Date(T0.getTime() + 60 * MS_PER_MIN)}, court_id = ${courts.b}
       where id = ${round2.id}`;
     await publishSchedule(auth, division.id);
 
@@ -263,7 +293,7 @@ describe.skipIf(!HAS_DB)("#404 re-verify published boards after a merge", () => 
     // schedule-reflow-verifier-widening.test.ts's own court-clash test
     // uses, for the identical reason). Round 2 now starts an hour before
     // round 1: round order requires round 1 <= round 2, so this is a
-    // direct, unambiguous H6 breach, on two DIFFERENT courts (court_label
+    // direct, unambiguous H6 breach, on two DIFFERENT courts (court_id
     // is untouched by this second write) so no incidental court clash
     // rides along.
     await sql`

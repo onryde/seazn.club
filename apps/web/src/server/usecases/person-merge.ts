@@ -321,8 +321,15 @@ async function reverifyBoards(auth: AuthCtx, survivorId: string): Promise<Reveal
       // Wired the same way `autoSchedule`/`applySchedule` were (`schedule.ts`,
       // the reference implementation).
       const roundRobin = await roundRobinStageIds(tx, board.id);
+      // P9 cutover: `court_id` is the real identity `toAssignment` reads
+      // (schedule.ts) — the frozen `court_label` is never written for a
+      // fixture scheduled after pass 3a, so gating on it here silently
+      // dropped every post-cutover court-scheduled fixture from `assignments`
+      // (found by sweep, no failing test): `reverifyBoards` would then have
+      // nothing to validate and every merge on such a board reported no
+      // conflicts, published or not.
       const assignments = all
-        .filter((f) => f.scheduled_at !== null && f.court_label !== null)
+        .filter((f) => f.scheduled_at !== null && f.court_id !== null)
         .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
       if (assignments.length === 0) continue;
       // Both halves, and both are load-bearing (#462). The assignments put the
