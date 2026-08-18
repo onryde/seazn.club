@@ -70,7 +70,7 @@ test("ko_plate template: completing the main draw seeds the plate", async ({ pag
   );
   const divisionId = divisions.data!.find((d) => d.slug === slug)!.id;
 
-  const stages = await apiJson<{ id: string; seq: number; kind: string; qualification: unknown }[]>(
+  const stages = await apiJson<{ id: string; seq: number; kind: string; progression: unknown }[]>(
     page.request,
     `/api/v1/divisions/${divisionId}/stages`,
   );
@@ -79,7 +79,16 @@ test("ko_plate template: completing the main draw seeds the plate", async ({ pag
   const plate = stages.data!.find((s) => s.seq === 2)!;
   expect(main.kind).toBe("knockout");
   expect(plate.kind).toBe("knockout");
-  expect(plate.qualification).toMatchObject({ losersOfRound: { round: 1, count: 4 } });
+  // ko_plate preset (format-templates.ts): plate's progression sources the
+  // main draw's round-1 losers, on_complete timing (F2 kept every template
+  // writer's default timing unchanged — Decision 1). `q` (round-1 loser
+  // count) defaults to 4 (division-builder.tsx's `qualified` knob), never
+  // touched by this test.
+  expect(plate.progression).toMatchObject({
+    sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 4 }] }],
+    placement: "rank_order",
+    timing: "on_complete",
+  });
 
   const { ids } = await addEntrantsViaApi(request, divisionId, [
     "Ann",

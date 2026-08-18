@@ -1177,12 +1177,12 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
   await assertNotClipped('[data-testid="template-gallery"]', "the template gallery");
 
   // euro24, not .first(): P7/D1b (T5) needs a template that actually carries
-  // a PROGRESSION map (a `.seeding` stage) to prove that block renders real
-  // rule text, and needs the sheet body's reorder (T4, 403c6bfd) proven
-  // against the template most likely to break it — PROGRESSION is the block
-  // T4's own comment names as having worsened the pre-fix scroll-fold, and
-  // .first() (slam128) carries no seeding at all, so the old assertions
-  // never exercised either.
+  // a PROGRESSION map (a stage with a real `progression` field, timing:
+  // "setup") to prove that block renders real rule text, and needs the sheet
+  // body's reorder (T4, 403c6bfd) proven against the template most likely to
+  // break it — PROGRESSION is the block T4's own comment names as having
+  // worsened the pre-fix scroll-fold, and .first() (slam128) carries no
+  // progression at all, so the old assertions never exercised either.
   await gallery.getByTestId("template-card-euro24").click();
   const dialog = page.locator('[role="dialog"]');
   await expect(page.getByTestId("template-detail-structure")).toBeVisible({ timeout: 15_000 });
@@ -1285,13 +1285,13 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
 // ---------------------------------------------------------------------------
 // P7 (D1b task T5) — the t20-super8 catalog template: THREE stages at
 // instantiation (group -> Super 8 -> knockout), the first template in the
-// catalog where TWO stages carry `.seeding` in the same division. Instantiation
-// itself creates NO fixtures (owner ruling, D1b brief: a `.seeding` stage
-// mints synthetic entrants and can generate with zero real ones, and one
-// fixture row at birth would format-lock the competition via both
-// replaceStages and patchDivision) — so this proves the stages exist and are
-// visible FIRST, then adds entrants and generates before a Super 8 fixture
-// exists to assert on at all.
+// catalog where TWO stages carry `progression` (timing: "setup") in the same
+// division. Instantiation itself creates NO fixtures (owner ruling, D1b
+// brief: a "setup"-timing progression stage mints synthetic entrants and can
+// generate with zero real ones, and one fixture row at birth would
+// format-lock the competition via both replaceStages and patchDivision) —
+// so this proves the stages exist and are visible FIRST, then adds entrants
+// and generates before a Super 8 fixture exists to assert on at all.
 //
 // Pro-only: t20-super8 is 3 stages, over community's stages.per_division.max
 // (2) on stage count alone — this file's shared storageState account is the
@@ -1338,7 +1338,7 @@ test("P7/D1b: the t20-super8 template creates 3 stages, and Super 8 fixtures res
   // fixtures. Digit-prefixed: StagesPanel's own heading is "{seq}. {name}";
   // ProgressionPanel (rendered above it for each seeded stage) uses the
   // SAME stage name with no digit, so an un-prefixed match would be
-  // ambiguous for Super 8 and Knockout (both carry .seeding).
+  // ambiguous for Super 8 and Knockout (both carry progression).
   await expect(page.getByRole("heading", { name: /^\d+\.\s*Group Stage$/ })).toBeVisible({
     timeout: 20_000,
   });
@@ -1454,11 +1454,12 @@ test("P6 setup: a fresh org with an up-front TBD knockout fixture (seeded, group
 
   await addEntrantsViaApi(page.request, p6DivisionId, ["Seed 1", "Seed 2", "Seed 3", "Seed 4"]);
 
-  // Groups (2 pools of 2) feeding a knockout final via .seeding — same shape
-  // as scripts/smoke.ts's stageProgressionSuite() and P5's own
-  // stage-progression.spec.ts. The KO fixture is generated BEFORE the group
-  // stage even has fixtures (the owner's "placeholders at setup time"
-  // ruling) — both slots stay TBD, carrying real slot.winner_group labels.
+  // Groups (2 pools of 2) feeding a knockout final via progression
+  // (timing: "setup") — same shape as scripts/smoke.ts's
+  // stageProgressionSuite() and P5's own stage-progression.spec.ts. The KO
+  // fixture is generated BEFORE the group stage even has fixtures (the
+  // owner's "placeholders at setup time" ruling) — both slots stay TBD,
+  // carrying real slot.winner_group labels.
   const stages = await apiJson<{ id: string; kind: string }[]>(
     page.request,
     `/api/v1/divisions/${p6DivisionId}/stages`,
@@ -1467,7 +1468,11 @@ test("P6 setup: a fresh org with an up-front TBD knockout fixture (seeded, group
       { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
       {
         seq: 2, kind: "knockout", name: "KO", config: {},
-        seeding: { source: "previous", take: [{ kind: "topNPerGroup", n: 1 }], placement: "rank_order" },
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
       },
     ],
   );
@@ -1606,7 +1611,11 @@ test("P6 task B setup: a 4-way-tied league decides, KO panel has a real tie to r
         kind: "knockout",
         name: "Knockout",
         config: {},
-        seeding: { source: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }], placement: "rank_order" },
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
       },
     ],
   );
@@ -1748,7 +1757,7 @@ test("P6 task B fix round 3 (Critical 1): regenerating a stage that already has 
   await loginUi(page, P6B_EMAIL());
 
   // A SEPARATE division/stage from the tie scenario — this path is generic
-  // to any stage with existing fixtures, not specific to `.seeding`.
+  // to any stage with existing fixtures, not specific to progression.
   const comp = await apiJson<{ id: string }>(page.request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `P6 TaskB Regen ${TAG}`,
