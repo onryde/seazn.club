@@ -10313,6 +10313,7 @@
                                             "outside_competition_window",
                                             "outside_start_window",
                                             "court_double_booking",
+                                            "court_tag_mismatch",
                                             "inside_blackout",
                                             "outside_session_windows",
                                             "entrant_overlap",
@@ -21449,7 +21450,8 @@
                                 "properties": {
                                   "court": {
                                     "type": "string",
-                                    "maxLength": 100
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                   },
                                   "from": {
                                     "type": "string",
@@ -22633,7 +22635,7 @@
                       "perEntrantMinRest": 0,
                       "blackouts": [
                         {
-                          "court": "example",
+                          "court": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                           "from": "2026-08-01T09:00:00Z",
                           "to": "2026-08-01T09:00:00Z"
                         }
@@ -22883,7 +22885,8 @@
                           "properties": {
                             "court": {
                               "type": "string",
-                              "maxLength": 100
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                             },
                             "from": {
                               "type": "string",
@@ -24061,7 +24064,7 @@
                   "perEntrantMinRest": 0,
                   "blackouts": [
                     {
-                      "court": "example",
+                      "court": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                       "from": "2026-08-01T09:00:00Z",
                       "to": "2026-08-01T09:00:00Z"
                     }
@@ -24166,7 +24169,8 @@
                                 "properties": {
                                   "court": {
                                     "type": "string",
-                                    "maxLength": 100
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                   },
                                   "from": {
                                     "type": "string",
@@ -25350,7 +25354,7 @@
                       "perEntrantMinRest": 0,
                       "blackouts": [
                         {
-                          "court": "example",
+                          "court": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                           "from": "2026-08-01T09:00:00Z",
                           "to": "2026-08-01T09:00:00Z"
                         }
@@ -25724,6 +25728,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -26403,6 +26408,21 @@
                         },
                         "schedule_locked": {
                           "type": "boolean"
+                        },
+                        "ends_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "court_name": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -26558,6 +26578,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -27441,6 +27462,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -29236,6 +29258,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -67195,6 +67218,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -67348,6 +67372,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -72071,6 +72096,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -72224,6 +72250,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -73738,6 +73765,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
