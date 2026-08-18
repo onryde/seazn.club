@@ -77,7 +77,9 @@ export default async function FixturePage({ params }: Props) {
   const jsonLd = sportsEventJsonLd({
     name: `${home} vs ${away} — ${division.name}, ${competition.name}`,
     ...(fixture.scheduled_at ? { startDate: fixture.scheduled_at } : {}),
-    ...(fixture.venue ? { location: fixture.venue } : {}),
+    // P9 cutover: venue_name is DERIVED (fixtures.venue_id via data.ts's
+    // withCourtVenueNames) — venue is frozen, no writer touches it any more.
+    ...(fixture.venue_name ? { location: fixture.venue_name } : {}),
     url: `https://seazn.club${basePath}/fixtures/${fixture.id}`,
     homeTeam: home,
     awayTeam: away,
@@ -122,8 +124,8 @@ export default async function FixturePage({ params }: Props) {
       </div>
       <p className="mb-4 text-sm text-ink-muted">
         {fixtureSubheading(fixture.status, fixture.scheduled_at)}
-        {fixture.venue ? ` · ${fixture.venue}` : ""}
-        {fixture.court_label ? ` · ${fixture.court_label}` : ""}
+        {fixture.venue_name ? ` · ${fixture.venue_name}` : ""}
+        {fixture.court_name ? ` · ${fixture.court_name}` : ""}
       </p>
 
       <LiveScore
