@@ -67,9 +67,6 @@ vi.mock("@/lib/credits", async (importOriginal) => {
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
-import type { AuthCtx } from "@/server/api-v1/auth";
-import { createCompetition } from "../competitions";
-import { createDivision } from "../divisions";
 import { HANDLED_EVENT_TYPES, processStripeEvent } from "../billing-events";
 import {
   ageAt,
@@ -105,10 +102,6 @@ import {
   registrationIcs,
   resumeRegistrationCheckout,
   mintGroupCheckout,
-  hashRegistrationToken,
-  REGISTRATION_TOKEN_PREFIX,
-  type RegistrationRow,
-  type RegistrationWithGroupRow,
 } from "../registrations";
 // The legacy `eligibilityIssues` string[] wrapper these pure tests used to
 // call was deleted at its source (RS002 W5 whole-branch review — zero
@@ -123,6 +116,19 @@ import { LEGAL_VERSION } from "@/lib/legal";
 import { resolveNameDisplay } from "@/lib/name-display";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import {
+  makeUser,
+  seedOrg,
+  asOwner,
+  rig,
+  loadWithGroup,
+  seedSecondEntry,
+  seedRegistration,
+  fakeSession,
+  SETTINGS_BASE,
+  stripeRig,
+  currencyRig,
+} from "./_registration-fixtures";
 import { FIRST_PAID_EARN, LIFETIME_EARN_CAP, REFERRAL_EARN, balance, walletIdFor } from "@/lib/credits";
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -225,220 +231,6 @@ describe("validateAnswers (pure)", () => {
 // ---------------------------------------------------------------------------
 // DB-backed flows
 // ---------------------------------------------------------------------------
-
-async function makeUser(name: string): Promise<string> {
-  const [{ id }] = await sql<{ id: string }[]>`
-    insert into users (email, display_name, email_verified)
-    values (${`${name}-${randomUUID().slice(0, 8)}@test.local`}, ${name}, true)
-    returning id`;
-  return id;
-}
-
-async function seedOrg(plan: "community" | "pro" = "pro"): Promise<{
-  orgId: string;
-  orgSlug: string;
-  ownerId: string;
-}> {
-  const suffix = randomUUID().slice(0, 8);
-  const ownerId = await makeUser("owner");
-  const orgSlug = "reg-org-" + suffix;
-  const [{ id: orgId }] = await sql<{ id: string }[]>`
-    insert into organizations (name, slug, created_by)
-    values (${"Reg Org " + suffix}, ${orgSlug}, ${ownerId}) returning id`;
-  await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${ownerId}, 'owner')`;
-  if (plan !== "community") {
-    await setOrgPlan(orgId, plan);
-  }
-  await sql`
-    insert into sports (key, name, module_version, position_catalog)
-    values ('generic', 'Generic', '1.0.0', ${sql.json({ groups: [], lineup: { size: 1, benchMax: 0 } })})
-    on conflict (key) do nothing`;
-  await sql`
-    insert into sport_variants (sport_key, key, name, config, is_system)
-    values ('generic', 'score', 'Score',
-            ${sql.json({ resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false })},
-            true)
-    on conflict do nothing`;
-  return { orgId, orgSlug, ownerId };
-}
-
-const asOwner = (orgId: string, userId: string): AuthCtx => ({
-  orgId,
-  via: "session",
-  userId,
-  role: "owner",
-  keyId: null,
-});
-
-async function rig(
-  owner: AuthCtx,
-  opts: { eligibility?: Record<string, unknown>[]; startsOn?: string } = {},
-) {
-  const competition = await createCompetition(owner, {
-    name: "Reg Cup " + randomUUID().slice(0, 6),
-    visibility: "public",
-    branding: {},
-    starts_on: opts.startsOn ?? "2026-09-15",
-    ends_on: "2026-09-20",
-  });
-  const division = await createDivision(owner, competition.id, {
-    name: "Open",
-    sport_key: "generic",
-    variant_key: "score",
-    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    eligibility: opts.eligibility ?? [],
-  });
-  return { competition, division };
-}
-
-/** r.* ∪ g.* — same join `regGroupCols` builds internally (not exported).
- *  Kept in exact column-list sync with it by the schema tests in
- *  registration-schema.test.ts, which pin every column on both tables.
- *  `g.refunded_cents` is aliased to `group_refunded_cents` (V368) so it never
- *  collides with `r.refunded_cents` — see the block comment above
- *  `RegistrationWithGroupRow` in registrations.ts. */
-async function loadWithGroup(regId: string): Promise<RegistrationWithGroupRow> {
-  const [row] = await sql<RegistrationWithGroupRow[]>`
-    select r.id, r.division_id, r.org_id, r.status, r.display_name, r.answers,
-           r.amount_cents, r.refunded_cents, r.entrant_id, r.promoted_at, r.withdrawn_at,
-           r.group_id, r.join_code, r.free_agent, r.created_at, r.updated_at,
-           g.contact_name, g.contact_email, g.user_id, g.locale, g.ref_code,
-           g.access_token_hash, g.currency, g.payment_method, g.checkout_session_id,
-           g.payment_intent_id, g.expires_at, g.reminded_at,
-           g.refunded_cents as group_refunded_cents,
-           g.refunded_at, g.disputed_at, g.dispute_id, g.offline_marked_paid_at,
-           g.offline_marked_paid_by, g.fee_percent, g.privacy_consent_at,
-           g.privacy_consent_version
-    from registrations r join registration_groups g on g.id = r.group_id
-    where r.id = ${regId}`;
-  return row;
-}
-
-/** Attaches a SECOND entry to an existing cart (group) — reproduces what a
- *  multi-entry cart will look like once RS002/RS003 ship group submit
- *  (design §3). No such flow exists yet, so this seeds directly, the same
- *  way seedRegistration reproduces submitRegistration's single-entry write. */
-async function seedSecondEntry(
-  groupId: string,
-  divisionId: string,
-  amountCents: number,
-  displayName: string,
-  status: RegistrationRow["status"] = "pending",
-): Promise<RegistrationWithGroupRow> {
-  const [reg] = await sql<{ id: string }[]>`
-    insert into registrations (group_id, division_id, display_name, status, amount_cents)
-    values (${groupId}, ${divisionId}, ${displayName}, ${status}, ${amountCents})
-    returning id`;
-  return loadWithGroup(reg.id);
-}
-
-/**
- * `submitRegistration` is deleted (RS001 registration demolition) — the
- * public submit route stays closed until RS002/RS003 ship the new
- * group-shaped cart flow (design §4). Every usecase exercised BELOW submit
- * (confirm, refund, waitlist, dispute, sweep, export, .ics…) is untouched and
- * still needs its regression coverage, so this seeds an equivalent
- * single-entry cart DIRECTLY — registration_groups → registrations →
- * registration_players, the V363/V364 shape — reproducing exactly what
- * `submitRegistration` used to write for one entry. It does NOT reproduce
- * submitRegistration's OWN decision logic (eligibility gate, form-answer
- * validation, privacy-consent gate, window/capacity checks, ref minting) —
- * those are gone with it; RS002/RS003 own re-testing them against the new
- * flow. `checkout_url` is always null here — a test that needs a live Stripe
- * session calls the surviving `resumeRegistrationCheckout` explicitly.
- */
-async function seedRegistration(
-  competitionId: string,
-  divisionId: string,
-  settings: { fee_cents: number; currency: string; payment_method: "offline" | "stripe" },
-  over: {
-    displayName?: string;
-    contactEmail?: string;
-    status?: RegistrationRow["status"];
-    amountCents?: number;
-    answers?: Record<string, unknown>;
-    players?: {
-      name: string;
-      dob?: string | null;
-      gender?: string | null;
-      squadNumber?: number | null;
-    }[];
-    locale?: string | null;
-    refCode?: string | null;
-  } = {},
-): Promise<{ registration: RegistrationWithGroupRow; access_token: string; checkout_url: null }> {
-  const rawToken = REGISTRATION_TOKEN_PREFIX + randomUUID().replace(/-/g, "");
-  const status = over.status ?? "pending";
-  // Waitlisted rows hold amount 0 and no pay window — same invariant
-  // `promoteOldestWaitlisted` relies on (registrations.ts:624).
-  const waitlisted = status === "waitlisted";
-  const amountCents = waitlisted ? 0 : (over.amountCents ?? settings.fee_cents);
-  const method = waitlisted ? null : settings.payment_method;
-  const stripeWindow = !waitlisted && method === "stripe" && amountCents > 0 && status === "pending";
-  const displayName = over.displayName ?? "Alex Test";
-
-  const [group] = await sql<{ id: string }[]>`
-    insert into registration_groups
-      (competition_id, contact_name, contact_email, access_token_hash,
-       amount_cents, currency, payment_method, expires_at, locale, ref_code,
-       privacy_consent_at, privacy_consent_version)
-    values (
-      ${competitionId}, ${displayName}, ${over.contactEmail ?? "alex@test.local"},
-      ${hashRegistrationToken(rawToken)},
-      ${amountCents}, ${settings.currency}, ${method},
-      ${stripeWindow ? sql`now() + interval '48 hours'` : null},
-      ${over.locale ?? null}, ${over.refCode ?? null},
-      now(), ${LEGAL_VERSION}
-    )
-    returning id`;
-
-  const [reg] = await sql<{ id: string }[]>`
-    insert into registrations (group_id, division_id, display_name, status, amount_cents, answers)
-    values (
-      ${group.id}, ${divisionId}, ${displayName}, ${status}, ${amountCents},
-      ${sql.json((over.answers ?? {}) as never)}
-    )
-    returning id`;
-
-  for (const p of over.players ?? []) {
-    await sql`
-      insert into registration_players (registration_id, full_name, dob, gender, squad_number, source)
-      values (
-        ${reg.id}, ${p.name}, ${p.dob ?? null}, ${p.gender ?? null},
-        ${p.squadNumber ?? null}, 'captain_entered'
-      )`;
-  }
-
-  const row = await loadWithGroup(reg.id);
-  return { registration: row, access_token: rawToken, checkout_url: null };
-}
-
-/** Builds a group checkout session (RS003 W3a/W3b metadata shape). Accepts
- *  either a single registration id (the common single-entry case — nearly
- *  every existing call site) or an array for a multi-entry cart; either way
- *  `metadata.registration_ids` is the comma-joined list
- *  `handleRegistrationCheckoutCompleted` actually reads. */
-function fakeSession(
-  regId: string | string[],
-  amount: number,
-  feePercent?: number,
-): Stripe.Checkout.Session {
-  const ids = Array.isArray(regId) ? regId : [regId];
-  return {
-    id: "cs_test_" + ids[0].slice(0, 8),
-    payment_intent: "pi_test_" + ids[0].slice(0, 8),
-    payment_status: "paid",
-    amount_total: amount,
-    // The session carries the rate it was billed at, exactly as
-    // createRegistrationCheckout stamps it (V312).
-    metadata: {
-      kind: "registration_group",
-      registration_group_id: "rg_group_test_" + ids[0].slice(0, 8),
-      registration_ids: ids.join(","),
-      ...(feePercent === undefined ? {} : { fee_percent: String(feePercent) }),
-    },
-  } as unknown as Stripe.Checkout.Session;
-}
 
 beforeEach(() => {
   stripeMock.checkoutCreate.mockReset().mockImplementation(async () => ({
@@ -1203,17 +995,6 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
 // Payment method settings (spec 2026-07-12 §3)
 // ---------------------------------------------------------------------------
 
-const SETTINGS_BASE = {
-  enabled: true,
-  entrant_kind: "individual" as const,
-  opens_at: null,
-  closes_at: null,
-  capacity: null,
-  currency: "gbp",
-  refund_lock_at: null,
-  form_fields: [],
-};
-
 describe.skipIf(!HAS_DB)("payment method settings (spec §3)", () => {
   it("stripe method requires charges_enabled and a viable minimum fee", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
@@ -1365,22 +1146,6 @@ describe.skipIf(!HAS_DB)("organiser payment actions (spec T7)", () => {
 // ---------------------------------------------------------------------------
 // Card submit path (spec §3): checkout at submit + 48h pay window
 // ---------------------------------------------------------------------------
-
-async function stripeRig(opts: { capacity?: number | null; feeCents?: number } = {}) {
-  const { orgId, orgSlug, ownerId } = await seedOrg("pro");
-  const owner = asOwner(orgId, ownerId);
-  await sql`update organizations
-            set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
-            where id = ${orgId}`;
-  const { competition, division } = await rig(owner);
-  const settings = await putRegistrationSettings(owner, division.id, {
-    ...SETTINGS_BASE,
-    payment_method: "stripe",
-    fee_cents: opts.feeCents ?? 500,
-    capacity: opts.capacity ?? null,
-  });
-  return { orgId, orgSlug, ownerId, owner, competition, division, settings };
-}
 
 describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
   it("snapshots the method, opens a 48h window, returns a checkout URL", async () => {
@@ -3262,23 +3027,6 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS0
 // it from this matrix, which asserts what OUR code SENDS to Stripe for every
 // allowlisted currency, not just the ones reachable end-to-end today.
 // ---------------------------------------------------------------------------
-
-/** Same shape as stripeRig (above), but pins the org's CURRENT currency to an
- *  explicit value instead of leaving it at V365's 'gbp' default, so the
- *  matrix below can seed a group whose snapshot matches ctx.currency for
- *  every member of REGISTRATION_CURRENCIES. Kept as its own helper rather
- *  than adding a currency opt to stripeRig, so this fixture carries zero
- *  risk to stripeRig's ~30 existing callers. */
-async function currencyRig(currency: Currency) {
-  const { orgId, orgSlug, ownerId } = await seedOrg("pro");
-  const owner = asOwner(orgId, ownerId);
-  const stripeAccountId = "acct_" + randomUUID().slice(0, 8);
-  await sql`update organizations
-            set stripe_charges_enabled = true, stripe_account_id = ${stripeAccountId}, currency = ${currency}
-            where id = ${orgId}`;
-  const { competition, division } = await rig(owner);
-  return { orgId, orgSlug, owner, competition, division, stripeAccountId };
-}
 
 describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)", () => {
   // The it.each below is driven by the REGISTRATION_CURRENCIES IMPORT
