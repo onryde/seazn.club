@@ -63,7 +63,7 @@ describe("POST /api/v1/format-preview — Body forwards progression, not qualifi
     expect((stagesArg as { progression: unknown }[])[1]!.progression).toEqual(progression);
   });
 
-  it("an old client POSTing the dropped qualification key gets it silently ignored (not .strict(), unlike CreateStage) — progression reaches previewDivisionFixtures as null", async () => {
+  it("rejects a legacy qualification key rather than previewing a format nobody asked for", async () => {
     previewMock.mockClear();
     const res = await POST(
       req({
@@ -71,10 +71,22 @@ describe("POST /api/v1/format-preview — Body forwards progression, not qualifi
         stages: [{ kind: "league", name: "League", config: {}, qualification: { topN: 4 } }],
       }),
     );
-    expect(res.status).toBe(200);
-    const [stagesArg] = previewMock.mock.calls[0]!;
-    const stage0 = stagesArg[0]!;
-    expect(stage0.progression ?? null).toBeNull();
-    expect(stage0).not.toHaveProperty("qualification");
+    // Before F2 made this route strict, the unknown key was dropped in silence
+    // and this returned 200 with progression null -- a preview of a DIFFERENT
+    // format, which is the most misleading answer a preview can give.
+    expect(res.status).toBe(400);
+    expect(previewMock).not.toHaveBeenCalled();
+  });
+
+  it("names the offending key, so the client learns what to change", async () => {
+    previewMock.mockClear();
+    const res = await POST(
+      req({
+        count: 8,
+        stages: [{ kind: "league", name: "League", config: {}, seeding: { source: "previous" } }],
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain("seeding");
   });
 });
