@@ -1329,6 +1329,12 @@ async function createRegistrationCheckout(
   if (!org?.stripe_account_id) {
     throw new HttpError(503, "Payments are not set up for this organiser yet");
   }
+  // Bound to a const because the session params are now built inside a closure
+  // (`mintOrTranslate`): TypeScript's narrowing from the guard above does not
+  // survive into a callback, since it cannot prove `org` is not reassigned
+  // meanwhile. Caught by `next build`'s type check, which runs the whole app —
+  // not by the vitest suites, which never typecheck.
+  const destination = org.stripe_account_id;
   const returnBase = token
     ? `${origin}/shared/${ctx.org_slug}/${ctx.comp_slug}/register/status` +
       `?rid=${groupId}&token=${encodeURIComponent(token)}`
@@ -1381,7 +1387,7 @@ async function createRegistrationCheckout(
     })),
     payment_intent_data: {
       application_fee_amount: applicationFeeCents(subtotal, feePercent),
-      transfer_data: { destination: org.stripe_account_id },
+      transfer_data: { destination },
       metadata: { registration_group_id: groupId, registration_ids: idsJoined, org_id: ctx.org_id },
     },
     success_url: `${returnBase}&checkout=success&session_id={CHECKOUT_SESSION_ID}`,
