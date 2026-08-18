@@ -204,6 +204,26 @@ export function CourtMultiPicker({
   // archived selected court (finding #6): it still resolves to a real name
   // here instead of falling through to unknownCourtLabel.
   const nameById = resolveCourtNames(venues);
+  // The strip renders the venue on its OWN line rather than inside the label,
+  // so the qualification survives a narrow viewport. At 320px a single
+  // truncating "Court 1 (Riverside Centre)" clips to "Court 1 (Riversid…" —
+  // and two venues whose names share a prefix ("Riverside Centre" / "Riverside
+  // Hall") then clip to IDENTICAL text, which defeats the whole point of
+  // qualifying at exactly the width the project mandates. Verified by
+  // screenshot, not assumed: the flat label really does clip there.
+  //
+  // `buildCourtDirectory` already decides WHETHER a name is ambiguous, so this
+  // does not re-derive that rule — a court whose bare name is unique keeps a
+  // single line and no venue.
+  const bareNameById = new Map(allCourtRows(venues).map((r) => [r.id, r.name] as const));
+  const venueLineFor = (id: string): string | null => {
+    const bare = bareNameById.get(id);
+    const label = nameById[id];
+    if (bare === undefined || label === undefined || label === bare) return null;
+    // Qualified form is `${name} (${venue})` — recover the venue for its own line.
+    const inner = label.slice(bare.length).trim();
+    return inner.startsWith("(") && inner.endsWith(")") ? inner.slice(1, -1) : inner;
+  };
   const atCap = maxSelected !== undefined && value.length >= maxSelected;
 
   if (groups.length === 0) {
@@ -239,6 +259,8 @@ export function CourtMultiPicker({
         <ol className="mb-2 list-none space-y-1.5">
           {value.map((id, i) => {
             const name = nameById[id] ?? unknownCourtLabel;
+            const venueLine = venueLineFor(id);
+            const courtLine = venueLine === null ? name : bareNameById.get(id) ?? name;
             return (
               <li
                 key={id}
@@ -247,7 +269,12 @@ export function CourtMultiPicker({
                 <span aria-hidden className="w-4 shrink-0 text-center text-xs text-purple-400">
                   {i + 1}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-slate-700">{name}</span>
+                <span className="min-w-0 flex-1 text-slate-700">
+                  <span className="block truncate">{courtLine}</span>
+                  {venueLine !== null && (
+                    <span className="block truncate text-xs text-slate-500">{venueLine}</span>
+                  )}
+                </span>
                 {!disabled && (
                   <div className="flex shrink-0 items-center gap-1">
                     <button
