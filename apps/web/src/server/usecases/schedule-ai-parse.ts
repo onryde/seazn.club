@@ -505,7 +505,12 @@ export interface ResolvedParse {
    *  days those are: only the pack does. Expanding here would mean either
    *  dropping the break or guessing at days, and guessing is the failure this
    *  whole file exists to prevent. `buildSchedulePack` owns the expansion, next
-   *  to where it already renders `config.blackouts`. */
+   *  to where it already renders `config.blackouts`.
+   *
+   *  `court`, when present, is already the resolved court ID (P9 pass 3d) —
+   *  NOT the name the organiser typed or the model echoed. The name only
+   *  ever exists transiently inside `resolveParsed`'s own `no_play_between`
+   *  branch, for the `hints.courts` lookup. */
   dailyBreaks: { from: string; to: string; court?: string }[];
 }
 
@@ -651,7 +656,20 @@ export function resolveParsed(
   raw: RawParsed | null,
   clock: Clock,
   tz: string,
-  hints: { fixtureCount?: number; courts?: string[]; parseFailed?: boolean } = {},
+  hints: {
+    fixtureCount?: number;
+    /** Court NAME -> id (P9 pass 3d), for the same candidate courts the
+     *  model was shown as settings.courts (schedule-ai.ts's
+     *  `toModelPayload`). A `no_play_between.court` is the NAME the model
+     *  copied — the organiser's own instruction and the model both speak
+     *  names, never ids — so this both verifies the name was one the model
+     *  was actually shown AND resolves it to the real court id before the
+     *  break reaches `dailyBreaks`, `PackSettings.blackouts` and
+     *  `ScheduleConfig`, none of which have carried a name since the P9
+     *  cutover. */
+    courts?: ReadonlyMap<string, string>;
+    parseFailed?: boolean;
+  } = {},
 ): ResolvedParse {
   const assumptions: string[] = [];
   const hard: HardConstraint[] = [];
@@ -748,17 +766,22 @@ export function resolveParsed(
         );
         continue;
       }
+      let courtId: string | undefined;
       if (h.court !== undefined) {
-        // Verify against the labels the model was actually shown. Dropping just
-        // the court would turn "court 2 is closed at lunch" into "everything
-        // stops at lunch" — a larger constraint than was stated. An
-        // unverifiable court is not the same as no court.
-        if (hints.courts === undefined || !hints.courts.includes(h.court)) {
+        // Verify against the labels the model was actually shown, and
+        // resolve straight to the court's real id in the same step —
+        // `dailyBreaks`/`PackSettings.blackouts`/`ScheduleConfig` all speak
+        // ids only since P9, never a name. Dropping just the court would
+        // turn "court 2 is closed at lunch" into "everything stops at
+        // lunch" — a larger constraint than was stated. An unverifiable
+        // court is not the same as no court.
+        courtId = hints.courts?.get(h.court);
+        if (courtId === undefined) {
           unparsed.push(`a break was stated for '${h.court}', which is not one of this run's courts`);
           continue;
         }
       }
-      dailyBreaks.push({ from: h.from, to: h.to, ...(h.court !== undefined ? { court: h.court } : {}) });
+      dailyBreaks.push({ from: h.from, to: h.to, ...(courtId !== undefined ? { court: courtId } : {}) });
       assumptions.push(
         `no play between ${h.from} and ${h.to}${h.court !== undefined ? ` on ${h.court}` : ""} on every day of the run (${tz})`,
       );
