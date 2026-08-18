@@ -1638,6 +1638,7 @@ export function ScheduleBoard({
           brief={aiBrief}
           fixtures={aiFixtures}
           entrantNames={entrantNames}
+          courtNames={courtNamesById}
           prefillRepair={aiRepairScope}
           onClose={() => {
             setAiOpen(false);

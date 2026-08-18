@@ -35,6 +35,7 @@ export function AiDiffPanel({
   excluded,
   onToggleExclude,
   entrantNames = {},
+  courtNames = {},
 }: {
   plan: AiPlanResponse;
   /** The board's current fixtures (before the proposal) — powers the provenance. */
@@ -48,6 +49,14 @@ export function AiDiffPanel({
    *  (`schedule-board.tsx`); every other/direct-construction caller keeps
    *  today's degrade-to-short-id behaviour unchanged. */
   entrantNames?: Record<string, string>;
+  /** Court id -> display label (`resolveCourtNames`/`buildCourtDirectory`,
+   *  the SAME "Name (Venue)" directory the board and the AI pack build).
+   *  P9 review wave 1, finding 4: every `AiDiffSlot.court_label` here is a
+   *  real court uuid (the frozen legacy field name never changed), so this
+   *  is what keeps a from/to row showing a name instead of a raw id.
+   *  Optional and additive: an id missing from the map — or the map itself
+   *  missing — degrades to `courtPicker.unknownCourt`, never the bare id. */
+  courtNames?: Record<string, string>;
 }) {
   const msg = useMsg();
   const plural = usePlural();
@@ -68,9 +77,16 @@ export function AiDiffPanel({
   );
   const cov = plan.officials_coverage;
 
+  // P9 review wave 1, finding 4: `court_label` here is a real court uuid, not
+  // display text (see AiDiffPanel's own `courtNames` doc) — resolve it
+  // through the directory rather than rendering the id verbatim. A miss
+  // (stale/deleted court) degrades to the same `courtPicker.unknownCourt`
+  // text the rest of the app already uses for that case, never the bare id.
   const slot = (s: AiDiffSlot | { scheduled_at: string; court_label: string | null }): string => {
     const time = timeLabel(s.scheduled_at);
-    return s.court_label ? `${s.court_label} · ${time}` : time;
+    if (!s.court_label) return time;
+    const label = courtNames[s.court_label] ?? msg("courtPicker.unknownCourt");
+    return `${label} · ${time}`;
   };
   const label = (id: string): { code: string; matchup: string; marker: string | null } => {
     const f = byId.get(id);

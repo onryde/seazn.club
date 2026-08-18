@@ -372,6 +372,7 @@ export function AiConsole({
   onProposalChange,
   onPulse,
   entrantNames = {},
+  courtNames = {},
 }: {
   divisionId: string;
   /** The division seq the board rendered at — the optimistic-concurrency token
@@ -398,6 +399,12 @@ export function AiConsole({
    *  back to a shortened id, never a raw UUID — the pre-existing degrade,
    *  unchanged for any caller that does not supply it. */
   entrantNames?: Record<string, string>;
+  /** Court id -> display label (`resolveCourtNames`/`buildCourtDirectory`).
+   *  P9 review wave 1, finding 4: threaded to the diff panel so a from/to
+   *  row shows a name instead of the raw court uuid the plan's legacy
+   *  `court_label` field actually carries. Optional/additive, same
+   *  degrade-to-`courtPicker.unknownCourt` rule as a miss in the map. */
+  courtNames?: Record<string, string>;
   /** A saved officials AssignPolicy, if the division has one — sent with the run
    *  for a dry coverage preview (§2). No persisted policy source exists today
    *  (the officials/auto flow composes it ad-hoc from unsaved UI state), so the
@@ -927,6 +934,7 @@ export function AiConsole({
           traceNonce={traceNonce}
           onPulse={(ids) => onPulseRef.current?.(ids)}
           entrantNames={entrantNames}
+          courtNames={courtNames}
         />
       )}
       {state.step === "officials" && (
@@ -1396,6 +1404,7 @@ export function ScheduleStep({
   traceNonce,
   onPulse,
   entrantNames = {},
+  courtNames = {},
 }: {
   state: AiConsoleState;
   dispatch: (a: Parameters<typeof aiConsoleReducer>[1]) => void;
@@ -1411,6 +1420,9 @@ export function ScheduleStep({
    *  id, never a raw UUID — the pre-existing degrade, unchanged for any
    *  caller that does not supply it. */
   entrantNames?: Record<string, string>;
+  /** Court id -> display label — P9 review wave 1, finding 4. Threaded
+   *  straight through to `AiDiffPanel`; see `AiConsole`'s own doc. */
+  courtNames?: Record<string, string>;
 }) {
   const plan = state.schedulePlan;
   const { events, flaggedIds } = useMemo(
@@ -1441,6 +1453,7 @@ export function ScheduleStep({
         excluded={state.excludedFixtures}
         onToggleExclude={(fixtureId) => dispatch({ type: "TOGGLE_EXCLUDE", fixtureId })}
         entrantNames={entrantNames}
+        courtNames={courtNames}
       />
 
       {/* Everything the run flagged, could not place, or assumed — one card,
