@@ -319,11 +319,18 @@ async function engineInput(
   // move a fixture to a different day than its sibling divisions see.
   const tz = (await loadSettings(tx, divisionId)).orgTz;
 
+  // P9 cutover: court_id, not the frozen court_label. `OfficialFixture.court`
+  // never leaves this pass (AssignResult carries no court field — engine/
+  // officials/types.ts), so it is purely the block-stay/sort identity
+  // (assign.ts: "prefer same court across a block", "time, then court, then
+  // id"); court_label being NULL for every fixture scheduled since pass 3a
+  // was silently collapsing all of them into one "no court" bucket, defeating
+  // block-stay for any org whose scheduling postdates the cutover.
   const fixtureRows = await tx<{
-    id: string; scheduled_at: string; court_label: string | null; pool_id: string | null;
+    id: string; scheduled_at: string; court_id: string | null; pool_id: string | null;
     stage_id: string; division_id: string; home_entrant_id: string | null; away_entrant_id: string | null;
   }[]>`
-    select id, scheduled_at, court_label, pool_id, stage_id, division_id,
+    select id, scheduled_at, court_id, pool_id, stage_id, division_id,
            home_entrant_id, away_entrant_id
     from fixtures
     where division_id = ${divisionId} and scheduled_at is not null
@@ -335,7 +342,7 @@ async function engineInput(
       id: f.id,
       startAt: start,
       endAt: start + matchMinutes * 60_000,
-      court: f.court_label ?? undefined,
+      court: f.court_id ?? undefined,
       poolId: f.pool_id ?? undefined,
       divisionId: f.division_id,
       stageId: f.stage_id,
@@ -572,13 +579,19 @@ async function assignedNotices(
   if (officials.length === 0) return [];
   const [org] = await tx<{ name: string }[]>`
     select name from organizations where id = ${orgId}`;
+  // P9 cutover: `venue`/`court_label` below are the DERIVED names (from
+  // venues/courts via venue_id/court_id) despite the field names — these
+  // feed `officialAssignedTemplate`'s rendered "where" line
+  // (lib/email-templates/official-assigned.ts) directly, and that template
+  // (outside this sweep's scope) reads exactly these two field names, so
+  // they stay as-is rather than becoming venue_name/court_name here.
   const fixtures = await tx<{
     id: string; scheduled_at: string | null; venue: string | null;
     court_label: string | null; venue_tz: string | null;
     home_name: string | null; away_name: string | null;
   }[]>`
     -- venue lane (V305): division override → org timezone → UTC
-    select f.id, f.scheduled_at, f.venue, f.court_label,
+    select f.id, f.scheduled_at, ven.name as venue, crt.name as court_label,
            coalesce(ss.tz, fo.timezone, 'UTC') as venue_tz,
            h.display_name as home_name, a.display_name as away_name
     from fixtures f
@@ -586,6 +599,8 @@ async function assignedNotices(
     left join organizations fo on fo.id = f.org_id
     left join entrants h on h.id = f.home_entrant_id
     left join entrants a on a.id = f.away_entrant_id
+    left join courts crt on crt.id = f.court_id
+    left join venues ven on ven.id = f.venue_id
     where f.id in ${tx(fixtureIds)}`;
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   return officials.map((o) => ({
