@@ -14,6 +14,7 @@ import { boardSlotTimes } from "../shared/time-options";
 export function MovePanel({
   fixture,
   courts,
+  courtNames,
   venueCap = "Court",
   entrantNames,
   feedLabels,
@@ -22,7 +23,18 @@ export function MovePanel({
   onClose,
 }: {
   fixture: BoardFixture;
+  /** P9 scope item 5: entries are `courts.id` uuids when the board's own
+   *  `cfg.courts` (real ids since P9 pass 1) supplied them — see
+   *  `schedule-board.tsx`'s own `courts` memo for the (pre-existing, not
+   *  this pass's to fix) caveat that a pre-cutover fixture's frozen
+   *  `court_label` can still ride along in this array. Never rendered raw:
+   *  `courtNames` resolves each entry to a display name. */
   courts: string[];
+  /** id -> display name, built from the org's own venues/courts (P9 scope
+   *  item 5). Optional: an entry with no mapping falls back to rendering
+   *  the raw value, matching this panel's behaviour before `courtNames`
+   *  existed — existing callers that don't pass it are unaffected. */
+  courtNames?: Record<string, string>;
   venueCap?: string;
   entrantNames: Record<string, string>;
   feedLabels: Record<string, FeedLabelPair>;
@@ -67,7 +79,13 @@ export function MovePanel({
   const [when, setWhen] = useState(
     fixture.scheduled_at ? zonedDateTimeInput(fixture.scheduled_at, boardConfig.orgTz) : "",
   );
-  const [court, setCourt] = useState(fixture.court_label ?? courts[0] ?? "");
+  // P9 scope item 5: seeded from `court_id`, never `court_label` — the
+  // latter is FROZEN and stays null on anything scheduled since the
+  // cutover (schedule.ts stopped writing it). `court_id` is what every
+  // write path (`moveFixture`'s own `PatchFixture`, `.strict()`) actually
+  // reads back, so seeding from it is what keeps the reopened panel's
+  // preselected court in sync with reality.
+  const [court, setCourt] = useState(fixture.court_id ?? courts[0] ?? "");
 
   // `undefined` here (rather than an empty array) is what makes DateTimeField
   // fall back to its own generated quarter-hour list — the design's rule 2
@@ -130,7 +148,7 @@ export function MovePanel({
         <select value={court} onChange={(e) => setCourt(e.target.value)} className="input min-h-11 px-2 py-1 text-xs">
           {courts.length === 0 && <option value="">{msg("board.unassigned")}</option>}
           {courts.map((c) => (
-            <option key={c} value={c}>{c}</option>
+            <option key={c} value={c}>{courtNames?.[c] ?? c}</option>
           ))}
         </select>
       </label>

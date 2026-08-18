@@ -37,6 +37,8 @@ import { MovePanel } from "./board/move-panel";
 import { ScheduleGateDialog, type GateAction } from "./board/schedule-gate-dialog";
 import { ScheduleResultStrip } from "./board/result-strip";
 import { SettingsPanel } from "./board/settings-panel";
+import { flattenCourts } from "@/components/v2/shared/court-multi-picker";
+import type { Venue } from "@/components/v2/venues-panel";
 import {
   cardTitle,
   DENSITY_STORAGE_KEY,
@@ -389,6 +391,12 @@ interface Props {
   competitionEnd?: string | null;
   /** Sport-appropriate playing-area word, capitalised (e.g. "Pitch"). */
   venueCap?: string;
+  /** Org venues with nested courts (`listVenues` shape, venues.ts) — feeds
+   *  the inline SettingsPanel's court multi-picker (P9 scope item 5) and
+   *  this board's own court-id -> display-name lookup (MovePanel's dropdown,
+   *  see `courtNamesById` below). Optional/defaulted to `[]`: existing test
+   *  call sites construct this board without it. */
+  venues?: Venue[];
   /** Render the inline settings card. The division schedule page turns this
    *  off and hosts the settings on its constraints tab instead. */
   showSettings?: boolean;
@@ -454,6 +462,7 @@ export function ScheduleBoard({
   competitionStart,
   competitionEnd,
   venueCap = "Court",
+  venues = [],
   showSettings = true,
   officialsWithBlackout = 0,
   competition,
@@ -860,6 +869,18 @@ export function ScheduleBoard({
     }
     return list;
   }, [cfg.courts, scheduled, ghosts]);
+
+  // P9 scope item 5: `courts` above is keyed by whatever `cfg.courts` holds
+  // (real ids since P9 pass 1) — never safe to render RAW to an organiser.
+  // This is the id -> name lookup MovePanel's dropdown resolves through;
+  // built from `venues` (threaded down from the page, same as
+  // SettingsPanel's own court picker below) rather than from any per-fixture
+  // field, so it also names a configured-but-not-yet-scheduled court.
+  const courtNamesById = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const c of flattenCourts(venues)) map[c.id] = c.name;
+    return map;
+  }, [venues]);
 
   // ------------------------------------------- pick-then-place (gap 11)
   const [pickedId, setPickedId] = useState<string | null>(null);
@@ -1318,6 +1339,7 @@ export function ScheduleBoard({
         <MovePanel
           fixture={pickedFixture}
           courts={courts}
+          courtNames={courtNamesById}
           venueCap={venueCap}
           entrantNames={entrantNames}
           feedLabels={feedLabels}
@@ -1595,6 +1617,7 @@ export function ScheduleBoard({
           canEdit={canEdit}
           constraintsAllowed={constraintsAllowed}
           venueCap={venueCap}
+          venues={venues}
           orgTz={settings.orgTz}
           // The same two dates this board already takes for its day range —
           // the panel bounds its date pickers by them, so a range outside the
