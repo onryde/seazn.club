@@ -120,3 +120,88 @@ describe("candidateCourts — archived exclusion (design doc A3: archived venues
     },
   );
 });
+
+describe(
+  "validateAssignments — court_tag_mismatch (P9 pass 2c: the verifier's own view of the placer's " +
+    "required_court_tags constraint — the placer/verifier fork this session's court-tags work " +
+    "introduced, candidate-courts.ts's module header)",
+  () => {
+    function assignment(court: string): Assignment {
+      return { fixtureId: "f1", court, startAt: 0, endAt: 30 * 60_000, entrants: [], people: [] };
+    }
+
+    it("an assignment on a court missing a required tag produces court_tag_mismatch, keyed on court_id", () => {
+      // "clay-court" is simply absent from the qualified set a real caller
+      // would have computed (it lacks the required tag) — courtTagQualifiedIds
+      // carries only what candidateCourts decided qualifies.
+      const config: VerifyConfig = {
+        perEntrantMinRest: 0,
+        gapMinutes: 0,
+        courtTagQualifiedIds: [],
+      };
+      const conflicts = validateAssignments([assignment("clay-court")], config, [], []);
+      expect(conflicts).toEqual([
+        { fixtureId: "f1", reason: "court", details: { kind: "court_tag_mismatch", court: "clay-court" } },
+      ]);
+    });
+
+    it("an assignment on a court whose tags ARE a superset of required does not produce it", () => {
+      const config: VerifyConfig = {
+        perEntrantMinRest: 0,
+        gapMinutes: 0,
+        courtTagQualifiedIds: ["clay-court"],
+      };
+      const conflicts = validateAssignments([assignment("clay-court")], config, [], []);
+      expect(conflicts).toEqual([]);
+    });
+
+    it("empty required tags never produce it — proven through the REAL candidateCourts computation, not a hand-built set", () => {
+      // A division with no required_court_tags: candidateCourts([], []) reads
+      // as "every court qualifies" (candidate-courts.ts ruling 2), which
+      // resolveTagQualifiedCourtIds (court-candidates.ts) hands straight
+      // through as courtTagQualifiedIds — this is that real computation, not
+      // an array asserted by hand.
+      const courts: CourtMeta[] = [meta("c1", [])];
+      const qualified = candidateCourts(["c1"], courts, []).ids;
+      const config: VerifyConfig = {
+        perEntrantMinRest: 0,
+        gapMinutes: 0,
+        courtTagQualifiedIds: qualified,
+      };
+      const conflicts = validateAssignments([assignment("c1")], config, [], []);
+      expect(conflicts).toEqual([]);
+    });
+
+    it("courtTagQualifiedIds entirely absent (every pre-pass-2c caller) never produces it — unconstrained, not zero-qualified", () => {
+      const config: VerifyConfig = { perEntrantMinRest: 0, gapMinutes: 0 };
+      const conflicts = validateAssignments([assignment("any-court")], config, [], []);
+      expect(conflicts).toEqual([]);
+    });
+
+    it(
+      "an assignment on an ARCHIVED court whose tags satisfy the requirement produces NO conflict " +
+        "(ruling 3: archiving must not retroactively invalidate a board) — using the SAME " +
+        "archived-neutralising resolution resolveTagQualifiedCourtIds (court-candidates.ts) performs",
+      () => {
+        const courts: CourtMeta[] = [meta("c1", ["clay"], /* archived */ true)];
+        // Mirrors resolveTagQualifiedCourtIds exactly: archived neutralised to
+        // false so ONLY the tag comparison governs this conflict — the
+        // combined (tag+archived) candidateCourts answer used for
+        // config.courts/NEW placement is deliberately NOT what this reads.
+        const tagOnly = courts.map((c) => ({ ...c, archived: false }));
+        const qualified = candidateCourts(
+          tagOnly.map((c) => c.id),
+          tagOnly,
+          ["clay"],
+        ).ids;
+        const config: VerifyConfig = {
+          perEntrantMinRest: 0,
+          gapMinutes: 0,
+          courtTagQualifiedIds: qualified,
+        };
+        const conflicts = validateAssignments([assignment("c1")], config, [], []);
+        expect(conflicts).toEqual([]);
+      },
+    );
+  },
+);
