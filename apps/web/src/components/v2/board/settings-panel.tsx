@@ -268,7 +268,21 @@ export function SettingsPanel({
   const applyCapacitySuggestion = {
     add_day: () => setEndAt((e) => (e === "" ? e : ymdAddDays(e, 1))),
     ...(nextAddableCourt !== undefined
-      ? { add_court: () => setCourts((cs) => (cs.length < 50 ? [...cs, nextAddableCourt] : cs)) }
+      ? {
+          // Review wave 2: the next court is chosen INSIDE the updater from
+          // `cs`, not from the render-time `nextAddableCourt` the closure
+          // captured. Two clicks before a re-render both appended the same id,
+          // so `config.courts` held a duplicate — deduped later by
+          // `candidateCourts`, but double-counted by this panel's own capacity
+          // supply figure in between, which is the number the organiser is
+          // looking at when they click.
+          add_court: () =>
+            setCourts((cs) => {
+              if (cs.length >= 50) return cs;
+              const next = flattenCourts(venues).find((c) => !cs.includes(c.id))?.id;
+              return next === undefined ? cs : [...cs, next];
+            }),
+        }
       : {}),
     shorten_match: (s: { amount: number }) => setMatchMinutes((m) => Math.max(1, m - s.amount)),
     shrink_gap: (s: { amount: number }) => setGapMinutes((g) => Math.max(0, g - s.amount)),

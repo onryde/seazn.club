@@ -164,8 +164,6 @@ export async function listMyFixtures(userId: string): Promise<{
     join entrant_members em on em.person_id = p.id
     join entrants e on e.id = em.entrant_id and e.status in ${sql(ROSTERED)}
     join fixtures f on (f.home_entrant_id = e.id or f.away_entrant_id = e.id)
-    left join courts crt on crt.id = f.court_id
-    left join venues ven on ven.id = f.venue_id
     left join match_states m on m.fixture_id = f.id
     join divisions d on d.id = f.division_id
     join competitions c on c.id = d.competition_id

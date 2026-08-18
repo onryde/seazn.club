@@ -65,7 +65,7 @@ import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 // #14: `courtNamesById` is the venue-qualified label map (via
 // `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
 // venues that legally share one court name.
-import { validateSchedule, courtNamesById } from "./schedule";
+import { validateSchedule, courtNamesById, courtVenueIds } from "./schedule";
 // #8 sibling fix: reuse the SAME not-found codes `venues.ts` already
 // throws for a bad court_id/venue_id, instead of minting new ones, so
 // addFixture's error is indistinguishable from every other "not a real
@@ -2825,6 +2825,17 @@ export async function addFixture(
       from fixtures where stage_id = ${stageId} and round_no = ${round}`;
     const [{ n }] = await tx<{ n: number }[]>`
       select count(*)::int as n from fixtures where stage_id = ${stageId}`;
+    // Review wave 2: the venue is DERIVED from the court, exactly as
+    // `applySchedule`/`moveFixture`/the joint apply now do. Accepting both
+    // independently let a caller post Venue A's court with Venue B's
+    // `venue_id` and create a fixture whose venue contradicts the court it
+    // sits on — the FK only checks each id belongs to the org, never that the
+    // two agree. A court with no resolvable venue falls back to the supplied
+    // value, so a venue-only ad-hoc fixture still works.
+    const adhocVenueId =
+      input.court_id != null
+        ? ((await courtVenueIds(tx)).get(input.court_id) ?? input.venue_id ?? null)
+        : (input.venue_id ?? null);
     const [fixture] = await tx<{ id: string }[]>`
       insert into fixtures (stage_id, division_id, pool_id, round_no, seq_in_round,
                             home_entrant_id, away_entrant_id, ext_key, status, scheduled_at,
@@ -2832,7 +2843,7 @@ export async function addFixture(
       values (${stageId}, ${stage.division_id}, ${poolId}, ${round}, ${nextSeq},
               ${input.home_entrant_id}, ${input.away_entrant_id}, ${"adhoc-" + String(n + 1)},
               'scheduled', ${input.scheduled_at ?? null},
-              ${input.venue_id ?? null}, ${input.court_id ?? null})
+              ${adhocVenueId}, ${input.court_id ?? null})
       returning id`;
     return { fixture_id: fixture!.id };
   });

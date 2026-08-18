@@ -6,7 +6,7 @@
 // `assessCourtMigrationHealth` is the fix: a pure function (no DB) so it is
 // testable without a live Postgres connection, unlike the script around it.
 import { describe, expect, it } from "vitest";
-import { assessCourtMigrationHealth, type CourtMigrationCounts } from "../verify-court-migration";
+import { assessCourtMigrationHealth, type CourtMigrationCounts } from "../court-migration-health";
 
 const HEALTHY: CourtMigrationCounts = {
   venuesTotal: 3,

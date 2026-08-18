@@ -118,7 +118,14 @@ export default async function DivisionPage({
     listEntrants(auth, id),
     getScheduleSettings(auth, id),
     hasFeature(auth.orgId, "exports"),
-    listVenues(auth),
+    // Archived-INCLUSIVE, matching the schedule page. `StagesPanel` builds its
+    // court names through `resolveCourtNames`, whose whole contract is that an
+    // archived court still RESOLVES to a name (a fixture placed before its
+    // court was archived must not render a bare uuid), and `FixtureLine`'s
+    // `courtById` is documented archived-inclusive too. Without the flag a
+    // name colliding only with an archived sibling rendered unqualified here
+    // and venue-qualified on the board — the same court, two labels.
+    listVenues(auth, { includeArchived: true }),
   ]);
   // Moved up from just before the JSX return (still THE canonical
   // frozen/editable derivation, unchanged) — the P6/D4b task B proposal

@@ -226,7 +226,16 @@ export function CourtMultiPicker({
   };
   const atCap = maxSelected !== undefined && value.length >= maxSelected;
 
-  if (groups.length === 0) {
+  // Review wave 2: the empty state is only correct when there is ALSO nothing
+  // selected. `courtGroups` drops archived venues and courts, so a division
+  // that already had courts configured, whose venue was later archived, hit
+  // this early return and showed the organiser a Directory pointer and nothing
+  // else — while `config.courts` still held those ids and the solver still
+  // scheduled on them. Unremovable, and invisible. With a selection present we
+  // fall through to the normal render: the strip still resolves names (that
+  // map is archived-INCLUSIVE by design, finding #6) so the organiser can see
+  // and remove them, and the option list below is simply empty.
+  if (groups.length === 0 && value.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm">
         <p className="font-medium text-slate-700">{emptyTitle}</p>

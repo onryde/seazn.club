@@ -291,6 +291,37 @@ describe("CourtMultiPicker — render", () => {
     expect(betaIndex).toBeLessThan(alphaIndex);
   });
 
+  it("keeps an existing selection visible when every venue is archived", () => {
+    // Review wave 2. `courtGroups` drops archived venues, so a division whose
+    // courts were configured and whose venue was later archived rendered the
+    // "no courts yet" empty state and NOTHING else — while `config.courts`
+    // still held those ids and the solver still scheduled on them. The
+    // organiser could neither see nor remove them.
+    const venues = [
+      makeVenue({
+        id: "v-gone",
+        name: "Closed Hall",
+        archived_at: "2026-01-01T00:00:00.000Z",
+        courts: [makeCourt({ id: "c-gone", name: "Court 1" })],
+      }),
+    ];
+    const html = renderToStaticMarkup(
+      <CourtMultiPicker {...baseProps} venues={venues} value={["c-gone"]} onChange={() => {}} />,
+    );
+    // The selection is still shown, by NAME (the name map is archived
+    // inclusive on purpose — finding #6), so it can be removed.
+    expect(html).toContain("Court 1");
+    expect(html).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+    // …and this is NOT the empty state.
+    expect(html).not.toContain(baseProps.emptyTitle);
+
+    // The contrast: with nothing selected, the empty state is still correct.
+    const empty = renderToStaticMarkup(
+      <CourtMultiPicker {...baseProps} venues={venues} value={[]} onChange={() => {}} />,
+    );
+    expect(empty).toContain(baseProps.emptyTitle);
+  });
+
   it("venue-qualifies the selected-order strip when two selected courts share a bare name across venues (review finding #13)", () => {
     // Two courts literally named "Court 1" in different venues are legal
     // data (courts' uniqueness is per-venue — see the resolveCourtNames

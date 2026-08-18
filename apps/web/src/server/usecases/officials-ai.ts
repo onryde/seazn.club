@@ -203,10 +203,16 @@ export async function buildOfficialsPack(
           // assignment compared unequal and double-counted in
           // `officialsAiPlanForDivision`'s `new Set(pack.fixtures.map(f =>
           // f.court))` credit-pricing input.
+          // Review wave 2: an override whose court does not resolve keeps its
+          // own value rather than becoming null. Nulling it DROPPED the court
+          // from the pack the model reads and from the distinct-court credit
+          // count — a silent under-price plus a fixture that looks unplaced.
+          // The persisted branch falls back to the id for the same reason:
+          // FixtureRow's own convention is id-on-miss, never null.
           const court = ov
-            ? (courtNames.get(ov.court_label) ?? null)
+            ? (courtNames.get(ov.court_label) ?? ov.court_label ?? null)
             : f.court_id !== null
-              ? (courtNames.get(f.court_id) ?? null)
+              ? (courtNames.get(f.court_id) ?? f.court_id)
               : null;
           return { f, atIso, court, startMs: atIso !== null ? new Date(atIso).getTime() : NaN };
         })

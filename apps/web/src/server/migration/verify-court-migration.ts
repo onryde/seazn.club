@@ -35,49 +35,12 @@
 //   npm run db:verify-court-migration   # same thing, from apps/web
 import postgres from "postgres";
 import pino from "pino";
+import {
+  assessCourtMigrationHealth,
+  type CourtMigrationCounts,
+} from "./court-migration-health.ts";
 
-export interface CourtMigrationCounts {
-  venuesTotal: number;
-  courtsTotal: number;
-  fixturesCourtLabelPopulated: number;
-  fixturesCourtIdPopulated: number;
-  fixturesCourtLabelWithoutId: number;
-  fixturesVenuePopulated: number;
-  fixturesVenueIdPopulated: number;
-  fixturesVenueTextWithoutId: number;
-  scheduleSettingsWithUnmigratedCourts: number;
-}
 
-export interface CourtMigrationHealth {
-  ok: boolean;
-  reasons: string[];
-}
-
-/**
- * Pure — no DB, no I/O — so it is unit-testable without a live Postgres
- * connection, unlike the script around it. Every reason here is a
- * FALSIFIABLE assertion the counts either satisfy or do not; `ok` is false
- * the moment any of them fails.
- */
-export function assessCourtMigrationHealth(counts: CourtMigrationCounts): CourtMigrationHealth {
-  const reasons: string[] = [];
-  if (counts.fixturesCourtLabelWithoutId > 0) {
-    reasons.push(
-      `${counts.fixturesCourtLabelWithoutId} fixture(s) carry court_label but no court_id — the step-6 backfill missed them`,
-    );
-  }
-  if (counts.fixturesVenueTextWithoutId > 0) {
-    reasons.push(
-      `${counts.fixturesVenueTextWithoutId} fixture(s) carry a free-text venue but no venue_id — the fixture-venue-migration backfill missed them`,
-    );
-  }
-  if (counts.scheduleSettingsWithUnmigratedCourts > 0) {
-    reasons.push(
-      `${counts.scheduleSettingsWithUnmigratedCourts} schedule_settings row(s) still hold a pre-migration free-text name in courts[]`,
-    );
-  }
-  return { ok: reasons.length === 0, reasons };
-}
 
 const log = pino({ name: "db.court-migration-verify", level: process.env.LOG_LEVEL ?? "info" });
 
