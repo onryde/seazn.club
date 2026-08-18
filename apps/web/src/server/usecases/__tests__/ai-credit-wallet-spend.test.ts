@@ -53,7 +53,7 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { aiPlanForDivision } from "../schedule-ai";
 import { officialsAiPlanForDivision } from "../officials-ai";
-import { GENERIC_CONFIG, seedOrg } from "./_seed";
+import { GENERIC_CONFIG, seedCourts, seedOrg } from "./_seed";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { balance, walletIdFor } from "@/lib/credits";
 
@@ -62,29 +62,37 @@ const TZ = "Europe/London";
 const MIN = 60_000;
 const BASE = Date.parse("2026-08-01T09:00:00.000Z");
 
-const SCHEDULE_SETTINGS_CONFIG = {
-  startAt: "2026-08-01T09:00:00.000Z",
-  matchMinutes: 30,
-  gapMinutes: 0,
-  courts: ["Court 1", "Court 2"],
-  perEntrantMinRest: 20,
-  blackouts: [],
-  sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T18:00:00.000Z" }],
-  constraints: {
-    restMin: 20,
-    noBackToBack: false,
-    startWindows: [],
-    fieldFairness: "balance",
-    parallelism: "mixed",
-    crossPersonClash: "hard",
-  },
-};
+function scheduleSettingsConfig(courts: string[]) {
+  return {
+    startAt: "2026-08-01T09:00:00.000Z",
+    matchMinutes: 30,
+    gapMinutes: 0,
+    courts,
+    perEntrantMinRest: 20,
+    blackouts: [],
+    sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T18:00:00.000Z" }],
+    constraints: {
+      restMin: 20,
+      noBackToBack: false,
+      startWindows: [],
+      fieldFairness: "balance",
+      parallelism: "mixed",
+      crossPersonClash: "hard",
+    },
+  };
+}
 
-async function setScheduleSettings(divisionId: string): Promise<void> {
+/** P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` — seeds 2 real
+ *  courts and returns them so callers (`legalPlan`) can stamp the SAME ids
+ *  on the fabricated AI plan; `runAiPlan`'s settings-membership check
+ *  refuses a `court_label` that is not one of them. */
+async function setScheduleSettings(auth: AuthCtx, divisionId: string): Promise<string[]> {
+  const courts = await seedCourts(auth.orgId, 2);
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${divisionId}, ${sql.json(SCHEDULE_SETTINGS_CONFIG)}, ${TZ}, now())
+    values (${divisionId}, ${sql.json(scheduleSettingsConfig(courts))}, ${TZ}, now())
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
+  return courts;
 }
 
 /** A timed division with 4 entrants (RR fixtures, all movable) + settings.
@@ -92,7 +100,7 @@ async function setScheduleSettings(divisionId: string): Promise<void> {
 async function seedPlannableDivision(
   auth: AuthCtx,
   opts: { officials?: number } = {},
-): Promise<{ divisionId: string; fixtureIds: string[] }> {
+): Promise<{ divisionId: string; fixtureIds: string[]; courts: string[] }> {
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Wallet AI", visibility: "public", branding: {} });
   const division = await createDivision(auth, comp.id, {
     name: "Open",
@@ -112,7 +120,7 @@ async function seedPlannableDivision(
       members: [],
     })),
   );
-  await setScheduleSettings(division.id);
+  const courts = await setScheduleSettings(auth, division.id);
   const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "League", config: {} });
   const { fixtures } = await generateStageFixtures(auth, stage!.id);
   for (let i = 0; i < (opts.officials ?? 0); i++) {
@@ -120,15 +128,15 @@ async function seedPlannableDivision(
       insert into officials (org_id, display_name, role_keys)
       values (${auth.orgId}, ${"Ref " + i}, ${sql.json(["referee"])})`;
   }
-  return { divisionId: division.id, fixtureIds: fixtures.map((f) => f.id) };
+  return { divisionId: division.id, fixtureIds: fixtures.map((f) => f.id), courts };
 }
 
-function legalPlan(fixtureIds: string[]): unknown {
+function legalPlan(fixtureIds: string[], courts: string[]): unknown {
   return {
     assignments: fixtureIds.map((id, i) => ({
       fixture_id: id,
       scheduled_at: new Date(BASE + Math.floor(i / 2) * 30 * MIN).toISOString(),
-      court_label: `Court ${(i % 2) + 1}`,
+      court_label: courts[i % courts.length]!,
     })),
     unschedulable: [],
     explanations: [],
@@ -216,11 +224,11 @@ describe.skipIf(!HAS_DB)("AI credit wallet metering — schedule-ai (SPEC-2 §5.
 
   it("a funded wallet spends exactly 1 credit per successful run (settled to the run)", async () => {
     const { auth } = await seedOrg("community");
-    const { divisionId, fixtureIds } = await seedPlannableDivision(auth);
+    const { divisionId, fixtureIds, courts } = await seedPlannableDivision(auth);
     const walletId = await walletIdFor(auth.orgId);
     await grantCredits(walletId, 5);
 
-    chat.mockResolvedValueOnce(chatResponse(legalPlan(fixtureIds)));
+    chat.mockResolvedValueOnce(chatResponse(legalPlan(fixtureIds, courts)));
     const out = await aiPlanForDivision(auth, divisionId, { instruction: "plan it", mode: "generate" });
     expect(out.proposal).toHaveLength(fixtureIds.length);
     expect(await balance(walletId)).toBe(4);
@@ -259,14 +267,14 @@ describe.skipIf(!HAS_DB)("AI credit wallet metering — schedule-ai (SPEC-2 §5.
   // the audit ledger both follow the chosen rung, not the prediction.
   it("an explicit rung above the prediction charges that many credits and stamps the ledger", async () => {
     const { auth } = await seedOrg("community");
-    const { divisionId, fixtureIds } = await seedPlannableDivision(auth);
+    const { divisionId, fixtureIds, courts } = await seedPlannableDivision(auth);
     const walletId = await walletIdFor(auth.orgId);
     await grantCredits(walletId, 5);
 
     // This pack (4 entrants, 2 courts, a handful of fixtures) predicts rung 1
     // under the default AI_RUNG_* thresholds — picking rung 2 is a deliberate
     // over-spend, never `underfunded`.
-    chat.mockResolvedValueOnce(chatResponse(legalPlan(fixtureIds)));
+    chat.mockResolvedValueOnce(chatResponse(legalPlan(fixtureIds, courts)));
     const out = await aiPlanForDivision(auth, divisionId, {
       instruction: "plan it",
       mode: "generate",
@@ -297,11 +305,11 @@ describe.skipIf(!HAS_DB)("AI credit wallet metering — schedule-ai (SPEC-2 §5.
     process.env.AI_RUNG_S1 = "0"; // force this pack's prediction above rung 1
     try {
       const { auth } = await seedOrg("community");
-      const { divisionId, fixtureIds } = await seedPlannableDivision(auth);
+      const { divisionId, fixtureIds, courts } = await seedPlannableDivision(auth);
       const walletId = await walletIdFor(auth.orgId);
       await grantCredits(walletId, 5);
 
-      chat.mockResolvedValueOnce(chatResponse(legalPlan(fixtureIds)));
+      chat.mockResolvedValueOnce(chatResponse(legalPlan(fixtureIds, courts)));
       const out = await aiPlanForDivision(auth, divisionId, {
         instruction: "plan it",
         mode: "generate",
