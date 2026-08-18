@@ -49,8 +49,48 @@ const GALLERY_DIR = process.env.GALLERY_DIR ?? "";
 const WIDTHS = [320, 768, 1280] as const;
 const HEIGHTS: Record<(typeof WIDTHS)[number], number> = { 320: 568, 768: 1024, 1280: 800 };
 
+/**
+ * Owner scope change (R2b sign-off, 2026-08-17): this wave's sign-off SHEET
+ * only needs 768/1280 — `GALLERY_WIDTHS` (comma-separated, e.g. "768,1280")
+ * overrides which widths get a screenshot FILE for THIS run only. `WIDTHS`
+ * above stays the compile-time default, unedited on purpose: every other
+ * wave and the runbook (docs/runbooks/pad-gallery.md §2) documents "three
+ * widths" as the no-env-var behaviour, and a later wave running this
+ * harness with `GALLERY_WIDTHS` unset must still get 320/768/1280 exactly
+ * as today. `captureState`'s 320px overflow MEASUREMENT is deliberately
+ * NOT gated by this override (see captureState below) — dropping the 320
+ * PNG must never also silently drop the measurement, which would read
+ * later in manifest.json as "0 == no overflow" for a width nothing
+ * actually measured, a false green rather than an honest omission.
+ */
+function parseActiveWidths(): readonly (typeof WIDTHS)[number][] {
+  const raw = process.env.GALLERY_WIDTHS;
+  if (!raw) return WIDTHS;
+  const known = WIDTHS as readonly number[];
+  const parsed = raw
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n): n is (typeof WIDTHS)[number] => known.includes(n));
+  if (parsed.length === 0) {
+    throw new Error(`GALLERY_WIDTHS="${raw}" matched none of the supported widths (${WIDTHS.join(", ")})`);
+  }
+  return parsed;
+}
+const ACTIVE_WIDTHS = parseActiveWidths();
+
 const STATES = ["01-pre", "02-live", "03-scored", "04-dock", "05-devicelink"] as const;
 type GalleryState = (typeof STATES)[number];
+
+/**
+ * R2b+ — wave-specific captures beyond the fixed five states above, kept in
+ * a SEPARATE tuple rather than joined into `STATES` (see `GallerySport.
+ * captureExtra` below for why): `STATES` drives every sport's identical
+ * five-state loop in the shared test body, and appending to it would demand
+ * these two states from all twelve sports, not just the one whose wave
+ * added them.
+ */
+const EXTRA_STATES = ["06-overtile", "07-oversheet"] as const;
+type ExtraGalleryState = (typeof EXTRA_STATES)[number];
 
 function pad(page: Page) {
   return page.locator('[data-testid="score-pad"]');
@@ -120,18 +160,22 @@ async function measureScroll(page: Page): Promise<{ scrollWidth: number; clientW
 }
 
 interface Measurement320 {
-  state: GalleryState;
+  state: GalleryState | ExtraGalleryState;
   scrollWidth: number;
   clientWidth: number;
   overflowPx: number;
 }
 
 /**
- * Screenshots one state at all three widths into `dir`. At 320px this ALSO
- * records the real scrollWidth/clientWidth pair (measurement debt Tasks 6
- * and 8 deferred here — see docs/runbooks/pad-gallery.md) and asserts no
- * horizontal page overflow; a genuine overflow fails the test here rather
- * than silently shipping a screenshot of a broken layout.
+ * Screenshots one state at each of `ACTIVE_WIDTHS` into `dir` (768/1280
+ * this wave, per the `GALLERY_WIDTHS` override above; 320/768/1280 by
+ * default). The 320px scrollWidth/clientWidth overflow measurement (debt
+ * Tasks 6 and 8 deferred here — see docs/runbooks/pad-gallery.md) runs
+ * UNCONDITIONALLY, before and independent of the `ACTIVE_WIDTHS` loop — it
+ * is a correctness gate (a genuine overflow fails the test here rather
+ * than silently shipping a screenshot of a broken layout), not a capture,
+ * and de-scoping the 320 PNG from the sign-off sheet must never also
+ * de-scope this assertion.
  *
  * `fullPage: true` is deliberate (matches the design spec's own capture
  * recipe) even though it paints the sticky nav a second time mid-image on
@@ -142,24 +186,24 @@ interface Measurement320 {
 async function captureState(
   page: Page,
   dir: string,
-  state: GalleryState,
+  state: GalleryState | ExtraGalleryState,
   slug: string,
   measurements: Measurement320[],
 ): Promise<void> {
-  for (const width of WIDTHS) {
+  await page.setViewportSize({ width: 320, height: HEIGHTS[320] });
+  const { scrollWidth, clientWidth } = await measureScroll(page);
+  const overflowPx = Math.max(0, scrollWidth - clientWidth);
+  measurements.push({ state, scrollWidth, clientWidth, overflowPx });
+  // Deliberate console.log: the raw numbers are the whole point of this
+  // measurement, and the wave gate reads them straight from the run's own
+  // stdout as well as manifest.json.
+  console.log(
+    `[gallery] ${slug} ${state} @320: scrollWidth=${scrollWidth} clientWidth=${clientWidth} overflowPx=${overflowPx}`,
+  );
+  await expectNoHorizontalScroll(page);
+
+  for (const width of ACTIVE_WIDTHS) {
     await page.setViewportSize({ width, height: HEIGHTS[width] });
-    if (width === 320) {
-      const { scrollWidth, clientWidth } = await measureScroll(page);
-      const overflowPx = Math.max(0, scrollWidth - clientWidth);
-      measurements.push({ state, scrollWidth, clientWidth, overflowPx });
-      // Deliberate console.log: the raw numbers are the whole point of this
-      // measurement, and the wave gate reads them straight from the run's
-      // own stdout as well as manifest.json.
-      console.log(
-        `[gallery] ${slug} ${state} @320: scrollWidth=${scrollWidth} clientWidth=${clientWidth} overflowPx=${overflowPx}`,
-      );
-      await expectNoHorizontalScroll(page);
-    }
     await page.screenshot({
       path: join(dir, `${state}-${width}.png`),
       fullPage: true,
@@ -190,6 +234,30 @@ interface GallerySport {
    * the harness.
    */
   openDock: (page: Page, fx: RosteredFixture, tag: string) => Promise<boolean>;
+  /**
+   * R2b+ — optional wave-specific captures beyond the fixed five states
+   * above, run on the SAME page immediately after 04-dock. Absent for
+   * every sport untouched by such a wave, which leaves that sport's five-
+   * state capture set byte-identical to before this hook existed (the
+   * shared body only calls it when present, and never touches `EXTRA_
+   * STATES`/`ACTIVE_WIDTHS` on its behalf). A hook drives whatever UI/API
+   * sequence its wave's new surface needs — including seeding an entirely
+   * separate fixture, when the PRIMARY fixture's state by this point in
+   * the flow cannot also reach the new surface. R2b's cricket hook does
+   * exactly this: by 04-dock, `scoreOne`'s six dot balls have already
+   * locked the primary fixture's innings to "fine" (first-event-wins,
+   * cricket.ts:661-678), and a coarse-innings tile is only reachable from
+   * an innings that has never taken a ball. Returns the extra state names
+   * it actually captured, in capture order, so manifest.json/index.html
+   * stay honest if a future hook aborts partway (`openDock`'s own
+   * boolean-return convention, generalised to a list).
+   */
+  captureExtra?: (
+    page: Page,
+    dir: string,
+    tag: string,
+    measurements: Measurement320[],
+  ) => Promise<ExtraGalleryState[]>;
 }
 
 const SPORTS: GallerySport[] = [
@@ -302,6 +370,108 @@ const SPORTS: GallerySport[] = [
       if (!(await runOut.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
       await runOut.click();
       return true;
+    },
+    // R2b (task 10, this wave's own two new sign-off screens): 06-overtile
+    // and 07-oversheet. The gate this proves is BIDIRECTIONAL and can only
+    // be shown from an innings whose FIRST-EVER event is a
+    // `cricket.innings.summary` (R2b plan doc, "What the scout re-pinned"
+    // §1-2; apps/web/e2e/scoring.spec.ts:226-240 is the existing API-post
+    // precedent) — the primary fixture above is unusable for this by now,
+    // since `scoreOne`'s six dot balls already locked ITS innings to
+    // "fine" (ball-scored), which correctly hides the over tile entirely
+    // (scorepad-v3-cricket.spec.ts:562-569's own assertion of that same
+    // gate, the mirror image of what this capture needs to show). A
+    // second, dedicated fixture is the only way to reach "coarse" at all.
+    captureExtra: async (page, dir, tag, measurements) => {
+      const otTag = `${tag}ot`;
+      const fx2 = await seedRosteredFixture(page.request, {
+        label: `Gallery Cricket OverTile ${otTag}`,
+        sportKey: "cricket",
+        variantKey: "t20",
+        // FOUR home batters, not the two a striker/non-striker pair
+        // suggests, and the reason is a live trap rather than a style
+        // preference: all-out is derived from the SQUAD, not from
+        // cfg.playersPerSide alone — `Math.min(cfg.playersPerSide,
+        // order.length) - 1` (allOutWickets, cricket.ts:538-542). A
+        // two-name home squad therefore makes all-out ONE wicket, so the
+        // `wickets: 1` summary below is an all-out innings: `autoClose`
+        // closes it, innings 2 falls due, and the pad correctly renders the
+        // fresh-innings state where the over tile AND the ball tiles are
+        // both legal — failing this hook's own "ball tiles must be gone"
+        // assertion for a reason that has nothing to do with the gate it is
+        // capturing. Four names put all-out at 3, clear of the 1 wicket the
+        // capture posts. (Found 2026-08-17 by running this harness; the
+        // e2e spec never saw it because it enters `wickets: 0` via the UI.)
+        home: [
+          { fullName: `Gallery Cricket OT Striker ${otTag}` },
+          { fullName: `Gallery Cricket OT NonStriker ${otTag}` },
+          { fullName: `Gallery Cricket OT Bat3 ${otTag}` },
+          { fullName: `Gallery Cricket OT Bat4 ${otTag}` },
+        ],
+        away: [{ fullName: `Gallery Cricket OT Bowler ${otTag}` }],
+        // API-driven start (no UI tap needed) — this hook is not
+        // re-demonstrating "Start match", the primary fixture's 02-live
+        // capture already does that for cricket.
+        emitCoreStart: true,
+      });
+
+      // core.start took seq 0 above (seedRosteredFixture's own
+      // emitCoreStart) — this summary is seq 1, and being the innings'
+      // FIRST innings-scoped event, it is what locks the innings "coarse"
+      // (`createInnings(...,"coarse")`, cricket.ts:1406) rather than
+      // "fine" (only reachable via a `cricket.ball`, cricket.ts:2940).
+      const summary = await apiJson<{ seq: number }>(
+        page.request,
+        `/api/v1/fixtures/${fx2.fixtureId}/events`,
+        "POST",
+        { expected_seq: 1, type: "cricket.innings.summary", payload: { runs: 7, wickets: 1, legalBalls: 6, partial: true } },
+      );
+      if (summary.status >= 300 || !summary.data) {
+        throw new Error(
+          `gallery(cricket): seed coarse summary -> ${summary.status} ${JSON.stringify(summary.error)}`,
+        );
+      }
+
+      await page.goto(await fixturePath(page.request, fx2.fixtureId));
+      const overTile = pad(page).locator('[data-tile-id="overSummary"]');
+      await expect(overTile, "gallery(cricket): over tile must render on a coarse innings").toBeVisible({
+        timeout: 20_000,
+      });
+      // The gate's other half, made visible in the SAME capture: a coarse
+      // innings must not ALSO offer a ball tile (R2b Q1 owner ruling) — a
+      // real absence check, `data-tile-id` is missing from the DOM
+      // entirely when a skin's `tiles()` simply does not push it, not
+      // merely CSS-hidden (see this repo's own e2e DOM-contract notes).
+      await expect(
+        pad(page).locator('[data-tile-id="run0"]'),
+        "gallery(cricket): ball tiles must be gone on a coarse innings",
+      ).not.toBeVisible();
+      await captureState(page, dir, "06-overtile", "cricket", measurements);
+
+      await overTile.click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      await expect(sheet, "gallery(cricket): tapping the tile must open the guided sheet").toBeVisible({
+        timeout: 10_000,
+      });
+      // Left on step 1/3 ("Runs this over") and NOT confirmed — same
+      // stop-before-commit posture every other sport's `openDock` takes
+      // above. The field is a PER-OVER delta and opens at 0 (Q2 REVERSED
+      // 2026-08-17, `_INDEX.md`), so what this capture has to show is the
+      // "before" anchor: the fold's own 7/1, rendered verbatim above the
+      // control (`SheetNumberStep.hint`, guided-sheet.tsx:374). That anchor
+      // is the ONLY thing on screen telling the scorer what their delta is
+      // being added to — if it ever stops rendering, the sheet still works
+      // and still looks right, which is precisely why the gallery pins it.
+      await expect(
+        sheet.getByRole("spinbutton", { name: "Runs this over" }),
+        "gallery(cricket): a per-over delta opens at 0, never carrying the fold forward",
+      ).toHaveValue("0");
+      await expect(sheet, "gallery(cricket): the before-anchor must render, or the delta has no context").toContainText(
+        "7/1",
+      );
+      await captureState(page, dir, "07-oversheet", "cricket", measurements);
+
+      return [...EXTRA_STATES];
     },
   },
   {
@@ -670,6 +840,9 @@ interface SportManifestEntry {
   variantKey: string;
   dockPanelOpened: boolean;
   measurements320: Measurement320[];
+  /** State names `GallerySport.captureExtra` actually captured, in order —
+   *  empty for every sport with no such hook. */
+  extraStates: ExtraGalleryState[];
 }
 
 const manifest: SportManifestEntry[] = [];
@@ -677,12 +850,18 @@ const manifest: SportManifestEntry[] = [];
 function buildIndexHtml(sports: SportManifestEntry[]): string {
   const sections = sports
     .map((s) => {
-      const stateBlocks = STATES.map((st) => {
+      // s.extraStates: wave-specific captures beyond the fixed five (e.g.
+      // R2b's cricket 06-overtile/07-oversheet) — appended per-sport here,
+      // never joined into the shared STATES tuple itself (see EXTRA_STATES'
+      // own comment for why).
+      const stateBlocks = [...STATES, ...s.extraStates].map((st) => {
         const dockNote =
           st === "04-dock" && !s.dockPanelOpened
             ? ' <em>(no distinct panel today — same view as 03-scored)</em>'
             : "";
-        const figures = WIDTHS.map(
+        // ACTIVE_WIDTHS, not WIDTHS: index.html must only link the widths
+        // this run actually wrote a file for (GALLERY_WIDTHS override).
+        const figures = ACTIVE_WIDTHS.map(
           (w) =>
             `<figure><figcaption>${w}px</figcaption><img loading="lazy" src="${s.slug}/${st}-${w}.png" alt="${s.label} ${st} ${w}px"></figure>`,
         ).join("");
@@ -722,7 +901,10 @@ not a product defect. States marked "no distinct panel today" reuse the 03-score
 because that sport's legacy pad has no separate detail-entry surface to show today — not a
 missing capture. See <code>docs/runbooks/pad-gallery.md</code> for the sign-off gate this
 gallery feeds and <code>manifest.json</code> beside this file for the 320px scrollWidth/
-clientWidth measurements per state.</p>
+clientWidth measurements per state (recorded for every state regardless of which widths
+below actually have a screenshot file — see <code>GALLERY_WIDTHS</code> in
+<code>gallery.capture.ts</code>).</p>
+<p class="note">This run captured widths: ${ACTIVE_WIDTHS.join(", ")}px.</p>
 ${sections}
 </body>
 </html>`;
@@ -780,6 +962,11 @@ for (const sport of SPORTS) {
     const dockOpened = await sport.openDock(page, fx, tag);
     await captureState(page, dir, "04-dock", sport.slug, measurements);
 
+    // Wave-specific extras (R2b: cricket only) — absent for every other
+    // sport, which makes this a no-op that leaves their run byte-identical
+    // to before this hook existed.
+    const extraStates = sport.captureExtra ? await sport.captureExtra(page, dir, tag, measurements) : [];
+
     const dl = await apiJson<{ id: string; secret: string }>(
       page.request,
       `/api/v1/fixtures/${fx.fixtureId}/device-links`,
@@ -821,6 +1008,7 @@ for (const sport of SPORTS) {
       variantKey: sport.variantKey,
       dockPanelOpened: dockOpened,
       measurements320: measurements,
+      extraStates,
     });
   });
 }

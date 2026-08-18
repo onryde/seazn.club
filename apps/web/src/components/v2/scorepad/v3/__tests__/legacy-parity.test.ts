@@ -101,4 +101,50 @@ describe("legacy parity — capabilities the v3 chassis must not lose", () => {
       expect(padHost).toContain(marker);
     }
   });
+
+  it("5. over-by-over entry (R2b) is wired end to end: sheet key resolves, ribbon copy is registered", () => {
+    // The tile's sheet key must resolve to a REAL builder in buildSheets, not
+    // a typo'd or forgotten entry — the exact "unit-tested function nothing
+    // calls" shape 3b guards against, one level down: a dangling sheet key
+    // opens on an empty wizard with no visible failure anywhere in this
+    // chassis.
+    const cricket = readFileSync(join(V3, "skins", "cricket.tsx"), "utf8");
+    expect(cricket).toMatch(/action:\s*\{\s*sheet:\s*"overSummary"\s*\}/);
+    expect(cricket).toMatch(/overSummary:\s*overSummarySheet\(view\)/);
+    // ribbon.ts gates its per-sport lookup on PAD_LABEL_KEYS membership
+    // BEFORE calling padLabel() — a ribbon key present only in the
+    // dictionaries (not here) silently stays on the generic "{event}
+    // recorded" fallback forever, with nothing failing (R1's own standing
+    // item, restated for R2b in the plan/_INDEX.md).
+    const scoringVocab = readFileSync(
+      join(HERE, "..", "..", "..", "..", "..", "lib", "scoring-vocab.ts"),
+      "utf8",
+    );
+    expect(scoringVocab).toContain('"pad.cricket.ribbon.innings.summary"');
+  });
+
+  it("6. the bowler-changed activity note resolves a NAME, not a raw id — personNames is forwarded from host to skin", () => {
+    // Same shape as 3b's own gap: `cricketBallDetail` shipping a
+    // `personNames` field with passing unit tests proves nothing about
+    // the product if `pad-host.tsx`'s own call site never forwards the real
+    // map — exactly the "unit-tested function nothing calls" defect 3b
+    // exists to catch, one field over.
+    const cricket = readFileSync(join(V3, "skins", "cricket.tsx"), "utf8");
+    const types = readFileSync(join(V3, "types.ts"), "utf8");
+    // R2b-cricket-over review fix (item 1): `activityDetail` now takes a
+    // single `ActivityDetailContext` object (types.ts) instead of seven
+    // positional parameters — updated below to match. `personNames` is
+    // part of THAT object's own contract, not a positional parameter of
+    // `activityDetail` itself any more.
+    expect(types).toContain("interface ActivityDetailContext"); // the dedicated context type exists
+    expect(types).toMatch(/activityDetail\?\(ctx: ActivityDetailContext\)/); // the method takes it
+    expect(types).toMatch(/interface ActivityDetailContext \{[\s\S]*?personNames\?:/); // …and personNames is part of that contract
+    expect(cricket).toMatch(/function cricketBallDetail\(ctx: ActivityDetailContext\)/); // the skin reads the same object shape
+    expect(cricket).toContain("personNames"); // …and destructures personNames from it
+    // The host's own resolveDetail closure must build the context object
+    // with personNames alongside cfg — not merely have it in scope
+    // (props.personNames is read for the ribbon and the ActivityPanel prop
+    // too; only the activityDetail call site proves THIS feature is wired).
+    expect(padHost).toMatch(/activityDetail!\(\{[\s\S]*?\bt,[\s\S]*?\beventType,[\s\S]*?\bpayload,[\s\S]*?\bhistory,[\s\S]*?cfg:\s*view\.cfg,[\s\S]*?\bpersonNames[\s\S]*?\}\)/);
+  });
 });

@@ -21,6 +21,22 @@ describe("stageNeedsDoubleElimGate", () => {
   );
 });
 
+// Bug fix 2026-08-18 (gate-copy): the "League + Playoffs" template's Pro
+// gate read "Double-elimination brackets are a Pro format." for a
+// page_playoff stage — no double elimination in that template at all. The
+// fix (feature-copy.ts's doubleElimFormatReason, wired through
+// template-gallery.tsx and upgrade-gate.tsx) is copy-only and must never
+// change WHICH kinds this gate fires on — that set is pinned here so a
+// future "fix" cannot quietly narrow the shared entitlement instead of just
+// the wording.
+describe("stageNeedsDoubleElimGate — gated kind set is unchanged by the gate-copy fix", () => {
+  it("still gates on exactly double_elim and page_playoff, sharing one entitlement on purpose", () => {
+    expect(stageNeedsDoubleElimGate("double_elim")).toBe(true);
+    expect(stageNeedsDoubleElimGate("page_playoff")).toBe(true);
+    expect(stageNeedsDoubleElimGate("knockout")).toBe(false);
+  });
+});
+
 describe("stageNeedsAdvancedFormatsGate", () => {
   it.each(["americano", "ladder"])("gates on kind '%s' regardless of config", (kind) => {
     expect(stageNeedsAdvancedFormatsGate({ kind })).toBe(true);

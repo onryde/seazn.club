@@ -187,7 +187,7 @@ test("cricket: undo mid-over keeps the scoring panel usable (v3/09 §2)", async 
   page,
   request,
 }) => {
-  // Two "Innings total" round trips through the v3 More sheet each pay
+  // Two coarse-summary round trips through the v3 over tile each pay
   // queue.ts's HOLD_MS = 6000ms soft-commit before the ledger sees them.
   test.setTimeout(120_000);
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
@@ -248,9 +248,10 @@ test("cricket: undo mid-over keeps the scoring panel usable (v3/09 §2)", async 
   // roster at all (no persons, no lineups — the original test's own "undo"
   // repro needs none), so the run/wide/wicket tiles would 422 on a real tap
   // (they carry striker/nonStriker/bowler resolved from an empty batting
-  // order); the coarse "Innings total" admin action — `cricket.innings.
-  // summary`, the very event type this test's own setup already posts via
-  // the API — rides the v3 "More" sheet (cricket.tsx's OWNER HYBRID RULING)
+  // order); the coarse summary action — `cricket.innings.summary`, the
+  // very event type this test's own setup already posts via the API —
+  // rides R2b's dedicated over tile (it moved off the "More" sheet; see
+  // the entry-point comment further down)
   // and is the one scoring surface this fixture can drive at all, same as
   // it was the one v2 could drive too.
   const scorebug = pad(page).locator('[data-role="v3-scorebug"]');
@@ -262,20 +263,41 @@ test("cricket: undo mid-over keeps the scoring panel usable (v3/09 §2)", async 
   await page.getByRole("button", { name: /Undo last/ }).click();
   await expect(scorebug).toContainText("0/0", { timeout: 20_000 });
 
-  // The panel stays usable — no blank screen, no dead-end: score again,
-  // through the v3 "More" tile's own "Innings total" action.
-  await pad(page).getByRole("button", { name: "More", exact: true }).click();
+  // The panel stays usable — no blank screen, no dead-end: score again.
+  //
+  // R2b MOVED this entry point. It used to be More → "Innings total" (the
+  // generic action form). R2b gave `cricket.innings.summary` a dedicated
+  // over tile with its own guided sheet, and `dedicatedEventTypes`
+  // (v3/pad-host.tsx:141-151) collects every sheet's `event` and filters it
+  // OUT of the More list — so "Innings total" is no longer offered there,
+  // by design: one event type, one entry point, the same rule that made R2b
+  // drop cricket's duplicate Retire tile. The over tile is the replacement,
+  // and it needs no roster either, which is what this fixture requires.
+  //
+  // The sheet is a three-step wizard of PER-OVER deltas (owner's Q2
+  // reversal, `_INDEX.md`), so against this post-undo 0/0 fold the numbers
+  // are the same ones the old total-shaped form took. `partial: true` is
+  // implied by the tile — there is no checkbox to tick.
   const sheet = pad(page).locator('[data-role="v3-sheet"]');
-  await sheet.getByRole("button", { name: "Innings total", exact: true }).click();
   const confirm = sheet.getByRole("button", { name: "Confirm", exact: true });
-  await expect(async () => {
-    await sheet.getByLabel("Runs", { exact: true }).fill("8");
-    await sheet.getByLabel("Wickets", { exact: true }).fill("0");
-    await sheet.getByLabel("Legal balls", { exact: true }).fill("6");
-    await expect(confirm).toBeEnabled({ timeout: 1_000 });
-  }).toPass({ timeout: 20_000 });
-  await sheet.getByLabel("Partial", { exact: true }).check();
-  await confirm.click();
+  await pad(page).locator('[data-tile-id="overSummary"]').click();
+  for (const [label, value] of [
+    ["Runs this over", "8"],
+    ["Wickets this over", "0"],
+    ["Balls this over", "6"],
+  ] as const) {
+    const field = sheet.getByRole("spinbutton", { name: label });
+    // Under load a fill can land before React hydrates (DOM value set,
+    // state empty), so re-fill until the pad actually accepts it — same
+    // reason the old form-shaped block wrapped its fills this way.
+    await expect(async () => {
+      await field.fill(value);
+      await expect(field).toHaveValue(value, { timeout: 1_000 });
+      await expect(confirm).toBeEnabled({ timeout: 1_000 });
+    }).toPass({ timeout: 20_000 });
+    await confirm.click();
+  }
+  await expect(sheet, "the wizard's own last step closes the sheet").not.toBeVisible({ timeout: 10_000 });
   // The scorebug reads the OPTIMISTIC fold (use-pad-pipeline.ts's
   // `commitPendingEnvelopes` runs synchronously inside `submitHeld`, before
   // the awaited durable enqueue) — it updates immediately, never gated on
@@ -324,7 +346,7 @@ test("cricket scores over-by-over: add an over grows the total, then close innin
   page,
   request,
 }) => {
-  // "Innings total" then "Close innings", each a held dispatch (queue.ts's
+  // one over then "Close innings", each a held dispatch (queue.ts's
   // HOLD_MS = 6000ms soft-commit) the ledger polls below wait out.
   test.setTimeout(120_000);
   // a minimal cricket fixture
@@ -380,8 +402,8 @@ test("cricket scores over-by-over: add an over grows the total, then close innin
   // over"/"wickets this over"/"add over" form are both gone. This fixture
   // seeds no roster (no persons, no lineups), so the run/wide/wicket tiles
   // would 422 (they resolve striker/nonStriker/bowler from an empty batting
-  // order) — the coarse "Innings total" admin action (`cricket.innings.
-  // summary`) rides the v3 "More" sheet (cricket.tsx's OWNER HYBRID RULING)
+  // order) — the coarse summary action (`cricket.innings.summary`) rides
+  // R2b's dedicated over tile (it moved off the "More" sheet)
   // and is this fixture's one scoring surface, and is a closer v2/v3
   // analogue of "over-by-over" than ball-by-ball would be anyway: a single
   // aggregate entry per over, exactly this test's own name.
@@ -389,21 +411,35 @@ test("cricket scores over-by-over: add an over grows the total, then close innin
   await expect(scorebug).toBeVisible({ timeout: 20_000 });
   await expect(scorebug).toContainText("0/0");
 
-  // record one over: 12 runs, 1 wicket, 6 legal balls. Under load the fill
-  // can land before React hydrates (DOM value set, state empty → button
-  // stays disabled), so re-fill until the pad actually accepts the input.
-  await pad(page).getByRole("button", { name: "More", exact: true }).click();
+  // record one over: 12 runs, 1 wicket, 6 legal balls — through R2b's
+  // dedicated over tile, NOT More → "Innings total". R2b gave
+  // `cricket.innings.summary` its own guided sheet, and
+  // `dedicatedEventTypes` (v3/pad-host.tsx:141-151) filters every sheet's
+  // event out of the More list, so the generic entry point is gone by
+  // design. The tile is what this test's own name has always described.
+  //
+  // Three steps, each a PER-OVER delta (owner's Q2 reversal, `_INDEX.md`):
+  // against this empty fold the numbers match the old total-shaped form's,
+  // and the assertions below are unchanged. Under load a fill can land
+  // before React hydrates (DOM value set, state empty → Confirm stays
+  // disabled), so re-fill until the pad actually accepts the input.
   const sheet = pad(page).locator('[data-role="v3-sheet"]');
-  await sheet.getByRole("button", { name: "Innings total", exact: true }).click();
   const confirm = sheet.getByRole("button", { name: "Confirm", exact: true });
-  await expect(async () => {
-    await sheet.getByLabel("Runs", { exact: true }).fill("12");
-    await sheet.getByLabel("Wickets", { exact: true }).fill("1");
-    await sheet.getByLabel("Legal balls", { exact: true }).fill("6");
-    await expect(confirm).toBeEnabled({ timeout: 1_000 });
-  }).toPass({ timeout: 20_000 });
-  await sheet.getByLabel("Partial", { exact: true }).check();
-  await confirm.click();
+  await pad(page).locator('[data-tile-id="overSummary"]').click();
+  for (const [label, value] of [
+    ["Runs this over", "12"],
+    ["Wickets this over", "1"],
+    ["Balls this over", "6"],
+  ] as const) {
+    const field = sheet.getByRole("spinbutton", { name: label });
+    await expect(async () => {
+      await field.fill(value);
+      await expect(field).toHaveValue(value, { timeout: 1_000 });
+      await expect(confirm).toBeEnabled({ timeout: 1_000 });
+    }).toPass({ timeout: 20_000 });
+    await confirm.click();
+  }
+  await expect(sheet, "the wizard's own last step closes the sheet").not.toBeVisible({ timeout: 10_000 });
 
   // the innings total grows (progressive summary folded) — the scorebug
   // reads the optimistic fold, so this resolves well before the ~6s

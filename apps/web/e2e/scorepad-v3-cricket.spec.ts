@@ -1,5 +1,12 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
-import { apiJson, fixturePath, seedRosteredFixture, TAG, type RosteredFixture } from "./helpers";
+import {
+  apiJson,
+  fixturePath,
+  seedRosteredFixture,
+  setDivisionConfigSql,
+  TAG,
+  type RosteredFixture,
+} from "./helpers";
 
 // ScoringPad v3, wave R2/task F1 — NEW coverage the wave's own acceptance
 // list requires beyond converting the four pre-existing cricket specs
@@ -69,6 +76,71 @@ async function setContextPerson(page: Page, chipLabel: string, personName: strin
   const candidate = strip.getByRole("button", { name: personName, exact: true });
   await expect(candidate, `${chipLabel} picker must show real names, not ids`).toBeVisible({ timeout: 10_000 });
   await candidate.click();
+}
+
+/** The guided-sheet root — chassis-generic (guided-sheet.tsx), same posture
+ *  `pad()` above already takes for the scorepad root itself. R2b's
+ *  over-by-over sheet is the first place THIS file drives it. */
+function sheetRoot(page: Page) {
+  return pad(page).locator('[data-role="v3-sheet"]');
+}
+
+// ---------------------------------------------------------------------------
+// R2b-cricket-over, task 5 continued (2026-08-17) — dock chips, the free-hit
+// indicator, the activity log's bowler-name note, the bowler-eligibility
+// block, the closed-innings TERMINAL gate, the innings transition, and the
+// free-hit wicket-kind gate. Three shared helpers below:
+//
+// `postEvent` dispatches a real ledger event directly (reading `last_seq`
+// fresh each call, same pattern `scoreFixture`/helpers.ts already uses) —
+// several tests below use it for SETUP that nothing here is testing (a dull
+// completed over, a forced innings close), so only the one action actually
+// under test goes through the real pad.
+//
+// `openConsoleAlreadyLive` is `openLiveConsole` minus the "Start match"
+// click, for a fixture whose `core.start` was already posted via
+// `postEvent`.
+//
+// `sendHeldNow` taps the dock's own "Send now" control (`pad.dock.dismiss`
+// — detail-dock.tsx's own doc: `dismiss()` calls `releaseHeld`, an
+// IMMEDIATE FLUSH, never a cancel). Every test below that needs its
+// dispatch CONFIRMED on the ledger uses this instead of waiting out the
+// full HOLD_MS=6000ms window — none of them are testing hold-window TIMING
+// itself (the two Undo tests earlier in this file already own that), so
+// there is nothing to lose by flushing early, and it keeps every budget
+// below well under the 120_000-180_000 the timing-sensitive tests need.
+// ---------------------------------------------------------------------------
+
+async function postEvent(
+  request: APIRequestContext,
+  fixtureId: string,
+  type: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
+  if (state.status !== 200 || !state.data) {
+    throw new Error(`postEvent(${type}): GET state -> ${state.status} ${JSON.stringify(state.error)}`);
+  }
+  const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+    expected_seq: state.data.last_seq,
+    type,
+    payload,
+  });
+  if (res.status >= 300) {
+    throw new Error(`postEvent(${type}) -> ${res.status} ${JSON.stringify(res.error)}`);
+  }
+}
+
+async function openConsoleAlreadyLive(page: Page, fx: RosteredFixture): Promise<void> {
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+}
+
+async function sendHeldNow(page: Page): Promise<void> {
+  await pad(page)
+    .locator('[data-role="v3-dock"]')
+    .getByRole("button", { name: "Send now", exact: true })
+    .click();
 }
 
 test(
@@ -446,3 +518,647 @@ test("cricket v3: voiding an OLDER event from the activity panel writes core.voi
   // real per-event void from the ribbon's undo-the-last-thing.
   expect(voided.payload).toMatchObject({ event_id: oldest.id });
 });
+
+// R2b (2026-08-17) — the over-by-over tile's own e2e coverage, deferred by
+// that wave's plan (`docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-
+// cricket-over.md`, task 5) to this session. Task 3/4 already shipped the
+// tile/sheet/gate + i18n (commits 8224ca04, 80a10f72, 9cd2b3f2, c70c0e90,
+// b9692a52) — nothing below adds a src line. It exists because the wave's
+// OWN unit tests assert spec BUILDERS only (apps/web vitest is
+// `environment:"node"`, no jsdom, this file's own header) — nothing before
+// this proved the tile renders, the sheet opens PREFILLED from the fold, the
+// event actually reaches the ledger and the pad, or that R2b's mutually-
+// exclusive gate (Q1 owner ruling, `_INDEX.md`) really REMOVES a tile rather
+// than merely disabling one that still looks tappable.
+test(
+  "cricket v3: the over-by-over tile posts a partial summary, updates the pad and the ribbon with real " +
+    "copy, APPENDS a second over's runs/wickets onto the fold, and hides the ball tiles once the innings is coarse",
+  async ({ page }) => {
+    // TWO real held dispatches now (queue.ts HOLD_MS = 6000ms each) — the
+    // second over was added when Q2 was reversed, because an append is
+    // unprovable from a single entry against an empty fold. Plus
+    // openLiveConsole's own two 20s-ceiling polls, two 20s ledger polls, and
+    // a third (cancelled, no network) sheet open. The 120_000 that covered
+    // the single-dispatch shape no longer has headroom for that.
+    test.setTimeout(180_000);
+    const fx = await seedRosteredFixture(page.request, {
+      label: `V3 Cricket OverTile ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [{ fullName: `V3 OT Striker ${TAG}` }, { fullName: `V3 OT NonStriker ${TAG}` }],
+      away: [{ fullName: `V3 OT Bowler ${TAG}` }],
+    });
+    await openLiveConsole(page, fx);
+
+    // Pre-innings (`unopened`): NEITHER lane has locked in yet, so the over
+    // tile and the ball-derived tiles are BOTH legal and both visible (R2b
+    // Q1 owner ruling) — the tile's own sublabel names the over an entry
+    // would close: "1" while unopened, nothing recorded yet.
+    const overTile = pad(page).locator('[data-tile-id="overSummary"]');
+    await expect(overTile, "over tile must render before any ball is scored").toBeVisible({ timeout: 10_000 });
+    await expect(overTile).toContainText("1");
+    await expect(pad(page).locator('[data-tile-id="run0"]')).toBeVisible();
+    await expect(pad(page).locator('[data-tile-id="wicket"]')).toBeVisible();
+
+    await overTile.click();
+    const sheet = sheetRoot(page);
+    await expect(sheet, "tapping the tile must open the guided sheet").toBeVisible({ timeout: 10_000 });
+
+    // Step 1/3 — "Runs this over": a PER-OVER delta, so it always opens at 0
+    // regardless of the fold (Q2 REVERSED by the owner 2026-08-17, `_INDEX.md`
+    // — the scorer enters this over's runs and the pad appends). Asserting 0
+    // here, against an empty fold, cannot tell "delta" from "total" — the
+    // second over below is what actually proves the append.
+    let field = sheet.getByRole("spinbutton", { name: "Runs this over" });
+    await expect(field).toBeVisible({ timeout: 10_000 });
+    await expect(field).toHaveValue("0");
+    await field.fill("8");
+    await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+
+    // Step 2/3 — "Wickets this over": 0, left unedited.
+    field = sheet.getByRole("spinbutton", { name: "Wickets this over" });
+    await expect(field).toBeVisible({ timeout: 10_000 });
+    await expect(field).toHaveValue("0");
+    await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+
+    // Step 3/3 — "Balls this over": prefilled to ONE full over (t20's own
+    // 6-ball bpo, never a hardcoded 6 — the Hundred's is 5), because a
+    // completed over is exactly `bpo` LEGAL deliveries however many extras
+    // were bowled alongside it. Left unedited; confirming closes the wizard
+    // and dispatches.
+    field = sheet.getByRole("spinbutton", { name: "Balls this over" });
+    await expect(field).toBeVisible({ timeout: 10_000 });
+    await expect(field).toHaveValue("6");
+    await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(sheet, "the wizard's own last step closes the sheet").not.toBeVisible({ timeout: 10_000 });
+
+    await expect
+      .poll(
+        async () =>
+          (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.innings.summary").length,
+        { timeout: 20_000 },
+      )
+      .toBe(1);
+    const summary = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "cricket.innings.summary")!;
+    // The EVENT still carries absolute totals — `cricket.innings.summary`
+    // REPLACES the innings totals (cricket.ts:1445-1451), it was never
+    // additive at the schema level. From an empty fold the delta and the
+    // total coincide (0 + 8 = 8), which is exactly why this assertion alone
+    // is not proof of the append; the second over below supplies that.
+    expect(summary.payload).toMatchObject({ runs: 8, wickets: 0, legalBalls: 6, partial: true });
+
+    // The pad reflects the posted totals, not a stale 0/0 — "the pad
+    // reflects the new totals" from this wave's own acceptance list.
+    const scorebug = pad(page).locator('[data-role="v3-scorebug"]');
+    await expect(scorebug).toContainText("8/0");
+    await expect(scorebug).toContainText("1.0");
+
+    // Real per-sport ribbon copy ("Over recorded",
+    // pad.cricket.ribbon.innings.summary) — never the generic
+    // `pad.ribbon.fallback` ("{event} recorded") a missing PAD_LABEL_KEYS
+    // entry would silently fall back to. The absence check is what actually
+    // separates a real hit from the fallback: "Over recorded" and
+    // "cricket.innings.summary recorded" both satisfy a bare
+    // toContainText("recorded").
+    const ribbon = pad(page).locator('[data-role="v3-ribbon"]');
+    await expect(ribbon).toContainText("Over recorded");
+    await expect(ribbon, "must never silently fall back to the raw event type").not.toContainText(
+      "cricket.innings.summary",
+    );
+
+    // THE GATE (coarse half) — this innings' first event was a summary, so
+    // it is now COARSE. The fold refuses a ball on a coarse innings
+    // (cricket.ts:1128-1131) — the chassis must not offer one, not merely
+    // disable it (R2b Q1 owner ruling).
+    await expect(
+      pad(page).locator('[data-tile-id="run0"]'),
+      "coarse innings: ball tiles must be GONE, not disabled",
+    ).not.toBeVisible();
+    await expect(
+      pad(page).locator('[data-tile-id="wicket"]'),
+      "coarse innings: wicket tile must be GONE, not disabled",
+    ).not.toBeVisible();
+    // The over tile survives — coarse stays eligible for the next partial —
+    // and its sublabel now names over 2.
+    await expect(overTile).toBeVisible();
+    await expect(overTile).toContainText("2");
+
+    // SECOND OVER, from a NON-ZERO fold — the only assertion in this file
+    // that can tell append from replace. The fold now reads 8/0 off 6; the
+    // scorer enters this over's 5 runs and 1 wicket, so the pad must emit
+    // 13/1 off 12. If `buildPayload` ever dropped its `+ delta` and sent the
+    // raw answers (5/1 off 6), that is a DECREASE and the engine's monotone
+    // guard (cricket.ts:1416-1426) would reject it — but if it dropped the
+    // ANSWER instead and re-sent the base, the ledger would silently stall at
+    // 8/0 with nothing failing. Both directions are covered by pinning the
+    // exact sum below.
+    await overTile.click();
+    await expect(sheet).toBeVisible({ timeout: 10_000 });
+
+    field = sheet.getByRole("spinbutton", { name: "Runs this over" });
+    await expect(field, "a per-over delta reopens at 0 — never carrying the fold's 8 forward").toHaveValue("0");
+    await field.fill("5");
+    await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+
+    field = sheet.getByRole("spinbutton", { name: "Wickets this over" });
+    await expect(field).toHaveValue("0");
+    await field.fill("1");
+    await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+
+    field = sheet.getByRole("spinbutton", { name: "Balls this over" });
+    await expect(field).toHaveValue("6");
+    await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(sheet).not.toBeVisible({ timeout: 10_000 });
+
+    await expect
+      .poll(
+        async () =>
+          (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.innings.summary").length,
+        { timeout: 20_000 },
+      )
+      .toBe(2);
+    const second = (await ledger(page.request, fx.fixtureId))
+      .filter((e) => e.type === "cricket.innings.summary")
+      .at(-1)!;
+    expect(second.payload, "8+5 runs, 0+1 wickets, 6+6 balls — the SUM, not the delta and not the base").toMatchObject(
+      { runs: 13, wickets: 1, legalBalls: 12, partial: true },
+    );
+    await expect(pad(page).locator('[data-role="v3-scorebug"]')).toContainText("13/1");
+
+    // Cancel must not dispatch — the ledger's own summary count stays at 2.
+    await overTile.click();
+    await expect(sheet).toBeVisible({ timeout: 10_000 });
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(sheet).not.toBeVisible({ timeout: 10_000 });
+    const afterCancel = await ledger(page.request, fx.fixtureId);
+    expect(afterCancel.filter((e) => e.type === "cricket.innings.summary")).toHaveLength(2);
+  },
+);
+
+test(
+  "cricket v3: a ball recorded first locks the innings to ball-by-ball and hides the over-by-over tile",
+  async ({ page }) => {
+    // openLiveConsole's own two 20s-ceiling polls plus one held ball
+    // dispatch — the same shape the two Undo conversions elsewhere in this
+    // file budget 120_000 for.
+    test.setTimeout(120_000);
+    const fx = await seedRosteredFixture(page.request, {
+      label: `V3 Cricket OverGateFine ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [{ fullName: `V3 OGF Striker ${TAG}` }, { fullName: `V3 OGF NonStriker ${TAG}` }],
+      away: [{ fullName: `V3 OGF Bowler ${TAG}` }],
+    });
+    await openLiveConsole(page, fx);
+
+    // Both lanes are legal before any ball — the mirror starting point of
+    // the coarse-lane test above.
+    const overTile = pad(page).locator('[data-tile-id="overSummary"]');
+    await expect(overTile).toBeVisible({ timeout: 10_000 });
+
+    await pad(page).locator('[data-tile-id="run0"]').click();
+    await expect
+      .poll(
+        async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
+        { timeout: 20_000 },
+      )
+      .toBe(1);
+
+    // THE GATE (fine half — the mirror of the coarse assertion above): this
+    // innings' first event was a ball, so it is now FINE. The fold refuses a
+    // summary on a fine innings (cricket.ts:1402-1404) — the tile must be
+    // GONE, not disabled, exactly like the coarse direction.
+    await expect(overTile, "fine innings: over tile must be GONE, not disabled").not.toBeVisible({
+      timeout: 10_000,
+    });
+    // The ball tiles are still there — confirms this is the OTHER lane
+    // winning, not the pad losing its tiles generally.
+    await expect(pad(page).locator('[data-tile-id="run1"]')).toBeVisible();
+    await expect(pad(page).locator('[data-tile-id="wicket"]')).toBeVisible();
+  },
+);
+
+test(
+  "cricket v3: a no-ball's dock offers bat-run chips that preserve the noball extra; a wide's dock offers none",
+  async ({ page }) => {
+    // Two dispatches, both flushed via "Send now" rather than the 6s hold —
+    // openLiveConsole's own two 20s-ceiling polls plus two fast confirms.
+    test.setTimeout(90_000);
+    const fx = await seedRosteredFixture(page.request, {
+      label: `V3 Cricket DockChips ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [{ fullName: `V3 DC Striker ${TAG}` }, { fullName: `V3 DC NonStriker ${TAG}` }],
+      away: [{ fullName: `V3 DC Bowler ${TAG}` }],
+    });
+    await openLiveConsole(page, fx);
+
+    // buildDock (skins/cricket.tsx): a no-ball's dock offers BAT_RUN_VALUES
+    // chips (a no-ball is batted normally) — tap "extra-noball", then the
+    // "+3" chip (label `pad.cricket.dock.batRun3`, en copy "3 runs") INSIDE
+    // the hold window. Wait for the chip's own `aria-pressed` before
+    // flushing: `tapChip` is async (it awaits `store.mutateHeld`), so
+    // sending immediately after the click risks flushing the UNMUTATED
+    // payload if the mutation hasn't landed in the local queue yet.
+    await pad(page).locator('[data-tile-id="extra-noball"]').click();
+    const dock = pad(page).locator('[data-role="v3-dock"]');
+    await expect(dock).toBeVisible({ timeout: 5_000 });
+    const chip3 = dock.getByRole("button", { name: "3 runs", exact: true });
+    await chip3.click();
+    await expect(chip3, "tapChip must resolve before Send now, or the flush races the mutation").toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await sendHeldNow(page);
+    await expect
+      .poll(
+        async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
+        { timeout: 20_000 },
+      )
+      .toBe(1);
+    const noball = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "cricket.ball")!;
+    // The no-ball's own 1-run extra survives the chip's mutation verbatim
+    // (batRunChip preserves `extras`, only ever touching `bat`).
+    expect(noball.payload.runs).toEqual({ bat: 3, extras: { kind: "noball", runs: 1 } });
+
+    // A wide is ALSO an extra, but the engine refuses bat runs off one
+    // (cricket.ts:1229) — buildDock's own `extraKind === "noball"` check
+    // (never a bare "is this an extra") is what keeps this dock empty.
+    await pad(page).locator('[data-tile-id="wide"]').click();
+    await expect(dock).toBeVisible({ timeout: 5_000 });
+    // Only "Send now" — zero chips. A real, non-vacuous check: buildDock
+    // returns `chips: []` for a wide, so the chip row has nothing to map.
+    await expect(dock.getByRole("button")).toHaveCount(1);
+    await sendHeldNow(page);
+    await expect
+      .poll(
+        async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
+        { timeout: 20_000 },
+      )
+      .toBe(2);
+  },
+);
+
+test(
+  "cricket v3: a free hit is indicated after a no-ball, survives a wide, and clears on the next legal ball",
+  async ({ page }) => {
+    // Three dispatches, each flushed via "Send now" — comfortably under the
+    // 120_000 budget the single-real-hold tests elsewhere in this file need.
+    test.setTimeout(120_000);
+    const fx = await seedRosteredFixture(page.request, {
+      label: `V3 Cricket FreeHit ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [{ fullName: `V3 FH Striker ${TAG}` }, { fullName: `V3 FH NonStriker ${TAG}` }],
+      away: [{ fullName: `V3 FH Bowler ${TAG}` }],
+    });
+    await openLiveConsole(page, fx);
+
+    const freeHit = pad(page).locator('[data-strip-item-id="freeHit"]');
+    const dock = pad(page).locator('[data-role="v3-dock"]');
+    const ballCount = async () =>
+      (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length;
+
+    await pad(page).locator('[data-tile-id="extra-noball"]').click();
+    await expect(dock).toBeVisible({ timeout: 5_000 });
+    await sendHeldNow(page);
+    await expect.poll(ballCount, { timeout: 20_000 }).toBe(1);
+    await expect(freeHit, "a white-ball no-ball must arm the indicator").toBeVisible({ timeout: 10_000 });
+
+    // THE case this test exists for: a wide is an extra but not a LEGAL
+    // delivery (freeHitPending's own doc mirrors cricket.ts's finishDelivery
+    // verbatim) — it must carry the flag forward, not consume it. Skipping
+    // straight to a legal ball here could not tell this from "any next ball
+    // clears it".
+    await pad(page).locator('[data-tile-id="wide"]').click();
+    await expect(dock).toBeVisible({ timeout: 5_000 });
+    await sendHeldNow(page);
+    await expect.poll(ballCount, { timeout: 20_000 }).toBe(2);
+    await expect(freeHit, "a wide must NOT clear a pending free hit").toBeVisible({ timeout: 10_000 });
+
+    await pad(page).locator('[data-tile-id="run0"]').click();
+    await expect(dock).toBeVisible({ timeout: 5_000 });
+    await sendHeldNow(page);
+    await expect.poll(ballCount, { timeout: 20_000 }).toBe(3);
+    await expect(freeHit, "the next LEGAL delivery must consume it").not.toBeVisible({ timeout: 10_000 });
+  },
+);
+
+test(
+  "cricket v3: the activity log names the bowler by real name when the bowler changes at an over boundary",
+  async ({ page }) => {
+    // Setup (over 1: six dot balls) goes through the API, not the pad — the
+    // ONLY thing under test is the over-2 bowler change and its own activity
+    // row, so openLiveConsole's own "Start match" click is skipped entirely
+    // (openConsoleAlreadyLive) and this budgets like a single-dispatch test.
+    test.setTimeout(60_000);
+    const fx = await seedRosteredFixture(page.request, {
+      label: `V3 Cricket ActivityName ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [{ fullName: `V3 AN Striker ${TAG}` }, { fullName: `V3 AN NonStriker ${TAG}` }],
+      away: [{ fullName: `V3 AN BowlerA ${TAG}` }, { fullName: `V3 AN BowlerB ${TAG}` }],
+      emitCoreStart: true,
+    });
+    const striker = fx.personIds[`V3 AN Striker ${TAG}`]!;
+    const nonStriker = fx.personIds[`V3 AN NonStriker ${TAG}`]!;
+    const bowlerA = fx.personIds[`V3 AN BowlerA ${TAG}`]!;
+
+    for (let ball = 1; ball <= 6; ball++) {
+      await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+        over: 0,
+        ballInOver: ball,
+        striker,
+        nonStriker,
+        bowler: bowlerA,
+        runs: { bat: 0 },
+      });
+    }
+    await openConsoleAlreadyLive(page, fx);
+
+    // Over 2's boundary — the ONE genuinely editable context slot (this
+    // file's own `setContextPerson` doc) — pick the OTHER eligible bowler.
+    await setContextPerson(page, "Bowler", `V3 AN BowlerB ${TAG}`);
+    await pad(page).locator('[data-tile-id="run0"]').click();
+    await expect(pad(page).locator('[data-role="v3-dock"]')).toBeVisible({ timeout: 5_000 });
+    await sendHeldNow(page);
+    await expect
+      .poll(
+        async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
+        { timeout: 20_000 },
+      )
+      .toBe(7);
+
+    const panel = pad(page).locator('[data-role="v3-activity-slot"]');
+    await expect(panel).toBeVisible({ timeout: 20_000 });
+    const rows = panel.locator('[data-role="v3-activity-row"]');
+    await expect.poll(async () => rows.count(), { timeout: 20_000 }).toBeGreaterThanOrEqual(7);
+    // Rows are newest-first (established elsewhere in this file) — row 0 is
+    // the just-scored ball 7, the one carrying the bowler-changed note.
+    const latestRowText = (await rows.nth(0).innerText()).trim();
+    const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+    expect(latestRowText, "must name the bowler, not fall back to a raw id").toContain(`V3 AN BowlerB ${TAG}`);
+    expect(latestRowText, "must never leak a raw person id into the activity log").not.toMatch(uuidPattern);
+  },
+);
+
+test(
+  "cricket v3: an ineligible bowler override blocks delivery tiles with a named reason, and clears once an eligible one is picked",
+  async ({ page }) => {
+    // No dispatch at all — a context-strip override is host-held local
+    // state (PadHostView.contextOverrides), never a server round trip, so
+    // this only pays for setup (six API dot balls + one page load) and two
+    // instant picker taps.
+    test.setTimeout(45_000);
+    const fx = await seedRosteredFixture(page.request, {
+      label: `V3 Cricket BowlerBlock ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [{ fullName: `V3 BB Striker ${TAG}` }, { fullName: `V3 BB NonStriker ${TAG}` }],
+      away: [{ fullName: `V3 BB BowlerA ${TAG}` }, { fullName: `V3 BB BowlerB ${TAG}` }],
+      emitCoreStart: true,
+    });
+    const striker = fx.personIds[`V3 BB Striker ${TAG}`]!;
+    const nonStriker = fx.personIds[`V3 BB NonStriker ${TAG}`]!;
+    const bowlerA = fx.personIds[`V3 BB BowlerA ${TAG}`]!;
+
+    for (let ball = 1; ball <= 6; ball++) {
+      await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+        over: 0,
+        ballInOver: ball,
+        striker,
+        nonStriker,
+        bowler: bowlerA,
+        runs: { bat: 0 },
+      });
+    }
+    await openConsoleAlreadyLive(page, fx);
+
+    // Over 2's boundary — re-select the SAME bowler who just bowled over 1.
+    // The picker still offers this name (a documented, pre-existing gap —
+    // see reference_padhostview_context_overrides_and_sheet_candidates /
+    // this skin's own buildContext CANDIDATE-LIST GAP comment); the fold
+    // would refuse it outright ("bowled the last over and cannot bowl this
+    // one too") — this test proves the CONSEQUENCE of tapping it is now
+    // caught in the pad, not a silent trip to the server.
+    await setContextPerson(page, "Bowler", `V3 BB BowlerA ${TAG}`);
+
+    for (const tileId of ["run0", "run1", "wicket"]) {
+      const tile = pad(page).locator(`[data-tile-id="${tileId}"]`);
+      await expect(tile, `${tileId} must carry data-tile-disabled="true"`).toHaveAttribute(
+        "data-tile-disabled",
+        "true",
+      );
+      await expect(tile, `${tileId} must be genuinely unclickable, not just styled`).toBeDisabled();
+    }
+    const bowlerMessage = pad(page).locator(
+      '[data-role="context-strip"] [data-role="context-slot-message"][data-slot-id="bowler"]',
+    );
+    await expect(bowlerMessage).toBeVisible({ timeout: 10_000 });
+    await expect(bowlerMessage, "the reason must name the actual bowler, not a raw id").toContainText(
+      `V3 BB BowlerA ${TAG}`,
+    );
+
+    // Pick the genuinely eligible bowler — everything clears.
+    await setContextPerson(page, "Bowler", `V3 BB BowlerB ${TAG}`);
+    for (const tileId of ["run0", "run1", "wicket"]) {
+      const tile = pad(page).locator(`[data-tile-id="${tileId}"]`);
+      await expect(tile, `${tileId} must carry data-tile-disabled="false" once eligible`).toHaveAttribute(
+        "data-tile-disabled",
+        "false",
+      );
+      await expect(tile).toBeEnabled();
+    }
+    await expect(bowlerMessage, "the block message must clear once the bowler is eligible").not.toBeVisible({
+      timeout: 10_000,
+    });
+  },
+);
+
+test(
+  "cricket v3: a terminal closed innings disables delivery tiles with a closure message and keeps the final score on the scorebug",
+  async ({ page }) => {
+    // Entirely API-driven setup (a config flip + five events) plus one page
+    // load — no held dispatch at all.
+    test.setTimeout(60_000);
+    const fx = await seedRosteredFixture(page.request, {
+      label: `V3 Cricket ClosedGate ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [{ fullName: `V3 CG Home1 ${TAG}` }, { fullName: `V3 CG Home2 ${TAG}` }],
+      away: [{ fullName: `V3 CG Away1 ${TAG}` }, { fullName: `V3 CG Away2 ${TAG}` }],
+    });
+    const home1 = fx.personIds[`V3 CG Home1 ${TAG}`]!;
+    const home2 = fx.personIds[`V3 CG Home2 ${TAG}`]!;
+    const away1 = fx.personIds[`V3 CG Away1 ${TAG}`]!;
+    const away2 = fx.personIds[`V3 CG Away2 ${TAG}`]!;
+
+    // `dueBattingSide`/`blockedByClosure` (skins/cricket.tsx, R2b-next) go
+    // null/true ONLY once NOTHING further is due — for a default
+    // inningsPerSide:1 cfg that is the SAME moment the engine decides the
+    // match outright (decideAfterClose -> decideWin/decideTie, phase
+    // "done"), and a "done"/"final" phase hides these tiles entirely
+    // (tile-grid.tsx filters by phase before `disabled` ever applies) rather
+    // than disabling them. A TIE with superOver:true is the one config where
+    // the match stays phase "super_over" instead (resolvePhase maps that to
+    // "live", same as an ordinary live match) — forced deliberately, before
+    // the first event, not an incidental config choice.
+    const div = await apiJson<{ config: Record<string, unknown> }>(
+      page.request,
+      `/api/v1/divisions/${fx.divisionId}`,
+    );
+    expect(div.status, `GET division -> ${div.status}`).toBe(200);
+    await setDivisionConfigSql(fx.divisionId, { ...div.data!.config, superOver: true });
+
+    await postEvent(page.request, fx.fixtureId, "core.start", {});
+    // Innings 1 (home): a single ball, then a manual close — home totals 1.
+    await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+      over: 0,
+      ballInOver: 1,
+      striker: home1,
+      nonStriker: home2,
+      bowler: away1,
+      runs: { bat: 1 },
+    });
+    await postEvent(page.request, fx.fixtureId, "cricket.innings.close", { reason: "other" });
+    // Innings 2 (away): target is home.runs + 1 = 2 — away scores EXACTLY
+    // target - 1 (a single ball, bat:1) so the second close TIES the match
+    // rather than deciding it outright.
+    await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+      over: 0,
+      ballInOver: 1,
+      striker: away1,
+      nonStriker: away2,
+      bowler: home1,
+      runs: { bat: 1 },
+    });
+    await postEvent(page.request, fx.fixtureId, "cricket.innings.close", { reason: "other" });
+
+    await openConsoleAlreadyLive(page, fx);
+
+    for (const tileId of ["run0", "run1", "wicket"]) {
+      const tile = pad(page).locator(`[data-tile-id="${tileId}"]`);
+      await expect(tile, `${tileId} must be present, carrying data-tile-disabled="true"`).toHaveAttribute(
+        "data-tile-disabled",
+        "true",
+      );
+      await expect(tile).toBeDisabled();
+    }
+    const closureMessage = pad(page).locator(
+      '[data-role="context-strip"] [data-role="context-slot-message"][data-slot-id="bowler"]',
+    );
+    await expect(closureMessage).toContainText("This innings is closed.");
+
+    // currentInnings' own "falls back to the last innings once every innings
+    // is closed" rule — the scorebug must keep showing away's final 1/0, not
+    // blank out or revert to home's.
+    await expect(pad(page).locator('[data-role="v3-scorebug"]')).toContainText("1/0");
+  },
+);
+
+test(
+  "cricket v3: tapping a delivery tile on a due innings opens the next one with the other side batting",
+  async ({ page }) => {
+    // One held dispatch (the tap under test), flushed via "Send now" — the
+    // rest of the setup (innings 1's single ball + its close) is API-driven.
+    test.setTimeout(60_000);
+    const fx = await seedRosteredFixture(page.request, {
+      label: `V3 Cricket InningsTransition ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [{ fullName: `V3 IT Home1 ${TAG}` }, { fullName: `V3 IT Home2 ${TAG}` }],
+      away: [{ fullName: `V3 IT Away1 ${TAG}` }, { fullName: `V3 IT Away2 ${TAG}` }],
+      emitCoreStart: true,
+    });
+    const home1 = fx.personIds[`V3 IT Home1 ${TAG}`]!;
+    const home2 = fx.personIds[`V3 IT Home2 ${TAG}`]!;
+    const away1 = fx.personIds[`V3 IT Away1 ${TAG}`]!;
+    const away2 = fx.personIds[`V3 IT Away2 ${TAG}`]!;
+
+    await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+      over: 0,
+      ballInOver: 1,
+      striker: home1,
+      nonStriker: home2,
+      bowler: away1,
+      runs: { bat: 1 },
+    });
+    await postEvent(page.request, fx.fixtureId, "cricket.innings.close", { reason: "other" });
+
+    await openConsoleAlreadyLive(page, fx);
+    // Due, not terminal (only 1 of 2 required innings closed) — buildContext
+    // returns null (no strip for an innings that does not exist yet) and the
+    // ball tiles stay fully enabled; tapping one is what the engine's own
+    // implicit-open (`createInnings` from `cricket.ball`) is for.
+    await expect(pad(page).locator('[data-role="context-strip"]')).not.toBeVisible();
+    const run1 = pad(page).locator('[data-tile-id="run1"]');
+    await expect(run1).toBeEnabled();
+    await run1.click();
+    await expect(pad(page).locator('[data-role="v3-dock"]')).toBeVisible({ timeout: 5_000 });
+    await sendHeldNow(page);
+    await expect
+      .poll(
+        async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
+        { timeout: 20_000 },
+      )
+      .toBe(2);
+
+    const balls = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball");
+    const opener = balls.at(-1)!;
+    expect([away1, away2], "the OTHER side must be batting").toContain(opener.payload.striker);
+    expect([away1, away2]).toContain(opener.payload.nonStriker);
+    expect(opener.payload.striker).not.toBe(opener.payload.nonStriker);
+    expect([home1, home2], "the OTHER side's opponents must be bowling").toContain(opener.payload.bowler);
+
+    const scorebug = pad(page).locator('[data-role="v3-scorebug"]');
+    // A fresh innings 2, not innings 1's total carried forward — 1 run, not 2.
+    await expect(scorebug).toContainText("1/0");
+  },
+);
+
+test(
+  "cricket v3: a pending free hit limits the wicket sheet to run out and obstructing the field, with a hint",
+  async ({ page }) => {
+    // No held dispatch — the wizard is opened but never completed, only its
+    // first step is asserted. EXPECTED TO FAIL against a bundle that
+    // predates the free-hit wicket-kind gate (commit 2f20e2dce) — see this
+    // task's own report.
+    test.setTimeout(45_000);
+    const fx = await seedRosteredFixture(page.request, {
+      label: `V3 Cricket FreeHitWicket ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [{ fullName: `V3 FW Striker ${TAG}` }, { fullName: `V3 FW NonStriker ${TAG}` }],
+      away: [{ fullName: `V3 FW Bowler ${TAG}` }],
+      emitCoreStart: true,
+    });
+    const striker = fx.personIds[`V3 FW Striker ${TAG}`]!;
+    const nonStriker = fx.personIds[`V3 FW NonStriker ${TAG}`]!;
+    const bowler = fx.personIds[`V3 FW Bowler ${TAG}`]!;
+
+    // A white-ball no-ball arms the free hit (freeHitPending's own doc) —
+    // the very next ball.
+    await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+      over: 0,
+      ballInOver: 1,
+      striker,
+      nonStriker,
+      bowler,
+      runs: { bat: 0, extras: { kind: "noball", runs: 1 } },
+    });
+
+    await openConsoleAlreadyLive(page, fx);
+    await pad(page).locator('[data-tile-id="wicket"]').click();
+    const sheet = sheetRoot(page);
+    await expect(sheet).toBeVisible({ timeout: 10_000 });
+
+    await expect(sheet.getByRole("button", { name: "Run out", exact: true })).toBeVisible();
+    await expect(sheet.getByRole("button", { name: "Obstructing the field", exact: true })).toBeVisible();
+    await expect(
+      sheet.getByRole("button", { name: "Bowled", exact: true }),
+      "FREE_HIT_WICKET_KINDS must actually narrow the list, not just add a hint on top of all ten",
+    ).not.toBeVisible();
+    await expect(sheet.getByRole("button", { name: "Caught", exact: true })).not.toBeVisible();
+    await expect(sheet.getByText("Free hit — only Run out or Obstructing the field apply.")).toBeVisible();
+  },
+);

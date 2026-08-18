@@ -34,6 +34,12 @@ Toss, reviews, innings close and — in Test formats — declarations, the follo
 
 Ball-by-ball scoring is the finest level a cricket match records, and it needs a plan that includes it. Below that, the pad records innings totals instead — a correct score and correct standings, with fewer details behind them. The chip in the pad header always says which level you're on, in words. See [choosing a detail level](/help/scoring/fidelity).
 
+## Over-by-over or ball-by-ball
+
+Every innings decides its own level from your first entry, not from a setting you pick beforehand. Tap a run, an extra or **Wicket** first, and that innings is scored ball by ball from then on. Tap **End of over** first instead, and it records over by over: each entry opens showing the innings' running total, ready to edit up to what actually happened, so you never add up an over yourself. Once an innings has picked a level the buttons for the other one drop away, since they'd no longer agree with the score.
+
+Tapped the wrong one? **Undo** the very first entry for that innings and it goes back to undecided, exactly as if nothing had been recorded — tap again to lock in whichever level you meant.
+
 ## Common questions
 
 **Does The Hundred's five-ball over work?** Yes — the over fills to whatever the format sets, not always six.

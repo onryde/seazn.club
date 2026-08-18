@@ -13,6 +13,7 @@ import {
   cricket,
   padSpec,
   CRICKET_EVENT_SCHEMAS,
+  nextBattingSide,
   type CricketBallEv,
   type CricketCfg,
   type CricketEv,
@@ -47,8 +48,15 @@ const t20: CricketCfg = cricket.configSchema.parse(
 const fold = (cfg: CricketCfg, events: EventEnvelope[]) =>
   foldMatch(cricket, cfg, lineups, events, STRICT_ALL);
 
-function stream(...specs: Array<[type: string, payload?: unknown]>): EventEnvelope[] {
-  return specs.map(([type, payload], i) => makeEnvelope(i, { type, payload: payload ?? {} }));
+// `voids` (3rd tuple slot) mirrors core/events.test.ts's own stream() — a
+// core.void's target travels in EventEnvelope.voids, not the payload
+// (CoreVoid = z.strictObject({})); resolveVoids reads it by that field.
+function stream(
+  ...specs: Array<[type: string, payload?: unknown, voids?: string]>
+): EventEnvelope[] {
+  return specs.map(([type, payload, voids], i) =>
+    makeEnvelope(i, { type, payload: payload ?? {} }, voids),
+  );
 }
 
 // Compact ball notation for hand-written goldens.
@@ -753,6 +761,115 @@ describe("a recorded revise survives a shortened over (§3.3)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// R2b (v3 pad, over-by-over tile) — the tile's gate rests entirely on the
+// per-innings fidelity lock (createInnings/applyDelivery/applySummary above)
+// and on undo recovering it by REPLAY, not by "resetting to coarse". This had
+// ZERO coverage before this addition; test-only, per the wave's brief — no
+// packages/engine/src line changes, only this file.
+// ---------------------------------------------------------------------------
+
+describe("cricket: per-innings fidelity lock is bidirectional, and undo recovers it by replay", () => {
+  // Batting side for innings 0 is "home" (battingFirst defaults "home" with
+  // no toss event, cricket.ts:2879); H-1/H-2 open, A-1 is a legal bowler.
+  const oneBall = [{ striker: "H-1", nonStriker: "H-2", bowler: "A-1", bat: 4 }];
+
+  it("refuses a partial summary on a ball-scored (fine) innings", () => {
+    const events = stream(
+      ["core.start"],
+      ...balls("cricket.ball", oneBall),
+      ["cricket.innings.summary", { runs: 4, wickets: 0, legalBalls: 1, partial: true }],
+    );
+    expect(() => fold(t20, events)).toThrowError(
+      expect.objectContaining({
+        code: "INVALID_EVENT",
+        message: expect.stringMatching(/recorded ball-by-ball — summaries are not allowed for it/),
+      }),
+    );
+  });
+
+  // The mirror of the refusal above. No existing test in this file covers a
+  // ball on a coarse innings (checked: zero hits for "summary fidelity" or
+  // "ball events are not allowed" outside this block) — new coverage, not a
+  // duplicate.
+  it("refuses a ball on a summary-fidelity (coarse) innings", () => {
+    const events = stream(
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 10, wickets: 0, legalBalls: 6, partial: true }],
+      ...balls("cricket.ball", oneBall),
+    );
+    expect(() => fold(t20, events)).toThrowError(
+      expect.objectContaining({
+        code: "INVALID_EVENT",
+        message: expect.stringMatching(/recorded at summary fidelity — ball events are not allowed/),
+      }),
+    );
+  });
+
+  it("undo of an innings' only ball reopens BOTH fidelities — fold replays from init, it does not reset to coarse", () => {
+    const voidOnly = fold(
+      t20,
+      stream(["core.start"], ...balls("cricket.ball", oneBall), ["core.void", {}, "e-1"]),
+    );
+    // createInnings("fine") ran once, folding e-1. resolveVoids drops e-1 (and
+    // the core.void itself) from the active stream before apply() ever sees
+    // it, and foldMatch replays the survivors from module.init — so the
+    // innings was never opened at all, not "reset to coarse": state.innings
+    // stays the [] init() started with (cricket.ts:2881).
+    expect(voidOnly.innings).toHaveLength(0);
+
+    const afterSummary = fold(
+      t20,
+      stream(
+        ["core.start"],
+        ...balls("cricket.ball", oneBall),
+        ["core.void", {}, "e-1"],
+        ["cricket.innings.summary", { runs: 4, wickets: 0, legalBalls: 1, partial: true }],
+      ),
+    );
+    expect(afterSummary.innings).toHaveLength(1);
+    expect(afterSummary.innings[0]).toMatchObject({ runs: 4, wickets: 0, legalBalls: 1, fine: null });
+  });
+
+  it("a sequence of partial summaries folds to the totals a scorer expects, without tripping the monotone guard", () => {
+    const events = stream(
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 12, wickets: 0, legalBalls: 6, partial: true }],
+      ["cricket.innings.summary", { runs: 24, wickets: 1, legalBalls: 12, partial: true }],
+      ["cricket.innings.summary", { runs: 31, wickets: 2, legalBalls: 18, partial: true }],
+    );
+    const state = fold(t20, events);
+    expect(state.innings).toHaveLength(1);
+    expect(state.innings[0]).toMatchObject({
+      runs: 31,
+      wickets: 2,
+      legalBalls: 18,
+      fine: null,
+      closed: false,
+    });
+  });
+
+  // Negative case for the monotone guard above (cricket.ts:1416-1426) — a
+  // grep of this file shows zero refusal coverage for it anywhere, so
+  // dropping the guard entirely would leave every existing test green.
+  // Matches the fold's own message, not a bare "it threw": a mutant that
+  // throws for some OTHER reason (e.g. the strict all-out/ballsLimit checks
+  // just below it) would still pass a bare-throw assertion.
+  it("refuses a partial summary whose totals go backwards from the previous partial", () => {
+    const events = stream(
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 24, wickets: 1, legalBalls: 12, partial: true }],
+      ["cricket.innings.summary", { runs: 20, wickets: 1, legalBalls: 12, partial: true }],
+    );
+    expect(() => fold(t20, events)).toThrowError(
+      expect.objectContaining({
+        code: "INVALID_EVENT",
+        message: expect.stringMatching(/summary totals may not decrease/),
+      }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // PROMPT-05 §8 (d) — tied T20 → super over → still-tied policies.
 // ---------------------------------------------------------------------------
 
@@ -930,6 +1047,51 @@ describe("cricket golden (e): two-innings matches", () => {
       { entrantId: "H", line: "300 & 150" },
       { entrantId: "A", line: "250 & 201/5" },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// nextBattingSide (R2b-next) — public mirror of the private battingSideAt/
+// maxInningsCount innings-sequencing rule, exported so apps/web's v3 cricket
+// skin can target a next innings that has not been created yet (see this
+// function's own doc, cricket.ts) instead of hand-copying the rule. Each
+// `it` below covers one cfg SHAPE end to end (every index through the
+// boundary), per the task brief's own ask.
+// ---------------------------------------------------------------------------
+
+describe("nextBattingSide", () => {
+  it("single innings per side: strictly alternates from battingFirst, then null once both sides have batted", () => {
+    const base = { battingFirst: "home" as const, followOnEnforced: false, cfg: { inningsPerSide: 1 as const } };
+    expect(nextBattingSide({ ...base, inningsCount: 0 })).toBe("home");
+    expect(nextBattingSide({ ...base, inningsCount: 1 })).toBe("away");
+    expect(nextBattingSide({ ...base, inningsCount: 2 })).toBeNull(); // nothing further due
+  });
+
+  it("reads battingFirst, not a hardcoded 'home' — an away-first match alternates the other way", () => {
+    const base = { battingFirst: "away" as const, followOnEnforced: false, cfg: { inningsPerSide: 1 as const } };
+    expect(nextBattingSide({ ...base, inningsCount: 0 })).toBe("away");
+    expect(nextBattingSide({ ...base, inningsCount: 1 })).toBe("home");
+  });
+
+  it("two innings per side, no follow-on: strict alternation (index % 2) across all four innings, then null", () => {
+    const base = { battingFirst: "home" as const, followOnEnforced: false, cfg: { inningsPerSide: 2 as const } };
+    expect(nextBattingSide({ ...base, inningsCount: 0 })).toBe("home");
+    expect(nextBattingSide({ ...base, inningsCount: 1 })).toBe("away");
+    expect(nextBattingSide({ ...base, inningsCount: 2 })).toBe("home");
+    expect(nextBattingSide({ ...base, inningsCount: 3 })).toBe("away");
+    expect(nextBattingSide({ ...base, inningsCount: 4 })).toBeNull();
+  });
+
+  it("two innings per side, follow-on enforced: F,S,S,F — diverges from plain alternation at innings 3 (a test only covering simple alternation cannot see this)", () => {
+    const base = { battingFirst: "home" as const, followOnEnforced: true, cfg: { inningsPerSide: 2 as const } };
+    expect(nextBattingSide({ ...base, inningsCount: 0 })).toBe("home");
+    expect(nextBattingSide({ ...base, inningsCount: 1 })).toBe("away");
+    // Plain alternation (index % 2 === 0) would say "home" here — the
+    // follow-on keeps "away" batting again instead (Law: the side asked to
+    // follow on bats immediately, skipping the other side's normal turn).
+    expect(nextBattingSide({ ...base, inningsCount: 2 })).toBe("away");
+    expect(nextBattingSide({ ...base, inningsCount: 3 })).toBe("home");
+    expect(nextBattingSide({ ...base, inningsCount: 4 })).toBeNull();
   });
 });
 

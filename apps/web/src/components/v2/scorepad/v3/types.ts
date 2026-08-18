@@ -17,7 +17,23 @@ import type { FidelityBand } from "@seazn/engine/sport";
 export type TapModel = "S" | "T";
 export type PadPhase = "pre" | "live" | "post";
 
-export interface StripItem { label?: string; value: string; accent?: boolean }
+/**
+ * R2b (owner ruling, live-tile audit — freeHit chip removal): `id`, an
+ * OPTIONAL/additive identity for a strip item. Every pre-existing item (over
+ * dots, striker/non-striker/bowler names, the chase target) omits it and
+ * renders exactly as before. Exists solely so a Playwright spec has a
+ * stable, localisation-independent `data-*` hook (`scorebug.tsx`'s
+ * `data-strip-item-id`) to target ONE item in what is otherwise a plain,
+ * unindexed list — matching text against a translated `value` is not a
+ * stable hook, and the strip had no per-item identity at all before this.
+ * First (only, as of this change) setter: cricket's free-hit indicator
+ * (`skins/cricket.tsx` `buildScorebug`) — a property of the DELIVERY, so
+ * `strip` (the scorebug's own ambient, always-on delivery status line — the
+ * same bucket as the over dots) is the natural home, not `ContextSlot.
+ * message` below (a PERSON slot's own explanation), which would be a misfit
+ * for a fact that isn't about any one person.
+ */
+export interface StripItem { id?: string; label?: string; value: string; accent?: boolean }
 // Fix round 2 (Task 5 review, Important — controller ruling): servingLabel
 // is a deliberate, additive contract change. The chassis (v3/scorebug.tsx)
 // must never resolve a sport-namespaced i18n key itself — reusing
@@ -37,7 +53,12 @@ export interface TapEvent { type: string; payload: Record<string, unknown> }
 export interface ScorebugHalf {
   who: WhoLine[];
   big: string;                    // pre-formatted, tabular-nums rendering
-  hint?: string;                  // i18n key; REQUIRED iff tappable
+  /** i18n KEY, resolved by the chassis (scorebug.tsx, via padLabel()) —
+   *  REQUIRED iff tappable. Renamed from `hint` (R2b-cricket-over
+   *  follow-up, hint-field naming pass, 2026-08-17): shared a bare name
+   *  with `SheetNumberStep.hint`, an opposite, PRE-RESOLVED convention —
+   *  see `SheetChoiceStep.hintKey`'s doc below for the full reasoning. */
+  hintKey?: string;
   tappable?: boolean;             // MODEL-S halves only
   tapEvent?: TapEvent;            // REQUIRED iff tappable
 }
@@ -52,11 +73,99 @@ export type TileKind = "primary" | "standard" | "destructive" | "minor";
 export interface TileSpec {
   id: string;
   label: string;                  // i18n key
+  /**
+   * R2b (owner sign-off finding, single-line label fix): a PRE-LOCALISED
+   * raw string, rendered VERBATIM by the chassis (tile-grid.tsx) — never
+   * resolved through `t()`. Same convention `WhoLine.servingLabel` and
+   * `ScorebugSpec.context` already establish elsewhere in this file, and
+   * `sublabelText` below establishes for the sublabel slot: the chassis
+   * never resolves a sport-namespaced key itself, not even an interpolated
+   * one — a skin whose label needs a variable INSIDE the sentence itself
+   * (cricket's over-summary tile: "End of over 2", the over number belongs
+   * IN the label, not a separate sublabel line) calls `t(key, vars)` itself
+   * and hands the chassis the already-resolved string. `label` stays
+   * REQUIRED and keeps resolving through the chassis's own bare
+   * `t(tile.label)` (no vars — tile-grid.tsx never gained a vars argument)
+   * for every tile that does not set `labelText`; every existing skin is
+   * unchanged.
+   *
+   * A tile always sets `label` (the type still requires a valid key as the
+   * fallback/canonical value) and OPTIONALLY also sets `labelText` — but
+   * when `labelText` is present, it WINS and `label`'s key is never
+   * resolved at all (tile-grid.tsx), never concatenated or merged. Same
+   * "explicit pre-localised value overrides the key-resolved one" posture
+   * `sublabelText` takes below, and `PadHostView.contextOverrides`
+   * documents for a different field pair in this file.
+   */
+  labelText?: string;
   sublabel?: string;              // i18n key
+  /**
+   * Fix round (review finding 1, R2b): a PRE-LOCALISED raw string, rendered
+   * VERBATIM by the chassis (tile-grid.tsx) — never resolved through `t()`.
+   * Same convention `WhoLine.servingLabel` and `ScorebugSpec.context`
+   * already establish elsewhere in this file: some tile sublabels are not
+   * translatable prose at all (a bare NUMBER is the motivating category —
+   * the same "locale-invariant" one `variantCode()` documents for T20/ODI/
+   * HUNDRED/TEST, cricket.tsx), and routing one through `sublabel` (an
+   * i18n KEY) fires `[i18n] missing key: …` on every render, since no
+   * dictionary will ever carry a key literally named "6". A skin with a
+   * genuinely translatable sublabel keeps using `sublabel` exactly as
+   * before — this field is additive/optional, so every existing skin is
+   * unchanged.
+   *
+   * A tile sets ONE of `sublabel`/`sublabelText`, not both, in the normal
+   * case — but if both are present, `sublabelText` WINS and `sublabel`'s
+   * key is never resolved at all (tile-grid.tsx), never concatenated or
+   * merged. Same "explicit pre-localised value overrides the key-resolved
+   * one" posture `PadHostView.contextOverrides` already documents for a
+   * different field pair in this file.
+   *
+   * R2b follow-up (owner sign-off, single-line label fix): cricket's
+   * over-summary tile — this doc's own original motivating example — no
+   * longer sets this field. The owner wanted the over NUMBER inside the
+   * tile's LABEL sentence ("End of over 2"), not a visually separate
+   * second line, so that tile now uses `labelText` above instead. This
+   * field has NO shipped production setter as of that change — kept,
+   * deliberately not deleted, as a chassis capability a later R3-R7 skin
+   * may still need for a genuinely non-translatable SUBLABEL (as opposed
+   * to a non-translatable LABEL); its own tests (`__tests__/tiles.test.ts`)
+   * stay in place unchanged.
+   */
+  sublabelText?: string;
   kind: TileKind;
   span?: 1 | 2 | 3 | 4;
   phases: PadPhase[];
   action: { event: TapEvent } | { sheet: string } | { swap: true };
+  /**
+   * R2b (owner ruling, bowler-eligibility block, 2026-08-17): `true` when
+   * this tile's action must NOT fire on a tap right now, while the tile
+   * itself stays fully VISIBLE — never removed. This is deliberately a
+   * DIFFERENT precedent from the over-summary tile's own "gone, not
+   * disabled" history (that one is a PERMANENT property of the innings'
+   * fidelity band): `disabled` exists for a TRANSIENT condition instead —
+   * cricket's run/extra/wicket tiles while the resolved bowler is
+   * ineligible, which clears the moment a legal bowler is picked. Removing
+   * every run tile at each over boundary would read as the pad breaking;
+   * disabling them, with the reason visible elsewhere (see below), does
+   * not.
+   *
+   * `tile-grid.tsx` renders such a tile as a real, native `disabled`
+   * `<button>` — no dispatch, no `onOpenSheet` — plus a stable
+   * `data-tile-disabled` attribute a Playwright spec can assert on without
+   * relying on visual styling (opacity/cursor) alone. Optional/absent
+   * means tappable — every pre-existing skin's tiles keep behaving
+   * identically with zero change, same additive/opt-in posture
+   * `labelText` above and `ContextSlot.readOnly` below already take.
+   *
+   * Deliberately carries NO paired reason-text field of its own: a single
+   * cause (e.g. one ineligible bowler) can disable MANY tiles at once —
+   * every run/extra/wicket tile that would emit `cricket.ball` — and
+   * repeating one long sentence on each of ten-plus tiles is worse UX than
+   * a plain disabled look, not better. The explanation lives once, on
+   * `ContextSlot.message` below, next to the affordance that can actually
+   * fix it (the bowler chip a scorer taps to pick someone eligible).
+   */
+  disabled?: boolean;
 }
 
 export interface DockChip {
@@ -96,6 +205,33 @@ export interface ContextSlot {
    * `context()`, keeps behaving identically with zero change.
    */
   readOnly?: boolean;
+  /**
+   * R2b (owner ruling, bowler-eligibility block, 2026-08-17): a
+   * PRE-LOCALISED raw string, rendered VERBATIM by the chassis
+   * (context-strip.tsx) — never resolved through `t()` itself, same
+   * convention `WhoLine.servingLabel`/`ScorebugSpec.context`/
+   * `TileSpec.labelText` already establish in this file: the chassis never
+   * resolves a sport-namespaced key, and this string needs an
+   * INTERPOLATED person name (and, for cricket's quota case, a cfg-derived
+   * number) baked in before it ever reaches here — `ContextSlot.label`'s
+   * own `t(slot.label)` call takes no `vars` argument, so it cannot carry
+   * this on its own.
+   *
+   * First use: cricket's bowler slot, explaining why `TileSpec.disabled`
+   * is currently true on every run/extra/wicket tile — "why can't I score
+   * a ball right now" and "who is on strike" are different questions, so
+   * this lives on the SLOT that names the person at fault (or, when
+   * nobody in particular is at fault, the slot whose affordance would
+   * normally fix it), not on `ScorebugSpec.context`'s ambient format/over/
+   * run-rate line, and not repeated onto every blocked tile
+   * (`TileSpec.disabled`'s own doc explains why not the latter).
+   *
+   * Optional/additive: every pre-existing `ContextSlot` (every other
+   * sport, and cricket's own striker/non-striker slots) omits this and
+   * renders exactly as before. Orthogonal to `readOnly` — either, both, or
+   * neither may be set on the same slot.
+   */
+  message?: string;
 }
 export interface ContextStripSpec { slots: ContextSlot[] }
 
@@ -119,7 +255,43 @@ export interface ContextStripSpec { slots: ContextSlot[] }
  */
 export type StepPredicate = (answers: Readonly<Record<string, string>>) => boolean;
 
-export interface SheetChoiceStep { id: string; kind: "choice"; title: string; options: { id: string; label: string }[]; when?: StepPredicate }
+/**
+ * R2b-over (review finding — the recurring "never offer what the engine
+ * will refuse" defect class, `_INDEX.md`): an OPTIONAL, additive reason line
+ * for a choice step whose `options` the skin has narrowed for the current
+ * fold state. First use: cricket's wicket "kind" step offers only
+ * runout/obstructed while a free hit is pending (`wicketSheet`,
+ * skins/cricket.tsx) — a silently shortened list is better than the bare
+ * rejection it replaces, but still leaves a scorer who expected "bowled"
+ * with no idea why it is missing; `hintKey` is that explanation. Absent
+ * means "no reason line" — every pre-existing `SheetChoiceStep` (every step
+ * shipped before this) omits it and renders identically.
+ *
+ * A plain i18n KEY, resolved by the chassis exactly like `title`/
+ * `options[].label` already are (`t(step.hintKey)`, guided-sheet.tsx) — the
+ * same convention `ScorebugHalf.hintKey` above already establishes for a
+ * hint with nothing to interpolate. Deliberately NOT `SheetNumberStep.
+ * hintText`'s pre-resolved-string convention below: that field needed an
+ * INTERPOLATED value baked in before `sheets()` returns, and `SkinDefV3.
+ * sheets` (unlike `tiles`/`scorebug`/`dock`/`context`) never receives a `t`
+ * at all (`sheets()`'s own header, skins/cricket.tsx) — keeping this a bare
+ * key lets a static, translatable sentence stay that way without widening
+ * `sheets()`'s signature for every skin.
+ *
+ * R2b-cricket-over follow-up (hint-field naming pass, 2026-08-17): renamed
+ * from `hint`. This field and `SheetNumberStep.hint` shared one bare name
+ * for opposite contracts — a key to resolve vs. an already-resolved string
+ * — a coin-flip for any R3-R7 skin author, and wrong in the worst possible
+ * direction either way: a raw key mis-typed into a `hintText`-shaped field
+ * renders literally to a scorer, while a resolved sentence mis-typed into a
+ * `hintKey`-shaped field is re-sent through `t()`, which logs a
+ * missing-key warning yet still renders the original sentence — so it
+ * looks fine in English and only breaks once translated. `ScorebugHalf`
+ * shared this same KEY convention (resolved by the chassis, never
+ * skin-supplied prose) and was renamed to `hintKey` alongside it for the
+ * identical reason, so neither convention is left as an unmarked default.
+ */
+export interface SheetChoiceStep { id: string; kind: "choice"; title: string; options: { id: string; label: string }[]; when?: StepPredicate; hintKey?: string }
 /**
  * R2/task A5 (`_INDEX.md` R1 "owed by later waves", closed here): `side` is
  * REQUIRED, not optional-with-a-default. Cricket's wicket flow needs the
@@ -150,7 +322,64 @@ export interface SheetChoiceStep { id: string; kind: "choice"; title: string; op
  * with no narrower notion than "the whole fielding side").
  */
 export interface SheetPersonStep { id: string; kind: "person"; title: string; pool: "onfield" | "bench" | "all"; side: "home" | "away"; candidates?: readonly string[]; when?: StepPredicate }
-export type GuidedSheetStep = SheetChoiceStep | SheetPersonStep;
+
+/**
+ * R2b/task 1 (`docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-cricket-
+ * over.md`): a numeric step for guided sheets — an answer that is a
+ * QUANTITY, not a choice from a fixed list (`SheetChoiceStep`) or a person
+ * from a roster pool (`SheetPersonStep`). First real use is cricket's
+ * over-summary sheet (task 3): a scorer editing a running total (runs,
+ * wickets, legal balls) UP from wherever the fold's own current total
+ * already sits, never counting from zero.
+ *
+ * `initial` is the value the stepper/field opens showing. Task 3's own
+ * design ruling (plan doc, Q2) is that the sheet PREFILLS from the fold's
+ * CURRENT total rather than starting at 0, so an unedited confirm can never
+ * trip the engine's "summary totals may not decrease" guard (`cricket.ts`)
+ * — but this type does not itself enforce that policy; it only carries
+ * whatever number the skin hands it, same as `SheetChoiceStep.options`/
+ * `SheetPersonStep.pool` carry whatever the skin decides without this file
+ * validating the choice.
+ *
+ * `min`/`max` are enforced by the CHASSIS renderer (guided-sheet.tsx), not
+ * left for the skin's own `buildPayload` to catch after the fact: the
+ * stepper's `−`/`+` buttons and the editable field are two paths to the
+ * SAME control, and a clamp only the skin enforces in `buildPayload` is a
+ * clamp the renderer itself could still be made to bypass (type an
+ * out-of-range number directly into the field). Both optional — an absent
+ * bound simply never clamps on that side, same "absent means unrestricted"
+ * reading `SheetPersonStep.candidates`'s own absence already gets.
+ *
+ * `hintText` follows `WhoLine.servingLabel`'s already-established rule
+ * (this file, above): pre-localised, skin-supplied prose — the chassis
+ * never resolves a sport-namespaced key itself. Renamed from `hint`
+ * (R2b-cricket-over follow-up, hint-field naming pass, 2026-08-17) — see
+ * `SheetChoiceStep.hintKey`'s doc above for why the shared bare name was a
+ * defect, not a coincidence.
+ *
+ * Deliberately NOT widening `GuidedSheetSpec.buildPayload`'s `answers:
+ * Record<string, string>` to admit a number: a number step's answer is
+ * still a plain STRING — the decimal rendering of whatever the stepper/
+ * field last held (`String(value)`) — read and parsed back by the SKIN's
+ * own `buildPayload`, exactly like a `SheetChoiceStep` answer is an option
+ * id and a `SheetPersonStep` answer is a person id, neither its own type
+ * either. Widening the map itself would be a contract change every R3-R7
+ * skin inherits for one sport's convenience, when the cost of NOT widening
+ * it is a one-line `Number(answers.x)` parse at cricket's own call site.
+ */
+export interface SheetNumberStep {
+  id: string;
+  kind: "number";
+  title: string;
+  initial: number;
+  min?: number;
+  max?: number;
+  /** Pre-localised, skin-supplied (same rule as WhoLine.servingLabel):
+   *  the chassis never resolves a sport-namespaced key. */
+  hintText?: string;
+  when?: StepPredicate;
+}
+export type GuidedSheetStep = SheetChoiceStep | SheetPersonStep | SheetNumberStep;
 export interface GuidedSheetSpec { event: string; steps: GuidedSheetStep[]; buildPayload: (answers: Record<string, string>) => Record<string, unknown> }
 
 /**
@@ -213,6 +442,74 @@ export interface SwapSlot {
   buildEvent(off: string, on: string): TapEvent;
 }
 
+/**
+ * R2b-cricket-over review fix (item 1): the single object `SkinDefV3.
+ * activityDetail` takes, replacing what had grown to seven positional
+ * parameters. Field-for-field the same information the removed positional
+ * signature carried, MINUS `prev` (item 2 — review proved it redundant: a
+ * "previous event" lookup and a "every older event" lookup were computed
+ * from the IDENTICAL range with the identical voided-skip rule — see
+ * `history` below and `activity.tsx`'s `priorActivityEvents`; `prev` was
+ * always exactly `history`'s own last element, so a skin that needs it
+ * derives `history[history.length - 1]` itself instead of receiving a
+ * separate, independently-computed argument that can never actually
+ * disagree with `history`).
+ */
+export interface ActivityDetailContext {
+  /** Interpolating message lookup — same shape every other v3 chassis
+   *  renderer's own `t` prop takes. */
+  t: (key: string, vars?: Record<string, string | number>) => string;
+  /** The event's own type, e.g. `"cricket.ball"`. */
+  eventType: string;
+  /** The event's own payload. */
+  payload: Record<string, unknown>;
+  /**
+   * Every strictly OLDER, non-voided event before this row, OLDEST FIRST —
+   * the order a REPLAY-style derivation needs to walk forward through
+   * (`ActivityPanel`'s own `priorActivityEvents`, activity.tsx). The
+   * caller does not filter by event TYPE: it has no sport vocabulary to
+   * filter with, so this may contain structural rows (`core.start`, a
+   * sport's own non-ball event) — a skin that only cares about SOME event
+   * types (e.g. cricket comparing ball to ball) checks `.type` against its
+   * own closed set itself once it receives this, the same "chassis
+   * provides the mechanism, skin decides the policy" split every other
+   * optional member of `SkinDefV3` already takes. The caller also SKIPS
+   * voided rows — a voided delivery must never establish a fact like "the
+   * previous bowler", or undoing a ball would invent a change that never
+   * happened. Empty array at the oldest row, or when every older row is
+   * voided — never `undefined` for "nothing older" (only the whole
+   * `history` field itself is optional, for a pre-R2b call site that
+   * never computes it at all). A skin deriving a single "previous event"
+   * fact reads `history[history.length - 1]` itself (item 2 — see this
+   * interface's own header).
+   */
+  history?: readonly { type: string; payload: Record<string, unknown> }[];
+  /**
+   * `PadHostView.cfg` verbatim — `unknown`, same as every other view field
+   * a skin re-derives its own shape from. Exists because a per-row
+   * derivation can depend on a cfg-level fact no event payload carries on
+   * its own (cricket's free hit only arms at all when
+   * `cfg.ballsPerInnings !== null`, a format property, not a per-ball
+   * one). `ActivityPanel` itself never learns what `cfg` means or that
+   * this field exists — `pad-host.tsx`'s own `resolveDetail` closure
+   * captures `view.cfg` directly and forwards it here.
+   */
+  cfg?: unknown;
+  /**
+   * `PadHostView.personNames` verbatim — a static, closure-captured data
+   * bag `pad-host.tsx`'s own `resolveDetail` closure forwards alongside
+   * `view.cfg`, never a resolver FUNCTION threaded through the contract.
+   * Exists so a skin can turn a raw person id on the payload (e.g.
+   * cricket's `bowler`) into a display name instead of a name-free note.
+   * A skin that resolves a name from this MUST fall back to something
+   * sane (e.g. `t("eventCopy.unknownPerson")`) and must NEVER render the
+   * raw id — unlike `ActivityPanel`'s own `nameOf` (`personNames[id] ??
+   * id`), which is safe only because its output never reaches a skin's
+   * own composed prose.
+   */
+  personNames?: Readonly<Record<string, string>>;
+}
+
 export interface SkinDefV3<View = unknown> {
   key: string;
   tapModel: TapModel;
@@ -242,7 +539,28 @@ export interface SkinDefV3<View = unknown> {
   phase?(view: View): PadPhase;
   scorebug(view: View): ScorebugSpec;
   tiles(view: View): TileSpec[];
-  dock(eventType: string, view: View): DockSpec | null;
+  /**
+   * R2b/task 4 (`_INDEX.md`, owner ruling): `payload`, the OPTIONAL 3rd
+   * argument, is the held tap's own event payload. Additive: every
+   * pre-existing 2-arg `dock(eventType, view)` call site, and every skin
+   * that declines to read this parameter at all, keeps compiling and
+   * behaving identically — zero change, same "chassis provides the
+   * mechanism, skin decides the policy" posture every other optional
+   * parameter in this file already takes.
+   *
+   * Exists because `eventType` alone cannot tell two taps apart: a no-ball
+   * and a plain single both dispatch the identical `cricket.ball` event
+   * TYPE, so a skin whose dock should offer different chips for the two
+   * (e.g. bat-run chips only for a no-ball, never for an ordinary run or a
+   * wide — the engine refuses bat runs off a wide, cricket.ts:1229) needs
+   * the actual PAYLOAD that was tapped, not just its type, to decide.
+   * `pad-host.tsx`'s own `resolveDockSpec` is the one call site that
+   * supplies this: the held tap's payload, captured at hold time
+   * (`HeldTap.payload`), forwarded verbatim, never re-derived from `view`
+   * (by dock-render time the optimistic fold has already advanced past the
+   * held tap, so `view.state` alone cannot answer "which tile was this").
+   */
+  dock(eventType: string, view: View, payload?: Record<string, unknown>): DockSpec | null;
   context?(view: View): ContextStripSpec | null;
   /** Turns a context-strip selection (a slot id + the tapped candidate's
    *  person id) into a concrete event — e.g. a sport that records "who is
@@ -288,8 +606,17 @@ export interface SkinDefV3<View = unknown> {
    * vocabulary, and the chassis must not learn it (the same rule that keeps
    * `WhoLine.servingLabel` skin-supplied). Returns `undefined` when the skin
    * has nothing to add, which leaves the static caption untouched.
+   *
+   * R2b-cricket-over review fix (item 1): takes a SINGLE `ActivityDetailContext`
+   * object (below) rather than positional parameters. This grew to seven
+   * positional params one fix round at a time — `cfg?: unknown` sat sixth
+   * among four trailing optionals, and since TypeScript types callbacks
+   * POSITIONALLY, a skin author who reordered params would get a silently
+   * type-safe wrong call (`unknown` accepts anything). Collapsing to one
+   * object makes every field self-naming at the call site instead. See
+   * `ActivityDetailContext`'s own doc for what each field means.
    */
-  activityDetail?(t: (key: string, vars?: Record<string, string | number>) => string, eventType: string, payload: Record<string, unknown>): string | undefined;
+  activityDetail?(ctx: ActivityDetailContext): string | undefined;
   /** Declares this skin's swap-sheet integration (design §2.7) — `null`
    *  when a swap is not applicable right now (e.g. no sub currently legal
    *  to OFFER, as opposed to legal-but-refused, which is `policyOk: false`
@@ -365,7 +692,7 @@ export interface PadHostView {
 export function assertScorebugSpec(spec: ScorebugSpec): string[] {
   const out: string[] = [];
   spec.halves.forEach((h, i) => {
-    if (h.tappable && !h.hint) out.push(`halves[${i}]: tappable requires hint`);
+    if (h.tappable && !h.hintKey) out.push(`halves[${i}]: tappable requires hintKey`);
     if (h.tappable && !h.tapEvent) out.push(`halves[${i}]: tappable requires tapEvent`);
     if (!h.who.length) out.push(`halves[${i}]: who must be non-empty`);
   });

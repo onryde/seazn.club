@@ -398,6 +398,47 @@ body {
     background: linear-gradient(to left, var(--background), transparent);
   }
 
+  /* The public bracket tree is intrinsically wide (engine geometry, shared
+     with the console panel and the PDF poster — see bracket.tsx) and every
+     public page routes through the `/shared/[orgSlug]` shell's
+     `max-w-5xl` reading column. Past that column's ~1024px breakpoint the
+     tree was capped to ~992px of usable width while real page margin sat
+     idle beside it — a knockout of 8 needs 1040px and lost its rightmost
+     column's border (and round caption) to a clip nobody could see, 48px
+     short with 144px going begging either side. `.scroll-x`'s own
+     overflow-x-auto (kept — genuinely-too-wide trees still scroll, and must)
+     never had a chance to help: the deficit was margin the SHELL was
+     hoarding, not width the tree failed to ask its own scroller for.
+
+     First cut symmetrically bled the wrapper out to the viewport on BOTH
+     sides (`left: 50%` + `margin-left: calc(-50vw + 1rem)`) — that closed
+     the clip but over-corrected: it pulled the LEFT edge off the page's own
+     content column (144px at a 1280 viewport) out to a flat 16px, so the
+     tree hung ~128px left of the very "KO" heading that labels it, out of
+     rhythm with the breadcrumb/title/tabs above it.
+
+     This version leaves the static left edge exactly where the page put it
+     (no `position`, no `left`, no `margin-left` — nothing here moves the
+     box) and grows WIDTH only, rightward, into the shell's own unused right
+     margin: `100%` is the containing block the element already fills
+     (whatever ancestor — main's max-w-5xl content box included), and
+     `max(0px, (100vw - 64rem) / 2)` is that shell's own half-margin — the
+     gap between its 64rem (max-w-5xl) cap and the viewport — once the
+     viewport passes the breakpoint, clamped to 0px below it. Below the
+     breakpoint (mobile/tablet, main already full-width, no margin exists to
+     reclaim) the clamp makes this a no-op with no media query needed: 100%
+     is already the box's unmodified width. The 1rem/`px-4` gutter that used
+     to be subtracted from the LEFT side is now naturally what's left
+     un-claimed on the right — the containing block's own right inset is
+     already that padding, so the box's new right edge lands flush against
+     it, not the bare viewport edge. `html,body{overflow-x:clip}` above is
+     a standing backstop for unrelated overflow elsewhere, not a mask this
+     rule leans on: left + width is provably ≤ 100vw by construction (right
+     edge = viewport − shell padding, always), independent of it. */
+  .bracket-bleed {
+    width: calc(100% + max(0px, (100vw - 64rem) / 2));
+  }
+
   /* Pattern 2: primary page action docks to a safe-area-aware bottom bar on
      phones, renders inline on desktop. */
   .bottom-bar {

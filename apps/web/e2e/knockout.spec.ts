@@ -6,6 +6,7 @@ import {
   createStageAndGenerate,
   scoreFixture,
   divisionPath,
+  activeOrg,
 } from "./helpers";
 
 // Bracket progression (the engine path the league journeys never touch):
@@ -139,4 +140,44 @@ test("double-elim division renders the two-lane bracket on the fixtures tab (con
   await expect(page.getByTestId("bracket-panel-de")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("Winners bracket")).toBeVisible();
   await expect(page.getByText("Losers bracket")).toBeVisible();
+});
+
+// The public bracket tree (TwoSided in public-site/bracket.tsx) is the one
+// bracket shape F1 (#606) left with no round captions at all — it was missed
+// by every prior naming sweep because it rendered no text to be wrong. This
+// division must be PUBLIC (unlike seedKnockoutDivision's private one, which
+// 404s off /shared/*) to reach the surface the fix actually touched.
+test("public bracket page names each round (Quarter/Semi/Final captions)", async ({
+  page,
+  request,
+}) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `KO Public ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+    visibility: "public",
+  });
+  const div = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Cup",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  const divisionId = div.data!.id;
+  await addEntrantsViaApi(request, divisionId, ["Seed1", "Seed2", "Seed3", "Seed4"]);
+  await createStageAndGenerate(request, divisionId, { kind: "knockout", name: "Cup" });
+
+  const orgSlug = (await activeOrg(page)).slug;
+  const compData = await apiJson<{ slug: string }>(request, `/api/v1/competitions/${comp.data!.id}`);
+  const divData = await apiJson<{ slug: string }>(request, `/api/v1/divisions/${divisionId}`);
+
+  await page.goto(`/shared/${orgSlug}/${compData.data!.slug}/${divData.data!.slug}`);
+  // The bracket tree lives under the "Standings" tab (Schedule is the default).
+  await page.getByRole("tab", { name: "Standings" }).click();
+  await expect(page.getByText("Semi-finals").first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Final", { exact: true }).first()).toBeVisible();
 });

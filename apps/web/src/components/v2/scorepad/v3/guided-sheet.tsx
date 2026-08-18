@@ -69,7 +69,7 @@
 // `destructive` in the TileGrid sense, so violet/red have no place here.
 import { useState } from "react";
 import { renderCandidateRow, resolvePool, type PoolView, type TFn } from "./context-strip";
-import type { GuidedSheetSpec, GuidedSheetStep, SheetPersonStep, TapEvent } from "./types";
+import type { GuidedSheetSpec, GuidedSheetStep, SheetNumberStep, SheetPersonStep, TapEvent } from "./types";
 
 export interface GuidedSheetState {
   readonly stepIndex: number;
@@ -100,6 +100,27 @@ function stepVisible(step: GuidedSheetStep, answers: Readonly<Record<string, str
  *  `candidates`) reads identically. */
 function candidatesForStep(step: SheetPersonStep, view: PoolView): readonly string[] {
   return step.candidates ?? resolvePool({ pool: step.pool }, view);
+}
+
+/** Enforces `SheetNumberStep.min`/`.max` on any candidate new value — the
+ *  ONE place both the stepper buttons and the typed field funnel through
+ *  (types.ts's own doc on `SheetNumberStep`: a clamp only the skin enforces
+ *  in its `buildPayload` is one this renderer could still be made to
+ *  bypass, e.g. typing an out-of-range number directly into the field).
+ *  Review fix (follow-up to c70c0e90): a non-finite `value` (NaN/±Infinity)
+ *  would otherwise sail through both bound checks unclamped — every NaN
+ *  comparison is false, and `Infinity` with no `max` set has nothing to
+ *  clamp it. Unreachable through TODAY's one call path (`step.initial` is
+ *  typed `number` and cricket always supplies a real one), but `initial`
+ *  is skin-supplied data, and a later R3-R7 skin is not guaranteed to hand
+ *  this a value that finite arithmetic already validated. Non-finite input
+ *  normalises to 0 — a safe, in-range-by-default baseline — BEFORE the
+ *  min/max clamps below apply on top of it. */
+function clampNumberStep(value: number, step: SheetNumberStep): number {
+  let v = Number.isFinite(value) ? value : 0;
+  if (step.min !== undefined && v < step.min) v = step.min;
+  if (step.max !== undefined && v > step.max) v = step.max;
+  return v;
 }
 
 /** R2 review finding (defect 2): drops any answer whose OWN step is no
@@ -266,21 +287,151 @@ const choiceButtonClass =
  *  reason renderCandidateRow is one: this repo's node-only `_hook-harness`
  *  walks a rendered tree through `.props.children` only, never invoking a
  *  nested custom component's own function — a real `<ChoiceRow/>` would
- *  make every button inside it invisible to `walk()`/`textOf()`. */
-function renderChoiceRow(options: readonly { id: string; label: string }[], t: TFn, onPick: (id: string) => void) {
+ *  make every button inside it invisible to `walk()`/`textOf()`.
+ *
+ *  `hintKey` (R2b-over, `SheetChoiceStep.hintKey`'s own doc, types.ts):
+ *  rendered VERBATIM-through-`t()` above the button row, same visual
+ *  treatment (`text-sm text-slate-600`, same wrapping flex-col) as
+ *  `renderNumberStep`'s own hint paragraph below — the two hints differ only
+ *  in whether the chassis or the skin resolves the string (that function's
+ *  own doc explains why), never in how they render. Undefined/omitted
+ *  renders nothing extra, so every pre-existing choice step is unchanged.
+ *  Renamed from `hint` (R2b-cricket-over follow-up, hint-field naming pass,
+ *  2026-08-17) — see `SheetChoiceStep.hintKey`'s doc (types.ts). */
+function renderChoiceRow(
+  options: readonly { id: string; label: string }[],
+  hintKey: string | undefined,
+  t: TFn,
+  onPick: (id: string) => void,
+) {
   return (
-    <div className="flex flex-wrap gap-2">
-      {options.map((opt) => (
+    <div className="flex flex-col gap-2">
+      {hintKey && <p className="text-sm text-slate-600">{t(hintKey)}</p>}
+      <div className="flex flex-wrap gap-2">
+        {options.map((opt) => (
+          <button
+            key={opt.id}
+            type="button"
+            onClick={() => onPick(opt.id)}
+            style={{ minHeight: 44 }}
+            className={choiceButtonClass}
+          >
+            {t(opt.label)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const stepperButtonClass =
+  "flex shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-lg font-semibold leading-none text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
+
+const numberFieldClass =
+  "min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-center text-base font-semibold tabular-nums text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
+
+/**
+ * A `−`/value/`+` stepper plus an editable numeric field for a
+ * `SheetNumberStep` — the numeric counterpart to `renderChoiceRow`/
+ * `renderCandidateRow` above: a PLAIN FUNCTION, not its own JSX component,
+ * for the identical reason those two are (this repo's node-only
+ * `_hook-harness` walks a rendered tree through `.props.children` only,
+ * never invoking a nested custom component's own function). `min`/`max` are
+ * enforced HERE via `clampNumberStep`, on every path that can change
+ * `value` — both stepper buttons and the typed field — never left for the
+ * skin's own `buildPayload` to catch after the fact (types.ts's own doc on
+ * `SheetNumberStep`). `hintText`, when present, is rendered VERBATIM above
+ * the control (never through `t()` — it is pre-localised, skin-supplied
+ * prose, same rule as `WhoLine.servingLabel`). Renamed from `hint`
+ * (R2b-cricket-over follow-up, hint-field naming pass, 2026-08-17) — see
+ * `SheetChoiceStep.hintKey`'s doc (types.ts).
+ *
+ * Unlike the other two row renderers, a tap here does NOT itself advance
+ * the wizard: `onConfirm` is a separate, explicit action (reusing the
+ * existing `scorepad.action.confirm` key action-form.tsx already uses for
+ * the same "I am done editing this value" gesture, rather than minting a
+ * new chassis-level key), because a scorer edits a count across several
+ * interactions — a few taps, or a typed correction — before it is ready to
+ * submit, unlike picking a single option or person.
+ *
+ * Review fix (follow-up to c70c0e90) — accessible naming for all three
+ * controls:
+ *  - The field gets `aria-label={t(step.title)}` — choice/person steps
+ *    self-label via their button text, but a numeric field's visible
+ *    content is just a number, so a screen reader needs the step's own
+ *    title (already resolved here) attached directly rather than relying
+ *    on the sighted-only title paragraph the PARENT renders outside this
+ *    function.
+ *  - Fix round (review finding 2, deferred from the chassis review): the
+ *    −/+ buttons originally derived their name from that SAME title plus
+ *    the bare glyph (`${title} −`) — a stopgap, because the dictionaries
+ *    were a parallel agent's files at the time. They are free now.
+ *    `pad.sheet.decrease`/`pad.sheet.increase` (dictionaries/{locale}/
+ *    ui.json) are dedicated, GENERIC chassis keys — same `pad.sheet.*`
+ *    namespace as `pad.sheet.back`/`.cancel` — interpolated with the
+ *    step's own already-resolved `{title}`, real per-locale wording rather
+ *    than a bare symbol suffix. Checked first, per the earlier report:
+ *    `addOns.extraOrg.increase`/`.decrease` is billing-specific (hardcoded
+ *    to "extra organisations"), `board.ai.stepperAria`/`.trace.
+ *    stepperAria` name a WORKFLOW step indicator, not a numeric +/-
+ *    control — neither reusable, confirming the earlier finding rather
+ *    than assuming it. Deliberately NOT added to `PAD_LABEL_KEYS`
+ *    (scoring-vocab.ts): that registry mirrors the ENGINE's own
+ *    `padSpec(cfg)` output, and this chassis-level control is not
+ *    something any sport module emits — same reason `pad.sheet.back`/
+ *    `.cancel` were never in it either.
+ */
+function renderNumberStep(
+  step: SheetNumberStep,
+  value: number,
+  t: TFn,
+  onChange: (value: number) => void,
+  onConfirm: () => void,
+) {
+  const title = t(step.title);
+  return (
+    <div className="flex flex-col gap-3">
+      {step.hintText && <p className="text-sm text-slate-600">{step.hintText}</p>}
+      <div className="flex items-center gap-3">
         <button
-          key={opt.id}
           type="button"
-          onClick={() => onPick(opt.id)}
-          style={{ minHeight: 44 }}
-          className={choiceButtonClass}
+          aria-label={t("pad.sheet.decrease", { title })}
+          onClick={() => onChange(clampNumberStep(value - 1, step))}
+          style={{ minHeight: 44, minWidth: 44 }}
+          className={stepperButtonClass}
         >
-          {t(opt.label)}
+          −
         </button>
-      ))}
+        <input
+          type="number"
+          inputMode="numeric"
+          aria-label={title}
+          min={step.min}
+          max={step.max}
+          value={value}
+          style={{ minHeight: 44 }}
+          className={numberFieldClass}
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (raw === "") return;
+            const n = Number(raw);
+            if (Number.isNaN(n)) return;
+            onChange(clampNumberStep(n, step));
+          }}
+        />
+        <button
+          type="button"
+          aria-label={t("pad.sheet.increase", { title })}
+          onClick={() => onChange(clampNumberStep(value + 1, step))}
+          style={{ minHeight: 44, minWidth: 44 }}
+          className={stepperButtonClass}
+        >
+          +
+        </button>
+      </div>
+      <button type="button" onClick={onConfirm} style={{ minHeight: 44 }} className={choiceButtonClass}>
+        {t("scorepad.action.confirm")}
+      </button>
     </div>
   );
 }
@@ -324,10 +475,37 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
   const [state, setState] = useState<GuidedSheetState>(() => initialSheetState());
   const step = currentStep(spec, state);
 
+  // Task 2 (R2b): a "number" step's in-progress edit value. Unlike a choice
+  // option or a person candidate — where a single tap both PICKS and
+  // ADVANCES — a scorer adjusts a count across several stepper taps or a
+  // typed correction before it is ready to submit, so that value has to
+  // live somewhere BETWEEN renders. Render-phase reset (the same "two
+  // useStates" pattern detail-dock.tsx uses for "reset when the thing being
+  // edited changes" — `react-hooks/refs` bans reading/writing a ref during
+  // render, so a single ref-based "last id" guard is not an option here):
+  // whenever the CURRENT step's id no longer matches the id this value was
+  // last seeded for, reseed it — from whatever answer this step already
+  // carries (Back must not blank out a value the scorer already entered),
+  // falling back to the step's own `initial`. `numberEditStepId` is
+  // explicitly cleared back to `null` at both `setState(initialSheetState())`
+  // call sites below (completion, cancel) — without that, this check alone
+  // cannot tell "freshly mounted" apart from "the wizard just completed and
+  // reopened on a first step whose id happens to repeat" (both look like
+  // stepIndex 0 with an empty answers map to this check alone).
+  const [numberEditStepId, setNumberEditStepId] = useState<string | null>(null);
+  const [numberEditValue, setNumberEditValue] = useState(0);
+  if (step && step.kind === "number" && step.id !== numberEditStepId) {
+    const prior = state.answers[step.id];
+    const seeded = prior !== undefined ? Number(prior) : step.initial;
+    setNumberEditStepId(step.id);
+    setNumberEditValue(clampNumberStep(seeded, step));
+  }
+
   const handleAnswer = (value: string) => {
     const outcome = answerStep(spec, state, value);
     if (outcome.done) {
       setState(initialSheetState());
+      setNumberEditStepId(null);
       onComplete(outcome.event);
     } else {
       setState(outcome.state);
@@ -336,6 +514,7 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
   const handleBack = () => setState((s) => backStep(spec, s));
   const handleCancel = () => {
     setState(initialSheetState());
+    setNumberEditStepId(null);
     onCancel?.();
   };
 
@@ -354,8 +533,10 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
       </div>
       <div className="px-4 py-3">
         {step.kind === "choice"
-          ? renderChoiceRow(step.options, t, handleAnswer)
-          : renderCandidateRow(candidatesForStep(step, views[step.side]), personNames, t, handleAnswer, emptyText)}
+          ? renderChoiceRow(step.options, step.hintKey, t, handleAnswer)
+          : step.kind === "number"
+            ? renderNumberStep(step, numberEditValue, t, setNumberEditValue, () => handleAnswer(String(numberEditValue)))
+            : renderCandidateRow(candidatesForStep(step, views[step.side]), personNames, t, handleAnswer, emptyText)}
       </div>
       <div className="flex justify-end px-4 pb-3">
         <button type="button" onClick={handleCancel} style={{ minHeight: 44 }} className={cancelButtonClass}>

@@ -45,6 +45,18 @@ interface Props {
   href?: string;
   /** Compact renders a one-line pill (for toolbars/toggles); default is a card. */
   compact?: boolean;
+  /**
+   * Overrides `featureReason(feature)`. Every existing call site omits this
+   * and is untouched — it exists for a caller that knows something the bare
+   * feature key can't express, such as WHICH stage kind actually triggered a
+   * gate two kinds share (bug fix 2026-08-18: `formats.double_elim` covers
+   * both a real double-elimination bracket and a Page playoff, and the
+   * generic sentence named the wrong one for a Page playoff template —
+   * template-gallery.tsx now passes `feature-copy.ts`'s
+   * `doubleElimFormatReason(stageKind)` here instead of guessing from the
+   * feature key alone).
+   */
+  reason?: string;
 }
 
 /**
@@ -144,8 +156,13 @@ function paidPlan(feature: string, currency: Currency): { name: string; price: s
  * It deliberately does NOT render the pass-owned card even when the org does
  * hold a pass — see usePassGateState for why the plan wins.
  */
-export function UpgradeGate({ feature, href = "/settings/billing", compact = false }: Props) {
-  const reason = featureReason(feature);
+export function UpgradeGate({
+  feature,
+  href = "/settings/billing",
+  compact = false,
+  reason: reasonOverride,
+}: Props) {
+  const reason = reasonOverride ?? featureReason(feature);
   const pathname = usePathname();
   const msg = useMsg();
   const dict = useDict();

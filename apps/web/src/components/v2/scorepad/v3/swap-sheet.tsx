@@ -143,7 +143,28 @@ export interface SwapSheetProps {
    *  event this becomes (`football.sub` vs `core.lineup.substitution`,
    *  spec §2.7) — same thin-renderer posture as every other v3 primitive. */
   onSwap: (off: string, on: string) => void;
+  /** Fires when Cancel is tapped, from EITHER step. `onSwap` is never
+   *  called in this case — cancelling discards whatever off-player was
+   *  already picked, the same "onComplete never fires on cancel" contract
+   *  `GuidedSheetProps.onCancel` documents for its sibling sheet
+   *  (guided-sheet.tsx). Optional for the same reason that one is: a
+   *  caller not yet wired to remove this sheet from the tree can omit it
+   *  with no crash — `SwapSheet` still resets its own pending `offId`
+   *  back to the off step either way (defect fix, walkthrough
+   *  2026-08-17: this sheet originally shipped with no dismiss control on
+   *  either step at all, the one chassis primitive that didn't get one). */
+  onCancel?: () => void;
 }
+
+/** Quietest control on the sheet — the one action that discards whatever
+ *  has been picked so far, so it must never compete visually with forward
+ *  progress. Byte-identical to guided-sheet.tsx's own `cancelButtonClass`
+ *  (that file's header explains the "TileGrid minor treatment" reasoning
+ *  in full); duplicated here rather than imported, matching how
+ *  pad-host.tsx's own "more actions" cancel control already inlines the
+ *  same class string instead of sharing one constant across files. */
+const cancelButtonClass =
+  "min-w-0 shrink-0 break-words rounded-full border border-dashed border-slate-300 bg-transparent px-4 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
 
 /**
  * Off-player picker -> on-player picker. `offId === null` renders the off
@@ -154,9 +175,21 @@ export interface SwapSheetProps {
  * the verdict refused, else the reused `noRoster` empty state — never a
  * disabled button either way.
  */
-export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap }: SwapSheetProps) {
+export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap, onCancel }: SwapSheetProps) {
   const [offId, setOffId] = useState<string | null>(null);
   const emptyText = t("scorepad.attribution.noRoster");
+  // Defect fix (walkthrough 2026-08-17): reset local state back to the
+  // start FIRST, then notify the caller — mirrors GuidedSheet's own
+  // handleCancel (guided-sheet.tsx) exactly, so a half-made off pick can
+  // never survive a cancel even if a future caller keeps this component
+  // mounted across re-opens (today's one call site, pad-host.tsx, happens
+  // to unmount it too, via `swapOpen &&`, but this component makes no
+  // assumption about that — same defensive posture GuidedSheet takes for
+  // its own internal state).
+  const handleCancel = () => {
+    setOffId(null);
+    onCancel?.();
+  };
 
   if (offId === null) {
     return (
@@ -164,6 +197,11 @@ export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap }:
         <p className="mk-eyebrow px-4 pt-3 text-slate-600">{t(spec.offLabel)}</p>
         <div className="px-4 py-3">
           {renderCandidateRow(resolvePool({ pool: "onfield" }, view), personNames, t, setOffId, emptyText)}
+        </div>
+        <div className="flex justify-end px-4 pb-3">
+          <button type="button" onClick={handleCancel} style={{ minHeight: 44 }} className={cancelButtonClass}>
+            {t("pad.sheet.cancel")}
+          </button>
         </div>
       </div>
     );
@@ -192,6 +230,11 @@ export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap }:
         ) : (
           renderCandidateRow(candidates, personNames, t, (id) => onSwap(offId, id), emptyText)
         )}
+      </div>
+      <div className="flex justify-end px-4 pb-3">
+        <button type="button" onClick={handleCancel} style={{ minHeight: 44 }} className={cancelButtonClass}>
+          {t("pad.sheet.cancel")}
+        </button>
       </div>
     </div>
   );

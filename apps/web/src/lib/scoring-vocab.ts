@@ -721,6 +721,10 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.cricket.ribbon.ball",
   "pad.cricket.ribbon.innings.close",
   "pad.cricket.ribbon.innings.declare",
+  // R2b: `cricket.innings.summary` is the over-by-over event this wave gives
+  // a dedicated tile — without this entry the ribbon silently stays on the
+  // generic "{event} recorded" fallback (ribbon.ts's own header comment).
+  "pad.cricket.ribbon.innings.summary",
   "pad.cricket.ribbon.retire",
   "pad.cricket.ribbon.review",
   "pad.cricket.ribbon.superover.ball",

@@ -16,6 +16,13 @@
 //     PHASE: two primaries in "live" and two more in "post" is a legal
 //     4-primary skin; three in the SAME phase is not (D-12).
 //
+// R2b (owner ruling, bowler-eligibility block, 2026-08-17) added a third,
+// per-TILE mechanism: `TileSpec.disabled` (types.ts). Unlike the two above
+// (which decide whether a tile is DECLARED for a phase at all), `disabled`
+// keeps a tile fully visible and only removes its tap — rendered below as a
+// real, native `disabled` <button> plus a `data-tile-disabled` hook, never a
+// control that merely LOOKS inert.
+//
 // Match-losing actions (Forfeit, Abandon) never live in this grid by
 // design — they belong to console chrome, not the scorer's tap surface —
 // so this file adds no affordance for them. This is a CONVENTION this
@@ -50,7 +57,7 @@
 // Focus rings are NOT hand-rolled here: globals.css's
 // `:where(a,button,summary,[role="tab"]):focus-visible` rule already
 // covers every real <button>, and every tile is one.
-import type { PadPhase, TileKind, TileSpec } from "./types";
+import type { ContextStripSpec, PadPhase, TileKind, TileSpec } from "./types";
 
 /**
  * Tiles whose `phases` include `phase`. The mechanism that stops
@@ -79,6 +86,46 @@ export function assertTileHierarchy(tiles: readonly TileSpec[]): string[] {
     }
   }
   return out;
+}
+
+/**
+ * R2b-cricket-over review fix (item 4, Important finding): a skin can
+ * legally set `disabled: true` (types.ts) on a tile with NO `context()` at
+ * all, or a `context()` whose slots all omit `message` — the chassis then
+ * renders a real `<button disabled>` explaining nothing, and nothing
+ * (type, test, or lint) caught the omission before this. Cricket only
+ * pairs them by convention; nothing enforced it.
+ *
+ * SET-LEVEL, not a per-tile pairing: `TileSpec.disabled`'s own doc is
+ * explicit that a single cause can disable MANY tiles at once and the
+ * explanation lives ONCE, on whichever `ContextSlot` names the person/fact
+ * at fault — never repeated per tile. So the rule here is "if any tile is
+ * disabled, at least one context slot must carry a non-empty message
+ * somewhere", never "every disabled tile needs its own paired slot".
+ * `!!slot.message` (not `!== undefined`) matches item 3's own fix on the
+ * renderer side — an empty-string message must not count as an
+ * explanation either.
+ *
+ * Never a throw — same non-throwing convention as `assertTileHierarchy`
+ * below and `assertScorebugSpec` (../types.ts): a skin author's own test
+ * suite asserts against the returned violation strings. Deliberately kept
+ * OUT of pad-host.tsx's render path for the same reason — a disabled tile
+ * with no explanation is a cosmetic authoring gap, not a correctness bug
+ * that should crash a live pad mid-match. `assertTileHierarchy`/
+ * `assertScorebugSpec` are themselves never wired into a live render
+ * either (confirmed by search, R2b-cricket-over review), so this keeps
+ * the file's one established convention for a structural-invariant
+ * validator rather than inventing a second one.
+ */
+export function assertDisabledTilesExplained(
+  tiles: readonly TileSpec[],
+  context: ContextStripSpec | null,
+): string[] {
+  const disabledIds = tiles.filter((tile) => tile.disabled === true).map((tile) => tile.id);
+  if (disabledIds.length === 0) return [];
+  const hasMessage = (context?.slots ?? []).some((slot) => !!slot.message);
+  if (hasMessage) return [];
+  return disabledIds.map((id) => `tile "${id}": disabled with no context slot message explaining why`);
 }
 
 /** Visual weight by kind — the hierarchy contract itself, table-driven so
@@ -117,7 +164,10 @@ export interface TileGridProps {
   /** Interpolating message lookup — same shape ribbon.ts's MsgFn and
    *  scorebug.tsx's `t` prop take (useMsg()/msgFor() both hand callers
    *  this shape). Tile `label`/`sublabel` are i18n keys (types.ts), never
-   *  hardcoded English — this renderer never prints raw copy. */
+   *  hardcoded English — this renderer never prints raw copy. The two
+   *  exceptions are `labelText`/`sublabelText` (types.ts's own doc): a
+   *  pre-localised raw string the skin already resolved, rendered
+   *  verbatim below with no call to `t` at all. */
   t: (key: string, vars?: Record<string, string | number>) => string;
   /** Fires with the tapped tile's own `action`, untouched, for every action
    *  shape EXCEPT `{sheet}` (task A1 carved that one out below — see
@@ -172,10 +222,18 @@ function Tile({
 }) {
   const minHeight = KIND_MIN_HEIGHT[tile.kind];
   const spanClass = SPAN_CLASS[tile.span ?? 1];
+  // R2b (owner ruling, bowler-eligibility block): a disabled tile stays
+  // VISIBLE (below) but must not accept a tap. `isDisabled` gates both the
+  // native `disabled` attribute (the real backstop — a browser never fires
+  // onClick for a disabled <button>) AND handleClick's own early return
+  // (belt-and-braces for any caller that invokes the onClick prop directly,
+  // bypassing real DOM click semantics — e.g. this file's own test harness).
+  const isDisabled = tile.disabled === true;
   // Route by action shape (task A1): {sheet} takes the distinct
   // onOpenSheet path; {event}/{swap:true} keep going through onAction
   // exactly as before — see TileGridProps.onOpenSheet's own doc.
   const handleClick = () => {
+    if (isDisabled) return;
     if ("sheet" in tile.action) {
       onOpenSheet?.(tile.action.sheet);
     } else {
@@ -187,9 +245,11 @@ function Tile({
       type="button"
       data-tile-id={tile.id}
       data-tile-kind={tile.kind}
+      data-tile-disabled={String(isDisabled)}
+      disabled={isDisabled}
       onClick={handleClick}
       style={{ minHeight }}
-      className={`relative min-w-0 flex flex-col items-center justify-center gap-0.5 rounded-xl px-2 py-1.5 text-center transition-colors ${spanClass} ${KIND_CLASS[tile.kind]} ${
+      className={`relative min-w-0 flex flex-col items-center justify-center gap-0.5 rounded-xl px-2 py-1.5 text-center transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${spanClass} ${KIND_CLASS[tile.kind]} ${
         tile.kind === "minor"
           ? // The 40px minor tile is visually smaller than the 44px touch
             // floor every other tile meets by height alone. Rather than
@@ -219,8 +279,12 @@ function Tile({
           : ""
       }`}
     >
-      <span className={`break-words ${tile.kind === "minor" ? "text-xs" : "text-sm"}`}>{t(tile.label)}</span>
-      {tile.sublabel && <span className="break-words text-[11px] opacity-70">{t(tile.sublabel)}</span>}
+      <span className={`break-words ${tile.kind === "minor" ? "text-xs" : "text-sm"}`}>
+        {tile.labelText ?? t(tile.label)}
+      </span>
+      {tile.sublabelText
+        ? <span className="break-words text-[11px] opacity-70">{tile.sublabelText}</span>
+        : tile.sublabel && <span className="break-words text-[11px] opacity-70">{t(tile.sublabel)}</span>}
     </button>
   );
 }

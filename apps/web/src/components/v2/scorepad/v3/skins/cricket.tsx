@@ -25,10 +25,22 @@
 // skin has no way to pre-resolve those few fields without SOME `t` in
 // scope. R1 shipped no real skin to hit this; this is the first one that
 // does. Resolution, kept to the SMALLEST possible footprint: `cricketSkinV3`
-// is a FACTORY taking `t` once, closing it over ONLY for `scorebug`/`dock`
-// (the two methods with a pre-resolved-string field) — every other member
-// (`tiles`/`context`/`sheets`/`swap`/`phase`) is a plain, `t`-free function
-// of `view` alone, independently exported and testable with no `t` involved.
+// is a FACTORY taking `t` once, closing it over for `scorebug`/`dock`/
+// `context` (the methods with a pre-resolved-string field — `context`
+// joined this list in R2b, `ContextSlot.message`'s own doc in ../types.ts,
+// once the bowler-eligibility block needed an interpolated name/quota baked
+// into a string before it reaches the chassis) — every other member
+// (`tiles`/`sheets`/`phase`) is a plain, `t`-free function of `view`
+// alone, independently exported and testable with no `t` involved. (cricket
+// declares no `swap` at all as of R2b — see the "swap() — DROPPED" section
+// further down.)
+// (`tiles` is the one exception worth flagging: it also RECEIVES an
+// optional `t` for `TileSpec.labelText`'s own sake, but keeps a working
+// default — `buildTiles`'s own header explains why that one is defaulted
+// rather than required, unlike `buildContext` below which follows the
+// identical defaulted-for-back-compat shape for the SAME reason: dozens of
+// pre-R2b call sites in this file's own test suite pass it only one
+// argument.)
 // `V3_SKINS.cricket` (registry.ts, a LATER task's file) will need
 // `cricketSkinV3(t)` called once with a real `t` in scope (e.g. inside the
 // component that resolves the skin, memoized on `t`) rather than assigned
@@ -67,11 +79,23 @@
 // rather than silently deviating from the literal brief text.
 "use client";
 import type { EventEnvelope } from "@seazn/engine/core";
+// R2b-next (owner-sanctioned exception to R2b's "no engine src changes"
+// rule, 2026-08-17): the ONE genuine import from packages/engine in this
+// file. Every other engine rule this file needs (`isEligibleOverBowler`,
+// `eligibleBowlers`) is MIRRORED rather than imported (that function's own
+// doc explains why: packages/engine's cricket module has no reason to
+// export it) — `nextBattingSide` is different because hand-copying its
+// alternation/follow-on branches would fork a real decision rule across a
+// package boundary, the recurring defect class this repo has hit before.
+// Exported specifically for this call site (packages/engine PR, same wave).
+import { nextBattingSide } from "@seazn/engine/sports/cricket";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
   MORE_SHEET_KEY,
+  type ActivityDetailContext,
   type ContextStripSpec,
+  type DockChip,
   type DockSpec,
   type GuidedSheetSpec,
   type GuidedSheetStep,
@@ -80,7 +104,6 @@ import {
   type ScorebugSpec,
   type SkinDefV3,
   type StripItem,
-  type SwapSlot,
   type TileSpec,
 } from "../types";
 
@@ -110,6 +133,20 @@ export const FIELDER_ELIGIBLE_KINDS = new Set<WicketKind>(["caught", "runout", "
  *  kind always dismisses the striker, so asking "who's out" there would be
  *  the wasted tap D-15 exists to remove. */
 export const VARIABLE_OUT_KINDS = new Set<WicketKind>(["runout"]);
+/**
+ * R2b-over (review finding — the fourth instance of "the pad must never
+ * offer what the engine will refuse", `_INDEX.md`): dismissals still legal
+ * while a free hit is pending — the engine's own restriction, verbatim
+ * (`cricket.ts:1275-1276`): `if (fine.freeHitPending && wicket.kind !==
+ * "runout" && wicket.kind !== "obstructed") invalid(...)`. Every OTHER
+ * WICKET_KINDS member is refused outright in that state. `wicketSheet`
+ * (below) is the only reader — narrows the "kind" step's `options` to this
+ * set whenever `freeHitPending(view.events, ...)` (the SAME fold
+ * `buildScorebug`'s indicator and `cricketBallDetail`'s activity note
+ * already use) is true, so the sheet can never offer a tap the server would
+ * bounce.
+ */
+export const FREE_HIT_WICKET_KINDS = new Set<WicketKind>(["runout", "obstructed"]);
 const BOWLER_CREDITED_KINDS = new Set<WicketKind>(["bowled", "caught", "lbw", "stumped", "hitwicket"]);
 
 const BALL_EVENT_TYPES = new Set(["cricket.ball", "cricket.superover.ball"]);
@@ -127,12 +164,25 @@ interface CricketCfgShape {
   dls?: { enabled?: boolean };
   followOn?: { enabled?: boolean };
   superOver?: boolean;
+  /** t20: 4, odi: 10, hundred: 4 (cricket.ts's own `variants`); absent for
+   *  test cricket (no cap). Bug fix (R2b live bug, 2026-08-17) — needed so
+   *  `resolvePeople`'s bowler default can mirror the engine's own quota
+   *  check (cricket.ts:1166-1171) rather than proposing an exhausted
+   *  bowler. */
+  maxOversPerBowler?: number;
 }
 interface CricketFineShape {
   striker?: string | null;
   nonStriker?: string | null;
   currentBowler?: string | null;
   freeHitPending?: boolean;
+  /** Bug fix (R2b live bug, 2026-08-17): mirrors the engine's own
+   *  `FineInnings.prevOverBowler`/`.bowlerBalls` (cricket.ts:415/419) —
+   *  needed by `resolvePeople`'s bowler default to mirror the engine's own
+   *  consecutive-over/quota checks (cricket.ts:1160-1171). Both absent from
+   *  this shape until this fix; see `resolvePeople`'s own doc for why. */
+  prevOverBowler?: string | null;
+  bowlerBalls?: Record<string, number>;
 }
 interface CricketInningsShape {
   battingSide?: "home" | "away";
@@ -153,6 +203,15 @@ interface CricketStateShape {
    *  these two drive). */
   revisedTarget?: number | null;
   targetSource?: "dls" | "manual" | null;
+  /** Bug fix (owner-confirmed live blocker, 2026-08-17 — R2b-next): who bats
+   *  first (`CricketState.battingFirst`, cricket.ts:460) and whether a
+   *  follow-on was enforced (`.followOnEnforced`, cricket.ts:463) — needed
+   *  by `dueBattingSide` (below) to mirror the engine's own
+   *  `nextBattingSide` innings-sequencing rule. Absent from this shape until
+   *  this fix, same "add the field this fix needs" pattern every other
+   *  addition here already follows. */
+  battingFirst?: "home" | "away";
+  followOnEnforced?: boolean;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -209,6 +268,91 @@ export function currentInnings(state: CricketStateShape): CricketInningsShape | 
   return innings.find((i) => !i.closed) ?? innings[innings.length - 1] ?? null;
 }
 
+export type InningsFidelity = "unopened" | "coarse" | "fine";
+
+/**
+ * R2b (Q1 owner ruling, `_INDEX.md`): which entry granularity governs the
+ * CURRENT innings — first-event-wins, read straight off the fold, never
+ * configured (no cfg field, no org band, no picker anywhere). `"unopened"`
+ * when no innings exists yet, so NEITHER lane has locked in; `"coarse"` once
+ * a `cricket.innings.summary` opened it (`fine === null` — `createInnings`,
+ * cricket.ts:661-678, called with `"coarse"` from `applySummary`,
+ * cricket.ts:1406); `"fine"` once a `cricket.ball` opened it instead
+ * (`createInnings(...,"fine")`, cricket.ts:2940). The two lanes are mutually
+ * exclusive WITHIN one innings — the fold refuses ball-on-coarse
+ * (cricket.ts:1128-1131/:2936-2938) AND summary-on-fine (:1402-1404) in both
+ * directions — so `buildTiles`/`buildSheets` below gate on THIS, never on
+ * `view.band`: the brief's own recommendation to band-gate the over-summary
+ * tile was refused by the fold itself (`_INDEX.md`'s "false premises found"
+ * for this wave), not by preference.
+ *
+ * Reuses `bowlerIsReadOnly`'s own narrowing pattern (this file, above) —
+ * read `innings?.fine` directly, no second accessor invented for the same
+ * fact.
+ */
+export function inningsFidelity(innings: CricketInningsShape | null): InningsFidelity {
+  if (innings === null) return "unopened";
+  return innings.fine === null ? "coarse" : "fine";
+}
+
+/**
+ * R2b-next (owner-confirmed live blocker, 2026-08-17): the batting side for
+ * the innings that would open NEXT, but ONLY in the one state where that
+ * question is actually live — the current/fallback innings (`currentInnings`
+ * above) is CLOSED and the fold would still accept another one. `null` in
+ * every other case: no innings exists yet, the current one is still OPEN
+ * (its own `battingSide` already answers this), or nothing further is due
+ * (the genuinely terminal case — the closure message stays correct there).
+ *
+ * A thin wrapper around the engine's own `nextBattingSide` (cricket.ts,
+ * exported this same wave) — never a hand-copy of its alternation/follow-on
+ * branches, the recurring defect class this repo keeps hitting when a rule
+ * gets forked across the engine/apps-web boundary. `state.innings.length`
+ * is the SAME index `createInnings` itself addresses by (cricket.ts:662).
+ */
+export function dueBattingSide(state: CricketStateShape, cfg: CricketCfgShape): "home" | "away" | null {
+  const innings = currentInnings(state);
+  if (innings === null || innings.closed !== true) return null;
+  return nextBattingSide({
+    battingFirst: state.battingFirst ?? "home",
+    followOnEnforced: state.followOnEnforced ?? false,
+    cfg: { inningsPerSide: cfg.inningsPerSide ?? 1 },
+    inningsCount: state.innings?.length ?? 0,
+  });
+}
+
+/**
+ * R2b-next: the innings to build a NEW payload/tile-set/sheet-default
+ * against — as opposed to `currentInnings` (DISPLAY: `buildScorebug` must
+ * keep showing the closed innings' own final score no matter what). `null`
+ * whenever a FRESH innings is what is actually being scored: pre-match
+ * (nothing recorded at all) and "closed, another due" (nothing recorded for
+ * THAT one either) collapse to the identical treatment throughout this file
+ * — `inningsFidelity`, `nextOverNumber`, and this function's own callers
+ * below all already do the right thing for `null` (an unopened innings
+ * offers both fidelity lanes and starts counting from over 1, exactly what
+ * a not-yet-created next innings should do too). `dueBattingSide` (above) is
+ * the one place that DOES tell the two `null`-producing cases apart, and
+ * every caller needing that distinction reads it separately.
+ */
+function scoringInnings(state: CricketStateShape, cfg: CricketCfgShape): CricketInningsShape | null {
+  return dueBattingSide(state, cfg) !== null ? null : currentInnings(state);
+}
+
+/**
+ * 1-indexed: the over an over-summary entry, if confirmed unedited, would
+ * complete — matching how a scorer counts overs aloud ("this is over 14"),
+ * not `basePayload`'s own 0-indexed `over` field (that one names the over a
+ * BALL belongs to; this one names the over a SUMMARY closes out). An
+ * unopened innings (`innings === null`) reads as over 1, same as one freshly
+ * opened with 0 `legalBalls` recorded yet — both are "the first over about
+ * to be entered." `bpo` is genuinely load-bearing here, same reason
+ * `ballsPerOverOf`'s own doc gives: `hundred` sets 5, never assume 6.
+ */
+export function nextOverNumber(innings: CricketInningsShape | null, bpo: number): number {
+  return Math.floor((innings?.legalBalls ?? 0) / bpo) + 1;
+}
+
 /** `cricket.ball` normally; `cricket.superover.ball` while the engine is
  *  actually in a super over — v2's own switch, `cricket-skin.tsx:502`. */
 export function ballEventType(state: CricketStateShape): "cricket.ball" | "cricket.superover.ball" {
@@ -223,12 +367,45 @@ export interface ResolvedPeople {
   bowler: string;
 }
 
+/**
+ * Bug fix (owner-reported, reproduced against real data, 2026-08-17): whether
+ * `personId` may legally OPEN a new over — mirrors the engine's own two
+ * checks at an over boundary (`fine.currentBowler === null`) verbatim:
+ * `applyDelivery`, cricket.ts:1160-1171, and the identical filter its own
+ * random-stream generator uses internally, `eligibleBowlers`, cricket.ts:
+ * 1784-1795 (private to that module; mirrored here, not imported — this
+ * file's own header now documents the ONE deliberate exception,
+ * `nextBattingSide`, granted specifically because that rule was worth an
+ * engine export rather than a second fork; `eligibleBowlers` was not
+ * granted one). No consecutive overs
+ * (`personId === fine.prevOverBowler`), and — only when the cfg actually
+ * caps it — the per-bowler quota (`floor(bowlerBalls[id] / bpo) >=
+ * maxOversPerBowler`). The engine's THIRD refusal ground ("not in the
+ * fielding lineup", cricket.ts:1163) needs no check here: every caller below
+ * draws `personId` FROM `bowlingOrder` itself, so it always already holds.
+ *
+ * `bpo` must be the cfg's real `ballsPerOver` (`ballsPerOverOf`), never a
+ * hardcoded 6 — the Hundred sets 5 (cricket.ts:2811), and the quota
+ * arithmetic silently mis-divides against the wrong divisor otherwise.
+ */
+export function isEligibleOverBowler(
+  personId: string,
+  fine: CricketFineShape | null | undefined,
+  maxOversPerBowler: number | undefined,
+  bpo: number,
+): boolean {
+  if (personId === (fine?.prevOverBowler ?? null)) return false;
+  if (maxOversPerBowler === undefined) return true;
+  const bowled = Math.floor((fine?.bowlerBalls?.[personId] ?? 0) / bpo);
+  return bowled < maxOversPerBowler;
+}
+
 /** Striker/non-striker/bowler, fold-authoritative (`fine.*`) with the SAME
  *  default v2's `ThisOverGroup` used before any manual pick existed:
- *  `battingOrder[0]`/`[1]`, `bowlingOrder[0]` — stateless here (no local
- *  component state available to a pure skin builder), so this default is
- *  recomputed fresh each call rather than remembered across renders. Empty
- *  string when even the order itself isn't populated yet (pre-lineup).
+ *  `battingOrder[0]`/`[1]` for striker/non-striker — stateless here (no
+ *  local component state available to a pure skin builder), so this default
+ *  is recomputed fresh each call rather than remembered across renders.
+ *  Empty string when even the order itself isn't populated yet (pre-lineup).
  *
  *  `overrides` (G5 — controller ruling 2026-08-16): `view.contextOverrides`,
  *  a slot id -> person id map of PENDING context-strip picks the HOST holds
@@ -237,27 +414,143 @@ export interface ResolvedPeople {
  *  a scorer's own just-tapped choice, which must win over both the last
  *  KNOWN fold value and the fallback default. Defaults to `{}` so every
  *  pre-G5 call site (none passed a second argument) keeps behaving
- *  identically. */
-export function resolvePeople(state: CricketStateShape, overrides: Readonly<Record<string, string>> = {}): ResolvedPeople {
-  const innings = currentInnings(state);
-  const battingSide = innings?.battingSide ?? "home";
+ *  identically.
+ *
+ *  Bug fix (owner-reported, live data, 2026-08-17): the bowler default used
+ *  to read `bowlingOrder[0]` unconditionally — at an over boundary
+ *  (`fine.currentBowler === null`) with bowlingOrder[0] having just bowled
+ *  the previous over or exhausted his quota, this proposed a bowler the
+ *  engine would refuse outright, and the scorer could not start the next
+ *  over at all (see this file's own test suite for the exact live
+ *  reproduction). Now the first ELIGIBLE name in `bowlingOrder`
+ *  (`isEligibleOverBowler`, above) — `""` (never an illegal name) when
+ *  nobody qualifies, forcing the scorer to choose via the context strip
+ *  rather than silently shipping a payload the engine will reject. `cfg`
+ *  (new 3rd param, defaulted to `{}`) is what this needs: every pre-fix call
+ *  site either already had a `CricketCfgShape` in scope (updated below) or
+ *  — for direct 2-arg test calls — gets `maxOversPerBowler: undefined` (no
+ *  quota check) and `ballsPerOverOf({}) === 6`, which reproduces the OLD
+ *  bowlingOrder[0]-always behaviour exactly whenever `fine.prevOverBowler`/
+ *  `.bowlerBalls` are absent too (every pre-fix fixture), so no existing
+ *  caller's behaviour silently changes underneath it. This does NOT touch
+ *  the mid-over branch (`fine?.currentBowler`, checked first) or the
+ *  `overrides.bowler` branch (checked first of all) — a manual pick is never
+ *  second-guessed, and the fold's own strict mid-over refusal
+ *  (cricket.ts:1173-1178) is untouched. */
+export function resolvePeople(
+  state: CricketStateShape,
+  overrides: Readonly<Record<string, string>> = {},
+  cfg: CricketCfgShape = {},
+): ResolvedPeople {
+  // R2b-next: `scoringInnings`/`dueBattingSide` (above) — `battingSide`
+  // falls through to the DUE side (closed, another innings still due)
+  // ahead of the stale closed innings' own `battingSide`; `innings` itself
+  // (for `fine`, below) is `null` in that same state, so striker/nonStriker/
+  // bowler all fall to their own "unopened innings" defaults, exactly as
+  // they already do before innings ONE's own first ball.
+  const innings = scoringInnings(state, cfg);
+  const due = dueBattingSide(state, cfg);
+  const battingSide = due ?? innings?.battingSide ?? "home";
   const bowlingSide = opponentSide(battingSide);
   const battingOrder = state.orders?.[battingSide] ?? [];
   const bowlingOrder = state.orders?.[bowlingSide] ?? [];
   const fine = innings?.fine ?? null;
+  const bpo = ballsPerOverOf(cfg);
   return {
     battingSide,
     bowlingSide,
     striker: overrides.striker ?? fine?.striker ?? battingOrder[0] ?? "",
     nonStriker: overrides.nonStriker ?? fine?.nonStriker ?? battingOrder[1] ?? "",
-    bowler: overrides.bowler ?? fine?.currentBowler ?? bowlingOrder[0] ?? "",
+    bowler:
+      overrides.bowler ??
+      fine?.currentBowler ??
+      bowlingOrder.find((id) => isEligibleOverBowler(id, fine, cfg.maxOversPerBowler, bpo)) ??
+      "",
   };
 }
 
-function basePayload(state: CricketStateShape, bpo: number, overrides: Readonly<Record<string, string>>): Record<string, unknown> {
-  const innings = currentInnings(state);
+export type BowlerBlockReason = "prevOver" | "notInLineup" | "quota" | "noEligible";
+
+/**
+ * R2b live bug PART 2 (owner-reported, reproduced against real data,
+ * 2026-08-17): `resolvePeople`'s own default (above) already stops
+ * PROPOSING an ineligible bowler, but a scorer who MANUALLY overrides the
+ * bowler chip at an over boundary can still end up with an ineligible
+ * `people.bowler` — the context-strip's candidate picker offers BOTH
+ * sides' whole on-field roster with no eligibility narrowing at all
+ * (`buildContext`'s own CANDIDATE-LIST GAP note, below — a pre-existing,
+ * still-open gap this function does not close, only catches the
+ * consequence of). Tapping a run/wicket tile at that point still emits a
+ * `cricket.ball` the client's deliberately non-strict optimistic fold
+ * accepts, only for the server to refuse it moments later as a generic
+ * rejection. This function is the gate that stops the TAP itself, in the
+ * tile-building path — `null` means the ball-emitting tiles stay tappable
+ * as normal; any other value is why they must not be (`buildTiles`/
+ * `buildContext` below, the only two callers).
+ *
+ * MID-OVER (`fine.currentBowler` already set) is never checked — that
+ * bowler is already locked in by the fold unconditionally, regardless of
+ * eligibility data, the same short-circuit `resolvePeople`'s own bowler
+ * branch and `bowlerIsReadOnly` already take.
+ *
+ * Priority mirrors the ENGINE's own real order at an over boundary
+ * verbatim (`applyDelivery`, cricket.ts:1160-1171): consecutive-over
+ * first, then fielding-lineup membership, then quota — each an early
+ * return, exactly like the engine's own sequential `invalid()` calls only
+ * ever throw on the FIRST ground that matches. `isEligibleOverBowler`
+ * (above) already owns two of these three grounds verbatim
+ * (consecutive-over + quota) — reused below for the QUOTA determination
+ * specifically (by the time it is called, consecutive-over is already
+ * ruled out, so a `false` result can only mean quota). It is deliberately
+ * NOT reused for the lineup-membership check: that is the one ground
+ * `isEligibleOverBowler`'s own doc explains is ABSENT from that helper,
+ * because every one of its OTHER callers draws `personId` FROM
+ * `bowlingOrder` itself, so it always already holds — the manual-override
+ * path is the first caller that can break that invariant (a picked name
+ * can be a BATTING-side player), so this function checks lineup membership
+ * directly rather than widening `isEligibleOverBowler`'s signature for
+ * every existing caller's sake.
+ *
+ * `"noEligible"` — the dead-end case the task brief required a decision
+ * on, not a silent block-everything: every fielding-side player is either
+ * the previous over's bowler or already at quota, so NOBODY can legally
+ * open the next over. This does not read as a CRICKET rule (the laws of
+ * the game do not contemplate a fielding side too small to field a legal
+ * bowler) so much as a data/product edge case — see this task's own
+ * report for why that reads as a decision still owed, not resolved here.
+ * `resolvePeople`'s own default already encodes the signal (`""`, never an
+ * illegal name) and this function reads it rather than re-deriving it.
+ */
+export function bowlerBlockReason(
+  state: CricketStateShape,
+  people: ResolvedPeople,
+  cfg: CricketCfgShape,
+): BowlerBlockReason | null {
+  // R2b-next: `scoringInnings`, not `currentInnings` — reading the CLOSED
+  // innings' own stale `fine` here (prevOverBowler/bowlerBalls from the
+  // innings that just ended) would wrongly block `people.bowler`, who was
+  // resolved against the NEW innings and has no history in this one at all.
+  const innings = scoringInnings(state, cfg);
+  const fine = innings?.fine ?? null;
+  if ((fine?.currentBowler ?? null) !== null) return null;
+  if (people.bowler === "") return "noEligible";
+  if (people.bowler === (fine?.prevOverBowler ?? null)) return "prevOver";
+  const bowlingOrder = state.orders?.[people.bowlingSide] ?? [];
+  if (!bowlingOrder.includes(people.bowler)) return "notInLineup";
+  const bpo = ballsPerOverOf(cfg);
+  return isEligibleOverBowler(people.bowler, fine, cfg.maxOversPerBowler, bpo) ? null : "quota";
+}
+
+function basePayload(state: CricketStateShape, cfg: CricketCfgShape, overrides: Readonly<Record<string, string>>): Record<string, unknown> {
+  // R2b-next: `scoringInnings`, not `currentInnings` — closed + another due
+  // reads as `null` here, so `legalBalls` falls to 0 and over/ballInOver
+  // below come out 0/1, the engine's own first-delivery numbering
+  // (`applyDelivery`'s `expectedOver`/`expectedBall` off `legalBalls: 0`),
+  // instead of the closed innings' own final over count.
+  const innings = scoringInnings(state, cfg);
+  const bpo = ballsPerOverOf(cfg);
   const legalBalls = innings?.legalBalls ?? 0;
-  const people = resolvePeople(state, overrides);
+  const people = resolvePeople(state, overrides, cfg);
   return {
     over: Math.floor(legalBalls / bpo),
     ballInOver: (legalBalls % bpo) + 1,
@@ -347,6 +640,86 @@ export function overDots(events: readonly EventEnvelope[], bpo: number): string[
   return windowed.slice(start).map((e) => ballOutcomeSymbol(e.payload as Record<string, unknown>));
 }
 
+/** The two fields `freeHitPending` (below) needs off one ball's own payload
+ *  — `over`/`ballInOver` for the innings-boundary check, `extraKind` for the
+ *  arm/consume/carry transition. `null` for anything not ball-shaped enough
+ *  to answer either question (a non-ball event, or a malformed payload
+ *  missing the numeric fields) — silently skipped by the caller, same
+ *  defensive-payload posture `overDots`/`ballOutcomeSymbol` already take. */
+function freeHitBallOf(
+  event: { type: string; payload: unknown },
+): { over: number; ballInOver: number; extraKind?: string } | null {
+  if (!BALL_EVENT_TYPES.has(event.type)) return null;
+  const payload = event.payload as Record<string, unknown> | null | undefined;
+  const over = payload?.over;
+  const ballInOver = payload?.ballInOver;
+  if (typeof over !== "number" || typeof ballInOver !== "number") return null;
+  const runs = payload?.runs as { extras?: { kind?: string } } | undefined;
+  return { over, ballInOver, extraKind: runs?.extras?.kind };
+}
+
+/**
+ * R2b (owner ruling, live-tile audit — freeHit chip removal): the ONE
+ * derivation shared by the read-only indicator (`buildScorebug`, below) and
+ * the activity log's own label (`cricketBallDetail`, below) — they answer
+ * the same question, "is/was a free hit pending", and must not risk drifting
+ * apart into two implementations (the recurring defect class in this repo).
+ * Given the whole ball history of ONE innings (or enough of it — see the
+ * innings-boundary note below), oldest first, folds FORWARD through it and
+ * returns whether a free hit is pending immediately AFTER the last event
+ * given. Mirrors the engine's own transition rule verbatim
+ * (`finishDelivery`, cricket.ts ~line 1363): a white-ball no-ball ARMS it; a
+ * LEGAL delivery (not wide, not no-ball) CONSUMES it; anything else (a wide,
+ * or a non-white-ball no-ball) carries the existing state forward unchanged.
+ *
+ * THE CORRECTNESS TRAP this exists to avoid: "was the previous row a
+ * no-ball?" gets `no-ball -> wide -> legal` silently wrong (the legal ball
+ * IS still a free hit — a wide never consumes it) and misses that
+ * consecutive no-balls each re-arm it. Folding forward over the WHOLE
+ * sequence gets both right by construction, not by a special case: calling
+ * this with everything up to (not including) some ball answers "was THAT
+ * ball itself a free hit"; calling it with everything recorded so far
+ * answers "is a free hit pending right now" — the SAME function, just a
+ * different slice, which is what keeps the indicator and the activity label
+ * from ever answering this two different ways.
+ *
+ * INNINGS-BOUNDARY RESET: a fresh `FineInnings` always starts
+ * `freeHitPending: false` (cricket.ts:650, `createInnings`) — a pending flag
+ * dangling at one innings' close must never leak into the next. There is no
+ * reliable explicit boundary EVENT to key off (an innings can auto-close,
+ * e.g. all out/overs complete, with no dedicated event landing in the
+ * ledger at all), so this detects the boundary the same way `overDots`
+ * already implicitly tolerates one: within one innings, each ball's own
+ * `(over, ballInOver)` is monotonically non-decreasing (an illegal ball
+ * holds it steady, a legal one advances it) — a ball whose pair is LOWER
+ * than the one immediately before it can only mean a fresh innings (or
+ * super over) just started, so the fold resets to `false` right there,
+ * before applying that ball's own transition on top.
+ *
+ * Ignores non-ball event types entirely (`freeHitBallOf` above), same
+ * convention as `prev`/`history` on `SkinDefV3.activityDetail` (types.ts):
+ * no sport vocabulary to filter with belongs at the boundary, only inside
+ * this file.
+ */
+export function freeHitPending(
+  events: readonly { type: string; payload: unknown }[],
+  whiteBall: boolean,
+): boolean {
+  let pending = false;
+  let prevKey: { over: number; ballInOver: number } | null = null;
+  for (const event of events) {
+    const ball = freeHitBallOf(event);
+    if (ball === null) continue;
+    if (prevKey !== null && (ball.over < prevKey.over || (ball.over === prevKey.over && ball.ballInOver < prevKey.ballInOver))) {
+      pending = false; // (over, ballInOver) regressed — a new innings/super over started here
+    }
+    const legal = ball.extraKind !== "wide" && ball.extraKind !== "noball";
+    pending = ball.extraKind === "noball" && whiteBall ? true : legal ? false : pending;
+    prevKey = { over: ball.over, ballInOver: ball.ballInOver };
+  }
+  return pending;
+}
+
 /**
  * D2 fix (Activity panel sign-off review, 2026-08-17): a localised,
  * differentiating detail for one `cricket.ball`/`cricket.superover.ball`
@@ -376,17 +749,88 @@ export function overDots(events: readonly EventEnvelope[], bpo: number): string[
  * Returns `undefined` for any non-ball event type, so wiring this as a
  * generic `resolveDetail` leaves every other cricket row (toss/review/
  * retire/…) on its existing static caption untouched.
+ *
+ * R2b-cricket-over review fix (item 1): takes a single `ActivityDetailContext`
+ * object (../types.ts) — wired by DIRECT REFERENCE as `SkinDefV3.
+ * activityDetail: cricketBallDetail` (below, no wrapper), so this
+ * function's signature must match that contract exactly.
+ *
+ * `ctx.history` (R2b, owner ruling — freeHit chip removal): the data
+ * already exists on every `cricket.ball`/`cricket.superover.ball` payload
+ * (`bowler`, a person id) — the bowler-changed note is a RENDERING change,
+ * not a new event. This function derives the single "previous ball" fact
+ * as `history`'s own LAST element (item 2 — review proved that is always
+ * exactly what the removed, separately-passed `prev` parameter carried;
+ * see `ActivityDetailContext`'s own doc, types.ts). When that derived
+ * event is a real ball AND its own `bowler` genuinely differs from THIS
+ * ball's `bowler`, the base detail above gets a bowler-changed note
+ * APPENDED (never replaces it — a wicket off the first ball of a new spell
+ * must still read as a wicket) via `bowlerChanged`/the
+ * `pad.cricket.ribbon.ball.bowlerChanged` key. `bowlerChanged` below
+ * rejects a structural row (e.g. `core.start`) via this file's own
+ * `BALL_EVENT_TYPES`.
+ *
+ * `ctx.history` is ALSO used, separately, for the free-hit note (R2b, owner
+ * ruling): when BOTH `history` and `cfg` are given, this ALSO appends a
+ * free-hit note — via the SAME `freeHitPending` fold (above) the read-only
+ * scorebug indicator uses, so the two can never disagree — wrapping
+ * whatever detail already exists (composes with the bowler-changed note
+ * above it, never replaces either). `history` must be every
+ * strictly-older, non-voided ball in the SAME innings, oldest first
+ * (`ActivityDetailContext`'s own doc, types.ts); `cfg` is `PadHostView.cfg`
+ * verbatim, re-derived here via `asCfg` like every other builder in this
+ * file. Either missing means "cannot determine" — no note, never a guess
+ * (`freeHitPending` is simply not called at all in that case).
+ *
+ * NAMED as of R2b follow-up (owner ruling, live-tile audit wave — "name the
+ * bowler, not just 'New bowler'"): `ctx.personNames` resolves `bowler` (a
+ * raw id) to a display name — same shape as `history`/`cfg` (an optional,
+ * additive, closure-captured data bag `pad-host.tsx` forwards verbatim from
+ * `PadHostView.personNames`). Falls back to `t("eventCopy.unknownPerson")`
+ * on a missing/unresolved id — the SAME fallback `bowlerBlockMessage` (this
+ * file, below) already uses for this exact bowler-naming problem
+ * elsewhere — and NEVER the raw id: an unresolved id in the activity log is
+ * worse than the name-free note it replaces, so this function does not
+ * fall back to the id the way `ActivityPanel`'s own `nameOf`
+ * (`personNames[id] ?? id`) safely can (that fallback never reaches
+ * composed prose; this one would).
  */
-export function cricketBallDetail(
-  t: TFn,
-  eventType: string,
-  payload: Record<string, unknown>,
-): string | undefined {
+export function cricketBallDetail(ctx: ActivityDetailContext): string | undefined {
+  const { t, eventType, payload, history, cfg, personNames } = ctx;
   if (!BALL_EVENT_TYPES.has(eventType)) return undefined;
   const p = payload as {
     wicket?: { kind?: string };
     runs?: { bat?: number; extras?: { kind?: string; runs?: number } };
+    bowler?: unknown;
   };
+  let detail = baseBallDetail(t, p);
+  // Item 2: the single "previous ball" fact is `history`'s own last
+  // element — the nearest OLDER, non-voided event (`history` is
+  // oldest-first) — rather than a separately-passed `prev` argument.
+  const prev = history && history.length > 0 ? history[history.length - 1] : undefined;
+  if (bowlerChanged(p.bowler, prev)) {
+    // `bowlerChanged` above already proved `p.bowler` is a non-empty
+    // string (its own doc) — re-narrowed here rather than cast, so this
+    // stays a genuine type guard, not an `as`.
+    const bowlerId = typeof p.bowler === "string" ? p.bowler : "";
+    const name = personNames?.[bowlerId] ?? t("eventCopy.unknownPerson");
+    detail = t("pad.cricket.ribbon.ball.bowlerChanged", { detail, name });
+  }
+  if (history !== undefined && cfg !== undefined) {
+    const whiteBall = asCfg(cfg).ballsPerInnings !== null;
+    if (freeHitPending(history, whiteBall)) detail = t("pad.cricket.ribbon.ball.freeHit", { detail });
+  }
+  return detail;
+}
+
+/** The outcome-only detail — wicket, then extras-by-kind, then plain runs
+ *  (same decision order as `ballOutcomeSymbol`). Factored out of
+ *  `cricketBallDetail` so the bowler-changed note (above) can wrap the
+ *  result without duplicating this chain. */
+function baseBallDetail(
+  t: TFn,
+  p: { wicket?: { kind?: string }; runs?: { bat?: number; extras?: { kind?: string; runs?: number } } },
+): string {
   if (p.wicket?.kind) return t(requiredVocabKey("kind", p.wicket.kind));
   const extraKind = p.runs?.extras?.kind;
   if (extraKind) return t(requiredVocabKey("kind", extraKind));
@@ -394,6 +838,35 @@ export function cricketBallDetail(
   if (bat === 0) return t("pad.cricket.ribbon.ball.dot");
   if (bat === 1) return t("pad.cricket.ribbon.ball.run");
   return t("pad.cricket.ribbon.ball.runs", { runs: bat });
+}
+
+/**
+ * True when `prev` is a real ball — `BALL_EVENT_TYPES`, never a
+ * structural row (`core.start`, `cricket.innings.summary`) or a
+ * `core.void` marker sitting between two real balls; `activity.tsx`'s own
+ * `priorActivityEvents` does not filter by type, so this file must —
+ * whose `bowler` genuinely differs from THIS ball's own `bowler`. Both
+ * compared as raw ids (`CricketBall.bowler`, packages/engine), never
+ * resolved to a name first, so two different people who happen to share a
+ * display name can never misread as "unchanged" and vice versa. An empty
+ * id on either side (the bowling order not populated yet) never counts as
+ * a change — that would misfire on the very first ball a bowler is ever
+ * recorded for.
+ *
+ * Takes `prev` as a plain, already-derived value rather than `history`
+ * itself (R2b-cricket-over review fix, item 2) — `cricketBallDetail`
+ * above derives it as `history`'s own last element before calling this,
+ * so this function's own shape stays a trivial, self-contained "compare
+ * two ball payloads" check.
+ */
+function bowlerChanged(bowler: unknown, prev?: { type: string; payload: Record<string, unknown> }): boolean {
+  if (!prev || !BALL_EVENT_TYPES.has(prev.type)) return false;
+  const prevBowler = (prev.payload as { bowler?: unknown }).bowler;
+  return (
+    typeof bowler === "string" && bowler !== "" &&
+    typeof prevBowler === "string" && prevBowler !== "" &&
+    bowler !== prevBowler
+  );
 }
 
 /** Runs per `bpo`-ball over, or `null` before any legal ball this innings —
@@ -495,7 +968,7 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   const runs = innings?.runs ?? 0;
   const wickets = innings?.wickets ?? 0;
   const legalBalls = innings?.legalBalls ?? 0;
-  const people = resolvePeople(state, view.contextOverrides);
+  const people = resolvePeople(state, view.contextOverrides, cfg);
 
   const contextParts: string[] = [];
   const vc = variantCode(cfg);
@@ -552,6 +1025,25 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
     });
   }
 
+  // R2b (owner ruling, live-tile audit — freeHit chip removal): the
+  // READ-ONLY replacement for the old dock chip — the scorer no longer
+  // declares what the fold already knows. Appended LAST (after target, same
+  // "never reindex the pinned strip[0..3] items" convention the target
+  // block above already established) — `freeHitPending` is the SAME fold
+  // `cricketBallDetail`'s own activity-log note uses (that function's own
+  // doc has the full correctness-trap/innings-boundary reasoning), called
+  // here with EVERYTHING recorded so far, which answers "is a free hit
+  // pending right now". Gated on live/super-over phase (matching
+  // `buildContext`'s own gate) so a stray pending flag can never survive
+  // into a finished match's display. `id: "freeHit"` is the stable,
+  // i18n-independent Playwright hook (`StripItem.id`, types.ts).
+  if (
+    (state.phase === "live" || state.phase === "super_over") &&
+    freeHitPending(view.events, cfg.ballsPerInnings !== null)
+  ) {
+    strip.push({ id: "freeHit", value: t("scorepad.skin.cricket.header.freeHit"), accent: true });
+  }
+
   return {
     context: contextParts.join(" · "),
     phase: resolvePhase(view),
@@ -579,73 +1071,205 @@ const RUN_VALUES = [0, 1, 2, 3, 4, 6] as const;
 const PRIMARY_RUNS = new Set<number>([0, 1]);
 const MINOR_EXTRA_KINDS: readonly ExtraKind[] = ["noball", "bye", "legbye", "penalty"];
 
-export function buildTiles(view: PadHostView): TileSpec[] {
+/**
+ * R2b (owner sign-off finding, single-line label fix): the over-summary
+ * tile's over number now rides INSIDE its `label` sentence ("End of over
+ * 2"), via `TileSpec.labelText` — a chassis-rendered, pre-localised raw
+ * string (types.ts), never re-resolved through `t()`. Building that one
+ * string needs a REAL `t`, unlike every other tile here (a bare i18n KEY,
+ * resolved later by the chassis's own `t(tile.label)` call, tile-grid.tsx)
+ * — so `t` is threaded in here, DEFAULTED rather than required like
+ * `buildScorebug`/`buildDock` below take it: the reachability sweep
+ * (`__tests__/cricket-dispatch-totality.test.ts`) and most of this file's
+ * own unit tests call `buildTiles(view)` with no second argument at all,
+ * and none of them inspect label TEXT (only tile ids/kinds/phases/
+ * actions) — a default no-op translator (echoes the bare key, ignoring
+ * vars) keeps every one of those call sites compiling and passing
+ * unchanged. Production always supplies the real one (`cricketSkinV3`'s
+ * own `tiles: (view) => buildTiles(view, t)` below) — relying on this
+ * default there would silently ship the raw i18n KEY as the tile's
+ * visible label.
+ */
+export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[] {
   const cfg = asCfg(view.cfg);
   const state = asState(view.state);
-  const bpo = ballsPerOverOf(view.cfg);
-  const base = basePayload(state, bpo, view.contextOverrides);
+  const bpo = ballsPerOverOf(cfg);
+  const base = basePayload(state, cfg, view.contextOverrides);
   const type = ballEventType(state);
   const twoInnings = cfg.inningsPerSide === 2;
+  const innings = currentInnings(state);
+  // R2b-next: fidelity/next-over-number are computed off `scoringInnings`,
+  // not the raw (possibly closed) `innings` above — see that function's own
+  // doc for why `null` is exactly right for "closed, another due" too.
+  const scoring = scoringInnings(state, cfg);
+  const fidelity = inningsFidelity(scoring);
+  // R2b (owner ruling, bowler-eligibility block, 2026-08-17): the SAME
+  // resolvePeople() call every other builder in this file uses (G5's own
+  // "one default computed in one place" reasoning) — so a tile that goes
+  // disabled here is blocking exactly the payload `basePayload` above just
+  // built, never a second, possibly-disagreeing computation.
+  const people = resolvePeople(state, view.contextOverrides, cfg);
+  const bowlerBlocked = bowlerBlockReason(state, people, cfg) !== null;
+  // R2b (owner ruling, live-tile audit defect 2, `_INDEX.md`, HIGH):
+  // `currentInnings()` falls back to the JUST-CLOSED innings once none is
+  // open — load-bearing for READ paths (`buildScorebug` above must still
+  // show the closed innings' final score) — but every delivery-capable tile
+  // used to stay tappable against it, and every tap 422d with "over/
+  // ballInOver do not match the ledger", a message that names ball
+  // sequencing, not the real cause (closure). `closedTile` reuses the EXACT
+  // bowler-block mechanism (`TileSpec.disabled` + a message on
+  // `ContextSlot`, `buildContext` below) rather than inventing a second one —
+  // same posture `ballTile` already takes for bowler-ineligibility, just
+  // gated on a different, independent condition (never OR'd into
+  // `bowlerBlocked` itself: `buildContext` below needs to tell the two
+  // causes apart to avoid showing a stale, possibly-misleading
+  // bowler-eligibility message once the real cause is closure).
+  const inningsClosed = innings?.closed === true;
+  const closedTile = (spec: TileSpec): TileSpec => (inningsClosed ? { ...spec, disabled: true } : spec);
+  // R2b-next (owner-confirmed live blocker, 2026-08-17): the gate above
+  // originally applied REGARDLESS of whether another innings was still due
+  // — the state this fix now targets. `dueBattingSide` (above) narrows it:
+  // `blockedByClosure` is true only for the GENUINELY terminal case (closed,
+  // nothing further due), and is what the ball-emitting tiles and the
+  // over-summary tile gate on below instead of the unnarrowed
+  // `inningsClosed` — both are able to CREATE the next innings on tap (the
+  // engine's own two implicit-open paths, `createInnings` from either
+  // `cricket.ball` or `cricket.innings.summary`, cricket.ts:2935-2944/
+  // :1401-1413 — no dedicated "start innings" event exists or should be
+  // invented, per this fix's own brief). `review`/`inningsClose`/`declare`
+  // stay on the unnarrowed `closedTile`/`inningsClosed` below, unchanged —
+  // none of them make sense against an innings that has not been created
+  // yet (nothing is open to review, close, or declare on).
+  const dueSide = dueBattingSide(state, cfg);
+  const blockedByClosure = inningsClosed && dueSide === null;
+  const dueAwareTile = (spec: TileSpec): TileSpec => (blockedByClosure ? { ...spec, disabled: true } : spec);
 
   const tiles: TileSpec[] = [
     { id: "toss", label: "pad.cricket.action.toss", kind: "primary", phases: ["pre"], action: { sheet: "toss" } },
   ];
 
-  for (const r of RUN_VALUES) {
-    tiles.push({
-      id: `run${r}`,
-      label: `pad.cricket.tile.runs.${r}`,
-      kind: PRIMARY_RUNS.has(r) ? "primary" : "standard",
+  // R2b (Q1 owner ruling, `_INDEX.md`): ball-derived tiles only when this
+  // innings can legally take a `cricket.ball` at all — never once it is
+  // coarse, where the fold refuses one outright (cricket.ts:1128-1131/
+  // :2936-2938). Every visible tap stays legal at the moment it is visible.
+  if (fidelity !== "coarse") {
+    // R2b (bowler-eligibility block): every tile pushed inside this branch
+    // emits `cricket.ball`/`cricket.superover.ball` — exactly the set
+    // Ruling 1 names ("runs, extras, wicket — everything that emits a
+    // cricket.ball") — so `ballTile` below is the ONLY place `disabled`
+    // gets set in this function; non-ball tiles (review/retire/
+    // inningsClose/declare/overSummary/more, pushed further down, outside
+    // this branch) are untouched.
+    const ballTile = (spec: TileSpec): TileSpec => (bowlerBlocked || blockedByClosure ? { ...spec, disabled: true } : spec);
+
+    for (const r of RUN_VALUES) {
+      tiles.push(ballTile({
+        id: `run${r}`,
+        label: `pad.cricket.tile.runs.${r}`,
+        kind: PRIMARY_RUNS.has(r) ? "primary" : "standard",
+        phases: ["live"],
+        action: { event: { type, payload: runPayload(base, r) } },
+      }));
+    }
+
+    tiles.push(ballTile({
+      id: "wide",
+      label: requiredVocabKey("kind", "wide"),
+      kind: "standard",
       phases: ["live"],
-      action: { event: { type, payload: runPayload(base, r) } },
-    });
+      action: { event: { type, payload: extraPayload(base, "wide") } },
+    }));
+
+    tiles.push(ballTile({
+      id: "wicket",
+      label: "pad.cricket.action.wicket",
+      kind: "destructive",
+      span: 4,
+      phases: ["live"],
+      action: { sheet: "wicket" },
+    }));
+
+    for (const kind of MINOR_EXTRA_KINDS) {
+      // R2b task 4 (`_INDEX.md`, owner ruling): penalty runs default to 5
+      // (Law 41), not the ordinary single every OTHER minor extra opens
+      // with — a real, deliberate exception, not an oversight. The other
+      // three kinds (noball/bye/legbye) keep `extraPayload`'s own default.
+      const runs = kind === "penalty" ? 5 : undefined;
+      tiles.push(ballTile({
+        id: `extra-${kind}`,
+        label: requiredVocabKey("kind", kind),
+        kind: "minor",
+        phases: ["live"],
+        action: { event: { type, payload: extraPayload(base, kind, runs) } },
+      }));
+    }
   }
 
-  tiles.push({
-    id: "wide",
-    label: requiredVocabKey("kind", "wide"),
-    kind: "standard",
-    phases: ["live"],
-    action: { event: { type, payload: extraPayload(base, "wide") } },
-  });
-
-  tiles.push({
-    id: "wicket",
-    label: "pad.cricket.action.wicket",
-    kind: "destructive",
-    span: 4,
-    phases: ["live"],
-    action: { sheet: "wicket" },
-  });
-
-  for (const kind of MINOR_EXTRA_KINDS) {
-    tiles.push({
-      id: `extra-${kind}`,
-      label: requiredVocabKey("kind", kind),
-      kind: "minor",
-      phases: ["live"],
-      action: { event: { type, payload: extraPayload(base, kind) } },
-    });
-  }
-
-  tiles.push({ id: "review", label: "pad.cricket.action.review", kind: "standard", phases: ["live"], action: { sheet: "review" } });
-  tiles.push({ id: "retire", label: "pad.cricket.action.retire", kind: "standard", phases: ["live"], action: { swap: true } });
-  tiles.push({
+  tiles.push(closedTile({ id: "review", label: "pad.cricket.action.review", kind: "standard", phases: ["live"], action: { sheet: "review" } }));
+  // R2b (owner ruling, live-tile audit defect 4, 2026-08-17): the dedicated
+  // Retire tile is GONE — its own SwapSheet scoped "off" to the whole
+  // batting side (never just the crease, engine backstops it at
+  // cricket.ts:1676) and hardcoded reason:"other", while the generic
+  // More-sheet's `cricket.retire` action (padSpec's own `retireAction`,
+  // engine cricket.ts) was ALSO reachable with a real reason enum — two
+  // divergent entry points for the one event. `pad-host.tsx`'s own
+  // `dedicatedEventTypes` never counted this tile's `{swap:true}` action
+  // toward the dedicated set anyway (its own header: a swap tile "builds its
+  // event dynamically... contributes nothing"), so `cricket.retire` was
+  // ALREADY reachable via the generic More sheet before this change and
+  // stays reachable the same way now — nothing to add here, only to remove.
+  // See `buildSwap`'s own former header (this section, now deleted) and
+  // `cricketSkinV3`'s factory below for the rest of the removal.
+  tiles.push(closedTile({
     id: "inningsClose",
     label: "pad.cricket.action.inningsClose",
     kind: "standard",
     phases: ["live"],
     action: { sheet: "inningsClose" },
-  });
+  }));
 
   if (twoInnings) {
-    tiles.push({
+    tiles.push(closedTile({
       id: "declare",
       label: "pad.cricket.action.declare",
       kind: "standard",
       phases: ["live"],
       action: { event: { type: "cricket.innings.declare", payload: {} } },
-    });
+    }));
+  }
+
+  // R2b (Q1 owner ruling): the over-by-over entry point — hidden once this
+  // innings is ball-level, where the fold refuses `cricket.innings.summary`
+  // just as firmly (cricket.ts:1402-1404), the mirror image of the guard
+  // above. `primary`/span-2 even when it co-occurs with run0/run1 (innings
+  // unopened): a genuine, first-tap fork in how the WHOLE innings gets
+  // scored earns the same weight as the two most-common ball outcomes, not
+  // less — `assertTileHierarchy`'s ">2 primaries" convention (tile-grid.tsx)
+  // is advisory only and not wired to any skin's real output yet (R1 fix
+  // round 1's own note), so this is a deliberate exception, not a defect.
+  if (fidelity !== "fine") {
+    const overLabel = "pad.cricket.action.endOfOver";
+    tiles.push(dueAwareTile({
+      id: "overSummary",
+      label: overLabel,
+      // R2b follow-up (owner sign-off, single-line label fix): the over
+      // number now rides INSIDE the label sentence itself ("End of over
+      // 2") via TileSpec.labelText (types.ts), rendered verbatim by
+      // tile-grid.tsx, never re-resolved through t() — NOT a separate
+      // sublabelText line any more (this tile was that field's original
+      // motivating case; see types.ts's own follow-up note on
+      // sublabelText, right below its doc). `label` above still carries
+      // the real dictionary key ("End of over {over}", en/ui.json) as the
+      // fallback/canonical value tile-grid.tsx resolves for any tile that
+      // doesn't set labelText. R2b-next: `scoring`, not `innings` — reads
+      // over 1 for a closed-with-another-due innings, not a number derived
+      // from the closed innings' own final legalBalls.
+      labelText: t(overLabel, { over: nextOverNumber(scoring, bpo) }),
+      kind: "primary",
+      span: 2,
+      phases: ["live"],
+      action: { sheet: "overSummary" },
+    }));
   }
 
   tiles.push({
@@ -661,35 +1285,158 @@ export function buildTiles(view: PadHostView): TileSpec[] {
 }
 
 // ---------------------------------------------------------------------------
-// dock() — needs `t` for DockSpec.title (this file's header). Free hit only:
-// "shot type" (design doc §3's cricket row) has no home in `CricketBall`'s
-// `z.strictObject` schema — no field anywhere carries how a shot was played,
-// and a strict-object dock mutation adding an unrecognised key would 422 at
-// send time. Flagged as a real, engine-schema-shaped gap (out of this wave's
-// "no packages/engine work" scope), not a silent scope cut: `freeHit` is the
-// one genuinely optional `CricketBall` field, so it is what this dock
-// offers. Unconditional (not gated on `fine.freeHitPending`): by dock-render
-// time the optimistic fold has ALREADY advanced past the just-tapped ball
-// (spec §2.3), so `view.state`'s OWN freeHitPending already reflects
-// AFTER this ball, not before it — this chassis gives a skin's `dock(type,
-// view)` no per-held-event payload to check instead. Tapping it on an
-// ineligible ball surfaces as a normal rejected-submission error (the fold's
-// own `"freeHit flagged but no free hit is pending"` check), same as any
-// other invalid pick elsewhere in this chassis — not a crash.
+// dock() — needs `t` for DockSpec.title (this file's header).
+//
+// R2b (owner ruling, live-tile audit, 2026-08-17): this dock USED TO offer a
+// `freeHit` chip unconditionally on every ball — "shot type" (design doc
+// §3's cricket row) has no home in `CricketBall`'s `z.strictObject` schema,
+// so `freeHit` (the one genuinely optional `CricketBall` field) was what it
+// always offered instead. That chip is GONE. It was never gated on whether a
+// free hit was actually pending (by dock-render time the optimistic fold has
+// already advanced past the just-tapped ball, so `view.state`'s own
+// `freeHitPending` already reflects AFTER this ball, not before it — there
+// was no cheap way to gate it correctly from here), so tapping it on an
+// ordinary ball surfaced as a bare rejected-submission error (the fold's own
+// `"freeHit flagged but no free hit is pending"` check) — the owner hit this
+// live. `payload.freeHit` was also never load-bearing: the server derives
+// `freeHitPending` purely from the preceding no-ball
+// (`finishDelivery`/`freeHitPending`, cricket.ts), and the free-hit
+// dismissal restriction reads `fine.freeHitPending`, never the payload flag
+// — so the flag was validated but never consumed; its only possible effect
+// was an error. Replaced by a READ-ONLY indicator (`buildScorebug`, above)
+// and an activity-log note (`cricketBallDetail`, above) — the scorer no
+// longer declares what the fold already knows, and the client never sends
+// `freeHit: true` at all any more.
+//
+// `buildDock` itself stays non-null for every ball event type even once
+// `chips` ends up empty (a plain run/wide/penalty tap, now that freeHit is
+// gone) — `e2e/scorepad-v3-cricket.spec.ts`'s undo tests tap a PLAIN run and
+// assert `[data-role="v3-dock"]` becomes visible, using dock PRESENCE as a
+// generic "this tap is still in the hold window" proxy, unrelated to free
+// hit specifically; returning `null` there would silently break that
+// already-passing coverage. The dock still shows its title, dismiss
+// control, and countdown with no chips in that case.
+//
+// R2b task 4 (`_INDEX.md`, owner ruling): `heldPayload`, the optional 3rd
+// argument (the widened chassis contract, `SkinDefV3.dock`, ../types.ts),
+// is what lets THIS dock tell a no-ball apart from a plain single — both
+// dispatch the identical `cricket.ball` event TYPE, so `eventType` alone
+// can never answer "which tile was actually tapped". A no-ball's dock
+// offers bat-run chips (+1/+2/+3/+4/+6 — a no-ball is batted normally, so
+// this is legal; a WIDE is deliberately excluded even though it is also an
+// extra, because the engine refuses any bat run off one, cricket.ts:1229 —
+// "bat runs are impossible off a wide"). A bye/leg-bye's dock offers
+// extra-run chips (2/3/4) that raise the EXTRA's own `runs`, never `bat`.
+// Every other case — a plain run tap, a wide, a penalty, or the pre-existing
+// 2-arg call with no payload at all — now offers no chips at all.
 // ---------------------------------------------------------------------------
 
-export function buildDock(eventType: string, t: TFn): DockSpec | null {
-  if (!BALL_EVENT_TYPES.has(eventType)) return null;
+const BAT_RUN_VALUES = [1, 2, 3, 4, 6] as const;
+const EXTRA_RUN_VALUES = [2, 3, 4] as const;
+
+/** A no-ball's dock chip that sets `runs.bat` to `n`, preserving the
+ *  no-ball's own `runs.extras` verbatim (never dropped, never re-kinded) —
+ *  and, for `n` in {4, 6}, also stamps `boundary`, mirroring `runPayload`'s
+ *  own convention for the plain run4/run6 tiles exactly: the same two
+ *  literal values, the same "boundary present only for 4 or 6" shape. */
+function batRunChip(n: (typeof BAT_RUN_VALUES)[number]): DockChip {
+  const boundary = n === 4 ? 4 : n === 6 ? 6 : undefined;
   return {
-    title: t("pad.cricket.dock.title"),
-    chips: [{ id: "freeHit", label: "pad.cricket.dock.freeHit", mutate: (payload) => ({ ...payload, freeHit: true }) }],
+    id: `batRun${n}`,
+    label: `pad.cricket.dock.batRun${n}`,
+    mutate: (payload) => {
+      const extras = (payload.runs as { extras?: unknown } | undefined)?.extras;
+      return {
+        ...payload,
+        runs: { bat: n, ...(extras !== undefined ? { extras } : {}) },
+        ...(boundary !== undefined ? { boundary } : {}),
+      };
+    },
   };
+}
+
+/** A bye/leg-bye's dock chip that raises the EXTRA's own `runs` to `n`.
+ *  `bat` is read from (never assumed on top of) the current payload — it is
+ *  always 0 for a real bye/leg-bye, but a chip should never silently touch
+ *  a field it was not asked to change — and `extras.kind` is preserved
+ *  verbatim so a leg-bye can never mutate into a bye or vice versa. */
+function extraRunChip(n: (typeof EXTRA_RUN_VALUES)[number]): DockChip {
+  return {
+    id: `extraRun${n}`,
+    label: `pad.cricket.dock.extraRun${n}`,
+    mutate: (payload) => {
+      const runs = payload.runs as { bat?: number; extras?: { kind?: string } } | undefined;
+      return { ...payload, runs: { bat: runs?.bat ?? 0, extras: { kind: runs?.extras?.kind, runs: n } } };
+    },
+  };
+}
+
+export function buildDock(eventType: string, t: TFn, heldPayload?: Record<string, unknown>): DockSpec | null {
+  if (!BALL_EVENT_TYPES.has(eventType)) return null;
+  const chips: DockChip[] = [];
+  const extraKind = (heldPayload?.runs as { extras?: { kind?: string } } | undefined)?.extras?.kind;
+  if (extraKind === "noball") {
+    for (const n of BAT_RUN_VALUES) chips.push(batRunChip(n));
+  } else if (extraKind === "bye" || extraKind === "legbye") {
+    for (const n of EXTRA_RUN_VALUES) chips.push(extraRunChip(n));
+  }
+  return { title: t("pad.cricket.dock.title"), chips };
+}
+
+const BOWLER_BLOCK_MESSAGE_KEY: Record<Exclude<BowlerBlockReason, "noEligible">, MessageKey> = {
+  prevOver: "pad.cricket.context.bowler.blocked.prevOver",
+  notInLineup: "pad.cricket.context.bowler.blocked.notInLineup",
+  quota: "pad.cricket.context.bowler.blocked.quota",
+};
+
+/**
+ * R2b (owner ruling, bowler-eligibility block, 2026-08-17): turns a
+ * `bowlerBlockReason` into the pre-localised prose `ContextSlot.message`
+ * carries (`buildContext`, below) — naming the bowler via `personNames`,
+ * NEVER a raw personId (the same posture `use-pad-pipeline.ts`'s own doc
+ * states for why the engine's OWN rejection text must never reach the
+ * scorer: English-only, no server-side i18n, and built around a raw id,
+ * not a display name). Falls back to `eventCopy.unknownPerson` on a
+ * missing name — the SAME fallback `chipLabel` (context-strip.tsx) already
+ * uses for the very chip this message sits beside, so the two can never
+ * name the bowler two different ways.
+ *
+ * `"noEligible"` names nobody — there is no single bowler at fault — and
+ * gets its own dedicated key with no `name` var at all, rather than a
+ * name-shaped hole in the per-reason map above.
+ *
+ * The `"quota"` branch reads `cfg.maxOversPerBowler` directly rather than
+ * threading the number through `BowlerBlockReason` itself: by the time
+ * `bowlerBlockReason` has returned `"quota"`, that field is guaranteed
+ * defined (its own doc — `isEligibleOverBowler` can only fail via the
+ * quota branch when `maxOversPerBowler !== undefined`) — the `throw` below
+ * is `requiredVocabKey`'s own "never a silently-wrong fallback" posture
+ * (this file, above), not a reachable runtime path through either of this
+ * function's two real callers.
+ */
+function bowlerBlockMessage(
+  t: TFn,
+  reason: BowlerBlockReason,
+  bowlerId: string,
+  personNames: Readonly<Record<string, string>>,
+  cfg: CricketCfgShape,
+): string {
+  if (reason === "noEligible") return t("pad.cricket.context.bowler.blocked.noEligible");
+  const name = personNames[bowlerId] ?? t("eventCopy.unknownPerson");
+  if (reason === "quota") {
+    const quota = cfg.maxOversPerBowler;
+    if (quota === undefined) {
+      throw new Error("cricket skin: quota block reason with no cfg.maxOversPerBowler");
+    }
+    return t(BOWLER_BLOCK_MESSAGE_KEY.quota, { name, quota });
+  }
+  return t(BOWLER_BLOCK_MESSAGE_KEY[reason], { name });
 }
 
 // ---------------------------------------------------------------------------
 // context() — §2.4, closes D-14. Fold-and-override-authoritative (same
-// `resolvePeople(state, view.contextOverrides)` the tiles/sheets use, so the
-// strip and the next tap NEVER disagree). No `contextSelect`: cricket has no
+// `resolvePeople(state, view.contextOverrides, cfg)` the tiles/sheets use, so
+// the strip and the next tap NEVER disagree). No `contextSelect`: cricket has no
 // event that records "who is currently bowling/batting" as its own
 // standalone fact (all 15 event types checked — see this file's header) —
 // declaring one would either invent an event (`createSkinDispatch`'s guard
@@ -741,13 +1488,39 @@ export function buildDock(eventType: string, t: TFn): DockSpec | null {
 // editable" convention rather than writing a redundant `readOnly: false`.
 // ---------------------------------------------------------------------------
 
-export function buildContext(view: PadHostView): ContextStripSpec | null {
+export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextStripSpec | null {
   const state = asState(view.state);
   if (state.phase !== "live" && state.phase !== "super_over") return null;
+  const cfg = asCfg(view.cfg);
   const innings = currentInnings(state);
   if (innings === null) return null;
-  const people = resolvePeople(state, view.contextOverrides);
+  // R2b-next (owner-confirmed live blocker, 2026-08-17): closed, with
+  // another innings due, is treated identically to "no innings open yet"
+  // (the check right above) — there is genuinely no fold-backed state to
+  // show or edit for an innings that has not been created (same reasoning
+  // `scoringInnings`'s own doc gives). This is not new UI to design: it is
+  // the SAME strip-less window innings ONE's own first ball already scores
+  // through today. `basePayload`/`resolvePeople` (below, and in buildTiles)
+  // still compute correct silent defaults for that first tap, exactly as
+  // they already do before innings one's own first ball.
+  if (dueBattingSide(state, cfg) !== null) return null;
+  const people = resolvePeople(state, view.contextOverrides, cfg);
   const bowlerReadOnly = bowlerIsReadOnly(innings);
+  // R2b (owner ruling, live-tile audit defect 2, `_INDEX.md`): closure is the
+  // ROOT cause once it applies — a bowler-eligibility read off the CLOSED
+  // innings' own stale `fine` would be a second, possibly-misleading message
+  // stacked on (or shown INSTEAD of) the real one, so the eligibility check
+  // is skipped entirely rather than computed and overridden. Mirrors
+  // `buildTiles`'s own `inningsClosed`/`closedTile` — see that function's
+  // header for the full defect/investigation writeup (not duplicated here).
+  const inningsClosed = innings.closed === true;
+  const closedMessage = inningsClosed ? t("pad.cricket.context.innings.closed") : undefined;
+  // R2b (owner ruling, bowler-eligibility block, 2026-08-17): the SAME
+  // decision `buildTiles` gates its own `disabled` tiles on — the strip and
+  // the tap can never disagree about WHETHER the bowler is blocked, same
+  // "one default computed in one place" reasoning G5 already established
+  // for WHO the bowler is.
+  const blockReason = inningsClosed ? null : bowlerBlockReason(state, people, cfg);
   return {
     slots: [
       {
@@ -757,6 +1530,7 @@ export function buildContext(view: PadHostView): ContextStripSpec | null {
         pool: "onfield",
         required: true,
         readOnly: true, // blocker 2 — see this file's header above
+        message: closedMessage, // defect 2 — see this file's header above
       },
       {
         id: "nonStriker",
@@ -765,14 +1539,50 @@ export function buildContext(view: PadHostView): ContextStripSpec | null {
         pool: "onfield",
         required: true,
         readOnly: true, // blocker 2 — see this file's header above
+        message: closedMessage, // defect 2 — see this file's header above
       },
       {
+        // CANDIDATE-LIST GAP (checked as part of the R2b live bug fix,
+        // 2026-08-17 — reported, not fixed here): when this slot is
+        // editable (over boundary, not readOnly), tapping it opens a picker
+        // whose candidates come from `pad-host.tsx`'s `combinedPool(squads)`
+        // — resolved through `ContextSlot.pool` alone, via
+        // `context-strip.tsx`'s `resolvePool`. `ContextSlot` (types.ts) has
+        // no `candidates`/`side` field — only `SheetPersonStep` (the wicket
+        // sheet's own `out`/`fielder` steps, G6 above) supports narrowing a
+        // person picker's list; a context-strip slot cannot. Two consequences,
+        // neither fixable from this file alone: (1) the picker offers BOTH
+        // sides' on-field roster, not just the bowling side (`combinedPool`'s
+        // own header already flags this as a "slightly wider-than-ideal"
+        // pre-existing gap); (2) within the bowling side, it offers every
+        // on-field player regardless of the SAME eligibility this fix just
+        // taught the default to respect (consecutive-over/quota) — the chip
+        // does not stop a scorer from tapping an ineligible name, the same
+        // shape of defect this fix closes for the untouched default, just
+        // reachable through the picker instead. Fixing this needs a
+        // `candidates`-like field on `ContextSlot` (types.ts) plus a
+        // `context-strip.tsx` change to honour it — both out of this file's
+        // grant (types.ts is a concurrent task's file this wave; see this
+        // task's own report). Flagged here rather than silently left
+        // unmentioned, per the brief's own ask to report even a null result.
+        //
+        // R2b UPDATE (bowler-eligibility block, 2026-08-17): the picker
+        // itself is STILL unfixed — it still offers an ineligible name —
+        // but the CONSEQUENCE of tapping one is no longer a silent trip to
+        // the server. `blockReason`/`message` below catch it here: the next
+        // render shows this exact slot's `message` and every ball tile
+        // goes `disabled` (`buildTiles`), so an ineligible pick now surfaces
+        // immediately, in the pad, naming the reason — never a bare 422.
         id: "bowler",
         label: "pad.cricket.context.bowler",
         personId: people.bowler || undefined,
         pool: "onfield",
         required: true,
-        readOnly: bowlerReadOnly ? true : undefined, // defect 3 — see this file's header above
+        // defect 3 (readOnly) / defect 2 (closure) — see this file's header
+        // above for both. Closure forces readOnly too: there is no "over
+        // boundary" concept once the innings itself is over.
+        readOnly: inningsClosed || bowlerReadOnly ? true : undefined,
+        message: closedMessage ?? (blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg) : undefined),
       },
     ],
   };
@@ -819,20 +1629,44 @@ const CLOSE_REASONS: readonly (readonly [string, string])[] = [
  */
 function wicketSheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
-  const people = resolvePeople(state, view.contextOverrides);
-  const base = basePayload(state, ballsPerOverOf(view.cfg), view.contextOverrides);
+  const cfg = asCfg(view.cfg);
+  const people = resolvePeople(state, view.contextOverrides, cfg);
+  const base = basePayload(state, cfg, view.contextOverrides);
   // G6: exactly the two batters who can be run out — never an empty-string
   // placeholder (resolvePeople's own "order not populated yet" fallback) —
   // so a not-yet-populated crease offers zero candidates rather than a
   // phantom "" entry `renderCandidateRow` would render as a blank button.
   const outCandidates = [people.striker, people.nonStriker].filter((id): id is string => id !== "");
+  // R2b-over (review finding — same recurring defect class this whole branch
+  // targets): the SAME `freeHitPending` fold buildScorebug's own indicator
+  // and cricketBallDetail's own activity note already use (that function's
+  // own header, above) — called here with the identical two arguments
+  // buildScorebug uses, so this gate can never disagree with what the
+  // scorer is already shown on the scorebug strip.
+  const freeHit = freeHitPending(view.events, cfg.ballsPerInnings !== null);
+  // FREE_HIT_WICKET_KINDS' own doc (above) has the engine restriction this
+  // mirrors (cricket.ts:1275-1276). Filtering WICKET_KINDS (rather than
+  // hardcoding the pair here too) means a future change to either closed
+  // set only has one place to update.
+  const kindOptions = (freeHit ? WICKET_KINDS.filter((k) => FREE_HIT_WICKET_KINDS.has(k)) : WICKET_KINDS).map((k) => ({
+    id: k,
+    label: requiredVocabKey("kind", k),
+  }));
 
   const steps: GuidedSheetStep[] = [
     {
       id: "kind",
       kind: "choice",
       title: "pad.cricket.sheet.wicket.kind.title",
-      options: WICKET_KINDS.map((k) => ({ id: k, label: requiredVocabKey("kind", k) })),
+      options: kindOptions,
+      // Owner ruling (this task's own brief): never leave a silently
+      // shortened list unexplained — a scorer expecting "bowled" and not
+      // finding it needs to know why. `SheetChoiceStep.hintKey`'s own doc
+      // (types.ts) has the full reasoning for why this is a plain i18n key
+      // rather than SheetNumberStep's pre-resolved convention. (Field
+      // renamed from `hint` — R2b-cricket-over follow-up, hint-field
+      // naming pass, 2026-08-17.)
+      hintKey: freeHit ? "pad.cricket.sheet.wicket.kind.freeHitHint" : undefined,
     },
     {
       id: "out",
@@ -970,47 +1804,121 @@ function inningsCloseSheet(): GuidedSheetSpec {
   };
 }
 
+/**
+ * R2b — the over-by-over entry point (Q1/Q2 owner rulings, `_INDEX.md`).
+ * Q2 was REVERSED by the owner on 2026-08-17 (`_INDEX.md`, "R2b — Q2
+ * REVERSED"): the three `SheetNumberStep`s below capture THIS OVER's
+ * runs/wickets/balls, not the innings-so-far total, and `buildPayload`
+ * appends them onto the fold's current totals before emitting — re-keying
+ * the running total every over was the worse trade, and a scorer thinks in
+ * per-over terms, not running totals.
+ *
+ * All three PREFILL to 0 (`balls` to `ballsPerOverOf(cfg)` — never a
+ * hardcoded 6, `hundred` sets 5, cricket.ts:2811) with `min: 0`: this is an
+ * increment form, the one documented exception to `SheetNumberStep`'s own
+ * "the scorer edits the total up" doc (types.ts). `balls` alone also
+ * carries `max: bpo`: a completed over is always exactly `bpo` LEGAL
+ * deliveries — extras (wides/no-balls) are not legal deliveries, so they
+ * can never push it past `bpo` — while below `bpo` stays legitimate, since
+ * an innings can end mid-over (all out, target reached, time). No `max` on
+ * `runs`/`wickets`: `allOut`/`ballsLimit` are strict, cfg/squad-derived
+ * checks the ENGINE makes (`applySummary`, same file) and are not exported
+ * for this pad to duplicate — same "the fold's own validation is still the
+ * correctness backstop" posture the wicket sheet's `fielder` step already
+ * takes (`wicketSheet`'s own doc, above).
+ *
+ * The engine's own "summary totals may not decrease" guard
+ * (cricket.ts:1416-1426) stays structurally UNREACHABLE through this sheet,
+ * now via a different mechanism than the original ruling: every answer is
+ * floored at `min: 0` and `buildPayload` only ever ADDS it onto the fold's
+ * own current `runs`/`wickets`/`legalBalls` reads below, so the emitted
+ * total can never fall below what the fold already holds. (The addition
+ * itself is the one new failure mode this reversal accepts — a bug there
+ * could still emit a total that is higher than before, which passes the
+ * guard while drifting wrong permanently with nothing to catch it; the
+ * `hintText` anchor below is the owner's chosen mitigation, not a fix.)
+ *
+ * `hintText` on all three: the fold's CURRENT total as `${runs}/${wickets}`
+ * — the exact notation `buildScorebug`'s own `halves[0].big` already uses,
+ * so it needs no translation (numerals + "/" read identically on every
+ * locale) and this function can stay `t`-free like every OTHER member here
+ * except `scorebug`/`dock` (this file's header). Now load-bearing rather
+ * than decorative: it is the only place the scorer sees what the delta
+ * above is being added to. `hintText` is baked once when this record is
+ * built (G4, types.ts) and rendered VERBATIM by guided-sheet.tsx (never
+ * through `t()`, that file's own doc on `SheetNumberStep.hintText`) — it
+ * cannot react to a scorer's still-in-progress stepper taps on ANY step
+ * (guided-sheet.tsx is out of this wave's file grant, and
+ * `SheetNumberStep.hintText` is a plain `string`, not a function of the
+ * live edit value or of answers already given earlier in the SAME wizard
+ * run). What ships instead: a correct, always-fresh "before" anchor —
+ * rebuilt every `sheets(view)` call, per `PadHostView`'s own "never stale"
+ * obligation — sitting directly above the ALREADY-live editable field
+ * (task 2's own `renderNumberStep`). Flagged here as a deliberate
+ * deviation, not a silent reinterpretation.
+ *
+ * Field renamed from `hint` (R2b-cricket-over follow-up, hint-field naming
+ * pass, 2026-08-17) — see `SheetChoiceStep.hintKey`'s doc (types.ts) for
+ * why the bare name, shared with that unrelated KEY-convention field, was
+ * a defect.
+ */
+function overSummarySheet(view: PadHostView): GuidedSheetSpec {
+  const state = asState(view.state);
+  const cfg = asCfg(view.cfg);
+  // R2b-next: `scoringInnings`, not `currentInnings` — a closed innings with
+  // another due must prefill/hint from 0/0/0, not the closed innings' own
+  // final totals, or buildPayload below would ADD this over's entered delta
+  // onto a completely unrelated (and much larger) base.
+  const innings = scoringInnings(state, cfg);
+  const bpo = ballsPerOverOf(cfg);
+  const runs = innings?.runs ?? 0;
+  const wickets = innings?.wickets ?? 0;
+  const legalBalls = innings?.legalBalls ?? 0;
+  const before = `${runs}/${wickets}`;
+
+  const steps: GuidedSheetStep[] = [
+    { id: "runs", kind: "number", title: "pad.cricket.sheet.overSummary.runs.title", initial: 0, min: 0, hintText: before },
+    { id: "wickets", kind: "number", title: "pad.cricket.sheet.overSummary.wickets.title", initial: 0, min: 0, hintText: before },
+    { id: "balls", kind: "number", title: "pad.cricket.sheet.overSummary.balls.title", initial: bpo, min: 0, max: bpo, hintText: before },
+  ];
+
+  return {
+    event: "cricket.innings.summary",
+    steps,
+    buildPayload: (answers) => ({
+      runs: runs + Number(answers.runs),
+      wickets: wickets + Number(answers.wickets),
+      legalBalls: legalBalls + Number(answers.balls),
+      partial: true,
+    }),
+  };
+}
+
 export function buildSheets(view: PadHostView): Record<string, GuidedSheetSpec> {
   return {
     wicket: wicketSheet(view),
     toss: tossSheet(view),
     review: reviewSheet(view),
     inningsClose: inningsCloseSheet(),
+    overSummary: overSummarySheet(view),
   };
 }
 
 // ---------------------------------------------------------------------------
-// swap() — §2.7. `cricket.retire`: `person`/`incoming` are exactly an
-// off/on pair (cricket.ts:274-278, `incoming` optional there — supplied
-// here since the whole point of offering the on-picker is to name someone).
-// `reason` is REQUIRED with no default (hurt/out/other) and the SwapSheet
-// primitive collects only the off/on pair, no third field — "other" is the
-// honest generic bucket (never presumes "hurt" for what might be a tactical
-// swap of the auto-assigned next batter, design doc §2.7's OTHER named use
-// of this same flow: "new batter after a wicket"). `policyOk: true`
-// unconditionally: unlike football/hockey's substitutions, cricket.retire
-// does not run through `reduceLineupEvent`/`lineupPolicy(cfg)` (it is the
-// sport's own event, validated by the cricket fold itself, not the generic
-// lineup reducer) — there is no pre-computable policy verdict to gate on
-// here; a genuinely illegal retire still surfaces as a normal rejected
-// submission, same backstop as the wicket sheet's own fielder step (still
-// whole-side, G6's own doc explains why that one can't be narrowed).
+// swap() — DROPPED (R2b, owner ruling, live-tile audit defect 4,
+// 2026-08-17). This section used to build a `SwapSlot` for `cricket.retire`
+// (off/on pair, hardcoded `reason: "other"`) backing the tile removed above
+// in `buildTiles`. That flow scoped its "off" picker to the WHOLE batting
+// side rather than the crease (engine backstops it at cricket.ts:1676),
+// while the generic More-sheet's own `cricket.retire` action was already
+// separately reachable with a real reason enum — two divergent entry points
+// for one event, the defect this removal closes. `cricketSkinV3` below now
+// omits `swap` entirely (same "absent means never applicable" convention
+// `context`/`contextSelect` already establish in this file) — cricket has
+// no SwapSheet surface at all. `SwapSheet`/`SwapSlot` remain CHASSIS code
+// (swap-sheet.tsx, types.ts, pad-host.tsx) untouched by this removal — they
+// stay available for R3-R7, simply unused by cricket now.
 // ---------------------------------------------------------------------------
-
-export function buildSwap(view: PadHostView): SwapSlot | null {
-  const state = asState(view.state);
-  if (state.phase !== "live" && state.phase !== "super_over") return null;
-  if (currentInnings(state) === null) return null;
-  const people = resolvePeople(state, view.contextOverrides);
-  if (!people.striker) return null; // nobody at the crease yet to retire
-  return {
-    offLabel: "pad.cricket.sheet.retire.who.title",
-    onLabel: "pad.cricket.sheet.retire.incoming.title",
-    side: people.battingSide,
-    policyOk: true,
-    buildEvent: (off, on) => ({ type: "cricket.retire", payload: { person: off, incoming: on, reason: "other" } }),
-  };
-}
 
 // ---------------------------------------------------------------------------
 // The factory (this file's header explains why a factory, not a bare
@@ -1023,9 +1931,9 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     tapModel: "T",
     phase: resolvePhase,
     scorebug: (view) => buildScorebug(view, t),
-    tiles: buildTiles,
-    dock: (eventType) => buildDock(eventType, t),
-    context: buildContext,
+    tiles: (view) => buildTiles(view, t),
+    dock: (eventType, _view, payload) => buildDock(eventType, t, payload),
+    context: (view) => buildContext(view, t),
     sheets: buildSheets,
     // D2 (R2 sign-off): the skin supplies per-ball detail so the activity
     // panel's rows differ from one another. Declared HERE rather than the
@@ -1033,6 +1941,8 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     // skin-owned. Without this line the function exists, its unit tests pass,
     // and every row still reads "Ball recorded" in the product.
     activityDetail: cricketBallDetail,
-    swap: buildSwap,
+    // No swap — see this file's own "swap() — DROPPED" section above
+    // (owner ruling, live-tile audit defect 4). cricket.retire is reached
+    // through the generic More sheet only.
   };
 }
