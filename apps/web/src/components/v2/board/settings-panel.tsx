@@ -31,6 +31,11 @@ import { Tip } from "@/components/ui/tip";
 import { useMsg, useLocale } from "@/components/i18n/dict-provider";
 import { settingsErrorText } from "@/lib/schedule-error";
 import { pluralizeVenue } from "@/lib/venue";
+// P9 scope item 5: the court multi-picker replaces the free-text court list
+// below. `venues` is fetched server-side (`listVenues`) and threaded down —
+// see the component's own header for why it isn't fetched client-side here.
+import { CourtMultiPicker, flattenCourts } from "@/components/v2/shared/court-multi-picker";
+import type { Venue } from "@/components/v2/venues-panel";
 // D2 capacity pre-check (design doc bench-product-value/designs/2026-08-13-
 // capacity-precheck-design.md): both imports are CLIENT-SAFE leaves — see
 // capacity-input.ts's header for why this file must never reach
@@ -54,6 +59,11 @@ export function StandaloneScheduleSettings(props: {
   canEdit: boolean;
   constraintsAllowed: boolean;
   venueCap?: string;
+  /** Org venues with nested courts, for the court multi-picker (P9 scope
+   *  item 5) — see {@link SettingsPanel}. Optional/defaulted so no other
+   *  caller of this wrapper breaks; omitted, the picker shows the
+   *  Directory pointer exactly as it would for a courtless org. */
+  venues?: Venue[];
   /** The VENUE clock (`settings.orgTz`, #448). See {@link SettingsPanel}. */
   orgTz: string;
   /** The parent competition's own dates. See {@link SettingsPanel}. */
@@ -107,6 +117,7 @@ export function SettingsPanel({
   canEdit,
   constraintsAllowed,
   venueCap = "Court",
+  venues = [],
   orgTz,
   competitionWindow,
   defaultOpen = false,
@@ -119,6 +130,12 @@ export function SettingsPanel({
   canEdit: boolean;
   constraintsAllowed: boolean;
   venueCap?: string;
+  /** Org venues with nested courts (`listVenues` shape, venues.ts) — feeds
+   *  the court multi-picker (P9 scope item 5) below. Defaulted to `[]`
+   *  rather than required: several existing test call sites construct this
+   *  panel without it, and an empty list degrades to the picker's own
+   *  "no courts yet" Directory pointer rather than a crash. */
+  venues?: Venue[];
   fixtures?: readonly {
     id: string;
     status: string;
@@ -160,11 +177,12 @@ export function SettingsPanel({
   const [matchMinutes, setMatchMinutes] = useState(config.matchMinutes);
   const [gapMinutes, setGapMinutes] = useState(config.gapMinutes);
   const [rest, setRest] = useState(config.perEntrantMinRest);
-  // Courts as a list (same UX as the division-creation wizard) — one input
-  // per venue with add/remove, not a comma-separated blob.
-  const [courts, setCourts] = useState<string[]>(
-    config.courts.length > 0 ? [...config.courts] : [`${venueCap} 1`],
-  );
+  // Courts: real `courts.id` uuids picked from the org's own court list (P9
+  // scope item 5 — the multi-picker below), same UX on both this panel and
+  // the division-creation wizard. No fabricated default: an empty selection
+  // is a legitimate state (`ScheduleConfig.courts` defaults to `[]`) — there
+  // is no free-text name left to invent one from.
+  const [courts, setCourts] = useState<string[]>([...config.courts]);
   const [saving, setSaving] = useState(false);
   const [hoursError, setHoursError] = useState<string | null>(null);
   // Prefill only when the stored windows are a uniform daily pattern —
@@ -239,9 +257,18 @@ export function SettingsPanel({
     return input === null ? null : assessCapacity(input);
   }, [startAt, endAt, matchMinutes, gapMinutes, rest, courts, fixtures, config, orgTz, divisionId]);
 
+  // "Add a court" can only offer a REAL, currently-unselected org court now
+  // (no more fabricating "Court N" out of thin air) — the next one in the
+  // org's own venue/sort order that isn't already in `courts`. `undefined`
+  // when every real court is already selected (or the org has none): the
+  // suggestion itself still renders (CapacityCard), just without an Apply
+  // button, which reads better than a button that silently does nothing.
+  const nextAddableCourt = flattenCourts(venues).find((c) => !courts.includes(c.id))?.id;
   const applyCapacitySuggestion = {
     add_day: () => setEndAt((e) => (e === "" ? e : ymdAddDays(e, 1))),
-    add_court: () => setCourts((cs) => (cs.length < 50 ? [...cs, `${venueCap} ${cs.length + 1}`] : cs)),
+    ...(nextAddableCourt !== undefined
+      ? { add_court: () => setCourts((cs) => (cs.length < 50 ? [...cs, nextAddableCourt] : cs)) }
+      : {}),
     shorten_match: (s: { amount: number }) => setMatchMinutes((m) => Math.max(1, m - s.amount)),
     shrink_gap: (s: { amount: number }) => setGapMinutes((g) => Math.max(0, g - s.amount)),
     // No `raise_cap`: that knob is a durable division rule on the
@@ -314,7 +341,6 @@ export function SettingsPanel({
     }
     setSaving(true);
     try {
-      const cleanCourts = courts.map((c) => c.trim()).filter(Boolean);
       // No `tz` key (V305): the venue timezone is an ORGANISATION setting now
       // and is inherited. Omitting it is load-bearing — the PUT treats an
       // absent tz as "leave the stored value alone", so divisions that already
@@ -329,7 +355,12 @@ export function SettingsPanel({
             matchMinutes,
             gapMinutes,
             perEntrantMinRest: rest,
-            courts: cleanCourts.length > 0 ? cleanCourts : [`${venueCap} 1`],
+            // Real court ids, organiser order, straight from the picker's own
+            // state — no trim/fallback left to do (that was free-text-era
+            // cleanup; `toggleCourtSelection` already guarantees no dupes,
+            // and an empty selection is valid: `ScheduleConfig.courts`
+            // defaults to `[]`).
+            courts,
             sessionWindows,
           },
         },
@@ -488,49 +519,28 @@ export function SettingsPanel({
         </div>
       </div>
 
-      <div>
-        <span className="label">{msg("boardset.venuesLabel", { venue: pluralizeVenue(venueCap) })}</span>
-        <p className="mb-2 text-xs text-slate-400">{msg("boardset.venuesDesc", { venue })}</p>
-        {/* Court names are short ("Court 1", "Show court"), so a full-bleed
-            input looked like a paragraph field. Capped at one column of the
-            gap-4 two-col grid above so it lines up with those fields. */}
-        <ul className="space-y-2 sm:max-w-[calc(50%-0.5rem)]">
-          {courts.map((c, i) => (
-            <li key={i} className="flex items-center gap-2">
-              <input
-                value={c}
-                onChange={(e) =>
-                  setCourts((cs) => cs.map((x, j) => (j === i ? e.target.value : x)))
-                }
-                placeholder={`${venueCap} ${i + 1}`}
-                maxLength={100}
-                className="input flex-1"
-                disabled={!canEdit}
-              />
-              {canEdit && courts.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => setCourts((cs) => cs.filter((_, j) => j !== i))}
-                  aria-label={msg("boardset.removeVenue", { venue, n: i + 1 })}
-                  className="rounded-md px-2 py-1 text-sm text-red-500 hover:bg-red-50"
-                >
-                  ✕
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-        {canEdit && (
-          <button
-            type="button"
-            onClick={() =>
-              setCourts((cs) => (cs.length < 50 ? [...cs, `${venueCap} ${cs.length + 1}`] : cs))
-            }
-            className="btn btn-ghost mt-2 text-sm"
-          >
-            {msg("boardset.addVenue", { venue })}
-          </button>
-        )}
+      <div className="sm:max-w-[calc(50%-0.5rem)]">
+        {/* P9 scope item 5: real org courts, multi-selected and ordered —
+            replaces the old free-text "Court 1"/"Court 2" name list. Section
+            copy (`boardset.venuesLabel`/`venuesDesc`) is UNCHANGED on
+            purpose — only the control underneath it changed shape. */}
+        <CourtMultiPicker
+          venues={venues}
+          value={courts}
+          onChange={setCourts}
+          disabled={!canEdit}
+          label={msg("boardset.venuesLabel", { venue: pluralizeVenue(venueCap) })}
+          description={msg("boardset.venuesDesc", { venue })}
+          emptyTitle={msg("courtPicker.emptyTitle")}
+          emptyBody={msg("courtPicker.emptyBody")}
+          directoryLinkLabel={msg("courtPicker.directoryLink")}
+          selectedLabel={msg("courtPicker.selected", { n: courts.length })}
+          noneSelectedLabel={msg("courtPicker.noneSelected")}
+          unknownCourtLabel={msg("courtPicker.unknownCourt")}
+          moveUpLabel={msg("venues.court.moveUp")}
+          moveDownLabel={msg("venues.court.moveDown")}
+          removeLabelFor={(n) => msg("boardset.removeVenue", { venue, n })}
+        />
       </div>
 
       {hoursError && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{hoursError}</p>}
