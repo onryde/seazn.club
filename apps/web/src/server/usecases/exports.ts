@@ -761,12 +761,15 @@ export async function buildMyRotaDoc(
   for (const a of assignments) {
     const key = a.official_id;
     const s = byOfficial.get(key) ?? { officialName: a.org_name, duties: [] };
+    // Cross-org doc: each duty is localized by ITS OWN org's default locale,
+    // not one global choice — the reader officiates for many organisations.
+    const lookup = exportLookup(a.org_default_locale);
     s.duties.push({
       at: fixtureWhen(a.scheduled_at, a.venue_tz),
       court: a.court_label,
       compDivision: `${a.competition_name} · ${a.division_name}`,
       role: a.role_key,
-      opponents: `${a.home_name ?? "TBD"} vs ${a.away_name ?? "TBD"}`,
+      opponents: `${a.home_name ?? resolveSlotLabel(a.home_slot_label, lookup, "schedule.tbd")} vs ${a.away_name ?? resolveSlotLabel(a.away_slot_label, lookup, "schedule.tbd")}`,
       response: a.response,
     });
     byOfficial.set(key, s);

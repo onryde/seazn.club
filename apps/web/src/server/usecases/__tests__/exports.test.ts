@@ -531,4 +531,42 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
     expect(text).toContain("Winner of Group A vs Runner-up of Group B");
     expect(text).not.toContain("TBD vs TBD");
   });
+
+  // F4/Task 3: buildMyRotaDoc reads getMyOfficiating(userId), which selected
+  // entrant names only — cross-org and SEAZN-neutral, so there is no single
+  // org locale and each row must carry its own.
+  it("my rota shows slot labels, localized per owning org", async () => {
+    const { auth } = await seedOrg("pro");
+    const { fixtures } = await seedDivision(auth);
+    await sql`
+      update fixtures
+      set home_slot_label = ${sql.json({ key: "slot.winner_group", params: { g: "A" } })},
+          away_slot_label = ${sql.json({ key: "slot.runner_up_group", params: { g: "B" } })},
+          home_entrant_id = null, away_entrant_id = null,
+          status = 'scheduled'
+      where id = ${fixtures[0]!.id}`;
+
+    // Linked official (same pattern as "Task 14: buildMyRotaDoc is scoped to
+    // the caller" above): a real users/persons/officials chain so
+    // getMyOfficiating(userId) can find the assignment cross-org.
+    const suffix = randomUUID().slice(0, 8);
+    const [{ id: userId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified)
+      values (${`rota-${suffix}@test.local`}, 'Rota Official', true)
+      returning id`;
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, user_id)
+      values (${auth.orgId}, 'Rota Official', ${userId}) returning id`;
+    const [{ id: officialId }] = await sql<{ id: string }[]>`
+      insert into officials (org_id, person_id, display_name)
+      values (${auth.orgId}, ${personId}, 'Rota Official') returning id`;
+    await sql`
+      insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
+      values (${auth.orgId}, ${fixtures[0]!.id}, ${officialId}, 'referee', 'accepted')`;
+
+    const model = await buildMyRotaDoc(userId, { printedAt: PRINTED });
+    const text = JSON.stringify(model);
+    expect(text).toContain("Winner of Group A vs Runner-up of Group B");
+    expect(text).not.toContain("TBD vs TBD");
+  });
 });

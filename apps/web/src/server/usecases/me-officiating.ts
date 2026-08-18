@@ -9,6 +9,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { refreshOfficialsCache } from "./officials";
 import { acceptResolvedClaim, resolveClaimById } from "./person-claims";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
 // refreshOfficialsCache is typed for the tenant tx; it only uses the tagged
 // template + .json, which the superuser `sql` shares — safe structural cast.
@@ -34,6 +35,12 @@ export interface MyOfficiatingAssignment {
   sport_key: string;
   home_name: string | null;
   away_name: string | null;
+  home_slot_label: SlotLabel | null;
+  away_slot_label: SlotLabel | null;
+  /** Cross-org doc, so each duty is localized by ITS OWN org's default
+   *  locale, not one global choice (F4/Task 3) — the reader officiates for
+   *  many organisations, unlike a single-org export. */
+  org_default_locale: string;
   scheduled_at: string | null;
   /** Venue zone (V305): division override → org timezone → UTC. */
   venue_tz: string | null;
@@ -84,6 +91,8 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
            c.visibility as competition_visibility,
            d.name as division_name, d.slug as division_slug, d.sport_key,
            h.display_name as home_name, a.display_name as away_name,
+           f.home_slot_label, f.away_slot_label,
+           org.default_locale as org_default_locale,
            f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz, f.venue, f.court_label,
            f.status as fixture_status,
            fo.role_key, fo.response, fo.decline_reason, fo.responded_at,
@@ -110,7 +119,10 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
     order by f.scheduled_at nulls last, f.id, fo.role_key
     limit 100`;
 
-  // Finished matches — most recent first — for the collapsed "completed" panel.
+  // Finished matches — most recent first — for the collapsed "completed"
+  // panel. Deliberately NOT widened with home_slot_label/away_slot_label/
+  // org_default_locale (F4/Task 3): a completed fixture has filled entrants
+  // by definition, so a placeholder label can never reach this query.
   const completed = await sql<MyOfficiatingAssignment[]>`
     select fo.fixture_id, fo.id as fixture_official_id, f.fixture_no, o.id as official_id,
            org.name as org_name, org.slug as org_slug,
