@@ -1417,11 +1417,46 @@ export async function mintGroupCheckout(
  * confirms + materialises in one tx. Safe to re-run: paid/confirmed short-
  * circuit, entrant_id is set once.
  */
+/** A group checkout session's comma-joined registration_ids metadata (W3a),
+ *  parsed to a clean id list — a stray/foreign session with no such field
+ *  becomes `[]`, never a false-positive single blank id. */
+function checkoutRegistrationIds(session: Stripe.Checkout.Session): string[] {
+  return (session.metadata?.registration_ids ?? "").split(",").filter(Boolean);
+}
+
+/**
+ * Fulfilment for a `registration_group` checkout session (RS003 W3b —
+ * re-keyed from a single `registration_id` to the group's comma-joined
+ * `registration_ids`, W3a's `createRegistrationCheckout`): every NAMED entry
+ * is confirmed, never a sibling outside that list.
+ *
+ * The SINGLE gate on `payment_status` for this kind, deliberately, so none of
+ * its three callers has to remember one: the `checkout.session.completed`
+ * AND `checkout.session.async_payment_succeeded` dispatch branches
+ * (billing-events.ts) both call straight through, and so do the two
+ * reconcile-on-return paths below. Before this wave the dispatch branch had
+ * NO gate at all — every sibling kind in that file already checked
+ * `payment_status`, this one didn't — so a delayed-notification payment
+ * method's `checkout.session.completed` (fired while still `unpaid`; the
+ * success arrives later on `async_payment_succeeded` — Stripe skill,
+ * "Webhooks and fulfillment") would have confirmed and materialised an
+ * entrant before any money actually moved.
+ *
+ * `amountTotal` is passed as `null`, always, from here — never
+ * `session.amount_total`. That field is the CART's total across every named
+ * entry; feeding it into `confirmPaidRegistration` per-entry would smear the
+ * whole cart's sum onto each entry's own `amount_cents` (and, worse, onto a
+ * late/duplicate refund, which reads the very same value — see the entry-level
+ * refund comment inside confirmPaidRegistration). Passing `null` makes each
+ * entry fall back to coalesce's other half: its OWN already-recorded
+ * `amount_cents`, exactly the value `createRegistrationCheckout` charged it.
+ */
 export async function handleRegistrationCheckoutCompleted(
   session: Stripe.Checkout.Session,
 ): Promise<void> {
-  const regId = session.metadata?.registration_id;
-  if (!regId) return;
+  if (session.payment_status !== "paid") return;
+  const regIds = checkoutRegistrationIds(session);
+  if (regIds.length === 0) return;
   const paymentIntent =
     typeof session.payment_intent === "string"
       ? session.payment_intent
@@ -1431,12 +1466,47 @@ export async function handleRegistrationCheckoutCompleted(
   const raw = session.metadata?.fee_percent;
   const chargedFeePercent =
     raw != null && raw !== "" && Number.isFinite(Number(raw)) ? Number(raw) : null;
-  await confirmPaidRegistration(
-    regId,
-    paymentIntent,
-    session.amount_total ?? null,
-    chargedFeePercent,
-  );
+  // Sequential, not Promise.all, and no per-id try/catch: each call is its
+  // own locked transaction, so a failure partway through must abort the rest
+  // and leave the WHOLE event unprocessed (billing_events.processed_at stays
+  // null) for Stripe's retry — every entry already flipped is idempotent on
+  // replay, but silently swallowing one entry's failure here would land the
+  // event as "processed" while that one entry stays paid-for and unconfirmed
+  // forever, with nothing left to retry it.
+  for (const regId of regIds) {
+    await confirmPaidRegistration(regId, paymentIntent, null, chargedFeePercent);
+  }
+}
+
+/**
+ * Delayed-notification counterpart of the handler above
+ * (`checkout.session.async_payment_failed` — Stripe skill, "Webhooks and
+ * fulfillment"): the payment that looked pending never landed.
+ * `handleRegistrationCheckoutCompleted` never ran fulfilment for this session
+ * (it gates on `payment_status`, and a failed session never reaches `paid`),
+ * so there is nothing to undo — every named entry is left exactly where it
+ * is, still `pending`, still payable. Only the failure is recorded, the same
+ * "audit but do not act" shape as `registration.refund_failed` above.
+ */
+export async function handleRegistrationCheckoutAsyncPaymentFailed(
+  session: Stripe.Checkout.Session,
+): Promise<void> {
+  const regIds = checkoutRegistrationIds(session);
+  if (regIds.length === 0) return;
+  const rows = await sql<{ id: string; org_id: string; competition_id: string }[]>`
+    select r.id, r.org_id, d.competition_id
+    from registrations r join divisions d on d.id = r.division_id
+    where r.id in ${sql(regIds)}`;
+  for (const row of rows) {
+    await audit(
+      sql,
+      row.competition_id,
+      row.org_id,
+      "registration.payment_failed",
+      { registration_id: row.id, checkout_session_id: session.id },
+      null,
+    );
+  }
 }
 
 type PayOutcome =
@@ -1834,7 +1904,9 @@ export async function reconcileRegistration(regId: string, token: string): Promi
     if (!reg || reg.status !== "pending" || !reg.checkout_session_id) return false;
     const session = await getStripe().checkout.sessions.retrieve(reg.checkout_session_id);
     if (session.payment_status !== "paid") return false;
-    if (session.metadata?.registration_id !== regId) return false;
+    // Re-keyed to the GROUP (W3b): the session may cover a whole cart now —
+    // membership in registration_ids, not equality on the old singular key.
+    if (!checkoutRegistrationIds(session).includes(regId)) return false;
     await handleRegistrationCheckoutCompleted(session);
     return true;
   } catch {
@@ -1856,7 +1928,9 @@ export async function reconcileRegistrationBySession(
     if (reg.status !== "pending") return false;
     const session = await getStripe().checkout.sessions.retrieve(sessionId);
     if (session.payment_status !== "paid") return false;
-    if (session.metadata?.registration_id !== reg.id) return false;
+    // Re-keyed to the GROUP (W3b): the session may cover a whole cart now —
+    // membership in registration_ids, not equality on the old singular key.
+    if (!checkoutRegistrationIds(session).includes(reg.id)) return false;
     await handleRegistrationCheckoutCompleted(session);
     return true;
   } catch {
