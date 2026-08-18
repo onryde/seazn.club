@@ -16,7 +16,14 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createPerson } from "../persons";
-import { createStages, completeStage, generateStageFixtures, issueChallenge } from "../stages";
+import {
+  createStages,
+  completeStage,
+  computeSeedProposal,
+  confirmSeedProposal,
+  generateStageFixtures,
+  issueChallenge,
+} from "../stages";
 import { americanoView } from "../americano";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
@@ -184,6 +191,80 @@ describe.skipIf(!HAS_DB)("qualification from any stage kind (L3/#414 pass 3)", (
 
     const plateGen = await generateStageFixtures(auth, plate!.id);
     expect(plateGen.created + plateGen.existing).toBe(3); // 4-entrant single elim
+  });
+
+  // F3 review item 5 (RESOLVED) — the on_complete sibling above always
+  // worked; this is the SAME shape under timing:"setup" (ko_plate's actual
+  // catalogue shape today, since F3 flipped every picker template to
+  // day-one fixtures), which routes through sourcesToTables
+  // (stage-seeding.ts) instead of seedNextStage's own tablesForCompletedStage
+  // — and sourcesToTables never fetched bracket data, so a roundLosers take
+  // could never resolve (STAGE_NOT_READY), silently swallowed by
+  // completeStage's best-effort catch. An organiser's plate stage stayed on
+  // TBD forever with no visible error.
+  it("knockout -> plate (timing: setup): computeSeedProposal resolves round-1 losers, confirm seats them in bracket order", async () => {
+    const { auth } = await seedOrg();
+    const { division, entrants } = await seedDivision(auth, ["A", "B", "C", "D", "E", "F", "G", "H"]);
+    const seedOf = new Map(entrants.map((e) => [e.id, e.seed ?? 99]));
+    const [main, plate] = await createStages(auth, division.id, [
+      { seq: 1, kind: "knockout", name: "Main", config: {} },
+      {
+        seq: 2,
+        kind: "knockout",
+        name: "Plate",
+        config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 4 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
+      },
+    ]);
+
+    // Day-one: the plate's TBD bracket exists before Main has even
+    // generated — the whole point of F3's flip to timing:"setup".
+    const plateDayOne = await generateStageFixtures(auth, plate!.id);
+    expect(plateDayOne.created).toBe(3); // 4-entrant single elim
+
+    await generateStageFixtures(auth, main!.id);
+    await startDivision(auth, division.id);
+    const r1 = await sql<{ id: string; home_entrant_id: string; away_entrant_id: string }[]>`
+      select id, home_entrant_id, away_entrant_id from fixtures
+      where stage_id = ${main!.id}
+        and round_no = (select min(round_no) from fixtures where stage_id = ${main!.id})
+      order by seq_in_round`;
+    expect(r1).toHaveLength(4);
+    const expectedLosers = r1.map((f) =>
+      (seedOf.get(f.home_entrant_id) ?? 99) < (seedOf.get(f.away_entrant_id) ?? 99)
+        ? f.away_entrant_id
+        : f.home_entrant_id,
+    );
+
+    await decideWholeBracket(auth, main!.id, seedOf);
+
+    // "complete": setup timing never auto-fills — completeStage computes a
+    // DRAFT proposal instead (ruling 12). Before this fix, this came back
+    // undefined (STAGE_NOT_READY swallowed inside computeSeedProposal).
+    const done = await completeStage(auth, main!.id);
+    expect(done.completed).toBe(true);
+    expect(done.seed_proposal).toBeDefined();
+
+    // "propose": explicit recompute — the real endpoint an organiser's UI
+    // hits, over the SAME sourcesToTables path the fix lives in.
+    const proposal = await computeSeedProposal(auth, plate!.id);
+    expect(proposal.computed.qualifiers.map((q) => q.entrantId)).toEqual(expectedLosers);
+    expect(proposal.computed.ties).toEqual([]);
+
+    // "confirm": fills the plate's TBD fixtures through the same fillSlot
+    // pathway intra-bracket advancement uses.
+    const confirmed = await confirmSeedProposal(auth, plate!.id, { proposalId: proposal.id });
+    expect(confirmed.filled).toBe(4);
+    const seated = new Set(
+      confirmed.fixtures
+        .flatMap((f) => [f.home_entrant_id, f.away_entrant_id])
+        .filter((id): id is string => id !== null),
+    );
+    for (const loser of expectedLosers) expect(seated.has(loser)).toBe(true);
   });
 
   it("knockout -> knockout: topN advances by final bracket placement", async () => {

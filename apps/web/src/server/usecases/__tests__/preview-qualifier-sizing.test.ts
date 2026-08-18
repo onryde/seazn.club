@@ -196,6 +196,71 @@ describe("previewDivisionFixtures — topNPerGroup sizing is shape-aware (F3 Tas
   });
 });
 
+// F3 review item 1 (owner-authorised widening) makes multi-source `setup`
+// progressions genuinely reachable — progression-multi-source.test.ts builds
+// one end to end. Before this fix, qualifierCount read `sources[0]` only
+// (comment removed from stages.ts: "previewDivisionFixtures never sees a
+// multi-source progression... reading only sources[0] is complete"), so a
+// multi-source preview undersized the downstream stage exactly the way
+// commit 0ec159e52 fixed for `topNPerGroup` — the "preview that lies" class.
+describe("previewDivisionFixtures — multi-source progression sizing (F3 review item 3)", () => {
+  it("sums qualifiers across 2+ SOURCES, not sources[0] alone", () => {
+    const phases = previewDivisionFixtures(
+      [
+        { kind: "league", name: "League A", config: {}, progression: null },
+        {
+          kind: "knockout",
+          name: "KO",
+          config: {},
+          progression: {
+            sources: [
+              { stage: "previous", take: [{ kind: "rankRange", from: 1, to: 3 }] },
+              { stage: { stageId: "other" }, take: [{ kind: "rankRange", from: 1, to: 5 }] },
+            ],
+            placement: "rank_order",
+            timing: "on_complete",
+          },
+        },
+      ],
+      16,
+    );
+    const koPhase = phases[1]!;
+    // 3 + 5 = 8 entrants -> Quarter-finals (4 matches). Sources[0] alone
+    // would give 3 -> a 4-slot bracket with 1 bye, "Semi-finals", 2 matches.
+    expect(koPhase.sections[0]!.title).toBe("Quarter-finals");
+    expect(koPhase.sections[0]!.matches).toHaveLength(4);
+  });
+
+  it("sums a shape-aware topNPerGroup source together with a plain rankRange source, each sized by its OWN branch", () => {
+    const phases = previewDivisionFixtures(
+      [
+        { kind: "group", name: "Group stage", config: { legs: 1, pools: { count: 4 } }, progression: null },
+        {
+          kind: "knockout",
+          name: "Knockout",
+          config: {},
+          progression: {
+            sources: [
+              { stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }, // 2 x 4 pools = 8
+              { stage: { stageId: "other" }, take: [{ kind: "rankRange", from: 1, to: 4 }] }, // 4
+            ],
+            placement: "rank_order",
+            timing: "setup",
+          },
+        },
+      ],
+      16,
+    );
+    const koPhase = phases[1]!;
+    // 8 + 4 = 12 -> pads to a 16-slot bracket (4 byes), "Round of 16", 8
+    // first-round fixtures. The old sources[0]-only read already had a
+    // shape-aware branch for THIS source (8), so this pins the SUM is taken
+    // across sources, not just that one branch's own correctness.
+    expect(koPhase.sections[0]!.title).toBe("Round of 16");
+    expect(koPhase.sections[0]!.matches).toHaveLength(8);
+  });
+});
+
 describe("previewDivisionFixtures — rankRange templates unaffected by the topNPerGroup shape fix", () => {
   it("league_ko, group_stepladder and qualifying_main size exactly as before (unchanged code path: no topNPerGroup in the take)", () => {
     const knobs = { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 };
