@@ -3,6 +3,8 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { Bracket } from "../bracket";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { msgFor } from "@/lib/messages-i18n";
@@ -357,4 +359,161 @@ describe("public Bracket", () => {
   // the falsifiability proof for this file's other conversion (the
   // roundName() fallback above gets its own dedicated test since nothing
   // pre-existing exercised it for double_elim).
+
+  // Knockout-captions gap (F1 left this the one bracket shape with NO round
+  // names at all): TwoSided is the TREE branch a well-formed, regular
+  // knockout actually renders through — every prior naming fix (DoubleElim,
+  // PagePlayoff, the column fallback) missed it because it renders no text
+  // to be wrong. A depth's L and R columns are the SAME round, so each name
+  // is computed ONCE (columnRoundLabel) and rendered at both mirrored
+  // x-positions — the two captions can never disagree, only ever repeat.
+  it("names a REGULAR, well-formed knockout of 8 through the tree, including 3rd place", () => {
+    const fixtures = [
+      // Round 0: quarter-finals (4 games).
+      F("q1", 0, 1, null, null, null),
+      F("q2", 0, 2, null, null, null),
+      F("q3", 0, 3, null, null, null),
+      F("q4", 0, 4, null, null, null),
+      // Round 1: semi-finals (2 games).
+      F("s1", 1, 1, null, null, null),
+      F("s2", 1, 2, null, null, null),
+      // Round 2: the final (lowest seq) + the 3rd-place playoff (2nd seq) —
+      // twoSidedBracket() places both at the centre column (bracket-layout.ts).
+      F("fin", 2, 1, null, null, null, "scheduled", null, null, null, true, false, false),
+      F("tp", 2, 2, null, null, null, "scheduled", null, null, null, false, true, false),
+    ];
+    const html = renderToStaticMarkup(
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+    );
+    expect(html).toContain('data-bracket="two-sided"'); // confirms the TREE branch, not the fallback
+    // Each round name appears exactly TWICE — once above the L column, once
+    // above the mirrored R column — never once (missing a side) and never
+    // more (which would mean a depth bled into the wrong column).
+    expect(html.match(/>Quarter-finals</g) ?? []).toHaveLength(2);
+    expect(html.match(/>Semi-finals</g) ?? []).toHaveLength(2);
+    // The centre column (the tournament final) renders exactly once.
+    expect(html.match(/>Final</g) ?? []).toHaveLength(1);
+    // The 3rd-place playoff — previously unlabelled entirely, the gap this
+    // task exists to close — gets its own caption via roundRole()'s
+    // thirdPlace early return, distinct from "Final".
+    expect(html.match(/>Third place</g) ?? []).toHaveLength(1);
+    expect(html.match(/data-side="center"/g) ?? []).toHaveLength(2);
+  });
+
+  it("does not render a 3rd-place caption when the knockout has no 3rd-place playoff", () => {
+    const fixtures = [
+      F("s1", 0, 1, "a", "b", null),
+      F("s2", 0, 2, "c", "d", null),
+      F("fin", 1, 1, null, null, null),
+    ];
+    const html = renderToStaticMarkup(
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+    );
+    expect(html).toContain('data-bracket="two-sided"');
+    expect(html.match(/>Semi-finals</g) ?? []).toHaveLength(2);
+    expect(html.match(/>Final</g) ?? []).toHaveLength(1);
+    expect(html).not.toContain("Third place");
+    expect(html.match(/data-side="center"/g) ?? []).toHaveLength(1);
+  });
+
+  // Layout defect (this session): at desktop the tree was clipped ~48px on
+  // its right edge while the `/shared/[orgSlug]` shell's `max-w-5xl <main>`
+  // left real page margin unused beside it (measured: a knockout of 8 needs
+  // 1040px, main's content box is ~992px). `.bracket-bleed` (globals.css)
+  // reclaims that margin without touching the shared shell. Every render
+  // path in this file wraps its tree/columns in its own overflow-x-auto
+  // scroller (unregressed — genuinely-too-wide brackets must still scroll),
+  // so every one of them needs the class, not just the two-sided tree the
+  // defect was measured on.
+  it("every bracket wrapper — tree AND column fallback — carries bracket-bleed", () => {
+    const twoSided = renderToStaticMarkup(
+      createElement(Bracket, {
+        kind: "knockout",
+        fixtures: [
+          F("f1", 0, 1, "a", "d", { kind: "win", winner: "a" }, "decided"),
+          F("f2", 0, 2, "b", "c", null, "in_play"),
+          F("f3", 1, 1, "a", null, null),
+        ] as never,
+        entrantNames: names, fixtureHref: href, lookup: msg,
+      }),
+    );
+    expect(twoSided).toMatch(/class="[^"]*\bbracket-bleed\b[^"]*"[^>]*data-bracket="two-sided"/);
+
+    const doubleElim = renderToStaticMarkup(
+      createElement(Bracket, {
+        kind: "double_elim",
+        fixtures: [
+          F("w1", 1, 1, "a", "b", null),
+          F("w2", 1, 2, "c", "d", null),
+          F("wf", 2, 1, null, null, null),
+          F("l1", 5, 1, null, null, null),
+          F("lf", 6, 1, null, null, null),
+          F("gf", 9, 1, null, null, null),
+        ] as never,
+        entrantNames: names, fixtureHref: href, lookup: msg,
+      }),
+    );
+    expect(doubleElim).toMatch(/class="[^"]*\bbracket-bleed\b[^"]*"[^>]*data-bracket="double-elim"/);
+
+    const pagePlayoff = renderToStaticMarkup(
+      createElement(Bracket, {
+        kind: "page_playoff",
+        fixtures: [
+          F("q1", 1, 1, "a", "b", { kind: "win", winner: "a" }, "decided"),
+          F("el", 1, 2, "c", "d", null, "in_play"),
+          F("q2", 2, 1, "b", null, null),
+          F("fin", 3, 1, "a", null, null),
+        ] as never,
+        entrantNames: names, fixtureHref: href, lookup: msg,
+      }),
+    );
+    expect(pagePlayoff).toMatch(/class="[^"]*\bbracket-bleed\b[^"]*"[^>]*data-bracket="page-playoff"/);
+
+    const columns = renderToStaticMarkup(
+      createElement(Bracket, {
+        kind: "stepladder",
+        fixtures: [
+          F("f1", 1, 1, "a", "b", null),
+          F("f2", 2, 1, null, "c", null),
+          F("f3", 3, 1, null, "d", null),
+        ] as never,
+        entrantNames: names, fixtureHref: href, lookup: msg,
+      }),
+    );
+    expect(columns).not.toContain('data-bracket="two-sided"'); // confirms the fallback branch rendered
+    expect(columns).toMatch(/class="[^"]*\bbracket-bleed\b[^"]*"[^>]*data-bracket="columns"/);
+  });
+
+  it("`.bracket-bleed` pins the left edge to the content column and grows width only, rightward", () => {
+    // Source-level assertion, same reasoning as modal-viewport-units.test.ts
+    // (adjacent __tests__ dir): renderToStaticMarkup has no layout engine —
+    // nothing here can compute a real clientWidth/left — so this reads the
+    // CSS rule body a revert would actually break.
+    //
+    // Coordinator's rebuild-measured correction: the first cut bled the
+    // wrapper out symmetrically (`left: 50%` + `margin-left: calc(-50vw +
+    // 1rem)`), which closed the clip but over-corrected — it pulled the
+    // LEFT edge off the page's own content column (144px at a 1280
+    // viewport) out to a flat 16px, so the tree hung ~128px left of its own
+    // "KO" heading. The fix must leave the static left edge untouched (no
+    // `position`, no `left`, no `margin-left` at all — any of those
+    // reappearing is the over-correction creeping back) and grow `width`
+    // only: `100%` (the containing block it already fills) plus
+    // `max(0px, (100vw - 64rem) / 2)`, the shell's own half-margin past its
+    // 64rem (max-w-5xl) breakpoint, clamped to 0px below it so this stays a
+    // no-op under the breakpoint exactly like before.
+    const css = readFileSync(
+      fileURLToPath(new URL("../../../app/globals.css", import.meta.url)),
+      "utf8",
+    );
+    const start = css.indexOf("\n  .bracket-bleed {");
+    expect(start).toBeGreaterThan(-1);
+    const rule = css.slice(start, css.indexOf("\n  .bottom-bar {", start));
+    expect(rule).toMatch(/width:\s*calc\(100% \+ max\(0px, \(100vw - 64rem\) \/ 2\)\)/);
+    // Pins the left edge as unmoved: none of the properties the symmetric
+    // over-correction relied on may reappear in this rule.
+    expect(rule).not.toMatch(/\bleft\s*:/);
+    expect(rule).not.toMatch(/margin-left\s*:/);
+    expect(rule).not.toMatch(/position\s*:\s*relative/);
+  });
 });
