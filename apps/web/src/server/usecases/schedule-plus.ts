@@ -41,18 +41,27 @@ export async function shiftDivisionSchedule(
     const [division] = await tx<{ seq: number }[]>`
       select seq from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
+    // P9 cutover: court_id, not the frozen court_label — `Assignment`/
+    // `ShiftableFixture.court` is a `courts.id` identity throughout this
+    // engine (toAssignment, schedule.ts), not a display value: history.ts's
+    // undo replay for this very event type writes `court_id = m.to.court`
+    // straight back to the row (see its own P9 comment), so feeding it a
+    // resolved NAME here would 500 the very next undo with a
+    // uuid-syntax error, and feeding it the frozen label would silently
+    // drop every post-cutover fixture from `scope.courts` matching (that
+    // scope filter requires non-null `f.court` — see report.ts).
     const rows = await tx<{
-      id: string; stage_id: string; pool_id: string | null; court_label: string | null;
+      id: string; stage_id: string; pool_id: string | null; court_id: string | null;
       scheduled_at: string | null; schedule_locked: boolean; status: string;
     }[]>`
-      select id, stage_id, pool_id, court_label, scheduled_at::text as scheduled_at,
+      select id, stage_id, pool_id, court_id, scheduled_at::text as scheduled_at,
              schedule_locked, status
       from fixtures where division_id = ${divisionId}`;
     const { moves, skipped } = shiftSchedule(
       rows.map((f) => ({
         id: f.id,
         at: f.scheduled_at,
-        court: f.court_label,
+        court: f.court_id,
         stageId: f.stage_id,
         poolId: f.pool_id ?? undefined,
         locked: f.schedule_locked,
@@ -87,11 +96,17 @@ export async function divisionScheduleReport(auth: AuthCtx, divisionId: string) 
     const [settings] = await tx<{ config: { matchMinutes?: number } }[]>`
       select config from schedule_settings where division_id = ${divisionId}`;
     const matchMinutes = settings?.config?.matchMinutes ?? 30;
+    // P9 cutover: court_id, not the frozen court_label — see
+    // shiftDivisionSchedule above, same `Assignment.court`-is-an-id reasoning.
+    // scheduleReport() (engine, below) never reads Assignment.court, so this
+    // is presently unobservable from this function's own return shape; fixed
+    // for consistency with every other Assignment producer in this file/repo
+    // rather than leaving a stale-column read live in a shared engine type.
     const rows = await tx<{
-      id: string; court_label: string | null; scheduled_at: string;
+      id: string; court_id: string | null; scheduled_at: string;
       home_entrant_id: string | null; away_entrant_id: string | null;
     }[]>`
-      select id, court_label, scheduled_at::text as scheduled_at,
+      select id, court_id, scheduled_at::text as scheduled_at,
              home_entrant_id, away_entrant_id
       from fixtures
       where division_id = ${divisionId} and scheduled_at is not null`;
@@ -99,7 +114,7 @@ export async function divisionScheduleReport(auth: AuthCtx, divisionId: string) 
       const start = new Date(f.scheduled_at).getTime();
       return {
         fixtureId: f.id,
-        court: f.court_label ?? "",
+        court: f.court_id ?? "",
         startAt: start,
         endAt: start + matchMinutes * MS_PER_MIN,
         entrants: [f.home_entrant_id, f.away_entrant_id].filter((e): e is string => e !== null),
