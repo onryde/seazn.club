@@ -16,6 +16,7 @@ import {
   resolveProgression,
   type ProgressionSource,
   type ProgressionSpec,
+  type SlotDescriptor,
   type SourceShape,
   type SourceTables,
   type TakeRule,
@@ -168,6 +169,29 @@ describe("placeDescriptors", () => {
       /does not match any qualifier/,
     );
   });
+
+  // F2 Task 6 review, finding 3: the third seeded_map error case
+  // (stage-seeding.test.ts's "two entries claiming the same slot 422s",
+  // deleted with that file and never migrated — the test above only
+  // restored the out-of-range-slot and unknown-source cases) with a
+  // duplicate slot claim across TWO entries, never a single malformed one.
+  it("seeded_map still 422s when two entries claim the same slot", () => {
+    const pots = expandSources(
+      [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+      () => UNGROUPED,
+    );
+    const map = [
+      { slot: "1", source: "rank:1" },
+      { slot: "1", source: "rank:2" },
+    ];
+    expect(() => placeDescriptors(pots, "seeded_map", map)).toThrow(/more than once/);
+    try {
+      placeDescriptors(pots, "seeded_map", map);
+      expect.fail("expected placeDescriptors to throw");
+    } catch (err) {
+      expect(EngineError.is(err, "SEEDING_MAP_SLOT_INVALID")).toBe(true);
+    }
+  });
 });
 
 describe("descriptorKey / descriptorLabel", () => {
@@ -175,6 +199,37 @@ describe("descriptorKey / descriptorLabel", () => {
     const d: import("./progression.ts").SlotDescriptor = { kind: "round_loser", round: 1, position: 3 };
     expect(descriptorKey(d)).toBe("loser:1:3");
     expect(descriptorLabel(d)).toEqual({ key: "slot.round_loser", params: { round: 1, n: 3 } });
+  });
+
+  // F2 Task 6 review, finding 3: these three cases (group_rank, rank_range,
+  // best_nth — every OTHER SlotDescriptor kind besides round_loser above)
+  // lived in apps/web's stage-seeding.test.ts before F2 moved
+  // descriptorKey/descriptorLabel into this module; Task 6 deleted that file
+  // and added progression-multi-source.test.ts in its place, but that file
+  // covers the DB-integration half only (per its own header) — the exact-
+  // value coverage for these three wire-vocabulary cases never migrated.
+  // Restored verbatim (same assertions, same fixture values) against the
+  // current module.
+  it("group_rank keys as poolKey+rank; labels winner/runner-up/nth", () => {
+    const winner: SlotDescriptor = { kind: "group_rank", pool: "A", rank: 1 };
+    const runnerUp: SlotDescriptor = { kind: "group_rank", pool: "A", rank: 2 };
+    const third: SlotDescriptor = { kind: "group_rank", pool: "A", rank: 3 };
+    expect(descriptorKey(winner)).toBe("A1");
+    expect(descriptorLabel(winner)).toEqual({ key: "slot.winner_group", params: { g: "A" } });
+    expect(descriptorLabel(runnerUp)).toEqual({ key: "slot.runner_up_group", params: { g: "A" } });
+    expect(descriptorLabel(third)).toEqual({ key: "slot.nth_group", params: { n: 3, g: "A" } });
+  });
+
+  it("rank_range keys/labels off the plain rank", () => {
+    const d: SlotDescriptor = { kind: "rank_range", rank: 5 };
+    expect(descriptorKey(d)).toBe("rank:5");
+    expect(descriptorLabel(d)).toEqual({ key: "slot.rank_range", params: { rank: 5 } });
+  });
+
+  it("best_nth keys/labels off its resolved position", () => {
+    const d: SlotDescriptor = { kind: "best_nth", nth: 3, position: 2 };
+    expect(descriptorKey(d)).toBe("best:2");
+    expect(descriptorLabel(d)).toEqual({ key: "slot.best_nth", params: { rank: 2, nth: 3 } });
   });
 });
 
