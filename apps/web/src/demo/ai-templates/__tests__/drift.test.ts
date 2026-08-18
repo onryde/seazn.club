@@ -80,7 +80,24 @@ function loadFixture(slug: string): AiDemoFixture {
   }
   const fixture = JSON.parse(raw) as AiDemoFixture;
   backfillRoundOrderFields(fixture.pack);
+  backfillConsoleFixtureCourtId(fixture.board.fixtures);
   return fixture;
+}
+
+/**
+ * `AiConsoleFixture.court_id` (ai-diff.ts:19, P9 pass 4a) postdates every
+ * committed recording — the same shape of gap `backfillRoundOrderFields`
+ * exists for, and the same fix: a captured row's `Object.keys()` genuinely
+ * does not have the key, so the exact-key-set check in
+ * `expectConsoleFixtureShape` needs it backfilled to `null` rather than
+ * invented from `court_label` (deriving one from the label would be exactly
+ * the forwarding bug this suite exists to catch, just relocated into the
+ * backfill).
+ */
+function backfillConsoleFixtureCourtId(fixtures: AiConsoleFixture[]): void {
+  for (const f of fixtures) {
+    if (!("court_id" in f)) (f as { court_id?: string | null }).court_id = null;
+  }
 }
 
 /**
@@ -129,6 +146,7 @@ const CONSOLE_FIXTURE_KEYS: Record<keyof Required<AiConsoleFixture>, true> = {
   division_id: true,
   scheduled_at: true,
   court_label: true,
+  court_id: true,
   code: true,
   matchup: true,
   isFinal: true,
@@ -153,6 +171,7 @@ function expectConsoleFixtureShape(row: AiConsoleFixture): void {
   expect(typeof row.division_id).toBe("string");
   expect(isStringOrNull(row.scheduled_at)).toBe(true);
   expect(isStringOrNull(row.court_label)).toBe(true);
+  expect(isStringOrNull(row.court_id)).toBe(true);
   // `code` VALUE is deliberately unasserted (see the header); its presence and
   // type are not.
   expect(typeof row.code).toBe("string");
