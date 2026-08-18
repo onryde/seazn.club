@@ -4,7 +4,7 @@ import { computeSeedProposal } from "@/server/usecases/stages";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-/** Compute (or recompute) a DRAFT seed proposal for a `.seeding`-declared
+/** Compute (or recompute) a DRAFT seed proposal for a `progression.timing: "setup"`-declared
  *  stage (D4a design doc — propose + confirm, never fully automatic). */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {

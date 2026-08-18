@@ -19841,7 +19841,7 @@
     },
     "/api/v1/stages/{id}/seed-proposal": {
       "post": {
-        "summary": "Compute (or recompute) a draft seed proposal for a `.seeding`-declared stage. 409 SEEDING_SOURCE_INCOMPLETE, 409 SEEDING_ALREADY_CONFIRMED, 422 SEEDING_RULES_MISSING",
+        "summary": "Compute (or recompute) a draft seed proposal for a stage whose `progression.timing` is `setup`. 409 SEEDING_SOURCE_INCOMPLETE, 409 SEEDING_ALREADY_CONFIRMED, 422 SEEDING_RULES_MISSING",
         "tags": [
           "stages"
         ],
@@ -20994,7 +20994,7 @@
                           },
                           "additionalProperties": {}
                         },
-                        "qualification": {
+                        "progression": {
                           "anyOf": [
                             {},
                             {
@@ -21007,7 +21007,7 @@
                         "kind",
                         "name",
                         "config",
-                        "qualification"
+                        "progression"
                       ],
                       "additionalProperties": false
                     }
@@ -21026,7 +21026,7 @@
                     "kind": "example",
                     "name": "example",
                     "config": {},
-                    "qualification": null
+                    "progression": null
                   }
                 ]
               }
