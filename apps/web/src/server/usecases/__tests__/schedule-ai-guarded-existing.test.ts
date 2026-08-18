@@ -35,6 +35,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages } from "../stages";
+import { createVenue, createCourt } from "../venues";
 import { buildSchedulePack, OTHER_DIVISION_LABEL } from "../schedule-ai";
 import { seedOrg } from "./_seed";
 
@@ -82,14 +83,43 @@ function settingsConfig(courts: string[]) {
   };
 }
 
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` (real `courts.id`
+// values, since pass 1) — callers keep passing readable labels; this
+// resolves (and caches, per org) a real court per label so the planned AND
+// sibling divisions below — and the raw fixed-fixture inserts naming the
+// SAME label — agree on exactly one court row. Mirrors
+// schedule-ai-assumptions.test.ts's identical helper.
+const courtsByOrg = new Map<string, { venueId: string; byName: Map<string, string> }>();
+
+async function courtIds(auth: AuthCtx, names: readonly string[]): Promise<string[]> {
+  let entry = courtsByOrg.get(auth.orgId);
+  if (!entry) {
+    const venue = await createVenue(auth, { name: "Main venue", sort: 0 });
+    entry = { venueId: venue.id, byName: new Map() };
+    courtsByOrg.set(auth.orgId, entry);
+  }
+  const out: string[] = [];
+  for (const name of names) {
+    const cached = entry.byName.get(name);
+    if (cached !== undefined) {
+      out.push(cached);
+      continue;
+    }
+    const court = await createCourt(auth, entry.venueId, { name, sort: entry.byName.size, tags: [] });
+    entry.byName.set(name, court.id);
+    out.push(court.id);
+  }
+  return out;
+}
+
 async function makeDivision(
   auth: AuthCtx,
   competitionId: string,
   name: string,
   slug: string,
-  courts: string[],
+  courtLabels: string[],
   entrantNames: string[],
-): Promise<{ id: string; entrantByName: Map<string, string>; stageId: string }> {
+): Promise<{ id: string; entrantByName: Map<string, string>; stageId: string; courts: string[] }> {
   const division = await createDivision(auth, competitionId, {
     name,
     slug,
@@ -98,6 +128,7 @@ async function makeDivision(
     config: GENERIC_CONFIG,
     eligibility: [],
   });
+  const courts = await courtIds(auth, courtLabels);
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
     values (${division.id}, ${sql.json(settingsConfig(courts))}, ${TZ}, now())
@@ -124,6 +155,7 @@ async function makeDivision(
     id: division.id,
     entrantByName: new Map(rows.map((r) => [r.display_name, r.id])),
     stageId: stage!.id,
+    courts,
   };
 }
 
@@ -205,10 +237,10 @@ async function seedSiblingCollapseBoard(): Promise<{
   // The sibling's board is already fixed court time.
   await sql`
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
-                          home_entrant_id, away_entrant_id, scheduled_at, court_label)
+                          home_entrant_id, away_entrant_id, scheduled_at, court_id)
     values (${sibling.stageId}, ${sibling.id}, ${auth.orgId}, 1, 0, 'fixed', 'finalized',
             ${sibling.entrantByName.get("S-1")!}, ${sibling.entrantByName.get("S-2")!},
-            ${new Date(FIXED_FROM).toISOString()}, 'Court 1')`;
+            ${new Date(FIXED_FROM).toISOString()}, ${sibling.courts[0]!})`;
 
   return { auth, plannedId: planned.id, danaId: dana, moveId: move!.id };
 }
@@ -251,10 +283,10 @@ async function seedObstacleCollapseBoard(): Promise<{
 
   await sql`
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
-                          home_entrant_id, away_entrant_id, scheduled_at, court_label)
+                          home_entrant_id, away_entrant_id, scheduled_at, court_id)
     values (${only.stageId}, ${only.id}, ${auth.orgId}, 1, 0, 'fixed', 'finalized',
             ${only.entrantByName.get("O-3")!}, ${only.entrantByName.get("O-4")!},
-            ${new Date(FIXED_FROM).toISOString()}, 'Court 1')`;
+            ${new Date(FIXED_FROM).toISOString()}, ${only.courts[0]!})`;
   const [move] = await sql<{ id: string }[]>`
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
                           home_entrant_id, away_entrant_id)
@@ -290,8 +322,10 @@ describe.skipIf(!HAS_DB)("the greedy pass's `existing` list is guarded too (#396
     expect(sib).toHaveLength(1);
     expect(Date.parse(sib[0]!.from)).toBe(FIXED_FROM);
     // …and on a court this division cannot even use, so no court rule applies.
-    expect(pack.settings.courts).toEqual(["Court 2"]);
-    expect(sib[0]!.court).toBe("Court 1");
+    // `courtIds` cache-hits here — both courts were already created while
+    // seeding the planned/sibling divisions above.
+    expect(pack.settings.courts).toEqual(await courtIds(auth, ["Court 2"]));
+    expect(sib[0]!.court).toBe((await courtIds(auth, ["Court 1"]))[0]);
 
     const a = pack.draft.find((d) => d.fixture_id === moveId);
     expect(a, "draft is missing the movable fixture").toBeDefined();
@@ -318,8 +352,8 @@ describe.skipIf(!HAS_DB)("the greedy pass's `existing` list is guarded too (#396
     expect(pack.participants[moveId]).toContain("name:rory quist");
     const fixed = pack.fixtures.obstacles.filter((o) => o.label !== OTHER_DIVISION_LABEL);
     expect(fixed).toHaveLength(1);
-    expect(fixed[0]!.court).toBe("Court 1");
-    expect(pack.settings.courts).toEqual(["Court 1", "Court 2"]);
+    expect(fixed[0]!.court).toBe((await courtIds(auth, ["Court 1"]))[0]);
+    expect(pack.settings.courts).toEqual(await courtIds(auth, ["Court 1", "Court 2"]));
 
     const a = pack.draft.find((d) => d.fixture_id === moveId);
     expect(a, "draft is missing the movable fixture").toBeDefined();
