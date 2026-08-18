@@ -104,6 +104,13 @@ describe.skipIf(!HAS_DB)("buildSchedulePack routes courts through resolveCandida
 
     await setCourts(divisionId, [good.id, archived.id, wrongTag.id]);
     await sql`update divisions set required_court_tags = ${sql.array(["grass"])} where id = ${divisionId}`;
+    // seedDivision only seeds entrants — nothing is movable until a stage
+    // actually generates fixtures for them (same two calls the inScope()
+    // describe block below already makes). Without this the division has
+    // ZERO fixtures, `pack.draft` is trivially empty and this test cannot
+    // tell "correctly filtered courts" apart from "nothing to place at all".
+    const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "League", config: {} });
+    await generateStageFixtures(auth, stage!.id);
 
     const { pack } = await buildSchedulePack(auth, divisionId, {
       now: NOW,
@@ -132,6 +139,12 @@ describe.skipIf(!HAS_DB)("buildSchedulePack routes courts through resolveCandida
     const wrongTag = await createCourt(auth, venueId, { name: "Clay 1", sort: 0, tags: ["clay"] });
     await setCourts(divisionId, [wrongTag.id]);
     await sql`update divisions set required_court_tags = ${sql.array(["grass"])} where id = ${divisionId}`;
+    // Same fixture-generation gap as the test above — without real movable
+    // fixtures, "the draft placed nothing" is true whether or not the courts
+    // fallback is buggy, which would leave a real widening-back regression
+    // undetected.
+    const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "League", config: {} });
+    await generateStageFixtures(auth, stage!.id);
 
     const { pack } = await buildSchedulePack(auth, divisionId, {
       now: NOW,
