@@ -12,6 +12,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { listCompetitionCardStats, listDivisionCardStats } from "../card-stats";
+import { createCourt, createVenue } from "../venues";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -58,7 +59,15 @@ describe.skipIf(!HAS_DB)("card-stats: TBD fixtures never surface as 'next' (D4a/
 
     const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
     const today = new Date(Date.now() + 3_600_000).toISOString(); // an hour from now — earlier than tomorrow
-    await sql`update fixtures set scheduled_at = ${tomorrow}, court_label = 'Real Court' where id = ${realFixtureId}`;
+    // P9: court_label is frozen (pass 3a) — the 'next' widget's court_label
+    // JSON key is now DERIVED from court_id (card-stats.ts). Poisoning
+    // court_label with a disagreeing value proves the read no longer falls
+    // back to it.
+    const venue = await createVenue(auth, { name: "Card Stats Venue", sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Real Court", sort: 0, tags: [] });
+    await sql`
+      update fixtures set scheduled_at = ${tomorrow}, court_id = ${court.id}, court_label = 'Stale Court'
+      where id = ${realFixtureId}`;
 
     // A fully-TBD placeholder fixture (both entrants null), scheduled EARLIER
     // than the real match — exactly the "final pinned on day one" scenario
@@ -74,6 +83,7 @@ describe.skipIf(!HAS_DB)("card-stats: TBD fixtures never surface as 'next' (D4a/
     const divNext = divisionStats.get(division.id)?.next;
     expect(divNext, JSON.stringify(divNext)).not.toBeNull();
     expect(divNext!.court_label).toBe("Real Court");
+    expect(divNext!.court_label).not.toBe("Stale Court");
     expect(divNext!.home).not.toBeNull();
     expect(divNext!.away).not.toBeNull();
 
@@ -81,6 +91,7 @@ describe.skipIf(!HAS_DB)("card-stats: TBD fixtures never surface as 'next' (D4a/
     const compNext = competitionStats.get(comp.id)?.next;
     expect(compNext, JSON.stringify(compNext)).not.toBeNull();
     expect(compNext!.court_label).toBe("Real Court");
+    expect(compNext!.court_label).not.toBe("Stale Court");
   });
 
   it("with ONLY a TBD fixture, next is null rather than a blank 'TBD vs TBD' row", async () => {

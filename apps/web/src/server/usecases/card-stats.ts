@@ -65,14 +65,19 @@ export async function listCompetitionCardStats(
         nf.next
       from competitions c
       left join lateral (
+        -- P9 cutover: court_label is frozen since pass 3a — crt.name (via
+        -- court_id) is the live value; the JSON key stays 'court_label'
+        -- because nextLine() below (same file) reads it by that name and
+        -- has no other consumer to keep in sync.
         select jsonb_build_object(
             'home', he.display_name, 'away', ae.display_name,
-            'court_label', f.court_label, 'scheduled_at', f.scheduled_at,
+            'court_label', crt.name, 'scheduled_at', f.scheduled_at,
             'in_play', f.status = 'in_play') as next
         from fixtures f
         join divisions d on d.id = f.division_id
         left join entrants he on he.id = f.home_entrant_id
         left join entrants ae on ae.id = f.away_entrant_id
+        left join courts crt on crt.id = f.court_id
         where d.competition_id = c.id and d.archived_at is null
           and f.status in ('scheduled','in_play')
           -- D4a (P5): a TBD/seeded fixture (either slot still unfilled) is
@@ -114,13 +119,16 @@ export async function listDivisionCardStats(
       from divisions d
       left join registration_settings rs on rs.division_id = d.id
       left join lateral (
+        -- P9 cutover: same court_label -> crt.name swap as
+        -- listCompetitionCardStats above; JSON key stays 'court_label'.
         select jsonb_build_object(
             'home', he.display_name, 'away', ae.display_name,
-            'court_label', f.court_label, 'scheduled_at', f.scheduled_at,
+            'court_label', crt.name, 'scheduled_at', f.scheduled_at,
             'in_play', f.status = 'in_play') as next
         from fixtures f
         left join entrants he on he.id = f.home_entrant_id
         left join entrants ae on ae.id = f.away_entrant_id
+        left join courts crt on crt.id = f.court_id
         where f.division_id = d.id and f.status in ('scheduled','in_play')
           -- D4a (P5): see listCompetitionCardStats above — a TBD/seeded slot
           -- is never a real "next" answer.
