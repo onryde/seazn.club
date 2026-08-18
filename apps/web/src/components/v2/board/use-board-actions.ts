@@ -414,7 +414,12 @@ export function useBoardActions(
       setBusy(true);
       try {
         type Proposal = {
-          assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+          // P9: the server's /schedule/auto returns `court_id` (schedule.ts:1599)
+          // and ApplyScheduleRequest is `.strict()` about it. Reading
+          // `court_label` here forwarded `undefined` and every Auto-schedule
+          // apply 400'd with "Invalid input", leaving the strip reporting a run
+          // the board never received.
+          assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
           conflicts: BoardConflict[];
           metrics?: ScheduleMetrics;
           solver?: ScheduleSolverInfo;
@@ -452,7 +457,7 @@ export function useBoardActions(
                 assignments: assignments.map((a) => ({
                   fixture_id: a.fixture_id,
                   scheduled_at: a.scheduled_at,
-                  court_label: a.court_label,
+                  court_id: a.court_id,
                 })),
                 source: "auto",
                 expected_seq: expectedSeq,

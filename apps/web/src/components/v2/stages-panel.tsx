@@ -380,7 +380,8 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
     setBusy(stageId);
     try {
       type Proposal = {
-        assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+        // P9: /schedule/auto returns `court_id`; the apply schema requires it.
+        assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
         metrics?: ScheduleMetrics;
         solver?: ScheduleSolverInfo;
       };
