@@ -871,8 +871,70 @@ suites**; `turbo typecheck` **2/2**; `openapi:gen` + `i18n:gen-keys` →
   `joinTeamEntry` needs no scoping — a join link posted at the wrong org's URL
   still resolves. No security consequence (the code IS the secret), but RS007
   should not assume the path is validated.
-- **W3 MUST FIX: the registration webhook branch has no `payment_status` gate,
-  and every branch beside it does.** `billing-events.ts:115-117` dispatches
+**Wave 3 CLOSED**, split into 3a (mint) and 3b (webhook) because both write
+`registrations.ts` — sequential, never parallel. Commits `d57384032`,
+`dca065a27`, `7dc86c0f7`, `554d89aac`, `864154032`, `9f5ece77f`, `aac6d9679`,
+`91b2ff5f5`, `7a2786cf1` (3a); `a9833d539`, `1d6ba5344`, `da9595c5c`,
+`f2f5528c3` (3b). Gate rerun by the main thread with placement running:
+**2993 total / 2962 passed / 0 failed / 0 failed suites / 31 pending**;
+`turbo typecheck` **2/2**; lint **75 warnings / 0 errors** (main's baseline);
+`openapi:gen` + `i18n:gen-keys` → porcelain empty.
+
+- **A checkout session covers a SET of entries in ONE group, not "the cart".**
+  Waitlist promotion pays for a single entry whose siblings may already be
+  paid, so the unit is an explicit id list. `createRegistrationCheckout(groupId,
+  registrationIds[], ctx, origin, token)` builds one line item per entry and
+  computes `application_fee_amount` over the SUM. Metadata (session AND payment
+  intent): `kind: "registration_group"`, `registration_group_id`,
+  `registration_ids` comma-joined. A test pins the joined value under Stripe's
+  500-char metadata cap for a maximal 10-entry cart, so raising the entry cap
+  reds here rather than in production.
+- **Currency 422 code is `REGISTRATION_CURRENCY_UNAVAILABLE`**, thrown before
+  `getStripe()` is reached (asserted). **But the two conditions are not
+  independently mutation-provable today**: `REGISTRATION_CURRENCY_EXCLUSIONS`
+  is empty, so `REGISTRATION_CURRENCIES == SUPPORTED_CURRENCIES`, and
+  `organizations.currency` carries a CHECK over that same list — any snapshot
+  failing the allowlist test is structurally guaranteed to fail the equality
+  test too. Both checks are real and owner-mandated (ruling 4 requires both);
+  they only become separable when someone populates the exclusions list.
+  Recorded so a future reader does not delete one as redundant.
+- **A mint failure must NOT fail the submit.** `submitRegistrationGroup` has
+  COMMITTED by the time the route mints, so a throw returned an error for a
+  registration that exists — entries holding capacity, and the registrant never
+  receiving the `ref_code`/`access_token` that are the only ways back to pay.
+  Their retry duplicates the cart. The route now catches, logs, and returns 201
+  with `checkout_url: null`; `mintGroupCheckout` still THROWS for its direct
+  callers (resume-checkout, promotion), where a 422/503 is the right answer and
+  nothing is lost.
+- **The webhook re-key exposed a cart-total smear.** The old handler forwarded
+  `session.amount_total` into a per-entry confirm — harmless while sessions were
+  entry-scoped, but a group session's `amount_total` is the CART's, so every
+  named entry would have taken the whole cart's sum onto its own `amount_cents`
+  AND onto any late/duplicate refund, which reads the same value. Same
+  cart-vs-entry confusion RS001 flagged and RS002 spent a wave fixing,
+  re-entering through the webhook. Fixed, and the parameter was **removed**
+  rather than passed `null`: with one non-test caller, all five
+  `amountTotal ?? …` fallbacks and the `coalesce()` had an unreachable non-null
+  side, three in refund math, and a dead money parameter reads like "the amount
+  actually charged".
+- **Fulfilment loops sequentially with NO per-id try/catch, on purpose.** Each
+  `confirmPaidRegistration` is its own locked transaction; a failure partway
+  must abort the rest so `billing_events.processed_at` stays null and Stripe
+  retries (already-flipped entries are idempotent on replay). Swallowing one
+  entry's failure would mark the event processed with that entry paid-for and
+  unconfirmed forever, with nothing left to retry it.
+- **`async_payment_failed` is tested through `processStripeEvent`, not by
+  calling the handler** — that also proves the dispatch branch and the
+  `HANDLED_EVENT_TYPES` entry. The direct import was removed; a comment says
+  why, so nobody "fixes" it back and reintroduces the lint drift.
+- **The gap that was open between 3a and 3b, for the record**: 3a re-keyed the
+  MINT while every consumer still read `metadata.registration_id`, so on that
+  intermediate commit a real payment would have landed and no entry would ever
+  have flipped. Inherent to splitting a wave down the producer/consumer seam —
+  if a future session splits this way, the two halves must land together.
+- **FIXED IN W3b (`a9833d539`) — and it was live on `main`, not something RS003
+  introduced: the registration webhook branch had no `payment_status` gate
+  while every branch beside it did.** `billing-events.ts:115-117` dispatched
   `kind === "registration"` straight into `handleRegistrationCheckoutCompleted`
   (`registrations.ts:1315-1335`), which reads the metadata and calls
   `confirmPaidRegistration` unconditionally. Its neighbours in the SAME
@@ -883,13 +945,14 @@ suites**; `turbo typecheck` **2/2**; `openapi:gen` + `i18n:gen-keys` →
   Why it bites: this repo correctly omits `payment_method_types`, so dynamic
   payment methods are live, and a delayed-notification method fires
   `checkout.session.completed` while the session is still **unpaid**. The entry
-  is then confirmed and MATERIALISED into an entrant before any money arrives;
-  if the payment later fails there is no `checkout.session.async_payment_failed`
-  handler to reverse it, and no `async_payment_succeeded` handler either. Same
-  family as RS002's worst finding (a rejected registration confirmed by a
-  replayed webhook) — money and materialisation moving on an event that does not
-  mean "paid". W3 owns this handler for the group re-key, so the gate is fixed
-  inline there, not deferred (no-new-issues rule).
+  would then be confirmed and MATERIALISED into an entrant before any money
+  arrived. Same family as RS002's worst finding (a rejected registration
+  confirmed by a replayed webhook) — money and materialisation moving on an
+  event that does not mean "paid". W3b owned this handler for the group re-key,
+  so the gate was fixed inline rather than deferred (no-new-issues rule), and
+  `checkout.session.async_payment_succeeded` / `_failed` were added to
+  `processStripeEvent`'s switch and to `HANDLED_EVENT_TYPES` — neither existed.
+  The webhook ROUTE never filtered event types; the switch was the real gap.
 - **RS001's entry condition 2 is CLOSED, not outstanding.** The privacy-consent
   rule that died with the old `submitRegistration` was reimplemented by RS002:
   `registration-submit.ts:426` throws the identical
