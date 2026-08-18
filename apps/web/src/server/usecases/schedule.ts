@@ -2871,15 +2871,18 @@ async function validateScheduleIn(
   ].filter((e): e is string => e !== null);
   const people = await peopleByEntrant(tx, entrantIds);
   // P9 pass 2b: court identity through the SAME resolveCandidateCourts the
-  // build side calls — never a second, inlined tag-filter loop here. No
-  // stage component (this validates the WHOLE division's board, spanning
-  // however many stages it has, so there is no single stage's tags to union
-  // in) and, deliberately, no guardNoMatchingCourt: this reports on a board
-  // that may already EXIST, and an assignment sitting on a since-archived or
-  // since-retagged court must keep validating clean (ruling 3,
-  // candidate-courts.ts) — see court-candidates.ts's own doc comment on
-  // guardNoMatchingCourt for why calling it here would be wrong, not merely
-  // unnecessary.
+  // build side calls — never a second, inlined tag-filter loop here. This
+  // half stays DIVISION-scoped only: `settingsForEngine.config.courts` below
+  // is dead weight for THIS path (`validateAssignments` has never read
+  // `.courts` — the next comment), so there is nothing here for a stage's
+  // own tags to usefully narrow. (Review finding #11: the OTHER half,
+  // `courtTagQualifiedIds` below, DOES need the stage union — see that
+  // comment.) And, deliberately, no guardNoMatchingCourt: this reports on a
+  // board that may already EXIST, and an assignment sitting on a
+  // since-archived or since-retagged court must keep validating clean
+  // (ruling 3, candidate-courts.ts) — see court-candidates.ts's own doc
+  // comment on guardNoMatchingCourt for why calling it here would be wrong,
+  // not merely unnecessary.
   const [divisionForCourts] = await tx<{ required_court_tags: string[] }[]>`
     select required_court_tags from divisions where id = ${divisionId}`;
   const requiredCourtTags = divisionForCourts?.required_court_tags ?? [];
@@ -2904,7 +2907,36 @@ async function validateScheduleIn(
   // exactly what ruling 3 (candidate-courts.ts) forbids. See
   // `resolveTagQualifiedCourtIds`'s own doc comment for the archived-neutral
   // mechanics.
-  const courtTagQualifiedIds = await resolveTagQualifiedCourtIds(tx, requiredCourtTags);
+  //
+  // Review finding #11: this used to resolve against `requiredCourtTags`
+  // alone — the DIVISION's tags, exactly what feeds `resolveCandidateCourts`
+  // above. `autoSchedule` instead unions in the STAGE's own tags too
+  // (`unionRequiredCourtTags(division, stage)`), because it is scoped to one
+  // stage; a stage-level `required_court_tags` therefore constrained the
+  // placer but was invisible here, and the placer/verifier fork this pass
+  // claims to close was only half closed. This function has no single stage
+  // to union in the same way `autoSchedule` does — it validates the WHOLE
+  // division's board, spanning however many stages it has — so it is
+  // resolved per STAGE instead: one `unionRequiredCourtTags` /
+  // `resolveTagQualifiedCourtIds` call per stage, and the QUALIFIED COURT
+  // SETS merged (a court qualifies board-wide if it satisfies ANY stage
+  // actually present), not the required-tag lists themselves.
+  // `unionRequiredCourtTags`/`candidateCourts` read a required-tag list as
+  // AND — a qualifying court needs EVERY tag in it — so flattening two
+  // stages' DIFFERENT tags into one combined list would demand a court carry
+  // tags from a stage a given fixture has nothing to do with, trading the
+  // old blind spot for a new false positive.
+  const stageCourtTagRows = await tx<{ required_court_tags: string[] }[]>`
+    select required_court_tags from stages where division_id = ${divisionId}`;
+  const stageTagSets: string[][] = stageCourtTagRows.map((s) => s.required_court_tags);
+  // A division with no stages yet (before its first is generated) has no
+  // stage tags to union in — division tags alone, exactly pre-#11 behaviour.
+  if (stageTagSets.length === 0) stageTagSets.push([]);
+  const courtTagQualifiedIds = new Set<string>();
+  for (const stageTags of stageTagSets) {
+    const union = unionRequiredCourtTags(requiredCourtTags, stageTags);
+    for (const id of await resolveTagQualifiedCourtIds(tx, union)) courtTagQualifiedIds.add(id);
+  }
   // C1 follow-up (2026-08-12, task 3 / G1). This function backs BOTH
   // `validateSchedule` (the board's live conflict report) and, through
   // `assertPublishable`, `publishSchedule`/`startDivision` — the write gate.

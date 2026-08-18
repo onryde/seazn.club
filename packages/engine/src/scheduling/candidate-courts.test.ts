@@ -6,7 +6,13 @@
 // re-deriving as a bug).
 import { describe, expect, it } from "vitest";
 import { candidateCourts, type CourtMeta } from "./candidate-courts.ts";
-import { validateAssignments, type Assignment, type VerifyConfig } from "./calendar.ts";
+import {
+  isBlockingConflict,
+  validateAssignments,
+  type Assignment,
+  type Conflict,
+  type VerifyConfig,
+} from "./calendar.ts";
 
 function meta(id: string, tags: string[], archived = false): CourtMeta {
   return { id, tags, archived };
@@ -213,5 +219,34 @@ describe(
         expect(conflicts).toEqual([]);
       },
     );
+  },
+);
+
+describe(
+  "isBlockingConflict — court_tag_mismatch is REPORTED, never BLOCKING (review finding #10, ruling 3: " +
+    "a required-tag change — or a hand-drag through moveFixture, which performs no tag check of its own — " +
+    "must not retroactively hard-refuse a board that already exists)",
+  () => {
+    it("a court_tag_mismatch conflict is NOT blocking", () => {
+      const conflict: Conflict = {
+        fixtureId: "f1",
+        reason: "court",
+        details: { kind: "court_tag_mismatch", court: "clay-court" },
+      };
+      expect(isBlockingConflict(conflict)).toBe(false);
+    });
+
+    // The other half of the carve-out: narrowing `reason === "court"` must not
+    // become a blanket weakening of every court conflict — a GENUINE double
+    // booking (two fixtures, one court, overlapping time) is still a physical
+    // impossibility and stays blocking exactly as before.
+    it("a court_double_booking conflict sharing the SAME reason is still blocking", () => {
+      const conflict: Conflict = {
+        fixtureId: "f1",
+        reason: "court",
+        details: { kind: "court_double_booking", court: "clay-court" },
+      };
+      expect(isBlockingConflict(conflict)).toBe(true);
+    });
   },
 );

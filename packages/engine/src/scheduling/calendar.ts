@@ -260,10 +260,27 @@ export const conflictKey = (c: Conflict): string =>
  *
  * ABSOLUTE. Whether a change may be WRITTEN is this answer filtered through
  * `deltaConflicts` at the gate, so a dirty board stays editable.
+ *
+ * ONE exception carved out of `reason === "court"`: `court_tag_mismatch`
+ * (review finding #10, ruling 3). It shares the `"court"` reason with
+ * `court_double_booking` — same coarse vocabulary, `details.kind` is what
+ * distinguishes them (this file's own note on `conflictKey`) — but it is not
+ * physically impossible the way a double booking is, and treating it as such
+ * reintroduced exactly the "retroactively invalidate an existing board"
+ * outcome ruling 3 exists to prevent: adding a `required_court_tags` value to
+ * a division whose board ALREADY exists, or a hand-drag through `moveFixture`
+ * (which performs no tag check of its own), would otherwise hard-refuse
+ * publish/start with no `acknowledge_warnings` override available — the
+ * organiser could not get unstuck. So this one detail kind is REPORTED, same
+ * as ever, but never BLOCKING: an acknowledgeable warning, not a hard
+ * refusal. `court_double_booking` is a genuine physical impossibility (the
+ * same court, two fixtures, overlapping time) and is deliberately NOT
+ * carved out — it stays blocking unconditionally, same as before this
+ * finding.
  */
 export function isBlockingConflict(c: Conflict): boolean {
   return (
-    c.reason === "court" ||
+    (c.reason === "court" && c.details?.kind !== "court_tag_mismatch") ||
     c.reason === "person_overlap" ||
     c.reason === "window" ||
     (c.reason === "order" && c.direct === true)

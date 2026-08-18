@@ -262,7 +262,11 @@ describe.skipIf(!HAS_DB)("validateSchedule — court_tag_mismatch (P9 pass 2c)",
       const mismatch = result.conflicts.find((c) => c.details?.kind === "court_tag_mismatch");
       expect(mismatch).toBeDefined();
       expect(mismatch!.fixture_id).toBe(fixture!.id);
-      expect(mismatch!.blocking).toBe(true);
+      // Review finding #10: REPORTED, never BLOCKING — see the
+      // "publishSchedule — court_tag_mismatch is non-blocking" suite below
+      // for the publish-gate consequence this feeds (`isBlockingConflict`,
+      // calendar.ts).
+      expect(mismatch!.blocking).toBe(false);
       // Keyed on court_id: the wire `details.court` field carries the id...
       expect(mismatch!.details?.court).toBe(untaggedCourt.id);
       // ...and a caller gets the resolved NAME too, both structured and in
@@ -313,3 +317,121 @@ describe.skipIf(!HAS_DB)("validateSchedule — court_tag_mismatch (P9 pass 2c)",
     },
   );
 });
+
+// ===========================================================================
+// Review finding #10: `court_tag_mismatch` shares `reason: "court"` with a
+// genuine court double-booking, and `isBlockingConflict` (calendar.ts) used
+// to treat every `reason: "court"` conflict as blocking — so adding a
+// `required_court_tags` value to a division whose board already exists, or a
+// hand-drag through `moveFixture` (which performs no tag check of its own),
+// hard-refused publish/start with no `acknowledge_warnings` override
+// available: the organiser could not get unstuck. Fixed by carving
+// `court_tag_mismatch` out of `isBlockingConflict` (ruling 3: retroactive
+// invalidation must not happen). candidate-courts.test.ts proves the engine
+// predicate directly; this suite proves the PUBLISH-GATE consequence end to
+// end, through a real DB board.
+// ===========================================================================
+describe.skipIf(!HAS_DB)(
+  "publishSchedule — court_tag_mismatch is non-blocking, court_double_booking still blocks (review finding #10)",
+  () => {
+    it(
+      "a board carrying only a court_tag_mismatch never throws PUBLISH_BLOCKED — unacknowledged it is the " +
+        "SOFT refusal (PUBLISH_UNACKNOWLEDGED), and acknowledged it publishes",
+      async () => {
+        const auth = await seedOrg();
+        const venue = await createVenue(auth, { name: "Main", sort: 0 });
+        const untaggedCourt = await createCourt(auth, venue.id, { name: "Hard 1", sort: 0, tags: [] });
+        const { divisionId } = await seedRoundRobin(auth, [untaggedCourt.id]);
+        await patchDivision(auth, divisionId, { required_court_tags: ["clay"] });
+        // Hand-drag, same shape as the court_tag_mismatch suite above: PATCH a
+        // fixture directly onto the untagged court, bypassing autoSchedule.
+        const [fixture] = await sql<{ id: string }[]>`
+          select id from fixtures where division_id = ${divisionId} limit 1`;
+        await sql`
+          update fixtures set scheduled_at = '2026-08-01T10:00:00.000Z', court_id = ${untaggedCourt.id}
+          where id = ${fixture!.id}`;
+        const { publishSchedule, PUBLISH_UNACKNOWLEDGED } = await import("../schedule");
+        let caught: unknown;
+        try {
+          await publishSchedule(auth, divisionId);
+        } catch (err) {
+          caught = err;
+        }
+        // The SOFT refusal, never the hard one — pinning the exact code rules
+        // out PUBLISH_BLOCKED (and any other failure) in one assertion.
+        expect(caught).toMatchObject({ status: 422, code: PUBLISH_UNACKNOWLEDGED });
+        // Acknowledged, it goes all the way through.
+        const out = await publishSchedule(auth, divisionId, { acknowledge_warnings: true });
+        expect(out.published).toBe(true);
+      },
+    );
+
+    it(
+      'a genuine court double-booking still throws PUBLISH_BLOCKED even when acknowledged — the narrowing is ' +
+        'scoped to court_tag_mismatch alone, not every reason: "court" conflict',
+      async () => {
+        const auth = await seedOrg();
+        const venue = await createVenue(auth, { name: "Main", sort: 0 });
+        const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+        const { divisionId } = await seedRoundRobin(auth, [court.id]);
+        // Round 1 of a 4-entrant round robin is exactly 2 fixtures sharing no
+        // entrant, so forcing both onto the same court/time produces a court
+        // double-booking WITHOUT also tripping person_overlap — the refusal
+        // below can only be attributed to the court conflict.
+        const fixtures = await sql<{ id: string }[]>`
+          select id from fixtures where division_id = ${divisionId} and round_no = 1`;
+        expect(fixtures.length).toBe(2);
+        for (const f of fixtures) {
+          await sql`
+            update fixtures set scheduled_at = '2026-08-01T10:00:00.000Z', court_id = ${court.id}
+            where id = ${f.id}`;
+        }
+        const { publishSchedule, PUBLISH_BLOCKED } = await import("../schedule");
+        let caught: unknown;
+        try {
+          await publishSchedule(auth, divisionId, { acknowledge_warnings: true });
+        } catch (err) {
+          caught = err;
+        }
+        expect(caught).toMatchObject({ status: 422, code: PUBLISH_BLOCKED });
+      },
+    );
+  },
+);
+
+// ===========================================================================
+// Review finding #11: `validateScheduleIn` used to derive `requiredCourtTags`
+// from `divisions.required_court_tags` ONLY, while `autoSchedule` unions in
+// the STAGE's own tags too (`unionRequiredCourtTags(division, stage)`) — a
+// stage-level `required_court_tags` constrained the placer but was invisible
+// to the verifier, so the placer/verifier fork this pass claims to close was
+// only half closed. Mirrors the autoSchedule stage-tag test above (line
+// ~166): division requires nothing, only the stage does, so this proves the
+// stage-side component specifically.
+// ===========================================================================
+describe.skipIf(!HAS_DB)(
+  "validateSchedule — stage-level required_court_tags is now seen by validate, matching autoSchedule (review finding #11)",
+  () => {
+    it("a hand-moved fixture on a court missing a STAGE-ONLY required tag reports court_tag_mismatch", async () => {
+      const auth = await seedOrg();
+      const venue = await createVenue(auth, { name: "Main", sort: 0 });
+      const unlitCourt = await createCourt(auth, venue.id, { name: "Unlit 1", sort: 0, tags: [] });
+      const { stageId, divisionId } = await seedRoundRobin(auth, [unlitCourt.id]);
+      // No usecase writes stages.required_court_tags yet (P9 pass 2b wires
+      // only the READ side) — set it directly, same as the autoSchedule
+      // stage-tag test above.
+      await sql`update stages set required_court_tags = ${sql.array(["lit"])} where id = ${stageId}`;
+      const [fixture] = await sql<{ id: string }[]>`
+        select id from fixtures where division_id = ${divisionId} limit 1`;
+      await sql`
+        update fixtures set scheduled_at = '2026-08-01T10:00:00.000Z', court_id = ${unlitCourt.id}
+        where id = ${fixture!.id}`;
+      const { validateSchedule } = await import("../schedule");
+      const result = await validateSchedule(auth, divisionId);
+      const mismatch = result.conflicts.find((c) => c.details?.kind === "court_tag_mismatch");
+      expect(mismatch).toBeDefined();
+      expect(mismatch!.fixture_id).toBe(fixture!.id);
+      expect(mismatch!.details?.court).toBe(unlitCourt.id);
+    });
+  },
+);
