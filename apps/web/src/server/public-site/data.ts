@@ -44,6 +44,49 @@ const normalizeFixture = <T extends { scheduled_at: unknown }>(f: T): T => ({
   scheduled_at: isoDateTime(f.scheduled_at),
 });
 
+/**
+ * P9 cutover: `venue_name`/`court_name` DERIVED from `venues`/`courts` via
+ * `fixtures.venue_id`/`court_id`. `public_fixtures_v` (db/migration) is a
+ * hand-maintained column list that has not been extended with the two id
+ * columns, so this queries the base `fixtures` table directly — scoped to
+ * exactly the ids the caller already fetched through the view (never a
+ * wider row set than the view already authorized) — rather than editing
+ * the view. Mirrors the view's own per-row "setup" redaction
+ * (`case when d.status = 'setup' then null else f.venue end`, V369) so an
+ * unreleased division's court assignment cannot leak through the new
+ * fields before `venue`/`court_label` themselves are allowed to show it.
+ */
+async function withCourtVenueNames<T extends PublicFixture>(
+  fixtures: T[],
+  divisionStatus: string,
+): Promise<T[]> {
+  if (fixtures.length === 0) return fixtures;
+  if (divisionStatus === "setup") {
+    return fixtures.map((f) => ({ ...f, venue_name: null, court_name: null }));
+  }
+  const rows = await sql<{ id: string; venue_name: string | null; court_name: string | null }[]>`
+    select f.id, ven.name as venue_name, crt.name as court_name
+    from fixtures f
+    left join courts crt on crt.id = f.court_id
+    left join venues ven on ven.id = f.venue_id
+    where f.id in ${sql(fixtures.map((f) => f.id))}`;
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  return fixtures.map((f) => {
+    const cv = byId.get(f.id);
+    return { ...f, venue_name: cv?.venue_name ?? null, court_name: cv?.court_name ?? null };
+  });
+}
+
+/** Single-fixture sibling of {@link withCourtVenueNames} — same derivation
+ *  and redaction, no array dance at the call site. */
+async function withCourtVenueName<T extends PublicFixture>(
+  fixture: T,
+  divisionStatus: string,
+): Promise<T> {
+  const [withNames] = await withCourtVenueNames([fixture], divisionStatus);
+  return withNames!;
+}
+
 export const REVALIDATE_FAST = 30; // competition / division / fixture pages
 export const REVALIDATE_SLOW = 300; // entrant / player pages
 
@@ -119,8 +162,21 @@ export interface PublicFixture {
   home_slot_label: SlotLabel | null;
   away_slot_label: SlotLabel | null;
   scheduled_at: string | null;
+  /** LEGACY, read-only — frozen since the P9 venues/courts cutover (pass
+   *  3a). Nothing writes these any more; use `venue_name`/`court_name`
+   *  below for display. Kept on the type only because `public_fixtures_v`
+   *  (db/migration, a hand-maintained column list) still selects them and
+   *  the view's own per-row "setup" redaction targets these columns. */
   venue: string | null;
   court_label: string | null;
+  /** P9 cutover: DERIVED from `venues`/`courts` via `fixtures.venue_id`/
+   *  `court_id` — resolved by a SEPARATE query in this file (the view above
+   *  has not been extended with the two id columns), mirroring the view's
+   *  own "setup" redaction so nothing about an unreleased division's court
+   *  assignment leaks ahead of `venue`/`court_label` above. Render THESE,
+   *  never `venue`/`court_label`. */
+  venue_name: string | null;
+  court_name: string | null;
   status: string;
   outcome: { kind?: string; winner?: string } | null;
   summary: {
@@ -353,7 +409,7 @@ export async function getPublicDivision(
         from public_pools_v p
         join public_stages_v s on s.id = p.stage_id
         where s.division_id = ${division.id} order by p.key`;
-      const fixtures = await sql<PublicFixture[]>`
+      const rawFixtures = await sql<PublicFixture[]>`
         select id, division_id, stage_id, pool_id, round_no, seq_in_round,
                home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
                scheduled_at, venue, court_label,
@@ -361,6 +417,7 @@ export async function getPublicDivision(
                lane, is_final, third_place, conditional
         from public_fixtures_v where division_id = ${division.id}
         order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixture));
+      const fixtures = await withCourtVenueNames(rawFixtures, division.status);
       const standings = await sql<PublicStandings[]>`
         select stage_id, pool_id, rows, updated_at
         from public_standings_v where division_id = ${division.id}`;
@@ -424,7 +481,7 @@ export async function getPublicFixture(
         from public_fixtures_v
         where id = ${fixtureId} and division_id = ${division.id} limit 1`;
       if (!fixtureRow) return null;
-      const fixture = normalizeFixture(fixtureRow);
+      const fixture = await withCourtVenueName(normalizeFixture(fixtureRow), division.status);
       const names = await sql<{ id: string; display_name: string }[]>`
         select id, display_name from public_entrants_v
         where division_id = ${division.id}`;

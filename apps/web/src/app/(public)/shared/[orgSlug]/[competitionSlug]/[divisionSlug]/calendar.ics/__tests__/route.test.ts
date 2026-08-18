@@ -7,7 +7,11 @@
 // resolve its label through the org's own default_locale, not print the
 // raw, hardcoded, always-English "TBD vs TBD" the route shipped with.
 import { describe, expect, it, vi } from "vitest";
-import type { PublicFixture, PublicEntrant, PublicCompetition } from "@/server/public-site/data";
+import type {
+  PublicFixture,
+  PublicEntrant,
+  PublicCompetition,
+} from "@/server/public-site/data";
 
 const getPublicDivision = vi.fn();
 vi.mock("@/server/public-site/data", () => ({
@@ -28,6 +32,8 @@ const F = (over: Partial<PublicFixture>): PublicFixture => ({
   scheduled_at: "2026-09-25T09:00:00.000Z",
   venue: null,
   court_label: null,
+  venue_name: null,
+  court_name: null,
   status: "scheduled",
   outcome: null,
   summary: null,
@@ -36,7 +42,17 @@ const F = (over: Partial<PublicFixture>): PublicFixture => ({
 });
 
 const ENTRANTS: PublicEntrant[] = [
-  { id: "e1", division_id: "d1", kind: "individual", display_name: "Real Team", seed: 1, status: "active", members: [], team_display: null, badge_url: null },
+  {
+    id: "e1",
+    division_id: "d1",
+    kind: "individual",
+    display_name: "Real Team",
+    seed: 1,
+    status: "active",
+    members: [],
+    team_display: null,
+    badge_url: null,
+  },
 ];
 
 const E = (over: Partial<PublicEntrant>): PublicEntrant => ({
@@ -57,12 +73,49 @@ const baseData = (
   fixtures: PublicFixture[],
   // F4 wave B: day-one fixture tests anchor the tentative all-day event to
   // the competition's dates, so the helper needs to override them per test.
-  competitionOverrides: Partial<Pick<PublicCompetition, "starts_on" | "ends_on">> = {},
+  competitionOverrides: Partial<
+    Pick<PublicCompetition, "starts_on" | "ends_on">
+  > = {},
   entrants: PublicEntrant[] = ENTRANTS,
 ) => ({
-  org: { id: "o1", name: "Test Org", slug: "test-org", branded: false, branding: {}, logo: null, about: null, default_locale: locale, card_payments: false },
-  competition: { id: "c1", org_id: "o1", name: "Test Comp", slug: "test-comp", description: null, starts_on: null, ends_on: null, branding: {}, status: "active", visibility: "public" as const, ...competitionOverrides },
-  division: { id: "d1", competition_id: "c1", name: "Open", slug: "open", description: null, sport_key: "generic", variant_key: "score", status: "active", module_version: "1.0.0", tiebreakers: null, sport_name: null, entrant_count: 1 },
+  org: {
+    id: "o1",
+    name: "Test Org",
+    slug: "test-org",
+    branded: false,
+    branding: {},
+    logo: null,
+    about: null,
+    default_locale: locale,
+    card_payments: false,
+  },
+  competition: {
+    id: "c1",
+    org_id: "o1",
+    name: "Test Comp",
+    slug: "test-comp",
+    description: null,
+    starts_on: null,
+    ends_on: null,
+    branding: {},
+    status: "active",
+    visibility: "public" as const,
+    ...competitionOverrides,
+  },
+  division: {
+    id: "d1",
+    competition_id: "c1",
+    name: "Open",
+    slug: "open",
+    description: null,
+    sport_key: "generic",
+    variant_key: "score",
+    status: "active",
+    module_version: "1.0.0",
+    tiebreakers: null,
+    sport_name: null,
+    entrant_count: 1,
+  },
   stages: [],
   pools: [],
   fixtures,
@@ -73,9 +126,16 @@ const baseData = (
 
 const get = async (org = "test-org", comp = "test-comp", div = "open") => {
   const { GET } = await import("../route");
-  const res = await GET(new Request(`http://t/shared/${org}/${comp}/${div}/calendar.ics`), {
-    params: Promise.resolve({ orgSlug: org, competitionSlug: comp, divisionSlug: div }),
-  });
+  const res = await GET(
+    new Request(`http://t/shared/${org}/${comp}/${div}/calendar.ics`),
+    {
+      params: Promise.resolve({
+        orgSlug: org,
+        competitionSlug: comp,
+        divisionSlug: div,
+      }),
+    },
+  );
   return { status: res.status, text: await res.text() };
 };
 
@@ -126,7 +186,7 @@ describe("GET .../calendar.ics — slot-label resolution (P6 finding #1)", () =>
     expect(text).toMatch(/SUMMARY:Real Team vs Runner-up of Group C/);
   });
 
-  it("no slot label at all (null) still falls back to a real localized string, never a raw literal \"TBD\" the route built itself", async () => {
+  it('no slot label at all (null) still falls back to a real localized string, never a raw literal "TBD" the route built itself', async () => {
     getPublicDivision.mockResolvedValue(baseData("fr", [F({ id: "mystery" })]));
     const { text } = await get();
     // fr's schedule.tbd is "À déterminer", NOT "TBD" — English's own
@@ -158,7 +218,10 @@ describe("GET .../calendar.ics — day-one fixtures (F4 wave B)", () => {
 
   it("an unscheduled fixture becomes a tentative all-day event on the competition's last day", async () => {
     getPublicDivision.mockResolvedValue(
-      baseData("en", [unscheduledFinal()], { starts_on: "2026-09-01", ends_on: "2026-09-13" }),
+      baseData("en", [unscheduledFinal()], {
+        starts_on: "2026-09-01",
+        ends_on: "2026-09-13",
+      }),
     );
     const { text } = await get();
     expect(text).toContain("DTSTART;VALUE=DATE:20260913");
@@ -168,7 +231,10 @@ describe("GET .../calendar.ics — day-one fixtures (F4 wave B)", () => {
 
   it("falls back to starts_on when the competition has no end date", async () => {
     getPublicDivision.mockResolvedValue(
-      baseData("en", [unscheduledFinal()], { starts_on: "2026-09-01", ends_on: null }),
+      baseData("en", [unscheduledFinal()], {
+        starts_on: "2026-09-01",
+        ends_on: null,
+      }),
     );
     const { text } = await get();
     expect(text).toContain("DTSTART;VALUE=DATE:20260901");
@@ -187,7 +253,10 @@ describe("GET .../calendar.ics — day-one fixtures (F4 wave B)", () => {
       away_slot_label: { key: "slot.runner_up_group", params: { g: "C" } },
     });
     getPublicDivision.mockResolvedValue(
-      baseData("en", [unscheduledFinal(), scheduledSemi], { starts_on: null, ends_on: null }),
+      baseData("en", [unscheduledFinal(), scheduledSemi], {
+        starts_on: null,
+        ends_on: null,
+      }),
     );
     const { text } = await get();
     // No anchor date exists, so no defensible DTSTART exists for the
@@ -200,10 +269,14 @@ describe("GET .../calendar.ics — day-one fixtures (F4 wave B)", () => {
   });
 
   it("REGRESSION: the UID is byte-identical before and after the fixture resolves", async () => {
-    const uidOf = (s: string) => s.split("\r\n").find((l) => l.startsWith("UID:"));
+    const uidOf = (s: string) =>
+      s.split("\r\n").find((l) => l.startsWith("UID:"));
 
     getPublicDivision.mockResolvedValue(
-      baseData("en", [unscheduledFinal()], { starts_on: "2026-09-01", ends_on: "2026-09-13" }),
+      baseData("en", [unscheduledFinal()], {
+        starts_on: "2026-09-01",
+        ends_on: "2026-09-13",
+      }),
     );
     const before = (await get()).text;
 
@@ -224,7 +297,10 @@ describe("GET .../calendar.ics — day-one fixtures (F4 wave B)", () => {
           }),
         ],
         { starts_on: "2026-09-01", ends_on: "2026-09-13" },
-        [E({ id: "e1", display_name: "Lions" }), E({ id: "e2", display_name: "Tigers", seed: 2 })],
+        [
+          E({ id: "e1", display_name: "Lions" }),
+          E({ id: "e2", display_name: "Tigers", seed: 2 }),
+        ],
       ),
     );
     const after = (await get()).text;
@@ -244,7 +320,10 @@ describe("GET .../calendar.ics — day-one fixtures (F4 wave B)", () => {
   // yet". The description is prefixed with a localized string to say so.
   it("the tentative event's DESCRIPTION carries the localized time-to-be-confirmed copy (en)", async () => {
     getPublicDivision.mockResolvedValue(
-      baseData("en", [unscheduledFinal()], { starts_on: "2026-09-01", ends_on: "2026-09-13" }),
+      baseData("en", [unscheduledFinal()], {
+        starts_on: "2026-09-01",
+        ends_on: "2026-09-13",
+      }),
     );
     const { text } = await get();
     expect(text).toContain("Time to be confirmed");
@@ -252,10 +331,48 @@ describe("GET .../calendar.ics — day-one fixtures (F4 wave B)", () => {
 
   it("resolves the time-to-be-confirmed copy in the ORG's locale (fr), not hardcoded English", async () => {
     getPublicDivision.mockResolvedValue(
-      baseData("fr", [unscheduledFinal()], { starts_on: "2026-09-01", ends_on: "2026-09-13" }),
+      baseData("fr", [unscheduledFinal()], {
+        starts_on: "2026-09-01",
+        ends_on: "2026-09-13",
+      }),
     );
     const { text } = await get();
     expect(text).toContain("Heure à confirmer");
     expect(text).not.toContain("Time to be confirmed");
+  });
+});
+
+// P9 pass 3c-3: fixtures.venue/court_label are frozen since pass 3a — the
+// route must render venue_name/court_name (data.ts's derived, join-backed
+// fields), never the stale legacy columns.
+describe("GET .../calendar.ics — LOCATION from the derived court/venue name (P9 cutover)", () => {
+  it("a stale court_label/venue that disagrees with venue_name/court_name never reaches LOCATION:", async () => {
+    getPublicDivision.mockResolvedValue(
+      baseData("en", [
+        F({
+          id: "final",
+          home_entrant_id: "e1",
+          away_entrant_id: "e1",
+          venue: "Stale Building",
+          court_label: "Stale Court",
+          venue_name: "Riverside Sports Hall",
+          court_name: "Court 3",
+        }),
+      ]),
+    );
+    const { text } = await get();
+    expect(text).toMatch(/LOCATION:Riverside Sports Hall \(Court 3\)/);
+    expect(text).not.toMatch(/Stale Building/);
+    expect(text).not.toMatch(/Stale Court/);
+  });
+
+  it("no venue at all omits LOCATION: entirely, never a blank/undefined line", async () => {
+    getPublicDivision.mockResolvedValue(
+      baseData("en", [
+        F({ id: "no-venue", home_entrant_id: "e1", away_entrant_id: "e1" }),
+      ]),
+    );
+    const { text } = await get();
+    expect(text).not.toMatch(/LOCATION:/);
   });
 });
