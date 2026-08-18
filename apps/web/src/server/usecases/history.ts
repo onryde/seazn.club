@@ -25,6 +25,7 @@ import { withTenant } from "@/lib/db";
 // below 1, where there is no window to roll (see `createCheckpoint`).
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { getLimit, requireFeature } from "@/lib/entitlements";
+import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CourtId, VenueId } from "@/server/api-v1/schemas";
 import { generateStageFixtures } from "./stages";
@@ -86,6 +87,36 @@ async function appendEvent(
   return last + 1;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Review wave 1, finding 1 (scope cut 2026-08-18, owner-authorized: no prod
+// backfill — there is no pre-cutover prod data — so this is a defensive
+// guard for a dev/staging DB or a restored backup, not a live-data fix).
+// `division_events` predates V374 for any division touched before the
+// cutover, so a stored payload can still hold a free-text court label.
+// `fixtures.court_id` is a real uuid column (V367); binding a non-uuid
+// string as its query parameter raises Postgres 22P02 and aborts the WHOLE
+// undo/redo transaction, not just the one fixture it names. Validate before
+// the value ever reaches a query rather than let Postgres be the guard, so a
+// single stale ledger row cannot break an unrelated transaction.
+//
+// `null`/`undefined` is a legitimate "no court" value and writes straight
+// through. Anything else that isn't a real uuid is logged and the write is
+// SKIPPED — `court_id` is left exactly as it already is, never overwritten
+// with a guess (a null-write would itself destroy a possibly-valid current
+// assignment the stale event knows nothing about).
+type CourtWrite = { write: true; value: string | null } | { write: false };
+
+function resolveCourtWrite(value: unknown, context: Record<string, unknown>): CourtWrite {
+  if (value === null || value === undefined) return { write: true, value: null };
+  if (typeof value === "string" && UUID_RE.test(value)) return { write: true, value };
+  log.warn(
+    { ...context, court: value },
+    "history: skipping non-uuid court in ledger event payload — court_id left untouched",
+  );
+  return { write: false };
+}
+
 // Execute one history event against the fixture tables. Undo/redo of a
 // fixtures_generated with no snapshots re-runs the deterministic generator.
 async function execute(
@@ -107,17 +138,31 @@ async function execute(
     case "schedule_shifted": {
       const moves = (p.moves as { fixture: string; to: { at: string | null; court: string | null } }[]) ?? [];
       for (const m of moves) {
-        await tx`update fixtures set scheduled_at = ${m.to.at}, court_id = ${m.to.court}
-                 where id = ${m.fixture} and status <> 'decided'`;
+        const court = resolveCourtWrite(m.to.court, { divisionId, fixtureId: m.fixture, eventType: event.type });
+        if (court.write) {
+          await tx`update fixtures set scheduled_at = ${m.to.at}, court_id = ${court.value}
+                   where id = ${m.fixture} and status <> 'decided'`;
+        } else {
+          await tx`update fixtures set scheduled_at = ${m.to.at}
+                   where id = ${m.fixture} and status <> 'decided'`;
+        }
       }
       break;
     }
     case "schedule_edited": {
       const to = p.to as { at: string | null; court: string | null; locked?: boolean };
-      await tx`
-        update fixtures set scheduled_at = ${to.at}, court_id = ${to.court},
-                            schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
-        where id = ${p.fixture as string} and status <> 'decided'`;
+      const court = resolveCourtWrite(to.court, { divisionId, fixtureId: p.fixture, eventType: event.type });
+      if (court.write) {
+        await tx`
+          update fixtures set scheduled_at = ${to.at}, court_id = ${court.value},
+                              schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
+          where id = ${p.fixture as string} and status <> 'decided'`;
+      } else {
+        await tx`
+          update fixtures set scheduled_at = ${to.at},
+                              schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
+          where id = ${p.fixture as string} and status <> 'decided'`;
+      }
       break;
     }
     case "schedule_cleared": {
@@ -129,8 +174,14 @@ async function execute(
     }
     case "schedule_restored": {
       for (const s of (p.restored as FixtureSnapshot[]) ?? []) {
-        await tx`update fixtures set scheduled_at = ${s.at ?? null}, court_id = ${s.court ?? null}
-                 where id = ${s.id} and status <> 'decided'`;
+        const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType: event.type });
+        if (court.write) {
+          await tx`update fixtures set scheduled_at = ${s.at ?? null}, court_id = ${court.value}
+                   where id = ${s.id} and status <> 'decided'`;
+        } else {
+          await tx`update fixtures set scheduled_at = ${s.at ?? null}
+                   where id = ${s.id} and status <> 'decided'`;
+        }
       }
       break;
     }

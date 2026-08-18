@@ -1,10 +1,11 @@
 // Integration tests for PROMPT-23 (Jul3/03): undo/redo over the division
 // ledger, scoped clear, pool clear-entrants, checkpoints, locks. Real
 // Postgres required; skipped without DATABASE_URL.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { EngineError } from "@seazn/engine/core";
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -187,6 +188,63 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
 
     const history = await divisionHistory(auth, division.id);
     expect(history.events.some((e) => e.type === "fixtures_generated")).toBe(true);
+  });
+
+  // Review wave 1, finding 1 (scope cut 2026-08-18, owner-authorized: no
+  // prod backfill — there is no pre-cutover prod data — so this is a
+  // defensive guard for a dev/staging DB or a restored backup only, not a
+  // live-data fix). `division_events` predates V374 for any division
+  // touched before the cutover, so a stored payload can still carry a
+  // free-text court label. `fixtures.court_id` is a real uuid column
+  // (V367); binding that string as a query parameter raises Postgres
+  // 22P02 and — pre-fix — aborts the WHOLE undo/redo transaction, not just
+  // this one fixture. The engine itself can never again produce a non-uuid
+  // `court` post-cutover (`REVERSIBLE.schedule_applied.invert` just swaps
+  // `from`/`to` on whatever the ledger already holds — packages/engine/src/
+  // history/history.ts), so a stale ledger row inserted directly is the
+  // only way to construct this scenario.
+  it("undo skips a non-uuid court in a stale ledger payload — logs it, never aborts the transaction", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures } = await seedDivision(auth);
+    const { courtA } = await seedCourts(auth);
+    const fx = fixtures[0]!;
+
+    // Baseline placement — proves the guard leaves court_id UNTOUCHED
+    // (never nulled, never the bad string, which is impossible: the column
+    // is uuid-typed) rather than merely avoiding a crash.
+    await patchFixture(auth, fx.id, { scheduled_at: at(20), court_id: courtA });
+    const [before] = await sql<{ scheduled_at: string | null }[]>`
+      select scheduled_at::text as scheduled_at from fixtures where id = ${fx.id}`;
+
+    // A pre-cutover-shaped ledger row, inserted directly (bypassing the
+    // engine/appendEvent — see header). undo() inverts this event (from/to
+    // swap), so the inverse's `to.court` is THIS event's `from.court`: the
+    // bad "Court 1" string.
+    const [{ seq: nextSeq }] = await sql<{ seq: number }[]>`
+      select coalesce(max(seq), 0)::int + 1 as seq from division_events
+      where division_id = ${division.id}`;
+    await sql`
+      insert into division_events (division_id, seq, type, payload, actor_id)
+      values (${division.id}, ${nextSeq}, 'schedule_applied',
+              ${sql.json({
+                moves: [
+                  { fixture: fx.id, from: { at: at(9), court: "Court 1" }, to: { at: at(10), court: courtA } },
+                ],
+              })}, null)`;
+
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+
+    await expect(undoDivision(auth, division.id)).resolves.toBeDefined();
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toMatchObject({ court: "Court 1", divisionId: division.id });
+
+    const [after] = await sql<{ scheduled_at: string | null; court_id: string | null }[]>`
+      select scheduled_at::text as scheduled_at, court_id from fixtures where id = ${fx.id}`;
+    // The `at` half of the same statement still applied...
+    expect(after!.scheduled_at).not.toBe(before!.scheduled_at);
+    // ...but court_id was left exactly as it was.
+    expect(after!.court_id).toBe(courtA);
   });
 
   it("scoped clear of pool A leaves pool B and locked fixtures intact; undo restores", async () => {
