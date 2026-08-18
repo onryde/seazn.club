@@ -563,3 +563,35 @@ DERIVED label, not a recorded one.
   edit owed). **No e2e drives SwapSheet at all** — `git grep -a "Retire"
   apps/web/e2e/` returns 2 hits, both `journey-community.spec.ts` retiring a
   TOURNAMENT, unrelated. That coverage gap is real and belongs to R8.
+
+### R2b — SIGN-OFF: approval-on-merge, 2026-08-18
+
+**What actually happened, recorded plainly because the gate cannot be
+reconstructed later.** `_RULES.md` §1 asks for the owner's per-screen verdicts
+before merge. The owner did not give per-screen verdicts; they instructed
+"merge if CI green", CI went green on `896c8e608`, and R2b merged as
+`78191611a` (PR #610). That instruction is the approval of record for this
+wave. **No per-screen verdict text exists — none is invented here.**
+
+What the owner DID review, in the session that produced this wave: the live
+pad, by hand, across two fixtures (one ball-by-ball part-played, one fresh for
+over-by-over). That walkthrough is what found six of the seven defects R2b
+fixed — none of which had a failing test. The published sign-off sheet
+(https://claude.ai/code/artifact/2afe5c99-e189-4c4e-a07c-0b7bb038761a, rev 2,
+seven states × 768/1280, captured after the final rebuild) carries empty
+verdict slots and stays that way.
+
+Two screens were flagged in the sheet as wanting a specific look and did NOT
+get an individually recorded answer — carry them into R8's closing walkthrough:
+
+- **06-overtile** — every ball tile disappears on a coarse innings. Engine
+  constraint, not a design preference, but it has never been confirmed to read
+  as intended rather than as missing buttons.
+- **07-oversheet** — the field opens at 0 and means THIS over, with the fold's
+  own 7/1 above it as the before-anchor. That anchor is the only thing on
+  screen telling the scorer what their delta is being added to.
+
+**A merge-gate precedent, stated so it is not silently reused:** a wave may
+merge on an explicit owner instruction in place of per-screen verdicts, and
+when it does, the decision log says so in these terms. It does not make the
+sheet optional, and it does not convert "CI green" into visual sign-off.
