@@ -1150,3 +1150,60 @@ describe.skipIf(!HAS_DB)("joint pack calendar anchor (#397)", () => {
     expect(JSON.stringify(a.pack)).toBe(JSON.stringify(b.pack));
   });
 });
+
+// P9 pass 3d: the joint pack has the identical regression as the
+// single-division one — toJointModelPayload passed courts/divergentCourts/
+// each division's own settings.courts straight through as raw uuids. See
+// schedule-ai-court-directory.test.ts for the pure coverage; this proves the
+// same property end to end against a real seeded joint pack, including the
+// venue-qualified disambiguation rule firing for real.
+describe.skipIf(!HAS_DB)("P9 pass 3d: the joint model payload speaks court names, never a bare uuid", () => {
+  it("relabels every court-shaped field, adds courtDetails, and venue-qualifies a name two real courts share", async () => {
+    const { auth } = await seedOrg("pro");
+    const { competitionId, divisions } = await seedCompetition(
+      auth,
+      `CourtNamesJoint ${randomUUID().slice(0, 6)}`,
+      [{ name: "Alpha", courts: ["Court 1", "Court 2"], matchMinutes: 30, entrants: 4, place: false, startOffsetMin: 0 }],
+    );
+    // A second venue whose own court shares "Court 1"'s bare name with the
+    // division's court of that name (in `courtId()`'s cached "Main venue") —
+    // the real-world ambiguity buildCourtDirectory must resolve.
+    const annex = await createVenue(auth, { name: "Annex", sort: 1 });
+    const court1 = await courtId(auth, "Court 1");
+    const court2 = await courtId(auth, "Court 2");
+    const sameNameElsewhere = await createCourt(auth, annex.id, {
+      name: "Court 1", sort: 0, tags: ["indoor"],
+    });
+
+    const { pack, movableIds, courtDirectory } = await buildCompetitionPack(
+      auth,
+      competitionId,
+      [divisions[0]!.id],
+      { mode: "generate", instruction: "x", now: NOW_W2 },
+    );
+    expect(movableIds.size).toBeGreaterThan(0);
+
+    // The real ambiguity, proven on the real (whole-org) directory this
+    // build produced.
+    expect(courtDirectory[court1]?.label).toBe("Court 1 (Main venue)");
+    expect(courtDirectory[sameNameElsewhere.id]?.label).toBe("Court 1 (Annex)");
+    expect(courtDirectory[court2]?.label).toBe("Court 2");
+
+    const payload = toJointModelPayload(pack, courtDirectory);
+    const json = JSON.stringify(payload);
+
+    // No bare uuid anywhere a court is expected.
+    expect(json).not.toContain(court1);
+    expect(json).not.toContain(court2);
+
+    expect([...payload.courts].sort()).toEqual(["Court 1 (Main venue)", "Court 2"]);
+    expect(payload.courtDetails.map((c) => c.label).sort()).toEqual(["Court 1 (Main venue)", "Court 2"]);
+    const mainCourt1 = payload.courtDetails.find((c) => c.label === "Court 1 (Main venue)");
+    expect(mainCourt1?.venue).toBe("Main venue");
+    expect(Array.isArray(mainCourt1?.tags)).toBe(true);
+
+    // Each division's OWN settings.courts is relabelled too, not just the
+    // top-level union.
+    expect(payload.divisions[0]!.settings.courts.slice().sort()).toEqual(["Court 1 (Main venue)", "Court 2"]);
+  });
+});
