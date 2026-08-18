@@ -29,7 +29,7 @@ and those two `stages.ts` functions; F1 is fenced off `qualification.ts`,
 | F1 | `F1-bracket-round-role.md` | — | **MERGED** as #606 (2026-08-18), plus #613 which named the knockout tree's rounds — the one bracket shape F1 left with no captions at all |
 | F2 | `F2-unified-progression-field.md` | — | **MERGED** as #616 (2026-08-18, `ef473f586`), 60 commits. One `progression` field; `qualification` and `seeding` dropped. Migrations V371-V373, no version collision on main |
 | F3 | **prompt ready** — `../2026-08-18-format-progression-f3-f5-design.md` §8 | F2 **merged** ✅ | design written 2026-08-18 against the shipped shape. Paste §8's F3 block as a whole prompt |
-| F4 | **prompt ready** — same doc §8 (two blocks, one session) | — | premise RETIRED (no sport/format-kind gap in either direction; its mexicano comment folds into F3). Slot **repurposed** to the export + calendar day-one leaks (§7 P5, P2). Does NOT wait for F3 — three catalogue templates already emit `timing: "setup"`. Owner CONFIRMED the repurpose 2026-08-18 |
+| F4 | **IN FLIGHT** — plan `../../plans/2026-08-18-f4-handout-surfaces.md`, branch `feat/f4-day-one-handout-surfaces`, worktree `.claude/worktrees/f4-handout`, DB label `f4` | — | premise RETIRED (no sport/format-kind gap in either direction; its mexicano comment folds into F3). Slot **repurposed** to the export + calendar day-one leaks (§7 P5, P2). Does NOT wait for F3 — three catalogue templates already emit `timing: "setup"`. Owner CONFIRMED the repurpose 2026-08-18 |
 | F5 | **prompt ready** — same doc §8 | all | scope fixed by the §5 table |
 
 **Why F3–F5 are not written.** They consume F2's field shape, and this repo has
@@ -102,6 +102,45 @@ prompts for F3, F5 and two standalone product fixes.
    Consequence: the staleness signal does NOT exist today and must be built
    (derived, not stored); `lib/seeding-error.ts` is post-hoc only, so this is
    new UI rather than new copy. Design §2.2 and §7 P3.
+
+8. **F4's ICS anchor: `competitions.ends_on`** (2026-08-18). An unscheduled
+   day-one fixture has no time, and `IcsEvent` requires a `start` — so a
+   tentative event needs a date from somewhere. `divisions` carry NO dates at
+   all; only `competitions.starts_on` / `ends_on` (`V207:10`, both nullable).
+   Ruling: all-day VEVENT on `ends_on`, falling back to `starts_on`, **skipped
+   entirely when both are null** — a guessed DTSTART in somebody's subscribed
+   calendar is worse than an absent event. `STATUS:TENTATIVE`, and the UID
+   stays keyed on the fixture id so it converts to a timed `CONFIRMED` event
+   **in place** rather than arriving beside a stale copy.
+
+9. **V362's pre-publish mask STAYS** (2026-08-18). `public_fixtures_v` NULLs
+   `scheduled_at` / `venue` / `court_label` for every fixture while
+   `divisions.status = 'setup'` (`V362:25-27`) — so pre-publish the public
+   calendar is empty *regardless of scheduling*, which is wider than the design
+   doc's "unscheduled finals" framing of P2. That masking is a deliberate
+   privacy rule feeding every public surface (bracket, schedule, embed, OG
+   image), not just the calendar. Accepted consequence: during `setup` the whole
+   feed is tentative all-day and converts at publish. Nothing new is exposed —
+   slot labels are already unmasked by V362 itself.
+
+## F4's brief contains one false premise (found 2026-08-18)
+
+The F3–F5 design §7 P5 and its §8 pickup prompt both state that
+`ticketRegistrationRows` coalesces fixture participants to `"TBD"` "the same"
+as `officialDutyRows`. **It does not.** `exports.ts:659-668` selects
+`registrations.display_name` / `ref_code` / name-display flags; it never joins
+`fixtures` or `entrants` and has no participant column to label. It is out of
+scope for F4 and needs no change.
+
+A **fifth** `?? "TBD"` site the brief does not name does exist —
+`auditLedgerDoc` (`exports.ts:763`). Also out of scope, deliberately: an audit
+ledger is the forensic record of an already-scored fixture, so both sides are
+filled entrants and a placeholder cannot reach it. F4 leaves a comment there
+rather than a change, so the next reader does not re-derive it as a gap.
+
+The four sites that ARE real: `exportFixtures` (`:209-210`, SQL literal),
+`officialDutyRows` + rota assembly (`:566-585`, `:614`), and `buildMyRotaDoc`
+(`:726`, sourced from `me-officiating.ts:80-111`, which must be widened too).
 
 ## Where ruling 4's collapse actually lands (swept 2026-08-17)
 
