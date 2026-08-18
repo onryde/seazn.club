@@ -226,3 +226,270 @@ written to reject because Postgres treats NULL as satisfied, a test asserting a
 defect approvingly. None crashed. All passed their suites. F3 changes what
 organisers see on every multi-stage format at once, so it should be verified by
 looking at rendered output, not by counting green tests.
+
+---
+
+## 7. Product improvements (added 2026-08-18, verified by execution)
+
+The sections above describe what F3 must *not get wrong*. This section is
+what F3 is *worth* — the product value that day-one fixtures unlock, and the
+places that value currently leaks out. Every row was checked against the code
+rather than reasoned about; the two that reverse an earlier assumption are
+marked.
+
+| # | Improvement | Verdict | Evidence |
+|---|---|---|---|
+| P1 | Schedule the whole tournament at setup, not just stage 1 | **unlocked free by F3** | no scheduler query excludes placeholder fixtures |
+| P2 | The subscribed calendar drops every day-one fixture | **real gap, blocks the stated product value** | `calendar.ics/route.ts:40` |
+| P3 | Staleness warned proactively, not as a 422 on save | **net-new UI, not a copy change** | `lib/seeding-error.ts` is post-hoc only |
+| P4 | Placeholder labels read well on day one | **already true — no work owed** | `stages.ts:1611,1614` |
+| P5 | The printed/exported draw says "TBD vs TBD" everywhere | **real gap, invisible from the UI** | `exports.ts` selects no `*_slot_label` |
+| P6 | Multi-source pool keys may collide | **open question F3 must answer** | `sourceIndex` discarded at `stages.ts:1457-1462` |
+
+### P1 — the whole tournament becomes schedulable on day one
+
+This is the largest unlock in the programme and it is nearly free, because the
+scheduler is already placeholder-aware. Verified: no query in `schedule.ts` or
+`packages/engine/src/scheduling/**` filters on `home_entrant_id is null`, and
+two subsystems handle unfilled sides deliberately — `capacity-input.ts:304`
+(a TBD side falls back to the fixture's pool for `restByGroup`) and
+`competition-schedule-ai.ts:770,1273` (avoids double-booking a person into a
+TBD bracket slot).
+
+So the moment F3 makes downstream fixtures exist at setup, BUILD and
+auto-schedule can allocate courts and times for finals day **before the group
+stage starts**. Today an organiser cannot book a venue for a final that does
+not exist as a row. That is an operational need, not a cosmetic one, and it is
+the clearest commercial answer to "why does day-one matter".
+
+**F3 owes a check, not a build**: confirm a `setup` stage's fixtures reach the
+board and survive a BUILD, and that placing them does not depend on entrant
+identity. If something does gate on entrants, that gate — not the flip — is
+F3's real work.
+
+### P2 — the subscribed calendar cannot deliver its own stated purpose
+
+`calendar.ics/route.ts:40` filters `f.scheduled_at !== null` before building
+events. Four lines above it, the P6 owner ruling is recorded verbatim:
+
+> "a subscribed calendar showing 'TBD vs TBD' for the final is the exact
+> product value TBD fixtures exist to deliver."
+
+It cannot currently deliver that. A day-one final exists but is unscheduled, so
+it never becomes a VEVENT and is simply absent from the calendar. P1 fixes this
+incidentally (scheduled fixtures pass the filter); emitting tentative events for
+unscheduled ones fixes it directly.
+
+**Constraint either way**: the VEVENT UID must stay keyed on the fixture id, so
+that when the final resolves from "Winner of Group A" to a real name it
+**updates in place** in calendars people already subscribed to, rather than
+arriving as a second event beside a stale one. A subscribed calendar is the one
+surface where getting this wrong is not recoverable by a redeploy.
+
+### P3 — staleness is currently a 422 the organiser meets too late
+
+§2.2 describes the entrant-churn hazard. What was not established there is that
+the only existing surface for it is reactive: `lib/seeding-error.ts` maps
+`SEEDING_RULES_MISSING` to a message *after* the organiser presses seed. No
+component warns while the bracket is drifting out of date, and nothing watches
+entrant count against `progressionSize`.
+
+So §2.2 option 1 ("detect and offer") is **new UI plus a derived staleness
+signal**, not a rewording of an existing banner. Scope it accordingly.
+
+### P4 — reverses an earlier assumption: labels are already correct
+
+An earlier reading of this programme assumed day-one fixtures would render
+"TBD vs TBD" and that giving them meaningful labels was F3's headline work.
+**That is wrong, and the opposite is true.**
+
+- `generateProgressionSetupFixtures` (`stages.ts:1432`) is reached *only* when
+  `progression.timing === "setup"` (short-circuit at `:981, :989-990`), and it
+  writes both `home_slot_label` and `away_slot_label` at `:1611` and `:1614`.
+  The `on_complete` path never calls `descriptorLabel` at all — labelling is
+  **exclusively** a setup-timing feature.
+- `descriptorLabel` (`packages/engine/src/competition/progression.ts:102-115`)
+  yields *Winner of Group A*, *Runner-up of Group A*, *3rd in Group A*,
+  *Best 3rd place*, *Rank N* — as i18n `{key, params}` refs, never prebuilt
+  strings.
+- `resolveSlotLabel` (`lib/slot-label.ts`) is the single renderer, and eight
+  surfaces already go through it: the public bracket (`bracket.tsx:57`), the
+  division page (`:105-108`), the fixture page (`:48-74`), the calendar route
+  (`:37`), the embed widget (`embed/divisions/[id]/[widget]/page.tsx:73-74`),
+  the OG image (`opengraph-image.tsx:52-57`), the public schedule (resolved by
+  its server parent and passed as `slotLabels`), and the board (`board/
+  types.ts:183-186`).
+
+**Consequence for F3**: flipping the six templates to `timing: "setup"` makes
+them *better labelled*, not worse — the labelling machinery only ever runs on
+the path they are moving onto. This removes what looked like F3's biggest risk.
+It also means the flip is the thing that switches labelling on, so a template
+left on `on_complete` keeps bare TBD by construction.
+
+### P5 — the printed draw is the one surface that stays "TBD vs TBD"
+
+`apps/web/src/server/usecases/exports.ts` selects **no** `*_slot_label` column
+anywhere: `exportFixtures` (`:205-220`) joins only `entrants.display_name` and
+coalesces to the literal `'TBD'` in SQL (`:209-210`), and `officialDutyRows`
+(`:566-572`) and `ticketRegistrationRows` do the same. `:614` and `:726` apply
+the same `?? "TBD"` in TypeScript.
+
+This is the sharpest gap in the set, because of *which* surface it is. The
+export path produces the artifact an organiser prints and pins to a wall, or
+mails to clubs, on day one — precisely the moment F3 exists to serve. Every
+other surface will show "Winner of Group A" while the printed sheet shows
+"TBD vs TBD", and **nothing in the UI reveals the discrepancy**: the columns are
+never selected, so no renderer can compensate downstream.
+
+Related: `poster.pdf` renders no fixture data at all today (QR and branding
+only). A day-one full-draw poster is a genuine product opportunity that F3
+makes possible for the first time, but it is additive scope — name it, do not
+smuggle it in.
+
+### P6 — the open question: multi-source pool keys may collide
+
+`expandSources` (`progression.ts:181-190`) tags every pot with its
+`sourceIndex`, but `placeDescriptors` (`:209-254`) and the `slotOf` map that
+consumes it (`stages.ts:1457-1462`) keep only `.descriptor` and **discard
+`sourceIndex`**. `descriptorKey` is `` `${pool}${rank}` `` — so two sources that
+both expose a pool named "A" produce the same key `A1`, and `descriptorLabel`
+produces the same text *Winner of Group A* for two different slots.
+
+This is stated as an open question, not a confirmed defect: it requires two
+sources with overlapping pool keys, and no shipped template produces that today
+(all six are single-source). But F3 is the session that makes multi-source
+reachable from the picker, so **F3 must determine whether the collision is real
+and either fix it or record why it cannot occur.** Leaving it undetermined is
+how this programme's silent defects have been created every previous time.
+
+---
+
+## 8. Pick-up prompts — start any of these from one message
+
+Each block below is self-contained: paths, criteria, exclusions, verification.
+Paste one as the whole prompt. Do not start F3 until PR #616 (F2) has merged —
+F3 consumes the shipped `progression` field, and this repo has a repeated
+failure where a session authored against a design met an implementation that
+landed differently.
+
+Standing rules that apply to **all** of these, restated so they need no lookup:
+read `docs/superpowers/RULES.md` first; every change ships a test that fails
+without it; all four test types (unit / e2e / smoke / regression); any new or
+changed user-facing string goes into all four locale dictionaries; UI is
+verified by screenshot at 1280, 320 and 768 with no horizontal page scroll;
+new branches go in a worktree, never the main checkout; `.github/workflows/
+e2e.yml` is **live on pull requests**.
+
+### Prompt: F3 — deliver day-one fixtures
+
+> Implement F3 of the format-progression programme, per
+> `docs/superpowers/specs/2026-08-18-format-progression-f3-f5-design.md`
+> §2 and §7. Read that document and `docs/superpowers/specs/
+> 2026-08-17-format-progression-prompts/_INDEX.md` before writing any code.
+> Write the implementation plan first (superpowers:writing-plans), then execute
+> it with a Scout/Implementer/Reviewer topology.
+>
+> **Deliver, in this order:**
+> 1. Flip all six multi-stage templates in `apps/web/src/components/v2/
+>    format-templates.ts` (lines 60, 79, 109, 122, 187, 205) from
+>    `timing: "on_complete"` to `timing: "setup"`. Owner ruling: all six.
+> 2. Derive `placement` from source shape instead of emitting `rank_order`
+>    universally (`:62, :97, :111, :124, :193, :207`) — a group-stage source
+>    implies `snake`; a template pinning specific seats uses `seeded_map`.
+>    Owner ruling: automatic, no new UI. Match the structure of the working
+>    references `server/templates/catalog/euro24.json:40` (`seeded_map`) and
+>    `catalog/t20-super8.json:32` (`snake`); do not invent a third convention.
+> 3. Resolve §7 P6: determine whether two progression sources with overlapping
+>    pool keys collide in `descriptorKey`
+>    (`packages/engine/src/competition/progression.ts`, `stages.ts:1457-1462`).
+>    Fix it or record in the index why it cannot occur. Do not leave it open.
+> 4. Verify §7 P1 by execution: a `setup` stage's fixtures reach the schedule
+>    board and survive a BUILD. If any gate depends on entrant identity, that
+>    gate is the real work — report before proceeding.
+> 5. Decide and implement the §2.2 entrant-churn experience. The design
+>    recommends option 1 (detect and offer a rebuild); confirm with the owner
+>    before building, since §7 P3 establishes this is new UI, not new copy.
+>    Ship a test for the stranded-seed case specifically — `stages.ts:1560`
+>    records that the existing advice "cannot work" there.
+> 6. Wire all 14 `label`/`help` strings in `STAGE_TEMPLATES` through the
+>    dictionary, **with a reader in the same commit**. Keys nothing reads are
+>    the inert-seam pattern L3 was made to revert; `i18n:check` verifies locale
+>    parity, not usage, so unused keys stay green while being dead.
+>
+> **Do not touch**: `packages/engine/src/sport/**`, the fidelity-tier scale,
+> the scoring pad, or the `StageKind` enum. §4's mexicano comment may be folded
+> in as a one-line comment at `division-builder.tsx:61` and nothing more.
+>
+> **Before writing the task list**, grep `apps/web/src`, `scripts/`,
+> `apps/web/e2e/`, `db/` and `packages/` in ONE pass for every symbol the
+> session touches. F2's unowned work surfaced in four separate waves because
+> each sweep was scoped to whatever that author happened to be editing (§6).
+>
+> **Verify**: `turbo run lint typecheck` from the repo root is the CI gate —
+> `npm run lint` alone is not. Run vitest with
+> `--reporter=json --outputFile=<path>` and judge only `numPassedTests` /
+> `numTotalTests`; readable summaries print `PASS(0) FAIL(0)` for a suite that
+> failed to collect. e2e specs pin the English picker labels, so step 6 will
+> red CI unless they are updated in the same PR.
+>
+> **Verify by looking, not by counting.** Every serious defect in F1 and F2 was
+> silent — a dropped key returning 200, a CHECK accepting what it was written
+> to reject, a test asserting a defect approvingly. F3 changes what organisers
+> see on every multi-stage format at once, so exercise all six templates end to
+> end on a real build and inspect the rendered bracket.
+
+### Prompt: P5 — make the exported and printed draw readable
+
+> Fix the export path so day-one fixtures print their real placeholder labels
+> instead of "TBD". See `docs/superpowers/specs/
+> 2026-08-18-format-progression-f3-f5-design.md` §7 P5.
+>
+> `apps/web/src/server/usecases/exports.ts` selects no `*_slot_label` column:
+> `exportFixtures` (`:205-220`) coalesces to the SQL literal `'TBD'` at
+> `:209-210`, and `:614` / `:726` apply `?? "TBD"` in TypeScript;
+> `officialDutyRows` (`:566-572`) and `ticketRegistrationRows` do the same.
+> Select the columns and resolve them through `resolveSlotLabel`
+> (`apps/web/src/lib/slot-label.ts`) — that module is deliberately the only
+> place a `SlotLabel` becomes display text, so do not hand-build strings.
+>
+> The export path is server-side and has no `useMsg()`; pass a `msgFor`-backed
+> lookup, the same way `calendar.ics/route.ts:32-33` does. Exports are
+> spectator-facing, so use the org's default locale rather than a request
+> cookie, for the reason recorded at `calendar.ics/route.ts:24-30`.
+>
+> **Test**: an export of a division with generated `setup` fixtures contains
+> "Winner of Group A" and contains no "TBD" for a slot that has a label. That
+> test must fail before the change.
+>
+> Out of scope: adding fixture data to `poster.pdf`, which today renders QR and
+> branding only. Worth doing, separately scoped.
+
+### Prompt: P2 — day-one fixtures in the subscribed calendar
+
+> Make unscheduled day-one fixtures appear in the subscribed calendar. See
+> `docs/superpowers/specs/2026-08-18-format-progression-f3-f5-design.md` §7 P2.
+>
+> `apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/
+> calendar.ics/route.ts:40` filters `f.scheduled_at !== null`, so a final that
+> exists at setup but has no time is absent from the calendar — which
+> contradicts the owner ruling recorded at `:24-30` in the same file.
+>
+> Confirm with the owner first whether the fix is P1 (schedule the whole
+> tournament up front, making the filter moot) or tentative VEVENTs for
+> unscheduled fixtures. If tentative events: keep the UID keyed on the fixture
+> id so a resolved final **updates in place** in already-subscribed calendars
+> instead of arriving as a duplicate beside a stale copy. That is the one
+> failure here a redeploy cannot repair.
+
+### Prompt: F5 — the programme's test debt
+
+> Close the deferred test debt from F1–F3, per `docs/superpowers/specs/
+> 2026-08-18-format-progression-f3-f5-design.md` §5. Owner ruling: F1's owed
+> smoke check plus the full recommended set. The table in §5 lists each item
+> with its evidence — work it top to bottom.
+>
+> Two items need care rather than typing. **Measure the board payload budget
+> before changing it**: §5's figure is inferred from arithmetic, not measured,
+> and `e2e/board-v3.spec.ts:228` is the gate. And the three tautological tests
+> assert a field is absent on a type that no longer has it — they would pass if
+> the code were deleted, so replace the assertion, do not delete the test.
