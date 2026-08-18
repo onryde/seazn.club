@@ -167,6 +167,19 @@ export const CONFLICT_HELP: Record<string, string> = {
   "warn.official_unavailable": "An assigned official is unavailable at this time.",
 };
 
+/**
+ * P9 pass 4a item 3: the court text to show an organiser for a fixture.
+ * Resolved NAME first, the frozen legacy label as a fallback (a pre-cutover
+ * fixture's court_label is still a real, human-readable string — never
+ * cleared), and NEVER `court_id` itself, which is a raw uuid. Null — not ""
+ * — when neither is known, so a caller can tell "no court text" from "an
+ * empty string" and choose its own placeholder rather than silently
+ * rendering a blank slot where a court label used to be.
+ */
+export function courtDisplayName(f: Pick<BoardFixture, "court_name" | "court_label">): string | null {
+  return f.court_name ?? f.court_label ?? null;
+}
+
 export function cardTitle(
   f: BoardFixture,
   names: Record<string, string>,
