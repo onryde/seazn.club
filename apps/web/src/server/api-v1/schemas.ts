@@ -575,12 +575,30 @@ export const ProgressionSchema = z
     // meaningful only when timing is "on_complete" (seedNextStage,
     // stages.ts); a "setup"-timing stage's propose/confirm flow never reads
     // it, same as `.seeding` never carried a field like this before F2.
+    // Enforced below (not just documented): the refine rejects the
+    // combination outright rather than letting it silently no-op.
     carry: z.enum(["none", "points", "full"]).optional(),
   })
   .strict()
   .refine((s) => s.placement !== "seeded_map" || (s.map !== undefined && s.map.length > 0), {
     message: "seeded_map placement needs a non-empty map",
     path: ["map"],
+  })
+  // F2 full-branch review — product question: pre-F2 `carry` lived only on
+  // `.qualification`, which was always `on_complete`, so this combination
+  // was inexpressible. Unification newly admits `{timing: "setup", carry:
+  // "points"|"full"}`, which parses fine and passes createStages' entitlement
+  // gate (stages.ts reads `progression?.carry` regardless of timing, so it
+  // charges the org's `standings.carry_over` Pro entitlement) — but `carry`
+  // is only ever read inside seedNextStage (stages.ts), which returns early
+  // unless `timing === "on_complete"`; the `setup` fixture generator never
+  // looks at it. That combination gates a paid feature on a no-op, which is
+  // worse than either rejecting it or ignoring it silently — so it is
+  // rejected here, at the edge, with a message naming the actual problem.
+  .refine((s) => s.timing === "on_complete" || s.carry === undefined || s.carry === "none", {
+    message:
+      'carry is only meaningful when timing is "on_complete" — a "setup"-timing stage seeds placeholders independently of source completion and never reads carry',
+    path: ["carry"],
   });
 export type ProgressionInput = z.infer<typeof ProgressionSchema>;
 

@@ -205,4 +205,62 @@ describe("ProgressionSchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  // F2 full-branch review — product question: `carry` is only ever read
+  // inside seedNextStage (usecases/stages.ts), which returns early unless
+  // `timing === "on_complete"` — the `setup` fixture generator never looks
+  // at it. Before this refine, `{timing: "setup", carry: "points"}` parsed
+  // fine, createStages charged the org's `standings.carry_over` Pro
+  // entitlement for it (stages.ts's gate reads `progression?.carry`
+  // regardless of timing), and the carry then silently never happened.
+  // Gating a paid feature on a combination that no-ops is the worst
+  // option, so the combination is rejected at the edge instead — the
+  // organiser gets a 400 naming the problem, not a silent charge for
+  // nothing. Pre-F2 this was inexpressible: `carry` lived only on
+  // `.qualification`, which was always `on_complete`; unification newly
+  // admits the bad combination, so this refine is what keeps it closed.
+  describe("carry requires timing: on_complete (F2 review product question)", () => {
+    it("rejects carry: \"points\" when timing is \"setup\" — carry would silently no-op (setup never calls seedNextStage)", () => {
+      const result = ProgressionSchema.safeParse({
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+        placement: "rank_order",
+        timing: "setup",
+        carry: "points",
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => i.path.join(".") === "carry")).toBe(true);
+      }
+    });
+
+    it("rejects carry: \"full\" when timing is \"setup\" the same way", () => {
+      const result = ProgressionSchema.safeParse({
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+        placement: "rank_order",
+        timing: "setup",
+        carry: "full",
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("accepts carry: \"none\" with timing: \"setup\" — equivalent to omitting carry, no entitlement gate fires on it", () => {
+      const result = ProgressionSchema.safeParse({
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+        placement: "rank_order",
+        timing: "setup",
+        carry: "none",
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts carry: \"points\" when timing is \"on_complete\" — the only path that actually reads it", () => {
+      const result = ProgressionSchema.safeParse({
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+        placement: "rank_order",
+        timing: "on_complete",
+        carry: "points",
+      });
+      expect(result.success).toBe(true);
+    });
+  });
 });
