@@ -18,6 +18,11 @@ export {
   // R2b-next — apps/web's next-innings targeting fix (a public mirror of the
   // private battingSideAt/maxInningsCount innings-sequencing rule).
   nextBattingSide,
+  // R2c — two rules the v3 pad must mirror rather than fork, so it can refuse
+  // an illegal pick BEFORE the tap instead of surfacing a generic 422 after it.
+  eligibleBowlers,
+  reviewsRemaining,
+  type OverBowlerFacts,
   type CricketBallEv,
   type CricketState,
   type InningsState,

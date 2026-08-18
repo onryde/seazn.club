@@ -1803,7 +1803,7 @@ function applyReview(state: CricketState, payload: z.infer<typeof CricketReview>
     away: { taken: 0, lost: 0 },
   };
   const allowance = state.cfg.reviews?.perInnings;
-  if (payload.kind === "player" && allowance !== undefined && ledger[side].lost >= allowance) {
+  if (payload.kind === "player" && reviewsRemaining(innings, allowance, side) === 0) {
     invalid(`"${payload.by}" has no reviews left in this innings`, { allowance });
   }
   // Only an unsuccessful player review is spent: umpire's call retains it
@@ -1822,17 +1822,80 @@ function applyReview(state: CricketState, payload: z.infer<typeof CricketReview>
 // Generator internals — spec 03 §6 (rng-injected, no fast-check dependency).
 // ---------------------------------------------------------------------------
 
-function eligibleBowlers(
+/**
+ * The two over-boundary facts `eligibleBowlers` reads, and nothing else.
+ * Deliberately a `Pick` rather than the whole `FineInnings`: the v3 cricket
+ * skin holds its own looser structural shape of a folded innings, and
+ * demanding every field would make the export unusable at the one call site
+ * it was created for while adding no safety here.
+ */
+export type OverBowlerFacts = Pick<FineInnings, "prevOverBowler" | "bowlerBalls">;
+
+/**
+ * Who may legally OPEN the next over — the consecutive-over law
+ * (`applyDelivery`'s own check) and, only where the cfg caps it, the
+ * per-bowler quota.
+ *
+ * EXPORTED for the pad (R2c). It was private, and R2b's v3 cricket skin
+ * hand-copied it as `isEligibleOverBowler` because the export was not
+ * granted — which cost that wave's review a byte-for-byte verification to
+ * trust, and left a rule that could silently drift. The pad needs exactly
+ * this LIST to narrow its bowler chip's candidates, so the fork is deleted
+ * rather than re-verified.
+ *
+ * The engine's THIRD refusal ground at an over boundary — "not in the
+ * fielding lineup" — is NOT applied here, because every caller passes
+ * `order` drawn from the fielding side already, which makes it structurally
+ * true rather than checked. A caller that can violate that invariant (a
+ * scorer's manual override) must check membership itself.
+ *
+ * `ballsPerOver` must be the cfg's real value, never a hardcoded 6 — the
+ * Hundred sets 5, and the quota arithmetic mis-divides against the wrong
+ * divisor otherwise. A null/absent `fine` means the innings has not opened:
+ * nobody has bowled, so nobody is yet ineligible.
+ */
+export function eligibleBowlers(
   order: readonly string[],
-  fine: FineInnings,
+  fine: OverBowlerFacts | null | undefined,
   maxOversPerBowler: number | undefined,
   ballsPerOver: number,
 ): string[] {
   return order.filter((person) => {
-    if (person === fine.prevOverBowler) return false;
+    if (person === (fine?.prevOverBowler ?? null)) return false;
     if (maxOversPerBowler === undefined) return true;
-    return Math.floor((fine.bowlerBalls[person] ?? 0) / ballsPerOver) < maxOversPerBowler;
+    return Math.floor((fine?.bowlerBalls[person] ?? 0) / ballsPerOver) < maxOversPerBowler;
   });
+}
+
+/**
+ * How many player reviews `side` still holds in this innings — `null` when
+ * the cfg declares no allowance at all (uncapped, which must never be read
+ * as zero).
+ *
+ * NEW in R2c, and it exists because this arithmetic was already forked TWICE
+ * inside this file — `applyReview` below and the random-stream generator each
+ * open-coded `lost >= allowance`. The pad needs the same rule to stop
+ * offering a review that will be refused, and a third copy is the drift bug
+ * this repo keeps paying for. Both engine call sites now route through here.
+ *
+ * Two subtleties this owns so no caller re-derives them: only an
+ * UNSUCCESSFUL player review is spent, so the counter is `lost`, never
+ * `taken`; and an innings that has recorded no reviews yet carries no ledger
+ * at all, which is a full allowance rather than a missing one.
+ *
+ * Takes the innings rather than the state on purpose: WHICH innings is the
+ * caller's business and the callers genuinely differ (the engine's two both
+ * mean the open innings; the pad resolves a scoring innings that may sit
+ * after a closed one). Only the arithmetic is shared, so only the arithmetic
+ * lives here.
+ */
+export function reviewsRemaining(
+  innings: Pick<InningsState, "reviews">,
+  allowance: number | undefined,
+  side: Side,
+): number | null {
+  if (allowance === undefined) return null;
+  return Math.max(0, allowance - (innings.reviews?.[side].lost ?? 0));
 }
 
 function pickFrom(items: readonly string[], rng: Rng): string {
@@ -3481,9 +3544,8 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
     if (roll >= 0.04 && roll < 0.046) {
       const by = rng() < 0.5 ? state.entrants.home : state.entrants.away;
       const side = sideOf(state, by);
-      const allowance = state.cfg.reviews?.perInnings;
-      const spent = open.innings.reviews?.[side].lost ?? 0;
-      if (allowance === undefined || spent < allowance) {
+      const remaining = reviewsRemaining(open.innings, state.cfg.reviews?.perInnings, side);
+      if (remaining === null || remaining > 0) {
         // `against` — the batter the decision concerned — is DERIVED from the
         // crease and gated on a state parity, for the same reason as
         // `wicket.incoming` above: it consumes no rng, so adding it re-seeds no

@@ -14,6 +14,8 @@ import {
   padSpec,
   CRICKET_EVENT_SCHEMAS,
   nextBattingSide,
+  eligibleBowlers,
+  reviewsRemaining,
   type CricketBallEv,
   type CricketCfg,
   type CricketEv,
@@ -1416,5 +1418,106 @@ describe("cricket padSpec — super over panel: cfg gates existence, a runtime g
     expect(
       evalPadGate(gate as NonNullable<typeof gate>, { state: tiedState, summary: cricket.summary(tiedState) }),
     ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R2c — two rules the PAD must mirror, exported rather than forked.
+//
+// `eligibleBowlers` was already the private filter the random-stream generator
+// used; R2b needed the same rule in the v3 cricket skin, was not granted the
+// export, and hand-copied it as `isEligibleOverBowler` — which cost that
+// wave's review a byte-for-byte verification to trust. R2c needs the LIST (to
+// narrow the bowler chip's candidates), which is exactly what this function
+// already is, so it is exported and the fork deleted.
+//
+// `reviewsRemaining` is new, and exists because the quota arithmetic is
+// ALREADY forked twice INSIDE this file (`applyReview` and the generator each
+// open-code `lost >= allowance`). A third copy in the pad is the drift bug
+// this repo keeps paying for.
+// ---------------------------------------------------------------------------
+
+describe("eligibleBowlers (R2c — exported for the pad's bowler chip)", () => {
+  // A REAL eleven, from this file's own lineup helper — not a toy array.
+  // Production passes the whole fielding side (`state.orders[bowlingSide]`,
+  // eleven names), and most of them have bowled nothing, so a 3-name fixture
+  // cannot show that the untouched majority stay eligible.
+  const order = lineup("away").slots.map((sl) => sl.personId);
+  const [b1, b2, b3] = order as [string, string, string];
+
+  it("returns the whole eleven when nobody has bowled and no over has been bowled yet", () => {
+    expect(eligibleBowlers(order, { prevOverBowler: null, bowlerBalls: {} }, 4, 6)).toEqual(order);
+  });
+
+  it("excludes whoever bowled the previous over — the consecutive-over law — and only them", () => {
+    const fine = { prevOverBowler: b2, bowlerBalls: {} };
+    expect(eligibleBowlers(order, fine, undefined, 6)).toEqual(order.filter((id) => id !== b2));
+  });
+
+  it("an ABSENT maxOversPerBowler means no quota at all, never a quota of zero", () => {
+    const fine = { prevOverBowler: null, bowlerBalls: { [b1]: 600 } };
+    expect(eligibleBowlers(order, fine, undefined, 6)).toEqual(order);
+  });
+
+  it("excludes a bowler who has reached the quota, and keeps one still short of it", () => {
+    // A real T20 spell: b1 has bowled his 4 overs, b2 three and a half.
+    const fine = { prevOverBowler: null, bowlerBalls: { [b1]: 24, [b2]: 21 } };
+    expect(eligibleBowlers(order, fine, 4, 6)).toEqual(order.filter((id) => id !== b1));
+  });
+
+  it("applies the consecutive-over and quota grounds together, not either/or", () => {
+    const fine = { prevOverBowler: b3, bowlerBalls: { [b1]: 24 } };
+    expect(eligibleBowlers(order, fine, 4, 6)).toEqual(order.filter((id) => id !== b1 && id !== b3));
+  });
+
+  it("divides by the cfg's ballsPerOver, not a hardcoded 6 — the Hundred bowls 5", () => {
+    // 20 balls is 4 overs at bpo 5 (quota reached) but only 3.33 at bpo 6.
+    const fine = { prevOverBowler: null, bowlerBalls: { [b1]: 20 } };
+    expect(eligibleBowlers(order, fine, 4, 5)).toEqual(order.filter((id) => id !== b1));
+    expect(eligibleBowlers(order, fine, 4, 6)).toEqual(order);
+  });
+
+  it("accepts a null fine — at an over boundary before the innings opens, nobody is yet ineligible", () => {
+    expect(eligibleBowlers(order, null, 4, 6)).toEqual(order);
+  });
+
+  it("can empty the eleven completely — every bowler spent is a real state the pad must handle", () => {
+    const spent = Object.fromEntries(order.map((id) => [id, 24]));
+    expect(eligibleBowlers(order, { prevOverBowler: null, bowlerBalls: spent }, 4, 6)).toEqual([]);
+  });
+});
+
+describe("reviewsRemaining (R2c — the quota rule, de-forked)", () => {
+  const ledger = (home: number, away: number) => ({
+    reviews: { home: { taken: 9, lost: home }, away: { taken: 0, lost: away } },
+  });
+
+  it("returns null when the cfg declares no allowance — uncapped, never zero", () => {
+    expect(reviewsRemaining(ledger(5, 5), undefined, "home")).toBeNull();
+  });
+
+  it("counts down from the allowance as reviews are LOST", () => {
+    expect(reviewsRemaining(ledger(0, 0), 2, "home")).toBe(2);
+    expect(reviewsRemaining(ledger(1, 0), 2, "home")).toBe(1);
+  });
+
+  it("reads `lost`, not `taken` — an upheld review is not spent", () => {
+    // home has TAKEN 9 and lost none; it still holds its full allowance.
+    expect(reviewsRemaining(ledger(0, 0), 2, "home")).toBe(2);
+  });
+
+  it("is exactly zero at the boundary, and never negative past it", () => {
+    expect(reviewsRemaining(ledger(2, 0), 2, "home")).toBe(0);
+    expect(reviewsRemaining(ledger(3, 0), 2, "home")).toBe(0);
+  });
+
+  it("an innings with no ledger yet holds the full allowance for both sides", () => {
+    expect(reviewsRemaining({}, 2, "home")).toBe(2);
+    expect(reviewsRemaining({}, 2, "away")).toBe(2);
+  });
+
+  it("tracks each side independently", () => {
+    expect(reviewsRemaining(ledger(2, 0), 2, "home")).toBe(0);
+    expect(reviewsRemaining(ledger(2, 0), 2, "away")).toBe(2);
   });
 });
