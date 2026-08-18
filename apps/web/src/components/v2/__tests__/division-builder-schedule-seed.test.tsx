@@ -5,6 +5,35 @@ import { msg } from "@/lib/messages";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import uiEn from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
+import type { Court, Venue } from "@/components/v2/venues-panel";
+
+function makeCourt(overrides: Partial<Court> = {}): Court {
+  return {
+    id: "c-1",
+    venue_id: "v-1",
+    name: "Court 1",
+    sort: 0,
+    tags: [],
+    archived_at: null,
+    created_at: "2026-01-01T00:00:00.000Z",
+    hours: [],
+    exceptions: [],
+    ...overrides,
+  };
+}
+
+function makeVenue(overrides: Partial<Venue> = {}): Venue {
+  return {
+    id: "v-1",
+    name: "Main Venue",
+    address: null,
+    sort: 0,
+    archived_at: null,
+    created_at: "2026-01-01T00:00:00.000Z",
+    courts: [],
+    ...overrides,
+  };
+}
 
 // Regression: the creation wizard's Scheduling step seeds schedule-settings
 // right after create. Two ways that seed used to be lost silently —
@@ -23,7 +52,7 @@ const SPORTS = [
   { key: "football", name: "Football", variants: [{ key: "standard", name: "Standard", system: true }] },
 ];
 
-function render(constraintsAllowed: boolean): string {
+function render(constraintsAllowed: boolean, venues: Venue[] = []): string {
   return renderToStaticMarkup(
     <DictProvider dict={uiEn as unknown as Dict} locale="en">
       <DivisionBuilder
@@ -31,6 +60,7 @@ function render(constraintsAllowed: boolean): string {
         orgSlug="org"
         compSlug="comp"
         sports={SPORTS}
+        venues={venues}
         constraintsAllowed={constraintsAllowed}
       />
     </DictProvider>,
@@ -38,34 +68,44 @@ function render(constraintsAllowed: boolean): string {
 }
 
 describe("buildScheduleSeed — wizard schedule-settings seed", () => {
+  // P9 scope item 5: `courts` are real `courts.id` uuids picked from the
+  // court multi-picker, in the organiser's chosen order — never free text,
+  // so there is nothing left to trim/dedupe/fall back to a fabricated name
+  // for (that was the pre-picker behaviour this describe block used to
+  // cover; see git history for the free-text version of these cases).
   const input = {
-    courts: ["Pitch 1", "  Pitch 2  ", "  "],
+    courts: ["court-a", "court-b"],
     matchMinutes: 90,
     startAt: "2026-08-01T10:00",
     endAt: "2026-08-03",
-    venueCap: "Pitch",
   };
 
-  it("trims the venue list and converts the local inputs to ISO", () => {
+  it("passes the picked court ids through unchanged, in order, and converts the local inputs to ISO", () => {
     const seed = buildScheduleSeed(input);
-    expect(seed.courts).toEqual(["Pitch 1", "Pitch 2"]);
+    expect(seed.courts).toEqual(["court-a", "court-b"]);
     expect(seed.matchMinutes).toBe(90);
     expect(seed.startAt).toBe(new Date("2026-08-01T10:00").toISOString());
     expect(seed.endAt).toBe(new Date("2026-08-03T23:59:00").toISOString());
   });
 
-  it("falls back to the SPORT's venue noun, not a hardcoded Court 1", () => {
-    expect(buildScheduleSeed({ ...input, courts: ["", "   "] }).courts).toEqual(["Pitch 1"]);
+  it("leaves an empty court selection empty — no fabricated default", () => {
+    // The picker's own "no courts yet" / "none selected" states are both
+    // legitimate; ScheduleConfig.courts defaults to [] server-side too.
+    expect(buildScheduleSeed({ ...input, courts: [] }).courts).toEqual([]);
   });
 
-  it("singleVenue keeps dates + match length while dropping the extra venues", () => {
-    // The retry after a 402: everything the organiser typed survives except
+  it("singleVenue keeps dates + match length while dropping every court but the first", () => {
+    // The retry after a 402: everything the organiser picked survives except
     // the part the plan actually gates.
     const seed = buildScheduleSeed(input, { singleVenue: true });
-    expect(seed.courts).toEqual(["Pitch 1"]);
+    expect(seed.courts).toEqual(["court-a"]);
     expect(seed.matchMinutes).toBe(90);
     expect(seed.startAt).not.toBeNull();
     expect(seed.endAt).not.toBeNull();
+  });
+
+  it("singleVenue on an empty selection stays empty (nothing to slice)", () => {
+    expect(buildScheduleSeed({ ...input, courts: [] }, { singleVenue: true }).courts).toEqual([]);
   });
 
   it("leaves unset dates null (a blank scheduling step is still valid)", () => {
@@ -180,17 +220,41 @@ describe("DivisionBuilder — scheduling step date/time controls", () => {
 });
 
 describe("DivisionBuilder — venue list gate", () => {
-  it("offers Add venue when the org has scheduling.constraints", () => {
+  // P9 scope item 5: the free-text "+ Add venue" button is gone — the court
+  // multi-picker's own checkboxes are how an organiser adds a court now. The
+  // Pro gate survives as a SELECTION CAP (maxSelected={1}) plus the same
+  // hint + upgrade gate copy, no longer paired with a button to hide.
+  it("shows no Pro hint when the org has scheduling.constraints", () => {
     const html = render(true);
-    expect(html).toContain(msg("boardset.addVenue", { venue: "pitch" }));
     expect(html).not.toContain(msg("wizard.venuesProHint", { venue: "pitch" }));
   });
 
-  it("replaces Add venue with the Pro hint + upgrade gate without the feature", () => {
+  it("shows the Pro hint + upgrade gate without the feature", () => {
     const html = render(false);
-    expect(html).not.toContain(msg("boardset.addVenue", { venue: "pitch" }));
     expect(html).toContain(msg("wizard.venuesProHint", { venue: "pitch" }));
     // The same paywall component the schedule settings panel uses.
     expect(html).toContain("/settings/billing");
   });
+
+  it("points at the Directory instead of an empty control when the org has no courts", () => {
+    // Scoped to the picker's own empty-state markup, not "no checkbox
+    // anywhere on the page" — other wizard steps (eligibility, format) have
+    // unrelated checkboxes of their own. court-multi-picker.test.tsx proves
+    // the empty state renders NO checkbox in isolation.
+    const html = render(true);
+    expect(html).toContain('href="/directory?tab=venues"');
+    expect(html).toContain(msg("courtPicker.emptyTitle"));
+  });
+
+  it("renders the org's real courts, by name, once venues are supplied", () => {
+    const venues = [
+      makeVenue({
+        courts: [makeCourt({ id: "c-1", name: "Center Court" }), makeCourt({ id: "c-2", name: "Practice Court" })],
+      }),
+    ];
+    const html = render(true, venues);
+    expect(html).toContain("Center Court");
+    expect(html).toContain("Practice Court");
+  });
+
 });

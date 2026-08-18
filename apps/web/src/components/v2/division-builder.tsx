@@ -17,6 +17,8 @@ import { defaultMatchMinutes } from "@/lib/match-length";
 import { FormatExplainerPanel } from "@/components/v2/format-explainer-panel";
 import { FormatRecommendStrip } from "@/components/v2/format-recommend-strip";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
+import { CourtMultiPicker } from "@/components/v2/shared/court-multi-picker";
+import type { Venue } from "@/components/v2/venues-panel";
 import { useMsg, useLocale } from "@/components/i18n/dict-provider";
 import { sportLabel } from "@/lib/scoring-vocab";
 import {
@@ -97,8 +99,11 @@ const GENDERS: { key: string; labelKey: "wizard.gender.m" | "wizard.gender.f" | 
 const DATETIME_LOCAL_VALUE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
 
 /** The schedule-settings body the wizard seeds right after create (doc 12 §3).
- *  `singleVenue` collapses the list to the first venue: more than one court
- *  trips `usesConstraints()` server-side, which 402s the WHOLE PUT — dates and
+ *  `singleVenue` collapses the list to the first COURT (P9 scope item 5:
+ *  `input.courts` are real `courts.id` uuids picked from the org's own list,
+ *  in the organiser's chosen order — never free text, so there is nothing
+ *  left to trim/dedupe/fall back on here): more than one court trips
+ *  `usesConstraints()` server-side, which 402s the WHOLE PUT — dates and
  *  match length included — for orgs without `scheduling.constraints`. */
 export function buildScheduleSeed(
   input: {
@@ -108,14 +113,11 @@ export function buildScheduleSeed(
     startAt: string;
     /** date value ("" = not set). */
     endAt: string;
-    venueCap: string;
   },
   opts: { singleVenue?: boolean } = {},
 ): { courts: string[]; matchMinutes: number; startAt: string | null; endAt: string | null } {
-  const clean = input.courts.map((c) => c.trim()).filter(Boolean);
-  const courts = clean.length > 0 ? clean : [`${input.venueCap} 1`];
   return {
-    courts: opts.singleVenue ? courts.slice(0, 1) : courts,
+    courts: opts.singleVenue ? input.courts.slice(0, 1) : input.courts,
     matchMinutes: input.matchMinutes,
     // A HALF-FILLED start (a date with no time — what the competition-window
     // prefill seeds, and what `joinValue` already emits "" for) is unset, not
@@ -160,6 +162,7 @@ export function DivisionBuilder({
   orgSlug,
   compSlug,
   sports,
+  venues = [],
   competitionWindow,
   constraintsAllowed = true,
   archivedSlotsExplainRefusal = false,
@@ -168,6 +171,12 @@ export function DivisionBuilder({
   orgSlug: string;
   compSlug: string;
   sports: SportOption[];
+  /** Org venues with nested courts (`listVenues` shape, venues.ts) — feeds
+   *  the Scheduling step's court multi-picker (P9 scope item 5). Optional/
+   *  defaulted to `[]`: existing test call sites construct this wizard
+   *  without it, and an empty list degrades to the picker's own "no courts
+   *  yet" Directory pointer rather than a crash. */
+  venues?: Venue[];
   /** The competition this division is being created inside — its own
    *  `starts_on`/`ends_on`. Both schedule fields carry it as `min`/`max`, and
    *  the start seeds its date half from the opening day, because the seed PUT
@@ -223,7 +232,11 @@ export function DivisionBuilder({
   const [legs, setLegs] = useState(1);
 
   // Scheduling (optional — can also be edited later on the schedule board).
-  const [courts, setCourts] = useState<string[]>(() => [`${venueLabel(sports[0]?.key)} 1`]);
+  // Real court ids picked from the org's own court list (P9 scope item 5) —
+  // no fabricated default: an org may have zero courts at this point, and
+  // there is no free-text name left to invent one from. Configuring courts
+  // is fully deferrable to the schedule board after create.
+  const [courts, setCourts] = useState<string[]>([]);
   const [matchMinutes, setMatchMinutes] = useState(() =>
     defaultMatchMinutes(sports[0]?.key, sports[0] ? pickVariant(sports[0].key, sports[0].variants) : ""),
   );
@@ -263,13 +276,9 @@ export function DivisionBuilder({
     setVariantKey(firstVariant);
     setRuleValues({}); // rules are sport-specific
     if (!matchMinutesTouched) setMatchMinutes(defaultMatchMinutes(key, firstVariant));
-    // Rename the default single venue to match the sport, unless the organiser
-    // has already customised the list.
-    setCourts((cs) =>
-      cs.length === 1 && /^(Court|Pitch|Table|Board) 1$/.test(cs[0]!.trim())
-        ? [`${venueLabel(key)} 1`]
-        : cs,
-    );
+    // `courts` (P9 scope item 5: real court ids from the picker) is no
+    // longer a fabricated per-sport name — nothing to rename here on a sport
+    // change any more; the organiser's own picked courts survive it.
   }
 
   function buildEligibility(): Record<string, unknown>[] {
@@ -353,7 +362,6 @@ export function DivisionBuilder({
         matchMinutes,
         startAt: scheduleStart,
         endAt: scheduleEnd,
-        venueCap: venueLabel(sportKey),
       };
       const putSeed = (config: ReturnType<typeof buildScheduleSeed>) =>
         apiV1(`/api/v1/divisions/${division.id}/schedule-settings`, {
@@ -412,7 +420,10 @@ export function DivisionBuilder({
     }
     if (t === "scheduling") {
       if (!(matchMinutes >= 1)) return msg("wizard.err.matchLength");
-      if (!courts.some((c) => c.trim())) return msg("wizard.err.addVenue", { venue });
+      // No "must pick at least one court" gate any more (P9 scope item 5):
+      // an org can have zero courts at create time, and `courts: []` is a
+      // legitimate ScheduleConfig — configuring courts is fully deferrable
+      // to the schedule board, same as leaving the dates blank already is.
     }
     return null;
   }
@@ -882,54 +893,38 @@ export function DivisionBuilder({
         </div>
 
         <div>
-          <span className="label">{msg("boardset.venuesLabel", { venue: pluralizeVenue(VenueCap) })}</span>
-          <p className="mb-2 text-xs text-slate-400">{msg("boardset.venuesDesc", { venue })}</p>
-          <ul className="space-y-2">
-            {courts.map((c, i) => (
-              <li key={i} className="flex items-center gap-2">
-                <input
-                  value={c}
-                  onChange={(e) =>
-                    setCourts((cs) => cs.map((x, j) => (j === i ? e.target.value : x)))
-                  }
-                  placeholder={`${VenueCap} ${i + 1}`}
-                  maxLength={100}
-                  className="input flex-1"
-                />
-                {courts.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => setCourts((cs) => cs.filter((_, j) => j !== i))}
-                    aria-label={msg("boardset.removeVenue", { venue, n: i + 1 })}
-                    className="rounded-md px-2 py-1 text-sm text-red-500 hover:bg-red-50"
-                  >
-                    ✕
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-          {constraintsAllowed ? (
-            <button
-              type="button"
-              onClick={() =>
-                setCourts((cs) => (cs.length < 50 ? [...cs, `${VenueCap} ${cs.length + 1}`] : cs))
-              }
-              className="btn btn-ghost mt-2 text-sm"
-            >
-              {msg("boardset.addVenue", { venue })}
-            </button>
-          ) : (
-            // Pre-empt the 402: a >1 venue list is Pro (doc 12 §5), and the
-            // server refuses the whole settings PUT if the wizard sends one.
+          {/* P9 scope item 5: real org courts, multi-selected and ordered —
+              replaces the old free-text "Court 1"/"Court 2" name list.
+              Section copy (`boardset.venuesLabel`/`venuesDesc`) is
+              UNCHANGED on purpose, same as the schedule board's own
+              settings panel. */}
+          <CourtMultiPicker
+            venues={venues}
+            value={courts}
+            onChange={setCourts}
+            maxSelected={constraintsAllowed ? undefined : 1}
+            label={msg("boardset.venuesLabel", { venue: pluralizeVenue(VenueCap) })}
+            description={msg("boardset.venuesDesc", { venue })}
+            emptyTitle={msg("courtPicker.emptyTitle")}
+            emptyBody={msg("courtPicker.emptyBody")}
+            directoryLinkLabel={msg("courtPicker.directoryLink")}
+            selectedLabel={msg("courtPicker.selected", { n: courts.length })}
+            noneSelectedLabel={msg("courtPicker.noneSelected")}
+            unknownCourtLabel={msg("courtPicker.unknownCourt")}
+            moveUpLabel={msg("venues.court.moveUp")}
+            moveDownLabel={msg("venues.court.moveDown")}
+            removeLabelFor={(n) => msg("boardset.removeVenue", { venue, n })}
+          />
+          {!constraintsAllowed && (
+            // Pre-empt the 402: a >1 court selection is Pro (doc 12 §5), and
+            // the server refuses the whole settings PUT if the wizard sends
+            // one. `maxSelected={1}` above stops the organiser from picking
+            // a second court in the first place; this just explains why.
             <div className="mt-2 space-y-1">
               <p className="text-xs text-slate-400">{msg("wizard.venuesProHint", { venue })}</p>
               <UpgradeGate feature="scheduling.constraints" compact />
             </div>
           )}
-          <p className="mt-1 text-xs text-slate-400">
-            {msg("wizard.venueCount", { n: courts.filter((c) => c.trim()).length || 1, venue })}
-          </p>
         </div>
       </section>
 
