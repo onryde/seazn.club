@@ -89,10 +89,14 @@ export async function listDivisionFixturesForBoard(
     // across ~330 fixtures is what put this page 33KB over its RSC payload
     // budget (board-v3.spec.ts:287); the calendar trim before it was the wrong
     // suspect and saved 583 bytes.
+    //
+    // `venue_id` is not sent either: a court BELONGS to a venue, so court_id
+    // already determines it, and measured across this database every one of
+    // 10,681 fixtures has it null — it was pure weight on every row.
     return tx<BoardFixtureRow[]>`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
              f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
-             f.scheduled_at, f.court_id, f.venue_id,
+             f.scheduled_at, f.court_id,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at
       from fixtures f
       where f.division_id = ${divisionId}

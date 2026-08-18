@@ -137,7 +137,10 @@ export const FIXTURE_COLS = [
  *  venues prop; sending them per row duplicated ~330 rows' worth of bytes.
  *  Distinct from `FixtureRow` (GET/PATCH /fixtures/{id}), which DOES carry the
  *  derived names because its consumers have no venue list to resolve from. */
-export type BoardFixtureRow = Omit<FixtureRow, "venue" | "court_label" | "court_name" | "venue_name">;
+export type BoardFixtureRow = Omit<
+  FixtureRow,
+  "venue" | "court_label" | "court_name" | "venue_name" | "venue_id"
+>;
 
 export const BOARD_FIXTURE_COLS = [
   "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "fixture_no",
