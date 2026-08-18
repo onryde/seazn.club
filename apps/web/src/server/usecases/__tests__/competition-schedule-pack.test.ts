@@ -20,6 +20,7 @@ import {
   verifyJoint,
 } from "../competition-schedule-ai";
 import { buildSchedulePack, isBlocking, OTHER_DIVISION_LABEL } from "../schedule-ai";
+import { createVenue, createCourt } from "../venues";
 import { seedOrg } from "./_seed";
 
 // A pass-through spy over the real implementation — it changes no behaviour and
@@ -50,6 +51,37 @@ const GENERIC_CONFIG = {
 const T0 = Date.parse("2026-08-01T09:00:00.000Z");
 const MIN = 60_000;
 const TZ = "Europe/London";
+
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` (real `courts.id`
+// values, since pass 1) — this whole file's spec DSL was written against the
+// pre-cutover free-text label ("Court 1", "Court 2", …), and every test below
+// that names a court still reads more naturally as a label than as a uuid.
+// Rather than rewrite the DSL, this resolves each label to a REAL court
+// exactly once per org and caches it, so "Court 2" named twice in one spec
+// (or across two `seedCompetition` calls sharing one `auth`) resolves to the
+// SAME row — load-bearing for the divergence tests below, which assert two
+// divisions genuinely share one physical court.
+const courtsByOrg = new Map<string, { venueId: string; byName: Map<string, string> }>();
+
+async function courtId(auth: AuthCtx, name: string): Promise<string> {
+  let entry = courtsByOrg.get(auth.orgId);
+  if (!entry) {
+    const venue = await createVenue(auth, { name: "Main venue", sort: 0 });
+    entry = { venueId: venue.id, byName: new Map() };
+    courtsByOrg.set(auth.orgId, entry);
+  }
+  const cached = entry.byName.get(name);
+  if (cached !== undefined) return cached;
+  const court = await createCourt(auth, entry.venueId, { name, sort: entry.byName.size, tags: [] });
+  entry.byName.set(name, court.id);
+  return court.id;
+}
+
+async function courtIds(auth: AuthCtx, names: readonly string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const name of names) out.push(await courtId(auth, name));
+  return out;
+}
 
 function settingsConfig(courts: string[], matchMinutes: number, windowMinutes = 720) {
   return {
@@ -154,10 +186,13 @@ async function seedCompetition(
         members: [],
       })),
     );
+    // P9 pass 3b: real court ids, resolved (and cached) from the spec's
+    // labels — see `courtIds`'s own doc comment above.
+    const resolvedCourts = await courtIds(auth, spec.courts);
     await sql`
       insert into schedule_settings (division_id, config, tz, updated_at)
       values (${division.id}, ${sql.json(
-        settingsConfig(spec.courts, spec.matchMinutes, spec.windowMinutes),
+        settingsConfig(resolvedCourts, spec.matchMinutes, spec.windowMinutes),
       )}, ${TZ}, now())
       on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
     const [stage] = await createStages(auth, division.id, {
@@ -177,7 +212,7 @@ async function seedCompetition(
             scheduled_at = ${new Date(
               T0 + (spec.startOffsetMin + i * spec.matchMinutes) * MIN,
             ).toISOString()},
-            court_label = ${spec.courts[i % spec.courts.length]!},
+            court_id = ${resolvedCourts[i % resolvedCourts.length]!},
             schedule_source = 'auto'
           where id = ${ordered[i]!.id}`;
       }
@@ -211,9 +246,10 @@ async function seedBigDivision(
     config: GENERIC_CONFIG,
     eligibility: [],
   });
+  const resolvedCourts = await courtIds(auth, ["Court 1", "Court 2"]);
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${division.id}, ${sql.json(settingsConfig(["Court 1", "Court 2"], 30))}, ${TZ}, now())
+    values (${division.id}, ${sql.json(settingsConfig(resolvedCourts, 30))}, ${TZ}, now())
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
   const [stage] = await createStages(auth, division.id, {
     seq: 1,
@@ -333,7 +369,7 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
           {
             fixture_id: first.id,
             scheduled_at: first.current.at ?? new Date(T0).toISOString(),
-            court_label: "Court 1",
+            court_label: pack.courts[0]!,
           },
         ],
         unschedulable: [],
@@ -352,7 +388,10 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
       mode: "generate",
       instruction: "x",
     });
-    expect(pack.courts).toEqual(["Court 1", "Court 2", "Court 3"]);
+    // `pack.courts` is sorted on the ID string (cmp) — real uuids do not sort
+    // in "Court 1" < "Court 2" < "Court 3" order, so the expectation must be
+    // sorted the same way rather than written in spec order.
+    expect(pack.courts).toEqual((await courtIds(auth, ["Court 1", "Court 2", "Court 3"])).sort());
   }, 60_000);
 
   it("divergentCourts names the labels that are not in every division", async () => {
@@ -361,7 +400,7 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
       mode: "generate",
       instruction: "x",
     });
-    expect(pack.divergentCourts).toEqual(["Court 1", "Court 3"]);
+    expect(pack.divergentCourts).toEqual((await courtIds(auth, ["Court 1", "Court 3"])).sort());
 
     // Identical court lists → nothing divergent.
     const same = await seedCompetition(auth, "Same Courts", [
@@ -374,7 +413,7 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
       same.divisions.map((d) => d.id),
       { now: NOW_W2, mode: "generate", instruction: "x" },
     );
-    expect(flat.pack.courts).toEqual(["Court 1", "Court 2"]);
+    expect(flat.pack.courts).toEqual((await courtIds(auth, ["Court 1", "Court 2"])).sort());
     expect(flat.pack.divergentCourts).toEqual([]);
   }, 60_000);
 
@@ -419,8 +458,9 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
     expect(pack.fixtures.obstacles.map((o) => Date.parse(o.from)).sort((a, b) => a - b)).toEqual(
       hotelStarts,
     );
+    const court1 = await courtId(auth, "Court 1");
     for (const o of pack.fixtures.obstacles) {
-      expect(o.court).toBe("Court 1");
+      expect(o.court).toBe(court1);
       expect(o.label).toBe(OTHER_DIVISION_LABEL);
     }
     // Neither selected division's own placements survived as obstacles: India's
@@ -448,14 +488,15 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
     });
     // Juliet occupies Court 1 at 09:00 and so does a movable Hotel fixture.
     // The obstacle is the excluded division's real, immovable court booking.
+    const court1 = await courtId(auth, "Court 1");
     const at0900 = pack.fixtures.obstacles.filter(
-      (o) => o.court === "Court 1" && Date.parse(o.from) === T0,
+      (o) => o.court === court1 && Date.parse(o.from) === T0,
     );
     expect(at0900.length).toBe(1);
     expect(at0900[0]!.division_id).toBe(null);
     expect(
       pack.fixtures.movable.some(
-        (f) => f.division_id === hotel.id && f.current.court === "Court 1" && Date.parse(f.current.at!) === T0,
+        (f) => f.division_id === hotel.id && f.current.court === court1 && Date.parse(f.current.at!) === T0,
       ),
     ).toBe(true);
   }, 60_000);
@@ -474,8 +515,9 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
       mode: "generate",
       instruction: "x",
     });
+    const court1 = await courtId(auth, "Court 1");
     const at0900 = pack.fixtures.obstacles.filter(
-      (o) => o.court === "Court 1" && Date.parse(o.from) === T0,
+      (o) => o.court === court1 && Date.parse(o.from) === T0,
     );
     expect(at0900.length).toBe(2);
     expect(at0900.map((o) => o.division_id).sort()).toEqual([kilo.id, lima.id].sort());
@@ -490,8 +532,9 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
     const foreign = pack.fixtures.obstacles.filter((o) => o.division_id === null);
     // Charlie is not in the run: all 6 of its placements are obstacles, once each.
     expect(foreign.length).toBe(RR);
+    const court4 = await courtId(auth, "Court 4");
     for (const o of foreign) {
-      expect(o.court).toBe("Court 4");
+      expect(o.court).toBe(court4);
       // The shared literal, imported — not a copy. A silent divergence here is
       // what would stop sibling removal from recognising a foreign obstacle.
       expect(o.label).toBe(OTHER_DIVISION_LABEL);
@@ -510,8 +553,10 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
     const bravo = pack.divisions.find((d) => d.name === "Bravo")!;
     expect(alpha.settings.matchMinutes).toBe(30);
     expect(bravo.settings.matchMinutes).toBe(45);
-    expect(alpha.settings.courts).toEqual(["Court 1", "Court 2"]);
-    expect(bravo.settings.courts).toEqual(["Court 2", "Court 3"]);
+    // Candidate-filter order (candidate-courts.ts ruling 1), NOT sorted —
+    // the division's own configured order, unlike pack.courts/divergentCourts.
+    expect(alpha.settings.courts).toEqual(await courtIds(auth, ["Court 1", "Court 2"]));
+    expect(bravo.settings.courts).toEqual(await courtIds(auth, ["Court 2", "Court 3"]));
     expect(alpha.tz).toBe(TZ);
     expect(alpha.sport).toBe("generic");
   }, 60_000);
@@ -534,7 +579,7 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
       shared.divisions.map((d) => d.id),
       { now: NOW_W2, mode: "generate", instruction: "x" },
     );
-    expect(pack.courts).toEqual(["Court 1"]);
+    expect(pack.courts).toEqual([await courtId(auth, "Court 1")]);
     expect(pack.divergentCourts).toEqual([]);
     // Both divisions must actually have drafted, or the overlap sweep below is
     // vacuous — a builder that simply dropped the second division would pass.
@@ -592,8 +637,9 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
       { now: NOW_W2, mode: "generate", instruction: "x" },
     );
     // The immovable fixture really is in the pack, tagged to its own division.
+    const court1 = await courtId(auth, "Court 1");
     const fixed = pack.fixtures.obstacles.filter(
-      (o) => o.division_id === bravo2.id && o.court === "Court 1" && Date.parse(o.from) === T0,
+      (o) => o.division_id === bravo2.id && o.court === court1 && Date.parse(o.from) === T0,
     );
     expect(fixed.length).toBe(1);
     // Alpha2 is built first and drafts a full board — so it really did compete
@@ -601,12 +647,12 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
     const alphaDivision = pack.divisions.find((d) => d.id === alpha2.id)!;
     expect(pack.divisions[0]!.id).toBe(alpha2.id);
     expect(alphaDivision.draftPlaced).toBe(RR);
-    expect(pack.draft.some((a) => a.division_id === alpha2.id && a.court_label === "Court 1")).toBe(true);
+    expect(pack.draft.some((a) => a.division_id === alpha2.id && a.court_label === court1)).toBe(true);
 
     const minutes = new Map(pack.divisions.map((d) => [d.id, d.settings.matchMinutes]));
     const overlaps: string[] = [];
     for (const a of pack.draft) {
-      if (a.court_label !== "Court 1") continue;
+      if (a.court_label !== court1) continue;
       const from = Date.parse(a.scheduled_at!);
       const to = from + minutes.get(a.division_id)! * MIN;
       if (from < T0 + 30 * MIN && T0 < to) {
@@ -648,15 +694,16 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
     });
     // BravoP's finalized fixture is on the board, on its OWN court — so court
     // occupancy cannot be what moves AlphaP.
+    const court2 = await courtId(auth, "Court 2");
     const fixed = pack.fixtures.obstacles.filter(
-      (o) => o.division_id === bravoP.id && o.court === "Court 2" && Date.parse(o.from) === T0,
+      (o) => o.division_id === bravoP.id && o.court === court2 && Date.parse(o.from) === T0,
     );
     expect(fixed.length).toBe(1);
     expect(pack.divisions[0]!.id).toBe(alphaP.id);
 
     const alphaDraft = pack.draft.filter((a) => a.division_id === alphaP.id);
     expect(alphaDraft.length).toBe(1);
-    expect(alphaDraft[0]!.court_label).toBe("Court 1");
+    expect(alphaDraft[0]!.court_label).toBe(await courtId(auth, "Court 1"));
     // The shared person is committed until 09:30, so AlphaP cannot start at 09:00.
     expect(Date.parse(alphaDraft[0]!.scheduled_at!)).toBeGreaterThanOrEqual(T0 + 30 * MIN);
   }, 60_000);
@@ -972,8 +1019,11 @@ describe.skipIf(!HAS_DB)("joint pack calendar anchor (#397)", () => {
     ];
     for (const [i, d] of divisions.entries()) {
       const r = ranges[i]!;
+      // Same cache `seedCompetition` just populated for this org (courtId is
+      // keyed on auth.orgId), so this resolves to the SAME court rows.
+      const resolvedCourts = await courtIds(auth, BOARD[i]!.courts);
       await sql`update schedule_settings set config = ${sql.json({
-        ...settingsConfig(BOARD[i]!.courts, BOARD[i]!.matchMinutes),
+        ...settingsConfig(resolvedCourts, BOARD[i]!.matchMinutes),
         startAt: `${r.start}T09:00:00.000Z`,
         endAt: `${r.end}T18:00:00.000Z`,
         sessionWindows: [{ from: `${r.start}T09:00:00.000Z`, to: `${r.start}T18:00:00.000Z` }],
