@@ -409,17 +409,19 @@ Emitters F2 must migrate because the shape they emit is being deleted:
     this collision. The task brief named `slotOf` as a fix site; traced and
     verified safe instead of changed, documented in place (`stages.ts`
     comment above the `slotOf` map).
-  - One residual, deliberately NOT fixed: `computeSeedProposal`'s
-    `seedOfKey` (same file) still keys by bare `descriptorKey` for the
-    ties-display lookup — genuinely the same bug class, but
-    `ProgressionTieFlag.descriptors` (`progression.ts`) is
-    `SlotDescriptor[]` with no `sourceIndex` to disambiguate with, so
-    fixing it means widening that engine type (ripples through
-    `resolveProgression`'s tie-group logic and the wire contract) — a
-    bigger blast radius than this session's authorized file set. Also
-    unreachable today (same single-source-only reason). Documented in
-    place (`stages.ts` comment above `seedOfKey`); whoever ships a
-    multi-source writer next needs this too.
+  - One residual noted at the time — SINCE RESOLVED on this same branch
+    (F3 round-3 review, Task 2), correcting the stale claim below (found by
+    the round-4 review, 2026-08-18): `computeSeedProposal`'s `seedOfKey`
+    (`stages.ts`) used to key by bare `descriptorKey` for the ties-display
+    lookup, genuinely the same bug class as P6 above. This paragraph
+    originally said fixing it would mean widening
+    `ProgressionTieFlag.descriptors` past `SlotDescriptor[]` — a bigger
+    blast radius than that session's authorized file set, so it was left
+    unfixed and documented in place. It WAS widened since, to `SourcedSlot[]`
+    (`progression.ts` — carries `sourceIndex`, no parallel shape invented).
+    `stages.ts`'s `seedOfKey`/`seedProposalKey` now key ties by
+    `sourceIndex` directly — `stages.ts:2452` reads `sourced.sourceIndex`.
+    Not a live gap; a future reader should not re-derive this as one.
 
 ## Evidence
 
