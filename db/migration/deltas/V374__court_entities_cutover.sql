@@ -410,22 +410,31 @@ end $$;
 -- (step 2b) for why that duplication is safe (a trivial, deterministic
 -- per-element check, not a "pick one among ties" lookup).
 --
--- UNLIKE `schedule_settings.config.courts` (whose consumer is a solver/
--- picker that cannot render a dangling name, so step 5 above DROPS an
--- unresolvable element), a scope lock's only job is to compare — a leftover
--- name string that maps to nothing is simply inert against real ids from
--- here on (it can never match again) and is LEFT UNTOUCHED rather than
--- dropped: silently discarding an organiser's lock entry is a worse failure
--- mode than an inert one, and the dry-run report below counts it so an
--- operator can see it and fix the stale name by hand if it matters.
+-- REVIEW WAVE 1, FINDING 12 (owner-authorized correction to the paragraph
+-- this replaces): this block used to LEAVE an unmappable name in place, on
+-- the theory that a scope lock only ever COMPARES its `courts`/`venues`
+-- (never renders them) so a dangling name is "inert" against real ids from
+-- here on. It is not inert: `LockInput` (usecases/history.ts) and
+-- `DivisionLocks` (api-v1/schemas.ts) tighten `courts`/`venues` to
+-- CourtId/VenueId (real uuids, same PR), and the console ECHOES a
+-- division's existing `locked_scopes` back into the body of every lock PUT
+-- — so a stale name now 400s that PUT, permanently, with no UI path to ever
+-- clear it. Same choice the blackout-court block below faces, same answer:
+-- an unresolvable element is DROPPED — here, only the one array element
+-- (the `courts`/`venues` array is the element-shaped analogue of step 5's
+-- `schedule_settings.config.courts`, not of a blackout's single scalar
+-- `court` field), never the whole scope object, and never silently widened
+-- into a broader lock than the organiser set. Counted in the dry-run report
+-- below either way, so an operator can see it.
 --
 -- Idempotent, same shape as the two blocks above: an element already equal
 -- to a real court/venue id for the org (a second run, post-migration) passes
 -- through via the same `id::text = <string>` referential check court_mapping/
--- venue_mapping themselves use (never a uuid-shape regex). A scope object's
--- `courts`/`venues` key that is ABSENT to begin with is never added (mirrors
--- the courts block's `? 'courts'` guard); `pool_ids` is untouched throughout
--- (already ids, never free text).
+-- venue_mapping themselves use (never a uuid-shape regex), and a dropped
+-- element stays dropped (nothing left to re-drop on a second run). A scope
+-- object's `courts`/`venues` key that is ABSENT to begin with is never added
+-- (mirrors the courts block's `? 'courts'` guard); `pool_ids` is untouched
+-- throughout (already ids, never free text).
 -- =============================================================================
 
 -- division-locked-scopes-migration:begin
@@ -488,7 +497,7 @@ begin
      group by org_id
      order by org_id
   loop
-    raise notice 'V374 division-locked-scopes migration (dry run): org=% divisions_with_scope_entries=% court_scope_entries=% court_entries_left_untouched=% venue_scope_entries=% venue_entries_left_untouched=%',
+    raise notice 'V374 division-locked-scopes migration (dry run): org=% divisions_with_scope_entries=% court_scope_entries=% court_entries_dropped_unmapped=% venue_scope_entries=% venue_entries_dropped_unmapped=%',
       v_org.org_id, v_org.n_divisions, v_org.n_court_entries, v_org.n_court_unmapped, v_org.n_venue_entries, v_org.n_venue_unmapped;
     v_total_orgs := v_total_orgs + 1;
     v_total_divisions := v_total_divisions + v_org.n_divisions;
@@ -497,7 +506,7 @@ begin
     v_total_venue_entries := v_total_venue_entries + v_org.n_venue_entries;
     v_total_venue_unmapped := v_total_venue_unmapped + v_org.n_venue_unmapped;
   end loop;
-  raise notice 'V374 division-locked-scopes migration (dry run) TOTAL: orgs=% divisions_with_scope_entries=% court_scope_entries=% court_entries_left_untouched=% venue_scope_entries=% venue_entries_left_untouched=%',
+  raise notice 'V374 division-locked-scopes migration (dry run) TOTAL: orgs=% divisions_with_scope_entries=% court_scope_entries=% court_entries_dropped_unmapped=% venue_scope_entries=% venue_entries_dropped_unmapped=%',
     v_total_orgs, v_total_divisions, v_total_court_entries, v_total_court_unmapped, v_total_venue_entries, v_total_venue_unmapped;
 
   -- WRITE: rewrite each division's locked_scopes array in place, element by
@@ -512,27 +521,45 @@ begin
          from jsonb_array_elements(d.locked_scopes) with ordinality as scope(obj, ord)
          cross join lateral (
            select
+             -- REVIEW WAVE 1, FINDING 12: an element that resolves neither
+             -- via court_mapping nor as an already-real id is DROPPED (the
+             -- `where resolved.court_id is not null` filter below), never
+             -- passed through as the raw string — same "drop, don't
+             -- silently carry a dangling name forward" rule step 5 already
+             -- applies to `schedule_settings.config.courts`, and the same
+             -- filter-after-coalesce shape closes finding 14's `[null]`
+             -- element case for free: a null array element resolves to NULL
+             -- on every join and is filtered out before jsonb_agg ever sees
+             -- it, so it can no longer surface as a JSON null either.
              (case when scope.obj ? 'courts' then coalesce((
-                      select jsonb_agg(to_jsonb(coalesce(cm.court_id::text, c_existing.id::text, celem.val)) order by celem.ord)
-                        from jsonb_array_elements_text(
-                               case when jsonb_typeof(scope.obj -> 'courts') = 'array'
-                                    then scope.obj -> 'courts' else '[]'::jsonb end
-                             ) with ordinality as celem(val, ord)
-                        left join court_mapping cm
-                          on cm.org_id = d.org_id and cm.court_string = celem.val
-                        left join courts c_existing
-                          on c_existing.org_id = d.org_id and c_existing.id::text = celem.val
+                      select jsonb_agg(to_jsonb(resolved.court_id::text) order by resolved.ord)
+                        from (
+                          select celem.ord, coalesce(cm.court_id, c_existing.id) as court_id
+                            from jsonb_array_elements_text(
+                                   case when jsonb_typeof(scope.obj -> 'courts') = 'array'
+                                        then scope.obj -> 'courts' else '[]'::jsonb end
+                                 ) with ordinality as celem(val, ord)
+                            left join court_mapping cm
+                              on cm.org_id = d.org_id and cm.court_string = celem.val
+                            left join courts c_existing
+                              on c_existing.org_id = d.org_id and c_existing.id::text = celem.val
+                        ) resolved
+                       where resolved.court_id is not null
                     ), '[]'::jsonb) end) as new_courts,
              (case when scope.obj ? 'venues' then coalesce((
-                      select jsonb_agg(to_jsonb(coalesce(vm.venue_id::text, v_existing.id::text, velem.val)) order by velem.ord)
-                        from jsonb_array_elements_text(
-                               case when jsonb_typeof(scope.obj -> 'venues') = 'array'
-                                    then scope.obj -> 'venues' else '[]'::jsonb end
-                             ) with ordinality as velem(val, ord)
-                        left join venue_mapping vm
-                          on vm.org_id = d.org_id and vm.venue_string = velem.val
-                        left join venues v_existing
-                          on v_existing.org_id = d.org_id and v_existing.id::text = velem.val
+                      select jsonb_agg(to_jsonb(resolved.venue_id::text) order by resolved.ord)
+                        from (
+                          select velem.ord, coalesce(vm.venue_id, v_existing.id) as venue_id
+                            from jsonb_array_elements_text(
+                                   case when jsonb_typeof(scope.obj -> 'venues') = 'array'
+                                        then scope.obj -> 'venues' else '[]'::jsonb end
+                                 ) with ordinality as velem(val, ord)
+                            left join venue_mapping vm
+                              on vm.org_id = d.org_id and vm.venue_string = velem.val
+                            left join venues v_existing
+                              on v_existing.org_id = d.org_id and v_existing.id::text = velem.val
+                        ) resolved
+                       where resolved.venue_id is not null
                     ), '[]'::jsonb) end) as new_venues
          ) stage
          cross join lateral (
@@ -572,26 +599,39 @@ end $$;
 -- already exists, exactly like the division-locked-scopes block above does
 -- for a scope's own `courts`/`venues` entries.
 --
--- UNLIKE `schedule_settings.config.courts` (whose consumer is a solver/
--- picker that cannot render a dangling name, so step 5 above DROPS an
--- unresolvable element), a blackout's `court` field is only ever COMPARED
--- against a fixture's `court_id` (engine build-grid.ts/calendar.ts) — same
--- "compare, not render" shape as division-locked-scopes' own court/venue
--- entries. A leftover name that maps to nothing is simply inert against real
--- ids from here on (it can never match again) and is LEFT UNTOUCHED rather
--- than dropped: silently discarding an organiser's blackout is a worse
--- failure mode than an inert one, and the dry-run report below counts it so
--- an operator can see it and fix the stale name by hand if it matters.
+-- REVIEW WAVE 1, FINDINGS 2 & 14 (owner-authorized correction to the
+-- paragraph this replaces): this block used to LEAVE an unmappable court
+-- name in place, on the theory that a blackout's `court` field is only ever
+-- COMPARED against a fixture's `court_id` (engine build-grid.ts/calendar.ts),
+-- never rendered, so a dangling name is "inert". It is not inert:
+-- `blackouts[].court` is `CourtId` (api-v1/schemas.ts, same PR) — a stale
+-- name fails `ScheduleConfig.parse` at `loadSettings`, 500ing the board,
+-- auto-schedule, apply, validate and publish for the whole division, not
+-- just the one blackout. Turning the entry into a venue-wide (global)
+-- blackout by dropping only the `court` key was considered and rejected: a
+-- global blackout blocks EVERY court during that window, strictly MORE than
+-- the one the organiser could no longer be identified — a correctness
+-- regression, not a safe fallback. So the whole entry is DROPPED — the
+-- collection query below and the write's CASE now both key off "does the
+-- `court` key exist" (`barr.obj ? 'court'`), with resolution (a real mapped
+-- or already-real id) deciding rewrite vs. drop; a `court` key present but
+-- unresolvable — including `"court": null`, which used to defeat
+-- `jsonb_set`'s STRICT null handling and leak a bare JSON `null` into the
+-- array (finding 14) — now falls out of aggregation entirely rather than
+-- ever reaching `jsonb_set`. Counted in the dry-run report below either way,
+-- so an operator can see it.
 --
 -- Idempotent, same shape as division-locked-scopes: an element already equal
 -- to a real court id for the org (a second run, post-migration) passes
 -- through via the same `id::text = <string>` referential check court_mapping
--- itself uses (never a uuid-shape regex). A blackout entry with no `court`
--- key (venue-wide) is untouched throughout. As a side effect this also folds
--- in the SAME present-but-non-array normalization the courts block's step 5
--- documents (json null/string/object -> treated as zero elements, so
--- `blackouts` itself lands on `[]`) via the identical CASE guard — not a new
--- write path, the existing courts-block idiom reused verbatim.
+-- itself uses (never a uuid-shape regex), and a dropped entry stays dropped
+-- (nothing left to re-drop on a second run). A blackout entry with no
+-- `court` key (venue-wide) is untouched throughout. As a side effect this
+-- also folds in the SAME present-but-non-array normalization the courts
+-- block's step 5 documents (json null/string/object -> treated as zero
+-- elements, so `blackouts` itself lands on `[]`) via the identical CASE
+-- guard — not a new write path, the existing courts-block idiom reused
+-- verbatim.
 -- =============================================================================
 
 -- blackouts-court-migration:begin
@@ -604,11 +644,13 @@ declare
   v_total_rewritten int := 0;
   v_total_unmapped int := 0;
 begin
-  -- Read-only: every blackout entry that carries a non-blank `court` string,
-  -- resolved against court_mapping (or a direct real-id passthrough check) —
-  -- reporting only, see header "Dry-run/write agreement" precedent above. A
-  -- blackout with no `court` key (venue-wide) never appears here — nothing
-  -- to migrate for it.
+  -- Read-only: every blackout entry that carries a `court` KEY (any value,
+  -- including null/blank — finding 14: this must agree with the write's own
+  -- guard below, `barr.obj ? 'court'`, or the two can disagree on an entry
+  -- neither of them then treats consistently), resolved against
+  -- court_mapping (or a direct real-id passthrough check). A blackout with
+  -- no `court` key at all (venue-wide) never appears here — nothing to
+  -- migrate for it.
   drop table if exists pg_temp.blackout_court_entries;
   create temp table blackout_court_entries as
     select ss.org_id, ss.division_id, elem.val as raw_string,
@@ -623,13 +665,14 @@ begin
         on cm.org_id = ss.org_id and cm.court_string = elem.val
       left join courts c_existing
         on c_existing.org_id = ss.org_id and c_existing.id::text = elem.val
-     where elem.val is not null and elem.val <> '';
+     where barr.obj ? 'court';
 
   -- DRY-RUN REPORT — emitted BEFORE the write below (the safety property of
   -- this whole session, per the P9 dispatch; a previous fix broke exactly
   -- this ordering and a re-review caught it). Counts every entry this block
-  -- will rewrite AND every one it will leave untouched, so neither number is
-  -- invisible to an operator deciding whether to run this migration.
+  -- will rewrite AND every one it will DROP (finding 2: no longer "leave
+  -- untouched" — see this block's header), so neither number is invisible to
+  -- an operator deciding whether to run this migration.
   for v_org in
     select org_id,
            count(distinct division_id) as n_divisions,
@@ -640,7 +683,7 @@ begin
      group by org_id
      order by org_id
   loop
-    raise notice 'V374 blackout-court migration (dry run): org=% divisions_with_court_blackouts=% court_blackout_entries=% entries_rewritten=% entries_left_untouched=%',
+    raise notice 'V374 blackout-court migration (dry run): org=% divisions_with_court_blackouts=% court_blackout_entries=% entries_rewritten=% entries_dropped_unmapped=%',
       v_org.org_id, v_org.n_divisions, v_org.n_entries, v_org.n_rewritten, v_org.n_unmapped;
     v_total_orgs := v_total_orgs + 1;
     v_total_divisions := v_total_divisions + v_org.n_divisions;
@@ -648,35 +691,43 @@ begin
     v_total_rewritten := v_total_rewritten + v_org.n_rewritten;
     v_total_unmapped := v_total_unmapped + v_org.n_unmapped;
   end loop;
-  raise notice 'V374 blackout-court migration (dry run) TOTAL: orgs=% divisions_with_court_blackouts=% court_blackout_entries=% entries_rewritten=% entries_left_untouched=%',
+  raise notice 'V374 blackout-court migration (dry run) TOTAL: orgs=% divisions_with_court_blackouts=% court_blackout_entries=% entries_rewritten=% entries_dropped_unmapped=%',
     v_total_orgs, v_total_divisions, v_total_entries, v_total_rewritten, v_total_unmapped;
 
-  -- WRITE: rewrite each blackout entry's `court` in place, element order
-  -- preserved. Only the `court` key changes (jsonb_set on the element);
-  -- `from`/`to` and any other keys pass through byte-identical. An element
-  -- with no `court` key is passed through unchanged (the CASE guard).
+  -- WRITE: rewrite each blackout entry's `court` in place where resolvable,
+  -- element order preserved among survivors; DROP the whole entry where it
+  -- is not (finding 2 — a stale/null court is never left in place and never
+  -- widened to venue-wide by dropping just the key). An element with no
+  -- `court` key at all (venue-wide) still passes through byte-identical —
+  -- the outer `not (barr.obj ? 'court')` branch never touches it. Resolution
+  -- is computed once per element (`resolved.new_obj`) and filtered on
+  -- BEFORE aggregation, so an unresolvable `court` — including JSON null,
+  -- which used to hit `jsonb_set`'s STRICT null handling and leak a bare
+  -- `null` into the array (finding 14) — never reaches `jsonb_set`/
+  -- `jsonb_agg` at all instead of being fixed up after the fact.
   update schedule_settings ss
      set config = jsonb_set(
        ss.config, '{blackouts}',
        coalesce((
-         select jsonb_agg(
-                  case when barr.obj ? 'court'
-                       then jsonb_set(
-                              barr.obj, '{court}',
-                              to_jsonb(coalesce(cm.court_id::text, c_existing.id::text, barr.obj ->> 'court'))
-                            )
-                       else barr.obj
-                  end
-                  order by barr.ord
-                )
-           from jsonb_array_elements(
-                  case when jsonb_typeof(ss.config -> 'blackouts') = 'array'
-                       then ss.config -> 'blackouts' else '[]'::jsonb end
-                ) with ordinality as barr(obj, ord)
-           left join court_mapping cm
-             on cm.org_id = ss.org_id and cm.court_string = (barr.obj ->> 'court')
-           left join courts c_existing
-             on c_existing.org_id = ss.org_id and c_existing.id::text = (barr.obj ->> 'court')
+         select jsonb_agg(resolved.new_obj order by resolved.ord)
+           from (
+             select barr.ord,
+                    case
+                      when not (barr.obj ? 'court') then barr.obj
+                      when coalesce(cm.court_id, c_existing.id) is not null
+                        then jsonb_set(barr.obj, '{court}', to_jsonb(coalesce(cm.court_id, c_existing.id)::text))
+                      else null
+                    end as new_obj
+               from jsonb_array_elements(
+                      case when jsonb_typeof(ss.config -> 'blackouts') = 'array'
+                           then ss.config -> 'blackouts' else '[]'::jsonb end
+                    ) with ordinality as barr(obj, ord)
+               left join court_mapping cm
+                 on cm.org_id = ss.org_id and cm.court_string = (barr.obj ->> 'court')
+               left join courts c_existing
+                 on c_existing.org_id = ss.org_id and c_existing.id::text = (barr.obj ->> 'court')
+           ) resolved
+          where resolved.new_obj is not null
        ), '[]'::jsonb)
      )
    where ss.config ? 'blackouts';

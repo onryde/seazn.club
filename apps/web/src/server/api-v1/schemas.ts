@@ -985,12 +985,14 @@ export const ScheduleConfig = z.object({
    *  could no longer match the court it named (silently went global or
    *  inert depending on the reader). V374 rewrites every stored
    *  `blackouts[].court` name -> id on migration, reusing the same
-   *  court_mapping `courts` itself is rewritten through; an entry that
-   *  cannot be mapped is left untouched rather than dropped (a blackout's
-   *  only job is to compare, same stance V374's locked_scopes block takes —
-   *  see that block's own comment for why "leave inert" beats "silently
-   *  discard an organiser's blackout"), and counted in the migration's
-   *  dry-run report so an operator can see and fix it by hand. */
+   *  court_mapping `courts` itself is rewritten through. Review wave 1,
+   *  finding 2: an entry that cannot be mapped is DROPPED entirely, never
+   *  left in place (this field is required-shaped — `.optional()` only
+   *  drops the KEY, a present-but-unmappable string still fails `CourtId`)
+   *  and never widened into a venue-wide blackout by dropping just the
+   *  `court` key — that would block every court during the window instead
+   *  of the one the organiser could no longer be identified. Counted in the
+   *  migration's dry-run report either way, so an operator can see it. */
   blackouts: z
     .array(z.object({ court: CourtId.optional(), from: IsoDateTime, to: IsoDateTime }))
     .max(200)
