@@ -14,6 +14,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { autoSchedule, putScheduleSettings } from "../schedule";
+import { seedCourts } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -79,13 +80,14 @@ async function seedRoundRobin(
     })),
   );
   const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
+  const courts = await seedCourts(auth.orgId, 1);
   await putScheduleSettings(auth, division.id, {
     config: {
       startAt: "2026-08-01T09:00:00.000Z",
       endAt: "2026-08-01T23:59:00.000Z", // ONE calendar day, UTC
       matchMinutes: 60,
       gapMinutes: 0,
-      courts: ["C1"],
+      courts,
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows,
