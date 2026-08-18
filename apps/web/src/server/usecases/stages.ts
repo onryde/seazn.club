@@ -135,7 +135,7 @@ export const FIXTURE_COLS = [
 export const BOARD_FIXTURE_COLS = [
   "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "fixture_no",
   "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label",
-  "scheduled_at", "venue", "court_label",
+  "scheduled_at", "venue", "court_label", "court_id", "venue_id",
   "officials", "status", "outcome", "schedule_source", "schedule_locked", "created_at",
 ] as const;
 

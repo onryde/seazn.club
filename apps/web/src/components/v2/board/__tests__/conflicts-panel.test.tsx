@@ -41,6 +41,8 @@ const TBD_FIXTURE: BoardFixture = {
   scheduled_at: null,
   venue: null,
   court_label: null,
+  court_id: null,
+  court_name: null,
   status: "scheduled",
   schedule_source: "manual",
   schedule_locked: false,

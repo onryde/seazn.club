@@ -28,6 +28,8 @@ const F = (over: Partial<PublicFixture>): PublicFixture => ({
   scheduled_at: "2026-09-25T09:00:00.000Z",
   venue: null,
   court_label: null,
+  venue_name: null,
+  court_name: null,
   status: "scheduled",
   outcome: null,
   summary: null,
