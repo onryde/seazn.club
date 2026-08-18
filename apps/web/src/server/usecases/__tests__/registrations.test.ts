@@ -2891,7 +2891,11 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS0
 
     const args = stripeMock.checkoutCreate.mock.calls[0][0];
     expect(args.line_items).toHaveLength(2);
-    expect(args.line_items.map((li) => li.price_data.unit_amount).sort()).toEqual([500, 700]);
+    expect(
+      args.line_items
+        .map((li: { price_data: { unit_amount: number } }) => li.price_data.unit_amount)
+        .sort(),
+    ).toEqual([500, 700]);
     // Pro plan (stripeRig seeds "pro") is 2% — over the SUM (1200), never
     // either entry alone.
     expect(args.payment_intent_data.application_fee_amount).toBe(applicationFeeCents(1200, 2));
