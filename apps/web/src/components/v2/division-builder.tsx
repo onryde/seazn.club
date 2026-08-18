@@ -18,7 +18,8 @@ import { FormatExplainerPanel } from "@/components/v2/format-explainer-panel";
 import { FormatRecommendStrip } from "@/components/v2/format-recommend-strip";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { CourtMultiPicker } from "@/components/v2/shared/court-multi-picker";
-import type { Venue } from "@/components/v2/venues-panel";
+// P9: BOARD-side Venue — no calendar (see court-multi-picker.tsx).
+import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { useMsg, useLocale } from "@/components/i18n/dict-provider";
 import { sportLabel } from "@/lib/scoring-vocab";
 import {

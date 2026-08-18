@@ -32,7 +32,9 @@ import { courtDisplayName, type BoardConfig } from "@/components/v2/board/types"
 // own `courtNamesById` and the settings tab's `CourtMultiPicker` already use
 // — reused here rather than a third court-name/court-picker implementation.
 import { courtGroups, resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
-import type { Venue } from "@/components/v2/venues-panel";
+// P9: the BOARD-side Venue (no `hours`/`exceptions`) — this panel shows and
+// picks courts, it never reads a calendar. See court-multi-picker.tsx.
+import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import type { PatchFixture } from "@/server/api-v1/schemas";
 import { zonedTimeInput } from "@/lib/zoned-datetime";
 import type { ScheduleMetrics, ScheduleSolverInfo } from "@/server/api-v1/schemas";

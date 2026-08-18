@@ -38,7 +38,9 @@ import { ScheduleGateDialog, type GateAction } from "./board/schedule-gate-dialo
 import { ScheduleResultStrip } from "./board/result-strip";
 import { SettingsPanel } from "./board/settings-panel";
 import { resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
-import type { Venue } from "@/components/v2/venues-panel";
+// P9: BOARD-side Venue — identity and display, no calendar. See
+// court-multi-picker.tsx for why the board must not carry hours/exceptions.
+import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import {
   cardTitle,
   courtDisplayName,

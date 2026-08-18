@@ -37,19 +37,19 @@ const fixtures = [
   {
     id: "f1", stage_id: "s1", pool_id: null, round_no: 1, seq_in_round: 1,
     fixture_no: 1, home_entrant_id: "e1", away_entrant_id: "e2",
-    scheduled_at: "2026-07-21T19:28:00.000Z", venue: null, court_label: null,
+    scheduled_at: "2026-07-21T19:28:00.000Z", venue: null, court_label: null, court_id: null, court_name: null,
     status: "scheduled", outcome: null,
   },
   {
     id: "f2", stage_id: "s1", pool_id: null, round_no: 2, seq_in_round: 1,
     fixture_no: 2, home_entrant_id: "e3", away_entrant_id: "e4",
-    scheduled_at: "2026-07-22T19:28:00.000Z", venue: null, court_label: null,
+    scheduled_at: "2026-07-22T19:28:00.000Z", venue: null, court_label: null, court_id: null, court_name: null,
     status: "scheduled", outcome: null,
   },
   {
     id: "f3", stage_id: "s1", pool_id: null, round_no: 3, seq_in_round: 1,
     fixture_no: 3, home_entrant_id: "e1", away_entrant_id: "e3",
-    scheduled_at: "2026-07-20T21:28:00.000Z", venue: null, court_label: null,
+    scheduled_at: "2026-07-20T21:28:00.000Z", venue: null, court_label: null, court_id: null, court_name: null,
     status: "scheduled", outcome: null,
   },
 ];

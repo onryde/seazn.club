@@ -23,7 +23,18 @@
 // the schedule board and division-wizard bundles, which never otherwise load
 // it. The filter itself is three lines; reimplemented inline below instead.
 import Link from "next/link";
-import type { Venue, Court } from "@/components/v2/venues-panel";
+import type { Venue as FullVenue, Court as FullCourt } from "@/components/v2/venues-panel";
+
+/** P9: the board side needs court IDENTITY and display only — never the
+ *  calendar. `hours`/`exceptions` are the Directory calendar editor's
+ *  business (and P10's lattice input); shipping them to every board render
+ *  put the five-division RSC payload 33KB over its budget
+ *  (board-v3.spec.ts:287). Narrowing the TYPE rather than blanking the arrays
+ *  keeps this honest: a future consumer cannot read a calendar that the board
+ *  prop does not carry. `FullCourt` remains assignable to `Court` here, so the
+ *  Directory can pass its richer rows unchanged. */
+export type Court = Omit<FullCourt, "hours" | "exceptions">;
+export type Venue = Omit<FullVenue, "courts"> & { courts: Court[] };
 import { buildCourtDirectory } from "@/lib/court-directory";
 
 /** Non-archived venues, each holding only its non-archived courts; a venue

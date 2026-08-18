@@ -35,7 +35,8 @@ import { pluralizeVenue } from "@/lib/venue";
 // below. `venues` is fetched server-side (`listVenues`) and threaded down —
 // see the component's own header for why it isn't fetched client-side here.
 import { CourtMultiPicker, flattenCourts } from "@/components/v2/shared/court-multi-picker";
-import type { Venue } from "@/components/v2/venues-panel";
+// P9: BOARD-side Venue — no calendar (see court-multi-picker.tsx).
+import type { Venue } from "@/components/v2/shared/court-multi-picker";
 // D2 capacity pre-check (design doc bench-product-value/designs/2026-08-13-
 // capacity-precheck-design.md): both imports are CLIENT-SAFE leaves — see
 // capacity-input.ts's header for why this file must never reach
