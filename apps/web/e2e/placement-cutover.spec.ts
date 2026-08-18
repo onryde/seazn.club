@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { TAG, apiJson, addEntrantsViaApi, divisionPath } from "./helpers";
+import { TAG, apiJson, addEntrantsViaApi, divisionPath, seedVenueWithCourts } from "./helpers";
 
 // Task 11 (placement cutover) — proves the ONE thing `auto-schedule.spec.ts`
 // structurally cannot: that clicking Auto-schedule in a real browser, against a
@@ -82,7 +82,8 @@ const BUSY_BACKOFF_MS = 4_000;
 interface FixtureRow {
   id: string;
   scheduled_at: string | null;
-  court_label: string | null;
+  court_id: string | null;
+  court_name: string | null;
 }
 const getFixture = async (request: APIRequestContext, id: string): Promise<FixtureRow> =>
   (await apiJson<FixtureRow>(request, `/api/v1/fixtures/${id}`)).data!;
@@ -145,6 +146,7 @@ async function seedBoard(
   }
   expect(fixtureIds.length).toBe(FIXTURE_COUNT);
 
+  const { courts } = await seedVenueWithCourts(request, ["Court A", "Court B"]);
   const settings = await apiJson(
     request,
     `/api/v1/divisions/${divisionId}/schedule-settings`,
@@ -155,7 +157,7 @@ async function seedBoard(
         startAt: START,
         matchMinutes: SLOT_MIN,
         gapMinutes: 0,
-        courts: ["Court A", "Court B"],
+        courts: courts.map((c) => c.id),
         perEntrantMinRest: REST_MIN,
         blackouts: [],
         sessionWindows: [],
@@ -260,8 +262,8 @@ test("Auto-schedule reaches the OPTIMISER, not the greedy fallback wearing the s
   await expect(page.getByTestId("schedule-result-lost")).toHaveCount(0);
   const after = await Promise.all(fixtureIds.map((id) => getFixture(request, id)));
   expect(after.filter((f) => f.scheduled_at !== null)).toHaveLength(FIXTURE_COUNT);
-  expect(after.every((f) => f.court_label !== null)).toBe(true);
-  expect(new Set(after.map((f) => f.court_label)).size).toBe(2);
+  expect(after.every((f) => f.court_id !== null)).toBe(true);
+  expect(new Set(after.map((f) => f.court_id)).size).toBe(2);
 });
 
 // --- task C2: a court-scoped blackout reaches the solver, not a refusal ----
@@ -369,6 +371,8 @@ test("a court-scoped blackout reaches the OPTIMISER instead of switching it off"
   }
   expect(fixtureIds.length).toBe(PER_COURT_FIXTURE_COUNT);
 
+  const { courts } = await seedVenueWithCourts(request, ["C1", "C2"]);
+  const [c1, c2] = courts;
   const settings = await apiJson(
     request,
     `/api/v1/divisions/${divisionId}/schedule-settings`,
@@ -379,14 +383,21 @@ test("a court-scoped blackout reaches the OPTIMISER instead of switching it off"
         startAt: PER_COURT_START,
         matchMinutes: PER_COURT_MATCH_MIN,
         gapMinutes: PER_COURT_GAP_MIN,
-        courts: ["C1", "C2"],
+        courts: [c1!.id, c2!.id],
         perEntrantMinRest: PER_COURT_REST_MIN,
         // C2 alone loses its back half (90-180 minutes in); C1 is untouched.
         // The two courts' offered start times now genuinely differ -- the
         // exact shape that used to be refused before ever reaching placement.
+        //
+        // `blackouts[].court` (ScheduleConfig, schemas.ts) is still a plain
+        // `z.string()` post-P9 — NOT narrowed to CourtId — but schedule.ts's
+        // own builder (~line 846-847) forwards it verbatim alongside `courts`
+        // (now real ids) with no separate name resolution, so a blackout
+        // scoped by NAME here would silently never match. Using the real id
+        // is the only reading consistent with the rest of this config.
         blackouts: [
           {
-            court: "C2",
+            court: c2!.id,
             from: new Date(PER_COURT_START_MS + 90 * 60_000).toISOString(),
             to: new Date(PER_COURT_START_MS + 180 * 60_000).toISOString(),
           },
@@ -416,10 +427,11 @@ test("a court-scoped blackout reaches the OPTIMISER instead of switching it off"
 
   const after = await Promise.all(fixtureIds.map((id) => getFixture(request, id)));
   expect(after.filter((f) => f.scheduled_at !== null)).toHaveLength(PER_COURT_FIXTURE_COUNT);
-  expect(after.every((f) => f.court_label !== null)).toBe(true);
+  expect(after.every((f) => f.court_id !== null)).toBe(true);
   // Both configured courts used -- the rebalance this test exists to prove,
-  // stated directly rather than only through the imbalance metric.
-  expect(new Set(after.map((f) => f.court_label))).toEqual(new Set(["C1", "C2"]));
+  // stated directly rather than only through the imbalance metric. Court
+  // NAME, not id (#465-style discipline: never assert a bare uuid).
+  expect(new Set(after.map((f) => f.court_name))).toEqual(new Set(["C1", "C2"]));
 });
 
 // --- C10 (2026-08-16, wire person indices design): two fixtures sharing a
