@@ -136,7 +136,11 @@ export default async function DivisionSchedulePage({
     preferredCurrency(auth.orgId),
     // Unconditional like `settings`/`stages` above (board AND settings tabs
     // both need it; not worth a per-tab gate for one cheap query set).
-    listVenues(auth),
+    // P9: archived INCLUDED deliberately — this list serves two jobs. The
+    // picker filters archived out itself (twice), so selection is unaffected;
+    // but a fixture placed before its court was archived still needs that
+    // court's NAME to render, and without it the board showed a bare uuid.
+    listVenues(auth, { includeArchived: true }),
   ]);
 
   // Feed wiring for TBD card labels ("Winner of R1·2" — doc 12 §2).

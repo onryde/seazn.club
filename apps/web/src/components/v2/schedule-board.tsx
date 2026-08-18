@@ -1708,7 +1708,11 @@ function WeekView({
     const hh = src ? String(src.getHours()).padStart(2, "0") : "09";
     const mm = src ? String(src.getMinutes()).padStart(2, "0") : "00";
     const iso = new Date(`${targetDay}T${hh}:${mm}:00`).toISOString();
-    onMove(fixtureId, iso, f.court_label ?? courts[0] ?? null);
+    // P9: the court must come from `court_id`. `court_label` is FROZEN — no
+    // writer has touched it since the cutover — so reading it here made every
+    // week-view day-drag fall through to `courts[0]`, silently REASSIGNING the
+    // fixture to the first configured court instead of keeping its own.
+    onMove(fixtureId, iso, f.court_id ?? courts[0] ?? null);
   }
 
   return (
