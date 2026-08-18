@@ -176,11 +176,19 @@ at the mapping site so the next reader does not re-derive it as a bug, and does
 **not** touch the engine enum — which would ripple through the schema, the DB
 CHECK and every exhaustive switch for a naming question.
 
-**Consequence**: F4 as originally conceived has almost no work left. This
-document recommends folding its comment into F3 and **retiring F4 as a
-session**, renumbering F5 or leaving the gap. A session that exists to justify
-its own number is how programmes accumulate ceremony. The owner should confirm
-before anyone writes an F4 prompt.
+**Consequence**: F4 *as originally conceived* has almost no work left — one
+comment, folded into F3. But the slot should not be left empty or renumbered.
+
+**F4 is repurposed** to the two product gaps §7 identifies on the surfaces
+organisers hand out: the exported/printed draw (P5) and the subscribed calendar
+(P2). Both are day-one fixtures leaking on a non-HTML surface, both are
+server-side, both are small, and both are disjoint from everything F3 touches.
+That is a coherent session with a real deliverable, which is a better use of
+the number than a session that exists to justify it — and better than a
+renumber, which would break every reference already written to F5.
+
+The sport/format-kind premise is retired; the number is not. Owner should
+confirm the repurpose.
 
 ---
 
@@ -245,6 +253,35 @@ marked.
 | P4 | Placeholder labels read well on day one | **already true — no work owed** | `stages.ts:1611,1614` |
 | P5 | The printed/exported draw says "TBD vs TBD" everywhere | **real gap, invisible from the UI** | `exports.ts` selects no `*_slot_label` |
 | P6 | Multi-source pool keys may collide | **open question F3 must answer** | `sourceIndex` discarded at `stages.ts:1457-1462` |
+
+### Where each of these lands
+
+Four of the six are F3's own work; two are not, and the split is not a matter
+of taste. F3 is already the riskiest session in the programme (§3) — it changes
+what organisers see on every multi-stage format at once. P2 and P5 touch a
+different subsystem entirely and would widen that blast radius for no gain.
+
+| # | Home | Why |
+|---|---|---|
+| P1 | **F3**, as a verification step | Confirms the flip is usable; only becomes work if a gate turns out to depend on entrant identity |
+| P2 | **F4** (see §4) | `calendar.ics` route — disjoint from every file F3 opens |
+| P3 | **F3** | It *is* §2.2, the session's central product decision |
+| P4 | nowhere — no work owed | Verified already correct |
+| P5 | **F4** (see §4) | `exports.ts` — disjoint from every file F3 opens |
+| P6 | **F3** | F3 is the session that makes multi-source reachable from the picker |
+
+**P2 and P5 do not have to wait for F3.** Verified on the F2 branch: three
+catalogue templates already emit `timing: "setup"` today —
+`euro24.json:47`, `league-playoff.json:32`, `t20-super8.json:33` and `:48`. So
+labelled placeholder fixtures exist to test against right now, and the export
+and calendar fixes can be written, tested and merged without F3 having landed.
+F3 then widens who benefits from them rather than enabling them.
+
+File sets are provably disjoint — F3 owns `format-templates.ts`,
+`progression.ts` and the seeding region of `stages.ts`; F4 owns `exports.ts`
+and the `calendar.ics` route — so the two may run in parallel. That is the
+standing bar for parallel work in this repo, and it is met here on inspection
+rather than by ownership assertion.
 
 ### P1 — the whole tournament becomes schedulable on day one
 
@@ -367,7 +404,9 @@ how this programme's silent defects have been created every previous time.
 ## 8. Pick-up prompts — start any of these from one message
 
 Each block below is self-contained: paths, criteria, exclusions, verification.
-Paste one as the whole prompt. Do not start F3 until PR #616 (F2) has merged —
+Paste one as the whole prompt. The two F4 blocks may be run together as one
+session, and need not wait for F3 — see §7's routing table for why. Do not
+start F3 until PR #616 (F2) has merged —
 F3 consumes the shipped `progression` field, and this repo has a repeated
 failure where a session authored against a design met an implementation that
 landed differently.
@@ -438,7 +477,7 @@ e2e.yml` is **live on pull requests**.
 > see on every multi-stage format at once, so exercise all six templates end to
 > end on a real build and inspect the rendered bracket.
 
-### Prompt: P5 — make the exported and printed draw readable
+### Prompt: F4 (part 1 of 2) — make the exported and printed draw readable
 
 > Fix the export path so day-one fixtures print their real placeholder labels
 > instead of "TBD". See `docs/superpowers/specs/
@@ -464,7 +503,7 @@ e2e.yml` is **live on pull requests**.
 > Out of scope: adding fixture data to `poster.pdf`, which today renders QR and
 > branding only. Worth doing, separately scoped.
 
-### Prompt: P2 — day-one fixtures in the subscribed calendar
+### Prompt: F4 (part 2 of 2) — day-one fixtures in the subscribed calendar
 
 > Make unscheduled day-one fixtures appear in the subscribed calendar. See
 > `docs/superpowers/specs/2026-08-18-format-progression-f3-f5-design.md` §7 P2.
