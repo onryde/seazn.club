@@ -716,4 +716,173 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
     expect(text).toContain("Tableau principal");
     expect(text).not.toContain("Winners bracket");
   });
+
+  // F4 wave-A re-review, Gap 1 (exports.ts:569): the knockout round-name
+  // callback moved from the client-safe English-default `msg` (@/lib/messages)
+  // onto the org-locale `slotLookup`. Every existing buildBracket-reaching
+  // test — including "bracket export names rounds via the injected roundRole
+  // wiring" above — runs against a DEFAULT ENGLISH org, where old `msg` and
+  // new `slotLookup` resolve to byte-identical strings (both ultimately read
+  // en/ui.json for an English org), so the wiring change was code-correct but
+  // test-unproven: it could have been silently reverted to `msg` and nothing
+  // here would fail. The double_elim French test directly above only reaches
+  // buildBracketDe's laneLabels — this one reaches buildBracket/
+  // roundRoleLabel, the knockout-only path the F1 Task 4 comment describes.
+  // Old code (msg, English-only regardless of locale) could only ever have
+  // produced ["Quarter-finals", "Semi-finals", "Final"] here — verified by
+  // temporarily reverting the callsite by hand (report has the red-run
+  // evidence) — so this assertion fails against it and passes against the
+  // current slotLookup wiring.
+  it("bracket export names knockout rounds in French for a French-locale org", async () => {
+    const { auth } = await seedOrg();
+    await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Print Cup FR KO",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    await createEntrants(
+      auth,
+      division.id,
+      Array.from({ length: 8 }, (_, i) => ({
+        kind: "individual" as const,
+        display_name: `E${i + 1}`,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "knockout",
+      name: "KO",
+      config: {},
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const model = await buildDivisionDocModel(auth, division.id, "bracket", {
+      printedAt: PRINTED,
+    });
+    // fr's bracket.round.quarter/semi/final — dictionaries/fr/ui.json:3947-3949.
+    expect(model.bracket!.roundLabels).toEqual(["Quarts de finale", "Demi-finales", "Finale"]);
+  });
+
+  // F4 wave-A re-review, Gap 2 (exports.ts:532-541): the page_playoff arm
+  // moved from hardcoded English literals ("Qualifier 1"/"Eliminator"/
+  // "Qualifier 2"/"Final", never routed through msg() at all per e3a322e5a's
+  // commit message) to slotLookup, and no test built a bracket doc for a
+  // page_playoff stage at all — zero prior coverage, English or otherwise.
+  // en's bracket.round.qualifier1/eliminator/qualifier2/final are
+  // byte-identical to those old hardcoded literals (dictionaries/en/ui.json:
+  // 3956-3959), so an English-org test would pass unchanged against the
+  // pre-Wave-A code and prove nothing about the slotLookup wiring — French is
+  // what makes this assertion capable of failing against the old code.
+  it("bracket export names page-playoff rounds in French for a French-locale org", async () => {
+    const { auth } = await seedOrg("pro"); // shares double_elim's Pro gate — stageNeedsDoubleElimGate(page_playoff) === true
+    await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Print Cup FR PP",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    // generatePagePlayoff (packages/engine/src/scheduling/bracket.ts) throws
+    // CONFIG_INVALID unless entrants.length === 4 — the format is a fixed
+    // 4-team IPL-style shape (Q1/Eliminator/Q2/Final), not parametric.
+    await createEntrants(
+      auth,
+      division.id,
+      Array.from({ length: 4 }, (_, i) => ({
+        kind: "individual" as const,
+        display_name: `E${i + 1}`,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "page_playoff",
+      name: "Playoffs",
+      config: {},
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const model = await buildDivisionDocModel(auth, division.id, "bracket", {
+      printedAt: PRINTED,
+    });
+    expect(model.pagePlayoff!.slotLabels).toEqual({
+      q1: "Qualification 1",
+      eliminator: "Éliminateur",
+      q2: "Qualification 2",
+      final: "Finale",
+    });
+  });
+
+  // F4 wave-A re-review, Gap 2 (exports.ts:543-552): same story as
+  // page_playoff above — the stepladder arm moved from a hardcoded
+  // `` `Rung ${i + 1}` ``/"Final" template (never through msg()) to
+  // slotLookup, with zero prior coverage of a stepladder bracket doc. en's
+  // bracket.round.rung/final are again byte-identical to the old hardcoded
+  // strings, so French is what makes this assertion capable of failing
+  // against the old code.
+  it("bracket export names stepladder rungs in French for a French-locale org", async () => {
+    const { auth } = await seedOrg(); // stepladder is NOT gated (format-gates.test.ts)
+    await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Print Cup FR SL",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    // generateStepladder (packages/engine/src/scheduling/bracket.ts) accepts
+    // any k >= 2 entrants; 4 gives 3 rungs (two climb games + a final), enough
+    // to prove both the `rung` and `final` labels in one doc.
+    await createEntrants(
+      auth,
+      division.id,
+      Array.from({ length: 4 }, (_, i) => ({
+        kind: "individual" as const,
+        display_name: `E${i + 1}`,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "stepladder",
+      name: "Stepladder",
+      config: {},
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const model = await buildDivisionDocModel(auth, division.id, "bracket", {
+      printedAt: PRINTED,
+    });
+    expect(model.ladder!.rungs.map((r) => r.label)).toEqual([
+      "Échelon 1",
+      "Échelon 2",
+      "Finale",
+    ]);
+  });
 });
