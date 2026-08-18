@@ -9,10 +9,9 @@ import { sql } from "@/lib/db";
 import { requireOrgPage } from "@/server/page-auth";
 import { routes } from "@/lib/routes";
 import { OrgPaymentInstructions } from "@/components/org-payment-instructions";
-import { BackLink } from "@/components/back-link";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
-import { SettingsShell } from "../_components/settings-nav";
+import { SettingsShell, navContext } from "../_components/settings-nav";
 
 export default async function ConnectSettingsPage({
   params,
@@ -24,6 +23,10 @@ export default async function ConnectSettingsPage({
   const isOwner = org.role === "owner";
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
+  // The rail's plan + credit-balance header. Skipped for a payer who is not a
+  // member: they get no rail at all (see SettingsShell.showNav), so the two
+  // reads would be paid for nothing.
+  const navCtx = await navContext(org.id);
 
   const [row] = await sql<
     { payment_instructions: string | null; default_payment_method: "offline" | "stripe" }[]
@@ -32,13 +35,14 @@ export default async function ConnectSettingsPage({
     from organizations where id = ${org.id}`;
 
   return (
-    <SettingsShell orgSlug={orgSlug} active="connect" dict={dict}>
-      {/* Same reason as the billing page: the apron chevron was not found. */}
-      <BackLink
-        href={routes.orgSettings(orgSlug)}
-        label={t(dict, "action.settings")}
-        emphasis="button"
-      />
+    <SettingsShell orgSlug={orgSlug} context={navCtx} active="connect" dict={dict}>
+      {/* No "back to Settings" link here any more. It existed because this page
+      had no navigation of its own — #190 removed it as duplication, it was
+      reported missing twice, and it came back. The rail beside it now goes
+      everywhere the link went and marks where you are, so the link is the
+      duplication #190 thought it was. A payer who is not a member has no rail,
+      and had no link either (v17 gap #333): the Settings index is member-gated
+      and would 404 on them. */}
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-900">{t(dict, "payments.title")}</h1>
         <p className="mt-1 text-sm text-slate-500">

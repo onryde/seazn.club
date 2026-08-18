@@ -61,6 +61,63 @@ test.describe("settings shell", () => {
     await expect(page.getByRole("button", { name: "Cookie settings" })).toHaveCount(0);
   });
 
+  // Both of these columns were read by entrant-facing surfaces long before
+  // anything could write them: default_locale by every public page, embed,
+  // calendar feed and registration email, and currency (V365) by every entry
+  // fee. This is the first UI that reaches either.
+  test("organisation defaults expose the public language and the entry-fee currency", async ({
+    page,
+  }) => {
+    await page.goto("/settings?tab=preferences");
+
+    const language = page.getByRole("combobox", { name: "Organisation public language" });
+    await expect(language).toBeVisible();
+    const currency = page.getByRole("combobox", { name: "Entry fee currency" });
+    await expect(currency).toBeVisible();
+
+    // Round-trip the language: pick a value, save, reload, it is still there.
+    const original = await language.inputValue();
+    const next = original === "fr" ? "es" : "fr";
+    await language.selectOption(next);
+    const languageRow = page
+      .locator("div")
+      .filter({ has: language })
+      .filter({ has: page.getByRole("button", { name: /^Sav/ }) })
+      .last();
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes("/api/orgs/") && r.request().method() === "PATCH",
+      ),
+      languageRow.getByRole("button", { name: /^Sav/ }).click(),
+    ]);
+    await page.reload();
+    await expect(
+      page.getByRole("combobox", { name: "Organisation public language" }),
+    ).toHaveValue(next, { timeout: 20_000 });
+
+    // Restore so later specs see the org they expect.
+    await page.getByRole("combobox", { name: "Organisation public language" }).selectOption(original);
+    await page
+      .locator("div")
+      .filter({ has: page.getByRole("combobox", { name: "Organisation public language" }) })
+      .filter({ has: page.getByRole("button", { name: /^Sav/ }) })
+      .last()
+      .getByRole("button", { name: /^Sav/ })
+      .click();
+  });
+
+  test("the rail carries the plan and credit balance from any Settings page", async ({ page }) => {
+    // Previously visible only from Billing and Credits — the two pages an
+    // owner is not on when they run out of credits mid-schedule.
+    await page.goto("/settings/billing");
+    // Scoped to the rail's own landmark: the billing PAGE also links to
+    // credits ("Manage AI credits"), and an unscoped match resolves to both.
+    // The point of this case is that the rail carries it, not the page.
+    const rail = page.getByRole("complementary");
+    await expect(rail.getByRole("link", { name: /AI credits$/ })).toBeVisible();
+    await expect(rail).toContainText("Pro");
+  });
+
   // The sidebar used to disappear the moment you left the tabbed index.
   test("the sidebar is present on the route-owning Settings pages", async ({ page }) => {
     // Only /settings/billing and /settings/connect have legacy redirects; the

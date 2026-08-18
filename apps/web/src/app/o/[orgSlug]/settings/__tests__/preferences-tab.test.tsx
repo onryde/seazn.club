@@ -19,23 +19,49 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prerender } from "react-dom/static";
 
 const {
-  hasFeature, hasFeatureOnAnyPass, requireOrgPage, getUserOrgs, resolveLocale, preferredCurrency,
+  hasFeature, hasFeatureOnAnyPass, orgPlanKey, requireOrgPage, getUserOrgs,
+  resolveLocale, preferredCurrency, walletIdFor, balance,
 } = vi.hoisted(() => ({
   hasFeature: vi.fn(),
   hasFeatureOnAnyPass: vi.fn(),
+  orgPlanKey: vi.fn(),
   requireOrgPage: vi.fn(),
   getUserOrgs: vi.fn(),
   resolveLocale: vi.fn(),
   preferredCurrency: vi.fn(),
+  walletIdFor: vi.fn(),
+  balance: vi.fn(),
 }));
 
 // One tagged-template mock serves both callers: the organisation tab's
 // `select about …` and the preferences tab's `select s.currency …`. Each
 // destructures `[row]` and reads its own field, so a single row carrying both
 // is not a fudge — it is the union of what the two queries return.
-const sqlRow = { about: null as string | null, currency: null as string | null };
-vi.mock("@/lib/db", () => ({ sql: vi.fn(async () => [sqlRow]) }));
-vi.mock("@/lib/entitlements", () => ({ hasFeature, hasFeatureOnAnyPass }));
+const sqlRow = {
+  about: null as string | null,
+  // The subscription probe.
+  currency: null as string | null,
+  // The org-defaults probe (`select default_locale, currency, …`) reads
+  // `currency` too — the same field, and deliberately: the subscription's
+  // billing currency and the org's entry-fee currency are DIFFERENT facts that
+  // happen to share a column name, and a test row that conflates them would
+  // pass while the page read the wrong one. Cases that care set them apart via
+  // `orgRow`.
+  default_locale: null as string | null,
+  stripe_account_id: null as string | null,
+  stripe_unsupported_currency: null as string | null,
+};
+/** Overrides applied to the org-defaults SELECT only (matched on its text). */
+const orgRow: Record<string, unknown> = {};
+vi.mock("@/lib/db", () => ({
+  sql: vi.fn(async (strings: TemplateStringsArray) => {
+    const text = Array.isArray(strings) ? strings.join("") : "";
+    if (text.includes("default_locale")) return [{ ...sqlRow, ...orgRow }];
+    return [sqlRow];
+  }),
+}));
+vi.mock("@/lib/entitlements", () => ({ hasFeature, hasFeatureOnAnyPass, orgPlanKey }));
+vi.mock("@/lib/credits", () => ({ walletIdFor, balance }));
 vi.mock("@/server/page-auth", () => ({ requireOrgPage }));
 vi.mock("@/lib/auth", () => ({ getUserOrgs }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale }));
@@ -59,6 +85,26 @@ vi.mock("@/components/cookie-settings-button", () => ({
 }));
 vi.mock("@/components/org-timezone", () => ({
   OrgTimezone: () => <div data-testid="org-timezone" />,
+}));
+vi.mock("@/components/org-public-language", () => ({
+  OrgPublicLanguage: ({ initialLocale }: { initialLocale: string }) => (
+    <div data-testid="org-language" data-locale={initialLocale} />
+  ),
+}));
+vi.mock("@/components/org-registration-currency", () => ({
+  OrgRegistrationCurrency: ({
+    initialCurrency,
+    lockedTo,
+  }: {
+    initialCurrency: string;
+    lockedTo: string | null;
+  }) => (
+    <div
+      data-testid="org-reg-currency"
+      data-current={initialCurrency}
+      data-locked={lockedTo ?? "no"}
+    />
+  ),
 }));
 vi.mock("@/components/org-logo", () => ({ OrgLogo: () => <div /> }));
 vi.mock("@/components/org-brand-color", () => ({ OrgBrandColor: () => <div /> }));
@@ -113,6 +159,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   sqlRow.about = null;
   sqlRow.currency = null;
+  sqlRow.default_locale = null;
+  sqlRow.stripe_account_id = null;
+  sqlRow.stripe_unsupported_currency = null;
+  for (const k of Object.keys(orgRow)) delete orgRow[k];
+  orgPlanKey.mockResolvedValue("pro");
+  walletIdFor.mockResolvedValue("w1");
+  balance.mockResolvedValue(42);
   requireOrgPage.mockResolvedValue({
     user: {
       id: "u1", email: "owner@example.com", display_name: "Owner",
@@ -130,14 +183,65 @@ beforeEach(() => {
 });
 
 describe("settings → preferences", () => {
-  it("mounts all five controls", async () => {
+  it("mounts all seven controls", async () => {
     const html = await render("preferences");
 
     expect(html).toContain("my-timezone");
     expect(html).toContain("my-language");
     expect(html).toContain("my-currency");
     expect(html).toContain("org-timezone");
+    expect(html).toContain("org-language");
+    expect(html).toContain("org-reg-currency");
     expect(html).toContain("cookie-settings");
+  });
+
+  it("seeds the org language from the column, not from the viewer's locale", async () => {
+    // The bug this pins: reading resolveLocale() (the CONSOLE language, "en"
+    // here) instead of organizations.default_locale would render a picker
+    // showing English for a club whose public pages are already French, and
+    // saving it would silently rewrite them.
+    orgRow.default_locale = "fr";
+    expect(await render("preferences")).toContain('data-locale="fr"');
+  });
+
+  it("falls back to English when the org has never set one", async () => {
+    orgRow.default_locale = null;
+    expect(await render("preferences")).toContain('data-locale="en"');
+  });
+
+  it("seeds the entry-fee currency from the ORG column, not the subscription's", async () => {
+    // Different facts, same column name. The subscription bills in EUR; the
+    // club charges entrants in INR.
+    sqlRow.currency = "eur";
+    orgRow.currency = "inr";
+    const html = await render("preferences");
+
+    expect(html).toContain('data-current="inr"');
+    expect(html).toContain("billed in EUR");
+  });
+
+  it("leaves the entry-fee currency unlocked while no Stripe account is attached", async () => {
+    orgRow.stripe_account_id = null;
+    expect(await render("preferences")).toContain('data-locked="no"');
+  });
+
+  it("locks the entry-fee currency to the settlement currency once connected", async () => {
+    // V365's same-currency rule: syncConnectAccount re-mirrors this column on
+    // every sync, so an editable control here would save and then revert.
+    orgRow.stripe_account_id = "acct_123";
+    orgRow.currency = "aud";
+    expect(await render("preferences")).toContain('data-locked="aud"');
+  });
+
+  it("names the UNSUPPORTED settlement code when the account settles outside the allowlist", async () => {
+    // Then `currency` was left alone, so echoing it would name the wrong code.
+    orgRow.stripe_account_id = "acct_123";
+    orgRow.currency = "gbp";
+    orgRow.stripe_unsupported_currency = "sek";
+    const html = await render("preferences");
+
+    expect(html).toContain('data-locked="sek"');
+    expect(html).not.toContain('data-locked="gbp"');
   });
 
   it("resolves the display currency with a NULL org id, not the org's", async () => {

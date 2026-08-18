@@ -4,7 +4,7 @@ import {
   Building2, Users,
   Pencil, Image as ImageIcon, Palette,
   User, Mail, Download, ShieldOff, Compass, BookOpen, Cookie, Handshake, KeyRound, Banknote,
-  Clock, Newspaper, SlidersHorizontal, Languages, Coins, CalendarClock,
+  Clock, Newspaper, SlidersHorizontal, Languages, Coins, CalendarClock, Globe, Receipt,
   type LucideIcon,
 } from "lucide-react";
 import { getUserOrgs } from "@/lib/auth";
@@ -44,7 +44,11 @@ import { TourReplayButton } from "@/components/tour-replay";
 import { PlanBadge } from "@/components/plan-badge";
 import { CurrencySwitcher } from "@/components/currency-switcher";
 import { preferredCurrency } from "@/lib/currency-server";
-import { SettingsNav, SETTINGS_TABS, type SettingsTab } from "./_components/settings-nav";
+import { SettingsNav, SETTINGS_TABS, navContext, type SettingsTab } from "./_components/settings-nav";
+import { OrgPublicLanguage } from "@/components/org-public-language";
+import { OrgRegistrationCurrency } from "@/components/org-registration-currency";
+import { asCurrency } from "@/lib/currency";
+import { toLocale } from "@/lib/i18n-constants";
 
 function SectionHeader({ icon: Icon, children, action }: {
   icon: LucideIcon;
@@ -219,6 +223,12 @@ export default async function SettingsPage({
   // `subscriptionCurrency` is read separately, only to say so in words.
   let displayCurrency: Awaited<ReturnType<typeof preferredCurrency>> | null = null;
   let subscriptionCurrency: string | null = null;
+  let orgDefaults: {
+    locale: ReturnType<typeof toLocale>;
+    currency: ReturnType<typeof asCurrency>;
+    /** Non-null ⇒ pinned by a connected Stripe account, not editable. */
+    currencyLockedTo: string | null;
+  } | null = null;
   if (tab === "preferences") {
     displayCurrency = await preferredCurrency(null);
     const [row] = await sql<{ currency: string | null }[]>`
@@ -226,7 +236,35 @@ export default async function SettingsPage({
       join organizations o on o.subscription_id = s.id
       where o.id = ${active.id}`;
     subscriptionCurrency = row?.currency ?? null;
+
+    // The org's own PUBLIC-facing defaults, both read straight off the row.
+    //
+    // `stripe_account_id` and `stripe_unsupported_currency` are read here
+    // rather than through `connectStatus`, which requires an OWNER session —
+    // an admin may edit these, and the two columns are all the lock state
+    // needs. `unsupported` is the account settling outside the platform
+    // allowlist, in which case `currency` was left alone and the code that
+    // pinned it is the one to name.
+    const [defaults] = await sql<{
+      default_locale: string | null;
+      currency: string | null;
+      stripe_account_id: string | null;
+      stripe_unsupported_currency: string | null;
+    }[]>`
+      select default_locale, currency, stripe_account_id, stripe_unsupported_currency
+      from organizations where id = ${active.id}`;
+    orgDefaults = {
+      locale: toLocale(defaults?.default_locale),
+      currency: asCurrency(defaults?.currency),
+      currencyLockedTo:
+        defaults?.stripe_account_id === null || defaults === undefined
+          ? null
+          : (defaults.stripe_unsupported_currency ?? asCurrency(defaults.currency)),
+    };
   }
+
+  // The rail's plan + credit-balance header (see navContext).
+  const navCtx = await navContext(active.id);
 
   const emailChangeMessage =
     email_change &&
@@ -239,7 +277,7 @@ export default async function SettingsPage({
       <div className="mx-auto max-w-5xl px-4 py-4 md:py-8">
         <div className="flex flex-col gap-4 md:flex-row md:gap-8">
 
-          <SettingsNav orgSlug={orgSlug} active={tab} dict={dict} />
+          <SettingsNav orgSlug={orgSlug} active={tab} dict={dict} context={navCtx} />
 
 
           {/* ── Panel ── */}
@@ -458,11 +496,39 @@ export default async function SettingsPage({
                 {/* Organisation — scheduling timezone (V305): the VENUE lane
                     every division inherits. Divisions no longer ask for a
                     timezone at all. */}
-                {canEdit && (
+                {canEdit && orgDefaults && (
                   <section className="card p-5">
                     <SectionHeader icon={CalendarClock}>{t(dict, "settings.prefs.org")}</SectionHeader>
                     <SubSection icon={Clock} label={t(dict, "settings.org.timezone")} />
                     <OrgTimezone orgId={active.id} initialTimezone={active.timezone} />
+
+                    {/* The org's PUBLIC language. Read for a long time by every
+                        entrant-facing surface — public pages, embeds,
+                        calendar.ics, OG images, the slideshow, and the locale
+                        frozen onto each registration — and written by nothing
+                        until now, so a club whose members read French had no
+                        way to say so. Sits directly under the personal
+                        language picker above precisely because the pair is
+                        what makes each one legible. */}
+                    <div className="mt-5 border-t border-slate-100 pt-5">
+                      <SubSection icon={Globe} label={t(dict, "settings.org.publicLanguage")} />
+                      <OrgPublicLanguage orgId={active.id} initialLocale={orgDefaults.locale} />
+                    </div>
+
+                    {/* The entry-fee currency (V365) — what an ENTRANT is
+                        quoted, not what the club is billed. Same story: the
+                        column and its allowlist have existed since RS001b with
+                        no UI to reach them. Locked while a Connect account is
+                        attached; the control says so and the API refuses the
+                        write rather than letting the next sync revert it. */}
+                    <div className="mt-5 border-t border-slate-100 pt-5">
+                      <SubSection icon={Receipt} label={t(dict, "settings.org.regCurrency")} />
+                      <OrgRegistrationCurrency
+                        orgId={active.id}
+                        initialCurrency={orgDefaults.currency}
+                        lockedTo={orgDefaults.currencyLockedTo}
+                      />
+                    </div>
                   </section>
                 )}
 

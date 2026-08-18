@@ -13,15 +13,13 @@ export const dynamic = "force-dynamic";
 // name — "Settings → Add-ons" — so routes.addOns and that sentence move
 // together.
 import { requireBillingPage } from "@/server/page-auth";
-import { routes } from "@/lib/routes";
-import { BackLink } from "@/components/back-link";
 import { getAddOnsTab } from "@/server/usecases/add-ons-tab";
 import { preferredCurrency } from "@/lib/currency-server";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { ExtraOrgsControl } from "@/components/extra-orgs-control";
 import { Tip } from "@/components/ui/tip";
-import { SettingsShell } from "../_components/settings-nav";
+import { SettingsShell, navContext } from "../_components/settings-nav";
 
 export default async function AddOnsSettingsPage({
   params,
@@ -34,6 +32,10 @@ export default async function AddOnsSettingsPage({
   });
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
+  // The rail's plan + credit-balance header. Skipped for a payer who is not a
+  // member: they get no rail at all (see SettingsShell.showNav), so the two
+  // reads would be paid for nothing.
+  const navCtx = viaPayer ? null : await navContext(org.id);
   const currency = await preferredCurrency(org.id);
   const view = await getAddOnsTab(org.id, user.id, currency);
 
@@ -47,18 +49,14 @@ export default async function AddOnsSettingsPage({
       : t(dict, "addOns.cap.summary", { count: view.liveOrgCount, cap: view.orgCap });
 
   return (
-    <SettingsShell orgSlug={orgSlug} active="add-ons" dict={dict} showNav={!viaPayer}>
-      {/* The org's own Settings index is member-gated, so a payer who is not a
-          member of this club would only 404 on it (v17 gap #333). They arrived
-          from the bill, not from the club, and have nothing to go back to
-          here. */}
-      {!viaPayer && (
-        <BackLink
-          href={routes.orgSettings(orgSlug)}
-          label={t(dict, "action.settings")}
-          emphasis="button"
-        />
-      )}
+    <SettingsShell orgSlug={orgSlug} context={navCtx} active="add-ons" dict={dict} showNav={!viaPayer}>
+      {/* No "back to Settings" link here any more. It existed because this page
+      had no navigation of its own — #190 removed it as duplication, it was
+      reported missing twice, and it came back. The rail beside it now goes
+      everywhere the link went and marks where you are, so the link is the
+      duplication #190 thought it was. A payer who is not a member has no rail,
+      and had no link either (v17 gap #333): the Settings index is member-gated
+      and would 404 on them. */}
       <div className="mb-1 flex items-center gap-2">
         <h1 className="page-title">{t(dict, "settings.nav.addOns")}</h1>
         <Tip id="billing.addons.extra-org" small />

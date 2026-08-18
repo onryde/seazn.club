@@ -31,13 +31,12 @@ import { asCurrency, formatMinor, proPrice, proPlusPrice, creditPackOptions } fr
 import { lowestPassRung } from "@/lib/pass-ladder";
 import { preferredCurrency } from "@/lib/currency-server";
 import { planLabel } from "@/lib/plan-label";
-import { BackLink } from "@/components/back-link";
 import { PoweredByStripe } from "@/components/powered-by-stripe";
 import { Tip } from "@/components/ui/tip";
 import Link from "@/components/ui/console-link";
 import { BillingGroupPanel } from "@/components/billing-group-panel";
 import { OperatorConsole } from "@/components/operator-console";
-import { SettingsShell } from "../_components/settings-nav";
+import { SettingsShell, navContext } from "../_components/settings-nav";
 import { allocationConsole } from "@/server/usecases/operator-allocation";
 import { IncomingTransferOffers } from "@/components/incoming-transfer-offers";
 import { routes } from "@/lib/routes";
@@ -80,6 +79,10 @@ export default async function BillingPage({
   const orgId = org.id;
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
+  // The rail's plan + credit-balance header. Skipped for a payer who is not a
+  // member: they get no rail at all (see SettingsShell.showNav), so the two
+  // reads would be paid for nothing.
+  const navCtx = viaPayer ? null : await navContext(org.id);
 
   // Reconcile straight from Stripe on return from checkout, so the plan updates
   // even if the webhook is delayed or missing (best-effort, never throws).
@@ -250,20 +253,14 @@ export default async function BillingPage({
         properties={{ plan_key: sub?.plan_key ?? "community" }}
       />
       {orgId && <BillingBanner orgId={orgId} />}
-      <SettingsShell orgSlug={orgSlug} active="billing" dict={dict} showNav={!viaPayer}>
-        {/* The apron chevron alone was not found: 16px at 70% opacity on the
-            dark bar, label hidden until hover. #190 removed the labelled link
-            as duplication; reported twice as missing, so it is back. */}
-        {/* …and not at all for a payer who is not a member of this club: the
-            Settings index it points at is member-gated and would 404 on them
-            (v17 gap #333). */}
-        {!viaPayer && (
-          <BackLink
-            href={routes.orgSettings(orgSlug)}
-            label={t(dict, "action.settings")}
-            emphasis="button"
-          />
-        )}
+      <SettingsShell orgSlug={orgSlug} context={navCtx} active="billing" dict={dict} showNav={!viaPayer}>
+        {/* No "back to Settings" link here any more. It existed because this page
+        had no navigation of its own — #190 removed it as duplication, it was
+        reported missing twice, and it came back. The rail beside it now goes
+        everywhere the link went and marks where you are, so the link is the
+        duplication #190 thought it was. A payer who is not a member has no rail,
+        and had no link either (v17 gap #333): the Settings index is member-gated
+        and would 404 on them. */}
         <div className="mb-6">
           <h1 className="page-title">
             {t(dict, "billing.title")}

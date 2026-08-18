@@ -14,14 +14,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prerender } from "react-dom/static";
 
-const { requireOrgPage, requireBillingPage, resolveLocale, preferredCurrency, getCreditsTab } =
-  vi.hoisted(() => ({
-    requireOrgPage: vi.fn(),
-    requireBillingPage: vi.fn(),
-    resolveLocale: vi.fn(),
-    preferredCurrency: vi.fn(),
-    getCreditsTab: vi.fn(),
-  }));
+const {
+  requireOrgPage, requireBillingPage, resolveLocale, preferredCurrency, getCreditsTab,
+  orgPlanKey, walletIdFor, balance,
+} = vi.hoisted(() => ({
+  requireOrgPage: vi.fn(),
+  requireBillingPage: vi.fn(),
+  resolveLocale: vi.fn(),
+  preferredCurrency: vi.fn(),
+  getCreditsTab: vi.fn(),
+  orgPlanKey: vi.fn(),
+  walletIdFor: vi.fn(),
+  balance: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
   sql: vi.fn(async () => [{ payment_instructions: null, default_payment_method: "offline" }]),
@@ -30,6 +35,8 @@ vi.mock("@/server/page-auth", () => ({ requireOrgPage, requireBillingPage }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale }));
 vi.mock("@/lib/currency-server", () => ({ preferredCurrency }));
 vi.mock("@/server/usecases/credits-tab", () => ({ getCreditsTab }));
+vi.mock("@/lib/entitlements", () => ({ orgPlanKey }));
+vi.mock("@/lib/credits", () => ({ walletIdFor, balance }));
 vi.mock("@/components/org-payment-instructions", () => ({
   OrgPaymentInstructions: () => <div data-testid="connect-panel" />,
 }));
@@ -38,7 +45,7 @@ vi.mock("@/components/billing-credits", () => ({
 }));
 
 import { getDictionary } from "@/lib/i18n";
-import { SettingsShell, SETTINGS_TABS } from "../_components/settings-nav";
+import { SettingsShell, SETTINGS_TABS, navContext } from "../_components/settings-nav";
 import ConnectSettingsPage from "../connect/page";
 import CreditsSettingsPage from "../credits/page";
 
@@ -66,6 +73,9 @@ beforeEach(() => {
   getCreditsTab.mockResolvedValue({
     balance: 0, granted: 0, spent: 0, periodStart: null, periodEnd: null, entries: [],
   });
+  orgPlanKey.mockResolvedValue("pro");
+  walletIdFor.mockResolvedValue("w1");
+  balance.mockResolvedValue(37);
 });
 
 describe("the Settings sidebar", () => {
@@ -98,6 +108,56 @@ describe("the Settings sidebar", () => {
     // active chip into view on a 320px strip, so this is load-bearing twice.
     const marked = out.match(/<a[^>]*aria-current="page"[^>]*>/)?.[0] ?? "";
     expect(marked).toContain("/o/riverside/settings/credits");
+  });
+
+  it("groups the links without rendering any of them twice", async () => {
+    const dict = await getDictionary("en", "ui");
+    const out = await html(
+      <SettingsShell orgSlug="riverside" active="credits" dict={dict}>
+        <p>panel</p>
+      </SettingsShell>,
+    );
+
+    for (const header of ["Organisation", "Money", "You"]) {
+      expect(out, `no ${header} group`).toContain(header);
+    }
+    // The obvious way to get headers on desktop and a flat strip on phones is
+    // to render the list twice and hide one with CSS. That puts every link —
+    // and `aria-current` — in the document twice, which a screen reader reads
+    // as two current pages. One rendering, reshaped with `display: contents`.
+    const links = out.match(/\/o\/riverside\/settings\/credits"/g) ?? [];
+    expect(links).toHaveLength(1);
+  });
+
+  it("shows the plan and credit balance when the page hands it context", async () => {
+    const dict = await getDictionary("en", "ui");
+    const out = await html(
+      <SettingsShell
+        orgSlug="riverside"
+        active="billing"
+        dict={dict}
+        context={{ plan: "Pro", credits: 37 }}
+      >
+        <p>panel</p>
+      </SettingsShell>,
+    );
+
+    // Both used to be visible only from the page that owns them — which is
+    // exactly where an owner is NOT looking when they run out mid-schedule.
+    expect(out).toContain("Pro");
+    expect(out).toContain("37 AI credits");
+  });
+
+  it("renders the rail without context rather than failing", async () => {
+    const dict = await getDictionary("en", "ui");
+    const out = await html(
+      <SettingsShell orgSlug="riverside" active="billing" dict={dict}>
+        <p>panel</p>
+      </SettingsShell>,
+    );
+
+    expect(out).not.toContain("AI credits");
+    expect(out).toContain("/o/riverside/settings?tab=organization");
   });
 
   it("is dropped for a payer who is not a member of this org", async () => {
@@ -139,5 +199,18 @@ describe("route-owning Settings pages mount the sidebar", () => {
 
     expect(out).toContain("credits-panel");
     expect(out).not.toContain("/o/riverside/settings?tab=organization");
+  });
+});
+
+describe("navContext", () => {
+  it("returns the plan label and the wallet balance", async () => {
+    expect(await navContext("org-1")).toEqual({ plan: "Pro", credits: 37 });
+  });
+
+  it("returns null rather than taking the page down when a read fails", async () => {
+    // The rail is navigation. A credits outage must not 500 every Settings
+    // page in the product.
+    balance.mockRejectedValue(new Error("wallet unavailable"));
+    expect(await navContext("org-1")).toBeNull();
   });
 });
