@@ -89,7 +89,13 @@ interface PersonFull {
  *  now says about it. */
 export interface RevealedConflicts {
   division_id: string;
-  conflicts: Conflict[];
+  /** Carries the deprecated legacy `detail` sentence too: every producer here
+   *  maps through `withLegacyDetail`, whose return type is `C & { detail?:
+   *  string }`. Declaring the plain engine type understated what actually
+   *  ships — the same "sent but not declared" drift review finding 9 covered
+   *  one layer up, and vitest does not typecheck test files, so a spec reading
+   *  `c.detail` compiled nowhere and passed anyway. */
+  conflicts: (Conflict & { detail?: string })[];
 }
 
 export interface MergeResult {
