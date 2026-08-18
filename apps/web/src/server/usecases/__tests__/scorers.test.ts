@@ -433,6 +433,20 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
     const withCourt = mine.find((f) => f.id === fixtures[0].id)!;
     expect(withCourt.venue_name).toBe("Riverside");
     expect(withCourt.court_name).toBe("Court 9");
+
+    // The OTHER half of contract drift: a field the usecase ships but the
+    // schema never declares is STRIPPED by z.object rather than rejected, so
+    // the parse above stays green while the published contract understates the
+    // payload. Reading them back off the PARSED value is what makes that
+    // visible. All seven pre-date the venues cutover.
+    const parsed = AssignedFixture.parse(withCourt);
+    for (const k of [
+      "fixture_no", "org_slug", "competition_slug", "division_slug",
+      "home_slot_label", "away_slot_label", "venue_tz",
+    ] as const) {
+      expect({ [k]: parsed[k] }).toEqual({ [k]: withCourt[k] });
+      expect(parsed[k]).not.toBeUndefined();
+    }
   });
 
   it("accept, existing viewer × scorer invite: scope added, role kept, no scorer seat", async () => {

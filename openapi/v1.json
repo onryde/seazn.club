@@ -14106,6 +14106,16 @@
                                   }
                                 ]
                               },
+                              "venue_tz": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
                               "status": {
                                 "type": "string"
                               },
@@ -14176,6 +14186,7 @@
                               "court_name",
                               "venue_id",
                               "venue_name",
+                              "venue_tz",
                               "status",
                               "availability",
                               "checked_in_at"
@@ -14361,6 +14372,7 @@
                         "court_name": "example",
                         "venue_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                         "venue_name": "example",
+                        "venue_tz": "example",
                         "status": "example",
                         "availability": {
                           "status": "in",
@@ -32809,12 +32821,20 @@
                             "format": "uuid",
                             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           },
+                          "fixture_no": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
                           "org_id": {
                             "type": "string",
                             "format": "uuid",
                             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           },
                           "org_name": {
+                            "type": "string"
+                          },
+                          "org_slug": {
                             "type": "string"
                           },
                           "competition_id": {
@@ -32825,12 +32845,18 @@
                           "competition_name": {
                             "type": "string"
                           },
+                          "competition_slug": {
+                            "type": "string"
+                          },
                           "division_id": {
                             "type": "string",
                             "format": "uuid",
                             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           },
                           "division_name": {
+                            "type": "string"
+                          },
+                          "division_slug": {
                             "type": "string"
                           },
                           "division_status": {
@@ -32891,7 +32917,71 @@
                               }
                             ]
                           },
+                          "home_slot_label": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "key": {
+                                    "type": "string"
+                                  },
+                                  "params": {
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": [
+                                  "key",
+                                  "params"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "away_slot_label": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "key": {
+                                    "type": "string"
+                                  },
+                                  "params": {
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": [
+                                  "key",
+                                  "params"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "scheduled_at": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "venue_tz": {
                             "anyOf": [
                               {
                                 "type": "string"
@@ -32951,12 +33041,16 @@
                         },
                         "required": [
                           "id",
+                          "fixture_no",
                           "org_id",
                           "org_name",
+                          "org_slug",
                           "competition_id",
                           "competition_name",
+                          "competition_slug",
                           "division_id",
                           "division_name",
+                          "division_slug",
                           "division_status",
                           "sport_key",
                           "module_version",
@@ -32965,7 +33059,10 @@
                           "away_entrant_id",
                           "home_name",
                           "away_name",
+                          "home_slot_label",
+                          "away_slot_label",
                           "scheduled_at",
+                          "venue_tz",
                           "court_id",
                           "court_name",
                           "venue_id",
@@ -32986,12 +33083,16 @@
                   "data": [
                     {
                       "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                      "fixture_no": -9007199254740991,
                       "org_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                       "org_name": "example",
+                      "org_slug": "example",
                       "competition_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                       "competition_name": "example",
+                      "competition_slug": "example",
                       "division_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                       "division_name": "example",
+                      "division_slug": "example",
                       "division_status": "example",
                       "sport_key": "example",
                       "module_version": "example",
@@ -33000,7 +33101,16 @@
                       "away_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                       "home_name": "example",
                       "away_name": "example",
+                      "home_slot_label": {
+                        "key": "example",
+                        "params": {}
+                      },
+                      "away_slot_label": {
+                        "key": "example",
+                        "params": {}
+                      },
                       "scheduled_at": "example",
+                      "venue_tz": "example",
                       "court_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                       "court_name": "example",
                       "venue_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",

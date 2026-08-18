@@ -461,6 +461,11 @@ export const MyFixture = z.object({
   court_name: z.string().nullable(),
   venue_id: VenueId.nullable(),
   venue_name: z.string().nullable(),
+  /** Venue zone (V305): division override -> org timezone -> UTC. Selected by
+   *  `listMyFixtures` and shipped on the wire since V305, but never declared
+   *  here — the times in this payload are unreadable without it, and a
+   *  consumer that parses against this schema drops it. Found closing #9. */
+  venue_tz: z.string().nullable(),
   status: z.string(),
   availability: z
     .object({ status: z.enum(["in", "out", "maybe"]), note: z.string().nullable() })
@@ -745,6 +750,14 @@ export const PatchFixture = z
   .refine((p) => Object.keys(p).length > 0, "empty patch");
 export type PatchFixture = z.infer<typeof PatchFixture>;
 
+/** D4a (P5) i18n pattern ref for a not-yet-filled slot — {key, params}, never
+ *  a prebuilt string. Named rather than inlined because THREE published
+ *  schemas carry it (Fixture, AssignedFixture) and a per-schema copy is how
+ *  two shapes of the same field drift apart. */
+export const SlotLabelRef = z
+  .object({ key: z.string(), params: z.record(z.string(), z.unknown()) })
+  .nullable();
+
 export const Fixture = z.object({
   id: Uuid,
   stage_id: Uuid,
@@ -763,8 +776,8 @@ export const Fixture = z.object({
   /** D4a (P5): i18n pattern ref for a not-yet-filled slot ("Winner Group A"),
    *  {key, params} — never a prebuilt string. Cleared on fill (design's Fill
    *  algorithm step 4); non-null only while the matching *_entrant_id is null. */
-  home_slot_label: z.object({ key: z.string(), params: z.record(z.string(), z.unknown()) }).nullable(),
-  away_slot_label: z.object({ key: z.string(), params: z.record(z.string(), z.unknown()) }).nullable(),
+  home_slot_label: SlotLabelRef,
+  away_slot_label: SlotLabelRef,
   scheduled_at: z.string().nullable(),
   // P9 pass 3c-2: court_id/venue_id + derived, read-only court_name/
   // venue_name — same shape as ScheduleAssignment. The frozen `venue`/
@@ -1792,12 +1805,21 @@ export const PublishScheduleResult = z.object({
 /** GET /me/assigned-fixtures — the "My matches" read (doc 13 §3/§6). */
 export const AssignedFixture = z.object({
   id: Uuid,
+  // Seven fields below were selected by `listAssignedFixtures` and shipped on
+  // the wire while this schema never declared them, so the published contract
+  // understated the payload and any consumer parsing against it dropped them.
+  // Pre-dates the venues cutover; found while closing review finding #9, which
+  // was the same drift one field over.
+  fixture_no: z.number().int(),
   org_id: Uuid,
   org_name: z.string(),
+  org_slug: z.string(),
   competition_id: Uuid,
   competition_name: z.string(),
+  competition_slug: z.string(),
   division_id: Uuid,
   division_name: z.string(),
+  division_slug: z.string(),
   division_status: z.string(),
   sport_key: z.string(),
   module_version: z.string(),
@@ -1806,7 +1828,12 @@ export const AssignedFixture = z.object({
   away_entrant_id: Uuid.nullable(),
   home_name: z.string().nullable(),
   away_name: z.string().nullable(),
+  /** D4b (P6): set only while the matching *_entrant_id is null. */
+  home_slot_label: SlotLabelRef,
+  away_slot_label: SlotLabelRef,
   scheduled_at: z.string().nullable(),
+  /** Venue zone (V305): division override -> org timezone -> UTC. */
+  venue_tz: z.string().nullable(),
   // Review finding #9 (P9 venues/courts cutover): same clean break as
   // Fixture and MyFixture above — court_id/venue_id + derived, read-only
   // court_name/venue_name. `venue`/`court_label` leave the wire entirely;

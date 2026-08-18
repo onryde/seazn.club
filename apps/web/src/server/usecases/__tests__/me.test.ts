@@ -359,5 +359,16 @@ describe.skipIf(!HAS_DB)("player home /me (PROMPT-53)", () => {
     const withCourt = mine.upcoming.find((f) => f.id === targetId)!;
     expect(withCourt.venue_name).toBe("Riverside");
     expect(withCourt.court_name).toBe("Court 9");
+
+    // The OTHER half of contract drift, and the half a `.parse()` alone cannot
+    // see: a field the usecase ships but the schema never declares is STRIPPED
+    // by z.object rather than rejected, so the parse stays green while the
+    // published contract quietly understates the payload. Reading the field
+    // back off the PARSED value is what makes that visible — `venue_tz` has
+    // been on the wire since V305 and undeclared here ever since, and the
+    // times in this payload are unreadable without it.
+    const parsed = MyFixture.parse(withCourt);
+    expect(parsed.venue_tz).toBe(withCourt.venue_tz);
+    expect(parsed.venue_tz).not.toBeUndefined();
   });
 });
