@@ -12,7 +12,10 @@ const CONFIG = {
   endAt: null,
   matchMinutes: 30,
   gapMinutes: 0,
-  courts: ["Court 1"],
+  // P9 cutover: ScheduleConfig.courts is a court-id array, not names. The tz
+  // tri-state below is what this suite asserts; the id is incidental but must
+  // still parse, or the ZodError masks the assertion entirely.
+  courts: ["6f1b7a2e-3c4d-4e5f-8a9b-0c1d2e3f4a5b"],
   perEntrantMinRest: 0,
   blackouts: [],
   sessionWindows: [],
