@@ -8160,7 +8160,24 @@ async function seedBracketAiDivision(
   divId: string;
   personIds: string[];
   fixtures: { id: string; home_entrant_id: string | null; away_entrant_id: string | null }[];
+  /** [courtA, courtB] real ids, matching the "A"/"B" names courts used to be
+   *  configured/assigned by literally. */
+  courtIds: [string, string];
 }> {
+  const bracketOrgId = s.cookies["seazn_org"]!;
+  const bracketVenue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${bracketOrgId}/venues`, "POST", { name: `${label} Venue ${tag}` }),
+  );
+  const bracketCourtA = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${bracketOrgId}/venues/${bracketVenue.id}/courts`, "POST", {
+      name: "A",
+    }),
+  );
+  const bracketCourtB = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${bracketOrgId}/venues/${bracketVenue.id}/courts`, "POST", {
+      name: "B",
+    }),
+  );
   const comp = v1data<{ id: string }>(
     await v1(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `${label} ${tag}` }),
   );
@@ -8203,7 +8220,7 @@ async function seedBracketAiDivision(
       startAt: "2026-10-08T09:00:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["A", "B"],
+      courts: [bracketCourtA.id, bracketCourtB.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -8213,7 +8230,12 @@ async function seedBracketAiDivision(
   const gen = v1data<{
     fixtures: { id: string; home_entrant_id: string | null; away_entrant_id: string | null }[];
   }>(await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"));
-  return { divId: div.id, personIds, fixtures: gen.fixtures };
+  return {
+    divId: div.id,
+    personIds,
+    fixtures: gen.fixtures,
+    courtIds: [bracketCourtA.id, bracketCourtB.id],
+  };
 }
 
 /** #397 (calendar anchor): a time that never left 1970 — what the pack handed
@@ -9772,10 +9794,14 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
       );
 
       const applied = await v1(plus, `/api/v1/stages/${stageId}/schedule/apply`, "POST", {
+        // ApplyScheduleRequest.assignments[] wants court_id — the AI plan's
+        // own proposal keeps the court_label field NAME (it already carries a
+        // real court id as its value, P9 pass 3b), so this is a rename at the
+        // wire boundary, not a value change.
         assignments: plan.proposal.map((a) => ({
           fixture_id: a.fixture_id,
           scheduled_at: a.scheduled_at,
-          court_label: a.court_label,
+          court_id: a.court_label,
         })),
         source: "ai",
         ai: {
@@ -9958,12 +9984,12 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
         ...decided.map((f, i) => ({
           fixture_id: f.id,
           scheduled_at: "2026-10-08T09:00:00.000Z",
-          court_label: i === 0 ? "A" : "B",
+          court_label: bracket.courtIds[i === 0 ? 0 : 1],
         })),
         ...[...tbdIds].map((id, i) => ({
           fixture_id: id,
           scheduled_at: "2026-10-08T09:30:00.000Z",
-          court_label: i === 0 ? "A" : "B",
+          court_label: bracket.courtIds[i === 0 ? 0 : 1],
         })),
       ];
       const refinedRes = await v1(
@@ -10147,7 +10173,21 @@ async function scheduleAiRoundOrderSuite(): Promise<void> {
 async function seedJointAiCompetition(
   s: Session,
   label: string,
-): Promise<{ compId: string; divIds: string[] }> {
+): Promise<{ compId: string; divIds: string[]; courtIds: [string, string] }> {
+  const jointAiOrgId = s.cookies["seazn_org"]!;
+  const jointAiVenue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${jointAiOrgId}/venues`, "POST", { name: `${label} Venue ${tag}` }),
+  );
+  const jointAiCourt1 = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${jointAiOrgId}/venues/${jointAiVenue.id}/courts`, "POST", {
+      name: "Court 1",
+    }),
+  );
+  const jointAiCourt2 = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${jointAiOrgId}/venues/${jointAiVenue.id}/courts`, "POST", {
+      name: "Court 2",
+    }),
+  );
   const comp = v1data<{ id: string }>(
     await v1(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `${label} ${tag}` }),
   );
@@ -10183,7 +10223,7 @@ async function seedJointAiCompetition(
         startAt: "2026-11-02T09:00:00.000Z",
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: ["Court 1", "Court 2"],
+        courts: [jointAiCourt1.id, jointAiCourt2.id],
         perEntrantMinRest: 0,
         blackouts: [],
         sessionWindows: [],
@@ -10193,7 +10233,7 @@ async function seedJointAiCompetition(
     await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST");
     divIds.push(div.id);
   }
-  return { compId: comp.id, divIds };
+  return { compId: comp.id, divIds, courtIds: [jointAiCourt1.id, jointAiCourt2.id] };
 }
 
 interface JointPlanLite {
@@ -10373,12 +10413,14 @@ async function jointAiSuite(): Promise<void> {
     const byDivision = divIds.map((id) => ({
       division_id: id,
       expected_seq: seqs[id] ?? 0,
+      // ApplyCompetitionScheduleRequest wants court_id — same field-name
+      // rename at the wire boundary as the single-division apply above.
       assignments: plan.proposal
         .filter((p) => p.division_id === id)
         .map((p) => ({
           fixture_id: p.fixture_id,
           scheduled_at: p.scheduled_at,
-          court_label: p.court_label,
+          court_id: p.court_label,
         })),
     }));
     const applied = await v1(s, `/api/v1/competitions/${compId}/schedule/apply`, "POST", {
