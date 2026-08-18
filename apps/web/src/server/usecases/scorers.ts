@@ -157,7 +157,13 @@ export interface AssignedFixture {
   /** Venue zone (V305): division override → org timezone → UTC. */
   venue_tz: string | null;
   venue: string | null;
-  court_label: string | null;
+  /** P9 cutover: DERIVED from `venues`/`courts` via `fixtures.venue_id`/
+   *  `court_id`; the frozen `fixtures.venue`/`court_label` columns are no
+   *  longer written and would render blank post-cutover. */
+  venue_id: string | null;
+  venue_name: string | null;
+  court_id: string | null;
+  court_name: string | null;
   status: string;
 }
 
@@ -181,7 +187,8 @@ export async function listAssignedFixtures(
              f.home_entrant_id, f.away_entrant_id,
              he.display_name as home_name, ae.display_name as away_name,
              f.home_slot_label, f.away_slot_label,
-             f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz, f.venue, f.court_label, f.status
+             f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
+             f.venue_id, ven.name as venue_name, f.court_id, crt.name as court_name, f.status
       from scorer_assignments sa
       join fixtures f on (
            (sa.scope_type = 'fixture'     and f.id = sa.scope_id)
@@ -189,6 +196,8 @@ export async function listAssignedFixtures(
         or (sa.scope_type = 'competition' and f.division_id in
               (select id from divisions where competition_id = sa.scope_id))
       ) and f.org_id = sa.org_id
+      left join courts crt on crt.id = f.court_id
+      left join venues ven on ven.id = f.venue_id
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
       join organizations o on o.id = f.org_id
@@ -208,11 +217,14 @@ export async function listAssignedFixtures(
              f.home_entrant_id, f.away_entrant_id,
              he.display_name as home_name, ae.display_name as away_name,
              f.home_slot_label, f.away_slot_label,
-             f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz, f.venue, f.court_label, f.status
+             f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
+             f.venue_id, ven.name as venue_name, f.court_id, crt.name as court_name, f.status
       from fixture_officials fo
       join officials ofc on ofc.id = fo.official_id
       join persons p on p.id = ofc.person_id
       join fixtures f on f.id = fo.fixture_id
+      left join courts crt on crt.id = f.court_id
+      left join venues ven on ven.id = f.venue_id
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
       join organizations o on o.id = f.org_id

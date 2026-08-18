@@ -44,8 +44,15 @@ export interface MyOfficiatingAssignment {
   scheduled_at: string | null;
   /** Venue zone (V305): division override → org timezone → UTC. */
   venue_tz: string | null;
-  venue: string | null;
-  court_label: string | null;
+  /** P9 cutover: `venue_name`/`court_name` are DERIVED (joined from `venues`/
+   *  `courts` via `fixtures.venue_id`/`court_id`). The frozen text columns
+   *  `fixtures.venue`/`court_label` are no longer read — writers stopped
+   *  populating them, so reading them renders blank for any fixture touched
+   *  after the cutover. */
+  venue_id: string | null;
+  venue_name: string | null;
+  court_id: string | null;
+  court_name: string | null;
   fixture_status: string;
   role_key: string;
   response: OfficiatingResponse;
@@ -93,7 +100,8 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
            h.display_name as home_name, a.display_name as away_name,
            f.home_slot_label, f.away_slot_label,
            org.default_locale as org_default_locale,
-           f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz, f.venue, f.court_label,
+           f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
+           f.venue_id, ven.name as venue_name, f.court_id, crt.name as court_name,
            f.status as fixture_status,
            fo.role_key, fo.response, fo.decline_reason, fo.responded_at,
            mr.status as report_status
@@ -101,6 +109,8 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
     join officials o on o.person_id = p.id
     join fixture_officials fo on fo.official_id = o.id
     join fixtures f on f.id = fo.fixture_id
+    left join courts crt on crt.id = f.court_id
+    left join venues ven on ven.id = f.venue_id
     left join match_reports mr on mr.fixture_official_id = fo.id
     join divisions d on d.id = f.division_id
     join competitions c on c.id = d.competition_id
@@ -135,7 +145,8 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
            h.display_name as home_name, a.display_name as away_name,
            f.home_slot_label, f.away_slot_label,
            org.default_locale as org_default_locale,
-           f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz, f.venue, f.court_label,
+           f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
+           f.venue_id, ven.name as venue_name, f.court_id, crt.name as court_name,
            f.status as fixture_status,
            fo.role_key, fo.response, fo.decline_reason, fo.responded_at,
            mr.status as report_status
@@ -143,6 +154,8 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
     join officials o on o.person_id = p.id
     join fixture_officials fo on fo.official_id = o.id
     join fixtures f on f.id = fo.fixture_id
+    left join courts crt on crt.id = f.court_id
+    left join venues ven on ven.id = f.venue_id
     left join match_reports mr on mr.fixture_official_id = fo.id
     join divisions d on d.id = f.division_id
     join competitions c on c.id = d.competition_id

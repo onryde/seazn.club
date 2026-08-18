@@ -141,7 +141,7 @@ function CompletedCard({ a }: { a: MyOfficiatingAssignment }) {
       </div>
       <p className="text-xs text-slate-400">
         {a.competition_name} · {a.division_name} · {a.org_name}
-        {a.court_label ? ` · ${a.court_label}` : ""}
+        {a.court_name ? ` · ${a.court_name}` : ""}
       </p>
       {a.scheduled_at && (
         <p className="text-xs text-slate-400">
@@ -276,8 +276,8 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
           </p>
           <p className="mt-0.5 text-xs text-slate-400">
             {a.competition_name} · {a.division_name} · {a.org_name}
-            {a.venue ? ` · ${a.venue}` : ""}
-            {a.court_label ? ` · ${a.court_label}` : ""}
+            {a.venue_name ? ` · ${a.venue_name}` : ""}
+            {a.court_name ? ` · ${a.court_name}` : ""}
           </p>
           <p className="mt-0.5 text-xs font-medium text-slate-600">
             {a.scheduled_at ? (

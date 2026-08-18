@@ -146,7 +146,7 @@ describe.skipIf(!HAS_DB)("resolveCandidateCourts (DB-backed)", () => {
   it("an empty configured list with NO required tags falls back to every non-archived org court", async () => {
     const { orgId, taggedCourtId, plainCourtId } = await seedOrgWithCourts();
     const result = await withTenant(orgId, (tx) => resolveCandidateCourts(tx, "div-98", [], []));
-    expect(result.ids.sort()).toEqual([plainCourtId, taggedCourtId].sort());
+    expect([...result.ids].sort()).toEqual([plainCourtId, taggedCourtId].sort());
   });
 
   it("an empty configured list AND an org with no courts at all resolves to an empty candidate set", async () => {

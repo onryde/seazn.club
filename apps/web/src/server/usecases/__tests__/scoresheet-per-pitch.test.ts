@@ -14,7 +14,23 @@ import { groupByCourt } from "@/server/usecases/exports";
 // fixture the arrays desynchronised and courts were read off the wrong
 // fixture. Only volleyball ships a bespoke sheet today and it emits one, so
 // that one was latent rather than live.
-const f = (id: string, court: string | null) => ({ id, court_label: court });
+// P9: groupByCourt keys on `court_id` (stable identity) and orders by
+// `court_name`. The helper mints a deterministic id per court NAME so these
+// cases read the same as before, while two same-named courts in different
+// venues would still be distinct ids — the case name-keying used to merge.
+const COURT_IDS = new Map<string, string>();
+const courtIdFor = (name: string) => {
+  const existing = COURT_IDS.get(name);
+  if (existing !== undefined) return existing;
+  const minted = `c0000000-0000-4000-8000-${String(COURT_IDS.size + 1).padStart(12, "0")}`;
+  COURT_IDS.set(name, minted);
+  return minted;
+};
+const f = (id: string, court: string | null) => ({
+  id,
+  court_id: court === null ? null : courtIdFor(court),
+  court_name: court,
+});
 
 describe("groupByCourt", () => {
   it("gathers each court's fixtures together out of round order", () => {

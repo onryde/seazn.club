@@ -156,8 +156,8 @@ export default async function MePage({
                 </p>
                 <p className="mt-1.5 text-sm text-cream/70">
                   <FixtureContext f={next} />
-                  {next.venue ? ` · ${next.venue}` : ""}
-                  {next.court_label ? ` · ${next.court_label}` : ""}
+                  {next.venue_name ? ` · ${next.venue_name}` : ""}
+                  {next.court_name ? ` · ${next.court_name}` : ""}
                 </p>
                 <p className="mt-1 text-sm font-medium text-cream/90">
                   {next.scheduled_at ? (
@@ -209,7 +209,7 @@ export default async function MePage({
                       </p>
                       <p className="mt-0.5 text-xs text-slate-400">
                         <FixtureContext f={f} />
-                        {f.venue ? ` · ${f.venue}` : ""}
+                        {f.venue_name ? ` · ${f.venue_name}` : ""}
                       </p>
                       <p className="mt-0.5 text-xs font-medium text-slate-600">
                         {f.scheduled_at ? (

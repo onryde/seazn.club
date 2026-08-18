@@ -49,7 +49,13 @@ export interface MyFixture {
   /** Venue zone (V305): division override → org timezone → UTC. */
   venue_tz: string | null;
   venue: string | null;
-  court_label: string | null;
+  /** P9 cutover: DERIVED from `venues`/`courts` via `fixtures.venue_id`/
+   *  `court_id`. The frozen `fixtures.venue`/`court_label` text columns are no
+   *  longer written, so reading them blanks any fixture touched post-cutover. */
+  venue_id: string | null;
+  venue_name: string | null;
+  court_id: string | null;
+  court_name: string | null;
   status: string;
   availability: { status: AvailabilityStatus; note: string | null } | null;
   checked_in_at: string | null;
@@ -101,7 +107,8 @@ export async function listMyFixtures(userId: string): Promise<{
            d.name as division_name, d.slug as division_slug, d.sport_key,
            f.round_no, e.display_name as entrant_name,
            opp.display_name as opponent_name,
-           f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz, f.venue, f.court_label, f.status,
+           f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
+           f.venue_id, ven.name as venue_name, f.court_id, crt.name as court_name, f.status,
            case when fa.status is null then null
                 else jsonb_build_object('status', fa.status, 'note', fa.note) end
              as availability,
@@ -110,6 +117,8 @@ export async function listMyFixtures(userId: string): Promise<{
     join entrant_members em on em.person_id = p.id
     join entrants e on e.id = em.entrant_id and e.status in ${sql(ROSTERED)}
     join fixtures f on (f.home_entrant_id = e.id or f.away_entrant_id = e.id)
+    left join courts crt on crt.id = f.court_id
+    left join venues ven on ven.id = f.venue_id
     join divisions d on d.id = f.division_id
     join competitions c on c.id = d.competition_id
     join organizations o on o.id = f.org_id
@@ -137,6 +146,8 @@ export async function listMyFixtures(userId: string): Promise<{
     join entrant_members em on em.person_id = p.id
     join entrants e on e.id = em.entrant_id and e.status in ${sql(ROSTERED)}
     join fixtures f on (f.home_entrant_id = e.id or f.away_entrant_id = e.id)
+    left join courts crt on crt.id = f.court_id
+    left join venues ven on ven.id = f.venue_id
     left join match_states m on m.fixture_id = f.id
     join divisions d on d.id = f.division_id
     join competitions c on c.id = d.competition_id
