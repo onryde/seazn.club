@@ -95,7 +95,7 @@ async function seedFixtureWithRoundRole(): Promise<{
     kind: "league",
     name: "L",
     config: {},
-    qualification: null,
+    progression: null,
   });
   await generateStageFixtures(auth, stage!.id);
   const [{ id: fixtureId }] = await sql<{ id: string }[]>`

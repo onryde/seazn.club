@@ -15,8 +15,16 @@
 // see topic_apps_web_api_v1_index memory) — irrelevant to what THIS test
 // verifies, which is the wire shape reaching the call, not the engine draw.
 import { describe, expect, it, vi } from "vitest";
+import type { PreviewPhase, PreviewStageInput } from "@/server/usecases/stages";
 
-const previewMock = vi.hoisted(() => vi.fn(() => [{ title: "t", sections: [] }]));
+// Explicit signature (not vi.fn(() => [...])'s inferred zero-arg one) —
+// otherwise .mock.calls[0] types as the empty tuple `[]` and every
+// destructure/cast of it below fails to typecheck.
+const previewMock = vi.hoisted(() =>
+  vi.fn<(stages: PreviewStageInput[], count: number) => PreviewPhase[]>(() => [
+    { title: "t", sections: [] },
+  ]),
+);
 vi.mock("@/server/usecases/stages", () => ({ previewDivisionFixtures: previewMock }));
 vi.mock("@/server/api-v1/auth", () => ({
   requireAuth: vi.fn(async () => ({ orgId: "org1", userId: "user1", role: "member" })),
@@ -65,7 +73,7 @@ describe("POST /api/v1/format-preview — Body forwards progression, not qualifi
     );
     expect(res.status).toBe(200);
     const [stagesArg] = previewMock.mock.calls[0]!;
-    const stage0 = (stagesArg as Record<string, unknown>[])[0]!;
+    const stage0 = stagesArg[0]!;
     expect(stage0.progression ?? null).toBeNull();
     expect(stage0).not.toHaveProperty("qualification");
   });

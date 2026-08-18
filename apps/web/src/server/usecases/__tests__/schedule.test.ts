@@ -158,10 +158,16 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
       { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
       {
         seq: 2, kind: "knockout", name: "KO", config: {},
-        qualification: { take: [
-          { pool: "A", rank: 1 }, { pool: "B", rank: 2 },
-          { pool: "B", rank: 1 }, { pool: "A", rank: 2 },
-        ] },
+        // F2: was `.qualification` (auto-seed-on-complete) — "on_complete"
+        // reproduces that behaviour exactly.
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "picks", picks: [
+            { pool: "A", rank: 1 }, { pool: "B", rank: 2 },
+            { pool: "B", rank: 1 }, { pool: "A", rank: 2 },
+          ] }] }],
+          placement: "rank_order",
+          timing: "on_complete",
+        },
       },
     ]);
 

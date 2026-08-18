@@ -65,7 +65,7 @@ describe("template catalog", () => {
     const wc32 = getTemplate("wc32")!;
     expect(wc32.divisions[0]!.stages).toHaveLength(2);
     expect(wc32.divisions[0]!.stages.map((s) => s.kind)).toEqual(["group", "knockout"]);
-    expect(wc32.divisions[0]!.stages[1]!.seeding).toBeUndefined();
+    expect(wc32.divisions[0]!.stages[1]!.progression).toBeUndefined();
   });
 
   // P7/D1b — the 3 entries StageSeeding unlocked. Each pins `take`,

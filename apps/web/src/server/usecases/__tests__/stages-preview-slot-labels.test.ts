@@ -21,7 +21,7 @@ import { previewDivisionFixtures } from "../stages";
 describe("previewDivisionFixtures — intra-bracket TBD labels (P7/F1 slot.match_ref conversion)", () => {
   it("a knockout's later round reads 'Winner of R<round>·<seq>' for an unresolved feed", () => {
     const phases = previewDivisionFixtures(
-      [{ kind: "knockout", name: "Knockout", config: {}, qualification: null }],
+      [{ kind: "knockout", name: "Knockout", config: {}, progression: null }],
       8,
     );
     const phase = phases[0]!;
@@ -38,7 +38,7 @@ describe("previewDivisionFixtures — intra-bracket TBD labels (P7/F1 slot.match
 
   it("never leaves the raw pattern key or an unfilled {placeholder} in the rendered text", () => {
     const phases = previewDivisionFixtures(
-      [{ kind: "knockout", name: "Knockout", config: {}, qualification: null }],
+      [{ kind: "knockout", name: "Knockout", config: {}, progression: null }],
       8,
     );
     const allText = phases[0]!.sections.flatMap((s) => s.matches.flatMap((m) => [m.home, m.away])).join(" | ");

@@ -88,7 +88,7 @@ describe.skipIf(!HAS_DB)("addFixture (PROMPT-66)", () => {
       kind: "league",
       name: "League",
       config: {},
-      qualification: null,
+      progression: null,
     });
     await generateStageFixtures(auth, stage!.id);
     const [{ count: before }] = await sql<{ count: number }[]>`
@@ -142,7 +142,7 @@ describe.skipIf(!HAS_DB)("addFixture (PROMPT-66)", () => {
       kind: "group",
       name: "Groups",
       config: { pools: { count: 2 } },
-      qualification: null,
+      progression: null,
     });
     await generateStageFixtures(auth, stage!.id);
     // Pick a real generated pairing so both entrants share a pool.
@@ -185,7 +185,7 @@ describe.skipIf(!HAS_DB)("addFixture (PROMPT-66)", () => {
       kind: "knockout",
       name: "KO",
       config: {},
-      qualification: null,
+      progression: null,
     });
     await generateStageFixtures(auth, ko!.id);
     await expect(
@@ -202,7 +202,7 @@ describe.skipIf(!HAS_DB)("addFixture (PROMPT-66)", () => {
       kind: "league",
       name: "League",
       config: {},
-      qualification: null,
+      progression: null,
     });
     await expect(
       addFixture(auth, league!.id, {
