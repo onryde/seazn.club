@@ -16,6 +16,12 @@ import { listDivisionFixtures, listFixtureHeadlines } from "@/server/usecases/fi
 import { BracketPanel } from "@/components/v2/bracket-panel";
 import { listEntrants } from "@/server/usecases/entrants";
 import { getScheduleSettings } from "@/server/usecases/schedule";
+// P9 pass 4d, item 1: StagesPanel's per-fixture court editor needs the org's
+// real courts (id/name/venue) to build its picker and to venue-qualify a
+// name two courts share — same `listVenues(auth)` call `d/new/page.tsx`
+// already makes for CourtMultiPicker (default includeArchived: false; the
+// picker excludes archived courts either way via `courtGroups`).
+import { listVenues } from "@/server/usecases/venues";
 import { resolveVenueTz } from "@/lib/tz";
 import { hasFeature } from "@/lib/entitlements";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
@@ -105,13 +111,14 @@ export default async function DivisionPage({
     (requested === "settings" && !canEdit) || (requested === "discipline" && !disciplineAvailable)
       ? defaultTab
       : (requested ?? defaultTab);
-  const [competition, stages, fixtures, entrants, scheduleSettings, canExport] = await Promise.all([
+  const [competition, stages, fixtures, entrants, scheduleSettings, canExport, venues] = await Promise.all([
     getCompetition(auth, division.competition_id),
     listStages(auth, id),
     listDivisionFixtures(auth, id),
     listEntrants(auth, id),
     getScheduleSettings(auth, id),
     hasFeature(auth.orgId, "exports"),
+    listVenues(auth),
   ]);
   // Moved up from just before the JSX return (still THE canonical
   // frozen/editable derivation, unchanged) — the P6/D4b task B proposal
@@ -373,6 +380,7 @@ export default async function DivisionPage({
               stages={stages}
               fixtures={fixtures}
               entrantNames={entrantNames}
+              venues={venues}
               canEdit={editable}
               tz={scheduleSettings.tz}
               // The GOVERNING clock, resolved here exactly as the schedule page
