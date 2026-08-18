@@ -18,6 +18,7 @@
 import { describe, expect, it } from "vitest";
 import { STAGE_TEMPLATES, buildTemplateStages, detectTemplate } from "../format-templates";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
+import { expandTake } from "@seazn/engine/competition";
 
 describe("ko_plate template", () => {
   it("builds a main knockout + a plate seeded by roundLosers, count = the qualified knob", () => {
@@ -167,26 +168,11 @@ describe("format-templates emit progression, not qualification", () => {
     expect(detectTemplate(stages)).toBe("qualifying_main");
   });
 
-  it("groups_ko emits picks, on_complete — the pool/rank picker, unchanged", () => {
+  it("groups_ko emits topNPerGroup, snake, setup — the cross-pool draw (F3)", () => {
     const stages = buildTemplateStages("groups_ko", { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });
     expect(stages[1]!.progression).toEqual({
-      sources: [
-        {
-          stage: "previous",
-          take: [
-            {
-              kind: "picks",
-              picks: [
-                { pool: "A", rank: 1 },
-                { pool: "B", rank: 1 },
-                { pool: "A", rank: 2 },
-                { pool: "B", rank: 2 },
-              ],
-            },
-          ],
-        },
-      ],
-      placement: "rank_order",
+      sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }],
+      placement: "snake",
       timing: "setup",
     });
   });
@@ -202,12 +188,93 @@ describe("format-templates emit progression, not qualification", () => {
 
   it("every qualification: null site becomes progression: null (mechanical rename)", () => {
     for (const t of STAGE_TEMPLATES) {
-      const stages = t.build(4);
+      const stages = t.build({ qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });
       for (const stage of stages) {
         expect(stage).not.toHaveProperty("qualification");
         expect("progression" in stage).toBe(true);
       }
     }
+  });
+});
+
+// F3 (day-one fixtures, owner ruling R5): groups_ko's knockout stage used to
+// draw from a hand-rolled `picks` interleave hardcoded to pools "A"/"B" —
+// with poolCount > 2 (the builder's own pools knob goes up to 8), groups C
+// onward produced zero qualifiers. Replaced with the engine's own
+// topNPerGroup (+ a bestNth remainder) and snake placement — euro24's take
+// shape, t20-super8's placement (server/templates/catalog/*.json) — so the
+// draw is correct for whatever poolCount the organiser picks.
+describe("groups_ko — cross-pool draw (F3 owner ruling R5)", () => {
+  it("qualified:8, poolCount:4 -> topNPerGroup(2) only (evenly divisible), snake", () => {
+    const stages = buildTemplateStages("groups_ko", { qualified: 8, swissRounds: 5, poolCount: 4, legs: 1 });
+    expect(stages[1]!.progression).toEqual({
+      sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }],
+      placement: "snake",
+      timing: "setup",
+    });
+  });
+
+  it("qualified:16, poolCount:6 -> topNPerGroup(2) + bestNth(nth:3, count:4) remainder", () => {
+    const stages = buildTemplateStages("groups_ko", { qualified: 16, swissRounds: 5, poolCount: 6, legs: 1 });
+    expect(stages[1]!.progression).toEqual({
+      sources: [
+        {
+          stage: "previous",
+          take: [
+            { kind: "topNPerGroup", n: 2 },
+            { kind: "bestNth", nth: 3, count: 4 },
+          ],
+        },
+      ],
+      placement: "snake",
+      timing: "setup",
+    });
+  });
+
+  it("qualified:3, poolCount:2 -> topNPerGroup(1) + bestNth(nth:2, count:1) remainder", () => {
+    const stages = buildTemplateStages("groups_ko", { qualified: 3, swissRounds: 5, poolCount: 2, legs: 1 });
+    expect(stages[1]!.progression).toEqual({
+      sources: [
+        {
+          stage: "previous",
+          take: [
+            { kind: "topNPerGroup", n: 1 },
+            { kind: "bestNth", nth: 2, count: 1 },
+          ],
+        },
+      ],
+      placement: "snake",
+      timing: "setup",
+    });
+  });
+
+  it("qualified:2, poolCount:8 (n===0, fewer qualifiers than pools) -> bestNth(nth:1, count:2) only", () => {
+    // Reachable: the Settings tab's qualified input is a free 2-32 integer
+    // with no ratio constraint against poolCount (division-settings.tsx).
+    // n = floor(2/8) = 0, so topNPerGroup would be a no-op (the engine's
+    // expandOne loops `wave <= rule.n`, zero iterations at n=0) and is
+    // omitted entirely; the whole take collapses to bestNth(nth:1, count:2)
+    // — the best 2 pool-winners by cross-pool rank, i.e. "every pool's
+    // winner" (topNPerGroup 1) truncated to the qualified count.
+    const stages = buildTemplateStages("groups_ko", { qualified: 2, swissRounds: 5, poolCount: 8, legs: 1 });
+    expect(stages[1]!.progression).toEqual({
+      sources: [{ stage: "previous", take: [{ kind: "bestNth", nth: 1, count: 2 }] }],
+      placement: "snake",
+      timing: "setup",
+    });
+  });
+
+  it("regression: with poolCount 4, the knockout draws qualifiers from every pool, not just A and B", () => {
+    const stages = buildTemplateStages("groups_ko", { qualified: 8, swissRounds: 5, poolCount: 4, legs: 1 });
+    const take = stages[1]!.progression!.sources[0]!.take;
+    // Before this fix, `take` was `{kind:"picks", picks:[...]}` hardcoded to
+    // alternate pools "A"/"B" regardless of poolCount, so with poolCount:4
+    // pools C and D never appeared and produced zero qualifiers. Expand the
+    // REAL take rule the template now emits against a real 4-pool shape,
+    // through the engine's own expandTake, and prove all four pools appear.
+    const pots = expandTake(take, { poolKeys: ["A", "B", "C", "D"] });
+    const pools = new Set(pots.flat().flatMap((d) => (d.kind === "group_rank" ? [d.pool] : [])));
+    expect(pools).toEqual(new Set(["A", "B", "C", "D"]));
   });
 });
 
@@ -221,11 +288,7 @@ describe("F3 — every progression-bearing template/family emits timing: setup",
   it("every STAGE_TEMPLATES entry's non-null progression.timing is setup", () => {
     const failures: string[] = [];
     for (const t of STAGE_TEMPLATES) {
-      // Task 2 (same session) changes build()'s signature to accept the
-      // whole TemplateKnobs object; until then plain `4` is q. This test
-      // only reads the literal `timing` field, so either call shape proves
-      // the same thing.
-      for (const stage of t.build(4)) {
+      for (const stage of t.build({ qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 })) {
         if (stage.progression && stage.progression.timing !== "setup") {
           failures.push(`${t.key}/${stage.kind}: timing=${stage.progression.timing}`);
         }

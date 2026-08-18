@@ -69,15 +69,26 @@ describe("format catalogue — shape regression (F1 Task 5)", () => {
     // below): format-templates.ts's StageDraft carries `progression` now,
     // never `qualification` — reading the old field here would silently
     // read undefined for every stage and always emit "-", masking real
-    // shape drift. This ONE line is fixed so the marker stays meaningful;
-    // the test as a whole stays red (snapshot mismatch) until Task 6
-    // converts previewDivisionFixtures/qualifierCount to read
-    // `.progression` — every later-stage entrant count currently falls
-    // back to qualifierCount's `|| 4` default regardless of the real
-    // take-rule count, which is a real (if silent) behaviour gap this file
-    // cannot close on its own. Do not regenerate this snapshot until then.
+    // shape drift. This ONE line is fixed so the marker stays meaningful.
+    // previewDivisionFixtures/qualifierCount already read `.progression`
+    // (not a Task still owed here) — but qualifierCount's progressionSize()
+    // call treats `topNPerGroup` as group-count-dependent and contributes 0
+    // to the count (a real shape needs expandTake + a SourceShape, which
+    // qualifierCount doesn't have), so a later stage fed BY a
+    // topNPerGroup-only take (no bestNth remainder) falls back to
+    // qualifierCount's `|| 4` default regardless of the real qualifier
+    // count. Real, if silent, and this file cannot close it on its own
+    // (previewDivisionFixtures is out of scope for F3's format-templates.ts
+    // change) — verified (2026-08-18, F3 Tasks 1-2: setup timing +
+    // groups_ko's topNPerGroup/bestNth draw) that it does NOT move this
+    // snapshot's numbers: previewDivisionFixtures never reads `.timing`,
+    // and groups_ko's knockout entrantCount stays 4 either way for the
+    // qualified:4/poolCount:2 knobs below (old picks.length was 4; new
+    // topNPerGroup(n:2) contributes 0 to progressionSize and falls back to
+    // the same `|| 4`). Re-verify by rerunning this test before trusting
+    // that coincidence for any OTHER knob combination.
     const summary = STAGE_TEMPLATES.map((t) => {
-      const stages = t.build(4);
+      const stages = t.build({ qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });
       const phases = previewDivisionFixtures(stages, 8);
       return {
         key: t.key,

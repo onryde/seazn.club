@@ -50,7 +50,7 @@ export const STAGE_TEMPLATES: {
   key: string;
   label: string;
   help: string;
-  build: (q: number) => StageDraft[];
+  build: (knobs: TemplateKnobs) => StageDraft[];
 }[] = [
   {
     key: "league",
@@ -62,7 +62,7 @@ export const STAGE_TEMPLATES: {
     key: "league_ko",
     label: "League + Finals",
     help: "Round robin, then top N knockout.",
-    build: (q) => [
+    build: ({ qualified: q }) => [
       { kind: "league", name: "League", config: { legs: 1 }, progression: null },
       { kind: "knockout", name: "Finals", config: {}, progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
@@ -75,43 +75,56 @@ export const STAGE_TEMPLATES: {
     key: "groups_ko",
     label: "Groups + Knockout",
     help: "Two pools, top of each cross over.",
-    build: (q) => [
-      {
-        kind: "group",
-        name: "Group stage",
-        config: { legs: 1, pools: { count: 2 } },
-        progression: null,
-      },
-      {
-        kind: "knockout",
-        name: "Knockout",
-        config: {},
-        progression: {
-          sources: [
-            {
-              stage: "previous",
-              take: [
-                {
-                  kind: "picks",
-                  picks: Array.from({ length: q }, (_, i) => ({
-                    pool: i % 2 === 0 ? "A" : "B",
-                    rank: Math.floor(i / 2) + 1,
-                  })),
-                },
-              ],
-            },
-          ],
-          placement: "rank_order",
-          timing: "setup",
+    build: ({ qualified: q, poolCount }) => {
+      // Cross-pool draw (owner ruling R5): take the top `n` finisher from
+      // EVERY pool, plus a `bestNth` remainder for the qualifier count that
+      // doesn't divide evenly across pools. topNPerGroup already expands
+      // wave-major (every pool's winner, then every pool's runner-up, …),
+      // which is what makes `snake` placement meaningful. Matches euro24's
+      // take shape and t20-super8's snake placement
+      // (server/templates/catalog/*.json) rather than inventing a third
+      // convention — replaces the old hand-rolled `picks` interleave, which
+      // hardcoded pools "A"/"B" and silently produced zero qualifiers from
+      // any pool beyond the second.
+      //
+      // n === 0 (q < poolCount — reachable: the Settings tab's qualified
+      // input is a free 2-32 integer with no ratio constraint against
+      // poolCount, division-settings.tsx) collapses to a no-op
+      // topNPerGroup(0) — the engine's expandOne loops `wave <= rule.n`, so
+      // n=0 contributes zero pots — so it's omitted here, and the whole
+      // take becomes bestNth(nth:1, count:q): the best q pool-winners by
+      // cross-pool rank, i.e. "topNPerGroup 1" (every pool's winner)
+      // truncated to q.
+      const n = Math.floor(q / poolCount);
+      const r = q - n * poolCount;
+      const take: TakeRule[] = [];
+      if (n > 0) take.push({ kind: "topNPerGroup", n });
+      if (r > 0) take.push({ kind: "bestNth", nth: n + 1, count: r });
+      return [
+        {
+          kind: "group",
+          name: "Group stage",
+          config: { legs: 1, pools: { count: poolCount } },
+          progression: null,
         },
-      },
-    ],
+        {
+          kind: "knockout",
+          name: "Knockout",
+          config: {},
+          progression: {
+            sources: [{ stage: "previous", take }],
+            placement: "snake",
+            timing: "setup",
+          },
+        },
+      ];
+    },
   },
   {
     key: "group_stepladder",
     label: "Group + Stepladder",
     help: "Round robin, then a stepladder final — lowest seed climbs.",
-    build: (q) => [
+    build: ({ qualified: q }) => [
       { kind: "league", name: "League", config: { legs: 1 }, progression: null },
       { kind: "stepladder", name: "Stepladder finals", config: {}, progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
@@ -189,7 +202,7 @@ export const STAGE_TEMPLATES: {
     key: "ko_plate",
     label: "Knockout + Plate",
     help: "Main knockout draw; round-1 losers play a plate bracket for a second chance.",
-    build: (q) => [
+    build: ({ qualified: q }) => [
       { kind: "knockout", name: "Main draw", config: {}, progression: null },
       {
         kind: "knockout",
@@ -207,7 +220,7 @@ export const STAGE_TEMPLATES: {
     key: "qualifying_main",
     label: "Qualifying + Main draw",
     help: "A smaller knockout decides who advances into the main knockout draw.",
-    build: (q) => [
+    build: ({ qualified: q }) => [
       { kind: "knockout", name: "Qualifying", config: {}, progression: null },
       { kind: "knockout", name: "Main draw", config: {}, progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
@@ -221,7 +234,7 @@ export const STAGE_TEMPLATES: {
 /** Template + knob values → the stage specs the API accepts. */
 export function buildTemplateStages(templateKey: string, knobs: TemplateKnobs): StageDraft[] {
   const t = STAGE_TEMPLATES.find((s) => s.key === templateKey) ?? STAGE_TEMPLATES[0]!;
-  return t.build(knobs.qualified).map((d) => {
+  return t.build(knobs).map((d) => {
     const config = { ...d.config };
     if (d.kind === "swiss") config.rounds = knobs.swissRounds;
     if (d.kind === "league" || d.kind === "group") config.legs = knobs.legs;

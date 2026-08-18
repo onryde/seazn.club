@@ -260,21 +260,12 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
         name: "Knockout",
         config: {},
         progression: {
-          sources: [
-            {
-              stage: "previous",
-              take: [
-                {
-                  kind: "picks",
-                  picks: [
-                    { pool: "A", rank: 1 }, { pool: "B", rank: 1 },
-                    { pool: "A", rank: 2 }, { pool: "B", rank: 2 },
-                  ],
-                },
-              ],
-            },
-          ],
-          placement: "rank_order",
+          // Same draw convention as format-templates.ts's groups_ko (owner
+          // ruling R5): top 2 of each of the 2 canned pools, cross over via
+          // `snake` — not the hand-rolled A/B `picks` interleave that used
+          // to live here, which could not generalise past 2 pools.
+          sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }],
+          placement: "snake",
           timing: "setup",
         },
       },

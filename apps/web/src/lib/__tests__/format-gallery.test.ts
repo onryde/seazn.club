@@ -52,27 +52,12 @@ describe("format gallery enumeration", () => {
 // moved off the hand-rolled `picks` A/B interleave onto `topNPerGroup` +
 // `snake` (owner ruling R5) — see the assertion below.
 describe("cannedStages emit progression, not qualification (F2)", () => {
-  it("groups-knockout's knockout stage carries a picks TakeRule, on_complete", () => {
+  it("groups-knockout's knockout stage carries a topNPerGroup TakeRule, snake, setup", () => {
     const family = formatFamily("groups-knockout")!;
     expect(family.cannedStages[0]!.progression).toBeNull();
     expect(family.cannedStages[1]!.progression).toEqual({
-      sources: [
-        {
-          stage: "previous",
-          take: [
-            {
-              kind: "picks",
-              picks: [
-                { pool: "A", rank: 1 },
-                { pool: "B", rank: 1 },
-                { pool: "A", rank: 2 },
-                { pool: "B", rank: 2 },
-              ],
-            },
-          ],
-        },
-      ],
-      placement: "rank_order",
+      sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }],
+      placement: "snake",
       timing: "setup",
     });
   });
