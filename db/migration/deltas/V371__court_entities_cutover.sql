@@ -449,9 +449,9 @@ begin
   create temp table division_scope_entries as
     select d.org_id, d.id as division_id, 'court' as kind, celem.val as raw_string,
            (cm.court_id is not null or c_existing.id is not null) as resolved
-      from divisions d,
-           lateral jsonb_array_elements(d.locked_scopes) as scope(obj),
-           lateral jsonb_array_elements_text(
+      from divisions d
+           cross join lateral jsonb_array_elements(d.locked_scopes) as scope(obj)
+           cross join lateral jsonb_array_elements_text(
              case when jsonb_typeof(scope.obj -> 'courts') = 'array'
                   then scope.obj -> 'courts' else '[]'::jsonb end
            ) as celem(val)
@@ -463,9 +463,9 @@ begin
     union all
     select d.org_id, d.id as division_id, 'venue' as kind, velem.val as raw_string,
            (vm.venue_id is not null or v_existing.id is not null) as resolved
-      from divisions d,
-           lateral jsonb_array_elements(d.locked_scopes) as scope(obj),
-           lateral jsonb_array_elements_text(
+      from divisions d
+           cross join lateral jsonb_array_elements(d.locked_scopes) as scope(obj)
+           cross join lateral jsonb_array_elements_text(
              case when jsonb_typeof(scope.obj -> 'venues') = 'array'
                   then scope.obj -> 'venues' else '[]'::jsonb end
            ) as velem(val)
