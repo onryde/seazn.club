@@ -1257,9 +1257,9 @@ export async function publicRegistrationInfo(
  * caller's `divisionCtx` call) — a snapshot gone stale since submit 422s
  * here, never as a Stripe-side error on a registrant's pay page.
  *
- * Greenfield conversion (owner ruling 3): this was entry-scoped
- * (`kind: "registration"`, a single `registration_id`) until this session;
- * there is no compat branch for the old shape — every caller now passes an
+ * Greenfield conversion (owner ruling 3): this used to key its metadata by
+ * one entry alone, singular-registration-id shaped, until this session;
+ * there is no compat branch for that old shape — every caller now passes an
  * explicit id list, even when that list has exactly one element.
  */
 async function createRegistrationCheckout(
