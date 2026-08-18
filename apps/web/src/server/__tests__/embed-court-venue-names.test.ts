@@ -78,4 +78,52 @@ describe.skipIf(!HAS_DB)("embedDivisionData — venue_name/court_name post-cutov
     expect(fixture.venue_name).toBe(venueName);
     expect(fixture.court_name).toBe("Center Court");
   });
+
+  it("redacts venue_name/court_name for a setup division, then reveals them once active", async () => {
+    const s = uniq();
+    await sql`
+      insert into sports (key, name, module_version, position_catalog)
+      values ('generic', 'Generic', '1.0.0', '{}') on conflict (key) do nothing`;
+    const [{ id: orgId }] = await sql<{ id: string }[]>`
+      insert into organizations (name, slug) values (${"Emb Setup " + s}, ${"emb-setup-" + s}) returning id`;
+    await setOrgPlan(orgId, "pro");
+    const [{ id: compId }] = await sql<{ id: string }[]>`
+      insert into competitions (org_id, name, slug, visibility)
+      values (${orgId}, ${"Comp " + s}, ${"comp-" + s}, 'public') returning id`;
+    // status is 'setup' this time — the point of this test — with a real
+    // court_id/venue_id set on the fixture below regardless, so a fixture
+    // with no court to redact in the first place can't pass this vacuously.
+    const [{ id: divId }] = await sql<{ id: string }[]>`
+      insert into divisions
+        (org_id, competition_id, name, slug, sport_key, variant_key, status, config, module_version)
+      values (${orgId}, ${compId}, 'Div', ${"div-" + s}, 'generic', 'score', 'setup', '{}', '1.0.0')
+      returning id`;
+    const [{ id: stageId }] = await sql<{ id: string }[]>`
+      insert into stages (org_id, division_id, kind, name, seq)
+      values (${orgId}, ${divId}, 'league', 'League', 1) returning id`;
+    const venueName = "Setup Venue " + s;
+    const [{ id: venueId }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${orgId}, ${venueName}) returning id`;
+    const [{ id: courtId }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name) values (${venueId}, ${orgId}, 'Setup Court') returning id`;
+    await sql`
+      insert into fixtures
+        (org_id, division_id, stage_id, fixture_no, round_no, seq_in_round, court_id, venue_id)
+      values (${orgId}, ${divId}, ${stageId}, 1, 1, 1, ${courtId}, ${venueId})`;
+
+    const setupRes = await embedDivisionData(divId);
+    expect(setupRes.ok).toBe(true);
+    if (!setupRes.ok) return;
+    const setupFixture = setupRes.data.fixtures[0]!;
+    expect(setupFixture.venue_name).toBeNull();
+    expect(setupFixture.court_name).toBeNull();
+
+    await sql`update divisions set status = 'active' where id = ${divId}`;
+    const activeRes = await embedDivisionData(divId);
+    expect(activeRes.ok).toBe(true);
+    if (!activeRes.ok) return;
+    const activeFixture = activeRes.data.fixtures[0]!;
+    expect(activeFixture.venue_name).toBe(venueName);
+    expect(activeFixture.court_name).toBe("Setup Court");
+  });
 });

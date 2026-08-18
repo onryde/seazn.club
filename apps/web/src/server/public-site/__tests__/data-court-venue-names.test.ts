@@ -91,6 +91,60 @@ async function seed(): Promise<Seeded> {
   return { orgSlug, compSlug, divSlug, fixtureAlphaId, fixtureBetaId, alphaVenueName, betaVenueName };
 }
 
+interface SeededSetup {
+  orgSlug: string;
+  compSlug: string;
+  divSlug: string;
+  divId: string;
+  fixtureId: string;
+  venueName: string;
+  courtName: string;
+}
+
+/**
+ * A division in 'setup' status with ONE fixture that already carries a real
+ * court_id/venue_id. The redaction that used to be driven by a
+ * caller-supplied `divisionStatus` argument is now decided by a `divisions`
+ * join INSIDE withCourtVenueNames/withCourtVenueName itself, so it needs
+ * its own proof independent of the disambiguation tests above — a fixture
+ * with no court/venue set would pass this whether or not the redaction
+ * still works.
+ */
+async function seedSetupRedaction(): Promise<SeededSetup> {
+  const s = uniq();
+  await sql`
+    insert into sports (key, name, module_version, position_catalog)
+    values ('generic', 'Generic', '1.0.0', '{}') on conflict (key) do nothing`;
+  const orgSlug = "dcv-setup-org-" + s;
+  const [{ id: orgId }] = await sql<{ id: string }[]>`
+    insert into organizations (name, slug) values (${"DCV Setup Org " + s}, ${orgSlug}) returning id`;
+  const compSlug = "dcv-setup-comp-" + s;
+  const [{ id: compId }] = await sql<{ id: string }[]>`
+    insert into competitions (org_id, name, slug, visibility, status)
+    values (${orgId}, ${"DCV Setup Comp " + s}, ${compSlug}, 'public', 'live') returning id`;
+  const divSlug = "setup-" + s;
+  const [{ id: divId }] = await sql<{ id: string }[]>`
+    insert into divisions
+      (org_id, competition_id, name, slug, sport_key, variant_key, status, config, module_version)
+    values (${orgId}, ${compId}, 'Setup Division', ${divSlug}, 'generic', 'score', 'setup', '{}', '1.0.0')
+    returning id`;
+  const [{ id: stageId }] = await sql<{ id: string }[]>`
+    insert into stages (org_id, division_id, kind, name, seq)
+    values (${orgId}, ${divId}, 'league', 'League', 1) returning id`;
+  const venueName = "Setup Venue " + s;
+  const courtName = "Setup Court " + s;
+  const [{ id: venueId }] = await sql<{ id: string }[]>`
+    insert into venues (org_id, name) values (${orgId}, ${venueName}) returning id`;
+  const [{ id: courtId }] = await sql<{ id: string }[]>`
+    insert into courts (venue_id, org_id, name) values (${venueId}, ${orgId}, ${courtName}) returning id`;
+  const [{ id: fixtureId }] = await sql<{ id: string }[]>`
+    insert into fixtures
+      (org_id, division_id, stage_id, fixture_no, round_no, seq_in_round, court_id, venue_id)
+    values (${orgId}, ${divId}, ${stageId}, 1, 1, 1, ${courtId}, ${venueId})
+    returning id`;
+  return { orgSlug, compSlug, divSlug, divId, fixtureId, venueName, courtName };
+}
+
 afterAll(async () => {
   if (!HAS_DB) return;
   const g = globalThis as { _sql?: { end(): Promise<void> } };
@@ -141,6 +195,45 @@ describe.skipIf(!HAS_DB)(
       expect(alphaPage!.fixture.court_name).toBe(`Court 1 (${seeded.alphaVenueName})`);
       expect(betaPage!.fixture.court_name).toBe(`Court 1 (${seeded.betaVenueName})`);
       expect(alphaPage!.fixture.court_name).not.toBe(betaPage!.fixture.court_name);
+    });
+
+    it("getPublicDivision redacts venue_name/court_name for a setup division, then reveals them once active", async () => {
+      const seeded = await seedSetupRedaction();
+      const setupPage = await getPublicDivision(seeded.orgSlug, seeded.compSlug, seeded.divSlug);
+      expect(setupPage).not.toBeNull();
+      const setupFixture = setupPage!.fixtures.find((f) => f.id === seeded.fixtureId);
+      expect(setupFixture).toBeDefined();
+      expect(setupFixture!.venue_name).toBeNull();
+      expect(setupFixture!.court_name).toBeNull();
+
+      await sql`update divisions set status = 'active' where id = ${seeded.divId}`;
+      const activePage = await getPublicDivision(seeded.orgSlug, seeded.compSlug, seeded.divSlug);
+      const activeFixture = activePage!.fixtures.find((f) => f.id === seeded.fixtureId);
+      expect(activeFixture!.venue_name).toBe(seeded.venueName);
+      expect(activeFixture!.court_name).toBe(seeded.courtName);
+    });
+
+    it("getPublicFixture redacts venue_name/court_name for a setup division, then reveals them once active", async () => {
+      const seeded = await seedSetupRedaction();
+      const setupPage = await getPublicFixture(
+        seeded.orgSlug,
+        seeded.compSlug,
+        seeded.divSlug,
+        seeded.fixtureId,
+      );
+      expect(setupPage).not.toBeNull();
+      expect(setupPage!.fixture.venue_name).toBeNull();
+      expect(setupPage!.fixture.court_name).toBeNull();
+
+      await sql`update divisions set status = 'active' where id = ${seeded.divId}`;
+      const activePage = await getPublicFixture(
+        seeded.orgSlug,
+        seeded.compSlug,
+        seeded.divSlug,
+        seeded.fixtureId,
+      );
+      expect(activePage!.fixture.venue_name).toBe(seeded.venueName);
+      expect(activePage!.fixture.court_name).toBe(seeded.courtName);
     });
   },
 );
