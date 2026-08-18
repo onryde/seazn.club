@@ -1249,6 +1249,28 @@ async function createRegistrationCheckout(
   token: string | null,
 ): Promise<string> {
   if (reg.amount_cents <= 0) throw new HttpError(422, "This registration has no entry fee");
+  // Owner ruling 4: validate the group's currency snapshot BEFORE any Stripe
+  // call. Both conditions below share one machine-readable code — "this
+  // cart cannot be charged in the currency it quoted right now" is one
+  // failure class whether the snapshot was delisted or the org's currency
+  // has since moved (same-currency lock pins it to the connected account's
+  // settlement currency) — never a Stripe-side error on a registrant's pay
+  // page. `ctx.currency` is the org's CURRENT currency, read fresh by the
+  // caller's `divisionCtx` call.
+  if (!isRegistrationCurrency(reg.currency)) {
+    throw new HttpError(
+      422,
+      "This organiser no longer accepts payment in this cart's currency",
+      "REGISTRATION_CURRENCY_UNAVAILABLE",
+    );
+  }
+  if (reg.currency !== ctx.currency) {
+    throw new HttpError(
+      422,
+      "This organiser's currency has changed since this cart was created",
+      "REGISTRATION_CURRENCY_UNAVAILABLE",
+    );
+  }
   const [org] = await sql<{ stripe_account_id: string | null }[]>`
     select stripe_account_id from organizations where id = ${ctx.org_id}`;
   if (!org?.stripe_account_id) {

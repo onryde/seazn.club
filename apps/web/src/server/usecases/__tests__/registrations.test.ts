@@ -1546,6 +1546,57 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(div.payment_method).toBe("stripe");
   });
 
+  // RS003 W3a owner ruling 4: the group's currency snapshot must be
+  // validated BEFORE any Stripe call — both that it is still an allowlisted
+  // registration currency, AND that it still matches the org's CURRENT
+  // currency (the same-currency lock pins that to the connected account's
+  // settlement currency; a stale snapshot must never surface as a Stripe
+  // error on a registrant's pay page). Both branches seed the mismatch
+  // directly via `seedRegistration`'s raw `currency` param — bypassing
+  // `putRegistrationSettings`, which always sources currency live from the
+  // org and so could never reproduce a STALE snapshot.
+  it("422s with a stable code when the group's currency has gone stale (not an allowlisted currency), and never calls Stripe", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    // "jpy" is not in REGISTRATION_CURRENCIES (usd/eur/gbp/inr/aud) — a
+    // snapshot minted before a delisting, or simply corrupt data.
+    const res = await seedRegistration(competition.id, division.id, {
+      fee_cents: 500,
+      currency: "jpy",
+      payment_method: "stripe",
+    });
+    await expect(
+      resumeRegistrationCheckout(res.registration.id, res.access_token, "http://test.local"),
+    ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_CURRENCY_UNAVAILABLE" });
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("422s with the same stable code when the group's snapshot no longer matches the org's CURRENT currency, and never calls Stripe", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    // organizations.currency defaults to 'gbp' (V365) and is left untouched
+    // here — the group below snapshots 'usd', a DIFFERENT but individually
+    // valid currency, reproducing an org that changed its preferred currency
+    // after this cart was submitted.
+    const { competition, division } = await rig(owner);
+    const res = await seedRegistration(competition.id, division.id, {
+      fee_cents: 500,
+      currency: "usd",
+      payment_method: "stripe",
+    });
+    await expect(
+      resumeRegistrationCheckout(res.registration.id, res.access_token, "http://test.local"),
+    ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_CURRENCY_UNAVAILABLE" });
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+
   it("late payment on a withdrawn registration is auto-refunded", async () => {
     const { competition, division, settings } = await stripeRig();
     const res = await seedRegistration(competition.id, division.id, settings);
