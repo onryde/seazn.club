@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { MyFixture } from "@/server/api-v1/schemas";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -326,5 +327,37 @@ describe.skipIf(!HAS_DB)("player home /me (PROMPT-53)", () => {
     ).rejects.toMatchObject({
       status: 404,
     });
+  });
+
+  it("listMyFixtures rows parse against the published MyFixture contract (review finding #9) — court_id/venue_id and derived court_name/venue_name, not the retired venue/court_label", async () => {
+    const { owner, orgId } = await seedOrg("contract");
+    const { persons } = await rig(owner);
+    const player = await makeUser("player");
+    await sql`update persons set user_id = ${player} where id = ${persons[0].id}`;
+
+    const before = await listMyFixtures(player);
+    expect(before.upcoming.length).toBeGreaterThan(0);
+    const targetId = before.upcoming[0]!.id;
+
+    // A real venue/court by id (P9 cutover) attached to one of the player's
+    // own fixtures — proves the derived court_name/venue_name resolve, not
+    // just that the schema shape happens to line up.
+    const [{ id: venueId }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${orgId}, ${"Riverside"}) returning id`;
+    const [{ id: courtId }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueId}, ${orgId}, ${"Court 9"}, ${sql.array([])})
+      returning id`;
+    await sql`update fixtures set venue_id = ${venueId}, court_id = ${courtId} where id = ${targetId}`;
+
+    const mine = await listMyFixtures(player);
+    // Would throw pre-fix: the published schema still required `venue`/
+    // `court_label` as present keys, which listMyFixtures stopped selecting —
+    // parsing a REAL row (not a hand-built literal) is what catches that.
+    for (const f of mine.upcoming) MyFixture.parse(f);
+
+    const withCourt = mine.upcoming.find((f) => f.id === targetId)!;
+    expect(withCourt.venue_name).toBe("Riverside");
+    expect(withCourt.court_name).toBe("Court 9");
   });
 });

@@ -451,8 +451,16 @@ export const MyFixture = z.object({
   entrant_name: z.string().nullable(),
   opponent_name: z.string().nullable(),
   scheduled_at: z.string().nullable(),
-  venue: z.string().nullable(),
-  court_label: z.string().nullable(),
+  // Review finding #9 (P9 venues/courts cutover): mirrors Fixture's own
+  // migration exactly (line ~769 above) — court_id/venue_id + derived,
+  // read-only court_name/venue_name. The frozen `venue`/`court_label` text
+  // columns leave the wire entirely; listMyFixtures (usecases/me.ts) never
+  // selected them post-cutover, so declaring them here as required was
+  // already false — there is no compatibility shim to preserve.
+  court_id: CourtId.nullable(),
+  court_name: z.string().nullable(),
+  venue_id: VenueId.nullable(),
+  venue_name: z.string().nullable(),
   status: z.string(),
   availability: z
     .object({ status: z.enum(["in", "out", "maybe"]), note: z.string().nullable() })
@@ -1799,8 +1807,16 @@ export const AssignedFixture = z.object({
   home_name: z.string().nullable(),
   away_name: z.string().nullable(),
   scheduled_at: z.string().nullable(),
-  venue: z.string().nullable(),
-  court_label: z.string().nullable(),
+  // Review finding #9 (P9 venues/courts cutover): same clean break as
+  // Fixture and MyFixture above — court_id/venue_id + derived, read-only
+  // court_name/venue_name. `venue`/`court_label` leave the wire entirely;
+  // listAssignedFixtures (usecases/scorers.ts) never selected them
+  // post-cutover, so declaring them here as required was already false —
+  // there is no compatibility shim to preserve.
+  court_id: CourtId.nullable(),
+  court_name: z.string().nullable(),
+  venue_id: VenueId.nullable(),
+  venue_name: z.string().nullable(),
   status: z.string(),
 });
 

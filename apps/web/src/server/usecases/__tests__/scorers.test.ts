@@ -9,6 +9,7 @@ import { PaymentRequiredError, HttpError } from "@/lib/errors";
 import { createOrgForUser } from "@/lib/auth";
 import { acceptInvite, grantInvite, loadInvite } from "@/lib/invites";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { AssignedFixture } from "@/server/api-v1/schemas";
 import type { OrgRole } from "@/lib/types";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -402,6 +403,36 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
     await expect(requireScorable(viewer, other.fixtures[0].id)).rejects.toMatchObject({
       status: 403,
     });
+  });
+
+  it("listAssignedFixtures rows parse against the published AssignedFixture contract (review finding #9) — court_id/venue_id and derived court_name/venue_name, not the retired venue/court_label", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asRole(orgId, ownerId, "owner");
+    const { division, fixtures } = await rig(owner);
+    const scorerId = await addMember(orgId, "scorer");
+    await createAssignment(orgId, scorerId, { type: "division", id: division.id }, ownerId);
+
+    // A real venue/court by id (P9 cutover) attached to one covered fixture —
+    // proves the derived court_name/venue_name resolve, not just that the
+    // schema shape happens to line up.
+    const [{ id: venueId }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${orgId}, ${"Riverside"}) returning id`;
+    const [{ id: courtId }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueId}, ${orgId}, ${"Court 9"}, ${sql.array([])})
+      returning id`;
+    await sql`update fixtures set venue_id = ${venueId}, court_id = ${courtId} where id = ${fixtures[0].id}`;
+
+    const mine = await listAssignedFixtures(scorerId);
+    expect(mine.length).toBeGreaterThan(0);
+    // Would throw pre-fix: the published schema still required `venue`/
+    // `court_label` as present keys, which listAssignedFixtures stopped
+    // selecting — parsing a REAL row (not a hand-built literal) catches that.
+    for (const f of mine) AssignedFixture.parse(f);
+
+    const withCourt = mine.find((f) => f.id === fixtures[0].id)!;
+    expect(withCourt.venue_name).toBe("Riverside");
+    expect(withCourt.court_name).toBe("Court 9");
   });
 
   it("accept, existing viewer × scorer invite: scope added, role kept, no scorer seat", async () => {

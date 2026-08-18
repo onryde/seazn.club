@@ -48,10 +48,11 @@ export interface MyFixture {
   scheduled_at: string | null;
   /** Venue zone (V305): division override → org timezone → UTC. */
   venue_tz: string | null;
-  venue: string | null;
   /** P9 cutover: DERIVED from `venues`/`courts` via `fixtures.venue_id`/
    *  `court_id`. The frozen `fixtures.venue`/`court_label` text columns are no
-   *  longer written, so reading them blanks any fixture touched post-cutover. */
+   *  longer written, so reading them blanks any fixture touched post-cutover.
+   *  Review finding #9: this interface used to also declare a dead `venue:
+   *  string | null` for the retired column — the SQL below never selected it. */
   venue_id: string | null;
   venue_name: string | null;
   court_id: string | null;
