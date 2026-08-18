@@ -2,7 +2,7 @@
 // with D4's StageSeeding; unified onto `progression` by F2).
 import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { CompetitionTemplate, type TemplateStageProgression } from "../schema";
+import { CompetitionTemplate, TemplateStage, type TemplateStageProgression } from "../schema";
 
 const MINIMAL_VALID = {
   key: "slam128",
@@ -169,5 +169,63 @@ describe("CompetitionTemplate schema", () => {
     };
     expect(typeof valid).toBe("function");
     expect(typeof bogus).toBe("function");
+  });
+});
+
+describe("TemplateStage — .strict() (F2 full-branch review, Blocker 2): a legacy key is REJECTED, not silently dropped", () => {
+  // Before this fix, TemplateStage was a plain z.object — a catalog JSON (or
+  // any object validated against this schema) carrying the pre-F2
+  // `seeding`/`qualification` shape parsed successfully with the key
+  // silently STRIPPED, producing `progression: undefined` with no error.
+  // Same failure class CreateStage was already fixed for (F2 Task 5,
+  // api-v1/schemas.ts) — `.strict()` converts it from silent to loud here
+  // too: the offending key now surfaces by name in the issue.
+  it("rejects a stage carrying the legacy qualification key, naming it in the issue", () => {
+    const r = TemplateStage.safeParse({
+      i18nNameKey: "templates.stage.x",
+      kind: "knockout",
+      qualification: { topN: 4 },
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      const issue = r.error.issues.find((i) => i.code === "unrecognized_keys");
+      expect(issue, "expected an unrecognized_keys issue, not just any failure").toBeDefined();
+      expect((issue as { keys: string[] }).keys).toContain("qualification");
+    }
+  });
+
+  it("rejects the legacy seeding key the same way", () => {
+    const r = TemplateStage.safeParse({
+      i18nNameKey: "templates.stage.x",
+      kind: "knockout",
+      seeding: { source: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }], placement: "rank_order" },
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      const issue = r.error.issues.find((i) => i.code === "unrecognized_keys");
+      expect((issue as { keys: string[] } | undefined)?.keys).toContain("seeding");
+    }
+  });
+
+  it("still accepts a well-formed stage — strict rejects unknown keys, not known ones", () => {
+    const r = TemplateStage.safeParse({
+      i18nNameKey: "templates.stage.x",
+      kind: "knockout",
+      size: 128,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("a legacy key on a nested catalog stage makes CompetitionTemplate.parse throw too — the same guard catalog.ts:42-44 relies on at module init", () => {
+    const bad = {
+      ...MINIMAL_VALID,
+      divisions: [
+        {
+          ...MINIMAL_VALID.divisions[0],
+          stages: [{ i18nNameKey: "templates.stage.x", kind: "knockout", seeding: { source: "previous" } }],
+        },
+      ],
+    };
+    expect(() => CompetitionTemplate.parse(bad)).toThrow();
   });
 });

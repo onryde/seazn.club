@@ -82,6 +82,14 @@ export const ScheduleDefaults = z.object({
   suggestedCourtTags: z.array(z.string()).optional(),
 });
 
+// F2 full-branch review, Blocker 2 — .strict(): before this, an unknown key
+// (the old .qualification/.seeding shape, or any typo) parsed successfully
+// with the key silently STRIPPED, producing `progression: undefined` with no
+// error — a catalog JSON could carry a stray key and never fail its
+// module-init parse (catalog.ts:42-44). Same failure class CreateStage was
+// already fixed for (F2 Task 5, api-v1/schemas.ts's CreateStage.strict()):
+// strict converts it from silent to loud, naming the offending key in the
+// zod unrecognized_keys issue.
 export const TemplateStage = z.object({
   i18nNameKey: z.string().min(1),
   kind: StageKind,
@@ -113,7 +121,7 @@ export const TemplateStage = z.object({
    *  progression of their own). See TemplateStageProgression above for why
    *  every source's `stage` is narrowed to `"previous"`. */
   progression: TemplateStageProgression.optional(),
-});
+}).strict();
 export type TemplateStage = z.infer<typeof TemplateStage>;
 
 export const TemplateDivision = z.object({
