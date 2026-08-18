@@ -631,14 +631,22 @@ export const CreateStage = z
 /** POST /divisions/{id}/stages — the stage graph, one or many (doc 08 §3). */
 export const CreateStages = z.union([CreateStage, z.array(CreateStage).min(1).max(20)]);
 
-/** POST /stages/{id}/fixtures — ad-hoc single fixture (PROMPT-66). */
-export const AddFixture = z.object({
-  home_entrant_id: Uuid,
-  away_entrant_id: Uuid,
-  round_no: z.number().int().min(1).optional(),
-  scheduled_at: z.string().datetime({ offset: true }).nullish(),
-  venue: z.string().max(200).nullish(),
-});
+/** POST /stages/{id}/fixtures — ad-hoc single fixture (PROMPT-66).
+ *
+ *  P9 pass 3c-2: this was the one writer the venues/courts cutover missed —
+ *  it still took a free-text `venue`. Real venue/court by id now, same as
+ *  `PatchFixture`. `.strict()` for the same reason that schema documents: a
+ *  client still sending `venue` gets a loud 400 instead of a silent no-op. */
+export const AddFixture = z
+  .object({
+    home_entrant_id: Uuid,
+    away_entrant_id: Uuid,
+    round_no: z.number().int().min(1).optional(),
+    scheduled_at: z.string().datetime({ offset: true }).nullish(),
+    venue_id: VenueId.nullish(),
+    court_id: CourtId.nullish(),
+  })
+  .strict();
 export type AddFixture = z.infer<typeof AddFixture>;
 export type CreateStages = z.infer<typeof CreateStages>;
 

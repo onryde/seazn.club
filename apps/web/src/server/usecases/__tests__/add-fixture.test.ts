@@ -94,11 +94,21 @@ describe.skipIf(!HAS_DB)("addFixture (PROMPT-66)", () => {
     const [{ count: before }] = await sql<{ count: number }[]>`
       select count(*)::int as count from fixtures where stage_id = ${stage!.id}`;
 
+    // P9 pass 3c-2: a real venue/court by id — addFixture was the one writer
+    // the cutover missed, still taking a free-text `venue` until now.
+    const [{ id: venueId }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${auth.orgId}, ${"Riverside"}) returning id`;
+    const [{ id: courtId }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueId}, ${auth.orgId}, ${"Court 9"}, ${sql.array([])})
+      returning id`;
+
     const { fixture_id } = await addFixture(auth, stage!.id, {
       home_entrant_id: entrants[0]!,
       away_entrant_id: entrants[1]!,
       scheduled_at: "2026-08-01T10:00:00Z",
-      venue: "Court 9",
+      venue_id: venueId,
+      court_id: courtId,
     });
 
     const [fx] = await sql<
@@ -108,11 +118,21 @@ describe.skipIf(!HAS_DB)("addFixture (PROMPT-66)", () => {
         status: string;
         ext_key: string;
         venue: string | null;
+        court_label: string | null;
+        venue_id: string | null;
+        court_id: string | null;
       }[]
-    >`select round_no, seq_in_round, status, ext_key, venue from fixtures where id = ${fixture_id}`;
+    >`select round_no, seq_in_round, status, ext_key, venue, court_label, venue_id, court_id
+      from fixtures where id = ${fixture_id}`;
     expect(fx.status).toBe("scheduled");
     expect(fx.ext_key.startsWith("adhoc-")).toBe(true);
-    expect(fx.venue).toBe("Court 9");
+    // The real identity lands...
+    expect(fx.venue_id).toBe(venueId);
+    expect(fx.court_id).toBe(courtId);
+    // ...and NEITHER frozen text column is touched — this is the writer the
+    // P9 cutover missed; reverting to `input.venue` would fail this.
+    expect(fx.venue).toBeNull();
+    expect(fx.court_label).toBeNull();
     const [{ count: after }] = await sql<{ count: number }[]>`
       select count(*)::int as count from fixtures where stage_id = ${stage!.id}`;
     expect(after).toBe(before + 1);

@@ -2711,7 +2711,11 @@ export async function addFixture(
     away_entrant_id: string;
     round_no?: number;
     scheduled_at?: string | null;
-    venue?: string | null;
+    // P9 pass 3c-2: this writer was the one cutover pass 3a missed — it still
+    // accepted and inserted the free-text `venue` column. Real venue/court by
+    // id, matching every other fixture-touching writer (moveFixture et al.).
+    venue_id?: string | null;
+    court_id?: string | null;
   },
 ): Promise<{ fixture_id: string }> {
   return withTenant(auth.orgId, async (tx) => {
@@ -2767,10 +2771,12 @@ export async function addFixture(
       select count(*)::int as n from fixtures where stage_id = ${stageId}`;
     const [fixture] = await tx<{ id: string }[]>`
       insert into fixtures (stage_id, division_id, pool_id, round_no, seq_in_round,
-                            home_entrant_id, away_entrant_id, ext_key, status, scheduled_at, venue)
+                            home_entrant_id, away_entrant_id, ext_key, status, scheduled_at,
+                            venue_id, court_id)
       values (${stageId}, ${stage.division_id}, ${poolId}, ${round}, ${nextSeq},
               ${input.home_entrant_id}, ${input.away_entrant_id}, ${"adhoc-" + String(n + 1)},
-              'scheduled', ${input.scheduled_at ?? null}, ${input.venue ?? null})
+              'scheduled', ${input.scheduled_at ?? null},
+              ${input.venue_id ?? null}, ${input.court_id ?? null})
       returning id`;
     return { fixture_id: fixture!.id };
   });
