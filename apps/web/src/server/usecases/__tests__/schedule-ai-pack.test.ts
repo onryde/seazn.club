@@ -67,6 +67,9 @@ function settingsConfig(court1: string, court2: string) {
 }
 
 const courtsByOrg = new Map<string, { venueId: string; byName: Map<string, string> }>();
+// Reverse of `byName` above, flattened across every org this file seeds in one
+// run — see `redact`'s own doc comment for why it exists.
+const courtNameByUuid = new Map<string, string>();
 
 /** A real court, resolved (and cached) by name within one org — see
  *  `settingsConfig`'s own doc comment. Mirrors
@@ -82,16 +85,37 @@ async function courtId(auth: AuthCtx, name: string): Promise<string> {
   if (cached !== undefined) return cached;
   const court = await createCourt(auth, entry.venueId, { name, sort: entry.byName.size, tags: [] });
   entry.byName.set(name, court.id);
+  courtNameByUuid.set(court.id, name);
   return court.id;
 }
 
 // UUIDs are random per seed run; redact them to stable, first-seen placeholders
 // so the structural snapshot survives re-seeding while ordering stays asserted.
+//
+// P9 pass 3b-tail: `court_label`/`settings.courts`/`blackouts[].court` now
+// carry REAL court uuids (`courtId`, above) instead of the pre-cutover
+// "Court 1"/"Court 2" labels the golden snapshot was recorded against. Left
+// alone, those uuids would fall into the generic sweep below and redact to
+// `<id:N>` — a value the snapshot never pinned, AND one that shifts every
+// OTHER id's number (fixture/entrant/person/official/division) by however
+// many distinct court uuids sort earlier in the pack's own key order, since
+// numbering is first-seen-in-JSON-stringify-order. So every id in the
+// snapshot would drift, not just the court ones.
+//
+// Substituting each known court uuid back to the NAME it was seeded from,
+// before the generic regex runs, sidesteps both problems at once: the
+// substituted text ("Court 1") is no longer uuid-shaped, so the sweep below
+// skips it exactly as it always skipped the literal pre-cutover label — every
+// OTHER id keeps the identical first-seen order and number the snapshot
+// already pins, and court_label/courts/blackouts render exactly as they did
+// before the cutover.
 function redact(pack: unknown): unknown {
   const re = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
   const map = new Map<string, string>();
+  let json = JSON.stringify(pack);
+  for (const [uuid, name] of courtNameByUuid) json = json.split(uuid).join(name);
   return JSON.parse(
-    JSON.stringify(pack).replace(re, (u) => {
+    json.replace(re, (u) => {
       if (!map.has(u)) map.set(u, `<id:${map.size + 1}>`);
       return map.get(u)!;
     }),
