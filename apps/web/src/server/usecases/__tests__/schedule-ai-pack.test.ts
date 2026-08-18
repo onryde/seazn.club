@@ -696,6 +696,44 @@ async function seedCourtTieBoard(): Promise<{
 }
 
 /**
+ * Two DECIDED cards at the same instant on two different courts, with the
+ * organiser's court order (`settings.courts`) deliberately DISAGREEING with the
+ * courts' raw UUID order: "Hi Court" is settings position 0 but carries an id
+ * leading `f`, "Lo Court" is position 1 with an id leading `0`. A
+ * `packObstacles` comparator that sorts on the raw court id therefore emits
+ * [Lo, Hi] — deterministically wrong, rather than the 50/50 coin flip two
+ * random per-seed court UUIDs would otherwise give. Same shape and same
+ * reasoning as `seedCourtTieBoard` above, one field over. The third card is
+ * unscheduled so `generate` still has a non-empty movable set.
+ */
+async function seedObstacleCourtOrderBoard(): Promise<{
+  auth: AuthCtx;
+  divisionId: string;
+  courtHi: string;
+  courtLo: string;
+}> {
+  const { auth, divisionId, stageId } = await seedKoDivision("ObstOrder");
+  const venue = await createVenue(auth, { name: "Obstacle venue", sort: 0 });
+  const courtHi = uuidLeading("f");
+  const courtLo = uuidLeading("0");
+  await insertCourt(auth, venue.id, courtHi, "Hi Court");
+  await insertCourt(auth, venue.id, courtLo, "Lo Court");
+  await setSettings(divisionId, courtHi, courtLo);
+  const at = new Date(T0).toISOString();
+  for (const [i, court] of [courtHi, courtLo].entries()) {
+    await sql`
+      insert into fixtures (id, stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
+                            scheduled_at, court_id)
+      values (${randomUUID()}, ${stageId}, ${divisionId}, ${auth.orgId}, 1, ${i}, ${`done-${i}`},
+              'decided', ${at}, ${court})`;
+  }
+  await sql`
+    insert into fixtures (id, stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
+    values (${randomUUID()}, ${stageId}, ${divisionId}, ${auth.orgId}, 2, 0, 'todo', 'scheduled')`;
+  return { auth, divisionId, courtHi, courtLo };
+}
+
+/**
  * C1 follow-up (2026-08-12, task 2 item 1). The SAME 4-entrant bracket shape
  * as `seedSmallBracket`, but on a stage whose `kind` is actually
  * `"knockout"` — `seedKoDivision` (which `seedSmallBracket` builds on)
@@ -1176,6 +1214,30 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
     expect(pack.draft.every((d) => d.scheduled_at === pack.draft[0]!.scheduled_at)).toBe(true);
     expect(new Set(pack.draft.map((d) => d.court_label)).size).toBe(2);
     expect(pack.draft.map((d) => d.fixture_id)).toEqual([first, second]);
+  });
+
+  it("obstacles order on the organiser's court order, not the raw court id", async () => {
+    // P9, second site of the same defect the test above pins: `packObstacles`
+    // sorted on `court`, which was the court NAME before the V374 cutover
+    // (stable across runs, and the order a reader expects) and is a per-seed
+    // court UUID after it. Nothing type-checks that away and the pack still
+    // looks well-formed — the only symptom is that the same board stops
+    // rebuilding the same pack, which is what the demo capture fixtures and
+    // `seeds.test.ts`'s reseed check assert.
+    const { auth, divisionId, courtHi, courtLo } = await seedObstacleCourtOrderBoard();
+    const { pack } = await buildSchedulePack(auth, divisionId, {
+      now: NOW_W2,
+      mode: "generate", instruction: "x",
+    });
+    // The organiser's order, which is also the order `courtDetails` is emitted in.
+    expect(pack.settings.courts).toEqual([courtHi, courtLo]);
+    expect(pack.fixtures.obstacles.length).toBe(2);
+    // Same instant, different courts — so the `from`/`to`/`label` tiebreaks
+    // below the court key cannot be what decides this ordering.
+    expect(new Set(pack.fixtures.obstacles.map((o) => o.from)).size).toBe(1);
+    // The premise: a raw-id sort would invert them.
+    expect(courtHi > courtLo).toBe(true);
+    expect(pack.fixtures.obstacles.map((o) => o.court)).toEqual([courtHi, courtLo]);
   });
 
   it("stripped-feeder assumptions order on the board, not on the UUID a null ext_key leaves in the text", async () => {

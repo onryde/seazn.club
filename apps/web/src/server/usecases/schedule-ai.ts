@@ -1344,6 +1344,25 @@ export async function buildSchedulePack(
       // Same comparator as `participantView` above — see `byBoardOrder`.
       .sort(byBoardOrder);
 
+    // P9: the obstacle order must not key on `court`. Before the cutover that
+    // field was the court NAME, so sorting on it was stable across runs and
+    // meaningful to read. It is a court UUID now — freshly minted per seed —
+    // so an id sort is a fresh PERMUTATION every time the same board is built.
+    // Nothing type-checks that away and nothing in the pack looks wrong; the
+    // only symptom is that a pack stops reproducing itself (the demo capture
+    // fixtures and `seeds.test.ts`'s reseed-determinism check both caught it).
+    // Sort on the court's position in `settings.courts` instead — the order
+    // the organiser sees and the order `courtDetails` is emitted in — with
+    // courts outside that set (archived or since-retagged, which obstacles may
+    // legitimately sit on) after it, ordered by label so they are stable too.
+    const courtOrderIndex = new Map(candidateCourtIds.ids.map((id, i) => [id, i] as const));
+    const courtOrderKey = (id: string): string => {
+      const i = courtOrderIndex.get(id);
+      return i === undefined
+        ? `1:${courtDirectory.get(id)?.label ?? id}`
+        : `0:${String(i).padStart(6, "0")}`;
+    };
+
     const packObstacles: PackObstacle[] = [
       ...obstacleFixtures.map((f) => {
         const start = new Date(f.scheduled_at as string | Date).getTime();
@@ -1366,9 +1385,8 @@ export async function buildSchedulePack(
         to: zonedIso(a.endAt, orgTz),
         label: OTHER_DIVISION_LABEL,
       })),
-    ].sort(
-      (a, b) => cmp(a.court, b.court) || cmp(a.from, b.from) || cmp(a.to, b.to) || cmp(a.label, b.label),
-    );
+    ].sort((a, b) => cmp(courtOrderKey(a.court), courtOrderKey(b.court))
+      || cmp(a.from, b.from) || cmp(a.to, b.to) || cmp(a.label, b.label));
 
     // Entrants + each one's pool, derived from the division's fixtures.
     const entrantPool = new Map<string, string>();
