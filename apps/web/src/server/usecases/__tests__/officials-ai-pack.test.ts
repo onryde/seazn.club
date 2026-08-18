@@ -33,12 +33,14 @@ const T0 = Date.parse("2026-08-01T09:00:00.000Z");
 const MIN = 60_000;
 const TZ = "Europe/London";
 
-// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` — real
-// `courts.id` values, seeded per org below. Nothing in this file reads
-// `pack.settings.courts` or otherwise cares WHICH courts these are — the
-// per-fixture court officials-ai.ts shows in the pack comes from the legacy
-// `fixtures.court_label` column (still, see the seeding below), unrelated to
-// this array; it exists purely to satisfy the schema.
+// P9 pass 3b/3c: `ScheduleConfig.courts` is `z.array(CourtId)` — real
+// `courts.id` values, seeded per org below (`seedCourts` names them
+// "Court 1".."Court N", so they read back identical to the old free-text
+// labels this suite already asserted on). The per-fixture court
+// officials-ai.ts shows in the pack is DERIVED from `courts` via each
+// fixture's `court_id` (pass 3c) — `court_label` is frozen and only ever
+// read back to prove it is NOT what renders (see the "stale court_label"
+// test below).
 function settingsConfig(courts: string[]) {
   return {
     startAt: "2026-08-01T09:00:00.000Z",
@@ -74,12 +76,13 @@ function redact(pack: unknown): unknown {
   );
 }
 
-async function setSettings(auth: AuthCtx, divisionId: string): Promise<void> {
+async function setSettings(auth: AuthCtx, divisionId: string): Promise<string[]> {
   const courts = await seedCourts(auth.orgId, 2);
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
     values (${divisionId}, ${sql.json(settingsConfig(courts))}, ${TZ}, now())
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
+  return courts;
 }
 
 // Seed one full RR board (2 courts, 8 entrants, a shared player, two referees)
@@ -105,11 +108,15 @@ async function seedOfficialsBoard(opts?: {
       kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [],
     })),
   );
-  await setSettings(auth, divisionId);
+  const courts = await setSettings(auth, divisionId);
   const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "League", config: {} });
   const { fixtures } = await generateStageFixtures(auth, stage!.id);
 
   // Deterministic 2-court schedule on STABLE order (round_no, seq_in_round).
+  // `court_id` is the real identity the pack now derives its name from;
+  // `court_label` rides along frozen (P9) so a reverted reader would still
+  // show "Court 1"/"Court 2" here too — see the dedicated stale-label test
+  // for the case that actually distinguishes the two.
   const ordered = [...fixtures].sort(
     (a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round,
   );
@@ -118,6 +125,7 @@ async function seedOfficialsBoard(opts?: {
       update fixtures set
         scheduled_at = ${new Date(T0 + i * 30 * MIN).toISOString()},
         court_label = ${i % 2 === 0 ? "Court 1" : "Court 2"},
+        court_id = ${i % 2 === 0 ? courts[0] : courts[1]},
         schedule_source = 'auto'
       where id = ${ordered[i]!.id}`;
   }
@@ -229,7 +237,7 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack (v4/03 §2)", () => {
         kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [],
       })),
     );
-    await setSettings(tieAuth, div.id);
+    const courts = await setSettings(tieAuth, div.id);
     const [stage] = await createStages(tieAuth, div.id, { seq: 1, kind: "league", name: "L", config: {} });
     const ents = await sql<{ id: string }[]>`select id from entrants where division_id = ${div.id} order by seed`;
     // Unique per run, but Court 1 always draws the HIGHER of the two UUIDs.
@@ -238,12 +246,12 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack (v4/03 §2)", () => {
     await sql`
       insert into fixtures
         (id, stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
-         scheduled_at, court_label, home_entrant_id, away_entrant_id)
+         scheduled_at, court_label, court_id, home_entrant_id, away_entrant_id)
       values
         (${court1Id}, ${stage!.id}, ${div.id}, ${tieAuth.orgId}, 1, 0, 'tie-c1', 'scheduled',
-         ${at}, 'Court 1', ${ents[0]!.id}, ${ents[1]!.id}),
+         ${at}, 'Court 1', ${courts[0]!}, ${ents[0]!.id}, ${ents[1]!.id}),
         (${court2Id}, ${stage!.id}, ${div.id}, ${tieAuth.orgId}, 1, 1, 'tie-c2', 'scheduled',
-         ${at}, 'Court 2', ${ents[2]!.id}, ${ents[3]!.id})`;
+         ${at}, 'Court 2', ${courts[1]!}, ${ents[2]!.id}, ${ents[3]!.id})`;
     await sql`
       insert into officials (org_id, display_name, role_keys) values
         (${tieAuth.orgId}, 'Sam Whistle', ${sql.json(["referee"])}),
@@ -377,5 +385,64 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack cross-org busy", () => {
     const shared = pack.officials.find((o) => o.id === officialA.id)!;
     expect(shared.busy_elsewhere.length).toBe(1);
     expect(/[+-]\d{2}:\d{2}$/.test(shared.busy_elsewhere[0]!)).toBe(true);
+  });
+});
+
+// P9 pass 3c: `f.court_label` is frozen — nothing writes it any more — so a
+// fixture whose stale label disagrees with its real `court_id` must still
+// render the court_id's live name. Fails on a reverted reader (which would
+// show the stale label instead).
+describe.skipIf(!HAS_DB)("buildOfficialsPack court naming (P9 cutover)", () => {
+  it("renders the court_id's live name, not a stale court_label", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Stale", visibility: "public", branding: {} });
+    const div = await createDivision(auth, comp.id, {
+      name: "Stale", slug: "stale", sport_key: "generic", variant_key: "score",
+      config: GENERIC_CONFIG, eligibility: [],
+    });
+    await createEntrants(auth, div.id, ["A", "B"].map((n, i) => ({
+      kind: "individual" as const, display_name: n, seed: i + 1, members: [],
+    })));
+    const courts = await setSettings(auth, div.id);
+    const [stage] = await createStages(auth, div.id, { seq: 1, kind: "league", name: "L", config: {} });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    await sql`
+      update fixtures set scheduled_at = ${"2026-08-01T09:00:00.000Z"},
+        court_label = 'Stale Court Name', court_id = ${courts[0]!}
+      where id = ${fixtures[0]!.id}`;
+    await sql`
+      insert into officials (org_id, display_name, role_keys)
+      values (${auth.orgId}, 'Ref', ${sql.json(["referee"])})`;
+
+    const p = await buildOfficialsPack(auth, div.id, { instruction: "x", policy: POLICY });
+    const f = p.fixtures.find((x) => x.id === fixtures[0]!.id)!;
+    expect(f.court).toBe("Court 1");
+    expect(f.court).not.toBe("Stale Court Name");
+  });
+
+  it("archived courts still render a name, never a bare uuid or blank", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Arch", visibility: "public", branding: {} });
+    const div = await createDivision(auth, comp.id, {
+      name: "Arch", slug: "arch", sport_key: "generic", variant_key: "score",
+      config: GENERIC_CONFIG, eligibility: [],
+    });
+    await createEntrants(auth, div.id, ["A", "B"].map((n, i) => ({
+      kind: "individual" as const, display_name: n, seed: i + 1, members: [],
+    })));
+    const courts = await setSettings(auth, div.id);
+    const [stage] = await createStages(auth, div.id, { seq: 1, kind: "league", name: "L", config: {} });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    await sql`
+      update fixtures set scheduled_at = ${"2026-08-01T09:00:00.000Z"}, court_id = ${courts[0]!}
+      where id = ${fixtures[0]!.id}`;
+    await sql`update courts set archived_at = now() where id = ${courts[0]!}`;
+    await sql`
+      insert into officials (org_id, display_name, role_keys)
+      values (${auth.orgId}, 'Ref', ${sql.json(["referee"])})`;
+
+    const p = await buildOfficialsPack(auth, div.id, { instruction: "x", policy: POLICY });
+    const f = p.fixtures.find((x) => x.id === fixtures[0]!.id)!;
+    expect(f.court).toBe("Court 1");
   });
 });
