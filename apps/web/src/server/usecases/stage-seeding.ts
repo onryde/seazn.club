@@ -33,7 +33,7 @@ import {
 } from "@seazn/engine/competition";
 import { EngineError } from "@seazn/engine/core";
 import { HttpError } from "@/lib/errors";
-import { poolCount, POOL_KEYS } from "./stages";
+import { poolCount, POOL_KEYS, BRACKET_KINDS, loadBracketFixtures } from "./stages";
 
 type Tx = postgres.TransactionSql;
 
@@ -225,13 +225,19 @@ export async function sourceStandingsTables(tx: Tx, source: { id: string }): Pro
  *  SEEDING_SOURCE_INCOMPLETE naming the first source stage that isn't ready
  *  — same contract computeSeedProposal has always had.
  *
- *  Bracket fixtures (needed only by a `roundLosers` take rule) are
- *  deliberately NOT fetched here: no `timing:"setup"` writer emits
- *  `roundLosers` today (`ko_plate` is `on_complete` — see the F2 plan,
- *  Task 5 Step 6), so a propose/confirm-flow progression never needs
- *  `SourceTables.bracket`, matching this file's behaviour before this
- *  session. seedNextStage (stages.ts), the `on_complete` flow, builds its
- *  own tables locally and does fetch bracket fixtures when relevant. */
+ *  Bracket fixtures (needed only by a `roundLosers` take rule) ARE fetched
+ *  here (F3 review item 5, RESOLVED) — a prior comment said they weren't,
+ *  reasoning "no `timing:"setup"` writer emits `roundLosers` today (`ko_plate`
+ *  is `on_complete`)". That premise died when F3 flipped every picker
+ *  template's `timing` to `"setup"` (day-one fixtures): `ko_plate`'s plate
+ *  stage IS a `roundLosers` take under `timing:"setup"` now, so this function
+ *  needed `SourceTables.bracket` for real — without it, `resolveProgression`'s
+ *  `loserAt` always threw `STAGE_NOT_READY`, silently swallowed by
+ *  completeStage's best-effort catch (stages.ts), leaving an organiser's
+ *  plate stuck on TBD forever with no visible error. Mirrors
+ *  `tablesForCompletedStage`'s (stages.ts, the `on_complete` flow's own table
+ *  builder) `BRACKET_KINDS.has(kind) ? loadBracketFixtures(...) : undefined`
+ *  exactly — same condition, same helper, now shared rather than forked. */
 export async function sourcesToTables(
   tx: Tx,
   target: { division_id: string; seq: number },
@@ -254,7 +260,8 @@ export async function sourcesToTables(
     resolved.push(source);
     shapes.push(await sourceShapeOf(tx, source));
     const pools = await sourceStandingsTables(tx, source);
-    tables.push({ pools });
+    const bracket = BRACKET_KINDS.has(source.kind) ? await loadBracketFixtures(tx, source.id) : undefined;
+    tables.push({ pools, ...(bracket ? { bracket } : {}) });
   }
   return { shapes, tables, resolved };
 }

@@ -836,12 +836,8 @@ function alphaLabel(i: number): string {
 
 // F2 — delegates to the engine's `progressionSize` (TOTAL across every
 // TakeRule kind, never throws) instead of re-deriving per-shape counts by
-// hand. previewDivisionFixtures never sees a multi-source progression (no
-// writer in this session emits one — Task 1's SourcedSlot doc comment), so
-// reading only `sources[0]` is complete, not a simplification: summing every
-// source's count would double-count entrants a REAL resolve would dedupe.
-// This is a READ path fed straight from a DB column — never let a malformed
-// value reach `progressionSize`.
+// hand. This is a READ path fed straight from a DB column — never let a
+// malformed value reach `progressionSize`.
 //
 // F3 Task 2b (regression fix, commit 6351fd2ce): `progressionSize`
 // deliberately contributes 0 for `topNPerGroup` (its own comment:
@@ -874,22 +870,41 @@ function previewSourceShape(prev: PreviewStageInput | undefined): SourceShape {
   return { poolKeys: POOL_KEYS.slice(0, count).split("") };
 }
 
+// F3 review item 3 (RESOLVED) — was `spec.sources?.[0]?.take` only: complete
+// while previewDivisionFixtures never saw a multi-source progression, but
+// item 1's fix makes multi-source a genuinely reachable `setup` spec
+// (progression-multi-source.test.ts creates one end to end), and this preview
+// undersized the downstream stage for one exactly the way commit 0ec159e52
+// fixed for `topNPerGroup` — the "preview that lies" class this programme
+// exists to end. Sums every source, each sized by the SAME per-source rule
+// this function always applied to `sources[0]` alone (topNPerGroup needs the
+// previous stage's real shape; everything else is a plain progressionSize),
+// so single-source behaviour is byte-identical (a one-source sum reduces to
+// the same single term). "Summing every source's count would double-count
+// entrants a REAL resolve would dedupe" (the old comment here) does not apply
+// to a preview: this sizes SLOTS from static take-rule counts, never real
+// entrant ids, and multiple sources describe entrants from DIFFERENT earlier
+// stages by construction — there is nothing to dedupe.
 function qualifierCount(progression: unknown, prevStage?: PreviewStageInput): number {
   if (!progression || typeof progression !== "object") return 0;
   const spec = progression as { sources?: { take?: unknown }[] };
-  const take = spec.sources?.[0]?.take;
-  if (!Array.isArray(take)) return 0;
-  const rules = take as TakeRule[];
-  if (rules.some((r) => (r as { kind?: unknown } | null)?.kind === "topNPerGroup")) {
-    try {
-      return expandTake(rules, previewSourceShape(prevStage)).reduce((sum, pot) => sum + pot.length, 0);
-    } catch {
-      // A malformed sibling rule despite the topNPerGroup check above —
-      // fall through to progressionSize's own graceful degradation; this
-      // read path must never throw.
+  const sources = spec.sources;
+  if (!Array.isArray(sources)) return 0;
+  return sources.reduce((total, source) => {
+    const take = source?.take;
+    if (!Array.isArray(take)) return total;
+    const rules = take as TakeRule[];
+    if (rules.some((r) => (r as { kind?: unknown } | null)?.kind === "topNPerGroup")) {
+      try {
+        return total + expandTake(rules, previewSourceShape(prevStage)).reduce((sum, pot) => sum + pot.length, 0);
+      } catch {
+        // A malformed sibling rule despite the topNPerGroup check above —
+        // fall through to progressionSize's own graceful degradation; this
+        // read path must never throw.
+      }
     }
-  }
-  return progressionSize(rules);
+    return total + progressionSize(rules);
+  }, 0);
 }
 
 /** Preview a whole stage graph. Stage 1 uses A,B,C… entrants; later (qualifier)
@@ -1859,7 +1874,10 @@ export async function fillSlot(
 // competition.ts's own (unexported) list — losersOfRound only makes sense
 // sourced from one of these.
 const REAL_TABLE_KINDS = new Set(["league", "group", "swiss"]);
-const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
+// Exported (F3 review item 5): stage-seeding.ts's sourcesToTables needs the
+// SAME set to know when a source needs bracket data for a roundLosers take
+// rule — see loadBracketFixtures' own export note below.
+export const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
 
 // Mirrors engine-db/competition.ts's private toEngineStatus (not exported):
 // DB fixtures.status -> engine FixtureStatus (spec 05 §1 vocabulary). Needed
@@ -1900,7 +1918,17 @@ function toBracketFixtureStatus(dbStatus: string): FixtureStatus {
 // resolveProgression's round_loser branch trusts ITS CALLER for bracket-position
 // order (there is nothing left for it to sort by) — `order by round_no,
 // seq_in_round` below is what makes THIS the ordering authority.
-async function loadBracketFixtures(tx: Tx, stageId: string): Promise<BracketFixture[]> {
+// F3 review item 5 (RESOLVED) — exported so stage-seeding.ts's
+// sourcesToTables (the `timing:"setup"` propose/confirm path's own table
+// builder) can populate SourceTables.bracket too, not just this file's own
+// seedNextStage/tablesForCompletedStage (the `timing:"on_complete"` path).
+// Before this, sourcesToTables NEVER fetched bracket data at all — a
+// roundLosers take rule under `timing:"setup"` (ko_plate's real catalogue
+// shape once F3 flipped every picker template to day-one fixtures) could
+// never resolve: progression.ts's loserAt throws STAGE_NOT_READY without
+// `bracket`, silently swallowed by completeStage's best-effort catch, so an
+// organiser's plate stage stayed on TBD forever with no visible error.
+export async function loadBracketFixtures(tx: Tx, stageId: string): Promise<BracketFixture[]> {
   const rows = await tx<
     {
       id: string;
@@ -2411,22 +2439,25 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
         { stageId },
       );
     }
-    // P6 (F3 Task 3) residual, NOT fixed here: this map IS keyed by bare
-    // descriptorKey (discarding sourceIndex), same anti-pattern
-    // placeDescriptors used to have — a tie spanning two sources that share
-    // a descriptorKey would resolve computedTies' slot for the WRONG one.
-    // Not fixed because the fix is blocked one layer up: `ties[].descriptors`
-    // (ProgressionTieFlag, progression.ts) is `SlotDescriptor[]`, which has
-    // no sourceIndex to key by — the caller has nothing to disambiguate
-    // with. Widening that type is a real engine API change (ripples through
-    // resolveProgression's tie-group logic and this function's wire
-    // contract), out of this session's authorized file set. Currently
-    // UNREACHABLE regardless: every writer in this codebase emits a
-    // single-source progression (multi-source is new capability this
-    // session's placeDescriptors fix unlocked, per SourcedSlot's own doc
-    // comment), so no tie can span two sources today. Recorded in
-    // _INDEX.md's P6 entry for whoever adds a multi-source writer next.
-    const seedOfKey = new Map(qualifiers.map((q) => [descriptorKey(q.descriptor), q.seed] as const));
+    // P6 (F3 review item 1, RESOLVED) — was keyed by bare descriptorKey,
+    // colliding across two sources that emit the same descriptor (trivially:
+    // two rankRange sources, or two group_rank sources sharing a pool letter
+    // — the default pool naming). The Map construction's last-write-wins
+    // meant a tie flagged on one source's slot could resolve to a DIFFERENT
+    // source's slot instead — the rightful qualifier silently dropped there
+    // while the real tie's slot kept the engine's unconfirmed default pick,
+    // exactly the "a tie is FLAGGED, never silently ordered" invariant
+    // confirmSeedProposal's own tie-resolution check below exists to uphold.
+    // Keyed by `${sourceIndex}:${descriptorKey}` instead, now that
+    // `ProgressionTieFlag.descriptors` carries sourceIndex (widened to
+    // SourcedSlot — progression.ts). Reachable today: createStages/
+    // replaceStages persist a multi-source `setup` progression with no
+    // progression-aware gate (format-gates.ts checks kind/byes/cross_feeds/
+    // placements only); progression-multi-source.test.ts exercises it end to
+    // end.
+    const seedOfKey = new Map(
+      qualifiers.map((q) => [`${q.sourceIndex}:${descriptorKey(q.descriptor)}`, q.seed] as const),
+    );
 
     const computedQualifiers = qualifiers.map((q) => ({
       rank: q.seed,
@@ -2452,9 +2483,9 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
       );
     }
     const computedTies = ties.map((t) => ({
-      slots: t.descriptors.map((d) => {
-        const seed = seedOfKey.get(descriptorKey(d));
-        return (seed !== undefined ? slotBySeed.get(seed)?.[0] : undefined) ?? descriptorKey(d);
+      slots: t.descriptors.map((sourced) => {
+        const seed = seedOfKey.get(`${sourced.sourceIndex}:${descriptorKey(sourced.descriptor)}`);
+        return (seed !== undefined ? slotBySeed.get(seed)?.[0] : undefined) ?? descriptorKey(sourced.descriptor);
       }),
       entrantIds: t.entrantIds,
       reason: t.reason,
