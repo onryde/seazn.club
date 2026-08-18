@@ -47,12 +47,23 @@ describe("format catalogue — shape regression (F1 Task 5)", () => {
   // change to what a format produces (a new round namer, a reordered
   // stage) has to update this snapshot deliberately, not drift silently.
   it("every shipped format produces its known shape", () => {
+    // F2 T5b collateral fix (not a task-owned file — see stages: line
+    // below): format-templates.ts's StageDraft carries `progression` now,
+    // never `qualification` — reading the old field here would silently
+    // read undefined for every stage and always emit "-", masking real
+    // shape drift. This ONE line is fixed so the marker stays meaningful;
+    // the test as a whole stays red (snapshot mismatch) until Task 6
+    // converts previewDivisionFixtures/qualifierCount to read
+    // `.progression` — every later-stage entrant count currently falls
+    // back to qualifierCount's `|| 4` default regardless of the real
+    // take-rule count, which is a real (if silent) behaviour gap this file
+    // cannot close on its own. Do not regenerate this snapshot until then.
     const summary = STAGE_TEMPLATES.map((t) => {
       const stages = t.build(4);
       const phases = previewDivisionFixtures(stages, 8);
       return {
         key: t.key,
-        stages: stages.map((s) => `${s.kind}:${s.qualification ? "Q" : "-"}`).join(">"),
+        stages: stages.map((s) => `${s.kind}:${s.progression ? "Q" : "-"}`).join(">"),
         rounds: phases.map((p) => p.sections.map((sec) => sec.title)),
       };
     });
