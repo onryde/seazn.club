@@ -98,9 +98,20 @@ export interface AiDiff {
   unchanged: AiDiffUnchanged[];
 }
 
-/** Same court and same wall-clock instant — an ISO restatement is not a move. */
-function sameSlot(a: AiFixtureRef | AiDiffSlot, b: AiDiffSlot): boolean {
-  if ((a.court_label ?? null) !== (b.court_label ?? null)) return false;
+/**
+ * Same court and same wall-clock instant — an ISO restatement is not a move.
+ *
+ * P9 review wave 1, finding 3 (HIGH): court identity must compare `a.court_id`
+ * (the board's real identity — `court_label` is frozen and always null on a
+ * board-sourced `AiFixtureRef`, per its own doc) against `b.court_label`
+ * (which, despite the legacy name, carries a real court uuid on the plan
+ * side — `resolveModelCourtLabels` writes the id back before the response
+ * leaves the server). Comparing `court_label` on both sides — as this used
+ * to — compares "always null" against "always a uuid": never equal, so a
+ * no-op plan bucketed every scheduled fixture as moved.
+ */
+function sameSlot(a: AiFixtureRef, b: AiDiffSlot): boolean {
+  if ((a.court_id ?? null) !== (b.court_label ?? null)) return false;
   const ta = a.scheduled_at ? new Date(a.scheduled_at).getTime() : NaN;
   const tb = new Date(b.scheduled_at).getTime();
   return ta === tb;
