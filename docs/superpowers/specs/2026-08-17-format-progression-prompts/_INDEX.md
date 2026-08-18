@@ -27,8 +27,8 @@ and those two `stages.ts` functions; F1 is fenced off `qualification.ts`,
 | Session | Prompt file | Depends on | Status |
 |---|---|---|---|
 | F1 | `F1-bracket-round-role.md` | — | **MERGED** as #606 (2026-08-18), plus #613 which named the knockout tree's rounds — the one bracket shape F1 left with no captions at all |
-| F2 | `F2-unified-progression-field.md` | — | **IN REVIEW** — PR #616, 60 commits. Implementation complete: Tasks 1-6, two review rounds, the e2e conversion, and the full-branch review's two blockers (V373's `sources` existence guard, `TemplateStage.strict()`) all landed |
-| F3 | **prompt ready** — `../2026-08-18-format-progression-f3-f5-design.md` §8 | F2 **merged** | design written 2026-08-18 against the shipped shape. Paste §8's F3 block as a whole prompt |
+| F2 | `F2-unified-progression-field.md` | — | **MERGED** as #616 (2026-08-18, `ef473f586`), 60 commits. One `progression` field; `qualification` and `seeding` dropped. Migrations V371-V373, no version collision on main |
+| F3 | **prompt ready** — `../2026-08-18-format-progression-f3-f5-design.md` §8 | F2 **merged** ✅ | design written 2026-08-18 against the shipped shape. Paste §8's F3 block as a whole prompt |
 | F4 | **prompt ready** — same doc §8 (two blocks, one session) | — | premise RETIRED (no sport/format-kind gap in either direction; its mexicano comment folds into F3). Slot **repurposed** to the export + calendar day-one leaks (§7 P5, P2). Does NOT wait for F3 — three catalogue templates already emit `timing: "setup"`. Owner CONFIRMED the repurpose 2026-08-18 |
 | F5 | **prompt ready** — same doc §8 | all | scope fixed by the §5 table |
 
