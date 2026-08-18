@@ -600,6 +600,8 @@ interface OfficialDutyRow {
   response: "pending" | "accepted" | "declined";
   home: string | null;
   away: string | null;
+  home_slot_label: SlotLabel | null;
+  away_slot_label: SlotLabel | null;
 }
 
 async function officialDutyRows(tx: Tx, divisionId: string): Promise<OfficialDutyRow[]> {
@@ -608,7 +610,8 @@ async function officialDutyRows(tx: Tx, divisionId: string): Promise<OfficialDut
            f.scheduled_at::text as scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz, f.court_label,
            c.name as comp_name, d.name as div_name,
            fo.role_key, fo.response,
-           h.display_name as home, a.display_name as away
+           h.display_name as home, a.display_name as away,
+           f.home_slot_label, f.away_slot_label
     from fixture_officials fo
     join officials o on o.id = fo.official_id
     join fixtures f on f.id = fo.fixture_id
@@ -640,6 +643,7 @@ export async function buildOfficialsRotaDoc(
     : undefined;
   return withTenant(auth.orgId, async (tx) => {
     const meta = await divisionMeta(tx, divisionId);
+    const slotLookup = exportLookup(meta.default_locale);
     const branding = layerDivisionBranding(baseBranding, meta);
     const rows = await officialDutyRows(tx, divisionId);
     const byOfficial = new Map<string, ExportOfficialSchedule>();
@@ -650,7 +654,7 @@ export async function buildOfficialsRotaDoc(
         court: r.court_label,
         compDivision: `${r.comp_name} · ${r.div_name}`,
         role: r.role_key,
-        opponents: `${r.home ?? "TBD"} vs ${r.away ?? "TBD"}`,
+        opponents: `${r.home ?? resolveSlotLabel(r.home_slot_label, slotLookup, "schedule.tbd")} vs ${r.away ?? resolveSlotLabel(r.away_slot_label, slotLookup, "schedule.tbd")}`,
         response: r.response,
       });
       byOfficial.set(r.official_id, s);
@@ -797,6 +801,9 @@ export async function auditLedgerDoc(
   return withTenant(auth.orgId, async (tx) => {
     const divMeta = await divisionMeta(tx, meta!.division_id);
     const branding = layerDivisionBranding(baseBranding, divMeta);
+    // No slot-label fallback here, deliberately: an audit ledger is the
+    // forensic record of a fixture that has already been scored, so both
+    // sides are always filled entrants. A placeholder cannot reach this doc.
     const vs =
       ledger.fixture.home !== null || ledger.fixture.away !== null
         ? ` — ${ledger.fixture.home ?? "TBD"} vs ${ledger.fixture.away ?? "TBD"}`

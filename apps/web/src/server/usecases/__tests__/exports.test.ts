@@ -503,4 +503,32 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
     });
     expect(JSON.stringify(model)).toContain(msgFor("fr", "schedule.tbd"));
   });
+
+  // F4/Task 2: officialDutyRows joined entrants only, and the rota assembly
+  // loop applied `?? "TBD"` in TypeScript — an official handed a rota for a
+  // knockout day saw "TBD vs TBD" for every unfilled match.
+  it("the officials rota shows slot labels for unfilled fixtures", async () => {
+    const { auth } = await seedOrg("pro");
+    const { division, fixtures } = await seedDivision(auth);
+    await sql`
+      update fixtures
+      set home_slot_label = ${sql.json({ key: "slot.winner_group", params: { g: "A" } })},
+          away_slot_label = ${sql.json({ key: "slot.runner_up_group", params: { g: "B" } })},
+          home_entrant_id = null, away_entrant_id = null,
+          status = 'scheduled'
+      where id = ${fixtures[0]!.id}`;
+    const [{ id: officialId }] = await sql<{ id: string }[]>`
+      insert into officials (org_id, display_name) values (${auth.orgId}, 'Sam Ref')
+      returning id`;
+    await sql`
+      insert into fixture_officials (fixture_id, official_id, role_key, response)
+      values (${fixtures[0]!.id}, ${officialId}, 'referee', 'accepted')`;
+
+    const model = await buildOfficialsRotaDoc(auth, division.id, {
+      printedAt: PRINTED,
+    });
+    const text = JSON.stringify(model);
+    expect(text).toContain("Winner of Group A vs Runner-up of Group B");
+    expect(text).not.toContain("TBD vs TBD");
+  });
 });
