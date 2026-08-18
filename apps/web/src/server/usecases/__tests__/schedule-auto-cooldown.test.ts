@@ -69,6 +69,7 @@ const { createDivision } = await import("../divisions");
 const { createEntrants } = await import("../entrants");
 const { createStages, generateStageFixtures } = await import("../stages");
 const { autoSchedule, putScheduleSettings, autoScheduleCooldown } = await import("../schedule");
+const { seedCourts } = await import("./_seed");
 const AUTO_SCHEDULE_COOLDOWN = autoScheduleCooldown();
 type AuthCtx = import("@/server/api-v1/auth").AuthCtx;
 
@@ -130,12 +131,13 @@ async function seedStage(): Promise<{ auth: AuthCtx; stageId: string }> {
     name: "L",
     config: {},
   });
+  const courts = await seedCourts(orgId, 2);
   await putScheduleSettings(auth, division.id, {
     config: {
       startAt: T0,
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["C1", "C2"],
+      courts,
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
