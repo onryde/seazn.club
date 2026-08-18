@@ -192,6 +192,74 @@ describe("placeDescriptors", () => {
       expect(EngineError.is(err, "SEEDING_MAP_SLOT_INVALID")).toBe(true);
     }
   });
+
+  // P6 (F3 Task 3): two SOURCES that each expose a pool "A" produce the same
+  // descriptorKey "A1" for their winners. A seeded_map entry naming "A1" used
+  // to resolve silently to whichever source's copy the old single-slot
+  // `byKey` Map construction visited last — the wrong team's placeholder in
+  // the wrong bracket seat, every test green. It must now refuse instead.
+  it("seeded_map source ambiguous across two sources sharing a pool key now 422s SEEDING_MAP_SOURCE_AMBIGUOUS", () => {
+    const sources: ProgressionSource[] = [
+      { stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] },
+      { stage: { stageId: "s2" }, take: [{ kind: "topNPerGroup", n: 1 }] },
+    ];
+    const pots = expandSources(sources, () => ({ poolKeys: ["A"] }));
+    const map = [{ slot: "1", source: "A1" }];
+    expect(() => placeDescriptors(pots, "seeded_map", map)).toThrow(/matches qualifiers from more than one/);
+    try {
+      placeDescriptors(pots, "seeded_map", map);
+      expect.fail("expected placeDescriptors to throw");
+    } catch (err) {
+      expect(EngineError.is(err, "SEEDING_MAP_SOURCE_AMBIGUOUS")).toBe(true);
+      // Names the key and both source indexes (the dispatch's own wording).
+      expect((err as EngineError).message).toContain("A1");
+      expect((err as EngineError).data).toMatchObject({ source: "A1", sourceIndexes: [0, 1] });
+    }
+  });
+
+  // Same two-source, same-pool-key shape, but WITHOUT a seeded_map entry
+  // naming the ambiguous key: rank_order/snake never go through a
+  // descriptorKey-keyed Map (they're plain array concatenation/reversal), so
+  // both "A1"s always survived here — this pins that down explicitly and
+  // demonstrates the keying pattern a caller MUST use if it ever needs to
+  // look one back up by key (apps/web's stages.ts has no such caller today —
+  // see the F3 Task 3 index note).
+  it("two same-keyed descriptors from different sources both survive rank_order/snake, distinguishable by sourceIndex", () => {
+    const sources: ProgressionSource[] = [
+      { stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] },
+      { stage: { stageId: "s2" }, take: [{ kind: "topNPerGroup", n: 1 }] },
+    ];
+    const pots = expandSources(sources, () => ({ poolKeys: ["A"] }));
+    const placed = placeDescriptors(pots, "rank_order");
+    expect(placed).toHaveLength(2);
+    expect(placed.every((s) => descriptorKey(s.descriptor) === "A1")).toBe(true);
+    expect(placed.map((s) => s.sourceIndex)).toEqual([0, 1]);
+
+    // The disambiguating key pattern: bare descriptorKey collapses to ONE
+    // entry (the bug); sourceIndex-qualified holds both.
+    const collapsed = new Map(placed.map((s) => [descriptorKey(s.descriptor), s]));
+    expect(collapsed.size).toBe(1);
+    const disambiguated = new Map(placed.map((s) => [`${s.sourceIndex}:${descriptorKey(s.descriptor)}`, s]));
+    expect(disambiguated.size).toBe(2);
+  });
+
+  it("seeded_map still works when an ambiguous key exists but is NOT the one referenced (only the referenced key must be unambiguous)", () => {
+    // Source 0 has pools A and B; source 1 has only pool A — "A1" is
+    // ambiguous between them, "B1" is not (only source 0 produces it).
+    const sources: ProgressionSource[] = [
+      { stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] },
+      { stage: { stageId: "s2" }, take: [{ kind: "topNPerGroup", n: 1 }] },
+    ];
+    const pots = expandSources(sources, (i) => (i === 0 ? { poolKeys: ["A", "B"] } : { poolKeys: ["A"] }));
+    const placed = placeDescriptors(pots, "seeded_map", [{ slot: "1", source: "B1" }]);
+    expect(placed).toHaveLength(3);
+    expect(placed[0]).toEqual({ sourceIndex: 0, descriptor: { kind: "group_rank", pool: "B", rank: 1 } });
+    // Both ambiguous-but-unreferenced "A1"s survive, one per source, neither
+    // silently dropped by the remaining-seat fill.
+    const rest = placed.slice(1);
+    expect(rest.every((s) => descriptorKey(s.descriptor) === "A1")).toBe(true);
+    expect(rest.map((s) => s.sourceIndex).sort()).toEqual([0, 1]);
+  });
 });
 
 describe("descriptorKey / descriptorLabel", () => {

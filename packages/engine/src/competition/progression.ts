@@ -198,14 +198,22 @@ function snakeMerge(pots: readonly SourcedSlot[][]): SourcedSlot[] {
  *  out-of-range or duplicate slot) — the "422 at rule save, not at proposal
  *  time" contract carried forward from stage-seeding.ts.
  *
- *  KNOWN LIMITATION, not fixed here: `seeded_map`'s `source` string matches
- *  against `descriptorKey`, which does not encode which SOURCE a descriptor
- *  came from. A seeded_map entry against a multi-source progression whose
- *  two sources happen to emit the same descriptor key (e.g. both have a
- *  "group_rank A1") resolves to whichever pot's copy `flat()` visits first.
- *  This is the same single-source assumption stage-seeding.ts always made;
- *  F2 does not test or fix the seeded_map + multi-source combination — no
- *  shipped writer produces it. */
+ *  P6 (F3 Task 3) — RESOLVED, was a KNOWN LIMITATION: `seeded_map`'s
+ *  `source` string matches against `descriptorKey`, which does not encode
+ *  which SOURCE a descriptor came from. A multi-source progression whose two
+ *  sources happen to emit the same descriptor key (e.g. both have a
+ *  "group_rank A1") is now a genuine ambiguity: if a `seeded_map` entry
+ *  names that key, this throws `SEEDING_MAP_SOURCE_AMBIGUOUS` naming the key
+ *  and every colliding source index, rather than silently resolving to
+ *  whichever source's copy happened to be visited last (the old `Map`
+ *  construction's last-write-wins behaviour — the wrong team's placeholder
+ *  in the wrong bracket seat, every test green). A shared key that is NOT
+ *  referenced by any `seeded_map` entry is not an error — both copies flow
+ *  through untouched, same as `rank_order`/`snake` (plain array
+ *  concatenation/reversal, never keyed by `descriptorKey`, so they never had
+ *  this bug). This was unreachable from the picker before F3: every writer
+ *  in this codebase emits a single-source progression; multi-source is new
+ *  capability this module unlocked (SourcedSlot's own doc comment). */
 export function placeDescriptors(
   pots: readonly SourcedSlot[][],
   placement: "rank_order" | "snake" | "seeded_map",
@@ -215,9 +223,25 @@ export function placeDescriptors(
   if (placement !== "seeded_map" || !map || map.length === 0) return flat;
 
   const total = flat.length;
-  const byKey = new Map(flat.map((s) => [descriptorKey(s.descriptor), s] as const));
+  // Grouped by key (never collapsed to one) — a multi-source progression can
+  // legitimately produce the same descriptorKey from two different sources,
+  // and `seeded_map.source` is a bare key with no source qualifier, so
+  // resolving it can be genuinely ambiguous (see this function's own doc
+  // comment above).
+  const byKey = new Map<string, SourcedSlot[]>();
+  for (const s of flat) {
+    const key = descriptorKey(s.descriptor);
+    const list = byKey.get(key);
+    if (list) list.push(s);
+    else byKey.set(key, [s]);
+  }
   const seats = new Array<SourcedSlot | undefined>(total).fill(undefined);
-  const claimed = new Set<string>();
+  // Claimed by OBJECT identity, not by key string: two flat entries can
+  // share a descriptorKey without being the same slot (the ambiguous-but-
+  // unreferenced case above), and only the ONE explicitly-mapped slot may be
+  // removed from the auto-fill pool — a key-based claim would silently drop
+  // its unclaimed sibling too.
+  const claimed = new Set<SourcedSlot>();
 
   for (const entry of map) {
     const seat = Number(entry.slot);
@@ -228,24 +252,33 @@ export function placeDescriptors(
         { slot: entry.slot, total },
       );
     }
-    const slot = byKey.get(entry.source);
-    if (!slot) {
+    const candidates = byKey.get(entry.source);
+    if (!candidates || candidates.length === 0) {
       throw new EngineError(
         "SEEDING_MAP_SOURCE_INVALID",
         `seeded_map source "${entry.source}" does not match any qualifier this stage's rules produce`,
         { source: entry.source, available: [...byKey.keys()] },
       );
     }
+    if (candidates.length > 1) {
+      const sourceIndexes = candidates.map((c) => c.sourceIndex);
+      throw new EngineError(
+        "SEEDING_MAP_SOURCE_AMBIGUOUS",
+        `seeded_map source "${entry.source}" matches qualifiers from more than one progression source (indexes ${sourceIndexes.join(", ")}) — seeded_map cannot tell them apart; use rank_order/snake placement instead, or make each source's pool keys distinct`,
+        { source: entry.source, sourceIndexes },
+      );
+    }
+    const slot = candidates[0]!;
     if (seats[seat - 1] !== undefined) {
       throw new EngineError("SEEDING_MAP_SLOT_INVALID", `seeded_map assigns seed ${seat} more than once`, {
         slot: seat,
       });
     }
     seats[seat - 1] = slot;
-    claimed.add(entry.source);
+    claimed.add(slot);
   }
 
-  const remaining = flat.filter((s) => !claimed.has(descriptorKey(s.descriptor)));
+  const remaining = flat.filter((s) => !claimed.has(s));
   let ri = 0;
   for (let i = 0; i < total; i++) {
     if (seats[i] === undefined) seats[i] = remaining[ri++];

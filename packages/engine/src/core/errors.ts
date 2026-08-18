@@ -60,6 +60,12 @@ export const EngineErrorCode = z.enum([
   "SEEDING_MAP_SLOT_INVALID",
   "SEEDING_MAP_SOURCE_INVALID",
   "SEEDING_BESTNTH_UNEQUAL_POOLS",
+  // F3 Task 3 (P6) — a seeded_map `source` string matched descriptors from
+  // more than one progression source (two sources sharing a pool key, e.g.
+  // both have a "group_rank A1"); placeDescriptors can no longer tell them
+  // apart, so it refuses instead of silently resolving to whichever source's
+  // copy it visited last. Appended last, existing order frozen.
+  "SEEDING_MAP_SOURCE_AMBIGUOUS",
 ]);
 export type EngineErrorCode = z.infer<typeof EngineErrorCode>;
 

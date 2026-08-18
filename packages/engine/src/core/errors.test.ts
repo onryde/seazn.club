@@ -61,6 +61,9 @@ describe("EngineError", () => {
       "SEEDING_MAP_SLOT_INVALID",
       "SEEDING_MAP_SOURCE_INVALID",
       "SEEDING_BESTNTH_UNEQUAL_POOLS",
+      // F3 Task 3 (P6) — seeded_map source resolved against >1 progression
+      // source. Appended last, existing order frozen.
+      "SEEDING_MAP_SOURCE_AMBIGUOUS",
     ]);
   });
 });
