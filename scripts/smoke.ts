@@ -8338,6 +8338,15 @@ async function schedulingConstraintsSuite(): Promise<void> {
   // is Pro, and so is the board apply path.
   const orgId = (await signIn(s, `smoke-sched-constraints-${tag}@example.com`)).org_id;
   await setPlan(orgId, "pro", s);
+  const constraintsVenue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `Constraints Venue ${tag}` }),
+  );
+  const courtA = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${constraintsVenue.id}/courts`, "POST", { name: "A" }),
+  );
+  const courtB = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${constraintsVenue.id}/courts`, "POST", { name: "B" }),
+  );
 
   // ======================================================================
   // 1. A durable feeder→dependent rest rule on a real bracket (#443, #447)
@@ -8389,7 +8398,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
       startAt: "2026-11-05T09:00:00.000Z",
       matchMinutes: 30,
       gapMinutes,
-      courts: ["A", "B"],
+      courts: [courtA.id, courtB.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -8427,7 +8436,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
   );
 
   interface AutoOut {
-    assignments: { fixture_id: string; scheduled_at: string; ends_at: string; court_label: string }[];
+    assignments: { fixture_id: string; scheduled_at: string; ends_at: string; court_id: string }[];
     conflicts: ScheduleConflictLite[];
     solver?: { status?: string };
   }
@@ -8547,10 +8556,10 @@ async function schedulingConstraintsSuite(): Promise<void> {
   }
   const cupBoard = (round2At: string) => ({
     assignments: [
-      { fixture_id: semis[0]!.id, scheduled_at: "2026-11-05T09:00:00.000Z", court_label: "A" },
-      { fixture_id: semis[1]!.id, scheduled_at: "2026-11-05T09:00:00.000Z", court_label: "B" },
-      { fixture_id: round2[0]!.id, scheduled_at: round2At, court_label: "A" },
-      { fixture_id: round2[1]!.id, scheduled_at: round2At, court_label: "B" },
+      { fixture_id: semis[0]!.id, scheduled_at: "2026-11-05T09:00:00.000Z", court_id: courtA.id },
+      { fixture_id: semis[1]!.id, scheduled_at: "2026-11-05T09:00:00.000Z", court_id: courtB.id },
+      { fixture_id: round2[0]!.id, scheduled_at: round2At, court_id: courtA.id },
+      { fixture_id: round2[1]!.id, scheduled_at: round2At, court_id: courtB.id },
     ],
   });
   const validateCup = async (): Promise<ScheduleConflictLite[]> =>
@@ -8679,7 +8688,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
       startAt: "2026-11-12T09:00:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["A", "B"],
+      courts: [courtA.id, courtB.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -8741,12 +8750,12 @@ async function schedulingConstraintsSuite(): Promise<void> {
   // and its absence is what proves the reported set is the PAIR and not the pool.
   const poolBoard = (strictSecond: string, laxSecond: string) => ({
     assignments: [
-      { fixture_id: sf[0]!.id, scheduled_at: at("09:00"), court_label: "A" },
-      { fixture_id: sf[1]!.id, scheduled_at: strictSecond, court_label: "A" },
-      { fixture_id: sf[2]!.id, scheduled_at: at("14:00"), court_label: "A" },
-      { fixture_id: lf[0]!.id, scheduled_at: at("09:00"), court_label: "B" },
-      { fixture_id: lf[1]!.id, scheduled_at: laxSecond, court_label: "B" },
-      { fixture_id: lf[2]!.id, scheduled_at: at("14:00"), court_label: "B" },
+      { fixture_id: sf[0]!.id, scheduled_at: at("09:00"), court_id: courtA.id },
+      { fixture_id: sf[1]!.id, scheduled_at: strictSecond, court_id: courtA.id },
+      { fixture_id: sf[2]!.id, scheduled_at: at("14:00"), court_id: courtA.id },
+      { fixture_id: lf[0]!.id, scheduled_at: at("09:00"), court_id: courtB.id },
+      { fixture_id: lf[1]!.id, scheduled_at: laxSecond, court_id: courtB.id },
+      { fixture_id: lf[2]!.id, scheduled_at: at("14:00"), court_id: courtB.id },
     ],
   });
   const validatePools = async (): Promise<ScheduleConflictLite[]> =>
@@ -8818,7 +8827,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
   // blocks), and the pool rule follows the card in both directions.
   await v1(s, `/api/v1/fixtures/${sf[1]!.id}`, "PATCH", {
     scheduled_at: at("10:30"),
-    court_label: "A",
+    court_id: courtA.id,
   });
   const draggedIn = idsWithCode(await validatePools(), "warn.rest");
   check(
@@ -8827,7 +8836,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
   );
   await v1(s, `/api/v1/fixtures/${sf[1]!.id}`, "PATCH", {
     scheduled_at: at("11:00"),
-    court_label: "A",
+    court_id: courtA.id,
   });
   check(
     "#452 pools/drag: ...and dragging it back out clears it again",
