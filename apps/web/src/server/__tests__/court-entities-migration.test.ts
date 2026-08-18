@@ -1,4 +1,4 @@
-// V371 (P9 pass 1): stored-config cutover to real venues/courts entities.
+// V374 (P9 pass 1): stored-config cutover to real venues/courts entities.
 // The read-path trap this migration exists to close: a stored
 // schedule_settings.config row with string court names must not 500 once
 // ScheduleConfig.courts requires real court ids (schemas.ts). This suite
@@ -32,7 +32,7 @@ const HAS_DB = !!process.env.DATABASE_URL;
 // Pure zod shape, no DB — pins the deliberate `.min(1)` drop documented on
 // the `courts` field: a defaulted [] must survive parse (fresh org, courts
 // key absent) while still rejecting a pre-migration free-text court name.
-describe("ScheduleConfig.courts (V371 shape)", () => {
+describe("ScheduleConfig.courts (V374 shape)", () => {
   it("courts key absent parses to an empty array via default, not a throw", () => {
     expect(ScheduleConfig.parse({}).courts).toEqual([]);
   });
@@ -56,7 +56,7 @@ describe("ScheduleConfig.courts (V371 shape)", () => {
 // court NAME — while `courts` above already moved to real ids. A court-
 // scoped blackout could no longer match the court it named. Same "the
 // migration IS the compatibility strategy" stance as `courts` above.
-describe("ScheduleConfig.blackouts[].court (V371 shape)", () => {
+describe("ScheduleConfig.blackouts[].court (V374 shape)", () => {
   it("blackouts key absent parses to an empty array via default, not a throw", () => {
     expect(ScheduleConfig.parse({}).blackouts).toEqual([]);
   });
@@ -97,12 +97,12 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 function migrationBlock(marker: string): string {
   const delta = readFileSync(
-    join(process.cwd(), "..", "..", "db", "migration", "deltas", "V371__court_entities_cutover.sql"),
+    join(process.cwd(), "..", "..", "db", "migration", "deltas", "V374__court_entities_cutover.sql"),
     "utf8",
   );
   const re = new RegExp(`-- ${marker}:begin([\\s\\S]*?)-- ${marker}:end`);
   const m = delta.match(re);
-  if (!m) throw new Error(`${marker} block missing from V371__court_entities_cutover.sql`);
+  if (!m) throw new Error(`${marker} block missing from V374__court_entities_cutover.sql`);
   return m[1]!;
 }
 
@@ -147,7 +147,7 @@ async function seedStage(orgId: string, divisionId: string): Promise<string> {
   return stageId;
 }
 
-describe.skipIf(!HAS_DB)("V371 court entities cutover", () => {
+describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
   const orgIds: string[] = [];
 
   afterAll(async () => {
@@ -228,7 +228,7 @@ describe.skipIf(!HAS_DB)("V371 court entities cutover", () => {
   // `.default([])` only substitutes for `undefined`, never for a
   // present-but-wrong-shaped value, so without the migration's step 5
   // normalization (folded into the string->id rewrite, P9 pass-1 re-review
-  // — see V371...sql's step 5 comment) this is a live 500 at
+  // — see V374...sql's step 5 comment) this is a live 500 at
   // ScheduleConfig.parse, not a rescued default.
   it("a present-but-non-array `courts` value (null, string, object) normalizes to [] instead of 500ing at read", async () => {
     const { orgId, divisionId: d1 } = await seedOrgWithDivision();

@@ -1,6 +1,6 @@
-// V371 (P9 pass 1) post-migration verification — READ ONLY, writes nothing.
+// V374 (P9 pass 1) post-migration verification — READ ONLY, writes nothing.
 // This is NOT a second migration mechanism (the write lives solely in
-// db/migration/deltas/V371__court_entities_cutover.sql, run once by Flyway);
+// db/migration/deltas/V374__court_entities_cutover.sql, run once by Flyway);
 // it re-derives the same counts the migration's own dry-run RAISE NOTICE
 // printed and logs them via pino so they survive past the migration's
 // terminal output, and doubles as an ongoing health check (the last query
@@ -74,7 +74,7 @@ try {
       fixturesVenueIdPopulated: fixturesVenue!.with_id,
       scheduleSettingsWithUnmigratedCourts: unmigrated!.n,
     },
-    "V371 court migration verification",
+    "V374 court migration verification",
   );
 
   if (unmigrated!.n > 0) {

@@ -446,7 +446,7 @@ export interface FixtureLite {
    *  `applySchedule` stopped, per the owner's FULL-cutover ruling) — frozen
    *  at whatever value each fixture already carried when that pass shipped.
    *  `scopeLocked` below matched on this column through pass 3a; P9
-   *  pass-3a-FIX migrated `locked_scopes` to real ids (V371, third block) and
+   *  pass-3a-FIX migrated `locked_scopes` to real ids (V374, third block) and
    *  switched the match to `court_id` above, so this field has no remaining
    *  reader. Do NOT use for anything else. */
   court_label: string | null;
@@ -462,15 +462,15 @@ export interface FixtureLite {
 // division's locked_scopes entry are treated exactly like pinned fixtures.
 //
 // P9 pass-3a-FIX: `courts`/`venues` hold real `courts.id`/`venues.id` values,
-// not organiser-typed names — V371's third migration block rewrote every
+// not organiser-typed names — V374's third migration block rewrote every
 // stored `locked_scopes` row from names to ids the same way pass 1 rewrote
 // `schedule_settings.config.courts`. `scopeLocked` below matches on
 // `court_id`/`venue_id` accordingly, never the legacy `court_label`/`venue`
 // columns.
 export interface LockedScope {
-  /** Real `courts.id` values (V371 cutover). */
+  /** Real `courts.id` values (V374 cutover). */
   courts?: string[];
-  /** Real `venues.id` values (V371 cutover). */
+  /** Real `venues.id` values (V374 cutover). */
   venues?: string[];
   pool_ids?: string[];
 }

@@ -112,7 +112,7 @@ async function setScheduleSettings(
 
 /**
  * Create one venue with N named courts via the real usecases and return
- * label -> id. V371 cutover: `ScheduleConfig.courts` is `CourtId[]` (real
+ * label -> id. V374 cutover: `ScheduleConfig.courts` is `CourtId[]` (real
  * court UUIDs) now, not display labels — these seeds predate that and wrote
  * the label directly into both `schedule_settings.config.courts` and
  * `fixtures.court_label`. Every caller below keeps its own label array as

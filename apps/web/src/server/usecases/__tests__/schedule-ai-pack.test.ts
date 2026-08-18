@@ -1084,7 +1084,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
 
   it("repair draft ties same-instant assignments on board position, not the court id", async () => {
     // P9: `byAssignment` used to tie-break on `court_label`, which since the
-    // V371 cutover carries the real per-seed court UUID — so two cards
+    // V374 cutover carries the real per-seed court UUID — so two cards
     // sharing an instant on different courts sorted in coin-flip order
     // across reseeds. `seedCourtTieBoard` forces the disagreement so the
     // regression is a deterministic red, not a 50/50 flake: `first` (board

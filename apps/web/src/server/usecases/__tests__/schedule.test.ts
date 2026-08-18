@@ -83,7 +83,7 @@ async function seedOrg(plan: "community" | "pro"): Promise<{ auth: AuthCtx; orgS
 }
 
 /** P9 pass 3a: `ScheduleConfig.courts` is `CourtId[]` (real `courts.id`
- *  values, since pass 1's V371 cutover) — a free-text "Court 1" string no
+ *  values, since pass 1's V374 cutover) — a free-text "Court 1" string no
  *  longer parses. One shared venue, one real court per name given, ids
  *  returned in the same order so a caller can keep addressing them by
  *  position the way this file's tests already do. */

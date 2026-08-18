@@ -262,7 +262,7 @@ async function parkAndLock(
  * something to bite and "it stayed" cannot be a compacting solver's
  * coincidence.
  *
- * P9 pass-3a-FIX: `locked_scopes.courts` holds a real `courts.id` now (V371's
+ * P9 pass-3a-FIX: `locked_scopes.courts` holds a real `courts.id` now (V374's
  * third migration block) — `scopeLocked` (schedule.ts) matches on
  * `court_id`, never the legacy free-text `court_label`. The DB-backed tests
  * that call this helper are this fix's own regression: on a revert to the

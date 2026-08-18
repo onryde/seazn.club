@@ -8995,7 +8995,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
   const slotAt = (n: number) =>
     new Date(Date.parse(START) + n * SLOT_MIN * 60_000).toISOString();
 
-  // ScheduleConfig.courts is real court ids now (V371 cutover), not display
+  // ScheduleConfig.courts is real court ids now (V374 cutover), not display
   // labels — one venue, two courts, same shape venuesSuite() already uses.
   const venue = v1data<{ id: string }>(
     await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `Z3 Venue ${tag}` }),
@@ -9237,7 +9237,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
  * with two courts, which is the shape every other court-seeding suite in
  * this file — `z3AutoScheduleSuite` immediately above included — already
  * uses). `ScheduleConfig.courts` is a plain array of court ids with no venue
- * structure of its own (V371 cutover), so a build that silently only ever
+ * structure of its own (V374 cutover), so a build that silently only ever
  * resolved courts through ONE venue's row would still pass every existing
  * "2 distinct courts" check in this file if it happened to seed both under
  * the same venue. This suite is the one place cross-venue resolution is the

@@ -67,7 +67,7 @@ async function fixturesByStatus(
 }
 
 /** Resolve court ids by name, in the given order — `seedCourts` (../seeds.ts)
- *  creates real courts now (V371 cutover: `ScheduleConfig.courts` is
+ *  creates real courts now (V374 cutover: `ScheduleConfig.courts` is
  *  `CourtId[]`), so a `config.courts` assertion needs the real id a fresh
  *  seed produced, not the label it used to store directly. */
 async function courtIdsByName(orgId: string, names: readonly string[]): Promise<string[]> {

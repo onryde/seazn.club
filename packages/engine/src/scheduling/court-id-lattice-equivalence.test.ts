@@ -3,7 +3,7 @@
 // (together, "the lattice") have never interpreted what a court STRING
 // means — only its identity (equality) and its POSITION within
 // `config.courts`. Swapping `ScheduleConfig.courts` from human names
-// ("Court 1") to court uuids (V371's cutover) is therefore a representation
+// ("Court 1") to court uuids (V374's cutover) is therefore a representation
 // change the lattice cannot see: this test proves it, by building the SAME
 // lattice twice — once name-keyed, once id-keyed, courts in identical
 // positions — projecting each court's identity down to its INDEX position

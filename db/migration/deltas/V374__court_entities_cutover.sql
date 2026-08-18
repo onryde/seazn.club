@@ -1,5 +1,5 @@
 -- =============================================================================
--- V371 — Court entities cutover (P9 pass 1/5): stored-config migration.
+-- V374 — Court entities cutover (P9 pass 1/5): stored-config migration.
 --
 -- V367 (P8) added the venues/courts/court_hours/court_exceptions tables and
 -- `fixtures.court_id`, but touched zero consumers — `schedule_settings.config
@@ -186,14 +186,14 @@ begin
       full outer join court_normalize_status cns on cns.org_id = css.org_id
      order by 1
   loop
-    raise notice 'V371 court migration (dry run): org=% distinct_court_strings=% courts_to_create=% courts_field_to_normalize=%',
+    raise notice 'V374 court migration (dry run): org=% distinct_court_strings=% courts_to_create=% courts_field_to_normalize=%',
       v_org.org_id, v_org.n_strings, v_org.n_to_create, v_org.n_to_normalize;
     v_total_orgs := v_total_orgs + 1;
     v_total_strings := v_total_strings + v_org.n_strings;
     v_total_to_create := v_total_to_create + v_org.n_to_create;
     v_total_to_normalize := v_total_to_normalize + v_org.n_to_normalize;
   end loop;
-  raise notice 'V371 court migration (dry run) TOTAL: orgs=% distinct_court_strings=% courts_to_create=% courts_field_to_normalize=%',
+  raise notice 'V374 court migration (dry run) TOTAL: orgs=% distinct_court_strings=% courts_to_create=% courts_field_to_normalize=%',
     v_total_orgs, v_total_strings, v_total_to_create, v_total_to_normalize;
 
   -- 4) Build the mapping, reusing any existing ACTIVE court that already
@@ -345,13 +345,13 @@ begin
      group by org_id
      order by org_id
   loop
-    raise notice 'V371 fixture-venue migration (dry run): org=% distinct_venue_strings=% venues_to_create=%',
+    raise notice 'V374 fixture-venue migration (dry run): org=% distinct_venue_strings=% venues_to_create=%',
       v_org.org_id, v_org.n_strings, v_org.n_to_create;
     v_total_orgs := v_total_orgs + 1;
     v_total_strings := v_total_strings + v_org.n_strings;
     v_total_to_create := v_total_to_create + v_org.n_to_create;
   end loop;
-  raise notice 'V371 fixture-venue migration (dry run) TOTAL: orgs=% distinct_venue_strings=% venues_to_create=%',
+  raise notice 'V374 fixture-venue migration (dry run) TOTAL: orgs=% distinct_venue_strings=% venues_to_create=%',
     v_total_orgs, v_total_strings, v_total_to_create;
 
   drop table if exists pg_temp.venue_mapping;
@@ -488,7 +488,7 @@ begin
      group by org_id
      order by org_id
   loop
-    raise notice 'V371 division-locked-scopes migration (dry run): org=% divisions_with_scope_entries=% court_scope_entries=% court_entries_left_untouched=% venue_scope_entries=% venue_entries_left_untouched=%',
+    raise notice 'V374 division-locked-scopes migration (dry run): org=% divisions_with_scope_entries=% court_scope_entries=% court_entries_left_untouched=% venue_scope_entries=% venue_entries_left_untouched=%',
       v_org.org_id, v_org.n_divisions, v_org.n_court_entries, v_org.n_court_unmapped, v_org.n_venue_entries, v_org.n_venue_unmapped;
     v_total_orgs := v_total_orgs + 1;
     v_total_divisions := v_total_divisions + v_org.n_divisions;
@@ -497,7 +497,7 @@ begin
     v_total_venue_entries := v_total_venue_entries + v_org.n_venue_entries;
     v_total_venue_unmapped := v_total_venue_unmapped + v_org.n_venue_unmapped;
   end loop;
-  raise notice 'V371 division-locked-scopes migration (dry run) TOTAL: orgs=% divisions_with_scope_entries=% court_scope_entries=% court_entries_left_untouched=% venue_scope_entries=% venue_entries_left_untouched=%',
+  raise notice 'V374 division-locked-scopes migration (dry run) TOTAL: orgs=% divisions_with_scope_entries=% court_scope_entries=% court_entries_left_untouched=% venue_scope_entries=% venue_entries_left_untouched=%',
     v_total_orgs, v_total_divisions, v_total_court_entries, v_total_court_unmapped, v_total_venue_entries, v_total_venue_unmapped;
 
   -- WRITE: rewrite each division's locked_scopes array in place, element by
@@ -640,7 +640,7 @@ begin
      group by org_id
      order by org_id
   loop
-    raise notice 'V371 blackout-court migration (dry run): org=% divisions_with_court_blackouts=% court_blackout_entries=% entries_rewritten=% entries_left_untouched=%',
+    raise notice 'V374 blackout-court migration (dry run): org=% divisions_with_court_blackouts=% court_blackout_entries=% entries_rewritten=% entries_left_untouched=%',
       v_org.org_id, v_org.n_divisions, v_org.n_entries, v_org.n_rewritten, v_org.n_unmapped;
     v_total_orgs := v_total_orgs + 1;
     v_total_divisions := v_total_divisions + v_org.n_divisions;
@@ -648,7 +648,7 @@ begin
     v_total_rewritten := v_total_rewritten + v_org.n_rewritten;
     v_total_unmapped := v_total_unmapped + v_org.n_unmapped;
   end loop;
-  raise notice 'V371 blackout-court migration (dry run) TOTAL: orgs=% divisions_with_court_blackouts=% court_blackout_entries=% entries_rewritten=% entries_left_untouched=%',
+  raise notice 'V374 blackout-court migration (dry run) TOTAL: orgs=% divisions_with_court_blackouts=% court_blackout_entries=% entries_rewritten=% entries_left_untouched=%',
     v_total_orgs, v_total_divisions, v_total_entries, v_total_rewritten, v_total_unmapped;
 
   -- WRITE: rewrite each blackout entry's `court` in place, element order

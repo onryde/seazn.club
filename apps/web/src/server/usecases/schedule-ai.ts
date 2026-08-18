@@ -867,7 +867,7 @@ export async function buildSchedulePack(
 
     // Determinism (defect fix, P9): `draft`'s own same-instant tie-break used
     // to be `cmp(court_label)`. Pre-cutover, `court_label` was a stable,
-    // organiser-authored string ("Court 1", "Court 2"); since V371,
+    // organiser-authored string ("Court 1", "Court 2"); since V374,
     // `PackDraftAssignment.court_label` carries the real court UUID in every
     // mode (see the three `draft = …` branches below: the solver's own
     // `a.court`, a prior proposal's `court_label`, or `f.court_id` directly)

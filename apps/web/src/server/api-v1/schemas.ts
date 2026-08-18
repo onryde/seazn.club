@@ -14,11 +14,11 @@ import { HardConstraint, type ConflictDetailKind } from "@seazn/engine/schedulin
 // ---------------------------------------------------------------------------
 
 export const Uuid = z.uuid();
-/** A real `courts.id` (V371 cutover) — structurally identical to Uuid;
+/** A real `courts.id` (V374 cutover) — structurally identical to Uuid;
  *  named separately so a stored `ScheduleConfig.courts` entry documents what
  *  it actually references (never a free-text court name post-migration). */
 export const CourtId = Uuid;
-/** A real `venues.id` (V371 cutover — `fixtures.venue_id`, backfilled from
+/** A real `venues.id` (V374 cutover — `fixtures.venue_id`, backfilled from
  *  the legacy free-text `fixtures.venue`). P9 pass 3a's own sibling of
  *  `CourtId`, same reasoning. */
 export const VenueId = Uuid;
@@ -651,7 +651,7 @@ export type AddFixture = z.infer<typeof AddFixture>;
 export type CreateStages = z.infer<typeof CreateStages>;
 
 // F2 — READ-path shape (Task 6): the two old columns this response used to
-// expose (qualification/seeding) were dropped by V371; API consumers now
+// expose (qualification/seeding) were dropped by V374; API consumers now
 // see the one unified field. Deliberately `z.record(...).nullable()`, not
 // `ProgressionSchema.nullable()` — a response schema should not 400 a row
 // this API itself wrote (defence-in-depth against a shape ProgressionSchema
@@ -777,7 +777,7 @@ export const Fixture = z.object({
   schedule_locked: z.boolean(),
   created_at: z.string(),
   /** F1 (2026-08-17): the engine's bracket-position role, persisted instead
-   *  of re-derived per consumer (V371/V369). Declared here for the same
+   *  of re-derived per consumer (V374/V369). Declared here for the same
    *  reason as `fixture_no` above — `FIXTURE_COLS` now selects it and every
    *  fixture route returns its row unmapped, so leaving it undocumented
    *  would be a silent gap between the published spec and the real
@@ -964,7 +964,7 @@ export const ScheduleConfig = z.object({
   endAt: IsoDateTime.nullish(),
   matchMinutes: z.number().int().min(1).max(24 * 60).default(30),
   gapMinutes: z.number().int().min(0).max(24 * 60).default(0),
-  /** V371 cutover: real court ids only, no tolerant string union — the
+  /** V374 cutover: real court ids only, no tolerant string union — the
    *  migration IS the compatibility strategy (design doc "Stored-config
    *  migration"). The original design named `.min(1)`, dropped here: a
    *  division that has never configured courts parses `courts` as
@@ -983,11 +983,11 @@ export const ScheduleConfig = z.object({
    *  `z.string().max(100)` (a court NAME). `courts` moved to real ids in
    *  pass 1 while this field stayed free text, so a court-scoped blackout
    *  could no longer match the court it named (silently went global or
-   *  inert depending on the reader). V371 rewrites every stored
+   *  inert depending on the reader). V374 rewrites every stored
    *  `blackouts[].court` name -> id on migration, reusing the same
    *  court_mapping `courts` itself is rewritten through; an entry that
    *  cannot be mapped is left untouched rather than dropped (a blackout's
-   *  only job is to compare, same stance V371's locked_scopes block takes —
+   *  only job is to compare, same stance V374's locked_scopes block takes —
    *  see that block's own comment for why "leave inert" beats "silently
    *  discard an organiser's blackout"), and counted in the migration's
    *  dry-run report so an operator can see and fix it by hand. */
@@ -2581,7 +2581,7 @@ export const RestoreCheckpoint = z.object({
 
 export const DivisionLocks = z.object({
   schedule_locked: z.boolean().optional(),
-  // P9 pass-3a-FIX: courts/venues are real ids (V371's locked_scopes
+  // P9 pass-3a-FIX: courts/venues are real ids (V374's locked_scopes
   // migration; `usecases/schedule.ts`'s `scopeLocked` matches on
   // court_id/venue_id, not organiser-typed names) — CourtId/VenueId, not a
   // bare string, mirrors `usecases/history.ts`'s `LockInput` (the schema

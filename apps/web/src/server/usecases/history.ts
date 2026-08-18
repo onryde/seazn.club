@@ -677,7 +677,7 @@ export async function clearPoolEntrants(
 
 export const LockInput = z.object({
   schedule_locked: z.boolean().optional(),
-  // P9 pass-3a-FIX: courts/venues are real ids (V371's locked_scopes
+  // P9 pass-3a-FIX: courts/venues are real ids (V374's locked_scopes
   // migration) — `scopeLocked` (schedule.ts) matches on court_id/venue_id,
   // not organiser-typed names. Kept identical by hand to api-v1/schemas.ts's
   // `DivisionLocks` (the OpenAPI doc schema for this same route) — that file
