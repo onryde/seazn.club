@@ -204,7 +204,12 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — own guards (RS003 W5c)", () => {
 describe.skipIf(!HAS_DB)("createRegistrationCheckout — token===null return-URL shape, via sweepRegistrations (RS003 W5c)", () => {
   it("a system-minted (token===null) session returns the token-free /r/[ref] URL, not the status-page shape (:1308-1311)", async () => {
     const { competition, division, settings } = await stripeRig();
-    const first = await seedRegistration(competition.id, division.id, settings, { refCode: "TESTREF1" });
+    // Random suffix — a fixed literal ref code collides with a leftover row
+    // from a prior run of this same test (registration_groups.ref_code is
+    // UNIQUE), unlike every other fixture value here which is randomUUID-
+    // suffixed for exactly this reason.
+    const refCode = "TESTREF" + randomUUID().slice(0, 8).toUpperCase();
+    const first = await seedRegistration(competition.id, division.id, settings, { refCode });
     // seedRegistration's own stripeWindow logic sets a 48h deadline — force
     // it inside the reminder sweep's T-24h window; reminded_at stays null
     // from the insert.
@@ -221,9 +226,9 @@ describe.skipIf(!HAS_DB)("createRegistrationCheckout — token===null return-URL
       cancel_url: string;
     };
     expect(args.success_url).toBe(
-      "http://test.local/r/TESTREF1?src=email&checkout=success&session_id={CHECKOUT_SESSION_ID}",
+      `http://test.local/r/${refCode}?src=email&checkout=success&session_id={CHECKOUT_SESSION_ID}`,
     );
-    expect(args.cancel_url).toBe("http://test.local/r/TESTREF1?src=email&checkout=cancelled");
+    expect(args.cancel_url).toBe(`http://test.local/r/${refCode}?src=email&checkout=cancelled`);
     // Never the token-bearing status-page shape a user-initiated resume/mint uses.
     expect(args.success_url).not.toContain("/register/status");
   });
