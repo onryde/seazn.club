@@ -101,10 +101,17 @@ export interface StageRow {
 
 const STAGE_COLS = ["id", "division_id", "seq", "kind", "name", "config", "progression", "status"] as const;
 
+// P9 pass 3c-2: `court_id`/`venue_id` added as the real identity, documented
+// here for parity with BOARD_FIXTURE_COLS below. The three `FIXTURE_COLS`
+// readers in this file (and the two in usecases/fixtures.ts) no longer
+// interpolate this array directly with `tx(FIXTURE_COLS)` — `court_name`/
+// `venue_name` are DERIVED (left join courts/venues), which a flat
+// unaliased column list can't express — so each of those selects is
+// hand-written instead. This array stays the source-of-truth column list.
 export const FIXTURE_COLS = [
   "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "fixture_no",
   "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label",
-  "scheduled_at", "venue", "court_label",
+  "scheduled_at", "venue", "court_label", "court_id", "venue_id",
   "officials", "status", "outcome", "schedule_source", "schedule_locked", "created_at",
   "ext_key", "lane", "is_final", "third_place", "conditional",
 ] as const;
@@ -150,6 +157,16 @@ export interface FixtureRow {
   scheduled_at: string | null;
   venue: string | null;
   court_label: string | null;
+  /** P9 pass 3c-2: DERIVED from `courts`/`venues` via `court_id`/`venue_id` —
+   *  the real identity. `venue`/`court_label` above are the FROZEN text
+   *  columns (no longer written anywhere since pass 3a); they stay on this
+   *  general row shape only for callers not yet migrated off them. Never
+   *  render `venue`/`court_label` in new code — render `venue_name`/
+   *  `court_name` (fall back to the id if a lookup somehow misses). */
+  court_id: string | null;
+  court_name: string | null;
+  venue_id: string | null;
+  venue_name: string | null;
   officials: unknown[];
   status: string;
   outcome: unknown;
@@ -1326,8 +1343,16 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
     }
 
     const fixtures = await tx<FixtureRow[]>`
-      select ${tx(FIXTURE_COLS)} from fixtures
-      where stage_id = ${stageId} order by round_no, seq_in_round`;
+      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.venue, f.court_label, f.court_id, crt.name as court_name,
+             f.venue_id, ven.name as venue_name,
+             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+      from fixtures f
+      left join courts crt on crt.id = f.court_id
+      left join venues ven on ven.id = f.venue_id
+      where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
     // Cross-format feeds (Jul3/08 §4): winner_to/loser_to may target another
     // stage (CL loser → EL slot). Wire every entry whose source and target
     // both exist; the per-decided-fixture fillSlot then follows them like any
@@ -1681,8 +1706,16 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
     }
 
     const fixtures = await tx<FixtureRow[]>`
-      select ${tx(FIXTURE_COLS)} from fixtures
-      where stage_id = ${stageId} order by round_no, seq_in_round`;
+      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.venue, f.court_label, f.court_id, crt.name as court_name,
+             f.venue_id, ven.name as venue_name,
+             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+      from fixtures f
+      left join courts crt on crt.id = f.court_id
+      left join venues ven on ven.id = f.venue_id
+      where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
 
     if (created > 0) {
       const [{ seq: last }] = await tx<{ seq: number }[]>`
@@ -2516,7 +2549,16 @@ export async function confirmSeedProposal(
     await tx`update stage_seed_proposals set status = 'confirmed', confirmed_at = now() where id = ${proposal.id}`;
 
     const fixtures = await tx<FixtureRow[]>`
-      select ${tx(FIXTURE_COLS)} from fixtures where stage_id = ${stageId} order by round_no, seq_in_round`;
+      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.venue, f.court_label, f.court_id, crt.name as court_name,
+             f.venue_id, ven.name as venue_name,
+             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+      from fixtures f
+      left join courts crt on crt.id = f.court_id
+      left join venues ven on ven.id = f.venue_id
+      where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
     return { filled: expandedEntries.length, fixtures, divisionId: stage.division_id };
   });
 
