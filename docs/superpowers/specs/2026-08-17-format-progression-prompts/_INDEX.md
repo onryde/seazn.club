@@ -28,7 +28,7 @@ and those two `stages.ts` functions; F1 is fenced off `qualification.ts`,
 |---|---|---|---|
 | F1 | `F1-bracket-round-role.md` | — | **MERGED** as #606 (2026-08-18), plus #613 which named the knockout tree's rounds — the one bracket shape F1 left with no captions at all |
 | F2 | `F2-unified-progression-field.md` | — | **MERGED** as #616 (2026-08-18, `ef473f586`), 60 commits. One `progression` field; `qualification` and `seeding` dropped. Migrations V371-V373, no version collision on main |
-| F3 | plan: `../../plans/2026-08-18-f3-day-one-fixtures.md` | F2 **merged** ✅ | **IN FLIGHT** 2026-08-18, worktree `f3-day-one`, branch `feat/f3-day-one-fixtures`. Plan written against real code; four findings below changed its scope |
+| F3 | plan: `../../plans/2026-08-18-f3-day-one-fixtures.md` | F2 **merged** ✅ | **IN FLIGHT** 2026-08-18 as DRAFT PR **#617**, worktree `f3-day-one`, branch `feat/f3-day-one-fixtures`. Plan written against real code; four findings below changed its scope |
 | F4 | **MERGED** as #619 (2026-08-18, `27af0f30d`), 16 commits. Export path + `.ics` feed + bracket poster | — | premise RETIRED (no sport/format-kind gap in either direction; its mexicano comment folds into F3). Slot **repurposed** to the export + calendar day-one leaks (§7 P5, P2). Does NOT wait for F3 — three catalogue templates already emit `timing: "setup"`. Owner CONFIRMED the repurpose 2026-08-18 |
 | F5 | **prompt ready** — same doc §8 | all | scope fixed by the §5 table |
 

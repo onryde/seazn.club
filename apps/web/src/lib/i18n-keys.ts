@@ -1715,6 +1715,7 @@ export type DictionaryKey =
   | "engineError.SCHEDULE_CONFLICT"
   | "engineError.SEEDING_BESTNTH_UNEQUAL_POOLS"
   | "engineError.SEEDING_MAP_SLOT_INVALID"
+  | "engineError.SEEDING_MAP_SOURCE_AMBIGUOUS"
   | "engineError.SEEDING_MAP_SOURCE_INVALID"
   | "engineError.SEEDING_RULES_MISSING"
   | "engineError.SEQ_CONFLICT"
