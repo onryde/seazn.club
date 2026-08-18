@@ -26,7 +26,10 @@ Specs of record (all in `../designs/`):
 
 ## Order
 
-Ratified build order: **P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8 → P9 → P10 → P11.**
+Ratified build order: **P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8 → P9 → P9.5 → P10 → P11.**
+P9.5 was carved out DURING P9 (owner ruling 2026-08-18): P10's prompt
+assumed `usableWindows` already existed, and it does not — see its own
+prompt for what is actually true today.
 P1–P4 are mutually independent (any subset may run, order above is the
 recommendation); P5→P6→P7 strict; P8→P9→P10 strict; P11 independent but
 S13-gated. New-branch-in-worktree rule applies to every session.
@@ -41,8 +44,9 @@ S13-gated. New-branch-in-worktree rule applies to every session.
 | P6 | D4b proposal UI + confirm flow | `P06-progression-ui.md` | P5 | green-light | **MERGED** `cdcc3bef` (#568), V362 |
 | P7 | D1b multi-stage templates | `P07-templates-multi-stage.md` | P4, P5 (StageSeeding merged) | green-light | **MERGED `98e95c9e` (#582)** — 3 templates + seeding persisted + progression map; stages now named not kinded (owner ruling); `validateStageSeeding` shared with instantiation; 2 defects found and reported unfixed (`uniqueSlug` race, modal 320 fold). Status: `docs/superpowers/plans/2026-08-16-p7-session-status.md` |
 | P8 | D5a venues/courts schema + API + **Directory** UI | `P08-venues-schema-ui.md` | — | green-light + **release-2 C-chain done** (cleared: C7 `298da0af`, C8 `e9a7c54a`) | **DONE 2026-08-17** — V367 (4 tables, RLS forced, composite FKs, `on delete restrict`), 8 routes, archive at court AND venue level, Directory venues tab (NOT org settings — amendment A2), calendar editor, reusable tag-chip input, 84 i18n keys ×4. Gates: unit 8401/8329/4 (the 4 = pre-existing `schedule-build-honours-locks`), e2e 2/2 + an active-tab guard at 320/430/768, smoke 8/8 venues checks, screenshots 1280/320/768. **Six design amendments A1–A6** corrected in place in the D5 spec with a log at its foot. Status: `docs/superpowers/plans/2026-08-17-p8-session-status.md` |
-| P9 | D5b scheduler integration + stored-config migration | `P09-venues-scheduler.md` | P8 | same as P8 | TODO |
-| P10 | D5c calendars + window compiler | `P10-venues-calendars.md` | P9 | same as P8 | TODO |
+| P9 | D5b scheduler integration + stored-config migration | `P09-venues-scheduler.md` | P8 | same as P8 | **IN REVIEW** — V374 (renumbered twice: main took V368, then V371), `ScheduleConfig.courts` = court uuids, one shared candidate filter used by build/validate/AI, `NO_MATCHING_COURT` 422, `court_tag_mismatch` (26th conflict kind), court multi-picker, AI pack speaks court NAMES while storage stays ids. 17 defects found, all one mechanism — identity changed under code that read it. Status: `docs/superpowers/plans/2026-08-17-p9-session-status.md` |
+| P9.5 | D5b.5 one court-availability function + the two constraints the placer never learned | `P09-5-window-unification.md` | P9 | same as P8 | TODO — **blocks P10** |
+| P10 | D5c calendars + window compiler | `P10-venues-calendars.md` | **P9.5** | same as P8 | TODO — its "consume `usableWindows`" premise is only true once P9.5 lands; it also still owes the stranded-fixture conflict code (D5 amendment A6) |
 | P11 | D6 batch import | `P11-batch-import.md` | — | green-light + **ScoringPad S13 done** | TODO |
 
 ## Decisions already made (do not re-open)
