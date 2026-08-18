@@ -1235,7 +1235,17 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
     // reads instead.
     expect("stageIds" in payload).toBe(false);
     expect("roundNos" in payload).toBe(false);
+    // P9 pass 3d: `courtDetails` is new and synthesized from a courtDirectory
+    // (venue + tags per candidate court) — not a `pack` field, so it is
+    // asserted on its own rather than folded into the byte-for-byte trim
+    // below. No directory was supplied to this call, so `toModelPayload`'s
+    // empty-map default applies and every entry's label falls back to the
+    // court id — this test does not care about label content, only that the
+    // field exists and covers every candidate court.
+    expect(Array.isArray(payload.courtDetails)).toBe(true);
+    expect((payload.courtDetails as unknown[]).length).toBe(pack.settings.courts.length);
     // Everything else survives the trim byte-for-byte.
+    const { courtDetails: _courtDetails, ...payloadRest } = payload;
     const trimmed = Object.fromEntries(
       Object.entries(pack).filter(
         ([k]) =>
@@ -1243,7 +1253,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
           k !== "stageIds" && k !== "roundNos",
       ),
     );
-    expect(payload).toEqual(trimmed);
+    expect(payloadRest).toEqual(trimmed);
   });
 
   // C1 follow-up (2026-08-12, task 2 item 1). `buildSchedulePack`'s own
