@@ -11417,6 +11417,86 @@ async function schedRegV3Suite(
       docPdfBytes.byteLength > 1024,
   );
 
+  // F4/P5 + F4/P2 (wave A/B — day-one handout surfaces). Reuses `comp`/`div`
+  // above rather than building another division: `div`'s League stage alone
+  // can never carry a placeholder — a round robin's fixtures are fully
+  // determined the instant it is generated, both sides known from the
+  // entrant list — so a second, bracket-shaped stage is added on the SAME
+  // division purely to get one unresolved slot. A 4-entrant knockout's final
+  // is fed by winnerOf(semi1)/winnerOf(semi2)
+  // (bracketToGen/generateStageFixtures,
+  // apps/web/src/server/usecases/stages.ts:1117-1155), so it is written with
+  // a `slot.winner_match` label and no scheduled_at — resolved at render
+  // time to "Winner of {ref}" — exactly the day-one shape both checks below
+  // need, and `comp` already carries the `ends_on` the calendar feed anchors
+  // on.
+  const dayOneStage = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/divisions/${div.id}/stages`, "POST", {
+      seq: 2,
+      kind: "knockout",
+      name: "Day One KO",
+    }),
+  );
+  const dayOneGen = v1data<{
+    fixtures: { id: string; home_entrant_id: string | null; away_entrant_id: string | null }[];
+  }>(await v1(admin, `/api/v1/stages/${dayOneStage.id}/generate`, "POST"));
+  const finalFixtureId = dayOneGen.fixtures.find(
+    (f) => f.home_entrant_id === null && f.away_entrant_id === null,
+  )?.id;
+  check(
+    "day-one KO stage generates a final whose slots are still unresolved (setup)",
+    finalFixtureId !== undefined,
+  );
+
+  // F4/P5: the printed draw is the artifact an organiser pins to a wall on day
+  // one. It used to say "TBD vs TBD" while every HTML surface said "Winner of
+  // Group A", and nothing in the UI could reveal the discrepancy because the
+  // slot-label columns were never selected. A PDF's content streams are
+  // compressed (see the comment above `docPdfBytes`), so `toContain` against
+  // PDF bytes proves nothing — XLSX cell text is exactly what a `toContain`
+  // can search. This is the SAME technique (ExcelJS) `exportColumnA` a few
+  // thousand lines up already uses for the pass-grants branding row — a new
+  // closure here rather than a call to that one, because it only ever reads
+  // column A (this export's own column order is [time, court, home, result,
+  // away, stage] — the slot label lands in columns 3/5, not 1) and it closes
+  // over `board`/`s`, which do not exist in this function.
+  const xlsxCellsToText = async (bytes: ArrayBuffer): Promise<string> => {
+    const ExcelJS = (await import("exceljs")).default;
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(bytes);
+    const cells: string[] = [];
+    wb.worksheets[0]?.eachRow((row) =>
+      row.eachCell((cell) => cells.push(String(cell.value ?? ""))),
+    );
+    return cells.join(" | ");
+  };
+  const drawXlsx = await fetch(`${BASE}/api/v1/divisions/${div.id}/exports/timetable?format=xlsx`, {
+    headers: { cookie: cookieHeader(admin) },
+  });
+  const drawText = await xlsxCellsToText(await drawXlsx.arrayBuffer());
+  check(
+    "exports timetable shows a placeholder's slot label, not TBD",
+    drawXlsx.status === 200 && /Winner of /.test(drawText) && !/TBD vs TBD/.test(drawText),
+  );
+
+  // F4/P2: the subscribed calendar had no smoke coverage at all.
+  const ics = await fetch(`${BASE}/shared/${proOrgSlug}/${comp.slug}/${div.slug}/calendar.ics`);
+  const icsBody = await ics.text();
+  check(
+    "public .ics serves as text/calendar",
+    ics.status === 200 && (ics.headers.get("content-type") ?? "").includes("text/calendar"),
+  );
+  check(
+    "public .ics carries the day-one final as a tentative all-day event",
+    icsBody.includes("STATUS:TENTATIVE") &&
+      icsBody.includes("DTSTART;VALUE=DATE:") &&
+      /SUMMARY:.*Winner of /.test(icsBody),
+  );
+  check(
+    "public .ics keys the VEVENT UID on the fixture id",
+    icsBody.includes(`UID:${finalFixtureId}@seazn.club`),
+  );
+
   // Backwards date ranges are refused server-side on BOTH endpoints the
   // organiser can reach them through. The panels now refuse first, in the
   // organiser's own language — these are the backstop for every other caller,
