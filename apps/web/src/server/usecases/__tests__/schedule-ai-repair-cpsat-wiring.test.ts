@@ -56,9 +56,38 @@ const { createCompetition } = await import("../competitions");
 const { createDivision } = await import("../divisions");
 const { createEntrants } = await import("../entrants");
 const { createStages, generateStageFixtures } = await import("../stages");
+const { createVenue, createCourt } = await import("../venues");
 const { buildSchedulePack, runAiPlan } = await import("../schedule-ai");
 const { buildCompetitionPack, runCompetitionAiPlan } = await import("../competition-schedule-ai");
 type AuthCtx = import("@/server/api-v1/auth").AuthCtx;
+
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` — real `courts.id`
+// values. This file's own DSL (and the fabricated AI plan below) names courts
+// "C1"/"C2", so — same idiom as competition-schedule-pack.test.ts — labels
+// resolve to real, per-org-cached courts rather than rewriting the whole file
+// around uuids. Load-bearing for the joint test: division A and B must share
+// the SAME physical "C1" for the clash to be genuine.
+const courtsByOrg = new Map<string, { venueId: string; byName: Map<string, string> }>();
+
+async function courtId(auth: AuthCtx, name: string): Promise<string> {
+  let entry = courtsByOrg.get(auth.orgId);
+  if (!entry) {
+    const venue = await createVenue(auth, { name: "Main venue", sort: 0 });
+    entry = { venueId: venue.id, byName: new Map() };
+    courtsByOrg.set(auth.orgId, entry);
+  }
+  const cached = entry.byName.get(name);
+  if (cached !== undefined) return cached;
+  const court = await createCourt(auth, entry.venueId, { name, sort: entry.byName.size, tags: [] });
+  entry.byName.set(name, court.id);
+  return court.id;
+}
+
+async function courtIds(auth: AuthCtx, names: readonly string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const name of names) out.push(await courtId(auth, name));
+  return out;
+}
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const T0 = "2026-08-01T09:00:00.000Z";
@@ -102,7 +131,7 @@ async function seedOrg(): Promise<AuthCtx> {
 
 async function seedDivision(
   auth: AuthCtx,
-  courts: string[] = ["C1", "C2"],
+  courtLabels: string[] = ["C1", "C2"],
 ): Promise<{ competitionId: string; divisionId: string; fixtureIds: string[] }> {
   const suffix = randomUUID().slice(0, 6);
   const competition = await createCompetition(auth, {
@@ -128,6 +157,7 @@ async function seedDivision(
       members: [],
     })),
   );
+  const courts = await courtIds(auth, courtLabels);
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
     values (${division.id}, ${sql.json({ ...SETTINGS_CONFIG, courts })}, 'UTC', now())
@@ -150,13 +180,13 @@ function planResponse(p: unknown, usage: unknown = { input_tokens: 1000, output_
  *  spread out — a genuine BLOCKING conflict that only a real repair round
  *  (LLM or solver) can clear, never a status/count that could pass by luck
  *  on an already-clean board. */
-function clashingPlan(fixtureIds: string[]): unknown {
+function clashingPlan(fixtureIds: string[], court: string): unknown {
   const BASE = Date.parse(T0) + 5 * 3_600_000; // 14:00Z, inside the window
   return {
     assignments: fixtureIds.map((id, i) => ({
       fixture_id: id,
       scheduled_at: new Date(i < 2 ? BASE : BASE + i * 3_600_000).toISOString(),
-      court_label: "C1",
+      court_label: court,
     })),
     unschedulable: [],
     explanations: [],
@@ -173,7 +203,7 @@ describe.skipIf(!HAS_DB)("AI repair round calls repairDecomposedCpsat (C9 wiring
 
     const auth = await seedOrg();
     const { divisionId, fixtureIds } = await seedDivision(auth);
-    parse.mockResolvedValueOnce(planResponse(clashingPlan(fixtureIds)));
+    parse.mockResolvedValueOnce(planResponse(clashingPlan(fixtureIds, await courtId(auth, "C1"))));
 
     const { pack, movableIds } = await buildSchedulePack(auth, divisionId, {
       mode: "generate",
@@ -207,7 +237,7 @@ describe.skipIf(!HAS_DB)("AI repair round calls repairDecomposedCpsat (C9 wiring
     // division at a's competition directly.
     await sql`update divisions set competition_id = ${a.competitionId} where id = ${b.divisionId}`;
     const fixtureIds = [...a.fixtureIds, ...b.fixtureIds];
-    parse.mockResolvedValueOnce(planResponse(clashingPlan(fixtureIds)));
+    parse.mockResolvedValueOnce(planResponse(clashingPlan(fixtureIds, await courtId(auth, "C1"))));
 
     const { pack, movableIds } = await buildCompetitionPack(auth, a.competitionId, [a.divisionId, b.divisionId], {
       mode: "generate",
