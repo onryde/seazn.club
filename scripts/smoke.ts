@@ -11409,6 +11409,19 @@ async function schedRegV3Suite(
   proOrgSlug: string,
   proOrgId: string,
 ): Promise<void> {
+  const schedV3Venue = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${proOrgId}/venues`, "POST", { name: `Sched v3 Venue ${tag}` }),
+  );
+  const schedV3CourtA = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${proOrgId}/venues/${schedV3Venue.id}/courts`, "POST", {
+      name: "A",
+    }),
+  );
+  const schedV3CourtB = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${proOrgId}/venues/${schedV3Venue.id}/courts`, "POST", {
+      name: "B",
+    }),
+  );
   // --- Pro path: competition + division + timetable + board page ---
   const comp = v1data<{ id: string; slug: string }>(
     await v1(admin, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
@@ -11444,7 +11457,7 @@ async function schedRegV3Suite(
       startAt: "2026-10-01T09:00:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["A", "B"],
+      courts: [schedV3CourtA.id, schedV3CourtB.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -11467,7 +11480,7 @@ async function schedRegV3Suite(
       startAt: "2026-10-01T09:00:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["A", "B"],
+      courts: [schedV3CourtA.id, schedV3CourtB.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -11480,7 +11493,7 @@ async function schedRegV3Suite(
         startAt: "2026-10-01T09:00:00.000Z",
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: ["A", "B"],
+        courts: [schedV3CourtA.id, schedV3CourtB.id],
         perEntrantMinRest: 0,
         blackouts: [],
         sessionWindows: [],
@@ -11494,7 +11507,7 @@ async function schedRegV3Suite(
         startAt: "2026-10-01T09:00:00.000Z",
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: ["A", "B"],
+        courts: [schedV3CourtA.id, schedV3CourtB.id],
         perEntrantMinRest: 0,
         blackouts: [],
         sessionWindows: [],
@@ -11754,13 +11767,13 @@ async function schedRegV3Suite(
   const seq0 = v1data<{ seq: number }>(await v1(admin, `/api/v1/divisions/${div.id}`)).seq;
   const move = await v1(admin, `/api/v1/fixtures/${fixture}`, "PATCH", {
     scheduled_at: "2026-10-01T09:00:00.000Z",
-    court_label: "A",
+    court_id: schedV3CourtA.id,
     expected_seq: Number(seq0),
   });
   check("sched seq-tokened reschedule lands", move.status === 200);
   const stale = await v1(admin, `/api/v1/fixtures/${fixture}`, "PATCH", {
     scheduled_at: "2026-10-01T10:00:00.000Z",
-    court_label: "A",
+    court_id: schedV3CourtA.id,
     expected_seq: Number(seq0),
   });
   check(
