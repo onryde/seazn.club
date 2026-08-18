@@ -532,6 +532,43 @@ checks pass against the previous bundle; judge vitest green only from
 `--reporter=json --outputFile`, and confirm every `.testResults[].name`
 resolves inside the worktree.
 
+## 8b. Built — what actually shipped, and what the gates said
+
+All five code steps landed in the order §8 sets out. Deviations from the
+design as written, each for a reason tsc or a test forced:
+
+- **The engine exports take standalone structural types, not `Pick<...>`.**
+  A `Pick` keeps its fields REQUIRED, so both exports were unusable from the
+  skin's looser innings shape — the exact friction the exports existed to
+  remove. tsc proved this; it was not visible to any test.
+- **C2 asks two steps, not three.** `incoming` is optional in the engine and
+  defaults to the next batter in the order, so asking would add a tap to
+  every retirement to restate what the fold already knows. Reversible.
+- **`buildSheets` now REQUIRES `t`.** Adding a translated string to a sheet
+  created a new `t`-threading point, and `_INDEX.md` carries "R3-R7 skin
+  authors: require `t`" precisely because a defaulted one is tsc-invisible.
+  A factory-level test mirrors R2b's own proof for `tiles`.
+- **The gallery needed three new capture states** — see `_INDEX.md`, "the
+  gallery is BLIND to a narrowing wave unless it adds states".
+
+Gates, judged from `--reporter=json` with every `.testResults[].name`
+confirmed inside the worktree:
+
+| Gate | Result |
+| --- | --- |
+| engine suite | 3934 passed / 0 failed / 3947 total (13 skipped = `placement-integration`, correct without the service) |
+| apps/web full suite | 8760 passed / 4 failed / 8832 total — the 4 are `schedule-build-honours-locks`, PROVEN environmental: 11/11 with the placement service up |
+| v3 suites | 599/599 |
+| apps/web tsc | EXIT 0 |
+| engine tsc | EXIT 0 |
+| root turbo lint | EXIT 0, 0 errors / 75 warnings (unchanged from baseline) |
+| i18n | parity OK across en/es/fr/nl; `i18n-keys.ts` regenerated |
+| e2e (3 R2c tests) | 5 passed incl. setup, against a prod build whose bundle was confirmed newer than the last src edit |
+
+Mutation-proofed at every step rather than trusted: 13 mutations across the
+engine rule, the chassis fields, both renderers, and all three consumers,
+each confirmed to red the specific test written for it.
+
 ## 9. Open, not blocking
 
 - **`noEligible` on the bowler slot.** When nobody can legally open the next
