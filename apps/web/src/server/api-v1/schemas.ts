@@ -2826,6 +2826,11 @@ const AiPlanAssignment = z.object({
  *  format would reject a real, correctly-computed conflict. */
 const AiPlanConflictDetail = z.object({
   kind: ConflictDetailKindSchema,
+  /** Review wave 3: the DERIVED, venue-qualified court name beside the raw
+   *  `court` id. Without it declared, zod strips whatever a caller attaches
+   *  and `formatConflictDetail` degrades every court conflict to "Unknown
+   *  court" — the field has to exist here as well as be resolved server-side. */
+  courtName: z.string().optional(),
   entrantIds: z.array(z.string()).optional(),
   personIds: z.array(z.string()).optional(),
   otherFixtureId: z.string().optional(),

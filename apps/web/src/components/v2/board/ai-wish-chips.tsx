@@ -210,7 +210,14 @@ function WishPicker({
       break;
     case "final_last":
       ready = court !== "";
-      build = () => ({ kind: "final_last", court });
+      // P9 review wave 3: compile the court's NAME, not its id. `court` is a
+      // `courts.id` since pass 1, and `wish-compile` puts this straight into
+      // the instruction the organiser reads AND the model is given — while
+      // `toModelPayload` shows the model venue-qualified NAMES in
+      // `settings.courts`/`courtDetails`. So a uuid here was both unreadable
+      // and unmatchable: the wish was silently dropped. Every other wish kind
+      // already compiles a name (targetName/aName/bName).
+      build = () => ({ kind: "final_last", court: courtNames[court] ?? court });
       break;
     case "pin_entrant":
       ready = entrantId !== "";

@@ -215,14 +215,18 @@ export function CourtMultiPicker({
   // `buildCourtDirectory` already decides WHETHER a name is ambiguous, so this
   // does not re-derive that rule — a court whose bare name is unique keeps a
   // single line and no venue.
-  const bareNameById = new Map(allCourtRows(venues).map((r) => [r.id, r.name] as const));
+  const rowsById = new Map(allCourtRows(venues).map((r) => [r.id, r] as const));
   const venueLineFor = (id: string): string | null => {
-    const bare = bareNameById.get(id);
+    const row = rowsById.get(id);
     const label = nameById[id];
-    if (bare === undefined || label === undefined || label === bare) return null;
-    // Qualified form is `${name} (${venue})` — recover the venue for its own line.
-    const inner = label.slice(bare.length).trim();
-    return inner.startsWith("(") && inner.endsWith(")") ? inner.slice(1, -1) : inner;
+    if (row === undefined || label === undefined || label === row.name) return null;
+    // Review wave 3: read the venue off the ROW rather than recovering it by
+    // slicing the label. The qualified form is usually `${name} (${venue})`,
+    // but `buildCourtDirectory` appends a ` #<id8>` tie-breaker for the
+    // residual case it exists to disambiguate (an archived and an active court
+    // sharing BOTH a venue and a name) — and against that the old parse
+    // produced `(Riverside Hall) #a1b2c3d4`, parentheses and all.
+    return row.venue_name;
   };
   const atCap = maxSelected !== undefined && value.length >= maxSelected;
 
@@ -269,7 +273,7 @@ export function CourtMultiPicker({
           {value.map((id, i) => {
             const name = nameById[id] ?? unknownCourtLabel;
             const venueLine = venueLineFor(id);
-            const courtLine = venueLine === null ? name : bareNameById.get(id) ?? name;
+            const courtLine = venueLine === null ? name : (rowsById.get(id)?.name ?? name);
             return (
               <li
                 key={id}

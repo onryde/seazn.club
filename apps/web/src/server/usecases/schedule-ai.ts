@@ -103,9 +103,11 @@ import {
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { AiPlanRequest, AiPlanResponse } from "@/server/api-v1/schemas";
 import { AiSchedulePlan, SINGLE_SYSTEM_PROMPT } from "./schedule-ai-prompt";
+import type { ConflictDetail } from "@seazn/engine/scheduling";
 import {
   MOVABLE_STATUS,
   divisionFixtures,
+  withCourtNames,
   divisionLockState,
   feedDependencies,
   loadSettings,
@@ -3403,6 +3405,16 @@ async function planForDivision(
     ? coveragePreview(pack, result.proposal, input.officials_policy)
     : null;
 
+  // Review wave 3: the id -> venue-qualified label map this response's
+  // conflicts resolve through. Built from the pack's OWN directory (already
+  // in scope for `toModelPayload`), so the organiser reads the same court
+  // label the model was shown.
+  const packCourtNames = new Map(
+    Object.entries(courtDirectory).map(([id, info]) => [id, info.label] as const),
+  );
+  const withPackCourtNames = <C extends { details?: ConflictDetail }>(c: C): C =>
+    c.details !== undefined ? { ...c, details: withCourtNames(c.details, packCourtNames) } : c;
+
   await captureServer({
     event: "ai_plan_run",
     distinctId,
@@ -3430,8 +3442,13 @@ async function planForDivision(
     // engine stopped producing (C3, 2026-08-13 design amendment), so an
     // existing client reading `.detail` off `warnings`/`blocking` keeps
     // working.
-    warnings: result.warnings.map(withLegacyDetail),
-    blocking: result.blocking.map(withLegacyDetail),
+    // Review wave 3: resolve the court NAME before the legacy prose is built.
+    // `withLegacyDetail` reads `details.courtName ?? details.court`, and
+    // `formatConflictDetail` on the client degrades to "Unknown court" without
+    // it — so an unresolved conflict here reached the AI diff panel as
+    // "Unknown court" and the deprecated sentence as a raw uuid.
+    warnings: result.warnings.map((c) => withLegacyDetail(withPackCourtNames(c))),
+    blocking: result.blocking.map((c) => withLegacyDetail(withPackCourtNames(c))),
     diff: result.diff,
     explanations: result.explanations,
     ...(result.constraint_suggestions !== undefined

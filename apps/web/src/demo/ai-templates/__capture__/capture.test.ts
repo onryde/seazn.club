@@ -420,6 +420,16 @@ describe.skipIf(!CAPTURING || !HAS_DB)("capture a real architect run", () => {
             instruction: seeded.instruction,
           },
           board,
+          // P9: everything court-shaped in this recording is a UUID. The public
+          // marketing demo renders `response.divergent_courts`, so the fixture
+          // has to carry the names with it — nothing downstream can re-derive
+          // them once the throwaway capture database is gone.
+          courtNames: Object.fromEntries(
+            (
+              await sql<{ id: string; name: string }[]>`
+                select id, name from courts where org_id = ${auth.orgId}`
+            ).map((c) => [c.id, c.name]),
+          ),
           pack,
           movableIds: [...movableIds],
           response,

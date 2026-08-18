@@ -1336,10 +1336,11 @@ export function FixtureLine({
   const saveSchedule = () =>
     patchSchedule({
       scheduled_at: when ? new Date(when).toISOString() : null,
-      // A court now implies its venue — moveFixture (schedule.ts) treats
-      // court_id/venue_id as fully independent fields with NO server-side
-      // derivation, so both are sent together from the SAME selection or the
-      // fixture is left with a stale venue_id after clearing/changing court.
+      // A court now implies its venue, and the SERVER derives it: `moveFixture`
+      // (schedule.ts) resolves `venue_id` from `courts.venue_id` and ignores
+      // any `venue_id` a client sends, so the two can no longer disagree.
+      // Still sent from the same selection so the optimistic local row matches
+      // what the server will write.
       court_id: courtId || null,
       venue_id: (courtId ? courtById.get(courtId)?.venue_id : undefined) ?? null,
     });

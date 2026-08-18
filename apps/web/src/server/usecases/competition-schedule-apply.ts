@@ -103,6 +103,7 @@ import { appendDivisionEvent } from "@/server/engine-db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { AiApplyMeta, ScheduleConfig } from "@/server/api-v1/schemas";
 import { withLegacyDetail } from "@/server/api-v1/conflict-detail-legacy";
+import type { ConflictDetail } from "@seazn/engine/scheduling";
 import {
   conflictKey,
   deltaConflicts,
@@ -117,8 +118,10 @@ import {
   applyWindow,
   assertFreshSeq,
   divisionFixtures,
+  courtNamesById,
   courtVenueIds,
   divisionLockState,
+  withCourtNames,
   feedDependencies,
   loadSettings,
   peopleByEntrant,
@@ -736,7 +739,12 @@ export async function applyCompetitionSchedule(
         // engine stopped producing (C3, 2026-08-13 design amendment) — this
         // list rides on the 409's `extra.conflicts` verbatim (http.ts), same
         // "carries `Conflict` verbatim" contract `AiPlanConflict` documents.
-        conflicts: blocking.map(withLegacyDetail),
+        // Review wave 3: resolve the court NAME first. This list is the 409
+        // an organiser reads, and `withLegacyDetail` renders
+        // `details.courtName ?? details.court` — so unresolved it named a raw
+        // court uuid. Same resolver every other server path in this cutover
+        // uses; `courtNamesById` is exported from `./schedule`.
+        conflicts: blocking.map((c) => withLegacyDetail(withJointCourtNames(c))),
       });
     }
 
@@ -744,6 +752,11 @@ export async function applyCompetitionSchedule(
     // Resolved ONCE for the whole joint apply: the venue is derived from the
     // court, never accepted from the client (see `courtVenueIds`' own note).
     const courtVenues = await courtVenueIds(tx);
+    // …and the venue-qualified court NAMES this run's conflicts resolve
+    // through, so a 409 never quotes a bare uuid at the organiser.
+    const jointCourtNames = await courtNamesById(tx);
+    const withJointCourtNames = <C extends { details?: ConflictDetail }>(c: C): C =>
+      c.details !== undefined ? { ...c, details: withCourtNames(c.details, jointCourtNames) } : c;
     let applied = 0;
     for (const d of order) {
       // Interleaved with the writes on purpose — see the module header. A
@@ -829,7 +842,9 @@ export async function applyCompetitionSchedule(
       // `withLegacyDetail` restores the deprecated `detail` string the engine
       // stopped producing (C3, 2026-08-13 design amendment) — `CompetitionApplyOut`
       // carries `Conflict` verbatim otherwise, same as `AiPlanConflict`.
-      conflicts: conflicts.filter((c) => !allSiblingIds.has(c.fixtureId)).map(withLegacyDetail),
+      conflicts: conflicts
+        .filter((c) => !allSiblingIds.has(c.fixtureId))
+        .map((c) => withLegacyDetail(withJointCourtNames(c))),
       divisionIds: order.map((d) => d.id),
     };
   });

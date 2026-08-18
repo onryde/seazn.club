@@ -18,6 +18,13 @@
 import type { AiConsoleFixture } from "@/components/v2/board/ai-diff";
 
 export interface AiDemoFixture {
+  /** court id -> display name, recorded at capture time. The pack, the board
+   *  and `response.divergent_courts` all carry court UUIDs since the P9
+   *  cutover, and the public marketing demo renders `divergent_courts` — so
+   *  without this the page shows raw uuids to the world. Optional because
+   *  fixtures captured before this field exist; a consumer MUST drop an id it
+   *  cannot resolve rather than render it. */
+  courtNames?: Record<string, string>;
   meta: {
     /** Template id — matches the `<slug>.json` filename and `SeededTemplate`. */
     slug: string;

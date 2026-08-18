@@ -1055,7 +1055,10 @@ function toWireConflictDetail(d: ConflictDetail): NonNullable<ScheduleConflict["
  * takes no second argument, so this is the one place a resolved name can
  * reach it.
  */
-function withCourtNames(details: ConflictDetail, courtNames: ReadonlyMap<string, string>): ConflictDetail {
+/** Attach the derived, venue-qualified court name to a conflict's details.
+ *  Exported (review wave 3) so the AI-plan and joint-apply paths resolve
+ *  identically instead of shipping a raw uuid to the organiser. */
+export function withCourtNames(details: ConflictDetail, courtNames: ReadonlyMap<string, string>): ConflictDetail {
   if (details.court === undefined) return details;
   const courtName = courtNames.get(details.court);
   return courtName !== undefined ? { ...details, courtName } : details;
@@ -3009,10 +3012,21 @@ async function validateScheduleIn(
   // A division with no stages yet (before its first is generated) has no
   // stage tags to union in — division tags alone, exactly pre-#11 behaviour.
   if (stageTagSets.length === 0) stageTagSets.push([]);
+  // Review wave 3: memoised on the tag UNION, not called per stage. Each call
+  // re-runs the full org court+venue join, so a division with N stages issued N
+  // scans on every validate, publish and start — and stages overwhelmingly
+  // share the same union (usually the empty one).
   const courtTagQualifiedIds = new Set<string>();
+  const qualifiedByUnion = new Map<string, ReadonlySet<string>>();
   for (const stageTags of stageTagSets) {
     const union = unionRequiredCourtTags(requiredCourtTags, stageTags);
-    for (const id of await resolveTagQualifiedCourtIds(tx, union)) courtTagQualifiedIds.add(id);
+    const key = [...union].sort().join("\u0000");
+    let ids = qualifiedByUnion.get(key);
+    if (ids === undefined) {
+      ids = await resolveTagQualifiedCourtIds(tx, union);
+      qualifiedByUnion.set(key, ids);
+    }
+    for (const id of ids) courtTagQualifiedIds.add(id);
   }
   // C1 follow-up (2026-08-12, task 3 / G1). This function backs BOTH
   // `validateSchedule` (the board's live conflict report) and, through

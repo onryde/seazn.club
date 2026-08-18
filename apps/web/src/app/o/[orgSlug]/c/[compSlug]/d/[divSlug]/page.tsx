@@ -127,6 +127,16 @@ export default async function DivisionPage({
     // and venue-qualified on the board — the same court, two labels.
     listVenues(auth, { includeArchived: true }),
   ]);
+  // Review wave 3: the panel gets court IDENTITY and display only — same trim
+  // the schedule page does, and for the same reason. `listVenues` rows carry
+  // every court's weekly `hours` and dated `exceptions` (the Directory calendar
+  // editor's data), which StagesPanel never reads and which the schedule page
+  // measured at 33KB over its RSC payload budget. Neither page has a budget
+  // test, so this would have grown silently.
+  const panelVenues = venues.map((v) => ({
+    ...v,
+    courts: v.courts.map(({ hours: _hours, exceptions: _exceptions, ...court }) => court),
+  }));
   // Moved up from just before the JSX return (still THE canonical
   // frozen/editable derivation, unchanged) — the P6/D4b task B proposal
   // panel below needs it to gate getSeedProposal, which must not fetch (let
@@ -387,7 +397,7 @@ export default async function DivisionPage({
               stages={stages}
               fixtures={fixtures}
               entrantNames={entrantNames}
-              venues={venues}
+              venues={panelVenues}
               canEdit={editable}
               tz={scheduleSettings.tz}
               // The GOVERNING clock, resolved here exactly as the schedule page

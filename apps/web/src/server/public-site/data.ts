@@ -373,6 +373,8 @@ export async function getPublicOrg(orgSlug: string): Promise<{
 }
 
 /** Competition home: hero + divisions (+ live-now strip). */
+export type LiveNowFixture = Omit<PublicFixture, "venue" | "court_label" | "venue_name" | "court_name">;
+
 export async function getPublicCompetition(
   orgSlug: string,
   compSlug: string,
@@ -380,7 +382,11 @@ export async function getPublicCompetition(
   org: PublicOrg;
   competition: PublicCompetition;
   divisions: PublicDivision[];
-  liveNow: PublicFixture[];
+  /** Review wave 3: this query selects no court/venue columns, so the type must
+   *  not claim them — it used to, and they read `undefined` at runtime. A
+   *  future "Live now" card wanting a location wires it like getPublicDivision
+   *  does (see the query's own note), rather than widening this back. */
+  liveNow: LiveNowFixture[];
 } | null> {
   const shell = await unstable_cache(
     async () => {
@@ -419,7 +425,13 @@ export async function getPublicCompetition(
       // is out of this fix's blast radius. If a future "Live now" card ever
       // wants to show where a match is being played, wire this the same way
       // getPublicDivision does, not by re-adding venue/court_label.
-      const liveNow = await sql<PublicFixture[]>`
+      // Review wave 3: this query selects none of the four court/venue fields,
+      // so the previous `PublicFixture[]` cast declared them present while they
+      // read `undefined` at runtime. No consumer touches them today; the cast
+      // is narrowed rather than the columns added, because the comment above
+      // says deliberately that a "Live now" card wanting a location should be
+      // wired like getPublicDivision, not by widening this.
+      const liveNow = await sql<LiveNowFixture[]>`
         select f.id, f.division_id, f.stage_id, f.pool_id, f.round_no,
                f.seq_in_round, f.home_entrant_id, f.away_entrant_id,
                f.home_slot_label, f.away_slot_label,
