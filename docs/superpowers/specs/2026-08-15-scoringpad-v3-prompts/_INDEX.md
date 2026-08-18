@@ -689,3 +689,30 @@ is what the published sheet shows.
 Worth generalising for R3-R7: a rendered-page check catches a whole class —
 copy that is right in isolation and wrong in context — that no assertion on the
 string can reach.
+
+### R2c — SIGN-OFF: approval-on-merge, 2026-08-18
+
+**What actually happened, recorded plainly because the gate cannot be
+reconstructed later.** `_RULES.md` §1 asks for the owner's per-screen verdicts
+before merge. The owner did not give per-screen verdicts; the sheet was
+published (link above) and the owner instructed "merge". **That instruction is
+the approval of record for this wave. No per-screen verdict text exists — none
+is invented here.** The sheet's verdict slots stay empty.
+
+This is the SECOND use of the precedent R2b set one day earlier, and the second
+use is worth noting as such: a precedent used once is an exception, used twice
+it is drifting into the default. The rule it was written with still stands — it
+does not make the sheet optional, and it does not convert "CI green" into
+visual sign-off.
+
+Not covered by that approval, and therefore still owed by a later wave:
+- **The reinstated Retire tile is new surface** (state `09-retiresheet`) and has
+  no individual verdict. R2's own sign-off record carries two screens in the
+  same position; add this to R8's closing walkthrough.
+- **`08-bowlerpicker` / `10-reviewblocked`** likewise — the blocked-candidate
+  treatment (visible, disabled, reason beside the name) is a new visual idiom
+  eleven skins will inherit, and it has never had an individual ruling.
+
+Unlike R2b, this wave was NOT merged on "CI green" — see the PR for what CI
+actually reported, since neither smoke (PR-only) nor the seven-width e2e had
+ever run against this branch at the point the instruction was given.
