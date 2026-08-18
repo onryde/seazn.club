@@ -29,7 +29,7 @@ and those two `stages.ts` functions; F1 is fenced off `qualification.ts`,
 | F1 | `F1-bracket-round-role.md` | — | IN FLIGHT 2026-08-17 — `feat/f1-bracket-round-role`. Plan: `../../plans/2026-08-17-f1-bracket-round-role.md`. L3/#414 merged (`11ab0c4e7`), so the `stages.ts` block is lifted |
 | F2 | `F2-unified-progression-field.md` | — | IN FLIGHT 2026-08-17 — `feat/f2-unified-progression-field`, plan being written first. **Rebases onto merged F1 before its own PR** |
 | F3 | **prompt ready** — `../2026-08-18-format-progression-f3-f5-design.md` §8 | F2 **merged** | design written 2026-08-18 against the shipped shape. Paste §8's F3 block as a whole prompt |
-| F4 | **prompt ready** — same doc §8 (two blocks, one session) | — | premise RETIRED (no sport/format-kind gap in either direction; its mexicano comment folds into F3). Slot **repurposed** to the export + calendar day-one leaks (§7 P5, P2). Does NOT wait for F3 — three catalogue templates already emit `timing: "setup"`. Owner to confirm the repurpose |
+| F4 | **prompt ready** — same doc §8 (two blocks, one session) | — | premise RETIRED (no sport/format-kind gap in either direction; its mexicano comment folds into F3). Slot **repurposed** to the export + calendar day-one leaks (§7 P5, P2). Does NOT wait for F3 — three catalogue templates already emit `timing: "setup"`. Owner CONFIRMED the repurpose 2026-08-18 |
 | F5 | **prompt ready** — same doc §8 | all | scope fixed by the §5 table |
 
 **Why F3–F5 are not written.** They consume F2's field shape, and this repo has
@@ -83,6 +83,16 @@ prompts for F3, F5 and two standalone product fixes.
    so **F2 verifies zero rows against the target database and stops if it finds
    any** — this ruling is dated and will outlive its accuracy. Consequence: F2
    does not need to split, so five sessions stands.
+
+6. **F4 is repurposed, not retired** (2026-08-18). Its original premise —
+   a sport/format-kind gap — was disproven in both directions, leaving one
+   mexicano comment that folds into F3. The SLOT now carries the two places
+   day-one fixtures leak on surfaces organisers hand out: the exported/printed
+   draw and the subscribed calendar (design §7 P5, P2). Repurposing beats
+   renumbering, which would break every reference already written to F5.
+   F4 does NOT depend on F3 and the two may run in parallel — file sets are
+   disjoint on inspection, and three catalogue templates already emit
+   `timing: "setup"` so F4 has live test data today.
 
 ## Where ruling 4's collapse actually lands (swept 2026-08-17)
 

@@ -187,8 +187,8 @@ That is a coherent session with a real deliverable, which is a better use of
 the number than a session that exists to justify it — and better than a
 renumber, which would break every reference already written to F5.
 
-The sport/format-kind premise is retired; the number is not. Owner should
-confirm the repurpose.
+The sport/format-kind premise is retired; the number is not.
+**Owner confirmed the repurpose 2026-08-18.**
 
 ---
 
@@ -404,8 +404,8 @@ how this programme's silent defects have been created every previous time.
 ## 8. Pick-up prompts — start any of these from one message
 
 Each block below is self-contained: paths, criteria, exclusions, verification.
-Paste one as the whole prompt. The two F4 blocks may be run together as one
-session, and need not wait for F3 — see §7's routing table for why. Do not
+Paste one as the whole prompt. F4 does not wait for F3 and the two may run in
+parallel — see §7's routing table for why. Do not
 start F3 until PR #616 (F2) has merged —
 F3 consumes the shipped `progression` field, and this repo has a repeated
 failure where a session authored against a design met an implementation that
@@ -477,48 +477,71 @@ e2e.yml` is **live on pull requests**.
 > see on every multi-stage format at once, so exercise all six templates end to
 > end on a real build and inspect the rendered bracket.
 
-### Prompt: F4 (part 1 of 2) — make the exported and printed draw readable
+### Prompt: F4 — day-one fixtures on the surfaces organisers hand out
 
-> Fix the export path so day-one fixtures print their real placeholder labels
-> instead of "TBD". See `docs/superpowers/specs/
-> 2026-08-18-format-progression-f3-f5-design.md` §7 P5.
+> Implement F4 of the format-progression programme, per
+> `docs/superpowers/specs/2026-08-18-format-progression-f3-f5-design.md`
+> §4 and §7 (P5, P2). Read that document first. Write the implementation plan
+> (superpowers:writing-plans), then execute with Scout/Implementer/Reviewer.
 >
-> `apps/web/src/server/usecases/exports.ts` selects no `*_slot_label` column:
-> `exportFixtures` (`:205-220`) coalesces to the SQL literal `'TBD'` at
-> `:209-210`, and `:614` / `:726` apply `?? "TBD"` in TypeScript;
+> One session, two deliverables. Day-one placeholder fixtures render correctly
+> on eight HTML surfaces already; these are the two places they do not, and
+> both are surfaces an organiser hands to other people.
+>
+> **This session does NOT depend on F3 and must not wait for it.** Three
+> catalogue templates already emit `timing: "setup"` today —
+> `apps/web/src/server/templates/catalog/euro24.json:47`,
+> `league-playoff.json:32`, `t20-super8.json:33` and `:48` — so labelled
+> placeholder fixtures exist to test against right now. F3 later widens who
+> benefits; it does not enable any of this.
+>
+> **Deliverable 1 — the exported and printed draw (§7 P5).**
+> `apps/web/src/server/usecases/exports.ts` selects no `*_slot_label` column
+> anywhere: `exportFixtures` (`:205-220`) coalesces to the SQL literal `'TBD'`
+> at `:209-210`, `:614` and `:726` apply `?? "TBD"` in TypeScript, and
 > `officialDutyRows` (`:566-572`) and `ticketRegistrationRows` do the same.
 > Select the columns and resolve them through `resolveSlotLabel`
-> (`apps/web/src/lib/slot-label.ts`) — that module is deliberately the only
+> (`apps/web/src/lib/slot-label.ts`) — that module is deliberately the ONLY
 > place a `SlotLabel` becomes display text, so do not hand-build strings.
->
 > The export path is server-side and has no `useMsg()`; pass a `msgFor`-backed
-> lookup, the same way `calendar.ics/route.ts:32-33` does. Exports are
-> spectator-facing, so use the org's default locale rather than a request
-> cookie, for the reason recorded at `calendar.ics/route.ts:24-30`.
+> lookup exactly as `calendar.ics/route.ts:32-33` does, using the org's default
+> locale rather than a request cookie, for the reason recorded at that file's
+> `:24-30` (an exported document has no single viewer to read a cookie from).
 >
-> **Test**: an export of a division with generated `setup` fixtures contains
-> "Winner of Group A" and contains no "TBD" for a slot that has a label. That
-> test must fail before the change.
->
-> Out of scope: adding fixture data to `poster.pdf`, which today renders QR and
-> branding only. Worth doing, separately scoped.
-
-### Prompt: F4 (part 2 of 2) — day-one fixtures in the subscribed calendar
-
-> Make unscheduled day-one fixtures appear in the subscribed calendar. See
-> `docs/superpowers/specs/2026-08-18-format-progression-f3-f5-design.md` §7 P2.
->
+> **Deliverable 2 — the subscribed calendar (§7 P2).**
 > `apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/
 > calendar.ics/route.ts:40` filters `f.scheduled_at !== null`, so a final that
-> exists at setup but has no time is absent from the calendar — which
-> contradicts the owner ruling recorded at `:24-30` in the same file.
+> exists at setup but has no time is absent from the calendar — contradicting
+> the owner ruling recorded at `:24-30` of that same file, which names this
+> exact case as the product value TBD fixtures exist to deliver. Emit tentative
+> events for unscheduled fixtures.
 >
-> Confirm with the owner first whether the fix is P1 (schedule the whole
-> tournament up front, making the filter moot) or tentative VEVENTs for
-> unscheduled fixtures. If tentative events: keep the UID keyed on the fixture
-> id so a resolved final **updates in place** in already-subscribed calendars
-> instead of arriving as a duplicate beside a stale copy. That is the one
-> failure here a redeploy cannot repair.
+> **The one constraint that a redeploy cannot repair**: keep the VEVENT UID
+> keyed on the fixture id, so a final that resolves from "Winner of Group A" to
+> a real name **updates in place** in calendars people have already subscribed
+> to, rather than arriving as a second event beside a stale copy. Ship a test
+> that asserts UID stability across resolution.
+>
+> **Tests** (all four types — unit, e2e, smoke, regression). Each must fail
+> before the change:
+> - An export of a division with generated `setup` fixtures contains
+>   "Winner of Group A", and contains no "TBD" for any slot that has a label.
+> - The `.ics` for such a division contains the final as an event.
+> - The same fixture's UID is byte-identical before and after its entrant
+>   resolves.
+>
+> **Do not touch**: `format-templates.ts`, `packages/engine/src/competition/
+> progression.ts`, or the seeding region of `stages.ts` — those belong to F3,
+> which may be running in parallel. Adding fixture data to `poster.pdf` (which
+> today renders QR and branding only) is out of scope and separately worth
+> doing.
+>
+> **Verify**: `turbo run lint typecheck` from the repo root is the CI gate —
+> `npm run lint` alone is not. Run vitest with
+> `--reporter=json --outputFile=<path>` and judge only `numPassedTests` /
+> `numTotalTests`; readable summaries print `PASS(0) FAIL(0)` for a suite that
+> failed to collect. Any new user-facing string goes into all four locale
+> dictionaries.
 
 ### Prompt: F5 — the programme's test debt
 
