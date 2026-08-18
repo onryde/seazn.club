@@ -2462,21 +2462,25 @@ describe("buildSheets — over summary (R2b)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// retire — dedicated tile + SwapSheet flow DROPPED (owner ruling, live-tile
-// audit defect 4, 2026-08-17): the tile's own SwapSheet scoped "off" to the
-// WHOLE batting side (never just the crease, engine backstops it at
-// cricket.ts:1676) and hardcoded reason:"other", while the generic
-// More-sheet's `cricket.retire` action was ALSO reachable, with a real
-// reason enum. Two divergent entry points for the same event was the
-// defect; the ruling keeps the generic path and drops the dedicated one.
-// `buildSwap` is gone — its only caller was the removed tile — and
-// `cricketSkinV3` now declares no `swap` member at all, so cricket has no
-// SwapSheet surface (SwapSheet stays chassis code, ready for R3-R7 — see
-// this describe block's own two tests below).
+// retire — the SwapSheet flow stays dropped; the TILE is back as a `{sheet}`
+// tile (R2c / C2, owner-approved amendment to defect 4's ruling, 2026-08-18).
+//
+// The 2026-08-17 audit dropped the dedicated tile because its SwapSheet
+// scoped "off" to the WHOLE batting side (never just the crease, engine
+// backstops it at `applyRetire`) and hardcoded reason:"other", while the
+// generic More-sheet action was ALSO reachable and at least carried a real
+// reason enum. Two entry points was the defect; the ruling kept the less-bad
+// one. R2c has the option neither of them was — the enum AND the crease —
+// and it does not reintroduce the duplication, because a `{swap:true}` action
+// contributes nothing to `dedicatedEventTypes` while a sheet's `event` does.
+//
+// What has NOT changed: `buildSwap` is still gone and `cricketSkinV3` still
+// declares no `swap` member, so cricket still has no SwapSheet surface
+// (SwapSheet stays chassis code, ready for R3-R7).
 // ---------------------------------------------------------------------------
 
-describe("retire — dedicated tile dropped, generic More sheet is the only path (owner ruling)", () => {
-  it("no tile in any lineup/fidelity state declares id 'retire' or a swap action", () => {
+describe("retire — a {sheet} tile, never a swap tile (R2c amendment to the defect-4 ruling)", () => {
+  it("declares a retire tile wherever a retirement is possible, and never a swap action anywhere", () => {
     const states = [
       state({ innings: [] }), // pre-lineup
       state({ innings: [innings({ fine: null })] }), // coarse
@@ -2484,9 +2488,13 @@ describe("retire — dedicated tile dropped, generic More sheet is the only path
     ];
     for (const st of states) {
       const tiles = buildTiles(view({ state: st }));
-      expect(tiles.some((tl) => tl.id === "retire")).toBe(false);
+      // The swap half of the original ruling stands, in every state.
       expect(tiles.some((tl) => "swap" in tl.action)).toBe(false);
     }
+    // The tile itself is a live-phase `{sheet}` tile, as for review/close.
+    const live = buildTiles(view({ state: state() }));
+    const retire = live.find((tl) => tl.id === "retire")!;
+    expect(retire.action).toEqual({ sheet: "retire" });
   });
 
   it("cricketSkinV3 declares no swap method — same 'absent means never applicable' shape as contextSelect", () => {
@@ -2655,5 +2663,58 @@ describe("buildContext — R2c: the bowler picker's candidates and per-candidate
     );
     expect(slot.readOnly).toBe(true);
     expect(slot.blocked ?? {}).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R2c / C2 — Retire comes back as a TILE opening a guided sheet.
+//
+// AMENDS R2b's defect-4 ruling ("drop the dedicated Retire tile, keep the
+// generic More-sheet flow"), owner-approved 2026-08-18. That audit compared
+// two flawed flows: the dedicated tile hardcoded reason:"other" and scoped
+// its picker to the whole batting side, while the generic form had a real
+// reason enum but offered all 22 players from BOTH sides. It kept the
+// less-bad one. This is the option neither of them was — the real reason
+// enum AND the crease — and it stays ONE entry point, because a sheet's
+// event counts toward dedicatedEventTypes and so removes the generic entry.
+// ---------------------------------------------------------------------------
+
+describe("buildSheets / buildTiles — R2c: Retire is a tile-driven guided sheet", () => {
+  const atCrease = () =>
+    state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: "a1", prevOverBowler: null, bowlerBalls: {} } })] });
+
+  it("declares a Retire tile that opens the skin's own retire sheet", () => {
+    const tile = buildTiles(view({ state: atCrease() }), t).find((x) => x.id === "retire")!;
+    expect(tile).toBeDefined();
+    expect(tile.action).toEqual({ sheet: "retire" });
+  });
+
+  it("the sheet emits cricket.retire, which is what removes the generic More-sheet entry", () => {
+    // dedicatedEventTypes folds every sheet's `event` into the dedicated set
+    // (pad-host.tsx), so declaring this sheet is itself the de-duplication.
+    expect(buildSheets(view({ state: atCrease() })).retire!.event).toBe("cricket.retire");
+  });
+
+  it("asks WHO first, narrowed to exactly the two batters at the crease", () => {
+    const step = buildSheets(view({ state: atCrease() })).retire!.steps[0]!;
+    expect(step.kind).toBe("person");
+    expect((step as { candidates?: readonly string[] }).candidates).toEqual(["h1", "h2"]);
+  });
+
+  it("never offers a phantom blank candidate when the crease is not populated yet", () => {
+    const empty = state({ innings: [innings({ fine: { striker: "", nonStriker: "", currentBowler: null, prevOverBowler: null, bowlerBalls: {} } })] });
+    const step = buildSheets(view({ state: empty })).retire!.steps[0]!;
+    expect((step as { candidates?: readonly string[] }).candidates).toEqual([]);
+  });
+
+  it("asks the REAL reason enum — the half of the generic flow worth keeping", () => {
+    const step = buildSheets(view({ state: atCrease() })).retire!.steps[1]!;
+    expect(step.kind).toBe("choice");
+    expect((step as { options: { id: string }[] }).options.map((o) => o.id)).toEqual(["hurt", "out", "other"]);
+  });
+
+  it("builds a payload the engine accepts, and never hardcodes reason:'other'", () => {
+    const spec = buildSheets(view({ state: atCrease() })).retire!;
+    expect(spec.buildPayload({ person: "h2", reason: "hurt" })).toEqual({ person: "h2", reason: "hurt" });
   });
 });

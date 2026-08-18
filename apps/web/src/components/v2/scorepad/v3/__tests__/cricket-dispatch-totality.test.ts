@@ -241,13 +241,23 @@ describe("cricket dispatch-guard totality (R2/task E headline)", () => {
     expect(invented, `reachable type not in the engine's own eventSchemas: ${invented.join(", ")}`).toEqual([]);
   });
 
-  // R2b (owner ruling, live-tile audit defect 4): the dedicated Retire tile
-  // and its SwapSheet flow are gone — `cricket.retire` must now be reached
-  // ONLY through the generic More sheet, never through the guided sheets
-  // surface this same sweep already accounts for above.
-  it("cricket.retire is reachable ONLY through the generic More sheet — the dedicated tile and its SwapSheet flow were dropped", () => {
+  // R2c / C2 (owner-approved amendment to defect 4's ruling, 2026-08-18):
+  // `cricket.retire` moves from the generic More sheet to the skin's own
+  // guided sheet, and — this is the half that matters — it is reachable
+  // through EXACTLY ONE of them, never both. Two divergent entry points was
+  // the original defect, and this sweep is what proves it has not come back:
+  // it computes both reachability sets independently from the built specs.
+  //
+  // The de-duplication is structural rather than hand-maintained.
+  // `dedicatedEventTypes` (pad-host.tsx) folds every sheet's own `event` into
+  // the dedicated set, and the More sheet lists only what is NOT dedicated —
+  // so declaring `retireSheet` is itself what removes the generic entry. The
+  // old `{swap:true}` tile could not do that (a swap action contributes no
+  // type at all), which is precisely how the duplication arose in the first
+  // place.
+  it("cricket.retire is reachable through the skin's own guided sheet, and NO LONGER through the generic More sheet", () => {
     const { viaSheets, viaMore } = sweep();
-    expect(viaSheets.has("cricket.retire")).toBe(false);
-    expect(viaMore.has("cricket.retire")).toBe(true);
+    expect(viaSheets.has("cricket.retire")).toBe(true);
+    expect(viaMore.has("cricket.retire")).toBe(false);
   });
 });

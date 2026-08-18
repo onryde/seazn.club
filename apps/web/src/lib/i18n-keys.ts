@@ -2635,6 +2635,7 @@ export type DictionaryKey =
   | "pad.cricket.sheet.overSummary.balls.title"
   | "pad.cricket.sheet.overSummary.runs.title"
   | "pad.cricket.sheet.overSummary.wickets.title"
+  | "pad.cricket.sheet.retire.person.title"
   | "pad.cricket.sheet.retire.reason.hurt"
   | "pad.cricket.sheet.retire.reason.other"
   | "pad.cricket.sheet.retire.reason.out"

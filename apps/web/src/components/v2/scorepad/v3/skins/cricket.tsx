@@ -1175,20 +1175,16 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   }
 
   tiles.push(closedTile({ id: "review", label: "pad.cricket.action.review", kind: "standard", phases: ["live"], action: { sheet: "review" } }));
-  // R2b (owner ruling, live-tile audit defect 4, 2026-08-17): the dedicated
-  // Retire tile is GONE — its own SwapSheet scoped "off" to the whole
-  // batting side (never just the crease, engine backstops it at
-  // cricket.ts:1676) and hardcoded reason:"other", while the generic
-  // More-sheet's `cricket.retire` action (padSpec's own `retireAction`,
-  // engine cricket.ts) was ALSO reachable with a real reason enum — two
-  // divergent entry points for the one event. `pad-host.tsx`'s own
-  // `dedicatedEventTypes` never counted this tile's `{swap:true}` action
-  // toward the dedicated set anyway (its own header: a swap tile "builds its
-  // event dynamically... contributes nothing"), so `cricket.retire` was
-  // ALREADY reachable via the generic More sheet before this change and
-  // stays reachable the same way now — nothing to add here, only to remove.
-  // See `buildSwap`'s own former header (this section, now deleted) and
-  // `cricketSkinV3`'s factory below for the rest of the removal.
+  // R2c / C2 (owner-approved amendment to R2b's defect-4 ruling, 2026-08-18):
+  // Retire is a tile again, but a `{sheet}` one rather than the `{swap:true}`
+  // tile R2b removed. Both faults that justified the removal are gone — the
+  // sheet carries the real reason enum and narrows to the crease — and the
+  // duplicate-entry-point problem solves itself: a `{swap:true}` action
+  // contributed NOTHING to `dedicatedEventTypes` (pad-host.tsx), which is
+  // exactly why the generic More-sheet `cricket.retire` stayed reachable
+  // alongside it, whereas a sheet's own `event` IS counted, so declaring
+  // `retireSheet` removes the generic entry with no extra wiring.
+  tiles.push(closedTile({ id: "retire", label: "pad.cricket.action.retire", kind: "standard", phases: ["live"], action: { sheet: "retire" } }));
   tiles.push(closedTile({
     id: "inningsClose",
     label: "pad.cricket.action.inningsClose",
@@ -1773,6 +1769,66 @@ function tossSheet(view: PadHostView): GuidedSheetSpec {
  *  step for an optional field would force a tap the engine itself does not
  *  require — the opposite of what this wave exists to fix. Left reachable
  *  only via the generic "More" sheet, same as before this skin existed. */
+/**
+ * R2c / C2 — cricket's own Retire flow, replacing the generic More-sheet
+ * `cricket.retire` form. AMENDS R2b's defect-4 ruling (owner-approved
+ * 2026-08-18): that audit dropped the dedicated tile because it hardcoded
+ * `reason: "other"` and scoped its picker to the whole batting side, and kept
+ * the generic form because it at least had a real reason enum. Neither fault
+ * survives here — the enum AND the crease — so the reason the tile was
+ * dropped no longer applies.
+ *
+ * Still ONE entry point, with nothing extra to remove: `dedicatedEventTypes`
+ * (pad-host.tsx) folds every sheet's own `event` into the dedicated set, so
+ * declaring this sheet is itself what drops `cricket.retire` from the More
+ * sheet. That is the same mechanism the old `{swap:true}` tile could NOT
+ * trigger, which is precisely how the two divergent entry points arose.
+ *
+ * `incoming` is deliberately NOT asked. The engine's own payload marks it
+ * optional and defaults it to the next batter in the order
+ * (`CricketRetire`), which is the ordinary case, so asking would add a tap
+ * to every retirement to restate what the fold already knows — the same
+ * "never re-ask what the fold already knows" rule the chassis is built on,
+ * and the same fewer-taps-on-the-common-case trade the R2b dock ruling made.
+ * A sport that later needs an explicit incoming batter adds a third step.
+ *
+ * The crease is `fine.striker`/`fine.nonStriker` — verbatim what the engine
+ * itself checks (`applyRetire`: `"… is not at the crease"`). Empty-string
+ * placeholders are filtered for the same reason `wicketSheet`'s own
+ * `outCandidates` filters them: `resolvePeople` yields `""` before the order
+ * is populated, and `renderCandidateRow` would draw that as a blank button.
+ */
+function retireSheet(view: PadHostView): GuidedSheetSpec {
+  const state = asState(view.state);
+  const cfg = asCfg(view.cfg);
+  const people = resolvePeople(state, view.contextOverrides, cfg);
+  const creaseCandidates = [people.striker, people.nonStriker].filter((id): id is string => id !== "");
+  return {
+    event: "cricket.retire",
+    steps: [
+      {
+        id: "person",
+        kind: "person",
+        title: "pad.cricket.sheet.retire.person.title",
+        pool: "onfield",
+        side: people.battingSide,
+        candidates: creaseCandidates,
+      },
+      {
+        id: "reason",
+        kind: "choice",
+        title: "pad.cricket.sheet.retire.reason.title",
+        options: [
+          { id: "hurt", label: "pad.cricket.sheet.retire.reason.hurt" },
+          { id: "out", label: "pad.cricket.sheet.retire.reason.out" },
+          { id: "other", label: "pad.cricket.sheet.retire.reason.other" },
+        ],
+      },
+    ],
+    buildPayload: (answers) => ({ person: answers.person, reason: answers.reason }),
+  };
+}
+
 function reviewSheet(view: PadHostView): GuidedSheetSpec {
   const squads = view.squads;
   return {
@@ -1925,6 +1981,7 @@ export function buildSheets(view: PadHostView): Record<string, GuidedSheetSpec> 
   return {
     wicket: wicketSheet(view),
     toss: tossSheet(view),
+    retire: retireSheet(view),
     review: reviewSheet(view),
     inningsClose: inningsCloseSheet(),
     overSummary: overSummarySheet(view),

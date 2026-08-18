@@ -3896,6 +3896,7 @@
   "pad.cricket.sheet.wicket.kind.freeHitHint": "Free hit — seuls Run out ou Obstruction du terrain s'appliquent.",
   "pad.cricket.sheet.wicket.who.title": "Qui est éliminé ?",
   "pad.cricket.sheet.wicket.fielder.title": "Joueur de champ",
+  "pad.cricket.sheet.retire.person.title": "Qui se retire ?",
   "pad.cricket.sheet.retire.reason.title": "Pourquoi se retirer ?",
   "pad.cricket.sheet.retire.reason.hurt": "Blessé",
   "pad.cricket.sheet.retire.reason.out": "Éliminé",
