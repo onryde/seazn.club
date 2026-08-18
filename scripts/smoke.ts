@@ -6340,7 +6340,20 @@ async function divisionSettingsSuite(admin: Session): Promise<void> {
  */
 async function scheduleCourtRemovalGuardSuite(): Promise<void> {
   const free = newSession();
-  await signIn(free, `dtx_free_${tag}@example.com`);
+  const freeOrgId = (await signIn(free, `dtx_free_${tag}@example.com`)).org_id;
+  const guardVenue = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${freeOrgId}/venues`, "POST", { name: `Guard Venue ${tag}` }),
+  );
+  const guardCourt1 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${freeOrgId}/venues/${guardVenue.id}/courts`, "POST", {
+      name: "Court 1",
+    }),
+  );
+  const guardCourt2 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${freeOrgId}/venues/${guardVenue.id}/courts`, "POST", {
+      name: "Court 2",
+    }),
+  );
   const comp = v1data<{ id: string }>(
     await v1(free, "/api/v1/competitions", "POST", {
       ends_on: "2030-12-31",
@@ -6382,14 +6395,14 @@ async function scheduleCourtRemovalGuardSuite(): Promise<void> {
         courts,
       },
     });
-  await putCourts(["Court 1", "Court 2"]);
+  await putCourts([guardCourt1.id, guardCourt2.id]);
   await v1(free, `/api/v1/fixtures/${fixtureId}`, "PATCH", {
     scheduled_at: new Date(Date.UTC(2026, 9, 19, 9, 0)).toISOString(),
-    court_label: "Court 2",
+    court_id: guardCourt2.id,
   });
   await v1(free, `/api/v1/fixtures/${fixtureId}`, "PATCH", { schedule_locked: true });
 
-  const refused = await putCourts(["Court 1"]);
+  const refused = await putCourts([guardCourt1.id]);
   const refusedMsg = (refused.json.error as { message?: string } | undefined)?.message ?? "";
   check(
     "schedule court-removal guard: dropping a court with a pinned fixture is refused (409, names the court + reason)",
@@ -6398,7 +6411,7 @@ async function scheduleCourtRemovalGuardSuite(): Promise<void> {
 
   // The control — the identically-shaped save once the fixture is unpinned.
   await v1(free, `/api/v1/fixtures/${fixtureId}`, "PATCH", { schedule_locked: false });
-  const allowed = await putCourts(["Court 1"]);
+  const allowed = await putCourts([guardCourt1.id]);
   check(
     "schedule court-removal guard: the identically-shaped save is allowed once unpinned",
     allowed.status === 200,
@@ -6820,7 +6833,20 @@ async function stageProgressionSuite(): Promise<void> {
  */
 async function scheduleHealthSuite(): Promise<void> {
   const free = newSession();
-  await signIn(free, `dtx_health_${tag}@example.com`);
+  const healthOrgId = (await signIn(free, `dtx_health_${tag}@example.com`)).org_id;
+  const healthVenue = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${healthOrgId}/venues`, "POST", { name: `Health Venue ${tag}` }),
+  );
+  const healthCourt1 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${healthOrgId}/venues/${healthVenue.id}/courts`, "POST", {
+      name: "Court 1",
+    }),
+  );
+  const healthCourt2 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${healthOrgId}/venues/${healthVenue.id}/courts`, "POST", {
+      name: "Court 2",
+    }),
+  );
   const comp = v1data<{ id: string }>(
     await v1(free, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `DTX Health ${tag}` }),
   );
@@ -6858,19 +6884,19 @@ async function scheduleHealthSuite(): Promise<void> {
       endAt: "2026-09-01T23:59:00.000Z",
       matchMinutes: 60,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 2"],
+      courts: [healthCourt1.id, healthCourt2.id],
       perEntrantMinRest: 0,
       sessionWindows: [{ from: "2026-09-01T09:00:00.000Z", to: "2026-09-01T21:00:00.000Z" }],
     },
   });
   const auto = v1data<{
-    assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+    assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
   }>(await v1(free, `/api/v1/stages/${stage.id}/schedule/auto`, "POST", { only_unlocked: true }));
   await v1(free, `/api/v1/stages/${stage.id}/schedule/apply`, "POST", {
     assignments: auto.assignments.map((a) => ({
       fixture_id: a.fixture_id,
       scheduled_at: a.scheduled_at,
-      court_label: a.court_label,
+      court_id: a.court_id,
     })),
     source: "auto",
   });
