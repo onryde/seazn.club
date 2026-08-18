@@ -50,6 +50,97 @@ describe("ICS feed (doc 09 §2)", () => {
     expect(folded).toBeDefined();
     expect(long.split("\r\n").every((l) => l.length <= 74)).toBe(true);
   });
+
+  it("an all-day event emits DATE-typed bounds and TENTATIVE status", () => {
+    const ics = buildIcs("Cup", [
+      { uid: "fix-1", allDayOn: "2026-09-13", summary: "Winner of Group A vs Runner-up of Group B" },
+    ]);
+    expect(ics).toContain("DTSTART;VALUE=DATE:20260913");
+    // RFC 5545 §3.6.1: the DATE-typed DTEND is EXCLUSIVE, so a one-day event
+    // ends on the following day. Ending on the same date renders as zero-length.
+    expect(ics).toContain("DTEND;VALUE=DATE:20260914");
+    expect(ics).toContain("STATUS:TENTATIVE");
+  });
+
+  // Reviewer finding (Minor, public-site.ts:63-67): every all-day DTEND case
+  // above stays mid-month, so nextDay()'s month/year rollover (Date's own
+  // UTC carry, not string arithmetic) was never exercised. Values below were
+  // computed independently with `new Date(...).setUTCDate(...)`, not copied
+  // from a spec.
+  it("all-day DTEND rolls over a month boundary — September has 30 days", () => {
+    const ics = buildIcs("Cup", [{ uid: "fix-1", allDayOn: "2026-09-30", summary: "Final" }]);
+    expect(ics).toContain("DTSTART;VALUE=DATE:20260930");
+    expect(ics).toContain("DTEND;VALUE=DATE:20261001");
+  });
+
+  it("all-day DTEND rolls over a year boundary", () => {
+    const ics = buildIcs("Cup", [{ uid: "fix-1", allDayOn: "2026-12-31", summary: "Final" }]);
+    expect(ics).toContain("DTSTART;VALUE=DATE:20261231");
+    expect(ics).toContain("DTEND;VALUE=DATE:20270101");
+  });
+
+  it("all-day DTEND rolls a leap day into March (2028 is a leap year; 2026 is not)", () => {
+    const ics = buildIcs("Cup", [{ uid: "fix-1", allDayOn: "2028-02-29", summary: "Final" }]);
+    expect(ics).toContain("DTSTART;VALUE=DATE:20280229");
+    expect(ics).toContain("DTEND;VALUE=DATE:20280301");
+  });
+
+  it("a timed event stays timed and is marked confirmed", () => {
+    const ics = buildIcs("Cup", [
+      {
+        uid: "fix-1",
+        start: new Date("2026-09-13T14:00:00Z"),
+        durationMinutes: 90,
+        summary: "Lions vs Tigers",
+      },
+    ]);
+    expect(ics).toContain("DTSTART:20260913T140000Z");
+    expect(ics).toContain("DTEND:20260913T153000Z");
+    expect(ics).toContain("STATUS:CONFIRMED");
+    expect(ics).not.toContain("VALUE=DATE");
+  });
+
+  it("UID is byte-identical across the tentative-to-timed transition", () => {
+    const tentative = buildIcs("Cup", [
+      { uid: "fix-1", allDayOn: "2026-09-13", summary: "Winner of Group A vs Runner-up of Group B" },
+    ]);
+    const timed = buildIcs("Cup", [
+      { uid: "fix-1", start: new Date("2026-09-13T14:00:00Z"), durationMinutes: 90, summary: "Lions vs Tigers" },
+    ]);
+    const uidOf = (s: string) => s.split("\r\n").find((l) => l.startsWith("UID:"));
+    expect(uidOf(tentative)).toBe("UID:fix-1@seazn.club");
+    expect(uidOf(timed)).toBe(uidOf(tentative));
+  });
+
+  // Fix-wave finding 3: DTSTAMP alone can't order the tentative→timed
+  // transition — it's derived from the event's own date, not a wall clock —
+  // so scheduling a fixture BEFORE the placeholder's anchor date moves
+  // DTSTAMP backward. Concretely: a competition ending 2026-09-20 emits the
+  // tentative placeholder with DTSTAMP 20260920T000000Z; the same fixture
+  // scheduled for 2026-09-18 emits the timed event with DTSTAMP
+  // 20260918T100000Z — earlier than the tentative copy. A client ordering
+  // revisions by DTSTAMP would keep the stale "TBD" placeholder over the real
+  // fixture. SEQUENCE fixes this: monotonically increasing across the
+  // transition, independent of any clock. Old code (no SEQUENCE line at all)
+  // fails both `toContain` assertions below.
+  it("SEQUENCE increments across the tentative-to-timed transition, independent of DTSTAMP", () => {
+    const tentative = buildIcs("Cup", [
+      { uid: "fix-1", allDayOn: "2026-09-20", summary: "Winner of Group A vs Runner-up of Group B" },
+    ]);
+    const timed = buildIcs("Cup", [
+      { uid: "fix-1", start: new Date("2026-09-18T10:00:00Z"), durationMinutes: 90, summary: "Lions vs Tigers" },
+    ]);
+    // Confirms the regression scenario itself: DTSTAMP really does move
+    // backward here, so SEQUENCE is doing real work, not guarding a case
+    // that could not otherwise arise.
+    expect(tentative).toContain("DTSTAMP:20260920T000000Z");
+    expect(timed).toContain("DTSTAMP:20260918T100000Z");
+
+    expect(tentative).toContain("SEQUENCE:0");
+    expect(timed).toContain("SEQUENCE:1");
+    const seqOf = (s: string) => Number(s.split("\r\n").find((l) => l.startsWith("SEQUENCE:"))?.slice("SEQUENCE:".length));
+    expect(seqOf(timed)).toBeGreaterThan(seqOf(tentative));
+  });
 });
 
 describe("SportsEvent JSON-LD (doc 09 §3)", () => {

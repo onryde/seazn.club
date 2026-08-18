@@ -13,6 +13,7 @@ import { Zoned } from "@/components/client-time";
 import { routes } from "@/lib/routes";
 import { MarkBadge } from "@/components/officials/mark-badge";
 import { ReportForm } from "@/components/officials/report-form";
+import { resolveSlotLabel } from "@/lib/slot-label";
 import type {
   MyBlackout,
   MyOfficiatingAssignment,
@@ -129,8 +130,9 @@ function CompletedCard({ a }: { a: MyOfficiatingAssignment }) {
     <li className="card space-y-1 border-l-4 border-l-slate-200 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="min-w-0 truncate text-sm text-slate-700">
-          {a.home_name ?? msg("me.tbd")} <span className="text-slate-400">vs</span>{" "}
-          {a.away_name ?? msg("me.tbd")}{" "}
+          {a.home_name ?? resolveSlotLabel(a.home_slot_label, msg, "me.tbd")}{" "}
+          <span className="text-slate-400">vs</span>{" "}
+          {a.away_name ?? resolveSlotLabel(a.away_slot_label, msg, "me.tbd")}{" "}
           <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] capitalize text-slate-500">
             {msg("me.off.role", { role: a.role_key })}
           </span>
@@ -265,8 +267,9 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-slate-800">
-            {a.home_name ?? msg("me.tbd")} <span className="text-slate-400">vs</span>{" "}
-            {a.away_name ?? msg("me.tbd")}{" "}
+            {a.home_name ?? resolveSlotLabel(a.home_slot_label, msg, "me.tbd")}{" "}
+            <span className="text-slate-400">vs</span>{" "}
+            {a.away_name ?? resolveSlotLabel(a.away_slot_label, msg, "me.tbd")}{" "}
             <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] capitalize text-slate-500">
               {msg("me.off.role", { role: a.role_key })}
             </span>

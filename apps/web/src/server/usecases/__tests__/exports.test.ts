@@ -18,6 +18,7 @@ import {
   buildMyRotaDoc,
 } from "../exports";
 import { docModelToPdf, docModelToXlsx } from "@/server/doc-render";
+import { msgFor } from "@/lib/messages-i18n";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -436,5 +437,468 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
       printedAt: PRINTED,
     });
     expect(model.bracket!.roundLabels).toEqual(["Quarter-finals", "Semi-finals", "Final"]);
+  });
+
+  // F4/Task 1: the exported draw used to coalesce unfilled slots to the SQL
+  // literal 'TBD' and never selected home_slot_label/away_slot_label, so a
+  // printed day-one timetable said "TBD vs TBD" while every HTML surface
+  // already said "Winner of Group A" for the identical fixture.
+  it("a placeholder fixture exports its slot label, not TBD", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures } = await seedDivision(auth);
+    // Force an unfilled, labeled slot directly (same pattern as
+    // public-slot-labels.test.ts) — how it got there in production is P5's
+    // stage-seeding.ts, which is out of scope here; this proves the export
+    // READ path resolves whatever it finds.
+    await sql`
+      update fixtures
+      set home_slot_label = ${sql.json({ key: "slot.winner_group", params: { g: "A" } })},
+          away_slot_label = ${sql.json({ key: "slot.runner_up_group", params: { g: "B" } })},
+          home_entrant_id = null, away_entrant_id = null
+      where id = ${fixtures[0]!.id}`;
+    const model = await buildDivisionDocModel(auth, division.id, "timetable", {
+      printedAt: PRINTED,
+    });
+    const text = JSON.stringify(model);
+    expect(text).toContain("Winner of Group A");
+    expect(text).toContain("Runner-up of Group B");
+    // Regression, fixed round 1 (reviewer): `home`/`away` serialize as
+    // separate table cells for the "timetable" kind (fixtureRows() in
+    // engine/exports/build.ts never joins them into one "X vs Y" string —
+    // that only happens for the officials-rota/my-rota "opponents" field),
+    // so a substring probe for "TBD vs TBD" is vacuous here: that exact
+    // shape can never appear in this doc kind's JSON even when the fallback
+    // is completely broken. Assert on the actual row instead — BOTH cells
+    // of the placeholder fixture's row must carry the resolved label, not
+    // the literal TBD text a half-applied fix would leave on one side.
+    // Cells are [time, court, home, result-or-"vs", away, stage] (see
+    // TIMETABLE_COLUMNS/fixtureRows() in engine/exports/build.ts) — scoped
+    // to indices 2/4 specifically, NOT the whole row: this fixture has no
+    // scheduled_at, so cell 0 (time) legitimately reads "TBD" too, via
+    // timeOf()'s own unrelated fallback, and would false-positive a
+    // whole-row check.
+    const row = model.sections
+      .flatMap((s) => s.table?.rows ?? [])
+      .find((r) => r.includes("Winner of Group A") || r.includes("Runner-up of Group B"));
+    expect(row).toEqual(expect.arrayContaining(["Winner of Group A", "Runner-up of Group B"]));
+    expect(row?.[2]).not.toBe(msgFor("en", "schedule.tbd"));
+    expect(row?.[4]).not.toBe(msgFor("en", "schedule.tbd"));
+  });
+
+  it("a filled fixture still exports entrant names", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures } = await seedDivision(auth);
+    const [names] = await sql<{ home_label: string | null; away_label: string | null }[]>`
+      select he.display_name as home_label, ae.display_name as away_label
+      from fixtures f
+      left join entrants he on he.id = f.home_entrant_id
+      left join entrants ae on ae.id = f.away_entrant_id
+      where f.id = ${fixtures[0]!.id}`;
+    // A league's round-1 fixtures are filled from creation — sanity-check the
+    // arrangement actually gives this test real entrant names to look for.
+    expect(names?.home_label).toBeTruthy();
+    expect(names?.away_label).toBeTruthy();
+    const model = await buildDivisionDocModel(auth, division.id, "timetable", {
+      printedAt: PRINTED,
+    });
+    const text = JSON.stringify(model);
+    expect(text).toContain(names!.home_label!);
+    expect(text).toContain(names!.away_label!);
+  });
+
+  it("a fixture with neither entrant nor label falls back to localized TBD", async () => {
+    const { auth } = await seedOrg();
+    // org.default_locale = 'fr' for this org; fr's schedule.tbd is not the
+    // English literal, which is what proves the lookup is wired to the org.
+    await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+    const { division, fixtures } = await seedDivision(auth);
+    await sql`
+      update fixtures
+      set home_entrant_id = null, home_slot_label = null,
+          away_entrant_id = null, away_slot_label = null
+      where id = ${fixtures[0]!.id}`;
+    const model = await buildDivisionDocModel(auth, division.id, "timetable", {
+      printedAt: PRINTED,
+    });
+    expect(JSON.stringify(model)).toContain(msgFor("fr", "schedule.tbd"));
+  });
+
+  // Fix round 1 (reviewer, Important): the "scoresheet" case arm's own
+  // resolveSlotLabel fallback (exports.ts, forced by Task 1's FixtureExportRow
+  // nullability change — the generic sport has no exportTemplates.scoresheet,
+  // so this exercises the `heading`/`signatures` fallback path directly) had
+  // zero coverage. scoresheet-per-pitch.test.ts only ever exercises filled
+  // fixtures — tsc-clean plus that suite staying green was never evidence the
+  // branch actually resolves.
+  it("a placeholder fixture's scoresheet shows its slot label in the heading and signatures", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures } = await seedDivision(auth);
+    await sql`
+      update fixtures
+      set home_slot_label = ${sql.json({ key: "slot.winner_group", params: { g: "A" } })},
+          away_slot_label = ${sql.json({ key: "slot.runner_up_group", params: { g: "B" } })},
+          home_entrant_id = null, away_entrant_id = null
+      where id = ${fixtures[0]!.id}`;
+    const model = await buildDivisionDocModel(auth, division.id, "scoresheet", {
+      printedAt: PRINTED,
+    });
+    const section = model.sections.find((s) => s.heading?.includes("Winner of Group A"));
+    expect(section).toBeTruthy();
+    expect(section!.heading).toBe("Winner of Group A vs Runner-up of Group B");
+    expect(section!.signatures).toEqual(
+      expect.arrayContaining(["Captain — Winner of Group A", "Captain — Runner-up of Group B"]),
+    );
+  });
+
+  // F4/Task 2: officialDutyRows joined entrants only, and the rota assembly
+  // loop applied `?? "TBD"` in TypeScript — an official handed a rota for a
+  // knockout day saw "TBD vs TBD" for every unfilled match.
+  it("the officials rota shows slot labels for unfilled fixtures", async () => {
+    const { auth } = await seedOrg("pro");
+    const { division, fixtures } = await seedDivision(auth);
+    await sql`
+      update fixtures
+      set home_slot_label = ${sql.json({ key: "slot.winner_group", params: { g: "A" } })},
+          away_slot_label = ${sql.json({ key: "slot.runner_up_group", params: { g: "B" } })},
+          home_entrant_id = null, away_entrant_id = null,
+          status = 'scheduled'
+      where id = ${fixtures[0]!.id}`;
+    const [{ id: officialId }] = await sql<{ id: string }[]>`
+      insert into officials (org_id, display_name) values (${auth.orgId}, 'Sam Ref')
+      returning id`;
+    await sql`
+      insert into fixture_officials (fixture_id, official_id, role_key, response)
+      values (${fixtures[0]!.id}, ${officialId}, 'referee', 'accepted')`;
+
+    const model = await buildOfficialsRotaDoc(auth, division.id, {
+      printedAt: PRINTED,
+    });
+    const text = JSON.stringify(model);
+    expect(text).toContain("Winner of Group A vs Runner-up of Group B");
+    expect(text).not.toContain("TBD vs TBD");
+  });
+
+  // F4/Task 3: buildMyRotaDoc reads getMyOfficiating(userId), which selected
+  // entrant names only — cross-org and SEAZN-neutral, so there is no single
+  // org locale and each row must carry its own.
+  //
+  // Fix-wave finding 4: this test used to assert only the ENGLISH slot-label
+  // string, which stays byte-identical whether buildMyRotaDoc's per-duty
+  // lookup is exportLookup(a.org_default_locale) (correct) or a
+  // mutated exportLookup("en") (the headline bug this test exists to catch)
+  // — a French-locale org is the only way "localized per owning org" is
+  // actually exercised, mirroring the fr bracket tests elsewhere in this
+  // file (e.g. "bracket export names knockout rounds in French…" above).
+  it("my rota shows slot labels, localized per owning org", async () => {
+    const { auth } = await seedOrg("pro");
+    await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+    const { fixtures } = await seedDivision(auth);
+    await sql`
+      update fixtures
+      set home_slot_label = ${sql.json({ key: "slot.winner_group", params: { g: "A" } })},
+          away_slot_label = ${sql.json({ key: "slot.runner_up_group", params: { g: "B" } })},
+          home_entrant_id = null, away_entrant_id = null,
+          status = 'scheduled'
+      where id = ${fixtures[0]!.id}`;
+
+    // Linked official (same pattern as "Task 14: buildMyRotaDoc is scoped to
+    // the caller" above): a real users/persons/officials chain so
+    // getMyOfficiating(userId) can find the assignment cross-org.
+    const suffix = randomUUID().slice(0, 8);
+    const [{ id: userId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified)
+      values (${`rota-${suffix}@test.local`}, 'Rota Official', true)
+      returning id`;
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, user_id)
+      values (${auth.orgId}, 'Rota Official', ${userId}) returning id`;
+    const [{ id: officialId }] = await sql<{ id: string }[]>`
+      insert into officials (org_id, person_id, display_name)
+      values (${auth.orgId}, ${personId}, 'Rota Official') returning id`;
+    await sql`
+      insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
+      values (${auth.orgId}, ${fixtures[0]!.id}, ${officialId}, 'referee', 'accepted')`;
+
+    const model = await buildMyRotaDoc(userId, { printedAt: PRINTED });
+    const text = JSON.stringify(model);
+    // fr's own translated strings (dictionaries/fr/ui.json) — "Vainqueur du
+    // Groupe A vs Deuxième du Groupe B" — not the English literal. Old code
+    // (exportLookup("en")) can only ever produce the English string here,
+    // regardless of the org's default_locale, so this fails against it.
+    expect(text).toContain(
+      `${msgFor("fr", "slot.winner_group", { g: "A" })} vs ${msgFor("fr", "slot.runner_up_group", { g: "B" })}`,
+    );
+    expect(text).not.toContain("Winner of Group A vs Runner-up of Group B");
+    expect(text).not.toContain("TBD vs TBD");
+  });
+
+  // NEW SCOPE (owner-approved): the bracket poster arm runs its OWN fixture
+  // query and never went through exportFixtures, which is why wave A missed
+  // it. For a knockout division the bracket poster IS the day-one printed
+  // draw — the single most valuable artifact this whole session exists to
+  // produce.
+  it("a placeholder slot in the bracket poster resolves its label, not a blank", async () => {
+    const { auth } = await seedOrg();
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Bracket Poster Cup",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    await createEntrants(
+      auth,
+      division.id,
+      Array.from({ length: 8 }, (_, i) => ({
+        kind: "individual" as const,
+        display_name: `E${i + 1}`,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "knockout",
+      name: "KO",
+      config: {},
+    });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    // Force one slot into an unfilled, labeled state directly (same pattern
+    // as Task 1/2/3) — proves the READ path resolves whatever it finds,
+    // independent of how a real knockout naturally seeds later rounds.
+    await sql`
+      update fixtures
+      set home_slot_label = ${sql.json({ key: "slot.winner_group", params: { g: "A" } })},
+          away_slot_label = ${sql.json({ key: "slot.runner_up_group", params: { g: "B" } })},
+          home_entrant_id = null, away_entrant_id = null
+      where id = ${fixtures[0]!.id}`;
+    const model = await buildDivisionDocModel(auth, division.id, "bracket", {
+      printedAt: PRINTED,
+    });
+    const text = JSON.stringify(model);
+    expect(text).toContain("Winner of Group A");
+    expect(text).toContain("Runner-up of Group B");
+  });
+
+  it("bracket poster chrome is localized for a French org, not the English literal", async () => {
+    const { auth } = await seedOrg("pro"); // formats.double_elim is Pro-gated
+    await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Bracket Poster Cup FR",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    await createEntrants(
+      auth,
+      division.id,
+      Array.from({ length: 8 }, (_, i) => ({
+        kind: "individual" as const,
+        display_name: `E${i + 1}`,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "double_elim",
+      name: "DE",
+      config: { bracketReset: true },
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const model = await buildDivisionDocModel(auth, division.id, "bracket", {
+      printedAt: PRINTED,
+    });
+    const text = JSON.stringify(model);
+    // "Tableau principal" is fr's bracket.winners (bracket-panel.tsx and
+    // public-site/bracket.tsx already render it for the live HTML lane
+    // header) — proves the poster's chrome is wired to the org's own
+    // locale via a real, already-translated key, not English left in.
+    expect(text).toContain("Tableau principal");
+    expect(text).not.toContain("Winners bracket");
+  });
+
+  // F4 wave-A re-review, Gap 1 (exports.ts:569): the knockout round-name
+  // callback moved from the client-safe English-default `msg` (@/lib/messages)
+  // onto the org-locale `slotLookup`. Every existing buildBracket-reaching
+  // test — including "bracket export names rounds via the injected roundRole
+  // wiring" above — runs against a DEFAULT ENGLISH org, where old `msg` and
+  // new `slotLookup` resolve to byte-identical strings (both ultimately read
+  // en/ui.json for an English org), so the wiring change was code-correct but
+  // test-unproven: it could have been silently reverted to `msg` and nothing
+  // here would fail. The double_elim French test directly above only reaches
+  // buildBracketDe's laneLabels — this one reaches buildBracket/
+  // roundRoleLabel, the knockout-only path the F1 Task 4 comment describes.
+  // Old code (msg, English-only regardless of locale) could only ever have
+  // produced ["Quarter-finals", "Semi-finals", "Final"] here — verified by
+  // temporarily reverting the callsite by hand (report has the red-run
+  // evidence) — so this assertion fails against it and passes against the
+  // current slotLookup wiring.
+  it("bracket export names knockout rounds in French for a French-locale org", async () => {
+    const { auth } = await seedOrg();
+    await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Print Cup FR KO",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    await createEntrants(
+      auth,
+      division.id,
+      Array.from({ length: 8 }, (_, i) => ({
+        kind: "individual" as const,
+        display_name: `E${i + 1}`,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "knockout",
+      name: "KO",
+      config: {},
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const model = await buildDivisionDocModel(auth, division.id, "bracket", {
+      printedAt: PRINTED,
+    });
+    // fr's bracket.round.quarter/semi/final — dictionaries/fr/ui.json:3947-3949.
+    expect(model.bracket!.roundLabels).toEqual(["Quarts de finale", "Demi-finales", "Finale"]);
+  });
+
+  // F4 wave-A re-review, Gap 2 (exports.ts:532-541): the page_playoff arm
+  // moved from hardcoded English literals ("Qualifier 1"/"Eliminator"/
+  // "Qualifier 2"/"Final", never routed through msg() at all per e3a322e5a's
+  // commit message) to slotLookup, and no test built a bracket doc for a
+  // page_playoff stage at all — zero prior coverage, English or otherwise.
+  // en's bracket.round.qualifier1/eliminator/qualifier2/final are
+  // byte-identical to those old hardcoded literals (dictionaries/en/ui.json:
+  // 3956-3959), so an English-org test would pass unchanged against the
+  // pre-Wave-A code and prove nothing about the slotLookup wiring — French is
+  // what makes this assertion capable of failing against the old code.
+  it("bracket export names page-playoff rounds in French for a French-locale org", async () => {
+    const { auth } = await seedOrg("pro"); // shares double_elim's Pro gate — stageNeedsDoubleElimGate(page_playoff) === true
+    await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Print Cup FR PP",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    // generatePagePlayoff (packages/engine/src/scheduling/bracket.ts) throws
+    // CONFIG_INVALID unless entrants.length === 4 — the format is a fixed
+    // 4-team IPL-style shape (Q1/Eliminator/Q2/Final), not parametric.
+    await createEntrants(
+      auth,
+      division.id,
+      Array.from({ length: 4 }, (_, i) => ({
+        kind: "individual" as const,
+        display_name: `E${i + 1}`,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "page_playoff",
+      name: "Playoffs",
+      config: {},
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const model = await buildDivisionDocModel(auth, division.id, "bracket", {
+      printedAt: PRINTED,
+    });
+    expect(model.pagePlayoff!.slotLabels).toEqual({
+      q1: "Qualification 1",
+      eliminator: "Éliminateur",
+      q2: "Qualification 2",
+      final: "Finale",
+    });
+  });
+
+  // F4 wave-A re-review, Gap 2 (exports.ts:543-552): same story as
+  // page_playoff above — the stepladder arm moved from a hardcoded
+  // `` `Rung ${i + 1}` ``/"Final" template (never through msg()) to
+  // slotLookup, with zero prior coverage of a stepladder bracket doc. en's
+  // bracket.round.rung/final are again byte-identical to the old hardcoded
+  // strings, so French is what makes this assertion capable of failing
+  // against the old code.
+  it("bracket export names stepladder rungs in French for a French-locale org", async () => {
+    const { auth } = await seedOrg(); // stepladder is NOT gated (format-gates.test.ts)
+    await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Print Cup FR SL",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    // generateStepladder (packages/engine/src/scheduling/bracket.ts) accepts
+    // any k >= 2 entrants; 4 gives 3 rungs (two climb games + a final), enough
+    // to prove both the `rung` and `final` labels in one doc.
+    await createEntrants(
+      auth,
+      division.id,
+      Array.from({ length: 4 }, (_, i) => ({
+        kind: "individual" as const,
+        display_name: `E${i + 1}`,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "stepladder",
+      name: "Stepladder",
+      config: {},
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const model = await buildDivisionDocModel(auth, division.id, "bracket", {
+      printedAt: PRINTED,
+    });
+    expect(model.ladder!.rungs.map((r) => r.label)).toEqual([
+      "Échelon 1",
+      "Échelon 2",
+      "Finale",
+    ]);
   });
 });

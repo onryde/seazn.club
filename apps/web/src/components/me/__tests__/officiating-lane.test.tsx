@@ -24,6 +24,9 @@ function makeAssignment(overrides: Partial<MyOfficiatingAssignment> = {}): MyOff
     sport_key: "football",
     home_name: "Home FC",
     away_name: "Away FC",
+    home_slot_label: null,
+    away_slot_label: null,
+    org_default_locale: "en",
     scheduled_at: null,
     venue_tz: null,
     venue: null,
@@ -188,5 +191,39 @@ describe("OfficiatingLane — completed matches panel", () => {
       <OfficiatingLane isOfficial assignments={[]} completed={[]} blackouts={[]} pendingClaims={[]} />,
     );
     expect(html).not.toContain("Completed matches");
+  });
+});
+
+// Fix-wave finding 1: F4 selected home_slot_label/away_slot_label into
+// MyOfficiatingAssignment and resolved them on the export path (buildMyRotaDoc),
+// but this component still printed `a.home_name ?? msg("me.tbd")` — the data
+// reached the component and was left unread. Old code (pre-fix) could only
+// ever render "TBD" for both sides here; these fail against it.
+describe("OfficiatingLane — day-one placeholder slot labels (fix-wave finding 1)", () => {
+  const placeholder = {
+    home_name: null,
+    away_name: null,
+    home_slot_label: { key: "slot.winner_group", params: { g: "A" } },
+    away_slot_label: { key: "slot.runner_up_group", params: { g: "B" } },
+  } as const;
+
+  it("an outstanding assignment card resolves a placeholder slot label, not TBD", () => {
+    const a = makeAssignment({ fixture_status: "scheduled", ...placeholder });
+    const html = renderToStaticMarkup(
+      <OfficiatingLane isOfficial assignments={[a]} completed={[]} blackouts={[]} pendingClaims={[]} />,
+    );
+    expect(html).toContain("Winner of Group A");
+    expect(html).toContain("Runner-up of Group B");
+    expect(html).not.toContain("TBD");
+  });
+
+  it("a completed-panel card resolves a placeholder slot label, not TBD", () => {
+    const done = makeAssignment({ fixture_status: "decided", ...placeholder });
+    const html = renderToStaticMarkup(
+      <OfficiatingLane isOfficial assignments={[]} completed={[done]} blackouts={[]} pendingClaims={[]} />,
+    );
+    expect(html).toContain("Winner of Group A");
+    expect(html).toContain("Runner-up of Group B");
+    expect(html).not.toContain("TBD");
   });
 });

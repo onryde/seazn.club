@@ -26,7 +26,6 @@ import {
 } from "@seazn/engine/exports";
 import { roundRole, type StandingsRow } from "@seazn/engine/competition";
 import { roundRoleLabel } from "@/lib/round-role-label";
-import { msg } from "@/lib/messages";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
@@ -40,8 +39,24 @@ import { resolveSponsors } from "./sponsors";
 import { getMyOfficiating } from "./me-officiating";
 import { eventRecorderNames, type AuditLedger } from "./fixtures";
 import { siteOrigin } from "@/lib/site-origin";
+import { toLocale } from "@/lib/i18n-constants";
+import { msgFor } from "@/lib/messages-i18n";
+import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
 type Tx = postgres.TransactionSql;
+
+/** Copy locale for a document nobody is "viewing".
+ *
+ *  An exported PDF is printed and pinned to a wall, or mailed to clubs — it
+ *  has no single reader whose cookie could be consulted, so it uses the org's
+ *  own default locale. This mirrors `calendar.ics/route.ts:32-33` exactly;
+ *  the reasoning is recorded at that file's :24-30 and is the same reasoning
+ *  here. Do NOT swap this for resolveLocale(). */
+function exportLookup(defaultLocale: string): SlotLabelLookup {
+  const locale = toLocale(defaultLocale);
+  return (key, vars) => msgFor(locale, key, vars);
+}
 
 export interface ExportOpts {
   pageBreaks?: PageBreaks;
@@ -56,6 +71,7 @@ interface DivisionMeta {
   org_id: string;
   org_name: string;
   org_slug: string;
+  default_locale: string;
   competition_id: string;
   competition_name: string;
   comp_slug: string;
@@ -70,6 +86,7 @@ interface DivisionMeta {
 async function divisionMeta(tx: Tx, divisionId: string): Promise<DivisionMeta> {
   const [row] = await tx<DivisionMeta[]>`
     select d.id, d.name, d.org_id, org.name as org_name, org.slug as org_slug,
+           org.default_locale,
            d.competition_id, c.name as competition_name, c.slug as comp_slug,
            c.visibility, d.slug as div_slug,
            c.branding, d.sport_key, d.module_version, d.config
@@ -194,8 +211,10 @@ interface FixtureExportRow {
   court_label: string | null;
   round_no: number | null;
   stage_name: string;
-  home_label: string;
-  away_label: string;
+  home_label: string | null;
+  away_label: string | null;
+  home_slot_label: SlotLabel | null;
+  away_slot_label: SlotLabel | null;
   home_color: string | null;
   away_color: string | null;
   summary: { sides?: { line: string }[] } | null;
@@ -206,8 +225,9 @@ async function exportFixtures(tx: Tx, divisionId: string): Promise<FixtureExport
   return tx<FixtureExportRow[]>`
     select f.id, f.scheduled_at::text as scheduled_at, f.court_label, f.round_no,
            s.name as stage_name,
-           coalesce(he.display_name, 'TBD') as home_label,
-           coalesce(ae.display_name, 'TBD') as away_label,
+           he.display_name as home_label,
+           ae.display_name as away_label,
+           f.home_slot_label, f.away_slot_label,
            htd.colors->>'primary' as home_color,
            atd.colors->>'primary' as away_color,
            m.summary, f.status
@@ -222,7 +242,11 @@ async function exportFixtures(tx: Tx, divisionId: string): Promise<FixtureExport
     order by s.seq, f.round_no, f.seq_in_round`;
 }
 
-function toExportFixture(f: FixtureExportRow, divisionName: string): ExportFixture {
+function toExportFixture(
+  f: FixtureExportRow,
+  divisionName: string,
+  lookup: SlotLabelLookup,
+): ExportFixture {
   const sides = f.summary?.sides;
   return {
     id: f.id,
@@ -230,8 +254,10 @@ function toExportFixture(f: FixtureExportRow, divisionName: string): ExportFixtu
     court: f.court_label,
     stageName: f.stage_name,
     round: f.round_no,
-    home: f.home_label,
-    away: f.away_label,
+    // A filled side wins; an empty one falls back to its placeholder label,
+    // and only a side with neither reaches the localized TBD.
+    home: f.home_label ?? resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd"),
+    away: f.away_label ?? resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd"),
     ...(f.home_color !== null ? { homeColor: f.home_color } : {}),
     ...(f.away_color !== null ? { awayColor: f.away_color } : {}),
     divisionName,
@@ -271,6 +297,7 @@ export async function buildDivisionDocModel(
   const participants = kind === "participants" ? await participantRows(auth, { divisionId }) : null;
   return withTenant(auth.orgId, async (tx) => {
     const meta = await divisionMeta(tx, divisionId);
+    const slotLookup = exportLookup(meta.default_locale);
     const branding = layerDivisionBranding(baseBranding, meta);
     const title = `${meta.competition_name} — ${meta.name}`;
     const common = {
@@ -286,7 +313,7 @@ export async function buildDivisionDocModel(
     switch (kind) {
       case "timetable": {
         const fixtures = await exportFixtures(tx, divisionId);
-        return buildTimetable(title, fixtures.map((f) => toExportFixture(f, meta.name)), {
+        return buildTimetable(title, fixtures.map((f) => toExportFixture(f, meta.name, slotLookup)), {
           ...common,
           ...(liveUrl !== undefined ? { liveUrl } : {}),
         });
@@ -389,9 +416,16 @@ export async function buildDivisionDocModel(
           // than at a section index — indexing sections against the fixture
           // list reads courts off the wrong fixture as soon as one does.
           const firstSection = sections.length;
+          // Same fallback chain as toExportFixture: a filled side wins, an
+          // empty one falls back to its placeholder label. ScoresheetInput.home
+          // is a required string ("TBD feeds arrive pre-rendered" per its own
+          // doc comment) — home_label/away_label are nullable now that the SQL
+          // coalesce is gone, so this resolution can't be skipped here either.
+          const homeLabel = f.home_label ?? resolveSlotLabel(f.home_slot_label, slotLookup, "schedule.tbd");
+          const awayLabel = f.away_label ?? resolveSlotLabel(f.away_slot_label, slotLookup, "schedule.tbd");
           const input = {
-            home: f.home_label,
-            away: f.away_label,
+            home: homeLabel,
+            away: awayLabel,
             ...(f.home_color !== null ? { homeColor: f.home_color } : {}),
             ...(f.away_color !== null ? { awayColor: f.away_color } : {}),
             ...(f.scheduled_at !== null ? { at: f.scheduled_at } : {}),
@@ -405,12 +439,12 @@ export async function buildDivisionDocModel(
           } else {
             // sport without a bespoke sheet: a generic result form
             sections.push({
-              heading: `${f.home_label} vs ${f.away_label}`,
+              heading: `${homeLabel} vs ${awayLabel}`,
               subheading: [f.scheduled_at, f.court_label, f.stage_name]
                 .filter((x): x is string => x !== null)
                 .join(" · "),
               formLines: ["Result: ________________", "Notes: ________________"],
-              signatures: ["Referee", `Captain — ${f.home_label}`, `Captain — ${f.away_label}`],
+              signatures: ["Referee", `Captain — ${homeLabel}`, `Captain — ${awayLabel}`],
             });
           }
           const start = sections[firstSection];
@@ -441,10 +475,12 @@ export async function buildDivisionDocModel(
           {
             id: string; round_no: number; seq_in_round: number;
             home_entrant_id: string | null; away_entrant_id: string | null;
+            home_slot_label: SlotLabel | null; away_slot_label: SlotLabel | null;
             outcome: unknown; headline: string | null;
           }[]
         >`
           select f.id, f.round_no, f.seq_in_round, f.home_entrant_id, f.away_entrant_id,
+                 f.home_slot_label, f.away_slot_label,
                  f.outcome, ms.summary->>'headline' as headline
           from fixtures f
           left join match_states ms on ms.fixture_id = f.id
@@ -460,37 +496,77 @@ export async function buildDivisionDocModel(
           id: f.id,
           round_no: f.round_no,
           seq_in_round: f.seq_in_round,
-          home: f.home_entrant_id ? (nameById.get(f.home_entrant_id) ?? null) : null,
-          away: f.away_entrant_id ? (nameById.get(f.away_entrant_id) ?? null) : null,
+          // A filled side wins; an empty one falls back to its placeholder
+          // label — same fallback chain as toExportFixture/the scoresheet
+          // loop, but "bracket.tbd" is THIS surface's own established
+          // fallback key: bracket-panel.tsx, public-site/bracket.tsx and
+          // slideshow.tsx already resolve every other bracket-shaped view
+          // through it, never schedule.tbd. `nameById.get(...) ?? null`
+          // (entrant_id set but the name lookup somehow missed) is left as
+          // a bare null on purpose — that is a data-integrity edge case,
+          // not a day-one placeholder, and out of this scope.
+          home: f.home_entrant_id
+            ? (nameById.get(f.home_entrant_id) ?? null)
+            : resolveSlotLabel(f.home_slot_label, slotLookup, "bracket.tbd"),
+          away: f.away_entrant_id
+            ? (nameById.get(f.away_entrant_id) ?? null)
+            : resolveSlotLabel(f.away_slot_label, slotLookup, "bracket.tbd"),
           headline: f.headline,
           decided: f.outcome !== null,
         }));
         const buildOpts = { ...common, ...(liveUrl !== undefined ? { liveUrl } : {}) };
         if (stage.kind === "double_elim") {
           return buildBracketDe(title, exportFixtures, {
-            winners: "Winners bracket", losers: "Losers bracket",
-            grandFinal: "Grand final", reset: "Reset",
+            // bracket.winners/losers/grandFinal/reset are the SAME keys
+            // bracket-panel.tsx and public-site/bracket.tsx already render
+            // for the live double-elim lane headers — reused rather than
+            // duplicated under a new bracket.poster.* prefix, so the
+            // printed poster and the live page say the exact same word in
+            // every locale instead of drifting onto a second vocabulary.
+            winners: slotLookup("bracket.winners"),
+            losers: slotLookup("bracket.losers"),
+            grandFinal: slotLookup("bracket.grandFinal"),
+            reset: slotLookup("bracket.reset"),
           }, buildOpts);
         }
         if (stage.kind === "page_playoff") {
           return buildPagePoster(title, exportFixtures, {
-            q1: "Qualifier 1", eliminator: "Eliminator", q2: "Qualifier 2", final: "Final",
+            // Same reuse: these are the exact round-name keys
+            // roundRoleLabel() already resolves for qualifier1/eliminator/
+            // qualifier2/final everywhere else in the product.
+            q1: slotLookup("bracket.round.qualifier1"),
+            eliminator: slotLookup("bracket.round.eliminator"),
+            q2: slotLookup("bracket.round.qualifier2"),
+            final: slotLookup("bracket.round.final"),
           }, { ...buildOpts, description: "The Page playoffs — the top two get a second chance." });
         }
         if (stage.kind === "stepladder") {
-          return buildLadderPoster(title, exportFixtures, (i) => (i === exportFixtures.length - 1 ? "Final" : `Rung ${i + 1}`), buildOpts);
+          return buildLadderPoster(
+            title,
+            exportFixtures,
+            (i) =>
+              i === exportFixtures.length - 1
+                ? slotLookup("bracket.round.final")
+                : slotLookup("bracket.round.rung", { n: i + 1 }),
+            buildOpts,
+          );
         }
-        // F1 Task 4: buildBracket takes the round-name resolution as an
-        // injected callback now (the engine cannot carry English) -- same
-        // client-safe msg() default the sibling calls above (laneLabels,
-        // Page-playoff/ladder labels) already use, since this export
-        // surface has never been locale-aware.
+        // F1 Task 4 / F4 bracket-poster scope (owner-approved): buildBracket
+        // takes the round-name resolution as an injected callback — the
+        // engine cannot carry English (round-role.ts's header). This whole
+        // case arm used to pass hardcoded English text directly (the
+        // laneLabels/Page-playoff/ladder chrome above were raw string
+        // literals, not even routed through msg()) because "this export
+        // surface has never been locale-aware". Wave A made the rest of the
+        // export path locale-aware, so the bracket poster's chrome and round
+        // names now resolve through the same org-locale slotLookup instead
+        // of the client-safe English default.
         return buildBracket(
           title,
           exportFixtures,
           (fromEnd) =>
             roundRoleLabel(
-              msg,
+              slotLookup,
               roundRole({
                 stageKind: "knockout",
                 lane: null,
@@ -526,17 +602,21 @@ export async function buildCompetitionTimetable(
     ? await orgBranding(compRef.org_id, compRef.org_name, competitionId)
     : undefined;
   return withTenant(auth.orgId, async (tx) => {
-    const [comp] = await tx<{ name: string; org_id: string; org_name: string }[]>`
-      select c.name, c.org_id, org.name as org_name
+    const [comp] = await tx<{ name: string; org_id: string; org_name: string; default_locale: string }[]>`
+      select c.name, c.org_id, org.name as org_name, org.default_locale
       from competitions c join organizations org on org.id = c.org_id
       where c.id = ${competitionId}`;
     if (!comp) throw new HttpError(404, "competition not found");
+    // Own org row, own lookup — this function reads a different meta row than
+    // divisionMeta (a competition can outlive/outspan any one division), so it
+    // cannot reuse buildDivisionDocModel's slotLookup.
+    const slotLookup = exportLookup(comp.default_locale);
     const divisions = await tx<{ id: string; name: string }[]>`
       select id, name from divisions where competition_id = ${competitionId} order by name`;
     const all: ExportFixture[] = [];
     for (const d of divisions) {
       const fixtures = await exportFixtures(tx, d.id);
-      all.push(...fixtures.map((f) => toExportFixture(f, d.name)));
+      all.push(...fixtures.map((f) => toExportFixture(f, d.name, slotLookup)));
     }
     return buildTimetable(comp.name, all, {
       printedAt: opts.printedAt,
@@ -561,6 +641,8 @@ interface OfficialDutyRow {
   response: "pending" | "accepted" | "declined";
   home: string | null;
   away: string | null;
+  home_slot_label: SlotLabel | null;
+  away_slot_label: SlotLabel | null;
 }
 
 async function officialDutyRows(tx: Tx, divisionId: string): Promise<OfficialDutyRow[]> {
@@ -569,7 +651,8 @@ async function officialDutyRows(tx: Tx, divisionId: string): Promise<OfficialDut
            f.scheduled_at::text as scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz, f.court_label,
            c.name as comp_name, d.name as div_name,
            fo.role_key, fo.response,
-           h.display_name as home, a.display_name as away
+           h.display_name as home, a.display_name as away,
+           f.home_slot_label, f.away_slot_label
     from fixture_officials fo
     join officials o on o.id = fo.official_id
     join fixtures f on f.id = fo.fixture_id
@@ -601,6 +684,7 @@ export async function buildOfficialsRotaDoc(
     : undefined;
   return withTenant(auth.orgId, async (tx) => {
     const meta = await divisionMeta(tx, divisionId);
+    const slotLookup = exportLookup(meta.default_locale);
     const branding = layerDivisionBranding(baseBranding, meta);
     const rows = await officialDutyRows(tx, divisionId);
     const byOfficial = new Map<string, ExportOfficialSchedule>();
@@ -611,7 +695,7 @@ export async function buildOfficialsRotaDoc(
         court: r.court_label,
         compDivision: `${r.comp_name} · ${r.div_name}`,
         role: r.role_key,
-        opponents: `${r.home ?? "TBD"} vs ${r.away ?? "TBD"}`,
+        opponents: `${r.home ?? resolveSlotLabel(r.home_slot_label, slotLookup, "schedule.tbd")} vs ${r.away ?? resolveSlotLabel(r.away_slot_label, slotLookup, "schedule.tbd")}`,
         response: r.response,
       });
       byOfficial.set(r.official_id, s);
@@ -718,12 +802,15 @@ export async function buildMyRotaDoc(
   for (const a of assignments) {
     const key = a.official_id;
     const s = byOfficial.get(key) ?? { officialName: a.org_name, duties: [] };
+    // Cross-org doc: each duty is localized by ITS OWN org's default locale,
+    // not one global choice — the reader officiates for many organisations.
+    const lookup = exportLookup(a.org_default_locale);
     s.duties.push({
       at: fixtureWhen(a.scheduled_at, a.venue_tz),
       court: a.court_label,
       compDivision: `${a.competition_name} · ${a.division_name}`,
       role: a.role_key,
-      opponents: `${a.home_name ?? "TBD"} vs ${a.away_name ?? "TBD"}`,
+      opponents: `${a.home_name ?? resolveSlotLabel(a.home_slot_label, lookup, "schedule.tbd")} vs ${a.away_name ?? resolveSlotLabel(a.away_slot_label, lookup, "schedule.tbd")}`,
       response: a.response,
     });
     byOfficial.set(key, s);
@@ -758,6 +845,9 @@ export async function auditLedgerDoc(
   return withTenant(auth.orgId, async (tx) => {
     const divMeta = await divisionMeta(tx, meta!.division_id);
     const branding = layerDivisionBranding(baseBranding, divMeta);
+    // No slot-label fallback here, deliberately: an audit ledger is the
+    // forensic record of a fixture that has already been scored, so both
+    // sides are always filled entrants. A placeholder cannot reach this doc.
     const vs =
       ledger.fixture.home !== null || ledger.fixture.away !== null
         ? ` — ${ledger.fixture.home ?? "TBD"} vs ${ledger.fixture.away ?? "TBD"}`

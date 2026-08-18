@@ -28,18 +28,48 @@ export function isReservedSlug(slug: string): boolean {
 // ICS calendar feed (doc 09 §2: `.ics` per division/entrant). Hand-rolled —
 // the format is 20 lines of RFC 5545, not worth a dependency.
 // ---------------------------------------------------------------------------
-export interface IcsEvent {
+export type IcsEvent = {
   uid: string;
-  start: Date;
-  /** minutes; feeds default to 90 when the sport gives no better figure */
-  durationMinutes: number;
   summary: string;
   location?: string;
   description?: string;
-}
+} & (
+  | {
+      start: Date;
+      /** minutes; feeds default to 90 when the sport gives no better figure */
+      durationMinutes: number;
+    }
+  | {
+      /** `YYYY-MM-DD` — an all-day VEVENT (RFC 5545 §3.3.4 DATE value type),
+       *  for a fixture that exists but has no time yet. Emitted TENTATIVE so
+       *  subscribers see it as provisional; it becomes a timed CONFIRMED event
+       *  under the SAME UID once scheduled, and therefore updates in place in
+       *  calendars people have already subscribed to. DTSTAMP alone can't be
+       *  trusted to order that transition — it's derived from the event's own
+       *  date, not wall-clock generation time, so it moves BACKWARD whenever a
+       *  fixture is scheduled earlier than the placeholder's anchor date.
+       *  SEQUENCE (0 tentative → 1 timed, in buildIcs below) is what a
+       *  compliant client actually orders revisions by — deterministic, no
+       *  clock involved. */
+      allDayOn: string;
+    }
+);
 
 function icsDate(d: Date): string {
   return d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+}
+
+function icsDateOnly(ymd: string): string {
+  return ymd.replace(/-/g, "");
+}
+
+/** The DATE-typed DTEND is exclusive (RFC 5545 §3.6.1), so a single all-day
+ *  event ends on the following day. Same date start and end renders as a
+ *  zero-length event that several clients drop entirely. */
+function nextDay(ymd: string): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
 }
 
 // RFC 5545 §3.3.11 TEXT escaping + §3.1 line folding at 75 octets.
@@ -69,13 +99,26 @@ export function buildIcs(calendarName: string, events: IcsEvent[]): string {
     `X-WR-CALNAME:${icsText(calendarName)}`,
   ];
   for (const ev of events) {
-    const end = new Date(ev.start.getTime() + ev.durationMinutes * 60_000);
+    const timing =
+      "allDayOn" in ev
+        ? [
+            `DTSTAMP:${icsDateOnly(ev.allDayOn)}T000000Z`,
+            `DTSTART;VALUE=DATE:${icsDateOnly(ev.allDayOn)}`,
+            `DTEND;VALUE=DATE:${icsDateOnly(nextDay(ev.allDayOn))}`,
+            "STATUS:TENTATIVE",
+            "SEQUENCE:0",
+          ]
+        : [
+            `DTSTAMP:${icsDate(ev.start)}`,
+            `DTSTART:${icsDate(ev.start)}`,
+            `DTEND:${icsDate(new Date(ev.start.getTime() + ev.durationMinutes * 60_000))}`,
+            "STATUS:CONFIRMED",
+            "SEQUENCE:1",
+          ];
     lines.push(
       "BEGIN:VEVENT",
       `UID:${ev.uid}@seazn.club`,
-      `DTSTAMP:${icsDate(ev.start)}`,
-      `DTSTART:${icsDate(ev.start)}`,
-      `DTEND:${icsDate(end)}`,
+      ...timing,
       `SUMMARY:${icsText(ev.summary)}`,
       ...(ev.location ? [`LOCATION:${icsText(ev.location)}`] : []),
       ...(ev.description ? [`DESCRIPTION:${icsText(ev.description)}`] : []),

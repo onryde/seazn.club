@@ -36,22 +36,45 @@ export async function GET(
     label: (typeof data.fixtures)[number]["home_slot_label"],
   ): string => (id ? (entrantNames[id] ?? "TBD") : resolveSlotLabel(label, lookup, "schedule.tbd"));
 
+  // A fixture that exists but has no time is the whole point of day-one
+  // fixtures: it is anchored to the competition's last day as an all-day
+  // TENTATIVE event, and becomes a timed CONFIRMED one under the same UID
+  // when it is scheduled. Note that `public_fixtures_v` NULLs scheduled_at
+  // for EVERY fixture while divisions.status = 'setup' (V362:25), so
+  // pre-publish the whole feed is tentative by construction — that masking
+  // is a deliberate privacy rule and is not worked around here.
+  const anchorDate = data.competition.ends_on ?? data.competition.starts_on;
+
   const events: IcsEvent[] = data.fixtures
-    .filter((f) => f.scheduled_at !== null)
     .filter(
       (f) =>
         !entrantId || f.home_entrant_id === entrantId || f.away_entrant_id === entrantId,
     )
-    .map((f) => ({
-      uid: f.id,
-      start: new Date(f.scheduled_at as string),
-      durationMinutes: 90,
-      summary: `${nameOrLabel(f.home_entrant_id, f.home_slot_label)} vs ${nameOrLabel(f.away_entrant_id, f.away_slot_label)} — ${data.division.name}`,
-      ...(f.venue
-        ? { location: f.court_label ? `${f.venue} (${f.court_label})` : f.venue }
-        : {}),
-      description: `${data.competition.name} · https://seazn.club/shared/${data.org.slug}/${data.competition.slug}/${data.division.slug}/fixtures/${f.id}`,
-    }));
+    // No competition dates means no defensible anchor; emitting a guessed
+    // DTSTART into somebody's calendar is worse than omitting the event.
+    .filter((f) => f.scheduled_at !== null || anchorDate !== null)
+    .map((f) => {
+      const description = `${data.competition.name} · https://seazn.club/shared/${data.org.slug}/${data.competition.slug}/${data.division.slug}/fixtures/${f.id}`;
+      const common = {
+        uid: f.id,
+        summary: `${nameOrLabel(f.home_entrant_id, f.home_slot_label)} vs ${nameOrLabel(f.away_entrant_id, f.away_slot_label)} — ${data.division.name}`,
+        ...(f.venue
+          ? { location: f.court_label ? `${f.venue} (${f.court_label})` : f.venue }
+          : {}),
+      };
+      return f.scheduled_at !== null
+        ? { ...common, start: new Date(f.scheduled_at), durationMinutes: 90, description }
+        : {
+            ...common,
+            allDayOn: anchorDate as string,
+            // STATUS:TENTATIVE is invisible in several major calendar
+            // clients, so a bare all-day event would otherwise read as "on
+            // that whole day" rather than "date not fixed yet" — say it in
+            // copy too, resolved through the same org-locale lookup as
+            // every other string on this feed (F4 wave B, owner ruling).
+            description: `${lookup("calendar.time_tbc")}\n${description}`,
+          };
+    });
 
   const name = entrantId
     ? `${entrantNames[entrantId] ?? "Entrant"} — ${data.division.name}`
