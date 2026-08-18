@@ -357,11 +357,28 @@ export async function getPublicCompetition(
         left join sports s on s.key = d.sport_key
         where d.competition_id = ${competition.id}
         order by d.created_at, d.id`;
+      // P9 sweep (pass 3c-4): venue/court_label dropped from this SELECT
+      // rather than resolved via withCourtVenueNames like getPublicDivision/
+      // getPublicFixture below — verified first (not assumed): the "Live
+      // now" strip (competition page) renders only division name and
+      // summary.headline, and opengraph-image.tsx's only use of `liveNow` is
+      // its `.length`. No consumer reads venue/court_label/venue_name/
+      // court_name off a liveNow item, so a frozen read here was genuinely
+      // dead, not silently wrong — resolving names nobody renders would just
+      // be N wasted queries. NOTE: PublicFixture still declares all four as
+      // required `string | null`, so a liveNow item reads `undefined` on
+      // them at runtime despite the type — same class of gap the file's own
+      // "lane/is_final" comment above already flags for this exact type;
+      // widening those four fields to optional would ripple through every
+      // other PublicFixture consumer (schedule/bracket views, pass 4), which
+      // is out of this fix's blast radius. If a future "Live now" card ever
+      // wants to show where a match is being played, wire this the same way
+      // getPublicDivision does, not by re-adding venue/court_label.
       const liveNow = await sql<PublicFixture[]>`
         select f.id, f.division_id, f.stage_id, f.pool_id, f.round_no,
                f.seq_in_round, f.home_entrant_id, f.away_entrant_id,
                f.home_slot_label, f.away_slot_label,
-               f.scheduled_at, f.venue, f.court_label, f.status, f.outcome,
+               f.scheduled_at, f.status, f.outcome,
                f.summary, f.last_seq,
                f.lane, f.is_final, f.third_place, f.conditional
         from public_fixtures_v f
