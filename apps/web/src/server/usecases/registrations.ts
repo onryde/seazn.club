@@ -894,7 +894,7 @@ export async function notifyPromoted(
     let payUrl: string | null = null;
     if (promoted.payment_method === "stripe" && promoted.amount_cents > 0 && ctx.charges_enabled) {
       try {
-        payUrl = await createRegistrationCheckout(promoted, ctx, origin, null);
+        payUrl = await createRegistrationCheckout(promoted.group_id, [promoted.id], ctx, origin, null);
       } catch {
         /* the reminder sweep mints another */
       }
@@ -1237,34 +1237,63 @@ export async function publicRegistrationInfo(
 // string[] wrapper it named was deleted at its source (RS002 W5
 // whole-branch review — zero production callers repo-wide, dead since W2).
 
-/** Destination charge on the org's Connect account; the platform keeps
- *  application_fee_amount (doc 16 §1.1). Always charges the SNAPSHOTTED
- *  reg.amount_cents (spec issue #8), never live settings. `token` builds the
- *  status-page return URLs; null falls back to the token-free /r/[ref] pair
- *  (email-minted sessions — the reminder can't recover the hashed token). */
+/**
+ * ONE Stripe checkout session for a SET of a cart's entries (RS003 W3a,
+ * owner ruling 1) — not necessarily the whole cart: a waitlist promotion
+ * pays for a single entry while its siblings may already be paid, so the
+ * unit this function takes is an explicit list of registration ids, always
+ * scoped to one `groupId`. One line item per entry (kept the existing
+ * per-entry product-name style); charged amount = sum of those entries'
+ * `amount_cents`; `application_fee_amount` computed over that SAME sum.
+ * Destination charge on the org's Connect account; the platform keeps
+ * application_fee_amount (doc 16 §1.1). `token` builds the status-page
+ * return URLs (now keyed by the GROUP, since a session can cover more than
+ * one entry); null falls back to the token-free /r/[ref] pair (email-minted
+ * sessions — the reminder can't recover the hashed token).
+ *
+ * Currency is validated BEFORE any Stripe call (owner ruling 4): the
+ * group's snapshot must both be an allowlisted registration currency and
+ * match the org's CURRENT currency (`ctx.currency`, read fresh by the
+ * caller's `divisionCtx` call) — a snapshot gone stale since submit 422s
+ * here, never as a Stripe-side error on a registrant's pay page.
+ *
+ * Greenfield conversion (owner ruling 3): this was entry-scoped
+ * (`kind: "registration"`, a single `registration_id`) until this session;
+ * there is no compat branch for the old shape — every caller now passes an
+ * explicit id list, even when that list has exactly one element.
+ */
 async function createRegistrationCheckout(
-  reg: RegistrationWithGroupRow,
+  groupId: string,
+  registrationIds: string[],
   ctx: DivisionCtx,
   origin: string,
   token: string | null,
 ): Promise<string> {
-  if (reg.amount_cents <= 0) throw new HttpError(422, "This registration has no entry fee");
+  const entries = await sql<RegistrationWithGroupRow[]>`
+    select ${regGroupCols(sql)}
+    from registrations r join registration_groups g on g.id = r.group_id
+    where r.group_id = ${groupId} and r.id in ${sql(registrationIds)}
+    order by r.created_at`;
+  if (entries.length === 0) throw new HttpError(422, "No registrations to pay for");
+  const firstEntry = entries[0]!;
+  const subtotal = entries.reduce((sum, e) => sum + e.amount_cents, 0);
+  if (subtotal <= 0) throw new HttpError(422, "This registration has no entry fee");
   // Owner ruling 4: validate the group's currency snapshot BEFORE any Stripe
   // call. Both conditions below share one machine-readable code — "this
   // cart cannot be charged in the currency it quoted right now" is one
   // failure class whether the snapshot was delisted or the org's currency
   // has since moved (same-currency lock pins it to the connected account's
   // settlement currency) — never a Stripe-side error on a registrant's pay
-  // page. `ctx.currency` is the org's CURRENT currency, read fresh by the
-  // caller's `divisionCtx` call.
-  if (!isRegistrationCurrency(reg.currency)) {
+  // page. Every entry shares one currency (a group column), so the first
+  // entry's is authoritative.
+  if (!isRegistrationCurrency(firstEntry.currency)) {
     throw new HttpError(
       422,
       "This organiser no longer accepts payment in this cart's currency",
       "REGISTRATION_CURRENCY_UNAVAILABLE",
     );
   }
-  if (reg.currency !== ctx.currency) {
+  if (firstEntry.currency !== ctx.currency) {
     throw new HttpError(
       422,
       "This organiser's currency has changed since this cart was created",
@@ -1278,53 +1307,103 @@ async function createRegistrationCheckout(
   }
   const returnBase = token
     ? `${origin}/shared/${ctx.org_slug}/${ctx.comp_slug}/register/status` +
-      `?rid=${reg.id}&token=${encodeURIComponent(token)}`
-    : `${origin}/r/${reg.ref_code}?src=email`;
+      `?rid=${groupId}&token=${encodeURIComponent(token)}`
+    : `${origin}/r/${firstEntry.ref_code}?src=email`;
   // The rate this charge uses: the competition's locked rate if it has one,
   // otherwise the live plan rate. Resolved ONCE and both charged and frozen onto
   // the registration, so the paid transition can stamp the competition with the
   // exact percent this payer was billed — never a re-resolved one that a
   // mid-competition plan change could have moved.
   const feePercent = await effectiveFeePercentFor(ctx.competition_id, ctx.org_id);
+  const idsJoined = registrationIds.join(",");
   const session = await getStripe().checkout.sessions.create({
     mode: "payment",
-    customer_email: reg.contact_email,
+    customer_email: firstEntry.contact_email,
     // fee_percent rides the session so the paid transition can stamp the
-    // competition with the rate THIS session was billed at — not reg.fee_percent,
-    // which a later re-mint (resume, reminder) overwrites. Without it, paying a
-    // stale still-open session after a plan change would lock the competition at
-    // a rate no entrant was ever charged.
+    // competition with the rate THIS session was billed at — not
+    // reg.fee_percent, which a later re-mint (resume, reminder) overwrites.
+    // Without it, paying a stale still-open session after a plan change
+    // would lock the competition at a rate no entrant was ever charged.
+    //
+    // Re-keyed to the GROUP (owner ruling 2): kind:"registration_group",
+    // an explicit registration_ids list (comma-joined — Stripe metadata
+    // values cap at 500 chars; a maximal 10-entry cart of 36-char uuids
+    // joins to ~370, proven in registrations.test.ts) rather than a single
+    // registration_id. Wave 3b's webhook rework reads this to flip exactly
+    // the listed entries.
     metadata: {
-      kind: "registration",
-      registration_id: reg.id,
+      kind: "registration_group",
+      registration_group_id: groupId,
+      registration_ids: idsJoined,
       org_id: ctx.org_id,
       fee_percent: String(feePercent),
     },
-    line_items: [
-      {
-        quantity: 1,
-        price_data: {
-          currency: reg.currency,
-          unit_amount: reg.amount_cents,
-          product_data: { name: `${ctx.comp_name} — entry fee (${reg.display_name})` },
-        },
+    line_items: entries.map((reg) => ({
+      quantity: 1,
+      price_data: {
+        currency: reg.currency,
+        unit_amount: reg.amount_cents,
+        product_data: { name: `${ctx.comp_name} — entry fee (${reg.display_name})` },
       },
-    ],
+    })),
     payment_intent_data: {
-      application_fee_amount: applicationFeeCents(reg.amount_cents, feePercent),
+      application_fee_amount: applicationFeeCents(subtotal, feePercent),
       transfer_data: { destination: org.stripe_account_id },
-      metadata: { registration_id: reg.id, org_id: ctx.org_id },
+      metadata: { registration_group_id: groupId, registration_ids: idsJoined, org_id: ctx.org_id },
     },
     success_url: `${returnBase}&checkout=success&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${returnBase}&checkout=cancelled`,
   });
   if (!session.url) throw new HttpError(502, "Stripe did not return a checkout URL");
-  // checkout_session_id/fee_percent live on the cart now (V364), not the entry.
+  // checkout_session_id/fee_percent live on the cart (V364) — one row to
+  // stamp regardless of how many entries this session covers.
   await sql`
     update registration_groups
     set checkout_session_id = ${session.id}, fee_percent = ${feePercent}, updated_at = now()
-    where id = ${reg.group_id}`;
+    where id = ${groupId}`;
   return session.url;
+}
+
+/**
+ * Mints the group's checkout session right after submit, when the cart has
+ * at least one payable (`pending`, `amount_cents > 0`) entry priced through
+ * Stripe. Called by the public register route so `submitRegistrationGroup`
+ * itself (registration-submit.ts, RS002) stays payment-agnostic — it never
+ * imports Stripe. Re-reads `payment_method` and the payable entry ids
+ * straight from the DB rather than trusting the caller's copy of
+ * `SubmitGroupResult` (which carries no `payment_method` field by design —
+ * see its own doc comment): this keeps "should this mint, and for which
+ * entries" logic in exactly one place. Returns null, never throws, for a
+ * zero-payable or non-stripe cart (owner ruling 5: an all-waitlisted,
+ * all-free, or offline-payment-method group mints nothing) — it only
+ * throws for a genuine failure (Connect not live, currency gone stale, a
+ * real Stripe error).
+ */
+export async function mintGroupCheckout(
+  groupId: string,
+  divisionId: string,
+  origin: string,
+  token: string,
+): Promise<string | null> {
+  const [group] = await sql<{ payment_method: string | null }[]>`
+    select payment_method from registration_groups where id = ${groupId}`;
+  if (!group || group.payment_method !== "stripe") return null;
+  const payable = await sql<{ id: string }[]>`
+    select id from registrations
+    where group_id = ${groupId} and status = 'pending' and amount_cents > 0
+    order by created_at`;
+  if (payable.length === 0) return null;
+  const ctx = await divisionCtx(sql, divisionId);
+  if (!ctx.charges_enabled) {
+    throw new HttpError(503, "Payments are not set up for this organiser yet");
+  }
+  return createRegistrationCheckout(
+    groupId,
+    payable.map((r) => r.id),
+    ctx,
+    origin,
+    token,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -2129,7 +2208,7 @@ export async function resumeRegistrationCheckout(
   if (!ctx.charges_enabled) {
     throw new HttpError(503, "Payments are not set up for this organiser yet");
   }
-  const url = await createRegistrationCheckout(reg, ctx, origin, token);
+  const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, token);
   return { checkout_url: url };
 }
 
@@ -2321,7 +2400,7 @@ export async function sweepRegistrations(
     try {
       const ctx = await divisionCtx(sql, reg.division_id);
       if (!ctx.charges_enabled) continue; // Connect broke — nothing to link to
-      const url = await createRegistrationCheckout(reg, ctx, origin, null);
+      const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, null);
       await sendPaymentReminderEmail({
         to: reg.contact_email,
         locale: toLocale(reg.locale),

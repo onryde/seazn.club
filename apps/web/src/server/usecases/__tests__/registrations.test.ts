@@ -1704,11 +1704,15 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(b.registration.status).toBe("waitlisted");
 
     // Checkout sessions minted for OUR registration only — the sweep mints one per
-    // due row platform-wide, and each carries metadata.registration_id.
+    // due row platform-wide, and each carries a comma-joined
+    // metadata.registration_ids (RS003 W3a: group-scoped, one id per call site
+    // here since each due row is reminded/promoted individually).
     const checkoutsFor = (id: string) =>
-      stripeMock.checkoutCreate.mock.calls.filter(
-        ([args]) => (args as { metadata?: { registration_id?: string } })
-          ?.metadata?.registration_id === id,
+      stripeMock.checkoutCreate.mock.calls.filter(([args]) =>
+        (args as { metadata?: { registration_ids?: string } })
+          ?.metadata?.registration_ids
+          ?.split(",")
+          .includes(id),
       ).length;
     const regRow = (id: string) => loadWithGroup(id);
     const auditCount = async (type: string, id: string) => {
