@@ -49,15 +49,19 @@ describe("format gallery enumeration", () => {
 // F3 (day-one fixtures, owner ruling R1/R4): timing flipped to "setup" —
 // same as format-templates.ts's equivalent templates, matching R4's scope
 // (picker's six plus this gallery's three). groups-knockout's `take` also
-// moved off the hand-rolled `picks` A/B interleave onto `topNPerGroup` +
-// `snake` (owner ruling R5) — see the assertion below.
+// moved off the hand-rolled `picks` A/B interleave onto `topNPerGroup`
+// (owner ruling R5). Placement is `rank_order`, not `snake` (owner ruling
+// 11): `snake` belongs to a group/pool TARGET, not a knockout one —
+// see format-templates.ts's groups_ko for the full citation — and this
+// canned entry feeds the identical knockout target format-templates.ts's
+// groups_ko does.
 describe("cannedStages emit progression, not qualification (F2)", () => {
-  it("groups-knockout's knockout stage carries a topNPerGroup TakeRule, snake, setup", () => {
+  it("groups-knockout's knockout stage carries a topNPerGroup TakeRule, rank_order, setup", () => {
     const family = formatFamily("groups-knockout")!;
     expect(family.cannedStages[0]!.progression).toBeNull();
     expect(family.cannedStages[1]!.progression).toEqual({
       sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }],
-      placement: "snake",
+      placement: "rank_order",
       timing: "setup",
     });
   });

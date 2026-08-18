@@ -261,11 +261,22 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
         config: {},
         progression: {
           // Same draw convention as format-templates.ts's groups_ko (owner
-          // ruling R5): top 2 of each of the 2 canned pools, cross over via
-          // `snake` — not the hand-rolled A/B `picks` interleave that used
-          // to live here, which could not generalise past 2 pools.
+          // ruling R5): top 2 of each of the 2 canned pools, cross over —
+          // not the hand-rolled A/B `picks` interleave that used to live
+          // here, which could not generalise past 2 pools.
+          //
+          // Placement is `rank_order`, NOT `snake` (owner ruling 11, found
+          // by review before it shipped): `snake` is chosen by the TARGET
+          // stage's kind, not the source's, and this entry's target is a
+          // KNOCKOUT. generateSingleElim's seedPositions fold
+          // (scheduling/bracket.ts:52-63, used at :156-163) pairs seed i
+          // against seed N+1-i, so snake's reversal would put every pool's
+          // winner back against its own runner-up in round 1 — see
+          // format-templates.ts's groups_ko for the full citation and
+          // format-templates.test.ts's "round 1 never pairs a group
+          // against itself" for the worked example.
           sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }],
-          placement: "snake",
+          placement: "rank_order",
           timing: "setup",
         },
       },
