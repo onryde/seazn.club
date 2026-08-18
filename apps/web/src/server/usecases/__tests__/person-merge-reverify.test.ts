@@ -344,4 +344,100 @@ describe.skipIf(!HAS_DB)("#404 re-verify published boards after a merge", () => 
       select merged_into from persons where id = ${absorbed}`;
     expect(tomb!.merged_into, "a failed report rolled the merge back").toBe(survivor);
   });
+
+  // #14 sibling fix: `RevealedConflicts.conflicts` carries the engine
+  // `Conflict` verbatim, and `withLegacyDetail` derives its prose from
+  // `details.courtName ?? details.court` — `courtName` is only ever
+  // caller-attached, never set by the engine (conflict-detail.ts). Before
+  // the fix, `reverifyBoards` never attached it, so a revealed
+  // `court_double_booking` showed the organiser a raw court uuid. Two
+  // venues share a bare court name here — legal, the unique index is
+  // scoped per venue — specifically so the resolved name proves it went
+  // through the SAME venue-qualifying rule as every other #14 surface, not
+  // a coincidental bare match.
+  it("#14: a revealed court_double_booking names the venue-qualified court, never a raw uuid", async () => {
+    const { auth } = await seedOrg("pro");
+    const venueA = await createVenue(auth, { name: "Riverside", sort: 0 });
+    const venueB = await createVenue(auth, { name: "Lakeside", sort: 1 });
+    const courtA = await createCourt(auth, venueA.id, { name: "Court 1", sort: 0, tags: [] });
+    const courtOther = await createCourt(auth, venueA.id, { name: "Court 2", sort: 1, tags: [] });
+    await createCourt(auth, venueB.id, { name: "Court 1", sort: 0, tags: [] });
+
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Reverify Court Cup " + rnd(),
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open " + rnd(),
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    await createEntrants(
+      auth,
+      division.id,
+      ["A", "B", "C", "D"].map((name, i) => ({
+        kind: "individual" as const,
+        display_name: name,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
+    await generateStageFixtures(auth, stage!.id);
+    const rows = await sql<BoardRow[]>`
+      select id, home_entrant_id, away_entrant_id from fixtures
+      where division_id = ${division.id} order by round_no, seq_in_round, id`;
+    const first = rows[0]!;
+    const second = rows.find(
+      (r) =>
+        r.home_entrant_id !== first.home_entrant_id &&
+        r.home_entrant_id !== first.away_entrant_id &&
+        r.away_entrant_id !== first.home_entrant_id &&
+        r.away_entrant_id !== first.away_entrant_id,
+    )!;
+    expect(second, "no disjoint second fixture in the generated league").toBeTruthy();
+
+    // Legal at publish time — different courts, same instant (mirrors
+    // seedBoard's own minutesApart:0 pattern): assertPublishable would
+    // refuse a board that ALREADY has a conflict, so the double-booking
+    // must not exist yet here.
+    await sql`update fixtures set scheduled_at = ${T0}, court_id = ${courtA.id} where id = ${first.id}`;
+    await sql`update fixtures set scheduled_at = ${T0}, court_id = ${courtOther.id} where id = ${second.id}`;
+    await publishSchedule(auth, division.id);
+
+    // NOW move `second` onto the SAME court as `first` — direct SQL,
+    // bypassing moveFixture's own conflict checks, the same way this
+    // file's "commits the merge even when re-verifying the board throws"
+    // test pokes schedule_settings directly: a published board can still
+    // develop a real problem some other way, and reverifyBoards — not the
+    // publish gate — is what has to catch it on the next merge.
+    await sql`update fixtures set court_id = ${courtA.id} where id = ${second.id}`;
+
+    const survivor = await person(auth.orgId, "Merge Court " + rnd());
+    const absorbed = await person(auth.orgId, "Merge Court " + rnd());
+    // The survivor just needs SOME entrant membership in this division so
+    // reverifyBoards picks it up — validateAssignments checks the WHOLE
+    // board, so the pre-existing double-booking surfaces regardless of
+    // whether the merge itself touched these two fixtures.
+    await joinEntrant(first.home_entrant_id, survivor);
+    await joinEntrant(second.home_entrant_id, absorbed);
+
+    const res = await mergePersons(auth, survivor, absorbed, { confirmedBy: auth.userId! });
+    const board = res.revealed.find((r) => r.division_id === division.id);
+    expect(board, "the published board was not re-verified").toBeTruthy();
+    const dbl = board!.conflicts.filter((c) => c.details?.kind === "court_double_booking");
+    expect(dbl.length, "no court_double_booking conflict").toBeGreaterThan(0);
+    for (const c of dbl) {
+      expect(c.details?.courtName).toBe("Court 1 (Riverside)");
+      expect(c.detail).toContain("Court 1 (Riverside)");
+      // `otherFixtureId` legitimately rides in the SAME legacy sentence
+      // ("... double-booked with <fixture uuid>") — only the courtName
+      // field itself is under test for "never a bare uuid".
+      expect(c.details?.courtName ?? "").not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/i);
+    }
+  });
 });
