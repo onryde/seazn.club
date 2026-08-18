@@ -18,6 +18,7 @@ import {
   courtGroups,
   flattenCourts,
   reorderSelection,
+  resolveCourtNames,
   toggleCourtSelection,
 } from "../court-multi-picker";
 
@@ -140,6 +141,84 @@ describe("flattenCourts", () => {
       makeVenue({ id: "v-2", courts: [makeCourt({ id: "c-3" })] }),
     ];
     expect(flattenCourts(venues).map((c) => c.id)).toEqual(["c-1", "c-2", "c-3"]);
+  });
+});
+
+describe("resolveCourtNames (P9 pass 4d — item 2)", () => {
+  it("venue-qualifies a bare name shared by courts in different venues", () => {
+    // The owner's live bug: a division's board showed three columns —
+    // "TENNIS COURT 1", "TENNIS COURT 3", "TENNIS COURT 3" — because two
+    // DIFFERENT venues each have a court literally named "Tennis Court 3"
+    // (P8's uniqueness is per-venue: `unique (venue_id, name) where
+    // archived_at is null`, so this is legal data).
+    const venues = [
+      makeVenue({
+        id: "v-north",
+        name: "North Sports Centre",
+        courts: [makeCourt({ id: "c-north-3", name: "Tennis Court 3" })],
+      }),
+      makeVenue({
+        id: "v-south",
+        name: "South Leisure Park",
+        courts: [makeCourt({ id: "c-south-3", name: "Tennis Court 3" })],
+      }),
+    ];
+    const names = resolveCourtNames(venues);
+    expect(names["c-north-3"]).toBe("Tennis Court 3 (North Sports Centre)");
+    expect(names["c-south-3"]).toBe("Tennis Court 3 (South Leisure Park)");
+    // The two labels must actually differ — two board columns must never
+    // render the identical text for two different courts.
+    expect(names["c-north-3"]).not.toBe(names["c-south-3"]);
+  });
+
+  it("leaves a uniquely-named court bare — no gratuitous venue suffix", () => {
+    const venues = [
+      makeVenue({
+        id: "v-north",
+        name: "North Sports Centre",
+        courts: [
+          makeCourt({ id: "c-north-3", name: "Tennis Court 3" }),
+          makeCourt({ id: "c-north-showcase", name: "Centre Court" }),
+        ],
+      }),
+      makeVenue({
+        id: "v-south",
+        name: "South Leisure Park",
+        courts: [makeCourt({ id: "c-south-3", name: "Tennis Court 3" })],
+      }),
+    ];
+    const names = resolveCourtNames(venues);
+    // Ambiguous name -> qualified; unique name -> bare, even though OTHER
+    // courts in the same input needed a suffix.
+    expect(names["c-north-3"]).toBe("Tennis Court 3 (North Sports Centre)");
+    expect(names["c-north-showcase"]).toBe("Centre Court");
+  });
+
+  it("excludes archived courts/venues before judging a name ambiguous", () => {
+    const venues = [
+      makeVenue({
+        id: "v-north",
+        name: "North Sports Centre",
+        courts: [makeCourt({ id: "c-north-3", name: "Tennis Court 3" })],
+      }),
+      makeVenue({
+        id: "v-south",
+        name: "South Leisure Park",
+        courts: [
+          makeCourt({
+            id: "c-south-3-retired",
+            name: "Tennis Court 3",
+            archived_at: "2026-01-01T00:00:00.000Z",
+          }),
+        ],
+      }),
+    ];
+    const names = resolveCourtNames(venues);
+    // Only one ACTIVE "Tennis Court 3" exists once the archived namesake is
+    // filtered out — no venue suffix needed, and the archived court has no
+    // entry at all (courtGroups drops it).
+    expect(names["c-north-3"]).toBe("Tennis Court 3");
+    expect(names["c-south-3-retired"]).toBeUndefined();
   });
 });
 

@@ -37,7 +37,7 @@ import { MovePanel } from "./board/move-panel";
 import { ScheduleGateDialog, type GateAction } from "./board/schedule-gate-dialog";
 import { ScheduleResultStrip } from "./board/result-strip";
 import { SettingsPanel } from "./board/settings-panel";
-import { flattenCourts } from "@/components/v2/shared/court-multi-picker";
+import { resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
 import type { Venue } from "@/components/v2/venues-panel";
 import {
   cardTitle,
@@ -902,11 +902,16 @@ export function ScheduleBoard({
   // built from `venues` (threaded down from the page, same as
   // SettingsPanel's own court picker below) rather than from any per-fixture
   // field, so it also names a configured-but-not-yet-scheduled court.
-  const courtNamesById = useMemo(() => {
-    const map: Record<string, string> = {};
-    for (const c of flattenCourts(venues)) map[c.id] = c.name;
-    return map;
-  }, [venues]);
+  //
+  // P9 pass 4d: the owner hit a live board rendering THREE columns as
+  // "TENNIS COURT 1", "TENNIS COURT 3", "TENNIS COURT 3" — two DIFFERENT
+  // venues each named a court "Tennis Court 3" (legal: P8's uniqueness is
+  // per-venue). The old body here (`map[c.id] = c.name`) never qualified a
+  // colliding name, so two real columns silently rendered identical text.
+  // `resolveCourtNames` reuses `buildCourtDirectory` — the SAME "Name
+  // (Venue)" rule pass 3d already shipped for the AI pack — rather than a
+  // second implementation of "is this name ambiguous".
+  const courtNamesById = useMemo(() => resolveCourtNames(venues), [venues]);
 
   // P9 pass 4c item 1: the swap button's own copy names two real courts —
   // never the raw ids `courts[0]`/`courts[1]` themselves. The click handler
@@ -1440,6 +1445,7 @@ export function ScheduleBoard({
               scheduled={scheduled}
               cfgStartAt={cfg.startAt ?? null}
               courts={courts}
+              courtNames={courtNamesById}
               divisionNames={divisionNames}
               entrantNames={entrantNames}
               feedLabels={feedLabels}
@@ -1464,6 +1470,7 @@ export function ScheduleBoard({
               onPlace={(iso, court) => void place(iso, court)}
               onTogglePin={(f) => void actions.togglePin(f)}
               highlightId={highlightId}
+              courtNames={courtNamesById}
             />
           )}
 
@@ -1480,6 +1487,7 @@ export function ScheduleBoard({
               pickedId={pickedId}
               onPick={pick}
               onTogglePin={(f) => void actions.togglePin(f)}
+              courtNames={courtNamesById}
               highlightId={highlightId}
             />
           )}
@@ -1678,6 +1686,7 @@ function WeekView({
   scheduled,
   cfgStartAt,
   courts,
+  courtNames,
   divisionNames,
   entrantNames,
   feedLabels,
@@ -1689,6 +1698,10 @@ function WeekView({
   scheduled: BoardFixture[];
   cfgStartAt: string | null;
   courts: string[];
+  /** P9 pass 4d: id -> venue-qualified display name — see `courtDisplayName`'s
+   *  own doc comment. Optional, falling back to the fixture's own bare name
+   *  when omitted. */
+  courtNames?: Record<string, string>;
   divisionNames: Record<string, string>;
   entrantNames: Record<string, string>;
   feedLabels: Record<string, FeedLabelPair>;
@@ -1794,8 +1807,9 @@ function WeekView({
                         {/* P9 pass 4c item 1: court_label is frozen legacy (null
                             for anything scheduled since the cutover) — resolve
                             NAME first, same helper FixtureBlock's sibling
-                            surfaces use, never the raw court_id. */}
-                        <span>{courtDisplayName(f)}</span>
+                            surfaces use, never the raw court_id. P9 pass 4d:
+                            venue-qualified via courtNames when ambiguous. */}
+                        <span>{courtDisplayName(f, courtNames)}</span>
                       </div>
                       <p title={cardTitle(f, entrantNames, feedLabels, msg)} className="truncate font-medium text-slate-700">
                         {cardTitle(f, entrantNames, feedLabels, msg)}

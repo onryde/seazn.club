@@ -127,4 +127,39 @@ describe("BoardGrid column headers (P9 pass 4c item 1)", () => {
     );
     expect(html).toContain("crt-a");
   });
+
+  it("renders two courts sharing a name (different venues) as distinct, venue-qualified headers", () => {
+    // The owner's live bug end to end: schedule-board.tsx's courtNamesById
+    // (resolveCourtNames — @/components/v2/shared/court-multi-picker) is what
+    // decides these strings; this proves BoardGrid then puts BOTH distinct
+    // strings on screen rather than the same bare "Tennis Court 3" twice.
+    const html = renderToStaticMarkup(
+      <BoardGrid
+        {...baseProps}
+        courts={["c-north-3", "c-south-3"]}
+        fixtures={[]}
+        entrantNames={{}}
+        courtNames={{
+          "c-north-3": "Tennis Court 3 (North Sports Centre)",
+          "c-south-3": "Tennis Court 3 (South Leisure Park)",
+        }}
+      />,
+    );
+    expect(html).toContain("Tennis Court 3 (North Sports Centre)");
+    expect(html).toContain("Tennis Court 3 (South Leisure Park)");
+  });
+
+  it("renders a uniquely-named court's header WITHOUT a venue suffix — no gratuitous noise", () => {
+    const html = renderToStaticMarkup(
+      <BoardGrid
+        {...baseProps}
+        courts={["c-centre"]}
+        fixtures={[]}
+        entrantNames={{}}
+        courtNames={{ "c-centre": "Centre Court" }}
+      />,
+    );
+    expect(html).toContain("Centre Court");
+    expect(html).not.toContain("Centre Court (");
+  });
 });

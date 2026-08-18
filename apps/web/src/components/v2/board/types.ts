@@ -175,8 +175,22 @@ export const CONFLICT_HELP: Record<string, string> = {
  * — when neither is known, so a caller can tell "no court text" from "an
  * empty string" and choose its own placeholder rather than silently
  * rendering a blank slot where a court label used to be.
+ *
+ * P9 pass 4d: an optional `courtNames` id -> venue-qualified-label map
+ * (schedule-board.tsx's `courtNamesById`, built via `resolveCourtNames` —
+ * the SAME "Name (Venue)" rule the AI pack applies) takes priority over the
+ * fixture's own bare `court_name` whenever `f.court_id` resolves in it, so
+ * two courts sharing a name in different venues never render the identical
+ * caption. `court_id` is optional on the Pick (not required) so every
+ * pre-existing call site that never carried it keeps typechecking
+ * unchanged; omitting `courtNames` keeps this function's original
+ * behaviour byte-for-byte.
  */
-export function courtDisplayName(f: Pick<BoardFixture, "court_name" | "court_label">): string | null {
+export function courtDisplayName(
+  f: Pick<BoardFixture, "court_name" | "court_label"> & Partial<Pick<BoardFixture, "court_id">>,
+  courtNames?: Record<string, string>,
+): string | null {
+  if (f.court_id != null && courtNames?.[f.court_id] !== undefined) return courtNames[f.court_id];
   return f.court_name ?? f.court_label ?? null;
 }
 

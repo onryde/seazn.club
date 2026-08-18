@@ -23,6 +23,7 @@ export function BoardAgenda({
   onPlace,
   onTogglePin,
   highlightId,
+  courtNames,
 }: {
   /** This day's scheduled fixtures, any court. */
   fixtures: BoardFixture[];
@@ -40,6 +41,10 @@ export function BoardAgenda({
   onPlace: (atIso: string, court: string | null) => void;
   onTogglePin: (f: BoardFixture) => void;
   highlightId: string | null;
+  /** P9 pass 4d: id -> venue-qualified display name (schedule-board.tsx's
+   *  `courtNamesById`) — see `courtDisplayName`'s own doc comment. Optional,
+   *  falling back to the fixture's own bare name when omitted. */
+  courtNames?: Record<string, string>;
 }) {
   const msg = useMsg();
   const sorted = [...fixtures].sort(
@@ -92,8 +97,10 @@ export function BoardAgenda({
                   onPick={() => onPick(f.id)}
                   onTogglePin={() => onTogglePin(f)}
                   // P9 pass 4a: resolved NAME first, the frozen label as a
-                  // fallback — never court_id (a raw uuid).
-                  time={courtDisplayName(f) ?? undefined}
+                  // fallback — never court_id (a raw uuid). P9 pass 4d:
+                  // venue-qualified via courtNames when the bare name is
+                  // ambiguous.
+                  time={courtDisplayName(f, courtNames) ?? undefined}
                 />
               </div>
             ))}

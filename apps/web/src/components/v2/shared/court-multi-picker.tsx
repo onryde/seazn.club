@@ -24,6 +24,7 @@
 // it. The filter itself is three lines; reimplemented inline below instead.
 import Link from "next/link";
 import type { Venue, Court } from "@/components/v2/venues-panel";
+import { buildCourtDirectory } from "@/lib/court-directory";
 
 /** Non-archived venues, each holding only its non-archived courts; a venue
  *  left with zero courts after that is dropped so no empty group heading
@@ -43,6 +44,29 @@ export function courtGroups(venues: readonly Venue[]): { venue: Venue; courts: C
  *  from. */
 export function flattenCourts(venues: readonly Venue[]): Court[] {
   return courtGroups(venues).flatMap((g) => g.courts);
+}
+
+/**
+ * id -> display name for every (non-archived) court across `venues`,
+ * venue-qualified ("Name (Venue)") wherever the bare name collides across
+ * venues — REUSES `buildCourtDirectory` (schedule-ai.ts's AI-pack rule,
+ * lifted to the client-safe `@/lib/court-directory` in P9 pass 4d) rather
+ * than a second "is this name ambiguous" implementation. Archived courts are
+ * excluded (via `courtGroups`) so an archived court's freed name never forces
+ * an unnecessary venue suffix onto its active namesake.
+ *
+ * The board's own `courtNamesById` (schedule-board.tsx) and stages-panel.tsx's
+ * fixture editor/badges both build their id->name map through this one
+ * function — see P9 pass 4d.
+ */
+export function resolveCourtNames(venues: readonly Venue[]): Record<string, string> {
+  const rows = courtGroups(venues).flatMap(({ venue, courts }) =>
+    courts.map((c) => ({ id: c.id, name: c.name, venue_name: venue.name, tags: c.tags })),
+  );
+  const directory = buildCourtDirectory(rows);
+  const map: Record<string, string> = {};
+  for (const [id, info] of directory) map[id] = info.label;
+  return map;
 }
 
 /** Toggle one court id in/out of the ordered selection. Checking APPENDS —

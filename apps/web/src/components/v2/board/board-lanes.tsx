@@ -23,6 +23,7 @@ export function BoardLanes({
   onPick,
   onTogglePin,
   highlightId,
+  courtNames,
 }: {
   day: string;
   divisions: BoardDivision[];
@@ -39,6 +40,10 @@ export function BoardLanes({
   onPick: (fixtureId: string) => void;
   onTogglePin: (f: BoardFixture) => void;
   highlightId: string | null;
+  /** P9 pass 4d: id -> venue-qualified display name (schedule-board.tsx's
+   *  `courtNamesById`) — see `courtDisplayName`'s own doc comment. Optional,
+   *  falling back to the fixture's own bare name when omitted. */
+  courtNames?: Record<string, string>;
 }) {
   const msg = useMsg();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -91,9 +96,10 @@ export function BoardLanes({
                       onPick={() => onPick(f.id)}
                       onTogglePin={() => onTogglePin(f)}
                       // P9 pass 4a: resolved NAME first, the frozen label as
-                      // a fallback — never court_id (a raw uuid).
+                      // a fallback — never court_id (a raw uuid). P9 pass 4d:
+                      // venue-qualified via courtNames when ambiguous.
                       time={`${timeLabel(f.scheduled_at as string)}${
-                        courtDisplayName(f) ? ` · ${courtDisplayName(f)}` : ""
+                        courtDisplayName(f, courtNames) ? ` · ${courtDisplayName(f, courtNames)}` : ""
                       }`}
                     />
                   </div>
