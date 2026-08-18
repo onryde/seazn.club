@@ -3,6 +3,8 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { Bracket } from "../bracket";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { msgFor } from "@/lib/messages-i18n";
@@ -412,5 +414,97 @@ describe("public Bracket", () => {
     expect(html.match(/>Final</g) ?? []).toHaveLength(1);
     expect(html).not.toContain("Third place");
     expect(html.match(/data-side="center"/g) ?? []).toHaveLength(1);
+  });
+
+  // Layout defect (this session): at desktop the tree was clipped ~48px on
+  // its right edge while the `/shared/[orgSlug]` shell's `max-w-5xl <main>`
+  // left real page margin unused beside it (measured: a knockout of 8 needs
+  // 1040px, main's content box is ~992px). `.bracket-bleed` (globals.css)
+  // reclaims that margin without touching the shared shell. Every render
+  // path in this file wraps its tree/columns in its own overflow-x-auto
+  // scroller (unregressed — genuinely-too-wide brackets must still scroll),
+  // so every one of them needs the class, not just the two-sided tree the
+  // defect was measured on.
+  it("every bracket wrapper — tree AND column fallback — carries bracket-bleed", () => {
+    const twoSided = renderToStaticMarkup(
+      createElement(Bracket, {
+        kind: "knockout",
+        fixtures: [
+          F("f1", 0, 1, "a", "d", { kind: "win", winner: "a" }, "decided"),
+          F("f2", 0, 2, "b", "c", null, "in_play"),
+          F("f3", 1, 1, "a", null, null),
+        ] as never,
+        entrantNames: names, fixtureHref: href, lookup: msg,
+      }),
+    );
+    expect(twoSided).toMatch(/class="[^"]*\bbracket-bleed\b[^"]*"[^>]*data-bracket="two-sided"/);
+
+    const doubleElim = renderToStaticMarkup(
+      createElement(Bracket, {
+        kind: "double_elim",
+        fixtures: [
+          F("w1", 1, 1, "a", "b", null),
+          F("w2", 1, 2, "c", "d", null),
+          F("wf", 2, 1, null, null, null),
+          F("l1", 5, 1, null, null, null),
+          F("lf", 6, 1, null, null, null),
+          F("gf", 9, 1, null, null, null),
+        ] as never,
+        entrantNames: names, fixtureHref: href, lookup: msg,
+      }),
+    );
+    expect(doubleElim).toMatch(/class="[^"]*\bbracket-bleed\b[^"]*"[^>]*data-bracket="double-elim"/);
+
+    const pagePlayoff = renderToStaticMarkup(
+      createElement(Bracket, {
+        kind: "page_playoff",
+        fixtures: [
+          F("q1", 1, 1, "a", "b", { kind: "win", winner: "a" }, "decided"),
+          F("el", 1, 2, "c", "d", null, "in_play"),
+          F("q2", 2, 1, "b", null, null),
+          F("fin", 3, 1, "a", null, null),
+        ] as never,
+        entrantNames: names, fixtureHref: href, lookup: msg,
+      }),
+    );
+    expect(pagePlayoff).toMatch(/class="[^"]*\bbracket-bleed\b[^"]*"[^>]*data-bracket="page-playoff"/);
+
+    const columns = renderToStaticMarkup(
+      createElement(Bracket, {
+        kind: "stepladder",
+        fixtures: [
+          F("f1", 1, 1, "a", "b", null),
+          F("f2", 2, 1, null, "c", null),
+          F("f3", 3, 1, null, "d", null),
+        ] as never,
+        entrantNames: names, fixtureHref: href, lookup: msg,
+      }),
+    );
+    expect(columns).not.toContain('data-bracket="two-sided"'); // confirms the fallback branch rendered
+    expect(columns).toMatch(/class="[^"]*\bbracket-bleed\b[^"]*"[^>]*data-bracket="columns"/);
+  });
+
+  it("`.bracket-bleed` breaks the wrapper out of the page shell, not just its own padding", () => {
+    // Source-level assertion, same reasoning as modal-viewport-units.test.ts
+    // (adjacent __tests__ dir): renderToStaticMarkup has no layout engine —
+    // nothing here can compute a real clientWidth/scrollWidth — so this
+    // reads the CSS rule body a revert would actually break. `left: 50%` is
+    // an offset in percent of the CONTAINING block (whatever ancestor —
+    // main's max-w-5xl content box included); `margin-left` is a REAL,
+    // flow-affecting shift in percent of the VIEWPORT. Only this pairing
+    // cancels an ancestor's inset regardless of how many wrap it — a bare
+    // `max-width`, `w-screen` alone, or a plain `-mx-*` would not reach past
+    // `main`.
+    const css = readFileSync(
+      fileURLToPath(new URL("../../../app/globals.css", import.meta.url)),
+      "utf8",
+    );
+    const start = css.indexOf("\n  .bracket-bleed {");
+    expect(start).toBeGreaterThan(-1);
+    const rule = css.slice(start, css.indexOf("\n  .bottom-bar {", start));
+    expect(rule).toMatch(/position:\s*relative/);
+    expect(rule).toMatch(/left:\s*50%/);
+    expect(rule).toMatch(/width:\s*calc\(100vw - 2rem\)/);
+    expect(rule).toMatch(/margin-left:\s*calc\(-50vw \+ 1rem\)/);
   });
 });

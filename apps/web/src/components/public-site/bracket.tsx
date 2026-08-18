@@ -218,7 +218,7 @@ function TwoSided({
   const roundLabelClass = "absolute font-display text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted";
 
   return (
-    <div className="overflow-x-auto" data-bracket="two-sided">
+    <div className="overflow-x-auto bracket-bleed" data-bracket="two-sided">
       <div className="relative" style={{ width: totalW, height: totalH }}>
         {Array.from({ length: layout.colsPerSide }, (_, col) => (
           <span
@@ -377,7 +377,7 @@ function DoubleElim({
   };
 
   return (
-    <div className="overflow-x-auto" data-bracket="double-elim">
+    <div className="overflow-x-auto bracket-bleed" data-bracket="double-elim">
       <div className="relative" style={{ width: totalW, height: totalH }}>
         <span className={`absolute ${laneLabel}`} style={{ left: 0, top: 0 }}>
           {lookup("bracket.winners")}
@@ -538,7 +538,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
   };
 
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto bracket-bleed" data-bracket="columns">
       <div className={kind === "stepladder" ? "flex flex-col gap-4" : "flex gap-6"}>
         {ordered.map(([roundNo, list]) => (
           <div key={roundNo} className="min-w-48">
@@ -610,7 +610,7 @@ function PagePlayoff({
   const cy = (slot: string) => pos[slot]!.y + LABEL_H + NODE_H / 2;
   const rx = (slot: string) => pos[slot]!.x + NODE_W;
   return (
-    <div className="overflow-x-auto" data-bracket="page-playoff">
+    <div className="overflow-x-auto bracket-bleed" data-bracket="page-playoff">
       <div className="relative" style={{ width: totalW, height: totalH }}>
         <svg aria-hidden className="absolute inset-0" width={totalW} height={totalH} viewBox={`0 0 ${totalW} ${totalH}`}>
           {/* Q1 loser drops into Q2; Eliminator winner advances into Q2. */}

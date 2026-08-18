@@ -398,6 +398,38 @@ body {
     background: linear-gradient(to left, var(--background), transparent);
   }
 
+  /* The public bracket tree is intrinsically wide (engine geometry, shared
+     with the console panel and the PDF poster — see bracket.tsx) and every
+     public page routes through the `/shared/[orgSlug]` shell's
+     `max-w-5xl` reading column. Past that column's ~1024px breakpoint the
+     tree was capped to ~992px of usable width while real page margin sat
+     idle beside it — a knockout of 8 needs 1040px and lost its rightmost
+     column's border (and round caption) to a clip nobody could see, 48px
+     short with 144px going begging either side. `.scroll-x`'s own
+     overflow-x-auto (kept — genuinely-too-wide trees still scroll, and must)
+     never had a chance to help: the deficit was margin the SHELL was
+     hoarding, not width the tree failed to ask its own scroller for.
+
+     This breaks a `.bracket-bleed` element out of ANY centred ancestor back
+     to the viewport edges (minus a 1rem gutter matching the shell's own
+     `px-4`), without touching that shared shell: for a box that already
+     fills its containing block, `left: 50%` (an offset, in percent of the
+     CONTAINING block's width) plus `margin-left: calc(-50vw + 1rem)` (a
+     real box-shift, in percent of the VIEWPORT) always cancel however much
+     the containing block itself is inset from the viewport — one ancestor's
+     padding or ten, mx-auto or not. Below the shell's breakpoint (mobile/
+     tablet, main already full-width) the same formula is a no-op — the
+     containing block IS `100vw - 2rem` already, so nothing moves; nothing
+     here needs a media query. `html,body{overflow-x:clip}` above is the
+     backstop for any sub-pixel scrollbar-width rounding: it clips silently,
+     it never grows a page scrollbar. */
+  .bracket-bleed {
+    position: relative;
+    left: 50%;
+    width: calc(100vw - 2rem);
+    margin-left: calc(-50vw + 1rem);
+  }
+
   /* Pattern 2: primary page action docks to a safe-area-aware bottom bar on
      phones, renders inline on desktop. */
   .bottom-bar {
