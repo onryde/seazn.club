@@ -28,15 +28,38 @@ and those two `stages.ts` functions; F1 is fenced off `qualification.ts`,
 |---|---|---|---|
 | F1 | `F1-bracket-round-role.md` | — | IN FLIGHT 2026-08-17 — `feat/f1-bracket-round-role`. Plan: `../../plans/2026-08-17-f1-bracket-round-role.md`. L3/#414 merged (`11ab0c4e7`), so the `stages.ts` block is lifted |
 | F2 | `F2-unified-progression-field.md` | — | IN FLIGHT 2026-08-17 — `feat/f2-unified-progression-field`, plan being written first. **Rebases onto merged F1 before its own PR** |
-| F3 | *(not written)* | F2 **merged** | authored against the shipped shape, not the designed one |
-| F4 | *(not written)* | F3 | same |
-| F5 | *(not written)* | all | written once the earlier sessions' deferred test debt is known |
+| F3 | **prompt ready** — `../2026-08-18-format-progression-f3-f5-design.md` §8 | F2 **merged** | design written 2026-08-18 against the shipped shape. Paste §8's F3 block as a whole prompt |
+| F4 | *(recommended for RETIREMENT)* | — | verification found no gap in either direction; its only content is a one-line mexicano comment, folded into F3. Owner to confirm |
+| F5 | **prompt ready** — same doc §8 | all | scope fixed by the §5 table |
 
 **Why F3–F5 are not written.** They consume F2's field shape, and this repo has
 a repeated failure where a session authored against a design meets an
 implementation that landed differently — the scoringpad index is full of
 "the prompt's central premise was false" entries. F3 gets written after F2
 **merges**, against real code.
+
+## F3–F5 design (2026-08-18) — read before picking any of them up
+
+`../2026-08-18-format-progression-f3-f5-design.md` is the design of record for
+what remains. Two of its findings reverse premises stated elsewhere and will be
+re-derived wrongly by a fresh session:
+
+- **Neither F1 nor F2 delivered the owner's original ask.** All six multi-stage
+  picker templates still emit `timing: "on_complete"`, so no format reachable
+  from the picker shows day-one fixtures. F2 preserved every writer's behaviour
+  deliberately. The capability exists and nothing uses it.
+- **Placeholder labelling is exclusively a `setup`-timing feature.**
+  `generateProgressionSetupFixtures` (`stages.ts:1432`) writes
+  `home/away_slot_label` at `:1611, :1614`; the `on_complete` path never calls
+  `descriptorLabel`. So flipping the templates switches labelling ON — it is
+  not a risk to be mitigated. The exception is the export path, which selects
+  no `*_slot_label` column at all and therefore prints "TBD" no matter what
+  (§7 P5).
+
+Also settled there: the downstream size is **always** derivable
+(`progressionSize`); the unstable thing is the entrant list, and that hazard
+already exists via `SEEDING_RULES_MISSING`. §8 carries copy-paste pickup
+prompts for F3, F5 and two standalone product fixes.
 
 ## Owner rulings (2026-08-17)
 
