@@ -1875,6 +1875,50 @@ git commit -m "db(F2): drop stages.qualification/seeding, add stages.progression
 >   until these are converted. Not optional, and not deferrable to a follow-up.
 > - **`scripts/seed-fifa2026.ts`** (~5 references, `:412`, `:422`).
 >
+> ### Task 5b sweep (2026-08-18) found the same class one layer further out: e2e specs
+>
+> All 8 files above (5 UI + 3 scripts) are converted and committed on
+> `feat/f2-t5b-writers`. A repo-wide `grep -rn "qualification:\|seeding:"
+> apps/web/e2e/*.spec.ts` during Task 5b's own verification found **four e2e
+> spec files, none in any task's file list, none a component or a script,
+> which is why every earlier sweep (component-scoped, then script-scoped)
+> missed this layer too**. `.github/workflows/e2e.yml` runs on every PR
+> (owner-confirmed) — these are not deferrable on the same reasoning
+> `smoke.ts` wasn't. Task 5b's own dispatch named exactly one of these
+> (`mobile.spec.ts:1504`, now drifted to two different line numbers below)
+> as a heads-up for collateral UI-text breakage, not as an assignment, and
+> Task 5b's UI changes touched zero rendered strings — so nothing here is a
+> side effect of Task 5b, and nothing here was in scope to fix under that
+> dispatch's file list. Recording precisely, same as the 5a note above, so
+> whichever session picks this up doesn't have to re-derive it:
+>
+> - **`apps/web/e2e/division-settings.spec.ts:94`** — `qualification: null`
+>   in a stages PUT body.
+> - **`apps/web/e2e/formats.spec.ts:73,82`** — reads a stage's
+>   `.qualification` straight off the GET response and asserts
+>   `{losersOfRound: {round,count}}` on it; both the read and the assertion
+>   shape need to move to `.progression`/`roundLosers` once Task 6 converts
+>   the `Stage` response schema (schemas.ts ~607-617) they depend on.
+> - **`apps/web/e2e/mobile.spec.ts:1470`** — `seeding: {source, take:
+>   [{kind:"topNPerGroup", n:1}], placement}`.
+> - **`apps/web/e2e/mobile.spec.ts:1609`** — `seeding: {source, take:
+>   [{kind:"rankRange", from:1, to:2}], placement}`. This is the exact
+>   literal the ORIGINAL Task 5 Step 7 (before the 5a/5b split) already
+>   described converting — it was never actually done; the line number
+>   drifted from :1504 to :1609 as unrelated PRs landed on `main` in the
+>   meantime.
+> - **`apps/web/e2e/stage-progression.spec.ts:60`** — `seeding: {source,
+>   take: [{kind:"topNPerGroup", n:2}], placement}`.
+>
+> All five carry `timing: "setup"` once converted (every one is exercising
+> the propose/confirm day-one-TBD path, same as `mobile.spec.ts`'s Task 5
+> Step 7 code block already specified). Unlike Task 5b's UI/script sites,
+> these can't be verified even statically against a mocked call — Playwright
+> specs run against a REAL server, so both the textual conversion AND its
+> correctness are blocked on Task 6 (`stages.ts`'s INSERT still targets the
+> dropped columns) in a way this session was explicitly told not to attempt
+> to stand up.
+>
 > ### Two facts about the tests themselves, learned the hard way
 >
 > **The component tests CANNOT catch the `CreateStage` silent-drop bug.** All

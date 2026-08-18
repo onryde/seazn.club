@@ -1,11 +1,18 @@
 // Review finding 5 (P6/D4b task B fix round 1, MINOR). The division page
 // zips `seedingStages[i] <-> seedProposals[i]` when it renders one
-// ProgressionPanel per `.seeding`-declared stage (page.tsx: `seedingStages =
-// stages.filter(s => s.seeding != null)`, `seedProposals =
+// ProgressionPanel per propose/confirm stage (page.tsx: `seedingStages =
+// stages.filter(s => s.progression?.timing === "setup")`, `seedProposals =
 // Promise.all(seedingStages.map(s => getSeedProposal(auth, s.id)))`, then
 // `seedingStages.map((st, i) => <ProgressionPanel ... proposal={seedProposals[i]
 // ?? null} .../>)`). Every existing test and the e2e drive exactly ONE
-// `.seeding` stage, so this pairing has never been exercised with two.
+// such stage, so this pairing has never been exercised with two.
+//
+// F2 (unified progression field): was `s.seeding != null` — the field is
+// gone, and the naive rename `s.progression != null` would ALSO catch
+// on_complete (auto-seed) stages, which never go through propose/confirm
+// (Decision 3: the two DB-level flows stay separate). The describe block
+// below adds a case proving an on_complete stage gets NO panel, which the
+// naive rename would fail.
 //
 // `Promise.all` preserves input order, so this is correct by construction —
 // not a live bug — but nothing stops a FUTURE refactor (a `.sort()` inserted
@@ -126,21 +133,24 @@ const PAGE = {
 // that matters here (seedingStages.map) is keyed purely on `.seeding != null`,
 // independent of `kind`, so a neutral kind keeps this test from also having
 // to stand up BracketPanel's own data (entrantLogos/headlines).
+const SETUP_PROGRESSION = {
+  sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+  placement: "rank_order",
+  timing: "setup",
+};
 const STAGE_X = {
   id: "stage-x",
   name: "Stage X",
   kind: "group",
   config: {},
-  qualification: null,
-  seeding: { source: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }], placement: "rank_order" },
+  progression: SETUP_PROGRESSION,
 };
 const STAGE_Y = {
   id: "stage-y",
   name: "Stage Y",
   kind: "group",
   config: {},
-  qualification: null,
-  seeding: { source: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }], placement: "rank_order" },
+  progression: SETUP_PROGRESSION,
 };
 
 const PROPOSAL_X = {
@@ -184,12 +194,12 @@ describe("division fixtures tab pairs each .seeding stage with its OWN proposal"
   });
 
   it("a third, non-seeding stage inserted between them still pairs correctly — not an accident of a 2-item array", async () => {
-    const stageMid = { id: "stage-mid", name: "Mid", kind: "league", config: {}, qualification: null, seeding: null };
+    const stageMid = { id: "stage-mid", name: "Mid", kind: "league", config: {}, progression: null };
     stagesSpies.listStages.mockResolvedValue([STAGE_X, stageMid, STAGE_Y]);
 
     const tree = await renderFixturesTab();
     const panels = findAll(tree, ProgressionPanel);
-    expect(panels).toHaveLength(2); // stage-mid has no .seeding, gets no panel
+    expect(panels).toHaveLength(2); // stage-mid has no progression, gets no panel
 
     const byStage = Object.fromEntries(
       panels.map((p) => [(p.props as { stageId: string }).stageId, (p.props as { proposal: unknown }).proposal]),
@@ -202,5 +212,34 @@ describe("division fixtures tab pairs each .seeding stage with its OWN proposal"
     await renderFixturesTab();
     const calledWith = stagesSpies.getSeedProposal.mock.calls.map((args: unknown[]) => args[1]);
     expect(calledWith.sort()).toEqual(["stage-x", "stage-y"]);
+  });
+
+  // The crux of the F2 conversion: `s.progression != null` alone is NOT the
+  // right filter — Decision 3 keeps the two DB-level flows (auto-seed on
+  // completion vs propose/confirm at setup) separate, and an on_complete
+  // stage never goes through getSeedProposal/ProgressionPanel. A stage
+  // carrying a real progression spec but timing: "on_complete" must get NO
+  // panel, same as a stage with no progression at all.
+  it("an on_complete stage (auto-seed) gets NO ProgressionPanel, even though it carries a real progression spec", async () => {
+    const stageAutoSeed = {
+      id: "stage-auto",
+      name: "Auto",
+      kind: "knockout",
+      config: {},
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+        placement: "rank_order",
+        timing: "on_complete",
+      },
+    };
+    stagesSpies.listStages.mockResolvedValue([STAGE_X, stageAutoSeed]);
+
+    const tree = await renderFixturesTab();
+    const panels = findAll(tree, ProgressionPanel);
+    expect(panels).toHaveLength(1);
+    expect((panels[0]!.props as { stageId: string }).stageId).toBe("stage-x");
+
+    const calledWith = stagesSpies.getSeedProposal.mock.calls.map((args: unknown[]) => args[1]);
+    expect(calledWith).toEqual(["stage-x"]);
   });
 });

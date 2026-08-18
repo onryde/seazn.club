@@ -48,7 +48,7 @@ const STAGE = {
   kind: "league",
   name: "League",
   config: {},
-  qualification: null,
+  progression: null,
   status: "active",
 };
 

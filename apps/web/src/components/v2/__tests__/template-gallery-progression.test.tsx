@@ -59,18 +59,26 @@ type Stage = CompetitionTemplate["divisions"][number]["stages"][number];
 const GROUP_NO_SEEDING: Stage = { i18nNameKey: "templates.stage.groupStage", kind: "group", groups: 6 };
 
 // euro24's actual R16 stage (catalog/euro24.json) — the ONE stage in the
-// launch catalog with more than one take rule.
+// launch catalog with more than one take rule. F2 (unified progression
+// field): was `.seeding: {source,take,placement}`, now
+// `.progression: {sources: [{stage,take}], placement, timing}` — schema.ts's
+// TemplateStageProgression narrows every source's `stage` to "previous".
 const EURO24_KNOCKOUT: Stage = {
   i18nNameKey: "templates.stage.knockout",
   kind: "knockout",
   size: 16,
-  seeding: {
-    source: "previous",
-    take: [
-      { kind: "topNPerGroup", n: 2 },
-      { kind: "bestNth", nth: 3, count: 4 },
+  progression: {
+    sources: [
+      {
+        stage: "previous",
+        take: [
+          { kind: "topNPerGroup", n: 2 },
+          { kind: "bestNth", nth: 3, count: 4 },
+        ],
+      },
     ],
     placement: "rank_order",
+    timing: "setup",
   },
 };
 
@@ -275,7 +283,11 @@ describe("TemplateDetailSheet — progression section", () => {
           i18nNameKey: "templates.stage.pagePlayoff",
           kind: "page_playoff",
           size: 4,
-          seeding: { source: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }], placement: "rank_order" },
+          progression: {
+            sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+            placement: "rank_order",
+            timing: "setup",
+          },
         },
       ],
       "cricket",

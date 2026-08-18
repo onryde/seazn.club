@@ -25,18 +25,22 @@ import { DivisionBuilder, paywallReasonForStages, type SportOption } from "@/com
 import type { StageDraft } from "@/components/v2/format-templates";
 import uiEn from "@/dictionaries/en/ui.json";
 
-const LEAGUE_STAGE: StageDraft = { kind: "league", name: "League", config: {}, qualification: null };
+const LEAGUE_STAGE: StageDraft = { kind: "league", name: "League", config: {}, progression: null };
 const PAGE_PLAYOFF_STAGE: StageDraft = {
   kind: "page_playoff",
   name: "Playoffs",
   config: {},
-  qualification: { topN: 4 },
+  progression: {
+    sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+    placement: "rank_order",
+    timing: "on_complete",
+  },
 };
 const DOUBLE_ELIM_STAGE: StageDraft = {
   kind: "double_elim",
   name: "Double elimination",
   config: {},
-  qualification: null,
+  progression: null,
 };
 
 describe("paywallReasonForStages — pure per-kind derivation", () => {

@@ -6286,7 +6286,7 @@ async function divisionSettingsSuite(admin: Session): Promise<void> {
   );
 
   const structSwap = await raw(admin, `/api/v1/divisions/${div.id}/stages`, "PUT", [
-    { seq: 1, kind: "knockout", name: "KO", config: {}, qualification: null },
+    { seq: 1, kind: "knockout", name: "KO", config: {}, progression: null },
   ]);
   check(
     "v8 structure PUT 409s once fixtures exist",
@@ -6500,7 +6500,8 @@ async function templateInstantiationSuite(): Promise<void> {
 
   // P7/D1b (T5) — multi-stage instantiation: t20-super8 (group -> Super 8 ->
   // knockout) is the catalog's first template with 3 stages, TWO of which
-  // carry `.seeding` in the SAME division. It is gated on STAGE COUNT alone
+  // carry progression (timing: "setup") in the SAME division. It is gated
+  // on STAGE COUNT alone
   // (V112: stages.per_division.max is 2 on community, 4 on pro) — a fresh
   // Pro session, via the same setPlan + bustOrgEntitlements flip every other
   // Pro-gated suite in this file already uses, not a template-specific block.
@@ -6557,10 +6558,11 @@ async function templateInstantiationSuite(): Promise<void> {
   check("template instantiation: t20-super8 group stage generates from real entrants", t20GroupGen.status < 300);
 
   // The group stage was only just generated, never played — Super 8 (fed by
-  // it via .seeding) must still generate real fixture ROWS with every slot
-  // TBD, exactly like P6/D4a's stageProgressionSuite proved for a knockout
-  // final. This is the same mechanism reaching a non-terminal, group-kind
-  // stage instead — the actual point of the t20-super8 catalog entry.
+  // it via progression, timing: "setup") must still generate real fixture
+  // ROWS with every slot TBD, exactly like P6/D4a's stageProgressionSuite
+  // proved for a knockout final. This is the same mechanism reaching a
+  // non-terminal, group-kind stage instead — the actual point of the
+  // t20-super8 catalog entry.
   const t20SuperGen = v1data<{
     created: number;
     fixtures: {
@@ -6598,9 +6600,10 @@ async function templateInstantiationSuite(): Promise<void> {
 
 /**
  * D4a/P5 stage progression (own fresh free session — not an entitlement
- * gate): seed a division whose knockout stage declares `.seeding` instead of
- * the older `qualification` field, generate its TBD placeholder fixtures
- * BEFORE the group stage is even generated, decide the group stage, complete
+ * gate): seed a division whose knockout stage declares progression with
+ * timing: "setup" (F2 unified the old `.seeding`/`.qualification` split
+ * onto this one field), generate its TBD placeholder fixtures BEFORE the
+ * group stage is even generated, decide the group stage, complete
  * it, propose, confirm, and score the now-real next-stage fixture — proving
  * the whole chain is actually playable end to end, not just that entrants
  * landed in the right cells.
@@ -6633,7 +6636,11 @@ async function stageProgressionSuite(): Promise<void> {
         kind: "knockout",
         name: "KO",
         config: {},
-        seeding: { source: "previous", take: [{ kind: "topNPerGroup", n: 1 }], placement: "rank_order" },
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
       },
     ]),
   );
@@ -6648,7 +6655,7 @@ async function stageProgressionSuite(): Promise<void> {
     fixtures: { home_entrant_id: string | null; home_slot_label: SlotLabelWire; away_slot_label: SlotLabelWire }[];
   }>(await v1(free, `/api/v1/stages/${koId}/generate`, "POST"));
   check(
-    "stage progression: .seeding KO generates 1 fully-TBD fixture before the group stage runs at all",
+    "stage progression: setup-timing KO generates 1 fully-TBD fixture before the group stage runs at all",
     koGen.created === 1 && koGen.fixtures[0]!.home_entrant_id === null,
   );
   // P6 (D4b task A) fix round 1 — smoke coverage for the data contract every
@@ -14648,7 +14655,11 @@ async function qualifyFromAnyStageSuite(admin: Session): Promise<void> {
       seq: 2,
       kind: "knockout",
       name: "Plate",
-      qualification: { losersOfRound: { round: 1, count: 4 } },
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 4 }] }],
+        placement: "rank_order",
+        timing: "on_complete",
+      },
     }),
   );
 

@@ -16,12 +16,17 @@ export interface FormatFamily {
   /** The one-sentence trade-off the recommendation strip shows. */
   tradeoff: string;
   body: string[];
-  /** Canned 8-entrant stage graph for the live preview. */
+  /** Canned 8-entrant stage graph for the live preview. F2 (unified
+   *  progression field): was `qualification`, now `progression` — mirrors
+   *  format-templates.ts's StageDraft shape (sources[].take[]/placement/
+   *  timing). These are NOT decorative: they feed the real engine through
+   *  previewDivisionFixtures, so a wrong shape here silently mis-sizes the
+   *  live preview rather than erroring. */
   cannedStages: {
     kind: string;
     name: string;
     config: Record<string, unknown>;
-    qualification: unknown;
+    progression: unknown;
   }[];
   pro?: boolean;
 }
@@ -243,22 +248,34 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
   {
     slug: "league",
     kinds: ["league"],
-    cannedStages: [{ kind: "league", name: "League", config: { legs: 1 }, qualification: null }],
+    cannedStages: [{ kind: "league", name: "League", config: { legs: 1 }, progression: null }],
   },
   {
     slug: "groups-knockout",
     kinds: ["group"],
     cannedStages: [
-      { kind: "group", name: "Group stage", config: { legs: 1, pools: { count: 2 } }, qualification: null },
+      { kind: "group", name: "Group stage", config: { legs: 1, pools: { count: 2 } }, progression: null },
       {
         kind: "knockout",
         name: "Knockout",
         config: {},
-        qualification: {
-          take: [
-            { pool: "A", rank: 1 }, { pool: "B", rank: 1 },
-            { pool: "A", rank: 2 }, { pool: "B", rank: 2 },
+        progression: {
+          sources: [
+            {
+              stage: "previous",
+              take: [
+                {
+                  kind: "picks",
+                  picks: [
+                    { pool: "A", rank: 1 }, { pool: "B", rank: 1 },
+                    { pool: "A", rank: 2 }, { pool: "B", rank: 2 },
+                  ],
+                },
+              ],
+            },
           ],
+          placement: "rank_order",
+          timing: "on_complete",
         },
       },
     ],
@@ -266,27 +283,31 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
   {
     slug: "knockout",
     kinds: ["knockout"],
-    cannedStages: [{ kind: "knockout", name: "Knockout", config: {}, qualification: null }],
+    cannedStages: [{ kind: "knockout", name: "Knockout", config: {}, progression: null }],
   },
   {
     slug: "double_elim",
     kinds: ["double_elim"],
     pro: true,
     cannedStages: [
-      { kind: "double_elim", name: "Double elimination", config: {}, qualification: null },
+      { kind: "double_elim", name: "Double elimination", config: {}, progression: null },
     ],
   },
   {
     slug: "swiss",
     kinds: ["swiss"],
-    cannedStages: [{ kind: "swiss", name: "Swiss", config: { rounds: 5 }, qualification: null }],
+    cannedStages: [{ kind: "swiss", name: "Swiss", config: { rounds: 5 }, progression: null }],
   },
   {
     slug: "stepladder",
     kinds: ["stepladder"],
     cannedStages: [
-      { kind: "league", name: "League", config: { legs: 1 }, qualification: null },
-      { kind: "stepladder", name: "Stepladder finals", config: {}, qualification: { topN: 4 } },
+      { kind: "league", name: "League", config: { legs: 1 }, progression: null },
+      { kind: "stepladder", name: "Stepladder finals", config: {}, progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+        placement: "rank_order",
+        timing: "on_complete",
+      } },
     ],
   },
   {
@@ -294,8 +315,12 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
     kinds: ["page_playoff"],
     pro: true,
     cannedStages: [
-      { kind: "league", name: "League", config: { legs: 1 }, qualification: null },
-      { kind: "page_playoff", name: "Playoffs", config: {}, qualification: { topN: 4 } },
+      { kind: "league", name: "League", config: { legs: 1 }, progression: null },
+      { kind: "page_playoff", name: "Playoffs", config: {}, progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+        placement: "rank_order",
+        timing: "on_complete",
+      } },
     ],
   },
   {
@@ -307,7 +332,7 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
         kind: "americano",
         name: "Americano",
         config: { mode: "americano", courtCount: 2, rounds: 7 },
-        qualification: null,
+        progression: null,
       },
     ],
   },
@@ -316,7 +341,7 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
     kinds: ["ladder"],
     pro: true,
     cannedStages: [
-      { kind: "ladder", name: "Ladder", config: { challengeRange: 3 }, qualification: null },
+      { kind: "ladder", name: "Ladder", config: { challengeRange: 3 }, progression: null },
     ],
   },
 ];

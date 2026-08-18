@@ -58,7 +58,7 @@ const STAGE = {
   kind: "league",
   name: "League",
   config: {},
-  qualification: null,
+  progression: null,
   status: "active",
 };
 /** UNSCHEDULED, deliberately — the auto-schedule CTA lives in the pinned

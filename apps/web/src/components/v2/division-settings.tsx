@@ -108,6 +108,35 @@ async function fileToWebp(file: File, max: number): Promise<Blob> {
   return blob;
 }
 
+/** Reverse-derives the picker's "how many qualify" knob from a division's
+ *  stored stages, to pre-fill the Top-N-advance control when editing an
+ *  existing format. Pure, so it's unit-testable without opening the
+ *  "Format" Group (defaults closed — its children, including the control
+ *  this feeds, never reach a static render or the interactive harness).
+ *
+ *  F2 (unified progression field): was `.qualification` (`topN` |
+ *  `take.length`); now reads the FIRST stage's `.progression`, matching
+ *  whichever TakeRule kind format-templates.ts's real specs emit —
+ *  rankRange -> to-from+1 (league_ko/group_stepladder/group_playoffs/
+ *  qualifying_main), picks -> picks.length (groups_ko), roundLosers ->
+ *  count (ko_plate). Falls back to 4, same default as before. */
+export function currentQualifiedFromStages(
+  stages: { progression: Record<string, unknown> | null }[],
+): number {
+  const stage = stages.find((st) => st.progression);
+  const sources = (stage?.progression as { sources?: { take?: unknown[] }[] } | undefined)?.sources;
+  const take = sources?.flatMap((s) => s.take ?? []) ?? [];
+  for (const t of take) {
+    const rule = t as { kind?: string; from?: number; to?: number; count?: number; picks?: unknown[] };
+    if (rule.kind === "rankRange" && typeof rule.from === "number" && typeof rule.to === "number") {
+      return rule.to - rule.from + 1;
+    }
+    if (rule.kind === "picks" && Array.isArray(rule.picks)) return rule.picks.length;
+    if (rule.kind === "roundLosers" && typeof rule.count === "number") return rule.count;
+  }
+  return 4;
+}
+
 export function DivisionSettings({
   division,
   orgId,
@@ -133,7 +162,7 @@ export function DivisionSettings({
   locked: boolean;
   /** Stage structure (kind + name) — shown so group/top sections are visible
    *  here; structure itself is edited on the Fixtures tab. */
-  stages: { name: string; kind: string; config: Record<string, unknown> | null; qualification: Record<string, unknown> | null }[];
+  stages: { name: string; kind: string; config: Record<string, unknown> | null; progression: Record<string, unknown> | null }[];
   canEdit: boolean;
   /** "/o/{org}/c/{comp}/d/" — renames regenerate the slug, and the client
    *  must follow it without losing the settings tab. */
@@ -162,13 +191,7 @@ export function DivisionSettings({
   // Competition format = the stage structure (League / Groups + Knockout…).
   const detected = detectTemplate(stages);
   const [template, setTemplate] = useState(detected ?? "league");
-  const currentQualified = (() => {
-    const q = stages.find((st) => st.qualification)?.qualification as
-      | { topN?: number; take?: unknown[] }
-      | undefined;
-    return q?.topN ?? (Array.isArray(q?.take) ? q.take.length : 4);
-  })();
-  const [qualified, setQualified] = useState(currentQualified);
+  const [qualified, setQualified] = useState(currentQualifiedFromStages(stages));
   const [poolCount, setPoolCount] = useState(
     ((stages.find((st) => st.kind === "group")?.config as { pools?: { count?: number } } | null)?.pools?.count) ?? 2,
   );
