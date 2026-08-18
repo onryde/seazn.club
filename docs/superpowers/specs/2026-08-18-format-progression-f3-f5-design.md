@@ -94,22 +94,35 @@ multi-stage picker format will:
   pre-insert guard was added to fail the transaction cleanly instead of
   committing a stage that can never be seeded.
 
-**F3 must decide what an organiser sees when this happens**, and the decision
-is a product one, not an implementation detail. The options, in the order this
-document recommends them:
+**Owner ruling 2026-08-18: detect and offer.** Considered and rejected were
+auto-regenerating silently while no result exists (least friction, but a
+bracket that reshapes under an organiser who has already shared its link is its
+own kind of wrong) and locking entrants once day-one fixtures exist (simplest
+to reason about, worst for real tournaments, where late entries are normal).
 
-1. **Detect and offer.** When entrants change under a `setup` stage with
-   generated fixtures, surface it in the UI — "your bracket was built for 16
-   qualifiers; your groups now produce 18. Rebuild it?" — with a one-click
-   regenerate. The organiser sees the truth and chooses.
-2. **Auto-regenerate on entrant change**, silently, while no result exists.
-   Least friction, but a bracket that silently reshapes under an organiser who
-   has already shared its link is its own kind of wrong.
-3. **Lock entrants once day-one fixtures exist.** Simplest to reason about,
-   worst for real tournaments, where late entries are normal.
+The ruling means: when entrants change under a `setup` stage that already has
+generated fixtures, F3 surfaces it — *"your bracket was built for 16
+qualifiers; your groups now produce 18. Rebuild it?"* — with a one-click
+regenerate. Nothing reshapes without someone choosing it.
 
-Whatever is chosen, F3 owes a test for the stranded-seed case specifically —
-it is the one path the existing error message admits it cannot resolve.
+Two consequences for scope, both established in §7 P3:
+
+- **The staleness signal does not exist and must be built.** Nothing today
+  compares live entrant count against a generated stage's slot count.
+  Derive it — `progressionSize` over the current source shape versus the
+  fixtures actually generated — rather than storing a flag, so it cannot go
+  stale on its own.
+- **This is new UI, not new copy.** `lib/seeding-error.ts` only translates
+  `SEEDING_RULES_MISSING` *after* an organiser presses seed. There is no
+  surface that warns while the bracket is drifting.
+
+Regeneration itself is already safe to offer: it is idempotent and
+deterministic, keyed by `ext_key` (`stages.ts:3, :150, :401`), so re-running
+diffs against what exists rather than duplicating.
+
+F3 owes a test for the stranded-seed case specifically — it is the one path the
+existing error message admits it cannot resolve (`stages.ts:1560`), and the
+rebuild offered by this ruling must not lead an organiser into it.
 
 ### 2.3 Derive placement from shape
 
@@ -445,11 +458,19 @@ e2e.yml` is **live on pull requests**.
 > 4. Verify §7 P1 by execution: a `setup` stage's fixtures reach the schedule
 >    board and survive a BUILD. If any gate depends on entrant identity, that
 >    gate is the real work — report before proceeding.
-> 5. Decide and implement the §2.2 entrant-churn experience. The design
->    recommends option 1 (detect and offer a rebuild); confirm with the owner
->    before building, since §7 P3 establishes this is new UI, not new copy.
->    Ship a test for the stranded-seed case specifically — `stages.ts:1560`
->    records that the existing advice "cannot work" there.
+> 5. Implement the §2.2 entrant-churn experience. **Owner ruled 2026-08-18:
+>    detect and offer** — a banner when a `setup` stage's generated fixtures
+>    stop matching what its sources now produce ("built for 16 qualifiers;
+>    your groups now produce 18. Rebuild it?") with a one-click regenerate.
+>    Nothing reshapes without the organiser choosing it; do not auto-regenerate
+>    and do not lock entrants. Derive the staleness signal (`progressionSize`
+>    over the current source shape vs the fixtures generated) rather than
+>    storing a flag. This is new UI — `lib/seeding-error.ts` is post-hoc only.
+>    Regeneration is already idempotent and `ext_key`-keyed (`stages.ts:3,
+>    :150, :401`), so it diffs rather than duplicates. Ship a test for the
+>    stranded-seed case specifically — `stages.ts:1560` records that the
+>    existing advice "cannot work" there, and the rebuild this ruling offers
+>    must not lead an organiser into it.
 > 6. Wire all 14 `label`/`help` strings in `STAGE_TEMPLATES` through the
 >    dictionary, **with a reader in the same commit**. Keys nothing reads are
 >    the inert-seam pattern L3 was made to revert; `i18n:check` verifies locale

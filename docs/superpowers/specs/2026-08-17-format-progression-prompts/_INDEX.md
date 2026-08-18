@@ -94,6 +94,15 @@ prompts for F3, F5 and two standalone product fixes.
    disjoint on inspection, and three catalogue templates already emit
    `timing: "setup"` so F4 has live test data today.
 
+7. **Entrant churn: DETECT AND OFFER** (2026-08-18). When entrants change
+   under a `setup` stage that already has generated fixtures, F3 surfaces it
+   with a one-click rebuild rather than auto-regenerating silently or locking
+   the entrant list. Nothing reshapes without the organiser choosing it — a
+   bracket that has already been shared is the case that decides this.
+   Consequence: the staleness signal does NOT exist today and must be built
+   (derived, not stored); `lib/seeding-error.ts` is post-hoc only, so this is
+   new UI rather than new copy. Design §2.2 and §7 P3.
+
 ## Where ruling 4's collapse actually lands (swept 2026-08-17)
 
 The two pairs are **cross-vocabulary** — each pair is one member from
