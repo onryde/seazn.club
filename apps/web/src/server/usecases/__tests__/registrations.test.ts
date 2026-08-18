@@ -97,6 +97,7 @@ import {
   exportRegistrationsCsv,
   registrationIcs,
   resumeRegistrationCheckout,
+  mintGroupCheckout,
   hashRegistrationToken,
   REGISTRATION_TOKEN_PREFIX,
   type RegistrationRow,
@@ -314,10 +315,11 @@ async function seedSecondEntry(
   divisionId: string,
   amountCents: number,
   displayName: string,
+  status: RegistrationRow["status"] = "pending",
 ): Promise<RegistrationWithGroupRow> {
   const [reg] = await sql<{ id: string }[]>`
     insert into registrations (group_id, division_id, display_name, status, amount_cents)
-    values (${groupId}, ${divisionId}, ${displayName}, 'pending', ${amountCents})
+    values (${groupId}, ${divisionId}, ${displayName}, ${status}, ${amountCents})
     returning id`;
   return loadWithGroup(reg.id);
 }
@@ -2859,5 +2861,146 @@ describe.skipIf(!HAS_DB)("RS002 W5 whole-branch review: clearing a stale expires
     // Reverting the sweep's clearExpiresIfNoLongerNeeded call makes this
     // fail: same stale-deadline gap as withdrawCore, same fix.
     expect(group!.expires_at).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS003 W3a — group-scoped checkout minting (owner rulings 1, 2, 3, 5).
+// Currency validation (ruling 4) is covered above, in "card submit path
+// (spec §3)" — the check lives in createRegistrationCheckout, shared by
+// every caller including mintGroupCheckout, so it is proven once.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS003 W3a)", () => {
+  it("mints ONE session for a multi-entry cart: N line items, amount = sum, application fee over the sum, group-keyed metadata on both session and intent", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const first = await seedRegistration(competition.id, division.id, settings, { displayName: "Team A" });
+    const second = await seedSecondEntry(first.registration.group_id, division.id, 700, "Team B");
+
+    const url = await mintGroupCheckout(
+      first.registration.group_id,
+      division.id,
+      "http://test.local",
+      first.access_token,
+    );
+    expect(url).toBe("https://checkout.stripe.test/session");
+
+    const args = stripeMock.checkoutCreate.mock.calls[0][0];
+    expect(args.line_items).toHaveLength(2);
+    expect(args.line_items.map((li) => li.price_data.unit_amount).sort()).toEqual([500, 700]);
+    // Pro plan (stripeRig seeds "pro") is 2% — over the SUM (1200), never
+    // either entry alone.
+    expect(args.payment_intent_data.application_fee_amount).toBe(applicationFeeCents(1200, 2));
+
+    expect(args.metadata.kind).toBe("registration_group");
+    expect(args.metadata.registration_group_id).toBe(first.registration.group_id);
+    expect(args.metadata.registration_ids.split(",").sort()).toEqual(
+      [first.registration.id, second.id].sort(),
+    );
+    expect(args.payment_intent_data.metadata.registration_group_id).toBe(first.registration.group_id);
+    expect(args.payment_intent_data.metadata.registration_ids.split(",").sort()).toEqual(
+      [first.registration.id, second.id].sort(),
+    );
+    // Greenfield conversion (owner ruling 3) — no reader should ever find
+    // the old entry-scoped shape on a freshly minted session.
+    expect(args.metadata.registration_id).toBeUndefined();
+    expect(args.payment_intent_data.metadata.registration_id).toBeUndefined();
+
+    // checkout_session_id/fee_percent have always lived on the GROUP
+    // (V364) — the mint stamps the cart, not either entry.
+    const group = await loadWithGroup(first.registration.id);
+    expect(group.checkout_session_id).toMatch(/^cs_test_/);
+  });
+
+  it("a partial-waitlist cart charges only the non-waitlisted entries", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const paid = await seedRegistration(competition.id, division.id, settings, { displayName: "Paid Entry" });
+    const waitlisted = await seedSecondEntry(
+      paid.registration.group_id,
+      division.id,
+      0,
+      "Waitlisted Entry",
+      "waitlisted",
+    );
+
+    const url = await mintGroupCheckout(
+      paid.registration.group_id,
+      division.id,
+      "http://test.local",
+      paid.access_token,
+    );
+    expect(url).not.toBeNull();
+
+    const args = stripeMock.checkoutCreate.mock.calls[0][0];
+    expect(args.line_items).toHaveLength(1);
+    expect(args.line_items[0].price_data.unit_amount).toBe(500);
+    expect(args.metadata.registration_ids).toBe(paid.registration.id);
+    expect(args.metadata.registration_ids).not.toContain(waitlisted.id);
+  });
+
+  it("a maximal 10-entry cart keeps the joined registration_ids metadata value under Stripe's 500-char limit", async () => {
+    // Must track schemas.ts's PublicRegisterGroupRequest.entries.max(10)
+    // (RS003 W1) — so a future cap raise fails HERE, not in production
+    // (owner ruling 2).
+    const { competition, division, settings } = await stripeRig();
+    const first = await seedRegistration(competition.id, division.id, settings, { displayName: "Entry 0" });
+    const ids = [first.registration.id];
+    for (let i = 1; i < 10; i++) {
+      const entry = await seedSecondEntry(first.registration.group_id, division.id, 100, `Entry ${i}`);
+      ids.push(entry.id);
+    }
+    expect(ids).toHaveLength(10);
+
+    const url = await mintGroupCheckout(
+      first.registration.group_id,
+      division.id,
+      "http://test.local",
+      first.access_token,
+    );
+    expect(url).not.toBeNull();
+
+    const args = stripeMock.checkoutCreate.mock.calls[0][0];
+    expect(args.line_items).toHaveLength(10);
+    const joined = args.metadata.registration_ids as string;
+    expect(joined.split(",").sort()).toEqual([...ids].sort());
+    expect(joined.length).toBeLessThan(500);
+    expect((args.payment_intent_data.metadata.registration_ids as string).length).toBeLessThan(500);
+  });
+
+  it("an all-waitlisted cart mints nothing (owner ruling 5)", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings, { status: "waitlisted" });
+    expect(res.registration.payment_method).toBeNull();
+
+    const url = await mintGroupCheckout(
+      res.registration.group_id,
+      division.id,
+      "http://test.local",
+      res.access_token,
+    );
+    expect(url).toBeNull();
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("an offline payment-method cart mints nothing (owner ruling 5)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      payment_method: "offline",
+      fee_cents: 500,
+    });
+    const res = await seedRegistration(competition.id, division.id, settings);
+    expect(res.registration.payment_method).toBe("offline");
+
+    const url = await mintGroupCheckout(
+      res.registration.group_id,
+      division.id,
+      "http://test.local",
+      res.access_token,
+    );
+    expect(url).toBeNull();
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
   });
 });
