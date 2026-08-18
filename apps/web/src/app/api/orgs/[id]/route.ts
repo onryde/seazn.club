@@ -14,6 +14,8 @@ import { handler } from "@/lib/http";
 import { HttpError } from "@/lib/errors";
 import { mergeBrandColor, mergeSponsors } from "@/lib/org-branding";
 import { isValidIana } from "@/lib/tz";
+import { hasLocale } from "@/lib/i18n-constants";
+import { isRegistrationCurrency } from "@/lib/currency";
 import { EDITOR_ROLES, renameOrgSchema, type Organization } from "@/lib/types";
 import { z } from "zod";
 
@@ -35,6 +37,23 @@ const orgPatchSchema = z.union([
       .refine(isValidIana, { message: "Unknown timezone" })
       .nullable(),
   }).strict(),
+  // Public default locale. Read by every ENTRANT-facing surface already — the
+  // public org/competition pages, embeds, calendar.ics, OG images, slideshows,
+  // and the locale frozen onto a new registration (lib/registrant-locale) —
+  // and until now written by nothing but tests. This is its first writer.
+  // Never null: `toLocale` would fall back to English anyway, so an explicit
+  // code is the only state worth storing.
+  z.object({ default_locale: z.string().refine(hasLocale, { message: "Unsupported locale" }) }).strict(),
+  // Entry-fee currency (RS001b, V365). NOT the billing currency — that is the
+  // subscription's and is resolved by preferredCurrency; this is what an
+  // ENTRANT is quoted and charged. `isRegistrationCurrency` mirrors the
+  // column's own allowlist CHECK; the DB constraint is the real gate, this
+  // just turns a violation into a 400 instead of a 500.
+  //
+  // The same-currency rule (V365) locks this column to the Connect account's
+  // settlement currency while one is attached, so the write is REFUSED rather
+  // than silently reverted by the next syncConnectAccount.
+  z.object({ currency: z.string().refine(isRegistrationCurrency, { message: "Unsupported currency" }) }).strict(),
   // Brand color ({ colors: { primary } }, same shape as competitions.branding).
   // primary: null clears back to the platform default. Writes are accepted on
   // any plan — reads are gated by dashboard.branding, like competitions.
@@ -90,6 +109,23 @@ export async function PATCH(
     if ("default_payment_method" in body) updates.default_payment_method = body.default_payment_method;
     if ("about" in body) updates.about = body.about;
     if ("timezone" in body) updates.timezone = body.timezone;
+    if ("default_locale" in body) updates.default_locale = body.default_locale;
+    if ("currency" in body) {
+      // Refuse rather than write-then-lose. syncConnectAccount mirrors the
+      // account's settlement currency onto this column on EVERY sync, so a
+      // change accepted here would be reverted on the next webhook — the org
+      // would see it save, then silently change back.
+      const [conn] = await sql<{ stripe_account_id: string | null }[]>`
+        select stripe_account_id from organizations where id = ${id}`;
+      if (!conn) throw new HttpError(404, "Organization not found");
+      if (conn.stripe_account_id !== null) {
+        throw new HttpError(
+          409,
+          "Currency is locked to the connected Stripe account's settlement currency",
+        );
+      }
+      updates.currency = body.currency;
+    }
     // Branding writes MERGE into the blob (lib/org-branding): colors and
     // sponsors share the column, and neither may clobber the other.
     if ("branding" in body || "sponsors" in body) {

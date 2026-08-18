@@ -19,7 +19,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { walk, propsOf, textOf } from "@/components/__tests__/_hook-harness";
 import { ExtraOrgsControl } from "@/components/extra-orgs-control";
-import { BackLink } from "@/components/back-link";
+import { SettingsShell } from "../../_components/settings-nav";
 import type { AddOnsTabView } from "@/server/usecases/add-ons-tab";
 
 // `requireBillingPage`, not `requireOrgPage`: the billing tabs admit the
@@ -321,16 +321,27 @@ describe("Add-ons page — a payer who is not a member of this club (v17 gap #33
     expect(control).toBeDefined();
   });
 
-  it("is not offered a back link into a Settings index that would 404 on them", async () => {
+  // This used to be phrased about a BACK LINK: the page had no navigation of
+  // its own, so the one link out was the whole question, and it was withheld
+  // from a payer because the Settings index it points at is member-gated and
+  // would 404 on them. The page now carries the Settings rail instead, and the
+  // rail is eleven links into that same member-gated area — so the rule is
+  // unchanged and the thing it applies to got bigger.
+  it("is not offered navigation into a Settings area that would 404 on them", async () => {
     view.mockResolvedValue(makeView());
     const tree = await AddOnsSettingsPage({ params: Promise.resolve({ orgSlug: "acme" }) });
-    expect(walk(tree).some((el) => el.type === BackLink)).toBe(false);
+    // `walk` inspects the ELEMENT tree, so the shell is what is visible here —
+    // it is the component that decides, and SettingsNav only exists once it
+    // has run.
+    const shell = walk(tree).find((el) => el.type === SettingsShell);
+    expect((shell?.props as { showNav?: boolean } | undefined)?.showNav).toBe(false);
   });
 
-  it("keeps that back link for a member, who can open it", async () => {
+  it("gives a member the rail, who can open every item on it", async () => {
     pageAuthState.viaPayer = false;
     view.mockResolvedValue(makeView());
     const tree = await AddOnsSettingsPage({ params: Promise.resolve({ orgSlug: "acme" }) });
-    expect(walk(tree).some((el) => el.type === BackLink)).toBe(true);
+    const shell = walk(tree).find((el) => el.type === SettingsShell);
+    expect((shell?.props as { showNav?: boolean } | undefined)?.showNav).toBe(true);
   });
 });

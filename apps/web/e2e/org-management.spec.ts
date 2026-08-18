@@ -89,7 +89,9 @@ test.describe.serial("org management", () => {
       "/api/orgs",
     );
     const originalTz = orgs?.find((o) => o.id === org.id)?.timezone ?? null;
-    await page.goto("/settings");
+    // Preferences, not the Organisation tab: the scheduling timezone moved
+    // there with the rest of the "how the product reads" controls.
+    await page.goto("/settings?tab=preferences");
 
     const tz = page.getByRole("combobox", { name: "Organisation scheduling timezone" });
     await expect(tz).toBeVisible();

@@ -1,10 +1,10 @@
 export const dynamic = "force-dynamic";
 import Link from "@/components/ui/console-link";
 import {
-  Building2, Users, CreditCard, UserCircle,
+  Building2, Users,
   Pencil, Image as ImageIcon, Palette,
-  User, Mail, Download, ShieldOff, KeyRound, Compass, Banknote, BookOpen, Cookie, Handshake,
-  Clock, Newspaper, Sparkles, PackagePlus,
+  User, Mail, Download, ShieldOff, Compass, BookOpen, Cookie, Handshake, KeyRound, Banknote,
+  Clock, Newspaper, SlidersHorizontal, Languages, Coins, CalendarClock, Globe, Receipt,
   type LucideIcon,
 } from "lucide-react";
 import { getUserOrgs } from "@/lib/auth";
@@ -42,6 +42,13 @@ import { Tip } from "@/components/ui/tip";
 import type { TipId } from "@/config/tips";
 import { TourReplayButton } from "@/components/tour-replay";
 import { PlanBadge } from "@/components/plan-badge";
+import { CurrencySwitcher } from "@/components/currency-switcher";
+import { preferredCurrency } from "@/lib/currency-server";
+import { SettingsNav, SETTINGS_TABS, navContext, type SettingsTab } from "./_components/settings-nav";
+import { OrgPublicLanguage } from "@/components/org-public-language";
+import { OrgRegistrationCurrency } from "@/components/org-registration-currency";
+import { asCurrency } from "@/lib/currency";
+import { toLocale } from "@/lib/i18n-constants";
 
 function SectionHeader({ icon: Icon, children, action }: {
   icon: LucideIcon;
@@ -89,29 +96,10 @@ function roleLabel(dict: Dict, role: string): string {
   return t(dict, `role.${role}`);
 }
 
-type Tab = "organization" | "news" | "sponsors" | "team" | "api" | "account";
-
-// Plan & Billing lives at its own route (/settings/billing) — it owns the
-// Stripe checkout-return reconciliation and portal flows — so it links out of
-// the tabbed sidebar rather than rendering an inline panel here. `labelKey`
-// is a ui-catalog key resolved per-request (t) so the nav localizes.
-const NAV_ITEMS: { tab: Tab; labelKey: string; icon: LucideIcon; href?: string }[] = [
-  { tab: "organization",  labelKey: "settings.nav.organization", icon: Building2  },
-  { tab: "news",          labelKey: "news.tab",                  icon: Newspaper  },
-  { tab: "sponsors",      labelKey: "sponsors.title",            icon: Handshake  },
-  { tab: "team",          labelKey: "settings.nav.team",         icon: Users      },
-  { tab: "api",           labelKey: "settings.nav.api",          icon: KeyRound   },
-  { tab: "account",       labelKey: "settings.nav.account",      icon: UserCircle },
-];
-
-const BILLING_NAV = { labelKey: "payments.planBilling", icon: CreditCard } as const;
-const CONNECT_NAV = { labelKey: "payments.title", icon: Banknote } as const;
-// AI Credits — its own route (the wallet moved off the billing page). Member-
-// visible like Billing/Connect; the page itself is not payer-gated.
-const CREDITS_NAV = { labelKey: "settings.nav.credits", icon: Sparkles } as const;
-// Purchasable add-ons (v17 gap #293) — extra organisations today. Member-
-// visible like the three above; the purchase control inside is payer-gated.
-const ADDONS_NAV = { labelKey: "settings.nav.addOns", icon: PackagePlus } as const;
+// The tab list, the four route-owning entries beside it, and the sidebar
+// markup all live in ./_components/settings-nav — this page is one of five
+// surfaces that render it, not its owner.
+type Tab = SettingsTab;
 
 export default async function SettingsPage({
   params,
@@ -128,7 +116,7 @@ export default async function SettingsPage({
   const dict = await getDictionary(locale, "ui");
 
   const { tab: rawTab, email_change } = await searchParams;
-  const tab: Tab = (NAV_ITEMS.some((n) => n.tab === rawTab) ? rawTab : "organization") as Tab;
+  const tab: Tab = (SETTINGS_TABS.includes(rawTab as SettingsTab) ? rawTab : "organization") as Tab;
 
   // Per-tab lazy data loading.
   //
@@ -228,6 +216,56 @@ export default async function SettingsPage({
     }
   }
 
+  // Preferences tab — the DISPLAY currency, deliberately resolved with a null
+  // org id. `preferredCurrency(orgId)` puts an existing subscription's currency
+  // ABOVE the cookie (renewals must never switch currency), so passing the org
+  // here would render a picker whose value ignores what the user just chose.
+  // `subscriptionCurrency` is read separately, only to say so in words.
+  let displayCurrency: Awaited<ReturnType<typeof preferredCurrency>> | null = null;
+  let subscriptionCurrency: string | null = null;
+  let orgDefaults: {
+    locale: ReturnType<typeof toLocale>;
+    currency: ReturnType<typeof asCurrency>;
+    /** Non-null ⇒ pinned by a connected Stripe account, not editable. */
+    currencyLockedTo: string | null;
+  } | null = null;
+  if (tab === "preferences") {
+    displayCurrency = await preferredCurrency(null);
+    const [row] = await sql<{ currency: string | null }[]>`
+      select s.currency from subscriptions s
+      join organizations o on o.subscription_id = s.id
+      where o.id = ${active.id}`;
+    subscriptionCurrency = row?.currency ?? null;
+
+    // The org's own PUBLIC-facing defaults, both read straight off the row.
+    //
+    // `stripe_account_id` and `stripe_unsupported_currency` are read here
+    // rather than through `connectStatus`, which requires an OWNER session —
+    // an admin may edit these, and the two columns are all the lock state
+    // needs. `unsupported` is the account settling outside the platform
+    // allowlist, in which case `currency` was left alone and the code that
+    // pinned it is the one to name.
+    const [defaults] = await sql<{
+      default_locale: string | null;
+      currency: string | null;
+      stripe_account_id: string | null;
+      stripe_unsupported_currency: string | null;
+    }[]>`
+      select default_locale, currency, stripe_account_id, stripe_unsupported_currency
+      from organizations where id = ${active.id}`;
+    orgDefaults = {
+      locale: toLocale(defaults?.default_locale),
+      currency: asCurrency(defaults?.currency),
+      currencyLockedTo:
+        defaults?.stripe_account_id === null || defaults === undefined
+          ? null
+          : (defaults.stripe_unsupported_currency ?? asCurrency(defaults.currency)),
+    };
+  }
+
+  // The rail's plan + credit-balance header (see navContext).
+  const navCtx = await navContext(active.id);
+
   const emailChangeMessage =
     email_change &&
     ["success", "invalid", "expired", "taken", "error"].includes(email_change)
@@ -239,76 +277,8 @@ export default async function SettingsPage({
       <div className="mx-auto max-w-5xl px-4 py-4 md:py-8">
         <div className="flex flex-col gap-4 md:flex-row md:gap-8">
 
-          {/* ── Sidebar on desktop; sticky scrollable tab row on phones
-                 (v3/02 §3.1 — no more desktop-width rows in one long scroll). ── */}
-          <aside className="w-full md:w-44 md:shrink-0">
-            <p className="mb-3 hidden px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500 md:block">
-              {t(dict, "settings.nav.title")}
-            </p>
-            {/* Sticky just below the gantry header (which is also sticky
-                top:0) — pinning both to top:0 makes them compete for the
-                same position and this row loses, scrolling fully out of
-                view (02-console-org.md). */}
-            <nav className="scroll-x scroll-x-fade sticky top-[var(--app-header-h)] z-30 -mx-4 flex gap-1 whitespace-nowrap bg-[var(--background)]/90 px-4 py-2 backdrop-blur md:static md:z-auto md:mx-0 md:block md:space-y-0.5 md:bg-transparent md:p-0 md:backdrop-blur-none">
-              {NAV_ITEMS.map(({ tab: navTab, labelKey, icon: Icon }) => {
-                const isActive = tab === navTab;
-                return (
-                  <Link
-                    key={navTab}
-                    href={routes.orgSettings(orgSlug, navTab)}
-                    className={`flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition ${
-                      isActive
-                        ? "bg-purple-100 font-medium text-purple-800"
-                        : "text-slate-600 hover:bg-purple-50 hover:text-purple-700"
-                    }`}
-                  >
-                    <Icon
-                      className={`h-4 w-4 shrink-0 ${isActive ? "text-purple-600" : "text-slate-500"}`}
-                      strokeWidth={1.75}
-                    />
-                    {t(dict, labelKey)}
-                  </Link>
-                );
-              })}
-              {/* Connect + Plan & Billing are their own routes (each owns a
-                  Stripe reconcile-on-return round trip). */}
-              <Link
-                href={routes.connect(orgSlug)}
-                className="flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-600 transition hover:bg-purple-50 hover:text-purple-700"
-              >
-                <CONNECT_NAV.icon className="h-4 w-4 shrink-0 text-slate-500" strokeWidth={1.75} />
-                {t(dict, CONNECT_NAV.labelKey)}
-              </Link>
-              <Link
-                href={routes.billing(orgSlug)}
-                className="flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-600 transition hover:bg-purple-50 hover:text-purple-700"
-              >
-                <BILLING_NAV.icon className="h-4 w-4 shrink-0 text-slate-500" strokeWidth={1.75} />
-                {t(dict, BILLING_NAV.labelKey)}
-              </Link>
-              <Link
-                href={routes.credits(orgSlug)}
-                className="flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-600 transition hover:bg-purple-50 hover:text-purple-700"
-              >
-                <CREDITS_NAV.icon className="h-4 w-4 shrink-0 text-slate-500" strokeWidth={1.75} />
-                {t(dict, CREDITS_NAV.labelKey)}
-              </Link>
-              <Link
-                href={routes.addOns(orgSlug)}
-                className="flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-600 transition hover:bg-purple-50 hover:text-purple-700"
-              >
-                <ADDONS_NAV.icon className="h-4 w-4 shrink-0 text-slate-500" strokeWidth={1.75} />
-                {t(dict, ADDONS_NAV.labelKey)}
-              </Link>
-            </nav>
-            <div className="my-4 hidden border-t border-purple-100 md:block" />
-            <Link
-              href={routes.orgHome(orgSlug)}
-              className="hidden rounded-lg px-3 py-2 text-sm text-slate-500 transition hover:bg-slate-50 hover:text-slate-600 md:block"
-            >
-              ← {t(dict, "settings.nav.backToCompetitions")}
-            </Link>
-          </aside>
+          <SettingsNav orgSlug={orgSlug} active={tab} dict={dict} context={navCtx} />
+
 
           {/* ── Panel ── */}
           <main className="min-w-0 flex-1">
@@ -393,16 +363,6 @@ export default async function SettingsPage({
                 )}
 
 
-                {/* Scheduling timezone (V305) — the VENUE lane every division
-                    inherits. Lives here, not on the division: divisions no
-                    longer ask for a timezone at all. */}
-                {canEdit && (
-                  <div className="mt-5 border-t border-slate-100 pt-5">
-                    <SubSection icon={Clock} label={t(dict, "settings.org.timezone")} />
-                    <OrgTimezone orgId={active.id} initialTimezone={active.timezone} />
-                  </div>
-                )}
-
                 {canEdit && (
                   <div className="mt-5 border-t border-slate-100 pt-5">
                     <SubSection icon={Compass} label={t(dict, "settings.org.tour")} />
@@ -482,6 +442,119 @@ export default async function SettingsPage({
               </section>
             )}
 
+            {/* ── PREFERENCES ──
+                Everything that changes how the product READS rather than what
+                it contains: your times, your language, the currency prices are
+                shown in, and your analytics consent. Four of these five lived
+                on the Account tab or the Organisation tab, where they sat
+                beside irreversible actions (delete account, transfer owner) and
+                org identity fields — different stakes, same page.
+
+                My timezone vs the organisation's is the one pair that must not
+                read as a duplicate: the personal one drives YOUR times, the org
+                one is the VENUE lane every division inherits. Labelled and
+                described separately for exactly that reason. */}
+            {tab === "preferences" && (
+              <div className="space-y-5">
+                <section className="card p-5">
+                  <SectionHeader icon={SlidersHorizontal}>{t(dict, "settings.nav.preferences")}</SectionHeader>
+                  <p className="text-sm text-slate-500">{t(dict, "settings.prefs.desc")}</p>
+                </section>
+
+                {/* Personal — timezone (spec 2026-07-14). Drives every personal
+                    time + the local-time hint beside venue times. */}
+                <section className="card p-5">
+                  <SectionHeader icon={Clock}>{t(dict, "settings.prefs.mine")}</SectionHeader>
+                  <label className="mb-1 block text-sm text-slate-500">{t(dict, "settings.account.timezone")}</label>
+                  <TimezonePreference current={user.timezone} />
+
+                  <div className="mt-5 border-t border-slate-100 pt-5">
+                    <SubSection icon={Languages} label={t(dict, "settings.account.language")} />
+                    <LocalePreference current={user.locale} />
+                  </div>
+
+                  <div className="mt-5 border-t border-slate-100 pt-5">
+                    <SubSection icon={Coins} label={t(dict, "settings.prefs.currency")} />
+                    {displayCurrency && <CurrencySwitcher current={displayCurrency} showLabel={false} />}
+                    <p className="mt-2 text-xs text-slate-500">
+                      {t(dict, "settings.prefs.currencyHelp")}
+                    </p>
+                    {/* An existing subscription's currency outranks this cookie
+                        in preferredCurrency() — renewals and upgrades never
+                        switch currency. Saying so here is the difference
+                        between a preference and a broken control. */}
+                    {subscriptionCurrency && (
+                      <p className="mt-1 text-xs text-slate-500">
+                        {t(dict, "settings.prefs.currencyLocked", {
+                          currency: subscriptionCurrency.toUpperCase(),
+                        })}
+                      </p>
+                    )}
+                  </div>
+                </section>
+
+                {/* Organisation — scheduling timezone (V305): the VENUE lane
+                    every division inherits. Divisions no longer ask for a
+                    timezone at all. */}
+                {canEdit && orgDefaults && (
+                  <section className="card p-5">
+                    <SectionHeader icon={CalendarClock}>{t(dict, "settings.prefs.org")}</SectionHeader>
+                    <SubSection icon={Clock} label={t(dict, "settings.org.timezone")} />
+                    <OrgTimezone orgId={active.id} initialTimezone={active.timezone} />
+
+                    {/* The org's PUBLIC language. Read for a long time by every
+                        entrant-facing surface — public pages, embeds,
+                        calendar.ics, OG images, the slideshow, and the locale
+                        frozen onto each registration — and written by nothing
+                        until now, so a club whose members read French had no
+                        way to say so. Sits directly under the personal
+                        language picker above precisely because the pair is
+                        what makes each one legible. */}
+                    <div className="mt-5 border-t border-slate-100 pt-5">
+                      <SubSection icon={Globe} label={t(dict, "settings.org.publicLanguage")} />
+                      <OrgPublicLanguage orgId={active.id} initialLocale={orgDefaults.locale} />
+                    </div>
+
+                    {/* The entry-fee currency (V365) — what an ENTRANT is
+                        quoted, not what the club is billed. Same story: the
+                        column and its allowlist have existed since RS001b with
+                        no UI to reach them. Locked while a Connect account is
+                        attached; the control says so and the API refuses the
+                        write rather than letting the next sync revert it. */}
+                    <div className="mt-5 border-t border-slate-100 pt-5">
+                      <SubSection icon={Receipt} label={t(dict, "settings.org.regCurrency")} />
+                      <OrgRegistrationCurrency
+                        orgId={active.id}
+                        initialCurrency={orgDefaults.currency}
+                        lockedTo={orgDefaults.currencyLockedTo}
+                      />
+                    </div>
+                  </section>
+                )}
+
+                {/* Privacy & cookies — analytics consent can be changed/withdrawn here. */}
+                <section className="card p-5">
+                  <SectionHeader
+                    icon={Cookie}
+                    action={
+                      <CookieSettingsButton className="btn btn-ghost text-xs">
+                        {t(dict, "settings.account.cookieSettings")}
+                      </CookieSettingsButton>
+                    }
+                  >
+                    {t(dict, "settings.account.privacy")}
+                  </SectionHeader>
+                  <p className="text-sm text-slate-500">
+                    {t(dict, "settings.account.privacyDesc")}{" "}
+                    <Link href="/legal/cookie-policy" className="text-purple-600 underline">
+                      {t(dict, "settings.account.cookiePolicy")}
+                    </Link>
+                    .
+                  </p>
+                </section>
+              </div>
+            )}
+
             {/* ── ACCOUNT ── */}
             {tab === "account" && (
               <div className="space-y-5">
@@ -510,16 +583,6 @@ export default async function SettingsPage({
                   </p>
                 </section>
 
-                {/* Preferences — timezone (spec 2026-07-14). Drives every
-                    personal time + the local-time hint beside venue times. */}
-                <section className="card p-5">
-                  <SectionHeader icon={Clock}>{t(dict, "settings.account.preferences")}</SectionHeader>
-                  <label className="mb-1 block text-sm text-slate-500">{t(dict, "settings.account.timezone")}</label>
-                  <TimezonePreference current={user.timezone} />
-                  <label className="mb-1 mt-5 block text-sm text-slate-500">{t(dict, "settings.account.language")}</label>
-                  <LocalePreference current={user.locale} />
-                </section>
-
                 {/* Change email */}
                 <section className="card p-5">
                   <SectionHeader icon={Mail}>{t(dict, "settings.account.changeEmail")}</SectionHeader>
@@ -540,27 +603,6 @@ export default async function SettingsPage({
                   </SectionHeader>
                   <p className="text-sm text-slate-500">
                     {t(dict, "settings.account.exportDesc")}
-                  </p>
-                </section>
-
-                {/* Privacy & cookies — analytics consent can be changed/withdrawn here. */}
-                <section className="card p-5">
-                  <SectionHeader
-                    icon={Cookie}
-                    action={
-                      <CookieSettingsButton className="btn btn-ghost text-xs">
-                        {t(dict, "settings.account.cookieSettings")}
-                      </CookieSettingsButton>
-                    }
-                  >
-                    {t(dict, "settings.account.privacy")}
-                  </SectionHeader>
-                  <p className="text-sm text-slate-500">
-                    {t(dict, "settings.account.privacyDesc")}{" "}
-                    <Link href="/legal/cookie-policy" className="text-purple-600 underline">
-                      {t(dict, "settings.account.cookiePolicy")}
-                    </Link>
-                    .
                   </p>
                 </section>
 

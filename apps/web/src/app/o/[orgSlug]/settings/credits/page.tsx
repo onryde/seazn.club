@@ -6,13 +6,13 @@ export const dynamic = "force-dynamic";
 // CSV export it mounts are session-authed inside their own handlers.
 import { requireBillingPage } from "@/server/page-auth";
 import { routes } from "@/lib/routes";
-import { BackLink } from "@/components/back-link";
 import { BillingCredits } from "@/components/billing-credits";
 import { getCreditsTab } from "@/server/usecases/credits-tab";
 import { creditPackOptions } from "@/lib/currency";
 import { preferredCurrency } from "@/lib/currency-server";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
+import { SettingsShell, navContext } from "../_components/settings-nav";
 
 export default async function CreditsSettingsPage({
   params,
@@ -24,6 +24,10 @@ export default async function CreditsSettingsPage({
   const orgId = org.id;
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
+  // The rail's plan + credit-balance header. Skipped for a payer who is not a
+  // member: they get no rail at all (see SettingsShell.showNav), so the two
+  // reads would be paid for nothing.
+  const navCtx = viaPayer ? null : await navContext(org.id);
 
   // The same credits-only fetch the billing page used to do: the wallet view,
   // the pack ladder priced in the group's locked currency, and the CSV export
@@ -32,18 +36,14 @@ export default async function CreditsSettingsPage({
   const creditsView = await getCreditsTab(orgId);
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-8">
-      {/* The org's own Settings index is member-gated, so a payer who is not a
-          member of this club would only 404 on it (v17 gap #333). They arrived
-          from the bill, not from the club, and have nothing to go back to
-          here. */}
-      {!viaPayer && (
-        <BackLink
-          href={routes.orgSettings(orgSlug)}
-          label={t(dict, "action.settings")}
-          emphasis="button"
-        />
-      )}
+    <SettingsShell orgSlug={orgSlug} context={navCtx} active="credits" dict={dict} showNav={!viaPayer}>
+      {/* No "back to Settings" link here any more. It existed because this page
+      had no navigation of its own — #190 removed it as duplication, it was
+      reported missing twice, and it came back. The rail beside it now goes
+      everywhere the link went and marks where you are, so the link is the
+      duplication #190 thought it was. A payer who is not a member has no rail,
+      and had no link either (v17 gap #333): the Settings index is member-gated
+      and would 404 on them. */}
       <div className="mb-6">
         <h1 className="page-title">{t(dict, "settings.nav.credits")}</h1>
       </div>
@@ -56,6 +56,6 @@ export default async function CreditsSettingsPage({
         packs={creditPackOptions(currency)}
         currency={currency}
       />
-    </main>
+    </SettingsShell>
   );
 }

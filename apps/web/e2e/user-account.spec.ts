@@ -39,9 +39,10 @@ test("display name edits persist and the data export downloads", async ({ page }
 });
 
 // Timezone preference: pick a zone, it persists; a bogus zone is rejected by
-// the API. No email budget touched.
+// the API. No email budget touched. It lives on the Preferences tab, not
+// Account — Account keeps identity and the irreversible actions.
 test("timezone preference persists and the API rejects a bogus zone", async ({ page }) => {
-  await page.goto("/settings?tab=account");
+  await page.goto("/settings?tab=preferences");
 
   // The picker is a search combobox, not a <select> — 418 zones cannot be
   // scrolled, so selectOption/toHaveValue no longer apply. Type, then click.

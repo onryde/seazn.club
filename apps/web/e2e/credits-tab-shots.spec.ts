@@ -27,8 +27,13 @@ test("AI Credits tab: nav entry, desktop + mobile, axe", async ({ page }) => {
   const org = await activeOrg(page);
 
   // Nav showing the new "AI Credits" tab (desktop settings sidebar).
+  //
+  // `exact: true` is load-bearing: Playwright's `name` is a SUBSTRING match,
+  // and the rail's plan header now carries a second link to the same route
+  // reading "10 AI credits". Without it this resolves to two elements and
+  // fails strict mode — which is what it did.
   await page.goto(`/o/${org.slug}/settings?tab=organization`, { waitUntil: "load" });
-  await expect(page.getByRole("link", { name: "AI Credits" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "AI Credits", exact: true })).toBeVisible();
   await shot(page, "settings-nav-desktop");
 
   // The new page, desktop.

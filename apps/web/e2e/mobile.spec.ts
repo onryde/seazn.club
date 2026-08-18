@@ -157,7 +157,10 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     { path: "/settings?tab=sponsors" },
     { path: "/settings?tab=team" },
     { path: "/settings?tab=api" },
+    { path: "/settings?tab=preferences" },
     { path: "/settings?tab=account" },
+    // Now carries the sidebar strip too — eleven chips that must scroll inside
+    // their own container, never the page body.
     { path: "/settings/billing" },
     // The Event Pass page (task 22). Its comparison table is three plans wide
     // and must scroll inside its own container, never the page body — the one

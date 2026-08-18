@@ -12,7 +12,18 @@
 // brings an off-screen tab in.
 import { useEffect, useRef } from "react";
 
-export function ScrollActiveTabIntoView({ children }: { children: React.ReactNode }) {
+// `className="contents"` is the escape hatch for a STICKY strip: the wrapper
+// would otherwise be exactly strip-height, leaving `position: sticky` no room
+// to travel inside it. `display: contents` generates no box, so the strip
+// still resolves its containing block against the real parent, and the ref
+// keeps working because querySelector walks the DOM, not the box tree.
+export function ScrollActiveTabIntoView({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -20,5 +31,5 @@ export function ScrollActiveTabIntoView({ children }: { children: React.ReactNod
     active?.scrollIntoView({ block: "nearest", inline: "center" });
   }, []);
 
-  return <div ref={ref}>{children}</div>;
+  return <div ref={ref} className={className}>{children}</div>;
 }
