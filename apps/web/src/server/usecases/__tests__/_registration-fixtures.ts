@@ -95,9 +95,15 @@ export async function rig(
 }
 export type RigResult = Awaited<ReturnType<typeof rig>>;
 
-/** r.* ∪ g.* — same join `regGroupCols` builds internally (not exported).
- *  Kept in exact column-list sync with it by the schema tests in
- *  registration-schema.test.ts, which pin every column on both tables.
+/** r.* ∪ g.* — the same join `regGroupCols` (registrations.ts, not exported)
+ *  builds internally.
+ *  NOTE: nothing enforces that these two column lists stay in sync.
+ *  `registration-schema.test.ts` asserts only that each column EXISTS in the
+ *  database, against its own separately hand-typed name array — it never
+ *  compares against `regGroupCols` or against this list. So a column added to
+ *  `registration_groups`/`registrations` and omitted from both hand-copied
+ *  lists would go unnoticed here. They are in sync today; that is maintenance,
+ *  not a guarantee.
  *  `g.refunded_cents` is aliased to `group_refunded_cents` (V368) so it never
  *  collides with `r.refunded_cents` — see the block comment above
  *  `RegistrationWithGroupRow` in registrations.ts. */

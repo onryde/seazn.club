@@ -193,9 +193,13 @@ export const ROUTES: RouteSpec[] = [
   { path: "/public/orgs/{orgSlug}/competitions/{slug}/registration", method: "get", summary: "Public register panel: open divisions, fees, remaining capacity", tag: "public", public: true, response: S.PublicRegistrationInfo },
   // POST .../register (old single-entry submit) deleted in the RS001
   // registration demolition — RS003 W2 defines its group-shaped replacement
-  // below, plus the new join-by-code endpoint. checkout_url is null until
-  // wave 3 wires Stripe checkout.
-  { path: "/public/orgs/{orgSlug}/competitions/{slug}/register", method: "post", summary: "Public group registration submit: a club rep's whole cart (one or more entries) in one transaction — capacity, eligibility, waitlist and payment-method coherence enforced; checkout_url is null until wave 3 wires Stripe", tag: "public", public: true, request: S.PublicRegisterGroupRequest, response: S.PublicRegisterGroupResponse, status: 201, errors: [402, 404, 422, 429, 503] },
+  // below, plus the new join-by-code endpoint. `checkout_url` carries a real
+  // Stripe URL whenever the cart has a payable subtotal, and is null for an
+  // all-free/all-waitlisted/offline cart OR when minting failed (the route
+  // returns 201 regardless, so a committed cart is never reported as a failed
+  // registration — see the route's own doc comment).
+  // 400 is the honeypot's generic rejection; there is no 402 on this path.
+  { path: "/public/orgs/{orgSlug}/competitions/{slug}/register", method: "post", summary: "Public group registration submit: a club rep's whole cart (one or more entries) in one transaction — capacity, eligibility, waitlist and payment-method coherence enforced; checkout_url is a Stripe URL when the cart has a payable subtotal, otherwise null", tag: "public", public: true, request: S.PublicRegisterGroupRequest, response: S.PublicRegisterGroupResponse, status: 201, errors: [400, 404, 422, 429, 503] },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}/register/join", method: "post", summary: "Join an existing team entry via its join_code link — mints one player row; squad-cap and eligibility enforced", tag: "public", public: true, request: S.PublicJoinRequest, response: S.PublicJoinResponse, status: 201, errors: [404, 422, 429] },
   { path: "/public/registrations/{id}", method: "get", summary: "Registrant status view (?token=; ?reconcile=1 after checkout)", tag: "public", public: true, response: S.PublicRegistrationStatus, errors: [401] },
   { path: "/public/registrations/{id}/withdraw", method: "post", summary: "Registrant self-withdraw (token)", tag: "public", public: true, request: S.PublicRegistrationToken, response: S.PublicRegistrationStatus },
