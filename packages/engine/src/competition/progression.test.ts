@@ -296,6 +296,104 @@ describe("resolveProgression", () => {
     expect(ties).toHaveLength(0); // the resolver never even reaches b/c: rank 1's row (a) already answers rankRange{1,1}
   });
 
+  // F2 Task 6 review (defect 2): the test above proves only that `ties`
+  // stays EMPTY — the tied rows are never actually reached, so it cannot
+  // tell a working tie-flag branch from a broken one. This test takes
+  // rankRange{1,2} so the resolver visits BOTH rank 1 (untied) and rank 2
+  // (a real, populated tie), and asserts the actual flagged shape.
+  it("flags a tie for real when the resolver actually reaches a tied row — not just proves ties stays empty", () => {
+    const tied = [
+      { entrantId: "a", rank: 1 },
+      { entrantId: "b", rank: 2, tieUnbroken: true, tieBreak: { key: "seed", with: ["c"] } },
+      { entrantId: "c", rank: 3, tieUnbroken: true, tieBreak: { key: "seed", with: ["b"] } },
+    ] as StandingsRow[];
+    const spec: ProgressionSpec = {
+      sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+      placement: "rank_order",
+    };
+    const { qualifiers, ties } = resolveProgression(spec, [{ poolKeys: [] }], [
+      { pools: [{ pool: "", rows: tied }] },
+    ]);
+    expect(qualifiers.map((q) => q.entrantId)).toEqual(["a", "b"]);
+    expect(ties).toHaveLength(1);
+    expect(ties[0]).toEqual({
+      descriptors: [{ kind: "rank_range", rank: 2 }],
+      entrantIds: ["b", "c"],
+      reason: "seed",
+    });
+  });
+
+  // F2 Task 6 review (defect 3): euro24's real shape — topNPerGroup +
+  // bestNth TOGETHER in ONE source's take[] (the old CombinedQualification
+  // within a single spec). Every existing test above exercises either a
+  // single take rule, or ordering multiple rules via placeDescriptors on
+  // bare descriptors (progression.ts's own test file) — nothing resolves
+  // (dedupes, reads real entrant ids for) 2+ take rules through
+  // resolveProgression itself. Two pools, both rules pull from BOTH pools,
+  // so a dedupe bug (an entrant counted twice) would surface as a thrown
+  // QUALIFICATION_INVALID or a wrong qualifier count, not silently pass.
+  it("resolves 2+ take rules in ONE source — euro24's real shape (topNPerGroup + bestNth together)", () => {
+    const tables: SourceTables = {
+      pools: [
+        {
+          pool: "A",
+          rows: [
+            { entrantId: "A1", rank: 1 },
+            { entrantId: "A2", rank: 2 },
+            { entrantId: "A3", rank: 3, points: 0 },
+          ] as StandingsRow[],
+        },
+        {
+          pool: "B",
+          rows: [
+            { entrantId: "B1", rank: 1 },
+            { entrantId: "B2", rank: 2 },
+            { entrantId: "B3", rank: 3, points: 3 },
+          ] as StandingsRow[],
+        },
+      ],
+    };
+    const spec: ProgressionSpec = {
+      sources: [
+        {
+          stage: "previous",
+          take: [
+            { kind: "topNPerGroup", n: 1 },
+            { kind: "bestNth", nth: 3, count: 2 },
+          ],
+        },
+      ],
+      placement: "rank_order",
+    };
+    const { qualifiers } = resolveProgression(spec, [{ poolKeys: ["A", "B"] }], [tables]);
+    // topNPerGroup's pot (both pools' winners) comes first, in pool-key
+    // order; bestNth's pot (both pools' 3rd place, cross-group ranked by
+    // points — B3 has more) comes second. All 4 distinct — no dedupe
+    // collision, and every entrant resolved for real (not just ordered).
+    expect(qualifiers.map((q) => q.entrantId)).toEqual(["A1", "B1", "B3", "A3"]);
+  });
+
+  // F2 Task 6 review (defect 4): `rankRange` replaced `topN`, whose old
+  // message told an organiser what to DO. Pins the restored message and its
+  // data payload so a future regression here is a red test, not a
+  // rediscovery.
+  it("a rankRange shortfall names the available count and tells the organiser what to do (topN's regressed UX, restored)", () => {
+    const spec: ProgressionSpec = {
+      sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 3 }] }],
+      placement: "rank_order",
+    };
+    const tables: SourceTables = { pools: [{ pool: "", rows: [{ entrantId: "e1", rank: 1 }] as StandingsRow[] }] };
+    expect(() => resolveProgression(spec, [{ poolKeys: [] }], [tables])).toThrow(
+      /the previous stage takes rank 2, but only 1 entrant is available — lower the qualifier count or add entrants/,
+    );
+    try {
+      resolveProgression(spec, [{ poolKeys: [] }], [tables]);
+    } catch (err) {
+      expect(EngineError.is(err, "STAGE_NOT_READY")).toBe(true);
+      expect((err as EngineError).data).toEqual({ pool: "", rank: 2, available: 1 });
+    }
+  });
+
   it("picks resolve positionally, never resorted — declaration order IS seed order", () => {
     const tables: SourceTables = {
       pools: [
