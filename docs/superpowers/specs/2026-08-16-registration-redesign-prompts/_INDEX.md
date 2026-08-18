@@ -25,8 +25,8 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 |---|---|---|---|
 | RS001 | `RS001-schema-and-demolition.md` | — | **DONE** — PR #592 merged `850cc630` (2026-08-17) |
 | RS001b | `RS001b-org-currency-allowlist.md` | RS001 | **DONE** — PR #598 merged `a7cca608` (2026-08-17) |
-| RS002 | `RS002-core-usecases.md` | RS001b | **IN FLIGHT** — branch `feat/rs002-registration-usecases` |
-| RS003 | `RS003-public-endpoints.md` | RS002 | TODO |
+| RS002 | `RS002-core-usecases.md` | RS001b | **DONE** — PR #607 merged `4ff0bf8f` (2026-08-17) |
+| RS003 | `RS003-public-endpoints.md` | RS002 | **IN FLIGHT** — branch `feat/rs003-registration-endpoints` |
 | RS004 | `RS004-hub-settings-tab.md` | RS003 | TODO |
 | RS005 | `RS005-hub-registrants-tab.md` | RS004 | TODO |
 | RS006 | `RS006-public-stepper.md` | RS003 | TODO |
@@ -680,6 +680,418 @@ recorded here because they bind future sessions too:
    `{dob, gender}` shape, not a `registration_players` row, so the organiser
    gates can call it against `persons`. **Two eligibility evaluators is the exact
    failure the RS011 re-homing exists to prevent.**
+
+## RS003 entry conditions (RS002 hands these over — verified 2026-08-17, not asserted)
+
+Written at RS003 kickoff after two scouts read the tree, because the RS002
+close-out believed these were already recorded here and they were not. Every
+claim below carries its `path:line`.
+
+1. **Checkout minting is NOT an empty seam — it is a LIVE per-registration one.**
+   `submitRegistrationGroup`'s own doc comment (`registration-submit.ts:301-303`)
+   correctly says minting is RS003's job, and no group/cart-level session
+   creator exists. But `createRegistrationCheckout`
+   (`registrations.ts:1242-1303`) does exist, charges ONE
+   `RegistrationWithGroupRow`'s `amount_cents`, and is reachable today from
+   `resumeRegistrationCheckout` (`:2107`) and both waitlist-promote paths
+   (`:894`, `:2299`). So RS003 is not adding minting to a blank slate; it is
+   introducing a cart-scoped session alongside a live entry-scoped one. Decide
+   explicitly whether the entry-scoped path is re-pointed at the group or kept,
+   and make the metadata unambiguous either way — see 2.
+2. **The webhook keys by a single registration id.** `billing-events.ts:115-116`
+   dispatches on `session.metadata.kind === "registration"` into
+   `handleRegistrationCheckoutCompleted` (`registrations.ts:1315-1335`), which
+   reads `session.metadata.registration_id` and `metadata.fee_percent`, then
+   calls the private `confirmPaidRegistration` (`:1348`). `createRegistrationCheckout`
+   also stamps `payment_intent_data.metadata = {registration_id, org_id}`
+   (`:1272-1277`, `:1291`). A group session therefore cannot simply reuse
+   `kind: "registration"` with a group id in the same key — the old handler
+   would take the group id for a registration id.
+3. **Currency 422 rule** — unchanged, restated so RS003 does not have to find it
+   under RS002's heading: validate `registration_groups.currency` against BOTH
+   `REGISTRATION_CURRENCIES` and the org's CURRENT `organizations.currency`
+   BEFORE any Stripe call; a stale snapshot is a clean 422 with a stable error
+   shape, never a Stripe error on a registrant's pay page. The snapshot itself
+   is already written correctly at submit — `registration-submit.ts:497` names
+   `currency` from `organizations.currency` (RS001b's NOT NULL, no default).
+4. **What the deleted route actually did**, from `git show 850cc6308^` — the
+   brief says "as the old route did" without the numbers:
+   - buckets: `regsubmit:${ip}` `{max:10, windowSeconds:60}`, then
+     `regsubmit:${ip}:${division_id}` `{max:5, windowSeconds:300}` — the second
+     fired AFTER the honeypot check, and re-keys to the competition for a cart.
+   - honeypot: field **`website`**, `throw new HttpError(400, "Registration failed")`.
+   - locale: `explicitLocale(req)` read cookie **`seazn_locale`**, `hasLocale`-validated,
+     passed as `locale` to the usecase; null means "fall back to org default".
+   - privacy gate: enforced in the USECASE, not the route —
+     `HttpError(422, "Please agree to the privacy policy to register")`.
+     `SubmitGroupInput.privacy_consent` (`registration-submit.ts:91-99`) is the
+     RS002 replacement; confirm it still throws before trusting it.
+   - response was `{registration_id, status, ref_code, access_token, checkout_url}`.
+5. **FALSE PREMISE in the RS003 prompt: "mirror the old route's tests" — there are
+   none to mirror.** `git grep -a` for `honeypot|website|429|rate` across the five
+   deleted e2e specs and `public-register-request.test.ts` returns ZERO hits. The
+   honeypot and both rate-limit buckets lived only in `route.ts` and were never
+   covered at any level. RS003 writes that coverage fresh; restoring a pattern is
+   not an option.
+6. **Status is server-side, so RS003 owes no GET route.** Old and current tree
+   both read status inside the page component (`register/status/page.tsx`,
+   `r/[ref]/page.tsx`) — no HTTP status endpoint ever existed. The read model
+   RS007 will consume is **`groupByRef`, and it is in `registrations.ts:2031`,
+   NOT `registration-approval.ts`** (the RS002 close-out filed it under the
+   wrong module). Its token compare is already correct — `tokenMatchesHash`
+   (`:2014`) is `timingSafeEqual` against `DUMMY_ACCESS_HASH` (`:2003`) even for
+   a nonexistent ref, and both misses throw the identical `404
+   "registration not found"`. **The older `publicRegistrationStatus*` paths
+   (`:1728`, `:1801`) still compare with SQL `=`** — not constant-time, and RS007
+   inherits that if nobody re-points them.
+7. **Entry points RS003 calls:** `submitRegistrationGroup(ctx, input)`
+   (`registration-submit.ts:305`) — `ctx` is `{orgSlug, compSlug, sessionUserId?}`,
+   returns `{group_id, ref_code, access_token, currency, amount_cents (subtotal,
+   non-waitlisted only), entries[]}`; and `joinTeamEntry(ctx, input)`
+   (`registration-submit.ts:710`). The group insert, `ref_code` retry loop,
+   `access_token` minting and per-entry `join_code` (team, non-free-agent only)
+   are all already inside the usecase — the endpoint must not re-do them.
+8. **`schemas.ts` is 3502 lines** and already carries a comment at `L1841-1846`
+   stating the old single-entry public request/response pair was deleted and that
+   RS003 owns defining the group-shaped replacements. Public registration schemas
+   sit at `L1803-1871`, org-authed ones at `L1690-1802`. OpenAPI generator entry:
+   `api-v1/openapi.ts:10`.
+
+### RS003 (2026-08-18) — branch `feat/rs003-registration-endpoints`
+
+**LIVE SESSION STATE.** Worktree `.claude/worktrees/rs003`, rebased onto `main`
+@ `604767c63`. **W1 CLOSED. W2/W3/W4 not started** — a resumed session starts at
+W2 (routes).
+
+- **Environment is LEFT UP for tomorrow** (owner's call, 2026-08-18): DB label
+  `rs003b` on `127.0.0.1:54671/seazn_rs003b`, schema at **v370**, worktree
+  `node_modules` already installed. The **placement service was stopped** — it
+  goes stale the moment `services/placement/src/**` changes and the next run
+  would dial it and pass against code that no longer exists. Restart it with
+  `seazn-env up --label rs003b --placement` (venv is warm now, ~9s), and
+  re-export `PLACEMENT_SERVICE_HOST` from `seazn-env env --label rs003b`,
+  because the port is re-derived and will NOT be 50633 again.
+- **Before trusting that DB tomorrow, check whether `main` moved.** If a rebase
+  brings any new delta, this DB's Flyway history no longer matches the tree and
+  it must be destroyed and rebuilt, not migrated — that is exactly what happened
+  to its predecessor today (see the V368 collision below).
+- **Wave plan** (sequential — the file sets overlap, so never parallel):
+  W1 schemas → W2 routes (`app/api/v1/public/.../register/**`) → W3 payment
+  orchestration + webhook re-key (`registrations.ts`, `billing-events.ts`) →
+  W4 whole-branch review.
+- **The V-number collision recurred, one merge after RS002 recorded it.** `main`
+  briefly held TWO V368s — F1's `V368__fixture_round_role.sql` (#606) and
+  RS002's `V368__registration_entry_refunds.sql` (#607) — and Flyway refuses to
+  run AT ALL in that state (`Found more than one migration with version 368`),
+  so no fresh clone, worktree or CI Postgres job could build a schema. Both PRs
+  were green in isolation; the collision existed only in the merge, because each
+  renumbered off P8's V367 independently while open. Fixed on `main` by
+  `604767c63` (registration refunds → **V370**; F1 keeps V368+V369 because they
+  are a pair). **RS003's own deltas start at V371.** Consequence for every RS
+  session: a DB built before that rebase has `V368 = registration refunds` in
+  its Flyway history and CANNOT be reused after it — ours was destroyed and
+  rebuilt, not migrated.
+- **A 600s watchdog stall cost a full wave.** W1's first implementer ran `tsc`
+  (~2.8 GB, minutes) and a broad vitest run inside its own loop, stalled
+  mid-TDD-red, and died with ZERO commits — the same failure RS002 recorded
+  three times. What fixed it on the retry: the brief FORBIDS the agent running
+  `tsc`, lint, or the broad suite at all (the orchestrator runs those at the
+  wave boundary), requires foreground-only commands, and requires a commit at
+  red, at green and at contract-regen. Second attempt: three commits, no stall.
+
+**Wave 1 CLOSED** (`c93071a3d` red, `715ce17fe` green, `fc5c6333c` review fix).
+Exports: `PublicRegisterGroupRequest`/`Response`, `PublicJoinRequest`/`Response`,
+plus `PublicRegisterGroupContact`/`Player`/`Entry`/`EntryResult`. Gate rerun by
+the main thread: api-v1 suite **396 total / 396 passed / 0 failed / 0 failed
+suites**; root `turbo typecheck` **2/2 successful**; `openapi:gen` +
+`i18n:gen-keys` → `git status --porcelain` empty.
+
+- **Bounds chosen (the brief asked for a number and said to record it): max 10
+  entries per cart, max 50 players per entry.** The 10 also keeps the W3 Stripe
+  metadata under the 500-char value limit if entry ids are listed there.
+- **`currency` on a public REQUEST is stripped, not rejected** — never declared,
+  and these schemas are not `.strict()`, matching every other public request
+  schema in the file. Recorded because "reject" is the other defensible choice
+  and a future reader will wonder which was meant.
+- **`checkout_url` ships required-but-nullable from W1**, before W3 can fill it,
+  so the wire contract never widens later.
+- **Review fix, found by the orchestrator reading the diff, not by the
+  implementer: the refinement defaulted a missing `self_player_index` to 0.**
+  The usecase resolves `self_player_index ?? (individual && players.length === 1
+  ? 0 : undefined)` and, on `undefined`, leaves `selfIndex` null and DROPS the
+  self declaration silently (`registration-submit.ts:383-393`). So a TEAM or
+  PAIR entry claiming `registering_self` without naming its row validated
+  cleanly and fell straight into that drop — the entry submits, the registrant
+  is never linked to their own player row, and no layer errors. The schema is
+  the only place that can surface it, which is what its own comment claimed it
+  was for. Now mirrors the usecase arm for arm.
+- **Two of the three tests added with that fix do not discriminate.** Mutated
+  back to `?? 0`, exactly ONE of 27 fails (the team case). The free-agent-with-
+  no-players and individual-implied-0 cases hold under both rules and are
+  labelled in the file as characterisation. Written down because three tests
+  beside one fix reads as three proofs.
+**Wave 2 CLOSED** (`cf76cd423` routes + tests, `29504f212` orchestrator fixes).
+`POST .../register` and `POST .../register/join` under
+`app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/`. Gate rerun by
+the main thread: routes + api-v1 **416 total / 416 passed / 0 failed / 0 failed
+suites**; `turbo typecheck` **2/2**; `openapi:gen` + `i18n:gen-keys` →
+`git status --porcelain` clean.
+
+- **The narrow bucket is keyed `regsubmit:${ip}:${orgSlug}:${slug}`, NOT on the
+  competition slug alone.** `competitions_org_id_slug_key` is unique on
+  `(org_id, slug)`, so two orgs may each run a "cup" and a slug-only key made
+  one tenant's registrants spend the other's budget. The old route keyed on
+  `division_id` (globally unique uuid) and could not express this bug — the
+  re-key to competition scope is what introduced the ambiguity, so it is this
+  session's to own. Buckets as shipped: `regsubmit:${ip}` 10/60s, then the
+  honeypot, then `regsubmit:${ip}:${orgSlug}:${slug}` 5/300s; join gets
+  `regjoin:${ip}` 5/300s.
+- **Rate-limit tests here are vacuous unless the module is mocked.** `rateLimit`
+  fails OPEN with no Redis, and vitest has none — firing 11 requests "proves"
+  the limiter whether or not the route ever calls it. Both suites `vi.mock`
+  `@/lib/rate-limit` and assert the exact key/config per bucket in order, plus
+  a case where the limiter throws and the route must surface it rather than
+  swallow it.
+- **`openapi.ts`'s `ROUTES` table is not optional for a new route.**
+  `openapi-coverage.test.ts` walks `route.ts` files against that table 1:1, so
+  an unregistered route is a deterministic red. But registering it is only half
+  — **`openapi-coverage` and `openapi-published` both pass against a STALE
+  `openapi/v1.json`**, because they read the table, not the committed artifact.
+  The drift gate is CI-only. W2's first commit shipped exactly that state: 17/17
+  green locally, two stale spec files, a red CI job waiting. Always finish with
+  `openapi:gen` + `git status --porcelain`.
+- **`turbo typecheck` is the only thing that sees a test file's types.** W2's
+  `join-route.test.ts` interpolated an `unknown` (`Envelope.data.player_id`)
+  into the `sql` tag — `TS1320` + `TS2345` — while its own suite ran 17/17
+  green, because **vitest never typechecks test files**. Consequence of the
+  anti-stall rule that implementers no longer run `tsc`: the boundary gate is
+  load-bearing, not ceremonial.
+- **Join route ignores its own `orgSlug`/`slug` path segments, deliberately.**
+  `join_code` is globally unique (RS001's partial unique index), so
+  `joinTeamEntry` needs no scoping — a join link posted at the wrong org's URL
+  still resolves. No security consequence (the code IS the secret), but RS007
+  should not assume the path is validated.
+**Wave 3 CLOSED**, split into 3a (mint) and 3b (webhook) because both write
+`registrations.ts` — sequential, never parallel. Commits `d57384032`,
+`dca065a27`, `7dc86c0f7`, `554d89aac`, `864154032`, `9f5ece77f`, `aac6d9679`,
+`91b2ff5f5`, `7a2786cf1` (3a); `a9833d539`, `1d6ba5344`, `da9595c5c`,
+`f2f5528c3` (3b). Gate rerun by the main thread with placement running:
+**2993 total / 2962 passed / 0 failed / 0 failed suites / 31 pending**;
+`turbo typecheck` **2/2**; lint **75 warnings / 0 errors** (main's baseline);
+`openapi:gen` + `i18n:gen-keys` → porcelain empty.
+
+- **A checkout session covers a SET of entries in ONE group, not "the cart".**
+  Waitlist promotion pays for a single entry whose siblings may already be
+  paid, so the unit is an explicit id list. `createRegistrationCheckout(groupId,
+  registrationIds[], ctx, origin, token)` builds one line item per entry and
+  computes `application_fee_amount` over the SUM. Metadata (session AND payment
+  intent): `kind: "registration_group"`, `registration_group_id`,
+  `registration_ids` comma-joined. A test pins the joined value under Stripe's
+  500-char metadata cap for a maximal 10-entry cart, so raising the entry cap
+  reds here rather than in production.
+- **Currency 422 code is `REGISTRATION_CURRENCY_UNAVAILABLE`**, thrown before
+  `getStripe()` is reached (asserted). **But the two conditions are not
+  independently mutation-provable today**: `REGISTRATION_CURRENCY_EXCLUSIONS`
+  is empty, so `REGISTRATION_CURRENCIES == SUPPORTED_CURRENCIES`, and
+  `organizations.currency` carries a CHECK over that same list — any snapshot
+  failing the allowlist test is structurally guaranteed to fail the equality
+  test too. Both checks are real and owner-mandated (ruling 4 requires both);
+  they only become separable when someone populates the exclusions list.
+  Recorded so a future reader does not delete one as redundant.
+- **A mint failure must NOT fail the submit.** `submitRegistrationGroup` has
+  COMMITTED by the time the route mints, so a throw returned an error for a
+  registration that exists — entries holding capacity, and the registrant never
+  receiving the `ref_code`/`access_token` that are the only ways back to pay.
+  Their retry duplicates the cart. The route now catches, logs, and returns 201
+  with `checkout_url: null`; `mintGroupCheckout` still THROWS for its direct
+  callers (resume-checkout, promotion), where a 422/503 is the right answer and
+  nothing is lost.
+- **The webhook re-key exposed a cart-total smear.** The old handler forwarded
+  `session.amount_total` into a per-entry confirm — harmless while sessions were
+  entry-scoped, but a group session's `amount_total` is the CART's, so every
+  named entry would have taken the whole cart's sum onto its own `amount_cents`
+  AND onto any late/duplicate refund, which reads the same value. Same
+  cart-vs-entry confusion RS001 flagged and RS002 spent a wave fixing,
+  re-entering through the webhook. Fixed, and the parameter was **removed**
+  rather than passed `null`: with one non-test caller, all five
+  `amountTotal ?? …` fallbacks and the `coalesce()` had an unreachable non-null
+  side, three in refund math, and a dead money parameter reads like "the amount
+  actually charged".
+- **Fulfilment loops sequentially with NO per-id try/catch, on purpose.** Each
+  `confirmPaidRegistration` is its own locked transaction; a failure partway
+  must abort the rest so `billing_events.processed_at` stays null and Stripe
+  retries (already-flipped entries are idempotent on replay). Swallowing one
+  entry's failure would mark the event processed with that entry paid-for and
+  unconfirmed forever, with nothing left to retry it.
+- **`async_payment_failed` is tested through `processStripeEvent`, not by
+  calling the handler** — that also proves the dispatch branch and the
+  `HANDLED_EVENT_TYPES` entry. The direct import was removed; a comment says
+  why, so nobody "fixes" it back and reintroduces the lint drift.
+- **The gap that was open between 3a and 3b, for the record**: 3a re-keyed the
+  MINT while every consumer still read `metadata.registration_id`, so on that
+  intermediate commit a real payment would have landed and no entry would ever
+  have flipped. Inherent to splitting a wave down the producer/consumer seam —
+  if a future session splits this way, the two halves must land together.
+- **FIXED IN W3b (`a9833d539`) — and it was live on `main`, not something RS003
+  introduced: the registration webhook branch had no `payment_status` gate
+  while every branch beside it did.** `billing-events.ts:115-117` dispatched
+  `kind === "registration"` straight into `handleRegistrationCheckoutCompleted`
+  (`registrations.ts:1315-1335`), which reads the metadata and calls
+  `confirmPaidRegistration` unconditionally. Its neighbours in the SAME
+  dispatcher all guard: `size_pack` at `:126`, the next branch at `:139`, the
+  competition branch at `:213`, and even registrations' own reconcile paths at
+  `registrations.ts:1731`/`:1753` (`if (session.payment_status !== "paid")
+  return false`). Only the webhook entry point does not.
+  Why it bites: this repo correctly omits `payment_method_types`, so dynamic
+  payment methods are live, and a delayed-notification method fires
+  `checkout.session.completed` while the session is still **unpaid**. The entry
+  would then be confirmed and MATERIALISED into an entrant before any money
+  arrived. Same family as RS002's worst finding (a rejected registration
+  confirmed by a replayed webhook) — money and materialisation moving on an
+  event that does not mean "paid". W3b owned this handler for the group re-key,
+  so the gate was fixed inline rather than deferred (no-new-issues rule), and
+  `checkout.session.async_payment_succeeded` / `_failed` were added to
+  `processStripeEvent`'s switch and to `HANDLED_EVENT_TYPES` — neither existed.
+  The webhook ROUTE never filtered event types; the switch was the real gap.
+- **RS001's entry condition 2 is CLOSED, not outstanding.** The privacy-consent
+  rule that died with the old `submitRegistration` was reimplemented by RS002:
+  `registration-submit.ts:426` throws the identical
+  `422 "Please agree to the privacy policy to register"`, with the guardian
+  gate at `:419`. Verified this session; no RS003 work owed.
+
+**Waves 4-5 CLOSED** — the per-currency matrix, then an approved deep-dive that
+added 36 tests across five new files. Commits `27d12bda4` (W4 matrix),
+`ec1c51d77` (fixture extraction), `629495a7a` (webhook fulfilment),
+`b1f2a2c85`+`74dcd1dcf` (checkout guards), `ebb1dcc4f` (concurrency),
+`c340fbb36`+`769834dae` (status reads). Gate rerun by the main thread with
+placement up: **3030 total / 2999 passed / 0 failed / 0 failed suites /
+31 pending**; `turbo typecheck` **2/2**; lint **75 warnings / 0 errors**
+(main's baseline); `openapi:gen` + `i18n:gen-keys` clean.
+
+- **New files** (fixtures now shared in `__tests__/_registration-fixtures.ts`,
+  leading underscore so vitest does not collect it):
+  `registration-webhook-fulfilment.test.ts` (12),
+  `registration-checkout-guards.test.ts` (8),
+  `registration-concurrency.test.ts` (5),
+  `registration-status-read.test.ts` (11).
+- **The webhook family is tested TOGETHER on purpose.** The same failure class
+  hit this dispatcher twice in consecutive sessions — RS002's replayed webhook
+  confirming a `rejected` registration, and W3b's missing `payment_status`
+  gate. Both are "money and materialisation move on an event that does not mean
+  what the code assumed". One file now holds `rejected` + `payment_status` +
+  replay + async succeeded/failed + mid-loop abort, so the next change here
+  cannot fix one and regress the other.
+- **`groupByRef`'s doc comment made three SECURITY claims that nothing
+  asserted** — identical 404 for wrong-token vs nonexistent ref, token compare
+  runs either way, no existence disclosure. Now pinned: splitting the combined
+  `!group || !tokenOk` guard into a distinct "invalid access token" branch reds
+  the indistinguishability test. Two traps found writing it: refs carry a
+  **CHECKSUM**, so an arbitrary "valid-looking" ref is rejected before any
+  lookup and proves nothing (use `generateRefCode()`, which also makes the
+  absent ref checksum-valid-but-unassigned — the real enumeration case); and
+  hardcoded ref literals collide on rerun because the DB persists and
+  `ref_code` is globally unique. A parallel agent hit the second trap
+  independently, so it is a property of the fixture, not of either author.
+- **Both reconcile `catch` arms had no coverage.** They run when Stripe is
+  unreachable at the moment a registrant returns from checkout; without them
+  the status page 500s for someone who has just paid. Proven by making both
+  rethrow — exactly two tests red, one per function.
+- **Real two-actor concurrency IS achievable here**, contra the RS002 note that
+  it "proved unreliable in this environment" (that verdict was about ONE
+  staging attempt). Races 1 and 2 are fully real on both actors by exploiting
+  the caller-supplied `tx`; race 3 uses a NAMED single-column proxy, documented
+  in the file header, because neither function accepts an external `tx`.
+  Removing `skip locked` hangs its test to a 30s timeout — an unusual but
+  genuine kill signal. The sweep-vs-webhook comment at `:2454-2456` is now
+  verified in BOTH orders rather than asserted in prose.
+- **ORCHESTRATOR MISTAKE, recorded so it is not repeated: three waves were run
+  in parallel on "provably disjoint file sets" — but only the TEST files were
+  disjoint.** All three mutation-tested the SAME production files
+  (`registrations.ts`, `billing-events.ts`), so each agent's mutate/revert
+  cycle ran inside the others' measurement windows. One wave lost a proof to an
+  interrupted cycle and reported it; a live `for update skip locked` -> `for
+  update` mutation was visible in `git status` mid-run. **Mutation testing is a
+  shared-resource operation on the production tree — serialise it even when the
+  test files differ.** Every critical proof (payment_status gate, RULING A
+  rejected branch, `mintGroupCheckout`'s own 503) was re-run SERIALLY afterwards
+  and each killed exactly its own test.
+- **Mutations that did NOT discriminate, reported rather than counted:**
+  dropping `regIds.length === 0` changes nothing (postgres.js tolerates an empty
+  `IN ()`) — the real guard is `.filter(Boolean)` in `checkoutRegistrationIds`;
+  and `entrant_id` alone cannot detect a double-confirm because `materialise`'s
+  own idempotency check masks it — the audit-row count is what catches it.
+- **Two checkout guards are structurally unreachable in a single
+  non-concurrent call** (`entries.length === 0`, `subtotal <= 0`): both callers
+  re-derive the value they pass down. They are reachable only through the real
+  TOCTOU window between `mintGroupCheckout`'s `payable` read and
+  `createRegistrationCheckout`'s re-query, which is how the tests drive them.
+  Sound defensive code — previously untestable rather than merely untested.
+- **`token === null` in `createRegistrationCheckout` is reached from
+  `sweepRegistrations`, NOT from `mintGroupCheckout`/`resumeRegistrationCheckout`**
+  — both of those declare `token: string`. The dispatch brief said otherwise and
+  was wrong about the call graph.
+- **Owner rule (2026-08-18): E2E and smoke get their own BRAINSTORM session
+  before either is written.** Applies to RS006/RS007's e2e and RS010's smoke.
+  A checklist line like "add an e2e for the paid flow" reliably yields one
+  happy-path spec while the failure classes that actually shipped go uncovered.
+
+**Wave 6 CLOSED — live Stripe probe, e2e, and the whole-branch review.** Branch
+rebased onto `main` @ `ca3a4357a` (34 commits). Gate after the rebase:
+**3046 total / 3009 passed / 0 failed / 0 failed suites / 37 pending**
+(pre-rebase baseline was 3045/3008 — the +1 is main's own test, not drift);
+`turbo typecheck` **2/2**; lint **75/0**; `openapi:gen` + `i18n:gen-keys` clean;
+e2e **11/11** local against a prod build; live Stripe **6/6** in test mode.
+
+- **The live probe found what four waves of mocked tests could not: amounts are
+  currency-blind.** A 500+700 cart is £12.00 in gbp but ₹12.00 in inr — about
+  9p — and Stripe refuses any session below its platform minimum (~30p on this
+  GB platform). INR is offline-only per ruling 10, but **the same refusal is
+  reachable in gbp** with an entry fee set too low, and it would surface as a
+  raw Stripe error on a registrant's pay page. Now translated to a clean 422
+  `REGISTRATION_AMOUNT_TOO_SMALL`, narrowly — every other Stripe failure
+  rethrows, because a blanket catch hides real integration faults.
+- **Live-probe constraints, both recorded in the file**:
+  `organizations_stripe_account_idx` is UNIQUE, so one connected account
+  attaches to exactly ONE org (an org per currency 23505s on the second) — the
+  probe uses one org and rewrites its currency; and it detaches the account from
+  any org a previous run left it on, because a probe that only passes on a
+  virgin DB is one nobody runs twice.
+- **E2E: the deferral did not survive scrutiny.** RS003's prompt deferred e2e to
+  RS006/RS007 for "no UI yet", but `RULES.md:63-65` requires one anyway, and
+  `payments-hardening.spec.ts` already drives money flows purely through
+  `page.request`. `registration-public-api.spec.ts` ships 9 API-level cases.
+  **RS006/RS007 still owe the UI-driven flows** — this is not a substitute.
+- **Two e2e cases deliberately NOT written, because they would be vacuous:**
+  rate limits (`e2e.yml:130` sets no `REDIS_URL` ON PURPOSE, so the limiter is
+  inert and any 429 assertion passes regardless) and real `checkout_url`s (no
+  `STRIPE_MOCK_HOST`, key is `sk_test_ci_e2e_dummy`, so a mint always fails —
+  asserting a URL would assert the environment). Both live in the mocked unit
+  suites where they can actually fail.
+- **Three e2e fixture facts, each of which first presented as a code failure:**
+  `sport_variants`' key is `(sport_key, key, org_scope)` so `ON CONFLICT` must
+  be bare; the base-url env var is `PLAYWRIGHT_BASE`, not `PLAYWRIGHT_BASE_URL`;
+  and `generic`'s lineup is `size 1`, so a team entry carrying a captain is
+  ALREADY FULL and a join correctly 422s — the rep registers the team with no
+  roster and shares the link, which is design §4's actual flow.
+- **`next build` type-checks the whole app and caught what the wave gate had not
+  been re-run to catch**: wrapping the session params in `mintOrTranslate`'s
+  closure discards the narrowing from the `!org?.stripe_account_id` guard (TS
+  cannot prove `org` is not reassigned). `turbo typecheck` would have caught it
+  too — it simply was not re-run after that edit. Bind to a const before the
+  closure.
+- **Whole-branch review: 1 blocker + 3 minors, all closed.** The blocker was the
+  e2e gap above. The minors: the OpenAPI summary still told integrators
+  `checkout_url` is null "until wave 3 wires Stripe" (wave 3 wired it, and the
+  stale text shipped in both committed contract files); `errors` listed 402,
+  which nothing throws, and omitted 400, which the honeypot does; and
+  `_registration-fixtures.ts` claimed `loadWithGroup` is kept "in exact
+  column-list sync" with `regGroupCols` by the schema tests — it is not, that
+  suite only asserts each column EXISTS against its own hand-typed array.
+- **A landmine defused for RS006/RS007**: `payments-hardening.spec.ts`'s parked
+  T10 told the next reader to "delete this test.skip line once the endpoint
+  exists again". It exists again — but `submitPublicRegistration` still posts
+  the OLD flat body, so following that instruction yields a 400 that reads
+  exactly like a capacity regression. The comment now names both blockers.
 
 ## RS011 — why #412 moved here (2026-08-17)
 
