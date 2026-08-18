@@ -2155,6 +2155,7 @@
   "board.conflict.detail.outside_start_window": "Outside this match's start window",
   "board.conflict.detail.court_double_booking": "Court {court} is already taken by {other}",
   "board.conflict.detail.court_double_booking.unknown": "Court {court} is already taken by another match",
+  "board.conflict.detail.court_tag_mismatch": "Court {court} does not carry a required tag",
   "board.conflict.detail.inside_blackout": "Falls inside a blackout period",
   "board.conflict.detail.outside_session_windows": "Falls outside every session window",
   "board.conflict.detail.entrant_overlap": "{entrant} is also playing in {other} at the same time",

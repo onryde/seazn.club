@@ -2110,6 +2110,7 @@
   "board.conflict.detail.outside_start_window": "Fuera de la ventana de inicio de este partido",
   "board.conflict.detail.court_double_booking": "La pista {court} ya está ocupada por {other}",
   "board.conflict.detail.court_double_booking.unknown": "La pista {court} ya está ocupada por otro partido",
+  "board.conflict.detail.court_tag_mismatch": "La pista {court} no tiene una etiqueta requerida",
   "board.conflict.detail.inside_blackout": "Cae dentro de un periodo bloqueado",
   "board.conflict.detail.outside_session_windows": "Cae fuera de todas las franjas de sesión",
   "board.conflict.detail.entrant_overlap": "{entrant} también está jugando en {other} a la misma hora",

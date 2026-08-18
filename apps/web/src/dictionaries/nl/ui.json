@@ -2110,6 +2110,7 @@
   "board.conflict.detail.outside_start_window": "Buiten het startvenster van deze wedstrijd",
   "board.conflict.detail.court_double_booking": "Baan {court} is al bezet door {other}",
   "board.conflict.detail.court_double_booking.unknown": "Baan {court} is al bezet door een andere wedstrijd",
+  "board.conflict.detail.court_tag_mismatch": "Baan {court} heeft geen vereist label",
   "board.conflict.detail.inside_blackout": "Valt binnen een geblokkeerde periode",
   "board.conflict.detail.outside_session_windows": "Valt buiten elk sessievenster",
   "board.conflict.detail.entrant_overlap": "{entrant} speelt tegelijk ook in {other}",

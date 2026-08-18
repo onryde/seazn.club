@@ -2155,6 +2155,7 @@
   "board.conflict.detail.outside_start_window": "En dehors de la fenêtre de départ de ce match",
   "board.conflict.detail.court_double_booking": "Le court {court} est déjà occupé par {other}",
   "board.conflict.detail.court_double_booking.unknown": "Le court {court} est déjà occupé par un autre match",
+  "board.conflict.detail.court_tag_mismatch": "Le court {court} ne possède pas une étiquette requise",
   "board.conflict.detail.inside_blackout": "Tombe dans une période d'indisponibilité",
   "board.conflict.detail.outside_session_windows": "Tombe en dehors de toutes les plages de session",
   "board.conflict.detail.entrant_overlap": "{entrant} joue aussi dans {other} au même moment",
