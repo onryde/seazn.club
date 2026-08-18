@@ -9,6 +9,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
+import { createVenue, createCourt } from "../venues";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 export const GENERIC_CONFIG = {
@@ -82,7 +83,20 @@ export async function seedFootballCatalog(): Promise<void> {
 }
 
 /** Division with FUTURE fixtures — the /me lane and re-accept both filter on
- *  matchday, so dates must be ahead of now. */
+ *  matchday, so dates must be ahead of now.
+ *
+ *  P9 pass 3b: seeds a REAL venue + court and stamps `fixtures.court_id` —
+ *  never the legacy `court_label` string. `court_id` is the identity every
+ *  production reader goes through since pass 3a (`FixtureLite`'s own doc
+ *  comment: "every 'does this fixture have a placed court' question reads
+ *  THIS, never court_label"), and `resolveCandidateCourts`
+ *  (court-candidates.ts) needs a REAL `courts.id` row to resolve against — a
+ *  free-text label like the old 'Court 1' string is not a valid `CourtId`
+ *  and every `ScheduleConfig.courts` parse would reject it. `venue`/`court`
+ *  are returned alongside the existing fields (additive — every pre-existing
+ *  `{ division, fixtures }` destructure keeps working) so a caller that needs
+ *  to reference this exact court (e.g. to build its own
+ *  `schedule_settings.config.courts`) does not have to look it up again. */
 export async function seedFutureDivision(auth: AuthCtx) {
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -115,13 +129,15 @@ export async function seedFutureDivision(auth: AuthCtx) {
     config: {},
   });
   const { fixtures } = await generateStageFixtures(auth, stage!.id);
+  const venue = await createVenue(auth, { name: "Main venue", sort: 0 });
+  const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
   const t0 = Date.now() + 7 * 86_400_000;
   for (let i = 0; i < fixtures.length; i++) {
     await sql`
       update fixtures
       set scheduled_at = ${new Date(t0 + i * 30 * 60_000).toISOString()},
-          court_label = 'Court 1'
+          court_id = ${court.id}
       where id = ${fixtures[i]!.id}`;
   }
-  return { division, fixtures };
+  return { division, fixtures, venue, court };
 }
