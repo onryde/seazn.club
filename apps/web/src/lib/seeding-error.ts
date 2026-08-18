@@ -36,12 +36,17 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
  *  that map's exhaustiveness check) but NO reader on this path, so an
  *  organiser saw raw English regardless of locale. Do NOT add more here
  *  without a fresh owner ruling (P6/D4b task B's scope note: "Do NOT audit or
- *  wire other unwired codes — that is a separate session's scope"). Four of
- *  these (MAP_SLOT_INVALID, MAP_SOURCE_INVALID, MAP_SOURCE_AMBIGUOUS,
- *  BESTNTH_UNEQUAL_POOLS) are save-time `.seeding` rule-validation errors —
- *  there is no seeding-rules editor UI yet to surface them from, so the copy
- *  exists and is tested but currently has no call site; a future rules
- *  editor (P7) gets it for free. */
+ *  wire other unwired codes — that is a separate session's scope"). Three of
+ *  these (MAP_SLOT_INVALID, MAP_SOURCE_INVALID, BESTNTH_UNEQUAL_POOLS) are
+ *  save-time `.seeding` rule-validation errors — there is no seeding-rules
+ *  editor UI yet to surface them from, so the copy exists and is tested but
+ *  currently has no call site; a future rules editor (P7) gets it for free.
+ *  MAP_SOURCE_AMBIGUOUS is no longer one of them (F3 round-3 review,
+ *  2026-08-18): `placeDescriptors` (packages/engine/src/competition/
+ *  progression.ts) now throws it directly from generateProgressionSetupFixtures
+ *  (usecases/stages.ts) — the day-one/setup fixture-generation path, not just
+ *  validateStageProgression's save-time check — so it has a real call site
+ *  today, independent of any rules-editor UI. */
 export const SEEDING_ERROR_CODES = [
   "SEEDING_MAP_SLOT_INVALID",
   "SEEDING_MAP_SOURCE_INVALID",

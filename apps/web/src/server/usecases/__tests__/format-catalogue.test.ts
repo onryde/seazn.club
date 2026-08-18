@@ -71,22 +71,28 @@ describe("format catalogue — shape regression (F1 Task 5)", () => {
     // read undefined for every stage and always emit "-", masking real
     // shape drift. This ONE line is fixed so the marker stays meaningful.
     // previewDivisionFixtures/qualifierCount already read `.progression`
-    // (not a Task still owed here) — but qualifierCount's progressionSize()
-    // call treats `topNPerGroup` as group-count-dependent and contributes 0
-    // to the count (a real shape needs expandTake + a SourceShape, which
-    // qualifierCount doesn't have), so a later stage fed BY a
-    // topNPerGroup-only take (no bestNth remainder) falls back to
-    // qualifierCount's `|| 4` default regardless of the real qualifier
-    // count. Real, if silent, and this file cannot close it on its own
-    // (previewDivisionFixtures is out of scope for F3's format-templates.ts
-    // change) — verified (2026-08-18, F3 Tasks 1-2: setup timing +
-    // groups_ko's topNPerGroup/bestNth draw) that it does NOT move this
-    // snapshot's numbers: previewDivisionFixtures never reads `.timing`,
-    // and groups_ko's knockout entrantCount stays 4 either way for the
-    // qualified:4/poolCount:2 knobs below (old picks.length was 4; new
-    // topNPerGroup(n:2) contributes 0 to progressionSize and falls back to
-    // the same `|| 4`). Re-verify by rerunning this test before trusting
-    // that coincidence for any OTHER knob combination.
+    // (not a Task still owed here). F3 round-3 review correction
+    // (2026-08-18): this comment used to say qualifierCount falls back to
+    // its `|| 4` default for a topNPerGroup-only take (progressionSize's own
+    // deliberate 0 for that kind) — that was true before commit 6351fd2ce's
+    // same-session follow-up fix (stages.ts's qualifierCount now expands a
+    // topNPerGroup take against the PREVIOUS stage's real shape via
+    // expandTake + previewSourceShape) and is no longer what the code does.
+    // Re-verified against the CURRENT code (F3 Tasks 1-2: setup timing +
+    // groups_ko's topNPerGroup/bestNth draw) that neither change moves this
+    // snapshot's numbers, for two SEPARATE reasons: previewDivisionFixtures
+    // never reads `.timing` at all (the setup-timing flip is structurally
+    // invisible to it — this snapshot can prove the stage graph and round
+    // titles are unchanged, never that day-one fixtures exist); and
+    // groups_ko's knockout entrantCount below (qualified:4, poolCount:2)
+    // computes to 4 via the real expandTake path (2 pools x
+    // topNPerGroup(n:2) = 4 qualifiers, genuinely counted, not a fallback)
+    // — coincidentally the SAME number the old picks-based shape produced
+    // (picks.length was 4) and the same number the `|| 4` guard would have
+    // produced anyway. Re-verify by rerunning this test before trusting that
+    // coincidence for any OTHER knob combination — a different
+    // qualified/poolCount pair would move this snapshot today, now that
+    // qualifierCount counts topNPerGroup for real instead of falling back.
     const summary = STAGE_TEMPLATES.map((t) => {
       const stages = t.build({ qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });
       const phases = previewDivisionFixtures(stages, 8);

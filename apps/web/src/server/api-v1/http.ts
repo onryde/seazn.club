@@ -59,12 +59,13 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   SEEDING_MAP_SOURCE_INVALID: 422,
   SEEDING_BESTNTH_UNEQUAL_POOLS: 422,
   // F3 Task 3 (P6) — a seeded_map source ambiguous across >1 progression
-  // source (placeDescriptors, progression.ts). Not in seeding-error.ts's
-  // wired 13-code allowlist (that list is closed by an explicit owner ruling
-  // — "Do NOT add more here without a fresh owner ruling") — an organiser
-  // sees this raw engine message verbatim, same fallback path STAGE_NOT_READY
-  // already uses for its own unwired reasons. The status is what matters
-  // here: 422, never the 500 an unmapped code would otherwise risk.
+  // source (placeDescriptors, progression.ts). It IS in seeding-error.ts's
+  // SEEDING_ERROR_CODES allowlist now (F3 round-3 review, 2026-08-18; same
+  // file, ~:48) with real copy in all four errors.json locales — an
+  // organiser sees translated seeding copy here, not a raw engine message
+  // the way STAGE_NOT_READY's own unwired fallback still does. The status is
+  // what matters independent of that: 422, never the 500 an unmapped code
+  // would otherwise risk.
   SEEDING_MAP_SOURCE_AMBIGUOUS: 422,
 };
 
