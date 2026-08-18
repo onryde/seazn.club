@@ -8,6 +8,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
 import { resolveSponsors, type ResolvedSponsor } from "@/server/usecases/sponsors";
+import { withCourtVenueNames } from "@/server/public-site/data";
 import type {
   PublicCompetition,
   PublicDivision,
@@ -93,7 +94,13 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
              status, outcome, summary, last_seq,
              lane, is_final, third_place, conditional
       from public_fixtures_v where division_id = ${divisionId}
-      order by round_no, seq_in_round`.then((rows) => rows.map(iso)),
+      order by round_no, seq_in_round`
+      .then((rows) => rows.map(iso))
+      // P9 cutover (finding #1): venue_name/court_name — public_fixtures_v
+      // has not been extended with venue_id/court_id, so these are derived
+      // the same way public-site/data.ts's own division/fixture reads
+      // already do (withCourtVenueNames), not left frozen undefined.
+      .then((rows) => withCourtVenueNames(rows)),
     sql<PublicStandings[]>`
       select stage_id, pool_id, rows, updated_at
       from public_standings_v where division_id = ${divisionId}`,

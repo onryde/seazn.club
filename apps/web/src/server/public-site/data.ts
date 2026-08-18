@@ -11,6 +11,7 @@ import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
 import { isoDateTime } from "@/lib/public-site";
+import { buildCourtDirectory } from "@/lib/court-directory";
 import { labelPlayerStats, groupCareerStatsBySport, type CareerSportStats } from "@/server/player-stats";
 // The DB-touching "matches" counter — NOT the pure module above (same name,
 // different file). Shared with personCareerStats/countMatchesByDivision
@@ -51,39 +52,83 @@ const normalizeFixture = <T extends { scheduled_at: unknown }>(f: T): T => ({
  * columns, so this queries the base `fixtures` table directly — scoped to
  * exactly the ids the caller already fetched through the view (never a
  * wider row set than the view already authorized) — rather than editing
- * the view. Mirrors the view's own per-row "setup" redaction
- * (`case when d.status = 'setup' then null else f.venue end`, V369) so an
- * unreleased division's court assignment cannot leak through the new
- * fields before `venue`/`court_label` themselves are allowed to show it.
+ * the view. Mirrors the view's own per-row "setup" redaction (`case when
+ * d.status = 'setup' then null else f.venue end`, V369) by joining
+ * `divisions` itself instead of taking a caller-supplied status — a batch
+ * can span more than one division (not true of the two callers in THIS
+ * file today, but true of `usecases/public.ts`'s `publicFixture`, which has
+ * no division context of its own), and this way nobody can pass the wrong
+ * one.
+ *
+ * `court_name` is resolved through {@link buildCourtDirectory} (P9 pass
+ * 3d/4d, `lib/court-directory.ts`) — the SAME "Name (Venue)" disambiguation
+ * the schedule board / AI pack / court picker already use (a court name is
+ * unique only WITHIN its venue — `courts_venue_name_active_idx` — so two
+ * venues may legally each name one "Court 1"). The directory is built
+ * ORG-WIDE (every court belonging to the same org(s) as the fixtures in
+ * this batch, not just the courts this particular batch happens to
+ * reference) so a court's label can never flip depending on which OTHER
+ * fixtures were queried alongside it — this is also why
+ * `withCourtVenueName`'s single-fixture form still disambiguates correctly
+ * with nothing else in its "batch" to compare against. This file reads a
+ * SUPERUSER connection (no `current_org_id()` RLS context — unlike
+ * `usecases/schedule.ts`'s `courtNamesById`, which can rely on RLS for its
+ * org scope), so the `org_id` filter below is a hard tenant-isolation
+ * requirement, not an optimization: dropping it would leak every OTHER
+ * org's court/venue names into this org's disambiguation. Do not write a
+ * second ambiguity rule.
  */
-async function withCourtVenueNames<T extends PublicFixture>(
+export async function withCourtVenueNames<T extends { id: string }>(
   fixtures: T[],
-  divisionStatus: string,
-): Promise<T[]> {
-  if (fixtures.length === 0) return fixtures;
-  if (divisionStatus === "setup") {
-    return fixtures.map((f) => ({ ...f, venue_name: null, court_name: null }));
-  }
-  const rows = await sql<{ id: string; venue_name: string | null; court_name: string | null }[]>`
-    select f.id, ven.name as venue_name, crt.name as court_name
+): Promise<(T & { venue_name: string | null; court_name: string | null })[]> {
+  if (fixtures.length === 0) return [];
+  const rows = await sql<
+    {
+      id: string;
+      court_id: string | null;
+      org_id: string;
+      division_status: string;
+      venue_name: string | null;
+      court_name: string | null;
+    }[]
+  >`
+    select f.id, f.court_id, f.org_id, d.status as division_status,
+           ven.name as venue_name, crt.name as court_name
     from fixtures f
+    join divisions d     on d.id = f.division_id
     left join courts crt on crt.id = f.court_id
     left join venues ven on ven.id = f.venue_id
     where f.id in ${sql(fixtures.map((f) => f.id))}`;
   const byId = new Map(rows.map((r) => [r.id, r]));
+  // Setup-redacted rows contribute nothing worth disambiguating — skip
+  // their org rather than pulling it into the directory query for a
+  // result that gets nulled back out below anyway.
+  const orgIds = [...new Set(rows.filter((r) => r.division_status !== "setup").map((r) => r.org_id))];
+  const directoryRows = orgIds.length
+    ? await sql<{ id: string; name: string; venue_name: string; tags: string[] }[]>`
+        select crt.id, crt.name, ven.name as venue_name, crt.tags
+        from courts crt
+        join venues ven on ven.id = crt.venue_id
+        where crt.org_id in ${sql(orgIds)}
+        order by ven.name, crt.name, crt.id`
+    : [];
+  const directory = buildCourtDirectory(directoryRows);
   return fixtures.map((f) => {
-    const cv = byId.get(f.id);
-    return { ...f, venue_name: cv?.venue_name ?? null, court_name: cv?.court_name ?? null };
+    const r = byId.get(f.id);
+    if (!r || r.division_status === "setup") {
+      return { ...f, venue_name: null, court_name: null };
+    }
+    const court_name = r.court_id ? (directory.get(r.court_id)?.label ?? r.court_name ?? null) : null;
+    return { ...f, venue_name: r.venue_name, court_name };
   });
 }
 
 /** Single-fixture sibling of {@link withCourtVenueNames} — same derivation
  *  and redaction, no array dance at the call site. */
-async function withCourtVenueName<T extends PublicFixture>(
+export async function withCourtVenueName<T extends { id: string }>(
   fixture: T,
-  divisionStatus: string,
-): Promise<T> {
-  const [withNames] = await withCourtVenueNames([fixture], divisionStatus);
+): Promise<T & { venue_name: string | null; court_name: string | null }> {
+  const [withNames] = await withCourtVenueNames([fixture]);
   return withNames!;
 }
 
@@ -434,7 +479,7 @@ export async function getPublicDivision(
                lane, is_final, third_place, conditional
         from public_fixtures_v where division_id = ${division.id}
         order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixture));
-      const fixtures = await withCourtVenueNames(rawFixtures, division.status);
+      const fixtures = await withCourtVenueNames(rawFixtures);
       const standings = await sql<PublicStandings[]>`
         select stage_id, pool_id, rows, updated_at
         from public_standings_v where division_id = ${division.id}`;
@@ -498,7 +543,7 @@ export async function getPublicFixture(
         from public_fixtures_v
         where id = ${fixtureId} and division_id = ${division.id} limit 1`;
       if (!fixtureRow) return null;
-      const fixture = await withCourtVenueName(normalizeFixture(fixtureRow), division.status);
+      const fixture = await withCourtVenueName(normalizeFixture(fixtureRow));
       const names = await sql<{ id: string; display_name: string }[]>`
         select id, display_name from public_entrants_v
         where division_id = ${division.id}`;
