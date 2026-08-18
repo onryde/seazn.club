@@ -58,7 +58,12 @@ import {
 } from "@/server/api-v1/schemas";
 import { sendOfficialAssignmentChangedEmail } from "@/lib/email";
 import { capacityInputForFixtures, guardCapacity } from "./capacity-guard";
-import { guardNoMatchingCourt, resolveCandidateCourts, unionRequiredCourtTags } from "./court-candidates";
+import {
+  guardNoMatchingCourt,
+  resolveCandidateCourts,
+  resolveTagQualifiedCourtIds,
+  unionRequiredCourtTags,
+} from "./court-candidates";
 import { buildEngineConstraints } from "./engine-constraints";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { generateStageFixtures } from "./stages";
@@ -999,9 +1004,10 @@ function toWireConflictDetail(d: ConflictDetail): NonNullable<ScheduleConflict["
 
 /**
  * `court` on a `ConflictDetail` (P9 pass 3a) is a real `courts.id` now —
- * `court_double_booking` and `locked_slot_clash` are the two kinds that set
- * it (via `Assignment.court`, `toAssignment`'s own comment). `courtNames`
- * is required, not defaulted, so a caller cannot forget to resolve it and
+ * `court_double_booking`, `locked_slot_clash`, and `court_tag_mismatch`
+ * (P9 pass 2c) are the three kinds that set it (via `Assignment.court`,
+ * `toAssignment`'s own comment). `courtNames` is required, not defaulted,
+ * so a caller cannot forget to resolve it and
  * silently ship a bare uuid in `details.court_name` / the legacy prose —
  * every call site below fetches it once (cheap: `select id, name from
  * courts`, RLS-scoped) and threads it through.
@@ -2876,16 +2882,29 @@ async function validateScheduleIn(
   // unnecessary.
   const [divisionForCourts] = await tx<{ required_court_tags: string[] }[]>`
     select required_court_tags from divisions where id = ${divisionId}`;
+  const requiredCourtTags = divisionForCourts?.required_court_tags ?? [];
   const candidateCourtIds = await resolveCandidateCourts(
     tx,
     divisionId,
     settings.config.courts,
-    divisionForCourts?.required_court_tags ?? [],
+    requiredCourtTags,
   );
   const settingsForEngine = {
     ...settings,
     config: { ...settings.config, courts: [...candidateCourtIds.ids] },
   };
+  // P9 pass 2c: gives the VERIFIER a real consumer for the same constraint —
+  // `candidateCourtIds` above (tag+archived filtered) becomes the new
+  // `config.courts`, but `validateAssignments` has never read `.courts`
+  // (this file's own false-premise history: candidate awareness on the
+  // verify side was new plumbing, not a refactor). Deliberately a SEPARATE
+  // resolution, not a reuse of `candidateCourtIds.ids`: that set already
+  // excludes archived courts, and reusing it for the mismatch conflict would
+  // retroactively red an assignment sitting on a since-archived court —
+  // exactly what ruling 3 (candidate-courts.ts) forbids. See
+  // `resolveTagQualifiedCourtIds`'s own doc comment for the archived-neutral
+  // mechanics.
+  const courtTagQualifiedIds = await resolveTagQualifiedCourtIds(tx, requiredCourtTags);
   // C1 follow-up (2026-08-12, task 3 / G1). This function backs BOTH
   // `validateSchedule` (the board's live conflict report) and, through
   // `assertPublishable`, `publishSchedule`/`startDivision` — the write gate.
@@ -2942,7 +2961,15 @@ async function validateScheduleIn(
         // constraints panel promises them on.
         validateAssignments(
           assignments,
-          toVerifyConfig(settingsForEngine, all, 0, siblings.ruleFixtures),
+          // P9 pass 2c: `courtTagQualifiedIds` is the one field
+          // `toVerifyConfig` itself never sets (every OTHER caller of this
+          // engine function omits it and keeps exactly today's behaviour —
+          // calendar.ts's own comment on the field) — spread on at this ONE
+          // call site rather than threaded through `toVerifyConfig`'s
+          // parameter list, which would touch its other three callers
+          // (autoSchedule, the AI planning path, every test in this
+          // package) for a question only THIS path asks.
+          { ...toVerifyConfig(settingsForEngine, all, 0, siblings.ruleFixtures), courtTagQualifiedIds: [...courtTagQualifiedIds] },
           siblings.assignments,
           feedDependencies(all),
         ),

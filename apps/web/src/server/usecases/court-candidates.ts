@@ -122,6 +122,48 @@ export async function resolveCandidateCourts(
 }
 
 /**
+ * P9 pass 2c: TAG-only qualification, ignoring archived status entirely.
+ * The verifier's `court_tag_mismatch` conflict (calendar.ts's
+ * `validateAssignments`) needs to answer a narrower question than
+ * `resolveCandidateCourts` above does — "does THIS court's own tag set
+ * satisfy the requirement", not "is this court usable for a NEW placement"
+ * (tags AND non-archived, ruling 3). Reusing the combined answer for the
+ * conflict would retroactively red every existing assignment sitting on a
+ * since-archived court, which ruling 3 forbids in as many words: "the court
+ * is gone" is a stranded-fixture case P10 owns (needs `usableWindows`,
+ * which does not exist yet), not this one.
+ *
+ * So this calls the SAME `candidateCourts` filter `resolveCandidateCourts`
+ * calls, with every court's `archived` flag neutralised to `false` first —
+ * the tag-superset loop runs completely unchanged; only the archived
+ * predicate is defeated. Not a second copy of the tag rule: the same
+ * function, different inputs. A second `orgCourtMetas` round trip (this
+ * path is a read/report, never a hot loop) beats reshaping
+ * `resolveCandidateCourts`'s own return value and disturbing its three
+ * existing callers (autoSchedule, validateScheduleIn, schedule-ai.ts's
+ * buildSchedulePack) for a question only ONE of them needs to ask.
+ *
+ * No `configuredCourtIds`/empty-means-unconstrained parameter, unlike
+ * `resolveCandidateCourts`: this answers a per-COURT question over the
+ * whole org, not "which of the organiser's configured ids survive" — every
+ * org court is a candidate for "does it happen to carry the right tags",
+ * whether or not it was ever added to a division's `config.courts`.
+ */
+export async function resolveTagQualifiedCourtIds(
+  tx: Tx,
+  requiredTags: readonly string[],
+): Promise<ReadonlySet<string>> {
+  const courts = await orgCourtMetas(tx);
+  const tagOnly = courts.map((c) => ({ ...c, archived: false }));
+  const result = candidateCourts(
+    tagOnly.map((c) => c.id),
+    tagOnly,
+    requiredTags,
+  );
+  return new Set(result.ids);
+}
+
+/**
  * Build-time precondition: an empty candidate set makes the solve
  * unwinnable before it starts, so this refuses with a typed 422 BEFORE
  * either solver is reached — same shape as `capacity-guard.ts`'s
