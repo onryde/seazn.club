@@ -284,7 +284,26 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     // quotes are not part of the payload).
     const dictBytes = JSON.stringify(JSON.stringify(JSON.parse(uiDict))).length - 2;
     expect(flightBytes).toBeGreaterThan(dictBytes); // the dict IS in there
-    expect(flightBytes - dictBytes).toBeLessThan(250_000);
+    // RE-BASELINED 2026-08-18 (P9 venues/courts cutover, owner-approved), from
+    // 250_000. Deliberate, measured, and recorded here rather than nudged:
+    //
+    // P9 replaced a ~9-byte court LABEL ("Court 1") with a 36-byte court UUID
+    // on every fixture row. That is structural and permanent — court identity
+    // is an entity now — and on this board (5 divisions × ~66 fixtures) it is
+    // ~9KB of irreducible growth the old number was never set for.
+    //
+    // What it costs a real user: measured on 330 of this repo's own fixture
+    // rows, the payload compresses 7.4× under gzip -9 and 9.3× under brotli
+    // -q11, so the growth is ~4KB on the wire — single-digit milliseconds on
+    // 4G. The expensive part of this payload is main-thread parse/hydration,
+    // which tracks the TOTAL, which is why a ceiling still exists.
+    //
+    // What this tripwire is still for: catching ACCIDENTAL growth. P9 itself
+    // shipped two such mistakes that this assertion caught — every court's
+    // weekly hours and dated exceptions sent to a board that renders neither,
+    // and six court/venue fields per row where the board needs one. Keep the
+    // headroom tight enough that the next one reds here too.
+    expect(flightBytes - dictBytes).toBeLessThan(300_000);
   });
 
   test("legend filters to two divisions in two taps; the URL is shareable", async ({ page }) => {
