@@ -73,26 +73,28 @@ describe("template catalog", () => {
   // a hand-copy), so a future catalog edit that silently reshapes the
   // seeding rules fails here.
   describe("euro24 — R16 seeded from the group stage", () => {
-    it("R16's seeding pins take/placement/map: 2 group qualifiers x 6 groups + 4 best-thirds = 16 slots", () => {
+    it("R16's progression pins sources/take/placement/map/timing: 2 group qualifiers x 6 groups + 4 best-thirds = 16 slots", () => {
       const euro24 = getTemplate("euro24")!;
       const stages = euro24.divisions[0]!.stages;
       expect(stages.map((s) => s.kind)).toEqual(["group", "knockout"]);
       expect(stages[0]!.groups).toBe(6);
-      expect(stages[0]!.seeding).toBeUndefined(); // nothing precedes the group stage
+      expect(stages[0]!.progression).toBeUndefined(); // nothing precedes the group stage
 
       const r16 = stages[1]!;
       expect(r16.size).toBe(16); // 12 group qualifiers (topNPerGroup n=2 x 6 groups) + 4 best-thirds
-      expect(r16.seeding?.source).toBe("previous");
-      expect(r16.seeding?.take).toEqual([
+      expect(r16.progression?.sources).toHaveLength(1); // one prior stage feeds this one
+      expect(r16.progression?.sources[0]?.stage).toBe("previous");
+      expect(r16.progression?.sources[0]?.take).toEqual([
         { kind: "topNPerGroup", n: 2 },
         { kind: "bestNth", nth: 3, count: 4 },
       ]);
-      expect(r16.seeding?.placement).toBe("seeded_map");
+      expect(r16.progression?.placement).toBe("seeded_map");
+      expect(r16.progression?.timing).toBe("setup"); // fixtures exist from setup, not TBD-on-complete
       // Exactly the 4 best-third sources are explicitly mapped — the 12
       // group qualifiers fall into the remaining seats in natural order
       // (placeDescriptors' documented "remaining" fallback, stage-seeding.ts).
-      expect(r16.seeding?.map).toHaveLength(4);
-      expect(r16.seeding?.map).toEqual([
+      expect(r16.progression?.map).toHaveLength(4);
+      expect(r16.progression?.map).toEqual([
         { slot: "13", source: "best:1" },
         { slot: "14", source: "best:2" },
         { slot: "15", source: "best:3" },
@@ -126,41 +128,47 @@ describe("template catalog", () => {
     });
   });
 
-  describe("t20-super8 — a two-link seeding chain (group -> Super 8 -> SF/F)", () => {
-    it("pins both seeding stages' take/placement, and that the first stage has none", () => {
+  describe("t20-super8 — a two-link progression chain (group -> Super 8 -> SF/F)", () => {
+    it("pins both progression stages' sources/take/placement/timing, and that the first stage has none", () => {
       const t20 = getTemplate("t20-super8")!;
       const stages = t20.divisions[0]!.stages;
       expect(stages.map((s) => s.kind)).toEqual(["group", "group", "knockout"]);
       expect(stages[0]!.groups).toBe(4);
-      expect(stages[0]!.seeding).toBeUndefined();
+      expect(stages[0]!.progression).toBeUndefined();
 
       const super8 = stages[1]!;
       expect(super8.groups).toBe(2);
-      expect(super8.seeding?.source).toBe("previous");
-      expect(super8.seeding?.take).toEqual([{ kind: "topNPerGroup", n: 2 }]);
-      expect(super8.seeding?.placement).toBe("snake");
-      expect(super8.seeding?.map).toBeUndefined();
+      expect(super8.progression?.sources).toHaveLength(1);
+      expect(super8.progression?.sources[0]?.stage).toBe("previous");
+      expect(super8.progression?.sources[0]?.take).toEqual([{ kind: "topNPerGroup", n: 2 }]);
+      expect(super8.progression?.placement).toBe("snake");
+      expect(super8.progression?.timing).toBe("setup");
+      expect(super8.progression?.map).toBeUndefined();
 
       const sfAndFinal = stages[2]!;
       expect(sfAndFinal.size).toBe(4);
-      expect(sfAndFinal.seeding?.source).toBe("previous");
-      expect(sfAndFinal.seeding?.take).toEqual([{ kind: "topNPerGroup", n: 2 }]);
-      expect(sfAndFinal.seeding?.placement).toBe("rank_order");
+      expect(sfAndFinal.progression?.sources).toHaveLength(1);
+      expect(sfAndFinal.progression?.sources[0]?.stage).toBe("previous");
+      expect(sfAndFinal.progression?.sources[0]?.take).toEqual([{ kind: "topNPerGroup", n: 2 }]);
+      expect(sfAndFinal.progression?.placement).toBe("rank_order");
+      expect(sfAndFinal.progression?.timing).toBe("setup");
     });
   });
 
   describe("league-playoff — league table into a page_playoff", () => {
-    it("pins the page_playoff stage's seeding: rankRange 1..4, rank_order", () => {
+    it("pins the page_playoff stage's progression: rankRange 1..4, rank_order, setup timing", () => {
       const lp = getTemplate("league-playoff")!;
       const stages = lp.divisions[0]!.stages;
       expect(stages.map((s) => s.kind)).toEqual(["league", "page_playoff"]);
-      expect(stages[0]!.seeding).toBeUndefined();
+      expect(stages[0]!.progression).toBeUndefined();
 
       const playoff = stages[1]!;
       expect(playoff.size).toBe(4);
-      expect(playoff.seeding?.source).toBe("previous");
-      expect(playoff.seeding?.take).toEqual([{ kind: "rankRange", from: 1, to: 4 }]);
-      expect(playoff.seeding?.placement).toBe("rank_order");
+      expect(playoff.progression?.sources).toHaveLength(1);
+      expect(playoff.progression?.sources[0]?.stage).toBe("previous");
+      expect(playoff.progression?.sources[0]?.take).toEqual([{ kind: "rankRange", from: 1, to: 4 }]);
+      expect(playoff.progression?.placement).toBe("rank_order");
+      expect(playoff.progression?.timing).toBe("setup");
     });
   });
 });
