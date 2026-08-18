@@ -21,14 +21,19 @@ export interface DisruptionFixtureInput {
   id: string;
   /** ISO string over the wire, Date straight from an RSC, null when in the tray. */
   scheduled_at: string | Date | null;
-  court_label: string | null;
+  /** P9 pass 4a: the real court identity — `court_label` (frozen legacy,
+   *  null for anything scheduled since the cutover) is never compared. */
+  court_id: string | null;
   status: string;
 }
 
 /** The config fields the signal reads — a structural subset of ScheduleConfig /
  *  BoardConfig (courts, blackouts, sessionWindows, matchMinutes). */
 export interface DisruptionSettingsInput {
+  /** Configured court ids (P9) — matched against DisruptionFixtureInput's
+   *  court_id, never court_label. */
   courts: string[];
+  /** `court` here is also a court id (P9), matched against court_id. */
   blackouts: { court?: string; from: string; to: string }[];
   sessionWindows: { from: string; to: string }[];
   /** Match length; a fixture occupies [start, start + matchMinutes). Optional —
@@ -109,16 +114,22 @@ export function computeDisruptions(
     if (f.status === "postponed") hits.push("postponed");
 
     // Court removed from the config — the fixture points at a court that no
-    // longer exists. That court seeds the repair scope.
-    if (f.court_label !== null && !configuredCourts.has(f.court_label)) {
+    // longer exists. That court seeds the repair scope. P9 pass 4a: court_id,
+    // not court_label — configuredCourts (settings.courts) is now an id set,
+    // so comparing the frozen label against it was wrong both directions: a
+    // PRE-cutover fixture's real (still-configured) label string is never a
+    // member of an id set, so it was falsely flagged court_gone; a POST-
+    // cutover fixture's court_label is null, which short-circuits the check
+    // entirely, so a genuinely removed court was never detected at all.
+    if (f.court_id !== null && !configuredCourts.has(f.court_id)) {
       hits.push("court_gone");
-      goneCourts.add(f.court_label);
+      goneCourts.add(f.court_id);
     }
 
     // Slot intersects a blackout — either a court-less one (applies everywhere)
     // or one scoped to this fixture's court.
     for (const b of blackouts) {
-      if (b.court != null && b.court !== f.court_label) continue;
+      if (b.court != null && b.court !== f.court_id) continue;
       const bFrom = toMs(b.from);
       const bTo = toMs(b.to);
       if (Number.isNaN(bFrom) || Number.isNaN(bTo)) continue;
