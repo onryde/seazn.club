@@ -26,17 +26,40 @@ and those two `stages.ts` functions; F1 is fenced off `qualification.ts`,
 
 | Session | Prompt file | Depends on | Status |
 |---|---|---|---|
-| F1 | `F1-bracket-round-role.md` | — | IN FLIGHT 2026-08-17 — `feat/f1-bracket-round-role`. Plan: `../../plans/2026-08-17-f1-bracket-round-role.md`. L3/#414 merged (`11ab0c4e7`), so the `stages.ts` block is lifted |
-| F2 | `F2-unified-progression-field.md` | — | IN FLIGHT 2026-08-17 — `feat/f2-unified-progression-field`, plan being written first. **Rebases onto merged F1 before its own PR** |
-| F3 | *(not written)* | F2 **merged** | authored against the shipped shape, not the designed one |
-| F4 | *(not written)* | F3 | same |
-| F5 | *(not written)* | all | written once the earlier sessions' deferred test debt is known |
+| F1 | `F1-bracket-round-role.md` | — | **MERGED** as #606 (2026-08-18), plus #613 which named the knockout tree's rounds — the one bracket shape F1 left with no captions at all |
+| F2 | `F2-unified-progression-field.md` | — | **IN REVIEW** — PR #616, 60 commits. Implementation complete: Tasks 1-6, two review rounds, the e2e conversion, and the full-branch review's two blockers (V373's `sources` existence guard, `TemplateStage.strict()`) all landed |
+| F3 | **prompt ready** — `../2026-08-18-format-progression-f3-f5-design.md` §8 | F2 **merged** | design written 2026-08-18 against the shipped shape. Paste §8's F3 block as a whole prompt |
+| F4 | **prompt ready** — same doc §8 (two blocks, one session) | — | premise RETIRED (no sport/format-kind gap in either direction; its mexicano comment folds into F3). Slot **repurposed** to the export + calendar day-one leaks (§7 P5, P2). Does NOT wait for F3 — three catalogue templates already emit `timing: "setup"`. Owner CONFIRMED the repurpose 2026-08-18 |
+| F5 | **prompt ready** — same doc §8 | all | scope fixed by the §5 table |
 
 **Why F3–F5 are not written.** They consume F2's field shape, and this repo has
 a repeated failure where a session authored against a design meets an
 implementation that landed differently — the scoringpad index is full of
 "the prompt's central premise was false" entries. F3 gets written after F2
 **merges**, against real code.
+
+## F3–F5 design (2026-08-18) — read before picking any of them up
+
+`../2026-08-18-format-progression-f3-f5-design.md` is the design of record for
+what remains. Two of its findings reverse premises stated elsewhere and will be
+re-derived wrongly by a fresh session:
+
+- **Neither F1 nor F2 delivered the owner's original ask.** All six multi-stage
+  picker templates still emit `timing: "on_complete"`, so no format reachable
+  from the picker shows day-one fixtures. F2 preserved every writer's behaviour
+  deliberately. The capability exists and nothing uses it.
+- **Placeholder labelling is exclusively a `setup`-timing feature.**
+  `generateProgressionSetupFixtures` (`stages.ts:1432`) writes
+  `home/away_slot_label` at `:1611, :1614`; the `on_complete` path never calls
+  `descriptorLabel`. So flipping the templates switches labelling ON — it is
+  not a risk to be mitigated. The exception is the export path, which selects
+  no `*_slot_label` column at all and therefore prints "TBD" no matter what
+  (§7 P5).
+
+Also settled there: the downstream size is **always** derivable
+(`progressionSize`); the unstable thing is the entrant list, and that hazard
+already exists via `SEEDING_RULES_MISSING`. §8 carries copy-paste pickup
+prompts for F3, F5 and two standalone product fixes.
 
 ## Owner rulings (2026-08-17)
 
@@ -60,6 +83,25 @@ implementation that landed differently — the scoringpad index is full of
    so **F2 verifies zero rows against the target database and stops if it finds
    any** — this ruling is dated and will outlive its accuracy. Consequence: F2
    does not need to split, so five sessions stands.
+
+6. **F4 is repurposed, not retired** (2026-08-18). Its original premise —
+   a sport/format-kind gap — was disproven in both directions, leaving one
+   mexicano comment that folds into F3. The SLOT now carries the two places
+   day-one fixtures leak on surfaces organisers hand out: the exported/printed
+   draw and the subscribed calendar (design §7 P5, P2). Repurposing beats
+   renumbering, which would break every reference already written to F5.
+   F4 does NOT depend on F3 and the two may run in parallel — file sets are
+   disjoint on inspection, and three catalogue templates already emit
+   `timing: "setup"` so F4 has live test data today.
+
+7. **Entrant churn: DETECT AND OFFER** (2026-08-18). When entrants change
+   under a `setup` stage that already has generated fixtures, F3 surfaces it
+   with a one-click rebuild rather than auto-regenerating silently or locking
+   the entrant list. Nothing reshapes without the organiser choosing it — a
+   bracket that has already been shared is the case that decides this.
+   Consequence: the staleness signal does NOT exist today and must be built
+   (derived, not stored); `lib/seeding-error.ts` is post-hoc only, so this is
+   new UI rather than new copy. Design §2.2 and §7 P3.
 
 ## Where ruling 4's collapse actually lands (swept 2026-08-17)
 
