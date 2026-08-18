@@ -194,7 +194,12 @@ describe("resolveCourtNames (P9 pass 4d — item 2)", () => {
     expect(names["c-north-showcase"]).toBe("Centre Court");
   });
 
-  it("excludes archived courts/venues before judging a name ambiguous", () => {
+  it("includes archived courts and venues in the map, folding them into the SAME ambiguity check as active courts (review finding #6)", () => {
+    // The old code built its rows from `courtGroups`, which drops archived
+    // venues/courts BEFORE the directory ever sees them. That defeated the
+    // schedule page's `listVenues(auth, { includeArchived: true })` fetch —
+    // a fixture placed before its court was archived had no name to render
+    // at all (BoardGrid's column header fell back to the bare uuid).
     const venues = [
       makeVenue({
         id: "v-north",
@@ -214,11 +219,37 @@ describe("resolveCourtNames (P9 pass 4d — item 2)", () => {
       }),
     ];
     const names = resolveCourtNames(venues);
-    // Only one ACTIVE "Tennis Court 3" exists once the archived namesake is
-    // filtered out — no venue suffix needed, and the archived court has no
-    // entry at all (courtGroups drops it).
-    expect(names["c-north-3"]).toBe("Tennis Court 3");
-    expect(names["c-south-3-retired"]).toBeUndefined();
+    // The archived court now resolves to a real name — it is not dropped —
+    // and because it shares a bare name with the active court in a
+    // different venue, BOTH get venue-qualified, exactly as two ACTIVE
+    // courts sharing a name would. Two different courts must never render
+    // as identical text just because one of them happens to be archived.
+    expect(names["c-south-3-retired"]).toBe("Tennis Court 3 (South Leisure Park)");
+    expect(names["c-north-3"]).toBe("Tennis Court 3 (North Sports Centre)");
+    expect(names["c-north-3"]).not.toBe(names["c-south-3-retired"]);
+  });
+
+  it("resolves an archived court's name for display while keeping it OUT of the selectable option list", () => {
+    // The second half is what stops the first from being a blanket
+    // widening: only the NAME map grows to cover archived courts — the
+    // checkbox options an organiser can newly pick must not.
+    const venues = [
+      makeVenue({
+        id: "v-1",
+        name: "Main Venue",
+        courts: [
+          makeCourt({ id: "c-1", name: "Center Court", archived_at: null }),
+          makeCourt({ id: "c-2", name: "Retired Court", archived_at: "2026-01-01T00:00:00.000Z" }),
+        ],
+      }),
+    ];
+    expect(resolveCourtNames(venues)["c-2"]).toBe("Retired Court");
+
+    const html = renderToStaticMarkup(
+      <CourtMultiPicker {...baseProps} venues={venues} value={[]} onChange={() => {}} />,
+    );
+    expect(html).not.toContain("Retired Court");
+    expect(html.match(/<input[^>]*type="checkbox"[^>]*>/g) ?? []).toHaveLength(1);
   });
 });
 
@@ -258,6 +289,37 @@ describe("CourtMultiPicker — render", () => {
     const alphaIndex = html.indexOf("Alpha");
     expect(betaIndex).toBeGreaterThan(-1);
     expect(betaIndex).toBeLessThan(alphaIndex);
+  });
+
+  it("venue-qualifies the selected-order strip when two selected courts share a bare name across venues (review finding #13)", () => {
+    // Two courts literally named "Court 1" in different venues are legal
+    // data (courts' uniqueness is per-venue — see the resolveCourtNames
+    // suite above). The venue-grouped checkbox list below can lean on its
+    // venue heading, but this flat, unheaded order strip has no such
+    // heading — it must qualify the text itself or the two are
+    // indistinguishable.
+    const venues = [
+      makeVenue({
+        id: "v-north",
+        name: "North Sports Centre",
+        courts: [makeCourt({ id: "c-north-1", name: "Court 1" })],
+      }),
+      makeVenue({
+        id: "v-south",
+        name: "South Leisure Park",
+        courts: [makeCourt({ id: "c-south-1", name: "Court 1" })],
+      }),
+    ];
+    const html = renderToStaticMarkup(
+      <CourtMultiPicker
+        {...baseProps}
+        venues={venues}
+        value={["c-north-1", "c-south-1"]}
+        onChange={() => {}}
+      />,
+    );
+    expect(html).toContain("Court 1 (North Sports Centre)");
+    expect(html).toContain("Court 1 (South Leisure Park)");
   });
 
   it("falls back to the unknown-court label for a selected id with no matching court", () => {

@@ -57,24 +57,46 @@ export function flattenCourts(venues: readonly Venue[]): Court[] {
   return courtGroups(venues).flatMap((g) => g.courts);
 }
 
+/** Every court across every venue, INCLUDING archived venues and archived
+ *  courts — the rows `resolveCourtNames` needs (review finding #6, P9). Never
+ *  used for the selectable option list: `courtGroups` stays archived-filtered
+ *  for that. Server order is preserved but not load-bearing here — the rows
+ *  feed `buildCourtDirectory`, which sorts (name, venue_name, id) itself. */
+function allCourtRows(
+  venues: readonly Venue[],
+): { id: string; name: string; venue_name: string; tags: readonly string[] }[] {
+  return venues.flatMap((venue) =>
+    venue.courts.map((c) => ({ id: c.id, name: c.name, venue_name: venue.name, tags: c.tags })),
+  );
+}
+
 /**
- * id -> display name for every (non-archived) court across `venues`,
- * venue-qualified ("Name (Venue)") wherever the bare name collides across
- * venues — REUSES `buildCourtDirectory` (schedule-ai.ts's AI-pack rule,
- * lifted to the client-safe `@/lib/court-directory` in P9 pass 4d) rather
- * than a second "is this name ambiguous" implementation. Archived courts are
- * excluded (via `courtGroups`) so an archived court's freed name never forces
- * an unnecessary venue suffix onto its active namesake.
+ * id -> display name for EVERY court across `venues`, including archived
+ * venues and archived courts, venue-qualified ("Name (Venue)") wherever the
+ * bare name collides with another court's — active or archived alike.
+ * REUSES `buildCourtDirectory` (schedule-ai.ts's AI-pack rule, lifted to the
+ * client-safe `@/lib/court-directory` in P9 pass 4d) rather than a second
+ * "is this name ambiguous" implementation.
  *
- * The board's own `courtNamesById` (schedule-board.tsx) and stages-panel.tsx's
- * fixture editor/badges both build their id->name map through this one
+ * Archived rows are deliberately INCLUDED (review finding #6, P9): a fixture
+ * placed before its court — or its whole venue — was archived still needs
+ * that court's name to render, which is why the schedule page fetches
+ * `listVenues(auth, { includeArchived: true })` in the first place; dropping
+ * archived rows here (the old bug) defeated that fetch and left the board
+ * rendering a bare uuid. An archived court sharing a bare name with another
+ * court (active or archived, same or different venue) counts toward
+ * ambiguity exactly like an active one, so two different courts are never
+ * shown identical text. This is a NAME-resolution widening ONLY — the
+ * selectable option list (`courtGroups`, above) stays archived-filtered; an
+ * archived court must still never be offered as a new choice.
+ *
+ * The board's own `courtNamesById` (schedule-board.tsx), stages-panel.tsx's
+ * fixture editor/badges, and this component's own selected-order strip
+ * (review finding #13) all build their id->name map through this one
  * function — see P9 pass 4d.
  */
 export function resolveCourtNames(venues: readonly Venue[]): Record<string, string> {
-  const rows = courtGroups(venues).flatMap(({ venue, courts }) =>
-    courts.map((c) => ({ id: c.id, name: c.name, venue_name: venue.name, tags: c.tags })),
-  );
-  const directory = buildCourtDirectory(rows);
+  const directory = buildCourtDirectory(allCourtRows(venues));
   const map: Record<string, string> = {};
   for (const [id, info] of directory) map[id] = info.label;
   return map;
@@ -175,7 +197,13 @@ export function CourtMultiPicker({
   removeLabelFor,
 }: CourtMultiPickerProps) {
   const groups = courtGroups(venues);
-  const byId = new Map(flattenCourts(venues).map((c) => [c.id, c] as const));
+  // Venue-qualified, same as the board's columns and the AI pack (review
+  // finding #13) — two courts named "Court 1" in different venues are legal
+  // (the unique index is per-venue) and must not render as indistinguishable
+  // text in the flat, unheaded selected-order strip below. Also covers an
+  // archived selected court (finding #6): it still resolves to a real name
+  // here instead of falling through to unknownCourtLabel.
+  const nameById = resolveCourtNames(venues);
   const atCap = maxSelected !== undefined && value.length >= maxSelected;
 
   if (groups.length === 0) {
@@ -210,8 +238,7 @@ export function CourtMultiPicker({
       ) : (
         <ol className="mb-2 list-none space-y-1.5">
           {value.map((id, i) => {
-            const court = byId.get(id);
-            const name = court?.name ?? unknownCourtLabel;
+            const name = nameById[id] ?? unknownCourtLabel;
             return (
               <li
                 key={id}
