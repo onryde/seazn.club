@@ -68,3 +68,6 @@ packages/engine/sim-report.json
 # The corpus and the scorer ARE tracked; the results are not.
 apps/web/parse-bench-results.json
 
+
+# Local CI runner (scripts/ci-local.sh) reporter output
+vitest-results-*.json
