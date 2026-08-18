@@ -3927,6 +3927,7 @@
   "pad.cricket.sheet.review.kind.title": "Tipo de revisión",
   "pad.cricket.sheet.review.outcome.title": "Resultado",
   "pad.cricket.sheet.review.by.title": "Solicitado por",
+  "pad.cricket.sheet.review.by.blocked.noneLeft": "{name} no le quedan revisiones en esta entrada.",
   "pad.cricket.sheet.overSummary.runs.title": "Carreras de este over",
   "pad.cricket.sheet.overSummary.wickets.title": "Wickets de este over",
   "pad.cricket.sheet.overSummary.balls.title": "Bolas de este over",

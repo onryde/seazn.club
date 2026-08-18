@@ -2640,6 +2640,7 @@ export type DictionaryKey =
   | "pad.cricket.sheet.retire.reason.other"
   | "pad.cricket.sheet.retire.reason.out"
   | "pad.cricket.sheet.retire.reason.title"
+  | "pad.cricket.sheet.review.by.blocked.noneLeft"
   | "pad.cricket.sheet.review.by.title"
   | "pad.cricket.sheet.review.kind.title"
   | "pad.cricket.sheet.review.outcome.title"

@@ -3927,6 +3927,7 @@
   "pad.cricket.sheet.review.kind.title": "Type review",
   "pad.cricket.sheet.review.outcome.title": "Uitslag",
   "pad.cricket.sheet.review.by.title": "Aangevraagd door",
+  "pad.cricket.sheet.review.by.blocked.noneLeft": "{name} heeft geen reviews meer in deze innings.",
   "pad.cricket.sheet.overSummary.runs.title": "Runs van deze over",
   "pad.cricket.sheet.overSummary.wickets.title": "Wickets van deze over",
   "pad.cricket.sheet.overSummary.balls.title": "Ballen van deze over",

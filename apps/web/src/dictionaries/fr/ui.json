@@ -3927,6 +3927,7 @@
   "pad.cricket.sheet.review.kind.title": "Type de révision",
   "pad.cricket.sheet.review.outcome.title": "Résultat",
   "pad.cricket.sheet.review.by.title": "Demandé par",
+  "pad.cricket.sheet.review.by.blocked.noneLeft": "{name} n'a plus d'arbitrages vidéo pour cette manche.",
   "pad.cricket.sheet.overSummary.runs.title": "Courses de cet over",
   "pad.cricket.sheet.overSummary.wickets.title": "Wickets de cet over",
   "pad.cricket.sheet.overSummary.balls.title": "Balles de cet over",

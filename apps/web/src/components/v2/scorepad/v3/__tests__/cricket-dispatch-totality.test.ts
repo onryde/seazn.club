@@ -185,7 +185,7 @@ function sweep(): SweepResult {
   for (const { cfg, probeSuperOver } of sweepCases()) {
     const live = baseView(cfg, liveState());
     const tiles = buildTiles(live);
-    const sheets = buildSheets(live);
+    const sheets = buildSheets(live, (k: string) => k);
     for (const t of tileEventTypes(tiles)) viaTiles.add(t);
     for (const t of sheetEventTypes(sheets)) viaSheets.add(t);
 
@@ -195,7 +195,7 @@ function sweep(): SweepResult {
       const so = baseView(cfg, superOverState());
       const soTiles = buildTiles(so);
       for (const t of tileEventTypes(soTiles)) viaTiles.add(t);
-      dedicated = new Set([...dedicated, ...dedicatedEventTypes(soTiles, buildSheets(so))]);
+      dedicated = new Set([...dedicated, ...dedicatedEventTypes(soTiles, buildSheets(so, (k: string) => k))]);
     }
 
     const spec = padSpecFor(cfg);

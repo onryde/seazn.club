@@ -3927,6 +3927,7 @@
   "pad.cricket.sheet.review.kind.title": "Review type",
   "pad.cricket.sheet.review.outcome.title": "Outcome",
   "pad.cricket.sheet.review.by.title": "Called by",
+  "pad.cricket.sheet.review.by.blocked.noneLeft": "{name} has no reviews left in this innings.",
   "pad.cricket.sheet.overSummary.runs.title": "Runs this over",
   "pad.cricket.sheet.overSummary.wickets.title": "Wickets this over",
   "pad.cricket.sheet.overSummary.balls.title": "Balls this over",

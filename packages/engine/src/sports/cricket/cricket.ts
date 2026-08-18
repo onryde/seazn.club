@@ -1824,12 +1824,18 @@ function applyReview(state: CricketState, payload: z.infer<typeof CricketReview>
 
 /**
  * The two over-boundary facts `eligibleBowlers` reads, and nothing else.
- * Deliberately a `Pick` rather than the whole `FineInnings`: the v3 cricket
- * skin holds its own looser structural shape of a folded innings, and
- * demanding every field would make the export unusable at the one call site
- * it was created for while adding no safety here.
+ * Deliberately a standalone structural type, not a `Pick<FineInnings, ...>`:
+ * the v3 cricket skin holds its own looser shape of a folded innings, where
+ * both of these are OPTIONAL, so a `Pick` — which keeps them required — was
+ * still unusable at the one call site the export was created for (proved by
+ * tsc, not guessed). Declaring them optional here is also the honest
+ * signature: the body already tolerates both being absent, since a fine
+ * innings that has not opened has neither.
  */
-export type OverBowlerFacts = Pick<FineInnings, "prevOverBowler" | "bowlerBalls">;
+export type OverBowlerFacts = {
+  readonly prevOverBowler?: string | null;
+  readonly bowlerBalls?: Readonly<Record<string, number>> | undefined;
+};
 
 /**
  * Who may legally OPEN the next over — the consecutive-over law
@@ -1863,7 +1869,7 @@ export function eligibleBowlers(
   return order.filter((person) => {
     if (person === (fine?.prevOverBowler ?? null)) return false;
     if (maxOversPerBowler === undefined) return true;
-    return Math.floor((fine?.bowlerBalls[person] ?? 0) / ballsPerOver) < maxOversPerBowler;
+    return Math.floor((fine?.bowlerBalls?.[person] ?? 0) / ballsPerOver) < maxOversPerBowler;
   });
 }
 
@@ -1889,8 +1895,18 @@ export function eligibleBowlers(
  * after a closed one). Only the arithmetic is shared, so only the arithmetic
  * lives here.
  */
+/**
+ * What `reviewsRemaining` reads. A standalone structural type rather than a
+ * `Pick<InningsState, "reviews">` for the same reason `OverBowlerFacts` is
+ * one: the v3 cricket skin carries its own looser shape of a folded innings,
+ * and a `Pick` of an optional field still demands the surrounding type match.
+ */
+export type ReviewLedgerHolder = {
+  readonly reviews?: Readonly<Record<Side, ReviewLedger>> | undefined;
+};
+
 export function reviewsRemaining(
-  innings: Pick<InningsState, "reviews">,
+  innings: ReviewLedgerHolder,
   allowance: number | undefined,
   side: Side,
 ): number | null {

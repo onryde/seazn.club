@@ -2096,7 +2096,7 @@ describe("buildScorebug — closed innings with nothing else open still shows th
 
 describe("buildSheets — wicket flow (D-15)", () => {
   function wicketSpec() {
-    return buildSheets(view()).wicket;
+    return buildSheets(view(), t).wicket;
   }
 
   it("bowled skips BOTH who-out and fielder — straight from kind to a built event", () => {
@@ -2161,7 +2161,7 @@ describe("buildSheets — wicket flow (D-15)", () => {
   });
 
   it("dispatches cricket.superover.ball while the engine is in a super over", () => {
-    const spec = buildSheets(view({ state: state({ phase: "super_over" }) })).wicket;
+    const spec = buildSheets(view({ state: state({ phase: "super_over" }) }), t).wicket;
     expect(spec.event).toBe("cricket.superover.ball");
   });
 
@@ -2185,7 +2185,7 @@ describe("buildSheets — wicket flow (D-15)", () => {
   });
 
   it("the 'out' step's candidates track a context override — reads the SAME resolvePeople(state, overrides) the payload does", () => {
-    const spec = buildSheets(view({ contextOverrides: { striker: "h3" } })).wicket;
+    const spec = buildSheets(view({ contextOverrides: { striker: "h3" } }), t).wicket;
     const out = spec.steps.find((s) => s.id === "out")!;
     if (out.kind !== "person") throw new Error("expected a person step");
     expect(out.candidates).toEqual(["h3", "h2"]);
@@ -2234,14 +2234,14 @@ describe("buildSheets — wicket kind gated by free hit (R2b-over)", () => {
   }
 
   it("free hit pending: the kind step offers EXACTLY runout and obstructed, nothing else, and carries a reason hint", () => {
-    const spec = buildSheets(view({ events: freeHitEvents })).wicket;
+    const spec = buildSheets(view({ events: freeHitEvents }), t).wicket;
     const kind = kindStepOf(spec);
     expect(kind.options.map((o) => o.id).sort()).toEqual(["obstructed", "runout"]);
     expect(kind.hintKey).toBe("pad.cricket.sheet.wicket.kind.freeHitHint");
   });
 
   it("no free hit pending: all ten kinds still offered and no hint — without this, the fix could over-restrict permanently and still pass", () => {
-    const spec = buildSheets(view()).wicket; // view()'s default events: [] — nothing pending
+    const spec = buildSheets(view(), t).wicket; // view()'s default events: [] — nothing pending
     const kind = kindStepOf(spec);
     expect(kind.options.map((o) => o.id).sort()).toEqual([...WICKET_KINDS].sort());
     expect(kind.hintKey).toBeUndefined();
@@ -2252,12 +2252,12 @@ describe("buildSheets — wicket kind gated by free hit (R2b-over)", () => {
       ...freeHitEvents,
       ballEvent("e2", { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "wide", runs: 1 } } }),
     ];
-    const spec = buildSheets(view({ events })).wicket;
+    const spec = buildSheets(view({ events }), t).wicket;
     expect(kindStepOf(spec).options.map((o) => o.id).sort()).toEqual(["obstructed", "runout"]);
   });
 
   it("buildPayload still emits a valid payload for both allowed kinds during a free hit", () => {
-    const spec = buildSheets(view({ events: freeHitEvents })).wicket;
+    const spec = buildSheets(view({ events: freeHitEvents }), t).wicket;
 
     const afterKind = answerStep(spec, initialSheetState(), "runout");
     if (afterKind.done) throw new Error("expected not done");
@@ -2282,7 +2282,7 @@ describe("buildSheets — wicket kind gated by free hit (R2b-over)", () => {
 
 describe("buildSheets — toss/review/inningsClose", () => {
   it("toss: who won -> elected, both required, in that order", () => {
-    const spec = buildSheets(view()).toss;
+    const spec = buildSheets(view(), t).toss;
     expect(spec.event).toBe("cricket.toss");
     const s = initialSheetState();
     expect(currentStep(spec, s)!.id).toBe("wonBy");
@@ -2295,7 +2295,7 @@ describe("buildSheets — toss/review/inningsClose", () => {
   });
 
   it("review: kind -> outcome -> by, never asks the two optional persons", () => {
-    const spec = buildSheets(view()).review;
+    const spec = buildSheets(view(), t).review;
     const s = initialSheetState();
     const afterKind = answerStep(spec, s, "player");
     if (afterKind.done) throw new Error("expected not done");
@@ -2308,7 +2308,7 @@ describe("buildSheets — toss/review/inningsClose", () => {
   });
 
   it("inningsClose: one reason step, covering every CricketClose.reason member", () => {
-    const spec = buildSheets(view()).inningsClose;
+    const spec = buildSheets(view(), t).inningsClose;
     const step = spec.steps[0]!;
     const options = step.kind === "choice" ? step.options.map((o) => o.id) : [];
     expect(options.sort()).toEqual(
@@ -2334,7 +2334,7 @@ describe("buildSheets — over summary (R2b)", () => {
     return view({ state: state({ innings: [innings({ fine: null, runs: 24, wickets: 1, legalBalls: 30 })] }) });
   }
   function overSpec() {
-    return buildSheets(overSummaryView()).overSummary;
+    return buildSheets(overSummaryView(), t).overSummary;
   }
 
   it("dispatches cricket.innings.summary", () => {
@@ -2352,7 +2352,7 @@ describe("buildSheets — over summary (R2b)", () => {
   });
 
   it("prefills 0/0/bpo when no innings is open yet", () => {
-    const spec = buildSheets(view({ state: state({ innings: [] }) })).overSummary;
+    const spec = buildSheets(view({ state: state({ innings: [] }) }), t).overSummary;
     expect(numberStep(spec, "runs").initial).toBe(0);
     expect(numberStep(spec, "wickets").initial).toBe(0);
     expect(numberStep(spec, "balls").initial).toBe(6);
@@ -2361,6 +2361,7 @@ describe("buildSheets — over summary (R2b)", () => {
   it("uses ballsPerOverOf for balls' initial/max, never a hardcoded 6 — hundred variant", () => {
     const spec = buildSheets(
       view({ cfg: cfg({ ballsPerOver: 5 }), state: state({ innings: [innings({ fine: null, legalBalls: 30 })] }) }),
+      t,
     ).overSummary;
     const balls = numberStep(spec, "balls");
     expect(balls.initial).toBe(5); // bpo(5), not the fold's legalBalls + bpo
@@ -2419,7 +2420,7 @@ describe("buildSheets — over summary (R2b)", () => {
   it("a sequence of partial summaries, each entered as THIS OVER's runs/wickets/balls, folds to the totals a scorer expects, never tripping the monotone guard", () => {
     // Over 1: innings unopened, scorer enters this over's 6 runs, 0 wickets, a
     // full over. Base is 0 here, so the absolute payload equals the delta.
-    const spec1 = buildSheets(view({ state: state({ innings: [] }) })).overSummary;
+    const spec1 = buildSheets(view({ state: state({ innings: [] }) }), t).overSummary;
     const payload1 = spec1.buildPayload({ runs: "6", wickets: "0", balls: "6" });
     expect(payload1).toEqual({ runs: 6, wickets: 0, legalBalls: 6, partial: true });
 
@@ -2428,7 +2429,7 @@ describe("buildSheets — over summary (R2b)", () => {
     // this file's own fixture-composition convention (no real fold invoked;
     // packages/engine is out of this wave's file grant).
     const foldedAfterOver1 = innings({ fine: null, runs: 6, wickets: 0, legalBalls: 6 });
-    const spec2 = buildSheets(view({ state: state({ innings: [foldedAfterOver1] }) })).overSummary;
+    const spec2 = buildSheets(view({ state: state({ innings: [foldedAfterOver1] }) }), t).overSummary;
     expect(numberStep(spec2, "runs")).toMatchObject({ initial: 0, min: 0 });
     expect(numberStep(spec2, "wickets")).toMatchObject({ initial: 0, min: 0 });
     expect(numberStep(spec2, "balls")).toMatchObject({ initial: 6, min: 0, max: 6 }); // bpo, not legalBalls + bpo
@@ -2452,6 +2453,7 @@ describe("buildSheets — over summary (R2b)", () => {
   it("closed innings with another due: hint/prefill reset to 0/0/bpo, never the closed innings' stale totals", () => {
     const spec = buildSheets(
       view({ state: state({ innings: [innings({ closed: true, runs: 187, wickets: 6, legalBalls: 118 })] }) }),
+      t,
     ).overSummary;
     expect(numberStep(spec, "runs")).toMatchObject({ initial: 0, hintText: "0/0" });
     expect(numberStep(spec, "wickets")).toMatchObject({ initial: 0, hintText: "0/0" });
@@ -2692,29 +2694,119 @@ describe("buildSheets / buildTiles — R2c: Retire is a tile-driven guided sheet
   it("the sheet emits cricket.retire, which is what removes the generic More-sheet entry", () => {
     // dedicatedEventTypes folds every sheet's `event` into the dedicated set
     // (pad-host.tsx), so declaring this sheet is itself the de-duplication.
-    expect(buildSheets(view({ state: atCrease() })).retire!.event).toBe("cricket.retire");
+    expect(buildSheets(view({ state: atCrease() }), t).retire!.event).toBe("cricket.retire");
   });
 
   it("asks WHO first, narrowed to exactly the two batters at the crease", () => {
-    const step = buildSheets(view({ state: atCrease() })).retire!.steps[0]!;
+    const step = buildSheets(view({ state: atCrease() }), t).retire!.steps[0]!;
     expect(step.kind).toBe("person");
     expect((step as { candidates?: readonly string[] }).candidates).toEqual(["h1", "h2"]);
   });
 
   it("never offers a phantom blank candidate when the crease is not populated yet", () => {
     const empty = state({ innings: [innings({ fine: { striker: "", nonStriker: "", currentBowler: null, prevOverBowler: null, bowlerBalls: {} } })] });
-    const step = buildSheets(view({ state: empty })).retire!.steps[0]!;
+    const step = buildSheets(view({ state: empty }), t).retire!.steps[0]!;
     expect((step as { candidates?: readonly string[] }).candidates).toEqual([]);
   });
 
   it("asks the REAL reason enum — the half of the generic flow worth keeping", () => {
-    const step = buildSheets(view({ state: atCrease() })).retire!.steps[1]!;
+    const step = buildSheets(view({ state: atCrease() }), t).retire!.steps[1]!;
     expect(step.kind).toBe("choice");
     expect((step as { options: { id: string }[] }).options.map((o) => o.id)).toEqual(["hurt", "out", "other"]);
   });
 
   it("builds a payload the engine accepts, and never hardcodes reason:'other'", () => {
-    const spec = buildSheets(view({ state: atCrease() })).retire!;
+    const spec = buildSheets(view({ state: atCrease() }), t).retire!;
     expect(spec.buildPayload({ person: "h2", reason: "hurt" })).toEqual({ person: "h2", reason: "hurt" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R2c / C3 — the review sheet stops offering a review the engine will refuse.
+//
+// PRE-EXISTING, untouched by R2b and correctly not claimed by it. The engine
+// enforces a per-innings player-review quota (`applyReview`); the pad never
+// checked it, so a scorer could complete the whole sheet and meet a generic
+// 422.
+//
+// The R2c brief called this a step-ORDERING problem — "the side asking for
+// the review is not known until a LATER step" — and asked for a ruling before
+// building. It is not: both sides' quotas are readable from `view` at
+// sheets() time, and the only late-bound fact is `kind`, which is ALREADY
+// step 1 while `by` is step 3. So `blocked(answers)` on the existing step is
+// the whole fix, and a reorder would have been strictly worse: it would ask
+// the side even for umpire reviews, which the engine never caps.
+// ---------------------------------------------------------------------------
+
+describe("reviewSheet — R2c: a side with no reviews left cannot be picked", () => {
+  const withReviews = (home: number, away: number, perInnings?: number) =>
+    view({
+      cfg: cfg(perInnings === undefined ? {} : { reviews: { perInnings } }),
+      state: state({
+        innings: [innings({ reviews: { home: { taken: 9, lost: home }, away: { taken: 0, lost: away } } })],
+      }),
+    });
+
+  const byStep = (v: PadHostView) => {
+    const step = buildSheets(v, t).review!.steps.find((s) => s.id === "by")!;
+    return step as typeof step & { blocked?: (a: Readonly<Record<string, string>>) => Readonly<Record<string, string>> };
+  };
+
+  it("blocks the exhausted side for a PLAYER review, naming it", () => {
+    const blocked = byStep(withReviews(2, 0, 2)).blocked!({ kind: "player" });
+    expect(blocked["home-1"]).toBe(
+      t("pad.cricket.sheet.review.by.blocked.noneLeft", { name: t("scorepad.attribution.home") }),
+    );
+  });
+
+  it("leaves the side that still holds reviews selectable", () => {
+    const blocked = byStep(withReviews(2, 0, 2)).blocked!({ kind: "player" });
+    expect(blocked["away-1"]).toBeUndefined();
+  });
+
+  it("blocks NOBODY for an umpire review — the engine never caps those", () => {
+    // This is the case a step reorder would have got wrong.
+    expect(byStep(withReviews(2, 2, 2)).blocked!({ kind: "umpire" })).toEqual({});
+  });
+
+  it("blocks nobody when the cfg declares no allowance — uncapped is not zero", () => {
+    expect(byStep(withReviews(9, 9)).blocked!({ kind: "player" })).toEqual({});
+  });
+
+  it("is exactly at the boundary: lost === allowance blocks, one short does not", () => {
+    expect(byStep(withReviews(2, 1, 2)).blocked!({ kind: "player" })["home-1"]).toBeTruthy();
+    expect(byStep(withReviews(2, 1, 2)).blocked!({ kind: "player" })["away-1"]).toBeUndefined();
+  });
+
+  it("reads LOST, not TAKEN — an upheld review is not spent", () => {
+    // home has taken 9 and lost none; it still holds its full allowance.
+    expect(byStep(withReviews(0, 0, 2)).blocked!({ kind: "player" })).toEqual({});
+  });
+
+  it("an innings with no review ledger yet blocks nobody", () => {
+    const v = view({ cfg: cfg({ reviews: { perInnings: 1 } }), state: state({ innings: [innings()] }) });
+    expect(byStep(v).blocked!({ kind: "player" })).toEqual({});
+  });
+});
+
+// R2c: `sheets` is a new `t`-threading point, and R2b proved this exact shape
+// is a tsc-invisible trap — dropping the argument at the factory wiring
+// type-checks, lints, and ships a raw i18n key to a scorer, while every test
+// that calls the builder DIRECTLY with an explicit `t` stays green. R2b closed
+// that hole for `tiles` with a factory-level test; this is the same proof for
+// `sheets`. Mutate `sheets: (view) => buildSheets(view, t)` to pass an
+// identity function and exactly this test must red.
+describe("cricketSkinV3 — sheets() closes over the factory's own t (R2c)", () => {
+  it("resolves the review-quota block through the real translator, never the bare key", () => {
+    const v = view({
+      cfg: cfg({ reviews: { perInnings: 1 } }),
+      state: state({ innings: [innings({ reviews: { home: { taken: 0, lost: 1 }, away: { taken: 0, lost: 0 } } })] }),
+    });
+    const step = cricketSkinV3(t).sheets!(v).review!.steps.find((s) => s.id === "by")!;
+    const blocked = (step as { blocked?: (a: Readonly<Record<string, string>>) => Readonly<Record<string, string>> }).blocked!({ kind: "player" });
+    expect(blocked["home-1"]).toBe(
+      t("pad.cricket.sheet.review.by.blocked.noneLeft", { name: t("scorepad.attribution.home") }),
+    );
+    expect(blocked["home-1"]).not.toBe("pad.cricket.sheet.review.by.blocked.noneLeft");
   });
 });

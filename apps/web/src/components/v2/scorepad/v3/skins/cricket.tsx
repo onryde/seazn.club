@@ -87,7 +87,7 @@ import type { EventEnvelope } from "@seazn/engine/core";
 // narrow the bowler chip's candidates, not merely to test one name), which is
 // exactly what the engine's own filter already is, so the mirror is DELETED
 // and the rule imported. Same reasoning `nextBattingSide` was granted on.
-import { eligibleBowlers, nextBattingSide } from "@seazn/engine/sports/cricket";
+import { eligibleBowlers, nextBattingSide, reviewsRemaining } from "@seazn/engine/sports/cricket";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
@@ -170,6 +170,9 @@ interface CricketCfgShape {
    *  check (cricket.ts:1166-1171) rather than proposing an exhausted
    *  bowler. */
   maxOversPerBowler?: number;
+  /** R2c / C3 — the per-innings player-review allowance. ABSENT means
+   *  uncapped, never zero (the engine's own `reviewsRemaining` reading). */
+  reviews?: { perInnings?: number } | undefined;
 }
 interface CricketFineShape {
   striker?: string | null;
@@ -191,6 +194,12 @@ interface CricketInningsShape {
   legalBalls?: number;
   closed?: boolean;
   fine?: CricketFineShape | null;
+  /** R2c / C3 — the per-side review ledger the engine's own `reviewsRemaining`
+   *  reads. Absent from this shape until C3 needed it, the same way
+   *  `prevOverBowler`/`bowlerBalls` were absent until R2b needed them: this
+   *  shape carries only what the skin has had a reason to read. `lost`, not
+   *  `taken`, is the counter that spends an allowance. */
+  reviews?: Record<"home" | "away", { taken: number; lost: number }> | undefined;
 }
 interface CricketStateShape {
   phase?: "pre" | "live" | "super_over" | "done" | "final";
@@ -1829,8 +1838,53 @@ function retireSheet(view: PadHostView): GuidedSheetSpec {
   };
 }
 
-function reviewSheet(view: PadHostView): GuidedSheetSpec {
+/**
+ * R2c / C3 — the `by` step refuses a side that has spent its player-review
+ * allowance, instead of letting the scorer finish the sheet and meet a
+ * generic 422 from `applyReview`.
+ *
+ * `t` is REQUIRED, never defaulted: R2b proved a defaulted translator is a
+ * tsc-invisible silent-fallback trap (dropping the argument at the factory
+ * type-checks, lints, and ships a raw i18n key to a scorer), and _INDEX.md
+ * carries "R3-R7 skin authors: require `t`" as a standing instruction.
+ *
+ * WHY THIS IS NOT A STEP-ORDERING PROBLEM, since the brief said it was. Both
+ * sides' quotas are readable from `view` here, at build time. The only fact
+ * that arrives later is `kind` — and `kind` is step 1 while `by` is step 3,
+ * so `blocked(answers)` already has it. A reorder would have been worse than
+ * unnecessary: it would ask the side even for an UMPIRE review, which the
+ * engine never caps at all.
+ *
+ * The quota arithmetic itself is the engine's `reviewsRemaining`, not a local
+ * copy — that rule was already forked twice inside cricket.ts and a third
+ * copy here is exactly the drift this wave exists to stop. Two subtleties it
+ * owns so this file does not restate them: only an UNSUCCESSFUL player review
+ * is spent (the counter is `lost`, never `taken`), and an absent allowance
+ * means uncapped rather than zero.
+ */
+function reviewSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
   const squads = view.squads;
+  const state = asState(view.state);
+  const cfg = asCfg(view.cfg);
+  const innings = scoringInnings(state, cfg);
+  const sideOfEntrant: Record<string, "home" | "away"> = {
+    [squads.home.entrantId]: "home",
+    [squads.away.entrantId]: "away",
+  };
+  const blockedSides = (answers: Readonly<Record<string, string>>): Blocked => {
+    // Umpire reviews are never capped (the engine gates the quota on
+    // `kind === "player"`), so nothing is blocked until that is the answer.
+    if (answers.kind !== "player") return {};
+    if (innings === null || innings === undefined) return {};
+    const out: Record<string, string> = {};
+    for (const [entrantId, side] of Object.entries(sideOfEntrant)) {
+      if (reviewsRemaining(innings, cfg.reviews?.perInnings, side) !== 0) continue;
+      out[entrantId] = t("pad.cricket.sheet.review.by.blocked.noneLeft", {
+        name: t(side === "home" ? "scorepad.attribution.home" : "scorepad.attribution.away"),
+      });
+    }
+    return out;
+  };
   return {
     event: "cricket.review",
     steps: [
@@ -1857,6 +1911,7 @@ function reviewSheet(view: PadHostView): GuidedSheetSpec {
         id: "by",
         kind: "choice",
         title: "pad.cricket.sheet.review.by.title",
+        blocked: blockedSides,
         options: [
           { id: squads.home.entrantId, label: "scorepad.attribution.home" },
           { id: squads.away.entrantId, label: "scorepad.attribution.away" },
@@ -1977,12 +2032,12 @@ function overSummarySheet(view: PadHostView): GuidedSheetSpec {
   };
 }
 
-export function buildSheets(view: PadHostView): Record<string, GuidedSheetSpec> {
+export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
   return {
     wicket: wicketSheet(view),
     toss: tossSheet(view),
     retire: retireSheet(view),
-    review: reviewSheet(view),
+    review: reviewSheet(view, t),
     inningsClose: inningsCloseSheet(),
     overSummary: overSummarySheet(view),
   };
@@ -2018,7 +2073,7 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     tiles: (view) => buildTiles(view, t),
     dock: (eventType, _view, payload) => buildDock(eventType, t, payload),
     context: (view) => buildContext(view, t),
-    sheets: buildSheets,
+    sheets: (view) => buildSheets(view, t),
     // D2 (R2 sign-off): the skin supplies per-ball detail so the activity
     // panel's rows differ from one another. Declared HERE rather than the
     // chassis importing `cricketBallDetail` directly — sport vocabulary stays
