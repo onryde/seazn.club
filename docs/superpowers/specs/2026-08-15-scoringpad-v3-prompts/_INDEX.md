@@ -657,3 +657,35 @@ which of your wave's changes is visible in the five shared states. Anything
 that lives behind a tap — a picker, a sheet, a dock, a disabled control and
 its reason — is not, and needs its own `EXTRA_STATES` entry or the gate is
 theatre.
+
+### R2c — sign-off sheet published 2026-08-18, verdicts OWED
+
+<https://claude.ai/code/artifact/52bb1534-20fb-40da-a9b7-e19e38a8e5c6> — a NEW
+artifact, not a republish of R2b's: this is a different wave's sheet, and
+overwriting R2b's URL would orphan the record of what that wave was signed off
+on. (R2b's own "republish to the SAME URL" rule was about its own re-captures.)
+
+Ten states x 768/1280, captured after the final rebuild, with each state's
+320px overflow measured — **0px on all ten**, including the three new ones,
+where a long reason string beside a long name was the real risk.
+
+**Verdict slots are EMPTY and stay that way until the owner fills them.** Merge
+is blocked until they are recorded here (`_RULES.md` §1). The reinstated Retire
+tile is new surface in this sheet, so it needs a verdict of its own rather than
+inheriting R2's.
+
+**One defect this sheet caught that thirteen mutation tests did not.** Every
+test asserted the blocked-candidate reason string matched, and it did — but the
+reason renders directly beside the name it names, so the chip read
+"G R2c BowlerA … G R2c BowlerA bowled the last over and cannot bowl this one
+too", and the review option read "Home | Home has no reviews left in this
+innings". Correct string, wrong in place. Fixed with name-free variants for the
+in-list case (the name-bearing wording stays on the slot-level message, which
+stands alone); both are still driven by the same `BowlerBlockReason`, so they
+cannot drift on the FACT, only on how much of the sentence the surrounding UI
+already supplies. **Recapture after the fix, not before** — the corrected copy
+is what the published sheet shows.
+
+Worth generalising for R3-R7: a rendered-page check catches a whole class —
+copy that is right in isolation and wrong in context — that no assertion on the
+string can reach.
