@@ -30,6 +30,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages } from "../stages";
+import { createVenue, createCourt } from "../venues";
 import {
   buildSchedulePack,
   toEngineAssignments,
@@ -38,6 +39,33 @@ import {
 } from "../schedule-ai";
 import type { AiSchedulePlan } from "../schedule-ai-prompt";
 import { seedOrg } from "./_seed";
+
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` — real
+// `courts.id` values. This file's own DSL (and `planFor`'s fabricated AI
+// plan) names courts "Court 1".."Court 3", so — same idiom as
+// competition-schedule-pack.test.ts — labels resolve to real, per-org-cached
+// courts rather than rewriting the whole file around uuids.
+const courtsByOrg = new Map<string, { venueId: string; byName: Map<string, string> }>();
+
+async function courtId(auth: AuthCtx, name: string): Promise<string> {
+  let entry = courtsByOrg.get(auth.orgId);
+  if (!entry) {
+    const venue = await createVenue(auth, { name: "Main venue", sort: 0 });
+    entry = { venueId: venue.id, byName: new Map() };
+    courtsByOrg.set(auth.orgId, entry);
+  }
+  const cached = entry.byName.get(name);
+  if (cached !== undefined) return cached;
+  const court = await createCourt(auth, entry.venueId, { name, sort: entry.byName.size, tags: [] });
+  entry.byName.set(name, court.id);
+  return court.id;
+}
+
+async function courtIds(auth: AuthCtx, names: readonly string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const name of names) out.push(await courtId(auth, name));
+  return out;
+}
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -62,12 +90,12 @@ const SLOT = [
   Date.parse(`${DAY}T17:00:00.000Z`),
 ];
 
-function settingsConfig(hard: HardConstraint[]) {
+function settingsConfig(courts: string[], hard: HardConstraint[]) {
   return {
     startAt: `${DAY}T08:00:00.000Z`,
     matchMinutes: 30,
     gapMinutes: 0,
-    courts: ["Court 1", "Court 2", "Court 3"],
+    courts,
     perEntrantMinRest: 20,
     blackouts: [],
     sessionWindows: [],
@@ -98,9 +126,10 @@ async function makeDivision(
     config: GENERIC_CONFIG,
     eligibility: [],
   });
+  const courts = await courtIds(auth, ["Court 1", "Court 2", "Court 3"]);
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${division.id}, ${sql.json(settingsConfig(hard))}, ${TZ}, now())
+    values (${division.id}, ${sql.json(settingsConfig(courts, hard))}, ${TZ}, now())
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
   await createEntrants(
     auth,
@@ -155,12 +184,13 @@ async function addFixture(
 }
 
 /** A plan that puts the given fixtures on ONE day, one per court, hours apart. */
-function planFor(ids: readonly string[]): AiSchedulePlan {
+async function planFor(auth: AuthCtx, ids: readonly string[]): Promise<AiSchedulePlan> {
+  const courts = await courtIds(auth, ids.map((_, i) => `Court ${i + 1}`));
   return {
     assignments: ids.map((id, i) => ({
       fixture_id: id,
       scheduled_at: new Date(SLOT[i]!).toISOString(),
-      court_label: `Court ${i + 1}`,
+      court_label: courts[i]!,
     })),
     unschedulable: [],
     explanations: [],
@@ -169,8 +199,12 @@ function planFor(ids: readonly string[]): AiSchedulePlan {
 }
 
 /** The referee's verdict on that plan, assembled exactly as the runner does. */
-function refereeConflicts(pack: SchedulePack, ids: readonly string[]): Conflict[] {
-  const plan = planFor(ids);
+async function refereeConflicts(
+  auth: AuthCtx,
+  pack: SchedulePack,
+  ids: readonly string[],
+): Promise<Conflict[]> {
+  const plan = await planFor(auth, ids);
   return validateAssignments(toEngineAssignments(plan, pack), verifyConfig(pack));
 }
 
@@ -207,10 +241,11 @@ async function seedCollapsedBoard(): Promise<{
 
   // "Tam plays at most one match a day" — authored against a real person UUID,
   // which is the only person identifier the console has.
+  const collapsedCourts = await courtIds(auth, ["Court 1", "Court 2", "Court 3"]);
   await sql`
     update schedule_settings
     set config = ${sql.json(
-      settingsConfig([
+      settingsConfig(collapsedCourts, [
         { type: "max_fixtures_per_day", count: 1, scope: { kind: "person", personKey: tam } },
       ]),
     )}
@@ -246,10 +281,11 @@ async function seedUniqueBoard(): Promise<{
   await addPerson(auth.orgId, "Solo U-3", [div.entrantByName.get("U-3")!]);
   await addPerson(auth.orgId, "Solo U-4", [div.entrantByName.get("U-4")!]);
 
+  const uniqueCourts = await courtIds(auth, ["Court 1", "Court 2", "Court 3"]);
   await sql`
     update schedule_settings
     set config = ${sql.json(
-      settingsConfig([
+      settingsConfig(uniqueCourts, [
         { type: "max_fixtures_per_day", count: 1, scope: { kind: "person", personKey: uma } },
       ]),
     )}
@@ -289,7 +325,7 @@ describe.skipIf(!HAS_DB)("person-scoped rules collapse with the rosters (#450)",
     // THE ASSERTION. Two fixtures on one day against a 1/day person cap: both
     // are movable, so both are reported. Before the fix this is an empty list —
     // the rule compiled, displayed as enforced, and bound nothing.
-    const capped = dayCapConflicts(refereeConflicts(pack, [f1, f2]));
+    const capped = dayCapConflicts(await refereeConflicts(auth, pack, [f1, f2]));
     expect(capped).toHaveLength(2);
     expect(capped.map((c) => c.fixtureId).sort()).toEqual([f1, f2].sort());
     expect(capped[0]!.details?.count).toBe(2);
@@ -325,7 +361,7 @@ describe.skipIf(!HAS_DB)("person-scoped rules collapse with the rosters (#450)",
 
     // Three fixtures on one day; the cap is scoped to Uma, who is in two of
     // them. So the count is 2 (not 3) and the third card is untouched.
-    const capped = dayCapConflicts(refereeConflicts(pack, [withUma[0]!, withoutUma, withUma[1]!]));
+    const capped = dayCapConflicts(await refereeConflicts(auth, pack, [withUma[0]!, withoutUma, withUma[1]!]));
     expect(capped).toHaveLength(2);
     expect(capped.map((c) => c.fixtureId).sort()).toEqual([...withUma].sort());
     expect(capped.map((c) => c.fixtureId)).not.toContain(withoutUma);
