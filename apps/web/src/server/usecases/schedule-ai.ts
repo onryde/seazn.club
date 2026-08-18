@@ -2197,8 +2197,12 @@ async function callModel(
  *  nobody could read. `labelToId.size === 0` (no directory supplied) is a
  *  fast path that returns `plan` untouched, matching this function's
  *  behaviour before this pass exactly for any caller with no directory to
- *  offer. */
-function resolveModelCourtLabels(
+ *  offer.
+ *
+ *  Exported: `runCompetitionAiPlan` (competition-schedule-ai.ts) needs the
+ *  identical step for the joint plan — `AiSchedulePlan.assignments` is the
+ *  same shape either way, only the pack around it differs. */
+export function resolveModelCourtLabels(
   plan: AiSchedulePlan,
   labelToId: ReadonlyMap<string, string>,
 ): AiSchedulePlan {
