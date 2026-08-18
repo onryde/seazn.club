@@ -92,6 +92,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
+import { createVenue, createCourt } from "../venues";
 import { aiPlanForCompetition } from "../competition-schedule-ai";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
@@ -128,6 +129,35 @@ interface DivSpec {
   entrants?: number;
 }
 
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` (real `courts.id`
+// values, since pass 1) — every DivSpec config below still specs a readable
+// "Court 1" label; nothing in this file asserts on a court's identity (it is
+// a pure capacity-arithmetic suite), so a real court is resolved (and
+// cached, per org — every config here uses exactly one court) 1:1 in place
+// of whatever labels spec.config.courts names.
+const courtsByOrg = new Map<string, { venueId: string; byName: Map<string, string> }>();
+
+async function courtIds(auth: AuthCtx, names: readonly string[]): Promise<string[]> {
+  let entry = courtsByOrg.get(auth.orgId);
+  if (!entry) {
+    const venue = await createVenue(auth, { name: "Main venue", sort: 0 });
+    entry = { venueId: venue.id, byName: new Map() };
+    courtsByOrg.set(auth.orgId, entry);
+  }
+  const out: string[] = [];
+  for (const name of names) {
+    const cached = entry.byName.get(name);
+    if (cached !== undefined) {
+      out.push(cached);
+      continue;
+    }
+    const court = await createCourt(auth, entry.venueId, { name, sort: entry.byName.size, tags: [] });
+    entry.byName.set(name, court.id);
+    out.push(court.id);
+  }
+  return out;
+}
+
 async function seedDivision(auth: AuthCtx, competitionId: string, spec: DivSpec): Promise<{ id: string; name: string }> {
   const division = await createDivision(auth, competitionId, {
     name: spec.name,
@@ -148,9 +178,10 @@ async function seedDivision(auth: AuthCtx, competitionId: string, spec: DivSpec)
       members: [],
     })),
   );
+  const config = { ...spec.config, courts: await courtIds(auth, spec.config.courts) };
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${division.id}, ${sql.json(spec.config as never)}, ${TZ}, now())
+    values (${division.id}, ${sql.json(config as never)}, ${TZ}, now())
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
   const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "League", config: {} });
   await generateStageFixtures(auth, stage!.id);
