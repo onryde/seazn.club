@@ -21,7 +21,7 @@ describe("previewDivisionFixtures — bye label (F1 Task 5)", () => {
           progression: {
             sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 6 }] }],
             placement: "rank_order",
-            timing: "on_complete",
+            timing: "setup",
           },
         },
       ],
@@ -43,7 +43,7 @@ describe("previewDivisionFixtures — bye label (F1 Task 5)", () => {
           progression: {
             sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 6 }] }],
             placement: "rank_order",
-            timing: "on_complete",
+            timing: "setup",
           },
         },
       ],

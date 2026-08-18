@@ -44,9 +44,13 @@ describe("format gallery enumeration", () => {
 // (":289" stepladder, ":298" page_playoff, plus groups-knockout's `take`)
 // were NOT decorative — they feed the real engine through
 // previewDivisionFixtures (dispatch note). Converted onto `progression`
-// (rankRange collapses topN, picks is unchanged), timing: "on_complete" —
-// same auto-seed-on-complete behaviour as format-templates.ts's equivalent
-// templates (Decision 1: no default timing changes this session).
+// (rankRange collapses topN).
+//
+// F3 (day-one fixtures, owner ruling R1/R4): timing flipped to "setup" —
+// same as format-templates.ts's equivalent templates, matching R4's scope
+// (picker's six plus this gallery's three). groups-knockout's `take` also
+// moved off the hand-rolled `picks` A/B interleave onto `topNPerGroup` +
+// `snake` (owner ruling R5) — see the assertion below.
 describe("cannedStages emit progression, not qualification (F2)", () => {
   it("groups-knockout's knockout stage carries a picks TakeRule, on_complete", () => {
     const family = formatFamily("groups-knockout")!;
@@ -69,25 +73,25 @@ describe("cannedStages emit progression, not qualification (F2)", () => {
         },
       ],
       placement: "rank_order",
-      timing: "on_complete",
+      timing: "setup",
     });
   });
 
-  it("stepladder's finals stage carries rankRange(1,4), on_complete — the topN:4 replacement", () => {
+  it("stepladder's finals stage carries rankRange(1,4), setup — the topN:4 replacement", () => {
     const family = formatFamily("stepladder")!;
     expect(family.cannedStages[1]!.progression).toEqual({
       sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
       placement: "rank_order",
-      timing: "on_complete",
+      timing: "setup",
     });
   });
 
-  it("page_playoff's playoffs stage carries rankRange(1,4), on_complete — the topN:4 replacement", () => {
+  it("page_playoff's playoffs stage carries rankRange(1,4), setup — the topN:4 replacement", () => {
     const family = formatFamily("page_playoff")!;
     expect(family.cannedStages[1]!.progression).toEqual({
       sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
       placement: "rank_order",
-      timing: "on_complete",
+      timing: "setup",
     });
   });
 

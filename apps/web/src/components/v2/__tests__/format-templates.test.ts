@@ -6,11 +6,18 @@
 // rewritten onto `progression:` in lockstep with format-templates.ts's own
 // StageDraft/STAGE_TEMPLATES conversion — losersOfRound -> roundLosers,
 // topN:n -> rankRange{from:1,to:n}, both wrapped in {sources,placement,
-// timing}. `timing` is always "on_complete" here: every one of these
-// templates reproduces today's auto-seed-on-complete behaviour exactly
-// (F2 plan Decision 1), never the propose/confirm "setup" flow.
+// timing}.
+//
+// F3 (day-one fixtures, owner ruling R1): `timing` is now "setup" on every
+// progression-bearing template below, including ko_plate and
+// qualifying_main — the propose/confirm flow this file's F2 comment said
+// it never used. `buildTemplateStages` now passes the whole `TemplateKnobs`
+// object into `build()` (owner ruling R5: groups_ko needs `poolCount`
+// alongside `qualified` to draw from every pool, not just A/B), not the
+// bare qualified count.
 import { describe, expect, it } from "vitest";
 import { STAGE_TEMPLATES, buildTemplateStages, detectTemplate } from "../format-templates";
+import { FORMAT_FAMILIES } from "@/config/format-gallery";
 
 describe("ko_plate template", () => {
   it("builds a main knockout + a plate seeded by roundLosers, count = the qualified knob", () => {
@@ -27,7 +34,7 @@ describe("ko_plate template", () => {
       progression: {
         sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 4 }] }],
         placement: "rank_order",
-        timing: "on_complete",
+        timing: "setup",
       },
     });
   });
@@ -65,7 +72,7 @@ describe("qualifying_main template", () => {
       progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 8 }] }],
         placement: "rank_order",
-        timing: "on_complete",
+        timing: "setup",
       },
     });
   });
@@ -124,7 +131,7 @@ describe("detectTemplate — existing templates still round-trip (regression)", 
           progression: {
             sources: [{ stage: "previous", take: [{ kind: "picks", picks: [{ pool: "A", rank: 1 }] }] }],
             placement: "rank_order",
-            timing: "on_complete",
+            timing: "setup",
           },
         },
       ]),
@@ -136,22 +143,22 @@ describe("detectTemplate — existing templates still round-trip (regression)", 
 // `qualification`; `rankRange` is the collapsed survivor for what used to be
 // `topN` (owner ruling 4 / Decision 2).
 describe("format-templates emit progression, not qualification", () => {
-  it("league_ko emits rankRange, on_complete — the topN replacement, unchanged behaviour", () => {
+  it("league_ko emits rankRange, setup — the topN replacement, unchanged take shape", () => {
     const stages = buildTemplateStages("league_ko", { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });
     const finals = stages[1]!;
     expect(finals.progression).toEqual({
       sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
       placement: "rank_order",
-      timing: "on_complete",
+      timing: "setup",
     });
   });
 
-  it("ko_plate still emits roundLosers, on_complete — unchanged, F3 owns flipping timing to setup", () => {
+  it("ko_plate still emits roundLosers, now setup — take shape unchanged, only timing flipped (F3)", () => {
     const stages = buildTemplateStages("ko_plate", { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });
     expect(stages[1]!.progression).toEqual({
       sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 4 }] }],
       placement: "rank_order",
-      timing: "on_complete",
+      timing: "setup",
     });
   });
 
@@ -180,7 +187,7 @@ describe("format-templates emit progression, not qualification", () => {
         },
       ],
       placement: "rank_order",
-      timing: "on_complete",
+      timing: "setup",
     });
   });
 
@@ -189,7 +196,7 @@ describe("format-templates emit progression, not qualification", () => {
     expect(stages[1]!.progression).toEqual({
       sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
       placement: "rank_order",
-      timing: "on_complete",
+      timing: "setup",
     });
   });
 
@@ -201,5 +208,42 @@ describe("format-templates emit progression, not qualification", () => {
         expect("progression" in stage).toBe(true);
       }
     }
+  });
+});
+
+// F3 (day-one fixtures, owner ruling R1): every progression-bearing writer
+// — the picker's STAGE_TEMPLATES AND the marketing gallery's cannedStages —
+// now generates its whole draw (final included) at division setup, never
+// waiting on its source stage to complete. A stray "on_complete" here would
+// silently reintroduce the "final only appears once group play ends" gap
+// this task exists to close.
+describe("F3 — every progression-bearing template/family emits timing: setup", () => {
+  it("every STAGE_TEMPLATES entry's non-null progression.timing is setup", () => {
+    const failures: string[] = [];
+    for (const t of STAGE_TEMPLATES) {
+      // Task 2 (same session) changes build()'s signature to accept the
+      // whole TemplateKnobs object; until then plain `4` is q. This test
+      // only reads the literal `timing` field, so either call shape proves
+      // the same thing.
+      for (const stage of t.build(4)) {
+        if (stage.progression && stage.progression.timing !== "setup") {
+          failures.push(`${t.key}/${stage.kind}: timing=${stage.progression.timing}`);
+        }
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("every gallery family's non-null cannedStages progression.timing is setup", () => {
+    const failures: string[] = [];
+    for (const f of FORMAT_FAMILIES) {
+      for (const stage of f.cannedStages) {
+        const progression = stage.progression as { timing?: string } | null;
+        if (progression && progression.timing !== "setup") {
+          failures.push(`${f.slug}/${stage.kind}: timing=${progression.timing}`);
+        }
+      }
+    }
+    expect(failures).toEqual([]);
   });
 });

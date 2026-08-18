@@ -7,10 +7,17 @@
 // below emits `progression` (mirrors api-v1/schemas.ts's ProgressionSchema
 // field-for-field: sources[].take[]/placement/map?/timing). Collapse (owner
 // ruling 4, F2 plan Decision 2): `topN: n` is now `rankRange{from:1,to:n}`;
-// `losersOfRound` is now `roundLosers`. Every writer here sets
-// `timing: "on_complete"` — Decision 1's explicit statement that no writer's
-// default timing changes in this session; the picker still waits for its
-// source stage to complete before generating, exactly as before.
+// `losersOfRound` is now `roundLosers`.
+//
+// F3 (day-one fixtures, owner ruling R1 — supersedes F2 Decision 1 above):
+// every progression-bearing writer here now sets `timing: "setup"`. The
+// whole draw, final included, is generated with placeholder
+// home/away_slot_label the moment the division is created
+// (generateProgressionSetupFixtures, stages.ts) — the picker no longer
+// waits for the source stage to complete before a later stage's fixtures
+// exist. `stages-panel.tsx`'s ad-hoc AddStageForm and the seed scripts
+// still default to "on_complete" (R4 scoped the flip to this file plus
+// config/format-gallery.tsx's cannedStages) — this file's templates do not.
 //
 // `take`'s element type reuses the engine's own TakeRule (rather than a
 // hand-rolled `unknown[]`/`{kind:string}[]` restated here) so this file and
@@ -60,7 +67,7 @@ export const STAGE_TEMPLATES: {
       { kind: "knockout", name: "Finals", config: {}, progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
         placement: "rank_order",
-        timing: "on_complete",
+        timing: "setup",
       } },
     ],
   },
@@ -95,7 +102,7 @@ export const STAGE_TEMPLATES: {
             },
           ],
           placement: "rank_order",
-          timing: "on_complete",
+          timing: "setup",
         },
       },
     ],
@@ -109,7 +116,7 @@ export const STAGE_TEMPLATES: {
       { kind: "stepladder", name: "Stepladder finals", config: {}, progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
         placement: "rank_order",
-        timing: "on_complete",
+        timing: "setup",
       } },
     ],
   },
@@ -122,7 +129,7 @@ export const STAGE_TEMPLATES: {
       { kind: "page_playoff", name: "Playoffs", config: {}, progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
         placement: "rank_order",
-        timing: "on_complete",
+        timing: "setup",
       } },
     ],
   },
@@ -191,7 +198,7 @@ export const STAGE_TEMPLATES: {
         progression: {
           sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: q }] }],
           placement: "rank_order",
-          timing: "on_complete",
+          timing: "setup",
         },
       },
     ],
@@ -205,7 +212,7 @@ export const STAGE_TEMPLATES: {
       { kind: "knockout", name: "Main draw", config: {}, progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
         placement: "rank_order",
-        timing: "on_complete",
+        timing: "setup",
       } },
     ],
   },

@@ -275,7 +275,7 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
             },
           ],
           placement: "rank_order",
-          timing: "on_complete",
+          timing: "setup",
         },
       },
     ],
@@ -306,7 +306,7 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
       { kind: "stepladder", name: "Stepladder finals", config: {}, progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
         placement: "rank_order",
-        timing: "on_complete",
+        timing: "setup",
       } },
     ],
   },
@@ -319,7 +319,7 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
       { kind: "page_playoff", name: "Playoffs", config: {}, progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
         placement: "rank_order",
-        timing: "on_complete",
+        timing: "setup",
       } },
     ],
   },
