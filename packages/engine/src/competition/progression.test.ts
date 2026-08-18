@@ -261,6 +261,49 @@ describe("placeDescriptors", () => {
     expect(rest.map((s) => s.sourceIndex).sort()).toEqual([0, 1]);
   });
 
+  // F3 review item 2 — the ambiguity gate used to fire on `candidates.length
+  // > 1` alone, so a SINGLE source with two overlapping rankRanges (both
+  // producing a "rank:2" descriptor) also 422d SEEDING_MAP_SOURCE_AMBIGUOUS,
+  // with a message claiming ">1 progression source" even though
+  // sourceIndexes was [0, 0]. A same-source overlap like this is harmless —
+  // both candidates are the literal same descriptor — so it must resolve.
+  it("seeded_map source matching TWO overlapping take rules within the SAME source resolves — not ambiguous, just a same-source duplicate", () => {
+    const sources: ProgressionSource[] = [
+      { stage: "previous", take: [{ kind: "rankRange", from: 1, to: 3 }, { kind: "rankRange", from: 2, to: 4 }] },
+    ];
+    const pots = expandSources(sources, () => ({ poolKeys: [] }));
+    const placed = placeDescriptors(pots, "seeded_map", [{ slot: "1", source: "rank:2" }]);
+    expect(placed[0]).toEqual({ sourceIndex: 0, descriptor: { kind: "rank_range", rank: 2 } });
+  });
+
+  // The residual danger the broadened same-source case must still catch:
+  // best_nth's descriptorKey is `best:${position}` alone (no `nth`), so two
+  // bestNth rules at the same position but a DIFFERENT nth collide on key
+  // while resolving to DIFFERENT entrants — not interchangeable. Silently
+  // picking `candidates[0]` here would mis-seed the wrong nth-tier entrant
+  // with no error at all; refuse instead, same code, an accurate message.
+  it("seeded_map source matching two DIFFERENT-nth bestNth descriptors within the SAME source still refuses — not interchangeable", () => {
+    const sources: ProgressionSource[] = [
+      {
+        stage: "previous",
+        take: [
+          { kind: "bestNth", nth: 1, count: 2 },
+          { kind: "bestNth", nth: 2, count: 2 },
+        ],
+      },
+    ];
+    const pots = expandSources(sources, () => ({ poolKeys: [] }));
+    const map = [{ slot: "1", source: "best:1" }];
+    expect(() => placeDescriptors(pots, "seeded_map", map)).toThrow(/more than one qualifier within the same progression source/);
+    try {
+      placeDescriptors(pots, "seeded_map", map);
+      expect.fail("expected placeDescriptors to throw");
+    } catch (err) {
+      expect(EngineError.is(err, "SEEDING_MAP_SOURCE_AMBIGUOUS")).toBe(true);
+      expect((err as EngineError).data).toMatchObject({ source: "best:1", sourceIndexes: [0, 0] });
+    }
+  });
+
   // Corollary caught in the same review as F3's ruling 11 (F3 programme
   // index): snakeMerge reverses a bestNth pot's ARRAY ORDER but never
   // touches each descriptor's own `position` (its cross-group strength
@@ -490,11 +533,55 @@ describe("resolveProgression", () => {
     ]);
     expect(qualifiers.map((q) => q.entrantId)).toEqual(["a", "b"]);
     expect(ties).toHaveLength(1);
+    // F3 review item 1: descriptors widened from SlotDescriptor[] to
+    // SourcedSlot[] (carries sourceIndex) — this spec has one source, so
+    // sourceIndex is 0 throughout.
     expect(ties[0]).toEqual({
-      descriptors: [{ kind: "rank_range", rank: 2 }],
+      descriptors: [{ sourceIndex: 0, descriptor: { kind: "rank_range", rank: 2 } }],
       entrantIds: ["b", "c"],
       reason: "seed",
     });
+  });
+
+  // F3 review item 1 — the collision this widening exists to fix: two
+  // DIFFERENT sources each carry their OWN 2-way tie at rank 1, so
+  // descriptorKey ("rank:1") is IDENTICAL for both, but the two tie groups
+  // have different entrant sets and must stay distinguishable. Before this
+  // session, apps/web's computeSeedProposal had nothing to key on but the
+  // bare descriptorKey (stages.ts's seedOfKey Map), so the second source's
+  // seed silently overwrote the first's in that Map — a tie flagged on
+  // source 0 resolved against source 1's (already-unambiguous) slot instead.
+  it("keeps two same-keyed ties from different sources distinguishable by sourceIndex (colliding descriptorKey)", () => {
+    const sourceATied = [
+      { entrantId: "a1", rank: 1, tieUnbroken: true, tieBreak: { key: "seed", with: ["a2"] } },
+      { entrantId: "a2", rank: 2, tieUnbroken: true, tieBreak: { key: "seed", with: ["a1"] } },
+    ] as StandingsRow[];
+    const sourceBTied = [
+      { entrantId: "b1", rank: 1, tieUnbroken: true, tieBreak: { key: "seed", with: ["b2"] } },
+      { entrantId: "b2", rank: 2, tieUnbroken: true, tieBreak: { key: "seed", with: ["b1"] } },
+    ] as StandingsRow[];
+    const spec: ProgressionSpec = {
+      sources: [
+        { stage: "previous", take: [{ kind: "rankRange", from: 1, to: 1 }] },
+        { stage: { stageId: "s2" }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+      ],
+      placement: "rank_order",
+    };
+    const { ties } = resolveProgression(
+      spec,
+      [{ poolKeys: [] }, { poolKeys: [] }],
+      [{ pools: [{ pool: "", rows: sourceATied }] }, { pools: [{ pool: "", rows: sourceBTied }] }],
+    );
+    expect(ties).toHaveLength(2);
+    const bySourceIndex = new Map(ties.map((t) => [t.descriptors[0]!.sourceIndex, t]));
+    expect(bySourceIndex.get(0)?.entrantIds).toEqual(["a1", "a2"]);
+    expect(bySourceIndex.get(1)?.entrantIds).toEqual(["b1", "b2"]);
+    // Both descriptors are the SAME rank_range/rank:1 shape — the collision
+    // itself — but tagged with a different sourceIndex, which is what lets a
+    // consumer key by `${sourceIndex}:${descriptorKey}` instead of the bare
+    // key that used to collide (stages.ts's computeSeedProposal).
+    expect(bySourceIndex.get(0)?.descriptors[0]?.descriptor).toEqual({ kind: "rank_range", rank: 1 });
+    expect(bySourceIndex.get(1)?.descriptors[0]?.descriptor).toEqual({ kind: "rank_range", rank: 1 });
   });
 
   // F2 Task 6 review (defect 3): euro24's real shape — topNPerGroup +

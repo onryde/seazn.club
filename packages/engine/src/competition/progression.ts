@@ -279,11 +279,35 @@ export function placeDescriptors(
     }
     if (candidates.length > 1) {
       const sourceIndexes = candidates.map((c) => c.sourceIndex);
-      throw new EngineError(
-        "SEEDING_MAP_SOURCE_AMBIGUOUS",
-        `seeded_map source "${entry.source}" matches qualifiers from more than one progression source (indexes ${sourceIndexes.join(", ")}) — seeded_map cannot tell them apart; use rank_order/snake placement instead, or make each source's pool keys distinct`,
-        { source: entry.source, sourceIndexes },
-      );
+      const distinctSources = new Set(sourceIndexes);
+      // F3 review item 2 (RESOLVED) — was `candidates.length > 1` alone, so
+      // a SINGLE source with two overlapping take rules (e.g. two
+      // overlapping rankRanges) also threw here, with `sourceIndexes: [0,
+      // 0]` while the message claimed ">1 progression source" — a
+      // same-source collision is a different condition and (for every
+      // descriptorKey EXCEPT best_nth's) a harmless one: descriptorKey fully
+      // determines every other kind's descriptor, so a same-key match within
+      // one source can only be the identical descriptor twice — an
+      // overlapping/duplicate take rule that resolveProgression's own
+      // entrant-dedupe guard (QUALIFICATION_INVALID) already refuses the
+      // moment BOTH copies are placed, whichever one `seeded_map` picks
+      // here. best_nth's key (`best:${position}`) is the one exception —
+      // it drops `nth`, so two bestNth rules at the same position but a
+      // DIFFERENT nth collide on key while resolving to different entrants;
+      // that is genuinely ambiguous even within a single source, so it still
+      // refuses rather than silently picking the wrong nth-tier entrant.
+      const distinctDescriptors = new Set(candidates.map((c) => JSON.stringify(c.descriptor)));
+      if (distinctSources.size > 1 || distinctDescriptors.size > 1) {
+        throw new EngineError(
+          "SEEDING_MAP_SOURCE_AMBIGUOUS",
+          distinctSources.size > 1
+            ? `seeded_map source "${entry.source}" matches qualifiers from more than one progression source (indexes ${[...distinctSources].join(", ")}) — seeded_map cannot tell them apart; use rank_order/snake placement instead, or make each source's pool keys distinct`
+            : `seeded_map source "${entry.source}" matches more than one qualifier within the same progression source (source ${sourceIndexes[0]}) — its take rules produce this key more than once (e.g. two bestNth rules at the same position with a different nth); remove the overlap or duplicate rule`,
+          { source: entry.source, sourceIndexes },
+        );
+      }
+      // Same source, identical descriptor: interchangeable — fall through
+      // and let `candidates[0]` claim the seat, same as any other match.
     }
     const slot = candidates[0]!;
     if (seats[seat - 1] !== undefined) {
@@ -361,7 +385,15 @@ export interface ResolvedProgressionEntry {
   tieUnbroken: boolean;
 }
 export interface ProgressionTieFlag {
-  descriptors: SlotDescriptor[];
+  // Widened from SlotDescriptor[] (F3 review item 1): a tie descriptor with
+  // no sourceIndex is indistinguishable from an identically-keyed descriptor
+  // on a DIFFERENT source (trivially: two rankRange sources, or two
+  // group_rank sources sharing a pool letter) — exactly the collision
+  // apps/web's computeSeedProposal (stages.ts) used to mis-seat a confirmed
+  // tie pick against, because its seedOfKey Map could only key by bare
+  // descriptorKey. SourcedSlot already carries sourceIndex — reuse it rather
+  // than invent a parallel shape.
+  descriptors: SourcedSlot[];
   entrantIds: EntrantId[];
   reason: string;
 }
@@ -572,8 +604,10 @@ export function resolveProgression(
       const group = [row.entrantId, ...(row.tieBreak?.with ?? [])].sort();
       const key = group.join(",");
       const existing = tieGroups.get(key);
-      if (existing) existing.descriptors.push(d);
-      else tieGroups.set(key, { descriptors: [d], entrantIds: group, reason: row.tieBreak?.key ?? "seed" });
+      // Push the whole SourcedSlot (sourceIndex + descriptor), not just `d`
+      // — see ProgressionTieFlag's own doc comment.
+      if (existing) existing.descriptors.push(slot);
+      else tieGroups.set(key, { descriptors: [slot], entrantIds: group, reason: row.tieBreak?.key ?? "seed" });
     }
   });
 
