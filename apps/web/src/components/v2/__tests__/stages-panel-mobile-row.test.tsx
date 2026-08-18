@@ -17,7 +17,7 @@ vi.mock("@/components/ui/confirm-provider", () => ({
 // below the sm breakpoint, and stay side-by-side at sm+ via `sm:contents`.
 const STAGE = {
   id: "s1", seq: 0, kind: "league", name: "League",
-  config: {}, qualification: null, status: "active",
+  config: {}, progression: null, status: "active",
 };
 const baseProps = {
   divisionId: "d1", divisionSeq: 5, competitionId: "c1", orgSlug: "org", compSlug: "comp", divSlug: "div",

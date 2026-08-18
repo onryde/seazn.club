@@ -42,7 +42,7 @@ interface StageRow {
   kind: string;
   name: string;
   config: Record<string, unknown>;
-  qualification: Record<string, unknown> | null;
+  progression: Record<string, unknown> | null;
   status: string;
 }
 interface FixtureRow {
@@ -929,6 +929,23 @@ const ADD_KINDS = [
   { key: "double_elim", label: "Double elimination" },
 ] as const;
 
+/** The follow-up stage's progression rule — pure, so the POST body shape is
+ *  unit-testable without the interactive hook-harness (same reasoning as
+ *  generatePreconditionMessage below: AddStageForm is a nested stateful
+ *  component, opaque to the harness's one-level-deep expansion). F2: was
+ *  `{ topN }`; `rankRange` is the collapsed survivor (owner ruling 4).
+ *  `timing: "on_complete"` because this form always tries to /generate
+ *  immediately after creating the stage, falling back to "seed on
+ *  completion" only via STAGE_NOT_READY below — exactly on_complete
+ *  semantics (F2 plan Decision 1), never the propose/confirm "setup" flow. */
+export function addStageProgression(topN: number) {
+  return {
+    sources: [{ stage: "previous" as const, take: [{ kind: "rankRange" as const, from: 1, to: topN }] }],
+    placement: "rank_order" as const,
+    timing: "on_complete" as const,
+  };
+}
+
 function AddStageForm({
   divisionId,
   nextSeq,
@@ -958,7 +975,7 @@ function AddStageForm({
           kind,
           name: name.trim() || "Finals",
           config: {},
-          qualification: { topN },
+          progression: addStageProgression(topN),
         },
       });
       try {
@@ -1058,8 +1075,9 @@ export function generatePreconditionMessage(err: unknown, msg: Msg): string | nu
         })
       : msg("schedule.error.tooFewEntrants");
   }
-  // F2a (P7 follow-up): the SEEDED-path analogue — a `.seeding` group stage
-  // whose placed seeds can't fill its configured pools
+  // F2a (P7 follow-up): the SEEDED-path analogue — a `.progression`
+  // (timing: "setup") group stage whose placed seeds can't fill its
+  // configured pools
   // (generateSeededStageFixtures) throws this reason instead. Same
   // actionable-banner treatment; distinct copy because the shortfall is in
   // QUALIFIERS the seeding rules produce, not in registered entrants.
@@ -1069,8 +1087,9 @@ export function generatePreconditionMessage(err: unknown, msg: Msg): string | nu
     // seeded kind, or a group stage left at pools.count's default of 1)
     // used to fall back to the PLAIN path's tooFewEntrants copy ("add at
     // least 2 entrants to this stage first") — unactionable here, since a
-    // `.seeding` stage's entrants are synthetic slot:N seeds minted from
-    // seeding.take rules (stages.ts:1399-1403), not rows a user can add.
+    // a `.progression` (timing: "setup") stage's entrants are synthetic
+    // slot:N seeds minted from its take rules (stages.ts:1399-1403), not
+    // rows a user can add.
     // The seeded path's real lever is the seeding rules or the source
     // stage's qualifier count, so it gets its own copy, never tooFewEntrants.
     return groups > 1
