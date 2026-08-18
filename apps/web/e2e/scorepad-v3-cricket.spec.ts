@@ -78,6 +78,16 @@ async function setContextPerson(page: Page, chipLabel: string, personName: strin
   await candidate.click();
 }
 
+/** Open a context chip's picker WITHOUT picking, so the candidate list itself
+ *  can be inspected. R2c gave the strip real narrowing (ContextSlot.candidates
+ *  / .blocked), so "who is even offered, and which of them are refused with a
+ *  reason" became a thing worth asserting rather than a list nothing checked. */
+async function openContextPicker(page: Page, chipLabel: string) {
+  const strip = pad(page).locator('[data-role="context-strip"]');
+  await strip.getByRole("button", { name: new RegExp(`^${chipLabel}(:|$)`) }).click();
+  return strip;
+}
+
 /** The guided-sheet root — chassis-generic (guided-sheet.tsx), same posture
  *  `pad()` above already takes for the scorepad root itself. R2b's
  *  over-by-over sheet is the first place THIS file drives it. */
@@ -934,33 +944,41 @@ test(
     }
     await openConsoleAlreadyLive(page, fx);
 
-    // Over 2's boundary — re-select the SAME bowler who just bowled over 1.
-    // The picker still offers this name (a documented, pre-existing gap —
-    // see reference_padhostview_context_overrides_and_sheet_candidates /
-    // this skin's own buildContext CANDIDATE-LIST GAP comment); the fold
-    // would refuse it outright ("bowled the last over and cannot bowl this
-    // one too") — this test proves the CONSEQUENCE of tapping it is now
-    // caught in the pad, not a silent trip to the server.
-    await setContextPerson(page, "Bowler", `V3 BB BowlerA ${TAG}`);
+    // Over 2's boundary. R2c (C1) changed what this picker even OFFERS, so
+    // this is now the primary assertion rather than a documented gap: the
+    // list is the FIELDING side only, and BowlerA — who just bowled over 1 —
+    // is still SHOWN, but refused in place with the reason naming him. That
+    // is R2b's "visible, blocked, and REASONED — not removed" ruling applied
+    // to a candidate list. Before C1 he was an ordinary tappable button and
+    // the block was only caught after the tap, on the tiles.
+    const strip = await openContextPicker(page, "Bowler");
 
-    for (const tileId of ["run0", "run1", "wicket"]) {
-      const tile = pad(page).locator(`[data-tile-id="${tileId}"]`);
-      await expect(tile, `${tileId} must carry data-tile-disabled="true"`).toHaveAttribute(
-        "data-tile-disabled",
-        "true",
-      );
-      await expect(tile, `${tileId} must be genuinely unclickable, not just styled`).toBeDisabled();
-    }
-    const bowlerMessage = pad(page).locator(
-      '[data-role="context-strip"] [data-role="context-slot-message"][data-slot-id="bowler"]',
+    const blockedCandidate = strip.locator(`[data-candidate-id="${bowlerA}"]`);
+    await expect(blockedCandidate).toBeVisible({ timeout: 10_000 });
+    await expect(blockedCandidate, "the previous over's bowler must be marked blocked").toHaveAttribute(
+      "data-blocked",
+      "true",
     );
-    await expect(bowlerMessage).toBeVisible({ timeout: 10_000 });
-    await expect(bowlerMessage, "the reason must name the actual bowler, not a raw id").toContainText(
-      `V3 BB BowlerA ${TAG}`,
-    );
+    await expect(blockedCandidate, "blocked must mean genuinely unclickable, not merely dimmed").toBeDisabled();
+    await expect(
+      blockedCandidate,
+      "the reason must be visible text naming the bowler — never a title/tooltip, which is invisible on touch",
+    ).toContainText(`V3 BB BowlerA ${TAG}`);
 
-    // Pick the genuinely eligible bowler — everything clears.
-    await setContextPerson(page, "Bowler", `V3 BB BowlerB ${TAG}`);
+    // SCOPE: no batting-side player is offered at all. Before C1 the picker
+    // drew from combinedPool(squads) and listed both squads, so a scorer
+    // could pick a batter as bowler and be refused by the server.
+    await expect(
+      strip.locator(`[data-candidate-id="${striker}"]`),
+      "a batting-side player must not be offered as a bowler at all",
+    ).toHaveCount(0);
+    await expect(strip.locator(`[data-candidate-id="${nonStriker}"]`)).toHaveCount(0);
+
+    // The genuinely eligible bowler is offered normally, and picking him
+    // leaves every delivery tile tappable.
+    const eligible = strip.locator(`[data-candidate-id="${fx.personIds[`V3 BB BowlerB ${TAG}`]!}"]`);
+    await expect(eligible).not.toHaveAttribute("data-blocked", "true");
+    await eligible.click();
     for (const tileId of ["run0", "run1", "wicket"]) {
       const tile = pad(page).locator(`[data-tile-id="${tileId}"]`);
       await expect(tile, `${tileId} must carry data-tile-disabled="false" once eligible`).toHaveAttribute(
@@ -969,9 +987,13 @@ test(
       );
       await expect(tile).toBeEnabled();
     }
-    await expect(bowlerMessage, "the block message must clear once the bowler is eligible").not.toBeVisible({
-      timeout: 10_000,
-    });
+    // The slot-level message is the TILE explanation (ContextSlot.message,
+    // R2b) — distinct from the per-candidate reasons asserted above, and it
+    // must be absent entirely once an eligible bowler is in the slot.
+    await expect(
+      pad(page).locator('[data-role="context-strip"] [data-role="context-slot-message"][data-slot-id="bowler"]'),
+      "the block message must clear once the bowler is eligible",
+    ).not.toBeVisible({ timeout: 10_000 });
   },
 );
 
@@ -1162,3 +1184,123 @@ test(
     await expect(sheet.getByText("Free hit — only Run out or Obstructing the field apply.")).toBeVisible();
   },
 );
+
+// ---------------------------------------------------------------------------
+// R2c (2026-08-18) — the other two candidate-narrowing surfaces, end to end.
+// Both are the same defect class the whole wave targets: the pad must never
+// offer what the engine will refuse. Unit tests assert the built specs; only
+// a browser proves the scorer cannot actually tap the thing.
+// ---------------------------------------------------------------------------
+
+test("cricket v3 (R2c/C2): Retire is one flow, offering only the two batters at the crease", async ({ page }) => {
+  test.setTimeout(45_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket Retire ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [
+      { fullName: `V3 RT Striker ${TAG}` },
+      { fullName: `V3 RT NonStriker ${TAG}` },
+      { fullName: `V3 RT Bench ${TAG}` },
+    ],
+    away: [{ fullName: `V3 RT Bowler ${TAG}` }],
+    emitCoreStart: true,
+  });
+  const striker = fx.personIds[`V3 RT Striker ${TAG}`]!;
+  const nonStriker = fx.personIds[`V3 RT NonStriker ${TAG}`]!;
+
+  await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+    over: 0,
+    ballInOver: 1,
+    striker,
+    nonStriker,
+    bowler: fx.personIds[`V3 RT Bowler ${TAG}`]!,
+    runs: { bat: 0 },
+  });
+  await openConsoleAlreadyLive(page, fx);
+
+  // The tile is back (R2c amendment to defect 4's ruling) and opens the
+  // skin's own guided sheet rather than the generic More-sheet form.
+  const retireTile = pad(page).locator('[data-tile-id="retire"]');
+  await expect(retireTile).toBeVisible({ timeout: 10_000 });
+  await retireTile.click();
+
+  const sheet = sheetRoot(page);
+  await expect(sheet).toBeVisible({ timeout: 10_000 });
+
+  // Exactly the crease. The generic flow offered all 22 from BOTH sides; the
+  // dropped SwapSheet tile offered the whole batting side. Neither could
+  // express "these two".
+  await expect(sheet.locator(`[data-candidate-id="${striker}"]`)).toBeVisible();
+  await expect(sheet.locator(`[data-candidate-id="${nonStriker}"]`)).toBeVisible();
+  await expect(
+    sheet.locator(`[data-candidate-id="${fx.personIds[`V3 RT Bench ${TAG}`]!}"]`),
+    "a batting-side player who is not at the crease must not be offered",
+  ).toHaveCount(0);
+  await expect(
+    sheet.locator(`[data-candidate-id="${fx.personIds[`V3 RT Bowler ${TAG}`]!}"]`),
+    "a FIELDING-side player must not be offered — the generic flow's worst failure",
+  ).toHaveCount(0);
+
+  // …and the real reason enum, which is why the generic flow was kept in the
+  // first place. Both halves, one flow.
+  await sheet.locator(`[data-candidate-id="${striker}"]`).click();
+  await expect(sheet.getByRole("button", { name: "Hurt", exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(sheet.getByRole("button", { name: "Out", exact: true })).toBeVisible();
+  await expect(sheet.getByRole("button", { name: "Other", exact: true })).toBeVisible();
+});
+
+test("cricket v3 (R2c/C3): a side with no reviews left cannot be picked, but an umpire review is never capped", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket Reviews ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 RV Striker ${TAG}` }, { fullName: `V3 RV NonStriker ${TAG}` }],
+    away: [{ fullName: `V3 RV Bowler ${TAG}` }],
+  });
+  // One review each innings, so a single unsuccessful one exhausts a side.
+  const div = await apiJson<{ config: Record<string, unknown> }>(
+    page.request,
+    `/api/v1/divisions/${fx.divisionId}`,
+  );
+  expect(div.status).toBe(200);
+  await setDivisionConfigSql(fx.divisionId, { ...div.data!.config, reviews: { perInnings: 1 } });
+
+  await postEvent(page.request, fx.fixtureId, "core.start", {});
+  await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+    over: 0,
+    ballInOver: 1,
+    striker: fx.personIds[`V3 RV Striker ${TAG}`]!,
+    nonStriker: fx.personIds[`V3 RV NonStriker ${TAG}`]!,
+    bowler: fx.personIds[`V3 RV Bowler ${TAG}`]!,
+    runs: { bat: 0 },
+  });
+  // The HOME side spends its only review — `lost`, which is the counter that
+  // actually depletes an allowance (an upheld review does not).
+  await postEvent(page.request, fx.fixtureId, "cricket.review", {
+    by: fx.homeEntrantId,
+    kind: "player",
+    outcome: "struck_down",
+  });
+
+  await openConsoleAlreadyLive(page, fx);
+  await pad(page).locator('[data-tile-id="review"]').click();
+  const sheet = sheetRoot(page);
+  await expect(sheet).toBeVisible({ timeout: 10_000 });
+
+  // kind = player -> the exhausted side is shown, refused, and explained.
+  await sheet.locator('[data-choice-option-id="player"]').click();
+  await sheet.getByRole("button", { name: "Upheld", exact: true }).click();
+  const homeOption = sheet.locator(`[data-choice-option-id="${fx.homeEntrantId}"]`);
+  await expect(homeOption).toBeVisible({ timeout: 10_000 });
+  await expect(homeOption).toHaveAttribute("data-blocked", "true");
+  await expect(homeOption).toBeDisabled();
+  await expect(homeOption, "the reason must be visible text, not a tooltip").toContainText("no reviews left");
+  await expect(
+    sheet.locator(`[data-choice-option-id="${fx.awayEntrantId}"]`),
+    "the side that still holds a review stays selectable",
+  ).not.toHaveAttribute("data-blocked", "true");
+});
