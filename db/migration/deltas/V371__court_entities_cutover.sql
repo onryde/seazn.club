@@ -549,3 +549,136 @@ begin
    where jsonb_array_length(d.locked_scopes) > 0;
 end $$;
 -- division-locked-scopes-migration:end
+
+-- =============================================================================
+-- Blackout court-name migration (P9 pass 4c, owner-authorized this session):
+-- `schedule_settings.config.blackouts[].court` was left a free-text court
+-- NAME by the courts-migration block above (out of scope for pass 1). The
+-- SAME config row's `courts` array already holds real ids from that block,
+-- so a court-scoped blackout could no longer match the court it named from
+-- that point on — silently global or inert depending on the reader.
+-- schemas.ts (same PR) tightens `blackouts[].court` to CourtId, which makes
+-- this migration required reading for any org with a court-scoped blackout,
+-- not optional cleanup.
+--
+-- REUSES court_mapping — built by the courts-migration block above as a
+-- session-scoped temp table (default `CREATE TEMP TABLE` semantics: it lives
+-- for the whole session/script, not just its own DO block), so this is not a
+-- third independent "does this name already exist" lookup. This block does
+-- NOT feed blackout court strings back into court_strings/court_mapping's
+-- own collection-and-create phase (steps 1-4 above): a blackout referencing
+-- a name no fixture or `courts[]` entry ever used has no business silently
+-- minting a brand-new court entity. It only ever probes the mapping that
+-- already exists, exactly like the division-locked-scopes block above does
+-- for a scope's own `courts`/`venues` entries.
+--
+-- UNLIKE `schedule_settings.config.courts` (whose consumer is a solver/
+-- picker that cannot render a dangling name, so step 5 above DROPS an
+-- unresolvable element), a blackout's `court` field is only ever COMPARED
+-- against a fixture's `court_id` (engine build-grid.ts/calendar.ts) — same
+-- "compare, not render" shape as division-locked-scopes' own court/venue
+-- entries. A leftover name that maps to nothing is simply inert against real
+-- ids from here on (it can never match again) and is LEFT UNTOUCHED rather
+-- than dropped: silently discarding an organiser's blackout is a worse
+-- failure mode than an inert one, and the dry-run report below counts it so
+-- an operator can see it and fix the stale name by hand if it matters.
+--
+-- Idempotent, same shape as division-locked-scopes: an element already equal
+-- to a real court id for the org (a second run, post-migration) passes
+-- through via the same `id::text = <string>` referential check court_mapping
+-- itself uses (never a uuid-shape regex). A blackout entry with no `court`
+-- key (venue-wide) is untouched throughout. As a side effect this also folds
+-- in the SAME present-but-non-array normalization the courts block's step 5
+-- documents (json null/string/object -> treated as zero elements, so
+-- `blackouts` itself lands on `[]`) via the identical CASE guard — not a new
+-- write path, the existing courts-block idiom reused verbatim.
+-- =============================================================================
+
+-- blackouts-court-migration:begin
+do $$
+declare
+  v_org record;
+  v_total_orgs int := 0;
+  v_total_divisions int := 0;
+  v_total_entries int := 0;
+  v_total_rewritten int := 0;
+  v_total_unmapped int := 0;
+begin
+  -- Read-only: every blackout entry that carries a non-blank `court` string,
+  -- resolved against court_mapping (or a direct real-id passthrough check) —
+  -- reporting only, see header "Dry-run/write agreement" precedent above. A
+  -- blackout with no `court` key (venue-wide) never appears here — nothing
+  -- to migrate for it.
+  drop table if exists pg_temp.blackout_court_entries;
+  create temp table blackout_court_entries as
+    select ss.org_id, ss.division_id, elem.val as raw_string,
+           (cm.court_id is not null or c_existing.id is not null) as resolved
+      from schedule_settings ss
+           cross join lateral jsonb_array_elements(
+             case when jsonb_typeof(ss.config -> 'blackouts') = 'array'
+                  then ss.config -> 'blackouts' else '[]'::jsonb end
+           ) as barr(obj)
+           cross join lateral (select barr.obj ->> 'court' as val) as elem(val)
+      left join court_mapping cm
+        on cm.org_id = ss.org_id and cm.court_string = elem.val
+      left join courts c_existing
+        on c_existing.org_id = ss.org_id and c_existing.id::text = elem.val
+     where elem.val is not null and elem.val <> '';
+
+  -- DRY-RUN REPORT — emitted BEFORE the write below (the safety property of
+  -- this whole session, per the P9 dispatch; a previous fix broke exactly
+  -- this ordering and a re-review caught it). Counts every entry this block
+  -- will rewrite AND every one it will leave untouched, so neither number is
+  -- invisible to an operator deciding whether to run this migration.
+  for v_org in
+    select org_id,
+           count(distinct division_id) as n_divisions,
+           count(*) as n_entries,
+           count(*) filter (where resolved) as n_rewritten,
+           count(*) filter (where not resolved) as n_unmapped
+      from blackout_court_entries
+     group by org_id
+     order by org_id
+  loop
+    raise notice 'V371 blackout-court migration (dry run): org=% divisions_with_court_blackouts=% court_blackout_entries=% entries_rewritten=% entries_left_untouched=%',
+      v_org.org_id, v_org.n_divisions, v_org.n_entries, v_org.n_rewritten, v_org.n_unmapped;
+    v_total_orgs := v_total_orgs + 1;
+    v_total_divisions := v_total_divisions + v_org.n_divisions;
+    v_total_entries := v_total_entries + v_org.n_entries;
+    v_total_rewritten := v_total_rewritten + v_org.n_rewritten;
+    v_total_unmapped := v_total_unmapped + v_org.n_unmapped;
+  end loop;
+  raise notice 'V371 blackout-court migration (dry run) TOTAL: orgs=% divisions_with_court_blackouts=% court_blackout_entries=% entries_rewritten=% entries_left_untouched=%',
+    v_total_orgs, v_total_divisions, v_total_entries, v_total_rewritten, v_total_unmapped;
+
+  -- WRITE: rewrite each blackout entry's `court` in place, element order
+  -- preserved. Only the `court` key changes (jsonb_set on the element);
+  -- `from`/`to` and any other keys pass through byte-identical. An element
+  -- with no `court` key is passed through unchanged (the CASE guard).
+  update schedule_settings ss
+     set config = jsonb_set(
+       ss.config, '{blackouts}',
+       coalesce((
+         select jsonb_agg(
+                  case when barr.obj ? 'court'
+                       then jsonb_set(
+                              barr.obj, '{court}',
+                              to_jsonb(coalesce(cm.court_id::text, c_existing.id::text, barr.obj ->> 'court'))
+                            )
+                       else barr.obj
+                  end
+                  order by barr.ord
+                )
+           from jsonb_array_elements(
+                  case when jsonb_typeof(ss.config -> 'blackouts') = 'array'
+                       then ss.config -> 'blackouts' else '[]'::jsonb end
+                ) with ordinality as barr(obj, ord)
+           left join court_mapping cm
+             on cm.org_id = ss.org_id and cm.court_string = (barr.obj ->> 'court')
+           left join courts c_existing
+             on c_existing.org_id = ss.org_id and c_existing.id::text = (barr.obj ->> 'court')
+       ), '[]'::jsonb)
+     )
+   where ss.config ? 'blackouts';
+end $$;
+-- blackouts-court-migration:end

@@ -415,4 +415,132 @@ describe.skipIf(!HAS_DB)("V371 court entities cutover", () => {
     // duplicate create.
     expect(venuesAfter2).toBe("1");
   });
+
+  // P9 pass 4c item 3: blackouts[].court name -> id, reusing court_mapping.
+  describe("blackouts-court-migration", () => {
+    it("resolves blackouts[].court via the courts[] mapping on the SAME config row", async () => {
+      const { orgId, divisionId } = await seedOrgWithDivision();
+      orgIds.push(orgId);
+
+      await sql`insert into schedule_settings (division_id, org_id, config)
+        values (${divisionId}, ${orgId}, ${sql.json({
+          courts: ["Court 1"],
+          blackouts: [{ court: "Court 1", from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
+        })})`;
+
+      await sql.unsafe(migrationBlock("courts-migration"));
+      await sql.unsafe(migrationBlock("blackouts-court-migration"));
+
+      const [row] = await sql<{ config: Record<string, unknown> }[]>`
+        select config from schedule_settings where division_id = ${divisionId}`;
+      const parsed = ScheduleConfig.parse(row!.config);
+      expect(parsed.courts).toHaveLength(1);
+      expect(parsed.blackouts).toHaveLength(1);
+      expect(parsed.blackouts[0]!.court).toBe(parsed.courts[0]);
+      expect(parsed.blackouts[0]!.court).toMatch(UUID_RE);
+    });
+
+    it("resolves blackouts[].court via a fixture's court_label when the name never appeared in courts[]", async () => {
+      const { orgId, divisionId } = await seedOrgWithDivision();
+      orgIds.push(orgId);
+      const stageId = await seedStage(orgId, divisionId);
+
+      const [{ id: fixtureId }] = await sql<{ id: string }[]>`
+        insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, court_label)
+        values (${stageId}, ${divisionId}, ${orgId}, 1, 1, 'Court 5')
+        returning id`;
+
+      await sql`insert into schedule_settings (division_id, org_id, config)
+        values (${divisionId}, ${orgId}, ${sql.json({
+          blackouts: [{ court: "Court 5", from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
+        })})`;
+
+      await sql.unsafe(migrationBlock("courts-migration"));
+      await sql.unsafe(migrationBlock("blackouts-court-migration"));
+
+      const [fixtureRow] = await sql<{ court_id: string | null }[]>`
+        select court_id from fixtures where id = ${fixtureId}`;
+      const [row] = await sql<{ config: Record<string, unknown> }[]>`
+        select config from schedule_settings where division_id = ${divisionId}`;
+      const parsed = ScheduleConfig.parse(row!.config);
+      expect(fixtureRow!.court_id).toMatch(UUID_RE);
+      expect(parsed.blackouts[0]!.court).toBe(fixtureRow!.court_id);
+    });
+
+    it("leaves an unmappable blackout court name untouched — never dropped, never invented", async () => {
+      const { orgId, divisionId } = await seedOrgWithDivision();
+      orgIds.push(orgId);
+
+      await sql`insert into schedule_settings (division_id, org_id, config)
+        values (${divisionId}, ${orgId}, ${sql.json({
+          blackouts: [{ court: "Ghost Court", from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
+        })})`;
+
+      await sql.unsafe(migrationBlock("courts-migration"));
+      await sql.unsafe(migrationBlock("blackouts-court-migration"));
+
+      const [row] = await sql<{ config: { blackouts: { court?: string }[] } }[]>`
+        select config from schedule_settings where division_id = ${divisionId}`;
+      // Left exactly as-is: still present, still the original name, no court
+      // silently minted for it.
+      expect(row!.config.blackouts).toHaveLength(1);
+      expect(row!.config.blackouts[0]!.court).toBe("Ghost Court");
+      const [{ n: courtsForOrg }] = await sql<{ n: string }[]>`
+        select count(*)::text as n from courts where org_id = ${orgId}`;
+      expect(courtsForOrg).toBe("0");
+      // Documented trade-off (schemas.ts comment on blackouts[].court): an
+      // unmapped name now fails ScheduleConfig.parse (CourtId requires a
+      // real uuid) — the dry-run report is what surfaces this to an
+      // operator, not a silent tolerant fallback.
+      expect(() => ScheduleConfig.parse(row!.config)).toThrow();
+    });
+
+    it("a venue-wide blackout (no court key) is untouched, byte-identical", async () => {
+      const { orgId, divisionId } = await seedOrgWithDivision();
+      orgIds.push(orgId);
+
+      const original = {
+        blackouts: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
+      };
+      await sql`insert into schedule_settings (division_id, org_id, config)
+        values (${divisionId}, ${orgId}, ${sql.json(original)})`;
+
+      await sql.unsafe(migrationBlock("courts-migration"));
+      await sql.unsafe(migrationBlock("blackouts-court-migration"));
+
+      const [row] = await sql<{ config: { blackouts: unknown[] } }[]>`
+        select config from schedule_settings where division_id = ${divisionId}`;
+      expect(row!.config.blackouts).toEqual(original.blackouts);
+      const parsed = ScheduleConfig.parse(row!.config);
+      expect(parsed.blackouts).toHaveLength(1);
+      expect(parsed.blackouts[0]!.court).toBeUndefined();
+    });
+
+    it("is a no-op on a second apply (idempotent)", async () => {
+      const { orgId, divisionId } = await seedOrgWithDivision();
+      orgIds.push(orgId);
+
+      await sql`insert into schedule_settings (division_id, org_id, config)
+        values (${divisionId}, ${orgId}, ${sql.json({
+          courts: ["Court 1"],
+          blackouts: [{ court: "Court 1", from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
+        })})`;
+
+      await sql.unsafe(migrationBlock("courts-migration"));
+      const block = migrationBlock("blackouts-court-migration");
+      await sql.unsafe(block);
+
+      const [after1] = await sql<{ config: Record<string, unknown> }[]>`
+        select config from schedule_settings where division_id = ${divisionId}`;
+
+      await sql.unsafe(block); // second apply — must change nothing
+
+      const [after2] = await sql<{ config: Record<string, unknown> }[]>`
+        select config from schedule_settings where division_id = ${divisionId}`;
+
+      expect(after2!.config).toEqual(after1!.config);
+      const parsed = ScheduleConfig.parse(after1!.config);
+      expect(parsed.blackouts[0]!.court).toMatch(UUID_RE);
+    });
+  });
 });
