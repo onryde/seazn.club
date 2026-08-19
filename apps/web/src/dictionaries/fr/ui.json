@@ -1620,6 +1620,7 @@
   "schedule.notice.undone": "Modification annulée.",
   "schedule.error.undoFailed": "Échec de l'annulation",
   "schedule.error.failed": "Échec",
+  "schedule.error.completedSeedingFailed": "Phase terminée, mais la qualification de la phase suivante n'a pas pu être préparée : {reason}",
   "schedule.notice.nothingToSchedule": "Rien à planifier — aucun créneau libre ou rien à programmer.",
   "schedule.notice.placed": "{n} match(s) placé(s).",
   "schedule.notice.stageDeleted": "Phase supprimée.",

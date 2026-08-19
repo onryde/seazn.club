@@ -3605,6 +3605,7 @@ export type DictionaryKey =
   | "schedule.complete"
   | "schedule.delete"
   | "schedule.editTime"
+  | "schedule.error.completedSeedingFailed"
   | "schedule.error.failed"
   | "schedule.error.tooFewEntrants"
   | "schedule.error.tooFewGroupEntrants"

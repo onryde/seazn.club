@@ -1620,6 +1620,7 @@
   "schedule.notice.undone": "Cambio deshecho.",
   "schedule.error.undoFailed": "Error al deshacer",
   "schedule.error.failed": "Error",
+  "schedule.error.completedSeedingFailed": "Fase completada, pero no se pudo preparar la clasificación de la siguiente fase: {reason}",
   "schedule.notice.nothingToSchedule": "Nada que programar: no hay huecos libres o no queda nada sin programar.",
   "schedule.notice.placed": "Se colocaron {n} enfrentamiento(s).",
   "schedule.notice.stageDeleted": "Fase eliminada.",

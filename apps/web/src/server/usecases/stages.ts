@@ -2307,6 +2307,32 @@ export async function completeStage(auth: AuthCtx, stageId: string): Promise<Com
       const proposal = await computeSeedProposal(auth, next!.id);
       return { ...result, seed_proposal: { id: proposal.id, status: proposal.status } };
     } catch (err) {
+      // F3 ultrareview finding 4 — this stage's completion committed in its
+      // OWN transaction, several statements ago. A bare re-throw therefore
+      // reached the organiser as a plain failure for an action that actually
+      // SUCCEEDED: the board still showed the stage as active (the client's
+      // catch has nothing to refresh on an error), so the next click hit an
+      // already-complete stage. Re-throwing is still right — A4 above added
+      // it precisely so a genuine progression misconfiguration stops being
+      // silent — but it has to say WHICH half failed. Wrapped in a code the
+      // panel classifies into "completed, but the next stage's seeding
+      // couldn't be prepared", so the organiser gets the real reason AND a
+      // refreshed board.
+      if (
+        !(err instanceof HttpError && err.code === "SEEDING_SOURCE_INCOMPLETE") &&
+        !(err instanceof HttpError && err.code === "STAGE_COMPLETED_SEEDING_FAILED")
+      ) {
+        log.warn(
+          { event: "seed_proposal_compute_failed", stageId, nextStageId: next!.id, err: String(err) },
+          "stage completed, but computing the next stage's seed proposal failed",
+        );
+        throw new HttpError(
+          409,
+          err instanceof Error ? err.message : String(err),
+          "STAGE_COMPLETED_SEEDING_FAILED",
+          { stageId, nextStageId: next!.id },
+        );
+      }
       if (!(err instanceof HttpError && err.code === "SEEDING_SOURCE_INCOMPLETE")) throw err;
       log.warn(
         { event: "seed_proposal_compute_skipped", stageId, nextStageId: next!.id, err: String(err) },

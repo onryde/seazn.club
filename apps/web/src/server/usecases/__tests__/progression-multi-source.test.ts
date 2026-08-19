@@ -322,9 +322,19 @@ describe.skipIf(!HAS_DB)("multi-source progression (F2 Decision 4 / Finding 1)",
     await decideLeagueWithWinner(auth, b.id, e1!.id);
 
     await completeStage(auth, a.id); // no-op for Final: A's own seq-adjacent successor is B
-    await expect(completeStage(auth, b.id)).rejects.toSatisfy((err: unknown) =>
-      EngineError.is(err, "QUALIFICATION_INVALID"),
-    );
+    // F3 ultrareview finding 4 — still REJECTS (A4's point: a genuine
+    // progression misconfiguration must not be silent), but no longer as a
+    // bare EngineError. B's completion committed in its own transaction
+    // before this ran, so a plain failure told the organiser "nothing
+    // happened" about an action that half-succeeded, and the client had
+    // nothing to distinguish and so never refreshed the board. The wrapper
+    // says which half failed while carrying the original reason verbatim.
+    await expect(completeStage(auth, b.id)).rejects.toSatisfy((err: unknown) => {
+      if (!(err instanceof HttpError)) return false;
+      if (err.code !== "STAGE_COMPLETED_SEEDING_FAILED") return false;
+      // The real cause survives — an organiser must be able to act on it.
+      return /qualifies through more than one/.test(err.message);
+    });
     // Same non-destructive guarantee as the on_complete sibling: B's OWN
     // completion is unaffected by the downstream seed-proposal failure.
     const [bRow] = await sql<{ status: string }[]>`select status from stages where id = ${b.id}`;

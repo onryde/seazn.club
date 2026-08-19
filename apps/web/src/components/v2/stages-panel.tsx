@@ -15,6 +15,8 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { TipCallout } from "@/components/ui/tip";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
+import { seedingErrorMessage } from "@/lib/seeding-error";
+import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
@@ -570,12 +572,10 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywallFeature(String(err.extra.feature_key ?? ""));
       } else {
-        const precondition = generatePreconditionMessage(err, msg);
-        if (precondition) {
-          setWarning(precondition);
-        } else {
-          setError(err instanceof Error ? err.message : msg("schedule.error.failed"));
-        }
+        const classified = classifyActError(err, msg, locale);
+        if (classified.tone === "warning") setWarning(classified.text);
+        else setError(classified.text);
+        if (classified.refresh) router.refresh();
       }
     } finally {
       setBusy(null);
@@ -1287,6 +1287,51 @@ export function rebuildBlockedMessage(err: unknown, msg: Msg): string | null {
  * Exported (pure, no state) so this classification is unit-testable without
  * a DOM/jsdom harness, which this repo's component tests don't set up.
  */
+/**
+ * How a failed generate/complete/delete is shown to the organiser: amber
+ * (something specific to fix) vs red (it failed), and whether the board
+ * needs re-reading. Exported pure for the same reason its two siblings above
+ * are — this panel's tests render it with renderToStaticMarkup, which never
+ * fires a handler, so a classifier left inline in the catch block is untested
+ * code on the path an organiser only reaches when something has gone wrong.
+ */
+export function classifyActError(
+  err: unknown,
+  msg: Msg,
+  locale: Locale,
+): { tone: "warning" | "error"; text: string; refresh: boolean } {
+  // F3 ultrareview finding 4 — the completion COMMITTED in its own
+  // transaction; only the next stage's seed proposal failed afterwards
+  // (completeStage, usecases/stages.ts). Amber, because the stage really is
+  // complete and the organiser has one concrete thing to fix — and a refresh,
+  // because otherwise the board keeps showing a completed stage as active and
+  // the next click lands on an already-complete stage.
+  if (err instanceof ApiV1Error && err.code === "STAGE_COMPLETED_SEEDING_FAILED") {
+    return {
+      tone: "warning",
+      text: msg("schedule.error.completedSeedingFailed", { reason: err.message }),
+      refresh: true,
+    };
+  }
+  const precondition = generatePreconditionMessage(err, msg);
+  if (precondition) return { tone: "warning", text: precondition, refresh: false };
+  // F3 ultrareview finding 10 — was `err.message` verbatim, i.e. raw English
+  // regardless of locale for every SEEDING_* code this panel can raise
+  // (generateProgressionSetupFixtures throws SEEDING_MAP_SOURCE_AMBIGUOUS
+  // straight out of `generate`). The copy already existed in all four
+  // errors.json; nothing on THIS path read it. No codes were added to that
+  // allowlist — see seeding-error.ts's own scope note — this is a second
+  // reader of copy that was already written and already tested.
+  if (err instanceof ApiV1Error) {
+    return { tone: "error", text: seedingErrorMessage(locale, err.code, err.message), refresh: false };
+  }
+  return {
+    tone: "error",
+    text: err instanceof Error ? err.message : msg("schedule.error.failed"),
+    refresh: false,
+  };
+}
+
 export function generatePreconditionMessage(err: unknown, msg: Msg): string | null {
   if (!(err instanceof ApiV1Error) || err.code !== "STAGE_NOT_READY") return null;
   if (err.extra.reason === "group_too_few_entrants") {

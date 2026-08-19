@@ -1620,6 +1620,7 @@
   "schedule.notice.undone": "Change undone.",
   "schedule.error.undoFailed": "Undo failed",
   "schedule.error.failed": "Failed",
+  "schedule.error.completedSeedingFailed": "Stage completed — but the next stage's seeding couldn't be prepared: {reason}",
   "schedule.notice.nothingToSchedule": "Nothing to schedule — no free slots or nothing unscheduled.",
   "schedule.notice.placed": "Placed {n} fixture(s).",
   "schedule.notice.stageDeleted": "Stage deleted.",

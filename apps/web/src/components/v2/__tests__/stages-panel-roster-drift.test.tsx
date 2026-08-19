@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { StagesPanel, attachmentWarning, rebuildBlockedMessage } from "@/components/v2/stages-panel";
+import {
+  StagesPanel,
+  attachmentWarning,
+  classifyActError,
+  rebuildBlockedMessage,
+} from "@/components/v2/stages-panel";
 import { ApiV1Error } from "@/lib/client-v1";
 import { msg } from "@/lib/messages";
 import { msgFor } from "@/lib/messages-i18n";
@@ -155,5 +160,66 @@ describe("attachmentWarning — what the rebuild clears besides fixtures", () =>
     expect(out).toContain("2 désignation(s) d'officiel");
     expect(out).toContain("1 feuille(s) de match");
     expect(out).toContain("Elle supprime aussi");
+  });
+});
+
+// F3 ultrareview findings 4 and 10 — how a failed generate/complete lands on
+// the organiser. Both were the same shape: the panel had one branch for
+// "everything else" and it showed `err.message` in red.
+describe("classifyActError — amber vs red, and whether the board is stale", () => {
+  it("a completion that committed but whose seeding failed is amber, carries the reason, and refreshes", () => {
+    const err = new ApiV1Error(
+      "entrant e1 qualifies through more than one source or take rule",
+      409,
+      "STAGE_COMPLETED_SEEDING_FAILED",
+      {},
+    );
+    const out = classifyActError(err, msg, "en");
+    expect(out.tone).toBe("warning");
+    // Red would say "it failed" about an action that half-succeeded.
+    expect(out.refresh).toBe(true);
+    expect(out.text).toContain("qualifies through more than one");
+    expect(out.text).toContain("Stage completed");
+  });
+
+  it("localises a SEEDING_* code instead of showing the server's English", () => {
+    const err = new ApiV1Error(
+      "seeded_map source \"A1\" matches more than one qualifier",
+      422,
+      "SEEDING_MAP_SOURCE_AMBIGUOUS",
+      {},
+    );
+    const en = classifyActError(err, msg, "en");
+    const fr = classifyActError(err, msg, "fr");
+    expect(en.tone).toBe("error");
+    expect(en.text).not.toContain("seeded_map"); // not the raw wire message
+    expect(fr.text).not.toBe(en.text); // …and it actually translates
+    expect(fr.text).toContain("qualifié");
+  });
+
+  it("falls back to the server message for a code with no wired copy — never a raw code, never a wrong guess", () => {
+    const err = new ApiV1Error("stage not found", 404, "NOT_FOUND", {});
+    const out = classifyActError(err, msg, "en");
+    expect(out).toEqual({ tone: "error", text: "stage not found", refresh: false });
+  });
+
+  it("a precondition failure stays amber and does not refresh — nothing changed server-side", () => {
+    const err = new ApiV1Error("too few", 422, "STAGE_NOT_READY", {
+      reason: "group_too_few_entrants",
+      groups: 2,
+      required: 4,
+      entrants: 3,
+    });
+    const out = classifyActError(err, msg, "en");
+    expect(out.tone).toBe("warning");
+    expect(out.refresh).toBe(false);
+  });
+
+  it("a non-ApiV1 error still surfaces its own message", () => {
+    expect(classifyActError(new Error("network down"), msg, "en")).toEqual({
+      tone: "error",
+      text: "network down",
+      refresh: false,
+    });
   });
 });
