@@ -1460,7 +1460,12 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
     // The reason has to be distinguishable, or the organiser goes hunting for a
     // pin that does not exist. This half is the load-bearing one.
     expect(err.message).not.toMatch(/pinned/i);
-    expect(err.message).toMatch(/in play or completed/i);
+    // Review follow-up (P9 court tags): "in play" and "completed" are now
+    // counted and named separately — archiving is a valid remedy for a
+    // completed fixture but not for a live one, so the two can no longer
+    // share one combined phrase. This fixture is `decided`, so "completed".
+    expect(err.message).toMatch(/completed/i);
+    expect(err.message).not.toMatch(/in play/i);
   });
 
   /** Same guard, the other reason, and the message says so. Two separate courts
@@ -1480,7 +1485,7 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
     const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2(courtsByName)));
     expect(err.status).toBe(409);
     expect(err.message).toMatch(/Court 2 \(1 pinned\)/);
-    expect(err.message).toMatch(/Court 3 \(1 in play or completed\)/);
+    expect(err.message).toMatch(/Court 3 \(1 completed\)/);
   });
 
   /** ATOMICITY on the widened path too. A second early return added for the

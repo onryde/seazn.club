@@ -322,11 +322,23 @@ export async function putScheduleSettings(
       // never match (a uuid against a free-text label), so it was silently
       // inert: a court could be removed out from under a pinned or in-play
       // fixture with nothing refusing it. Keying on `court_id` restores it.
-      const blocked = await tx<{ court_id: string; pinned: number; fixed: number }[]>`
+      // "fixed" and "in_play" are split, not one combined count: they need
+      // DIFFERENT remedies. A completed/decided/finalized/forfeited fixture
+      // can have its court archived right now (`archiveCourt`,
+      // `UNPLAYED_FIXTURE_STATUSES` in venues.ts blocks only on
+      // scheduled/in_play). An in_play fixture cannot — it's still one of
+      // archiveCourt's own UNPLAYED_FIXTURE_STATUSES, so pointing the
+      // organiser at "archive it instead" for a live match sends them
+      // straight into a SECOND 409 with no remedy at all (review finding,
+      // P9 fix 3 follow-up: the two guards' status sets overlap on exactly
+      // "in_play", which the original single `fixed` count could not tell
+      // apart from a genuinely archivable one).
+      const blocked = await tx<{ court_id: string; pinned: number; in_play: number; fixed: number }[]>`
         select court_id,
                count(*) filter (where schedule_locked)::int as pinned,
+               count(*) filter (where not schedule_locked and status = 'in_play')::int as in_play,
                count(*) filter (
-                 where not schedule_locked and status = any(${FIXED_OCCUPYING})
+                 where not schedule_locked and status = any(${FIXED_OCCUPYING}) and status != 'in_play'
                )::int as fixed
         from fixtures
         where division_id = ${divisionId}
@@ -335,8 +347,8 @@ export async function putScheduleSettings(
         group by court_id
         order by court_id`;
       if (blocked.length > 0) {
-        // Names every offending court and both counts, so the organiser does
-        // not discover the second blocker only after clearing the first. A
+        // Names every offending court and every count, so the organiser does
+        // not discover the next blocker only after clearing the first. A
         // name, never a bare uuid — resolved here rather than joined into
         // the query above so the fallback (a resolver miss) stays a single,
         // obvious `?? r.court_id` rather than a second query shape.
@@ -345,14 +357,28 @@ export async function putScheduleSettings(
           .map((r) => {
             const why = [
               ...(r.pinned > 0 ? [`${r.pinned} pinned`] : []),
-              ...(r.fixed > 0 ? [`${r.fixed} in play or completed`] : []),
+              ...(r.in_play > 0 ? [`${r.in_play} in play`] : []),
+              ...(r.fixed > 0 ? [`${r.fixed} completed`] : []),
             ];
             return `${courtNames.get(r.court_id) ?? r.court_id} (${why.join(" + ")})`;
           })
           .join(", ");
+        // `code` + `extra` let the panel (`lib/schedule-error.ts`) pick the
+        // remedy that actually applies instead of always saying "unpin or
+        // reschedule" — a court blocked purely by a completed fixture has
+        // neither a pin to release nor a future slot to move (P9 fix 3).
+        // `SCHEDULE_COURT_STILL_IN_USE`, never venues.ts's `COURT_IN_USE` —
+        // same shape of problem, different guard, different remedy set.
         throw new HttpError(
           409,
           `cannot remove a court that still holds fixtures the schedule cannot move: ${detail} — unpin or reschedule them first`,
+          "SCHEDULE_COURT_STILL_IN_USE",
+          {
+            courtsDetail: detail,
+            anyPinned: blocked.some((r) => r.pinned > 0),
+            anyInPlay: blocked.some((r) => r.in_play > 0),
+            anyFixed: blocked.some((r) => r.fixed > 0),
+          },
         );
       }
     }

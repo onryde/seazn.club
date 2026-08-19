@@ -86,6 +86,69 @@ export function scheduleWindowErrorMessage(
   });
 }
 
+/** The wire code thrown by `putScheduleSettings`'s court-removal guard
+ *  (`server/usecases/schedule.ts`) when a dropped court still holds a fixture
+ *  the schedule cannot relocate. Deliberately NOT `venues.ts`'s
+ *  `COURT_IN_USE` — same shape of problem, different guard, different
+ *  remedy set (that one blocks archiving; this one blocks removing a court
+ *  from `config.courts`). */
+export const SCHEDULE_COURT_STILL_IN_USE = "SCHEDULE_COURT_STILL_IN_USE";
+
+/** The `extra` the court-removal guard rides along with. Same "arrives off
+ *  the wire, every field optional" discipline as `ScheduleWindowExtra`: a
+ *  payload missing both booleans, or carrying a non-string `courtsDetail`,
+ *  must degrade to the fallback rather than render a sentence with nothing
+ *  to name. */
+export interface ScheduleCourtInUseExtra {
+  anyPinned?: unknown;
+  anyInPlay?: unknown;
+  anyFixed?: unknown;
+  courtsDetail?: unknown;
+}
+
+/**
+ * `ApiV1Error` (code, extra) -> localized copy for the court-removal guard,
+ * or `fallback` verbatim.
+ *
+ * FOUR variants, picked by three independent booleans rather than one
+ * template with optional clauses — same reasoning as
+ * `scheduleWindowErrorMessage` above. `anyFixed` here means "genuinely
+ * archivable" (completed/decided/finalized/forfeited) — `anyInPlay` is
+ * deliberately its own boolean, not folded into `anyFixed`: archiving a
+ * court blocks on the exact same still-unplayed statuses `venues.ts`'s
+ * `archiveCourt` guards on, which INCLUDES `in_play`. Telling an organiser
+ * to "archive it instead" for a live match would send them straight into a
+ * second 409 with no remedy at all — the bug this split closes. Two or more
+ * booleans true falls through to `mixed`, which names every reason without
+ * promising a specific single-step remedy (a per-court breakdown, not a
+ * per-reason one, is what `courtsDetail` already carries).
+ */
+export function courtStillInUseErrorMessage(
+  locale: Locale,
+  code: string,
+  extra: ScheduleCourtInUseExtra | undefined,
+  fallback: string,
+): string {
+  if (code !== SCHEDULE_COURT_STILL_IN_USE) return fallback;
+  const anyPinned = extra?.anyPinned === true;
+  const anyInPlay = extra?.anyInPlay === true;
+  const anyFixed = extra?.anyFixed === true;
+  const courtsDetail =
+    typeof extra?.courtsDetail === "string" && extra.courtsDetail !== "" ? extra.courtsDetail : null;
+
+  // Which variant the payload can actually SUPPORT: no usable `courtsDetail`
+  // means every variant is a sentence with a hole in it, and no boolean true
+  // means there is no remedy to name at all.
+  if (courtsDetail === null) return fallback;
+  const reasonCount = [anyPinned, anyInPlay, anyFixed].filter(Boolean).length;
+  const variant =
+    reasonCount > 1 ? "mixed" : anyPinned ? "pinned" : anyInPlay ? "inPlay" : anyFixed ? "fixed" : null;
+  if (variant === null) return fallback;
+
+  const dict = BY_LOCALE[locale] ?? BY_LOCALE[DEFAULT_LOCALE];
+  return t(dict, `schedule.${SCHEDULE_COURT_STILL_IN_USE}.${variant}`, { courtsDetail });
+}
+
 /**
  * A failed schedule-settings save, as the organiser should read it.
  *
@@ -99,13 +162,17 @@ export function scheduleWindowErrorMessage(
  * in `schedule-board.tsx` and importing it from `board/settings-panel.tsx`
  * would close an import cycle (the board renders the panel).
  *
- * Only the one code this pass authored copy for is translated. Everything else
- * still shows the server's message: a localized guess at copy that does not
- * exist would read worse than an accurate English sentence, and `generic` is
- * reserved for a throw that is not an `Error` at all.
+ * Two codes have authored copy — `SCHEDULE_OUTSIDE_COMPETITION` and
+ * `SCHEDULE_COURT_STILL_IN_USE`. Everything else still shows the server's own
+ * message: a localized guess at copy that does not exist would read worse
+ * than an accurate English sentence, and `generic` is reserved for a throw
+ * that is not an `Error` at all.
  */
 export function settingsErrorText(err: unknown, locale: Locale, generic: string): string {
   if (err instanceof ApiV1Error) {
+    if (err.code === SCHEDULE_COURT_STILL_IN_USE) {
+      return courtStillInUseErrorMessage(locale, err.code, err.extra, err.message);
+    }
     return scheduleWindowErrorMessage(locale, err.code, err.extra, err.message);
   }
   return err instanceof Error ? err.message : generic;

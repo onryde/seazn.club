@@ -15,5 +15,9 @@
   "seeding.SEEDING_FIXTURES_ALREADY_FILLED": "One of the destination slots is already filled. Recompute the proposal to see what's left.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.before": "This division's schedule starts before the competition opens on {startsOn}. Widen the competition dates, or bring the division inside them.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.after": "This division's schedule ends after the competition closes on {endsOn}. Widen the competition dates, or bring the division inside them.",
-  "schedule.SCHEDULE_OUTSIDE_COMPETITION.both": "This division's schedule starts before the competition opens on {startsOn} and ends after it closes on {endsOn}. Widen the competition dates, or bring the division inside them."
+  "schedule.SCHEDULE_OUTSIDE_COMPETITION.both": "This division's schedule starts before the competition opens on {startsOn} and ends after it closes on {endsOn}. Widen the competition dates, or bring the division inside them.",
+  "schedule.SCHEDULE_COURT_STILL_IN_USE.pinned": "Cannot remove a court that still holds pinned fixtures: {courtsDetail}. Unpin them or reschedule them before removing the court.",
+  "schedule.SCHEDULE_COURT_STILL_IN_USE.fixed": "Cannot remove a court that still holds fixtures the schedule can't move: {courtsDetail}. They're already completed, so there's nothing to unpin or reschedule. To stop scheduling new matches on this court, archive it from the venue Directory instead of removing it here.",
+  "schedule.SCHEDULE_COURT_STILL_IN_USE.inPlay": "Cannot remove a court with a fixture still in play: {courtsDetail}. A live match can't be unpinned, rescheduled, or archived away — wait for it to finish, then try again.",
+  "schedule.SCHEDULE_COURT_STILL_IN_USE.mixed": "Cannot remove a court that still holds fixtures the schedule can't move: {courtsDetail}. Unpin any pinned fixtures and wait for live matches to finish; once only completed fixtures remain, archive the court from the venue Directory instead of removing it here."
 }

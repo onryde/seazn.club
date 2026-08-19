@@ -603,4 +603,157 @@ describe.skipIf(!HAS_DB)("putScheduleSettings refuses to remove a court still ho
     });
     expect(out.config.courts).toEqual([board.courts[0], board.courts[1]]);
   });
+
+  // Fix 3: the 409's message used to hard-code "unpin or reschedule them
+  // first" regardless of WHY the block fired — a court blocked purely by a
+  // completed fixture has nothing to unpin and nothing to reschedule (a
+  // decided match is history). The throw now carries a `code` plus three
+  // booleans so the client can pick the remedy that actually applies:
+  // `anyPinned` (something to unpin), `anyFixed` (something to archive
+  // instead, via the venue Directory — `venues.ts`'s `archiveCourt`), and
+  // `anyInPlay` (a live match — archiving is NOT a remedy here: `archiveCourt`
+  // blocks on the exact same still-unplayed statuses, which include
+  // `in_play`. Review follow-up: the original single `fixed` count folded
+  // `in_play` and `decided`/`finalized`/`forfeited` together, so the "archive
+  // it instead" copy could fire for a live match and send the organiser
+  // straight into a second, remedy-less 409.
+  it("carries SCHEDULE_COURT_STILL_IN_USE with anyPinned true / anyFixed false when the block is a PIN only", async () => {
+    const board = await seedBoard();
+    const pinned = board.fixtures[0]!; // sits on board.courts[0] ("Court 1")
+    await moveFixture(board.auth, pinned.id, { schedule_locked: true });
+
+    await expect(
+      putScheduleSettings(board.auth, board.divisionId, {
+        config: {
+          startAt: T0,
+          matchMinutes: 30,
+          gapMinutes: 0,
+          courts: [board.courts[1], board.courts[2]], // drops courts[0]
+          perEntrantMinRest: 0,
+          blackouts: [],
+          sessionWindows: [],
+        },
+        tz: "UTC",
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: "SCHEDULE_COURT_STILL_IN_USE",
+      extra: { anyPinned: true, anyFixed: false },
+    });
+  });
+
+  it("carries SCHEDULE_COURT_STILL_IN_USE with anyPinned false / anyFixed true when the block is a completed fixture only", async () => {
+    const board = await seedBoard();
+    const finished = board.fixtures[0]!; // sits on board.courts[0] ("Court 1")
+    // No usecase marks a fixture decided directly; the repo's own test
+    // convention is a raw status write (e.g. admin-fixture-config.test.ts,
+    // officials.test.ts) — `finalized` is one of `FIXED_OCCUPYING`'s statuses.
+    await sql`update fixtures set status = 'finalized' where id = ${finished.id}`;
+
+    await expect(
+      putScheduleSettings(board.auth, board.divisionId, {
+        config: {
+          startAt: T0,
+          matchMinutes: 30,
+          gapMinutes: 0,
+          courts: [board.courts[1], board.courts[2]], // drops courts[0]
+          perEntrantMinRest: 0,
+          blackouts: [],
+          sessionWindows: [],
+        },
+        tz: "UTC",
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: "SCHEDULE_COURT_STILL_IN_USE",
+      extra: { anyPinned: false, anyFixed: true },
+    });
+  });
+
+  it("carries anyPinned true AND anyFixed true when the same save is blocked by both a pin and a completed fixture", async () => {
+    const board = await seedBoard();
+    // Both sit on board.courts[0] — seedBoard places every fixture there —
+    // so removing courts[0] alone trips both reasons in the same refusal.
+    const pinned = board.fixtures[0]!;
+    const finished = board.fixtures[1]!;
+    await moveFixture(board.auth, pinned.id, { schedule_locked: true });
+    await sql`update fixtures set status = 'finalized' where id = ${finished.id}`;
+
+    await expect(
+      putScheduleSettings(board.auth, board.divisionId, {
+        config: {
+          startAt: T0,
+          matchMinutes: 30,
+          gapMinutes: 0,
+          courts: [board.courts[1], board.courts[2]], // drops courts[0]
+          perEntrantMinRest: 0,
+          blackouts: [],
+          sessionWindows: [],
+        },
+        tz: "UTC",
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: "SCHEDULE_COURT_STILL_IN_USE",
+      extra: { anyPinned: true, anyFixed: true },
+    });
+  });
+
+  it("carries anyPinned true AND anyFixed true when a pin on ONE court and a completed fixture on a DIFFERENT court are removed in the same save", async () => {
+    // Review coverage gap: the two-reasons-same-court case above doesn't
+    // prove the OR-reduction across `blocked` (schedule.ts's `blocked.some`)
+    // is actually cross-court, only that it's cross-fixture. This moves the
+    // second fixture onto board.courts[1] before finalizing it, so the two
+    // reasons genuinely sit on two different court rows in `blocked`.
+    const board = await seedBoard();
+    const pinned = board.fixtures[0]!; // stays on board.courts[0] ("Court 1")
+    const finished = board.fixtures[1]!;
+    await moveFixture(board.auth, pinned.id, { schedule_locked: true });
+    await forceSlot(finished.id, at(60), board.courts[1]);
+    await sql`update fixtures set status = 'finalized' where id = ${finished.id}`;
+
+    await expect(
+      putScheduleSettings(board.auth, board.divisionId, {
+        config: {
+          startAt: T0,
+          matchMinutes: 30,
+          gapMinutes: 0,
+          courts: [board.courts[2]], // drops BOTH courts[0] and courts[1]
+          perEntrantMinRest: 0,
+          blackouts: [],
+          sessionWindows: [],
+        },
+        tz: "UTC",
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: "SCHEDULE_COURT_STILL_IN_USE",
+      extra: { anyPinned: true, anyFixed: true, anyInPlay: false },
+    });
+  });
+
+  it("carries anyInPlay true / anyFixed false when the block is a live match only — archiving is not a valid remedy for it", async () => {
+    const board = await seedBoard();
+    const live = board.fixtures[0]!; // sits on board.courts[0] ("Court 1")
+    await sql`update fixtures set status = 'in_play' where id = ${live.id}`;
+
+    await expect(
+      putScheduleSettings(board.auth, board.divisionId, {
+        config: {
+          startAt: T0,
+          matchMinutes: 30,
+          gapMinutes: 0,
+          courts: [board.courts[1], board.courts[2]], // drops courts[0]
+          perEntrantMinRest: 0,
+          blackouts: [],
+          sessionWindows: [],
+        },
+        tz: "UTC",
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: "SCHEDULE_COURT_STILL_IN_USE",
+      extra: { anyPinned: false, anyInPlay: true, anyFixed: false },
+    });
+  });
 });

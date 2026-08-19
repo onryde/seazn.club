@@ -32,7 +32,9 @@ HARD RULES — the server verifier rejects violations, so check your work agains
 before answering:
 H1. court_label must be exactly one of settings.courts. scheduled_at must be ISO-8601 with
     a UTC offset, expressed in the division timezone. Never invent courts or fixtures; use
-    only the fixture ids given as movable.
+    only the fixture ids given as movable. When a movable fixture carries its own courts
+    list, that list overrides settings.courts for that fixture only — its own stage
+    requires more than the division does, so use it instead of the wider list.
 H2. A fixture occupies [scheduled_at, scheduled_at + matchMinutes + gapMinutes). Two
     fixtures on the same court must not overlap in that interval.
 H3. Never place any part of a fixture inside a blackout for its court (or a court-less
