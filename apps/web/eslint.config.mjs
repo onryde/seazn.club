@@ -93,6 +93,20 @@ const eslintConfig = defineConfig([
       ],
     },
   },
+  {
+    // Server-only surfaces (route handlers, usecases): pino (server/logger.ts)
+    // is the logger, not console. Scoped to server/** and app/api/** rather
+    // than repo-wide — pino is server-only, and src/**/*.tsx client
+    // components have no pino convention yet (a separate sub-project).
+    // Test files keep console: .live.test.ts cleanup hooks print straight to
+    // the test runner's own console, the same class of exemption as
+    // packages/engine's scripts/** (see that config for the rationale).
+    files: ["src/server/**/*.ts", "src/app/api/**/*.ts"],
+    ignores: ["**/*.test.ts", "**/__tests__/**"],
+    rules: {
+      "no-console": "error",
+    },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts"]),
 ]);
