@@ -7,6 +7,7 @@ import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { HttpError } from "@/lib/errors";
+import { ROSTER_DRIFT_INELIGIBLE_KINDS, isRosterDriftEligible } from "@/lib/roster-drift-eligibility";
 import { assertWithinLimit, getLimit, requireFeature } from "@/lib/entitlements";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
@@ -1498,24 +1499,13 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
 // than referencing the division's registered entrants directly — this
 // signal would misreport ~100% of entrants "unplaced" for both.
 // ---------------------------------------------------------------------------
-const ROSTER_DRIFT_INELIGIBLE_KINDS = new Set(["ladder", "americano"]);
-const NO_ATTACHMENTS = { officials: 0, lineups: 0, deviceLinks: 0 } as const;
+// Re-exported so existing `import { … } from "./stages"` call sites need no
+// churn; the rule itself lives in a DB-free module (lib/roster-drift-
+// eligibility.ts) so the division page and its tests can import the REAL
+// function rather than restating it in a mock of this server-only file.
+export { ROSTER_DRIFT_INELIGIBLE_KINDS, isRosterDriftEligible };
 
-/** Does this stage draw its fixtures from the live active roster, and so
- *  have a board that CAN drift? The condition both `getStageRosterDrift` and
- *  `rebuildStageFixtures` gate on, exported (F3 ultrareview finding 9) so
- *  the page choosing which stages to ask about applies the SAME rule rather
- *  than a looser `progression === null` stand-in — that stand-in picked the
- *  FIRST progression-less stage, which in a ladder-then-league division is
- *  the ladder, and the ladder is ineligible, so the whole division silently
- *  lost its drift signal. Two readers of one rule is the recurring bug in
- *  this area (see americanoPlacementTables); now there is one. */
-export function isRosterDriftEligible(stage: {
-  kind: string;
-  progression: unknown;
-}): boolean {
-  return stage.progression === null && !ROSTER_DRIFT_INELIGIBLE_KINDS.has(stage.kind);
-}
+const NO_ATTACHMENTS = { officials: 0, lineups: 0, deviceLinks: 0 } as const;
 
 export interface StageRosterDriftEntrant {
   id: string;

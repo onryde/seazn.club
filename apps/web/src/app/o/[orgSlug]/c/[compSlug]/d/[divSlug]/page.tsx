@@ -11,13 +11,12 @@ import { requireDivisionPage } from "@/server/page-auth";
 import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
 import { getCompetition } from "@/server/usecases/competitions";
-import {
-  listStages,
-  getStandings,
-  getSeedProposal,
-  getStageRosterDrift,
-  isRosterDriftEligible,
-} from "@/server/usecases/stages";
+import { listStages, getStandings, getSeedProposal, getStageRosterDrift } from "@/server/usecases/stages";
+// From the DB-free module, not through the server-only usecase above: this
+// page's tests mock `@/server/usecases/stages` wholesale, and a mocked
+// predicate is a second copy of the rule (F3 ultrareview finding 9 was a
+// second copy of this exact rule).
+import { isRosterDriftEligible } from "@/lib/roster-drift-eligibility";
 import { listDivisionFixtures, listFixtureHeadlines } from "@/server/usecases/fixtures";
 import { BracketPanel } from "@/components/v2/bracket-panel";
 import { listEntrants } from "@/server/usecases/entrants";

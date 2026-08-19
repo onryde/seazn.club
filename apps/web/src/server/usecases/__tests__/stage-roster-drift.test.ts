@@ -23,7 +23,7 @@ import {
   getStageRosterDrift,
   isRosterDriftEligible,
   rebuildStageFixtures,
-} from "../stages";
+} from "../stages"; // isRosterDriftEligible is re-exported from lib/roster-drift-eligibility
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
