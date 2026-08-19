@@ -20,8 +20,11 @@ import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
+import { msgFor } from "@/lib/messages-i18n";
+import { resolveSlotLabel } from "@/lib/slot-label";
 import { resolveVenueTz } from "@/lib/tz";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPair } from "@/server/engine-db/lineups";
 import { entrantFoldCtx, loadEntrantMembersForFixture } from "@/server/engine-db/entrant-members";
@@ -1333,8 +1336,18 @@ export async function assembleDigestUpcoming(
   orgId: string,
   nowMs: number,
   orgTz: string,
+  // Copy locale for a document nobody is "viewing" — same reasoning as
+  // exports.ts's exportLookup / calendar.ics/route.ts: the weekly digest
+  // email has no single reader whose cookie could be consulted, so it uses
+  // the org's own default locale. `digestForOrg` already resolves this from
+  // `organizations.default_locale` for the digest's own copy — threaded
+  // through rather than re-queried. Defaults to 'en' for direct callers
+  // (existing digestUpcoming tests) that predate this param.
+  locale: Locale = "en",
 ): Promise<{ upcoming: DigestUpcomingDay[]; overflow: number }> {
   const EMPTY = { upcoming: [] as DigestUpcomingDay[], overflow: 0 };
+  const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
+    msgFor(locale, k, v);
   try {
     // Savepoint — same reason as loadDivisionHeadlines above.
     return await tx.savepoint(async (sp) => {
@@ -1345,12 +1358,15 @@ export async function assembleDigestUpcoming(
           id: string;
           home_name: string | null;
           away_name: string | null;
+          home_slot_label: SlotLabel | null;
+          away_slot_label: SlotLabel | null;
           scheduled_at: Date;
           competition_name: string;
           division_name: string;
         }[]
       >`
-        select f.id, h.display_name as home_name, a.display_name as away_name, f.scheduled_at,
+        select f.id, h.display_name as home_name, a.display_name as away_name,
+               f.home_slot_label, f.away_slot_label, f.scheduled_at,
                c.name as competition_name, d.name as division_name
         from fixtures f
         join divisions d on d.id = f.division_id
@@ -1362,8 +1378,8 @@ export async function assembleDigestUpcoming(
         order by f.scheduled_at`;
       const fixtures: UpcomingFixture[] = rows.map((r) => ({
         id: r.id,
-        homeName: r.home_name ?? "TBD",
-        awayName: r.away_name ?? "TBD",
+        homeName: r.home_name ?? resolveSlotLabel(r.home_slot_label, lookup, "schedule.tbd"),
+        awayName: r.away_name ?? resolveSlotLabel(r.away_slot_label, lookup, "schedule.tbd"),
         scheduledAt: r.scheduled_at.toISOString(),
         competitionName: r.competition_name,
         divisionName: r.division_name,
@@ -1428,7 +1444,7 @@ async function digestForOrg(
   let upcoming: DigestUpcomingDay[] = [];
   let upcomingOverflow = 0;
   try {
-    const res = await assembleDigestUpcoming(tx, orgId, nowMs, orgTz);
+    const res = await assembleDigestUpcoming(tx, orgId, nowMs, orgTz, locale);
     upcoming = res.upcoming;
     upcomingOverflow = res.overflow;
   } catch (err) {

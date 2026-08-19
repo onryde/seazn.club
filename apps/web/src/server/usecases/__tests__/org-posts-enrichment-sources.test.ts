@@ -308,4 +308,33 @@ describe.skipIf(!HAS_DB)("P3 review finding 3 — genuine-throw fail-open, per s
     const out = await withTenant(ctx.orgId, (tx) => assembleDigestUpcoming(tx, "not-a-uuid", Date.now(), "UTC"));
     expect(out).toEqual({ upcoming: [], overflow: 0 });
   });
+
+  // F5/Task 9: assembleDigestUpcoming's `homeName`/`awayName` used to
+  // coalesce a fixture's unfilled entrant name straight to the bare literal
+  // "TBD" — never selecting home_slot_label/away_slot_label. This query
+  // filters only on status='scheduled', not on entrants resolved, so a
+  // day-one fixture with a real time but no entrants reaches this digest.
+  it("digestUpcoming: a day-one fixture with unresolved entrants renders its slot label, not TBD", async () => {
+    const ctx = await seedOrg();
+    const div = await seedDivision(ctx);
+    const scheduledAt = new Date(Date.now() + 2 * 24 * 3600_000).toISOString();
+    await sql`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round,
+        home_entrant_id, away_entrant_id, home_slot_label, away_slot_label, status, scheduled_at)
+      values (${div.stageId}, ${div.divisionId}, ${ctx.orgId}, 1, 1,
+        null, null, ${sql.json({ key: "bracket.round.roundOf", params: { n: 4 } })}, null,
+        'scheduled', ${scheduledAt})`;
+
+    const out = await withTenant(ctx.orgId, (tx) =>
+      assembleDigestUpcoming(tx, ctx.orgId, Date.now(), "UTC", "en"),
+    );
+    const line = out.upcoming.flatMap((d) => d.lines).find((l) => l.homeName === "Round of 4");
+    expect(line, "expected an upcoming line with the resolved slot label").toBeTruthy();
+    // away_slot_label was left null deliberately — its fallback to
+    // schedule.tbd stays visible here so this test doesn't false-positive
+    // on a whole-row check the way a bare "not TBD" probe on the string
+    // concatenation would.
+    expect(line!.awayName).toBe("TBD");
+    expect(line!.homeName).not.toBe("TBD");
+  });
 });

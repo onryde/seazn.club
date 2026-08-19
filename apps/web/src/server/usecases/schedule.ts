@@ -58,6 +58,10 @@ import {
   type StartDivisionRequest,
 } from "@/server/api-v1/schemas";
 import { sendOfficialAssignmentChangedEmail } from "@/lib/email";
+import { toLocale } from "@/lib/i18n-constants";
+import { msgFor } from "@/lib/messages-i18n";
+import { resolveSlotLabel } from "@/lib/slot-label";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { capacityInputForFixtures, guardCapacity } from "./capacity-guard";
 import {
   guardNoMatchingCourt,
@@ -2881,15 +2885,20 @@ export async function moveFixture(
         fixture.court_id !== nextCourtId);
     let changeNotices: {
       email: string; display_name: string; role_key: string; org_name: string;
+      default_locale: string | null;
       home_name: string | null; away_name: string | null; venue_tz: string | null;
+      home_slot_label: SlotLabel | null; away_slot_label: SlotLabel | null;
     }[] = [];
     if (timetableChanged) {
       changeNotices = await tx`
         select o.email, o.display_name, fo.role_key, org.name as org_name,
+               org.default_locale,
                h.display_name as home_name, a.display_name as away_name,
+               f.home_slot_label, f.away_slot_label,
                -- venue lane (V305): division override → org timezone → UTC
                coalesce(ss.tz, org.timezone, 'UTC') as venue_tz
         from fixture_officials fo
+        join fixtures f on f.id = fo.fixture_id
         join officials o on o.id = fo.official_id
         join organizations org on org.id = o.org_id
         left join entrants h on h.id = ${fixture.home_entrant_id}
@@ -2915,11 +2924,18 @@ export async function moveFixture(
     };
   });
   for (const n of out.changeNotices) {
+    // Copy locale for a document nobody is "viewing" — same reasoning as
+    // exports.ts's exportLookup / calendar.ics/route.ts: the officials-change
+    // notice email has no single reader whose cookie could be consulted, so
+    // it uses the org's own default locale.
+    const locale = toLocale(n.default_locale);
+    const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
+      msgFor(locale, k, v);
     void sendOfficialAssignmentChangedEmail(n.email, {
       orgName: n.org_name,
       officialName: n.display_name,
       roleKey: n.role_key,
-      label: `${n.home_name ?? "TBD"} vs ${n.away_name ?? "TBD"}`,
+      label: `${n.home_name ?? resolveSlotLabel(n.home_slot_label, lookup, "schedule.tbd")} vs ${n.away_name ?? resolveSlotLabel(n.away_slot_label, lookup, "schedule.tbd")}`,
       prevAt: out.change.prevAt,
       nextAt: out.change.nextAt,
       venueTz: n.venue_tz,
