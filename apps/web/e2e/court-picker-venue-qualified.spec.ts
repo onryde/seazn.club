@@ -81,8 +81,11 @@ test("court picker: two venues sharing a court name stay distinguishable at ever
   // is asserted here only as the premise: there really are two of them.
   const options = page.getByRole("checkbox", { name: "Court 1" });
   await expect(options).toHaveCount(2);
-  await expect(page.getByText(venueA, { exact: true })).toBeVisible();
-  await expect(page.getByText(venueB, { exact: true })).toBeVisible();
+  // `.first()`: each venue name now appears TWICE on this surface — as the
+  // option list's group heading and, once selected, as the strip's own venue
+  // line. Without it this is a strict-mode violation rather than an assertion.
+  await expect(page.getByText(venueA, { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(venueB, { exact: true }).first()).toBeVisible();
 
   // Select both. The SELECTED-ORDER STRIP is the surface finding 13 is about:
   // it is flat and UNHEADED, so a bare `court.name` there renders the two

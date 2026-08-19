@@ -166,7 +166,13 @@ test("a division that requires a court tag is auto-scheduled only onto courts ca
   // needs to resolve a bare uuid itself.
   for (const a of auto.data!.assignments) {
     expect(a.court_id).toBe(tagged.id);
-    expect(a.court_name).toBe(tagged.name);
+    // `toContain`, not `toBe`: the name is VENUE-QUALIFIED whenever another
+    // court in the same org shares the bare name, and CI's shared Pro org
+    // accumulates courts across specs — so this legitimately reads
+    // "Clay Court (E2E Tag Venue …)" there and "Clay Court" on a fresh org.
+    // What matters is that a NAME comes back and never a bare uuid.
+    expect(a.court_name).toContain(tagged.name);
+    expect(a.court_name).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/i);
   }
 
   const applied = await apiJson<{ applied: number }>(
@@ -224,9 +230,17 @@ test("a division that requires a court tag is auto-scheduled only onto courts ca
   );
   expect(mismatch, "moved a fixture onto the untagged court and /validate did not report it").toBeTruthy();
   expect(mismatch!.code).toBe("conflict.court");
-  expect(mismatch!.blocking).toBe(true);
+  // Review wave 2 ruling: REPORTED but NOT blocking. `court_tag_mismatch`
+  // shares `reason: "court"` with double-booking, and blocking it meant that
+  // adding a tag requirement to a division whose board already existed
+  // hard-refused publish with no override — the retroactive-invalidation
+  // outcome ruling 3 exists to prevent. The organiser sees it and decides.
+  expect(mismatch!.blocking).toBe(false);
   expect(mismatch!.details!.court).toBe(untagged.id);
-  expect(mismatch!.details!.court_name).toBe(untagged.name);
+  // Venue-qualified when the bare name collides elsewhere in the org — see the
+  // auto-pass assertion above for why this is `toContain`.
+  expect(mismatch!.details!.court_name).toContain(untagged.name);
+  expect(mismatch!.details!.court_name).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/i);
 
   // Every OTHER fixture is still on the tagged court and reports nothing —
   // the conflict is scoped to the one fixture actually moved.

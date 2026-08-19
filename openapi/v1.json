@@ -10328,6 +10328,9 @@
                                             "no_slot_budget"
                                           ]
                                         },
+                                        "courtName": {
+                                          "type": "string"
+                                        },
                                         "entrantIds": {
                                           "type": "array",
                                           "items": {
@@ -10480,13 +10483,13 @@
                             "detail": "example",
                             "details": {
                               "kind": "person_double_booking",
+                              "courtName": "example",
                               "entrantIds": [
                                 null
                               ],
                               "personIds": [
                                 null
-                              ],
-                              "otherFixtureId": "example"
+                              ]
                             }
                           }
                         ]
@@ -67399,6 +67402,9 @@
                                       "no_slot_budget"
                                     ]
                                   },
+                                  "courtName": {
+                                    "type": "string"
+                                  },
                                   "entrantIds": {
                                     "type": "array",
                                     "items": {
@@ -67552,6 +67558,9 @@
                                       "no_slot_lattice",
                                       "no_slot_budget"
                                     ]
+                                  },
+                                  "courtName": {
+                                    "type": "string"
                                   },
                                   "entrantIds": {
                                     "type": "array",
@@ -68172,13 +68181,13 @@
                         "detail": "example",
                         "details": {
                           "kind": "person_double_booking",
+                          "courtName": "example",
                           "entrantIds": [
                             "example"
                           ],
                           "personIds": [
                             "example"
-                          ],
-                          "otherFixtureId": "example"
+                          ]
                         }
                       }
                     ],
@@ -68189,13 +68198,13 @@
                         "detail": "example",
                         "details": {
                           "kind": "person_double_booking",
+                          "courtName": "example",
                           "entrantIds": [
                             "example"
                           ],
                           "personIds": [
                             "example"
-                          ],
-                          "otherFixtureId": "example"
+                          ]
                         }
                       }
                     ],
@@ -72277,6 +72286,9 @@
                                       "no_slot_budget"
                                     ]
                                   },
+                                  "courtName": {
+                                    "type": "string"
+                                  },
                                   "entrantIds": {
                                     "type": "array",
                                     "items": {
@@ -72430,6 +72442,9 @@
                                       "no_slot_lattice",
                                       "no_slot_budget"
                                     ]
+                                  },
+                                  "courtName": {
+                                    "type": "string"
                                   },
                                   "entrantIds": {
                                     "type": "array",
@@ -72953,13 +72968,13 @@
                         "detail": "example",
                         "details": {
                           "kind": "person_double_booking",
+                          "courtName": "example",
                           "entrantIds": [
                             "example"
                           ],
                           "personIds": [
                             "example"
-                          ],
-                          "otherFixtureId": "example"
+                          ]
                         }
                       }
                     ],
@@ -72970,13 +72985,13 @@
                         "detail": "example",
                         "details": {
                           "kind": "person_double_booking",
+                          "courtName": "example",
                           "entrantIds": [
                             "example"
                           ],
                           "personIds": [
                             "example"
-                          ],
-                          "otherFixtureId": "example"
+                          ]
                         }
                       }
                     ],
@@ -73946,6 +73961,9 @@
                                       "no_slot_budget"
                                     ]
                                   },
+                                  "courtName": {
+                                    "type": "string"
+                                  },
                                   "entrantIds": {
                                     "type": "array",
                                     "items": {
@@ -74076,13 +74094,13 @@
                         "detail": "example",
                         "details": {
                           "kind": "person_double_booking",
+                          "courtName": "example",
                           "entrantIds": [
                             "example"
                           ],
                           "personIds": [
                             "example"
-                          ],
-                          "otherFixtureId": "example"
+                          ]
                         }
                       }
                     ]

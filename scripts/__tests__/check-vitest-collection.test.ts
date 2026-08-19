@@ -27,11 +27,16 @@ import { describe, expect, it } from "vitest";
 const REPO_ROOT = join(import.meta.dirname, "../..");
 const SCRIPT = "scripts/check-vitest-collection.ts";
 
-// The four files `vitest list --filesOnly src/server/public-site` selects, and
+// The five files `vitest list --filesOnly src/server/public-site` selects, and
 // the one a `c*` glob removes. Named explicitly so that adding or removing a file
 // in that directory fails loudly rather than quietly changing what is proven.
 const CONSENT = "src/server/public-site/__tests__/consent.test.ts";
 const REST = [
+  // P9: added with the public court/venue-name coverage. This list is
+  // deliberately explicit so a new file in that directory fails HERE rather
+  // than quietly changing what the gate proves — which is exactly what
+  // happened, and is the list working.
+  "src/server/public-site/__tests__/data-court-venue-names.test.ts",
   "src/server/public-site/__tests__/pass-scope-public-realtime.test.ts",
   "src/server/public-site/__tests__/player-stats-public.test.ts",
   "src/server/public-site/__tests__/revalidate.test.ts",
@@ -67,7 +72,7 @@ describe("check-vitest-collection --exclude", () => {
     const { status, output } = run([
       "--results", results, "--exclude", EXCLUDE_C, "--", "src/server/public-site",
     ]);
-    expect(output).toContain("listed=3 executed=3");
+    expect(output).toContain("listed=4 executed=4");
     expect(output).toContain(`excluding ${EXCLUDE_C}`);
     expect(status).toBe(0);
   });
@@ -77,7 +82,7 @@ describe("check-vitest-collection --exclude", () => {
     // mattering and the two-job split is no longer being reconciled per half.
     const results = resultsFile("unnarrowed", REST);
     const { status, output } = run(["--results", results, "--", "src/server/public-site"]);
-    expect(output).toContain("listed=4 executed=3");
+    expect(output).toContain("listed=5 executed=4");
     expect(output).toContain("LISTED BUT NOT RUN (1)");
     expect(output).toContain(CONSENT);
     expect(status).toBe(1);
@@ -106,7 +111,7 @@ describe("check-vitest-collection --exclude", () => {
     const { status, output } = run([
       "--results", results, "--exclude", "", "--", "src/server/public-site",
     ]);
-    expect(output).toContain("listed=4 executed=3");
+    expect(output).toContain("listed=5 executed=4");
     expect(output).not.toContain("excluding");
     expect(status).toBe(1);
   });
