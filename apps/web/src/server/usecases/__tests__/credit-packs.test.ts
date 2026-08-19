@@ -15,6 +15,7 @@ import { sql } from "@/lib/db";
 import { balance, packBalance, walletIdFor } from "@/lib/credits";
 import { CREDIT_PACKS } from "@/lib/credit-packs";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { log } from "@/server/logger";
 import { processStripeEvent } from "../billing-events";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -151,14 +152,17 @@ describe.skipIf(!HAS_DB)("webhook → credit pack purchase", () => {
   it("an unknown pack_key with NO credits snapshot grants nothing rather than throwing (ACKs the webhook) — surfaced, not silent", async () => {
     const orgId = await seedOrg();
     const walletId = await walletIdFor(orgId);
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const errSpy = vi.spyOn(log, "error").mockImplementation(() => {});
     try {
       await processStripeEvent(
         packCheckoutEvent({ orgId, packKey: "not_a_real_pack", credits: null }),
       );
       expect(await balance(walletId)).toBe(0);
       // Paid-but-ungranted must be visible, not a quiet no-op (review fix, P3 T1).
-      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("paid but ungranted"));
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ orgId }),
+        expect.stringContaining("paid but ungranted"),
+      );
     } finally {
       errSpy.mockRestore();
     }
@@ -176,11 +180,14 @@ describe.skipIf(!HAS_DB)("webhook → credit pack purchase", () => {
   it("no pack_key and no credits snapshot at all is surfaced as an error, not a silent no-op", async () => {
     const orgId = await seedOrg();
     const walletId = await walletIdFor(orgId);
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const errSpy = vi.spyOn(log, "error").mockImplementation(() => {});
     try {
       await processStripeEvent(packCheckoutEvent({ orgId, credits: null }));
       expect(await balance(walletId)).toBe(0);
-      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("paid but ungranted"));
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ orgId }),
+        expect.stringContaining("paid but ungranted"),
+      );
     } finally {
       errSpy.mockRestore();
     }

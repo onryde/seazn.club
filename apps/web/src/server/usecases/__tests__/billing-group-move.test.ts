@@ -174,6 +174,7 @@ import { hasFeature } from "@/lib/entitlements";
 import { billedQuantity } from "@/lib/billing-group";
 import { balance, grantBalance, packBalance, walletIdFor } from "@/lib/credits";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { log } from "@/server/logger";
 import {
   acceptGroupTransfer,
   attachOrgToGroup,
@@ -187,6 +188,12 @@ import { processStripeEvent } from "../billing-events";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
+
+// pino's log.{warn,error} take (fields, message) — a bare String() on the
+// fields object gives "[object Object]" and loses every id/status it carries.
+// JSON-serialise objects, leave strings as-is.
+const stringifyLogArg = (arg: unknown): string =>
+  typeof arg === "string" ? arg : JSON.stringify(arg);
 
 async function makeUser(tag: string): Promise<string> {
   const [{ id }] = await sql<{ id: string }[]>`
@@ -474,7 +481,7 @@ describe.skipIf(!HAS_DB)("attach", () => {
     await makeOrg(group, payer);
     const joiner = await makeLooseOrg(payer);
     stripeMock.state.billingScheme = "per_unit";
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = vi.spyOn(log, "error").mockImplementation(() => {});
     try {
       await expect(
         attachOrgToGroup({ actorUserId: payer, orgId: joiner.orgId, subscriptionId: group }),
@@ -663,7 +670,7 @@ describe.skipIf(!HAS_DB)("attach", () => {
     await makeOrg(group, payer);
     const joiner = await makeLooseOrg(payer);
     stripeMock.subscriptionsUpdate.mockRejectedValueOnce(new Error("stripe is down"));
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = vi.spyOn(log, "error").mockImplementation(() => {});
 
     try {
       await expect(
@@ -998,7 +1005,7 @@ describe.skipIf(!HAS_DB)("detach", () => {
     const leaving = await makeOrg(group, clubOwner);
     const joiner = await makeLooseOrg(payer);
 
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = vi.spyOn(log, "error").mockImplementation(() => {});
     // Stands in for the attach that wins the lock the instant the claim commits.
     // Doing it inside the Stripe double is what puts it in the real window: the
     // rollback has not run yet, and it is the only code that will.
@@ -1054,7 +1061,7 @@ describe.skipIf(!HAS_DB)("detach", () => {
     const leaving = await makeOrg(group, clubOwner);
     expect((await readGroup(group)).cancel_at_period_end).toBe(true);
 
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = vi.spyOn(log, "error").mockImplementation(() => {});
     stripeMock.subscriptionsCancel.mockImplementationOnce(async () => {
       throw new Error("stripe refused the cancel");
     });
@@ -2219,7 +2226,7 @@ describe.skipIf(!HAS_DB)("a detach racing an attach into the group it empties", 
     const leaving = await makeOrg(group, clubOwner);
     stripeMock.subscriptionsCancel.mockRejectedValueOnce(new Error("stripe is down"));
 
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = vi.spyOn(log, "error").mockImplementation(() => {});
     let res;
     try {
       res = await detachOrgFromGroup({ actorUserId: clubOwner, orgId: leaving });
@@ -2329,7 +2336,7 @@ describe.skipIf(!HAS_DB)("a live subscription with nothing left to bill", () => 
     const orgId = await makeOrg(group, payer);
     await sql`update organizations set deleted_at = now() where id = ${orgId}`;
 
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = vi.spyOn(log, "error").mockImplementation(() => {});
     try {
       await syncGroupQuantity(group);
     } finally {
@@ -2353,7 +2360,7 @@ describe.skipIf(!HAS_DB)("a live subscription with nothing left to bill", () => 
     await sql`update organizations set deleted_at = now() where id = ${orgId}`;
     stripeMock.subscriptionsCancel.mockRejectedValueOnce(new Error("stripe is down"));
 
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = vi.spyOn(log, "error").mockImplementation(() => {});
     try {
       await syncGroupQuantity(group);
     } finally {
@@ -2392,8 +2399,8 @@ describe.skipIf(!HAS_DB)("a live subscription with nothing left to bill", () => 
     const orgId = await makeOrg(group, payer);
     await sql`update organizations set deleted_at = now() where id = ${orgId}`;
 
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const err = vi.spyOn(log, "error").mockImplementation(() => {});
     // Read the spy BEFORE restoring it. vi's mockRestore also RESETS, so
     // `warn.mock.calls` is empty afterwards and every assertion on it passes
     // vacuously — the exact shape of check this issue is about.
@@ -2402,8 +2409,8 @@ describe.skipIf(!HAS_DB)("a live subscription with nothing left to bill", () => 
     try {
       await syncGroupQuantity(group);
     } finally {
-      said = warn.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
-      erred = err.mock.calls.map((c) => c.map(String).join(" "));
+      said = warn.mock.calls.map((c) => c.map(stringifyLogArg).join(" ")).join("\n");
+      erred = err.mock.calls.map((c) => c.map(stringifyLogArg).join(" "));
       warn.mockRestore();
       err.mockRestore();
     }
@@ -2442,13 +2449,13 @@ describe.skipIf(!HAS_DB)("a live subscription with nothing left to bill", () => 
     const leaver = await makeOrg(group, payer);
     await makeOrg(group, payer);
 
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     // Captured before the restore, which resets the spy — see the note above.
     let said: string[] = [];
     try {
       await detachOrgFromGroup({ actorUserId: payer, orgId: leaver });
     } finally {
-      said = warn.mock.calls.map((c) => c.map(String).join(" "));
+      said = warn.mock.calls.map((c) => c.map(stringifyLogArg).join(" "));
       warn.mockRestore();
     }
 
@@ -2573,7 +2580,7 @@ describe.skipIf(!HAS_DB)("the sweep's signal survives a failed sync", () => {
     await makeOrg(group, payer);
     stripeMock.state.quantity = 5;
     stripeMock.subscriptionsUpdate.mockRejectedValueOnce(new Error("stripe is down"));
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = vi.spyOn(log, "error").mockImplementation(() => {});
     try {
       await processStripeEvent(invoiceEvent(stripeSubId, "subscription_cycle"));
     } finally {

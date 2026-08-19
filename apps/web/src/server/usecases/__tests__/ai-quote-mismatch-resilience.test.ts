@@ -18,6 +18,7 @@ const { withTenantMock } = vi.hoisted(() => ({ withTenantMock: vi.fn() }));
 vi.mock("@/lib/db", () => ({ withTenant: withTenantMock }));
 
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { log } from "@/server/logger";
 import { recordQuoteMismatch } from "../ai-quote-mismatch";
 
 const auth = { orgId: "org-1", userId: "user-1" } as unknown as AuthCtx;
@@ -31,7 +32,7 @@ describe("recordQuoteMismatch — the write failing must not fail the run", () =
   });
 
   it("still resolves with the mismatch when the insert throws", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
     withTenantMock.mockRejectedValue(new Error("duplicate key value violates unique constraint"));
 
     // The assertion that carries the regression: without the catch this
@@ -43,12 +44,15 @@ describe("recordQuoteMismatch — the write failing must not fail the run", () =
 
     // The failure is not silent — a swallowed telemetry error that leaves no
     // trace is how a permanently broken insert goes unnoticed for a month.
-    expect(warn).toHaveBeenCalledWith("[quote-mismatch] record failed:", expect.any(Error));
+    expect(warn).toHaveBeenCalledWith(
+      { err: expect.any(Error) },
+      "quote-mismatch: record failed",
+    );
     warn.mockRestore();
   });
 
   it("reports the mismatch to the caller even though nothing was recorded", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
     withTenantMock.mockRejectedValue(new Error("could not serialize access"));
 
     // A lost row is not a reason to tell the caller their quote matched. The

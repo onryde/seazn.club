@@ -32,6 +32,7 @@ vi.mock("@/lib/stripe", () => ({
 }));
 
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { sweepOrphanGroups } from "@/server/usecases/billing-groups";
 
 const TAG = randomUUID().slice(0, 8);
@@ -138,7 +139,7 @@ describe.skipIf(!process.env.DATABASE_URL)("sweepOrphanGroups (#375)", () => {
   });
 
   it("does not cancel a subscription Stripe still calls live — it raises it", async () => {
-    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warn = vi.spyOn(log, "error").mockImplementation(() => {});
     try {
       const { id, stripeId } = await seedOrphan("incomplete", { stripeStatus: "active" });
 
@@ -152,7 +153,9 @@ describe.skipIf(!process.env.DATABASE_URL)("sweepOrphanGroups (#375)", () => {
       // paying customer's subscription is not a sweep's call to make.
       expect(cancelled).toEqual([]);
       expect(
-        warn.mock.calls.some((c) => String(c[0]).includes("live and billing for nobody")),
+        warn.mock.calls.some((c) =>
+          c.some((arg) => typeof arg === "string" && arg.includes("live and billing for nobody")),
+        ),
       ).toBe(true);
     } finally {
       warn.mockRestore();
@@ -206,7 +209,7 @@ describe.skipIf(!process.env.DATABASE_URL)("sweepOrphanGroups (#375)", () => {
   });
 
   it("leaves the row untouched when Stripe cannot be read", async () => {
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = vi.spyOn(log, "error").mockImplementation(() => {});
     try {
       const { id } = await seedOrphan("incomplete", { stripeMissing: true });
       const res = await sweepOrphanGroups();

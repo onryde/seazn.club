@@ -7,6 +7,7 @@ import "server-only";
 // is an event we never received (the deleted-endpoint incident class).
 import type Stripe from "stripe";
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import {
   linkStripeCustomerForGroup,
   linkStripeCustomer,
@@ -166,9 +167,9 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
           : (() => {
               const fallback = packKey ? CREDIT_PACKS[packKey]?.credits : undefined;
               if (fallback) {
-                console.error(
-                  `[billing] credit_pack session ${session.id} had no usable credits snapshot ` +
-                    `(metadata.credits=${String(snapshotRaw)}) — fell back to catalog lookup by pack_key ${packKey}`,
+                log.error(
+                  { sessionId: session.id, snapshotRaw, packKey },
+                  "billing: credit_pack session had no usable credits snapshot — fell back to catalog lookup by pack_key",
                 );
               }
               return fallback;
@@ -191,12 +192,12 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
         // could resolve a credit amount — a silent zero-grant here would be
         // an invisible paid-but-ungranted purchase (the bug this fix closes).
         // Surface it the same way other billing anomalies in this file are
-        // surfaced: a `[billing]` console.error plus a best-effort staff
-        // alert email, and still ACK the webhook (nothing here is retryable
-        // into a better outcome — a human must grant this manually).
-        console.error(
-          `[billing] credit_pack session ${session.id} (org ${orgId}) paid but ungranted — ` +
-            `no credits snapshot and no resolvable pack_key (${packKey ?? "none"})`,
+        // surfaced: a `log.error` plus a best-effort staff alert email, and
+        // still ACK the webhook (nothing here is retryable into a better
+        // outcome — a human must grant this manually).
+        log.error(
+          { sessionId: session.id, orgId, packKey },
+          "billing: credit_pack session paid but ungranted — no credits snapshot and no resolvable pack_key",
         );
         const alertTo = process.env.STAFF_ALERT_EMAIL;
         if (alertTo) {
@@ -306,9 +307,9 @@ async function grantSizePackAddon(session: Stripe.Checkout.Session): Promise<voi
   const targetCompetitionId = md.target_competition_id;
   const sizePackKey = md.size_pack_key;
   if (!targetOrgId || !targetCompetitionId) {
-    console.error(
-      `[billing] size_pack session ${session.id} missing target_org_id/target_competition_id ` +
-        `— cannot resolve which cap to lift; skipping`,
+    log.error(
+      { sessionId: session.id },
+      "billing: size_pack session missing target_org_id/target_competition_id — cannot resolve which cap to lift; skipping",
     );
     return;
   }
@@ -322,18 +323,17 @@ async function grantSizePackAddon(session: Stripe.Checkout.Session): Promise<voi
     if (cat) {
       featureKey = featureKey || cat.feature_key;
       deltaEach = Number.isFinite(deltaEach) ? deltaEach : cat.delta_each;
-      console.error(
-        `[billing] size_pack session ${session.id} had no usable snapshot ` +
-          `(feature_key=${md.feature_key ?? "none"}, delta_each=${md.delta_each ?? "none"}) ` +
-          `— fell back to catalog lookup by size_pack_key ${sizePackKey}`,
+      log.error(
+        { sessionId: session.id, featureKey: md.feature_key, deltaEach: md.delta_each, sizePackKey },
+        "billing: size_pack session had no usable snapshot — fell back to catalog lookup by size_pack_key",
       );
     }
   }
   if (!featureKey || !Number.isFinite(deltaEach) || deltaEach <= 0) {
     // Paid but ungranted — surface it, never a silent no-op (mirrors credit packs).
-    console.error(
-      `[billing] size_pack session ${session.id} (org ${targetOrgId}) paid but ungranted ` +
-        `— no usable snapshot and no resolvable size_pack_key (${sizePackKey ?? "none"})`,
+    log.error(
+      { sessionId: session.id, targetOrgId, sizePackKey },
+      "billing: size_pack session paid but ungranted — no usable snapshot and no resolvable size_pack_key",
     );
     const alertTo = process.env.STAFF_ALERT_EMAIL;
     if (alertTo) {
@@ -379,7 +379,10 @@ async function checkoutGroupId(
     const [row] = await sql<{ id: string }[]>`
       select id from subscriptions where id = ${stamped}`;
     if (row) return row.id;
-    console.error(`[billing] checkout session ${session.id} stamped with unknown group ${stamped}`);
+    log.error(
+      { sessionId: session.id, stamped },
+      "billing: checkout session stamped with unknown group",
+    );
   }
   return subscriptionIdForOrg(orgId);
 }
@@ -489,8 +492,9 @@ async function resolveGroupForStripeSub(
     const [row] = await sql<{ id: string }[]>`
       select id from subscriptions where id = ${stamped}`;
     if (row) return { subscriptionId: row.id, via: "metadata_subscription_id" };
-    console.error(
-      `[billing] subscription ${stripeSub.id} stamped with unknown group ${stamped}`,
+    log.error(
+      { stripeSubscriptionId: stripeSub.id, stamped },
+      "billing: subscription stamped with unknown group",
     );
   }
 
@@ -510,9 +514,9 @@ async function resolveGroupForStripeSub(
   if (!orgId) return null;
   const legacy = await subscriptionIdForOrg(orgId);
   if (!legacy) return null;
-  console.warn(
-    `[billing] subscription ${stripeSub.id} resolved to group ${legacy} via LEGACY metadata.org_id ` +
-      `(${orgId}) — no subscription_id stamp, no stored sub id, no customer match`,
+  log.warn(
+    { stripeSubscriptionId: stripeSub.id, subscriptionId: legacy, orgId },
+    "billing: subscription resolved to group via LEGACY metadata.org_id — no subscription_id stamp, no stored sub id, no customer match",
   );
   return { subscriptionId: legacy, via: "legacy_org_id" };
 }
@@ -544,10 +548,15 @@ async function mayWriteGroup(
   if (resolved.via === "metadata_subscription_id" && isLiveStripeStatus(stripeSub.status)) {
     return true; // re-buy: this subscription replaces the stored one
   }
-  console.error(
-    `[billing] REFUSING to write group ${resolved.subscriptionId} (billing ${stored}) ` +
-      `from subscription ${stripeSub.id} status=${stripeSub.status} resolved via ${resolved.via} — ` +
-      `wrong-row write averted`,
+  log.error(
+    {
+      subscriptionId: resolved.subscriptionId,
+      stored,
+      stripeSubscriptionId: stripeSub.id,
+      status: stripeSub.status,
+      via: resolved.via,
+    },
+    "billing: REFUSING to write group — wrong-row write averted",
   );
   return false;
 }
@@ -659,9 +668,9 @@ export async function syncSeatAddonsForSubscription(
   for (const item of seatItems) {
     const targetOrgId = item.metadata?.target_org_id;
     if (!targetOrgId) {
-      console.error(
-        `[billing] seat item ${item.id} on subscription ${stripeSub.id} carries no ` +
-          `target_org_id metadata — cannot resolve which org's cap to lift; skipping`,
+      log.error(
+        { itemId: item.id, stripeSubscriptionId: stripeSub.id },
+        "billing: seat item carries no target_org_id metadata — cannot resolve which org's cap to lift; skipping",
       );
       continue;
     }
@@ -1003,11 +1012,15 @@ export async function convergeOrgAddonPrices(
         // claims it at the branch above, so a genuine duplicate is alerted
         // instead of being sent into an update Stripe would reject.
         if (targetClaimed) {
-          console.error(
-            `[billing] extra-org rider ${item.id} on subscription ${stripeSub.id} (group ` +
-              `${subscriptionId}) is on price ${live?.price?.id ?? item.price?.id} but ` +
-              `${expectedPriceId} is already held by another item — leaving it for ` +
-              `setExtraOrgs to consolidate`,
+          log.error(
+            {
+              itemId: item.id,
+              stripeSubscriptionId: stripeSub.id,
+              subscriptionId,
+              currentPriceId: live?.price?.id ?? item.price?.id,
+              expectedPriceId,
+            },
+            "billing: extra-org rider is on a price already held by another item — leaving it for setExtraOrgs to consolidate",
           );
           // Alerted, not just logged: this group bills the wrong rate on this
           // item until a human or a purchase consolidates the duplicate, and
@@ -1033,10 +1046,17 @@ export async function convergeOrgAddonPrices(
           proration_behavior: "create_prorations",
         });
         targetClaimed = true;
-        console.warn(
-          `[billing] re-priced extra-org rider ${item.id} (qty ${qty}) from ` +
-            `${live?.price?.id ?? item.price?.id} to ${expectedPriceId} for plan ${planKey} ` +
-            `on subscription ${stripeSub.id} (group ${subscriptionId})`,
+        log.warn(
+          {
+            itemId: item.id,
+            qty,
+            fromPriceId: live?.price?.id ?? item.price?.id,
+            expectedPriceId,
+            planKey,
+            stripeSubscriptionId: stripeSub.id,
+            subscriptionId,
+          },
+          "billing: re-priced extra-org rider",
         );
         // Upgrade the published item from LIVE to POST-UPDATE. The publish at
         // the read already put a truthful item here; this replaces it with the
@@ -1047,17 +1067,22 @@ export async function convergeOrgAddonPrices(
         // processed is a benign race, not something to page anyone about —
         // there is nothing left to re-price.
         if (isStripeResourceMissing(err)) {
-          console.warn(
-            `[billing] extra-org rider ${item.id} is gone from subscription ${stripeSub.id} ` +
-              `(group ${subscriptionId}) — nothing to re-price`,
+          log.warn(
+            { itemId: item.id, stripeSubscriptionId: stripeSub.id, subscriptionId },
+            "billing: extra-org rider is gone from subscription — nothing to re-price",
           );
           continue;
         }
-        console.error(
-          `[billing] could not re-price extra-org rider ${item.id} to ${expectedPriceId} ` +
-            `(plan ${planKey}, subscription ${stripeSub.id}, group ${subscriptionId}) — ` +
-            `the row still reconciles, only the rate stays stale`,
-          err,
+        log.error(
+          {
+            itemId: item.id,
+            expectedPriceId,
+            planKey,
+            stripeSubscriptionId: stripeSub.id,
+            subscriptionId,
+            err,
+          },
+          "billing: could not re-price extra-org rider — the row still reconciles, only the rate stays stale",
         );
         await maybeAlertOrgRepriceFailed({
           subscriptionId,
@@ -1075,10 +1100,9 @@ export async function convergeOrgAddonPrices(
   } catch (err) {
     // Almost always resolveOrgAddonPriceId's 503: `stripe:sync` has not been
     // run for this account, so the catalog cannot name a price to move to.
-    console.error(
-      `[billing] could not resolve the extra-org rider price for group ${subscriptionId} ` +
-        `(subscription ${stripeSub.id}) — rows still reconcile, rates stay stale`,
-      err,
+    log.error(
+      { subscriptionId, stripeSubscriptionId: stripeSub.id, err },
+      "billing: could not resolve the extra-org rider price for group — rows still reconcile, rates stay stale",
     );
     await maybeAlertOrgRepriceFailed({
       subscriptionId,
@@ -1140,9 +1164,9 @@ export async function maybeAlertOrgRepriceFailed(opts: {
     if (!alertTo) return;
     await sendExtraOrgRepriceFailedAlertEmail({ to: alertTo, ...opts });
   } catch (err) {
-    console.error(
-      `[billing] extra-org re-price alert failed (group ${opts.subscriptionId})`,
-      err,
+    log.error(
+      { subscriptionId: opts.subscriptionId, err },
+      "billing: extra-org re-price alert failed",
     );
   }
 }
@@ -1330,9 +1354,9 @@ export async function sweepStaleOrgAddonPrices(limit = 500): Promise<{
      order by a.created_at
      limit ${limit}`;
   if (total > rows.length) {
-    console.warn(
-      `[billing] extra-org rider sweep is TRUNCATED: ${rows.length} of ${total} live riders ` +
-        `examined this pass (limit ${limit}) — the newest riders are never reached`,
+    log.warn(
+      { examined: rows.length, total, limit },
+      "billing: extra-org rider sweep is TRUNCATED — the newest riders are never reached",
     );
   }
 
@@ -1401,17 +1425,16 @@ export async function sweepStaleOrgAddonPrices(limit = 500): Promise<{
     } catch (err) {
       if (isStripeResourceMissing(err)) {
         vanished++;
-        console.warn(
-          `[billing] extra-org rider ${row.stripe_item_id} (group ${row.subscription_id}) is gone ` +
-            `from Stripe but its org_addons row is still active — no price to check`,
+        log.warn(
+          { itemId: row.stripe_item_id, subscriptionId: row.subscription_id },
+          "billing: extra-org rider is gone from Stripe but its org_addons row is still active — no price to check",
         );
         continue;
       }
       unreadable++;
-      console.error(
-        `[billing] could not read extra-org rider ${row.stripe_item_id} (group ` +
-          `${row.subscription_id}) — its rate is UNKNOWN this pass, not wrong`,
-        err,
+      log.error(
+        { itemId: row.stripe_item_id, subscriptionId: row.subscription_id, err },
+        "billing: could not read extra-org rider — its rate is UNKNOWN this pass, not wrong",
       );
       continue;
     }
@@ -1431,10 +1454,18 @@ export async function sweepStaleOrgAddonPrices(limit = 500): Promise<{
   // Logged for EVERY mismatch (the record when staff email is not configured);
   // emailed for the first ORG_PRICE_SWEEP_ALERT_CAP only.
   for (const m of mismatches) {
-    console.error(
-      `[billing] stale extra-org rider ${m.itemId} (qty ${m.qty}) on subscription ` +
-        `${m.stripeSubscriptionId} (group ${m.subscriptionId}, plan ${m.planKey}): ` +
-        `${m.currentPriceId ?? "unknown"} != ${m.expectedPriceId ?? "unresolved"} — ${m.reason}`,
+    log.error(
+      {
+        itemId: m.itemId,
+        qty: m.qty,
+        stripeSubscriptionId: m.stripeSubscriptionId,
+        subscriptionId: m.subscriptionId,
+        planKey: m.planKey,
+        currentPriceId: m.currentPriceId,
+        expectedPriceId: m.expectedPriceId,
+        reason: m.reason,
+      },
+      "billing: stale extra-org rider",
     );
   }
   // The env is re-read here rather than left to maybeAlertOrgRepriceFailed's own
@@ -1717,7 +1748,7 @@ async function trueUpQuantityPaid(invoice: Stripe.Invoice, subId: string): Promi
   try {
     await syncGroupQuantity(row.id, { renewal: true, invoicedQuantity: invoicedSeats(invoice) });
   } catch (err) {
-    console.error(`[billing] renewal quantity sync failed for group ${row.id}`, err);
+    log.error({ subscriptionId: row.id, err }, "billing: renewal quantity sync failed for group");
   }
 }
 
@@ -1827,9 +1858,9 @@ async function handlePackChargeRefunded(charge: Stripe.Charge): Promise<void> {
   }
   if (pi.metadata?.kind !== "credit_pack") return; // a genuine non-pack charge.
 
-  console.error(
-    `[billing] credit_pack charge ${charge.id} (intent ${intent}) refunded but no ` +
-      `pack_purchase ledger row found — nothing to claw back (was it ever granted?)`,
+  log.error(
+    { chargeId: charge.id, intent },
+    "billing: credit_pack charge refunded but no pack_purchase ledger row found — nothing to claw back (was it ever granted?)",
   );
   const alertTo = process.env.STAFF_ALERT_EMAIL;
   if (alertTo) {
@@ -2187,7 +2218,7 @@ async function resolveEventGroup(event: Stripe.Event): Promise<string | null> {
     }
     return null;
   } catch (err) {
-    console.error(`[billing] resolveEventGroup failed for ${event.id}`, err);
+    log.error({ eventId: event.id, err }, "billing: resolveEventGroup failed");
     return null;
   }
 }

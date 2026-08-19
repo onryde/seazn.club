@@ -16,6 +16,7 @@ import type postgres from "postgres";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { getStripe } from "@/lib/stripe";
+import { log } from "@/server/logger";
 import {
   assertPriceBillsQuantity,
   syncPaymentMethodFlagForSubscription,
@@ -391,9 +392,9 @@ export async function syncGroupQuantity(
     // as "CANCEL FAILED, will retry" would be both a duplicate and a lie: no
     // cancel was attempted and nothing retries it.
     if (outcome === "cancelled" || outcome === "cancel_failed")
-      console.error(
-        `[billing] group ${subscriptionId} has a live subscription and no organisations — ` +
-          (outcome === "cancelled" ? "cancelled" : "CANCEL FAILED, will retry"),
+      log.error(
+        { subscriptionId, outcome },
+        "billing: group has a live subscription and no organisations",
       );
   }
   return res;
@@ -461,12 +462,13 @@ export async function reconcileGroupQuantities(limit = 500): Promise<{
       // One broken group (archived price, deleted subscription) must not stop
       // the sweep for everybody else.
       failed++;
-      console.error(`[billing] quantity reconcile failed for group ${g.id}`, err);
+      log.error({ err, groupId: g.id }, "billing: quantity reconcile failed");
     }
   }
   if (groups.length === limit)
-    console.warn(
-      `[billing] quantity reconcile hit its limit of ${limit} — some groups were not visited`,
+    log.warn(
+      { limit },
+      "billing: quantity reconcile hit its limit — some groups were not visited",
     );
   return { checked: groups.length, corrected, failed };
 }
@@ -551,10 +553,14 @@ export async function sweepOrphanGroups(limit = 200): Promise<{
         // organisations may be a detach mid-flight or a support action in
         // progress, and an unattended cancel of a paying customer's
         // subscription is not a sweep's decision to make.
-        console.error(
-          `[billing] group ${g.id} has no organisations, but Stripe says its subscription ` +
-            `${g.stripe_subscription_id} is '${stripeSub.status}' — live and billing for nobody. ` +
-            `Row updated to match; the subscription was NOT cancelled.`,
+        log.error(
+          {
+            groupId: g.id,
+            stripeSubscriptionId: g.stripe_subscription_id,
+            status: stripeSub.status,
+          },
+          "billing: group has no organisations but Stripe subscription is live and billing for " +
+            "nobody — row updated to match, subscription NOT cancelled",
         );
       }
     } catch (err) {
@@ -563,12 +569,13 @@ export async function sweepOrphanGroups(limit = 200): Promise<{
       // rather than assumed dead: writing `canceled` off a failed read is
       // exactly the guess this function refuses to make.
       failed++;
-      console.error(`[billing] orphan-group sweep failed for group ${g.id}`, err);
+      log.error({ err, groupId: g.id }, "billing: orphan-group sweep failed for group");
     }
   }
   if (groups.length === limit)
-    console.warn(
-      `[billing] orphan-group sweep hit its limit of ${limit} — some groups were not visited`,
+    log.warn(
+      { limit },
+      "billing: orphan-group sweep hit its limit — some groups were not visited",
     );
   return { checked: groups.length, retired, stillLive, failed };
 }
@@ -737,14 +744,14 @@ async function cancelGroupIfEmpty(
     // the ordinary outcome of every detach that leaves somebody behind, and an
     // alarm that fires on the happy path is one nobody reads.
     if (!attempt.empty) return "not_empty";
-    console.warn(
-      `[billing] cancelGroupIfEmpty DECLINED to cancel group ${subscriptionId}: it has no live ` +
-        `organisations, but its status is '${attempt.prev.prev_status}', which is outside the ` +
-        `set this claim cancels ('trialing', 'active', 'past_due'). Nothing was cancelled at ` +
-        `Stripe and nothing here will retry. For 'incomplete' that is deliberate — the first ` +
-        `invoice is unpaid, and Stripe voids it and expires the subscription itself within 23 ` +
-        `hours (#367). Any OTHER status reaching this line is worth chasing: it means a group ` +
-        `is live at Stripe and billing for nobody.`,
+    log.warn(
+      { subscriptionId, status: attempt.prev.prev_status },
+      "billing: cancelGroupIfEmpty declined to cancel group: it has no live organisations, but " +
+        "its status is outside the set this claim cancels ('trialing', 'active', 'past_due'). " +
+        "Nothing was cancelled at Stripe and nothing here will retry. For 'incomplete' that is " +
+        "deliberate — the first invoice is unpaid, and Stripe voids it and expires the " +
+        "subscription itself within 23 hours (#367). Any OTHER status reaching this line is " +
+        "worth chasing: it means a group is live at Stripe and billing for nobody.",
     );
     return "not_cancellable";
   }
@@ -775,7 +782,7 @@ async function cancelGroupIfEmpty(
                cancel_at_period_end = ${claimed.prev_cancel_at_period_end},
                updated_at = now()
          where id = ${subscriptionId}`;
-      console.error("cancelGroupIfEmpty: Stripe cancel failed", subscriptionId, err);
+      log.error({ subscriptionId, err }, "cancelGroupIfEmpty: Stripe cancel failed");
       // The rollback has to take the CACHE back with it. The claim committed
       // `community`/`canceled` before Stripe was called, so any resolve in that
       // window — an org an attach landed in the group while it was in flight —
@@ -1013,9 +1020,9 @@ export async function attachOrgToGroup(args: {
     const q = await syncGroupQuantity(subscriptionId);
     return { subscription_id: subscriptionId, ...q };
   } catch (err) {
-    console.error(
-      `[billing] attach: org ${orgId} joined group ${subscriptionId} but the quantity sync failed`,
-      err,
+    log.error(
+      { orgId, subscriptionId, err },
+      "billing: attach — org joined group but the quantity sync failed",
     );
     if (err instanceof HttpError) throw err;
     throw new HttpError(
@@ -1346,9 +1353,9 @@ export async function detachOrgFromGroup(args: {
   try {
     await syncGroupQuantity(result.from, { spendFreedSeat: result.comped });
   } catch (err) {
-    console.error(
-      `[billing] detach: org ${orgId} left group ${result.from} but the quantity sync failed`,
-      err,
+    log.error(
+      { orgId, groupId: result.from, err },
+      "billing: detach — org left group but the quantity sync failed",
     );
   }
   return { subscription_id: result.to, cancelled_group: cancelled };
@@ -1510,7 +1517,7 @@ export async function offerGroupTransfer(args: {
       recipientId: recipient.id,
       recipientEmail: recipient.email,
     }).catch((err) => {
-      console.error("[billing-groups] transfer-offer email failed (best-effort):", err);
+      log.error({ err }, "billing-groups: transfer-offer email failed (best-effort)");
     });
 
     return {
@@ -1540,7 +1547,7 @@ export async function offerGroupTransfer(args: {
     recipientId: recipient.id,
     recipientEmail: recipient.email,
   }).catch((err) => {
-    console.error("[billing-groups] transfer-complete email failed (best-effort):", err);
+    log.error({ err }, "billing-groups: transfer-complete email failed (best-effort)");
   });
 
   return { status: "transferred", subscription_id: subscriptionId, owner_user_id: recipient.id };
@@ -1745,7 +1752,7 @@ async function transferRenewalQuote(
     });
     return { amount_minor: preview.total, interval };
   } catch (err) {
-    console.error(`[billing] could not quote transfer renewal for group ${group.id}`, err);
+    log.error({ err, groupId: group.id }, "billing: could not quote transfer renewal for group");
     return null;
   }
 }
@@ -1821,9 +1828,9 @@ export async function listGroupTransferOffers(
     // blank the WHOLE list — an outage must not blank the list.
     const summary = toMe
       ? await transferOfferSummary(r.subscription_id).catch((err) => {
-          console.error(
-            `[billing] could not load transfer summary for group ${r.subscription_id}`,
-            err,
+          log.error(
+            { err, groupId: r.subscription_id },
+            "billing: could not load transfer summary for group",
           );
           return null;
         })
@@ -1836,7 +1843,10 @@ export async function listGroupTransferOffers(
         .setupIntents.retrieve(r.setup_intent_id)
         .then((si) => si.client_secret)
         .catch((err) => {
-          console.error(`[billing] could not load transfer intent ${r.setup_intent_id}`, err);
+          log.error(
+            { err, setupIntentId: r.setup_intent_id },
+            "billing: could not load transfer intent",
+          );
           return null;
         });
     }
@@ -2047,7 +2057,7 @@ async function notifyDetachParties(args: {
       await sendGroupOrgLeftEmail(to.email, orgName, !comped, billingSettingsLink(remainingSlug), to.locale);
     }
   } catch (err) {
-    console.error("[billing-groups] detach notification failed (best-effort):", err);
+    log.error({ err }, "billing-groups: detach notification failed (best-effort)");
   }
 }
 

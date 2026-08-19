@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
+import { log } from "@/server/logger";
 import { runEvent } from "@/server/usecases/billing-events";
 
 // Signed Stripe webhook. The dispatch table lives in
@@ -30,7 +31,7 @@ export async function POST(req: Request) {
     await runEvent(event);
   } catch (err) {
     // Return 5xx so Stripe retries
-    console.error("Webhook processing error:", err);
+    log.error({ err }, "stripe-webhook: processing failed");
     return NextResponse.json({ error: "Processing failed" }, { status: 500 });
   }
 
