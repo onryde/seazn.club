@@ -1,7 +1,7 @@
 // Integration tests for PROMPT-22 (Jul3/02): officials CRUD, auto → apply,
 // manual set/lock, hide-names public read, entitlement gates. Real Postgres
 // required; skipped without DATABASE_URL.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -20,9 +20,23 @@ import {
 } from "../officials";
 import { acceptedOfficialCovers, fixtureScope } from "../scorers";
 import { orgMarksSummary, putMark } from "../official-marks";
+import { createCourt, createVenue } from "../venues";
 import { makeUser as makeSeedUser, seedOrg as seedSeedOrg, seedFutureDivision } from "./_seed";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+
+// P9 sweep (pass 3c-4): captures what assignedNotices() (officials.ts) would
+// actually email an official, without depending on RESEND_API_KEY/network —
+// sendAssignedNotices calls this synchronously (fire-and-forget, but the call
+// itself happens before applyOfficialAssignments/patchFixtureOfficials
+// resolves), so the mock has recorded its args by the time the assertion
+// runs. vi.hoisted for the same reason officials-ai-route.test.ts uses it: the
+// vi.mock factory below hoists above this const otherwise.
+const { sendOfficialAssignedEmail } = vi.hoisted(() => ({
+  sendOfficialAssignedEmail: vi.fn().mockResolvedValue(true),
+}));
+vi.mock("@/lib/email", () => ({ sendOfficialAssignedEmail }));
+
 const HAS_DB = !!process.env.DATABASE_URL;
 
 const GENERIC_CONFIG = {
@@ -91,11 +105,17 @@ async function seedScheduledDivision(auth: AuthCtx) {
   });
   const { fixtures } = await generateStageFixtures(auth, stage!.id);
   const t0 = Date.UTC(2026, 6, 10, 9, 0, 0);
+  // P9: court_id, not the frozen court_label — engineInput() (officials.ts)
+  // reads court_id for block-stay/sort grouping now, so a real court row is
+  // what makes "all scheduled on one court" (this helper's own header
+  // comment) still true post-cutover.
+  const venue = await createVenue(auth, { name: "Officials Venue", sort: 0 });
+  const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
   for (let i = 0; i < fixtures.length; i++) {
     await sql`
       update fixtures
       set scheduled_at = ${new Date(t0 + i * 30 * 60_000).toISOString()},
-          court_label = 'Court 1'
+          court_id = ${court.id}
       where id = ${fixtures[i]!.id}`;
   }
   return { comp, division, stage: stage!, fixtures, entrants };
@@ -492,5 +512,46 @@ describe.skipIf(!HAS_DB)("non-member official fixture access rule", () => {
     expect(await acceptedOfficialCovers(user.id, fixtureId)).toBe(true);
     const scope = await fixtureScope(fixtureId);
     expect(scope?.org_id).toBe(auth.orgId);
+  });
+});
+
+// P9 sweep (pass 3c-4): assignedNotices() (officials.ts) used to SELECT
+// f.venue/f.court_label straight into the assignment-notice email — both
+// frozen since pass 3a, so a fixture assigned an official after the cutover
+// emailed a blank "where" line regardless of its real venue_id/court_id.
+describe.skipIf(!HAS_DB)("P9: assignment-notice email carries the live venue/court name", () => {
+  it("uses the resolved venue/court name, not a disagreeing frozen venue/court_label", async () => {
+    const { auth } = await seedOrg("pro_plus");
+    const { fixtures } = await seedScheduledDivision(auth);
+    const venue = await createVenue(auth, { name: "Live Notice Venue", sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Live Notice Court", sort: 0, tags: [] });
+    // seedScheduledDivision already pointed fixtures[0] at its own court_id —
+    // repoint venue_id/court_id here to a venue/court whose NAME disagrees
+    // with a hand-poisoned, stale venue/court_label, so a read that fell
+    // back to the frozen columns would show the wrong text, not just blank.
+    await sql`
+      update fixtures set venue_id = ${venue.id}, court_id = ${court.id},
+                          venue = 'Stale Venue', court_label = 'Stale Court'
+      where id = ${fixtures[0]!.id}`;
+    const email = `ref-${randomUUID().slice(0, 8)}@example.com`;
+    const official = await createOfficial(auth, {
+      display_name: "Notice Ref",
+      role_keys: ["referee"],
+      email,
+    });
+    sendOfficialAssignedEmail.mockClear();
+
+    await patchFixtureOfficials(auth, fixtures[0]!.id, {
+      set: [{ official_id: official.id, role_key: "referee", locked: false }],
+    });
+
+    const call = sendOfficialAssignedEmail.mock.calls.find((c) => c[0] === email);
+    expect(call, "sendOfficialAssignedEmail was never called for this official").toBeTruthy();
+    const args = call![1] as { fixtures: { venue: string | null; court_label: string | null }[] };
+    expect(args.fixtures).toHaveLength(1);
+    expect(args.fixtures[0]!.venue).toBe("Live Notice Venue");
+    expect(args.fixtures[0]!.court_label).toBe("Live Notice Court");
+    expect(args.fixtures[0]!.venue).not.toBe("Stale Venue");
+    expect(args.fixtures[0]!.court_label).not.toBe("Stale Court");
   });
 });

@@ -42,6 +42,11 @@ import {
 } from "../ai-console";
 
 /** An AiConsoleFixture with only the fields the officials sizing reads. */
+// P9 review wave 1, finding 7: a board-sourced fixture carries its real
+// identity in `court_id`, with `court_label` frozen null (consoleFixtures,
+// schedule-board.tsx) — the same shape the "P9 pass 4a regression" test
+// above already established for `movableForRun`. `o.court` here stands in
+// for that real court_id, never the legacy label field.
 function fx(
   id: string,
   o: { status: string; at: string | null; court: string | null; home: string; away: string },
@@ -50,7 +55,8 @@ function fx(
     id,
     stage_id: "st-1",
     scheduled_at: o.at,
-    court_label: o.court,
+    court_label: null,
+    court_id: o.court,
     code: id,
     matchup: `${o.home} v ${o.away}`,
     isFinal: false,
@@ -405,7 +411,10 @@ const DIVISION_ID = "00000000-0000-4000-8000-000000000001";
 const movableFixture = (i: number, court: string, at: string | null) => ({
   id: `f${i}`,
   scheduled_at: at,
-  court_label: court,
+  // P9 pass 4a: `court_id`, the real identity `movableForRun` narrows on —
+  // `court_label` is frozen legacy and null for anything scheduled since the
+  // cutover.
+  court_id: court,
 });
 
 /** 250 movable on Court 1, 40 ACTIVE entrants, 4 courts → score 278 → rung 3. */
@@ -555,9 +564,9 @@ describe("the RungInput the client builds", () => {
     const fixtures = [
       movableFixture(1, "Court 1", "2026-08-01T09:00:00.000Z"),
       movableFixture(2, "Court 9", "2026-08-01T10:00:00.000Z"),
-      { id: "tray", scheduled_at: null, court_label: null },
+      { id: "tray", scheduled_at: null, court_id: null },
     ];
-    // A fixture with no court survives a court scope (server: `court_label === null || …`).
+    // A fixture with no court survives a court scope (server: `court_id === null || …`).
     expect(
       movableForRun(fixtures, "repair", { courts: ["Court 9"] }).map((f) => f.id),
     ).toEqual(["f2", "tray"]);
@@ -565,6 +574,36 @@ describe("the RungInput the client builds", () => {
     expect(
       movableForRun(fixtures, "repair", { from: "2026-08-01T10:00:00.000Z" }).map((f) => f.id),
     ).toEqual(["f2", "tray"]);
+  });
+
+  it("P9 pass 4a regression: narrows a court-scoped repair by court_id even when court_label is null (post-cutover fixture)", () => {
+    // Reproduces the real defect exactly: fixtures carry a real court_id but
+    // a frozen, null court_label — the shape every fixture has had since the
+    // P9 cutover. Comparing on court_label (the old code) never excludes
+    // anything, so a repair scoped to one court was quoted at the whole
+    // division's size — a rung-3 card in front of a rung-1 charge.
+    const scopedCourtId = "3d6c2e2a-0000-4000-8000-000000000009";
+    const otherCourtId = "3d6c2e2a-0000-4000-8000-000000000001";
+    const fixtures = [
+      ...Array.from({ length: 245 }, (_, i) => ({
+        id: `f${i}`,
+        scheduled_at: "2026-08-01T10:00:00.000Z",
+        court_id: otherCourtId,
+        court_label: null,
+      })),
+      ...Array.from({ length: 5 }, (_, i) => ({
+        id: `f${500 + i}`,
+        scheduled_at: "2026-08-01T10:00:00.000Z",
+        court_id: scopedCourtId,
+        court_label: null,
+      })),
+    ];
+    const narrowed = movableForRun(fixtures, "repair", { courts: [scopedCourtId] });
+    // THE ASSERTION THAT MATTERS: the narrowed COUNT, since that is what is
+    // priced. Before the fix this is 250 (every fixture survives the null
+    // court_label check) instead of the true 5.
+    expect(narrowed.length).toBe(5);
+    expect(narrowed.map((f) => f.id)).toEqual(["f500", "f501", "f502", "f503", "f504"]);
   });
 
   it("sizes the officials quote from the officials pack, not the division", () => {
@@ -592,5 +631,27 @@ describe("the RungInput the client builds", () => {
         { fixture_id: "d", scheduled_at: "2026-08-01T11:00:00.000Z", court_label: "Court 3" },
       ]),
     ).toEqual({ movableFixtures: 3, entrants: 5, courts: 2 });
+  });
+
+  it("P9 review wave 1, finding 7: counts a persisted court's real identity, not the frozen court_label", () => {
+    // `court_label` is frozen null on every board fixture (consoleFixtures) —
+    // comparing on it (the old code) makes a PERSISTED court invisible unless
+    // an AI proposal happens to override it, undercounting toward zero.
+    const COURT_A = "aaaaaaaa-0000-4000-8000-000000000001";
+    const COURT_B = "bbbbbbbb-0000-4000-8000-000000000002";
+    const fixtures = [
+      fx("a", { status: "scheduled", at: "2026-08-01T09:00:00.000Z", court: COURT_A, home: "e1", away: "e2" }),
+      fx("b", { status: "scheduled", at: "2026-08-01T10:00:00.000Z", court: COURT_B, home: "e3", away: "e4" }),
+    ];
+    // No proposal at all: both real, persisted courts must still be seen.
+    expect(officialsQuoteInput(fixtures, [])).toEqual({ movableFixtures: 2, entrants: 4, courts: 2 });
+
+    // The AI proposal moves "b" onto "a"'s court — one genuinely shared
+    // physical court, override and persisted alike, must count once.
+    expect(
+      officialsQuoteInput(fixtures, [
+        { fixture_id: "b", scheduled_at: "2026-08-01T11:00:00.000Z", court_label: COURT_A },
+      ]),
+    ).toEqual({ movableFixtures: 2, entrants: 4, courts: 1 });
   });
 });

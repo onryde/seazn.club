@@ -27,6 +27,7 @@ import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
+import { createCourt, createVenue } from "@/server/usecases/venues";
 
 /** What Task 3's capture harness needs to drive one real architect run. */
 export interface SeededTemplate {
@@ -109,6 +110,29 @@ async function setScheduleSettings(
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
 }
 
+/**
+ * Create one venue with N named courts via the real usecases and return
+ * label -> id. V374 cutover: `ScheduleConfig.courts` is `CourtId[]` (real
+ * court UUIDs) now, not display labels — these seeds predate that and wrote
+ * the label directly into both `schedule_settings.config.courts` and
+ * `fixtures.court_label`. Every caller below keeps its own label array as
+ * the readable, deterministic source and maps through this at the call
+ * site, so the template bodies still read "Court 1", "Court 2", …
+ */
+async function seedCourts(
+  auth: AuthCtx,
+  venueName: string,
+  labels: readonly string[],
+): Promise<Record<string, string>> {
+  const venue = await createVenue(auth, { name: venueName, sort: 0 });
+  const byLabel: Record<string, string> = {};
+  for (let i = 0; i < labels.length; i++) {
+    const court = await createCourt(auth, venue.id, { name: labels[i]!, sort: i, tags: [] });
+    byLabel[labels[i]!] = court.id;
+  }
+  return byLabel;
+}
+
 /** Individual entrants in list order, seeded 1..n — the order IS the draw. */
 function entrantInputs(names: readonly string[]) {
   return names.map((display_name, i) => ({
@@ -179,6 +203,7 @@ const CLUB_NIGHT_INSTRUCTION =
 export async function seedClubNight(auth: AuthCtx): Promise<SeededTemplate> {
   await brandOrg(auth, "Riverside Badminton Club");
   const sport = await resolveSport("badminton", "bwf");
+  const courts = await seedCourts(auth, "Riverside Badminton Club", ["Court 1", "Court 2"]);
 
   const comp = await createCompetition(auth, {
     ends_on: ENDS_ON,
@@ -199,7 +224,7 @@ export async function seedClubNight(auth: AuthCtx): Promise<SeededTemplate> {
     startAt: "2026-09-15T18:30:00+01:00",
     matchMinutes: 20,
     gapMinutes: 5,
-    courts: ["Court 1", "Court 2"],
+    courts: [courts["Court 1"]!, courts["Court 2"]!],
     perEntrantMinRest: 20,
     blackouts: [],
     sessionWindows: [
@@ -302,7 +327,10 @@ interface NorthsideDivision {
   slug: string;
   entrants: readonly string[];
   stage: { kind: "knockout" | "group"; name: string; config: Record<string, unknown> };
-  config: DemoScheduleConfig;
+  /** Labels, resolved to real court ids in `seedNorthsideOpen` — see
+   *  `seedCourts`'s doc comment. */
+  courtLabels: readonly string[];
+  config: Omit<DemoScheduleConfig, "courts">;
 }
 
 const NORTHSIDE_DIVISIONS: readonly NorthsideDivision[] = [
@@ -311,11 +339,11 @@ const NORTHSIDE_DIVISIONS: readonly NorthsideDivision[] = [
     slug: "mens-singles",
     entrants: NORTHSIDE_MENS_ENTRANTS,
     stage: { kind: "knockout", name: "Main Draw", config: {} },
+    courtLabels: ["Court 1", "Court 2", "Court 3", "Court 4"],
     config: {
       startAt: "2026-09-19T09:00:00+01:00",
       matchMinutes: 45,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 2", "Court 3", "Court 4"],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: NORTHSIDE_ADULT_WINDOWS,
@@ -327,11 +355,11 @@ const NORTHSIDE_DIVISIONS: readonly NorthsideDivision[] = [
     slug: "womens-singles",
     entrants: NORTHSIDE_WOMENS_ENTRANTS,
     stage: { kind: "group", name: "Pools", config: { pools: { count: 6 } } },
+    courtLabels: ["Court 1", "Court 2", "Court 3", "Court 4"],
     config: {
       startAt: "2026-09-19T09:00:00+01:00",
       matchMinutes: 45,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 2", "Court 3", "Court 4"],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: NORTHSIDE_ADULT_WINDOWS,
@@ -343,11 +371,11 @@ const NORTHSIDE_DIVISIONS: readonly NorthsideDivision[] = [
     slug: "u15-mixed",
     entrants: NORTHSIDE_U15_ENTRANTS,
     stage: { kind: "group", name: "Pools", config: { pools: { count: 8 } } },
+    courtLabels: ["Court 3", "Court 4", "Court 5"],
     config: {
       startAt: "2026-09-19T09:00:00+01:00",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["Court 3", "Court 4", "Court 5"],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: NORTHSIDE_JUNIOR_WINDOWS,
@@ -367,6 +395,13 @@ const NORTHSIDE_DIVISIONS: readonly NorthsideDivision[] = [
 export async function seedNorthsideOpen(auth: AuthCtx): Promise<SeededTemplate> {
   await brandOrg(auth, "Northside Sports Centre");
   const sport = await resolveSport("badminton", "bwf");
+  const courts = await seedCourts(auth, "Northside Sports Centre", [
+    "Court 1",
+    "Court 2",
+    "Court 3",
+    "Court 4",
+    "Court 5",
+  ]);
 
   const comp = await createCompetition(auth, {
     ends_on: ENDS_ON,
@@ -386,7 +421,10 @@ export async function seedNorthsideOpen(auth: AuthCtx): Promise<SeededTemplate> 
       eligibility: [],
     });
     await createEntrants(auth, division.id, entrantInputs(spec.entrants));
-    await setScheduleSettings(division.id, spec.config);
+    await setScheduleSettings(division.id, {
+      ...spec.config,
+      courts: spec.courtLabels.map((label) => courts[label]!),
+    });
     const [stage] = await createStages(auth, division.id, {
       seq: 1,
       kind: spec.stage.kind,
@@ -470,6 +508,7 @@ const FINALS_DAY_PLAYED = 11;
 export async function seedFinalsDay(auth: AuthCtx): Promise<SeededTemplate> {
   await brandOrg(auth, "Eastvale Tennis Club");
   const sport = await resolveSport("tennis", "tour");
+  const courts = await seedCourts(auth, "Eastvale Tennis Club", FINALS_DAY_COURTS);
 
   const comp = await createCompetition(auth, {
     ends_on: ENDS_ON,
@@ -490,7 +529,7 @@ export async function seedFinalsDay(auth: AuthCtx): Promise<SeededTemplate> {
     startAt: "2026-09-26T09:00:00+01:00",
     matchMinutes: 60,
     gapMinutes: 10,
-    courts: [...FINALS_DAY_COURTS],
+    courts: FINALS_DAY_COURTS.map((label) => courts[label]!),
     perEntrantMinRest: 0,
     blackouts: [{ from: "2026-09-26T13:00:00+01:00", to: "2026-09-26T15:30:00+01:00" }],
     sessionWindows: [
@@ -525,7 +564,7 @@ export async function seedFinalsDay(auth: AuthCtx): Promise<SeededTemplate> {
     await sql`
       update fixtures
       set scheduled_at = ${at.toISOString()},
-          court_label = ${FINALS_DAY_COURTS[i % FINALS_DAY_COURTS.length]!}
+          court_id = ${courts[FINALS_DAY_COURTS[i % FINALS_DAY_COURTS.length]!]!}
       where id = ${row.id}`;
   }
 

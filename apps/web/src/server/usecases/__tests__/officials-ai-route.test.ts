@@ -61,7 +61,7 @@ import { createStages, generateStageFixtures } from "../stages";
 import { patchFixtureOfficials } from "../officials";
 import { officialsAiPlanForDivision } from "../officials-ai";
 import { maybeAlertExpensiveRun as maybeAlertExpensiveRunSpy } from "../ai-runs-admin";
-import { GENERIC_CONFIG, seedOrg } from "./_seed";
+import { GENERIC_CONFIG, seedCourts, seedOrg } from "./_seed";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { balance, recordPackPurchase, walletIdFor } from "@/lib/credits";
@@ -70,15 +70,22 @@ const TZ = "Europe/London";
 const MIN = 60_000;
 const BASE = Date.parse("2026-08-01T09:00:00.000Z");
 
-const SETTINGS_CONFIG = {
-  startAt: "2026-08-01T09:00:00.000Z",
-  matchMinutes: 30,
-  gapMinutes: 0,
-  courts: ["Court 1", "Court 2"],
-  perEntrantMinRest: 0,
-  blackouts: [],
-  sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T23:00:00.000Z" }],
-};
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` — real
+// `courts.id` values, seeded per org below. The `schedule` dry-run
+// court_label values throughout this file (e.g. `spread()`) are unrelated —
+// officials-ai.ts sources the pack's per-fixture court display from the
+// legacy `fixtures.court_label` column, not this array.
+function settingsConfig(courts: string[]) {
+  return {
+    startAt: "2026-08-01T09:00:00.000Z",
+    matchMinutes: 30,
+    gapMinutes: 0,
+    courts,
+    perEntrantMinRest: 0,
+    blackouts: [],
+    sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T23:00:00.000Z" }],
+  };
+}
 
 const POLICY = {
   roles: ["referee"],
@@ -90,10 +97,11 @@ const POLICY = {
   blockGapMinutes: 30,
 };
 
-async function setSettings(divisionId: string): Promise<void> {
+async function setSettings(auth: AuthCtx, divisionId: string): Promise<void> {
+  const courts = await seedCourts(auth.orgId, 2);
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${divisionId}, ${sql.json(SETTINGS_CONFIG)}, ${TZ}, now())
+    values (${divisionId}, ${sql.json(settingsConfig(courts))}, ${TZ}, now())
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
 }
 
@@ -148,7 +156,7 @@ async function seedOfficials(
       members: [],
     })),
   );
-  await setSettings(division.id);
+  await setSettings(auth, division.id);
   const [stage] = await createStages(auth, division.id, {
     seq: 1,
     kind: "league",

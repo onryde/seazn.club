@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { apiJson, TAG } from "./helpers";
+import { apiJson, TAG, seedVenueWithCourts } from "./helpers";
 
 // D4a (P5) — API-level e2e (browser flow is P6): groups -> complete ->
 // proposal -> confirm -> KO entrants filled, schedule intact. Pure
@@ -86,10 +86,12 @@ test("groups -> complete -> proposal -> confirm -> KO entrants filled, schedule 
   // the fixture confirm must leave byte-identical below.
   const minRound = Math.min(...koGen.data!.fixtures.map((f) => f.round_no));
   const pinnedFixtureId = koGen.data!.fixtures.find((f) => f.round_no === minRound)!.id;
+  const { courts } = await seedVenueWithCourts(request, ["Centre Court"]);
+  const centreCourtId = courts[0]!.id;
   const patch = await apiJson(request, `/api/v1/fixtures/${pinnedFixtureId}`, "PATCH", {
     scheduled_at: "2026-09-25T09:00:00.000Z",
-    court_label: "Centre Court",
-    venue: null,
+    court_id: centreCourtId,
+    venue_id: null,
     officials: [],
     schedule_locked: true,
   });
@@ -141,7 +143,7 @@ test("groups -> complete -> proposal -> confirm -> KO entrants filled, schedule 
   const confirmed = await apiJson<{
     proposalId: string;
     filled: number;
-    fixtures: { id: string; round_no: number; home_entrant_id: string | null; away_entrant_id: string | null; scheduled_at: string | null; court_label: string | null; schedule_locked: boolean }[];
+    fixtures: { id: string; round_no: number; home_entrant_id: string | null; away_entrant_id: string | null; scheduled_at: string | null; court_id: string | null; schedule_locked: boolean }[];
   }>(request, `/api/v1/stages/${koStageId}/seed-proposal/confirm`, "POST", { proposalId: proposal.data!.id });
   expect(confirmed.status, JSON.stringify(confirmed.error)).toBe(200);
   expect(confirmed.data!.filled).toBe(8);
@@ -161,7 +163,7 @@ test("groups -> complete -> proposal -> confirm -> KO entrants filled, schedule 
   // guarantee, over the real HTTP boundary this time.
   const pinnedAfter = confirmed.data!.fixtures.find((f) => f.id === pinnedFixtureId)!;
   expect(pinnedAfter.scheduled_at).toBe("2026-09-25T09:00:00.000Z");
-  expect(pinnedAfter.court_label).toBe("Centre Court");
+  expect(pinnedAfter.court_id).toBe(centreCourtId);
   expect(pinnedAfter.schedule_locked).toBe(true);
 
   // Confirming the SAME proposal again is refused — a slot doesn't fill

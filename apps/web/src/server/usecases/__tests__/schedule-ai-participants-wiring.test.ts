@@ -39,8 +39,37 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages } from "../stages";
+import { createVenue, createCourt } from "../venues";
 import { buildSchedulePack, runAiPlan } from "../schedule-ai";
 import { seedOrg } from "./_seed";
+
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` — real
+// `courts.id` values. This file's own DSL (and the hand-authored AI proposal
+// below) names courts "Court 1"/"Court 2", so — same idiom as
+// competition-schedule-pack.test.ts — labels resolve to real, per-org-cached
+// courts. Load-bearing for the proposal: its `court_label` must match a REAL
+// configured court or `runAiPlan`'s own settings-membership check refuses it.
+const courtsByOrg = new Map<string, { venueId: string; byName: Map<string, string> }>();
+
+async function courtId(auth: AuthCtx, name: string): Promise<string> {
+  let entry = courtsByOrg.get(auth.orgId);
+  if (!entry) {
+    const venue = await createVenue(auth, { name: "Main venue", sort: 0 });
+    entry = { venueId: venue.id, byName: new Map() };
+    courtsByOrg.set(auth.orgId, entry);
+  }
+  const cached = entry.byName.get(name);
+  if (cached !== undefined) return cached;
+  const court = await createCourt(auth, entry.venueId, { name, sort: entry.byName.size, tags: [] });
+  entry.byName.set(name, court.id);
+  return court.id;
+}
+
+async function courtIds(auth: AuthCtx, names: readonly string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const name of names) out.push(await courtId(auth, name));
+  return out;
+}
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -63,23 +92,25 @@ const MIN = 60_000;
 
 // 2 courts, 30-minute matches, no gap, a 09:00-18:00Z session window and
 // crossPersonClash=hard — the placer rejects a person double-booking outright.
-const SETTINGS_CONFIG = {
-  startAt: "2026-08-01T09:00:00.000Z",
-  matchMinutes: 30,
-  gapMinutes: 0,
-  courts: ["Court 1", "Court 2"],
-  perEntrantMinRest: 20,
-  blackouts: [],
-  sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T18:00:00.000Z" }],
-  constraints: {
-    restMin: 20,
-    noBackToBack: false,
-    startWindows: [],
-    fieldFairness: "balance",
-    parallelism: "mixed",
-    crossPersonClash: "hard",
-  },
-};
+function settingsConfig(courts: string[]) {
+  return {
+    startAt: "2026-08-01T09:00:00.000Z",
+    matchMinutes: 30,
+    gapMinutes: 0,
+    courts,
+    perEntrantMinRest: 20,
+    blackouts: [],
+    sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T18:00:00.000Z" }],
+    constraints: {
+      restMin: 20,
+      noBackToBack: false,
+      startWindows: [],
+      fieldFairness: "balance",
+      parallelism: "mixed",
+      crossPersonClash: "hard",
+    },
+  };
+}
 
 interface Board {
   auth: AuthCtx;
@@ -107,9 +138,10 @@ async function seedRecursionClashBoard(): Promise<Board> {
     eligibility: [],
   });
   const divisionId = division.id;
+  const courts = await courtIds(auth, ["Court 1", "Court 2"]);
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${divisionId}, ${sql.json(SETTINGS_CONFIG)}, ${TZ}, now())
+    values (${divisionId}, ${sql.json(settingsConfig(courts))}, ${TZ}, now())
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
 
   // A, B, C, D are the bracket; X, Y play the unrelated fixture.
@@ -273,12 +305,14 @@ describe.skipIf(!HAS_DB)("pack.participants is wired into both consumers (#396)"
     // the final starts, everything inside the session window. The only defect is
     // that `final` and `other` run at the same time on different courts while
     // sharing one human.
+    const court1 = await courtId(auth, "Court 1");
+    const court2 = await courtId(auth, "Court 2");
     const proposal = {
       assignments: [
-        { fixture_id: fixtureIds.semi1, scheduled_at: "2026-08-01T10:00:00+01:00", court_label: "Court 1" },
-        { fixture_id: fixtureIds.semi2, scheduled_at: "2026-08-01T10:00:00+01:00", court_label: "Court 2" },
-        { fixture_id: fixtureIds.other, scheduled_at: "2026-08-01T11:00:00+01:00", court_label: "Court 1" },
-        { fixture_id: fixtureIds.final, scheduled_at: "2026-08-01T11:00:00+01:00", court_label: "Court 2" },
+        { fixture_id: fixtureIds.semi1, scheduled_at: "2026-08-01T10:00:00+01:00", court_label: court1 },
+        { fixture_id: fixtureIds.semi2, scheduled_at: "2026-08-01T10:00:00+01:00", court_label: court2 },
+        { fixture_id: fixtureIds.other, scheduled_at: "2026-08-01T11:00:00+01:00", court_label: court1 },
+        { fixture_id: fixtureIds.final, scheduled_at: "2026-08-01T11:00:00+01:00", court_label: court2 },
       ],
       unschedulable: [],
       explanations: [],

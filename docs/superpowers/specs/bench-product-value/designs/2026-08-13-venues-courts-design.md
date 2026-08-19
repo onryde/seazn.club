@@ -296,3 +296,73 @@ re-deriving the original answer. Owner-ratified unless marked otherwise.
 **Also owed to P10 by this session:** the stranded-fixture conflict code
 (A6). **Owed to P9:** exclude archived venues/courts from scheduling
 candidate sets (A3), and the competition free-text `venue` switch (A5).
+
+## Amendment log — P9 session, 2026-08-17/18
+
+Seven amendments made while executing P9 (D5b). Corrected in place above where
+the spec was wrong; recorded here so P9.5 and P10 see what changed and why.
+Owner-ratified unless marked otherwise.
+
+- **A7 — the string→solver-index mapping is NOT in `build.ts`.** This spec and
+  P9's prompt both said it was. It is `placement-client.ts:596-599`
+  (`courtNames: [...input.courts]`) — array POSITION is the wire index, and
+  duplicate names collapse to the first (`:459-468`). `build.ts` only passes
+  `config.courts` verbatim and calls a module-private
+  `restrictToConfiguredCourts`. Anything reasoning about court→index must read
+  the placement client, not the builder.
+
+- **A8 — there is no `tournaments` table.** A5 owed P9 "the competition
+  free-text `venue` switch" and cited V109 `tournaments.venue`. The v1→v2
+  cutover dropped that table; `competitions` has no venue or location column.
+  The surviving free-text venue is `fixtures.venue` (V214, sibling of
+  `court_label`), so P9 switched THAT, via a new `fixtures.venue_id` with a
+  composite FK to `venues (id, org_id)` mirroring A1.
+
+- **A9 — the typed code is `NO_MATCHING_COURT`, not
+  `capacity.no_matching_court`.** Typed codes in this repo are ALL_CAPS_SNAKE
+  (`schemas.ts:3134-3138`, precedent `CAPACITY_IMPOSSIBLE`); dotted-lowercase
+  is i18n-key-shaped. Exactly the same false premise as P8's `court.in_use`.
+
+- **A10 — the verifier gained `court_tag_mismatch` (26th conflict kind).**
+  `validateAssignments` never received a court list, so court double-booking
+  was a pairwise scan and NOTHING on the verify side saw the tag constraint the
+  placer enforces: a fixture hand-dragged (or AI-drafted) onto a tag-mismatched
+  court validated clean. The verifier now resolves through the same
+  `candidate-courts` function the placer uses. **Archived courts stay CLEAN on
+  validate** — "the court is gone" is the stranded-fixture case P10 owes (A6);
+  "the court violates a declared constraint" is this conflict. Two situations,
+  two mechanisms, same split as A3's delete-vs-archive-vs-exception.
+
+- **A11 — `blackouts[].court` is a court id too.** It was left as a NAME while
+  `courts[]` became ids, so a court-scoped blackout could no longer match the
+  court it named — silently becoming inert. V374 rewrites stored values; an
+  unmappable entry is left untouched and counted, never dropped. An unset
+  `court` still means GLOBAL.
+
+- **A12 — the AI pack speaks court NAMES; storage and wire speak IDS.** With
+  `settings.courts` as uuids, the model chose courts from an opaque id list and
+  court-scoped instructions ("nothing on Court 1 before noon") were silently
+  DROPPED at parse. The model-facing payload now carries names plus each
+  court's venue and tags (`courtDetails`), disambiguated as `"Name (Venue)"`,
+  and labels resolve back to ids the moment a response is parsed. Nothing
+  stored or sent over the wire regains a name. Owner-ruled during the session.
+
+- **A13 — `stages.required_court_tags` is honoured by the BUILD path only.**
+  The AI draft and `/validate` union division tags alone. Not reachable today:
+  the stages column has no write path (divisions has the CRUD, stages does
+  not). Fixing it properly needs PER-FIXTURE stage resolution — a division's
+  fixtures span stages, so a blanket union would over-constrain every fixture
+  by every stage's tags. **Owed by whoever gives that column a write path.**
+
+**Owed to P9.5 by this session:** `usableWindows` does not exist and neither
+`_RULES.md` nor `_INDEX.md` was correct to say it prevents the placer/verifier
+fork. The three window computations do NOT drift (all share
+`intervalsOverlap`, identical bounds, identical blackout scoping, identical
+empty-`sessionWindows` semantics) — but `admits()` omits the competition pack
+window and per-target start windows that the verifier enforces, so the lattice
+offers slots `/validate` rejects. See the owner-raised availability edge matrix
+in `portfolio-prompts/P09-5-window-unification.md`.
+
+**Still owed to P10:** the stranded-fixture conflict code (A6), and the
+`court_hours`/`court_exceptions` consumption that makes P8's calendar editor
+mean anything — those tables are read by `venues.ts` alone today.

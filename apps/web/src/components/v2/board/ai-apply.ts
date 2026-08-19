@@ -11,7 +11,8 @@
 // SEQ_CONFLICT (another organiser edited the board) is distinguishable from a
 // blocking SCHEDULE_CONFLICT — only the former offers "re-run as refine".
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
-import type { AiApplyMeta, AiPlanResponse, PutScheduleSettings, ScheduleConfig } from "@/server/api-v1/schemas";
+import type { z } from "zod";
+import type { AiApplyMeta, AiPlanResponse, PutScheduleSettings, ScheduleConfig , ApplyScheduleRequest } from "@/server/api-v1/schemas";
 
 /** The audit-block model string. The plan response carries no model name (the
  *  server picks it from SCHEDULING_AI_MODEL), so the apply stamps the documented
@@ -37,13 +38,18 @@ export function aiCheckpointLabel(at: Date = new Date()): string {
 }
 
 /** One proposed placement, tagged with its stage (the apply route is
- *  stage-scoped and rejects cross-stage fixtures). */
-export interface ScheduleAssignmentInput {
-  fixture_id: string;
-  scheduled_at: string;
-  court_label: string;
+ *  stage-scoped and rejects cross-stage fixtures).
+ *
+ *  P9 pass 3b: `court_id` — the apply route's own `ApplyScheduleRequest`
+ *  item is `.strict()` and requires `court_id` (schemas.ts), so a payload
+ *  still keyed `court_label` 400s outright rather than silently applying. */
+export type ScheduleAssignmentInput = z.infer<typeof ApplyScheduleRequest>["assignments"][number] & {
+  /** Not part of the apply payload — the caller groups by stage before POSTing
+   *  (the route is per-stage), so this rides alongside and is stripped at the
+   *  boundary. Everything the SERVER validates is inferred above, so a new
+   *  required field becomes a type error here instead of a runtime 400. */
   stage_id: string;
-}
+};
 
 /** One officials assignment in the apply route's snake_case shape. */
 export interface OfficialsAssignmentInput {
@@ -214,7 +220,7 @@ export async function applyAiPlans(input: ApplyAiInput, api: ApplyApi = apiV1): 
           assignments: group.map((a) => ({
             fixture_id: a.fixture_id,
             scheduled_at: a.scheduled_at,
-            court_label: a.court_label,
+            court_id: a.court_id,
           })),
           source: "ai",
           expected_seq: seq,

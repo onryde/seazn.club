@@ -28,6 +28,8 @@ const F = (over: Partial<PublicFixture>): PublicFixture => ({
   scheduled_at: "2026-09-25T09:00:00.000Z",
   venue: null,
   court_label: null,
+  venue_name: null,
+  court_name: null,
   status: "scheduled",
   outcome: null,
   summary: null,
@@ -101,5 +103,33 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
     );
     expect(html).toContain('title="Best 2 of the 3-place teams"');
     expect(html).toContain('title="Winner of Group B"');
+  });
+});
+
+describe("public Schedule — court_name/venue_name, never the frozen court_label/venue (P9 pass 4c)", () => {
+  it("renders the resolved court_name and venue_name when they disagree with the frozen court_label/venue", () => {
+    const fixtures = [
+      F({
+        id: "f1",
+        scheduled_at: "2026-09-25T09:00:00.000Z",
+        venue: "Stale Freetext Venue",
+        court_label: "Stale Freetext Court",
+        venue_name: "Riverside Sports Hall",
+        court_name: "Show Court 3",
+      }),
+    ];
+    const html = renderToStaticMarkup(
+      createElement(Schedule, {
+        fixtures,
+        entrantNames,
+        divisionPath: "/shared/org/comp/div",
+        tz: "UTC",
+        slotLabels: {},
+      }),
+    );
+    expect(html).toContain("Show Court 3");
+    expect(html).toContain("Riverside Sports Hall");
+    expect(html).not.toContain("Stale Freetext Court");
+    expect(html).not.toContain("Stale Freetext Venue");
   });
 });

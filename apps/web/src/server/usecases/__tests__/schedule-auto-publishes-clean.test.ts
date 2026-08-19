@@ -29,6 +29,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { applySchedule, autoSchedule, publishSchedule } from "../schedule";
+import { createVenue, createCourt } from "../venues";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -42,12 +43,14 @@ const at = (hhmm: string): string => `${DAY}T${hhmm}:00.000Z`;
  *  inside the window, and impossible to reach by accident. */
 const REST_MIN = 30;
 
-function settingsConfig() {
+// P9 pass 3a: real courts.id values — ScheduleConfig.courts is CourtId[]
+// since pass 1 and fixtures.court_id carries a composite FK since V367/368.
+function settingsConfig(courts: [string, string]) {
   return {
     startAt: at("08:00"),
     matchMinutes: 30,
     gapMinutes: 0,
-    courts: ["Court 1", "Court 2"],
+    courts,
     perEntrantMinRest: REST_MIN,
     blackouts: [],
     sessionWindows: [],
@@ -68,6 +71,8 @@ interface Seeded {
   divisionId: string;
   stageId: string;
   entrantIds: string[];
+  /** P9 pass 3a — the 2 real courts.id values `["Court 1","Court 2"]` used to be. */
+  courts: [string, string];
 }
 
 async function seedDivision(): Promise<Seeded> {
@@ -93,9 +98,13 @@ async function seedDivision(): Promise<Seeded> {
     config: GENERIC_CONFIG,
     eligibility: [],
   });
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const court1 = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+  const court2 = await createCourt(auth, venue.id, { name: "Court 2", sort: 1, tags: [] });
+  const courts: [string, string] = [court1.id, court2.id];
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${division.id}, ${sql.json(settingsConfig())}, ${"UTC"}, now())
+    values (${division.id}, ${sql.json(settingsConfig(courts))}, ${"UTC"}, now())
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
   await createEntrants(
     auth,
@@ -121,6 +130,7 @@ async function seedDivision(): Promise<Seeded> {
     divisionId: division.id,
     stageId: stage!.id,
     entrantIds: entrants.map((e) => e.id),
+    courts,
   };
 }
 
@@ -158,7 +168,7 @@ describe.skipIf(!HAS_DB)("an auto-scheduled board publishes without acknowledgem
       assignments: proposal.assignments.map((a) => ({
         fixture_id: a.fixture_id,
         scheduled_at: a.scheduled_at,
-        court_label: a.court_label,
+        court_id: a.court_id,
       })),
       source: "auto",
     });
@@ -175,17 +185,16 @@ describe.skipIf(!HAS_DB)("an auto-scheduled board publishes without acknowledgem
     // Same settings, same entrants, board placed BY HAND with E1 turning round
     // in 30 minutes. Without this the case above is satisfied by a gate that
     // never checks rest at all.
-    const { auth, divisionId, stageId, entrantIds } = await seedDivision();
+    const { auth, divisionId, stageId, entrantIds, courts } = await seedDivision();
     const [e1, e2, e3] = entrantIds as [string, string, string];
-    for (const [i, row] of (
-      [
-        { home: e1, away: e2, hhmm: "09:00", court: "Court 1" },
-        { home: e1, away: e3, hhmm: "09:30", court: "Court 2" },
-      ] as const
-    ).entries()) {
+    const rows = [
+      { home: e1, away: e2, hhmm: "09:00", court: courts[0] },
+      { home: e1, away: e3, hhmm: "09:30", court: courts[1] },
+    ];
+    for (const [i, row] of rows.entries()) {
       await sql`
         insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key,
-                              status, home_entrant_id, away_entrant_id, scheduled_at, court_label)
+                              status, home_entrant_id, away_entrant_id, scheduled_at, court_id)
         values (${stageId}, ${divisionId}, ${auth.orgId}, 1, ${i}, ${`hand${i}`},
                 'scheduled', ${row.home}, ${row.away}, ${at(row.hhmm)}, ${row.court})`;
     }

@@ -32,7 +32,7 @@ const props: Parameters<typeof AiConsole>[0] = {
     movableFixtures: Array.from({ length: 4 }, (_, i) => ({
       id: `f${i}`,
       scheduled_at: "2026-08-01T10:00:00.000Z",
-      court_label: "Court 1",
+      court_id: "crt-1",
     })),
     pinned: 0,
     entrants: [

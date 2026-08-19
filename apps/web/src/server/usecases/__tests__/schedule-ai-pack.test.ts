@@ -14,6 +14,7 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { validateAssignments } from "@seazn/engine/scheduling";
 import { buildSchedulePack, isBlocking, toEngineAssignments, toModelPayload, verifyConfig } from "../schedule-ai";
+import { createVenue, createCourt } from "../venues";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -37,13 +38,11 @@ const T0 = Date.parse("2026-08-01T09:00:00.000Z");
 const MIN = 60_000;
 const TZ = "Europe/London";
 
-const SETTINGS_CONFIG = {
+const BASE_SETTINGS_CONFIG = {
   startAt: "2026-08-01T09:00:00.000Z",
   matchMinutes: 30,
   gapMinutes: 0,
-  courts: ["Court 1", "Court 2"],
   perEntrantMinRest: 20,
-  blackouts: [{ court: "Court 2", from: "2026-08-01T12:00:00.000Z", to: "2026-08-01T13:00:00.000Z" }],
   sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T18:00:00.000Z" }],
   constraints: {
     restMin: 20,
@@ -55,23 +54,87 @@ const SETTINGS_CONFIG = {
   },
 };
 
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` (real `courts.id`
+// values, since pass 1) — `courts`/`blackouts[].court` can no longer be
+// literal "Court 1"/"Court 2" strings, so they are resolved (and cached) per
+// org rather than baked into a static constant. See `courtId`/`courtIds`.
+function settingsConfig(court1: string, court2: string) {
+  return {
+    ...BASE_SETTINGS_CONFIG,
+    courts: [court1, court2],
+    blackouts: [{ court: court2, from: "2026-08-01T12:00:00.000Z", to: "2026-08-01T13:00:00.000Z" }],
+  };
+}
+
+const courtsByOrg = new Map<string, { venueId: string; byName: Map<string, string> }>();
+// Reverse of `byName` above, flattened across every org this file seeds in one
+// run — see `redact`'s own doc comment for why it exists.
+const courtNameByUuid = new Map<string, string>();
+
+/** A real court, resolved (and cached) by name within one org — see
+ *  `settingsConfig`'s own doc comment. Mirrors
+ *  `competition-schedule-pack.test.ts`'s identical helper. */
+async function courtId(auth: AuthCtx, name: string): Promise<string> {
+  let entry = courtsByOrg.get(auth.orgId);
+  if (!entry) {
+    const venue = await createVenue(auth, { name: "Main venue", sort: 0 });
+    entry = { venueId: venue.id, byName: new Map() };
+    courtsByOrg.set(auth.orgId, entry);
+  }
+  const cached = entry.byName.get(name);
+  if (cached !== undefined) return cached;
+  const court = await createCourt(auth, entry.venueId, { name, sort: entry.byName.size, tags: [] });
+  entry.byName.set(name, court.id);
+  courtNameByUuid.set(court.id, name);
+  return court.id;
+}
+
+/** A raw insert, deliberately NOT `courtId()`'s cache: the determinism
+ *  regression below (`seedCourtTieBoard`) needs the court's raw id under
+ *  caller control, the same way `uuidLeading` already forces fixture ids —
+ *  `createCourt` always lets Postgres mint `id`, with no override. */
+async function insertCourt(auth: AuthCtx, venueId: string, id: string, name: string): Promise<void> {
+  await sql`insert into courts (id, venue_id, org_id, name, sort, tags)
+            values (${id}, ${venueId}, ${auth.orgId}, ${name}, 0, '{}')`;
+}
+
 // UUIDs are random per seed run; redact them to stable, first-seen placeholders
 // so the structural snapshot survives re-seeding while ordering stays asserted.
+//
+// P9 pass 3b-tail: `court_label`/`settings.courts`/`blackouts[].court` now
+// carry REAL court uuids (`courtId`, above) instead of the pre-cutover
+// "Court 1"/"Court 2" labels the golden snapshot was recorded against. Left
+// alone, those uuids would fall into the generic sweep below and redact to
+// `<id:N>` — a value the snapshot never pinned, AND one that shifts every
+// OTHER id's number (fixture/entrant/person/official/division) by however
+// many distinct court uuids sort earlier in the pack's own key order, since
+// numbering is first-seen-in-JSON-stringify-order. So every id in the
+// snapshot would drift, not just the court ones.
+//
+// Substituting each known court uuid back to the NAME it was seeded from,
+// before the generic regex runs, sidesteps both problems at once: the
+// substituted text ("Court 1") is no longer uuid-shaped, so the sweep below
+// skips it exactly as it always skipped the literal pre-cutover label — every
+// OTHER id keeps the identical first-seen order and number the snapshot
+// already pins, and court_label/courts/blackouts render exactly as they did
+// before the cutover.
 function redact(pack: unknown): unknown {
   const re = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
   const map = new Map<string, string>();
+  let json = JSON.stringify(pack);
+  for (const [uuid, name] of courtNameByUuid) json = json.split(uuid).join(name);
   return JSON.parse(
-    JSON.stringify(pack).replace(re, (u) => {
+    json.replace(re, (u) => {
       if (!map.has(u)) map.set(u, `<id:${map.size + 1}>`);
       return map.get(u)!;
     }),
   );
 }
 
-async function setSettings(divisionId: string): Promise<void> {
+async function setSettings(divisionId: string, court1: string, court2: string): Promise<void> {
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${divisionId}, ${sql.json(SETTINGS_CONFIG)}, ${TZ}, now())
+    values (${divisionId}, ${sql.json(settingsConfig(court1, court2))}, ${TZ}, now())
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
 }
 
@@ -105,9 +168,12 @@ async function fixtureIds(divisionId: string): Promise<string[]> {
 }
 
 /** Unschedule the whole board — the state a division is in before its first
- *  auto-schedule, and the one that used to produce 1970 draft times. */
+ *  auto-schedule, and the one that used to produce 1970 draft times.
+ *  P9 pass 3b: nulls `court_id`, the real identity `buildSchedulePack` now
+ *  reads — nulling only the legacy `court_label` left every fixture reading
+ *  as still placed. */
 async function clearBoard(divisionId: string): Promise<void> {
-  await sql`update fixtures set scheduled_at = null, court_label = null
+  await sql`update fixtures set scheduled_at = null, court_id = null
             where division_id = ${divisionId}`;
 }
 
@@ -115,7 +181,15 @@ async function clearBoard(divisionId: string): Promise<void> {
 // roster) in a FRESH pro org. Everything is persisted on STABLE domain keys —
 // never fixture UUIDs — so re-seeding an identical board yields the same logical
 // pack. Returns the org auth + division so a caller can reseed for determinism.
-async function seedRrBoard(): Promise<{ auth: AuthCtx; divisionId: string }> {
+// P9 pass 3b: also returns the two real court ids this board's own config was
+// built with, so a caller building its OWN config (e.g. NO_ANCHOR_CONFIG)
+// against the same org can reuse them.
+async function seedRrBoard(): Promise<{
+  auth: AuthCtx;
+  divisionId: string;
+  court1: string;
+  court2: string;
+}> {
   const { auth } = await seedOrg("pro");
   // The pack's ONE clock is the ORGANISATION zone (#397). This board has always
   // been a London board — it just said so on the division row. Saying it on the
@@ -136,7 +210,9 @@ async function seedRrBoard(): Promise<{ auth: AuthCtx; divisionId: string }> {
       kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [],
     })),
   );
-  await setSettings(divisionId);
+  const court1 = await courtId(auth, "Court 1");
+  const court2 = await courtId(auth, "Court 2");
+  await setSettings(divisionId, court1, court2);
   const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "League", config: {} });
   const { fixtures } = await generateStageFixtures(auth, stage!.id);
   expect(fixtures.length).toBe((8 * 7) / 2);
@@ -151,7 +227,7 @@ async function seedRrBoard(): Promise<{ auth: AuthCtx; divisionId: string }> {
     await sql`
       update fixtures set
         scheduled_at = ${new Date(T0 + i * 30 * MIN).toISOString()},
-        court_label = ${i % 2 === 0 ? "Court 1" : "Court 2"},
+        court_id = ${i % 2 === 0 ? court1 : court2},
         schedule_source = 'auto'
       where id = ${ordered[i]!.id}`;
   }
@@ -178,7 +254,7 @@ async function seedRrBoard(): Promise<{ auth: AuthCtx; divisionId: string }> {
     insert into official_availability (org_id, official_id, date, status, note)
     values (${auth.orgId}, ${o1!.id}, '2026-08-02', 'unavailable', 'holiday')`;
 
-  return { auth, divisionId };
+  return { auth, divisionId, court1, court2 };
 }
 
 afterAll(async () => {
@@ -192,10 +268,12 @@ afterAll(async () => {
 describe.skipIf(!HAS_DB)("buildSchedulePack (v4/01 §2)", () => {
   let auth: AuthCtx;
   let divisionId: string;
+  let court1: string;
+  let court2: string;
   const RR = (8 * 7) / 2; // 28 round-robin fixtures
 
   beforeAll(async () => {
-    ({ auth, divisionId } = await seedRrBoard());
+    ({ auth, divisionId, court1, court2 } = await seedRrBoard());
   });
 
   it("rebuilds byte-identical for an identical board reseeded with fresh UUIDs", async () => {
@@ -239,7 +317,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack (v4/01 §2)", () => {
       .filter((t): t is number => t !== undefined)
       .sort((x, y) => x - y);
     expect(sharedStarts.length).toBeGreaterThan(1);
-    const apart = SETTINGS_CONFIG.matchMinutes + SETTINGS_CONFIG.perEntrantMinRest;
+    const apart = BASE_SETTINGS_CONFIG.matchMinutes + BASE_SETTINGS_CONFIG.perEntrantMinRest;
     expect(sharedStarts.slice(1).filter((t, i) => t - sharedStarts[i]! < apart * MIN)).toEqual([]);
     expect(a.pack.officials.length).toBeGreaterThan(0);
     // Officials availability wired through: blackout date + entrant links.
@@ -260,24 +338,24 @@ describe.skipIf(!HAS_DB)("buildSchedulePack (v4/01 §2)", () => {
   it("repair scope excludes out-of-scope fixtures from movable and adds them as obstacles", async () => {
     const { pack, movableIds } = await buildSchedulePack(auth, divisionId, {
       now: NOW_W2,
-      mode: "repair", instruction: "Court 2 flooded", scope: { courts: ["Court 2"] },
+      mode: "repair", instruction: "Court 2 flooded", scope: { courts: [court2] },
     });
     for (const f of pack.fixtures.movable) {
-      expect(f.current.court === "Court 2" || f.current.court === null).toBe(true);
+      expect(f.current.court === court2 || f.current.court === null).toBe(true);
     }
     expect(movableIds.size).toBeLessThan(RR);
     expect(movableIds.size).toBeGreaterThan(0);
     // Court 1 fixtures are now fixed obstacles.
-    expect(pack.fixtures.obstacles.some((o) => o.court === "Court 1")).toBe(true);
+    expect(pack.fixtures.obstacles.some((o) => o.court === court1)).toBe(true);
   });
 
   it("repair draft is the movable set's current persisted slots", async () => {
     const { pack } = await buildSchedulePack(auth, divisionId, {
       now: NOW_W2,
-      mode: "repair", instruction: "reflow", scope: { courts: ["Court 2"] },
+      mode: "repair", instruction: "reflow", scope: { courts: [court2] },
     });
     expect(pack.draft.length).toBe(pack.fixtures.movable.length);
-    expect(pack.draft.every((d) => d.court_label === "Court 2")).toBe(true);
+    expect(pack.draft.every((d) => d.court_label === court2)).toBe(true);
   });
 
   it("refine mode uses the prior proposal verbatim as the draft", async () => {
@@ -303,6 +381,49 @@ describe.skipIf(!HAS_DB)("buildSchedulePack (v4/01 §2)", () => {
       buildSchedulePack(auth, divisionId, {
         now: NOW_W2,
         mode: "repair", instruction: "x", scope: { courts: ["Court 9"] },
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  // #8: the "a court was removed, repair the board" nudge (use-disruption-
+  // signals.ts's `goneCourts`) sends a scope naming a court that is NOT in
+  // settings.courts BY CONSTRUCTION — that check alone made the nudge the
+  // product itself offers always 400. Fixed to also accept a court this
+  // division's fixtures actually reference, while still rejecting a court
+  // with no relationship to the division at all.
+  it("#8: accepts a scope court removed from config but still referenced by a fixture; still rejects an unrelated court", async () => {
+    // A fresh, isolated board — the shared `divisionId`/beforeAll board is
+    // reused by every other test in this describe block, so mutating its
+    // config here would leak between tests.
+    const board = await seedRrBoard();
+    // Simulate "the court was removed from config": court2 keeps its
+    // already-scheduled fixtures (seedRrBoard placed half the board on it),
+    // but the division's configured court list no longer names it.
+    await setConfig(board.divisionId, {
+      ...settingsConfig(board.court1, board.court2),
+      courts: [board.court1],
+    });
+
+    const { pack, movableIds } = await buildSchedulePack(board.auth, board.divisionId, {
+      now: NOW_W2,
+      mode: "repair",
+      instruction: "court removed, repair",
+      scope: { courts: [board.court2] },
+    });
+    expect(movableIds.size).toBeGreaterThan(0);
+    for (const f of pack.fixtures.movable) {
+      expect(f.current.court === board.court2 || f.current.court === null).toBe(true);
+    }
+
+    // A court with NO relationship to this division — never configured,
+    // never placed on — still 400s. Proves the fix widened the check to
+    // "configured OR referenced", not removed it outright.
+    await expect(
+      buildSchedulePack(board.auth, board.divisionId, {
+        now: NOW_W2,
+        mode: "repair",
+        instruction: "x",
+        scope: { courts: [randomUUID()] },
       }),
     ).rejects.toMatchObject({ status: 400 });
   });
@@ -358,6 +479,12 @@ describe.skipIf(!HAS_DB)("buildSchedulePack (v4/01 §2)", () => {
   });
 });
 
+// P9 pass 3b regression coverage (archived/tag-mismatched court excluded via
+// resolveCandidateCourts; inScope() matches court_id, ignores a frozen,
+// misleading court_label) lives in schedule-ai-candidate-courts.test.ts, a
+// separate self-contained file — deliberately not here, so it needs no
+// dependency on this suite's own SETTINGS_CONFIG/seedRrBoard.
+
 // Bulk fixture seeder — direct inserts (no generator) to hit the size limits.
 async function seedBigDivision(auth: AuthCtx, n: number): Promise<string> {
   const comp = await createCompetition(auth, {
@@ -368,7 +495,7 @@ async function seedBigDivision(auth: AuthCtx, n: number): Promise<string> {
     name: "Big", slug: `big-${randomUUID().slice(0, 6)}`, sport_key: "generic",
     variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
   });
-  await setSettings(division.id);
+  await setSettings(division.id, await courtId(auth, "Court 1"), await courtId(auth, "Court 2"));
   const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
   await sql`
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
@@ -389,7 +516,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack size limits", () => {
     // Rough chars/4 heuristic proxy; the live AI_EVAL=1 test uses count_tokens.
     // Measures the PAYLOAD, not the pack: `participants`/`assumptions` are
     // enforcement inputs and never reach the model (see `toModelPayload`).
-    expect(JSON.stringify(toModelPayload(pack)).length / 4).toBeLessThan(60_000);
+    expect(JSON.stringify(toModelPayload(pack, {})).length / 4).toBeLessThan(60_000);
   });
 
   it("more than 500 movable fixtures is 422 AI_PLAN_TOO_LARGE", async () => {
@@ -398,6 +525,82 @@ describe.skipIf(!HAS_DB)("buildSchedulePack size limits", () => {
     await expect(
       buildSchedulePack(auth, divisionId, { now: NOW_W2, mode: "generate", instruction: "x" }),
     ).rejects.toMatchObject({ status: 422, message: "AI_PLAN_TOO_LARGE" });
+  });
+});
+
+// P9 pass 3d: the AI pack must speak court NAMES again — settings.courts held
+// raw uuids since the V374 cutover (H1: "court_label must be exactly one of
+// settings.courts"), so the model could only ever choose a court blind to its
+// name, venue or tags. See schedule-ai-court-directory.test.ts for the pure
+// buildCourtDirectory/resolveModelCourtLabels coverage; this proves the same
+// property end to end against a real seeded pack, including the venue-
+// qualified disambiguation rule firing for real (not just on hand-built rows).
+describe.skipIf(!HAS_DB)("P9 pass 3d: the model payload speaks court names, never a bare uuid", () => {
+  it("relabels every court-shaped field, adds courtDetails, and venue-qualifies a name two real courts share", async () => {
+    const { auth } = await seedOrg("pro");
+    // A second venue whose own court shares "Court 1"'s bare name with the
+    // division's court of that name in `courtId()`'s "Main venue" — the
+    // real-world ambiguity buildCourtDirectory must resolve deterministically.
+    const annex = await createVenue(auth, { name: "Annex", sort: 1 });
+    const court1 = await courtId(auth, "Court 1"); // "Main venue"
+    const court2 = await courtId(auth, "Court 2"); // "Main venue"
+    const sameNameElsewhere = await createCourt(auth, annex.id, {
+      name: "Court 1", sort: 0, tags: ["indoor"],
+    });
+
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31", name: `CourtNames ${randomUUID().slice(0, 6)}`,
+      visibility: "public", branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open", slug: `open-${randomUUID().slice(0, 6)}`, sport_key: "generic",
+      variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
+    });
+    await setSettings(division.id, court1, court2);
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
+    await createEntrants(auth, division.id, [
+      { kind: "individual" as const, display_name: "A", seed: 1, members: [] },
+      { kind: "individual" as const, display_name: "B", seed: 2, members: [] },
+    ]);
+    const ents = await sql<{ id: string }[]>`
+      select id from entrants where division_id = ${division.id} order by seed`;
+    await sql`
+      insert into fixtures
+        (stage_id, division_id, org_id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status)
+      values
+        (${stage!.id}, ${division.id}, ${auth.orgId}, 1, 0, ${ents[0]!.id}, ${ents[1]!.id}, 'scheduled')`;
+
+    const { pack, courtDirectory } = await buildSchedulePack(auth, division.id, {
+      now: NOW_W2, mode: "generate", instruction: "x",
+    });
+    // The real ambiguity, proven on the real (whole-org) directory this
+    // build produced — not a hand-built row set.
+    expect(courtDirectory[court1]?.label).toBe("Court 1 (Main venue)");
+    expect(courtDirectory[sameNameElsewhere.id]?.label).toBe("Court 1 (Annex)");
+    expect(courtDirectory[court2]?.label).toBe("Court 2");
+
+    const payload = toModelPayload(pack, courtDirectory);
+    const json = JSON.stringify(payload);
+
+    // No bare uuid anywhere a court is expected — neither candidate court's
+    // real id appears anywhere in what the model is sent.
+    expect(json).not.toContain(court1);
+    expect(json).not.toContain(court2);
+
+    // The model gets names — venue-qualified where real ambiguity exists —
+    // and, new this pass, each candidate court's venue and tags.
+    expect([...payload.settings.courts].sort()).toEqual(["Court 1 (Main venue)", "Court 2"]);
+    expect(payload.courtDetails.map((c) => c.label).sort()).toEqual(["Court 1 (Main venue)", "Court 2"]);
+    const mainCourt1 = payload.courtDetails.find((c) => c.label === "Court 1 (Main venue)");
+    expect(mainCourt1?.venue).toBe("Main venue");
+    expect(Array.isArray(mainCourt1?.tags)).toBe(true);
+
+    // Every court-shaped field in the wire payload — the draft the greedy
+    // solver produced included — carries a name, never the raw id.
+    for (const d of payload.draft) {
+      expect([court1, court2]).not.toContain(d.court_label);
+      expect(["Court 1 (Main venue)", "Court 2"]).toContain(d.court_label);
+    }
   });
 });
 
@@ -421,7 +624,7 @@ async function seedKoDivision(
     name, slug: `${name.toLowerCase()}-${tag}`, sport_key: "generic",
     variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
   });
-  await setSettings(division.id);
+  await setSettings(division.id, await courtId(auth, "Court 1"), await courtId(auth, "Court 2"));
   const [stage] = await createStages(auth, division.id, {
     seq: 1, kind: "league", name: "KO", config: {},
   });
@@ -498,6 +701,82 @@ async function seedSmallBracket(fixtureIds?: {
 }
 
 /**
+ * P9 regression (`byAssignment`'s court tie-break). Two movable fixtures at
+ * the SAME `scheduled_at`, on two different courts whose raw ids are forced
+ * to sort OPPOSITE the fixtures' own board order (round_no, seq_in_round):
+ * `first` (round 1, seq 0) sits on the LEXICALLY-LARGER court id, `second`
+ * (round 1, seq 1) on the smaller one. A `pack.draft` comparator that
+ * (re-)falls back to the court id/label therefore emits [second, first] —
+ * deterministically wrong, rather than the 50/50 coin flip a same-instant
+ * collision would otherwise be, since which of two random per-seed court
+ * UUIDs sorts first is itself a coin flip across reseeds.
+ */
+async function seedCourtTieBoard(): Promise<{
+  auth: AuthCtx;
+  divisionId: string;
+  first: string;
+  second: string;
+}> {
+  const { auth, divisionId, stageId } = await seedKoDivision("CourtTie");
+  const venue = await createVenue(auth, { name: "Tie venue", sort: 0 });
+  const courtHi = uuidLeading("f");
+  const courtLo = uuidLeading("0");
+  await insertCourt(auth, venue.id, courtHi, "Hi Court");
+  await insertCourt(auth, venue.id, courtLo, "Lo Court");
+  await setSettings(divisionId, courtHi, courtLo);
+  const at = new Date(T0).toISOString();
+  const first = uuidLeading("a");
+  const second = uuidLeading("b");
+  await sql`
+    insert into fixtures (id, stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
+                          scheduled_at, court_id)
+    values (${first}, ${stageId}, ${divisionId}, ${auth.orgId}, 1, 0, 'first', 'scheduled', ${at}, ${courtHi})`;
+  await sql`
+    insert into fixtures (id, stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
+                          scheduled_at, court_id)
+    values (${second}, ${stageId}, ${divisionId}, ${auth.orgId}, 1, 1, 'second', 'scheduled', ${at}, ${courtLo})`;
+  return { auth, divisionId, first, second };
+}
+
+/**
+ * Two DECIDED cards at the same instant on two different courts, with the
+ * organiser's court order (`settings.courts`) deliberately DISAGREEING with the
+ * courts' raw UUID order: "Hi Court" is settings position 0 but carries an id
+ * leading `f`, "Lo Court" is position 1 with an id leading `0`. A
+ * `packObstacles` comparator that sorts on the raw court id therefore emits
+ * [Lo, Hi] — deterministically wrong, rather than the 50/50 coin flip two
+ * random per-seed court UUIDs would otherwise give. Same shape and same
+ * reasoning as `seedCourtTieBoard` above, one field over. The third card is
+ * unscheduled so `generate` still has a non-empty movable set.
+ */
+async function seedObstacleCourtOrderBoard(): Promise<{
+  auth: AuthCtx;
+  divisionId: string;
+  courtHi: string;
+  courtLo: string;
+}> {
+  const { auth, divisionId, stageId } = await seedKoDivision("ObstOrder");
+  const venue = await createVenue(auth, { name: "Obstacle venue", sort: 0 });
+  const courtHi = uuidLeading("f");
+  const courtLo = uuidLeading("0");
+  await insertCourt(auth, venue.id, courtHi, "Hi Court");
+  await insertCourt(auth, venue.id, courtLo, "Lo Court");
+  await setSettings(divisionId, courtHi, courtLo);
+  const at = new Date(T0).toISOString();
+  for (const [i, court] of [courtHi, courtLo].entries()) {
+    await sql`
+      insert into fixtures (id, stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
+                            scheduled_at, court_id)
+      values (${randomUUID()}, ${stageId}, ${divisionId}, ${auth.orgId}, 1, ${i}, ${`done-${i}`},
+              'decided', ${at}, ${court})`;
+  }
+  await sql`
+    insert into fixtures (id, stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
+    values (${randomUUID()}, ${stageId}, ${divisionId}, ${auth.orgId}, 2, 0, 'todo', 'scheduled')`;
+  return { auth, divisionId, courtHi, courtLo };
+}
+
+/**
  * C1 follow-up (2026-08-12, task 2 item 1). The SAME 4-entrant bracket shape
  * as `seedSmallBracket`, but on a stage whose `kind` is actually
  * `"knockout"` — `seedKoDivision` (which `seedSmallBracket` builds on)
@@ -522,7 +801,7 @@ async function seedSmallKnockoutBracket(): Promise<{
     name: "KO", slug: `ko-${tag}`, sport_key: "generic",
     variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
   });
-  await setSettings(division.id);
+  await setSettings(division.id, await courtId(auth, "Court 1"), await courtId(auth, "Court 2"));
   const [stage] = await createStages(auth, division.id, {
     seq: 1, kind: "knockout", name: "KO", config: {},
   });
@@ -560,7 +839,7 @@ async function seedSmallBracketWithFinishedSemi(): Promise<{ auth: AuthCtx; divi
   const { auth, divisionId, ids } = await seedSmallBracket();
   await sql`
     update fixtures set status = 'finalized',
-      scheduled_at = ${new Date(T0).toISOString()}, court_label = 'Court 1'
+      scheduled_at = ${new Date(T0).toISOString()}, court_id = ${await courtId(auth, "Court 1")}
     where id = ${ids.fixtureIds.semi1}`;
   return { auth, divisionId };
 }
@@ -594,14 +873,15 @@ async function seedNullExtKeyDanglingFeeders(): Promise<{
     values (${stageId}, ${divisionId}, ${auth.orgId}, 2, 0, 'final', 'scheduled') returning id`;
   // semi-A sorts ABOVE semi-B as a raw string, but BELOW it on (round, seq).
   const ids = [uuidLeading("f"), uuidLeading("0")];
+  const court1 = await courtId(auth, "Court 1");
   for (let i = 0; i < 2; i++) {
     await sql`
       insert into fixtures (id, stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
                             home_entrant_id, away_entrant_id, winner_to_fixture, winner_to_slot,
-                            scheduled_at, court_label)
+                            scheduled_at, court_id)
       values (${ids[i]!}, ${stageId}, ${divisionId}, ${auth.orgId}, 1, ${i}, null, 'finalized',
               ${ents[i * 2]!.id}, ${ents[i * 2 + 1]!.id}, ${final!.id}, ${i + 1},
-              ${new Date(T0 + i * 30 * MIN).toISOString()}, 'Court 1')`;
+              ${new Date(T0 + i * 30 * MIN).toISOString()}, ${court1})`;
   }
   return { auth, divisionId, semiA: ids[0]!, semiB: ids[1]! };
 }
@@ -643,11 +923,11 @@ async function seedSharedFeederTwoDependents(fixtureIds: {
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
                           home_entrant_id, away_entrant_id,
                           winner_to_fixture, winner_to_slot, loser_to_fixture, loser_to_slot,
-                          scheduled_at, court_label)
+                          scheduled_at, court_id)
     values (${stageId}, ${divisionId}, ${auth.orgId}, 1, 0, 'sf', 'finalized',
             ${ents[0]!.id}, ${ents[1]!.id},
             ${fixtureIds.winners}, 1, ${fixtureIds.losers}, 1,
-            ${new Date(T0).toISOString()}, 'Court 1')`;
+            ${new Date(T0).toISOString()}, ${await courtId(auth, "Court 1")})`;
   return { auth, divisionId, winners: fixtureIds.winners, losers: fixtureIds.losers };
 }
 
@@ -842,7 +1122,7 @@ describe.skipIf(!HAS_DB)("scheduling-only same-name guard (#396)", () => {
     // `people` (the wire array) keeps REAL person ids — the synthetic key lives
     // only in `participants`, which never leaves the server.
     expect(pack.people.filter((p) => p.person_id.startsWith("name:"))).toEqual([]);
-    expect(JSON.stringify(toModelPayload(pack))).not.toContain("name:");
+    expect(JSON.stringify(toModelPayload(pack, {}))).not.toContain("name:");
   });
 
   it("two people with different names are never collapsed", async () => {
@@ -959,6 +1239,50 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
     expect(redact(packA.pack)).toEqual(redact(packB.pack));
   });
 
+  it("repair draft ties same-instant assignments on board position, not the court id", async () => {
+    // P9: `byAssignment` used to tie-break on `court_label`, which since the
+    // V374 cutover carries the real per-seed court UUID — so two cards
+    // sharing an instant on different courts sorted in coin-flip order
+    // across reseeds. `seedCourtTieBoard` forces the disagreement so the
+    // regression is a deterministic red, not a 50/50 flake: `first` (board
+    // position 0) sits on the LEXICALLY LARGER court id, so a comparator
+    // that (re-)falls back to `cmp(court_label)` emits [second, first].
+    const { auth, divisionId, first, second } = await seedCourtTieBoard();
+    const { pack } = await buildSchedulePack(auth, divisionId, {
+      now: NOW_W2,
+      mode: "repair", instruction: "x",
+    });
+    expect(pack.draft.length).toBe(2);
+    // Same instant, different courts — the premise this test exercises.
+    expect(pack.draft.every((d) => d.scheduled_at === pack.draft[0]!.scheduled_at)).toBe(true);
+    expect(new Set(pack.draft.map((d) => d.court_label)).size).toBe(2);
+    expect(pack.draft.map((d) => d.fixture_id)).toEqual([first, second]);
+  });
+
+  it("obstacles order on the organiser's court order, not the raw court id", async () => {
+    // P9, second site of the same defect the test above pins: `packObstacles`
+    // sorted on `court`, which was the court NAME before the V374 cutover
+    // (stable across runs, and the order a reader expects) and is a per-seed
+    // court UUID after it. Nothing type-checks that away and the pack still
+    // looks well-formed — the only symptom is that the same board stops
+    // rebuilding the same pack, which is what the demo capture fixtures and
+    // `seeds.test.ts`'s reseed check assert.
+    const { auth, divisionId, courtHi, courtLo } = await seedObstacleCourtOrderBoard();
+    const { pack } = await buildSchedulePack(auth, divisionId, {
+      now: NOW_W2,
+      mode: "generate", instruction: "x",
+    });
+    // The organiser's order, which is also the order `courtDetails` is emitted in.
+    expect(pack.settings.courts).toEqual([courtHi, courtLo]);
+    expect(pack.fixtures.obstacles.length).toBe(2);
+    // Same instant, different courts — so the `from`/`to`/`label` tiebreaks
+    // below the court key cannot be what decides this ordering.
+    expect(new Set(pack.fixtures.obstacles.map((o) => o.from)).size).toBe(1);
+    // The premise: a raw-id sort would invert them.
+    expect(courtHi > courtLo).toBe(true);
+    expect(pack.fixtures.obstacles.map((o) => o.court)).toEqual([courtHi, courtLo]);
+  });
+
   it("stripped-feeder assumptions order on the board, not on the UUID a null ext_key leaves in the text", async () => {
     // `fixtures.ext_key` is NULLABLE, so the ext_key substitution leaves a full
     // raw UUID inside both messages and a text sort orders on a per-seed random
@@ -1061,7 +1385,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
     // for the owner's decision to keep participants server-side: 500 bracket
     // fixtures with 500 named entrants already sit at 86% of the ceiling before
     // this wave adds anything.
-    expect(JSON.stringify(toModelPayload(pack)).length / 4).toBeLessThan(60_000);
+    expect(JSON.stringify(toModelPayload(pack, {})).length / 4).toBeLessThan(60_000);
   });
 
   it("participants and assumptions never reach the model, and stay complete on the pack", async () => {
@@ -1072,7 +1396,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
       now: NOW_W2,
       mode: "generate", instruction: "Two rounds.",
     });
-    const payload = toModelPayload(pack) as Record<string, unknown>;
+    const payload = toModelPayload(pack, {}) as Record<string, unknown>;
     expect("participants" in payload).toBe(false);
     expect("assumptions" in payload).toBe(false);
     expect(JSON.stringify(payload)).not.toContain("participants");
@@ -1092,7 +1416,17 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
     // reads instead.
     expect("stageIds" in payload).toBe(false);
     expect("roundNos" in payload).toBe(false);
+    // P9 pass 3d: `courtDetails` is new and synthesized from a courtDirectory
+    // (venue + tags per candidate court) — not a `pack` field, so it is
+    // asserted on its own rather than folded into the byte-for-byte trim
+    // below. No directory was supplied to this call, so `toModelPayload`'s
+    // empty-map default applies and every entry's label falls back to the
+    // court id — this test does not care about label content, only that the
+    // field exists and covers every candidate court.
+    expect(Array.isArray(payload.courtDetails)).toBe(true);
+    expect((payload.courtDetails as unknown[]).length).toBe(pack.settings.courts.length);
     // Everything else survives the trim byte-for-byte.
+    const { courtDetails: _courtDetails, ...payloadRest } = payload;
     const trimmed = Object.fromEntries(
       Object.entries(pack).filter(
         ([k]) =>
@@ -1100,7 +1434,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
           k !== "stageIds" && k !== "roundNos",
       ),
     );
-    expect(payload).toEqual(trimmed);
+    expect(payloadRest).toEqual(trimmed);
   });
 
   // C1 follow-up (2026-08-12, task 2 item 1). `buildSchedulePack`'s own
@@ -1174,7 +1508,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
     expect([...stageIdValues][0]).toBeTruthy();
 
     // Through the LLM shape: neither field reaches the model.
-    const payload = toModelPayload(pack) as Record<string, unknown>;
+    const payload = toModelPayload(pack, {}) as Record<string, unknown>;
     expect("roundNos" in payload).toBe(false);
     expect("stageIds" in payload).toBe(false);
 
@@ -1186,7 +1520,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
     const [assignment] = toEngineAssignments(
       {
         assignments: [
-          { fixture_id: first.id, scheduled_at: first.current.at ?? new Date(T0).toISOString(), court_label: "Court 1" },
+          { fixture_id: first.id, scheduled_at: first.current.at ?? new Date(T0).toISOString(), court_label: pack.settings.courts[0]! },
         ],
         unschedulable: [],
         explanations: [],
@@ -1226,18 +1560,19 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
 const NOW = NOW_W2;
 const OPTS = { mode: "generate" as const, instruction: "", now: NOW };
 
-// SETTINGS_CONFIG with no startAt and no sessionWindows — the state that
-// produced the 1970 drafts. Everything else is unchanged, so only the anchor
-// moves.
-const NO_ANCHOR_CONFIG = (() => {
-  const { startAt: _startAt, ...rest } = SETTINGS_CONFIG;
+// settingsConfig(court1, court2) with no startAt and no sessionWindows — the
+// state that produced the 1970 drafts. Everything else is unchanged, so only
+// the anchor moves. A function, not a constant (P9 pass 3b): courts are real
+// per-org ids, resolved by whichever seedRrBoard() call the test already ran.
+function noAnchorConfig(court1: string, court2: string) {
+  const { startAt: _startAt, ...rest } = settingsConfig(court1, court2);
   return { ...rest, sessionWindows: [] };
-})();
+}
 
 describe.skipIf(!HAS_DB)("pack calendar anchor (#397)", () => {
   it("carries the ORG zone, a clock, a window and session hours", async () => {
-    const { auth, divisionId } = await seedRrBoard();
-    await setConfig(divisionId, NO_ANCHOR_CONFIG);
+    const { auth, divisionId, court1, court2 } = await seedRrBoard();
+    await setConfig(divisionId, noAnchorConfig(court1, court2));
     await clearBoard(divisionId);
     const { pack } = await buildSchedulePack(auth, divisionId, OPTS);
 
@@ -1258,9 +1593,9 @@ describe.skipIf(!HAS_DB)("pack calendar anchor (#397)", () => {
   // very defect this wave exists to surface goes invisible again. A configured
   // sessionWindow is the same input by another door and must be filtered too.
   it("does not let an epoch sessionWindow drag the window back to 1970", async () => {
-    const { auth, divisionId } = await seedRrBoard();
+    const { auth, divisionId, court1, court2 } = await seedRrBoard();
     await setConfig(divisionId, {
-      ...NO_ANCHOR_CONFIG,
+      ...noAnchorConfig(court1, court2),
       sessionWindows: [{ from: "1970-01-01T00:00:00.000Z", to: "1970-01-01T18:00:00.000Z" }],
     });
     await clearBoard(divisionId);
@@ -1289,8 +1624,8 @@ describe.skipIf(!HAS_DB)("pack calendar anchor (#397)", () => {
   it("no longer emits 1970 draft times for a division with no configured start", async () => {
     // The bug #397 exists to kill: toSlotConfig(settings, 0) anchored the greedy
     // draft at the epoch, so the model was handed 1970-01-01 for every fixture.
-    const { auth, divisionId } = await seedRrBoard();
-    await setConfig(divisionId, NO_ANCHOR_CONFIG);
+    const { auth, divisionId, court1, court2 } = await seedRrBoard();
+    await setConfig(divisionId, noAnchorConfig(court1, court2));
     await clearBoard(divisionId);
     const { pack } = await buildSchedulePack(auth, divisionId, OPTS);
 
@@ -1309,8 +1644,8 @@ describe.skipIf(!HAS_DB)("pack calendar anchor (#397)", () => {
     // A compiled date range replaces the inferred window. Anchored on the
     // inferred start, every drafted card arrives outside `pack.window` — the
     // model is then asked to repair a board we drew wrong.
-    const { auth, divisionId } = await seedRrBoard();
-    await setConfig(divisionId, NO_ANCHOR_CONFIG);
+    const { auth, divisionId, court1, court2 } = await seedRrBoard();
+    await setConfig(divisionId, noAnchorConfig(court1, court2));
     await clearBoard(divisionId);
     const { pack } = await buildSchedulePack(auth, divisionId, {
       ...OPTS,
@@ -1358,12 +1693,12 @@ describe.skipIf(!HAS_DB)("pack calendar anchor (#397)", () => {
   it("widens the window to cover a board already scheduled beyond the horizon", async () => {
     // A repair round must not report every card it was asked to keep. Widening
     // is one-directional: the default horizon can only grow.
-    const { auth, divisionId } = await seedRrBoard();
-    await setConfig(divisionId, NO_ANCHOR_CONFIG);
+    const { auth, divisionId, court1, court2 } = await seedRrBoard();
+    await setConfig(divisionId, noAnchorConfig(court1, court2));
     await clearBoard(divisionId);
     const ids = await fixtureIds(divisionId);
     await sql`update fixtures
-              set scheduled_at = '2026-09-20T10:00:00Z', court_label = 'Court 1'
+              set scheduled_at = '2026-09-20T10:00:00Z', court_id = ${court1}
               where id = ${ids[0]!}`;
 
     const { pack } = await buildSchedulePack(auth, divisionId, { ...OPTS, mode: "repair" });
@@ -1383,7 +1718,7 @@ describe.skipIf(!HAS_DB)("pack calendar anchor (#397)", () => {
   it("sends the anchor to the model but never the enforcement inputs", async () => {
     const { auth, divisionId } = await seedRrBoard();
     const { pack } = await buildSchedulePack(auth, divisionId, OPTS);
-    const payload = toModelPayload(pack) as Record<string, unknown>;
+    const payload = toModelPayload(pack, {}) as Record<string, unknown>;
     expect(payload.tz).toBe("Europe/London");
     expect(payload.clock).toEqual(pack.clock);
     expect(payload.window).toEqual(pack.window);

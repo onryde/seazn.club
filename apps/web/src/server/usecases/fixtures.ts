@@ -6,8 +6,11 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { PatchFixture, PutLineup, ScheduleConflict } from "@/server/api-v1/schemas";
-import { FIXTURE_COLS, BOARD_FIXTURE_COLS, type FixtureRow } from "./stages";
-import { moveFixture } from "./schedule";
+import { type BoardFixtureRow, type FixtureRow } from "./stages";
+// #14: `courtNamesById` is the venue-qualified label map (via
+// `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
+// venues that legally share one court name.
+import { moveFixture, courtNamesById } from "./schedule";
 import { scoresViaAssignment } from "./scorers";
 
 /** Doc 13 §7: a device link reads fixture state/events ONLY — every other
@@ -18,13 +21,39 @@ function rejectDeviceLink(auth: AuthCtx): void {
   }
 }
 
-export async function getFixture(auth: AuthCtx, id: string): Promise<FixtureRow> {
+/** The fixture shape GET/PATCH /fixtures/{id} actually serve (P9 pass
+ *  3c-2): court_id/venue_id + derived court_name/venue_name, WITHOUT the
+ *  frozen venue/court_label text columns. This is the one fixture read
+ *  path that makes a clean break rather than adding alongside — it's the
+ *  highest-visibility surface (the published v1 API contract), and #461's
+ *  own PatchedFixtureOut precedent already documents this endpoint's result
+ *  IS the wire, unmapped. Every other FixtureRow reader (listDivisionFixtures
+ *  below, generateStageFixtures, ...) keeps venue/court_label for callers
+ *  not yet migrated off them. */
+export type FixtureOut = Omit<FixtureRow, "venue" | "court_label">;
+
+export async function getFixture(auth: AuthCtx, id: string): Promise<FixtureOut> {
   rejectDeviceLink(auth);
   return withTenant(auth.orgId, async (tx) => {
-    const [row] = await tx<FixtureRow[]>`
-      select ${tx(FIXTURE_COLS)} from fixtures where id = ${id}`;
+    const [row] = await tx<Omit<FixtureOut, "court_name">[]>`
+      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.court_id, f.venue_id, ven.name as venue_name,
+             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+      from fixtures f
+      left join venues ven on ven.id = f.venue_id
+      where f.id = ${id}`;
     if (!row) throw new HttpError(404, "fixture not found");
-    return row;
+    // #14: venue-qualified label (a bare joined `courts.name` can't tell two
+    // same-named courts in different venues apart) — see FixtureRow's own
+    // doc comment: fall back to the id itself if a lookup somehow misses
+    // (should not happen; courts.id is FK-restricted from fixtures.court_id).
+    const courtNames = await courtNamesById(tx);
+    return {
+      ...row,
+      court_name: row.court_id !== null ? (courtNames.get(row.court_id) ?? row.court_id) : null,
+    };
   });
 }
 
@@ -33,10 +62,23 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
   return withTenant(auth.orgId, async (tx) => {
     const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
-    return tx<FixtureRow[]>`
-      select ${tx(FIXTURE_COLS)} from fixtures
-      where division_id = ${divisionId}
-      order by stage_id, round_no, seq_in_round`;
+    const rows = await tx<Omit<FixtureRow, "court_name">[]>`
+      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.venue, f.court_label, f.court_id,
+             f.venue_id, ven.name as venue_name,
+             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+      from fixtures f
+      left join venues ven on ven.id = f.venue_id
+      where f.division_id = ${divisionId}
+      order by f.stage_id, f.round_no, f.seq_in_round`;
+    // #14: venue-qualified label, same fallback convention as getFixture above.
+    const courtNames = await courtNamesById(tx);
+    return rows.map((r) => ({
+      ...r,
+      court_name: r.court_id !== null ? (courtNames.get(r.court_id) ?? r.court_id) : null,
+    }));
   });
 }
 
@@ -50,14 +92,30 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
 export async function listDivisionFixturesForBoard(
   auth: AuthCtx,
   divisionId: string,
-): Promise<FixtureRow[]> {
+): Promise<BoardFixtureRow[]> {
   return withTenant(auth.orgId, async (tx) => {
     const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
-    return tx<FixtureRow[]>`
-      select ${tx(BOARD_FIXTURE_COLS)} from fixtures
-      where division_id = ${divisionId}
-      order by stage_id, round_no, seq_in_round`;
+    // P9: IDENTITY ONLY. The board resolves a court's display name client-side
+    // from the venues prop (`resolveCourtNames`, which covers every org court
+    // including archived), so shipping `court_name`/`venue_name` on every row
+    // duplicated data the client already holds — and `court_label`/`venue` are
+    // the frozen legacy columns nothing writes. Six court/venue fields per row
+    // across ~330 fixtures is what put this page 33KB over its RSC payload
+    // budget (board-v3.spec.ts:287); the calendar trim before it was the wrong
+    // suspect and saved 583 bytes.
+    //
+    // `venue_id` is not sent either: a court BELONGS to a venue, so court_id
+    // already determines it, and measured across this database every one of
+    // 10,681 fixtures has it null — it was pure weight on every row.
+    return tx<BoardFixtureRow[]>`
+      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.court_id,
+             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at
+      from fixtures f
+      where f.division_id = ${divisionId}
+      order by f.stage_id, f.round_no, f.seq_in_round`;
   });
 }
 
@@ -67,7 +125,7 @@ export async function listDivisionFixturesForBoard(
  *  would have widened GET too, where there is no move and nothing to report.
  *  Mirrored by `PatchedFixture` in `api-v1/schemas.ts`, which is what the
  *  published spec is generated from. */
-export type PatchedFixtureOut = FixtureRow & { conflicts: ScheduleConflict[] };
+export type PatchedFixtureOut = FixtureOut & { conflicts: ScheduleConflict[] };
 
 export async function patchFixture(
   auth: AuthCtx,
@@ -90,10 +148,23 @@ export async function patchFixture(
       await tx`
         update fixtures set officials = ${tx.json(officials as never)} where id = ${id}`;
     }
-    const [row] = await tx<FixtureRow[]>`
-      select ${tx(FIXTURE_COLS)} from fixtures where id = ${id}`;
+    const [row] = await tx<Omit<FixtureOut, "court_name">[]>`
+      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.court_id, f.venue_id, ven.name as venue_name,
+             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+      from fixtures f
+      left join venues ven on ven.id = f.venue_id
+      where f.id = ${id}`;
     if (!row) throw new HttpError(404, "fixture not found");
-    return { ...row, conflicts };
+    // #14: venue-qualified label, same fallback convention as getFixture above.
+    const courtNames = await courtNamesById(tx);
+    return {
+      ...row,
+      court_name: row.court_id !== null ? (courtNames.get(row.court_id) ?? row.court_id) : null,
+      conflicts,
+    };
   });
 }
 

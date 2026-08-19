@@ -58,6 +58,7 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { autoSchedule, putScheduleSettings } from "../schedule";
 import { patchFixture } from "../fixtures";
+import { createVenue, createCourt } from "../venues";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const T0 = "2026-11-05T09:00:00.000Z";
@@ -82,6 +83,9 @@ interface Bracket {
   /** The third-place fixture — round 2, but fed by nothing, so it is the
    *  control: whatever the feed rules do, they must not touch it. */
   thirdPlace: string;
+  /** P9 pass 3a — the 2 real courts.id values "C1"/"C2" used to be. */
+  court1: string;
+  court2: string;
 }
 
 /** 4 seeded entrants -> a knockout stage of 2 fed semis + final + third place,
@@ -138,12 +142,17 @@ async function seed(): Promise<Bracket> {
     name: "Cup",
     config: { thirdPlace: true },
   });
+  // P9 pass 3a: real courts.id values — ScheduleConfig.courts is CourtId[]
+  // since pass 1, fixtures.court_id carries a composite FK since V367/368.
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const court1 = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
+  const court2 = await createCourt(auth, venue.id, { name: "C2", sort: 1, tags: [] });
   await putScheduleSettings(auth, division.id, {
     config: {
       startAt: T0,
       matchMinutes: MATCH_MINUTES,
       gapMinutes: 0,
-      courts: ["C1", "C2"],
+      courts: [court1.id, court2.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -164,7 +173,10 @@ async function seed(): Promise<Bracket> {
   expect(targets.size).toBe(1);
   const final = [...targets][0]!;
   const thirdPlace = rows.find((r) => r.winner_to_fixture === null && r.id !== final)!.id;
-  return { auth, stageId: stage!.id, feeders: feeders.map((f) => f.id), final, thirdPlace };
+  return {
+    auth, stageId: stage!.id, feeders: feeders.map((f) => f.id), final, thirdPlace,
+    court1: court1.id, court2: court2.id,
+  };
 }
 
 describe.skipIf(!HAS_DB)("the auto pass honours feed order (#452)", () => {
@@ -190,14 +202,14 @@ describe.skipIf(!HAS_DB)("the auto pass honours feed order (#452)", () => {
     // is not the same as never having to read one. The final runs 09:00-09:30,
     // its semis 10:00-10:30, so it finishes 90 minutes before either feeder does.
     await sql`
-      update fixtures set scheduled_at = ${at(0)}, court_label = 'C1' where id = ${b.final}`;
+      update fixtures set scheduled_at = ${at(0)}, court_id = ${b.court1} where id = ${b.final}`;
     await sql`
-      update fixtures set scheduled_at = ${at(60)}, court_label = 'C1' where id = ${b.feeders[0]!}`;
+      update fixtures set scheduled_at = ${at(60)}, court_id = ${b.court1} where id = ${b.feeders[0]!}`;
     await sql`
-      update fixtures set scheduled_at = ${at(60)}, court_label = 'C2' where id = ${b.feeders[1]!}`;
+      update fixtures set scheduled_at = ${at(60)}, court_id = ${b.court2} where id = ${b.feeders[1]!}`;
     // Parked well clear, after both semis, so it contributes nothing of its own.
     await sql`
-      update fixtures set scheduled_at = ${at(240)}, court_label = 'C2'
+      update fixtures set scheduled_at = ${at(240)}, court_id = ${b.court2}
       where id = ${b.thirdPlace}`;
     // ONLY the feeders are locked. "final" is deliberately left UNLOCKED —
     // the whole point is that it is frozen anyway, because it is already
@@ -237,17 +249,17 @@ describe.skipIf(!HAS_DB)("the auto pass honours feed order (#452)", () => {
     // same as never having to read one. The final runs 09:00-09:30, its semis
     // 10:00-10:30 — it finishes an hour and a half before either feeder ends.
     await sql`
-      update fixtures set scheduled_at = ${at(0)}, court_label = 'C1' where id = ${b.final}`;
+      update fixtures set scheduled_at = ${at(0)}, court_id = ${b.court1} where id = ${b.final}`;
     await sql`
-      update fixtures set scheduled_at = ${at(60)}, court_label = 'C1' where id = ${b.feeders[0]!}`;
+      update fixtures set scheduled_at = ${at(60)}, court_id = ${b.court1} where id = ${b.feeders[0]!}`;
     await sql`
-      update fixtures set scheduled_at = ${at(60)}, court_label = 'C2' where id = ${b.feeders[1]!}`;
+      update fixtures set scheduled_at = ${at(60)}, court_id = ${b.court2} where id = ${b.feeders[1]!}`;
     // Parked well clear on the other court, and MOVABLE, so the repair solver
     // has a real proposal to work on and the run is not a degenerate empty
     // solve. It is fed by both semis' losers and sits after both, so it
     // contributes no row of its own.
     await sql`
-      update fixtures set scheduled_at = ${at(240)}, court_label = 'C2'
+      update fixtures set scheduled_at = ${at(240)}, court_id = ${b.court2}
       where id = ${b.thirdPlace}`;
     // Pinned, so the offending three cannot be moved and the inversion survives
     // to the report — no search, no flake.

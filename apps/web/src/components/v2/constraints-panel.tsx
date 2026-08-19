@@ -2,7 +2,7 @@
 
 // Constraints v2 console (Jul3/04 §6): constraint editor, bulk time shift,
 // and the pre-publish wait-time report.
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
@@ -12,6 +12,10 @@ import { Tip } from "@/components/ui/tip";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { RestFloorNote, restFloorNoteShown } from "@/components/v2/rest-floor-note";
 import { isoFromZonedDateTime, zonedDateTimeInput } from "@/lib/zoned-datetime";
+// P9 review wave 3, finding #12: read-only reuse of the board's own court-name
+// rule (@/lib/court-directory.ts's buildCourtDirectory, via this resolver) —
+// see courtOptionLabel below. Not editing court-multi-picker.tsx itself.
+import { resolveCourtNames, type Venue } from "@/components/v2/shared/court-multi-picker";
 
 /** 625 → "10h 25m"; 45 → "45m". The raw minute dumps read like debug output. */
 function fmtDuration(minutes: number): string {
@@ -309,11 +313,39 @@ function useSavedPulse(ms = 2000) {
   return [saved, pulse] as const;
 }
 
+/** A real `courts.id` uuid, distinguished from a legacy free-text blackout
+ *  scope (see `courtOptionLabel` below). */
+const COURT_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Display text for one blackout-scope `<option>` (P9 review wave 3, finding
+ * #12). `value` is `config.courts`' own id shape post-cutover OR a stored
+ * blackout's `court` — either a real id (`courtNames` resolves it, venue-
+ * qualified, archived courts included) or, for a row saved before this
+ * picker/the P9 cutover existed, a genuine free-text label that was never an
+ * id at all ("keeps a stale court scope selectable", blackout-editor.test.tsx
+ * — dropping that text would make the option unreadable AND unfindable by
+ * its own stored value). The uuid shape is what tells the two cases apart: a
+ * `courtNames` miss on something uuid-shaped is a deleted/foreign court and
+ * degrades to the shared fallback (never the raw id); a miss on anything else
+ * is the legacy label, rendered as-is.
+ */
+export function courtOptionLabel(
+  value: string,
+  courtNames: Readonly<Record<string, string>>,
+  unknownCourtLabel: string,
+): string {
+  const resolved = courtNames[value];
+  if (resolved !== undefined) return resolved;
+  return COURT_UUID_RE.test(value) ? unknownCourtLabel : value;
+}
+
 export function ConstraintsPanel({
   divisionId,
   initialSettings,
   canEdit,
   orgTz,
+  venues = [],
 }: {
   divisionId: string;
   initialSettings: Settings;
@@ -323,6 +355,17 @@ export function ConstraintsPanel({
    *  for display). Required rather than defaulted: a wrong zone here stores the
    *  wrong instant and looks correct on the way back out. */
   orgTz: string;
+  /** Org venues with nested courts (`listVenues` shape, venues.ts) — resolves
+   *  the blackout scope picker's court ids to venue-qualified display names
+   *  (P9 review wave 3, finding #12), the same `resolveCourtNames` rule the
+   *  board and the settings-tab court picker already use. Archived venues/
+   *  courts included deliberately: a blackout scoped to a since-archived
+   *  court must still render its name, matching why the division schedule
+   *  page fetches `listVenues(auth, { includeArchived: true })` in the first
+   *  place. Optional/defaulted to `[]` — existing test call sites construct
+   *  this panel without it, and an empty directory falls through
+   *  `courtOptionLabel`'s own degrade. */
+  venues?: Venue[];
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -532,6 +575,9 @@ export function ConstraintsPanel({
     ...courts,
     ...blackouts.map((b) => b.court).filter((c) => c !== "" && !courts.includes(c)),
   ].filter((c, i, all) => all.indexOf(c) === i);
+  // P9 review wave 3, finding #12 — venue-qualified id -> name, archived
+  // courts included (see this component's own `venues` doc comment above).
+  const courtNames = useMemo(() => resolveCourtNames(venues), [venues]);
   // The whole block is Pro: the page hands down `canEdit && !frozen &&
   // scheduling.constraints`, mirroring the server's `usesConstraints()` gate
   // (schedule.ts), which trips on a non-empty `blackouts`. Windows already
@@ -813,7 +859,7 @@ export function ConstraintsPanel({
                             <option value="">{msg("constraints.blackout.everywhere")}</option>
                             {courtOptions.map((court) => (
                               <option key={court} value={court}>
-                                {court}
+                                {courtOptionLabel(court, courtNames, msg("courtPicker.unknownCourt"))}
                               </option>
                             ))}
                           </select>

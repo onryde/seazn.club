@@ -24,9 +24,21 @@ import { ScheduleResultStrip } from "@/components/v2/board/result-strip";
 import { DateTimeField } from "./shared/datetime-field";
 import { boardSlotTimes } from "./shared/time-options";
 import { windowsToDailyHours } from "@/lib/schedule-board";
-import type { BoardConfig } from "@/components/v2/board/types";
+import { courtDisplayName, type BoardConfig } from "@/components/v2/board/types";
+// P9 pass 4d: item 1 — this panel's per-fixture court editor used to seed
+// from and PATCH the frozen `court_label` text column, which 400s against
+// PatchFixture's `.strict()` schema (only `court_id` is a valid key now).
+// `courtGroups`/`resolveCourtNames` are the SAME shared pieces the board's
+// own `courtNamesById` and the settings tab's `CourtMultiPicker` already use
+// — reused here rather than a third court-name/court-picker implementation.
+import { courtGroups, resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
+// P9: the BOARD-side Venue (no `hours`/`exceptions`) — this panel shows and
+// picks courts, it never reads a calendar. See court-multi-picker.tsx.
+import type { Venue } from "@/components/v2/shared/court-multi-picker";
+import type { PatchFixture } from "@/server/api-v1/schemas";
 import { zonedTimeInput } from "@/lib/zoned-datetime";
-import type { ScheduleMetrics, ScheduleSolverInfo } from "@/server/api-v1/schemas";
+import type { z } from "zod";
+import type { ApplyScheduleRequest, ScheduleMetrics, ScheduleSolverInfo } from "@/server/api-v1/schemas";
 // D2 capacity pre-check — client-safe leaves only, see capacity-input.ts's
 // header for why this file must never reach @seazn/engine/scheduling (the
 // solver barrel) or capacity-guard.ts (server-only).
@@ -59,8 +71,19 @@ interface FixtureRow {
   home_slot_label?: SlotLabel | null;
   away_slot_label?: SlotLabel | null;
   scheduled_at: string | null;
+  /** FROZEN legacy text (no writer has touched either since P9 pass 3a) —
+   *  kept only as a read fallback for a pre-cutover fixture that never got a
+   *  real court_id. Never seed an editor from these, never PATCH them —
+   *  `PatchFixture` is `.strict()` and has no `venue`/`court_label` key. */
   venue: string | null;
   court_label: string | null;
+  /** P9 pass 4d: the fixture's REAL court identity — mirrors
+   *  `FixtureRow.court_id`/`court_name` (stages.ts's server-side type, which
+   *  `FIXTURE_COLS` has selected since pass 3c-2). */
+  court_id: string | null;
+  /** DERIVED display name for `court_id` — never render `court_id` itself
+   *  (a raw uuid). Falls back to `court_label` via `courtDisplayName`. */
+  court_name: string | null;
   status: string;
   outcome: unknown;
   /** F1 (2026-08-17) — the engine's bracket-position role, persisted on
@@ -94,6 +117,12 @@ interface Props {
   stages: StageRow[];
   fixtures: FixtureRow[];
   entrantNames: Record<string, string>;
+  /** Org venues with nested courts (`listVenues` shape, venues.ts) — feeds
+   *  the per-fixture court editor's picker and the venue-qualified display
+   *  name (P9 pass 4d, item 1). Same prop shape schedule-board.tsx's own
+   *  `venues` already uses for the identical purpose. Defaults to `[]` below
+   *  so existing hand-built test props don't all need updating. */
+  venues?: Venue[];
   canEdit: boolean;
   /** Competition timezone (schedule settings) — every time renders in it. */
   tz: string;
@@ -276,10 +305,16 @@ export function capacityForStage(
   return input === null ? null : assessCapacity(input);
 }
 
-export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, canEdit, tz, orgTz, canExport }: Props) {
+export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], canEdit, tz, orgTz, canExport }: Props) {
   const msg = useMsg();
   const confirmDialog = useConfirm();
   const router = useRouter();
+  // P9 pass 4d: id -> venue-qualified display name, reusing the SAME
+  // `resolveCourtNames`/`buildCourtDirectory` rule the board's own
+  // `courtNamesById` applies (schedule-board.tsx) — never a second
+  // "is this name ambiguous" implementation. Feeds both the "now playing"
+  // strip below and every FixtureLine's badge/editor.
+  const courtNamesById = useMemo(() => resolveCourtNames(venues), [venues]);
   // Optimistic-concurrency token (v3/11 gap 10), mirroring use-board-actions
   // .ts's `seqRef` for this panel's one division: the ref is what
   // `autoScheduleStage` reads/bumps between writes, resynced from the prop on
@@ -380,7 +415,11 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
     setBusy(stageId);
     try {
       type Proposal = {
-        assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+        // P9: INFERRED from the schema the server validates against. A hand
+        // written wire type is an assertion `apiV1<T>` never checks — that is
+        // exactly how the board's apply shipped `court_label` and 400'd every
+        // Auto-schedule run for the whole cutover.
+        assignments: z.infer<typeof ApplyScheduleRequest>["assignments"];
         metrics?: ScheduleMetrics;
         solver?: ScheduleSolverInfo;
       };
@@ -594,7 +633,12 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                       ? (entrantNames[f.away_entrant_id] ?? "?")
                       : resolveSlotLabel(f.away_slot_label ?? null, msg, "schedule.tbd")}
                   </span>
-                  {f.court_label ? <span className="text-slate-500">· {f.court_label}</span> : null}
+                  {/* P9 pass 4d: resolved NAME first (venue-qualified when
+                      ambiguous), the frozen label as a fallback — never a raw
+                      court_id. */}
+                  {courtDisplayName(f, courtNamesById) ? (
+                    <span className="text-slate-500">· {courtDisplayName(f, courtNamesById)}</span>
+                  ) : null}
                 </Link>
               </li>
             ))}
@@ -808,6 +852,8 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                       canEdit={canEdit}
                       tz={tz}
                       boardSlotOptions={boardSlotOptions}
+                      venues={venues}
+                      courtNames={courtNamesById}
                       onRescheduled={() => {
                         setNotice(msg("schedule.rescheduled"));
                         setUndoable(true);
@@ -849,6 +895,8 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                             canEdit={canEdit}
                             tz={tz}
                             boardSlotOptions={boardSlotOptions}
+                            venues={venues}
+                            courtNames={courtNamesById}
                             onRescheduled={() => {
                               setNotice(msg("schedule.rescheduled"));
                               setUndoable(true);
@@ -890,6 +938,8 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                         canEdit={canEdit}
                         tz={tz}
                         boardSlotOptions={boardSlotOptions}
+                        venues={venues}
+                        courtNames={courtNamesById}
                         onRescheduled={() => {
                           setNotice(msg("schedule.rescheduled"));
                           setUndoable(true);
@@ -1193,13 +1243,15 @@ function outcomeText(msg: Msg, outcome: unknown, entrantNames: Record<string, st
   }
 }
 
-function FixtureLine({
+export function FixtureLine({
   fixture,
   href,
   entrantNames,
   canEdit,
   tz,
   boardSlotOptions,
+  venues = [],
+  courtNames,
   onRescheduled,
 }: {
   fixture: FixtureRow;
@@ -1210,6 +1262,12 @@ function FixtureLine({
   /** Board slots for the inline "When" field — see `boardSlotOptionsFor`
    *  above. `undefined` lets `DateTimeField` fall back to quarter hours. */
   boardSlotOptions?: string[];
+  /** Org venues with nested courts — feeds the court picker below (P9 pass
+   *  4d, item 1). Same shape/default as StagesPanel's own `venues` prop. */
+  venues?: Venue[];
+  /** id -> venue-qualified display name (StagesPanel's `courtNamesById`) —
+   *  see `courtDisplayName`'s own doc comment. */
+  courtNames?: Record<string, string>;
   /** Fired after a schedule PATCH lands — the panel offers Undo (item 5). */
   onRescheduled?: () => void;
 }) {
@@ -1219,10 +1277,24 @@ function FixtureLine({
   const [when, setWhen] = useState(
     fixture.scheduled_at ? toLocalInput(fixture.scheduled_at) : "",
   );
-  const [venue, setVenue] = useState(fixture.venue ?? "");
-  const [court, setCourt] = useState(fixture.court_label ?? "");
+  // P9 pass 4d: seeded from court_id, never court_label — court_label is
+  // FROZEN (no writer has touched it since the pass 3a cutover), so seeding
+  // the editor from it showed stale/blank state the moment a fixture's court
+  // had ever been set post-cutover. PatchFixture is `.strict()` and has no
+  // `venue`/`court_label` key at all, so a save built from the old
+  // venue/court text state 400'd unconditionally.
+  const [courtId, setCourtId] = useState(fixture.court_id ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // P9 review wave 3 ("Also yours"): archived-INCLUSIVE on purpose, unlike
+  // `courtGroups(venues)` (used below for the SELECTABLE option list, which
+  // must stay archived-filtered — you cannot newly pick an archived court).
+  // This map's only job is resolving `courtId`'s venue_id for the save below,
+  // and `courtId` can legitimately be an already-archived court's id (this
+  // fixture was scheduled onto it before it was archived) — `courtGroups`
+  // dropping that row silently cleared `venue_id` on every such save, even
+  // though `court_id` itself was preserved.
+  const courtById = new Map(venues.flatMap((venue) => venue.courts).map((c) => [c.id, c] as const));
 
   const home = fixture.home_entrant_id
     ? (entrantNames[fixture.home_entrant_id] ?? "?")
@@ -1242,7 +1314,11 @@ function FixtureLine({
     );
   }
 
-  async function patchSchedule(json: Record<string, unknown>) {
+  // Typed by INFERRING from PatchFixture (server/api-v1/schemas.ts) — never
+  // hand-declared. `apiV1<T>`'s `json` param is `unknown`, so a hand-rolled
+  // wire type here is exactly how the court_label/venue 400 survived 175
+  // commits: nothing caught a payload shape the schema no longer accepts.
+  async function patchSchedule(json: PatchFixture) {
     setBusy(true);
     setError(null);
     try {
@@ -1260,8 +1336,13 @@ function FixtureLine({
   const saveSchedule = () =>
     patchSchedule({
       scheduled_at: when ? new Date(when).toISOString() : null,
-      venue: venue.trim() || null,
-      court_label: court.trim() || null,
+      // A court now implies its venue, and the SERVER derives it: `moveFixture`
+      // (schedule.ts) resolves `venue_id` from `courts.venue_id` and ignores
+      // any `venue_id` a client sends, so the two can no longer disagree.
+      // Still sent from the same selection so the optimistic local row matches
+      // what the server will write.
+      court_id: courtId || null,
+      venue_id: (courtId ? courtById.get(courtId)?.venue_id : undefined) ?? null,
     });
 
   const unschedule = () => {
@@ -1305,7 +1386,14 @@ function FixtureLine({
             ) : (
               msg("schedule.chip.unscheduled")
             )}
-            {fixture.court_label ? ` · ${fixture.court_label}` : fixture.venue ? ` · ${fixture.venue}` : ""}
+            {/* P9 pass 4d: resolved NAME first (venue-qualified when
+                ambiguous via courtNames), the frozen label next, then the
+                ultimate bare-venue-text fallback for a fixture older than
+                either cutover — never a raw court_id. */}
+            {(() => {
+              const text = courtDisplayName(fixture, courtNames) ?? fixture.venue;
+              return text ? ` · ${text}` : "";
+            })()}
           </span>
           {/* Play state only once it's under way / done. */}
           {played && (
@@ -1323,6 +1411,7 @@ function FixtureLine({
           {canEdit && fixture.status === "scheduled" && (
             <button
               type="button"
+              data-testid="fixture-schedule-toggle"
               onClick={() => setEditing(!editing)}
               className="btn btn-ghost px-3 py-1 text-xs"
             >
@@ -1350,26 +1439,47 @@ function FixtureLine({
             onChange={setWhen}
             options={boardSlotOptions}
           />
-          <label className="block">
-            <span className="label">{msg("schedule.field.venue")}</span>
-            <input
-              value={venue}
-              onChange={(e) => setVenue(e.target.value)}
-              // `.input`'s own padding loses to `px-2 py-1 text-xs` under
-              // Tailwind's utilities layer (S13/#422 W11). `min-h-11` survives it.
-              className="input min-h-11 w-40 px-2 py-1 text-xs"
-            />
-          </label>
+          {/* P9 pass 4d, item 1: real court selection, grouped by venue —
+              replaces the free-text venue/court inputs, which PATCHed the now-
+              retired `venue`/`court_label` keys and 400'd against
+              PatchFixture's `.strict()` schema. Built from the SAME
+              `courtGroups` piece CourtMultiPicker uses (court-multi-picker.tsx)
+              rather than a second court-picker implementation — a plain
+              single-select `<optgroup>`-per-venue here, since one fixture ever
+              has exactly one court (CourtMultiPicker's multi-select/reorder
+              machinery has nothing to do). Offers every ACTIVE org court, not
+              just the division's configured subset — a manual per-fixture
+              override is not the auto-scheduler, and `courtGroups` already
+              excludes archived venues/courts. Venue-qualifying the OPTION text
+              itself is unnecessary here (unlike a flat list — MovePanel's
+              dropdown, the board's column headers): each `<optgroup>` already
+              names its venue, so two courts sharing a name never collide
+              within the picker's own grouping. */}
           <label className="block">
             <span className="label">{msg("schedule.field.court")}</span>
-            <input
-              value={court}
-              onChange={(e) => setCourt(e.target.value)}
-              className="input min-h-11 w-28 px-2 py-1 text-xs"
-            />
+            <select
+              data-testid="fixture-court-select"
+              value={courtId}
+              onChange={(e) => setCourtId(e.target.value)}
+              // `.input`'s own padding loses to `px-2 py-1 text-xs` under
+              // Tailwind's utilities layer (S13/#422 W11). `min-h-11` survives it.
+              className="input min-h-11 w-48 px-2 py-1 text-xs"
+            >
+              <option value="">{msg("board.unassigned")}</option>
+              {courtGroups(venues).map(({ venue, courts }) => (
+                <optgroup key={venue.id} label={venue.name}>
+                  {courts.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
           </label>
           <button
             type="button"
+            data-testid="fixture-save-schedule"
             disabled={busy}
             onClick={saveSchedule}
             className="btn btn-primary px-3 py-1.5 text-xs"

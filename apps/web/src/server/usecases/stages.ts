@@ -62,7 +62,15 @@ import { log } from "@/server/logger";
 import { msg } from "@/lib/messages";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
-import { validateSchedule } from "./schedule";
+// #14: `courtNamesById` is the venue-qualified label map (via
+// `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
+// venues that legally share one court name.
+import { validateSchedule, courtNamesById, courtVenueIds } from "./schedule";
+// #8 sibling fix: reuse the SAME not-found codes `venues.ts` already
+// throws for a bad court_id/venue_id, instead of minting new ones, so
+// addFixture's error is indistinguishable from every other "not a real
+// court/venue in this org" 404 in the product.
+import { VENUE_NOT_FOUND_CODE, COURT_NOT_FOUND_CODE } from "./venues";
 import {
   descriptorKey,
   descriptorLabel,
@@ -101,10 +109,17 @@ export interface StageRow {
 
 const STAGE_COLS = ["id", "division_id", "seq", "kind", "name", "config", "progression", "status"] as const;
 
+// P9 pass 3c-2: `court_id`/`venue_id` added as the real identity, documented
+// here for parity with BOARD_FIXTURE_COLS below. The three `FIXTURE_COLS`
+// readers in this file (and the two in usecases/fixtures.ts) no longer
+// interpolate this array directly with `tx(FIXTURE_COLS)` — `court_name`/
+// `venue_name` are DERIVED (left join courts/venues), which a flat
+// unaliased column list can't express — so each of those selects is
+// hand-written instead. This array stays the source-of-truth column list.
 export const FIXTURE_COLS = [
   "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "fixture_no",
   "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label",
-  "scheduled_at", "venue", "court_label",
+  "scheduled_at", "venue", "court_label", "court_id", "venue_id",
   "officials", "status", "outcome", "schedule_source", "schedule_locked", "created_at",
   "ext_key", "lane", "is_final", "third_place", "conditional",
 ] as const;
@@ -125,10 +140,20 @@ export const FIXTURE_COLS = [
  *  its capacity precheck; this restores that invariant rather than
  *  breaking new ground. Same as FIXTURE_COLS minus those five columns —
  *  keep the two in sync by hand if FIXTURE_COLS's other columns change. */
+/** P9: what the BOARD actually receives — identity, no derived names and no
+ *  frozen legacy text. The board resolves display names client-side from the
+ *  venues prop; sending them per row duplicated ~330 rows' worth of bytes.
+ *  Distinct from `FixtureRow` (GET/PATCH /fixtures/{id}), which DOES carry the
+ *  derived names because its consumers have no venue list to resolve from. */
+export type BoardFixtureRow = Omit<
+  FixtureRow,
+  "venue" | "court_label" | "court_name" | "venue_name" | "venue_id"
+>;
+
 export const BOARD_FIXTURE_COLS = [
   "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "fixture_no",
   "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label",
-  "scheduled_at", "venue", "court_label",
+  "scheduled_at", "venue", "court_label", "court_id", "venue_id",
   "officials", "status", "outcome", "schedule_source", "schedule_locked", "created_at",
 ] as const;
 
@@ -150,6 +175,16 @@ export interface FixtureRow {
   scheduled_at: string | null;
   venue: string | null;
   court_label: string | null;
+  /** P9 pass 3c-2: DERIVED from `courts`/`venues` via `court_id`/`venue_id` —
+   *  the real identity. `venue`/`court_label` above are the FROZEN text
+   *  columns (no longer written anywhere since pass 3a); they stay on this
+   *  general row shape only for callers not yet migrated off them. Never
+   *  render `venue`/`court_label` in new code — render `venue_name`/
+   *  `court_name` (fall back to the id if a lookup somehow misses). */
+  court_id: string | null;
+  court_name: string | null;
+  venue_id: string | null;
+  venue_name: string | null;
   officials: unknown[];
   status: string;
   outcome: unknown;
@@ -1325,9 +1360,25 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
       await tx`update stages set status = 'active' where id = ${stageId}`;
     }
 
-    const fixtures = await tx<FixtureRow[]>`
-      select ${tx(FIXTURE_COLS)} from fixtures
-      where stage_id = ${stageId} order by round_no, seq_in_round`;
+    const fixtureRows = await tx<Omit<FixtureRow, "court_name">[]>`
+      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.venue, f.court_label, f.court_id,
+             f.venue_id, ven.name as venue_name,
+             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+      from fixtures f
+      left join venues ven on ven.id = f.venue_id
+      where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
+    // #14: venue-qualified label (a bare joined `courts.name` can't tell two
+    // same-named courts in different venues apart) — same fallback
+    // convention as FixtureRow's own doc comment: fall back to the id
+    // itself on a miss (should not happen; FK-restricted).
+    const courtNames = await courtNamesById(tx);
+    const fixtures = fixtureRows.map((f) => ({
+      ...f,
+      court_name: f.court_id !== null ? (courtNames.get(f.court_id) ?? f.court_id) : null,
+    }));
     // Cross-format feeds (Jul3/08 §4): winner_to/loser_to may target another
     // stage (CL loser → EL slot). Wire every entry whose source and target
     // both exist; the per-decided-fixture fillSlot then follows them like any
@@ -1680,9 +1731,25 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
       await tx`update stages set status = 'active' where id = ${stageId}`;
     }
 
-    const fixtures = await tx<FixtureRow[]>`
-      select ${tx(FIXTURE_COLS)} from fixtures
-      where stage_id = ${stageId} order by round_no, seq_in_round`;
+    const fixtureRows = await tx<Omit<FixtureRow, "court_name">[]>`
+      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.venue, f.court_label, f.court_id,
+             f.venue_id, ven.name as venue_name,
+             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+      from fixtures f
+      left join venues ven on ven.id = f.venue_id
+      where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
+    // #14: venue-qualified label (a bare joined `courts.name` can't tell two
+    // same-named courts in different venues apart) — same fallback
+    // convention as FixtureRow's own doc comment: fall back to the id
+    // itself on a miss (should not happen; FK-restricted).
+    const courtNames = await courtNamesById(tx);
+    const fixtures = fixtureRows.map((f) => ({
+      ...f,
+      court_name: f.court_id !== null ? (courtNames.get(f.court_id) ?? f.court_id) : null,
+    }));
 
     if (created > 0) {
       const [{ seq: last }] = await tx<{ seq: number }[]>`
@@ -2515,8 +2582,25 @@ export async function confirmSeedProposal(
     }
     await tx`update stage_seed_proposals set status = 'confirmed', confirmed_at = now() where id = ${proposal.id}`;
 
-    const fixtures = await tx<FixtureRow[]>`
-      select ${tx(FIXTURE_COLS)} from fixtures where stage_id = ${stageId} order by round_no, seq_in_round`;
+    const fixturesRaw = await tx<Omit<FixtureRow, "court_name">[]>`
+      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.venue, f.court_label, f.court_id,
+             f.venue_id, ven.name as venue_name,
+             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+      from fixtures f
+      left join venues ven on ven.id = f.venue_id
+      where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
+    // #14: venue-qualified label (a bare joined `courts.name` can't tell two
+    // same-named courts in different venues apart) — same fallback
+    // convention as FixtureRow's own doc comment: fall back to the id
+    // itself on a miss (should not happen; FK-restricted).
+    const courtNames = await courtNamesById(tx);
+    const fixtures = fixturesRaw.map((f) => ({
+      ...f,
+      court_name: f.court_id !== null ? (courtNames.get(f.court_id) ?? f.court_id) : null,
+    }));
     return { filled: expandedEntries.length, fixtures, divisionId: stage.division_id };
   });
 
@@ -2669,7 +2753,11 @@ export async function addFixture(
     away_entrant_id: string;
     round_no?: number;
     scheduled_at?: string | null;
-    venue?: string | null;
+    // P9 pass 3c-2: this writer was the one cutover pass 3a missed — it still
+    // accepted and inserted the free-text `venue` column. Real venue/court by
+    // id, matching every other fixture-touching writer (moveFixture et al.).
+    venue_id?: string | null;
+    court_id?: string | null;
   },
 ): Promise<{ fixture_id: string }> {
   return withTenant(auth.orgId, async (tx) => {
@@ -2699,6 +2787,20 @@ export async function addFixture(
     if (entrants.length !== 2) {
       throw new HttpError(422, "both entrants must belong to this stage's division");
     }
+    // #14 sibling fix: `court_id`/`venue_id` are FK-restricted but the FK is
+    // `deferrable initially deferred` (V367) — an id that isn't a real court/
+    // venue of this org would otherwise only fail at COMMIT time, as a raw
+    // Postgres foreign_key_violation (500), not a clean 4xx. `tx` is already
+    // RLS-scoped to this org, so existence here IS the ownership check —
+    // same pattern venues.ts's own writers use for the same tables.
+    if (input.court_id) {
+      const [court] = await tx<{ id: string }[]>`select id from courts where id = ${input.court_id}`;
+      if (!court) throw new HttpError(404, "court not found", COURT_NOT_FOUND_CODE);
+    }
+    if (input.venue_id) {
+      const [venue] = await tx<{ id: string }[]>`select id from venues where id = ${input.venue_id}`;
+      if (!venue) throw new HttpError(404, "venue not found", VENUE_NOT_FOUND_CODE);
+    }
     // Group stages: the match must land in the entrants' pool so the right
     // table folds it. Inferred from the stage's existing fixtures — no
     // separate pool-membership lookup exists or is needed.
@@ -2723,12 +2825,25 @@ export async function addFixture(
       from fixtures where stage_id = ${stageId} and round_no = ${round}`;
     const [{ n }] = await tx<{ n: number }[]>`
       select count(*)::int as n from fixtures where stage_id = ${stageId}`;
+    // Review wave 2: the venue is DERIVED from the court, exactly as
+    // `applySchedule`/`moveFixture`/the joint apply now do. Accepting both
+    // independently let a caller post Venue A's court with Venue B's
+    // `venue_id` and create a fixture whose venue contradicts the court it
+    // sits on — the FK only checks each id belongs to the org, never that the
+    // two agree. A court with no resolvable venue falls back to the supplied
+    // value, so a venue-only ad-hoc fixture still works.
+    const adhocVenueId =
+      input.court_id != null
+        ? ((await courtVenueIds(tx)).get(input.court_id) ?? input.venue_id ?? null)
+        : (input.venue_id ?? null);
     const [fixture] = await tx<{ id: string }[]>`
       insert into fixtures (stage_id, division_id, pool_id, round_no, seq_in_round,
-                            home_entrant_id, away_entrant_id, ext_key, status, scheduled_at, venue)
+                            home_entrant_id, away_entrant_id, ext_key, status, scheduled_at,
+                            venue_id, court_id)
       values (${stageId}, ${stage.division_id}, ${poolId}, ${round}, ${nextSeq},
               ${input.home_entrant_id}, ${input.away_entrant_id}, ${"adhoc-" + String(n + 1)},
-              'scheduled', ${input.scheduled_at ?? null}, ${input.venue ?? null})
+              'scheduled', ${input.scheduled_at ?? null},
+              ${adhocVenueId}, ${input.court_id ?? null})
       returning id`;
     return { fixture_id: fixture!.id };
   });

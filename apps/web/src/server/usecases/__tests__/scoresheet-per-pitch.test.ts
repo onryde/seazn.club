@@ -14,7 +14,23 @@ import { groupByCourt } from "@/server/usecases/exports";
 // fixture the arrays desynchronised and courts were read off the wrong
 // fixture. Only volleyball ships a bespoke sheet today and it emits one, so
 // that one was latent rather than live.
-const f = (id: string, court: string | null) => ({ id, court_label: court });
+// P9: groupByCourt keys on `court_id` (stable identity) and orders by
+// `court_name`. The helper mints a deterministic id per court NAME so these
+// cases read the same as before, while two same-named courts in different
+// venues would still be distinct ids — the case name-keying used to merge.
+const COURT_IDS = new Map<string, string>();
+const courtIdFor = (name: string) => {
+  const existing = COURT_IDS.get(name);
+  if (existing !== undefined) return existing;
+  const minted = `c0000000-0000-4000-8000-${String(COURT_IDS.size + 1).padStart(12, "0")}`;
+  COURT_IDS.set(name, minted);
+  return minted;
+};
+const f = (id: string, court: string | null) => ({
+  id,
+  court_id: court === null ? null : courtIdFor(court),
+  court_name: court,
+});
 
 describe("groupByCourt", () => {
   it("gathers each court's fixtures together out of round order", () => {
@@ -66,4 +82,21 @@ describe("groupByCourt", () => {
     groupByCourt(rounds);
     expect(rounds.map((x) => x.id)).toEqual(["r1c2", "r1c1"]);
   });
+
+  // P9, added after review: every case above mints ONE id per court NAME, so
+  // none of them can tell `court_id` grouping apart from `court_name` grouping
+  // — reverting groupByCourt to compare names would pass them all. Entities
+  // make same-named courts in different venues representable for the first
+  // time, and merging those into one printed stack is the defect the id-keying
+  // exists to prevent. This is the only case that discriminates.
+  it("keeps two SAME-NAMED courts in different venues apart (name-keying would merge them)", () => {
+    const venueACourt1 = { id: "a1", court_id: "c0000000-0000-4000-8000-0000000000a1", court_name: "Court 1" };
+    const venueBCourt1 = { id: "b1", court_id: "c0000000-0000-4000-8000-0000000000b1", court_name: "Court 1" };
+    const plan = groupByCourt([venueACourt1, venueBCourt1, { ...venueACourt1, id: "a2" }]);
+    // Grouped by identity: both of venue A's fixtures land together, venue B's
+    // starts a new stack.
+    expect(plan.map((p) => p.fixture.id)).toEqual(["a1", "a2", "b1"]);
+    expect(plan.map((p) => p.startsNewCourt)).toEqual([false, false, true]);
+  });
+
 });

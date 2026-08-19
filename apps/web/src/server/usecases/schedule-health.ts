@@ -42,7 +42,7 @@ import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { assessHealth, type HealthConfig, type HealthFixture, type HealthMetric } from "@seazn/engine/scheduling/health";
 import { healthFixturesFor, type HealthFixtureInput } from "@/lib/health-input";
-import { loadSettings } from "./schedule";
+import { courtNamesById, loadSettings } from "./schedule";
 
 type Tx = postgres.TransactionSql;
 
@@ -75,7 +75,13 @@ export interface ScheduleHealthReport {
 interface HealthFixtureRow {
   id: string;
   scheduled_at: string | Date;
-  court_label: string;
+  /** P9 pass 3a (venues/courts cutover): a real `courts.id` — health scoring
+   *  keys on this now, never the legacy free-text `court_label`, which
+   *  writers stop populating (owner ruling, FULL cutover). A fixture with
+   *  `court_id` set and `court_label` NULL (the post-drop-PR world already)
+   *  is healthy and scoreable — this file no longer reads that column at
+   *  all, so there is nothing left in it to disagree with `court_id`. */
+  court_id: string;
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   pool_id: string | null;
@@ -83,7 +89,7 @@ interface HealthFixtureRow {
 }
 
 /** Smallest possible stage-scoped query for this feature — `scheduled_at`
- *  and `court_label` both NOT NULL in the WHERE, so every row this returns
+ *  and `court_id` both NOT NULL in the WHERE, so every row this returns
  *  maps to a concrete `HealthFixture` with no null-handling left for the
  *  caller. No stage-scoped equivalent of `divisionFixtures` exists yet
  *  (schedule.ts's loader is division-scoped only) — this is deliberately
@@ -100,12 +106,12 @@ interface HealthFixtureRow {
 // this comment answers was scoped to abandoned specifically.
 async function stageFixtures(tx: Tx, stageId: string): Promise<HealthFixtureRow[]> {
   return tx<HealthFixtureRow[]>`
-    select id, scheduled_at, court_label, home_entrant_id, away_entrant_id, pool_id, round_no
+    select id, scheduled_at, court_id, home_entrant_id, away_entrant_id, pool_id, round_no
     from fixtures
     where stage_id = ${stageId}
       and status in ('scheduled', 'in_play', 'decided', 'finalized', 'abandoned', 'forfeited')
       and scheduled_at is not null
-      and court_label is not null
+      and court_id is not null
     order by scheduled_at`;
 }
 
@@ -181,7 +187,7 @@ async function computeStageHealth(tx: Tx, stageId: string): Promise<StageHealthR
   const inputs: HealthFixtureInput[] = rows.map((r) => ({
     fixtureId: r.id,
     scheduledAtMs: toMs(r.scheduled_at),
-    court: r.court_label,
+    court: r.court_id,
     ...(r.home_entrant_id !== null ? { home: r.home_entrant_id } : {}),
     ...(r.away_entrant_id !== null ? { away: r.away_entrant_id } : {}),
     roundNo: r.round_no,
@@ -197,22 +203,31 @@ async function computeStageHealth(tx: Tx, stageId: string): Promise<StageHealthR
     divisionId: stage.division_id,
     status: "ready",
     computedAt: new Date().toISOString(),
-    metrics: await withEntrantNames(tx, assessed.metrics),
+    metrics: await withResolvedOffenderLabels(tx, assessed.metrics),
     fixtures,
   };
 }
 
 /**
- * Replace entrant-kind offender labels with the entrant's display name.
+ * Replace entrant-kind offender labels with the entrant's display name, and
+ * (P9 pass 3a) a courtDay-kind offender's embedded court id with the
+ * court's own name.
  *
- * The engine is pure and knows nothing about the `entrants` table, so
- * `HealthOffender.label` arrives as the raw id — health.ts documents this
- * verbatim ("Raw id (entrant id, court label, or `${court}::${dayKey}`) …
- * the module and the route stay at raw labels for now"). Nothing then did
- * the resolving, so the panel rendered `Entrant · e3a37cef-54f3-47cc-…`:
- * a seam left for a later pass that shipped user-visible. Resolving it is
- * the APP layer's job — teaching the engine about a table would be the
- * wrong fix, and it stays a pure function this way.
+ * The engine is pure and knows nothing about the `entrants`/`courts` tables,
+ * so `HealthOffender.label` arrives as a raw id (entrant) or built from one
+ * (courtDay: `${court} ${dayKey}`, `court` being `HealthFixture.court` —
+ * health.ts documents this verbatim, "Raw id (entrant id, court label, or
+ * `${court}::${dayKey}`) … the module and the route stay at raw labels for
+ * now"). Nothing then did the resolving for entrants, so the panel rendered
+ * `Entrant · e3a37cef-54f3-47cc-…`: a seam left for a later pass that
+ * shipped user-visible. `court`/`courtDay` were genuinely fine to pass
+ * through untouched when that comment was written — `HealthFixture.court`
+ * was still the free-text `court_label` then, already a display string.
+ * P9 pass 3a's cutover (`computeStageHealth`/`stageFixtures` above feed it
+ * `court_id` now) means a courtDay offender's label would start rendering a
+ * bare uuid too unless resolved here — the same bug, one field later.
+ * Resolving both is the APP layer's job — teaching the engine about a table
+ * would be the wrong fix, and it stays a pure function this way.
  *
  * Applied INSIDE `computeStageHealth`, deliberately, so the single-stage
  * route and the joint route cannot diverge: this file's whole premise is
@@ -221,28 +236,52 @@ async function computeStageHealth(tx: Tx, stageId: string): Promise<StageHealthR
  * report against its standalone one. Resolving names in either caller
  * instead would break that equality on the first run.
  *
- * `court` and `courtDay` labels are already human-readable (the latter is
- * built as `${court} ${dayKey}`) and pass through untouched. An id with no
- * matching row keeps the id rather than rendering blank — a withdrawn
- * entrant still deserves an identifiable row.
+ * An id with no matching row keeps the id (entrant) or the raw court id
+ * inside the courtDay label rather than rendering blank — a withdrawn
+ * entrant or a since-deleted court still deserves an identifiable row.
  */
-async function withEntrantNames(tx: Tx, metrics: HealthMetric[]): Promise<HealthMetric[]> {
-  const ids = [
+async function withResolvedOffenderLabels(tx: Tx, metrics: HealthMetric[]): Promise<HealthMetric[]> {
+  const entrantIds = [
     ...new Set(
       metrics.flatMap((m) => m.offenders.filter((o) => o.kind === "entrant").map((o) => o.id)),
     ),
   ];
-  if (ids.length === 0) return metrics;
+  // `kind: "court"` is declared on the engine's HealthOffender union but no
+  // metric currently emits it (grep-verified, health.ts) — checked here
+  // anyway, defensively, so a future emitter is covered for free rather than
+  // silently rendering a uuid the day one is added.
+  const needsCourtNames = metrics.some((m) =>
+    m.offenders.some((o) => o.kind === "courtDay" || o.kind === "court"),
+  );
+  if (entrantIds.length === 0 && !needsCourtNames) return metrics;
 
-  const rows = await tx<{ id: string; display_name: string }[]>`
-    select id, display_name from entrants where id = any(${ids}::uuid[])`;
-  const nameById = new Map(rows.map((r) => [r.id, r.display_name]));
+  const [entrantRows, courtNames] = await Promise.all([
+    entrantIds.length > 0
+      ? tx<{ id: string; display_name: string }[]>`
+          select id, display_name from entrants where id = any(${entrantIds}::uuid[])`
+      : Promise.resolve([]),
+    needsCourtNames ? courtNamesById(tx) : Promise.resolve(new Map<string, string>()),
+  ]);
+  const nameById = new Map(entrantRows.map((r) => [r.id, r.display_name]));
 
   return metrics.map((m) => ({
     ...m,
-    offenders: m.offenders.map((o) =>
-      o.kind === "entrant" ? { ...o, label: nameById.get(o.id) ?? o.label } : o,
-    ),
+    offenders: m.offenders.map((o) => {
+      if (o.kind === "entrant") return { ...o, label: nameById.get(o.id) ?? o.label };
+      if (o.kind === "courtDay") {
+        // `courtDayKey` (health.ts) builds `o.id` as `${court}::${dayKey}` —
+        // the SAME split `gapDispersionMetric` itself uses to build the
+        // UNRESOLVED label this replaces.
+        const [courtId, dayKey] = o.id.split("::");
+        const name = courtId !== undefined ? courtNames.get(courtId) : undefined;
+        return name !== undefined ? { ...o, label: `${name} ${dayKey}` } : o;
+      }
+      if (o.kind === "court") {
+        const name = courtNames.get(o.id);
+        return name !== undefined ? { ...o, label: name } : o;
+      }
+      return o;
+    }),
   }));
 }
 
@@ -349,14 +388,16 @@ export async function getCompetitionScheduleHealth(
     // The combined block calls `assessHealth` DIRECTLY rather than going
     // through `computeStageHealth`, because it scores the union of every
     // stage's fixtures and there is no single stage to compute. That means
-    // it does not inherit the entrant-name resolution either, and it must
-    // ask for it explicitly: `primeSlotFairness` is one of the two metrics
-    // COMBINED keeps and it emits `kind: "entrant"` offenders, so without
-    // this the joint report still rendered `Entrant · <uuid>` — the same
-    // bug the per-stage path fixed, left open one caller away because the
-    // first fix stopped at the emitter the report named.
+    // it does not inherit the offender-label resolution either, and it must
+    // ask for it explicitly: `primeSlotFairness` emits `kind: "entrant"`
+    // offenders and `gapDispersion` emits `kind: "courtDay"` ones — BOTH of
+    // COMBINED's two kept metrics — so without this the joint report still
+    // rendered `Entrant · <uuid>` (and, since P9 pass 3a, a bare court uuid
+    // in every courtDay label too) — the same bug the per-stage path fixed,
+    // left open one caller away because the first fix stopped at the
+    // emitter the report named.
     const combined = {
-      metrics: await withEntrantNames(
+      metrics: await withResolvedOffenderLabels(
         tx,
         combinedAssessed.metrics.filter((m) => COMBINED_METRIC_KEYS.has(m.key)),
       ),

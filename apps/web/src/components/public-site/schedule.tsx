@@ -129,7 +129,7 @@ function ScorebugRow({
         <span className="mt-0.5 max-w-[3.25rem] truncate text-[10px] uppercase tracking-wide text-ink-muted">
           {!decided && !live && railMode === "date" && f.scheduled_at
             ? shortDate(f.scheduled_at, tz)
-            : (f.court_label ?? "")}
+            : (f.court_name ?? "")}
         </span>
       </span>
 
@@ -144,7 +144,7 @@ function ScorebugRow({
               : "text-[11px] text-ink-muted"
           }`}
         >
-          {f.summary?.headline ?? (f.venue && railMode === "time" ? f.venue : "")}
+          {f.summary?.headline ?? (f.venue_name && railMode === "time" ? f.venue_name : "")}
         </span>
       )}
       <span title={awayName} className={nameCls(f.away_entrant_id)}>{awayName}</span>

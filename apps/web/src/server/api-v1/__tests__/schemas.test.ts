@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AppendEventRequest,
+  ApplyScheduleRequest,
   CreateClubContact,
   CreateCompetition,
   CreateDivision,
@@ -12,6 +13,7 @@ import {
   LineupSlotInput,
   PatchCompetition,
   PatchEntrant,
+  PatchFixture,
   SetTeamSquad,
 } from "../schemas";
 
@@ -414,5 +416,67 @@ describe("LineupSlotInput.pair_order (S12/#421 pass D)", () => {
     expect(LineupSlotInput.safeParse({ ...base, pair_order: 0 }).success).toBe(false);
     expect(LineupSlotInput.safeParse({ ...base, pair_order: -1 }).success).toBe(false);
     expect(LineupSlotInput.safeParse({ ...base, pair_order: 1.5 }).success).toBe(false);
+  });
+});
+
+// P9 pass 3a — venues/courts cutover, FULL (not a compatibility shim): the
+// legacy free-text `court_label`/`venue` fields leave the wire entirely.
+// `.strict()` on both schemas below turns a stale client's old field name
+// into a loud 400 instead of a silently-stripped-then-empty-patch no-op.
+describe("PatchFixture (P9 pass 3a — venues/courts cutover)", () => {
+  const COURT_ID = "22222222-2222-4222-8222-222222222222";
+  const VENUE_ID = "33333333-3333-4333-8333-333333333333";
+
+  it("accepts court_id and venue_id", () => {
+    const r = PatchFixture.safeParse({ court_id: COURT_ID, venue_id: VENUE_ID });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.court_id).toBe(COURT_ID);
+      expect(r.data.venue_id).toBe(VENUE_ID);
+    }
+  });
+
+  it("accepts a null court_id/venue_id — clearing a fixture's court/venue", () => {
+    expect(PatchFixture.safeParse({ court_id: null, venue_id: null }).success).toBe(true);
+  });
+
+  it("rejects the retired court_label / venue field names — gone from the wire, not silently ignored", () => {
+    expect(PatchFixture.safeParse({ court_label: "Court 1" }).success).toBe(false);
+    expect(PatchFixture.safeParse({ venue: "Main venue" }).success).toBe(false);
+    // Mixed with an otherwise-valid field: a non-strict schema would silently
+    // strip court_label and pass on scheduled_at alone. This must still 400.
+    expect(
+      PatchFixture.safeParse({ scheduled_at: "2026-08-20T09:00:00.000Z", court_label: "Court 1" }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a non-uuid court_id — a real courts.id now, never a free-text label", () => {
+    expect(PatchFixture.safeParse({ court_id: "Court 1" }).success).toBe(false);
+  });
+});
+
+describe("ApplyScheduleRequest (P9 pass 3a — venues/courts cutover)", () => {
+  const base = { fixture_id: UUID, scheduled_at: "2026-08-20T09:00:00.000Z" };
+  const COURT_ID = "22222222-2222-4222-8222-222222222222";
+
+  it("accepts an assignment with court_id, optional venue_id", () => {
+    expect(ApplyScheduleRequest.safeParse({ assignments: [{ ...base, court_id: COURT_ID }] }).success).toBe(
+      true,
+    );
+    expect(
+      ApplyScheduleRequest.safeParse({
+        assignments: [{ ...base, court_id: COURT_ID, venue_id: "33333333-3333-4333-8333-333333333333" }],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("requires court_id — an assignment naming no court is not a valid placement", () => {
+    expect(ApplyScheduleRequest.safeParse({ assignments: [base] }).success).toBe(false);
+  });
+
+  it("rejects an assignment carrying the retired court_label field", () => {
+    expect(
+      ApplyScheduleRequest.safeParse({ assignments: [{ ...base, court_label: "Court 1" }] }).success,
+    ).toBe(false);
   });
 });

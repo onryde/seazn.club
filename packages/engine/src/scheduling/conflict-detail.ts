@@ -7,9 +7,38 @@
 // whichever of the scalar/id fields that template needs. The engine stays
 // id-only — it has no display names, and gains none; resolving an id to a
 // name is a client concern, out of scope here.
+//
+// `courtName` (P9 pass 3a, venues/courts cutover) is the one deliberate
+// exception to "id-only", and it does not contradict the ruling above: no
+// engine call site (calendar.ts/build.ts) ever sets it — `court` became a
+// real `courts.id` the moment apps/web started feeding `Assignment.court`
+// with `fixtures.court_id` instead of the legacy free-text `court_label`
+// (see candidate-courts.ts's own header, and the court-id-lattice-
+// equivalence test: the lattice has always treated `court` as an opaque
+// string, so that swap is a pure representation change, invisible here).
+// `court_double_booking` and `locked_slot_clash` are now the two kinds whose
+// `court` is a bare uuid, and `legacyConflictDetail`
+// (apps/web/conflict-detail-legacy.ts) builds ENGLISH PROSE from a
+// `ConflictDetail` alone — no db, no second argument — so a caller with db
+// access (apps/web) has nowhere else to attach a resolved name for that pure
+// function to read. `courtName` is that attachment point: optional, never
+// populated by the engine, populated only by a caller that already resolved
+// `court` to a `courts.name` before handing the (still otherwise
+// engine-built) detail to `legacyConflictDetail` or the wire mapper.
+//
+// `court_tag_mismatch` (P9 pass 2c, venues/courts cutover, owner ruling) is a
+// 26th kind added post-doc — the design doc's table enumerates 25 and this
+// one postdates it, the same way `courtName` above postdates the doc's
+// original field list. It closes the placer/verifier fork P9 introduced:
+// the placer restricts NEW placements to courts whose tags satisfy a
+// division's/stage's `required_court_tags` (candidate-courts.ts), but
+// nothing on the verify side read that constraint, so a fixture landed on a
+// tag-mismatched court by any other path (a hand-drag, an AI draft) validated
+// clean. `court` is its uuid, same convention as `court_double_booking`.
 
-/** One member per family template. Closed at exactly the 25 the design doc's
- *  table enumerates — a 26th needs a design amendment, not a cast. */
+/** One member per family template. The design doc's own table enumerates 25;
+ *  a 26th (`court_tag_mismatch`, above) has since been added by owner ruling
+ *  — closed at exactly these 26, and a 27th needs the same, not a cast. */
 export type ConflictDetailKind =
   | "person_double_booking"
   | "locked_slot_clash"
@@ -24,6 +53,7 @@ export type ConflictDetailKind =
   | "outside_competition_window"
   | "outside_start_window"
   | "court_double_booking"
+  | "court_tag_mismatch"
   | "inside_blackout"
   | "outside_session_windows"
   | "entrant_overlap"
@@ -50,6 +80,8 @@ export interface ConflictDetail {
   personIds?: string[];
   otherFixtureId?: string;
   court?: string;
+  /** Caller-attached only — see the module header. Never set by the engine. */
+  courtName?: string;
   day?: string;
   otherDay?: string;
   weekday?: string;
@@ -80,6 +112,7 @@ const FIELD_ORDER_WITNESS: Record<Exclude<keyof ConflictDetail, "kind">, true> =
   personIds: true,
   otherFixtureId: true,
   court: true,
+  courtName: true,
   day: true,
   otherDay: true,
   weekday: true,

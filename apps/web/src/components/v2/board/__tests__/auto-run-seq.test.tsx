@@ -81,7 +81,8 @@ function driveHook() {
 }
 
 const solveOk = (fixtureId: string, at: string, court: string) => ({
-  assignments: [{ fixture_id: fixtureId, scheduled_at: at, court_label: court }],
+  // P9: /schedule/auto returns `court_id` (schedule.ts), not the frozen label.
+  assignments: [{ fixture_id: fixtureId, scheduled_at: at, court_id: court }],
   conflicts: [],
 });
 const applyOk = () => Promise.resolve({ applied: 1, conflicts: [] });
@@ -135,7 +136,7 @@ describe("autoRun — a 409 on apply re-solves ONCE against the fresh board", ()
     expect(bodies[0]).toMatchObject({ expected_seq: 3 }); // DIV_A's original rendered seq
     expect(bodies[1]).toMatchObject({
       expected_seq: 9, // the 409's current_seq, not seqRef's stale value
-      assignments: [{ fixture_id: "f1", scheduled_at: "2026-08-05T11:00:00.000Z", court_label: "2" }],
+      assignments: [{ fixture_id: "f1", scheduled_at: "2026-08-05T11:00:00.000Z", court_id: "2" }],
     });
     // Silent, per the owner ruling: no red error, and the friendly
     // SEQ_CONFLICT notice never fires — this conflict resolved itself.

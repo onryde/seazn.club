@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { TAG, apiJson, activeOrg, setDateTime } from "./helpers";
+import { TAG, apiJson, activeOrg, setDateTime, seedVenueWithCourts } from "./helpers";
 
 // PROMPT-33 item 4 (v3/04 §3): the division fixtures page groups rounds with
 // date ranges, renders times in the COMPETITION timezone (browser pinned to
@@ -38,12 +38,13 @@ test("rounds group with dates, times honour the competition tz, reschedule undoe
     "POST",
     { seq: 1, kind: "league", name: "League" },
   );
+  const { courts } = await seedVenueWithCourts(request, ["Court 1"]);
   await apiJson(request, `/api/v1/divisions/${div.data!.id}/schedule-settings`, "PUT", {
     config: {
       startAt: "2026-09-15T09:00:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["Court 1"],
+      courts: [courts[0]!.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -61,7 +62,7 @@ test("rounds group with dates, times honour the competition tz, reschedule undoe
   for (let i = 0; i < ids.length - 1; i++) {
     await apiJson(request, `/api/v1/fixtures/${ids[i]!}`, "PATCH", {
       scheduled_at: new Date(base + i * 60 * 60_000).toISOString(),
-      court_label: "Court 1",
+      court_id: courts[0]!.id,
     });
   }
   // C1: the inline-reschedule bait below moves a scheduled fixture to a LATER
@@ -180,12 +181,13 @@ test("a division with an END date and no start date still renders its fixtures t
   // The crashing shape: `endAt` present, `startAt` absent entirely. Fixtures
   // are generated and left unscheduled, which is what puts the capacity
   // pre-check — the throw site — on screen in the first place.
+  const { courts } = await seedVenueWithCourts(request, ["Court 1"]);
   await apiJson(request, `/api/v1/divisions/${div.data!.id}/schedule-settings`, "PUT", {
     config: {
       endAt: "2026-09-20T22:59:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["Court 1"],
+      courts: [courts[0]!.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],

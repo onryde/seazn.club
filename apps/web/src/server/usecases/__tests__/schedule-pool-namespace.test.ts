@@ -49,6 +49,12 @@ const DIV_A = "11111111-1111-4111-8111-111111111111";
 const POOL_A_ID = "22222222-2222-4222-8222-222222222222";
 /** What `pools.key` holds and what the MODEL is shown as `PackFixture.pool`. */
 const POOL_A_KEY = "A";
+/** P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)`. This file has no
+ *  DB — `settings()` runs its literal through the real `ScheduleConfig.parse`,
+ *  so its `courts` array needs uuid-shaped values; the AI-path `pack()` below
+ *  keeps its own free-text court labels (never zod-parsed) untouched. */
+const COURT_A_ID = "55555555-5555-4555-8555-555555555555";
+const COURT_B_ID = "66666666-6666-4666-8666-666666666666";
 
 // One day, two fixtures in pool A sharing entrant e1, 40 minutes apart. Both a
 // 180-minute pool rest and a 1/day pool cap are breached — by a wide margin, so
@@ -83,6 +89,10 @@ function row(over: Partial<FixtureLite> = {}): FixtureLite {
     home_entrant_id: "e1",
     away_entrant_id: "e2",
     scheduled_at: iso(T0),
+    // P9 cutover: `court_id` is the real identity the engine reads; the two
+    // legacy text fields below are frozen and read-only.
+    court_id: "33333333-3333-4333-8333-333333333333",
+    venue_id: null,
     court_label: "Court 1",
     venue: null,
     status: "scheduled",
@@ -111,7 +121,7 @@ function settings(constraints: Record<string, unknown>): ScheduleSettingsOut {
       startAt: iso(T0),
       matchMinutes: 40,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 2"],
+      courts: [COURT_A_ID, COURT_B_ID],
       perEntrantMinRest: 30,
       constraints,
     }),
@@ -275,7 +285,7 @@ describe("one pool namespace across the engine boundary (#449)", () => {
     // uuid. Scoped to `fixtures` on purpose — `settings.constraints` genuinely
     // does carry pool uuids on the wire (a stored `restByGroup` key, a stored
     // rule's scope), and that predates this change.
-    const payload = toModelPayload(pack(POOL_A_ID)) as Record<string, unknown>;
+    const payload = toModelPayload(pack(POOL_A_ID), {}) as Record<string, unknown>;
     expect("poolIds" in payload).toBe(false);
     expect(JSON.stringify(payload.fixtures)).not.toContain(POOL_A_ID);
     expect(JSON.stringify(payload.fixtures)).toContain(`"pool":"${POOL_A_KEY}"`);

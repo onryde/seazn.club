@@ -94,11 +94,21 @@ describe.skipIf(!HAS_DB)("addFixture (PROMPT-66)", () => {
     const [{ count: before }] = await sql<{ count: number }[]>`
       select count(*)::int as count from fixtures where stage_id = ${stage!.id}`;
 
+    // P9 pass 3c-2: a real venue/court by id — addFixture was the one writer
+    // the cutover missed, still taking a free-text `venue` until now.
+    const [{ id: venueId }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${auth.orgId}, ${"Riverside"}) returning id`;
+    const [{ id: courtId }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueId}, ${auth.orgId}, ${"Court 9"}, ${sql.array([])})
+      returning id`;
+
     const { fixture_id } = await addFixture(auth, stage!.id, {
       home_entrant_id: entrants[0]!,
       away_entrant_id: entrants[1]!,
       scheduled_at: "2026-08-01T10:00:00Z",
-      venue: "Court 9",
+      venue_id: venueId,
+      court_id: courtId,
     });
 
     const [fx] = await sql<
@@ -108,11 +118,21 @@ describe.skipIf(!HAS_DB)("addFixture (PROMPT-66)", () => {
         status: string;
         ext_key: string;
         venue: string | null;
+        court_label: string | null;
+        venue_id: string | null;
+        court_id: string | null;
       }[]
-    >`select round_no, seq_in_round, status, ext_key, venue from fixtures where id = ${fixture_id}`;
+    >`select round_no, seq_in_round, status, ext_key, venue, court_label, venue_id, court_id
+      from fixtures where id = ${fixture_id}`;
     expect(fx.status).toBe("scheduled");
     expect(fx.ext_key.startsWith("adhoc-")).toBe(true);
-    expect(fx.venue).toBe("Court 9");
+    // The real identity lands...
+    expect(fx.venue_id).toBe(venueId);
+    expect(fx.court_id).toBe(courtId);
+    // ...and NEITHER frozen text column is touched — this is the writer the
+    // P9 cutover missed; reverting to `input.venue` would fail this.
+    expect(fx.venue).toBeNull();
+    expect(fx.court_label).toBeNull();
     const [{ count: after }] = await sql<{ count: number }[]>`
       select count(*)::int as count from fixtures where stage_id = ${stage!.id}`;
     expect(after).toBe(before + 1);
@@ -224,5 +244,53 @@ describe.skipIf(!HAS_DB)("addFixture (PROMPT-66)", () => {
         away_entrant_id: other.entrants[1]!,
       }),
     ).rejects.toMatchObject({ status: 422 }); // complete stage refuses
+  });
+
+  // #8 sibling fix: court_id/venue_id are FK-restricted, but the FK is
+  // `deferrable initially deferred` (V367) — an id that isn't a real court/
+  // venue of this org used to only fail at COMMIT time as a raw Postgres
+  // foreign_key_violation (500), not a clean 4xx.
+  it("rejects a court_id/venue_id that is not a real court/venue of this org (404, not a commit-time FK violation)", async () => {
+    const { auth } = await seedOrg();
+    const { division, entrants } = await seedDivision(auth, 3);
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "league",
+      name: "League",
+      config: {},
+      progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+
+    await expect(
+      addFixture(auth, stage!.id, {
+        home_entrant_id: entrants[0]!,
+        away_entrant_id: entrants[1]!,
+        court_id: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ status: 404, code: "COURT_NOT_FOUND" });
+
+    await expect(
+      addFixture(auth, stage!.id, {
+        home_entrant_id: entrants[0]!,
+        away_entrant_id: entrants[1]!,
+        venue_id: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ status: 404, code: "VENUE_NOT_FOUND" });
+
+    // A real court/venue of this org, meanwhile, still succeeds.
+    const [{ id: venueId }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${auth.orgId}, ${"Riverside"}) returning id`;
+    const [{ id: courtId }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueId}, ${auth.orgId}, ${"Court A"}, ${sql.array([])})
+      returning id`;
+    const { fixture_id } = await addFixture(auth, stage!.id, {
+      home_entrant_id: entrants[0]!,
+      away_entrant_id: entrants[1]!,
+      venue_id: venueId,
+      court_id: courtId,
+    });
+    expect(fixture_id).toBeTruthy();
   });
 });

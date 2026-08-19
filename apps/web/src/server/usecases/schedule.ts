@@ -14,6 +14,7 @@ import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { publishDivisionUpdate } from "@/lib/realtime";
 import { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED, REASON_CODE } from "@/lib/schedule-board";
 import { resolveVenueTz } from "@/lib/tz";
+import { buildCourtDirectory } from "@/lib/court-directory";
 import { log } from "@/server/logger";
 import { EngineError } from "@seazn/engine/core";
 import {
@@ -58,6 +59,12 @@ import {
 } from "@/server/api-v1/schemas";
 import { sendOfficialAssignmentChangedEmail } from "@/lib/email";
 import { capacityInputForFixtures, guardCapacity } from "./capacity-guard";
+import {
+  guardNoMatchingCourt,
+  resolveCandidateCourts,
+  resolveTagQualifiedCourtIds,
+  unionRequiredCourtTags,
+} from "./court-candidates";
 import { buildEngineConstraints } from "./engine-constraints";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { generateStageFixtures } from "./stages";
@@ -308,28 +315,39 @@ export async function putScheduleSettings(
       // One row per offending court, with the two reasons counted separately.
       // A pinned-AND-decided fixture counts once, as pinned: the pin is the
       // thing the organiser can actually act on.
-      const blocked = await tx<{ court_label: string; pinned: number; fixed: number }[]>`
-        select court_label,
+      //
+      // P9 pass 3a: `removedCourts` holds court IDS (`ScheduleConfig.courts`
+      // has been `CourtId[]` since pass 1) — this guard queried
+      // `court_label = any(removedCourts)` for one whole pass, which could
+      // never match (a uuid against a free-text label), so it was silently
+      // inert: a court could be removed out from under a pinned or in-play
+      // fixture with nothing refusing it. Keying on `court_id` restores it.
+      const blocked = await tx<{ court_id: string; pinned: number; fixed: number }[]>`
+        select court_id,
                count(*) filter (where schedule_locked)::int as pinned,
                count(*) filter (
                  where not schedule_locked and status = any(${FIXED_OCCUPYING})
                )::int as fixed
         from fixtures
         where division_id = ${divisionId}
-          and court_label = any(${removedCourts})
+          and court_id = any(${removedCourts})
           and (schedule_locked or status = any(${FIXED_OCCUPYING}))
-        group by court_label
-        order by court_label`;
+        group by court_id
+        order by court_id`;
       if (blocked.length > 0) {
         // Names every offending court and both counts, so the organiser does
-        // not discover the second blocker only after clearing the first.
+        // not discover the second blocker only after clearing the first. A
+        // name, never a bare uuid — resolved here rather than joined into
+        // the query above so the fallback (a resolver miss) stays a single,
+        // obvious `?? r.court_id` rather than a second query shape.
+        const courtNames = await courtNamesById(tx);
         const detail = blocked
           .map((r) => {
             const why = [
               ...(r.pinned > 0 ? [`${r.pinned} pinned`] : []),
               ...(r.fixed > 0 ? [`${r.fixed} in play or completed`] : []),
             ];
-            return `${r.court_label} (${why.join(" + ")})`;
+            return `${courtNames.get(r.court_id) ?? r.court_id} (${why.join(" + ")})`;
           })
           .join(", ");
         throw new HttpError(
@@ -417,7 +435,23 @@ export interface FixtureLite {
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   scheduled_at: string | Date | null;
+  /** P9 pass 3a (venues/courts cutover): the REAL identity now — every
+   *  "does this fixture have a placed court/is it occupying one" question
+   *  reads THIS, never `court_label` below. `toAssignment` feeds it straight
+   *  into the engine's `Assignment.court` (a pure representation swap — the
+   *  scheduling lattice has always treated `court` as an opaque string, see
+   *  court-id-lattice-equivalence.test.ts). */
+  court_id: string | null;
+  venue_id: string | null;
+  /** LEGACY, read-only. Nothing writes it any more (`moveFixture`/
+   *  `applySchedule` stopped, per the owner's FULL-cutover ruling) — frozen
+   *  at whatever value each fixture already carried when that pass shipped.
+   *  `scopeLocked` below matched on this column through pass 3a; P9
+   *  pass-3a-FIX migrated `locked_scopes` to real ids (V374, third block) and
+   *  switched the match to `court_id` above, so this field has no remaining
+   *  reader. Do NOT use for anything else. */
   court_label: string | null;
+  /** LEGACY, read-only — same reasoning as `court_label` above. */
   venue: string | null;
   status: string;
   schedule_locked: boolean;
@@ -427,20 +461,29 @@ export interface FixtureLite {
 
 // Scope locks (Jul3/03 §4, 22 Jun two-site safety): fixtures matching a
 // division's locked_scopes entry are treated exactly like pinned fixtures.
+//
+// P9 pass-3a-FIX: `courts`/`venues` hold real `courts.id`/`venues.id` values,
+// not organiser-typed names — V374's third migration block rewrote every
+// stored `locked_scopes` row from names to ids the same way pass 1 rewrote
+// `schedule_settings.config.courts`. `scopeLocked` below matches on
+// `court_id`/`venue_id` accordingly, never the legacy `court_label`/`venue`
+// columns.
 export interface LockedScope {
+  /** Real `courts.id` values (V374 cutover). */
   courts?: string[];
+  /** Real `venues.id` values (V374 cutover). */
   venues?: string[];
   pool_ids?: string[];
 }
 
 export function scopeLocked(
-  f: Pick<FixtureLite, "court_label" | "venue" | "pool_id">,
+  f: Pick<FixtureLite, "court_id" | "venue_id" | "pool_id">,
   scopes: readonly LockedScope[],
 ): boolean {
   return scopes.some(
     (s) =>
-      (s.courts !== undefined && f.court_label !== null && s.courts.includes(f.court_label)) ||
-      (s.venues !== undefined && f.venue !== null && s.venues.includes(f.venue)) ||
+      (s.courts !== undefined && f.court_id !== null && s.courts.includes(f.court_id)) ||
+      (s.venues !== undefined && f.venue_id !== null && s.venues.includes(f.venue_id)) ||
       (s.pool_ids !== undefined && f.pool_id !== null && s.pool_ids.includes(f.pool_id)),
   );
 }
@@ -534,7 +577,7 @@ export function roundRobinSequenceSiblings(
     (f) =>
       !exclude.has(f.id) &&
       f.scheduled_at !== null &&
-      f.court_label !== null &&
+      f.court_id !== null &&
       keys.has(roundRobinSequenceKey(f)),
   );
 }
@@ -542,7 +585,9 @@ export function roundRobinSequenceSiblings(
 const FIXTURE_LITE_COLS = [
   "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "ext_key",
   "home_entrant_id", "away_entrant_id",
-  "scheduled_at", "court_label", "venue", "status", "schedule_locked",
+  // P9 pass 3a: court_id/venue_id are the real identity; court_label/venue
+  // ride along read-only, for scopeLocked alone (see FixtureLite's comment).
+  "scheduled_at", "court_id", "venue_id", "court_label", "venue", "status", "schedule_locked",
   "winner_to_fixture", "loser_to_fixture",
 ] as const;
 
@@ -551,6 +596,62 @@ export async function divisionFixtures(tx: Tx, divisionId: string): Promise<Fixt
     select ${tx(FIXTURE_LITE_COLS)} from fixtures
     where division_id = ${divisionId} and status in ${tx(OCCUPYING)}
     order by round_no, seq_in_round, id`;
+}
+
+/** id -> name for every court this org has configured (P9 pass 3a). The
+ *  DERIVED, read-only name a response carries beside a `court_id` — see the
+ *  dispatch ruling on `ScheduleAssignment`/`ScheduleConflictDetail`.
+ *  Deliberately NOT filtered to non-archived: an archived court can still
+ *  carry a real, already-placed fixture (ruling 3, candidate-courts.ts) or a
+ *  historical conflict, and both must still render a name, not a bare uuid.
+ *  Relies on `withTenant`'s RLS context for org scoping — the same
+ *  convention `court-candidates.ts`'s `orgCourtMetas` already uses. */
+export async function courtNamesById(tx: Tx): Promise<Map<string, string>> {
+  // P9 review wave 2: VENUE-QUALIFIED, not the bare `courts.name`. A court name
+  // is unique only WITHIN its venue (`courts_venue_name_active_idx` is scoped
+  // per venue), so two venues may legally each name one "Court 1" — and every
+  // consumer of this map was then showing them identically. That is not only a
+  // display defect: `officials-ai.ts` prices a run on the count of DISTINCT
+  // court values in its pack, so two same-named courts collapsed into one and
+  // the credit rung came out under the run the organiser actually got.
+  //
+  // `buildCourtDirectory` is the one implementation of that rule (the board,
+  // the picker and the AI pack already go through it) and it also settles the
+  // residual ties — including an archived and an active court sharing a venue
+  // AND a name, which the partial index permits once a name is freed.
+  const rows = await tx<{ id: string; name: string; venue_name: string; tags: string[] }[]>`
+    select c.id, c.name, v.name as venue_name, c.tags
+    from courts c
+    join venues v on v.id = c.venue_id
+    order by v.sort, v.name, c.sort, c.name, c.id`;
+  return new Map([...buildCourtDirectory(rows)].map(([id, info]) => [id, info.label]));
+}
+
+/** id -> name for every venue this org has configured (P9 pass 3a) — the
+ *  `venue_id` sibling of {@link courtNamesById}, same reasoning throughout. */
+export async function venueNamesById(tx: Tx): Promise<Map<string, string>> {
+  const rows = await tx<{ id: string; name: string }[]>`select id, name from venues`;
+  return new Map(rows.map((r) => [r.id, r.name]));
+}
+
+/** id -> venue_id for every court this org has configured (P9 review #5) —
+ *  the SERVER-SIDE source of truth for which venue a court belongs to, so a
+ *  fixture's `venue_id` can be DERIVED from its `court_id` rather than
+ *  trusted from client input (see `applySchedule`/`moveFixture`'s writes). A
+ *  supplied `venue_id` must never be able to disagree with the court's own
+ *  venue. Deliberately NOT filtered to non-archived — same reasoning as
+ *  `courtNamesById`: an archived court can still carry an already-placed
+ *  fixture, and its venue_id must still resolve. Relies on `withTenant`'s
+ *  RLS context for org scoping, same convention as `courtNamesById`/
+ *  `venueNamesById`. */
+/** court id -> its venue id. The venue a fixture sits in is DERIVED from the
+ *  court it is on, never taken from the client: `courts.venue_id` and the
+ *  composite FK already guarantee the two agree, so a supplied `venue_id`
+ *  could only ever disagree. Exported for the JOINT apply path
+ *  (competition-schedule-apply.ts), which must resolve it identically. */
+export async function courtVenueIds(tx: Tx): Promise<Map<string, string>> {
+  const rows = await tx<{ id: string; venue_id: string }[]>`select id, venue_id from courts`;
+  return new Map(rows.map((r) => [r.id, r.venue_id]));
 }
 
 // person ids per entrant, for cross-division overlap warnings (doc 06 §4.3).
@@ -637,7 +738,15 @@ export function toAssignment(
   const start = ms(f.scheduled_at as string | Date);
   return {
     fixtureId: f.id,
-    court: f.court_label ?? "",
+    // P9 pass 3a: court_id, not the legacy court_label — `SlotConfig.courts`
+    // has held real court uuids since pass 1 (`ScheduleConfig.courts:
+    // z.array(CourtId)`), so an Assignment fed the OLD label could never
+    // match a configured court string again; occupancy tracking and
+    // double-booking detection would have gone silently blind the moment
+    // this cutover's other half (the config side) landed. See
+    // court-id-lattice-equivalence.test.ts — the lattice itself is a pure
+    // representation swap either way.
+    court: f.court_id ?? "",
     startAt: start,
     endAt: start + matchMinutes * MS_PER_MIN,
     entrants: [f.home_entrant_id, f.away_entrant_id].filter((e): e is string => e !== null),
@@ -711,7 +820,7 @@ export async function siblingAssignments(
     select ${tx(FIXTURE_LITE_COLS)} from fixtures
     where division_id in (select id from divisions
                           where competition_id = ${competitionId} and id not in ${tx(excluded)})
-      and scheduled_at is not null and court_label is not null
+      and scheduled_at is not null and court_id is not null
       and status in ${tx(OCCUPYING)}`;
   if (rows.length === 0) return { assignments: [], ruleFixtures: [] };
   const settings = await tx<{ division_id: string; config: unknown }[]>`
@@ -910,6 +1019,9 @@ function toWireConflictDetail(d: ConflictDetail): NonNullable<ScheduleConflict["
     ...(d.personIds !== undefined ? { person_ids: d.personIds } : {}),
     ...(d.otherFixtureId !== undefined ? { other_fixture_id: d.otherFixtureId } : {}),
     ...(d.court !== undefined ? { court: d.court } : {}),
+    // P9 pass 3a: reads `courtName` already resolved onto `d` by
+    // `mapConflicts` below — this function itself does no db lookup.
+    ...(d.courtName !== undefined ? { court_name: d.courtName } : {}),
     ...(d.day !== undefined ? { day: d.day } : {}),
     ...(d.otherDay !== undefined ? { other_day: d.otherDay } : {}),
     ...(d.weekday !== undefined ? { weekday: d.weekday } : {}),
@@ -927,24 +1039,55 @@ function toWireConflictDetail(d: ConflictDetail): NonNullable<ScheduleConflict["
   };
 }
 
-function mapConflicts(conflicts: readonly Conflict[]): ScheduleConflict[] {
-  return conflicts.map((c) => ({
-    fixture_id: c.fixtureId,
-    code: REASON_CODE[c.reason],
-    // The rule the prompt teaches, carried through so the organiser's 409 and a
-    // repair round cite the same token (#399).
-    ...(c.rule !== undefined ? { rule: c.rule } : {}),
-    ...(c.shortfallMinutes !== undefined ? { shortfall_minutes: c.shortfallMinutes } : {}),
-    blocking: isBlockingConflict(c),
-    // Structured (additive) and the deprecated derived English (back-compat,
-    // C3 2026-08-13 design amendment) — both from the SAME `details`, so they
-    // can never disagree. Omitted together: a `Conflict` the engine built
-    // without a `details` entry gets neither, same as it got no `detail`
-    // before this wave.
-    ...(c.details !== undefined
-      ? { details: toWireConflictDetail(c.details), detail: legacyConflictDetail(c.details) }
-      : {}),
-  }));
+/**
+ * `court` on a `ConflictDetail` (P9 pass 3a) is a real `courts.id` now —
+ * `court_double_booking`, `locked_slot_clash`, and `court_tag_mismatch`
+ * (P9 pass 2c) are the three kinds that set it (via `Assignment.court`,
+ * `toAssignment`'s own comment). `courtNames` is required, not defaulted,
+ * so a caller cannot forget to resolve it and
+ * silently ship a bare uuid in `details.court_name` / the legacy prose —
+ * every call site below fetches it once (cheap: `select id, name from
+ * courts`, RLS-scoped) and threads it through.
+ *
+ * Resolves onto a CLONE of `details` — the engine's own `Conflict[]` is
+ * never mutated — via the engine's `ConflictDetail.courtName` field (see
+ * its own doc comment): `legacyConflictDetail` is a pure function that
+ * takes no second argument, so this is the one place a resolved name can
+ * reach it.
+ */
+/** Attach the derived, venue-qualified court name to a conflict's details.
+ *  Exported (review wave 3) so the AI-plan and joint-apply paths resolve
+ *  identically instead of shipping a raw uuid to the organiser. */
+export function withCourtNames(details: ConflictDetail, courtNames: ReadonlyMap<string, string>): ConflictDetail {
+  if (details.court === undefined) return details;
+  const courtName = courtNames.get(details.court);
+  return courtName !== undefined ? { ...details, courtName } : details;
+}
+
+function mapConflicts(
+  conflicts: readonly Conflict[],
+  courtNames: ReadonlyMap<string, string>,
+): ScheduleConflict[] {
+  return conflicts.map((c) => {
+    const details = c.details !== undefined ? withCourtNames(c.details, courtNames) : c.details;
+    return {
+      fixture_id: c.fixtureId,
+      code: REASON_CODE[c.reason],
+      // The rule the prompt teaches, carried through so the organiser's 409 and a
+      // repair round cite the same token (#399).
+      ...(c.rule !== undefined ? { rule: c.rule } : {}),
+      ...(c.shortfallMinutes !== undefined ? { shortfall_minutes: c.shortfallMinutes } : {}),
+      blocking: isBlockingConflict(c),
+      // Structured (additive) and the deprecated derived English (back-compat,
+      // C3 2026-08-13 design amendment) — both from the SAME `details`, so they
+      // can never disagree. Omitted together: a `Conflict` the engine built
+      // without a `details` entry gets neither, same as it got no `detail`
+      // before this wave.
+      ...(details !== undefined
+        ? { details: toWireConflictDetail(details), detail: legacyConflictDetail(details) }
+        : {}),
+    };
+  });
 }
 
 /**
@@ -986,11 +1129,15 @@ export function applyWindow(
  * absolute rule the organiser's next edit to such a board would 409 and they
  * would be stuck, unable to fix the very thing that is wrong.
  */
-function assertNoNewBlocking(before: readonly Conflict[], after: readonly Conflict[]): void {
+function assertNoNewBlocking(
+  before: readonly Conflict[],
+  after: readonly Conflict[],
+  courtNames: ReadonlyMap<string, string>,
+): void {
   const refused = deltaConflicts(before, after).filter(isBlockingConflict);
   if (refused.length > 0) {
     throw new EngineError("SCHEDULE_CONFLICT", "schedule change hits a blocking conflict", {
-      conflicts: mapConflicts(refused),
+      conflicts: mapConflicts(refused, courtNames),
     });
   }
 }
@@ -1022,7 +1169,14 @@ function assertNoNewBlocking(before: readonly Conflict[], after: readonly Confli
 export const TIERS_TOTAL = TIER_COUNT;
 
 export interface AutoScheduleOut {
-  assignments: { fixture_id: string; scheduled_at: string; ends_at: string; court_label: string }[];
+  assignments: {
+    fixture_id: string;
+    scheduled_at: string;
+    ends_at: string;
+    court_id: string;
+    /** DERIVED, read-only (P9 pass 3a) — see `ScheduleAssignment` in schemas.ts. */
+    court_name: string | null;
+  }[];
   conflicts: ScheduleConflict[];
   /** Board quality of the proposal (Task 8's wire shape, filled here). */
   metrics: ScheduleMetrics;
@@ -1049,6 +1203,16 @@ interface AutoSchedulePlan {
    *  `withDefaultDaySpread`'s synthetic cap. See the guard call site's
    *  comment for why this is deliberately NOT the same object as `config`. */
   capacityConfig: SlotConfig & VerifyConfig & { courts: string[] };
+  /** P9 pass 2b: the union of tags that produced `capacityConfig.courts` —
+   *  division ∪ stage (`unionRequiredCourtTags`). Carried out of the
+   *  transaction purely for the phase-2 `guardNoMatchingCourt` error
+   *  payload; nothing else reads it. */
+  requiredCourtTags: string[];
+  /** P9 pass 3a: id -> name, resolved once in phase 1 (the only phase with
+   *  a db connection) and carried out for phase 3's wire mapping
+   *  (`court_name` on each proposed assignment, and any conflict whose
+   *  `details.court` needs one). */
+  courtNames: Map<string, string>;
   /**
    * The direct winner/loser feed edges of the whole division (#452).
    *
@@ -1119,13 +1283,30 @@ export async function autoSchedule(
 
   // ---- Phase 1: read. The connection goes back to the pool at the `}` below.
   const plan = await withTenant(auth.orgId, async (tx): Promise<AutoSchedulePlan> => {
-    const [stage] = await tx<{ division_id: string; competition_id: string }[]>`
-      select s.division_id, d.competition_id
+    const [stage] = await tx<
+      {
+        division_id: string;
+        competition_id: string;
+        // P9 pass 2b: read straight off the SAME join the rest of this query
+        // already makes rather than a second round trip — division's D5/P8
+        // tags and the stage's own V367 sibling (its READ path, previously
+        // unwired, see court-candidates.ts), unioned below for the
+        // candidate-court resolve.
+        stage_required_court_tags: string[];
+        division_required_court_tags: string[];
+      }[]
+    >`
+      select s.division_id, d.competition_id,
+        s.required_court_tags as stage_required_court_tags,
+        d.required_court_tags as division_required_court_tags
       from stages s join divisions d on d.id = s.division_id
       where s.id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
     const settings = await loadSettings(tx, stage.division_id);
     const all = await divisionFixtures(tx, stage.division_id);
+    // P9 pass 3a: resolved once here (the only phase with a connection) and
+    // carried out via the plan for phase 3's wire mapping — see AutoSchedulePlan.
+    const courtNames = await courtNamesById(tx);
     const { scopes } = await divisionLockState(tx, stage.division_id);
     // C1 (2026-08-12 round-order design). Resolved once, reused for both the
     // `schedulable` builder below and every `toAssignment` call in this
@@ -1145,7 +1326,7 @@ export async function autoSchedule(
     const movable = all.filter((f) => f.stage_id === stageId && f.status === MOVABLE_STATUS);
     const obstacles = all
       .filter((f) => !movable.includes(f))
-      .filter((f) => f.scheduled_at !== null && f.court_label !== null)
+      .filter((f) => f.scheduled_at !== null && f.court_id !== null)
       .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
     const siblings = await siblingAssignments(
       tx,
@@ -1197,7 +1378,7 @@ export async function autoSchedule(
       ...(f.away_entrant_id !== null ? { away: f.away_entrant_id } : {}),
       people: peopleOf(f, people),
       ...(pinnedIds.has(f.id)
-        ? { locked: { court: f.court_label as string, startAt: ms(f.scheduled_at as string | Date) } }
+        ? { locked: { court: f.court_id as string, startAt: ms(f.scheduled_at as string | Date) } }
         : {}),
     }));
 
@@ -1213,13 +1394,37 @@ export async function autoSchedule(
     // Where the movable cards sit RIGHT NOW. REFLOW proposes from this rather
     // than from nothing, so it is split by whether this run may move the card.
     const placedNow = movable
-      .filter((f) => !pinnedIds.has(f.id) && f.scheduled_at !== null && f.court_label !== null)
+      .filter((f) => !pinnedIds.has(f.id) && f.scheduled_at !== null && f.court_id !== null)
       .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
     const pinnedNow = movable
       .filter((f) => pinnedIds.has(f.id))
       .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
 
-    const declaredConfig = toVerifyConfig(settings, all, roundToMinute(Date.now()), siblings.ruleFixtures);
+    // P9 pass 2b: the candidate court set for THIS stage — the organiser's
+    // configured `settings.config.courts`, filtered to non-archived courts
+    // carrying every tag the division OR the stage requires, through the
+    // ONE engine filter (court-candidates.ts's own header explains why a
+    // second, inlined tag-filter loop here is this subsystem's recurring
+    // bug). `settingsForEngine` overrides ONLY `config.courts` — every other
+    // read of `settings` below (matchMinutes, orgTz, …) stays untouched —
+    // so `toVerifyConfig`/`toSlotConfig` need no changes of their own:
+    // `courts: [...c.courts]` already does the right thing once the courts
+    // it's handed already ARE the filtered set.
+    const requiredCourtTags = unionRequiredCourtTags(
+      stage.division_required_court_tags,
+      stage.stage_required_court_tags,
+    );
+    const candidateCourtIds = await resolveCandidateCourts(
+      tx,
+      stage.division_id,
+      settings.config.courts,
+      requiredCourtTags,
+    );
+    const settingsForEngine = {
+      ...settings,
+      config: { ...settings.config, courts: [...candidateCourtIds.ids] },
+    };
+    const declaredConfig = toVerifyConfig(settingsForEngine, all, roundToMinute(Date.now()), siblings.ruleFixtures);
     const windowedConfig = boundSolverWindow(
       declaredConfig,
       schedulable,
@@ -1267,6 +1472,14 @@ export async function autoSchedule(
       // organiser configured, still carrying every rule they actually set
       // (constraints.hard from the Constraints tab).
       capacityConfig: declaredConfig,
+      // P9 pass 2b: the NO_MATCHING_COURT guard (phase 2, no db connection
+      // held) reads `capacityConfig.courts.length` — declaredConfig's, the
+      // same "read declaredConfig, never windowedConfig/config" discipline
+      // guardCapacity's own call site already established just below — and
+      // needs the tags that produced it for the error payload, which is not
+      // otherwise derivable once the transaction has closed.
+      requiredCourtTags,
+      courtNames,
       board,
       divisionId: stage.division_id,
       orgTz: settings.orgTz,
@@ -1299,6 +1512,19 @@ export async function autoSchedule(
   // `reflowExisting`'s own doc comment for the full rationale, the accepted
   // trade-off, and the reconciliation this makes necessary.
   const { schedulable, config, board, dependencies, total } = plan;
+  // P9 pass 2b: an empty candidate court set makes the solve unwinnable
+  // before it starts — checked FIRST, ahead of capacity, because "no court
+  // matches your tags" is a more specific, more actionable refusal than the
+  // capacity guard would derive from a zero-court config on its own. Reads
+  // `capacityConfig.courts` (declaredConfig, already the FILTERED set —
+  // phase 1 fed it through `resolveCandidateCourts` before building
+  // `declaredConfig`), the same "read declaredConfig" discipline
+  // `guardCapacity` just below follows for the identical reason.
+  guardNoMatchingCourt(plan.capacityConfig.courts, {
+    requiredTags: plan.requiredCourtTags,
+    divisionId: plan.divisionId,
+    stageId,
+  });
   // D2 capacity pre-check: arithmetic-provable impossibility refuses with a
   // typed 422 BEFORE either solver is reached — no db connection is held
   // here (phase 1 already closed), so this costs nothing a real solve
@@ -1404,13 +1630,14 @@ export async function autoSchedule(
   const seeded: number | undefined =
     "seeded" in out && typeof out.seeded === "number" ? out.seeded : undefined;
 
-  // ---- Phase 3: map. Pure.
+  // ---- Phase 3: map. Pure (courtNames was resolved in phase 1).
   return {
     assignments: out.assignments.map((a) => ({
       fixture_id: a.fixtureId,
       scheduled_at: iso(a.startAt),
       ends_at: iso(a.endAt),
-      court_label: a.court,
+      court_id: a.court,
+      court_name: plan.courtNames.get(a.court) ?? null,
     })),
     // No baseline: the auto pass PROPOSES a board rather than editing one, so
     // every conflict in it is this proposal's own doing (#399).
@@ -1434,10 +1661,10 @@ export async function autoSchedule(
     // with `validateAssignments` (which reads only the `min_rest_minutes`
     // subset, and only to raise a pair's bound), so the two lists concatenate
     // without double-reporting.
-    conflicts: mapConflicts([
-      ...out.conflicts,
-      ...validateInstructionRules(out.assignments, config, board),
-    ]),
+    conflicts: mapConflicts(
+      [...out.conflicts, ...validateInstructionRules(out.assignments, config, board)],
+      plan.courtNames,
+    ),
     metrics: {
       makespan_minutes: out.metrics.makespanMinutes,
       worst_idle_gap_minutes: out.metrics.worstIdleGapMinutes,
@@ -1789,7 +2016,7 @@ export function withDefaultDaySpread<T extends SlotConfig & VerifyConfig>(
 /**
  * Fixtures the caller may not move this run: `schedule_locked`, or caught by
  * a `scopeLocked` scope lock, and currently placed (`scheduled_at` AND
- * `court_label` both set — a lock with nothing to anchor to has nothing to
+ * `court_id` both set — a lock with nothing to anchor to has nothing to
  * pin). THE ONE PREDICATE, per ruling R5 for what a "frozen" card is: there
  * is no per-fixture published flag, so "the cards an entrant has already
  * been told about" is approximated by the cards the organiser pinned.
@@ -1822,7 +2049,7 @@ export function lockedFixtureIds(
         (f) =>
           (f.schedule_locked || scopeLocked(f, scopes)) &&
           f.scheduled_at !== null &&
-          f.court_label !== null,
+          f.court_id !== null,
       )
       .map((f) => f.id),
   );
@@ -2065,6 +2292,11 @@ export async function applySchedule(
 
     const settings = await loadSettings(tx, stage.division_id);
     const all = await divisionFixtures(tx, stage.division_id);
+    // P9 pass 3a — resolved once, used by the conflict mapping below.
+    const courtNames = await courtNamesById(tx);
+    // #5 fix — resolved once, used to DERIVE venue_id from each assignment's
+    // court_id below (never trusted from the client's own a.venue_id).
+    const courtVenues = await courtVenueIds(tx);
     const lockState = await divisionLockState(tx, stage.division_id);
     if (lockState.frozen) {
       throw new HttpError(422, "the division schedule is locked — unlock it to edit");
@@ -2098,7 +2330,7 @@ export async function applySchedule(
       const start = ms(a.scheduled_at);
       return {
         fixtureId: a.fixture_id,
-        court: a.court_label,
+        court: a.court_id,
         startAt: start,
         endAt: start + settings.config.matchMinutes * MS_PER_MIN,
         entrants: [f.home_entrant_id, f.away_entrant_id].filter((e): e is string => e !== null),
@@ -2159,7 +2391,7 @@ export async function applySchedule(
     // ORIGINAL composition — `siblingIds` stays IN here, matching every rule
     // family's pre-round-order behaviour (and origin/main's, byte for byte).
     const untouched = all
-      .filter((f) => !listed.has(f.id) && f.scheduled_at !== null && f.court_label !== null)
+      .filter((f) => !listed.has(f.id) && f.scheduled_at !== null && f.court_id !== null)
       .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
     // Round-order-only checked set: the siblings, same representation as
     // `untouched`'s rows, added to BOTH delta sides below so a pre-existing
@@ -2188,7 +2420,7 @@ export async function applySchedule(
     // placement causes reads as introduced. Correct: it is.
     const currentSlots = input.assignments
       .map((a) => byId.get(a.fixture_id) as FixtureLite)
-      .filter((f) => f.scheduled_at !== null && f.court_label !== null)
+      .filter((f) => f.scheduled_at !== null && f.court_id !== null)
       .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
     // CORE families (window/start_window/court/blackout/rest/person_overlap/
     // instruction rules/feed-order): `includeRoundOrder=false` — this call is
@@ -2204,32 +2436,51 @@ export async function applySchedule(
       ...validateAssignments(proposed, slotConfig, board, deps, false),
       ...roundOrderConflicts(proposed.concat(widenedSiblings), slotConfig.tz),
     ];
-    assertNoNewBlocking(baseline, found);
+    assertNoNewBlocking(baseline, found, courtNames);
     // Scoped to the fixtures THIS apply actually listed (#461's contract,
     // `moveFixture`'s own return does the same) — the widened siblings above
     // exist so the round-order GATE can see them, not so their own (possibly
     // pre-existing and entirely unrelated) conflicts leak into a response
     // about fixtures the caller never named.
-    const conflicts = mapConflicts(found.filter((c) => !siblingIds.has(c.fixtureId)));
+    const conflicts = mapConflicts(found.filter((c) => !siblingIds.has(c.fixtureId)), courtNames);
 
     const moves: { fixture: string; from: unknown; to: unknown }[] = [];
     for (const a of input.assignments) {
       const f = byId.get(a.fixture_id) as FixtureLite;
+      // P9 pass 3a: writers stop writing court_label/venue (owner ruling,
+      // FULL cutover) — court_id/venue_id only.
+      //
+      // #5 fix (P9 review): venue_id is DERIVED from a.court_id server-side,
+      // via courts.venue_id — never trusted from the client's own a.venue_id.
+      // No caller (use-board-actions.ts/ai-apply.ts/move-panel.tsx) has ever
+      // sent venue_id; the old `coalesce(a.venue_id, venue_id)` therefore
+      // left every freshly-scheduled fixture's venue_id NULL and, after a
+      // move to a court in a different venue, stuck on the OLD venue — every
+      // player-facing venue string (ICS LOCATION, /me, /my-matches, the
+      // public fixture page + its JSON-LD) derives from this column.
+      // a.court_id is a required field here (ApplyScheduleRequest's
+      // Assignment, never nullable), and courts.venue_id is NOT NULL, so
+      // this always resolves for a real, same-org court; a bogus court_id is
+      // already rejected by fixtures' composite (court_id, org_id) FK before
+      // venue_id's own correctness could matter.
       await tx`
         update fixtures set
           scheduled_at = ${a.scheduled_at},
-          court_label = ${a.court_label},
-          venue = coalesce(${a.venue ?? null}, venue),
+          court_id = ${a.court_id},
+          venue_id = ${courtVenues.get(a.court_id) ?? null},
           schedule_source = ${input.source},
           schedule_locked = ${a.schedule_locked ?? f.schedule_locked}
         where id = ${a.fixture_id}`;
+      // `court` here is a courts.id, not a label — see moveFixture's
+      // identical note on `schedule_edited`'s ledger payload; history.ts's
+      // `execute()` replays `schedule_applied`/`schedule_shifted` the same way.
       moves.push({
         fixture: a.fixture_id,
         from: {
           at: f.scheduled_at !== null ? iso(ms(f.scheduled_at)) : null,
-          court: f.court_label,
+          court: f.court_id,
         },
-        to: { at: a.scheduled_at, court: a.court_label },
+        to: { at: a.scheduled_at, court: a.court_id },
       });
     }
     // One auditable ledger entry per apply (doc 12 §2 family: schedule_edited/…).
@@ -2308,8 +2559,15 @@ export async function lastAiApply(
 
 export interface MoveInput {
   scheduled_at?: string | null;
-  court_label?: string | null;
-  venue?: string | null;
+  // P9 pass 3a: court_id/venue_id — see PatchFixture (schemas.ts). Mirrors
+  // that schema's post-`.strict()`/`.partial()` shape structurally:
+  // fixtures.ts's `patchFixture` destructures `{ officials, ...move }` off
+  // an already-parsed `PatchFixture` and hands `move` straight to
+  // `moveFixture` — no field-by-field mapping, so this interface has to
+  // stay structurally assignable from `Omit<PatchFixture, "officials">` or
+  // that call breaks.
+  court_id?: string | null;
+  venue_id?: string | null;
   schedule_locked?: boolean;
   expected_seq?: number;
 }
@@ -2372,7 +2630,8 @@ export async function moveFixture(
       (FixtureLite & { competition_id: string })[]
     >`
       select f.id, f.stage_id, f.division_id, f.round_no, f.home_entrant_id,
-             f.away_entrant_id, f.scheduled_at, f.court_label, f.venue, f.pool_id,
+             f.away_entrant_id, f.scheduled_at, f.court_id, f.venue_id,
+             f.court_label, f.venue, f.pool_id,
              f.status, f.schedule_locked, f.winner_to_fixture, f.loser_to_fixture,
              d.competition_id
       from fixtures f join divisions d on d.id = f.division_id
@@ -2392,17 +2651,25 @@ export async function moveFixture(
       throw new HttpError(422, "the division schedule is locked — unlock it to edit");
     }
 
-    const movesTimetable = patch.scheduled_at !== undefined || patch.court_label !== undefined;
+    const movesTimetable = patch.scheduled_at !== undefined || patch.court_id !== undefined;
     if (movesTimetable && fixture.status !== MOVABLE_STATUS) {
       throw new HttpError(422, `fixture is ${fixture.status} — decided fixtures are immutable`);
     }
 
     const settings = await loadSettings(tx, fixture.division_id);
+    // P9 pass 3a: resolved once, used for the conflict mapping below AND
+    // (court/venue both) for the officials email built after this
+    // transaction closes — see `change` at the end of this callback.
+    const courtNames = await courtNamesById(tx);
+    const venueNames = await venueNamesById(tx);
+    // #5 fix — resolved once, used to DERIVE venue_id from the target
+    // court_id below.
+    const courtVenues = await courtVenueIds(tx);
     const nextAt = patch.scheduled_at !== undefined ? patch.scheduled_at : (fixture.scheduled_at !== null ? iso(ms(fixture.scheduled_at)) : null);
-    const nextCourt = patch.court_label !== undefined ? patch.court_label : fixture.court_label;
+    const nextCourtId = patch.court_id !== undefined ? patch.court_id : fixture.court_id;
 
     let conflicts: ScheduleConflict[] = [];
-    if (movesTimetable && nextAt !== null && nextCourt !== null) {
+    if (movesTimetable && nextAt !== null && nextCourtId !== null) {
       const all = await divisionFixtures(tx, fixture.division_id);
       const entrantIds = [
         ...new Set(all.flatMap((f) => [f.home_entrant_id, f.away_entrant_id])),
@@ -2415,7 +2682,7 @@ export async function moveFixture(
       const start = ms(nextAt);
       const proposed: Assignment = {
         fixtureId: fixture.id,
-        court: nextCourt,
+        court: nextCourtId,
         startAt: start,
         endAt: start + settings.config.matchMinutes * MS_PER_MIN,
         entrants: [fixture.home_entrant_id, fixture.away_entrant_id].filter(
@@ -2473,7 +2740,7 @@ export async function moveFixture(
       // rule family's pre-round-order behaviour (and origin/main's, byte for
       // byte).
       const others = all
-        .filter((f) => f.id !== fixture.id && f.scheduled_at !== null && f.court_label !== null)
+        .filter((f) => f.id !== fixture.id && f.scheduled_at !== null && f.court_id !== null)
         .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
       // Round-order-only checked set: this fixture's siblings, added to BOTH
       // delta sides below so a pre-existing round-order violation among them
@@ -2496,7 +2763,7 @@ export async function moveFixture(
       // baseline, so every blocking conflict its first placement causes is
       // introduced — which is exactly what it is.
       const currentSlot =
-        fixture.scheduled_at !== null && fixture.court_label !== null
+        fixture.scheduled_at !== null && fixture.court_id !== null
           ? [toAssignment(fixture, settings.config.matchMinutes, people, roundRobin)]
           : [];
       // CORE families: `includeRoundOrder=false` — this call is
@@ -2512,19 +2779,36 @@ export async function moveFixture(
         ...validateAssignments([proposed], slotConfig, board, deps, false),
         ...roundOrderConflicts([proposed, ...widenedSiblings], slotConfig.tz),
       ];
-      assertNoNewBlocking(baseline, found);
+      assertNoNewBlocking(baseline, found, courtNames);
       // Scoped to the fixture THIS move actually names (#461's contract) —
       // the widened siblings above exist so the round-order GATE can see
       // them, not so their own (possibly pre-existing and entirely
       // unrelated) conflicts leak into a response about a card the caller
       // never touched.
-      conflicts = mapConflicts(found.filter((c) => !siblingIds.has(c.fixtureId)));
+      conflicts = mapConflicts(found.filter((c) => !siblingIds.has(c.fixtureId)), courtNames);
     }
 
+    // #5 fix (P9 review): venue_id is DERIVED from the court, server side —
+    // never trusted from client input, which must never be able to disagree
+    // with the court's own venue (courts.venue_id, composite-FK-guaranteed
+    // to agree with org). `patch.venue_id` is intentionally never read
+    // below; keeping it in MoveInput/PatchFixture's own type is harmless — a
+    // caller sending it just has it silently ignored. Untouched (`fixture.
+    // venue_id`) when court_id itself is untouched; derived from the target
+    // court when set; cleared to null alongside a cleared court_id — there
+    // is nothing left to derive a venue from once there is no court.
+    const nextVenueId =
+      patch.court_id !== undefined
+        ? patch.court_id !== null
+          ? (courtVenues.get(patch.court_id) ?? null)
+          : null
+        : fixture.venue_id;
     const values: Record<string, unknown> = {};
     if (patch.scheduled_at !== undefined) values.scheduled_at = patch.scheduled_at;
-    if (patch.court_label !== undefined) values.court_label = patch.court_label;
-    if (patch.venue !== undefined) values.venue = patch.venue;
+    if (patch.court_id !== undefined) {
+      values.court_id = patch.court_id;
+      values.venue_id = nextVenueId;
+    }
     if (patch.schedule_locked !== undefined) values.schedule_locked = patch.schedule_locked;
     if (movesTimetable) values.schedule_source = "manual";
     if (Object.keys(values).length > 0) {
@@ -2534,16 +2818,21 @@ export async function moveFixture(
     }
 
     if (movesTimetable || patch.schedule_locked !== undefined) {
+      // P9 pass 3a: `court` in this ledger payload is a `courts.id`
+      // (previously a free-text `court_label`) — `execute()` in history.ts
+      // replays this event straight back into `fixtures.court_id` on
+      // undo/redo, so it has to be the id, not a display name, or restore
+      // would write a label into an id column.
       const seq = await appendDivisionEvent(tx, fixture.division_id, "schedule_edited", {
         fixture: fixture.id,
         from: {
           at: fixture.scheduled_at !== null ? iso(ms(fixture.scheduled_at)) : null,
-          court: fixture.court_label,
+          court: fixture.court_id,
           locked: fixture.schedule_locked,
         },
         to: {
           at: nextAt,
-          court: nextCourt,
+          court: nextCourtId,
           locked: patch.schedule_locked ?? fixture.schedule_locked,
         },
       });
@@ -2553,11 +2842,17 @@ export async function moveFixture(
     // v11: officials who agreed to a slot must hear when it moves. Only real
     // timetable/venue changes notify, only non-declined assignments, only
     // officials with an email — assembled in-tx, sent after commit.
+    //
+    // #5 fix: the OLD second disjunct (`patch.venue_id !== undefined &&
+    // patch.venue_id !== fixture.venue_id`) is now dead code, deliberately
+    // removed rather than left misleading — venue_id can no longer change
+    // independently of court_id (see nextVenueId's own comment above), and
+    // any court_id change is already covered by the `fixture.court_id !==
+    // nextCourtId` clause below.
     const timetableChanged =
-      (movesTimetable &&
-        ((fixture.scheduled_at !== null ? iso(ms(fixture.scheduled_at)) : null) !== nextAt ||
-          fixture.court_label !== nextCourt)) ||
-      (patch.venue !== undefined && patch.venue !== fixture.venue);
+      movesTimetable &&
+      ((fixture.scheduled_at !== null ? iso(ms(fixture.scheduled_at)) : null) !== nextAt ||
+        fixture.court_id !== nextCourtId);
     let changeNotices: {
       email: string; display_name: string; role_key: string; org_name: string;
       home_name: string | null; away_name: string | null; venue_tz: string | null;
@@ -2582,11 +2877,14 @@ export async function moveFixture(
       competitionId: fixture.competition_id,
       conflicts,
       changeNotices,
+      // P9 pass 3a: the officials-change EMAIL renders human text, so this
+      // (internal-only — never the API response, which is just `conflicts`)
+      // carries RESOLVED NAMES, not ids, unlike the ledger event above.
       change: {
         prevAt: fixture.scheduled_at !== null ? iso(ms(fixture.scheduled_at)) : null,
         nextAt,
-        court: nextCourt,
-        venue: patch.venue !== undefined ? patch.venue : fixture.venue,
+        courtName: nextCourtId !== null ? (courtNames.get(nextCourtId) ?? null) : null,
+        venueName: nextVenueId !== null ? (venueNames.get(nextVenueId) ?? null) : null,
       },
     };
   });
@@ -2599,8 +2897,8 @@ export async function moveFixture(
       prevAt: out.change.prevAt,
       nextAt: out.change.nextAt,
       venueTz: n.venue_tz,
-      court: out.change.court,
-      venue: out.change.venue,
+      court: out.change.courtName,
+      venue: out.change.venueName,
     }).catch(() => {});
   }
   afterScheduleWrite(out.divisionId, out.competitionId, "schedule");
@@ -2652,6 +2950,84 @@ async function validateScheduleIn(
     ...new Set(all.flatMap((f) => [f.home_entrant_id, f.away_entrant_id])),
   ].filter((e): e is string => e !== null);
   const people = await peopleByEntrant(tx, entrantIds);
+  // P9 pass 2b: court identity through the SAME resolveCandidateCourts the
+  // build side calls — never a second, inlined tag-filter loop here. This
+  // half stays DIVISION-scoped only: `settingsForEngine.config.courts` below
+  // is dead weight for THIS path (`validateAssignments` has never read
+  // `.courts` — the next comment), so there is nothing here for a stage's
+  // own tags to usefully narrow. (Review finding #11: the OTHER half,
+  // `courtTagQualifiedIds` below, DOES need the stage union — see that
+  // comment.) And, deliberately, no guardNoMatchingCourt: this reports on a
+  // board that may already EXIST, and an assignment sitting on a
+  // since-archived or since-retagged court must keep validating clean
+  // (ruling 3, candidate-courts.ts) — see court-candidates.ts's own doc
+  // comment on guardNoMatchingCourt for why calling it here would be wrong,
+  // not merely unnecessary.
+  const [divisionForCourts] = await tx<{ required_court_tags: string[] }[]>`
+    select required_court_tags from divisions where id = ${divisionId}`;
+  const requiredCourtTags = divisionForCourts?.required_court_tags ?? [];
+  const candidateCourtIds = await resolveCandidateCourts(
+    tx,
+    divisionId,
+    settings.config.courts,
+    requiredCourtTags,
+  );
+  const settingsForEngine = {
+    ...settings,
+    config: { ...settings.config, courts: [...candidateCourtIds.ids] },
+  };
+  // P9 pass 2c: gives the VERIFIER a real consumer for the same constraint —
+  // `candidateCourtIds` above (tag+archived filtered) becomes the new
+  // `config.courts`, but `validateAssignments` has never read `.courts`
+  // (this file's own false-premise history: candidate awareness on the
+  // verify side was new plumbing, not a refactor). Deliberately a SEPARATE
+  // resolution, not a reuse of `candidateCourtIds.ids`: that set already
+  // excludes archived courts, and reusing it for the mismatch conflict would
+  // retroactively red an assignment sitting on a since-archived court —
+  // exactly what ruling 3 (candidate-courts.ts) forbids. See
+  // `resolveTagQualifiedCourtIds`'s own doc comment for the archived-neutral
+  // mechanics.
+  //
+  // Review finding #11: this used to resolve against `requiredCourtTags`
+  // alone — the DIVISION's tags, exactly what feeds `resolveCandidateCourts`
+  // above. `autoSchedule` instead unions in the STAGE's own tags too
+  // (`unionRequiredCourtTags(division, stage)`), because it is scoped to one
+  // stage; a stage-level `required_court_tags` therefore constrained the
+  // placer but was invisible here, and the placer/verifier fork this pass
+  // claims to close was only half closed. This function has no single stage
+  // to union in the same way `autoSchedule` does — it validates the WHOLE
+  // division's board, spanning however many stages it has — so it is
+  // resolved per STAGE instead: one `unionRequiredCourtTags` /
+  // `resolveTagQualifiedCourtIds` call per stage, and the QUALIFIED COURT
+  // SETS merged (a court qualifies board-wide if it satisfies ANY stage
+  // actually present), not the required-tag lists themselves.
+  // `unionRequiredCourtTags`/`candidateCourts` read a required-tag list as
+  // AND — a qualifying court needs EVERY tag in it — so flattening two
+  // stages' DIFFERENT tags into one combined list would demand a court carry
+  // tags from a stage a given fixture has nothing to do with, trading the
+  // old blind spot for a new false positive.
+  const stageCourtTagRows = await tx<{ required_court_tags: string[] }[]>`
+    select required_court_tags from stages where division_id = ${divisionId}`;
+  const stageTagSets: string[][] = stageCourtTagRows.map((s) => s.required_court_tags);
+  // A division with no stages yet (before its first is generated) has no
+  // stage tags to union in — division tags alone, exactly pre-#11 behaviour.
+  if (stageTagSets.length === 0) stageTagSets.push([]);
+  // Review wave 3: memoised on the tag UNION, not called per stage. Each call
+  // re-runs the full org court+venue join, so a division with N stages issued N
+  // scans on every validate, publish and start — and stages overwhelmingly
+  // share the same union (usually the empty one).
+  const courtTagQualifiedIds = new Set<string>();
+  const qualifiedByUnion = new Map<string, ReadonlySet<string>>();
+  for (const stageTags of stageTagSets) {
+    const union = unionRequiredCourtTags(requiredCourtTags, stageTags);
+    const key = [...union].sort().join("\u0000");
+    let ids = qualifiedByUnion.get(key);
+    if (ids === undefined) {
+      ids = await resolveTagQualifiedCourtIds(tx, union);
+      qualifiedByUnion.set(key, ids);
+    }
+    for (const id of ids) courtTagQualifiedIds.add(id);
+  }
   // C1 follow-up (2026-08-12, task 3 / G1). This function backs BOTH
   // `validateSchedule` (the board's live conflict report) and, through
   // `assertPublishable`, `publishSchedule`/`startDivision` — the write gate.
@@ -2665,8 +3041,10 @@ async function validateScheduleIn(
   // already are (`schedule.ts`'s own reference wiring; `person-merge.ts`).
   const roundRobin = await roundRobinStageIds(tx, divisionId);
   const assignments = all
-    .filter((f) => f.scheduled_at !== null && f.court_label !== null)
+    .filter((f) => f.scheduled_at !== null && f.court_id !== null)
     .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
+  // P9 pass 3a — the same resolve every mapConflicts call needs.
+  const courtNames = await courtNamesById(tx);
   const siblings = await siblingAssignments(
     tx,
     divisionId,
@@ -2706,10 +3084,19 @@ async function validateScheduleIn(
         // constraints panel promises them on.
         validateAssignments(
           assignments,
-          toVerifyConfig(settings, all, 0, siblings.ruleFixtures),
+          // P9 pass 2c: `courtTagQualifiedIds` is the one field
+          // `toVerifyConfig` itself never sets (every OTHER caller of this
+          // engine function omits it and keeps exactly today's behaviour —
+          // calendar.ts's own comment on the field) — spread on at this ONE
+          // call site rather than threaded through `toVerifyConfig`'s
+          // parameter list, which would touch its other three callers
+          // (autoSchedule, the AI planning path, every test in this
+          // package) for a question only THIS path asks.
+          { ...toVerifyConfig(settingsForEngine, all, 0, siblings.ruleFixtures), courtTagQualifiedIds: [...courtTagQualifiedIds] },
           siblings.assignments,
           feedDependencies(all),
         ),
+        courtNames,
       ),
       ...officialConflicts.map((c) => ({ fixture_id: c.fixture_id, code: c.code as ScheduleConflict["code"], blocking: false })),
     ],
@@ -2755,7 +3142,7 @@ export { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED };
  *
  * It rejects CONFLICTS, never INCOMPLETENESS. `validateAssignments` reports
  * only on rows it is given as `assignments`, and `validateScheduleIn` builds
- * those from fixtures carrying BOTH a `scheduled_at` and a `court_label` — so
+ * those from fixtures carrying BOTH a `scheduled_at` and a `court_id` — so
  * an empty or half-slotted board yields no assignments and therefore nothing to
  * report. Dozens of suites (and organisers) start divisions in exactly that
  * state; a gate that refused them would be the wrong gate.

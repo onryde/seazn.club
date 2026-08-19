@@ -8,6 +8,9 @@ import { withTenant } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
 import { archivedSlotsExplainRefusal } from "@/server/usecases/division-slots";
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
+// P9 scope item 5: org venues+courts feed the Scheduling step's court
+// multi-picker.
+import { listVenues } from "@/server/usecases/venues";
 
 export default async function NewDivisionPage({
   params,
@@ -19,7 +22,7 @@ export default async function NewDivisionPage({
   const { auth, canEdit } = page;
   const id = page.competition.id;
   if (!canEdit) redirect(routes.competition(orgSlug, compSlug));
-  const [competition, constraintsAllowed, explainArchivedSlots] = await Promise.all([
+  const [competition, constraintsAllowed, explainArchivedSlots, venues] = await Promise.all([
     getCompetition(auth, id),
     // A multi-venue schedule seed is Pro (doc 12 §5) — gate the list in the
     // wizard rather than letting the settings PUT 402 after create.
@@ -33,6 +36,8 @@ export default async function NewDivisionPage({
     // keeps the rule on the server; asking for it after the 402 would need a
     // new endpoint exposing the quota predicate to the browser.
     archivedSlotsExplainRefusal(auth, id),
+    // P9 scope item 5: the Scheduling step's court multi-picker.
+    listVenues(auth),
   ]);
 
   // Sport catalog + variant presets (system rows are tenant-readable, org
@@ -68,6 +73,7 @@ export default async function NewDivisionPage({
           orgSlug={orgSlug}
           compSlug={compSlug}
           sports={sports}
+          venues={venues}
           // The window this division's schedule must sit inside. The seed PUT
           // the wizard fires after create is refused outside it (422) and the
           // wizard swallows that refusal, so the pickers carry the bound.

@@ -26,6 +26,7 @@ import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { seedOrg, seedFutureDivision } from "@/server/usecases/__tests__/_seed";
 import { putScheduleSettings, validateSchedule } from "@/server/usecases/schedule";
+import { createVenue, createCourt } from "@/server/usecases/venues";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -45,28 +46,34 @@ async function seedSplitZoneFixture(): Promise<{
   const { auth } = await seedOrg("pro");
   await sql`update organizations set timezone = 'Europe/London' where id = ${auth.orgId}`;
   const { division, fixtures } = await seedFutureDivision(auth);
+  // P9 pass 3a: a real court — ScheduleConfig.courts is CourtId[] since
+  // pass 1, and fixtures.court_id carries a composite FK since V367/368.
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
   // The V305 override — the only thing that makes the two zones diverge.
   await putScheduleSettings(auth, division.id, {
     config: {
       startAt: FIXTURE_AT,
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["Court 1"],
+      courts: [court.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
     },
     tz: "America/New_York",
   });
-  // `seedFutureDivision` boards every fixture a week out on Court 1; park them
-  // all somewhere harmless and put exactly ONE card on the split-zone instant,
-  // so no other row can supply the warning under test.
+  // `seedFutureDivision` boards every fixture a week out on Court 1 (the
+  // LEGACY court_label — that helper is officials-unify/me shared infra,
+  // out of P9 pass 3a's own scope); park them all somewhere harmless and
+  // put exactly ONE card on the split-zone instant, so no other row can
+  // supply the warning under test.
   const fixtureId = fixtures[0]!.id;
   await sql`
-    update fixtures set scheduled_at = null, court_label = null
+    update fixtures set scheduled_at = null, court_id = null
     where division_id = ${division.id} and id <> ${fixtureId}`;
   await sql`
-    update fixtures set scheduled_at = ${FIXTURE_AT}, court_label = 'Court 1'
+    update fixtures set scheduled_at = ${FIXTURE_AT}, court_id = ${court.id}
     where id = ${fixtureId}`;
   const [{ id: officialId }] = await sql<{ id: string }[]>`
     insert into officials (org_id, display_name, role_keys)

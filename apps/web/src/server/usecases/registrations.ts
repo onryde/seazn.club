@@ -3058,13 +3058,19 @@ export async function buildDisputeEvidence(
       and payload->>'registration_id' = ${regId}
     order by created_at`;
 
+  // P9 cutover: venue is DERIVED from venues.name via fixtures.venue_id —
+  // fixtures.venue (frozen since pass 3a) would silently blank the "service
+  // provided" venue line on this Stripe dispute evidence document for any
+  // fixture played after the cutover.
   const fixtures = reg.entrant_id
     ? await sql<
         { round_no: number | null; status: string; outcome: unknown; scheduled_at: Date | null; venue: string | null }[]
       >`
-      select round_no, status, outcome, scheduled_at, venue from fixtures
-      where home_entrant_id = ${reg.entrant_id} or away_entrant_id = ${reg.entrant_id}
-      order by round_no nulls last, scheduled_at nulls last`
+      select f.round_no, f.status, f.outcome, f.scheduled_at, ven.name as venue
+      from fixtures f
+      left join venues ven on ven.id = f.venue_id
+      where f.home_entrant_id = ${reg.entrant_id} or f.away_entrant_id = ${reg.entrant_id}
+      order by f.round_no nulls last, f.scheduled_at nulls last`
     : [];
 
   // The transactional receipt, reconstructed with the exact sender inputs. The

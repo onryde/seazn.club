@@ -20,6 +20,7 @@ import { createEntrants } from "../entrants";
 import { mergePersons } from "../person-merge";
 import { publishSchedule } from "../schedule";
 import { createStages, generateStageFixtures } from "../stages";
+import { createCourt, createVenue } from "../venues";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -39,6 +40,17 @@ interface BoardRow {
   id: string;
   home_entrant_id: string;
   away_entrant_id: string;
+}
+
+/** Two real, distinct courts (P9: `fixtures.court_id` is a real FK into
+ *  `courts`, so "different courts" can no longer be faked with two
+ *  `court_label` strings — `reverifyBoards` reads `court_id`, per
+ *  person-merge.ts's own comment on the filter this file exercises). */
+async function twoCourts(auth: AuthCtx): Promise<{ a: string; b: string }> {
+  const venue = await createVenue(auth, { name: "Reverify Venue " + rnd(), sort: 0 });
+  const a = await createCourt(auth, venue.id, { name: "Court 1 " + rnd(), sort: 0, tags: [] });
+  const b = await createCourt(auth, venue.id, { name: "Court 2 " + rnd(), sort: 1, tags: [] });
+  return { a: a.id, b: b.id };
 }
 
 /**
@@ -100,8 +112,12 @@ async function seedBoard(
   expect(second, "no disjoint second fixture in the generated league").toBeTruthy();
 
   const second_at = new Date(T0.getTime() + opts.minutesApart * MS_PER_MIN);
-  await sql`update fixtures set scheduled_at = ${T0}, court_label = 'Court 1' where id = ${first.id}`;
-  await sql`update fixtures set scheduled_at = ${second_at}, court_label = 'Court 2' where id = ${second.id}`;
+  // P9: `court_label` is frozen (never written post-cutover) — `court_id` is
+  // what `reverifyBoards`/`toAssignment` read, so the "different courts" half
+  // of this scenario has to be real court rows now, not two label strings.
+  const courts = await twoCourts(auth);
+  await sql`update fixtures set scheduled_at = ${T0}, court_id = ${courts.a} where id = ${first.id}`;
+  await sql`update fixtures set scheduled_at = ${second_at}, court_id = ${courts.b} where id = ${second.id}`;
 
   if (opts.publish) await publishSchedule(auth, division.id);
   return { divisionId: division.id, first, second };
@@ -111,6 +127,19 @@ async function joinEntrant(entrantId: string, personId: string): Promise<void> {
   await sql`insert into entrant_members (entrant_id, person_id) values (${entrantId}, ${personId})`;
 }
 
+// P9 sweep (pass 3c-4): `reverifyBoards`'s assignment filter (person-merge.ts)
+// used to gate on `court_label`, which nothing has written since pass 3a — a
+// fixture scheduled with a real `court_id` but a NULL `court_label` (the only
+// state a post-cutover fixture can be in; the column is frozen, never a stale
+// non-null value) was silently dropped from `assignments`, so the whole board
+// skipped re-verification. `court_label` is a presence check there, not a
+// value comparison, so a *disagreeing* non-null label cannot distinguish old
+// code from new — a non-null stale label still satisfies the old
+// `court_label !== null`. NULL is the only input that discriminates, which is
+// exactly what `seedBoard` below now seeds (real `court_id` via `twoCourts`,
+// `court_label` never written). The first test below and the round-order one
+// further down both go red if person-merge.ts's filter is reverted to
+// `court_label !== null` — that is this scenario's regression coverage.
 describe.skipIf(!HAS_DB)("#404 re-verify published boards after a merge", () => {
   it("reports the person overlap the merge created on a published board", async () => {
     const { auth } = await seedOrg("pro");
@@ -251,9 +280,10 @@ describe.skipIf(!HAS_DB)("#404 re-verify published boards after a merge", () => 
     // reached with a straight SQL edit instead of a merge, since merging
     // people cannot change a fixture's time or round (only reveal what
     // time/round already made true — see this test's own header comment).
-    await sql`update fixtures set scheduled_at = ${T0}, court_label = 'Court 1' where id = ${round1.id}`;
+    const courts = await twoCourts(auth);
+    await sql`update fixtures set scheduled_at = ${T0}, court_id = ${courts.a} where id = ${round1.id}`;
     await sql`
-      update fixtures set scheduled_at = ${new Date(T0.getTime() + 60 * MS_PER_MIN)}, court_label = 'Court 2'
+      update fixtures set scheduled_at = ${new Date(T0.getTime() + 60 * MS_PER_MIN)}, court_id = ${courts.b}
       where id = ${round2.id}`;
     await publishSchedule(auth, division.id);
 
@@ -263,7 +293,7 @@ describe.skipIf(!HAS_DB)("#404 re-verify published boards after a merge", () => 
     // schedule-reflow-verifier-widening.test.ts's own court-clash test
     // uses, for the identical reason). Round 2 now starts an hour before
     // round 1: round order requires round 1 <= round 2, so this is a
-    // direct, unambiguous H6 breach, on two DIFFERENT courts (court_label
+    // direct, unambiguous H6 breach, on two DIFFERENT courts (court_id
     // is untouched by this second write) so no incidental court clash
     // rides along.
     await sql`
@@ -313,5 +343,101 @@ describe.skipIf(!HAS_DB)("#404 re-verify published boards after a merge", () => 
     const [tomb] = await sql<{ merged_into: string | null }[]>`
       select merged_into from persons where id = ${absorbed}`;
     expect(tomb!.merged_into, "a failed report rolled the merge back").toBe(survivor);
+  });
+
+  // #14 sibling fix: `RevealedConflicts.conflicts` carries the engine
+  // `Conflict` verbatim, and `withLegacyDetail` derives its prose from
+  // `details.courtName ?? details.court` — `courtName` is only ever
+  // caller-attached, never set by the engine (conflict-detail.ts). Before
+  // the fix, `reverifyBoards` never attached it, so a revealed
+  // `court_double_booking` showed the organiser a raw court uuid. Two
+  // venues share a bare court name here — legal, the unique index is
+  // scoped per venue — specifically so the resolved name proves it went
+  // through the SAME venue-qualifying rule as every other #14 surface, not
+  // a coincidental bare match.
+  it("#14: a revealed court_double_booking names the venue-qualified court, never a raw uuid", async () => {
+    const { auth } = await seedOrg("pro");
+    const venueA = await createVenue(auth, { name: "Riverside", sort: 0 });
+    const venueB = await createVenue(auth, { name: "Lakeside", sort: 1 });
+    const courtA = await createCourt(auth, venueA.id, { name: "Court 1", sort: 0, tags: [] });
+    const courtOther = await createCourt(auth, venueA.id, { name: "Court 2", sort: 1, tags: [] });
+    await createCourt(auth, venueB.id, { name: "Court 1", sort: 0, tags: [] });
+
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Reverify Court Cup " + rnd(),
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open " + rnd(),
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    await createEntrants(
+      auth,
+      division.id,
+      ["A", "B", "C", "D"].map((name, i) => ({
+        kind: "individual" as const,
+        display_name: name,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
+    await generateStageFixtures(auth, stage!.id);
+    const rows = await sql<BoardRow[]>`
+      select id, home_entrant_id, away_entrant_id from fixtures
+      where division_id = ${division.id} order by round_no, seq_in_round, id`;
+    const first = rows[0]!;
+    const second = rows.find(
+      (r) =>
+        r.home_entrant_id !== first.home_entrant_id &&
+        r.home_entrant_id !== first.away_entrant_id &&
+        r.away_entrant_id !== first.home_entrant_id &&
+        r.away_entrant_id !== first.away_entrant_id,
+    )!;
+    expect(second, "no disjoint second fixture in the generated league").toBeTruthy();
+
+    // Legal at publish time — different courts, same instant (mirrors
+    // seedBoard's own minutesApart:0 pattern): assertPublishable would
+    // refuse a board that ALREADY has a conflict, so the double-booking
+    // must not exist yet here.
+    await sql`update fixtures set scheduled_at = ${T0}, court_id = ${courtA.id} where id = ${first.id}`;
+    await sql`update fixtures set scheduled_at = ${T0}, court_id = ${courtOther.id} where id = ${second.id}`;
+    await publishSchedule(auth, division.id);
+
+    // NOW move `second` onto the SAME court as `first` — direct SQL,
+    // bypassing moveFixture's own conflict checks, the same way this
+    // file's "commits the merge even when re-verifying the board throws"
+    // test pokes schedule_settings directly: a published board can still
+    // develop a real problem some other way, and reverifyBoards — not the
+    // publish gate — is what has to catch it on the next merge.
+    await sql`update fixtures set court_id = ${courtA.id} where id = ${second.id}`;
+
+    const survivor = await person(auth.orgId, "Merge Court " + rnd());
+    const absorbed = await person(auth.orgId, "Merge Court " + rnd());
+    // The survivor just needs SOME entrant membership in this division so
+    // reverifyBoards picks it up — validateAssignments checks the WHOLE
+    // board, so the pre-existing double-booking surfaces regardless of
+    // whether the merge itself touched these two fixtures.
+    await joinEntrant(first.home_entrant_id, survivor);
+    await joinEntrant(second.home_entrant_id, absorbed);
+
+    const res = await mergePersons(auth, survivor, absorbed, { confirmedBy: auth.userId! });
+    const board = res.revealed.find((r) => r.division_id === division.id);
+    expect(board, "the published board was not re-verified").toBeTruthy();
+    const dbl = board!.conflicts.filter((c) => c.details?.kind === "court_double_booking");
+    expect(dbl.length, "no court_double_booking conflict").toBeGreaterThan(0);
+    for (const c of dbl) {
+      expect(c.details?.courtName).toBe("Court 1 (Riverside)");
+      expect(c.detail).toContain("Court 1 (Riverside)");
+      // `otherFixtureId` legitimately rides in the SAME legacy sentence
+      // ("... double-booked with <fixture uuid>") — only the courtName
+      // field itself is under test for "never a bare uuid".
+      expect(c.details?.courtName ?? "").not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/i);
+    }
   });
 });

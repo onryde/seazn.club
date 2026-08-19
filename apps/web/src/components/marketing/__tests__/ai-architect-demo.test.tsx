@@ -40,7 +40,7 @@ import clubNightJson from "@/demo/ai-templates/club-night.json";
 import northsideJson from "@/demo/ai-templates/northside-open.json";
 import finalsDayJson from "@/demo/ai-templates/finals-day.json";
 
-import { AiArchitectDemo, demoQuoteLines } from "../ai-architect-demo";
+import { AiArchitectDemo, resolveDivergentCourtNames, demoQuoteLines } from "../ai-architect-demo";
 
 const UI_PREFIXES = ["board.ai.", "board.conflict."] as const;
 
@@ -382,14 +382,42 @@ describe("AiArchitectDemo — T2 Northside Open (joint)", () => {
     expect(island.text()).toContain(divisions[0]!.name);
   });
 
-  it("warns about the courts the divisions do not share", async () => {
+  it("never prints a raw court id in the divergent-courts note", async () => {
+    // P9 review wave 3: `divergent_courts` carries court UUIDs since the
+    // cutover, and this component renders on the PUBLIC marketing site. The
+    // note resolves through the capture's own recorded `courtNames` and DROPS
+    // anything it cannot resolve — so a fixture recorded before that field
+    // existed suppresses the note entirely rather than showing three uuids.
     const island = await mount();
     await select(island, "northside-open");
-    const note = find(island, "data-ai-divergent");
-    expect(note, "no divergent-courts note").toBeDefined();
-    for (const court of planOf(NORTHSIDE).divergent_courts!) {
-      expect(island.text()).toContain(court);
+    const ids = planOf(NORTHSIDE).divergent_courts ?? [];
+    expect(ids.length, "the fixture still carries divergent courts").toBeGreaterThan(0);
+    for (const court of ids) {
+      expect(island.text(), "a raw court uuid reached the public page").not.toContain(court);
     }
+    // This fixture predates `courtNames`, so nothing resolves and the note is
+    // withheld. Re-capturing restores it — the capture records the map now.
+    const hasNames = Boolean((NORTHSIDE as { courtNames?: unknown }).courtNames);
+    expect(Boolean(find(island, "data-ai-divergent"))).toBe(hasNames);
+  });
+
+  it("resolves divergent courts to NAMES, and to nothing when unnamed", () => {
+    // The other half, as a direct unit on the exported rule: the component
+    // loads fixtures through a dynamic import() a test cannot substitute
+    // per-case. Without this, the assertion above would be satisfied by a
+    // component that simply never shows the note at all.
+    const ids = planOf(NORTHSIDE).divergent_courts ?? [];
+    expect(resolveDivergentCourtNames(NORTHSIDE, ids)).toEqual([]);
+    const named = {
+      ...NORTHSIDE,
+      courtNames: Object.fromEntries(ids.map((id, i) => [id, `Show Court ${i + 1}`])),
+    } as AiDemoFixture;
+    expect(resolveDivergentCourtNames(named, ids)).toEqual(
+      ids.map((_, i) => `Show Court ${i + 1}`),
+    );
+    // An id present in the list but absent from the map is dropped, never shown.
+    expect(resolveDivergentCourtNames(named, [...ids, "ffffffff-0000-4000-8000-000000000000"]))
+      .toHaveLength(ids.length);
   });
 
   it("lists the conflicts flat, and says so when there are none", async () => {

@@ -24,6 +24,7 @@ import { ScheduleSettings } from "@/server/api-v1/schemas";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { getScheduleSettings, putScheduleSettings } from "../schedule";
+import { seedCourts } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -37,15 +38,19 @@ const DIVISION_CONFIG = {
   progressScore: false,
 };
 
-const CONFIG = {
-  startAt: "2026-08-01T09:00:00.000Z",
-  matchMinutes: 30,
-  gapMinutes: 0,
-  courts: ["Court 1"],
-  perEntrantMinRest: 0,
-  blackouts: [],
-  sessionWindows: [],
-};
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` — real
+// `courts.id` values, seeded per org below.
+function makeConfig(courts: string[]) {
+  return {
+    startAt: "2026-08-01T09:00:00.000Z",
+    matchMinutes: 30,
+    gapMinutes: 0,
+    courts,
+    perEntrantMinRest: 0,
+    blackouts: [],
+    sessionWindows: [],
+  };
+}
 
 /** Org zone and division zone must DIFFER, or "tz carries the display zone"
  *  and "tz carries the governing zone" agree and the assertion is vacuous. */
@@ -71,7 +76,7 @@ async function seedOrg(): Promise<AuthCtx> {
 
 /** A division pinned to its own zone — the case where display and governing
  *  zones disagree, which is the whole reason the two fields exist. */
-async function seedDivision(auth: AuthCtx): Promise<string> {
+async function seedDivision(auth: AuthCtx): Promise<{ divisionId: string; courts: string[] }> {
   const competition = await createCompetition(auth, {
     ends_on: "2030-12-31",
     name: "Wire Cup",
@@ -86,11 +91,12 @@ async function seedDivision(auth: AuthCtx): Promise<string> {
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
     eligibility: [],
   });
+  const courts = await seedCourts(auth.orgId, 1);
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${division.id}, ${sql.json(CONFIG as never)}, ${DIVISION_TZ}, now())
+    values (${division.id}, ${sql.json(makeConfig(courts) as never)}, ${DIVISION_TZ}, now())
     on conflict (division_id) do update set tz = excluded.tz`;
-  return division.id;
+  return { divisionId: division.id, courts };
 }
 
 afterAll(async () => {
@@ -104,7 +110,7 @@ afterAll(async () => {
 describe.skipIf(!HAS_DB)("schedule-settings wire contract", () => {
   it("GET emits exactly { division_id, config, tz, updated_at }", async () => {
     const auth = await seedOrg();
-    const divisionId = await seedDivision(auth);
+    const { divisionId } = await seedDivision(auth);
 
     const wire = await getScheduleSettings(auth, divisionId);
     expect(Object.keys(wire).sort()).toEqual(WIRE_KEYS);
@@ -112,24 +118,24 @@ describe.skipIf(!HAS_DB)("schedule-settings wire contract", () => {
 
   it("PUT emits the same key set — it must not leak the internal shape", async () => {
     const auth = await seedOrg();
-    const divisionId = await seedDivision(auth);
+    const { divisionId, courts } = await seedDivision(auth);
 
-    const wire = await putScheduleSettings(auth, divisionId, { config: CONFIG });
+    const wire = await putScheduleSettings(auth, divisionId, { config: makeConfig(courts) });
     expect(Object.keys(wire).sort()).toEqual(WIRE_KEYS);
   });
 
   it("`tz` carries the DISPLAY zone, not the governing org zone", async () => {
     const auth = await seedOrg();
-    const divisionId = await seedDivision(auth);
+    const { divisionId, courts } = await seedDivision(auth);
 
     // The division overrides; the org is elsewhere. `tz` is the override.
     expect((await getScheduleSettings(auth, divisionId)).tz).toBe(DIVISION_TZ);
-    expect((await putScheduleSettings(auth, divisionId, { config: CONFIG })).tz).toBe(DIVISION_TZ);
+    expect((await putScheduleSettings(auth, divisionId, { config: makeConfig(courts) })).tz).toBe(DIVISION_TZ);
   });
 
   it("round-trips through the ScheduleSettings response schema unchanged", async () => {
     const auth = await seedOrg();
-    const divisionId = await seedDivision(auth);
+    const { divisionId, courts } = await seedDivision(auth);
 
     // zod STRIPS unknown keys, so an extra field on the payload makes the
     // parsed object differ from the emitted one — this is what catches a new
@@ -137,7 +143,7 @@ describe.skipIf(!HAS_DB)("schedule-settings wire contract", () => {
     const wire = await getScheduleSettings(auth, divisionId);
     expect(ScheduleSettings.parse(wire)).toEqual(wire);
 
-    const put = await putScheduleSettings(auth, divisionId, { config: CONFIG });
+    const put = await putScheduleSettings(auth, divisionId, { config: makeConfig(courts) });
     expect(ScheduleSettings.parse(put)).toEqual(put);
   });
 });

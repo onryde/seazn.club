@@ -129,6 +129,7 @@ export function AiOfficialsReview({
   onBack,
   onContinue,
   onPulse,
+  courtNames = {},
 }: {
   plan: AiOfficialsPlanResponse | null;
   placements: OfficialsPlacement[];
@@ -167,6 +168,13 @@ export function AiOfficialsReview({
   onBack: () => void;
   onContinue: () => void;
   onPulse: (ids: string[]) => void;
+  /** Court id -> display label (`resolveCourtNames`/`buildCourtDirectory`).
+   *  `OfficialsPlacement.court_label` (below) carries a real court uuid since
+   *  the P9 cutover despite its legacy name — this resolves it for the grid
+   *  row's court/time caption (P9 review wave 3, finding #10). Optional/
+   *  defaulted to `{}`: existing test call sites construct this without it,
+   *  and a miss degrades to courtPicker.unknownCourt, never the raw id. */
+  courtNames?: Record<string, string>;
 }) {
   const msg = useMsg();
   const plural = usePlural();
@@ -325,7 +333,9 @@ export function AiOfficialsReview({
                     {row.marker && <Marker kind={row.marker} />}
                     <span title={row.matchup} className="min-w-0 flex-1 truncate text-slate-600">{row.matchup}</span>
                     <span className="shrink-0 whitespace-nowrap font-mono text-[10px] text-slate-400">
-                      {row.courtLabel ? `${row.courtLabel} · ${timeLabel(row.scheduledAt)}` : timeLabel(row.scheduledAt)}
+                      {row.courtLabel
+                        ? `${courtNames[row.courtLabel] ?? msg("courtPicker.unknownCourt")} · ${timeLabel(row.scheduledAt)}`
+                        : timeLabel(row.scheduledAt)}
                     </span>
                   </div>
                   <ul className="mt-1.5 flex flex-wrap gap-1.5">

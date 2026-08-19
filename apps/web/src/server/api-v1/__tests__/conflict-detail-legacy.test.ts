@@ -85,6 +85,14 @@ const CASES: Record<ConflictDetailKind, { detail: ConflictDetail; expected: stri
     detail: { kind: "court_double_booking", court: "Court 1", otherFixtureId: "f2" },
     expected: "court Court 1 double-booked with f2",
   },
+  // P9 pass 2c — postdates the d0cd9a25 baseline this describe block
+  // otherwise reproduces byte-for-byte; there is no historical English for
+  // this kind, so this is new prose (see conflict-detail-legacy.ts's own
+  // comment on this entry).
+  court_tag_mismatch: {
+    detail: { kind: "court_tag_mismatch", court: "Court 1" },
+    expected: "court Court 1 does not carry a required tag",
+  },
   inside_blackout: {
     detail: { kind: "inside_blackout" },
     expected: "inside a blackout window",
@@ -145,6 +153,50 @@ describe("legacyConflictDetail — byte-for-byte pre-C3 English (d0cd9a25)", () 
   it("court_double_booking WITHOUT otherFixtureId falls back to the literal (calendar.ts:1384's reportability guard)", () => {
     expect(legacyConflictDetail({ kind: "court_double_booking", court: "Court 1" })).toBe(
       "court Court 1 double-booked with another fixture",
+    );
+  });
+});
+
+// ===========================================================================
+// 1b. P9 pass 3a: `court` is now a real `courts.id` (uuid). `courtName` is
+// the caller-attached resolution — never rendered as a bare uuid.
+// ===========================================================================
+
+describe("legacyConflictDetail — courtName (P9 pass 3a, venues/courts cutover)", () => {
+  const courtId = "44444444-4444-4444-4444-444444444444";
+
+  it("court_double_booking prefers courtName over the raw id", () => {
+    expect(
+      legacyConflictDetail({
+        kind: "court_double_booking",
+        court: courtId,
+        courtName: "Centre Court",
+        otherFixtureId: "f2",
+      }),
+    ).toBe("court Centre Court double-booked with f2");
+  });
+
+  it("locked_slot_clash prefers courtName over the raw id", () => {
+    expect(
+      legacyConflictDetail({ kind: "locked_slot_clash", court: courtId, courtName: "Centre Court" }),
+    ).toBe("locked slot clashes on Centre Court");
+  });
+
+  it("court_tag_mismatch (P9 pass 2c) prefers courtName over the raw id", () => {
+    expect(
+      legacyConflictDetail({ kind: "court_tag_mismatch", court: courtId, courtName: "Centre Court" }),
+    ).toBe("court Centre Court does not carry a required tag");
+  });
+
+  it("court_tag_mismatch falls back to the bare id when courtName is unset", () => {
+    expect(legacyConflictDetail({ kind: "court_tag_mismatch", court: courtId })).toBe(
+      `court ${courtId} does not carry a required tag`,
+    );
+  });
+
+  it("falls back to the bare id when courtName is unset — never throws, still not silent", () => {
+    expect(legacyConflictDetail({ kind: "court_double_booking", court: courtId, otherFixtureId: "f2" })).toBe(
+      `court ${courtId} double-booked with f2`,
     );
   });
 });

@@ -74,14 +74,95 @@ describe("formatConflictDetail — instruction_time splits on ruleType", () => {
 });
 
 describe("formatConflictDetail — court_double_booking's optional otherFixtureId", () => {
-  it("names the other fixture when known", () => {
-    const d: ConflictDetail = { kind: "court_double_booking", court: "Court 1", otherFixtureId: "f2" };
-    expect(formatConflictDetail(d, baseCtx)).toBe("Court Court 1 is already taken by Charlie vs Delta");
+  // P9 review wave 3, finding #3: `court` is a real courts.id uuid since the
+  // P9 cutover, never a name — the server resolves `courtName` beside it
+  // (schemas.ts's court_name, via courtNamesById -> buildCourtDirectory) and
+  // that is what these messages must interpolate, never `court` itself.
+  const COURT_UUID = "7c9c3ad1-4f2e-4b1a-9e77-1a2b3c4d5e6f";
+
+  it("names the other fixture through the resolved courtName, never the raw court id", () => {
+    const d: ConflictDetail = {
+      kind: "court_double_booking",
+      court: COURT_UUID,
+      courtName: "Court 1 (Riverside Centre)",
+      otherFixtureId: "f2",
+    };
+    const text = formatConflictDetail(d, baseCtx);
+    expect(text).toBe("Court Court 1 (Riverside Centre) is already taken by Charlie vs Delta");
+    expect(text).not.toContain(COURT_UUID);
   });
 
-  it("falls back to the generic sentence when otherFixtureId is absent (calendar.ts:1384's reportability guard)", () => {
-    const d: ConflictDetail = { kind: "court_double_booking", court: "Court 1" };
-    expect(formatConflictDetail(d, baseCtx)).toBe("Court Court 1 is already taken by another match");
+  it("falls back to the generic sentence when otherFixtureId is absent (calendar.ts:1384's reportability guard) — still through courtName", () => {
+    const d: ConflictDetail = { kind: "court_double_booking", court: COURT_UUID, courtName: "Court 1 (Riverside Centre)" };
+    const text = formatConflictDetail(d, baseCtx);
+    expect(text).toBe("Court Court 1 (Riverside Centre) is already taken by another match");
+    expect(text).not.toContain(COURT_UUID);
+  });
+
+  it("a courtName miss degrades to the shared unknown-court string — never the raw uuid", () => {
+    const d: ConflictDetail = { kind: "court_double_booking", court: COURT_UUID, otherFixtureId: "f2" };
+    const text = formatConflictDetail(d, baseCtx);
+    expect(text).toBe("Court Unknown court is already taken by Charlie vs Delta");
+    expect(text).not.toContain(COURT_UUID);
+  });
+});
+
+describe("formatConflictDetail — locked_slot_clash and court_tag_mismatch resolve courtName too (P9 review wave 3, finding #3)", () => {
+  const COURT_UUID = "9a1b2c3d-4e5f-4061-8a1b-2c3d4e5f6071";
+
+  it("locked_slot_clash names the resolved court, never the raw id", () => {
+    const d: ConflictDetail = { kind: "locked_slot_clash", court: COURT_UUID, courtName: "Court 2" };
+    const text = formatConflictDetail(d, baseCtx);
+    expect(text).toBe("The pinned time clashes on court Court 2");
+    expect(text).not.toContain(COURT_UUID);
+  });
+
+  it("locked_slot_clash degrades to the unknown-court string on a courtName miss", () => {
+    const d: ConflictDetail = { kind: "locked_slot_clash", court: COURT_UUID };
+    const text = formatConflictDetail(d, baseCtx);
+    expect(text).toBe("The pinned time clashes on court Unknown court");
+    expect(text).not.toContain(COURT_UUID);
+  });
+
+  it("court_tag_mismatch names the resolved court, never the raw id (previously untested entirely)", () => {
+    const d: ConflictDetail = { kind: "court_tag_mismatch", court: COURT_UUID, courtName: "Show Court" };
+    const text = formatConflictDetail(d, baseCtx);
+    expect(text).toBe("Court Show Court does not carry a required tag");
+    expect(text).not.toContain(COURT_UUID);
+  });
+
+  it("court_tag_mismatch degrades to the unknown-court string on a courtName miss", () => {
+    const d: ConflictDetail = { kind: "court_tag_mismatch", court: COURT_UUID };
+    const text = formatConflictDetail(d, baseCtx);
+    expect(text).toBe("Court Unknown court does not carry a required tag");
+    expect(text).not.toContain(COURT_UUID);
+  });
+
+  it("two courts sharing a bare name in different venues stay distinguishable through courtName — never collapse to identical text", () => {
+    // The server resolves courtName venue-qualified (courtNamesById ->
+    // buildCourtDirectory) whenever a bare name collides across venues —
+    // this proves the CLIENT plumbing preserves whatever distinguishing text
+    // the server sent, rather than re-deriving or losing it.
+    const a: ConflictDetail = {
+      kind: "court_double_booking",
+      court: "11111111-1111-4111-8111-111111111111",
+      courtName: "Court 1 (Riverside Centre)",
+      otherFixtureId: "f1",
+    };
+    const b: ConflictDetail = {
+      kind: "court_double_booking",
+      court: "22222222-2222-4222-8222-222222222222",
+      courtName: "Court 1 (Downtown Hall)",
+      otherFixtureId: "f1",
+    };
+    const textA = formatConflictDetail(a, baseCtx);
+    const textB = formatConflictDetail(b, baseCtx);
+    expect(textA).toContain("Court 1 (Riverside Centre)");
+    expect(textB).toContain("Court 1 (Downtown Hall)");
+    expect(textA).not.toBe(textB);
+    const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-/;
+    expect(textA).not.toMatch(UUID_RE);
+    expect(textB).not.toMatch(UUID_RE);
   });
 });
 
@@ -238,6 +319,25 @@ describe("fromBoardConflictDetail / formatBoardConflictDetail — the snake_case
     const wire: BoardConflictDetail = { kind: "no_slot_lattice" };
     const converted = fromBoardConflictDetail(wire);
     expect(Object.keys(converted)).toEqual(["kind"]);
+  });
+
+  it("maps the wire's court_name to courtName (P9 review wave 3, finding #3) — the gap that let a raw uuid through", () => {
+    const UUID = "5c6d7e8f-4a1b-4c2d-9e3f-1a2b3c4d5e6f";
+    const wire: BoardConflictDetail = {
+      kind: "court_double_booking",
+      court: UUID,
+      court_name: "Court 1 (Riverside Centre)",
+      other_fixture_id: "f2",
+    };
+    expect(fromBoardConflictDetail(wire)).toEqual({
+      kind: "court_double_booking",
+      court: UUID,
+      courtName: "Court 1 (Riverside Centre)",
+      otherFixtureId: "f2",
+    });
+    const text = formatBoardConflictDetail(wire, baseCtx);
+    expect(text).toBe("Court Court 1 (Riverside Centre) is already taken by Charlie vs Delta");
+    expect(text).not.toContain(UUID);
   });
 });
 

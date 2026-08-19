@@ -14,6 +14,14 @@ import { HardConstraint, type ConflictDetailKind } from "@seazn/engine/schedulin
 // ---------------------------------------------------------------------------
 
 export const Uuid = z.uuid();
+/** A real `courts.id` (V374 cutover) — structurally identical to Uuid;
+ *  named separately so a stored `ScheduleConfig.courts` entry documents what
+ *  it actually references (never a free-text court name post-migration). */
+export const CourtId = Uuid;
+/** A real `venues.id` (V374 cutover — `fixtures.venue_id`, backfilled from
+ *  the legacy free-text `fixtures.venue`). P9 pass 3a's own sibling of
+ *  `CourtId`, same reasoning. */
+export const VenueId = Uuid;
 export const Slug = z
   .string()
   .min(1)
@@ -179,9 +187,10 @@ export const PatchDivision = z
      *  must carry every one of these tags; empty = any court. Normalised
      *  (trim/lowercase/dedupe) by usecases/divisions.ts via the SAME
      *  normalizeTags() the courts path uses — same shape, same rules, one
-     *  copy. Stored and read back only; not yet read by scheduling or
-     *  candidate-court filtering (P9), and `stages.required_court_tags`
-     *  (V367) stays unwired for the same reason — both are P9's. */
+     *  copy. Read by scheduling as of P9 pass 2b: `usecases/court-
+     *  candidates.ts`'s `resolveCandidateCourts`, unioned with the sibling
+     *  `stages.required_court_tags` (V367) — that column's own CRUD still
+     *  does not exist, only its read into this union. */
     required_court_tags: z.array(z.string().min(1).max(40)).max(50),
   })
   .partial()
@@ -442,8 +451,21 @@ export const MyFixture = z.object({
   entrant_name: z.string().nullable(),
   opponent_name: z.string().nullable(),
   scheduled_at: z.string().nullable(),
-  venue: z.string().nullable(),
-  court_label: z.string().nullable(),
+  // Review finding #9 (P9 venues/courts cutover): mirrors Fixture's own
+  // migration exactly (line ~769 above) — court_id/venue_id + derived,
+  // read-only court_name/venue_name. The frozen `venue`/`court_label` text
+  // columns leave the wire entirely; listMyFixtures (usecases/me.ts) never
+  // selected them post-cutover, so declaring them here as required was
+  // already false — there is no compatibility shim to preserve.
+  court_id: CourtId.nullable(),
+  court_name: z.string().nullable(),
+  venue_id: VenueId.nullable(),
+  venue_name: z.string().nullable(),
+  /** Venue zone (V305): division override -> org timezone -> UTC. Selected by
+   *  `listMyFixtures` and shipped on the wire since V305, but never declared
+   *  here — the times in this payload are unreadable without it, and a
+   *  consumer that parses against this schema drops it. Found closing #9. */
+  venue_tz: z.string().nullable(),
   status: z.string(),
   availability: z
     .object({ status: z.enum(["in", "out", "maybe"]), note: z.string().nullable() })
@@ -622,19 +644,27 @@ export const CreateStage = z
 /** POST /divisions/{id}/stages — the stage graph, one or many (doc 08 §3). */
 export const CreateStages = z.union([CreateStage, z.array(CreateStage).min(1).max(20)]);
 
-/** POST /stages/{id}/fixtures — ad-hoc single fixture (PROMPT-66). */
-export const AddFixture = z.object({
-  home_entrant_id: Uuid,
-  away_entrant_id: Uuid,
-  round_no: z.number().int().min(1).optional(),
-  scheduled_at: z.string().datetime({ offset: true }).nullish(),
-  venue: z.string().max(200).nullish(),
-});
+/** POST /stages/{id}/fixtures — ad-hoc single fixture (PROMPT-66).
+ *
+ *  P9 pass 3c-2: this was the one writer the venues/courts cutover missed —
+ *  it still took a free-text `venue`. Real venue/court by id now, same as
+ *  `PatchFixture`. `.strict()` for the same reason that schema documents: a
+ *  client still sending `venue` gets a loud 400 instead of a silent no-op. */
+export const AddFixture = z
+  .object({
+    home_entrant_id: Uuid,
+    away_entrant_id: Uuid,
+    round_no: z.number().int().min(1).optional(),
+    scheduled_at: z.string().datetime({ offset: true }).nullish(),
+    venue_id: VenueId.nullish(),
+    court_id: CourtId.nullish(),
+  })
+  .strict();
 export type AddFixture = z.infer<typeof AddFixture>;
 export type CreateStages = z.infer<typeof CreateStages>;
 
 // F2 — READ-path shape (Task 6): the two old columns this response used to
-// expose (qualification/seeding) were dropped by V371; API consumers now
+// expose (qualification/seeding) were dropped by V374; API consumers now
 // see the one unified field. Deliberately `z.record(...).nullable()`, not
 // `ProgressionSchema.nullable()` — a response schema should not 400 a row
 // this API itself wrote (defence-in-depth against a shape ProgressionSchema
@@ -695,8 +725,12 @@ export type FromTemplateResult = z.infer<typeof FromTemplateResult>;
 export const PatchFixture = z
   .object({
     scheduled_at: z.iso.datetime({ offset: true }).nullable(),
-    venue: z.string().max(200).nullable(),
-    court_label: z.string().max(100).nullable(),
+    // P9 pass 3a (venues/courts cutover, FULL — not a compatibility shim):
+    // `venue`/`court_label` free text leave the wire entirely. A request
+    // names a real venue/court by id; `court_label`/`venue` stay in the DB,
+    // unwritten, until the drop PR.
+    venue_id: VenueId.nullable(),
+    court_id: CourtId.nullable(),
     officials: z.array(z.record(z.string(), z.unknown())),
     /** Pin/lock (doc 12 §2): locked assignments survive re-running auto. */
     schedule_locked: z.boolean(),
@@ -705,8 +739,24 @@ export const PatchFixture = z
     expected_seq: z.number().int().nonnegative(),
   })
   .partial()
+  // P9 pass 3a: `.strict()` so a client still sending the retired
+  // `court_label`/`venue` gets a loud 400 instead of a silent no-op — a
+  // plain (non-strict) object schema STRIPS an unknown key rather than
+  // refusing it, and "I set court_label but the fixture never moved, with
+  // no error" is a far worse failure than a 400 telling the client its
+  // field name is gone. Same reasoning `ApplyCompetitionScheduleRequest`'s
+  // own `.strict()` documents.
+  .strict()
   .refine((p) => Object.keys(p).length > 0, "empty patch");
 export type PatchFixture = z.infer<typeof PatchFixture>;
+
+/** D4a (P5) i18n pattern ref for a not-yet-filled slot — {key, params}, never
+ *  a prebuilt string. Named rather than inlined because THREE published
+ *  schemas carry it (Fixture, AssignedFixture) and a per-schema copy is how
+ *  two shapes of the same field drift apart. */
+export const SlotLabelRef = z
+  .object({ key: z.string(), params: z.record(z.string(), z.unknown()) })
+  .nullable();
 
 export const Fixture = z.object({
   id: Uuid,
@@ -726,11 +776,21 @@ export const Fixture = z.object({
   /** D4a (P5): i18n pattern ref for a not-yet-filled slot ("Winner Group A"),
    *  {key, params} — never a prebuilt string. Cleared on fill (design's Fill
    *  algorithm step 4); non-null only while the matching *_entrant_id is null. */
-  home_slot_label: z.object({ key: z.string(), params: z.record(z.string(), z.unknown()) }).nullable(),
-  away_slot_label: z.object({ key: z.string(), params: z.record(z.string(), z.unknown()) }).nullable(),
+  home_slot_label: SlotLabelRef,
+  away_slot_label: SlotLabelRef,
   scheduled_at: z.string().nullable(),
-  venue: z.string().nullable(),
-  court_label: z.string().nullable(),
+  // P9 pass 3c-2: court_id/venue_id + derived, read-only court_name/
+  // venue_name — same shape as ScheduleAssignment. The frozen `venue`/
+  // `court_label` text columns leave the wire entirely here (unlike the
+  // general internal FixtureRow, which keeps them for callers not yet
+  // migrated): this is the published v1 API contract, the highest-visibility
+  // reader, and the one place P9 makes a clean break rather than adding
+  // alongside. A client still reading `court_label` off this response
+  // needs to move to `court_name` — there is no compatibility shim.
+  court_id: CourtId.nullable(),
+  court_name: z.string().nullable(),
+  venue_id: VenueId.nullable(),
+  venue_name: z.string().nullable(),
   officials: z.array(z.unknown()),
   status: z.enum(["scheduled", "in_play", "decided", "finalized", "abandoned", "forfeited", "cancelled"]),
   outcome: z.unknown().nullable(),
@@ -738,7 +798,7 @@ export const Fixture = z.object({
   schedule_locked: z.boolean(),
   created_at: z.string(),
   /** F1 (2026-08-17): the engine's bracket-position role, persisted instead
-   *  of re-derived per consumer (V368/V369). Declared here for the same
+   *  of re-derived per consumer (V374/V369). Declared here for the same
    *  reason as `fixture_no` above — `FIXTURE_COLS` now selects it and every
    *  fixture route returns its row unmapped, so leaving it undocumented
    *  would be a silent gap between the published spec and the real
@@ -925,10 +985,37 @@ export const ScheduleConfig = z.object({
   endAt: IsoDateTime.nullish(),
   matchMinutes: z.number().int().min(1).max(24 * 60).default(30),
   gapMinutes: z.number().int().min(0).max(24 * 60).default(0),
-  courts: z.array(z.string().min(1).max(100)).min(1).max(50).default(["Court 1"]),
+  /** V374 cutover: real court ids only, no tolerant string union — the
+   *  migration IS the compatibility strategy (design doc "Stored-config
+   *  migration"). The original design named `.min(1)`, dropped here: a
+   *  division that has never configured courts parses `courts` as
+   *  `undefined`, and zod's `.default()` substitutes WITHOUT re-running the
+   *  array's own checks (verified against the installed zod@4.4.3 — an
+   *  explicit `[]` DOES fail `.min(1)`, but a defaulted `[]` does not), so
+   *  `.min(1)` cannot be paired with an empty-array default, and no static
+   *  default can name a real per-org court id. An empty array is therefore a
+   *  legitimate, parseable "no courts configured yet" state; the capacity
+   *  guard already needs to treat zero usable courts as a first-class case
+   *  (`capacity.no_matching_court`, design doc "Scheduler integration") —
+   *  pass 3's job, not this one's. */
+  courts: z.array(CourtId).max(50).default([]),
   perEntrantMinRest: z.number().int().min(0).max(24 * 60).default(0),
+  /** P9 pass 4c: real court id, like `courts` above — was
+   *  `z.string().max(100)` (a court NAME). `courts` moved to real ids in
+   *  pass 1 while this field stayed free text, so a court-scoped blackout
+   *  could no longer match the court it named (silently went global or
+   *  inert depending on the reader). V374 rewrites every stored
+   *  `blackouts[].court` name -> id on migration, reusing the same
+   *  court_mapping `courts` itself is rewritten through. Review wave 1,
+   *  finding 2: an entry that cannot be mapped is DROPPED entirely, never
+   *  left in place (this field is required-shaped — `.optional()` only
+   *  drops the KEY, a present-but-unmappable string still fails `CourtId`)
+   *  and never widened into a venue-wide blackout by dropping just the
+   *  `court` key — that would block every court during the window instead
+   *  of the one the organiser could no longer be identified. Counted in the
+   *  migration's dry-run report either way, so an operator can see it. */
   blackouts: z
-    .array(z.object({ court: z.string().max(100).optional(), from: IsoDateTime, to: IsoDateTime }))
+    .array(z.object({ court: CourtId.optional(), from: IsoDateTime, to: IsoDateTime }))
     .max(200)
     .default([]),
   sessionWindows: z
@@ -1093,6 +1180,7 @@ const CONFLICT_DETAIL_KIND_WITNESS: Record<ConflictDetailKind, true> = {
   outside_competition_window: true,
   outside_start_window: true,
   court_double_booking: true,
+  court_tag_mismatch: true,
   inside_blackout: true,
   outside_session_windows: true,
   entrant_overlap: true,
@@ -1127,6 +1215,12 @@ const ScheduleConflictDetail = z.object({
   person_ids: z.array(Uuid).optional(),
   other_fixture_id: Uuid.optional(),
   court: z.string().optional(),
+  /** P9 pass 3a: `court` is now a real `courts.id`; this is the DERIVED,
+   *  read-only display name resolved by the usecase before this leaves the
+   *  server — mirrors the engine's own `ConflictDetail.courtName` (see its
+   *  doc comment). Absent exactly when `court` is, or on the rare miss a
+   *  resolver could not name. */
+  court_name: z.string().optional(),
   day: z.string().optional(),
   other_day: z.string().optional(),
   weekday: z.string().optional(),
@@ -1216,7 +1310,12 @@ export const ScheduleAssignment = z.object({
   fixture_id: Uuid,
   scheduled_at: z.string(),
   ends_at: z.string(),
-  court_label: z.string(),
+  court_id: CourtId,
+  /** DERIVED, read-only (P9 pass 3a) — resolved from `court_id` by the
+   *  usecase. Nullable rather than omitted on a miss: `court_id` itself is
+   *  always present on a real assignment, so a client can always render
+   *  SOMETHING (fall back to the id) without a key-absence check. */
+  court_name: z.string().nullable(),
 });
 export type ScheduleAssignment = z.infer<typeof ScheduleAssignment>;
 
@@ -1474,7 +1573,7 @@ export const ScheduleSolverInfo = z.object({
    *  response from a server one deploy behind, must still parse.
    *
    *  Counts PLACEMENTS, not the division's lock flag: a locked fixture with
-   *  no `scheduled_at`/`court_label` yet has nothing to anchor to and is not
+   *  no `scheduled_at`/`court_id` yet has nothing to anchor to and is not
    *  counted (the same rule the anchor itself uses — see `lockedFixtureIds`
    *  in `schedule.ts`). */
   locked_kept: z.number().int().optional(),
@@ -1624,13 +1723,28 @@ export type AiApplyMeta = z.infer<typeof AiApplyMeta>;
 export const ApplyScheduleRequest = z.object({
   assignments: z
     .array(
-      z.object({
-        fixture_id: Uuid,
-        scheduled_at: IsoDateTime,
-        court_label: z.string().min(1).max(100),
-        venue: z.string().max(200).nullish(),
-        schedule_locked: z.boolean().optional(),
-      }),
+      z
+        .object({
+          fixture_id: Uuid,
+          scheduled_at: IsoDateTime,
+          // P9 pass 3a — see PatchFixture's identical note just above, incl.
+          // why `.strict()` below: a client still sending `court_label`
+          // must get a loud 400, not a silently-stripped-and-then-required-
+          // -field-missing error that names the wrong thing.
+          court_id: CourtId,
+          venue_id: VenueId.nullish(),
+          schedule_locked: z.boolean().optional(),
+          // ECHOED, ignored. `/schedule/auto` returns these two alongside the
+          // assignment, and posting its response straight back to /apply is the
+          // documented round-trip (the board does it, and so does
+          // auto-schedule.spec.ts). `.strict()` below turned that into a 400 on
+          // an unknown key, which is a contract break dressed as validation —
+          // the strictness exists to reject a client still sending
+          // `court_label`, not to reject this endpoint's own output.
+          ends_at: IsoDateTime.optional(),
+          court_name: z.string().nullish(),
+        })
+        .strict(),
     )
     .min(1)
     .max(500),
@@ -1691,12 +1805,21 @@ export const PublishScheduleResult = z.object({
 /** GET /me/assigned-fixtures — the "My matches" read (doc 13 §3/§6). */
 export const AssignedFixture = z.object({
   id: Uuid,
+  // Seven fields below were selected by `listAssignedFixtures` and shipped on
+  // the wire while this schema never declared them, so the published contract
+  // understated the payload and any consumer parsing against it dropped them.
+  // Pre-dates the venues cutover; found while closing review finding #9, which
+  // was the same drift one field over.
+  fixture_no: z.number().int(),
   org_id: Uuid,
   org_name: z.string(),
+  org_slug: z.string(),
   competition_id: Uuid,
   competition_name: z.string(),
+  competition_slug: z.string(),
   division_id: Uuid,
   division_name: z.string(),
+  division_slug: z.string(),
   division_status: z.string(),
   sport_key: z.string(),
   module_version: z.string(),
@@ -1705,9 +1828,22 @@ export const AssignedFixture = z.object({
   away_entrant_id: Uuid.nullable(),
   home_name: z.string().nullable(),
   away_name: z.string().nullable(),
+  /** D4b (P6): set only while the matching *_entrant_id is null. */
+  home_slot_label: SlotLabelRef,
+  away_slot_label: SlotLabelRef,
   scheduled_at: z.string().nullable(),
-  venue: z.string().nullable(),
-  court_label: z.string().nullable(),
+  /** Venue zone (V305): division override -> org timezone -> UTC. */
+  venue_tz: z.string().nullable(),
+  // Review finding #9 (P9 venues/courts cutover): same clean break as
+  // Fixture and MyFixture above — court_id/venue_id + derived, read-only
+  // court_name/venue_name. `venue`/`court_label` leave the wire entirely;
+  // listAssignedFixtures (usecases/scorers.ts) never selected them
+  // post-cutover, so declaring them here as required was already false —
+  // there is no compatibility shim to preserve.
+  court_id: CourtId.nullable(),
+  court_name: z.string().nullable(),
+  venue_id: VenueId.nullable(),
+  venue_name: z.string().nullable(),
   status: z.string(),
 });
 
@@ -2499,11 +2635,17 @@ export const RestoreCheckpoint = z.object({
 
 export const DivisionLocks = z.object({
   schedule_locked: z.boolean().optional(),
+  // P9 pass-3a-FIX: courts/venues are real ids (V374's locked_scopes
+  // migration; `usecases/schedule.ts`'s `scopeLocked` matches on
+  // court_id/venue_id, not organiser-typed names) — CourtId/VenueId, not a
+  // bare string, mirrors `usecases/history.ts`'s `LockInput` (the schema
+  // that actually validates this route's body; kept identical by hand, same
+  // as before this pass, to avoid the two drifting).
   locked_scopes: z
     .array(
       z.object({
-        courts: z.array(z.string()).optional(),
-        venues: z.array(z.string()).optional(),
+        courts: z.array(CourtId).optional(),
+        venues: z.array(VenueId).optional(),
         pool_ids: z.array(z.string()).optional(),
       }),
     )
@@ -2612,7 +2754,13 @@ export const AiPlanRequest = z.object({
   scope: z
     .object({
       from: IsoDateTime.optional(),
-      courts: z.array(z.string()).optional(),
+      // P9 pass 3b: real `courts.id` values — `buildSchedulePack`'s own
+      // `inScope()` matches this against a fixture's `court_id`, and its
+      // scope-validation check compares it against `ScheduleConfig.courts`
+      // (`CourtId[]` since pass 1), so a bare `z.string()` here let a
+      // free-text label through the parse only to silently never match
+      // anything downstream.
+      courts: z.array(CourtId).optional(),
       pool_ids: z.array(Uuid).optional(),
     })
     .optional(),
@@ -2678,6 +2826,11 @@ const AiPlanAssignment = z.object({
  *  format would reject a real, correctly-computed conflict. */
 const AiPlanConflictDetail = z.object({
   kind: ConflictDetailKindSchema,
+  /** Review wave 3: the DERIVED, venue-qualified court name beside the raw
+   *  `court` id. Without it declared, zod strips whatever a caller attaches
+   *  and `formatConflictDetail` degrades every court conflict to "Unknown
+   *  court" — the field has to exist here as well as be resolved server-side. */
+  courtName: z.string().optional(),
   entrantIds: z.array(z.string()).optional(),
   personIds: z.array(z.string()).optional(),
   otherFixtureId: z.string().optional(),
@@ -3227,7 +3380,15 @@ export const ApplyCompetitionScheduleRequest = z.object({
               .object({
                 fixture_id: Uuid,
                 scheduled_at: IsoDateTime,
-                court_label: z.string().min(1).max(100),
+                // P9 pass 3b: a real `courts.id`, not the legacy free-text
+                // label — mirrors `ApplyScheduleRequest`'s identical field
+                // (the per-stage apply's own `.strict()` reasoning above
+                // applies verbatim here: a client still sending `court_label`
+                // must get a loud 400). `venue_id` is optional, same
+                // coalesce-over-unchanged semantics `applySchedule`
+                // (schedule.ts) already gives it.
+                court_id: CourtId,
+                venue_id: VenueId.nullish(),
               })
               /**
                * `.strict()`, because the plan's own output is WIDER than this.

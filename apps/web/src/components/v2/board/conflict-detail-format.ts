@@ -101,6 +101,19 @@ function fixtureLabel(id: string | undefined, fixtureTitles: Readonly<Record<str
   return fixtureTitles[id] ?? shortId(id);
 }
 
+/** P9 review wave 3, finding #3: `d.court` is a real courts.id uuid for
+ *  every kind that carries it (court_double_booking, locked_slot_clash,
+ *  court_tag_mismatch — see the engine's own ConflictDetail doc) and must
+ *  never render directly. `d.courtName` is the server-resolved, venue-
+ *  qualified display name for it (schemas.ts's ScheduleConflictDetail.
+ *  court_name, via courtNamesById -> buildCourtDirectory — the SAME
+ *  directory rule every other court-facing surface uses, not a second
+ *  implementation of it). A miss degrades to the shared "Unknown court"
+ *  string (court-multi-picker.tsx's own convention), never the raw id. */
+function courtLabel(courtName: string | undefined, msg: FormatMsg): string {
+  return courtName ?? msg("courtPicker.unknownCourt");
+}
+
 /**
  * Localized, name-resolved text for one structured conflict detail.
  *
@@ -118,7 +131,7 @@ export function formatConflictDetail(d: ConflictDetail, ctx: ConflictDetailCtx):
         other: fixtureLabel(d.otherFixtureId, fixtureTitles),
       });
     case "locked_slot_clash":
-      return msg("board.conflict.detail.locked_slot_clash", { court: d.court ?? "" });
+      return msg("board.conflict.detail.locked_slot_clash", { court: courtLabel(d.courtName, msg) });
     case "no_slot_start_window":
       return msg("board.conflict.detail.no_slot_start_window");
     case "no_slot_person_bound":
@@ -175,10 +188,15 @@ export function formatConflictDetail(d: ConflictDetail, ctx: ConflictDetailCtx):
       // (`courtBlocked`/`hits` disagreeing) rather than a real counterparty.
       return d.otherFixtureId
         ? msg("board.conflict.detail.court_double_booking", {
-            court: d.court ?? "",
+            court: courtLabel(d.courtName, msg),
             other: fixtureLabel(d.otherFixtureId, fixtureTitles),
           })
-        : msg("board.conflict.detail.court_double_booking.unknown", { court: d.court ?? "" });
+        : msg("board.conflict.detail.court_double_booking.unknown", { court: courtLabel(d.courtName, msg) });
+    case "court_tag_mismatch":
+      // P9 pass 2c. No counterparty fixture — this is a property of the
+      // court itself, not a clash with another card — so unlike
+      // court_double_booking there is no otherFixtureId branch.
+      return msg("board.conflict.detail.court_tag_mismatch", { court: courtLabel(d.courtName, msg) });
     case "inside_blackout":
       return msg("board.conflict.detail.inside_blackout");
     case "outside_session_windows":
@@ -259,6 +277,7 @@ export function fromBoardConflictDetail(d: BoardConflictDetail): ConflictDetail 
     ...(d.person_ids !== undefined ? { personIds: d.person_ids } : {}),
     ...(d.other_fixture_id !== undefined ? { otherFixtureId: d.other_fixture_id } : {}),
     ...(d.court !== undefined ? { court: d.court } : {}),
+    ...(d.court_name !== undefined ? { courtName: d.court_name } : {}),
     ...(d.day !== undefined ? { day: d.day } : {}),
     ...(d.other_day !== undefined ? { otherDay: d.other_day } : {}),
     ...(d.weekday !== undefined ? { weekday: d.weekday } : {}),

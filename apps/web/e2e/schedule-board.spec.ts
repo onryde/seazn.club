@@ -6,6 +6,7 @@ import {
   createStageAndGenerate,
   competitionPath,
   divisionPath,
+  seedVenueWithCourts,
 } from "./helpers";
 
 // The scheduling board's write paths (schedule-panels.spec covers officials /
@@ -18,13 +19,15 @@ test.describe.serial("schedule board", () => {
   let divisionId: string;
   let stageId: string;
   let fixtureIds: string[] = [];
-  const slotOf = new Map<string, { scheduled_at: string; court_label: string }>();
+  let courtA: string;
+  let courtB: string;
+  const slotOf = new Map<string, { scheduled_at: string; court_id: string }>();
 
   interface FixtureRow {
     id: string;
     round_no: number;
     scheduled_at: string | null;
-    court_label: string | null;
+    court_id: string | null;
     home_entrant_id: string | null;
     away_entrant_id: string | null;
     schedule_locked?: boolean;
@@ -57,13 +60,16 @@ test.describe.serial("schedule board", () => {
 
     // Core ScheduleConfig: two courts, 45' matches, rest floor for the
     // warning test later. Multi-court/rest is the Pro constraints layer.
+    const venue = await seedVenueWithCourts(request, ["Court A", "Court B"]);
+    courtA = venue.courts[0]!.id;
+    courtB = venue.courts[1]!.id;
     const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
       tz: "UTC",
       config: {
         startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
         matchMinutes: 45,
         gapMinutes: 5,
-        courts: ["Court A", "Court B"],
+        courts: [courtA, courtB],
         perEntrantMinRest: 30,
       },
     });
@@ -71,12 +77,12 @@ test.describe.serial("schedule board", () => {
 
     // Propose (nothing persisted) — both courts get used …
     const auto = await apiJson<{
-      assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+      assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
       conflicts: { blocking: boolean }[];
     }>(request, `/api/v1/stages/${stageId}/schedule/auto`, "POST", {});
     expect(auto.status).toBe(200);
     expect(auto.data!.assignments.length).toBe(6);
-    expect(new Set(auto.data!.assignments.map((a) => a.court_label)).size).toBe(2);
+    expect(new Set(auto.data!.assignments.map((a) => a.court_id)).size).toBe(2);
 
     // … then persist the proposal.
     const applied = await apiJson<{ applied: number }>(
@@ -87,7 +93,7 @@ test.describe.serial("schedule board", () => {
         assignments: auto.data!.assignments.map((a) => ({
           fixture_id: a.fixture_id,
           scheduled_at: a.scheduled_at,
-          court_label: a.court_label,
+          court_id: a.court_id,
         })),
         source: "auto",
       },
@@ -95,7 +101,7 @@ test.describe.serial("schedule board", () => {
     expect(applied.status).toBe(200);
     expect(applied.data!.applied).toBe(6);
     for (const a of auto.data!.assignments) {
-      slotOf.set(a.fixture_id, { scheduled_at: a.scheduled_at, court_label: a.court_label });
+      slotOf.set(a.fixture_id, { scheduled_at: a.scheduled_at, court_id: a.court_id });
     }
 
     // A full validation pass over the applied board reports no blockers.
@@ -168,8 +174,8 @@ test.describe.serial("schedule board", () => {
       "POST",
       {
         assignments: [
-          { fixture_id: fixtureIds[0]!, scheduled_at: when, court_label: "Court A" },
-          { fixture_id: fixtureIds[1]!, scheduled_at: when, court_label: "Court A" },
+          { fixture_id: fixtureIds[0]!, scheduled_at: when, court_id: courtA },
+          { fixture_id: fixtureIds[1]!, scheduled_at: when, court_id: courtA },
         ],
         source: "manual",
       },
@@ -227,7 +233,7 @@ test.describe.serial("schedule board", () => {
     // it is only vacating ITS OWN later slot to move earlier.
     const lowerStart = Date.parse(lower.scheduled_at!);
     const upperStart = lowerStart + (45 + 5) * 60_000;
-    const upperCourt = upper.court_label!;
+    const upperCourt = upper.court_id!;
     const tight = await apiJson<{ applied: number; conflicts: { code: string; blocking: boolean }[] }>(
       request,
       `/api/v1/stages/${stageId}/schedule/apply`,
@@ -237,7 +243,7 @@ test.describe.serial("schedule board", () => {
           {
             fixture_id: upper.id,
             scheduled_at: new Date(upperStart).toISOString(), // 5' rest — below the 30' floor
-            court_label: upperCourt,
+            court_id: upperCourt,
           },
         ],
         source: "manual",
@@ -272,19 +278,19 @@ test.describe.serial("schedule board", () => {
     const free = new Date(Date.UTC(2026, 8, 24, 15, 0)).toISOString();
     const moved = await apiJson(request, `/api/v1/fixtures/${lastRound.id}`, "PATCH", {
       scheduled_at: free,
-      court_label: "Court B",
+      court_id: courtB,
     });
     expect(moved.status).toBe(200);
     const after = await getFixture(request, lastRound.id);
     expect(after.scheduled_at).toBe(free);
-    expect(after.court_label).toBe("Court B");
-    slotOf.set(lastRound.id, { scheduled_at: free, court_label: "Court B" });
+    expect(after.court_id).toBe(courtB);
+    slotOf.set(lastRound.id, { scheduled_at: free, court_id: courtB });
 
     // Moving another fixture onto that exact slot is a blocking court clash.
     const other = allFixtures.find((f) => f.id !== lastRound.id)!;
     const onto = await apiJson(request, `/api/v1/fixtures/${other.id}`, "PATCH", {
       scheduled_at: free,
-      court_label: "Court B",
+      court_id: courtB,
     });
     expect(onto.status).toBeGreaterThanOrEqual(400);
   });
@@ -297,7 +303,7 @@ test.describe.serial("schedule board", () => {
     expect(pinned.status).toBe(200);
 
     const reflow = await apiJson<{
-      assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+      assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
     }>(request, `/api/v1/stages/${stageId}/schedule/auto`, "POST", { only_unlocked: true });
     expect(reflow.status).toBe(200);
     // The locked fixture is a fixed obstacle — if the proposal mentions it at
@@ -305,7 +311,7 @@ test.describe.serial("schedule board", () => {
     const pinnedProposal = reflow.data!.assignments.find((a) => a.fixture_id === pinnedId);
     if (pinnedProposal) {
       expect(pinnedProposal.scheduled_at).toBe(slotOf.get(pinnedId)!.scheduled_at);
-      expect(pinnedProposal.court_label).toBe(slotOf.get(pinnedId)!.court_label);
+      expect(pinnedProposal.court_id).toBe(slotOf.get(pinnedId)!.court_id);
     }
     const still = await getFixture(request, pinnedId);
     expect(still.scheduled_at).toBe(slotOf.get(pinnedId)!.scheduled_at);
@@ -319,7 +325,7 @@ test.describe.serial("schedule board", () => {
 
     const blocked = await apiJson(request, `/api/v1/fixtures/${fixtureIds[4]!}`, "PATCH", {
       scheduled_at: new Date(Date.UTC(2026, 8, 25, 9, 0)).toISOString(),
-      court_label: "Court A",
+      court_id: courtA,
     });
     expect(blocked.status).toBeGreaterThanOrEqual(400);
 
@@ -343,7 +349,7 @@ test.describe.serial("schedule board", () => {
 
     await apiJson(request, `/api/v1/fixtures/${target}`, "PATCH", {
       scheduled_at: new Date(Date.UTC(2026, 8, 26, 18, 0)).toISOString(),
-      court_label: "Court A",
+      court_id: courtA,
     });
 
     const restored = await apiJson(request, `/api/v1/divisions/${divisionId}/restore`, "POST", {
@@ -353,7 +359,7 @@ test.describe.serial("schedule board", () => {
     expect(restored.status).toBe(200);
     const after = await getFixture(request, target);
     expect(after.scheduled_at).toBe(before.scheduled_at);
-    expect(after.court_label).toBe(before.court_label);
+    expect(after.court_id).toBe(before.court_id);
   });
 
   test("clear schedule empties unlocked slots but spares the pinned fixture", async ({ request }) => {
@@ -376,13 +382,13 @@ test.describe.serial("schedule board", () => {
   test("publish flips the division to scheduled", async ({ request }) => {
     // Re-schedule everything first (publish expects a timetable).
     const auto = await apiJson<{
-      assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+      assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
     }>(request, `/api/v1/stages/${stageId}/schedule/auto`, "POST", { only_unlocked: true });
     await apiJson(request, `/api/v1/stages/${stageId}/schedule/apply`, "POST", {
       assignments: auto.data!.assignments.map((a) => ({
         fixture_id: a.fixture_id,
         scheduled_at: a.scheduled_at,
-        court_label: a.court_label,
+        court_id: a.court_id,
       })),
       source: "auto",
     });
@@ -537,6 +543,9 @@ test("the publish gate offers a way through for warnings, and none for a blocker
   // A two-hour rest floor, so a 60-minute turnaround is a `warn.rest` — a
   // warning, NOT a blocker. (`conflict.start_window` is non-blocking and
   // `warn.window` IS blocking; the prefix decides nothing.)
+  const gateVenue = await seedVenueWithCourts(request, ["Court A", "Court B"]);
+  const gateCourtA = gateVenue.courts[0]!.id;
+  const gateCourtB = gateVenue.courts[1]!.id;
   const warnSettings = await apiJson(
     request,
     `/api/v1/divisions/${divisionId}/schedule-settings`,
@@ -547,7 +556,7 @@ test("the publish gate offers a way through for warnings, and none for a blocker
         startAt: at(9),
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: ["Court A", "Court B"],
+        courts: [gateCourtA, gateCourtB],
         perEntrantMinRest: 120,
       },
     },
@@ -575,11 +584,11 @@ test("the publish gate offers a way through for warnings, and none for a blocker
   expect(sharer, "the generated round robin has no pair sharing an entrant").toBeTruthy();
   await apiJson(request, `/api/v1/fixtures/${first.id}`, "PATCH", {
     scheduled_at: at(9),
-    court_label: "Court A",
+    court_id: gateCourtA,
   });
   await apiJson(request, `/api/v1/fixtures/${sharer!.id}`, "PATCH", {
     scheduled_at: at(10),
-    court_label: "Court B",
+    court_id: gateCourtB,
   });
 
   await page.goto(await competitionPath(page.request, comp.data!.id, "/schedule"));
@@ -628,7 +637,7 @@ test("the publish gate offers a way through for warnings, and none for a blocker
         endAt: new Date(DAY - 3_600_000).toISOString(),
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: ["Court A", "Court B"],
+        courts: [gateCourtA, gateCourtB],
         perEntrantMinRest: 120,
       },
     },
@@ -675,19 +684,21 @@ test("single-division board: no legend, no division chip, Move panel still works
   const divisionId = div.data!.id;
   await addEntrantsViaApi(request, divisionId, ["Ash", "Birch", "Cedar", "Dune"]);
   const out = await createStageAndGenerate(request, divisionId);
+  const soloVenue = await seedVenueWithCourts(request, ["Court A"]);
+  const soloCourtA = soloVenue.courts[0]!.id;
   await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
     tz: "UTC",
     config: {
       startAt: new Date(Date.UTC(2026, 9, 20, 9, 0)).toISOString(),
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["Court A"],
+      courts: [soloCourtA],
       perEntrantMinRest: 0,
     },
   });
   await apiJson(request, `/api/v1/fixtures/${out.fixtureIds[0]!}`, "PATCH", {
     scheduled_at: new Date(Date.UTC(2026, 9, 20, 9, 0)).toISOString(),
-    court_label: "Court A",
+    court_id: soloCourtA,
   });
 
   await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));

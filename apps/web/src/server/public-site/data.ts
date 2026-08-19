@@ -11,6 +11,7 @@ import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
 import { isoDateTime } from "@/lib/public-site";
+import { buildCourtDirectory } from "@/lib/court-directory";
 import { labelPlayerStats, groupCareerStatsBySport, type CareerSportStats } from "@/server/player-stats";
 // The DB-touching "matches" counter — NOT the pure module above (same name,
 // different file). Shared with personCareerStats/countMatchesByDivision
@@ -43,6 +44,93 @@ const normalizeFixture = <T extends { scheduled_at: unknown }>(f: T): T => ({
   ...f,
   scheduled_at: isoDateTime(f.scheduled_at),
 });
+
+/**
+ * P9 cutover: `venue_name`/`court_name` DERIVED from `venues`/`courts` via
+ * `fixtures.venue_id`/`court_id`. `public_fixtures_v` (db/migration) is a
+ * hand-maintained column list that has not been extended with the two id
+ * columns, so this queries the base `fixtures` table directly — scoped to
+ * exactly the ids the caller already fetched through the view (never a
+ * wider row set than the view already authorized) — rather than editing
+ * the view. Mirrors the view's own per-row "setup" redaction (`case when
+ * d.status = 'setup' then null else f.venue end`, V369) by joining
+ * `divisions` itself instead of taking a caller-supplied status — a batch
+ * can span more than one division (not true of the two callers in THIS
+ * file today, but true of `usecases/public.ts`'s `publicFixture`, which has
+ * no division context of its own), and this way nobody can pass the wrong
+ * one.
+ *
+ * `court_name` is resolved through {@link buildCourtDirectory} (P9 pass
+ * 3d/4d, `lib/court-directory.ts`) — the SAME "Name (Venue)" disambiguation
+ * the schedule board / AI pack / court picker already use (a court name is
+ * unique only WITHIN its venue — `courts_venue_name_active_idx` — so two
+ * venues may legally each name one "Court 1"). The directory is built
+ * ORG-WIDE (every court belonging to the same org(s) as the fixtures in
+ * this batch, not just the courts this particular batch happens to
+ * reference) so a court's label can never flip depending on which OTHER
+ * fixtures were queried alongside it — this is also why
+ * `withCourtVenueName`'s single-fixture form still disambiguates correctly
+ * with nothing else in its "batch" to compare against. This file reads a
+ * SUPERUSER connection (no `current_org_id()` RLS context — unlike
+ * `usecases/schedule.ts`'s `courtNamesById`, which can rely on RLS for its
+ * org scope), so the `org_id` filter below is a hard tenant-isolation
+ * requirement, not an optimization: dropping it would leak every OTHER
+ * org's court/venue names into this org's disambiguation. Do not write a
+ * second ambiguity rule.
+ */
+export async function withCourtVenueNames<T extends { id: string }>(
+  fixtures: T[],
+): Promise<(T & { venue_name: string | null; court_name: string | null })[]> {
+  if (fixtures.length === 0) return [];
+  const rows = await sql<
+    {
+      id: string;
+      court_id: string | null;
+      org_id: string;
+      division_status: string;
+      venue_name: string | null;
+      court_name: string | null;
+    }[]
+  >`
+    select f.id, f.court_id, f.org_id, d.status as division_status,
+           ven.name as venue_name, crt.name as court_name
+    from fixtures f
+    join divisions d     on d.id = f.division_id
+    left join courts crt on crt.id = f.court_id
+    left join venues ven on ven.id = f.venue_id
+    where f.id in ${sql(fixtures.map((f) => f.id))}`;
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  // Setup-redacted rows contribute nothing worth disambiguating — skip
+  // their org rather than pulling it into the directory query for a
+  // result that gets nulled back out below anyway.
+  const orgIds = [...new Set(rows.filter((r) => r.division_status !== "setup").map((r) => r.org_id))];
+  const directoryRows = orgIds.length
+    ? await sql<{ id: string; name: string; venue_name: string; tags: string[] }[]>`
+        select crt.id, crt.name, ven.name as venue_name, crt.tags
+        from courts crt
+        join venues ven on ven.id = crt.venue_id
+        where crt.org_id in ${sql(orgIds)}
+        order by ven.name, crt.name, crt.id`
+    : [];
+  const directory = buildCourtDirectory(directoryRows);
+  return fixtures.map((f) => {
+    const r = byId.get(f.id);
+    if (!r || r.division_status === "setup") {
+      return { ...f, venue_name: null, court_name: null };
+    }
+    const court_name = r.court_id ? (directory.get(r.court_id)?.label ?? r.court_name ?? null) : null;
+    return { ...f, venue_name: r.venue_name, court_name };
+  });
+}
+
+/** Single-fixture sibling of {@link withCourtVenueNames} — same derivation
+ *  and redaction, no array dance at the call site. */
+export async function withCourtVenueName<T extends { id: string }>(
+  fixture: T,
+): Promise<T & { venue_name: string | null; court_name: string | null }> {
+  const [withNames] = await withCourtVenueNames([fixture]);
+  return withNames!;
+}
 
 export const REVALIDATE_FAST = 30; // competition / division / fixture pages
 export const REVALIDATE_SLOW = 300; // entrant / player pages
@@ -119,8 +207,21 @@ export interface PublicFixture {
   home_slot_label: SlotLabel | null;
   away_slot_label: SlotLabel | null;
   scheduled_at: string | null;
+  /** LEGACY, read-only — frozen since the P9 venues/courts cutover (pass
+   *  3a). Nothing writes these any more; use `venue_name`/`court_name`
+   *  below for display. Kept on the type only because `public_fixtures_v`
+   *  (db/migration, a hand-maintained column list) still selects them and
+   *  the view's own per-row "setup" redaction targets these columns. */
   venue: string | null;
   court_label: string | null;
+  /** P9 cutover: DERIVED from `venues`/`courts` via `fixtures.venue_id`/
+   *  `court_id` — resolved by a SEPARATE query in this file (the view above
+   *  has not been extended with the two id columns), mirroring the view's
+   *  own "setup" redaction so nothing about an unreleased division's court
+   *  assignment leaks ahead of `venue`/`court_label` above. Render THESE,
+   *  never `venue`/`court_label`. */
+  venue_name: string | null;
+  court_name: string | null;
   status: string;
   outcome: { kind?: string; winner?: string } | null;
   summary: {
@@ -272,6 +373,8 @@ export async function getPublicOrg(orgSlug: string): Promise<{
 }
 
 /** Competition home: hero + divisions (+ live-now strip). */
+export type LiveNowFixture = Omit<PublicFixture, "venue" | "court_label" | "venue_name" | "court_name">;
+
 export async function getPublicCompetition(
   orgSlug: string,
   compSlug: string,
@@ -279,7 +382,11 @@ export async function getPublicCompetition(
   org: PublicOrg;
   competition: PublicCompetition;
   divisions: PublicDivision[];
-  liveNow: PublicFixture[];
+  /** Review wave 3: this query selects no court/venue columns, so the type must
+   *  not claim them — it used to, and they read `undefined` at runtime. A
+   *  future "Live now" card wanting a location wires it like getPublicDivision
+   *  does (see the query's own note), rather than widening this back. */
+  liveNow: LiveNowFixture[];
 } | null> {
   const shell = await unstable_cache(
     async () => {
@@ -301,11 +408,34 @@ export async function getPublicCompetition(
         left join sports s on s.key = d.sport_key
         where d.competition_id = ${competition.id}
         order by d.created_at, d.id`;
-      const liveNow = await sql<PublicFixture[]>`
+      // P9 sweep (pass 3c-4): venue/court_label dropped from this SELECT
+      // rather than resolved via withCourtVenueNames like getPublicDivision/
+      // getPublicFixture below — verified first (not assumed): the "Live
+      // now" strip (competition page) renders only division name and
+      // summary.headline, and opengraph-image.tsx's only use of `liveNow` is
+      // its `.length`. No consumer reads venue/court_label/venue_name/
+      // court_name off a liveNow item, so a frozen read here was genuinely
+      // dead, not silently wrong — resolving names nobody renders would just
+      // be N wasted queries. NOTE: PublicFixture still declares all four as
+      // required `string | null`, so a liveNow item reads `undefined` on
+      // them at runtime despite the type — same class of gap the file's own
+      // "lane/is_final" comment above already flags for this exact type;
+      // widening those four fields to optional would ripple through every
+      // other PublicFixture consumer (schedule/bracket views, pass 4), which
+      // is out of this fix's blast radius. If a future "Live now" card ever
+      // wants to show where a match is being played, wire this the same way
+      // getPublicDivision does, not by re-adding venue/court_label.
+      // Review wave 3: this query selects none of the four court/venue fields,
+      // so the previous `PublicFixture[]` cast declared them present while they
+      // read `undefined` at runtime. No consumer touches them today; the cast
+      // is narrowed rather than the columns added, because the comment above
+      // says deliberately that a "Live now" card wanting a location should be
+      // wired like getPublicDivision, not by widening this.
+      const liveNow = await sql<LiveNowFixture[]>`
         select f.id, f.division_id, f.stage_id, f.pool_id, f.round_no,
                f.seq_in_round, f.home_entrant_id, f.away_entrant_id,
                f.home_slot_label, f.away_slot_label,
-               f.scheduled_at, f.venue, f.court_label, f.status, f.outcome,
+               f.scheduled_at, f.status, f.outcome,
                f.summary, f.last_seq,
                f.lane, f.is_final, f.third_place, f.conditional
         from public_fixtures_v f
@@ -353,7 +483,7 @@ export async function getPublicDivision(
         from public_pools_v p
         join public_stages_v s on s.id = p.stage_id
         where s.division_id = ${division.id} order by p.key`;
-      const fixtures = await sql<PublicFixture[]>`
+      const rawFixtures = await sql<PublicFixture[]>`
         select id, division_id, stage_id, pool_id, round_no, seq_in_round,
                home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
                scheduled_at, venue, court_label,
@@ -361,6 +491,7 @@ export async function getPublicDivision(
                lane, is_final, third_place, conditional
         from public_fixtures_v where division_id = ${division.id}
         order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixture));
+      const fixtures = await withCourtVenueNames(rawFixtures);
       const standings = await sql<PublicStandings[]>`
         select stage_id, pool_id, rows, updated_at
         from public_standings_v where division_id = ${division.id}`;
@@ -424,7 +555,7 @@ export async function getPublicFixture(
         from public_fixtures_v
         where id = ${fixtureId} and division_id = ${division.id} limit 1`;
       if (!fixtureRow) return null;
-      const fixture = normalizeFixture(fixtureRow);
+      const fixture = await withCourtVenueName(normalizeFixture(fixtureRow));
       const names = await sql<{ id: string; display_name: string }[]>`
         select id, display_name from public_entrants_v
         where division_id = ${division.id}`;

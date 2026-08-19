@@ -13072,7 +13072,19 @@
                                   }
                                 ]
                               },
-                              "venue": {
+                              "court_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "court_name": {
                                 "anyOf": [
                                   {
                                     "type": "string"
@@ -13082,7 +13094,19 @@
                                   }
                                 ]
                               },
-                              "court_label": {
+                              "venue_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "venue_name": {
                                 "anyOf": [
                                   {
                                     "type": "string"
@@ -13179,8 +13203,10 @@
                               "home_slot_label",
                               "away_slot_label",
                               "scheduled_at",
-                              "venue",
-                              "court_label",
+                              "court_id",
+                              "court_name",
+                              "venue_id",
+                              "venue_name",
                               "officials",
                               "status",
                               "outcome",
@@ -13230,8 +13256,10 @@
                           "params": {}
                         },
                         "scheduled_at": "example",
-                        "venue": "example",
-                        "court_label": "example",
+                        "court_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "court_name": "example",
+                        "venue_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "venue_name": "example",
                         "officials": [
                           null
                         ],
@@ -14886,7 +14914,19 @@
                                   }
                                 ]
                               },
-                              "venue": {
+                              "court_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "court_name": {
                                 "anyOf": [
                                   {
                                     "type": "string"
@@ -14896,7 +14936,19 @@
                                   }
                                 ]
                               },
-                              "court_label": {
+                              "venue_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "venue_name": {
                                 "anyOf": [
                                   {
                                     "type": "string"
@@ -14993,8 +15045,10 @@
                               "home_slot_label",
                               "away_slot_label",
                               "scheduled_at",
-                              "venue",
-                              "court_label",
+                              "court_id",
+                              "court_name",
+                              "venue_id",
+                              "venue_name",
                               "officials",
                               "status",
                               "outcome",
@@ -15044,8 +15098,10 @@
                           "params": {}
                         },
                         "scheduled_at": "example",
-                        "venue": "example",
-                        "court_label": "example",
+                        "court_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "court_name": "example",
+                        "venue_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "venue_name": "example",
                         "officials": [
                           null
                         ],
@@ -15707,16 +15763,13 @@
                               "maximum": 1440
                             },
                             "courts": {
-                              "default": [
-                                "Court 1"
-                              ],
-                              "minItems": 1,
+                              "default": [],
                               "maxItems": 50,
                               "type": "array",
                               "items": {
                                 "type": "string",
-                                "minLength": 1,
-                                "maxLength": 100
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                               }
                             },
                             "perEntrantMinRest": {
@@ -15734,7 +15787,8 @@
                                 "properties": {
                                   "court": {
                                     "type": "string",
-                                    "maxLength": 100
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                   },
                                   "from": {
                                     "type": "string",
@@ -16913,12 +16967,12 @@
                       "matchMinutes": 1,
                       "gapMinutes": 0,
                       "courts": [
-                        "example"
+                        "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                       ],
                       "perEntrantMinRest": 0,
                       "blackouts": [
                         {
-                          "court": "example",
+                          "court": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                           "from": "2026-08-01T09:00:00Z",
                           "to": "2026-08-01T09:00:00Z"
                         }
@@ -17144,16 +17198,13 @@
                         "maximum": 1440
                       },
                       "courts": {
-                        "default": [
-                          "Court 1"
-                        ],
-                        "minItems": 1,
+                        "default": [],
                         "maxItems": 50,
                         "type": "array",
                         "items": {
                           "type": "string",
-                          "minLength": 1,
-                          "maxLength": 100
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                         }
                       },
                       "perEntrantMinRest": {
@@ -17171,7 +17222,8 @@
                           "properties": {
                             "court": {
                               "type": "string",
-                              "maxLength": 100
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                             },
                             "from": {
                               "type": "string",
@@ -18344,12 +18396,12 @@
                   "matchMinutes": 1,
                   "gapMinutes": 0,
                   "courts": [
-                    "example"
+                    "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   ],
                   "perEntrantMinRest": 0,
                   "blackouts": [
                     {
-                      "court": "example",
+                      "court": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                       "from": "2026-08-01T09:00:00Z",
                       "to": "2026-08-01T09:00:00Z"
                     }
@@ -18430,16 +18482,13 @@
                               "maximum": 1440
                             },
                             "courts": {
-                              "default": [
-                                "Court 1"
-                              ],
-                              "minItems": 1,
+                              "default": [],
                               "maxItems": 50,
                               "type": "array",
                               "items": {
                                 "type": "string",
-                                "minLength": 1,
-                                "maxLength": 100
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                               }
                             },
                             "perEntrantMinRest": {
@@ -18457,7 +18506,8 @@
                                 "properties": {
                                   "court": {
                                     "type": "string",
-                                    "maxLength": 100
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                   },
                                   "from": {
                                     "type": "string",
@@ -19636,12 +19686,12 @@
                       "matchMinutes": 1,
                       "gapMinutes": 0,
                       "courts": [
-                        "example"
+                        "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                       ],
                       "perEntrantMinRest": 0,
                       "blackouts": [
                         {
-                          "court": "example",
+                          "court": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                           "from": "2026-08-01T09:00:00Z",
                           "to": "2026-08-01T09:00:00Z"
                         }
@@ -19938,15 +19988,28 @@
                               "ends_at": {
                                 "type": "string"
                               },
-                              "court_label": {
-                                "type": "string"
+                              "court_id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "court_name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
                               "fixture_id",
                               "scheduled_at",
                               "ends_at",
-                              "court_label"
+                              "court_id",
+                              "court_name"
                             ],
                             "additionalProperties": false
                           }
@@ -20002,6 +20065,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -20038,6 +20102,9 @@
                                     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                   },
                                   "court": {
+                                    "type": "string"
+                                  },
+                                  "court_name": {
                                     "type": "string"
                                   },
                                   "day": {
@@ -20275,7 +20342,8 @@
                         "fixture_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                         "scheduled_at": "example",
                         "ends_at": "example",
-                        "court_label": "example"
+                        "court_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "court_name": "example"
                       }
                     ],
                     "conflicts": [
@@ -20658,16 +20726,17 @@
                           "format": "date-time",
                           "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
                         },
-                        "court_label": {
+                        "court_id": {
                           "type": "string",
-                          "minLength": 1,
-                          "maxLength": 100
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                         },
-                        "venue": {
+                        "venue_id": {
                           "anyOf": [
                             {
                               "type": "string",
-                              "maxLength": 200
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                             },
                             {
                               "type": "null"
@@ -20676,12 +20745,27 @@
                         },
                         "schedule_locked": {
                           "type": "boolean"
+                        },
+                        "ends_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "court_name": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
                         "fixture_id",
                         "scheduled_at",
-                        "court_label"
+                        "court_id"
                       ],
                       "additionalProperties": false
                     }
@@ -20740,8 +20824,8 @@
                   {
                     "fixture_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "scheduled_at": "2026-08-01T09:00:00Z",
-                    "court_label": "example",
-                    "venue": "example"
+                    "court_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "venue_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   }
                 ],
                 "source": "auto",
@@ -20831,6 +20915,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -20867,6 +20952,9 @@
                                     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                   },
                                   "court": {
+                                    "type": "string"
+                                  },
+                                  "court_name": {
                                     "type": "string"
                                   },
                                   "day": {
@@ -21711,6 +21799,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -21747,6 +21836,9 @@
                                     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                   },
                                   "court": {
+                                    "type": "string"
+                                  },
+                                  "court_name": {
                                     "type": "string"
                                   },
                                   "day": {
@@ -22763,7 +22855,19 @@
                             }
                           ]
                         },
-                        "venue": {
+                        "court_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "court_name": {
                           "anyOf": [
                             {
                               "type": "string"
@@ -22773,7 +22877,19 @@
                             }
                           ]
                         },
-                        "court_label": {
+                        "venue_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "venue_name": {
                           "anyOf": [
                             {
                               "type": "string"
@@ -22870,8 +22986,10 @@
                         "home_slot_label",
                         "away_slot_label",
                         "scheduled_at",
-                        "venue",
-                        "court_label",
+                        "court_id",
+                        "court_name",
+                        "venue_id",
+                        "venue_name",
                         "officials",
                         "status",
                         "outcome",
@@ -22908,8 +23026,10 @@
                       "params": {}
                     },
                     "scheduled_at": "example",
-                    "venue": "example",
-                    "court_label": "example",
+                    "court_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "court_name": "example",
+                    "venue_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "venue_name": "example",
                     "officials": [
                       null
                     ],
@@ -23102,22 +23222,24 @@
                       }
                     ]
                   },
-                  "venue": {
+                  "venue_id": {
                     "anyOf": [
                       {
                         "type": "string",
-                        "maxLength": 200
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                       },
                       {
                         "type": "null"
                       }
                     ]
                   },
-                  "court_label": {
+                  "court_id": {
                     "anyOf": [
                       {
                         "type": "string",
-                        "maxLength": 100
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                       },
                       {
                         "type": "null"
@@ -23147,8 +23269,8 @@
               },
               "example": {
                 "scheduled_at": "2026-08-01T09:00:00Z",
-                "venue": "example",
-                "court_label": "example",
+                "venue_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                "court_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                 "officials": [
                   {}
                 ]
@@ -23305,7 +23427,19 @@
                             }
                           ]
                         },
-                        "venue": {
+                        "court_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "court_name": {
                           "anyOf": [
                             {
                               "type": "string"
@@ -23315,7 +23449,19 @@
                             }
                           ]
                         },
-                        "court_label": {
+                        "venue_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "venue_name": {
                           "anyOf": [
                             {
                               "type": "string"
@@ -23449,6 +23595,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -23485,6 +23632,9 @@
                                     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                   },
                                   "court": {
+                                    "type": "string"
+                                  },
+                                  "court_name": {
                                     "type": "string"
                                   },
                                   "day": {
@@ -23587,8 +23737,10 @@
                         "home_slot_label",
                         "away_slot_label",
                         "scheduled_at",
-                        "venue",
-                        "court_label",
+                        "court_id",
+                        "court_name",
+                        "venue_id",
+                        "venue_name",
                         "officials",
                         "status",
                         "outcome",
@@ -23626,8 +23778,10 @@
                       "params": {}
                     },
                     "scheduled_at": "example",
-                    "venue": "example",
-                    "court_label": "example",
+                    "court_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "court_name": "example",
+                    "venue_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "venue_name": "example",
                     "officials": [
                       null
                     ],
@@ -49506,13 +49660,17 @@
                         "courts": {
                           "type": "array",
                           "items": {
-                            "type": "string"
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           }
                         },
                         "venues": {
                           "type": "array",
                           "items": {
-                            "type": "string"
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           }
                         },
                         "pool_ids": {
@@ -49533,10 +49691,10 @@
                 "locked_scopes": [
                   {
                     "courts": [
-                      "example"
+                      "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                     ],
                     "venues": [
-                      "example"
+                      "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                     ],
                     "pool_ids": [
                       "example"
@@ -50874,7 +51032,9 @@
                       "courts": {
                         "type": "array",
                         "items": {
-                          "type": "string"
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                         }
                       },
                       "pool_ids": {
@@ -51020,7 +51180,7 @@
                 "scope": {
                   "from": "2026-08-01T09:00:00Z",
                   "courts": [
-                    "example"
+                    "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   ],
                   "pool_ids": [
                     "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -51154,6 +51314,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -51167,6 +51328,9 @@
                                       "no_slot_lattice",
                                       "no_slot_budget"
                                     ]
+                                  },
+                                  "courtName": {
+                                    "type": "string"
                                   },
                                   "entrantIds": {
                                     "type": "array",
@@ -51307,6 +51471,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -51320,6 +51485,9 @@
                                       "no_slot_lattice",
                                       "no_slot_budget"
                                     ]
+                                  },
+                                  "courtName": {
+                                    "type": "string"
                                   },
                                   "entrantIds": {
                                     "type": "array",
@@ -51940,13 +52108,13 @@
                         "detail": "example",
                         "details": {
                           "kind": "person_double_booking",
+                          "courtName": "example",
                           "entrantIds": [
                             "example"
                           ],
                           "personIds": [
                             "example"
-                          ],
-                          "otherFixtureId": "example"
+                          ]
                         }
                       }
                     ],
@@ -51957,13 +52125,13 @@
                         "detail": "example",
                         "details": {
                           "kind": "person_double_booking",
+                          "courtName": "example",
                           "entrantIds": [
                             "example"
                           ],
                           "personIds": [
                             "example"
-                          ],
-                          "otherFixtureId": "example"
+                          ]
                         }
                       }
                     ],
@@ -56030,6 +56198,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -56043,6 +56212,9 @@
                                       "no_slot_lattice",
                                       "no_slot_budget"
                                     ]
+                                  },
+                                  "courtName": {
+                                    "type": "string"
                                   },
                                   "entrantIds": {
                                     "type": "array",
@@ -56183,6 +56355,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -56196,6 +56369,9 @@
                                       "no_slot_lattice",
                                       "no_slot_budget"
                                     ]
+                                  },
+                                  "courtName": {
+                                    "type": "string"
                                   },
                                   "entrantIds": {
                                     "type": "array",
@@ -56719,13 +56895,13 @@
                         "detail": "example",
                         "details": {
                           "kind": "person_double_booking",
+                          "courtName": "example",
                           "entrantIds": [
                             "example"
                           ],
                           "personIds": [
                             "example"
-                          ],
-                          "otherFixtureId": "example"
+                          ]
                         }
                       }
                     ],
@@ -56736,13 +56912,13 @@
                         "detail": "example",
                         "details": {
                           "kind": "person_double_booking",
+                          "courtName": "example",
                           "entrantIds": [
                             "example"
                           ],
                           "personIds": [
                             "example"
-                          ],
-                          "otherFixtureId": "example"
+                          ]
                         }
                       }
                     ],
@@ -57540,16 +57716,28 @@
                                 "format": "date-time",
                                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
                               },
-                              "court_label": {
+                              "court_id": {
                                 "type": "string",
-                                "minLength": 1,
-                                "maxLength": 100
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "venue_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
                               "fixture_id",
                               "scheduled_at",
-                              "court_label"
+                              "court_id"
                             ],
                             "additionalProperties": false
                           }
@@ -57611,7 +57799,8 @@
                       {
                         "fixture_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                         "scheduled_at": "2026-08-01T09:00:00Z",
-                        "court_label": "example"
+                        "court_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "venue_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                       }
                     ]
                   }
@@ -57684,6 +57873,7 @@
                                       "outside_competition_window",
                                       "outside_start_window",
                                       "court_double_booking",
+                                      "court_tag_mismatch",
                                       "inside_blackout",
                                       "outside_session_windows",
                                       "entrant_overlap",
@@ -57697,6 +57887,9 @@
                                       "no_slot_lattice",
                                       "no_slot_budget"
                                     ]
+                                  },
+                                  "courtName": {
+                                    "type": "string"
                                   },
                                   "entrantIds": {
                                     "type": "array",
@@ -57828,13 +58021,13 @@
                         "detail": "example",
                         "details": {
                           "kind": "person_double_booking",
+                          "courtName": "example",
                           "entrantIds": [
                             "example"
                           ],
                           "personIds": [
                             "example"
-                          ],
-                          "otherFixtureId": "example"
+                          ]
                         }
                       }
                     ]
@@ -61190,11 +61383,24 @@
                       }
                     ]
                   },
-                  "venue": {
+                  "venue_id": {
                     "anyOf": [
                       {
                         "type": "string",
-                        "maxLength": 200
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "court_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                       },
                       {
                         "type": "null"

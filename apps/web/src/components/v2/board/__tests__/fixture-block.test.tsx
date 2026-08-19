@@ -27,6 +27,8 @@ const fixture: BoardFixture = {
   scheduled_at: "2026-08-10T11:30:00.000Z",
   venue: null,
   court_label: "Court 1",
+  court_id: "crt-1",
+  court_name: "Court 1",
   status: "scheduled",
   schedule_source: "manual",
   schedule_locked: false,

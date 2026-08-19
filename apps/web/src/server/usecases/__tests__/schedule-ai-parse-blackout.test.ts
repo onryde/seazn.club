@@ -18,9 +18,19 @@ const TZ = "Europe/London";
 const CLOCK = makeClock(Date.parse("2026-08-03T09:00:00Z"), TZ);
 const COMPETITION = { kind: "competition" } as const;
 const DIVISION = { kind: "division", divisionId: "d1" } as const;
-const COURTS = ["Court 1", "Court 2"];
+// P9 pass 3d: `hints.courts` is name -> id (the same map `buildSchedulePack`
+// derives from its court directory) — `resolveParsed` resolves a matched
+// name straight to the id, since `dailyBreaks`/`PackSettings.blackouts`/
+// `ScheduleConfig` all speak ids only. Real-looking but arbitrary uuids;
+// nothing here touches a database.
+const COURT_1_ID = "11111111-1111-1111-1111-111111111111";
+const COURT_2_ID = "22222222-2222-2222-2222-222222222222";
+const COURTS = new Map([
+  ["Court 1", COURT_1_ID],
+  ["Court 2", COURT_2_ID],
+]);
 
-const resolve = (hard: unknown[], hints: { courts?: string[] } = { courts: COURTS }) =>
+const resolve = (hard: unknown[], hints: { courts?: ReadonlyMap<string, string> } = { courts: COURTS }) =>
   resolveParsed(RawParsed.parse({ hard, soft: [], unparsed: [] }), CLOCK, TZ, hints);
 
 const lunch = (over: Record<string, unknown> = {}) => ({
@@ -48,10 +58,13 @@ describe("a mid-day break compiles instead of becoming a whole-day bound", () =>
     expect(out.assumptions.join(" ")).toContain("every day");
   });
 
-  it("keeps a court the organiser was actually shown", () => {
+  it("resolves a court the organiser was actually shown to its real id", () => {
+    // The P9 regression this guards: a court-scoped break must survive as a
+    // constraint bound to the court's ID, never the label — everything
+    // downstream (PackSettings.blackouts, ScheduleConfig) speaks ids only.
     const out = resolve([lunch({ court: "Court 2" })]);
 
-    expect(out.dailyBreaks).toEqual([{ from: "12:00", to: "13:00", court: "Court 2" }]);
+    expect(out.dailyBreaks).toEqual([{ from: "12:00", to: "13:00", court: COURT_2_ID }]);
   });
 
   it("resolves a break alongside an ordinary window", () => {

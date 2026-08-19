@@ -244,6 +244,8 @@ describe("anti-drift: board card ref code vs feed label {ext} (P7/F1, required)"
     scheduled_at: null,
     venue: null,
     court_label: null,
+    court_id: null,
+    court_name: null,
     status: "scheduled",
     schedule_source: "manual",
     schedule_locked: false,

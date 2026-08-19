@@ -9,6 +9,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { buildDisputeEvidence } from "../registrations";
+import { createVenue } from "../venues";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -91,6 +92,44 @@ describe.skipIf(!HAS_DB)("dispute evidence pack", () => {
       where type = 'registration.evidence_exported'
         and payload->>'registration_id' = ${regId}`;
     expect(audit).toBeDefined();
+  });
+
+  // P9 sweep (pass 3c-4): the "fixtures for this entrant" section used to
+  // SELECT fixtures.venue straight into the printed evidence document —
+  // frozen since pass 3a, so a fixture played after the cutover printed a
+  // blank venue line on a document organisers paste into an actual Stripe
+  // dispute response.
+  it("fixtures section shows the live venue name, not a disagreeing frozen venue", async () => {
+    const { owner, orgId, divisionId, compId } = await seed();
+    const [{ id: stageId }] = await sql<{ id: string }[]>`
+      insert into stages (division_id, org_id, seq, kind, name)
+      values (${divisionId}, ${orgId}, 1, 'league', 'League') returning id`;
+    const [{ id: entrantId }] = await sql<{ id: string }[]>`
+      insert into entrants (division_id, org_id, kind, display_name, seed)
+      values (${divisionId}, ${orgId}, 'individual', 'Evidence Entrant', 1) returning id`;
+    const venue = await createVenue(owner, { name: "Evidence Live Venue", sort: 0 });
+    await sql`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round,
+                            home_entrant_id, status, scheduled_at, venue_id, venue)
+      values (${stageId}, ${divisionId}, ${orgId}, 1, 1,
+              ${entrantId}, 'decided', now(), ${venue.id}, 'Stale Venue')`;
+
+    const ref = `SZ-EV${randomUUID().slice(0, 6).toUpperCase()}`;
+    const [{ id: groupId }] = await sql<{ id: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, access_token_hash, ref_code,
+         currency, payment_method)
+      values (${compId}, 'Evidence Entrant', 'evidence@example.com', ${randomUUID()}, ${ref},
+              'gbp', 'offline')
+      returning id`;
+    const [{ id: regId }] = await sql<{ id: string }[]>`
+      insert into registrations (division_id, group_id, status, display_name, entrant_id)
+      values (${divisionId}, ${groupId}, 'confirmed', 'Evidence Entrant', ${entrantId})
+      returning id`;
+
+    const pack = await buildDisputeEvidence(owner, regId, "https://test.local");
+    expect(pack.html).toContain("Evidence Live Venue");
+    expect(pack.html).not.toContain("Stale Venue");
   });
 
   it("refuses another org's registration", async () => {

@@ -83,3 +83,7 @@ export * from "./repair-minimality.ts";
 // dynamic import already keeps `placement-client.ts`'s gRPC dependency out of
 // a client bundle.
 export * from "./repair-decompose-cpsat.ts";
+// P9 pass 2: candidate courts for a stage (tags ⊇ required, archived
+// excluded, id order preserved) — the ONE function both the build-input
+// assembly and validateScheduleIn filter through. Pure, zero imports.
+export * from "./candidate-courts.ts";

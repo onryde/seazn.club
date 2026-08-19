@@ -2409,6 +2409,15 @@ function restrictToConfiguredCourts(
   return { slots, byCourt, stepMinutes: grid.stepMinutes, overCap: grid.overCap };
 }
 
+// TEST-ONLY EXPORT ALIAS, same shape as `solveBuildForTests` above: the
+// function itself stays module-private (its ONLY two callers are both in
+// this file, :328/:1591), but P9's court-id-cutover regression
+// (court-id-lattice-equivalence.test.ts) needs to drive it directly to prove
+// the LATTICE is representation-agnostic — that a court "identity" is an
+// opaque string this function never interprets, whether that string is a
+// human name or a court uuid.
+export const restrictToConfiguredCourtsForTests = restrictToConfiguredCourts;
+
 // --- the z3 lexicographic tier encoder USED TO LIVE HERE ---------------
 //
 // `Tier`, `TierInput` and `buildTiers` were removed 2026-08-10. They were

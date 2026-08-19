@@ -13,6 +13,7 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { putScheduleSettings, autoSchedule, applySchedule, lastAiApply } from "../schedule";
 import { schedulingAiModel } from "../schedule-ai";
+import { createVenue, createCourt } from "../venues";
 import { ApplyScheduleRequest, Fixture } from "@/server/api-v1/schemas";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -63,12 +64,16 @@ async function seedPlannableStage(auth: AuthCtx) {
   const [stage] = await createStages(auth, division.id, [
     { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 1 } } },
   ]);
+  // P9 pass 3a: ScheduleConfig.courts is CourtId[] (real courts.id) since
+  // pass 1 — a free-text "Court 1" no longer parses.
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
   await putScheduleSettings(auth, division.id, {
     config: {
       startAt: T0,
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["Court 1"],
+      courts: [court.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -91,10 +96,13 @@ afterAll(async () => {
 // Pure schema contract (no DB): the apply request must accept the optional `ai`
 // provenance block and trim the instruction server-side (v4/03 §10).
 describe("ApplyScheduleRequest.ai (v4/03 §10)", () => {
+  // P9 pass 3a: court_id (real courts.id), not the legacy court_label — the
+  // assignment object is `.strict()`. Pure schema test, no DB: any
+  // uuid-shaped string satisfies CourtId here.
   const validAssignment = {
     fixture_id: randomUUID(),
     scheduled_at: "2026-08-01T09:00:00.000Z",
-    court_label: "Court 1",
+    court_id: randomUUID(),
   };
 
   it("accepts an ai block (trimming is applied server-side at the apply seam)", () => {
@@ -120,7 +128,10 @@ describe("ApplyScheduleRequest.ai (v4/03 §10)", () => {
       round_no: 1, seq_in_round: 1, fixture_no: 1, home_entrant_id: null, away_entrant_id: null,
       // D4a (P5): home/away_slot_label, null on a filled/plain fixture.
       home_slot_label: null, away_slot_label: null,
-      scheduled_at: null, venue: null, court_label: null, officials: [], status: "scheduled",
+      // P9 pass 3c-2: court_id/court_name/venue_id/venue_name, not the
+      // retired venue/court_label — Fixture no longer declares those.
+      scheduled_at: null, court_id: null, court_name: null, venue_id: null, venue_name: null,
+      officials: [], status: "scheduled",
       outcome: null, schedule_source: "ai", schedule_locked: false, created_at: T0,
     };
     expect(Fixture.parse(row).schedule_source).toBe("ai");
@@ -136,7 +147,7 @@ describe.skipIf(!HAS_DB)("AI audit trail in the ledger (v4/03 §10)", () => {
       assignments: proposal.assignments.map((a) => ({
         fixture_id: a.fixture_id,
         scheduled_at: a.scheduled_at,
-        court_label: a.court_label,
+        court_id: a.court_id,
       })),
       source: "ai",
       // The client sends a DIFFERENT model string ("claude-x"); the audit must
@@ -182,11 +193,14 @@ describe.skipIf(!HAS_DB)("AI audit trail in the ledger (v4/03 §10)", () => {
     // Binding #1 (integration): the persisted fixtures read back through the
     // Fixture response schema with schedule_source "ai".
     const rows = await sql`
-      select id, stage_id, division_id, pool_id, round_no, seq_in_round, fixture_no,
-             home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
-             scheduled_at, venue, court_label,
-             officials, status, outcome, schedule_source, schedule_locked, created_at
-      from fixtures where stage_id = ${stage.id} and scheduled_at is not null limit 1`;
+      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.court_id, crt.name as court_name, f.venue_id, ven.name as venue_name,
+             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at
+      from fixtures f
+      left join courts crt on crt.id = f.court_id
+      left join venues ven on ven.id = f.venue_id
+      where f.stage_id = ${stage.id} and f.scheduled_at is not null limit 1`;
     const parsed = Fixture.parse({
       ...rows[0],
       scheduled_at: rows[0]!.scheduled_at ? new Date(rows[0]!.scheduled_at as string).toISOString() : null,
@@ -203,7 +217,7 @@ describe.skipIf(!HAS_DB)("AI audit trail in the ledger (v4/03 §10)", () => {
       assignments: proposal.assignments.map((a) => ({
         fixture_id: a.fixture_id,
         scheduled_at: a.scheduled_at,
-        court_label: a.court_label,
+        court_id: a.court_id,
       })),
       source: "auto",
     });

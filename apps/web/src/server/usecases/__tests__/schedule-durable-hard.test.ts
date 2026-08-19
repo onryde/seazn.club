@@ -41,6 +41,11 @@ const DIV_B = "44444444-4444-4444-8444-444444444444";
 const POOL_A = "22222222-2222-4222-8222-222222222222";
 const F1 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
 const F2 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2";
+// P9 pass 3a: `court_id`/`ScheduleConfig.courts` are real courts.id values
+// now, never a free-text label ("Court 1"/"Court 2") — this file is pure
+// (no DB, no FK), so any distinct uuid-shaped string stands in.
+const COURT_1 = "cccccccc-cccc-4ccc-8ccc-ccccccccccc1";
+const COURT_2 = "cccccccc-cccc-4ccc-8ccc-ccccccccccc2";
 
 // A fixtures row exactly as `FIXTURE_LITE_COLS` selects it.
 function row(over: Partial<FixtureLite> = {}): FixtureLite {
@@ -55,6 +60,10 @@ function row(over: Partial<FixtureLite> = {}): FixtureLite {
     home_entrant_id: "e1",
     away_entrant_id: "e2",
     scheduled_at: iso(T0),
+    court_id: COURT_1,
+    venue_id: null,
+    // LEGACY, read-only (scopeLocked only — see FixtureLite's own comment).
+    // Not exercised by anything in this file.
     court_label: "Court 1",
     venue: null,
     status: "scheduled",
@@ -75,7 +84,7 @@ function settings(constraints: Record<string, unknown>): ScheduleSettingsOut {
       startAt: iso(T0),
       matchMinutes: 40,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 2"],
+      courts: [COURT_1, COURT_2],
       perEntrantMinRest: 0,
       constraints,
     }),
@@ -145,7 +154,7 @@ describe("the tz dependency (#447)", () => {
   const s = settings({
     hard: [{ type: "max_fixtures_per_day", count: 1, scope: { kind: "competition" } }],
   });
-  const rows = [row({ id: F1 }), row({ id: F2, court_label: "Court 2", home_entrant_id: "e3", away_entrant_id: "e4" })];
+  const rows = [row({ id: F1 }), row({ id: F2, court_id: COURT_2, home_entrant_id: "e3", away_entrant_id: "e4" })];
   const assignments = rows.map((r) => toAssignment(r, 40, people));
 
   it("binds the day cap when the org zone is carried", () => {
@@ -185,7 +194,7 @@ describe("durable min_rest_minutes across a feed edge (#447)", () => {
   const dependent = row({
     id: F2,
     ext_key: "F",
-    court_label: "Court 2",
+    court_id: COURT_2,
     home_entrant_id: "e3",
     away_entrant_id: "e4",
     scheduled_at: iso(T0 + 60 * MIN), // 20 min after the feeder's 09:40 finish
@@ -260,7 +269,7 @@ describe("durable min_rest_minutes across a feed edge (#447)", () => {
     // Same entrant, 45 minutes apart: clears the 0-minute default, breaches 120.
     const first = toAssignment(row({ id: F1 }), 40, people);
     const second = toAssignment(
-      row({ id: F2, court_label: "Court 2", scheduled_at: iso(T0 + 85 * MIN) }),
+      row({ id: F2, court_id: COURT_2, scheduled_at: iso(T0 + 85 * MIN) }),
       40,
       people,
     );

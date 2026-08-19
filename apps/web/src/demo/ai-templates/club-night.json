@@ -1,9 +1,9 @@
 {
   "meta": {
     "slug": "club-night",
-    "capturedAt": "2026-08-09T08:22:08.362Z",
+    "capturedAt": "2026-08-18T19:49:19.426Z",
     "model": "google/gemini-3.6-flash",
-    "commit": "19b3cf87b6f8a1e7913ca7ac555a61b25600040d",
+    "commit": "d75ed76c02991ce802f1beeff212fcdec9f9d3fa",
     "mode": "generate",
     "joint": false,
     "instruction": "Schedule the club night. Nobody plays twice in a row — every player gets at least 20 minutes rest between matches."
@@ -11,209 +11,221 @@
   "board": {
     "fixtures": [
       {
-        "id": "3ba27b22-2992-4e3c-a9b0-881877eeebe3",
-        "stage_id": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-        "division_id": "ab1cc5f8-fa5b-48b9-8f7b-47414bfba7f6",
+        "id": "7bfd5e4b-2b56-46b4-ae80-3136a14a82c9",
+        "stage_id": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+        "division_id": "945e3bdf-6e1b-4178-a7b4-b953e65cc325",
         "scheduled_at": null,
         "court_label": null,
+        "court_id": null,
         "code": "F1",
         "matchup": "Priya N. vs Rosa L.",
         "isFinal": false,
         "isJunior": false,
         "status": "scheduled",
-        "home_entrant_id": "e6b40064-9ea9-48a4-a8d6-3da7a123221d",
-        "away_entrant_id": "d55aaff0-f6e0-4d78-97b0-e7551e5db540"
+        "home_entrant_id": "76be52ee-5c23-45e7-b20a-6cea6ac7c128",
+        "away_entrant_id": "2c3b2d12-ed07-4e5a-8a5b-1faceaf2ec08"
       },
       {
-        "id": "3e29c75c-acf0-4cdd-a442-e44b2b49e011",
-        "stage_id": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-        "division_id": "ab1cc5f8-fa5b-48b9-8f7b-47414bfba7f6",
+        "id": "3a3a52bc-3383-4624-8850-d61219503dbd",
+        "stage_id": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+        "division_id": "945e3bdf-6e1b-4178-a7b4-b953e65cc325",
         "scheduled_at": null,
         "court_label": null,
+        "court_id": null,
         "code": "F2",
         "matchup": "Sam R. vs Jordan K.",
         "isFinal": false,
         "isJunior": false,
         "status": "scheduled",
-        "home_entrant_id": "aec11830-10c4-4b55-9dd5-bd55e7b73e3b",
-        "away_entrant_id": "9cac85e2-f4fe-4ee9-972a-aa7b778ae6e5"
+        "home_entrant_id": "d98e8613-2d35-4a06-9ada-45dc69559d78",
+        "away_entrant_id": "18558b6b-6118-47bc-8faa-8c5115f83e7f"
       },
       {
-        "id": "15ccf29c-b82b-46d2-8aa1-5dfb3f2f044c",
-        "stage_id": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-        "division_id": "ab1cc5f8-fa5b-48b9-8f7b-47414bfba7f6",
+        "id": "4076d4d5-35f2-4bad-865e-dfd4f664a1a2",
+        "stage_id": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+        "division_id": "945e3bdf-6e1b-4178-a7b4-b953e65cc325",
         "scheduled_at": null,
         "court_label": null,
+        "court_id": null,
         "code": "F3",
         "matchup": "Jordan K. vs Priya N.",
         "isFinal": false,
         "isJunior": false,
         "status": "scheduled",
-        "home_entrant_id": "9cac85e2-f4fe-4ee9-972a-aa7b778ae6e5",
-        "away_entrant_id": "e6b40064-9ea9-48a4-a8d6-3da7a123221d"
+        "home_entrant_id": "18558b6b-6118-47bc-8faa-8c5115f83e7f",
+        "away_entrant_id": "76be52ee-5c23-45e7-b20a-6cea6ac7c128"
       },
       {
-        "id": "a6556f60-52f2-417b-ae89-eeabb11a902e",
-        "stage_id": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-        "division_id": "ab1cc5f8-fa5b-48b9-8f7b-47414bfba7f6",
+        "id": "6f6c1d4f-2138-47d3-91cd-8886064570b3",
+        "stage_id": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+        "division_id": "945e3bdf-6e1b-4178-a7b4-b953e65cc325",
         "scheduled_at": null,
         "court_label": null,
+        "court_id": null,
         "code": "F4",
         "matchup": "Rosa L. vs Sam R.",
         "isFinal": false,
         "isJunior": false,
         "status": "scheduled",
-        "home_entrant_id": "d55aaff0-f6e0-4d78-97b0-e7551e5db540",
-        "away_entrant_id": "aec11830-10c4-4b55-9dd5-bd55e7b73e3b"
+        "home_entrant_id": "2c3b2d12-ed07-4e5a-8a5b-1faceaf2ec08",
+        "away_entrant_id": "d98e8613-2d35-4a06-9ada-45dc69559d78"
       },
       {
-        "id": "b73e47f7-8882-4b87-96c2-8a2ffa0635e2",
-        "stage_id": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-        "division_id": "ab1cc5f8-fa5b-48b9-8f7b-47414bfba7f6",
+        "id": "69c07f02-8701-4120-b2b3-d4b4c265207c",
+        "stage_id": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+        "division_id": "945e3bdf-6e1b-4178-a7b4-b953e65cc325",
         "scheduled_at": null,
         "court_label": null,
+        "court_id": null,
         "code": "F5",
         "matchup": "Priya N. vs Sam R.",
         "isFinal": false,
         "isJunior": false,
         "status": "scheduled",
-        "home_entrant_id": "e6b40064-9ea9-48a4-a8d6-3da7a123221d",
-        "away_entrant_id": "aec11830-10c4-4b55-9dd5-bd55e7b73e3b"
+        "home_entrant_id": "76be52ee-5c23-45e7-b20a-6cea6ac7c128",
+        "away_entrant_id": "d98e8613-2d35-4a06-9ada-45dc69559d78"
       },
       {
-        "id": "d7020e41-5a61-42fb-8cf4-359122276b27",
-        "stage_id": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-        "division_id": "ab1cc5f8-fa5b-48b9-8f7b-47414bfba7f6",
+        "id": "218f30fd-72f6-4417-87d0-917df879f34f",
+        "stage_id": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+        "division_id": "945e3bdf-6e1b-4178-a7b4-b953e65cc325",
         "scheduled_at": null,
         "court_label": null,
+        "court_id": null,
         "code": "F6",
         "matchup": "Jordan K. vs Rosa L.",
         "isFinal": false,
         "isJunior": false,
         "status": "scheduled",
-        "home_entrant_id": "9cac85e2-f4fe-4ee9-972a-aa7b778ae6e5",
-        "away_entrant_id": "d55aaff0-f6e0-4d78-97b0-e7551e5db540"
+        "home_entrant_id": "18558b6b-6118-47bc-8faa-8c5115f83e7f",
+        "away_entrant_id": "2c3b2d12-ed07-4e5a-8a5b-1faceaf2ec08"
       },
       {
-        "id": "b5b3f118-9773-45c0-9303-bb11676a1385",
-        "stage_id": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-        "division_id": "ab1cc5f8-fa5b-48b9-8f7b-47414bfba7f6",
+        "id": "30ba4efb-16a4-4712-9f06-c95bdc417313",
+        "stage_id": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+        "division_id": "945e3bdf-6e1b-4178-a7b4-b953e65cc325",
         "scheduled_at": null,
         "court_label": null,
+        "court_id": null,
         "code": "F7",
         "matchup": "Marcus T. vs Dev P.",
         "isFinal": false,
         "isJunior": false,
         "status": "scheduled",
-        "home_entrant_id": "565ef956-ddb5-4e72-b466-13556cb2e7c1",
-        "away_entrant_id": "80dacbd3-0143-4733-80b8-b390ad105df0"
+        "home_entrant_id": "020fcd42-7f6f-4b2a-837e-5db82fc238f5",
+        "away_entrant_id": "b0bf5a78-92e1-4d22-bc59-b71708fec035"
       },
       {
-        "id": "cdb0cf73-4a30-4819-98cc-cf3b8f036b8a",
-        "stage_id": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-        "division_id": "ab1cc5f8-fa5b-48b9-8f7b-47414bfba7f6",
+        "id": "78b925a0-54a2-4328-a1ba-a7549de58795",
+        "stage_id": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+        "division_id": "945e3bdf-6e1b-4178-a7b4-b953e65cc325",
         "scheduled_at": null,
         "court_label": null,
+        "court_id": null,
         "code": "F8",
         "matchup": "Elena V. vs Aiko M.",
         "isFinal": false,
         "isJunior": false,
         "status": "scheduled",
-        "home_entrant_id": "ca35d18f-5300-4caf-8540-132b1afaa22e",
-        "away_entrant_id": "cf945c09-6531-4683-94fd-aef41cc0f435"
+        "home_entrant_id": "7a287e03-bafc-4d8d-9bce-0222bf10886f",
+        "away_entrant_id": "f3144330-c5e3-4544-b51d-b73981c02142"
       },
       {
-        "id": "f5b8d2d5-53d3-47a8-970a-0afa8a44c639",
-        "stage_id": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-        "division_id": "ab1cc5f8-fa5b-48b9-8f7b-47414bfba7f6",
+        "id": "2cb8e8b5-c554-42e5-ba71-61da13af4006",
+        "stage_id": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+        "division_id": "945e3bdf-6e1b-4178-a7b4-b953e65cc325",
         "scheduled_at": null,
         "court_label": null,
+        "court_id": null,
         "code": "F9",
         "matchup": "Aiko M. vs Marcus T.",
         "isFinal": false,
         "isJunior": false,
         "status": "scheduled",
-        "home_entrant_id": "cf945c09-6531-4683-94fd-aef41cc0f435",
-        "away_entrant_id": "565ef956-ddb5-4e72-b466-13556cb2e7c1"
+        "home_entrant_id": "f3144330-c5e3-4544-b51d-b73981c02142",
+        "away_entrant_id": "020fcd42-7f6f-4b2a-837e-5db82fc238f5"
       },
       {
-        "id": "dbe5de70-d3ed-452b-b39c-28509073a4dd",
-        "stage_id": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-        "division_id": "ab1cc5f8-fa5b-48b9-8f7b-47414bfba7f6",
+        "id": "1a3431ec-61ec-4fa3-ba2e-66dde2c9c1a0",
+        "stage_id": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+        "division_id": "945e3bdf-6e1b-4178-a7b4-b953e65cc325",
         "scheduled_at": null,
         "court_label": null,
+        "court_id": null,
         "code": "F10",
         "matchup": "Dev P. vs Elena V.",
         "isFinal": false,
         "isJunior": false,
         "status": "scheduled",
-        "home_entrant_id": "80dacbd3-0143-4733-80b8-b390ad105df0",
-        "away_entrant_id": "ca35d18f-5300-4caf-8540-132b1afaa22e"
+        "home_entrant_id": "b0bf5a78-92e1-4d22-bc59-b71708fec035",
+        "away_entrant_id": "7a287e03-bafc-4d8d-9bce-0222bf10886f"
       },
       {
-        "id": "6ddfa1ab-32ab-4d40-aae1-12b32c6c78ec",
-        "stage_id": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-        "division_id": "ab1cc5f8-fa5b-48b9-8f7b-47414bfba7f6",
+        "id": "8053a5a7-afc7-4e3d-aa0d-f03bd3cad317",
+        "stage_id": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+        "division_id": "945e3bdf-6e1b-4178-a7b4-b953e65cc325",
         "scheduled_at": null,
         "court_label": null,
+        "court_id": null,
         "code": "F11",
         "matchup": "Marcus T. vs Elena V.",
         "isFinal": false,
         "isJunior": false,
         "status": "scheduled",
-        "home_entrant_id": "565ef956-ddb5-4e72-b466-13556cb2e7c1",
-        "away_entrant_id": "ca35d18f-5300-4caf-8540-132b1afaa22e"
+        "home_entrant_id": "020fcd42-7f6f-4b2a-837e-5db82fc238f5",
+        "away_entrant_id": "7a287e03-bafc-4d8d-9bce-0222bf10886f"
       },
       {
-        "id": "87944e3c-44b2-4bfd-88d8-937ceb587d06",
-        "stage_id": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-        "division_id": "ab1cc5f8-fa5b-48b9-8f7b-47414bfba7f6",
+        "id": "4e8b40af-f01b-4997-9690-7fda70676302",
+        "stage_id": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+        "division_id": "945e3bdf-6e1b-4178-a7b4-b953e65cc325",
         "scheduled_at": null,
         "court_label": null,
+        "court_id": null,
         "code": "F12",
         "matchup": "Aiko M. vs Dev P.",
         "isFinal": false,
         "isJunior": false,
         "status": "scheduled",
-        "home_entrant_id": "cf945c09-6531-4683-94fd-aef41cc0f435",
-        "away_entrant_id": "80dacbd3-0143-4733-80b8-b390ad105df0"
+        "home_entrant_id": "f3144330-c5e3-4544-b51d-b73981c02142",
+        "away_entrant_id": "b0bf5a78-92e1-4d22-bc59-b71708fec035"
       }
     ],
     "courts": [
-      "Court 1",
-      "Court 2"
+      "54565832-14b7-4d8a-85ab-08d3694cc169",
+      "4ea87a0b-863b-4b01-bc3e-5428b9efa9d9"
     ],
     "entrants": [
       {
-        "id": "e6b40064-9ea9-48a4-a8d6-3da7a123221d",
+        "id": "76be52ee-5c23-45e7-b20a-6cea6ac7c128",
         "name": "Priya N."
       },
       {
-        "id": "565ef956-ddb5-4e72-b466-13556cb2e7c1",
+        "id": "020fcd42-7f6f-4b2a-837e-5db82fc238f5",
         "name": "Marcus T."
       },
       {
-        "id": "ca35d18f-5300-4caf-8540-132b1afaa22e",
+        "id": "7a287e03-bafc-4d8d-9bce-0222bf10886f",
         "name": "Elena V."
       },
       {
-        "id": "aec11830-10c4-4b55-9dd5-bd55e7b73e3b",
+        "id": "d98e8613-2d35-4a06-9ada-45dc69559d78",
         "name": "Sam R."
       },
       {
-        "id": "9cac85e2-f4fe-4ee9-972a-aa7b778ae6e5",
+        "id": "18558b6b-6118-47bc-8faa-8c5115f83e7f",
         "name": "Jordan K."
       },
       {
-        "id": "cf945c09-6531-4683-94fd-aef41cc0f435",
+        "id": "f3144330-c5e3-4544-b51d-b73981c02142",
         "name": "Aiko M."
       },
       {
-        "id": "80dacbd3-0143-4733-80b8-b390ad105df0",
+        "id": "b0bf5a78-92e1-4d22-bc59-b71708fec035",
         "name": "Dev P."
       },
       {
-        "id": "d55aaff0-f6e0-4d78-97b0-e7551e5db540",
+        "id": "2c3b2d12-ed07-4e5a-8a5b-1faceaf2ec08",
         "name": "Rosa L."
       }
     ],
@@ -225,7 +237,7 @@
   "pack": {
     "mode": "generate",
     "division": {
-      "id": "ab1cc5f8-fa5b-48b9-8f7b-47414bfba7f6",
+      "id": "945e3bdf-6e1b-4178-a7b4-b953e65cc325",
       "name": "Club Night",
       "sport": "badminton",
       "tz": "Europe/London"
@@ -263,8 +275,8 @@
       "gapMinutes": 5,
       "perEntrantMinRest": 20,
       "courts": [
-        "Court 1",
-        "Court 2"
+        "54565832-14b7-4d8a-85ab-08d3694cc169",
+        "4ea87a0b-863b-4b01-bc3e-5428b9efa9d9"
       ],
       "sessionWindows": [
         {
@@ -284,49 +296,49 @@
     },
     "entrants": [
       {
-        "id": "e6b40064-9ea9-48a4-a8d6-3da7a123221d",
+        "id": "76be52ee-5c23-45e7-b20a-6cea6ac7c128",
         "name": "Priya N.",
         "pool": "A",
         "seed": 1
       },
       {
-        "id": "565ef956-ddb5-4e72-b466-13556cb2e7c1",
+        "id": "020fcd42-7f6f-4b2a-837e-5db82fc238f5",
         "name": "Marcus T.",
         "pool": "B",
         "seed": 2
       },
       {
-        "id": "ca35d18f-5300-4caf-8540-132b1afaa22e",
+        "id": "7a287e03-bafc-4d8d-9bce-0222bf10886f",
         "name": "Elena V.",
         "pool": "B",
         "seed": 3
       },
       {
-        "id": "aec11830-10c4-4b55-9dd5-bd55e7b73e3b",
+        "id": "d98e8613-2d35-4a06-9ada-45dc69559d78",
         "name": "Sam R.",
         "pool": "A",
         "seed": 4
       },
       {
-        "id": "9cac85e2-f4fe-4ee9-972a-aa7b778ae6e5",
+        "id": "18558b6b-6118-47bc-8faa-8c5115f83e7f",
         "name": "Jordan K.",
         "pool": "A",
         "seed": 5
       },
       {
-        "id": "cf945c09-6531-4683-94fd-aef41cc0f435",
+        "id": "f3144330-c5e3-4544-b51d-b73981c02142",
         "name": "Aiko M.",
         "pool": "B",
         "seed": 6
       },
       {
-        "id": "80dacbd3-0143-4733-80b8-b390ad105df0",
+        "id": "b0bf5a78-92e1-4d22-bc59-b71708fec035",
         "name": "Dev P.",
         "pool": "B",
         "seed": 7
       },
       {
-        "id": "d55aaff0-f6e0-4d78-97b0-e7551e5db540",
+        "id": "2c3b2d12-ed07-4e5a-8a5b-1faceaf2ec08",
         "name": "Rosa L.",
         "pool": "A",
         "seed": 8
@@ -334,72 +346,72 @@
     ],
     "people": [],
     "participants": {
-      "3ba27b22-2992-4e3c-a9b0-881877eeebe3": [],
-      "b5b3f118-9773-45c0-9303-bb11676a1385": [],
-      "3e29c75c-acf0-4cdd-a442-e44b2b49e011": [],
-      "cdb0cf73-4a30-4819-98cc-cf3b8f036b8a": [],
-      "a6556f60-52f2-417b-ae89-eeabb11a902e": [],
-      "dbe5de70-d3ed-452b-b39c-28509073a4dd": [],
-      "15ccf29c-b82b-46d2-8aa1-5dfb3f2f044c": [],
-      "f5b8d2d5-53d3-47a8-970a-0afa8a44c639": [],
-      "b73e47f7-8882-4b87-96c2-8a2ffa0635e2": [],
-      "6ddfa1ab-32ab-4d40-aae1-12b32c6c78ec": [],
-      "d7020e41-5a61-42fb-8cf4-359122276b27": [],
-      "87944e3c-44b2-4bfd-88d8-937ceb587d06": []
+      "7bfd5e4b-2b56-46b4-ae80-3136a14a82c9": [],
+      "30ba4efb-16a4-4712-9f06-c95bdc417313": [],
+      "3a3a52bc-3383-4624-8850-d61219503dbd": [],
+      "78b925a0-54a2-4328-a1ba-a7549de58795": [],
+      "6f6c1d4f-2138-47d3-91cd-8886064570b3": [],
+      "1a3431ec-61ec-4fa3-ba2e-66dde2c9c1a0": [],
+      "4076d4d5-35f2-4bad-865e-dfd4f664a1a2": [],
+      "2cb8e8b5-c554-42e5-ba71-61da13af4006": [],
+      "69c07f02-8701-4120-b2b3-d4b4c265207c": [],
+      "8053a5a7-afc7-4e3d-aa0d-f03bd3cad317": [],
+      "218f30fd-72f6-4417-87d0-917df879f34f": [],
+      "4e8b40af-f01b-4997-9690-7fda70676302": []
     },
     "poolIds": {
-      "3ba27b22-2992-4e3c-a9b0-881877eeebe3": "4f94b63f-9e16-4496-a428-e22e3bd831a3",
-      "b5b3f118-9773-45c0-9303-bb11676a1385": "65090790-d0ad-444f-8d1d-f7f81ae858f4",
-      "3e29c75c-acf0-4cdd-a442-e44b2b49e011": "4f94b63f-9e16-4496-a428-e22e3bd831a3",
-      "cdb0cf73-4a30-4819-98cc-cf3b8f036b8a": "65090790-d0ad-444f-8d1d-f7f81ae858f4",
-      "a6556f60-52f2-417b-ae89-eeabb11a902e": "4f94b63f-9e16-4496-a428-e22e3bd831a3",
-      "dbe5de70-d3ed-452b-b39c-28509073a4dd": "65090790-d0ad-444f-8d1d-f7f81ae858f4",
-      "15ccf29c-b82b-46d2-8aa1-5dfb3f2f044c": "4f94b63f-9e16-4496-a428-e22e3bd831a3",
-      "f5b8d2d5-53d3-47a8-970a-0afa8a44c639": "65090790-d0ad-444f-8d1d-f7f81ae858f4",
-      "b73e47f7-8882-4b87-96c2-8a2ffa0635e2": "4f94b63f-9e16-4496-a428-e22e3bd831a3",
-      "6ddfa1ab-32ab-4d40-aae1-12b32c6c78ec": "65090790-d0ad-444f-8d1d-f7f81ae858f4",
-      "d7020e41-5a61-42fb-8cf4-359122276b27": "4f94b63f-9e16-4496-a428-e22e3bd831a3",
-      "87944e3c-44b2-4bfd-88d8-937ceb587d06": "65090790-d0ad-444f-8d1d-f7f81ae858f4"
+      "7bfd5e4b-2b56-46b4-ae80-3136a14a82c9": "e994e0ed-9737-4de3-83da-46dc4e1dc95f",
+      "30ba4efb-16a4-4712-9f06-c95bdc417313": "f8f80c44-2944-49d7-820b-9345edbff629",
+      "3a3a52bc-3383-4624-8850-d61219503dbd": "e994e0ed-9737-4de3-83da-46dc4e1dc95f",
+      "78b925a0-54a2-4328-a1ba-a7549de58795": "f8f80c44-2944-49d7-820b-9345edbff629",
+      "6f6c1d4f-2138-47d3-91cd-8886064570b3": "e994e0ed-9737-4de3-83da-46dc4e1dc95f",
+      "1a3431ec-61ec-4fa3-ba2e-66dde2c9c1a0": "f8f80c44-2944-49d7-820b-9345edbff629",
+      "4076d4d5-35f2-4bad-865e-dfd4f664a1a2": "e994e0ed-9737-4de3-83da-46dc4e1dc95f",
+      "2cb8e8b5-c554-42e5-ba71-61da13af4006": "f8f80c44-2944-49d7-820b-9345edbff629",
+      "69c07f02-8701-4120-b2b3-d4b4c265207c": "e994e0ed-9737-4de3-83da-46dc4e1dc95f",
+      "8053a5a7-afc7-4e3d-aa0d-f03bd3cad317": "f8f80c44-2944-49d7-820b-9345edbff629",
+      "218f30fd-72f6-4417-87d0-917df879f34f": "e994e0ed-9737-4de3-83da-46dc4e1dc95f",
+      "4e8b40af-f01b-4997-9690-7fda70676302": "f8f80c44-2944-49d7-820b-9345edbff629"
     },
     "stageIds": {
-      "3ba27b22-2992-4e3c-a9b0-881877eeebe3": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-      "b5b3f118-9773-45c0-9303-bb11676a1385": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-      "3e29c75c-acf0-4cdd-a442-e44b2b49e011": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-      "cdb0cf73-4a30-4819-98cc-cf3b8f036b8a": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-      "a6556f60-52f2-417b-ae89-eeabb11a902e": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-      "dbe5de70-d3ed-452b-b39c-28509073a4dd": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-      "15ccf29c-b82b-46d2-8aa1-5dfb3f2f044c": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-      "f5b8d2d5-53d3-47a8-970a-0afa8a44c639": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-      "b73e47f7-8882-4b87-96c2-8a2ffa0635e2": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-      "6ddfa1ab-32ab-4d40-aae1-12b32c6c78ec": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-      "d7020e41-5a61-42fb-8cf4-359122276b27": "6f702a5f-c28a-405a-a432-85bfe30b953f",
-      "87944e3c-44b2-4bfd-88d8-937ceb587d06": "6f702a5f-c28a-405a-a432-85bfe30b953f"
+      "7bfd5e4b-2b56-46b4-ae80-3136a14a82c9": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+      "30ba4efb-16a4-4712-9f06-c95bdc417313": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+      "3a3a52bc-3383-4624-8850-d61219503dbd": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+      "78b925a0-54a2-4328-a1ba-a7549de58795": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+      "6f6c1d4f-2138-47d3-91cd-8886064570b3": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+      "1a3431ec-61ec-4fa3-ba2e-66dde2c9c1a0": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+      "4076d4d5-35f2-4bad-865e-dfd4f664a1a2": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+      "2cb8e8b5-c554-42e5-ba71-61da13af4006": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+      "69c07f02-8701-4120-b2b3-d4b4c265207c": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+      "8053a5a7-afc7-4e3d-aa0d-f03bd3cad317": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+      "218f30fd-72f6-4417-87d0-917df879f34f": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42",
+      "4e8b40af-f01b-4997-9690-7fda70676302": "4cc5bee3-0a71-4dd1-9bd9-0185d1df3b42"
     },
     "roundNos": {
-      "3ba27b22-2992-4e3c-a9b0-881877eeebe3": 1,
-      "b5b3f118-9773-45c0-9303-bb11676a1385": 1,
-      "3e29c75c-acf0-4cdd-a442-e44b2b49e011": 1,
-      "cdb0cf73-4a30-4819-98cc-cf3b8f036b8a": 1,
-      "a6556f60-52f2-417b-ae89-eeabb11a902e": 2,
-      "dbe5de70-d3ed-452b-b39c-28509073a4dd": 2,
-      "15ccf29c-b82b-46d2-8aa1-5dfb3f2f044c": 2,
-      "f5b8d2d5-53d3-47a8-970a-0afa8a44c639": 2,
-      "b73e47f7-8882-4b87-96c2-8a2ffa0635e2": 3,
-      "6ddfa1ab-32ab-4d40-aae1-12b32c6c78ec": 3,
-      "d7020e41-5a61-42fb-8cf4-359122276b27": 3,
-      "87944e3c-44b2-4bfd-88d8-937ceb587d06": 3
+      "7bfd5e4b-2b56-46b4-ae80-3136a14a82c9": 1,
+      "30ba4efb-16a4-4712-9f06-c95bdc417313": 1,
+      "3a3a52bc-3383-4624-8850-d61219503dbd": 1,
+      "78b925a0-54a2-4328-a1ba-a7549de58795": 1,
+      "6f6c1d4f-2138-47d3-91cd-8886064570b3": 2,
+      "1a3431ec-61ec-4fa3-ba2e-66dde2c9c1a0": 2,
+      "4076d4d5-35f2-4bad-865e-dfd4f664a1a2": 2,
+      "2cb8e8b5-c554-42e5-ba71-61da13af4006": 2,
+      "69c07f02-8701-4120-b2b3-d4b4c265207c": 3,
+      "8053a5a7-afc7-4e3d-aa0d-f03bd3cad317": 3,
+      "218f30fd-72f6-4417-87d0-917df879f34f": 3,
+      "4e8b40af-f01b-4997-9690-7fda70676302": 3
     },
     "assumptions": [],
     "fixtures": {
       "movable": [
         {
-          "id": "3ba27b22-2992-4e3c-a9b0-881877eeebe3",
+          "id": "7bfd5e4b-2b56-46b4-ae80-3136a14a82c9",
           "ext_key": "pA-rr-r1-c1",
           "round": 1,
           "seq": 1,
           "pool": "A",
-          "home": "e6b40064-9ea9-48a4-a8d6-3da7a123221d",
-          "away": "d55aaff0-f6e0-4d78-97b0-e7551e5db540",
+          "home": "76be52ee-5c23-45e7-b20a-6cea6ac7c128",
+          "away": "2c3b2d12-ed07-4e5a-8a5b-1faceaf2ec08",
           "feeds": {
             "winner_to": null,
             "after": []
@@ -411,13 +423,13 @@
           "pinned": false
         },
         {
-          "id": "b5b3f118-9773-45c0-9303-bb11676a1385",
+          "id": "30ba4efb-16a4-4712-9f06-c95bdc417313",
           "ext_key": "pB-rr-r1-c1",
           "round": 1,
           "seq": 1,
           "pool": "B",
-          "home": "565ef956-ddb5-4e72-b466-13556cb2e7c1",
-          "away": "80dacbd3-0143-4733-80b8-b390ad105df0",
+          "home": "020fcd42-7f6f-4b2a-837e-5db82fc238f5",
+          "away": "b0bf5a78-92e1-4d22-bc59-b71708fec035",
           "feeds": {
             "winner_to": null,
             "after": []
@@ -429,13 +441,13 @@
           "pinned": false
         },
         {
-          "id": "3e29c75c-acf0-4cdd-a442-e44b2b49e011",
+          "id": "3a3a52bc-3383-4624-8850-d61219503dbd",
           "ext_key": "pA-rr-r1-c2",
           "round": 1,
           "seq": 2,
           "pool": "A",
-          "home": "aec11830-10c4-4b55-9dd5-bd55e7b73e3b",
-          "away": "9cac85e2-f4fe-4ee9-972a-aa7b778ae6e5",
+          "home": "d98e8613-2d35-4a06-9ada-45dc69559d78",
+          "away": "18558b6b-6118-47bc-8faa-8c5115f83e7f",
           "feeds": {
             "winner_to": null,
             "after": []
@@ -447,13 +459,13 @@
           "pinned": false
         },
         {
-          "id": "cdb0cf73-4a30-4819-98cc-cf3b8f036b8a",
+          "id": "78b925a0-54a2-4328-a1ba-a7549de58795",
           "ext_key": "pB-rr-r1-c2",
           "round": 1,
           "seq": 2,
           "pool": "B",
-          "home": "ca35d18f-5300-4caf-8540-132b1afaa22e",
-          "away": "cf945c09-6531-4683-94fd-aef41cc0f435",
+          "home": "7a287e03-bafc-4d8d-9bce-0222bf10886f",
+          "away": "f3144330-c5e3-4544-b51d-b73981c02142",
           "feeds": {
             "winner_to": null,
             "after": []
@@ -465,13 +477,13 @@
           "pinned": false
         },
         {
-          "id": "a6556f60-52f2-417b-ae89-eeabb11a902e",
+          "id": "6f6c1d4f-2138-47d3-91cd-8886064570b3",
           "ext_key": "pA-rr-r2-c1",
           "round": 2,
           "seq": 1,
           "pool": "A",
-          "home": "d55aaff0-f6e0-4d78-97b0-e7551e5db540",
-          "away": "aec11830-10c4-4b55-9dd5-bd55e7b73e3b",
+          "home": "2c3b2d12-ed07-4e5a-8a5b-1faceaf2ec08",
+          "away": "d98e8613-2d35-4a06-9ada-45dc69559d78",
           "feeds": {
             "winner_to": null,
             "after": []
@@ -483,13 +495,13 @@
           "pinned": false
         },
         {
-          "id": "dbe5de70-d3ed-452b-b39c-28509073a4dd",
+          "id": "1a3431ec-61ec-4fa3-ba2e-66dde2c9c1a0",
           "ext_key": "pB-rr-r2-c1",
           "round": 2,
           "seq": 1,
           "pool": "B",
-          "home": "80dacbd3-0143-4733-80b8-b390ad105df0",
-          "away": "ca35d18f-5300-4caf-8540-132b1afaa22e",
+          "home": "b0bf5a78-92e1-4d22-bc59-b71708fec035",
+          "away": "7a287e03-bafc-4d8d-9bce-0222bf10886f",
           "feeds": {
             "winner_to": null,
             "after": []
@@ -501,13 +513,13 @@
           "pinned": false
         },
         {
-          "id": "15ccf29c-b82b-46d2-8aa1-5dfb3f2f044c",
+          "id": "4076d4d5-35f2-4bad-865e-dfd4f664a1a2",
           "ext_key": "pA-rr-r2-c2",
           "round": 2,
           "seq": 2,
           "pool": "A",
-          "home": "9cac85e2-f4fe-4ee9-972a-aa7b778ae6e5",
-          "away": "e6b40064-9ea9-48a4-a8d6-3da7a123221d",
+          "home": "18558b6b-6118-47bc-8faa-8c5115f83e7f",
+          "away": "76be52ee-5c23-45e7-b20a-6cea6ac7c128",
           "feeds": {
             "winner_to": null,
             "after": []
@@ -519,13 +531,13 @@
           "pinned": false
         },
         {
-          "id": "f5b8d2d5-53d3-47a8-970a-0afa8a44c639",
+          "id": "2cb8e8b5-c554-42e5-ba71-61da13af4006",
           "ext_key": "pB-rr-r2-c2",
           "round": 2,
           "seq": 2,
           "pool": "B",
-          "home": "cf945c09-6531-4683-94fd-aef41cc0f435",
-          "away": "565ef956-ddb5-4e72-b466-13556cb2e7c1",
+          "home": "f3144330-c5e3-4544-b51d-b73981c02142",
+          "away": "020fcd42-7f6f-4b2a-837e-5db82fc238f5",
           "feeds": {
             "winner_to": null,
             "after": []
@@ -537,13 +549,13 @@
           "pinned": false
         },
         {
-          "id": "b73e47f7-8882-4b87-96c2-8a2ffa0635e2",
+          "id": "69c07f02-8701-4120-b2b3-d4b4c265207c",
           "ext_key": "pA-rr-r3-c1",
           "round": 3,
           "seq": 1,
           "pool": "A",
-          "home": "e6b40064-9ea9-48a4-a8d6-3da7a123221d",
-          "away": "aec11830-10c4-4b55-9dd5-bd55e7b73e3b",
+          "home": "76be52ee-5c23-45e7-b20a-6cea6ac7c128",
+          "away": "d98e8613-2d35-4a06-9ada-45dc69559d78",
           "feeds": {
             "winner_to": null,
             "after": []
@@ -555,13 +567,13 @@
           "pinned": false
         },
         {
-          "id": "6ddfa1ab-32ab-4d40-aae1-12b32c6c78ec",
+          "id": "8053a5a7-afc7-4e3d-aa0d-f03bd3cad317",
           "ext_key": "pB-rr-r3-c1",
           "round": 3,
           "seq": 1,
           "pool": "B",
-          "home": "565ef956-ddb5-4e72-b466-13556cb2e7c1",
-          "away": "ca35d18f-5300-4caf-8540-132b1afaa22e",
+          "home": "020fcd42-7f6f-4b2a-837e-5db82fc238f5",
+          "away": "7a287e03-bafc-4d8d-9bce-0222bf10886f",
           "feeds": {
             "winner_to": null,
             "after": []
@@ -573,13 +585,13 @@
           "pinned": false
         },
         {
-          "id": "d7020e41-5a61-42fb-8cf4-359122276b27",
+          "id": "218f30fd-72f6-4417-87d0-917df879f34f",
           "ext_key": "pA-rr-r3-c2",
           "round": 3,
           "seq": 2,
           "pool": "A",
-          "home": "9cac85e2-f4fe-4ee9-972a-aa7b778ae6e5",
-          "away": "d55aaff0-f6e0-4d78-97b0-e7551e5db540",
+          "home": "18558b6b-6118-47bc-8faa-8c5115f83e7f",
+          "away": "2c3b2d12-ed07-4e5a-8a5b-1faceaf2ec08",
           "feeds": {
             "winner_to": null,
             "after": []
@@ -591,13 +603,13 @@
           "pinned": false
         },
         {
-          "id": "87944e3c-44b2-4bfd-88d8-937ceb587d06",
+          "id": "4e8b40af-f01b-4997-9690-7fda70676302",
           "ext_key": "pB-rr-r3-c2",
           "round": 3,
           "seq": 2,
           "pool": "B",
-          "home": "cf945c09-6531-4683-94fd-aef41cc0f435",
-          "away": "80dacbd3-0143-4733-80b8-b390ad105df0",
+          "home": "f3144330-c5e3-4544-b51d-b73981c02142",
+          "away": "b0bf5a78-92e1-4d22-bc59-b71708fec035",
           "feeds": {
             "winner_to": null,
             "after": []
@@ -613,64 +625,64 @@
     },
     "draft": [
       {
-        "fixture_id": "3ba27b22-2992-4e3c-a9b0-881877eeebe3",
+        "fixture_id": "7bfd5e4b-2b56-46b4-ae80-3136a14a82c9",
         "scheduled_at": "2026-09-15T18:30:00+01:00",
-        "court_label": "Court 1"
+        "court_label": "54565832-14b7-4d8a-85ab-08d3694cc169"
       },
       {
-        "fixture_id": "b5b3f118-9773-45c0-9303-bb11676a1385",
+        "fixture_id": "30ba4efb-16a4-4712-9f06-c95bdc417313",
         "scheduled_at": "2026-09-15T18:30:00+01:00",
-        "court_label": "Court 2"
+        "court_label": "4ea87a0b-863b-4b01-bc3e-5428b9efa9d9"
       },
       {
-        "fixture_id": "3e29c75c-acf0-4cdd-a442-e44b2b49e011",
+        "fixture_id": "3a3a52bc-3383-4624-8850-d61219503dbd",
         "scheduled_at": "2026-09-15T18:55:00+01:00",
-        "court_label": "Court 1"
+        "court_label": "54565832-14b7-4d8a-85ab-08d3694cc169"
       },
       {
-        "fixture_id": "cdb0cf73-4a30-4819-98cc-cf3b8f036b8a",
+        "fixture_id": "78b925a0-54a2-4328-a1ba-a7549de58795",
         "scheduled_at": "2026-09-15T18:55:00+01:00",
-        "court_label": "Court 2"
+        "court_label": "4ea87a0b-863b-4b01-bc3e-5428b9efa9d9"
       },
       {
-        "fixture_id": "dbe5de70-d3ed-452b-b39c-28509073a4dd",
+        "fixture_id": "6f6c1d4f-2138-47d3-91cd-8886064570b3",
         "scheduled_at": "2026-09-15T19:35:00+01:00",
-        "court_label": "Court 1"
+        "court_label": "4ea87a0b-863b-4b01-bc3e-5428b9efa9d9"
       },
       {
-        "fixture_id": "a6556f60-52f2-417b-ae89-eeabb11a902e",
+        "fixture_id": "1a3431ec-61ec-4fa3-ba2e-66dde2c9c1a0",
         "scheduled_at": "2026-09-15T19:35:00+01:00",
-        "court_label": "Court 2"
+        "court_label": "54565832-14b7-4d8a-85ab-08d3694cc169"
       },
       {
-        "fixture_id": "f5b8d2d5-53d3-47a8-970a-0afa8a44c639",
+        "fixture_id": "4076d4d5-35f2-4bad-865e-dfd4f664a1a2",
         "scheduled_at": "2026-09-15T20:00:00+01:00",
-        "court_label": "Court 1"
+        "court_label": "4ea87a0b-863b-4b01-bc3e-5428b9efa9d9"
       },
       {
-        "fixture_id": "15ccf29c-b82b-46d2-8aa1-5dfb3f2f044c",
+        "fixture_id": "2cb8e8b5-c554-42e5-ba71-61da13af4006",
         "scheduled_at": "2026-09-15T20:00:00+01:00",
-        "court_label": "Court 2"
+        "court_label": "54565832-14b7-4d8a-85ab-08d3694cc169"
       },
       {
-        "fixture_id": "b73e47f7-8882-4b87-96c2-8a2ffa0635e2",
+        "fixture_id": "69c07f02-8701-4120-b2b3-d4b4c265207c",
         "scheduled_at": "2026-09-15T20:40:00+01:00",
-        "court_label": "Court 1"
+        "court_label": "54565832-14b7-4d8a-85ab-08d3694cc169"
       },
       {
-        "fixture_id": "6ddfa1ab-32ab-4d40-aae1-12b32c6c78ec",
+        "fixture_id": "8053a5a7-afc7-4e3d-aa0d-f03bd3cad317",
         "scheduled_at": "2026-09-15T20:40:00+01:00",
-        "court_label": "Court 2"
+        "court_label": "4ea87a0b-863b-4b01-bc3e-5428b9efa9d9"
       },
       {
-        "fixture_id": "d7020e41-5a61-42fb-8cf4-359122276b27",
+        "fixture_id": "218f30fd-72f6-4417-87d0-917df879f34f",
         "scheduled_at": "2026-09-15T21:05:00+01:00",
-        "court_label": "Court 1"
+        "court_label": "54565832-14b7-4d8a-85ab-08d3694cc169"
       },
       {
-        "fixture_id": "87944e3c-44b2-4bfd-88d8-937ceb587d06",
+        "fixture_id": "4e8b40af-f01b-4997-9690-7fda70676302",
         "scheduled_at": "2026-09-15T21:05:00+01:00",
-        "court_label": "Court 2"
+        "court_label": "4ea87a0b-863b-4b01-bc3e-5428b9efa9d9"
       }
     ],
     "instruction": "Schedule the club night. Nobody plays twice in a row — every player gets at least 20 minutes rest between matches.",
@@ -678,80 +690,80 @@
     "officials": []
   },
   "movableIds": [
-    "3ba27b22-2992-4e3c-a9b0-881877eeebe3",
-    "b5b3f118-9773-45c0-9303-bb11676a1385",
-    "3e29c75c-acf0-4cdd-a442-e44b2b49e011",
-    "cdb0cf73-4a30-4819-98cc-cf3b8f036b8a",
-    "a6556f60-52f2-417b-ae89-eeabb11a902e",
-    "dbe5de70-d3ed-452b-b39c-28509073a4dd",
-    "15ccf29c-b82b-46d2-8aa1-5dfb3f2f044c",
-    "f5b8d2d5-53d3-47a8-970a-0afa8a44c639",
-    "6ddfa1ab-32ab-4d40-aae1-12b32c6c78ec",
-    "b73e47f7-8882-4b87-96c2-8a2ffa0635e2",
-    "87944e3c-44b2-4bfd-88d8-937ceb587d06",
-    "d7020e41-5a61-42fb-8cf4-359122276b27"
+    "30ba4efb-16a4-4712-9f06-c95bdc417313",
+    "7bfd5e4b-2b56-46b4-ae80-3136a14a82c9",
+    "3a3a52bc-3383-4624-8850-d61219503dbd",
+    "78b925a0-54a2-4328-a1ba-a7549de58795",
+    "1a3431ec-61ec-4fa3-ba2e-66dde2c9c1a0",
+    "6f6c1d4f-2138-47d3-91cd-8886064570b3",
+    "2cb8e8b5-c554-42e5-ba71-61da13af4006",
+    "4076d4d5-35f2-4bad-865e-dfd4f664a1a2",
+    "69c07f02-8701-4120-b2b3-d4b4c265207c",
+    "8053a5a7-afc7-4e3d-aa0d-f03bd3cad317",
+    "218f30fd-72f6-4417-87d0-917df879f34f",
+    "4e8b40af-f01b-4997-9690-7fda70676302"
   ],
   "response": {
     "proposal": [
       {
-        "fixture_id": "3ba27b22-2992-4e3c-a9b0-881877eeebe3",
+        "fixture_id": "7bfd5e4b-2b56-46b4-ae80-3136a14a82c9",
         "scheduled_at": "2026-09-15T18:30:00+01:00",
-        "court_label": "Court 1"
+        "court_label": "54565832-14b7-4d8a-85ab-08d3694cc169"
       },
       {
-        "fixture_id": "b5b3f118-9773-45c0-9303-bb11676a1385",
+        "fixture_id": "3a3a52bc-3383-4624-8850-d61219503dbd",
         "scheduled_at": "2026-09-15T18:30:00+01:00",
-        "court_label": "Court 2"
+        "court_label": "4ea87a0b-863b-4b01-bc3e-5428b9efa9d9"
       },
       {
-        "fixture_id": "3e29c75c-acf0-4cdd-a442-e44b2b49e011",
+        "fixture_id": "30ba4efb-16a4-4712-9f06-c95bdc417313",
         "scheduled_at": "2026-09-15T18:55:00+01:00",
-        "court_label": "Court 1"
+        "court_label": "54565832-14b7-4d8a-85ab-08d3694cc169"
       },
       {
-        "fixture_id": "cdb0cf73-4a30-4819-98cc-cf3b8f036b8a",
+        "fixture_id": "78b925a0-54a2-4328-a1ba-a7549de58795",
         "scheduled_at": "2026-09-15T18:55:00+01:00",
-        "court_label": "Court 2"
+        "court_label": "4ea87a0b-863b-4b01-bc3e-5428b9efa9d9"
       },
       {
-        "fixture_id": "dbe5de70-d3ed-452b-b39c-28509073a4dd",
-        "scheduled_at": "2026-09-15T19:35:00+01:00",
-        "court_label": "Court 1"
+        "fixture_id": "6f6c1d4f-2138-47d3-91cd-8886064570b3",
+        "scheduled_at": "2026-09-15T19:20:00+01:00",
+        "court_label": "54565832-14b7-4d8a-85ab-08d3694cc169"
       },
       {
-        "fixture_id": "a6556f60-52f2-417b-ae89-eeabb11a902e",
-        "scheduled_at": "2026-09-15T19:35:00+01:00",
-        "court_label": "Court 2"
+        "fixture_id": "4076d4d5-35f2-4bad-865e-dfd4f664a1a2",
+        "scheduled_at": "2026-09-15T19:20:00+01:00",
+        "court_label": "4ea87a0b-863b-4b01-bc3e-5428b9efa9d9"
       },
       {
-        "fixture_id": "f5b8d2d5-53d3-47a8-970a-0afa8a44c639",
-        "scheduled_at": "2026-09-15T20:00:00+01:00",
-        "court_label": "Court 1"
+        "fixture_id": "1a3431ec-61ec-4fa3-ba2e-66dde2c9c1a0",
+        "scheduled_at": "2026-09-15T19:45:00+01:00",
+        "court_label": "54565832-14b7-4d8a-85ab-08d3694cc169"
       },
       {
-        "fixture_id": "15ccf29c-b82b-46d2-8aa1-5dfb3f2f044c",
-        "scheduled_at": "2026-09-15T20:00:00+01:00",
-        "court_label": "Court 2"
+        "fixture_id": "2cb8e8b5-c554-42e5-ba71-61da13af4006",
+        "scheduled_at": "2026-09-15T19:45:00+01:00",
+        "court_label": "4ea87a0b-863b-4b01-bc3e-5428b9efa9d9"
       },
       {
-        "fixture_id": "b73e47f7-8882-4b87-96c2-8a2ffa0635e2",
-        "scheduled_at": "2026-09-15T20:40:00+01:00",
-        "court_label": "Court 1"
+        "fixture_id": "69c07f02-8701-4120-b2b3-d4b4c265207c",
+        "scheduled_at": "2026-09-15T20:10:00+01:00",
+        "court_label": "54565832-14b7-4d8a-85ab-08d3694cc169"
       },
       {
-        "fixture_id": "6ddfa1ab-32ab-4d40-aae1-12b32c6c78ec",
-        "scheduled_at": "2026-09-15T20:40:00+01:00",
-        "court_label": "Court 2"
+        "fixture_id": "218f30fd-72f6-4417-87d0-917df879f34f",
+        "scheduled_at": "2026-09-15T20:10:00+01:00",
+        "court_label": "4ea87a0b-863b-4b01-bc3e-5428b9efa9d9"
       },
       {
-        "fixture_id": "d7020e41-5a61-42fb-8cf4-359122276b27",
-        "scheduled_at": "2026-09-15T21:05:00+01:00",
-        "court_label": "Court 1"
+        "fixture_id": "8053a5a7-afc7-4e3d-aa0d-f03bd3cad317",
+        "scheduled_at": "2026-09-15T20:35:00+01:00",
+        "court_label": "54565832-14b7-4d8a-85ab-08d3694cc169"
       },
       {
-        "fixture_id": "87944e3c-44b2-4bfd-88d8-937ceb587d06",
-        "scheduled_at": "2026-09-15T21:05:00+01:00",
-        "court_label": "Court 2"
+        "fixture_id": "4e8b40af-f01b-4997-9690-7fda70676302",
+        "scheduled_at": "2026-09-15T20:35:00+01:00",
+        "court_label": "4ea87a0b-863b-4b01-bc3e-5428b9efa9d9"
       }
     ],
     "unschedulable": [],
@@ -760,45 +772,45 @@
     "diff": {
       "moved": [],
       "placed": [
-        "3ba27b22-2992-4e3c-a9b0-881877eeebe3",
-        "b5b3f118-9773-45c0-9303-bb11676a1385",
-        "3e29c75c-acf0-4cdd-a442-e44b2b49e011",
-        "cdb0cf73-4a30-4819-98cc-cf3b8f036b8a",
-        "a6556f60-52f2-417b-ae89-eeabb11a902e",
-        "dbe5de70-d3ed-452b-b39c-28509073a4dd",
-        "15ccf29c-b82b-46d2-8aa1-5dfb3f2f044c",
-        "f5b8d2d5-53d3-47a8-970a-0afa8a44c639",
-        "b73e47f7-8882-4b87-96c2-8a2ffa0635e2",
-        "6ddfa1ab-32ab-4d40-aae1-12b32c6c78ec",
-        "d7020e41-5a61-42fb-8cf4-359122276b27",
-        "87944e3c-44b2-4bfd-88d8-937ceb587d06"
+        "7bfd5e4b-2b56-46b4-ae80-3136a14a82c9",
+        "30ba4efb-16a4-4712-9f06-c95bdc417313",
+        "3a3a52bc-3383-4624-8850-d61219503dbd",
+        "78b925a0-54a2-4328-a1ba-a7549de58795",
+        "6f6c1d4f-2138-47d3-91cd-8886064570b3",
+        "1a3431ec-61ec-4fa3-ba2e-66dde2c9c1a0",
+        "4076d4d5-35f2-4bad-865e-dfd4f664a1a2",
+        "2cb8e8b5-c554-42e5-ba71-61da13af4006",
+        "69c07f02-8701-4120-b2b3-d4b4c265207c",
+        "8053a5a7-afc7-4e3d-aa0d-f03bd3cad317",
+        "218f30fd-72f6-4417-87d0-917df879f34f",
+        "4e8b40af-f01b-4997-9690-7fda70676302"
       ],
       "unscheduled": [],
       "unchanged": []
     },
     "explanations": [
       {
-        "fixture_id": "dbe5de70-d3ed-452b-b39c-28509073a4dd",
-        "note": "Scheduled at 19:35 to provide Elena with at least 20 minutes rest following her 18:55 match."
+        "fixture_id": "6f6c1d4f-2138-47d3-91cd-8886064570b3",
+        "note": "Scheduled at 19:20 to eliminate idle gaps while giving Pool A players 30 minutes rest after their 18:30 match."
       },
       {
-        "fixture_id": "a6556f60-52f2-417b-ae89-eeabb11a902e",
-        "note": "Scheduled at 19:35 to provide Sam with at least 20 minutes rest following his 18:55 match."
+        "fixture_id": "1a3431ec-61ec-4fa3-ba2e-66dde2c9c1a0",
+        "note": "Scheduled at 19:45 so Pool B players get 30 minutes rest following their 18:55 match."
       },
       {
-        "fixture_id": "b73e47f7-8882-4b87-96c2-8a2ffa0635e2",
-        "note": "Scheduled at 20:40 to ensure Priya receives 20 minutes rest following her 20:00 match."
+        "fixture_id": "69c07f02-8701-4120-b2b3-d4b4c265207c",
+        "note": "Scheduled at 20:10 after 30 minutes rest for Pool A players from their 19:20 match."
       },
       {
-        "fixture_id": "6ddfa1ab-32ab-4d40-aae1-12b32c6c78ec",
-        "note": "Scheduled at 20:40 to ensure Marcus receives 20 minutes rest following his 20:00 match."
+        "fixture_id": "8053a5a7-afc7-4e3d-aa0d-f03bd3cad317",
+        "note": "Scheduled at 20:35 after 30 minutes rest for Pool B players from their 19:45 match."
       }
     ],
-    "summary": "All 12 fixtures for Club Night have been scheduled across Court 1 and Court 2 starting at 18:30. Every player is guaranteed at least 20 minutes of rest between consecutive matches, fully respecting the rest requirement. The entire programme completes by 21:25.",
+    "summary": "Scheduled all 12 fixtures across Court 1 and Court 2 by alternating Pool A and Pool B rounds. This guarantees every player gets 30 minutes of rest between matches, exceeding the required 20-minute minimum and avoiding back-to-back play. The entire programme finishes compactly at 20:55.",
     "assumptions": [],
     "usage": {
-      "input_tokens": 9964,
-      "output_tokens": 13906,
+      "input_tokens": 10662,
+      "output_tokens": 11295,
       "repair_rounds": 0
     },
     "repair": {
@@ -808,11 +820,11 @@
     "officials_coverage": null,
     "credits": 1,
     "budget": 32000,
-    "spent_tokens": 13906,
+    "spent_tokens": 11295,
     "underfunded": false,
     "stopped_on_budget": false,
     "est_tokens": 6000,
-    "parse_tokens": 55,
+    "parse_tokens": 1038,
     "parse_failed": false,
     "rung": 1,
     "predicted_rung": 1

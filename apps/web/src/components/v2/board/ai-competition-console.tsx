@@ -79,7 +79,7 @@ export interface JointDivision {
   scheduleLocked: boolean;
   /** This division's OWN configured courts — the pricing input the server uses
    *  (it builds each division's pack from that division's settings), and the
-   *  input to the by-name divergence check. */
+   *  input to the divergence check (by court id since P9, not by name). */
   courts: string[];
   /** Resolved venue zone. */
   tz: string;
@@ -132,13 +132,18 @@ export function jointQuoteLines(
 }
 
 /**
- * Court labels that are NOT set up in every selected division.
+ * Court IDS that are NOT set up in every selected division.
  *
- * Cross-division court identity is a string match and nothing else — there is no
- * venue-level court entity. So "Court 2" in one division and "Court A" in
- * another are two courts even if they are the same slab of tarmac, and the run
- * will happily put a match on each at the same time. Mirrors the server's own
- * `divergentCourts`, so the pre-run warning and the response agree.
+ * P9: this used to compare court NAMES, and its warning existed because there
+ * was no court entity — "Court 2" in one division and "Court A" in another were
+ * two courts even if they were the same slab of tarmac. Courts are entities
+ * now, so identity here is the court uuid and the same physical court IS the
+ * same id across divisions; what remains divergent is a court genuinely absent
+ * from a selected division's configured set. The returned ids are NOT
+ * display-ready — the caller resolves them through the venue-qualifying court
+ * directory, the same way the server's `divergent_courts` is resolved. Mirrors
+ * the server's own `divergentCourts`, so the pre-run warning and the response
+ * agree.
  */
 export function divergentCourts(divisions: JointDivision[], selected: string[]): string[] {
   const chosen = divisions.filter((d) => selected.includes(d.id));
@@ -332,9 +337,14 @@ export function jointApplyDivisions(
   const seqOf = new Map(divisions.map((d) => [d.id, d.seq]));
   const byDivision = new Map<string, JointApplyDivision["assignments"]>();
   for (const p of plan.proposal) {
-    if (!p.court_label) continue; // the wire requires a court label
+    if (!p.court_label) continue; // the wire requires a court id
     const list = byDivision.get(p.division_id);
-    const row = { fixture_id: p.fixture_id, scheduled_at: p.scheduled_at, court_label: p.court_label };
+    // P9 pass 3b: outgoing key is `court_id` (`JointApplyDivision`/
+    // `ApplyCompetitionScheduleRequest`, schemas.ts) — `p.court_label` is the
+    // AI plan response's own field name, which has carried a real `courts.id`
+    // value (never a display label) since pass 1; this is a key rename at
+    // the wire boundary, not a value lookup.
+    const row = { fixture_id: p.fixture_id, scheduled_at: p.scheduled_at, court_id: p.court_label };
     if (list) list.push(row);
     else byDivision.set(p.division_id, [row]);
   }
@@ -487,6 +497,7 @@ export function JointReviewStep({
   onReRun,
   msg,
   entrantNames = {},
+  courtNames = {},
 }: {
   plan: AiCompetitionPlanResponse;
   divisions: JointDivision[];
@@ -501,6 +512,14 @@ export function JointReviewStep({
    *  other/direct-construction caller keeps today's degrade-to-short-id
    *  behaviour unchanged. */
   entrantNames?: Record<string, string>;
+  /** Court id -> venue-qualified display label (`resolveCourtNames`/
+   *  `buildCourtDirectory` — the SAME "Name (Venue)" directory the board and
+   *  the AI pack build). P9 review wave 1, finding 5: `plan.divergent_courts`
+   *  holds real court uuids, and two different venues may legally share a
+   *  bare court name (`courts_venue_name_active_idx` is scoped per venue),
+   *  so a bare name alone is still ambiguous. Optional/additive; a miss
+   *  degrades to `courtPicker.unknownCourt`, never the bare id. */
+  courtNames?: Record<string, string>;
   applying: boolean;
   outcome: JointApplyOutcome | null;
   undoing: boolean;
@@ -740,7 +759,15 @@ export function JointReviewStep({
           )}
           {plan.divergent_courts.length > 0 && (
             <ScopeNote title={msg("board.ai.joint.courtsDivergentTitle")}>
-              {msg("board.ai.joint.courtsDivergent", { courts: plan.divergent_courts.join(", ") })}
+              {/* P9 review wave 1, finding 5: `divergent_courts` entries are
+                  real court uuids ("NOT display-ready" per the field's own
+                  server doc) — resolve each through the venue-qualifying
+                  directory rather than joining raw ids. */}
+              {msg("board.ai.joint.courtsDivergent", {
+                courts: plan.divergent_courts
+                  .map((id) => courtNames[id] ?? msg("courtPicker.unknownCourt"))
+                  .join(", "),
+              })}
             </ScopeNote>
           )}
         </div>
@@ -899,6 +926,7 @@ export function AiCompetitionConsole({
   onRefetch,
   onProposalChange,
   entrantNames = {},
+  courtNames = {},
 }: {
   competitionId: string;
   /** Every division on the board, in board order. */
@@ -925,6 +953,9 @@ export function AiCompetitionConsole({
   onRefetch?: () => void;
   /** Mirrors the current proposal to the board so it can paint grid ghosts. */
   onProposalChange?: (plan: JointProposalMirror | null) => void;
+  /** Court id -> venue-qualified display label — P9 review wave 1, finding 5.
+   *  Threaded straight through to `JointReviewStep`; see its own doc. */
+  courtNames?: Record<string, string>;
 }) {
   const msg = useMsg();
   const plural = usePlural();
@@ -1176,7 +1207,17 @@ export function AiCompetitionConsole({
 
       {divergent.length > 0 && (
         <Caution title={msg("board.ai.joint.courtsDivergentTitle")}>
-          {msg("board.ai.joint.courtsDivergent", { courts: divergent.join(", ") })}
+          {/* P9 review wave 2: the SECOND site of wave 1's finding 5. This is
+              the pre-run warning, built client-side by `divergentCourts` from
+              each division's own configured courts — which are court uuids
+              since the cutover, exactly like the server's `divergent_courts`
+              the post-run note above already resolves. Both notes say the same
+              sentence, so both must resolve the same way. */}
+          {msg("board.ai.joint.courtsDivergent", {
+            courts: divergent
+              .map((id) => courtNames[id] ?? msg("courtPicker.unknownCourt"))
+              .join(", "),
+          })}
         </Caution>
       )}
 
@@ -1313,6 +1354,7 @@ export function AiCompetitionConsole({
       onReRun={() => void run(plan)}
       msg={msg}
       entrantNames={entrantNames}
+      courtNames={courtNames}
     />
   ) : (
     brief

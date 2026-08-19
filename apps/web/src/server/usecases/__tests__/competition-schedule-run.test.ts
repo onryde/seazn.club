@@ -213,7 +213,7 @@ describe("runCompetitionAiPlan (#350)", () => {
     // #396: `participants` and `assumptions` are enforcement inputs for the
     // placer and the referee, never prompt material — and inlining them re-breaks
     // the joint token budget. Everything else goes over verbatim.
-    expect(JSON.parse(body.messages[0]!.content)).toEqual(toJointModelPayload(pack));
+    expect(JSON.parse(body.messages[0]!.content)).toEqual(toJointModelPayload(pack, {}));
     expect(body.messages[0]!.content).not.toContain("participants");
     expect(body.messages[0]!.content).not.toContain("assumptions");
   });

@@ -190,8 +190,10 @@ interface Props {
     scheduled_at: string | null;
     /** Venue zone (schedule_settings.tz) so the kick-off shows venue time. */
     scheduled_tz?: string;
-    venue: string | null;
-    court_label: string | null;
+    /** P9 pass 3c-2: derived from venue_id/court_id (courts/venues), not the
+     *  frozen free-text venue/court_label columns. */
+    venue_name: string | null;
+    court_name: string | null;
     round_no: number;
     /** D4b (P6) — {key, params} i18n pattern ref while `home`/`away` (below)
      *  is null (V360's fixtures.home/away_slot_label). */
@@ -416,8 +418,8 @@ export function FixtureConsole({
           ) : (
             ""
           )}
-          {fixture.venue ? ` · ${fixture.venue}` : ""}
-          {fixture.court_label ? ` · ${fixture.court_label}` : ""}
+          {fixture.venue_name ? ` · ${fixture.venue_name}` : ""}
+          {fixture.court_name ? ` · ${fixture.court_name}` : ""}
           {` · ${msg("score.recordedBy", { scorer: sport.scorerLabel.toLowerCase() })}`}
         </p>
       </header>

@@ -35,6 +35,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages } from "../stages";
 import { publishSchedule, startDivision, validateSchedule } from "../schedule";
+import { createVenue, createCourt } from "../venues";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -54,13 +55,17 @@ interface ConfigOpts {
   roundMinutes?: number;
 }
 
-function settingsConfig(opts: ConfigOpts) {
+// P9 pass 3a: real courts.id values — ScheduleConfig.courts is CourtId[]
+// since pass 1, and fixtures.court_id carries a composite FK since
+// V367/368. `Slot.court`/the constants below keep the readable "Court 1"/
+// "Court 2" labels; `seedBoard` resolves them to real ids via this map.
+function settingsConfig(opts: ConfigOpts, courts: [string, string]) {
   const rest = opts.restMin ?? 20;
   return {
     startAt: at(DAY, "08:00"),
     matchMinutes: 30,
     gapMinutes: 0,
-    courts: ["Court 1", "Court 2"],
+    courts,
     perEntrantMinRest: rest,
     ...(opts.roundMinutes !== undefined ? { roundMinutes: opts.roundMinutes } : {}),
     blackouts: [],
@@ -83,7 +88,8 @@ interface Slot {
   away: number;
   /** Omitted leaves `scheduled_at` NULL — an unscheduled card. */
   hhmm?: string;
-  /** Omitted leaves `court_label` NULL. A card needs BOTH to be an assignment. */
+  /** "Court 1"/"Court 2" — `seedBoard` resolves to a real court_id (P9 pass
+   *  3a). Omitted leaves `court_id` NULL. A card needs BOTH to be an assignment. */
   court?: string;
   round?: number;
 }
@@ -111,9 +117,16 @@ async function seedBoard(slots: Slot[], config: ConfigOpts = {}): Promise<Board>
     config: GENERIC_CONFIG,
     eligibility: [],
   });
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const court1 = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+  const court2 = await createCourt(auth, venue.id, { name: "Court 2", sort: 1, tags: [] });
+  const courtByLabel = new Map([
+    ["Court 1", court1.id],
+    ["Court 2", court2.id],
+  ]);
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${division.id}, ${sql.json(settingsConfig(config))}, ${"UTC"}, now())
+    values (${division.id}, ${sql.json(settingsConfig(config, [court1.id, court2.id]))}, ${"UTC"}, now())
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
   await createEntrants(
     auth,
@@ -136,12 +149,13 @@ async function seedBoard(slots: Slot[], config: ConfigOpts = {}): Promise<Board>
   });
   const fixtureIds: string[] = [];
   for (const [i, s] of slots.entries()) {
+    const courtId = s.court !== undefined ? (courtByLabel.get(s.court) ?? null) : null;
     const [f] = await sql<{ id: string }[]>`
       insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key,
-                            status, home_entrant_id, away_entrant_id, scheduled_at, court_label)
+                            status, home_entrant_id, away_entrant_id, scheduled_at, court_id)
       values (${stage!.id}, ${division.id}, ${auth.orgId}, ${s.round ?? 1}, ${i}, ${`f${i}`},
               'scheduled', ${byName.get(`E${s.home}`)!}, ${byName.get(`E${s.away}`)!},
-              ${s.hhmm ? at(DAY, s.hhmm) : null}, ${s.court ?? null})
+              ${s.hhmm ? at(DAY, s.hhmm) : null}, ${courtId})
       returning id`;
     fixtureIds.push(f!.id);
   }

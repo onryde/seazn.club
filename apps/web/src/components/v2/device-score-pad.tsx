@@ -46,6 +46,10 @@ interface Props {
   fixture: {
     id: string;
     round_no: number;
+    /** P9 cutover: the caller (app/score/[token]/page.tsx) now derives these
+     *  from `venues`/`courts` via `venue_id`/`court_id` — display strings
+     *  only, despite the field names still matching the frozen
+     *  `fixtures.venue`/`court_label` columns they used to read verbatim. */
     venue: string | null;
     court_label: string | null;
     competition_name: string;

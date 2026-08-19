@@ -66,7 +66,7 @@ import {
 } from "@/lib/ai-rung";
 import { deferred } from "@/lib/deferred";
 import { maybeAlertExpensiveRun } from "@/server/usecases/ai-runs-admin";
-import { divisionFixtures, loadSettings } from "./schedule";
+import { courtNamesById, divisionFixtures, loadSettings } from "./schedule";
 import {
   listOfficialBusyElsewhere,
   loadOfficialBlackouts,
@@ -87,6 +87,9 @@ export interface OfficialsPackFixture {
    *  calendar day this fixture falls on: that is `dayKeyInTz(start, org_tz)`
    *  (#448). Slicing the offset out of this string reads the DIVISION's day. */
   start_at: string;
+  /** DERIVED display name (P9 cutover) — `courts.name` via the fixture's
+   *  `court_id`, or the dry-run override's own label. Never the frozen
+   *  `fixtures.court_label`. */
   court: string | null;
   /** Pool id — the engine's poolLock target. */
   pool: string | null;
@@ -177,6 +180,12 @@ export async function buildOfficialsPack(
     const scheduleOverride = new Map(
       (opts.schedule ?? []).map((s) => [s.fixture_id, s] as const),
     );
+    // P9 cutover: `f.court_label` is frozen (no writer touches it any more —
+    // see FixtureLite's own doc in schedule.ts), so the pack's court display
+    // is DERIVED from `courts` via `f.court_id` instead. The dry-run
+    // override's own `court_label` is a separate, caller-supplied Phase-A
+    // proposal (not yet persisted) and is untouched by this cutover.
+    const courtNames = await courtNamesById(tx);
     const included = divisionFixtures(tx, divisionId).then((rows) =>
       rows
         .map((f) => {
@@ -184,7 +193,27 @@ export async function buildOfficialsPack(
           const persisted =
             f.scheduled_at !== null ? new Date(f.scheduled_at as string | Date).toISOString() : null;
           const atIso = ov?.scheduled_at ?? persisted;
-          const court = ov?.court_label ?? f.court_label;
+          // P9 review wave 1, finding 8 (MONEY): `ov.court_label` is a real
+          // court uuid on the wire (the Phase-A proposal — see ai-diff.ts's
+          // own doc), not a display string — resolve it through the SAME
+          // `courtNames` map the persisted branch already uses below.
+          // Before this fix the override passed its uuid straight through
+          // while the persisted branch resolved a name, so one physical
+          // court showing once as an override and once as a persisted
+          // assignment compared unequal and double-counted in
+          // `officialsAiPlanForDivision`'s `new Set(pack.fixtures.map(f =>
+          // f.court))` credit-pricing input.
+          // Review wave 2: an override whose court does not resolve keeps its
+          // own value rather than becoming null. Nulling it DROPPED the court
+          // from the pack the model reads and from the distinct-court credit
+          // count — a silent under-price plus a fixture that looks unplaced.
+          // The persisted branch falls back to the id for the same reason:
+          // FixtureRow's own convention is id-on-miss, never null.
+          const court = ov
+            ? (courtNames.get(ov.court_label) ?? ov.court_label ?? null)
+            : f.court_id !== null
+              ? (courtNames.get(f.court_id) ?? f.court_id)
+              : null;
           return { f, atIso, court, startMs: atIso !== null ? new Date(atIso).getTime() : NaN };
         })
         // Fixtures still needing officials — must have a time, and not be over.

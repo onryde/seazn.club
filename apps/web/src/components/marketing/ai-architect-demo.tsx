@@ -105,6 +105,30 @@ type DemoPack = {
  * and Women's land at 55 and 55.5 against an `s1` of 60 — so a board-derived
  * quote is one recapture away from printing a rung the run never paid.
  */
+
+/**
+ * Court NAMES for the divergent-courts note, or an empty list.
+ *
+ * P9: every court value in a recorded fixture is a UUID since the cutover, and
+ * this component renders on the PUBLIC marketing site — so an id that cannot be
+ * resolved is DROPPED rather than shown. A shorter list is a fine outcome;
+ * three raw uuids in a caution box is not. Fixtures recorded before the capture
+ * started writing `courtNames` resolve nothing, and the caller hides the note.
+ *
+ * Exported so both branches are testable: the component loads its fixtures
+ * through a dynamic `import()` of the JSON, which a test cannot substitute
+ * without mocking the module for the whole file.
+ */
+export function resolveDivergentCourtNames(
+  fixture: AiDemoFixture | null,
+  divergent: readonly string[] | undefined,
+): string[] {
+  const names = fixture?.courtNames ?? {};
+  return (divergent ?? [])
+    .map((id) => names[id])
+    .filter((n): n is string => typeof n === "string" && n.length > 0);
+}
+
 export function demoQuoteLines(fixture: AiDemoFixture): QuoteLineInput[] {
   const pack = fixture.pack as DemoPack;
   const fallbackCourts = fixture.board.courts.length;
@@ -232,6 +256,16 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
 
   const plan = (fixture?.response ?? null) as DemoPlan | null;
   const joint = Boolean(plan?.divisions?.length);
+
+  // P9: every court value in a recorded fixture is a UUID since the cutover.
+  // This component renders on the PUBLIC marketing site, so an unresolved id
+  // is dropped rather than shown — a shorter list is a fine outcome, three
+  // raw uuids in a caution box is not. Fixtures recorded before `courtNames`
+  // existed simply resolve nothing and the block hides itself.
+  const divergentCourtNames = useMemo(
+    () => resolveDivergentCourtNames(fixture ?? null, plan?.divergent_courts),
+    [fixture, plan],
+  );
 
   // The referee trace, composed by the console's own composer over the recorded
   // response — never a script written for the demo.
@@ -461,13 +495,18 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
                         </li>
                       ))}
                     </ul>
-                    {plan.divergent_courts && plan.divergent_courts.length > 0 && (
+                    {divergentCourtNames.length > 0 && (
                       <p
                         data-ai-divergent="courts"
                         className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800"
                       >
                         {t("scheduling.aidemo.divergentCourts", {
-                          courts: plan.divergent_courts.join(", "),
+                          // P9: `divergent_courts` carries court UUIDs since the
+                          // cutover. This is a PUBLIC page, so an id must never
+                          // reach the DOM — resolve through the capture's own
+                          // recorded name map and drop anything unresolvable
+                          // rather than printing it.
+                          courts: divergentCourtNames.join(", "),
                         })}
                       </p>
                     )}

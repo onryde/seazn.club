@@ -38,6 +38,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages } from "../stages";
+import { createVenue, createCourt } from "../venues";
 import { applySchedule, autoSchedule, validateSchedule } from "../schedule";
 import { seedOrg } from "./_seed";
 
@@ -91,13 +92,29 @@ interface Div {
   id: string;
   stageId: string;
   entrantByName: Map<string, string>;
+  /** P9 pass 3a: `config.courts` (and every fixture's own placement) is a
+   *  real `courts.id` now — this maps each caller-given NAME back to the id
+   *  created for it, so call sites can keep addressing courts by name. */
+  courtsByName: Map<string, string>;
+}
+
+/** P9 pass 3a: `ScheduleConfig.courts` is `CourtId[]` (real ids since pass
+ *  1). One shared venue, one real court per name, ids returned in order. */
+async function seedCourts(auth: AuthCtx, names: string[]): Promise<string[]> {
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const courts: string[] = [];
+  for (let i = 0; i < names.length; i++) {
+    const c = await createCourt(auth, venue.id, { name: names[i]!, sort: i, tags: [] });
+    courts.push(c.id);
+  }
+  return courts;
 }
 
 async function makeDivision(
   auth: AuthCtx,
   competitionId: string,
   slug: string,
-  courts: string[],
+  courtNames: string[],
   entrantNames: string[],
   hard: HardConstraint[],
   endAt?: string,
@@ -110,9 +127,10 @@ async function makeDivision(
     config: GENERIC_CONFIG,
     eligibility: [],
   });
+  const courtIds = await seedCourts(auth, courtNames);
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${division.id}, ${sql.json(settingsConfig(courts, hard, endAt))}, ${TZ}, now())
+    values (${division.id}, ${sql.json(settingsConfig(courtIds, hard, endAt))}, ${TZ}, now())
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
   await createEntrants(
     auth,
@@ -136,9 +154,11 @@ async function makeDivision(
     id: division.id,
     stageId: stage!.id,
     entrantByName: new Map(rows.map((r) => [r.display_name, r.id])),
+    courtsByName: new Map(courtNames.map((n, i) => [n, courtIds[i]!])),
   };
 }
 
+/** `slot.court`, when given, is a real `courts.id` — see `Div.courtsByName`. */
 async function addFixture(
   auth: AuthCtx,
   d: Div,
@@ -151,7 +171,7 @@ async function addFixture(
 ): Promise<string> {
   const [f] = await sql<{ id: string }[]>`
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
-                          home_entrant_id, away_entrant_id, scheduled_at, court_label)
+                          home_entrant_id, away_entrant_id, scheduled_at, court_id)
     values (${d.stageId}, ${d.id}, ${auth.orgId}, 1, ${seq}, ${extKey}, ${status},
             ${d.entrantByName.get(home)!}, ${d.entrantByName.get(away)!},
             ${slot?.at ?? null}, ${slot?.court ?? null})
@@ -197,16 +217,16 @@ async function seedBoard(placed: boolean, endAt?: string): Promise<{
 
   const fa1 = await addFixture(
     auth, planned, 0, "a-f1", "A-1", "A-2",
-    placed ? { at: AT("09:00"), court: "Court 1" } : null,
+    placed ? { at: AT("09:00"), court: planned.courtsByName.get("Court 1")! } : null,
   );
   const fa2 = await addFixture(
     auth, planned, 1, "a-f2", "A-3", "A-4",
-    placed ? { at: AT("11:00"), court: "Court 2" } : null,
+    placed ? { at: AT("11:00"), court: planned.courtsByName.get("Court 2")! } : null,
   );
   // Fixed court time in another division of the same competition, on the day.
   const siblingFixtureId = await addFixture(
     auth, sibling, 0, "b-f1", "B-1", "B-2",
-    { at: AT("14:00"), court: SIBLING_COURT }, "finalized",
+    { at: AT("14:00"), court: sibling.courtsByName.get(SIBLING_COURT)! }, "finalized",
   );
   return { auth, planned, fa1, fa2, siblingFixtureId };
 }
@@ -245,8 +265,8 @@ describe.skipIf(!HAS_DB)("sibling fixtures carry their rule identity (#462)", ()
     const out = await applySchedule(auth, planned.stageId, {
       source: "manual",
       assignments: [
-        { fixture_id: fa1, scheduled_at: AT("09:00"), court_label: "Court 1" },
-        { fixture_id: fa2, scheduled_at: AT("11:00"), court_label: "Court 2" },
+        { fixture_id: fa1, scheduled_at: AT("09:00"), court_id: planned.courtsByName.get("Court 1")! },
+        { fixture_id: fa2, scheduled_at: AT("11:00"), court_id: planned.courtsByName.get("Court 2")! },
       ],
     });
     expect(out.applied).toBe(2);

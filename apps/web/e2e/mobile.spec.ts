@@ -15,6 +15,7 @@ import {
   claimProfileBySql,
   setOrgLocaleSql,
   scoreFixture,
+  seedVenueWithCourts,
 } from "./helpers";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
@@ -511,6 +512,7 @@ test("the publish gate's confirm sheet holds at phone width", async ({ page, req
   const gateDivisionId = div.data!.id;
   await addEntrantsViaApi(request, gateDivisionId, ["Eve M", "Fay M", "Gus M", "Hal M"]);
   const { fixtureIds } = await createStageAndGenerate(request, gateDivisionId);
+  const { courts: gateCourts } = await seedVenueWithCourts(request, ["Court A", "Court B"]);
   const settings = await apiJson(
     request,
     `/api/v1/divisions/${gateDivisionId}/schedule-settings`,
@@ -521,7 +523,7 @@ test("the publish gate's confirm sheet holds at phone width", async ({ page, req
         startAt: at(9),
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: ["Court A", "Court B"],
+        courts: gateCourts.map((c) => c.id),
         // A two-hour floor, so the hour-apart pair below is a `warn.rest` — a
         // warning, which is the case that HAS a confirm affordance to size.
         perEntrantMinRest: 120,
@@ -548,11 +550,11 @@ test("the publish gate's confirm sheet holds at phone width", async ({ page, req
   )!;
   await apiJson(request, `/api/v1/fixtures/${first.id}`, "PATCH", {
     scheduled_at: at(9),
-    court_label: "Court A",
+    court_id: gateCourts[0]!.id,
   });
   await apiJson(request, `/api/v1/fixtures/${sharer.id}`, "PATCH", {
     scheduled_at: at(10),
-    court_label: "Court B",
+    court_id: gateCourts[1]!.id,
   });
 
   await page.goto(await divisionPath(page.request, gateDivisionId, "/schedule?tab=board"), { waitUntil: "load" });
@@ -879,6 +881,7 @@ test("z3 schedule actions + result strip hold at phone width", async ({ page, re
   await addEntrantsViaApi(request, solverDivisionId, ["Ash M", "Brook M", "Clay M", "Dune M"]);
   const { fixtureIds } = await createStageAndGenerate(request, solverDivisionId);
   expect(fixtureIds.length).toBe(6);
+  const { courts: solverCourts } = await seedVenueWithCourts(request, ["Court A", "Court B"]);
   const settings = await apiJson(
     request,
     `/api/v1/divisions/${solverDivisionId}/schedule-settings`,
@@ -889,7 +892,7 @@ test("z3 schedule actions + result strip hold at phone width", async ({ page, re
         startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: ["Court A", "Court B"],
+        courts: solverCourts.map((c) => c.id),
         perEntrantMinRest: 0,
         blackouts: [],
         sessionWindows: [],
@@ -1022,13 +1025,14 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
   // impossible, and a generator change that produced fewer would leave this
   // test measuring a card that never appears.
   expect(capGen.data!.fixtures.length).toBe(28);
+  const { courts: capCourts } = await seedVenueWithCourts(request, ["Court 1"]);
   const capSettings = await apiJson(request, `/api/v1/divisions/${capDivisionId}/schedule-settings`, "PUT", {
     config: {
       startAt: "2026-09-12T00:00:00.000Z",
       endAt: "2026-09-12T23:59:00.000Z",
       matchMinutes: 60,
       gapMinutes: 0,
-      courts: ["Court 1"],
+      courts: [capCourts[0]!.id],
       perEntrantMinRest: 0,
     },
   });
@@ -1083,6 +1087,7 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
     round_no: number;
   };
   const hGen = await apiJson<{ fixtures: HFixture[] }>(request, `/api/v1/stages/${hStageId}/generate`, "POST");
+  const { courts: hCourts } = await seedVenueWithCourts(request, ["Court 1", "Court 2"]);
   await apiJson(request, `/api/v1/divisions/${hDivisionId}/schedule-settings`, "PUT", {
     tz: "UTC",
     config: {
@@ -1090,7 +1095,7 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
       endAt: `${DAY}T23:59:00.000Z`,
       matchMinutes: 60,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 2"],
+      courts: hCourts.map((c) => c.id),
       perEntrantMinRest: 0,
       sessionWindows: [{ from: `${DAY}T09:00:00.000Z`, to: `${DAY}T21:00:00.000Z` }],
     },
@@ -1138,7 +1143,7 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
     return inRound.map((f) => ({
       fixture_id: f.id,
       scheduled_at: at(t),
-      court_label: f.home_entrant_id === h1! || f.away_entrant_id === h1! ? "Court 1" : "Court 2",
+      court_id: f.home_entrant_id === h1! || f.away_entrant_id === h1! ? hCourts[0]!.id : hCourts[1]!.id,
     }));
   });
   const applied = await apiJson(request, `/api/v1/stages/${hStageId}/schedule/apply`, "POST", {
@@ -1636,9 +1641,10 @@ test("P6 task B setup: a 4-way-tied league decides, KO panel has a real tie to r
   );
   expect(koGen.data!.created).toBe(1);
   const koFixtureId = koGen.data!.fixtures[0]!.id;
+  const { courts: p6bCourts } = await seedVenueWithCourts(page.request, [P6B_COURT]);
   const pin = await apiJson(page.request, `/api/v1/fixtures/${koFixtureId}`, "PATCH", {
     scheduled_at: "2030-11-15T14:00:00.000Z",
-    court_label: P6B_COURT,
+    court_id: p6bCourts[0]!.id,
   });
   expect(pin.status).toBeLessThan(300);
 

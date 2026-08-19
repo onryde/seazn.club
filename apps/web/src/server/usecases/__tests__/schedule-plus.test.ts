@@ -12,6 +12,7 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { patchFixture } from "../fixtures";
 import { putScheduleSettings } from "../schedule";
+import { createVenue, createCourt } from "../venues";
 import { PutScheduleSettings } from "@/server/api-v1/schemas";
 import { undoDivision } from "../history";
 import { shiftDivisionSchedule, divisionScheduleReport } from "../schedule-plus";
@@ -97,13 +98,15 @@ describe.skipIf(!HAS_DB)("scheduling constraints v2 (Jul3/04)", () => {
   it("bulk-shift +15m moves all in scope, skips locked, and is undoable (PROMPT-23)", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth);
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
     await patchFixture(auth, fixtures[0]!.id, {
       scheduled_at: at(0),
-      court_label: "C1",
+      court_id: court.id,
     });
     await patchFixture(auth, fixtures[1]!.id, {
       scheduled_at: at(30),
-      court_label: "C1",
+      court_id: court.id,
     });
     await patchFixture(auth, fixtures[1]!.id, { schedule_locked: true });
 
@@ -124,6 +127,44 @@ describe.skipIf(!HAS_DB)("scheduling constraints v2 (Jul3/04)", () => {
     expect(new Date(back!.scheduled_at).toISOString()).toBe(at(0));
   });
 
+  // P9 sweep (pass 3c-4): shiftSchedule's `scope.courts` (report.ts) and its
+  // ledger `moves[].court` (history.ts's undo replay writes it straight back
+  // to `court_id` — see that file's own P9 comment) both expect a real
+  // `courts.id`, matching `toAssignment`'s Assignment.court convention
+  // everywhere else in this engine. court_label is frozen since pass 3a and
+  // patchFixture no longer writes it, so it is NULL on any fixture scheduled
+  // through the normal path — the old read (`f.court_label`) therefore
+  // dropped every such fixture out of `scope.courts` scoping regardless of
+  // what the scope named, since the null-check short-circuits ahead of the
+  // scope comparison (report.ts). Nothing needs to be poisoned to prove
+  // this — a fixture scheduled via `patchFixture` already has court_label
+  // NULL, which is exactly the real post-cutover state.
+  it("bulk-shift scoped to a court id reaches a fixture whose court_label was never written", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures } = await seedDivision(auth);
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const courtA = await createCourt(auth, venue.id, { name: "Court A", sort: 0, tags: [] });
+    const courtB = await createCourt(auth, venue.id, { name: "Court B", sort: 1, tags: [] });
+    await patchFixture(auth, fixtures[0]!.id, { scheduled_at: at(0), court_id: courtA.id });
+    await patchFixture(auth, fixtures[1]!.id, { scheduled_at: at(30), court_id: courtB.id });
+
+    const result = await shiftDivisionSchedule(auth, {
+      division_id: division.id,
+      scope: { courts: [courtA.id], excludeLocked: true },
+      delta_minutes: 15,
+    });
+
+    expect(result.shifted).toBe(1);
+    const [moved] = await sql<{ scheduled_at: string }[]>`
+      select scheduled_at::text as scheduled_at from fixtures where id = ${fixtures[0]!.id}`;
+    expect(new Date(moved!.scheduled_at).toISOString()).toBe(at(15));
+    // Court B was never in scope — unmoved either way, but pins that the
+    // scope filter is genuinely selective, not "everything matches now".
+    const [untouched] = await sql<{ scheduled_at: string }[]>`
+      select scheduled_at::text as scheduled_at from fixtures where id = ${fixtures[1]!.id}`;
+    expect(new Date(untouched!.scheduled_at).toISOString()).toBe(at(30));
+  });
+
   it("wait report surfaces the worst gap", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures, entrants } = await seedDivision(auth);
@@ -132,13 +173,15 @@ describe.skipIf(!HAS_DB)("scheduling constraints v2 (Jul3/04)", () => {
       (f: { home_entrant_id: string | null; away_entrant_id: string | null }) =>
         f.home_entrant_id === entrants[0]!.id || f.away_entrant_id === entrants[0]!.id,
     );
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
     await patchFixture(auth, aGames[0]!.id, {
       scheduled_at: at(0),
-      court_label: "C1",
+      court_id: court.id,
     });
     await patchFixture(auth, aGames[1]!.id, {
       scheduled_at: at(300),
-      court_label: "C1",
+      court_id: court.id,
     });
     const report = await divisionScheduleReport(auth, division.id);
     expect(report.worst[0]).toMatchObject({
@@ -155,12 +198,14 @@ describe.skipIf(!HAS_DB)("scheduling constraints v2 (Jul3/04)", () => {
   it("constraint fields on schedule-settings are open to Community (#382)", async () => {
     const { auth: freeAuth } = await seedOrg("community");
     const { division: freeDiv } = await seedDivision(freeAuth);
+    const venue = await createVenue(freeAuth, { name: "Main", sort: 0 });
+    const court = await createCourt(freeAuth, venue.id, { name: "Court 1", sort: 0, tags: [] });
     const saved = await putScheduleSettings(
       freeAuth,
       freeDiv.id,
       PutScheduleSettings.parse({
         config: {
-          courts: ["Court 1"],
+          courts: [court.id],
           constraints: { crossPersonClash: "hard" },
         },
         tz: "UTC",

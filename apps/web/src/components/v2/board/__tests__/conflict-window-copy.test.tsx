@@ -71,6 +71,8 @@ const board: BoardFixture[] = [
     scheduled_at: "2026-09-01T10:00:00.000Z",
     venue: null,
     court_label: "Court 1",
+    court_id: "crt-1",
+    court_name: "Court 1",
     status: "scheduled",
     schedule_source: "manual",
     schedule_locked: false,

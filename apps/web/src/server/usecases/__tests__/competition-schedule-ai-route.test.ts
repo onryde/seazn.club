@@ -107,6 +107,7 @@ import { createStages, generateStageFixtures } from "../stages";
 import { aiPlanForCompetition } from "../competition-schedule-ai";
 import { aiPlanForDivision, buildSchedulePack } from "../schedule-ai";
 import { aiMarginReport, listAiRuns } from "../ai-runs-admin";
+import { createVenue, createCourt } from "../venues";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { balance, recordPackPurchase, walletIdFor } from "@/lib/credits";
@@ -116,6 +117,36 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const TZ = "Europe/London";
 const MIN = 60_000;
 const T0 = Date.parse("2026-08-01T09:00:00.000Z");
+
+// P9 pass 3b: `ScheduleConfig.courts` is `z.array(CourtId)` (real `courts.id`
+// values) — this whole file's DivSpec DSL was written against the pre-cutover
+// free-text label ("Court 1", "Court 2", …), and many specs deliberately
+// SHARE a label across two divisions (e.g. "Court 2" below) to mean "the same
+// physical court" for divergent/shared-court assertions. Same idiom as
+// competition-schedule-pack.test.ts: resolve (and cache) each label to a REAL
+// court exactly once per org, so a label named twice — in one spec or across
+// two `seedDivision` calls sharing one `auth` — resolves to the SAME row.
+const courtsByOrg = new Map<string, { venueId: string; byName: Map<string, string> }>();
+
+async function courtId(auth: AuthCtx, name: string): Promise<string> {
+  let entry = courtsByOrg.get(auth.orgId);
+  if (!entry) {
+    const venue = await createVenue(auth, { name: "Main venue", sort: 0 });
+    entry = { venueId: venue.id, byName: new Map() };
+    courtsByOrg.set(auth.orgId, entry);
+  }
+  const cached = entry.byName.get(name);
+  if (cached !== undefined) return cached;
+  const court = await createCourt(auth, entry.venueId, { name, sort: entry.byName.size, tags: [] });
+  entry.byName.set(name, court.id);
+  return court.id;
+}
+
+async function courtIds(auth: AuthCtx, names: readonly string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const name of names) out.push(await courtId(auth, name));
+  return out;
+}
 
 function settingsConfig(courts: string[], blackouts: { from: string; to: string }[] = []) {
   return {
@@ -162,7 +193,7 @@ async function seedDivision(
   competitionId: string,
   spec: DivSpec,
 ): Promise<SeededDivision> {
-  const courts = spec.courts ?? ["Court 1", "Court 2"];
+  const courts = await courtIds(auth, spec.courts ?? ["Court 1", "Court 2"]);
   const slug = `${spec.name.toLowerCase()}-${randomUUID().slice(0, 6)}`;
   const division = await createDivision(auth, competitionId, {
     name: spec.name,
@@ -235,7 +266,7 @@ async function seedBigDivision(auth: AuthCtx, competitionId: string, n: number):
   });
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${division.id}, ${sql.json(settingsConfig(["Court 9"]))}, ${TZ}, now())`;
+    values (${division.id}, ${sql.json(settingsConfig(await courtIds(auth, ["Court 9"])))}, ${TZ}, now())`;
   const [stage] = await createStages(auth, division.id, {
     seq: 1,
     kind: "league",
@@ -554,7 +585,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
       {
         name: "Bravo",
         courts: ["Court 3"],
-        rawConfig: { ...settingsConfig(["Court 3"]), matchMinutes: 0 },
+        rawConfig: { ...settingsConfig(await courtIds(auth, ["Court 3"])), matchMinutes: 0 },
       },
     ]);
     await expect(run(auth, competitionId, divisions.map((d) => d.id))).rejects.toMatchObject({
@@ -565,11 +596,21 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
     expect(await balance(walletId)).toBe(before);
   });
 
-  it("a division with NO settings row is plannable on the default court", async () => {
-    // The other direction of the same gate: an absent row parses to
-    // ScheduleConfig's defaults (one "Court 1"), which is the state of every
-    // board before its first settings PUT. Refusing it would 422 half the
-    // product.
+  it("a division with NO settings row is plannable via the org-courts fallback", async () => {
+    // The other direction of the same gate. `loadSettings` parses an absent
+    // row's config as `{}`, and `ScheduleConfig.courts` defaults to `[]` (P9
+    // pass 1 dropped the old free-text "Court 1" default along with the
+    // label-based court model) — so an empty CONFIGURED list is no longer a
+    // literal court to place on. `resolveCandidateCourts` (court-candidates.ts,
+    // P9 pass 3b-FIX) reads an empty configured list as UNCONSTRAINED, not
+    // "no courts", and falls back to every court the ORG has — same reading
+    // `candidateCourts` already gives an empty `required_court_tags`. Bravo
+    // below gets no `schedule_settings` row at all; `courts: ["Court 1"]`
+    // only registers "Court 1" as an ORG court (`seedDivision`'s `courtIds()`
+    // call runs regardless of `noSettings`) for the fallback to pick up —
+    // nothing writes it into Bravo's own (nonexistent) settings row. Refusing
+    // this division outright would 422 half the product — every board before
+    // its first settings PUT.
     const auth = await seedPlusOrg();
     const { competitionId, divisions } = await seedCompetition(auth, "Defaulted", [
       { name: "Alpha", courts: ["Court 3", "Court 4"] },
@@ -579,6 +620,12 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
     const out = await run(auth, competitionId, divisions.map((d) => d.id));
     expect(out.divisions.map((d) => d.name).sort()).toEqual(["Alpha", "Bravo"]);
     expect(out.proposal).toHaveLength(12);
+    // Bravo's own board specifically — not just the joint total — actually
+    // landed via the fallback, on the org court the mocked plan named.
+    const bravo = divisions.find((d) => d.name === "Bravo")!;
+    const mine = out.proposal.filter((p) => p.division_id === bravo.id);
+    expect(mine.map((p) => p.fixture_id).sort()).toEqual([...bravo.fixtureIds].sort());
+    expect(mine.every((p) => p.court_label === bravo.courts[0])).toBe(true);
   });
 
   it("501 summed movable fixtures → 409 AI_PLAN_TOO_LARGE, wallet untouched", async () => {
@@ -990,7 +1037,11 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition results (#350 Task 4)", () => {
     ]);
     parse.mockResolvedValue(planResponse(jointPlan(divisions)));
     const out = await run(auth, competitionId, divisions.map((d) => d.id));
-    expect(out.divergent_courts).toEqual(["Court 1", "Court 3"]);
+    // P9: `courts`/`divergentCourts` are ordered by FIRST APPEARANCE across
+    // divisions (structural — divisions are themselves name/slug ordered), not
+    // by the id string. Sorting uuids is meaningless, and an expectation that
+    // sorted them too agreed with the code only about half the time.
+    expect(out.divergent_courts).toEqual(await courtIds(auth, ["Court 1", "Court 3"]));
   });
 
   it("returns warnings IN FULL — a non-blocking violation is never swallowed (R13)", async () => {

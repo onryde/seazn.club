@@ -14,6 +14,11 @@ import { listStages } from "@/server/usecases/stages";
 import { listDivisionFixturesForBoard } from "@/server/usecases/fixtures";
 import { listEntrants } from "@/server/usecases/entrants";
 import { getScheduleSettings } from "@/server/usecases/schedule";
+// P9 scope item 5: org venues+courts feed the court multi-picker (both the
+// board's inline settings card and the standalone settings tab) plus
+// MovePanel's court-id -> name lookup — see ScheduleBoard's own
+// `courtNamesById` comment.
+import { listVenues } from "@/server/usecases/venues";
 import { hasFeature } from "@/lib/entitlements";
 import { preferredCurrency } from "@/lib/currency-server";
 import { withTenant } from "@/lib/db";
@@ -112,6 +117,7 @@ export default async function DivisionSchedulePage({
     blackouts,
     busy,
     currency,
+    venues,
   ] = await Promise.all([
     getCompetition(auth, division.competition_id),
     listStages(auth, id),
@@ -128,7 +134,26 @@ export default async function DivisionSchedulePage({
     wantsBlackouts ? listOfficialBlackouts(auth) : notLoaded<OfficialBlackoutRow>(),
     wantsOfficials ? listOfficialBusyElsewhere(auth) : notLoaded<OfficialBusyRow>(),
     preferredCurrency(auth.orgId),
+    // Unconditional like `settings`/`stages` above (board AND settings tabs
+    // both need it; not worth a per-tab gate for one cheap query set).
+    // P9: archived INCLUDED deliberately — this list serves two jobs. The
+    // picker filters archived out itself (twice), so selection is unaffected;
+    // but a fixture placed before its court was archived still needs that
+    // court's NAME to render, and without it the board showed a bare uuid.
+    listVenues(auth, { includeArchived: true }),
   ]);
+
+  // P9: the board gets court IDENTITY and display only. `listVenues` rows
+  // carry every court's weekly `hours` and dated `exceptions` — the Directory
+  // calendar editor's data, and P10's lattice input — which the board never
+  // reads and which put this page's five-division RSC payload 33KB over its
+  // budget (board-v3.spec.ts:287). Dropping them here is the fix; the board's
+  // `Venue`/`Court` types no longer declare them, so nothing downstream can
+  // quietly start depending on a calendar that is not sent.
+  const boardVenues = venues.map((v) => ({
+    ...v,
+    courts: v.courts.map(({ hours: _hours, exceptions: _exceptions, ...court }) => court),
+  }));
 
   // Feed wiring for TBD card labels ("Winner of R1·2" — doc 12 §2).
   const feedRows = await withTenant(auth.orgId, (tx) =>
@@ -284,6 +309,7 @@ export default async function DivisionSchedulePage({
               competitionStart={competition.starts_on}
               competitionEnd={competition.ends_on}
               venueCap={venueLabel(division.sport_key)}
+              venues={boardVenues}
               showSettings={false}
               officialsWithBlackout={new Set(blackouts.map((b) => b.official_id)).size}
             />
@@ -362,6 +388,7 @@ export default async function DivisionSchedulePage({
             canEdit={editable}
             constraintsAllowed={constraints}
             venueCap={venueLabel(division.sport_key)}
+            venues={boardVenues}
             orgTz={orgTz}
             // The competition's own dates — already in scope for the board's
             // day range above. The panel's date pickers carry them as
@@ -383,6 +410,10 @@ export default async function DivisionSchedulePage({
           }}
           canEdit={canEdit && !frozen && constraints}
           orgTz={orgTz}
+          // P9 review wave 3, finding #12: same `boardVenues` the board and
+          // settings tabs already get above — resolves the blackout scope
+          // picker's court ids to names instead of the uuids it showed before.
+          venues={boardVenues}
         />
         )}
 

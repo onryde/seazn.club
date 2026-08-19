@@ -17,6 +17,7 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { recomputePlayerStats } from "./player-stats";
 import {
+  courtNamesById,
   divisionFixtures,
   feedDependencies,
   loadSettings,
@@ -27,6 +28,23 @@ import {
   toVerifyConfig,
 } from "./schedule";
 import type { PersonRow } from "./persons";
+
+/**
+ * #14 sibling fix: `RevealedConflicts.conflicts` carries the engine
+ * `Conflict[]` verbatim (see that interface's own comment) and
+ * `withLegacyDetail` derives its prose from `details.courtName ?? details.court`
+ * (conflict-detail-legacy.ts) — `courtName` is "the caller-attached
+ * resolution (never set by the engine)" per that field's own doc comment, so
+ * without this the merge-preview prose fell back to a raw court uuid.
+ * schedule.ts has an identical private `withCourtNames` (unexported, and
+ * that file is out of scope here) — this is the same one-line attach,
+ * duplicated locally rather than widening schedule.ts's exports for it.
+ */
+function attachCourtNames(c: Conflict, courtNames: ReadonlyMap<string, string>): Conflict {
+  if (c.details?.court === undefined) return c;
+  const courtName = courtNames.get(c.details.court);
+  return courtName !== undefined ? { ...c, details: { ...c.details, courtName } } : c;
+}
 
 type Tx = postgres.TransactionSql;
 
@@ -71,7 +89,13 @@ interface PersonFull {
  *  now says about it. */
 export interface RevealedConflicts {
   division_id: string;
-  conflicts: Conflict[];
+  /** Carries the deprecated legacy `detail` sentence too: every producer here
+   *  maps through `withLegacyDetail`, whose return type is `C & { detail?:
+   *  string }`. Declaring the plain engine type understated what actually
+   *  ships — the same "sent but not declared" drift review finding 9 covered
+   *  one layer up, and vitest does not typecheck test files, so a spec reading
+   *  `c.detail` compiled nowhere and passed anyway. */
+  conflicts: (Conflict & { detail?: string })[];
 }
 
 export interface MergeResult {
@@ -302,6 +326,9 @@ async function reverifyBoards(auth: AuthCtx, survivorId: string): Promise<Reveal
         join entrant_members em on em.entrant_id = e.id
        where em.person_id = ${survivorId} and d.status <> 'setup'
        order by d.id`;
+    // #14: one org-wide lookup, reused for every board below — court names
+    // don't vary per board within one org.
+    const courtNames = await courtNamesById(tx);
     const out: RevealedConflicts[] = [];
     for (const board of boards) {
       const settings = await loadSettings(tx, board.id);
@@ -321,8 +348,15 @@ async function reverifyBoards(auth: AuthCtx, survivorId: string): Promise<Reveal
       // Wired the same way `autoSchedule`/`applySchedule` were (`schedule.ts`,
       // the reference implementation).
       const roundRobin = await roundRobinStageIds(tx, board.id);
+      // P9 cutover: `court_id` is the real identity `toAssignment` reads
+      // (schedule.ts) — the frozen `court_label` is never written for a
+      // fixture scheduled after pass 3a, so gating on it here silently
+      // dropped every post-cutover court-scheduled fixture from `assignments`
+      // (found by sweep, no failing test): `reverifyBoards` would then have
+      // nothing to validate and every merge on such a board reported no
+      // conflicts, published or not.
       const assignments = all
-        .filter((f) => f.scheduled_at !== null && f.court_label !== null)
+        .filter((f) => f.scheduled_at !== null && f.court_id !== null)
         .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
       if (assignments.length === 0) continue;
       // Both halves, and both are load-bearing (#462). The assignments put the
@@ -346,8 +380,14 @@ async function reverifyBoards(auth: AuthCtx, survivorId: string): Promise<Reveal
       // `withLegacyDetail` restores the deprecated `detail` string the engine
       // stopped producing (C3, 2026-08-13 design amendment) — `MergeResult`
       // carries `Conflict` verbatim otherwise, same as `AiPlanConflict`.
+      // #14: `attachCourtNames` FIRST — `legacyConflictDetail` (inside
+      // `withLegacyDetail`) reads `details.courtName ?? details.court`, and
+      // `courtName` is only ever caller-attached, never set by the engine.
       if (conflicts.length > 0) {
-        out.push({ division_id: board.id, conflicts: conflicts.map(withLegacyDetail) });
+        out.push({
+          division_id: board.id,
+          conflicts: conflicts.map((c) => withLegacyDetail(attachCourtNames(c, courtNames))),
+        });
       }
     }
     return out;

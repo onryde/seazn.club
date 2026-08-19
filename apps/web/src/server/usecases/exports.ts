@@ -38,6 +38,14 @@ import { participantRows } from "./clubs";
 import { resolveSponsors } from "./sponsors";
 import { getMyOfficiating } from "./me-officiating";
 import { eventRecorderNames, type AuditLedger } from "./fixtures";
+// #14: the ONE court-name disambiguation rule (a bare name is unique only
+// WITHIN its venue — courts_venue_name_active_idx is scoped per venue, so
+// two venues may legally each name one "Court 1"). `courtNamesById` already
+// resolves to the venue-qualified label via `buildCourtDirectory` — reused
+// here rather than selecting the bare `courts.name` column, which is what
+// let the officials rota PDF and the timetable/scoresheet exports show two
+// indistinguishable "Court 1" entries for two different physical courts.
+import { courtNamesById } from "./schedule";
 import { siteOrigin } from "@/lib/site-origin";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
@@ -111,19 +119,30 @@ async function divisionMeta(tx: Tx, divisionId: string): Promise<DivisionMeta> {
  *  court go last — they are the ones nobody can hand to a court yet. The sort
  *  is stable, so within a court the original stage/round order survives, which
  *  is the order play actually happens in. */
-export function groupByCourt<T extends { court_label: string | null }>(
+export function groupByCourt<T extends { court_id: string | null; court_name: string | null }>(
   fixtures: readonly T[],
 ): { fixture: T; startsNewCourt: boolean }[] {
+  // P9: grouping keys on `court_id` (stable identity) while ORDERING by the
+  // display name. Two venues may each hold a "Court 1"; keying the group on the
+  // name would silently merge them into one stack.
   const ordered = [...fixtures].sort((a, b) => {
-    if (a.court_label === b.court_label) return 0;
-    if (a.court_label === null) return 1;
-    if (b.court_label === null) return -1;
-    return a.court_label.localeCompare(b.court_label, undefined, { numeric: true });
+    if (a.court_id === b.court_id) return 0;
+    if (a.court_id === null) return 1;
+    if (b.court_id === null) return -1;
+    // Name first (human order: "Court 2" before "Court 10"), then the id as a
+    // TOTAL tie-break. Without the id, two same-named courts in different
+    // venues compare equal, the sort leaves them interleaved, and their
+    // fixtures never gather into one stack each — the exact merge that keying
+    // on `court_id` exists to prevent.
+    return (
+      (a.court_name ?? "").localeCompare(b.court_name ?? "", undefined, { numeric: true }) ||
+      (a.court_id < b.court_id ? -1 : a.court_id > b.court_id ? 1 : 0)
+    );
   });
   let lastCourt: string | null | undefined;
   return ordered.map((fixture, i) => {
-    const startsNewCourt = i > 0 && fixture.court_label !== lastCourt;
-    lastCourt = fixture.court_label;
+    const startsNewCourt = i > 0 && fixture.court_id !== lastCourt;
+    lastCourt = fixture.court_id;
     return { fixture, startsNewCourt };
   });
 }
@@ -208,7 +227,12 @@ function layerDivisionBranding(
 interface FixtureExportRow {
   id: string;
   scheduled_at: string | null;
-  court_label: string | null;
+  /** P9: the real identity — the frozen `fixtures.court_label` column is
+   *  never read here again. `court_name` is now resolved via the caller's
+   *  `courtNames` map (#14: NOT a raw joined `courts.name` — two venues may
+   *  legally share one bare name, and a plain join can't disambiguate). */
+  court_id: string | null;
+  court_name: string | null;
   round_no: number | null;
   stage_name: string;
   home_label: string | null;
@@ -221,9 +245,13 @@ interface FixtureExportRow {
   status: string;
 }
 
-async function exportFixtures(tx: Tx, divisionId: string): Promise<FixtureExportRow[]> {
-  return tx<FixtureExportRow[]>`
-    select f.id, f.scheduled_at::text as scheduled_at, f.court_label, f.round_no,
+async function exportFixtures(
+  tx: Tx,
+  divisionId: string,
+  courtNames: ReadonlyMap<string, string>,
+): Promise<FixtureExportRow[]> {
+  const rows = await tx<Omit<FixtureExportRow, "court_name">[]>`
+    select f.id, f.scheduled_at::text as scheduled_at, f.court_id, f.round_no,
            s.name as stage_name,
            he.display_name as home_label,
            ae.display_name as away_label,
@@ -240,6 +268,10 @@ async function exportFixtures(tx: Tx, divisionId: string): Promise<FixtureExport
     left join match_states m on m.fixture_id = f.id
     where f.division_id = ${divisionId}
     order by s.seq, f.round_no, f.seq_in_round`;
+  return rows.map((r) => ({
+    ...r,
+    court_name: r.court_id !== null ? (courtNames.get(r.court_id) ?? r.court_id) : null,
+  }));
 }
 
 function toExportFixture(
@@ -251,7 +283,7 @@ function toExportFixture(
   return {
     id: f.id,
     at: f.scheduled_at,
-    court: f.court_label,
+    court: f.court_name,
     stageName: f.stage_name,
     round: f.round_no,
     // A filled side wins; an empty one falls back to its placeholder label,
@@ -312,7 +344,8 @@ export async function buildDivisionDocModel(
 
     switch (kind) {
       case "timetable": {
-        const fixtures = await exportFixtures(tx, divisionId);
+        const courtNames = await courtNamesById(tx);
+        const fixtures = await exportFixtures(tx, divisionId, courtNames);
         return buildTimetable(title, fixtures.map((f) => toExportFixture(f, meta.name, slotLookup)), {
           ...common,
           ...(liveUrl !== undefined ? { liveUrl } : {}),
@@ -398,7 +431,8 @@ export async function buildDivisionDocModel(
       }
       case "scoresheet": {
         const sportModule = resolveModule(meta.sport_key, meta.module_version);
-        const fixtures = await exportFixtures(tx, divisionId);
+        const courtNames = await courtNamesById(tx);
+        const fixtures = await exportFixtures(tx, divisionId, courtNames);
         const sections: DocSection[] = [];
         const undecided = fixtures.filter((x) => x.status !== "decided");
         // per_pitch means "one printed stack per court", so the sheets have to
@@ -429,7 +463,7 @@ export async function buildDivisionDocModel(
             ...(f.home_color !== null ? { homeColor: f.home_color } : {}),
             ...(f.away_color !== null ? { awayColor: f.away_color } : {}),
             ...(f.scheduled_at !== null ? { at: f.scheduled_at } : {}),
-            ...(f.court_label !== null ? { court: f.court_label } : {}),
+            ...(f.court_name !== null ? { court: f.court_name } : {}),
             stageName: f.stage_name,
             ...(opts.blank === true ? { blank: true } : {}),
           };
@@ -440,7 +474,7 @@ export async function buildDivisionDocModel(
             // sport without a bespoke sheet: a generic result form
             sections.push({
               heading: `${homeLabel} vs ${awayLabel}`,
-              subheading: [f.scheduled_at, f.court_label, f.stage_name]
+              subheading: [f.scheduled_at, f.court_name, f.stage_name]
                 .filter((x): x is string => x !== null)
                 .join(" · "),
               formLines: ["Result: ________________", "Notes: ________________"],
@@ -613,9 +647,10 @@ export async function buildCompetitionTimetable(
     const slotLookup = exportLookup(comp.default_locale);
     const divisions = await tx<{ id: string; name: string }[]>`
       select id, name from divisions where competition_id = ${competitionId} order by name`;
+    const courtNames = await courtNamesById(tx);
     const all: ExportFixture[] = [];
     for (const d of divisions) {
-      const fixtures = await exportFixtures(tx, d.id);
+      const fixtures = await exportFixtures(tx, d.id, courtNames);
       all.push(...fixtures.map((f) => toExportFixture(f, d.name, slotLookup)));
     }
     return buildTimetable(comp.name, all, {
@@ -634,7 +669,12 @@ interface OfficialDutyRow {
   official_name: string;
   scheduled_at: string | null;
   venue_tz: string | null;
-  court_label: string | null;
+  /** P9: derived from `courts` via `fixtures.court_id`; the frozen
+   *  `fixtures.court_label` column is not read. #14: `court_name` is
+   *  resolved via the caller's `courtNames` map, not a raw joined
+   *  `courts.name` — two venues may legally share one bare name. */
+  court_id: string | null;
+  court_name: string | null;
   comp_name: string;
   div_name: string;
   role_key: string;
@@ -645,10 +685,14 @@ interface OfficialDutyRow {
   away_slot_label: SlotLabel | null;
 }
 
-async function officialDutyRows(tx: Tx, divisionId: string): Promise<OfficialDutyRow[]> {
-  return tx<OfficialDutyRow[]>`
+async function officialDutyRows(
+  tx: Tx,
+  divisionId: string,
+  courtNames: ReadonlyMap<string, string>,
+): Promise<OfficialDutyRow[]> {
+  const rows = await tx<Omit<OfficialDutyRow, "court_name">[]>`
     select o.id as official_id, o.display_name as official_name,
-           f.scheduled_at::text as scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz, f.court_label,
+           f.scheduled_at::text as scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz, f.court_id,
            c.name as comp_name, d.name as div_name,
            fo.role_key, fo.response,
            h.display_name as home, a.display_name as away,
@@ -665,6 +709,10 @@ async function officialDutyRows(tx: Tx, divisionId: string): Promise<OfficialDut
     where f.division_id = ${divisionId}
       and f.status in ('scheduled', 'in_play')
     order by o.display_name, f.scheduled_at nulls last`;
+  return rows.map((r) => ({
+    ...r,
+    court_name: r.court_id !== null ? (courtNames.get(r.court_id) ?? r.court_id) : null,
+  }));
 }
 
 /** Officials rota for a single division (v12/Task 13): every official with a
@@ -686,13 +734,14 @@ export async function buildOfficialsRotaDoc(
     const meta = await divisionMeta(tx, divisionId);
     const slotLookup = exportLookup(meta.default_locale);
     const branding = layerDivisionBranding(baseBranding, meta);
-    const rows = await officialDutyRows(tx, divisionId);
+    const courtNames = await courtNamesById(tx);
+    const rows = await officialDutyRows(tx, divisionId, courtNames);
     const byOfficial = new Map<string, ExportOfficialSchedule>();
     for (const r of rows) {
       const s = byOfficial.get(r.official_id) ?? { officialName: r.official_name, duties: [] };
       s.duties.push({
         at: fixtureWhen(r.scheduled_at, r.venue_tz),
-        court: r.court_label,
+        court: r.court_name,
         compDivision: `${r.comp_name} · ${r.div_name}`,
         role: r.role_key,
         opponents: `${r.home ?? resolveSlotLabel(r.home_slot_label, slotLookup, "schedule.tbd")} vs ${r.away ?? resolveSlotLabel(r.away_slot_label, slotLookup, "schedule.tbd")}`,
@@ -807,7 +856,7 @@ export async function buildMyRotaDoc(
     const lookup = exportLookup(a.org_default_locale);
     s.duties.push({
       at: fixtureWhen(a.scheduled_at, a.venue_tz),
-      court: a.court_label,
+      court: a.court_name,
       compDivision: `${a.competition_name} · ${a.division_name}`,
       role: a.role_key,
       opponents: `${a.home_name ?? resolveSlotLabel(a.home_slot_label, lookup, "schedule.tbd")} vs ${a.away_name ?? resolveSlotLabel(a.away_slot_label, lookup, "schedule.tbd")}`,

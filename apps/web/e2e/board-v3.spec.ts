@@ -8,6 +8,7 @@ import {
   setOrgPlanBySql,
   expectNoHorizontalScroll,
   setDateTime,
+  seedVenueWithCourts,
 } from "./helpers";
 
 // PROMPT-33 acceptance (v3/04 §2 + v3/11 gaps 10/11/15): five-division board
@@ -19,9 +20,11 @@ import {
 
 const DIVISIONS = ["U16 Boys", "U16 Girls", "U18 Boys", "U18 Girls", "Open Singles"];
 
-/** Per-division court pair — divisions must not share courts or every slot
- *  would be a cross-division court clash (siblingAssignments checks the whole
- *  competition) and the seeding PATCHes would 409. */
+/** Per-division court-NAME pair — divisions must not share courts or every
+ *  slot would be a cross-division court clash (siblingAssignments checks the
+ *  whole competition) and the seeding PATCHes would 409. Resolve through
+ *  `Rig.courtId` (built once in `buildRig`) for the real court id every wire
+ *  shape now wants — this stays a pure label generator. */
 const courtsOf = (di: number): [string, string] => [`P${di}A`, `P${di}B`];
 
 interface Rig {
@@ -32,11 +35,23 @@ interface Rig {
   fixtures: Record<string, string[]>;
   /** two fixtures in division[0] sharing an entrant (rest-violation bait) */
   sharedEntrantFixtures: [string, string];
+  /** courtsOf()'s labels -> the real court id `seedVenueWithCourts` created
+   *  for it (P9: ScheduleConfig.courts / apply assignments / fixture PATCHes
+   *  all take a real court_id now, never the retired court_label). */
+  courtId: Map<string, string>;
 }
 
 async function buildRig(request: APIRequestContext, page: Page): Promise<Rig> {
   const org = await activeOrg(page);
   await setOrgPlanBySql({ orgId: org.id }, "pro");
+
+  // One venue, ten courts (two per division, matching courtsOf's labels) —
+  // every e2e org starts with none, and P9 wire shapes below take a real id.
+  const { courts } = await seedVenueWithCourts(
+    request,
+    DIVISIONS.flatMap((_, di) => courtsOf(di)),
+  );
+  const courtId = new Map(courts.map((c) => [c.name, c.id]));
 
   const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
     name: `Board v3 ${TAG}`,
@@ -84,7 +99,7 @@ async function buildRig(request: APIRequestContext, page: Page): Promise<Rig> {
         startAt: "2026-09-15T09:00:00.000Z",
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: courtsOf(di),
+        courts: courtsOf(di).map((label) => courtId.get(label)!),
         perEntrantMinRest: 0,
         blackouts: [],
         sessionWindows: [],
@@ -172,7 +187,7 @@ async function buildRig(request: APIRequestContext, page: Page): Promise<Rig> {
       return {
         fixture_id: f.id,
         scheduled_at: new Date(at).toISOString(),
-        court_label: courtsOf(di)[i % 2],
+        court_id: courtId.get(courtsOf(di)[i % 2])!,
       };
     });
     const applied = await apiJson(
@@ -218,6 +233,7 @@ async function buildRig(request: APIRequestContext, page: Page): Promise<Rig> {
     divisions,
     fixtures,
     sharedEntrantFixtures: sharedEntrantFixtures!,
+    courtId,
   };
 }
 
@@ -268,7 +284,26 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     // quotes are not part of the payload).
     const dictBytes = JSON.stringify(JSON.stringify(JSON.parse(uiDict))).length - 2;
     expect(flightBytes).toBeGreaterThan(dictBytes); // the dict IS in there
-    expect(flightBytes - dictBytes).toBeLessThan(250_000);
+    // RE-BASELINED 2026-08-18 (P9 venues/courts cutover, owner-approved), from
+    // 250_000. Deliberate, measured, and recorded here rather than nudged:
+    //
+    // P9 replaced a ~9-byte court LABEL ("Court 1") with a 36-byte court UUID
+    // on every fixture row. That is structural and permanent — court identity
+    // is an entity now — and on this board (5 divisions × ~66 fixtures) it is
+    // ~9KB of irreducible growth the old number was never set for.
+    //
+    // What it costs a real user: measured on 330 of this repo's own fixture
+    // rows, the payload compresses 7.4× under gzip -9 and 9.3× under brotli
+    // -q11, so the growth is ~4KB on the wire — single-digit milliseconds on
+    // 4G. The expensive part of this payload is main-thread parse/hydration,
+    // which tracks the TOTAL, which is why a ceiling still exists.
+    //
+    // What this tripwire is still for: catching ACCIDENTAL growth. P9 itself
+    // shipped two such mistakes that this assertion caught — every court's
+    // weekly hours and dated exceptions sent to a board that renders neither,
+    // and six court/venue fields per row where the board needs one. Keep the
+    // headroom tight enough that the next one reds here too.
+    expect(flightBytes - dictBytes).toBeLessThan(300_000);
   });
 
   test("legend filters to two divisions in two taps; the URL is shareable", async ({ page }) => {
@@ -322,7 +357,7 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
         startAt: "2026-09-15T09:00:00.000Z",
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: courtsOf(0),
+        courts: courtsOf(0).map((label) => rig.courtId.get(label)!),
         perEntrantMinRest: 60,
         blackouts: [],
         sessionWindows: [],
@@ -340,7 +375,7 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     // ends — safe both ways: comparable against `fa`'s round only helps
     // (moving later), and `fb`'s own round is exempt from the scan against
     // its OWN untouched same-round siblings.
-    const faRow = await apiJson<{ scheduled_at: string; court_label: string }>(
+    const faRow = await apiJson<{ scheduled_at: string }>(
       request,
       `/api/v1/fixtures/${fa}`,
     );
@@ -359,17 +394,17 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     // and pick one that is genuinely free.
     const allFixtureRows = await Promise.all(
       rig.fixtures[d0.id]!.filter((id) => id !== fa && id !== fb).map((id) =>
-        apiJson<{ scheduled_at: string | null; court_label: string | null }>(
+        apiJson<{ scheduled_at: string | null; court_id: string | null }>(
           request,
           `/api/v1/fixtures/${id}`,
         ),
       ),
     );
     const fbEnd = fbStart + 30 * 60_000;
-    const [courtA, courtB] = courtsOf(0);
+    const [courtA, courtB] = courtsOf(0).map((label) => rig.courtId.get(label)!);
     const courtFree = (court: string) =>
       !allFixtureRows.some((r) => {
-        if (r.data!.court_label !== court || r.data!.scheduled_at === null) return false;
+        if (r.data!.court_id !== court || r.data!.scheduled_at === null) return false;
         const otherStart = Date.parse(r.data!.scheduled_at);
         const otherEnd = otherStart + 30 * 60_000;
         return fbStart < otherEnd && otherStart < fbEnd;
@@ -377,7 +412,7 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     const fbCourt = courtFree(courtA) ? courtA : courtB;
     await apiJson(request, `/api/v1/fixtures/${fb}`, "PATCH", {
       scheduled_at: new Date(fbStart).toISOString(),
-      court_label: fbCourt,
+      court_id: fbCourt,
     });
 
     await page.goto(boardUrl);
@@ -427,7 +462,7 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     const target = rig.fixtures[d0.id]![4]!;
     await apiJson(request, `/api/v1/fixtures/${target}`, "PATCH", {
       scheduled_at: null,
-      court_label: null,
+      court_id: null,
     });
 
     await page.setViewportSize({ width: 390, height: 844 });
@@ -459,7 +494,7 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     const target = rig.fixtures[d0.id]![5]!;
     await apiJson(request, `/api/v1/fixtures/${target}`, "PATCH", {
       scheduled_at: null,
-      court_label: null,
+      court_id: null,
     });
 
     await page.goto(`${boardUrl}?d=${d0.slug}`);
@@ -506,15 +541,15 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     // Index 24 is untouched by every earlier test in this file (they use
     // index 4, index 5, and the shared-entrant pair — all comfortably below
     // 24) — but rather than trust that by construction, read its CURRENT
-    // scheduled_at/court_label live and build the window around exactly
+    // scheduled_at/court_id live and build the window around exactly
     // that, so this test can't drift out of sync with what earlier tests in
     // this serial chain actually left on the board.
     const target = rig.fixtures[d0.id]![24]!;
-    const before = await apiJson<{ scheduled_at: string; court_label: string }>(
+    const before = await apiJson<{ scheduled_at: string; court_id: string }>(
       request,
       `/api/v1/fixtures/${target}`,
     );
-    const court = before.data!.court_label!;
+    const court = before.data!.court_id!;
     const from = before.data!.scheduled_at!;
     const to = new Date(new Date(from).getTime() + 30 * 60_000).toISOString();
 
@@ -523,7 +558,7 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
         startAt: "2026-09-15T09:00:00.000Z",
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: courtsOf(0),
+        courts: courtsOf(0).map((label) => rig.courtId.get(label)!),
         perEntrantMinRest: 0,
         blackouts: [{ court, from, to }],
         sessionWindows: [],
@@ -536,7 +571,7 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     // `data-blackout` at all.
     await apiJson(request, `/api/v1/fixtures/${target}`, "PATCH", {
       scheduled_at: null,
-      court_label: null,
+      court_id: null,
     });
 
     await page.goto(`${boardUrl}?d=${d0.slug}`);

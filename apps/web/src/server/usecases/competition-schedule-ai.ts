@@ -23,9 +23,13 @@ import "server-only";
 //     filter cannot tell "division B's fixture re-served to me" from "excluded
 //     division C happens to sit on the same court at the same instant", and
 //     deleting the second is deleting a hard constraint with no trace.
-//   * courts are matched across divisions by LABEL and nothing else, so the
-//     pack names the labels that do not appear in every selected division
-//     (`divergentCourts`) for the board to warn on.
+//   * courts are matched across divisions by simple string equality — safe
+//     since P9: `PackSettings.courts` has carried each division's real,
+//     org-wide-unique `courts.id` values since pass 1 (never an
+//     organiser-typed label two DIFFERENT physical courts could collide on),
+//     so an equal string now IS the same court. The pack names the ids that
+//     do not appear in every selected division (`divergentCourts`) for the
+//     board to warn on.
 //   * the shared-player map is rebuilt over the whole run. A per-division map
 //     keeps only persons in >= 2 of ITS OWN entrants, so someone in one entrant
 //     of A and one of B is in neither — invisible to a union of the two. H4
@@ -68,6 +72,7 @@ import {
   planIsAcceptable,
   personKeyResolver,
   planRungs,
+  resolveModelCourtLabels,
   runLadder,
   schedulingAiModel,
   toRuleFixture,
@@ -79,6 +84,7 @@ import {
   DEFAULT_SESSION_HOURS,
   type PackEntrant,
   type PackFixture,
+  type PackCourtInfo,
   type PackObstacle,
   type PackPerson,
   type PackSettings,
@@ -302,11 +308,12 @@ export interface CompetitionPack {
   sessionHours: { start: string; end: string };
   /** Sorted by name, then slug. */
   divisions: CompetitionPackDivision[];
-  /** Union of every selected division's court labels, sorted. */
+  /** Union of every selected division's court ids (real `courts.id` values,
+   *  P9), sorted. */
   courts: string[];
-  /** Court labels that do NOT appear in every selected division — the board
-   *  warns on these, because cross-division court identity is a string match
-   *  and nothing else. */
+  /** Court ids that do NOT appear in every selected division — the board
+   *  warns on these, so an organiser sees the run does not offer every
+   *  division the same physical courts. */
   divergentCourts: string[];
   entrants: (PackEntrant & { division_id: string })[];
   people: PackPerson[];
@@ -372,15 +379,40 @@ export interface CompetitionPack {
  * joint pack is several boards: the run is capped at 500 movable fixtures
  * across every division against the same 60,000-token ceiling, so the pack that
  * exactly fills the cap is the one that fails first. Send
- * `toJointModelPayload(pack)` — never `pack`.
+ * `toJointModelPayload(pack, courtDirectory)` — never `pack`.
  *
  * Written field-by-field rather than as a rest-spread on purpose: the return
  * type makes `tsc` fail HERE the moment `CompetitionPack` gains a field, so
  * what reaches the model is always a decision somebody made, never a default.
+ *
+ * P9 pass 3d: also the joint twin of `toModelPayload`'s relabelling — every
+ * court-shaped field (the top-level `courts`/`divergentCourts` union, each
+ * division's OWN `settings.courts`/`settings.blackouts[].court`, a movable
+ * fixture's `current.court`, an obstacle's `court`, and `court_label` on the
+ * draft and any prior proposal) is relabelled from the real id `pack` carries
+ * throughout to a human-readable name, via `courtDirectory`. `courtDetails`
+ * is new: venue + tags for every court this run might show, something the
+ * model had no way to see before this pass. Every OTHER consumer of `pack`
+ * (`jointStructuralCheck`, `toJointEngineAssignments`, `verifyConfigFor`,
+ * `jointSolverConfig`, `courtsAreOwned`, apply) reads `pack` directly, never
+ * this function's output, and keeps comparing ids unchanged. The model's own
+ * answer is resolved back to ids immediately in `runCompetitionAiPlan`,
+ * before any of those run.
  */
 export function toJointModelPayload(
   pack: CompetitionPack,
-): Omit<CompetitionPack, "participants" | "assumptions" | "poolIds" | "stageIds" | "roundNos"> {
+  /** id -> display info, from the SAME `buildCompetitionPack` call that
+   *  built `pack`. Defaults to empty — see `toModelPayload` (schedule-ai.ts)
+   *  for why that is a safe, behaviour-preserving default. */
+  // P9 pass 3d: REQUIRED, not defaulted. With a default of `{}` every label
+  // silently fell back to the court's UUID — which is the exact regression
+  // this function exists to prevent — and a caller that forgot it compiled
+  // clean. Callers that genuinely want no directory pass `{}` on purpose.
+  courtDirectory: Record<string, PackCourtInfo>,
+): Omit<CompetitionPack, "participants" | "assumptions" | "poolIds" | "stageIds" | "roundNos"> & {
+  courtDetails: { label: string; venue: string; tags: string[] }[];
+} {
+  const label = (id: string): string => courtDirectory[id]?.label ?? id;
   return {
     mode: pack.mode,
     competition: pack.competition,
@@ -391,15 +423,44 @@ export function toJointModelPayload(
     sessionHours: pack.sessionHours,
     // #398: the compiled instruction IS prompt material.
     parsed: pack.parsed,
-    divisions: pack.divisions,
-    courts: pack.courts,
-    divergentCourts: pack.divergentCourts,
+    divisions: pack.divisions.map((d) => ({
+      ...d,
+      settings: {
+        ...d.settings,
+        courts: d.settings.courts.map(label),
+        blackouts: d.settings.blackouts.map((b) => ({
+          ...b,
+          ...(b.court !== undefined ? { court: label(b.court) } : {}),
+        })),
+      },
+    })),
+    courts: pack.courts.map(label),
+    divergentCourts: pack.divergentCourts.map(label),
+    // P9 pass 3d: venue + tags for every court this run might show — the
+    // union `pack.courts` already carries, same set `courts` (top-level)
+    // is built from.
+    courtDetails: pack.courts.map((id) => ({
+      label: label(id),
+      venue: courtDirectory[id]?.venue ?? "",
+      tags: courtDirectory[id]?.tags ?? [],
+    })),
     entrants: pack.entrants,
     people: pack.people,
-    fixtures: pack.fixtures,
-    draft: pack.draft,
+    fixtures: {
+      movable: pack.fixtures.movable.map((f) => ({
+        ...f,
+        current: { ...f.current, court: f.current.court !== null ? label(f.current.court) : null },
+      })),
+      obstacles: pack.fixtures.obstacles.map((o) => ({ ...o, court: label(o.court) })),
+    },
+    draft: pack.draft.map((d) => ({ ...d, court_label: label(d.court_label) })),
     instruction: pack.instruction,
-    prior: pack.prior,
+    prior: pack.prior
+      ? {
+          ...pack.prior,
+          assignments: pack.prior.assignments.map((a) => ({ ...a, court_label: label(a.court_label) })),
+        }
+      : null,
   };
 }
 
@@ -446,7 +507,16 @@ export async function buildCompetitionPack(
   competitionId: string,
   divisionIds: string[],
   opts: BuildCompetitionPackOptions,
-): Promise<{ pack: CompetitionPack; movableIds: Set<string> }> {
+): Promise<{
+  pack: CompetitionPack;
+  movableIds: Set<string>;
+  /** P9 pass 3d — the joint twin of `BuildPackOptions`' return (schedule-
+   *  ai.ts). Merged from every division's own `buildSchedulePack` call:
+   *  each already queries the WHOLE org's courts, so the maps are identical
+   *  in practice, but merging (rather than taking `built[0]`) costs nothing
+   *  and does not assume that. */
+  courtDirectory: Record<string, PackCourtInfo>;
+}> {
   const requested = [...new Set(divisionIds)];
   if (requested.length === 0) {
     throw new HttpError(400, "no divisions selected", "AI_PLAN_NO_DIVISIONS");
@@ -485,12 +555,17 @@ export async function buildCompetitionPack(
     // deliberately excluded: their current placements are exactly what is being
     // re-planned, and constraining against them would pin the schedule to where
     // it already is.
+    // P9 pass 3b: `court_id`, not the legacy `court_label` — the latter is
+    // frozen and null on every fixture scheduled since the cutover, which
+    // silently dropped every real fixed placement from the run's own
+    // "already occupying a court" set (every OTHER division's greedy draft
+    // would then double-book straight through it).
     const fixedRows = await tx<
       {
         id: string;
         division_id: string;
         scheduled_at: string | Date;
-        court_label: string;
+        court_id: string;
         home_entrant_id: string | null;
         away_entrant_id: string | null;
         round_no: number;
@@ -499,7 +574,7 @@ export async function buildCompetitionPack(
         config: unknown;
       }[]
     >`
-      select f.id, f.division_id, f.scheduled_at, f.court_label,
+      select f.id, f.division_id, f.scheduled_at, f.court_id,
              f.home_entrant_id, f.away_entrant_id, f.round_no, f.seq_in_round, f.ext_key,
              s.config
       from fixtures f
@@ -507,7 +582,7 @@ export async function buildCompetitionPack(
       where f.division_id in ${tx(requested)}
         and f.status in ${tx(FIXED_OCCUPYING)}
         and f.scheduled_at is not null
-        and f.court_label is not null`;
+        and f.court_id is not null`;
     // …and the run's PEOPLE, entrant by entrant, over every entrant named on any
     // of its fixtures.
     //
@@ -624,7 +699,7 @@ export async function buildCompetitionPack(
       const startAt = new Date(r.scheduled_at).getTime();
       return {
         fixtureId: r.id,
-        court: r.court_label,
+        court: r.court_id,
         startAt,
         endAt: startAt + (fixedMinutes.get(r.division_id) ?? 0) * MS_PER_MIN,
         entrants: [r.home_entrant_id, r.away_entrant_id].filter((e): e is string => e !== null),
@@ -667,7 +742,12 @@ export async function buildCompetitionPack(
   // draft is free of cross-division court clashes rather than N
   // independently-legal boards stacked on top of each other. See the module
   // header on why this is a legality hint only.
-  const built: { id: string; pack: SchedulePack; movableIds: Set<string> }[] = [];
+  const built: {
+    id: string;
+    pack: SchedulePack;
+    movableIds: Set<string>;
+    courtDirectory: Record<string, PackCourtInfo>;
+  }[] = [];
   const drafted: Assignment[] = [];
   /** #396 participants, accumulated division by division as each one is built —
    *  the feed-forward below needs the division's map before the next division
@@ -687,7 +767,7 @@ export async function buildCompetitionPack(
             })),
         }
       : undefined;
-    let one: { pack: SchedulePack; movableIds: Set<string> };
+    let one: { pack: SchedulePack; movableIds: Set<string>; courtDirectory: Record<string, PackCourtInfo> };
     try {
       one = await buildSchedulePack(auth, id, {
         mode: opts.mode,
@@ -741,7 +821,7 @@ export async function buildCompetitionPack(
       }
       throw err;
     }
-    built.push({ id, pack: one.pack, movableIds: one.movableIds });
+    built.push({ id, pack: one.pack, movableIds: one.movableIds, courtDirectory: one.courtDirectory });
 
     // #396: who could stand in each of this division's fixtures — the advancers
     // behind a null slot included — resolved against the WHOLE run's identity
@@ -864,10 +944,38 @@ export async function buildCompetitionPack(
     ),
   };
 
-  // Courts: a label is THE SAME COURT across divisions iff the string matches.
+  // Courts: `b.pack.settings.courts` is each division's OWN already-filtered
+  // candidate set (buildSchedulePack's own resolveCandidateCourts call), so
+  // an id equal across divisions IS the same physical court.
   const courtSets = built.map((b) => new Set(b.pack.settings.courts));
-  const courts = [...new Set(built.flatMap((b) => b.pack.settings.courts))].sort(cmp);
+  // P9: court ids are UUIDs minted per org, so sorting them lexicographically
+  // orders the list differently for two identically-seeded competitions — the
+  // same defect `byDivision` above already calls out ("Never the UUID"). Order
+  // by FIRST APPEARANCE across divisions instead: `built` is already in
+  // division name/slug order and each division's `settings.courts` is its own
+  // organiser-authored candidate order, so this is structural and reproduces
+  // across seeds.
+  const courtOrder = new Map<string, number>();
+  for (const b of built) {
+    for (const id of b.pack.settings.courts) {
+      if (!courtOrder.has(id)) courtOrder.set(id, courtOrder.size);
+    }
+  }
+  const courtRank = (id: string | null): number =>
+    id === null ? Number.MAX_SAFE_INTEGER : (courtOrder.get(id) ?? Number.MAX_SAFE_INTEGER - 1);
+  const courts = [...new Set(built.flatMap((b) => b.pack.settings.courts))].sort(
+    (a, b) => courtRank(a) - courtRank(b),
+  );
   const divergentCourts = courts.filter((c) => !courtSets.every((s) => s.has(c)));
+
+  // P9 pass 3d: merge every division's own courtDirectory (id -> {label,
+  // venue, tags}) into one joint map — each already queried the WHOLE org's
+  // courts (schedule-ai.ts's buildSchedulePack), so in practice these are
+  // identical, but a plain merge costs nothing and does not lean on that.
+  const courtDirectory: Record<string, PackCourtInfo> = Object.assign(
+    {},
+    ...built.map((b) => b.courtDirectory),
+  );
 
   const movable: CompetitionPackFixture[] = built
     .flatMap((b) => b.pack.fixtures.movable.map((f) => ({ ...f, division_id: b.id })))
@@ -941,6 +1049,13 @@ export async function buildCompetitionPack(
       // the joint path needs it as much as the single-division one, or a whole
       // competition is scheduled ignoring a brief nobody is told was dropped.
       parseFailed: opts.parseFailed === true,
+      // P9 pass 3d: name -> id over the JOINT candidate set (`courts`, the
+      // union just above) — the single-division twin of this call
+      // (schedule-ai.ts) narrows to one division's candidates for the same
+      // reason: an instruction naming a court excluded from every selected
+      // division must defer, not compile against a court `pack.courts`
+      // does not carry.
+      courts: new Map(courts.map((id) => [courtDirectory[id]?.label ?? id, id] as const)),
     });
   if (resolved.windowMs !== null) {
     window.start = zonedIso(resolved.windowMs.from, orgTz);
@@ -1005,7 +1120,14 @@ export async function buildCompetitionPack(
     })
     .sort(
       (a, b) =>
-        cmp(a.court, b.court) ||
+        // #14 sibling fix: was `cmp(a.court, b.court)` — a raw court uuid,
+        // freshly minted per seed, so that sort was a fresh permutation on
+        // every reseed (identical defect to the single-division path's own
+        // `courtOrderKey` fix, schedule-ai.ts). `courtRank` (defined above,
+        // already used for `draft` ordering for the exact same reason) is
+        // the joint-scope structural order instead: reproducible across two
+        // identically-seeded competitions.
+        courtRank(a.court) - courtRank(b.court) ||
         ms(a.from) - ms(b.from) ||
         ms(a.to) - ms(b.to) ||
         cmp(a.label, b.label),
@@ -1033,7 +1155,9 @@ export async function buildCompetitionPack(
     b: CompetitionPackDraftAssignment,
   ): number =>
     byJointTime(a, b) ||
-    cmp(a.court_label, b.court_label) ||
+    // P9: `court_label` carries a court UUID now; ranking by the structural
+    // court order keeps two identically-seeded competitions byte-identical.
+    courtRank(a.court_label) - courtRank(b.court_label) ||
     byDivision(a.division_id, b.division_id) ||
     cmp(a.fixture_id, b.fixture_id);
 
@@ -1126,7 +1250,7 @@ export async function buildCompetitionPack(
     prior,
   };
 
-  return { pack, movableIds };
+  return { pack, movableIds, courtDirectory };
 }
 
 // ===========================================================================
@@ -1974,6 +2098,11 @@ export async function runCompetitionAiPlan(
   modelOverride?: string,
   providerName?: ProviderName,
   meter: TokenMeter = unmeteredTokenMeter(),
+  /** P9 pass 3d, appended rather than inserted so no positional caller
+   *  shifts. Same directory `buildCompetitionPack` returned alongside
+   *  `pack` — see `toJointModelPayload` and `resolveModelCourtLabels`
+   *  (schedule-ai.ts). Defaults to empty. */
+  courtDirectory: Record<string, PackCourtInfo> = {},
 ): Promise<CompetitionPlanResult> {
   const provider = providerName ? resolveProvider(providerName) : selectProvider();
   if (!provider.isConfigured()) {
@@ -1981,11 +2110,15 @@ export async function runCompetitionAiPlan(
   }
   const model = modelOverride ?? schedulingAiModel();
 
-  // `toJointModelPayload(pack)`, never `pack`: `participants` and `assumptions`
-  // are server-side enforcement inputs and would blow the token budget.
+  // `toJointModelPayload(pack, courtDirectory)`, never `pack`: `participants`
+  // and `assumptions` are server-side enforcement inputs and would blow the
+  // token budget.
   const conversation: AiTurn[] = [
-    { role: "user", content: JSON.stringify(toJointModelPayload(pack)) },
+    { role: "user", content: JSON.stringify(toJointModelPayload(pack, courtDirectory)) },
   ];
+  // P9 pass 3d: label -> id, for resolving the model's own court_label back
+  // the moment each round answers — see the `plan` derivation below.
+  const labelToId = new Map(Object.entries(courtDirectory).map(([id, c]) => [c.label, id] as const));
   const divisionByFixture = new Map(pack.fixtures.movable.map((f) => [f.id, f.division_id]));
   /** Same invariant as toJointEngineAssignments, and for the same reason: a
    *  proposal entry with an empty division_id is a valid-looking lie that the
@@ -2101,7 +2234,11 @@ export async function runCompetitionAiPlan(
       );
     }
 
-    const plan = response?.parsed ?? null;
+    // P9 pass 3d: resolve the model's court_label (a label) back to the real
+    // id BEFORE anything below reads it — jointStructuralCheck,
+    // toJointEngineAssignments and the diff all compare against `pack`'s own
+    // id-based fields.
+    const plan = response?.parsed ? resolveModelCourtLabels(response.parsed, labelToId) : null;
     const structuralError =
       plan === null ? "the model returned no parseable plan" : jointStructuralCheck(plan, movableIds, pack);
     if (structuralError !== null) {
@@ -2276,10 +2413,13 @@ export async function runCompetitionAiPlanLadder(
   pack: CompetitionPack,
   movableIds: Set<string>,
   meter: TokenMeter,
+  /** P9 pass 3d — threaded straight through to every rung's
+   *  `runCompetitionAiPlan` call. Defaults to empty. */
+  courtDirectory: Record<string, PackCourtInfo> = {},
 ): Promise<CompetitionPlanResult & { served_model: string; escalated_from?: string; rungs_tried: string[] }> {
   return runLadder(
     planRungs(),
-    (rung) => runCompetitionAiPlan(pack, movableIds, rung.model, rung.provider, meter),
+    (rung) => runCompetitionAiPlan(pack, movableIds, rung.model, rung.provider, meter, courtDirectory),
     (result) => planIsAcceptable(result, movableIds.size),
     () => !meter.stoppedOnBudget,
   );
@@ -2344,8 +2484,10 @@ export interface AiCompetitionPlanRequest {
 export interface AiCompetitionPlanResponse
   extends Omit<CompetitionPlanResult, "usage" | "constraint_suggestions">,
     Omit<RunMeterStamp, "divisions"> {
-  /** Court labels not shared by every solved division — same-named courts are
-   *  the SAME court and differently-named ones are not, so the board warns. */
+  /** Court ids (real `courts.id` values, P9) not shared by every solved
+   *  division, so the board can warn on them. NOT display-ready — a
+   *  consumer must resolve each id to a court name before rendering it;
+   *  never render a bare uuid. */
   divergent_courts: string[];
   /**
    * One row per SOLVED division, in pack order: what it is AND what it cost.
@@ -2813,7 +2955,7 @@ async function planForCompetition(
       : undefined;
 
   // The summed 500-fixture cap lives in here — still before any reserve.
-  const { pack, movableIds } = await buildCompetitionPack(auth, competitionId, kept, {
+  const { pack, movableIds, courtDirectory } = await buildCompetitionPack(auth, competitionId, kept, {
     mode: input.mode,
     instruction: input.instruction,
     raw: parse.raw,
@@ -2874,7 +3016,7 @@ async function planForCompetition(
           aiRunId: crypto.randomUUID(),
           // The LADDER, not the single-model runner: production wants the
           // fallback chain, and the two names differ by one word.
-          result: await runCompetitionAiPlanLadder(pack, movableIds, meter),
+          result: await runCompetitionAiPlanLadder(pack, movableIds, meter, courtDirectory),
         };
       },
       // …and un-consumed again if the ladder throws — the joint run is the most

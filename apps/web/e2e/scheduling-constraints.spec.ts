@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import { TAG, apiJson, addEntrantsViaApi, divisionPath } from "./helpers";
+import { TAG, apiJson, addEntrantsViaApi, divisionPath, seedVenueWithCourts } from "./helpers";
 
 /**
  * The scheduling rules an organiser STORES, proven on the board (#452).
@@ -66,7 +66,12 @@ async function seedDivision(
     entrants: string[];
     stage: { kind: string; name: string; config?: Record<string, unknown> };
   },
-): Promise<{ divisionId: string; stageId: string; fixtures: FixtureRow[] }> {
+): Promise<{
+  divisionId: string;
+  stageId: string;
+  fixtures: FixtureRow[];
+  courts: { id: string; name: string }[];
+}> {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
     name: `Constraints ${TAG}-${rand()}`,
     visibility: "private",
@@ -84,6 +89,7 @@ async function seedDivision(
   );
   const divisionId = div.data!.id;
   await addEntrantsViaApi(request, divisionId, opts.entrants);
+  const { courts } = await seedVenueWithCourts(request, ["Court A", "Court B"]);
   const stage = await apiJson<{ id: string }>(
     request,
     `/api/v1/divisions/${divisionId}/stages`,
@@ -97,7 +103,7 @@ async function seedDivision(
     "POST",
   );
   expect(gen.status).toBeLessThan(300);
-  return { divisionId, stageId, fixtures: gen.data?.fixtures ?? [] };
+  return { divisionId, stageId, fixtures: gen.data?.fixtures ?? [], courts };
 }
 
 /**
@@ -111,6 +117,7 @@ async function seedDivision(
 async function putSettings(
   request: APIRequestContext,
   divisionId: string,
+  courts: { id: string; name: string }[],
   constraints: Record<string, unknown>,
 ): Promise<void> {
   const res = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
@@ -119,7 +126,7 @@ async function putSettings(
       startAt: new Date(START).toISOString(),
       matchMinutes: MATCH_MINUTES,
       gapMinutes: 0,
-      courts: ["Court A", "Court B"],
+      courts: courts.map((c) => c.id),
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -138,6 +145,7 @@ async function placeBackToBack(
   request: APIRequestContext,
   stageId: string,
   pair: [FixtureRow, FixtureRow],
+  courts: { id: string; name: string }[],
 ): Promise<void> {
   const res = await apiJson<{ applied: number }>(
     request,
@@ -148,12 +156,12 @@ async function placeBackToBack(
         {
           fixture_id: pair[0].id,
           scheduled_at: new Date(START).toISOString(),
-          court_label: "Court A",
+          court_id: courts[0]!.id,
         },
         {
           fixture_id: pair[1].id,
           scheduled_at: new Date(START + MATCH_MINUTES * MIN).toISOString(),
-          court_label: "Court B",
+          court_id: courts[1]!.id,
         },
       ],
       source: "manual",
@@ -206,7 +214,7 @@ test("a durable min_rest_minutes rule the API stored binds on the board — and 
   page,
   request,
 }) => {
-  const { divisionId, stageId, fixtures } = await seedDivision(request, {
+  const { divisionId, stageId, fixtures, courts } = await seedDivision(request, {
     entrants: ["Ada", "Bay", "Cy", "Dot"],
     stage: { kind: "league", name: "League" },
   });
@@ -217,8 +225,8 @@ test("a durable min_rest_minutes rule the API stored binds on the board — and 
   // Same board, same zero rest between the same two cards. If this half shows
   // a conflict then the board has some other reason to complain and direction
   // 2 proves nothing about the rule.
-  await putSettings(request, divisionId, { hard: [] });
-  await placeBackToBack(request, stageId, pair);
+  await putSettings(request, divisionId, courts, { hard: [] });
+  await placeBackToBack(request, stageId, pair, courts);
   await openBoard(page, divisionId, "Ada");
   await expect(badge(page)).toHaveCount(0);
 
@@ -229,7 +237,7 @@ test("a durable min_rest_minutes rule the API stored binds on the board — and 
   // `perEntrantMinRest` produces. That is exactly why direction 1 has to pin
   // `perEntrantMinRest: 0`: it is what makes the row unambiguously the stored
   // rule's doing.
-  await putSettings(request, divisionId, {
+  await putSettings(request, divisionId, courts, {
     hard: [
       {
         type: "min_rest_minutes",
@@ -295,7 +303,7 @@ test("a universal daily cap counts each entrant, not the whole day", async ({ pa
   // which on a 60-player event caps the whole day at one match. That is the
   // misreading PARSER_PROMPT rule 8 was written to prevent, and this test is
   // what makes the fix visible to an organiser rather than only to a unit test.
-  const { divisionId, stageId, fixtures } = await seedDivision(request, {
+  const { divisionId, stageId, fixtures, courts } = await seedDivision(request, {
     entrants: ["Ada", "Bay", "Cy", "Dot"],
     stage: { kind: "league", name: "League" },
   });
@@ -305,10 +313,10 @@ test("a universal daily cap counts each entrant, not the whole day", async ({ pa
 
   // ---- Direction 1: cap each entrant at one a day. ------------------------
   // Nobody plays twice, so nobody is over. A clean board.
-  await putSettings(request, divisionId, {
+  await putSettings(request, divisionId, courts, {
     hard: [{ type: "max_fixtures_per_day", count: 1, scope: { kind: "every_entrant" } }],
   });
-  await placeBackToBack(request, stageId, pair);
+  await placeBackToBack(request, stageId, pair, courts);
   await openBoard(page, divisionId, "Ada");
   await expect(badge(page)).toHaveCount(0);
 
@@ -316,7 +324,7 @@ test("a universal daily cap counts each entrant, not the whole day", async ({ pa
   // Same board, same number, nothing else changed — and now two fixtures share
   // one day against a cap of one, so it breaches. If this half were also clean
   // the cap would simply not be binding and direction 1 would prove nothing.
-  await putSettings(request, divisionId, {
+  await putSettings(request, divisionId, courts, {
     hard: [{ type: "max_fixtures_per_day", count: 1, scope: { kind: "competition" } }],
   });
   await openBoard(page, divisionId, "Ada");
@@ -347,7 +355,7 @@ test("a pool-targeted restByGroup binds the pool it names, and no other (#446)",
   // (stages.ts `poolCount`), and `pool_id` is precisely what #446 was about:
   // the placer carried it, the Assignment handed to the verifier did not, so a
   // pool-keyed rule bound during placement and evaporated during verification.
-  const { divisionId, stageId, fixtures } = await seedDivision(request, {
+  const { divisionId, stageId, fixtures, courts } = await seedDivision(request, {
     entrants: ["Ada", "Bay", "Cy", "Dot", "Eve", "Fay"],
     stage: { kind: "group", name: "Groups", config: { pools: { count: 2 } } },
   });
@@ -367,13 +375,13 @@ test("a pool-targeted restByGroup binds the pool it names, and no other (#446)",
   // is the only control that distinguishes "the pool key was matched" from
   // "any restByGroup entry raises rest for everybody" — which is what a
   // dropped `poolId` would look like if the fallback happened to hit.
-  await putSettings(request, divisionId, { restByGroup: { [poolB]: REST_MINUTES } });
-  await placeBackToBack(request, stageId, pair);
+  await putSettings(request, divisionId, courts, { restByGroup: { [poolB]: REST_MINUTES } });
+  await placeBackToBack(request, stageId, pair, courts);
   await openBoard(page, divisionId, "Ada");
   await expect(badge(page)).toHaveCount(0);
 
   // ---- Direction 2: re-key the SAME value onto this pair's pool. ----------
-  await putSettings(request, divisionId, { restByGroup: { [poolA]: REST_MINUTES } });
+  await putSettings(request, divisionId, courts, { restByGroup: { [poolA]: REST_MINUTES } });
   await openBoard(page, divisionId, "Ada");
   await expect(badge(page)).toBeVisible({ timeout: 20_000 });
 

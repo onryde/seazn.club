@@ -66,6 +66,17 @@ async function fixturesByStatus(
     order by fixture_no`;
 }
 
+/** Resolve court ids by name, in the given order — `seedCourts` (../seeds.ts)
+ *  creates real courts now (V374 cutover: `ScheduleConfig.courts` is
+ *  `CourtId[]`), so a `config.courts` assertion needs the real id a fresh
+ *  seed produced, not the label it used to store directly. */
+async function courtIdsByName(orgId: string, names: readonly string[]): Promise<string[]> {
+  const rows = await sql<{ id: string; name: string }[]>`
+    select id, name from courts where org_id = ${orgId} and name in ${sql(names as string[])}`;
+  const byName = new Map(rows.map((r) => [r.name, r.id]));
+  return names.map((n) => byName.get(n)!);
+}
+
 /** The pack the capture harness will hand the model, for whichever surface the
  *  template declares — one division, or the joint competition pack. */
 async function packFor(auth: AuthCtx, t: SeededTemplate): Promise<unknown> {
@@ -194,7 +205,9 @@ describe.skipIf(!HAS_DB)("seedClubNight (club-night)", () => {
     const [row] = await sql<{ config: Record<string, unknown>; tz: string }[]>`
       select config, tz from schedule_settings where division_id = ${t.a.divisionIds[0]!}`;
     expect(row.tz).toBe("Europe/London");
-    expect(row.config.courts).toEqual(["Court 1", "Court 2"]);
+    expect(row.config.courts).toEqual(
+      await courtIdsByName(t.authA.orgId, ["Court 1", "Court 2"]),
+    );
     expect(row.config.matchMinutes).toBe(20);
     expect(row.config.gapMinutes).toBe(5);
     expect(row.config.perEntrantMinRest).toBe(20);
@@ -252,9 +265,17 @@ describe.skipIf(!HAS_DB)("seedNorthsideOpen (northside-open)", () => {
       where division_id in ${sql(t.a.divisionIds)}`;
     const byId = new Map(rows.map((r) => [r.division_id, r.config]));
     const [ms, ws, u15] = t.a.divisionIds.map((id) => byId.get(id)!);
-    expect(ms.courts).toEqual(["Court 1", "Court 2", "Court 3", "Court 4"]);
-    expect(ws.courts).toEqual(["Court 1", "Court 2", "Court 3", "Court 4"]);
-    expect(u15.courts).toEqual(["Court 3", "Court 4", "Court 5"]);
+    const adultCourts = await courtIdsByName(t.authA.orgId, [
+      "Court 1",
+      "Court 2",
+      "Court 3",
+      "Court 4",
+    ]);
+    expect(ms.courts).toEqual(adultCourts);
+    expect(ws.courts).toEqual(adultCourts);
+    expect(u15.courts).toEqual(
+      await courtIdsByName(t.authA.orgId, ["Court 3", "Court 4", "Court 5"]),
+    );
     expect(ms.matchMinutes).toBe(45);
     expect(ws.matchMinutes).toBe(45);
     expect(u15.matchMinutes).toBe(30);
@@ -300,7 +321,7 @@ describe.skipIf(!HAS_DB)("seedFinalsDay (finals-day)", () => {
     const [{ n }] = await sql<{ n: number }[]>`
       select count(*)::int as n from fixtures
       where division_id = ${divisionId}
-        and (scheduled_at is null or court_label is null)`;
+        and (scheduled_at is null or court_id is null)`;
     expect(n).toBe(0);
   });
 

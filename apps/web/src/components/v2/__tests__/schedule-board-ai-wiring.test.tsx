@@ -118,6 +118,8 @@ function fixture(id: string, divisionId: string, hour: number): BoardFixture {
     scheduled_at: `2026-08-01T${String(hour).padStart(2, "0")}:00:00.000Z`,
     venue: null,
     court_label: "Court 1",
+    court_id: "crt-1",
+    court_name: "Court 1",
     status: "scheduled",
     schedule_source: "manual",
     schedule_locked: false,
@@ -391,7 +393,7 @@ describe("the division console's brief is priced on the LIVE board", () => {
     const console_ = typed(island.tree(), AiConsole);
     if (!console_) throw new Error("the division console did not mount");
     const brief = propsOf(console_).brief as {
-      movableFixtures: { id: string; scheduled_at: string | null; court_label: string | null }[];
+      movableFixtures: { id: string; scheduled_at: string | null; court_id: string | null }[];
       activeEntrants: number;
     };
     return brief;
@@ -421,10 +423,13 @@ describe("the division console's brief is priced on the LIVE board", () => {
     (propsOf(button).onClick as () => void)();
 
     const f1 = movable(island).movableFixtures.find((f) => f.id === "f1");
+    // P9 pass 4a: aiPricingInputs now carries court_id (the real identity),
+    // not the frozen court_label — "Court 2" here is the DRAGGED court, sent
+    // through moveCard's onDropCard("f1", …, "Court 2") call above.
     expect(f1).toEqual({
       id: "f1",
       scheduled_at: "2026-08-01T16:00:00.000Z",
-      court_label: "Court 2",
+      court_id: "Court 2",
     });
     // The server-shaped prop still says otherwise — which is what makes this a
     // real distinction rather than two names for one list.

@@ -104,7 +104,12 @@ export interface MovableFixture {
   id: string;
   /** ISO string, or null while the fixture sits in the tray. */
   scheduled_at: string | null;
-  court_label: string | null;
+  /** P9 pass 4a: the real court identity — `inScope` (schedule-ai.ts) now
+   *  matches `scope.courts` against `court_id`, and `court_label` is frozen
+   *  legacy (null for anything scheduled since the cutover), so comparing on
+   *  it never excludes anything and a court-scoped repair silently prices at
+   *  the whole division's size. */
+  court_id: string | null;
 }
 
 /**
@@ -125,7 +130,7 @@ export function movableForRun(
 ): MovableFixture[] {
   if (mode !== "repair" || !scope) return fixtures;
   return fixtures.filter((f) => {
-    if (scope.courts && !(f.court_label === null || scope.courts.includes(f.court_label))) {
+    if (scope.courts && !(f.court_id === null || scope.courts.includes(f.court_id))) {
       return false;
     }
     if (scope.from) {
@@ -278,13 +283,21 @@ export function officialsQuoteInput(
   const included = fixtures
     .map((f) => {
       const ov = override.get(f.id);
-      return { f, at: ov?.scheduled_at ?? f.scheduled_at, court: ov?.court_label ?? f.court_label };
+      // P9 review wave 1, finding 7: `f.court_label` is frozen and always
+      // null on a board-sourced fixture (consoleFixtures) — falling back to
+      // it made every PERSISTED court invisible, so this count only ever
+      // saw an AI proposal's override. `f.court_id` is the board's real
+      // identity; `ov.court_label`, despite the legacy name, is ALSO a real
+      // court uuid (the Phase-A proposal — see ai-diff.ts's own doc), so the
+      // two are directly comparable court ids, matching officials-ai.ts's
+      // own server-side count (officialsAiPlanForDivision's quoteRun input).
+      return { f, at: ov?.scheduled_at ?? f.scheduled_at, court: ov?.court_label ?? f.court_id };
     })
     .filter((x) => x.at !== null && x.f.status !== "decided");
   const entrants = new Set(
     included.flatMap((x) => [x.f.home_entrant_id, x.f.away_entrant_id]).filter((e) => e !== null),
   );
-  const courts = new Set(included.map((x) => x.court).filter((c) => c !== null));
+  const courts = new Set(included.map((x) => x.court).filter((c): c is string => c != null));
   return { movableFixtures: included.length, entrants: entrants.size, courts: courts.size };
 }
 
@@ -367,6 +380,7 @@ export function AiConsole({
   onProposalChange,
   onPulse,
   entrantNames = {},
+  courtNames = {},
 }: {
   divisionId: string;
   /** The division seq the board rendered at — the optimistic-concurrency token
@@ -393,6 +407,12 @@ export function AiConsole({
    *  back to a shortened id, never a raw UUID — the pre-existing degrade,
    *  unchanged for any caller that does not supply it. */
   entrantNames?: Record<string, string>;
+  /** Court id -> display label (`resolveCourtNames`/`buildCourtDirectory`).
+   *  P9 review wave 1, finding 4: threaded to the diff panel so a from/to
+   *  row shows a name instead of the raw court uuid the plan's legacy
+   *  `court_label` field actually carries. Optional/additive, same
+   *  degrade-to-`courtPicker.unknownCourt` rule as a miss in the map. */
+  courtNames?: Record<string, string>;
   /** A saved officials AssignPolicy, if the division has one — sent with the run
    *  for a dry coverage preview (§2). No persisted policy source exists today
    *  (the officials/auto flow composes it ad-hoc from unsaved UI state), so the
@@ -799,7 +819,12 @@ export function AiConsole({
           scheduleAssignments: plan.proposal.map((p) => ({
             fixture_id: p.fixture_id,
             scheduled_at: p.scheduled_at,
-            court_label: p.court_label,
+            // P9 pass 3b: the wire KEY is `court_id` on the apply route
+            // (`ApplyScheduleRequest`'s `.strict()` item, schemas.ts) —
+            // `p.court_label` is still the AI plan response's OWN field
+            // name (schemas.ts's `AiPlanResponse`, unconverted by design),
+            // and it already carries a real `courts.id` value.
+            court_id: p.court_label,
             stage_id: stageOf.get(p.fixture_id) ?? "",
           })),
           scheduleAudit,
@@ -904,6 +929,7 @@ export function AiConsole({
           onFill={fillInstruction}
           lastRun={lastRun}
           scheduleFrozen={scheduleFrozen}
+          courtNames={courtNames}
         />
       )}
       {state.step === "schedule" && (
@@ -917,6 +943,7 @@ export function AiConsole({
           traceNonce={traceNonce}
           onPulse={(ids) => onPulseRef.current?.(ids)}
           entrantNames={entrantNames}
+          courtNames={courtNames}
         />
       )}
       {state.step === "officials" && (
@@ -947,6 +974,7 @@ export function AiConsole({
             void runOfficials({ instruction: state.officialsPriorInstruction, priorAssignments: patched });
           }}
           onPulse={(ids) => onPulseRef.current?.(ids)}
+          courtNames={courtNames}
         />
       )}
       {state.step === "apply" && (
@@ -1102,6 +1130,7 @@ export function BriefStep({
   onFill,
   lastRun,
   scheduleFrozen,
+  courtNames = {},
 }: {
   state: AiConsoleState;
   dispatch: (a: Parameters<typeof aiConsoleReducer>[1]) => void;
@@ -1120,6 +1149,12 @@ export function BriefStep({
   onWishes: (next: Wish[]) => void;
   onFill: (value: string) => void;
   lastRun: AiLastResult | null;
+  /** Court id -> display label (`resolveCourtNames`/`buildCourtDirectory`) —
+   *  threaded straight through to AiWishChips' final_last picker/pill (P9
+   *  review wave 3, finding #11). Optional/defaulted to `{}`, matching
+   *  ScheduleStep's own `courtNames` — existing test call sites construct
+   *  this step without it. */
+  courtNames?: Record<string, string>;
 }) {
   const plural = usePlural();
   // #385: the CTA and the confirm card price through the SAME server-resolved
@@ -1223,7 +1258,13 @@ export function BriefStep({
       {lastRun?.last && <AiLastRun last={lastRun.last} onReuse={onFill} />}
 
       {/* Wish chips compile into the instruction below. */}
-      <AiWishChips wishes={wishes} onChange={onWishes} entrants={brief.entrants} courts={brief.courts} />
+      <AiWishChips
+        wishes={wishes}
+        onChange={onWishes}
+        entrants={brief.entrants}
+        courts={brief.courts}
+        courtNames={courtNames}
+      />
 
       <div>
         <label htmlFor="ai-instruction" className="label">
@@ -1386,6 +1427,7 @@ export function ScheduleStep({
   traceNonce,
   onPulse,
   entrantNames = {},
+  courtNames = {},
 }: {
   state: AiConsoleState;
   dispatch: (a: Parameters<typeof aiConsoleReducer>[1]) => void;
@@ -1401,6 +1443,9 @@ export function ScheduleStep({
    *  id, never a raw UUID — the pre-existing degrade, unchanged for any
    *  caller that does not supply it. */
   entrantNames?: Record<string, string>;
+  /** Court id -> display label — P9 review wave 1, finding 4. Threaded
+   *  straight through to `AiDiffPanel`; see `AiConsole`'s own doc. */
+  courtNames?: Record<string, string>;
 }) {
   const plan = state.schedulePlan;
   const { events, flaggedIds } = useMemo(
@@ -1431,6 +1476,7 @@ export function ScheduleStep({
         excluded={state.excludedFixtures}
         onToggleExclude={(fixtureId) => dispatch({ type: "TOGGLE_EXCLUDE", fixtureId })}
         entrantNames={entrantNames}
+        courtNames={courtNames}
       />
 
       {/* Everything the run flagged, could not place, or assumed — one card,
@@ -1497,6 +1543,7 @@ export function OfficialsStep({
   onReplan,
   onAdopt,
   onPulse,
+  courtNames = {},
 }: {
   state: AiConsoleState;
   dispatch: (a: Parameters<typeof aiConsoleReducer>[1]) => void;
@@ -1512,6 +1559,12 @@ export function OfficialsStep({
   onReplan: () => void;
   onAdopt: (fixtureId: string, roleKey: string, candidateId: string) => void;
   onPulse: (ids: string[]) => void;
+  /** Court id -> display label (`resolveCourtNames`/`buildCourtDirectory`) —
+   *  threaded to AiOfficialsReview's grid, whose rows carry a dry-run
+   *  placement's court AS AN ID since the P9 cutover, despite the field's
+   *  legacy name (P9 review wave 3, finding #10). Optional/defaulted to
+   *  `{}`, matching ScheduleStep's own `courtNames`. */
+  courtNames?: Record<string, string>;
 }) {
   const placements = (state.schedulePlan?.proposal ?? []).map((p) => ({
     fixture_id: p.fixture_id,
@@ -1532,6 +1585,7 @@ export function OfficialsStep({
       hasPrior={hadPrior}
       busy={busy}
       traceNonce={traceNonce}
+      courtNames={courtNames}
       error={state.run === "error" ? state.error : null}
       instruction={state.officialsInstruction}
       // The second spend path's instruction, so the card can ask the server's

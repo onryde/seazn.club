@@ -77,7 +77,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
-import { GENERIC_CONFIG, seedOrg } from "./_seed";
+import { GENERIC_CONFIG, seedCourts, seedOrg } from "./_seed";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { recordPackPurchase, walletIdFor } from "@/lib/credits";
 import { POST as planRoute } from "@/app/api/v1/competitions/[id]/schedule/ai-plan/route";
@@ -187,9 +187,11 @@ async function seedBoard(): Promise<{
     visibility: "public",
     branding: {},
   });
+  // P9 pass 3b: real, DISJOINT courts.id values per division (seedCourts
+  // mints a fresh pair each call) — ScheduleConfig.courts is z.array(CourtId).
   const divisions = [
-    await seedDivision(auth, comp.id, "Alpha", ["Court 1", "Court 2"], 4),
-    await seedDivision(auth, comp.id, "Beta", ["Court 3", "Court 4"], 5),
+    await seedDivision(auth, comp.id, "Alpha", await seedCourts(auth.orgId, 2), 4),
+    await seedDivision(auth, comp.id, "Beta", await seedCourts(auth.orgId, 2), 5),
   ];
   return { auth, competitionId: comp.id, divisions };
 }

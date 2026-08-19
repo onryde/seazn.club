@@ -228,12 +228,13 @@ async function boardFor(t: SeededTemplate, pack: unknown): Promise<AiDemoFixture
         round_no: number;
         scheduled_at: Date | null;
         court_label: string | null;
+        court_id: string | null;
         status: string;
         home_entrant_id: string | null;
         away_entrant_id: string | null;
       }[]
     >`
-      select id, stage_id, fixture_no, round_no, scheduled_at, court_label, status,
+      select id, stage_id, fixture_no, round_no, scheduled_at, court_label, court_id, status,
              home_entrant_id, away_entrant_id
         from fixtures
        where division_id = ${divisionId} and status in ${sql(OCCUPYING)}
@@ -252,6 +253,7 @@ async function boardFor(t: SeededTemplate, pack: unknown): Promise<AiDemoFixture
         division_id: divisionId,
         scheduled_at: f.scheduled_at ? new Date(f.scheduled_at).toISOString() : null,
         court_label: f.court_label,
+        court_id: f.court_id,
         code: `F${f.fixture_no}`,
         matchup: `${nameOf.get(f.home_entrant_id ?? "") ?? "TBC"} vs ${
           nameOf.get(f.away_entrant_id ?? "") ?? "TBC"
@@ -323,6 +325,26 @@ afterAll(async () => {
   // divisions, entrants, fixtures, schedule_settings — cascades with the org,
   // which is the same shape `scripts/smoke.ts`'s cleanup(tag) relies on.
   if (guardOrgIds.length > 0) {
+    // P9: courts must go BEFORE venues, and both before the org. P8 made
+    // `courts.venue_id` ON DELETE RESTRICT deliberately (a venue with courts
+    // must not vanish through the API), and a RESTRICT sitting inside the
+    // organizations cascade path blocks the whole delete:
+    //   update or delete on table "venues" violates foreign key constraint
+    //   "courts_venue_id_org_id_fkey" on table "courts"
+    // Deferral does not help: a RESTRICT is checked immediately even when the
+    // constraint is DEFERRABLE, and this is one statement's own cascade
+    // fan-out, not a multi-statement ordering the deferral could rescue.
+    // No product code deletes an organisation, so this is harness-only
+    // ordering — same fix as `scripts/smoke.ts`'s cleanup and
+    // `usecases/__tests__/venues.test.ts`.
+    // `fixtures.court_id` is ON DELETE RESTRICT for the same reason, so the
+    // cards have to let go of their courts first.
+    await sql`update fixtures set court_id = null, venue_id = null
+              where org_id in ${sql(guardOrgIds)}`;
+    await sql`delete from court_exceptions where org_id in ${sql(guardOrgIds)}`;
+    await sql`delete from court_hours where org_id in ${sql(guardOrgIds)}`;
+    await sql`delete from courts where org_id in ${sql(guardOrgIds)}`;
+    await sql`delete from venues where org_id in ${sql(guardOrgIds)}`;
     await sql`delete from organizations where id in ${sql(guardOrgIds)}`;
   }
   if (guardUserIds.length > 0) {
@@ -398,6 +420,16 @@ describe.skipIf(!CAPTURING || !HAS_DB)("capture a real architect run", () => {
             instruction: seeded.instruction,
           },
           board,
+          // P9: everything court-shaped in this recording is a UUID. The public
+          // marketing demo renders `response.divergent_courts`, so the fixture
+          // has to carry the names with it — nothing downstream can re-derive
+          // them once the throwaway capture database is gone.
+          courtNames: Object.fromEntries(
+            (
+              await sql<{ id: string; name: string }[]>`
+                select id, name from courts where org_id = ${auth.orgId}`
+            ).map((c) => [c.id, c.name]),
+          ),
           pack,
           movableIds: [...movableIds],
           response,

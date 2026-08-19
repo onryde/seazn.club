@@ -27,6 +27,7 @@ import { createEntrants } from "../entrants";
 import { createStages } from "../stages";
 import { applySchedule, moveFixture } from "../schedule";
 import { patchFixture } from "../fixtures";
+import { createVenue, createCourt } from "../venues";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -54,6 +55,11 @@ const DAY_CAP: HardConstraint[] = [
 
 const SIBLING_COURT = "Far Court";
 
+// P9 pass 3a: `courts`/`slot.court` below are real courts.id values now —
+// ScheduleConfig.courts is CourtId[] since pass 1, fixtures.court_id
+// carries a composite FK since V367/368. `makeDivision`/`addFixture` keep
+// their generic `string`/`string[]` signatures; `seedBoard` resolves the
+// readable "Court 1"/"Court 2"/SIBLING_COURT labels to real ids once.
 function settingsConfig(courts: string[], hard: HardConstraint[]) {
   return {
     startAt: at(DAY, "08:00"),
@@ -138,7 +144,7 @@ async function addFixture(
 ): Promise<string> {
   const [f] = await sql<{ id: string }[]>`
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
-                          home_entrant_id, away_entrant_id, scheduled_at, court_label)
+                          home_entrant_id, away_entrant_id, scheduled_at, court_id)
     values (${d.stageId}, ${d.id}, ${auth.orgId}, 1, ${seq}, ${extKey}, ${status},
             ${d.entrantByName.get(home)!}, ${d.entrantByName.get(away)!},
             ${slot?.at ?? null}, ${slot?.court ?? null})
@@ -149,7 +155,7 @@ async function addFixture(
 /** Planned division: one card already on `DAY`, one card with no slot yet.
  *  Sibling division: one fixed card on `DAY`, on a court this division does not
  *  even have — so nothing physical stands in for the rule firing. */
-async function seedBoard(): Promise<{ auth: AuthCtx; planned: Div; mover: string }> {
+async function seedBoard(): Promise<{ auth: AuthCtx; planned: Div; mover: string; court2: string }> {
   const { auth } = await seedOrg("pro");
   const tag = randomUUID().slice(0, 6);
   const comp = await createCompetition(auth, {
@@ -158,20 +164,24 @@ async function seedBoard(): Promise<{ auth: AuthCtx; planned: Div; mover: string
     visibility: "public",
     branding: {},
   });
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const court1 = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+  const court2 = await createCourt(auth, venue.id, { name: "Court 2", sort: 1, tags: [] });
+  const sibCourt = await createCourt(auth, venue.id, { name: SIBLING_COURT, sort: 2, tags: [] });
   const planned = await makeDivision(
-    auth, comp.id, `planned-${tag}`, ["Court 1", "Court 2"],
+    auth, comp.id, `planned-${tag}`, [court1.id, court2.id],
     ["A-1", "A-2", "A-3", "A-4"], DAY_CAP,
   );
   const sibling = await makeDivision(
-    auth, comp.id, `sibling-${tag}`, [SIBLING_COURT], ["B-1", "B-2"], [],
+    auth, comp.id, `sibling-${tag}`, [sibCourt.id], ["B-1", "B-2"], [],
   );
-  await addFixture(auth, planned, 0, "a-f1", "A-1", "A-2", { at: at(DAY, "09:00"), court: "Court 1" });
+  await addFixture(auth, planned, 0, "a-f1", "A-1", "A-2", { at: at(DAY, "09:00"), court: court1.id });
   const mover = await addFixture(auth, planned, 1, "a-f2", "A-3", "A-4", null);
   await addFixture(
     auth, sibling, 0, "b-f1", "B-1", "B-2",
-    { at: at(DAY, "14:00"), court: SIBLING_COURT }, "finalized",
+    { at: at(DAY, "14:00"), court: sibCourt.id }, "finalized",
   );
-  return { auth, planned, mover };
+  return { auth, planned, mover, court2: court2.id };
 }
 
 afterAll(async () => {
@@ -184,10 +194,10 @@ afterAll(async () => {
 
 describe.skipIf(!HAS_DB)("a move returns the conflicts it computes (#461)", () => {
   it("hands back the WARN-level conflicts a drag creates, and still writes", async () => {
-    const { auth, mover } = await seedBoard();
+    const { auth, mover, court2 } = await seedBoard();
     const conflicts = await moveFixture(auth, mover, {
       scheduled_at: at(DAY, "11:00"),
-      court_label: "Court 2",
+      court_id: court2,
     });
 
     // Non-empty and non-blocking — the two halves that make this reportable
@@ -205,19 +215,19 @@ describe.skipIf(!HAS_DB)("a move returns the conflicts it computes (#461)", () =
     expect(conflicts[0]!.details?.day).toBe(DAY);
 
     // The write happened anyway — a warn never refuses.
-    const [row] = await sql<{ court_label: string }[]>`
-      select court_label from fixtures where id = ${mover}`;
-    expect(row!.court_label).toBe("Court 2");
+    const [row] = await sql<{ court_id: string }[]>`
+      select court_id from fixtures where id = ${mover}`;
+    expect(row!.court_id).toBe(court2);
   }, 120_000);
 
   it("returns an empty list for a move that breaks nothing", async () => {
     // The falsifier for the test above: if `moveFixture` returned a non-empty
     // list unconditionally, or the whole board's conflicts rather than this
     // move's, the assertion above would pass while meaning nothing.
-    const { auth, mover } = await seedBoard();
+    const { auth, mover, court2 } = await seedBoard();
     const conflicts = await moveFixture(auth, mover, {
       scheduled_at: at(OTHER_DAY, "09:00"),
-      court_label: "Court 2",
+      court_id: court2,
     });
     expect(conflicts).toEqual([]);
   }, 120_000);
@@ -229,10 +239,10 @@ describe.skipIf(!HAS_DB)("a move returns the conflicts it computes (#461)", () =
     // real payload, which is what this does. `JSON.parse(JSON.stringify(...))` is
     // deliberate: postgres hands back `timestamptz` as a Date, and the WIRE is
     // what the schema describes.
-    const { auth, mover } = await seedBoard();
+    const { auth, mover, court2 } = await seedBoard();
     const out = await patchFixture(auth, mover, {
       scheduled_at: at(DAY, "11:00"),
-      court_label: "Court 2",
+      court_id: court2,
     });
     const wire = JSON.parse(JSON.stringify(out));
 
@@ -255,9 +265,9 @@ describe.skipIf(!HAS_DB)("a move returns the conflicts it computes (#461)", () =
   // file: THREE on the tally (mover + a-f1 + the sibling division's card),
   // but ONE row back, named `mover` — not `a-f1`, and not two rows.
   it("applySchedule's partial-apply path keeps the same scoping: a widened sibling's own conflict is not returned", async () => {
-    const { auth, planned, mover } = await seedBoard();
+    const { auth, planned, mover, court2 } = await seedBoard();
     const out = await applySchedule(auth, planned.stageId, {
-      assignments: [{ fixture_id: mover, scheduled_at: at(DAY, "11:00"), court_label: "Court 2" }],
+      assignments: [{ fixture_id: mover, scheduled_at: at(DAY, "11:00"), court_id: court2 }],
       source: "manual",
     });
     expect(out.conflicts).toHaveLength(1);
@@ -267,5 +277,100 @@ describe.skipIf(!HAS_DB)("a move returns the conflicts it computes (#461)", () =
     expect(out.conflicts[0]!.details?.kind).toBe("instruction_day_cap");
     expect(out.conflicts[0]!.details?.count).toBe(3);
     expect(out.conflicts[0]!.details?.day).toBe(DAY);
+  }, 120_000);
+});
+
+// P9 review #5 — venue_id must be DERIVED from the assigned court, server
+// side, never trusted from the caller. Before this fix, applySchedule wrote
+// `venue_id = coalesce(a.venue_id ?? null, venue_id)` — since no real client
+// (use-board-actions.ts/ai-apply.ts/move-panel.tsx) ever sends venue_id, a
+// freshly-scheduled fixture kept venue_id NULL forever, and a move to a court
+// in a DIFFERENT venue left venue_id stuck on the OLD one. Every player-facing
+// venue string (ICS LOCATION, /me, /my-matches, the public fixture page + its
+// JSON-LD) derives from fixtures.venue_id, so this is user-visible, not
+// cosmetic. `moveFixture` had the identical hole via `patch.venue_id`.
+describe.skipIf(!HAS_DB)("venue_id is derived from the court, never trusted from the caller (#5)", () => {
+  async function seedTwoVenues(slug: string) {
+    const { auth } = await seedOrg("pro");
+    const tag = randomUUID().slice(0, 6);
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: `Venue Derive ${slug} ${tag}`,
+      visibility: "public",
+      branding: {},
+    });
+    const venueA = await createVenue(auth, { name: "Hall A", sort: 0 });
+    const venueB = await createVenue(auth, { name: "Hall B", sort: 1 });
+    const courtA = await createCourt(auth, venueA.id, { name: "Court 1", sort: 0, tags: [] });
+    const courtB = await createCourt(auth, venueB.id, { name: "Court 1", sort: 0, tags: [] });
+    const d = await makeDivision(
+      auth, comp.id, `${slug}-${tag}`, [courtA.id, courtB.id], ["X-1", "X-2"], [],
+    );
+    return { auth, d, venueA, venueB, courtA, courtB };
+  }
+
+  it("applySchedule stamps the assigned court's own venue_id, ignoring a disagreeing client-supplied one", async () => {
+    const { auth, d, venueA, venueB, courtA, courtB } = await seedTwoVenues("apply");
+    const f = await addFixture(auth, d, 0, "v-f1", "X-1", "X-2", null);
+
+    // A client-supplied venue_id that DISAGREES with the court must be
+    // ignored — this is the crux of the bug: the schema still accepts the
+    // field (ApplyScheduleRequest's Assignment.venue_id is nullish), so a
+    // caller CAN send a wrong one, and the server must win regardless.
+    await applySchedule(auth, d.stageId, {
+      assignments: [
+        { fixture_id: f, scheduled_at: at(DAY, "09:00"), court_id: courtA.id, venue_id: venueB.id },
+      ],
+      source: "manual",
+    });
+    const [afterA] = await sql<{ court_id: string; venue_id: string | null }[]>`
+      select court_id, venue_id from fixtures where id = ${f}`;
+    expect(afterA!.court_id).toBe(courtA.id);
+    expect(afterA!.venue_id).toBe(venueA.id);
+
+    // Re-applying onto a court in a DIFFERENT venue must UPDATE venue_id —
+    // the other half of the bug: the old `coalesce(a.venue_id, venue_id)`
+    // left a fixture stuck on its stale venue after a cross-venue move.
+    await applySchedule(auth, d.stageId, {
+      assignments: [{ fixture_id: f, scheduled_at: at(DAY, "10:00"), court_id: courtB.id }],
+      source: "manual",
+    });
+    const [afterB] = await sql<{ court_id: string; venue_id: string | null }[]>`
+      select court_id, venue_id from fixtures where id = ${f}`;
+    expect(afterB!.court_id).toBe(courtB.id);
+    expect(afterB!.venue_id).toBe(venueB.id);
+  }, 120_000);
+
+  it("moveFixture stamps the target court's own venue_id, updates it on a cross-venue move, leaves it alone when the court is untouched, and clears it with the court", async () => {
+    const { auth, d, venueA, venueB, courtA, courtB } = await seedTwoVenues("move");
+    const f = await addFixture(
+      auth, d, 0, "v-f2", "X-1", "X-2", { at: at(DAY, "09:00"), court: courtA.id },
+    );
+    // Seeded via a raw INSERT (like every other fixture in this file) —
+    // venue_id starts NULL, untouched by moveFixture/applySchedule so far.
+    const [before] = await sql<{ venue_id: string | null }[]>`select venue_id from fixtures where id = ${f}`;
+    expect(before!.venue_id).toBeNull();
+
+    await moveFixture(auth, f, { court_id: courtA.id });
+    const [afterA] = await sql<{ venue_id: string | null }[]>`select venue_id from fixtures where id = ${f}`;
+    expect(afterA!.venue_id).toBe(venueA.id);
+
+    await moveFixture(auth, f, { court_id: courtB.id });
+    const [afterB] = await sql<{ venue_id: string | null }[]>`select venue_id from fixtures where id = ${f}`;
+    expect(afterB!.venue_id).toBe(venueB.id);
+
+    // A move that never touches court_id (time-only) must not disturb venue_id.
+    await moveFixture(auth, f, { scheduled_at: at(DAY, "12:00") });
+    const [afterTimeOnly] = await sql<{ venue_id: string | null }[]>`
+      select venue_id from fixtures where id = ${f}`;
+    expect(afterTimeOnly!.venue_id).toBe(venueB.id);
+
+    // Clearing the court must clear the derived venue too — never a stale
+    // leftover once there is no court to derive it from.
+    await moveFixture(auth, f, { court_id: null });
+    const [afterClear] = await sql<{ court_id: string | null; venue_id: string | null }[]>`
+      select court_id, venue_id from fixtures where id = ${f}`;
+    expect(afterClear!.court_id).toBeNull();
+    expect(afterClear!.venue_id).toBeNull();
   }, 120_000);
 });

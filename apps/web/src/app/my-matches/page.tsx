@@ -119,7 +119,7 @@ function Section({
                   )}
                 </p>
                 <p className="text-slate-400">
-                  {[f.venue, f.court_label].filter(Boolean).join(" · ")}
+                  {[f.venue_name, f.court_name].filter(Boolean).join(" · ")}
                 </p>
               </div>
               <span

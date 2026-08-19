@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { apiJson, TAG, divisionPath } from "./helpers";
+import { apiJson, TAG, divisionPath, seedVenueWithCourts } from "./helpers";
 
 // D2 capacity pre-check (design doc bench-product-value/designs/2026-08-13-
 // capacity-precheck-design.md). Two things a unit/integration test cannot
@@ -60,13 +60,14 @@ async function seedTightRoundRobin(request: import("@playwright/test").APIReques
     "POST",
   );
   expect(gen.data!.fixtures.length).toBe(28);
+  const { courts } = await seedVenueWithCourts(request, ["Court 1"]);
   const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
     config: {
       startAt: START_AT,
       endAt: END_AT,
       matchMinutes: 60,
       gapMinutes: 0,
-      courts: ["Court 1"],
+      courts: [courts[0]!.id],
       perEntrantMinRest: 0,
     },
   });

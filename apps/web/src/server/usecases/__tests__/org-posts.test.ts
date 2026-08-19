@@ -23,6 +23,7 @@ import {
 } from "../org-posts";
 import { scoreEvent } from "../scoring";
 import { putLineup, getLineup } from "../fixtures";
+import { createVenue } from "../venues";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -410,6 +411,26 @@ describe.skipIf(!HAS_DB)("org-posts auto-drafts", () => {
       fixture_id: fx,
       stale: false,
     });
+  });
+
+  // P9 sweep (pass 3c-4): draftPostsForDecidedFixture used to SELECT
+  // fixtures.venue straight into the result draft's body — frozen since pass
+  // 3a, so a fixture decided post-cutover drafted a blank venue line
+  // regardless of its real venue_id.
+  it("result draft body carries the live venue name, not a disagreeing frozen venue", async () => {
+    const ctx = await seedOrg();
+    const div = await seedDivision(ctx, { autoPosts: true });
+    const fx = await seedDecidedFixture(ctx, div, { homeLine: "2", awayLine: "0" });
+    const venue = await createVenue(ctx.auth, { name: "Meadow Park Live", sort: 0 });
+    await sql`update fixtures set venue_id = ${venue.id}, venue = 'Stale Venue' where id = ${fx}`;
+
+    await draft(ctx, fx);
+
+    const posts = await listPosts(ctx.auth, ctx.orgId);
+    const results = posts.filter((p) => p.kind === "result");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.bodyMd).toContain("Meadow Park Live");
+    expect(results[0]!.bodyMd).not.toContain("Stale Venue");
   });
 
   it("is idempotent under the auto-once index (re-run keeps one)", async () => {

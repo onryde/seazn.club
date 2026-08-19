@@ -10,6 +10,8 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { dayKey, PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED } from "@/lib/schedule-board";
 import type { FeedLabelPair } from "@/lib/schedule-board";
+import type { z } from "zod";
+import type { ApplyScheduleRequest } from "@/server/api-v1/schemas";
 import type {
   AutoScheduleRequest,
   ScheduleMetrics,
@@ -28,7 +30,10 @@ import {
   type BoardFixture,
 } from "./types";
 
-type Override = { scheduled_at: string | null; court_label: string | null; schedule_locked: boolean };
+// P9 pass 4a: court_id — the merge `{...f, ...o}` (below) has to overwrite
+// the field board-grid/movableForRun/etc. actually key on, or an optimistic
+// drag shows the card in its OLD column until the next server refresh.
+type Override = { scheduled_at: string | null; court_id: string | null; schedule_locked: boolean };
 
 /**
  * A publish/start refusal from the server-side validation gate, carried back to
@@ -345,7 +350,7 @@ export function useBoardActions(
         ...o,
         [fixtureId]: {
           scheduled_at: atIso,
-          court_label: court,
+          court_id: court,
           schedule_locked: prev.schedule_locked,
         },
       }));
@@ -354,7 +359,10 @@ export function useBoardActions(
           method: "PATCH",
           json: {
             scheduled_at: atIso,
-            court_label: court,
+            // P9 pass 4a: PatchFixture (schemas.ts) is `.strict()` and dropped
+            // court_label from its shape when the cutover landed — sending the
+            // old key 400s every drag instead of moving the fixture.
+            court_id: court,
             expected_seq: seqRef.current[prev.division_id],
           },
         });
@@ -408,7 +416,15 @@ export function useBoardActions(
       setBusy(true);
       try {
         type Proposal = {
-          assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+          // P9: DERIVED from the schema the server validates against, never
+          // hand-declared. `apiV1<T>` is an unchecked cast, so a hand-written
+          // wire type is an assertion the compiler cannot check — this one
+          // claimed `court_label` after the server moved to `court_id`, so
+          // every Auto-schedule apply POSTed `court_id: undefined`, got a
+          // "Invalid input" 400, and persisted nothing while the strip
+          // reported the run's own in-memory result. Inferring from
+          // ApplyScheduleRequest makes that class of drift a type error.
+          assignments: z.infer<typeof ApplyScheduleRequest>["assignments"];
           conflicts: BoardConflict[];
           metrics?: ScheduleMetrics;
           solver?: ScheduleSolverInfo;
@@ -446,7 +462,7 @@ export function useBoardActions(
                 assignments: assignments.map((a) => ({
                   fixture_id: a.fixture_id,
                   scheduled_at: a.scheduled_at,
-                  court_label: a.court_label,
+                  court_id: a.court_id,
                 })),
                 source: "auto",
                 expected_seq: expectedSeq,
@@ -604,11 +620,15 @@ export function useBoardActions(
         for (const f of board) {
           if (f.scheduled_at === null || f.status !== "scheduled") continue;
           if (dayKey(f.scheduled_at as string) !== day) continue;
-          const target = f.court_label === a ? b : f.court_label === b ? a : null;
+          // P9 pass 4a: court_id — court_label is frozen legacy and null for
+          // anything scheduled since the cutover, so this could no longer
+          // match either side; `a`/`b` are court ids (BoardConfig.courts).
+          const target = f.court_id === a ? b : f.court_id === b ? a : null;
           if (!target) continue;
           await apiV1(`/api/v1/fixtures/${f.id}`, {
             method: "PATCH",
-            json: { court_label: target, expected_seq: seqRef.current[f.division_id] },
+            // PatchFixture (schemas.ts) is `.strict()` — court_label 400s.
+            json: { court_id: target, expected_seq: seqRef.current[f.division_id] },
           });
           seqRef.current[f.division_id] = (seqRef.current[f.division_id] ?? 0) + 1;
         }

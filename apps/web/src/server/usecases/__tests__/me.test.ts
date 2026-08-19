@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { MyFixture } from "@/server/api-v1/schemas";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -326,5 +327,87 @@ describe.skipIf(!HAS_DB)("player home /me (PROMPT-53)", () => {
     ).rejects.toMatchObject({
       status: 404,
     });
+  });
+
+  it("listMyFixtures rows parse against the published MyFixture contract (review finding #9) — court_id/venue_id and derived court_name/venue_name, not the retired venue/court_label", async () => {
+    const { owner, orgId } = await seedOrg("contract");
+    const { persons } = await rig(owner);
+    const player = await makeUser("player");
+    await sql`update persons set user_id = ${player} where id = ${persons[0].id}`;
+
+    const before = await listMyFixtures(player);
+    expect(before.upcoming.length).toBeGreaterThan(0);
+    const targetId = before.upcoming[0]!.id;
+
+    // A real venue/court by id (P9 cutover) attached to one of the player's
+    // own fixtures — proves the derived court_name/venue_name resolve, not
+    // just that the schema shape happens to line up.
+    const [{ id: venueId }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${orgId}, ${"Riverside"}) returning id`;
+    const [{ id: courtId }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueId}, ${orgId}, ${"Court 9"}, ${sql.array([])})
+      returning id`;
+    await sql`update fixtures set venue_id = ${venueId}, court_id = ${courtId} where id = ${targetId}`;
+
+    const mine = await listMyFixtures(player);
+    // Would throw pre-fix: the published schema still required `venue`/
+    // `court_label` as present keys, which listMyFixtures stopped selecting —
+    // parsing a REAL row (not a hand-built literal) is what catches that.
+    for (const f of mine.upcoming) MyFixture.parse(f);
+
+    const withCourt = mine.upcoming.find((f) => f.id === targetId)!;
+    expect(withCourt.venue_name).toBe("Riverside");
+    expect(withCourt.court_name).toBe("Court 9");
+
+    // The OTHER half of contract drift, and the half a `.parse()` alone cannot
+    // see: a field the usecase ships but the schema never declares is STRIPPED
+    // by z.object rather than rejected, so the parse stays green while the
+    // published contract quietly understates the payload. Reading the field
+    // back off the PARSED value is what makes that visible — `venue_tz` has
+    // been on the wire since V305 and undeclared here ever since, and the
+    // times in this payload are unreadable without it.
+    const parsed = MyFixture.parse(withCourt);
+    expect(parsed.venue_tz).toBe(withCourt.venue_tz);
+    expect(parsed.venue_tz).not.toBeUndefined();
+  });
+
+  // #14: listMyFixtures is a SUPERUSER, cross-org read (no withTenant/RLS) —
+  // a court name is unique only WITHIN its venue, so it must venue-qualify
+  // via the same rule the board/AI pack use, not show two indistinguishable
+  // "Court 1" entries for two different physical courts.
+  it("#14: disambiguates two same-named courts across two venues; never renders a bare uuid", async () => {
+    const { owner, orgId } = await seedOrg("court-disambig");
+    const { persons } = await rig(owner);
+    const player = await makeUser("player");
+    await sql`update persons set user_id = ${player} where id = ${persons[0].id}`;
+
+    const before = await listMyFixtures(player);
+    expect(before.upcoming.length).toBeGreaterThanOrEqual(2);
+    const [f1, f2] = before.upcoming;
+
+    const [{ id: venueA }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${orgId}, ${"Riverside"}) returning id`;
+    const [{ id: venueB }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${orgId}, ${"Lakeside"}) returning id`;
+    const [{ id: courtA }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueA}, ${orgId}, ${"Court 1"}, ${sql.array([])}) returning id`;
+    const [{ id: courtB }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueB}, ${orgId}, ${"Court 1"}, ${sql.array([])}) returning id`;
+    await sql`update fixtures set venue_id = ${venueA}, court_id = ${courtA} where id = ${f1!.id}`;
+    await sql`update fixtures set venue_id = ${venueB}, court_id = ${courtB} where id = ${f2!.id}`;
+
+    const mine = await listMyFixtures(player);
+    for (const f of mine.upcoming) MyFixture.parse(f);
+    const c1 = mine.upcoming.find((f) => f.id === f1!.id)!;
+    const c2 = mine.upcoming.find((f) => f.id === f2!.id)!;
+    expect(c1.court_name).toBe("Court 1 (Riverside)");
+    expect(c2.court_name).toBe("Court 1 (Lakeside)");
+    // Every fixture's own id/person_id/etc. are legitimately uuids — only the
+    // NAME field is under test here.
+    const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-/i;
+    for (const f of mine.upcoming) expect(f.court_name ?? "").not.toMatch(uuidRe);
   });
 });

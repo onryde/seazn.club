@@ -41,8 +41,8 @@ function baseInput(over: Partial<ApplyAiInput> = {}): ApplyAiInput {
     divisionId: "div-1",
     expectedSeq: 7,
     scheduleAssignments: [
-      { fixture_id: "fa", scheduled_at: "2026-08-01T10:00:00Z", court_label: "Court 1", stage_id: "st-1" },
-      { fixture_id: "fb", scheduled_at: "2026-08-01T11:00:00Z", court_label: "Court 1", stage_id: "st-1" },
+      { fixture_id: "fa", scheduled_at: "2026-08-01T10:00:00Z", court_id: "c0000000-0000-4000-8000-000000000001", stage_id: "st-1" },
+      { fixture_id: "fb", scheduled_at: "2026-08-01T11:00:00Z", court_id: "c0000000-0000-4000-8000-000000000001", stage_id: "st-1" },
     ],
     scheduleAudit: audit,
     officials: {
@@ -93,8 +93,8 @@ describe("applyAiPlans — chained accept", () => {
     expect((calls[0].json as { label: string }).label).toMatch(/^Before AI · /);
     expect(calls[1].json).toMatchObject({ source: "ai", expected_seq: 7, ai: audit });
     expect((calls[1].json as { assignments: unknown }).assignments).toEqual([
-      { fixture_id: "fa", scheduled_at: "2026-08-01T10:00:00Z", court_label: "Court 1" },
-      { fixture_id: "fb", scheduled_at: "2026-08-01T11:00:00Z", court_label: "Court 1" },
+      { fixture_id: "fa", scheduled_at: "2026-08-01T10:00:00Z", court_id: "c0000000-0000-4000-8000-000000000001" },
+      { fixture_id: "fb", scheduled_at: "2026-08-01T11:00:00Z", court_id: "c0000000-0000-4000-8000-000000000001" },
     ]);
     expect(calls[2].json).toMatchObject({ ai: offAudit });
   });
@@ -117,8 +117,8 @@ describe("applyAiPlans — chained accept", () => {
     await applyAiPlans(
       baseInput({
         scheduleAssignments: [
-          { fixture_id: "fa", scheduled_at: "t", court_label: "C1", stage_id: "st-1" },
-          { fixture_id: "fb", scheduled_at: "t", court_label: "C1", stage_id: "st-2" },
+          { fixture_id: "fa", scheduled_at: "t", court_id: "c0000000-0000-4000-8000-000000000002", stage_id: "st-1" },
+          { fixture_id: "fb", scheduled_at: "t", court_id: "c0000000-0000-4000-8000-000000000002", stage_id: "st-2" },
         ],
         officials: null,
       }),

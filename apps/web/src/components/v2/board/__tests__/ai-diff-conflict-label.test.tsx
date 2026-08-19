@@ -51,11 +51,29 @@ const FIX = "11111111-1111-1111-1111-111111111111";
 // detail (C3, 2026-08-13 design amendment). `court_double_booking` with no
 // `otherFixtureId` is the reportability-fallback branch
 // (calendar.ts:1384) — the ".unknown" localized variant.
+//
+// `court` is a real courts.id uuid on the wire (P9 review wave 3, finding
+// #3) — this fixture used to write the bare string "Court 1" here as if it
+// were still a name, which happened to "work" only because
+// conflict-detail-format.ts used to interpolate `court` verbatim. P9 review
+// wave 3's fix made that read `courtName` instead (server-resolved,
+// venue-qualified) — and `AiPlanConflictDetail` (this schema, unlike
+// `ScheduleConflictDetail`) has NO `courtName` field at all: schedule-ai.ts's
+// own `blocking: result.blocking.map(withLegacyDetail)` never calls
+// `attachCourtNames` first, unlike person-merge.ts's conflicts path, which
+// already does (`conflicts.map((c) => withLegacyDetail(attachCourtNames(c,
+// courtNames)))`). So an AI-plan blocking court conflict genuinely has no
+// resolved name to show today — this fixture now uses a real uuid to be
+// honest about that, and the expectations below assert the safe degrade
+// (never the raw id) rather than a name this path cannot actually produce
+// yet. Flagged as a real, separate gap — out of this pass's scope (server
+// usecase, not a board/console file).
+const COURT_UUID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const plan: AiPlanResponse = {
   proposal: [],
   unschedulable: [],
   warnings: [],
-  blocking: [{ fixtureId: FIX, reason: "court", details: { kind: "court_double_booking", court: "Court 1" } }],
+  blocking: [{ fixtureId: FIX, reason: "court", details: { kind: "court_double_booking", court: COURT_UUID } }],
   diff: { moved: [], placed: [], unscheduled: [], unchanged: [] },
   explanations: [],
   summary: "Kept the court clear.",
@@ -95,11 +113,14 @@ describe("AiDiffPanel blocking row localization", () => {
 
   it("localizes the structured detail as supplementary text — never the raw engine string (C3, 2026-08-13 design amendment)", () => {
     const html = renderPanel(enDict, "en");
+    // No courtName on this wire shape (see the fixture's own comment above) —
+    // the safe degrade, never the raw uuid.
     const expected = (enDict["board.conflict.detail.court_double_booking.unknown"] as string).replace(
       "{court}",
-      "Court 1",
+      enDict["courtPicker.unknownCourt"] as string,
     );
     expect(html).toContain(expected);
+    expect(html).not.toContain(COURT_UUID);
     // Non-vacuity: the deprecated raw shape is gone from this row entirely,
     // not merely absent from the assertion.
     expect(html).not.toContain("court Court 1 double-booked");
@@ -112,9 +133,10 @@ describe("AiDiffPanel blocking row localization", () => {
     const html = renderPanel(frDict, "fr");
     const expected = (frDict["board.conflict.detail.court_double_booking.unknown"] as string).replace(
       "{court}",
-      "Court 1",
+      frDict["courtPicker.unknownCourt"] as string,
     );
     expect(html).toContain(expected);
+    expect(html).not.toContain(COURT_UUID);
     expect(frDict["board.conflict.detail.court_double_booking.unknown"]).not.toBe(
       enDict["board.conflict.detail.court_double_booking.unknown"],
     );

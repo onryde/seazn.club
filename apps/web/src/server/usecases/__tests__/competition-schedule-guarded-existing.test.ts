@@ -39,7 +39,7 @@ import { createEntrants } from "../entrants";
 import { createStages } from "../stages";
 import { buildCompetitionPack } from "../competition-schedule-ai";
 import { buildSchedulePack } from "../schedule-ai";
-import { seedOrg } from "./_seed";
+import { seedCourts, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -165,9 +165,12 @@ async function seedFixedOccupancyBoard(): Promise<{
   bravoId: string;
   codyId: string;
   moveId: string;
+  court1: string;
+  court2: string;
 }> {
   const { auth } = await seedOrg("pro");
   const tag = randomUUID().slice(0, 6);
+  const [court1, court2] = await seedCourts(auth.orgId, 2);
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
     name: `Fixed Occupancy ${tag}`,
@@ -175,11 +178,11 @@ async function seedFixedOccupancyBoard(): Promise<{
     branding: {},
   });
   // Built in NAME order, so Alpha drafts first and sees Bravo's fixed board.
-  const alpha = await makeDivision(auth, comp.id, "Alpha", `alpha-${tag}`, ["Court 2"], [
+  const alpha = await makeDivision(auth, comp.id, "Alpha", `alpha-${tag}`, [court2!], [
     "A-1",
     "A-2",
   ]);
-  const bravo = await makeDivision(auth, comp.id, "Bravo", `bravo-${tag}`, ["Court 1"], [
+  const bravo = await makeDivision(auth, comp.id, "Bravo", `bravo-${tag}`, [court1!], [
     "B-1",
     "B-2",
     "B-3",
@@ -200,13 +203,16 @@ async function seedFixedOccupancyBoard(): Promise<{
   const moveId = await movableFixture(auth, alpha, "move", 0, "A-1", "A-2");
   await sql`
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
-                          home_entrant_id, away_entrant_id, scheduled_at, court_label)
+                          home_entrant_id, away_entrant_id, scheduled_at, court_id)
     values (${bravo.stageId}, ${bravo.id}, ${auth.orgId}, 1, 0, 'fixed', 'finalized',
             ${bravo.entrantByName.get("B-1")!}, ${bravo.entrantByName.get("B-2")!},
-            ${new Date(FIXED_FROM).toISOString()}, 'Court 1')`;
+            ${new Date(FIXED_FROM).toISOString()}, ${court1!})`;
   await movableFixture(auth, bravo, "spare", 1, "B-3", "B-4");
 
-  return { auth, competitionId: comp.id, alphaId: alpha.id, bravoId: bravo.id, codyId: cody, moveId };
+  return {
+    auth, competitionId: comp.id, alphaId: alpha.id, bravoId: bravo.id, codyId: cody, moveId,
+    court1: court1!, court2: court2!,
+  };
 }
 
 /**
@@ -230,18 +236,20 @@ async function seedFeedForwardBoard(): Promise<{
   erinId: string;
   aMoveId: string;
   bMoveId: string;
+  courts: string[];
 }> {
   const { auth } = await seedOrg("pro");
   const tag = randomUUID().slice(0, 6);
+  const [court1, court2, court3] = await seedCourts(auth.orgId, 3);
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
     name: `Feed Forward ${tag}`,
     visibility: "public",
     branding: {},
   });
-  const alpha = await makeDivision(auth, comp.id, "Alpha", `alpha-${tag}`, ["Court 1"], ["A-1", "A-2"]);
-  const bravo = await makeDivision(auth, comp.id, "Bravo", `bravo-${tag}`, ["Court 2"], ["B-1", "B-2"]);
-  const charlie = await makeDivision(auth, comp.id, "Charlie", `charlie-${tag}`, ["Court 3"], [
+  const alpha = await makeDivision(auth, comp.id, "Alpha", `alpha-${tag}`, [court1!], ["A-1", "A-2"]);
+  const bravo = await makeDivision(auth, comp.id, "Bravo", `bravo-${tag}`, [court2!], ["B-1", "B-2"]);
+  const charlie = await makeDivision(auth, comp.id, "Charlie", `charlie-${tag}`, [court3!], [
     "C-1",
     "C-2",
   ]);
@@ -266,6 +274,7 @@ async function seedFeedForwardBoard(): Promise<{
     erinId: erin,
     aMoveId,
     bMoveId,
+    courts: [court1!, court2!, court3!],
   };
 }
 
@@ -306,8 +315,8 @@ describe.skipIf(!HAS_DB)("the joint pass's `existing` lists are raw AND guarded 
     // Disjoint courts, so no court rule can separate the two fixtures.
     const courtsOf = (id: string): string[] =>
       pack.divisions.find((d) => d.id === id)!.settings.courts;
-    expect(courtsOf(board.alphaId)).toEqual(["Court 2"]);
-    expect(courtsOf(board.bravoId)).toEqual(["Court 1"]);
+    expect(courtsOf(board.alphaId)).toEqual([board.court2]);
+    expect(courtsOf(board.bravoId)).toEqual([board.court1]);
 
     const a = pack.draft.find((d) => d.fixture_id === board.moveId);
     expect(a, "joint draft is missing Alpha's movable fixture").toBeDefined();
@@ -352,7 +361,7 @@ describe.skipIf(!HAS_DB)("the joint pass's `existing` lists are raw AND guarded 
     // Nothing is fixed on this board, so `fixedOccupancy` cannot be the link…
     expect(pack.fixtures.obstacles).toEqual([]);
     // …and every division owns its own court, so no court rule can be either.
-    expect(pack.divergentCourts.sort()).toEqual(["Court 1", "Court 2", "Court 3"]);
+    expect(pack.divergentCourts.sort()).toEqual([...board.courts].sort());
 
     const slot = (id: string): { from: number; to: number; court: string } => {
       const a = pack.draft.find((d) => d.fixture_id === id);

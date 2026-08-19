@@ -1,5 +1,12 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, divisionPath } from "./helpers";
+import {
+  TAG,
+  apiJson,
+  addEntrantsViaApi,
+  createStageAndGenerate,
+  divisionPath,
+  seedVenueWithCourts,
+} from "./helpers";
 
 // T15 — the three solver actions on the schedule board, driven through the
 // UI against the real engine. (Named `z3-auto-schedule.spec.ts` until the z3
@@ -74,22 +81,27 @@ const BUSY_BACKOFF_MS = 4_000;
 interface FixtureRow {
   id: string;
   scheduled_at: string | null;
-  court_label: string | null;
+  court_id: string | null;
   schedule_locked?: boolean;
 }
 const getFixture = async (request: APIRequestContext, id: string): Promise<FixtureRow> =>
   (await apiJson<FixtureRow>(request, `/api/v1/fixtures/${id}`)).data!;
 
-/** `${scheduled_at}@${court_label}` — the whole slot as one comparable value, so
+/** `${scheduled_at}@${court_id}` — the whole slot as one comparable value, so
  *  a card that kept its time but changed court still reads as moved. */
-const slotKey = (f: FixtureRow) => `${f.scheduled_at ?? "-"}@${f.court_label ?? "-"}`;
+const slotKey = (f: FixtureRow) => `${f.scheduled_at ?? "-"}@${f.court_id ?? "-"}`;
 
 /** A private competition + a 4-entrant round-robin division (6 fixtures) on a
  *  two-court, 30-minute grid. Own everything: nothing here is shared state. */
 async function seedBoard(
   request: APIRequestContext,
   label: string,
-): Promise<{ divisionId: string; stageId: string; fixtureIds: string[] }> {
+): Promise<{
+  divisionId: string;
+  stageId: string;
+  fixtureIds: string[];
+  courts: { id: string; name: string }[];
+}> {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     // #376 — mandatory, and far enough out that nothing here renders a
     // finished/locked competition state.
@@ -116,6 +128,7 @@ async function seedBoard(
   // improvement forced rather than merely likely.
   expect(fixtureIds.length).toBe(6);
 
+  const { courts } = await seedVenueWithCourts(request, ["Court A", "Court B"]);
   const settings = await apiJson(
     request,
     `/api/v1/divisions/${divisionId}/schedule-settings`,
@@ -126,7 +139,7 @@ async function seedBoard(
         startAt: START,
         matchMinutes: SLOT_MIN,
         gapMinutes: 0,
-        courts: ["Court A", "Court B"],
+        courts: courts.map((c) => c.id),
         // 0, not a rest floor: a rest shortfall is a WARN, and a board carrying
         // warnings would let "the solver produced nothing useful" and "the
         // solver produced a legal board" look the same in the strip's tone.
@@ -137,7 +150,7 @@ async function seedBoard(
     },
   );
   expect(settings.status).toBe(200);
-  return { divisionId, stageId, fixtureIds };
+  return { divisionId, stageId, fixtureIds, courts };
 }
 
 /**
@@ -210,11 +223,11 @@ test("Auto-schedule places an empty board and the strip reports the run", async 
   await expectSolvedStrip(strip, { tone: "plain" });
   const after = await Promise.all(fixtureIds.map((id) => getFixture(request, id)));
   expect(after.filter((f) => f.scheduled_at !== null)).toHaveLength(6);
-  expect(after.every((f) => f.court_label !== null)).toBe(true);
+  expect(after.every((f) => f.court_id !== null)).toBe(true);
   // Two courts exist and a 6-match round robin cannot fit on one inside this
   // grid without doubling the makespan — a board that used a single court is a
   // solver that ignored its own configuration.
-  expect(new Set(after.map((f) => f.court_label)).size).toBe(2);
+  expect(new Set(after.map((f) => f.court_id)).size).toBe(2);
 
   // COVER 2 — the strip carries THIS run's telemetry, not a placeholder.
   const headline = page.getByTestId("schedule-result-headline");
@@ -261,7 +274,7 @@ test("Re-flow places the unscheduled cards and leaves a pinned one alone", async
   // Build a full board over the API first — the UI click under test is the
   // RE-FLOW, so the starting board must not come from one.
   const auto = await apiJson<{
-    assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+    assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
   }>(request, `/api/v1/stages/${stageId}/schedule/auto`, "POST", { only_unlocked: false });
   expect(auto.status).toBe(200);
   const applied = await apiJson<{ applied: number }>(
@@ -307,11 +320,11 @@ test("Re-flow places the unscheduled cards and leaves a pinned one alone", async
   // …and the other half: the run demonstrably did something.
   const refilled = await Promise.all(others.map((id) => getFixture(request, id)));
   expect(refilled.filter((f) => f.scheduled_at !== null).length).toBeGreaterThanOrEqual(1);
-  expect(refilled.every((f) => f.scheduled_at !== null && f.court_label !== null)).toBe(true);
+  expect(refilled.every((f) => f.scheduled_at !== null && f.court_id !== null)).toBe(true);
 });
 
 test("Improve times compacts the board without moving a locked card", async ({ page, request }) => {
-  const { divisionId, stageId, fixtureIds } = await seedBoard(request, "Polish");
+  const { divisionId, stageId, fixtureIds, courts } = await seedBoard(request, "Polish");
 
   // A deliberately POOR but entirely LEGAL board: all six matches strung down
   // Court A in consecutive 30-minute slots, Court B untouched. Polish runs the
@@ -323,7 +336,7 @@ test("Improve times compacts the board without moving a locked card", async ({ p
   const board = fixtureIds.map((id, i) => ({
     fixture_id: id,
     scheduled_at: slotAt(i),
-    court_label: "Court A",
+    court_id: courts[0]!.id,
   }));
   const applied = await apiJson<{ applied: number }>(
     request,
@@ -379,7 +392,7 @@ test.describe("Auto-schedule confirm gate (#pins-ui)", () => {
   async function seedLockedBoard(request: APIRequestContext, label: string) {
     const { divisionId, stageId, fixtureIds } = await seedBoard(request, label);
     const auto = await apiJson<{
-      assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+      assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
     }>(request, `/api/v1/stages/${stageId}/schedule/auto`, "POST", { only_unlocked: false });
     expect(auto.status).toBe(200);
     const applied = await apiJson<{ applied: number }>(

@@ -10,6 +10,11 @@ import { HttpError } from "@/lib/errors";
 import { refreshOfficialsCache } from "./officials";
 import { acceptResolvedClaim, resolveClaimById } from "./person-claims";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
+// #14: this read is a SUPERUSER, cross-org query (no `withTenant`/RLS — an
+// official is usually not an org member) — `courtLabelsByOrg` is the
+// cross-org twin of schedule.ts's `courtNamesById`; see that helper's own
+// doc comment.
+import { courtLabelsByOrg } from "./cross-org-court-labels";
 
 // refreshOfficialsCache is typed for the tenant tx; it only uses the tagged
 // template + .json, which the superuser `sql` shares — safe structural cast.
@@ -44,8 +49,15 @@ export interface MyOfficiatingAssignment {
   scheduled_at: string | null;
   /** Venue zone (V305): division override → org timezone → UTC. */
   venue_tz: string | null;
-  venue: string | null;
-  court_label: string | null;
+  /** P9 cutover: `venue_name`/`court_name` are DERIVED (joined from `venues`/
+   *  `courts` via `fixtures.venue_id`/`court_id`). The frozen text columns
+   *  `fixtures.venue`/`court_label` are no longer read — writers stopped
+   *  populating them, so reading them renders blank for any fixture touched
+   *  after the cutover. */
+  venue_id: string | null;
+  venue_name: string | null;
+  court_id: string | null;
+  court_name: string | null;
   fixture_status: string;
   role_key: string;
   response: OfficiatingResponse;
@@ -84,16 +96,17 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
       where p.user_id = ${userId} and p.merged_into is null) as has`;
   if (!linked?.has) return { is_official: false, assignments: [], completed: [], blackouts: [] };
 
-  const assignments = await sql<MyOfficiatingAssignment[]>`
+  const assignmentsRaw = await sql<(Omit<MyOfficiatingAssignment, "court_name"> & { org_id: string })[]>`
     select fo.fixture_id, fo.id as fixture_official_id, f.fixture_no, o.id as official_id,
-           org.name as org_name, org.slug as org_slug,
+           f.org_id, org.name as org_name, org.slug as org_slug,
            c.name as competition_name, c.slug as competition_slug,
            c.visibility as competition_visibility,
            d.name as division_name, d.slug as division_slug, d.sport_key,
            h.display_name as home_name, a.display_name as away_name,
            f.home_slot_label, f.away_slot_label,
            org.default_locale as org_default_locale,
-           f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz, f.venue, f.court_label,
+           f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
+           f.venue_id, ven.name as venue_name, f.court_id,
            f.status as fixture_status,
            fo.role_key, fo.response, fo.decline_reason, fo.responded_at,
            mr.status as report_status
@@ -101,6 +114,7 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
     join officials o on o.person_id = p.id
     join fixture_officials fo on fo.official_id = o.id
     join fixtures f on f.id = fo.fixture_id
+    left join venues ven on ven.id = f.venue_id
     left join match_reports mr on mr.fixture_official_id = fo.id
     join divisions d on d.id = f.division_id
     join competitions c on c.id = d.competition_id
@@ -126,16 +140,17 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
   // resolve, so this query can return unfilled home/away rows too — the
   // interface makes all three fields non-optional, and this query used to
   // select none of them.
-  const completed = await sql<MyOfficiatingAssignment[]>`
+  const completedRaw = await sql<(Omit<MyOfficiatingAssignment, "court_name"> & { org_id: string })[]>`
     select fo.fixture_id, fo.id as fixture_official_id, f.fixture_no, o.id as official_id,
-           org.name as org_name, org.slug as org_slug,
+           f.org_id, org.name as org_name, org.slug as org_slug,
            c.name as competition_name, c.slug as competition_slug,
            c.visibility as competition_visibility,
            d.name as division_name, d.slug as division_slug, d.sport_key,
            h.display_name as home_name, a.display_name as away_name,
            f.home_slot_label, f.away_slot_label,
            org.default_locale as org_default_locale,
-           f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz, f.venue, f.court_label,
+           f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
+           f.venue_id, ven.name as venue_name, f.court_id,
            f.status as fixture_status,
            fo.role_key, fo.response, fo.decline_reason, fo.responded_at,
            mr.status as report_status
@@ -143,6 +158,7 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
     join officials o on o.person_id = p.id
     join fixture_officials fo on fo.official_id = o.id
     join fixtures f on f.id = fo.fixture_id
+    left join venues ven on ven.id = f.venue_id
     left join match_reports mr on mr.fixture_official_id = fo.id
     join divisions d on d.id = f.division_id
     join competitions c on c.id = d.competition_id
@@ -155,6 +171,23 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
       and f.status = any(${[...FINISHED_STATUSES]})
     order by f.scheduled_at desc nulls last, f.id, fo.role_key
     limit 50`;
+
+  // #14: venue-qualified label, resolved per-org (this read spans every org
+  // the caller officiates for) — one combined batch for both lists, same
+  // fallback convention as FixtureRow's own doc comment: fall back to the
+  // id on a miss (should not happen; FK-restricted).
+  const courtNames = await courtLabelsByOrg([...assignmentsRaw, ...completedRaw]);
+  const resolveCourt = (
+    r: Omit<MyOfficiatingAssignment, "court_name"> & { org_id: string },
+  ): MyOfficiatingAssignment => {
+    const { org_id: _orgId, ...rest } = r;
+    return {
+      ...rest,
+      court_name: rest.court_id !== null ? (courtNames.get(rest.court_id) ?? rest.court_id) : null,
+    };
+  };
+  const assignments = assignmentsRaw.map(resolveCourt);
+  const completed = completedRaw.map(resolveCourt);
 
   const blackouts = await sql<MyBlackout[]>`
     select oa.date::text as date, min(oa.note) as note

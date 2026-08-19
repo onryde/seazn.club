@@ -39,7 +39,7 @@ import {
   verifyJoint,
 } from "../competition-schedule-ai";
 import type { AiSchedulePlan } from "../schedule-ai-prompt";
-import { seedOrg } from "./_seed";
+import { seedCourts, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -143,12 +143,16 @@ interface RecursionBoard {
   bravoId: string;
   sharedPersonId: string;
   fixtureIds: { semi1: string; semi2: string; final: string; other: string };
+  court1: string;
+  court2: string;
+  court3: string;
 }
 
 /** The board drawn at the top of this file. */
 async function seedJointRecursionBoard(): Promise<RecursionBoard> {
   const { auth } = await seedOrg("pro");
   const tag = randomUUID().slice(0, 6);
+  const [court1, court2, court3] = await seedCourts(auth.orgId, 3);
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
     name: `Joint Wiring ${tag}`,
@@ -161,7 +165,7 @@ async function seedJointRecursionBoard(): Promise<RecursionBoard> {
     comp.id,
     "Alpha",
     `alpha-${tag}`,
-    ["Court 1", "Court 2"],
+    [court1!, court2!],
     "2026-08-01T09:00:00.000Z",
     ["A-A", "A-B", "A-C", "A-D"],
   );
@@ -170,7 +174,7 @@ async function seedJointRecursionBoard(): Promise<RecursionBoard> {
     comp.id,
     "Bravo",
     `bravo-${tag}`,
-    ["Court 3"],
+    [court3!],
     "2026-08-01T09:30:00.000Z",
     ["B-X", "B-Y"],
   );
@@ -212,6 +216,7 @@ async function seedJointRecursionBoard(): Promise<RecursionBoard> {
     bravoId: bravo.id,
     sharedPersonId: shared,
     fixtureIds: { semi1: semis[0]!, semi2: semis[1]!, final: final!.id, other: other!.id },
+    court1: court1!, court2: court2!, court3: court3!,
   };
 }
 
@@ -221,6 +226,8 @@ interface SameNameBoard {
   divisionIds: string[];
   personIds: [string, string];
   fixtureIds: { f1: string; f2: string };
+  court1: string;
+  court2: string;
 }
 
 /** Two divisions, one fixture each, and the SAME HUMAN entered in both under two
@@ -229,6 +236,7 @@ interface SameNameBoard {
 async function seedCrossDivisionSameNameBoard(): Promise<SameNameBoard> {
   const { auth } = await seedOrg("pro");
   const tag = randomUUID().slice(0, 6);
+  const [court1, court2] = await seedCourts(auth.orgId, 2);
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
     name: `Same Name ${tag}`,
@@ -240,7 +248,7 @@ async function seedCrossDivisionSameNameBoard(): Promise<SameNameBoard> {
     comp.id,
     "Ones",
     `ones-${tag}`,
-    ["Court 1"],
+    [court1!],
     "2026-08-01T09:00:00.000Z",
     ["O-1", "O-2"],
   );
@@ -249,7 +257,7 @@ async function seedCrossDivisionSameNameBoard(): Promise<SameNameBoard> {
     comp.id,
     "Twos",
     `twos-${tag}`,
-    ["Court 2"],
+    [court2!],
     "2026-08-01T09:00:00.000Z",
     ["T-1", "T-2"],
   );
@@ -277,6 +285,7 @@ async function seedCrossDivisionSameNameBoard(): Promise<SameNameBoard> {
     divisionIds: [one.id, two.id],
     personIds: [p1, p2],
     fixtureIds: { f1: f1!.id, f2: f2!.id },
+    court1: court1!, court2: court2!,
   };
 }
 
@@ -287,6 +296,7 @@ async function seedMeasurementBoard(
 ): Promise<{ auth: AuthCtx; competitionId: string; divisionIds: string[] }> {
   const { auth } = await seedOrg("pro");
   const tag = randomUUID().slice(0, 6);
+  const [court1, court2] = await seedCourts(auth.orgId, 2);
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
     name: `Measure ${tag}`,
@@ -301,7 +311,7 @@ async function seedMeasurementBoard(
       comp.id,
       name,
       slug,
-      ["Court 1", "Court 2"],
+      [court1!, court2!],
       "2026-08-01T09:00:00.000Z",
       Array.from({ length: entrantsPerDivision }, (_, i) => `${slug}-E${String(i + 1).padStart(3, "0")}`),
     );
@@ -411,10 +421,10 @@ describe.skipIf(!HAS_DB)("CompetitionPack.participants is wired into both joint 
     // instant while sharing one human.
     const conflicts = verifyJoint(
       plan([
-        { fixture_id: board.fixtureIds.semi1, scheduled_at: "2026-08-01T09:00:00.000Z", court_label: "Court 1" },
-        { fixture_id: board.fixtureIds.semi2, scheduled_at: "2026-08-01T09:00:00.000Z", court_label: "Court 2" },
-        { fixture_id: board.fixtureIds.final, scheduled_at: "2026-08-01T10:00:00.000Z", court_label: "Court 1" },
-        { fixture_id: board.fixtureIds.other, scheduled_at: "2026-08-01T10:00:00.000Z", court_label: "Court 3" },
+        { fixture_id: board.fixtureIds.semi1, scheduled_at: "2026-08-01T09:00:00.000Z", court_label: board.court1 },
+        { fixture_id: board.fixtureIds.semi2, scheduled_at: "2026-08-01T09:00:00.000Z", court_label: board.court2 },
+        { fixture_id: board.fixtureIds.final, scheduled_at: "2026-08-01T10:00:00.000Z", court_label: board.court1 },
+        { fixture_id: board.fixtureIds.other, scheduled_at: "2026-08-01T10:00:00.000Z", court_label: board.court3 },
       ]),
       pack,
     );
@@ -470,8 +480,8 @@ describe.skipIf(!HAS_DB)("CompetitionPack.participants is wired into both joint 
 
     const conflicts = verifyJoint(
       plan([
-        { fixture_id: board.fixtureIds.f1, scheduled_at: "2026-08-01T09:00:00.000Z", court_label: "Court 1" },
-        { fixture_id: board.fixtureIds.f2, scheduled_at: "2026-08-01T09:00:00.000Z", court_label: "Court 2" },
+        { fixture_id: board.fixtureIds.f1, scheduled_at: "2026-08-01T09:00:00.000Z", court_label: board.court1 },
+        { fixture_id: board.fixtureIds.f2, scheduled_at: "2026-08-01T09:00:00.000Z", court_label: board.court2 },
       ]),
       pack,
     );
@@ -492,7 +502,7 @@ describe.skipIf(!HAS_DB)("CompetitionPack.participants is wired into both joint 
 
     // The synthetic key is a scheduling-only device: it never reaches the model,
     // and nothing was merged in the database.
-    expect(JSON.stringify(toJointModelPayload(pack))).not.toContain("name:");
+    expect(JSON.stringify(toJointModelPayload(pack, {}))).not.toContain("name:");
     const rows = await sql<{ id: string }[]>`
       select id from persons where id in ${sql([board.personIds[0], board.personIds[1]])}`;
     expect(rows).toHaveLength(2);
@@ -506,6 +516,7 @@ describe.skipIf(!HAS_DB)("CompetitionPack.participants is wired into both joint 
     // pack keeps the run-wide one. Pins the pattern the drop is keyed on.
     const { auth } = await seedOrg("pro");
     const tag = randomUUID().slice(0, 6);
+    const [court1, court2] = await seedCourts(auth.orgId, 2);
     const comp = await createCompetition(auth, {
       ends_on: "2030-12-31",
       name: `Twin Rows ${tag}`,
@@ -513,11 +524,11 @@ describe.skipIf(!HAS_DB)("CompetitionPack.participants is wired into both joint 
       branding: {},
     });
     const one = await makeDivision(
-      auth, comp.id, "Ones", `ones-${tag}`, ["Court 1"], "2026-08-01T09:00:00.000Z",
+      auth, comp.id, "Ones", `ones-${tag}`, [court1!], "2026-08-01T09:00:00.000Z",
       ["O-1", "O-2"],
     );
     const two = await makeDivision(
-      auth, comp.id, "Twos", `twos-${tag}`, ["Court 2"], "2026-08-01T09:00:00.000Z",
+      auth, comp.id, "Twos", `twos-${tag}`, [court2!], "2026-08-01T09:00:00.000Z",
       ["T-1", "T-2"],
     );
     // Two rows in ONE division (Ones) — plus a third of the same name in Twos,
@@ -551,13 +562,16 @@ describe.skipIf(!HAS_DB)("CompetitionPack.participants is wired into both joint 
 
   it("toJointModelPayload strips participants and assumptions, and that is what keeps the joint pack inside the token budget", async () => {
     const board = await seedMeasurementBoard(20);
-    const { pack } = await buildCompetitionPack(
+    const { pack, courtDirectory } = await buildCompetitionPack(
       board.auth,
       board.competitionId,
       board.divisionIds,
       { now: NOW_W2, mode: "generate", instruction: "Pack the day." },
     );
-    const payload = toJointModelPayload(pack) as Record<string, unknown>;
+    // The REAL directory, exactly as the production call site passes it — so
+    // the "no uuid reaches the model" assertion below tests the real path
+    // rather than an empty-map fixture.
+    const payload = toJointModelPayload(pack, courtDirectory) as Record<string, unknown>;
     expect("participants" in payload).toBe(false);
     expect("assumptions" in payload).toBe(false);
     expect(JSON.stringify(payload)).not.toContain("participants");
@@ -571,15 +585,36 @@ describe.skipIf(!HAS_DB)("CompetitionPack.participants is wired into both joint 
     // it reads instead.
     expect("stageIds" in payload).toBe(false);
     expect("roundNos" in payload).toBe(false);
-    // Everything else survives the trim byte-for-byte.
-    expect(payload).toEqual(
-      Object.fromEntries(
-        Object.entries(pack).filter(
-          ([k]) =>
+    // P9 pass 3d: `courtDirectory` is the internal id -> {label, venue, tags}
+    // map. It is stripped for the same reason as the twins above — the model
+    // never sees a court UUID — and its human-readable projection rides
+    // instead as `courtDetails`, which is model-facing by design.
+    expect("courtDirectory" in payload).toBe(false);
+    expect(Array.isArray(payload.courtDetails)).toBe(true);
+    expect(JSON.stringify(payload.courtDetails)).not.toMatch(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/,
+    );
+    // Everything else survives the trim — as a KEY SET. It is no longer
+    // byte-for-byte, and pretending otherwise would hide the point of P9 pass
+    // 3d: court identity is RELABELLED on the way out (ids in the pack, names
+    // in the payload), so `settings.courts`, the draft and the obstacles
+    // legitimately differ in VALUE while the shape is unchanged.
+    expect(
+      Object.keys(payload).filter((k) => k !== "courtDetails").sort(),
+    ).toEqual(
+      Object.keys(pack)
+        .filter(
+          (k) =>
             k !== "participants" && k !== "assumptions" && k !== "poolIds" &&
-            k !== "stageIds" && k !== "roundNos",
-        ),
-      ),
+            k !== "stageIds" && k !== "roundNos" && k !== "courtDirectory",
+        )
+        .sort(),
+    );
+    // The relabelling itself, asserted rather than assumed: every court the
+    // model is shown is a NAME the organiser would recognise, and no court
+    // uuid survives anywhere in the payload.
+    expect(JSON.stringify(payload)).not.toMatch(
+      new RegExp(pack.courts.map((id) => id).join("|")),
     );
     // …while the map the placer and the referee read is still complete.
     expect(Object.keys(pack.participants)).toEqual(pack.fixtures.movable.map((f) => f.id));

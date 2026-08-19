@@ -13,6 +13,10 @@ export interface AiFixtureRef {
   /** ISO string (or null when the fixture sits unscheduled in the tray). */
   scheduled_at: string | null;
   court_label: string | null;
+  /** P9 pass 4a: additive real identity, alongside the frozen `court_label`
+   *  above — NOT a rename (that wire shape is a known separate follow-up).
+   *  Optional: several existing builders of this shape predate the field. */
+  court_id?: string | null;
 }
 
 /** A fixture enriched with what a ghost block / diff row shows (design §3): a
@@ -94,9 +98,20 @@ export interface AiDiff {
   unchanged: AiDiffUnchanged[];
 }
 
-/** Same court and same wall-clock instant — an ISO restatement is not a move. */
-function sameSlot(a: AiFixtureRef | AiDiffSlot, b: AiDiffSlot): boolean {
-  if ((a.court_label ?? null) !== (b.court_label ?? null)) return false;
+/**
+ * Same court and same wall-clock instant — an ISO restatement is not a move.
+ *
+ * P9 review wave 1, finding 3 (HIGH): court identity must compare `a.court_id`
+ * (the board's real identity — `court_label` is frozen and always null on a
+ * board-sourced `AiFixtureRef`, per its own doc) against `b.court_label`
+ * (which, despite the legacy name, carries a real court uuid on the plan
+ * side — `resolveModelCourtLabels` writes the id back before the response
+ * leaves the server). Comparing `court_label` on both sides — as this used
+ * to — compares "always null" against "always a uuid": never equal, so a
+ * no-op plan bucketed every scheduled fixture as moved.
+ */
+function sameSlot(a: AiFixtureRef, b: AiDiffSlot): boolean {
+  if ((a.court_id ?? null) !== (b.court_label ?? null)) return false;
   const ta = a.scheduled_at ? new Date(a.scheduled_at).getTime() : NaN;
   const tb = new Date(b.scheduled_at).getTime();
   return ta === tb;
@@ -131,7 +146,13 @@ export function computeAiDiff(
     } else {
       diff.moved.push({
         fixture_id: p.fixture_id,
-        from: { scheduled_at: now.scheduled_at, court_label: now.court_label },
+        // P9 review wave 3, finding #13: `now.court_label` is frozen and
+        // always null on a board-sourced AiFixtureRef (sameSlot's own doc
+        // comment above) — the board query stopped sending it. `court_id` is
+        // the real identity, the same field sameSlot already compares; using
+        // it here is what lets AiDiffPanel's `slot()` resolve a NAME for the
+        // origin side instead of silently dropping to time-only.
+        from: { scheduled_at: now.scheduled_at, court_label: now.court_id ?? null },
         to,
       });
     }
@@ -141,7 +162,8 @@ export function computeAiDiff(
     if (f.scheduled_at !== null && !proposedIds.has(f.id)) {
       diff.unscheduled.push({
         fixture_id: f.id,
-        from: { scheduled_at: f.scheduled_at, court_label: f.court_label },
+        // Same fix as `moved.from` just above.
+        from: { scheduled_at: f.scheduled_at, court_label: f.court_id ?? null },
       });
     }
   }

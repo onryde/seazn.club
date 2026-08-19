@@ -31,6 +31,7 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { applySchedule, autoSchedule, putScheduleSettings } from "../schedule";
 import { patchFixture } from "../fixtures";
+import { createVenue, createCourt } from "../venues";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const T0 = "2026-08-01T09:00:00.000Z";
@@ -46,8 +47,11 @@ const DIVISION_CONFIG = {
 };
 
 /** 4 entrants -> 6 league fixtures, 2 courts, 30-minute matches, 30 minutes'
- *  rest owed between an entrant's matches (so a pair needs 60 minutes apart). */
-async function seed(): Promise<{ auth: AuthCtx; stageId: string }> {
+ *  rest owed between an entrant's matches (so a pair needs 60 minutes apart).
+ *  `courts` (P9 pass 3a): "C1"/"C2" -> real `courts.id`, since
+ *  `ScheduleConfig.courts` is `CourtId[]` now — every call site below keeps
+ *  addressing courts by name through this map. */
+async function seed(): Promise<{ auth: AuthCtx; stageId: string; courts: Map<string, string> }> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug) values (${"Org " + suffix}, ${"org-" + suffix})
@@ -104,12 +108,15 @@ async function seed(): Promise<{ auth: AuthCtx; stageId: string }> {
     name: "L",
     config: {},
   });
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const c1 = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
+  const c2 = await createCourt(auth, venue.id, { name: "C2", sort: 1, tags: [] });
   await putScheduleSettings(auth, division.id, {
     config: {
       startAt: T0,
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["C1", "C2"],
+      courts: [c1.id, c2.id],
       perEntrantMinRest: 30,
       blackouts: [],
       sessionWindows: [],
@@ -117,14 +124,21 @@ async function seed(): Promise<{ auth: AuthCtx; stageId: string }> {
     tz: "UTC",
   });
   await generateStageFixtures(auth, stage.id);
-  return { auth, stageId: stage.id };
+  return {
+    auth,
+    stageId: stage.id,
+    courts: new Map([
+      ["C1", c1.id],
+      ["C2", c2.id],
+    ]),
+  };
 }
 
 describe.skipIf(!HAS_DB)(
   "reflow reports the FULL verifier's rows over the board it returns",
   () => {
     it("names exactly the rest breach on a pinned, unrepairable board", async () => {
-      const { auth, stageId } = await seed();
+      const { auth, stageId, courts } = await seed();
 
       const rows = await sql<
         { id: string; home_entrant_id: string; away_entrant_id: string; round_no: number }[]
@@ -186,12 +200,12 @@ describe.skipIf(!HAS_DB)(
       const round3 = byRound.get(3)!;
       await applySchedule(auth, stageId, {
         assignments: [
-          { fixture_id: round1Other.id, scheduled_at: at(-60), court_label: "C2" },
-          { fixture_id: first.id, scheduled_at: at(0), court_label: "C1" },
-          { fixture_id: clashing.id, scheduled_at: at(30), court_label: "C2" },
-          { fixture_id: round2Other.id, scheduled_at: at(60), court_label: "C1" },
-          { fixture_id: round3[0]!.id, scheduled_at: at(150), court_label: "C1" },
-          { fixture_id: round3[1]!.id, scheduled_at: at(150), court_label: "C2" },
+          { fixture_id: round1Other.id, scheduled_at: at(-60), court_id: courts.get("C2")! },
+          { fixture_id: first.id, scheduled_at: at(0), court_id: courts.get("C1")! },
+          { fixture_id: clashing.id, scheduled_at: at(30), court_id: courts.get("C2")! },
+          { fixture_id: round2Other.id, scheduled_at: at(60), court_id: courts.get("C1")! },
+          { fixture_id: round3[0]!.id, scheduled_at: at(150), court_id: courts.get("C1")! },
+          { fixture_id: round3[1]!.id, scheduled_at: at(150), court_id: courts.get("C2")! },
         ],
         source: "manual",
       });
@@ -286,7 +300,7 @@ describe.skipIf(!HAS_DB)(
      * which is the C4-era point worth a comment surviving for.
      */
     it("degrades gracefully when round order is the only thing a pinned board violates", async () => {
-      const { auth, stageId } = await seed();
+      const { auth, stageId, courts } = await seed();
 
       const rows = await sql<{ id: string; round_no: number }[]>`
         select id, round_no from fixtures where stage_id = ${stageId} order by round_no, id`;
@@ -333,7 +347,7 @@ describe.skipIf(!HAS_DB)(
         [round1Other, 240, "C2"],
       ] as const) {
         await sql`
-          update fixtures set scheduled_at = ${at(minutes)}, court_label = ${court}
+          update fixtures set scheduled_at = ${at(minutes)}, court_id = ${courts.get(court)!}
           where id = ${f.id}`;
       }
       // ONLY round 1 is locked. This is deliberate, not a weaker stand-in for
@@ -402,7 +416,7 @@ describe.skipIf(!HAS_DB)(
      * same as never having to read one.
      */
     it("names exactly the blocking court clash on a board it hands back unchanged", async () => {
-      const { auth, stageId } = await seed();
+      const { auth, stageId, courts } = await seed();
 
       const rows = await sql<
         { id: string; home_entrant_id: string; away_entrant_id: string; round_no: number }[]
@@ -454,22 +468,22 @@ describe.skipIf(!HAS_DB)(
       // double-booking, not rest — round order tolerates ties, so `a`/`b`
       // sitting together is not itself a violation.
       await sql`
-        update fixtures set scheduled_at = ${at(-60)}, court_label = 'C2'
+        update fixtures set scheduled_at = ${at(-60)}, court_id = ${courts.get("C2")!}
         where id = ${aOther.id}`;
       await sql`
-        update fixtures set scheduled_at = ${at(60)}, court_label = 'C1'
+        update fixtures set scheduled_at = ${at(60)}, court_id = ${courts.get("C1")!}
         where id = ${bOther.id}`;
       await sql`
-        update fixtures set scheduled_at = ${at(150)}, court_label = 'C1'
+        update fixtures set scheduled_at = ${at(150)}, court_id = ${courts.get("C1")!}
         where id = ${round3[0]!.id}`;
       await sql`
-        update fixtures set scheduled_at = ${at(150)}, court_label = 'C2'
+        update fixtures set scheduled_at = ${at(150)}, court_id = ${courts.get("C2")!}
         where id = ${round3[1]!.id}`;
 
       // Two cards stacked on ONE court at ONE time — physically impossible, and
       // `assertNoNewBlocking` would refuse to write it, so it goes in directly.
       await sql`
-      update fixtures set scheduled_at = ${at(0)}, court_label = 'C1'
+      update fixtures set scheduled_at = ${at(0)}, court_id = ${courts.get("C1")!}
       where id in ${sql([a.id, b.id])}`;
       // Pinned, so the repair solver may not resolve the clash and the incumbent
       // board is what comes back.
@@ -516,7 +530,17 @@ describe.skipIf(!HAS_DB)(
             code: "conflict.court",
             rule: "H2",
             blocking: true,
-            details: { kind: "court_double_booking" as const, court: "C1", other_fixture_id: other! },
+            // P9 pass 3a: `court` is the real courts.id; `court_name` is the
+            // DERIVED display name the usecase resolves before this leaves
+            // the server (schemas.ts ScheduleConflictDetail) — present
+            // alongside `court` whenever the resolver can name it, which it
+            // always can here (the court was just created, never archived).
+            details: {
+              kind: "court_double_booking" as const,
+              court: courts.get("C1")!,
+              court_name: "C1",
+              other_fixture_id: other!,
+            },
           },
           {
             fixture_id: self!,

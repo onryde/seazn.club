@@ -9,6 +9,7 @@ import { PaymentRequiredError, HttpError } from "@/lib/errors";
 import { createOrgForUser } from "@/lib/auth";
 import { acceptInvite, grantInvite, loadInvite } from "@/lib/invites";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { AssignedFixture } from "@/server/api-v1/schemas";
 import type { OrgRole } from "@/lib/types";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -402,6 +403,84 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
     await expect(requireScorable(viewer, other.fixtures[0].id)).rejects.toMatchObject({
       status: 403,
     });
+  });
+
+  it("listAssignedFixtures rows parse against the published AssignedFixture contract (review finding #9) — court_id/venue_id and derived court_name/venue_name, not the retired venue/court_label", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asRole(orgId, ownerId, "owner");
+    const { division, fixtures } = await rig(owner);
+    const scorerId = await addMember(orgId, "scorer");
+    await createAssignment(orgId, scorerId, { type: "division", id: division.id }, ownerId);
+
+    // A real venue/court by id (P9 cutover) attached to one covered fixture —
+    // proves the derived court_name/venue_name resolve, not just that the
+    // schema shape happens to line up.
+    const [{ id: venueId }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${orgId}, ${"Riverside"}) returning id`;
+    const [{ id: courtId }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueId}, ${orgId}, ${"Court 9"}, ${sql.array([])})
+      returning id`;
+    await sql`update fixtures set venue_id = ${venueId}, court_id = ${courtId} where id = ${fixtures[0].id}`;
+
+    const mine = await listAssignedFixtures(scorerId);
+    expect(mine.length).toBeGreaterThan(0);
+    // Would throw pre-fix: the published schema still required `venue`/
+    // `court_label` as present keys, which listAssignedFixtures stopped
+    // selecting — parsing a REAL row (not a hand-built literal) catches that.
+    for (const f of mine) AssignedFixture.parse(f);
+
+    const withCourt = mine.find((f) => f.id === fixtures[0].id)!;
+    expect(withCourt.venue_name).toBe("Riverside");
+    expect(withCourt.court_name).toBe("Court 9");
+
+    // The OTHER half of contract drift: a field the usecase ships but the
+    // schema never declares is STRIPPED by z.object rather than rejected, so
+    // the parse above stays green while the published contract understates the
+    // payload. Reading them back off the PARSED value is what makes that
+    // visible. All seven pre-date the venues cutover.
+    const parsed = AssignedFixture.parse(withCourt);
+    for (const k of [
+      "fixture_no", "org_slug", "competition_slug", "division_slug",
+      "home_slot_label", "away_slot_label", "venue_tz",
+    ] as const) {
+      expect({ [k]: parsed[k] }).toEqual({ [k]: withCourt[k] });
+      expect(parsed[k]).not.toBeUndefined();
+    }
+  });
+
+  // #14: listAssignedFixtures is a SUPERUSER, cross-org read (no
+  // withTenant/RLS) — a court name is unique only WITHIN its venue, so it
+  // must venue-qualify via the same rule the board/AI pack use, not show two
+  // indistinguishable "Court 1" entries for two different physical courts.
+  it("#14: disambiguates two same-named courts across two venues; never renders a bare uuid", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asRole(orgId, ownerId, "owner");
+    const { division, fixtures } = await rig(owner);
+    const scorerId = await addMember(orgId, "scorer");
+    await createAssignment(orgId, scorerId, { type: "division", id: division.id }, ownerId);
+
+    const [{ id: venueA }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${orgId}, ${"Riverside"}) returning id`;
+    const [{ id: venueB }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${orgId}, ${"Lakeside"}) returning id`;
+    const [{ id: courtA }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueA}, ${orgId}, ${"Court 1"}, ${sql.array([])}) returning id`;
+    const [{ id: courtB }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueB}, ${orgId}, ${"Court 1"}, ${sql.array([])}) returning id`;
+    await sql`update fixtures set venue_id = ${venueA}, court_id = ${courtA} where id = ${fixtures[0].id}`;
+    await sql`update fixtures set venue_id = ${venueB}, court_id = ${courtB} where id = ${fixtures[1].id}`;
+
+    const mine = await listAssignedFixtures(scorerId);
+    for (const f of mine) AssignedFixture.parse(f);
+    const c1 = mine.find((f) => f.id === fixtures[0].id)!;
+    const c2 = mine.find((f) => f.id === fixtures[1].id)!;
+    expect(c1.court_name).toBe("Court 1 (Riverside)");
+    expect(c2.court_name).toBe("Court 1 (Lakeside)");
+    const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-/i;
+    for (const f of mine) expect(f.court_name ?? "").not.toMatch(uuidRe);
   });
 
   it("accept, existing viewer × scorer invite: scope added, role kept, no scorer seat", async () => {

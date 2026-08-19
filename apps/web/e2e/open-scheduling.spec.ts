@@ -1,6 +1,13 @@
 import { test, expect, type Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
-import { TAG, apiJson, loginUi, addEntrantsViaApi, createStageAndGenerate } from "./helpers";
+import {
+  TAG,
+  apiJson,
+  loginUi,
+  addEntrantsViaApi,
+  createStageAndGenerate,
+  seedVenueWithCourts,
+} from "./helpers";
 
 /**
  * Division scheduling is open to every plan (#382, V353) — proven in the
@@ -139,6 +146,7 @@ test.describe("Community reaches the board and the constraints (#382)", () => {
     const org = await seedCommunityOrg();
     await loginAsOwner(page, org.ownerEmail);
     const rig = await seedRig(page.request);
+    const { courts } = await seedVenueWithCourts(page.request, ["Court A", "Court B"]);
 
     // Every one of these trips `usesConstraints` on its own: a rest floor, a
     // blackout AND a second court. Before V353 this was a flat 402 on community.
@@ -150,7 +158,7 @@ test.describe("Community reaches the board and the constraints (#382)", () => {
           startAt: new Date(Date.UTC(2026, 9, 12, 9, 0)).toISOString(),
           matchMinutes: 45,
           gapMinutes: 5,
-          courts: ["Court A", "Court B"],
+          courts: courts.map((c) => c.id),
           perEntrantMinRest: 30,
         },
       }),
@@ -162,7 +170,7 @@ test.describe("Community reaches the board and the constraints (#382)", () => {
       page.request,
       `/api/v1/divisions/${rig.divisionId}/schedule-settings`,
     );
-    expect(read.data!.config.courts).toEqual(["Court A", "Court B"]);
+    expect(read.data!.config.courts).toEqual(courts.map((c) => c.id));
     expect(read.data!.config.perEntrantMinRest).toBe(30);
   });
 
@@ -170,6 +178,7 @@ test.describe("Community reaches the board and the constraints (#382)", () => {
     const org = await seedCommunityOrg();
     await loginAsOwner(page, org.ownerEmail);
     const rig = await seedRig(page.request);
+    const { courts } = await seedVenueWithCourts(page.request, ["Court A"]);
 
     // `source: "manual"` is the branch gated on `scheduling.board`.
     const applied = await page.request.post(`/api/v1/stages/${rig.stageId}/schedule/apply`, {
@@ -180,7 +189,7 @@ test.describe("Community reaches the board and the constraints (#382)", () => {
           {
             fixture_id: rig.fixtureIds[0],
             scheduled_at: new Date(Date.UTC(2026, 9, 12, 9, 0)).toISOString(),
-            court_label: "Court A",
+            court_id: courts[0]!.id,
           },
         ],
       }),
@@ -194,12 +203,13 @@ test.describe("Community reaches the board and the constraints (#382)", () => {
     });
     expect(pinned.status(), await pinned.text()).toBe(200);
 
-    const fixture = await apiJson<{ schedule_locked: boolean; court_label: string | null }>(
+    const fixture = await apiJson<{ schedule_locked: boolean; court_id: string | null; court_name: string | null }>(
       page.request,
       `/api/v1/fixtures/${rig.fixtureIds[0]}`,
     );
     expect(fixture.data!.schedule_locked).toBe(true);
-    expect(fixture.data!.court_label).toBe("Court A");
+    expect(fixture.data!.court_id).toBe(courts[0]!.id);
+    expect(fixture.data!.court_name).toBe("Court A");
   });
 
   test("the division board page renders no scheduling paywall for Community", async ({ page }) => {

@@ -18,7 +18,7 @@ import { createStages, generateStageFixtures } from "../stages";
 import { claimPerson } from "../person-claims";
 import { createOfficial, inviteOfficial, patchFixtureOfficials } from "../officials";
 import { buildOfficialsPack } from "../officials-ai";
-import { makeUser, seedOrg } from "./_seed";
+import { makeUser, seedCourts, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -33,15 +33,25 @@ const T0 = Date.parse("2026-08-01T09:00:00.000Z");
 const MIN = 60_000;
 const TZ = "Europe/London";
 
-const SETTINGS_CONFIG = {
-  startAt: "2026-08-01T09:00:00.000Z",
-  matchMinutes: 30,
-  gapMinutes: 0,
-  courts: ["Court 1", "Court 2"],
-  perEntrantMinRest: 20,
-  blackouts: [],
-  sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T23:00:00.000Z" }],
-};
+// P9 pass 3b/3c: `ScheduleConfig.courts` is `z.array(CourtId)` — real
+// `courts.id` values, seeded per org below (`seedCourts` names them
+// "Court 1".."Court N", so they read back identical to the old free-text
+// labels this suite already asserted on). The per-fixture court
+// officials-ai.ts shows in the pack is DERIVED from `courts` via each
+// fixture's `court_id` (pass 3c) — `court_label` is frozen and only ever
+// read back to prove it is NOT what renders (see the "stale court_label"
+// test below).
+function settingsConfig(courts: string[]) {
+  return {
+    startAt: "2026-08-01T09:00:00.000Z",
+    matchMinutes: 30,
+    gapMinutes: 0,
+    courts,
+    perEntrantMinRest: 20,
+    blackouts: [],
+    sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T23:00:00.000Z" }],
+  };
+}
 
 const POLICY: AssignPolicy = {
   roles: ["referee"],
@@ -66,11 +76,13 @@ function redact(pack: unknown): unknown {
   );
 }
 
-async function setSettings(divisionId: string): Promise<void> {
+async function setSettings(auth: AuthCtx, divisionId: string): Promise<string[]> {
+  const courts = await seedCourts(auth.orgId, 2);
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)
-    values (${divisionId}, ${sql.json(SETTINGS_CONFIG)}, ${TZ}, now())
+    values (${divisionId}, ${sql.json(settingsConfig(courts))}, ${TZ}, now())
     on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
+  return courts;
 }
 
 // Seed one full RR board (2 courts, 8 entrants, a shared player, two referees)
@@ -96,11 +108,15 @@ async function seedOfficialsBoard(opts?: {
       kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [],
     })),
   );
-  await setSettings(divisionId);
+  const courts = await setSettings(auth, divisionId);
   const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "League", config: {} });
   const { fixtures } = await generateStageFixtures(auth, stage!.id);
 
   // Deterministic 2-court schedule on STABLE order (round_no, seq_in_round).
+  // `court_id` is the real identity the pack now derives its name from;
+  // `court_label` rides along frozen (P9) so a reverted reader would still
+  // show "Court 1"/"Court 2" here too — see the dedicated stale-label test
+  // for the case that actually distinguishes the two.
   const ordered = [...fixtures].sort(
     (a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round,
   );
@@ -109,6 +125,7 @@ async function seedOfficialsBoard(opts?: {
       update fixtures set
         scheduled_at = ${new Date(T0 + i * 30 * MIN).toISOString()},
         court_label = ${i % 2 === 0 ? "Court 1" : "Court 2"},
+        court_id = ${i % 2 === 0 ? courts[0] : courts[1]},
         schedule_source = 'auto'
       where id = ${ordered[i]!.id}`;
   }
@@ -162,6 +179,41 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack (v4/03 §2)", () => {
 
   beforeAll(async () => {
     ({ auth, divisionId } = await seedOfficialsBoard());
+  });
+
+  it("distinguishes two courts that share a bare name in different venues", async () => {
+    // P9 review wave 2. `courtNamesById` returned the bare `courts.name`, but a
+    // court name is unique only WITHIN its venue
+    // (`courts_venue_name_active_idx` is scoped per venue), so two venues may
+    // legally each name one "Court 1". The pack then showed the same physical
+    // slot under one identity twice — and this is a MONEY path, not only a
+    // display one: `quoteRun` prices on the count of DISTINCT court values in
+    // the pack, so the two collapsed into one and the credit rung came out
+    // under the run the organiser actually got.
+    const board = await seedOfficialsBoard();
+    const [{ id: venue2 }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${board.auth.orgId}, 'Second venue') returning id`;
+    // Deliberately the SAME bare name a court on the first venue already has.
+    const [{ id: court2 }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venue2}, ${board.auth.orgId}, 'Court 1', ${sql.array([])}) returning id`;
+    const [moved] = await sql<{ id: string }[]>`
+      select id from fixtures where division_id = ${board.divisionId}
+        and court_id is not null order by scheduled_at limit 1`;
+    await sql`update fixtures set court_id = ${court2} where id = ${moved!.id}`;
+
+    const pack = await buildOfficialsPack(board.auth, board.divisionId, {
+      instruction: "x", policy: POLICY,
+    });
+    const named = pack.fixtures.filter((f) => f.court !== null && f.court !== undefined);
+    const moving = named.find((f) => f.id === moved!.id)!;
+    const staying = named.find((f) => f.id !== moved!.id && f.court !== moving.court);
+    // Both resolve to a name (never a bare uuid)…
+    expect(moving.court).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+    // …and the two "Court 1"s are TOLD APART, which is the whole point.
+    expect(staying).toBeDefined();
+    expect(moving.court).toContain("Second venue");
+    expect(moving.court).not.toBe(staying!.court);
   });
 
   it("rebuilds byte-identical for an identical board reseeded with fresh UUIDs", async () => {
@@ -220,7 +272,7 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack (v4/03 §2)", () => {
         kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [],
       })),
     );
-    await setSettings(div.id);
+    const courts = await setSettings(tieAuth, div.id);
     const [stage] = await createStages(tieAuth, div.id, { seq: 1, kind: "league", name: "L", config: {} });
     const ents = await sql<{ id: string }[]>`select id from entrants where division_id = ${div.id} order by seed`;
     // Unique per run, but Court 1 always draws the HIGHER of the two UUIDs.
@@ -229,12 +281,12 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack (v4/03 §2)", () => {
     await sql`
       insert into fixtures
         (id, stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
-         scheduled_at, court_label, home_entrant_id, away_entrant_id)
+         scheduled_at, court_label, court_id, home_entrant_id, away_entrant_id)
       values
         (${court1Id}, ${stage!.id}, ${div.id}, ${tieAuth.orgId}, 1, 0, 'tie-c1', 'scheduled',
-         ${at}, 'Court 1', ${ents[0]!.id}, ${ents[1]!.id}),
+         ${at}, 'Court 1', ${courts[0]!}, ${ents[0]!.id}, ${ents[1]!.id}),
         (${court2Id}, ${stage!.id}, ${div.id}, ${tieAuth.orgId}, 1, 1, 'tie-c2', 'scheduled',
-         ${at}, 'Court 2', ${ents[2]!.id}, ${ents[3]!.id})`;
+         ${at}, 'Court 2', ${courts[1]!}, ${ents[2]!.id}, ${ents[3]!.id})`;
     await sql`
       insert into officials (org_id, display_name, role_keys) values
         (${tieAuth.orgId}, 'Sam Whistle', ${sql.json(["referee"])}),
@@ -294,13 +346,47 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack (v4/03 §2)", () => {
     const base = await buildOfficialsPack(auth, divisionId, { instruction: "x", policy: POLICY });
     const target = base.fixtures[0]!;
     const overrideAt = "2026-08-05T14:00:00.000Z";
+    // P9 review wave 1, finding 8: the dry-run override's `court_label` is a
+    // real court uuid on the wire (the Phase-A proposal — ai-console.tsx
+    // forwards `schedulePlan.proposal[].court_label` verbatim), never a bare
+    // display string — so the fixture under test must send one too.
+    const [court2] = await sql<{ id: string }[]>`
+      select id from courts where org_id = ${auth.orgId} and name = 'Court 2'`;
     const withOverride = await buildOfficialsPack(auth, divisionId, {
       instruction: "x", policy: POLICY,
-      schedule: [{ fixture_id: target.id, scheduled_at: overrideAt, court_label: "Court 2" }],
+      schedule: [{ fixture_id: target.id, scheduled_at: overrideAt, court_label: court2!.id }],
     });
     const moved = withOverride.fixtures.find((f) => f.id === target.id)!;
     expect(new Date(moved.start_at).toISOString()).toBe(overrideAt);
     expect(moved.court).toBe("Court 2");
+  });
+
+  // P9 review wave 1, finding 8 (MEDIUM, MONEY): the override branch used to
+  // pass its uuid straight through while the persisted branch resolved a
+  // name via `courtNames.get(f.court_id)` — one field, two kinds of value.
+  // `officialsAiPlanForDivision`'s quoteRun prices off
+  // `new Set(pack.fixtures.map(f => f.court)).size`, so the SAME physical
+  // court showing once as a raw uuid and once as "Court 1" double-counted
+  // and inflated the credit charge. Fails on a reverted `court` derivation
+  // (the override's id compares unequal to the persisted name).
+  it("an override resolves to the SAME name a persisted assignment on that court shows", async () => {
+    const [court1] = await sql<{ id: string }[]>`
+      select id from courts where org_id = ${auth.orgId} and name = 'Court 1'`;
+    const base = await buildOfficialsPack(auth, divisionId, { instruction: "x", policy: POLICY });
+    const persistedOnCourt1 = base.fixtures.find((f) => f.court === "Court 1")!;
+    const onCourt2 = base.fixtures.find((f) => f.court === "Court 2")!;
+    const withOverride = await buildOfficialsPack(auth, divisionId, {
+      instruction: "x", policy: POLICY,
+      schedule: [
+        { fixture_id: onCourt2.id, scheduled_at: "2026-08-05T15:00:00.000Z", court_label: court1!.id },
+      ],
+    });
+    const moved = withOverride.fixtures.find((f) => f.id === onCourt2.id)!;
+    // Same physical court, same string — this is what lets quoteRun's
+    // `new Set(...)` collapse the two to ONE distinct court instead of
+    // double-counting the override's raw uuid as a second, different court.
+    expect(moved.court).toBe(persistedOnCourt1.court);
+    expect(moved.court).toBe("Court 1");
   });
 
   it("422 NO_OFFICIALS when the roster is empty", async () => {
@@ -310,7 +396,7 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack (v4/03 §2)", () => {
       name: "Bare", slug: "bare", sport_key: "generic", variant_key: "score",
       config: GENERIC_CONFIG, eligibility: [],
     });
-    await setSettings(div.id);
+    await setSettings(emptyAuth, div.id);
     await expect(
       buildOfficialsPack(emptyAuth, div.id, { instruction: "x", policy: POLICY }),
     ).rejects.toMatchObject({ status: 422, message: "NO_OFFICIALS" });
@@ -368,5 +454,64 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack cross-org busy", () => {
     const shared = pack.officials.find((o) => o.id === officialA.id)!;
     expect(shared.busy_elsewhere.length).toBe(1);
     expect(/[+-]\d{2}:\d{2}$/.test(shared.busy_elsewhere[0]!)).toBe(true);
+  });
+});
+
+// P9 pass 3c: `f.court_label` is frozen — nothing writes it any more — so a
+// fixture whose stale label disagrees with its real `court_id` must still
+// render the court_id's live name. Fails on a reverted reader (which would
+// show the stale label instead).
+describe.skipIf(!HAS_DB)("buildOfficialsPack court naming (P9 cutover)", () => {
+  it("renders the court_id's live name, not a stale court_label", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Stale", visibility: "public", branding: {} });
+    const div = await createDivision(auth, comp.id, {
+      name: "Stale", slug: "stale", sport_key: "generic", variant_key: "score",
+      config: GENERIC_CONFIG, eligibility: [],
+    });
+    await createEntrants(auth, div.id, ["A", "B"].map((n, i) => ({
+      kind: "individual" as const, display_name: n, seed: i + 1, members: [],
+    })));
+    const courts = await setSettings(auth, div.id);
+    const [stage] = await createStages(auth, div.id, { seq: 1, kind: "league", name: "L", config: {} });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    await sql`
+      update fixtures set scheduled_at = ${"2026-08-01T09:00:00.000Z"},
+        court_label = 'Stale Court Name', court_id = ${courts[0]!}
+      where id = ${fixtures[0]!.id}`;
+    await sql`
+      insert into officials (org_id, display_name, role_keys)
+      values (${auth.orgId}, 'Ref', ${sql.json(["referee"])})`;
+
+    const p = await buildOfficialsPack(auth, div.id, { instruction: "x", policy: POLICY });
+    const f = p.fixtures.find((x) => x.id === fixtures[0]!.id)!;
+    expect(f.court).toBe("Court 1");
+    expect(f.court).not.toBe("Stale Court Name");
+  });
+
+  it("archived courts still render a name, never a bare uuid or blank", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Arch", visibility: "public", branding: {} });
+    const div = await createDivision(auth, comp.id, {
+      name: "Arch", slug: "arch", sport_key: "generic", variant_key: "score",
+      config: GENERIC_CONFIG, eligibility: [],
+    });
+    await createEntrants(auth, div.id, ["A", "B"].map((n, i) => ({
+      kind: "individual" as const, display_name: n, seed: i + 1, members: [],
+    })));
+    const courts = await setSettings(auth, div.id);
+    const [stage] = await createStages(auth, div.id, { seq: 1, kind: "league", name: "L", config: {} });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    await sql`
+      update fixtures set scheduled_at = ${"2026-08-01T09:00:00.000Z"}, court_id = ${courts[0]!}
+      where id = ${fixtures[0]!.id}`;
+    await sql`update courts set archived_at = now() where id = ${courts[0]!}`;
+    await sql`
+      insert into officials (org_id, display_name, role_keys)
+      values (${auth.orgId}, 'Ref', ${sql.json(["referee"])})`;
+
+    const p = await buildOfficialsPack(auth, div.id, { instruction: "x", policy: POLICY });
+    const f = p.fixtures.find((x) => x.id === fixtures[0]!.id)!;
+    expect(f.court).toBe("Court 1");
   });
 });

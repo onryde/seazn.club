@@ -17,16 +17,23 @@
 // Pure and React-free with an injected api seam, exactly as ai-apply.ts is, so
 // the call order and the payloads are assertable without a server.
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
-import type { AiApplyMeta } from "@/server/api-v1/schemas";
+import type { z } from "zod";
+import type { AiApplyMeta , ApplyScheduleRequest } from "@/server/api-v1/schemas";
 import { aiCheckpointLabel } from "./ai-apply";
 
 /** One division's slice of the joint write. `expectedSeq` is REQUIRED by the
  *  endpoint — a joint write that skipped the check on one division would let a
- *  stale board silently overwrite a concurrent edit there. */
+ *  stale board silently overwrite a concurrent edit there.
+ *
+ *  P9 pass 3b: `court_id` (a real `courts.id`), not the legacy `court_label`
+ *  — `ApplyCompetitionScheduleRequest`'s assignment item is `.strict()` and
+ *  requires `court_id` (schemas.ts), so a `court_label` key here 400s the
+ *  whole joint apply rather than silently applying nothing. */
 export interface JointApplyDivision {
   divisionId: string;
   expectedSeq: number;
-  assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+  // P9: INFERRED, never hand-declared — see stages-panel/use-board-actions.
+  assignments: z.infer<typeof ApplyScheduleRequest>["assignments"];
 }
 
 export interface JointApplyInput {

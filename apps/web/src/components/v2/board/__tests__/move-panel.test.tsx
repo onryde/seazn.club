@@ -30,6 +30,8 @@ const fixture: BoardFixture = {
   scheduled_at: null,
   venue: null,
   court_label: null,
+  court_id: null,
+  court_name: null,
   status: "scheduled",
   schedule_source: "manual",
   schedule_locked: false,
@@ -151,6 +153,33 @@ describe("MovePanel", () => {
     expect(html).toContain("Ganador del Grupo A");
     expect(html).toContain("Ganador del Grupo B");
     expect(html).not.toContain("Winner of Group A");
+  });
+
+  // P9 scope item 5: the court multi-picker replaced free-text court NAMES
+  // with real court ids everywhere upstream — this panel's own seed was the
+  // last free-text-shaped read left (`fixture.court_label`, frozen null on
+  // anything scheduled since the cutover). A fixture whose stale label
+  // disagrees with its real court_id must show the court_id's court.
+  it("seeds the selected court from court_id, never the frozen court_label", () => {
+    const html = renderToStaticMarkup(
+      <MovePanel
+        {...baseProps}
+        fixture={{ ...baseProps.fixture, court_label: "Old Label", court_id: "c-2" }}
+        courts={["c-1", "c-2"]}
+        courtNames={{ "c-1": "Court One", "c-2": "Court Two" }}
+        boardConfig={{ config: baseConfig, orgTz: "UTC" }}
+      />,
+    );
+    expect(html).toMatch(/<option value="c-2"[^>]*selected[^>]*>Court Two<\/option>/);
+    expect(html).not.toContain("Old Label");
+    expect(html).not.toMatch(/<option value="c-1"[^>]*selected[^>]*>/);
+  });
+
+  it("falls back to the raw id when courtNames has no entry for it", () => {
+    const html = renderToStaticMarkup(
+      <MovePanel {...baseProps} courts={["c-1"]} boardConfig={{ config: baseConfig, orgTz: "UTC" }} />,
+    );
+    expect(html).toMatch(/<option value="c-1"[^>]*>c-1<\/option>/);
   });
 
   it("wraps the When field in an explicit-width container so it cannot collapse", () => {

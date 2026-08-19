@@ -37,8 +37,13 @@ import { MovePanel } from "./board/move-panel";
 import { ScheduleGateDialog, type GateAction } from "./board/schedule-gate-dialog";
 import { ScheduleResultStrip } from "./board/result-strip";
 import { SettingsPanel } from "./board/settings-panel";
+import { resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
+// P9: BOARD-side Venue — identity and display, no calendar. See
+// court-multi-picker.tsx for why the board must not carry hours/exceptions.
+import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import {
   cardTitle,
+  courtDisplayName,
   DENSITY_STORAGE_KEY,
   type BoardConfig,
   type BoardDivision,
@@ -89,7 +94,9 @@ export function aiPricingInputs(
       .map((f) => ({
         id: f.id,
         scheduled_at: f.scheduled_at ? new Date(f.scheduled_at).toISOString() : null,
-        court_label: f.court_label,
+        // P9 pass 4a: `court_id`, not the frozen `court_label` — `movableForRun`
+        // narrows a repair scope on the real identity now.
+        court_id: f.court_id,
       })),
     // SELECTS the count as well as returning it — deliberately. An earlier
     // version took the number as a parameter, which put the boundary BELOW the
@@ -268,7 +275,11 @@ export function consoleFixtures(
       // which are absent from the proposal it used to be read from.
       division_id: f.division_id,
       scheduled_at: f.scheduled_at ? new Date(f.scheduled_at).toISOString() : null,
-      court_label: f.court_label,
+      // P9: the frozen label is no longer sent to the board, so this carries
+      // whatever a non-board caller happened to include (usually nothing).
+      // `court_id` below is the identity every consumer actually keys on.
+      court_label: f.court_label ?? null,
+      court_id: f.court_id,
       // P7/F1: was a hand-built `R${...}·${...}` template — now the SAME
       // matchRef() the feed label's {ext} substitution calls (slot-label.ts),
       // so this code chip and a "Winner of …" label naming this same fixture
@@ -344,6 +355,36 @@ export function ghostBlocks(
   });
 }
 
+/**
+ * The board's court-COLUMN list for the day/week views: configured courts
+ * first, then any court a scheduled fixture or an AI ghost carries that
+ * isn't in it yet, so a legacy or proposed placement always gets a column.
+ *
+ * IDS ONLY (P9 pass 4c) — this used to merge in `f.court_label`, a
+ * fixture's frozen legacy NAME, right alongside `cfg.courts`'s real ids.
+ * `BoardGrid` matches a column against `f.court_id` (`sameCol`, pass 4a), so
+ * a label entry could never match any fixture there, and a mixed list meant
+ * one column could match a neighbour's fixture instead of its own. Keyed on
+ * id throughout — including here — so two courts that happen to share a
+ * NAME (different venues, the same case that exposed a real bug in
+ * `groupByCourt` server-side) never collapse into one column; resolve the
+ * display name at the render site (`courtNamesById`), never inside this list.
+ */
+export function boardCourtColumns(
+  configuredCourts: string[],
+  scheduled: Pick<BoardFixture, "court_id">[],
+  ghosts: Pick<GhostBlock, "court">[] | null,
+): string[] {
+  const list = [...configuredCourts];
+  for (const f of scheduled) {
+    if (f.court_id && !list.includes(f.court_id)) list.push(f.court_id);
+  }
+  for (const g of ghosts ?? []) {
+    if (g.court && !list.includes(g.court)) list.push(g.court);
+  }
+  return list;
+}
+
 interface Props {
   divisions: BoardDivision[];
   stages: BoardStage[];
@@ -384,6 +425,12 @@ interface Props {
   competitionEnd?: string | null;
   /** Sport-appropriate playing-area word, capitalised (e.g. "Pitch"). */
   venueCap?: string;
+  /** Org venues with nested courts (`listVenues` shape, venues.ts) — feeds
+   *  the inline SettingsPanel's court multi-picker (P9 scope item 5) and
+   *  this board's own court-id -> display-name lookup (MovePanel's dropdown,
+   *  see `courtNamesById` below). Optional/defaulted to `[]`: existing test
+   *  call sites construct this board without it. */
+  venues?: Venue[];
   /** Render the inline settings card. The division schedule page turns this
    *  off and hosts the settings on its constraints tab instead. */
   showSettings?: boolean;
@@ -449,6 +496,7 @@ export function ScheduleBoard({
   competitionStart,
   competitionEnd,
   venueCap = "Court",
+  venues = [],
   showSettings = true,
   officialsWithBlackout = 0,
   competition,
@@ -844,17 +892,40 @@ export function ScheduleBoard({
   }, [scheduled, competitionStart, competitionEnd, cfg.startAt, cfg.endAt]);
 
   // Courts: configured list plus anything already used on the board or proposed
-  // by a ghost, so a proposal's court always has a column.
-  const courts = useMemo(() => {
-    const list = [...cfg.courts];
-    for (const f of scheduled) {
-      if (f.court_label && !list.includes(f.court_label)) list.push(f.court_label);
-    }
-    for (const g of ghosts ?? []) {
-      if (g.court && !list.includes(g.court)) list.push(g.court);
-    }
-    return list;
-  }, [cfg.courts, scheduled, ghosts]);
+  // by a ghost, so a proposal's court always has a column. Pure/exported (see
+  // `boardCourtColumns` above) so its id-only invariant is unit-tested directly.
+  const courts = useMemo(
+    () => boardCourtColumns(cfg.courts, scheduled, ghosts),
+    [cfg.courts, scheduled, ghosts],
+  );
+
+  // P9 scope item 5: `courts` above is keyed by whatever `cfg.courts` holds
+  // (real ids since P9 pass 1) — never safe to render RAW to an organiser.
+  // This is the id -> name lookup MovePanel's dropdown resolves through;
+  // built from `venues` (threaded down from the page, same as
+  // SettingsPanel's own court picker below) rather than from any per-fixture
+  // field, so it also names a configured-but-not-yet-scheduled court.
+  //
+  // P9 pass 4d: the owner hit a live board rendering THREE columns as
+  // "TENNIS COURT 1", "TENNIS COURT 3", "TENNIS COURT 3" — two DIFFERENT
+  // venues each named a court "Tennis Court 3" (legal: P8's uniqueness is
+  // per-venue). The old body here (`map[c.id] = c.name`) never qualified a
+  // colliding name, so two real columns silently rendered identical text.
+  // `resolveCourtNames` reuses `buildCourtDirectory` — the SAME "Name
+  // (Venue)" rule pass 3d already shipped for the AI pack — rather than a
+  // second implementation of "is this name ambiguous".
+  const courtNamesById = useMemo(() => resolveCourtNames(venues), [venues]);
+
+  // P9 pass 4c item 1: the swap button's own copy names two real courts —
+  // never the raw ids `courts[0]`/`courts[1]` themselves. The click handler
+  // still sends the raw ids (the server's swapCourts identity), only the
+  // button's title/label text is resolved.
+  const swapCourtNames = useMemo(() => {
+    if (courts.length < 2) return null;
+    const a = courts[0] as string;
+    const b = courts[1] as string;
+    return { a: courtNamesById[a] ?? a, b: courtNamesById[b] ?? b };
+  }, [courts, courtNamesById]);
 
   // ------------------------------------------- pick-then-place (gap 11)
   const [pickedId, setPickedId] = useState<string | null>(null);
@@ -1293,15 +1364,15 @@ export function ScheduleBoard({
             {msg("board.shiftDay")}
             <button type="button" disabled={actions.busy} onClick={() => void actions.shiftDay(day, -15)} className="btn btn-ghost px-2 py-1 text-xs">−15m</button>
             <button type="button" disabled={actions.busy} onClick={() => void actions.shiftDay(day, 15)} className="btn btn-ghost px-2 py-1 text-xs">+15m</button>
-            {courts.length >= 2 && (
+            {courts.length >= 2 && swapCourtNames && (
               <button
                 type="button"
                 disabled={actions.busy}
                 onClick={() => void actions.swapCourts(day, courts[0] as string, courts[1] as string)}
                 className="btn btn-ghost px-2 py-1 text-xs"
-                title={msg("board.swapTitle", { a: courts[0] as string, b: courts[1] as string })}
+                title={msg("board.swapTitle", swapCourtNames)}
               >
-                {msg("board.swap", { a: courts[0] as string, b: courts[1] as string })}
+                {msg("board.swap", swapCourtNames)}
               </button>
             )}
           </span>
@@ -1313,6 +1384,7 @@ export function ScheduleBoard({
         <MovePanel
           fixture={pickedFixture}
           courts={courts}
+          courtNames={courtNamesById}
           venueCap={venueCap}
           entrantNames={entrantNames}
           feedLabels={feedLabels}
@@ -1348,6 +1420,7 @@ export function ScheduleBoard({
               slots={slots}
               slotMinutes={slotMinutes}
               courts={courts}
+              courtNames={courtNamesById}
               fixtures={dayFixtures}
               divisionNames={divisionNames}
               entrantNames={entrantNames}
@@ -1375,6 +1448,7 @@ export function ScheduleBoard({
               scheduled={scheduled}
               cfgStartAt={cfg.startAt ?? null}
               courts={courts}
+              courtNames={courtNamesById}
               divisionNames={divisionNames}
               entrantNames={entrantNames}
               feedLabels={feedLabels}
@@ -1399,6 +1473,7 @@ export function ScheduleBoard({
               onPlace={(iso, court) => void place(iso, court)}
               onTogglePin={(f) => void actions.togglePin(f)}
               highlightId={highlightId}
+              courtNames={courtNamesById}
             />
           )}
 
@@ -1415,6 +1490,7 @@ export function ScheduleBoard({
               pickedId={pickedId}
               onPick={pick}
               onTogglePin={(f) => void actions.togglePin(f)}
+              courtNames={courtNamesById}
               highlightId={highlightId}
             />
           )}
@@ -1539,6 +1615,7 @@ export function ScheduleBoard({
           currency={currency}
           fixtures={aiFixtures}
           entrantNames={entrantNames}
+          courtNames={courtNamesById}
           onClose={() => {
             setAiOpen(false);
             setAiProposal(null);
@@ -1562,6 +1639,7 @@ export function ScheduleBoard({
           brief={aiBrief}
           fixtures={aiFixtures}
           entrantNames={entrantNames}
+          courtNames={courtNamesById}
           prefillRepair={aiRepairScope}
           onClose={() => {
             setAiOpen(false);
@@ -1590,6 +1668,7 @@ export function ScheduleBoard({
           canEdit={canEdit}
           constraintsAllowed={constraintsAllowed}
           venueCap={venueCap}
+          venues={venues}
           orgTz={settings.orgTz}
           // The same two dates this board already takes for its day range —
           // the panel bounds its date pickers by them, so a range outside the
@@ -1612,6 +1691,7 @@ function WeekView({
   scheduled,
   cfgStartAt,
   courts,
+  courtNames,
   divisionNames,
   entrantNames,
   feedLabels,
@@ -1623,6 +1703,10 @@ function WeekView({
   scheduled: BoardFixture[];
   cfgStartAt: string | null;
   courts: string[];
+  /** P9 pass 4d: id -> venue-qualified display name — see `courtDisplayName`'s
+   *  own doc comment. Optional, falling back to the fixture's own bare name
+   *  when omitted. */
+  courtNames?: Record<string, string>;
   divisionNames: Record<string, string>;
   entrantNames: Record<string, string>;
   feedLabels: Record<string, FeedLabelPair>;
@@ -1642,7 +1726,11 @@ function WeekView({
     const hh = src ? String(src.getHours()).padStart(2, "0") : "09";
     const mm = src ? String(src.getMinutes()).padStart(2, "0") : "00";
     const iso = new Date(`${targetDay}T${hh}:${mm}:00`).toISOString();
-    onMove(fixtureId, iso, f.court_label ?? courts[0] ?? null);
+    // P9: the court must come from `court_id`. `court_label` is FROZEN — no
+    // writer has touched it since the cutover — so reading it here made every
+    // week-view day-drag fall through to `courts[0]`, silently REASSIGNING the
+    // fixture to the first configured court instead of keeping its own.
+    onMove(fixtureId, iso, f.court_id ?? courts[0] ?? null);
   }
 
   return (
@@ -1721,7 +1809,12 @@ function WeekView({
                     >
                       <div className="flex items-center justify-between text-[10px] text-slate-500">
                         <span>{timeLabel(f.scheduled_at as string)}</span>
-                        <span>{f.court_label}</span>
+                        {/* P9 pass 4c item 1: court_label is frozen legacy (null
+                            for anything scheduled since the cutover) — resolve
+                            NAME first, same helper FixtureBlock's sibling
+                            surfaces use, never the raw court_id. P9 pass 4d:
+                            venue-qualified via courtNames when ambiguous. */}
+                        <span>{courtDisplayName(f, courtNames)}</span>
                       </div>
                       <p title={cardTitle(f, entrantNames, feedLabels, msg)} className="truncate font-medium text-slate-700">
                         {cardTitle(f, entrantNames, feedLabels, msg)}

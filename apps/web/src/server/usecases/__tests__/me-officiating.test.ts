@@ -245,6 +245,50 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
     expect(row!.org_default_locale).toBe("en");
   });
 
+  // #14: getMyOfficiating is a SUPERUSER, cross-org read (no withTenant/RLS)
+  // — a court name is unique only WITHIN its venue, so it must venue-qualify
+  // via the same rule the board/AI pack use, not show two indistinguishable
+  // "Court 1" entries for two different physical courts.
+  it("#14: disambiguates two same-named courts across two venues; never renders a bare uuid", async () => {
+    const { auth } = await seedOrg();
+    const ref = await makeUser("ref");
+    const { fixtures } = await seedFutureDivision(auth);
+    const official = await createOfficial(auth, {
+      display_name: "Ref Court",
+      role_keys: ["referee"],
+    });
+    const invited = await inviteOfficial(auth, official.id, ref.email);
+    await claimPerson(invited.secret, ref.id, ref.email);
+
+    const fx1 = fixtures[0]!.id;
+    const fx2 = fixtures[1]!.id;
+    for (const id of [fx1, fx2]) {
+      await patchFixtureOfficials(auth, id, {
+        set: [{ official_id: official.id, role_key: "referee", locked: false }],
+      });
+    }
+    const [{ id: venueA }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${auth.orgId}, ${"Riverside"}) returning id`;
+    const [{ id: venueB }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${auth.orgId}, ${"Lakeside"}) returning id`;
+    const [{ id: courtA }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueA}, ${auth.orgId}, ${"Court 1"}, ${sql.array([])}) returning id`;
+    const [{ id: courtB }] = await sql<{ id: string }[]>`
+      insert into courts (venue_id, org_id, name, tags)
+      values (${venueB}, ${auth.orgId}, ${"Court 1"}, ${sql.array([])}) returning id`;
+    await sql`update fixtures set venue_id = ${venueA}, court_id = ${courtA} where id = ${fx1}`;
+    await sql`update fixtures set venue_id = ${venueB}, court_id = ${courtB} where id = ${fx2}`;
+
+    const mine = await getMyOfficiating(ref.id);
+    const a1 = mine.assignments.find((a) => a.fixture_id === fx1)!;
+    const a2 = mine.assignments.find((a) => a.fixture_id === fx2)!;
+    expect(a1.court_name).toBe("Court 1 (Riverside)");
+    expect(a2.court_name).toBe("Court 1 (Lakeside)");
+    const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-/i;
+    for (const a of mine.assignments) expect(a.court_name ?? "").not.toMatch(uuidRe);
+  });
+
   it("guards response transitions and scopes writes to the assigned official", async () => {
     const { auth } = await seedOrg();
     const ref = await makeUser("ref");

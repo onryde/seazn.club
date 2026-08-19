@@ -40,8 +40,25 @@ export interface BoardFixture {
   away_slot_label?: SlotLabel | null;
   /** ISO string over the wire, Date when it crosses straight from an RSC. */
   scheduled_at: string | Date | null;
-  venue: string | null;
-  court_label: string | null;
+  /** LEGACY and OPTIONAL. Frozen since the P9 cutover — nothing writes them,
+   *  and the board query stopped SENDING them (identity only; six court/venue
+   *  fields per row is what blew the RSC payload budget). Kept on the type,
+   *  optional, because non-board callers still pass richer rows and
+   *  `courtDisplayName` keeps them as a last-resort fallback for a
+   *  pre-cutover fixture whose court string never mapped to a real court. */
+  venue?: string | null;
+  court_label?: string | null;
+  /** P9 pass 4a: the fixture's REAL court identity — `court_label` above is
+   *  frozen legacy (null for anything scheduled since the cutover). Every
+   *  column/scope/swap comparison must key on this, never on `court_label`.
+   *  Mirrors `FixtureRow.court_id`/`court_name` (stages.ts). */
+  court_id: string | null;
+  /** DERIVED display name for `court_id` — never render `court_id` itself
+   *  (a raw uuid) to an organiser. Falls back to `court_label` at the render
+   *  site while no lookup populates this (purely additive; see court_id). */
+  /** OPTIONAL: the board resolves this client-side from the venues prop
+   *  (`resolveCourtNames`), so the server no longer ships it per row. */
+  court_name?: string | null;
   status: string;
   schedule_source: string;
   schedule_locked: boolean;
@@ -91,6 +108,14 @@ export interface BoardConflictDetail {
   person_ids?: string[];
   other_fixture_id?: string;
   court?: string;
+  /** P9 review wave 3, finding #3: the server's resolved, venue-qualified
+   *  display name for `court` (schemas.ts's ScheduleConflictDetail.court_name,
+   *  via courtNamesById -> buildCourtDirectory — see toWireConflictDetail).
+   *  `court` itself is a raw `courts.id` uuid for every kind that carries it
+   *  (court_double_booking, locked_slot_clash, court_tag_mismatch) and must
+   *  never render directly — conflict-detail-format.ts is the one place that
+   *  reads this field, and degrades a miss to courtPicker.unknownCourt. */
+  court_name?: string;
   day?: string;
   other_day?: string;
   weekday?: string;
@@ -157,6 +182,33 @@ export const CONFLICT_HELP: Record<string, string> = {
   "warn.official_declined": "An assigned official has declined — re-assign this match.",
   "warn.official_unavailable": "An assigned official is unavailable at this time.",
 };
+
+/**
+ * P9 pass 4a item 3: the court text to show an organiser for a fixture.
+ * Resolved NAME first, the frozen legacy label as a fallback (a pre-cutover
+ * fixture's court_label is still a real, human-readable string — never
+ * cleared), and NEVER `court_id` itself, which is a raw uuid. Null — not ""
+ * — when neither is known, so a caller can tell "no court text" from "an
+ * empty string" and choose its own placeholder rather than silently
+ * rendering a blank slot where a court label used to be.
+ *
+ * P9 pass 4d: an optional `courtNames` id -> venue-qualified-label map
+ * (schedule-board.tsx's `courtNamesById`, built via `resolveCourtNames` —
+ * the SAME "Name (Venue)" rule the AI pack applies) takes priority over the
+ * fixture's own bare `court_name` whenever `f.court_id` resolves in it, so
+ * two courts sharing a name in different venues never render the identical
+ * caption. `court_id` is optional on the Pick (not required) so every
+ * pre-existing call site that never carried it keeps typechecking
+ * unchanged; omitting `courtNames` keeps this function's original
+ * behaviour byte-for-byte.
+ */
+export function courtDisplayName(
+  f: Pick<BoardFixture, "court_name" | "court_label"> & Partial<Pick<BoardFixture, "court_id">>,
+  courtNames?: Record<string, string>,
+): string | null {
+  if (f.court_id != null && courtNames?.[f.court_id] !== undefined) return courtNames[f.court_id];
+  return f.court_name ?? f.court_label ?? null;
+}
 
 export function cardTitle(
   f: BoardFixture,

@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { canonConflictDetail, type ConflictDetail, type ConflictDetailKind } from "./conflict-detail.ts";
 import { conflictKey, type Conflict } from "./calendar.ts";
 
-// The 25-kind table, field-for-field, written out explicitly rather than
+// The 26-kind table, field-for-field, written out explicitly rather than
 // generated so it reads beside the design doc's table and a missing kind is a
 // `Record<ConflictDetailKind, …>` type error rather than a silently skipped
 // row — the same reasoning `RULE_BY_REASON` uses for `ConflictReason`.
@@ -40,6 +40,10 @@ const FULL_DETAIL: Record<ConflictDetailKind, ConflictDetail> = {
   outside_competition_window: { kind: "outside_competition_window" },
   outside_start_window: { kind: "outside_start_window" },
   court_double_booking: { kind: "court_double_booking", court: "C1", otherFixtureId: "f-other" },
+  // P9 pass 2c's 26th kind. `court` is the court's uuid, same convention as
+  // court_double_booking above; there is no `otherFixtureId` because the
+  // clash is with a declared tag requirement, not with another fixture.
+  court_tag_mismatch: { kind: "court_tag_mismatch", court: "C1" },
   inside_blackout: { kind: "inside_blackout" },
   outside_session_windows: { kind: "outside_session_windows" },
   entrant_overlap: { kind: "entrant_overlap", entrantIds: ["e1", "e2"], otherFixtureId: "f-other" },
@@ -75,6 +79,7 @@ const ALT_VALUE: { [K in keyof Omit<ConflictDetail, "kind">]-?: NonNullable<Conf
   personIds: ["p9"],
   otherFixtureId: "f-changed",
   court: "C2",
+  courtName: "Centre Court",
   day: "2026-08-11",
   otherDay: "2026-08-12",
   weekday: "SAT",
@@ -115,6 +120,31 @@ describe("canonConflictDetail — per-kind field participation (all 25 kinds)", 
       }
     });
   }
+});
+
+// `courtName` (P9 pass 3a) is deliberately absent from every `FULL_DETAIL`
+// fixture above — the engine itself never sets it (see the field's own doc
+// comment in conflict-detail.ts) — so the per-kind sweep's `fields` list
+// never includes it and cannot exercise it. Tested directly instead, on the
+// two kinds a caller (apps/web) actually attaches it to.
+describe("canonConflictDetail — courtName (P9 pass 3a, caller-attached, never engine-set)", () => {
+  it("participates in the canon for court_double_booking — dropping it would go undetected", () => {
+    const base: ConflictDetail = { kind: "court_double_booking", court: "C1", otherFixtureId: "f-other" };
+    const withName: ConflictDetail = { ...base, courtName: "Centre Court" };
+    expect(withName).not.toEqual(base);
+    expect(canonConflictDetail(withName)).not.toBe(canonConflictDetail(base));
+  });
+
+  it("participates in the canon for locked_slot_clash", () => {
+    const base: ConflictDetail = { kind: "locked_slot_clash", court: "C1" };
+    const withName: ConflictDetail = { ...base, courtName: "Centre Court" };
+    expect(canonConflictDetail(withName)).not.toBe(canonConflictDetail(base));
+  });
+
+  it("an engine-built detail (which never sets courtName) canons identically whether the key is absent or explicitly undefined", () => {
+    const detail: ConflictDetail = { kind: "court_double_booking", court: "C1", otherFixtureId: "f-other" };
+    expect(canonConflictDetail(detail)).toBe(canonConflictDetail({ ...detail, courtName: undefined }));
+  });
 });
 
 describe("canonConflictDetail — insertion-order independence", () => {

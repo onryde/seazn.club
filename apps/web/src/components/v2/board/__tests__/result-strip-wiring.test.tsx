@@ -58,6 +58,10 @@ const FIXTURE = {
   division_id: "d1",
   status: "scheduled",
   scheduled_at: null,
+  // P9: `court_id` is the identity the board acts on; `court_label` is frozen.
+  // These fixtures are cast `as unknown as BoardFixture`, so tsc cannot catch a
+  // missing field here — swapCourts silently matched nothing until this was set.
+  court_id: null,
   court_label: null,
   schedule_locked: false,
 } as unknown as BoardFixture;
@@ -87,6 +91,7 @@ const AT = "2026-08-05T10:00:00.000Z";
 const PLACED_FIXTURE = {
   ...FIXTURE,
   scheduled_at: AT,
+  court_id: "1",
   court_label: "1",
 } as unknown as BoardFixture;
 

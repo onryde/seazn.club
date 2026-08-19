@@ -260,10 +260,27 @@ export const conflictKey = (c: Conflict): string =>
  *
  * ABSOLUTE. Whether a change may be WRITTEN is this answer filtered through
  * `deltaConflicts` at the gate, so a dirty board stays editable.
+ *
+ * ONE exception carved out of `reason === "court"`: `court_tag_mismatch`
+ * (review finding #10, ruling 3). It shares the `"court"` reason with
+ * `court_double_booking` — same coarse vocabulary, `details.kind` is what
+ * distinguishes them (this file's own note on `conflictKey`) — but it is not
+ * physically impossible the way a double booking is, and treating it as such
+ * reintroduced exactly the "retroactively invalidate an existing board"
+ * outcome ruling 3 exists to prevent: adding a `required_court_tags` value to
+ * a division whose board ALREADY exists, or a hand-drag through `moveFixture`
+ * (which performs no tag check of its own), would otherwise hard-refuse
+ * publish/start with no `acknowledge_warnings` override available — the
+ * organiser could not get unstuck. So this one detail kind is REPORTED, same
+ * as ever, but never BLOCKING: an acknowledgeable warning, not a hard
+ * refusal. `court_double_booking` is a genuine physical impossibility (the
+ * same court, two fixtures, overlapping time) and is deliberately NOT
+ * carved out — it stays blocking unconditionally, same as before this
+ * finding.
  */
 export function isBlockingConflict(c: Conflict): boolean {
   return (
-    c.reason === "court" ||
+    (c.reason === "court" && c.details?.kind !== "court_tag_mismatch") ||
     c.reason === "person_overlap" ||
     c.reason === "window" ||
     (c.reason === "order" && c.direct === true)
@@ -954,6 +971,25 @@ export type VerifyConfig = Pick<
      *  checked twice at two different values instead of once at the maximum —
      *  and their recovery does not care which bracket they are in (design §7.2). */
     restByDivision?: Readonly<Record<string, number>>;
+    /** P9 pass 2c: court ids whose OWN tags satisfy the division's (∪
+     *  stage's) `required_court_tags` — the verifier's own view of the
+     *  constraint `candidate-courts.ts`'s `candidateCourts` gives the placer.
+     *  The caller (`court-candidates.ts`'s `resolveTagQualifiedCourtIds`)
+     *  computes this through that SAME shared function, with every court's
+     *  `archived` flag neutralised to `false` first.
+     *
+     *  Deliberately NOT `SlotConfig.courts` (the placer's own field, absent
+     *  from this type for exactly that reason — see this file's false-premise
+     *  history: `validateAssignments` used to receive no court list at all).
+     *  `SlotConfig.courts` is archived-EXCLUSIVE — reusing it here would
+     *  retroactively red an assignment already sitting on a since-archived
+     *  court, which ruling 3 (candidate-courts.ts) forbids: "the court is
+     *  gone" is a stranded-fixture case P10 owns, not this one.
+     *
+     *  Absent means unconstrained — every court qualifies, the same reading
+     *  an empty `requiredTags` gives `candidateCourts` itself, and the
+     *  reading every pre-pass-2c caller gets for free by omitting this field. */
+    courtTagQualifiedIds?: readonly string[];
   };
 
 /** Exactly the fields `scopeCoversFixture` reads. Named (#447) so the PLACER can
@@ -1458,6 +1494,13 @@ export function validateAssignments(
   // by `validateInstructionRules`, which derives its own copy.
   const hard = effectiveHard(config);
   const fixtureById = ruleFixtureIndex(config);
+  // P9 pass 2c: precomputed once, same reasoning as `hard`/`fixtureById`
+  // just above. `undefined` (the field omitted, every pre-pass-2c caller)
+  // means unconstrained, read at the push site below — NOT defaulted to an
+  // empty Set here, which would make every court fail the mismatch check
+  // instead of the check being skipped entirely.
+  const courtTagQualified =
+    config.courtTagQualifiedIds !== undefined ? new Set(config.courtTagQualifiedIds) : undefined;
 
   for (const a of assignments) {
     // The pack window (#397): the whole occupancy must fall inside the days the
@@ -1518,6 +1561,23 @@ export function validateAssignments(
           },
         });
       }
+    }
+    // P9 pass 2c: the verifier's own view of the placer's tag constraint —
+    // closes the placer/verifier fork this session's court-tags work
+    // introduced (candidate-courts.ts's module header). `courtTagQualified`
+    // is already archived-neutral (its own comment, above): an assignment
+    // sitting on a since-archived court is deliberately NOT reported here
+    // (ruling 3, candidate-courts.ts) — only a genuine TAG violation is this
+    // conflict's business. Scoped to `assignments` alone, never `existing`,
+    // matching the pack-window/start-window checks above: `existing` is
+    // another division's board or an outside booking, not what this run is
+    // being asked to report on.
+    if (courtTagQualified !== undefined && !courtTagQualified.has(a.court)) {
+      conflicts.push({
+        fixtureId: a.fixtureId,
+        reason: "court",
+        details: { kind: "court_tag_mismatch", court: a.court },
+      });
     }
     for (const bo of blackouts) {
       if (bo.court !== undefined && bo.court !== a.court) continue;

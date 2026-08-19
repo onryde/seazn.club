@@ -62,13 +62,29 @@ function tEn(key: string, vars?: Record<string, string | number>): string {
  *   - d3 has nothing to place and d4 is frozen — two different reasons a
  *     division cannot join a run, which must not be shown as the same thing.
  */
+// P9: `JointDivision.courts` carries court UUIDs since the cutover, not the
+// pre-cutover "Court 1"/"Court 2" labels — and two venues may legally share a
+// bare court name, so what the organiser is shown is the venue-qualified label
+// from the court directory. Both of those are what these fixtures encode.
+const C1 = "aaaaaaaa-1111-4111-8111-111111111111";
+const C2 = "bbbbbbbb-2222-4222-8222-222222222222";
+const C3 = "cccccccc-3333-4333-8333-333333333333";
+/** The venue-qualifying directory the board builds (`resolveCourtNames`). C2
+ *  and C3 deliberately share a bare name across two venues — the ambiguity the
+ *  qualification exists for. */
+const COURT_LABELS: Record<string, string> = {
+  [C1]: "Court 1 (Main Courts)",
+  [C2]: "Court 2 (Main Courts)",
+  [C3]: "Court 2 (Riverside)",
+};
+
 const DIVISIONS: JointDivision[] = [
   {
     id: "d1",
     name: "Under 12s",
     seq: 4,
     scheduleLocked: false,
-    courts: ["Court 1", "Court 2"],
+    courts: [C1, C2],
     tz: "Europe/London",
     personClashBlocks: false,
     movableFixtures: 8,
@@ -79,7 +95,7 @@ const DIVISIONS: JointDivision[] = [
     name: "Under 14s",
     seq: 11,
     scheduleLocked: false,
-    courts: ["Court 1", "Court 3"],
+    courts: [C1, C3],
     tz: "America/New_York",
     personClashBlocks: true,
     movableFixtures: 120,
@@ -90,7 +106,7 @@ const DIVISIONS: JointDivision[] = [
     name: "Under 16s",
     seq: 2,
     scheduleLocked: false,
-    courts: ["Court 1"],
+    courts: [C1],
     tz: "Europe/London",
     personClashBlocks: false,
     movableFixtures: 0,
@@ -101,7 +117,7 @@ const DIVISIONS: JointDivision[] = [
     name: "Masters",
     seq: 9,
     scheduleLocked: true,
-    courts: ["Court 1"],
+    courts: [C1],
     tz: "Europe/London",
     personClashBlocks: false,
     movableFixtures: 30,
@@ -109,7 +125,7 @@ const DIVISIONS: JointDivision[] = [
   },
 ];
 
-function render(divisions = DIVISIONS): string {
+function render(divisions = DIVISIONS, courtNames = COURT_LABELS): string {
   return renderToStaticMarkup(
     <RungConfigProvider value={resolveRungConfig()}>
     <DictProvider dict={dict} locale="en">
@@ -119,6 +135,7 @@ function render(divisions = DIVISIONS): string {
         aiAllowed
         currency="usd"
         fixtures={[]}
+        courtNames={courtNames}
         onClose={() => {}}
       />
     </DictProvider>
@@ -367,19 +384,39 @@ describe("the price the organiser is shown", () => {
 });
 
 describe("what the board cannot know about the divisions it is merging", () => {
-  it("names the court labels that are not shared by every selected division", () => {
-    // Cross-division court identity is a string match and nothing else. "Court
-    // 2" existing only in one division means it is NOT the other's "Court 2" —
-    // and neither is anything else.
-    expect(divergentCourts(DIVISIONS, ["d1", "d2"])).toEqual(["Court 2", "Court 3"]);
+  it("names the courts that are not shared by every selected division", () => {
+    // Court identity across divisions is the court ID since P9 — the same
+    // physical court IS the same id in both divisions, and what stays
+    // divergent is a court genuinely absent from one division's set.
+    expect(divergentCourts(DIVISIONS, ["d1", "d2"])).toEqual([C2, C3].sort());
     const html = render();
-    expect(html).toContain(tEn("board.ai.joint.courtsDivergent", { courts: "Court 2, Court 3" }));
+    // P9 review wave 2 (second site of wave 1's finding 5): the PRE-RUN
+    // warning must resolve those ids through the venue-qualifying directory,
+    // exactly as the post-run note already does. C2 and C3 share a bare name
+    // across two venues, so an unqualified name would be ambiguous and a bare
+    // join would leak uuids at the organiser. Fails on a reverted lookup.
+    expect(html).toContain(
+      tEn("board.ai.joint.courtsDivergent", {
+        courts: [C2, C3].sort().map((id) => COURT_LABELS[id]).join(", "),
+      }),
+    );
+    expect(html).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+  });
+
+  it("falls back to the unknown-court label, never a bare uuid, for a court missing from the directory", () => {
+    const html = render(DIVISIONS, {});
+    expect(html).toContain(
+      tEn("board.ai.joint.courtsDivergent", {
+        courts: [enText["courtPicker.unknownCourt"]!, enText["courtPicker.unknownCourt"]!].join(", "),
+      }),
+    );
+    expect(html).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
   });
 
   it("says nothing about courts when the selected divisions share them all", () => {
     // The contrast is the test: a banner that always renders satisfies the
     // assertion above without detecting anything.
-    const same = DIVISIONS.map((d) => ({ ...d, courts: ["Court 1", "Court 2"] }));
+    const same = DIVISIONS.map((d) => ({ ...d, courts: [C1, C2] }));
     expect(divergentCourts(same, ["d1", "d2"])).toEqual([]);
     expect(render(same)).not.toContain(enText["board.ai.joint.courtsDivergentTitle"]);
   });
@@ -504,14 +541,17 @@ describe("jointApplyDivisions — the payload the apply is built from", () => {
         divisionId: "d1",
         expectedSeq: 4,
         assignments: [
-          { fixture_id: "f1", scheduled_at: "2026-08-01T09:00:00.000Z", court_label: "Court 1" },
+          // P9 pass 3b: jointApplyDivisions' OWN output is keyed court_id
+          // (ApplyCompetitionScheduleRequest's .strict() item, schemas.ts) —
+          // court_label above is plan().proposal's field, unchanged.
+          { fixture_id: "f1", scheduled_at: "2026-08-01T09:00:00.000Z", court_id: "Court 1" },
         ],
       },
       {
         divisionId: "d2",
         expectedSeq: 11,
         assignments: [
-          { fixture_id: "f2", scheduled_at: "2026-08-01T10:00:00.000Z", court_label: "Court 1" },
+          { fixture_id: "f2", scheduled_at: "2026-08-01T10:00:00.000Z", court_id: "Court 1" },
         ],
       },
     ]);
@@ -668,12 +708,17 @@ describe("what the joint review says there is to review", () => {
   // The ruling was to demote them, not to count them: folding them in would
   // make one number mean two different units.
   it("keeps the division-level notes out of the counted amber band", () => {
+    // P9 review wave 1, finding 5: `divergent_courts` carries real court
+    // uuids, not the bare name this test used to hand it directly — resolved
+    // here through `courtNames`, same as production.
+    const COURT_3 = "ffffffff-ffff-ffff-ffff-ffffffffffff";
     const html = review({
       plan: plan({
         warnings: [{ fixtureId: "f1", reason: "rest", detail: "20 minutes" }],
         skipped_divisions: [{ id: "d3", name: "Under 16s", reason: "no_movable_fixtures" }],
-        divergent_courts: ["Court 3"],
+        divergent_courts: [COURT_3],
       } as Partial<AiCompetitionPlanResponse>),
+      courtNames: { [COURT_3]: "Court 3" },
     });
     // Still said, and still where the ledger they are about is.
     expect(html).toContain(tEn("board.ai.joint.skipped", { divisions: "Under 16s" }));
@@ -686,6 +731,42 @@ describe("what the joint review says there is to review", () => {
     // …and not counted, because a court-name mismatch is not a fixture.
     expect(html).toContain('data-review-count="1"');
     expect(html.match(/data-review-count="/g) ?? []).toHaveLength(1);
+  });
+
+  // P9 review wave 1, finding 5 (MEDIUM): `plan.divergent_courts` holds real
+  // court uuids — the server's own doc on the field says it is "NOT
+  // display-ready — never render a bare uuid". Two different venues may
+  // legally share a bare court name (`courts_venue_name_active_idx` is
+  // scoped per venue, not global), so the id must resolve through the same
+  // venue-qualifying directory the rest of the app uses
+  // (buildCourtDirectory/resolveCourtNames), not a raw join. Fails on a
+  // reverted `courtNames` lookup (joins the raw ids instead).
+  describe("divergent-courts name resolution", () => {
+    const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-/;
+    const COURT_X = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+    const COURT_Y = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+
+    it("shows venue-qualified names, never raw uuids, for divergent courts", () => {
+      const html = review({
+        plan: plan({ divergent_courts: [COURT_X, COURT_Y] } as Partial<AiCompetitionPlanResponse>),
+        courtNames: { [COURT_X]: "Court 1 (Main Courts)", [COURT_Y]: "Court 1 (Riverside)" },
+      });
+      expect(html).toContain(
+        tEn("board.ai.joint.courtsDivergent", { courts: "Court 1 (Main Courts), Court 1 (Riverside)" }),
+      );
+      expect(html).not.toMatch(UUID_RE);
+    });
+
+    it("falls back to the unknown-court label, never a bare uuid, for an id missing from the directory", () => {
+      const html = review({
+        plan: plan({ divergent_courts: [COURT_X] } as Partial<AiCompetitionPlanResponse>),
+        courtNames: {},
+      });
+      expect(html).toContain(
+        tEn("board.ai.joint.courtsDivergent", { courts: enText["courtPicker.unknownCourt"]! }),
+      );
+      expect(html).not.toMatch(UUID_RE);
+    });
   });
 
   // Must-fix 1. `plan.proposal` and `plan.unschedulable` are mutually exclusive

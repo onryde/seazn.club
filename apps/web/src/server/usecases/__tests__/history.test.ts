@@ -1,10 +1,11 @@
 // Integration tests for PROMPT-23 (Jul3/03): undo/redo over the division
 // ledger, scoped clear, pool clear-entrants, checkpoints, locks. Real
 // Postgres required; skipped without DATABASE_URL.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { EngineError } from "@seazn/engine/core";
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -14,6 +15,7 @@ import { createStages, generateStageFixtures } from "../stages";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { patchFixture } from "../fixtures";
+import { createVenue, createCourt } from "../venues";
 import { lockDivisions } from "../competition-schedule-apply";
 import {
   undoDivision,
@@ -97,6 +99,19 @@ async function seedDivision(auth: AuthCtx, stageCfg: Record<string, unknown> = {
 
 const at = (h: number) => new Date(Date.UTC(2026, 6, 12, h, 0, 0)).toISOString();
 
+/** Two real courts (P9 pass 3a — venues/courts cutover): `patchFixture`'s
+ *  `court_id` is a real `courts.id` now (composite FK to `courts(id,
+ *  org_id)`, `on delete restrict` — V367), never a free-text label, so every
+ *  test below that used to write `court_label: "C1"`/`"C2"` needs an actual
+ *  seeded court to point at. Named `courtA`/`courtB` (not `court1`/`court2`)
+ *  to read unambiguously beside `stage`/`division` etc. below. */
+async function seedCourts(auth: AuthCtx): Promise<{ courtA: string; courtB: string }> {
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const a = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
+  const b = await createCourt(auth, venue.id, { name: "C2", sort: 1, tags: [] });
+  return { courtA: a.id, courtB: b.id };
+}
+
 /** Manual save points inserted DIRECTLY, bypassing `createCheckpoint`.
  *
  *  This is the only way to build a division sitting ABOVE its cap, which is
@@ -121,22 +136,35 @@ afterAll(async () => {
   await client?.end();
 });
 
+// P9 dispatch #9: THREE tests in this file now `vi.spyOn(log, "warn")` (the
+// pre-existing UPDATE-path test plus two new INSERT-path ones). None of them
+// used to restore it — harmless with only one such test, since there was
+// nothing to accumulate against, but `vi.spyOn` on an already-spied method
+// returns the SAME mock instance rather than a fresh one, so a second test's
+// `warnSpy.mock.calls` silently carried the first test's call(s) forward too
+// (a `toHaveBeenCalledTimes(1)` in test 2 saw 2, test 3 saw 3). Restoring
+// after every test is the standard vitest hygiene for exactly this.
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
-  it("move ×3 → undo ×3 = original → redo ×3 = moved (golden)", async () => {
+  it("move ×3 → undo ×3 = original → redo ×3 = moved (golden) — round-trips court_id, not a label (P9 pass 3a)", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth);
+    const { courtA, courtB } = await seedCourts(auth);
     const three = fixtures.slice(0, 3);
     // place them first (baseline), then move them (3 edits)
     for (let i = 0; i < 3; i++) {
       await patchFixture(auth, three[i]!.id, {
         scheduled_at: at(9 + i),
-        court_label: "C1",
+        court_id: courtA,
       });
     }
     for (let i = 0; i < 3; i++) {
       await patchFixture(auth, three[i]!.id, {
         scheduled_at: at(14 + i),
-        court_label: "C2",
+        court_id: courtB,
       });
     }
     const placed = async () =>
@@ -144,16 +172,23 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
         {
           id: string;
           scheduled_at: string | null;
-          court_label: string | null;
+          court_id: string | null;
         }[]
       >`
-        select id, scheduled_at::text as scheduled_at, court_label from fixtures
+        select id, scheduled_at::text as scheduled_at, court_id from fixtures
         where id in ${sql(three.map((f) => f.id))} order by id`;
     const moved = await placed();
 
     for (let i = 0; i < 3; i++) await undoDivision(auth, division.id);
     const original = await placed();
-    expect(original.map((f) => f.court_label)).toEqual(["C1", "C1", "C1"]);
+    // THE regression this pass owes: undo restores court_id (a real
+    // courts.id), never a stale label — `fixtures.court_label` is never
+    // written by `patchFixture` any more (owner ruling, FULL cutover), so a
+    // restore that wrote the old free-text column instead would have left
+    // `court_id` untouched here and this assertion would fail loudly rather
+    // than silently — there is no longer a court_label value for it to
+    // coincidentally agree with.
+    expect(original.map((f) => f.court_id)).toEqual([courtA, courtA, courtA]);
 
     for (let i = 0; i < 3; i++) await redoDivision(auth, division.id);
     expect(await placed()).toEqual(moved);
@@ -167,17 +202,168 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     expect(history.events.some((e) => e.type === "fixtures_generated")).toBe(true);
   });
 
+  // Review wave 1, finding 1 (scope cut 2026-08-18, owner-authorized: no
+  // prod backfill — there is no pre-cutover prod data — so this is a
+  // defensive guard for a dev/staging DB or a restored backup only, not a
+  // live-data fix). `division_events` predates V374 for any division
+  // touched before the cutover, so a stored payload can still carry a
+  // free-text court label. `fixtures.court_id` is a real uuid column
+  // (V367); binding that string as a query parameter raises Postgres
+  // 22P02 and — pre-fix — aborts the WHOLE undo/redo transaction, not just
+  // this one fixture. The engine itself can never again produce a non-uuid
+  // `court` post-cutover (`REVERSIBLE.schedule_applied.invert` just swaps
+  // `from`/`to` on whatever the ledger already holds — packages/engine/src/
+  // history/history.ts), so a stale ledger row inserted directly is the
+  // only way to construct this scenario.
+  it("undo skips a non-uuid court in a stale ledger payload — logs it, never aborts the transaction", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures } = await seedDivision(auth);
+    const { courtA } = await seedCourts(auth);
+    const fx = fixtures[0]!;
+
+    // Baseline placement — proves the guard leaves court_id UNTOUCHED
+    // (never nulled, never the bad string, which is impossible: the column
+    // is uuid-typed) rather than merely avoiding a crash.
+    await patchFixture(auth, fx.id, { scheduled_at: at(20), court_id: courtA });
+    const [before] = await sql<{ scheduled_at: string | null }[]>`
+      select scheduled_at::text as scheduled_at from fixtures where id = ${fx.id}`;
+
+    // A pre-cutover-shaped ledger row, inserted directly (bypassing the
+    // engine/appendEvent — see header). undo() inverts this event (from/to
+    // swap), so the inverse's `to.court` is THIS event's `from.court`: the
+    // bad "Court 1" string.
+    const [{ seq: nextSeq }] = await sql<{ seq: number }[]>`
+      select coalesce(max(seq), 0)::int + 1 as seq from division_events
+      where division_id = ${division.id}`;
+    await sql`
+      insert into division_events (division_id, seq, type, payload, actor_id)
+      values (${division.id}, ${nextSeq}, 'schedule_applied',
+              ${sql.json({
+                moves: [
+                  { fixture: fx.id, from: { at: at(9), court: "Court 1" }, to: { at: at(10), court: courtA } },
+                ],
+              })}, null)`;
+
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+
+    await expect(undoDivision(auth, division.id)).resolves.toBeDefined();
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toMatchObject({ court: "Court 1", divisionId: division.id });
+
+    const [after] = await sql<{ scheduled_at: string | null; court_id: string | null }[]>`
+      select scheduled_at::text as scheduled_at, court_id from fixtures where id = ${fx.id}`;
+    // The `at` half of the same statement still applied...
+    expect(after!.scheduled_at).not.toBe(before!.scheduled_at);
+    // ...but court_id was left exactly as it was.
+    expect(after!.court_id).toBe(courtA);
+  });
+
+  // P9 dispatch #9: the guard above only covers the UPDATE sites inside
+  // execute()'s schedule_applied/schedule_shifted/schedule_edited/
+  // schedule_restored cases (review wave 1, finding 1's actual scope). The
+  // two `insert into fixtures (… court_id …)` sites — pool_entrants_restored
+  // (execute()) and fixtures_generated-with-snapshots (step(), a re-insert
+  // that bypasses execute() entirely) — still bind `${s.court ?? null}`
+  // directly and raise the SAME 22P02, aborting the whole undo transaction,
+  // on a stale snapshot naming neither a real nor an existing fixture row.
+  it("undo restoring cleared pool entrants skips a non-uuid court in a stale snapshot — inserts the fixture anyway, never aborts", async () => {
+    const { auth } = await seedOrg();
+    const { division, stage } = await seedDivision(auth, { kind: "group", pools: { count: 1 } });
+    const fxId = randomUUID();
+
+    // A pre-cutover-shaped `pool_entrants_cleared` event, inserted directly
+    // (bypassing clearPoolEntrants/the engine — same technique as the test
+    // above; no real row exists for fxId, matching "this fixture was
+    // already cleared"). undo() inverts this into pool_entrants_restored
+    // (REVERSIBLE.pool_entrants_cleared.invert — packages/engine/src/
+    // history/history.ts), whose execute() case is the INSERT this dispatch
+    // item targets.
+    const [{ seq: nextSeq }] = await sql<{ seq: number }[]>`
+      select coalesce(max(seq), 0)::int + 1 as seq from division_events
+      where division_id = ${division.id}`;
+    await sql`
+      insert into division_events (division_id, seq, type, payload, actor_id)
+      values (${division.id}, ${nextSeq}, 'pool_entrants_cleared',
+              ${sql.json({
+                pool_id: null,
+                fixtures: [
+                  {
+                    id: fxId, stage_id: stage.id, round_no: 1, seq_in_round: 1,
+                    home_entrant_id: null, away_entrant_id: null, at: null, court: "Court 1",
+                  },
+                ],
+              })}, null)`;
+
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+
+    await expect(undoDivision(auth, division.id)).resolves.toBeDefined();
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toMatchObject({ court: "Court 1", divisionId: division.id });
+
+    const [row] = await sql<{ id: string; court_id: string | null }[]>`
+      select id, court_id from fixtures where id = ${fxId}`;
+    expect(row).toBeDefined(); // the fixture WAS restored...
+    expect(row!.court_id).toBeNull(); // ...just never with the bad court
+  });
+
+  it("undo of a cleared-with-snapshots event skips a non-uuid court when re-inserting via fixtures_generated, never aborts", async () => {
+    const { auth } = await seedOrg();
+    const { division, stage } = await seedDivision(auth);
+    const fxId = randomUUID();
+
+    // A pre-cutover-shaped `fixtures_cleared` event carrying FULL row
+    // snapshots — the enriched shape `step()` itself builds (reading LIVE
+    // court_id, always real) right before a genuine undo of
+    // fixtures_generated deletes the rows; inserted directly here so its
+    // `fixtures[]` can carry a stale non-uuid court instead. Undoing THIS
+    // event inverts it into `fixtures_generated` WITH `fixtures` present
+    // (REVERSIBLE.fixtures_cleared.invert), which `step()` re-inserts
+    // DIRECTLY — history.ts's second insert site, never reached through
+    // execute() at all.
+    const [{ seq: nextSeq }] = await sql<{ seq: number }[]>`
+      select coalesce(max(seq), 0)::int + 1 as seq from division_events
+      where division_id = ${division.id}`;
+    await sql`
+      insert into division_events (division_id, seq, type, payload, actor_id)
+      values (${division.id}, ${nextSeq}, 'fixtures_cleared',
+              ${sql.json({
+                stage_id: stage.id,
+                fixture_ids: [fxId],
+                fixtures: [
+                  {
+                    id: fxId, stage_id: stage.id, round_no: 1, seq_in_round: 1,
+                    home_entrant_id: null, away_entrant_id: null, at: null, court: "Court 1",
+                  },
+                ],
+              })}, null)`;
+
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+
+    await expect(undoDivision(auth, division.id)).resolves.toBeDefined();
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toMatchObject({ court: "Court 1", divisionId: division.id });
+
+    const [row] = await sql<{ id: string; court_id: string | null }[]>`
+      select id, court_id from fixtures where id = ${fxId}`;
+    expect(row).toBeDefined();
+    expect(row!.court_id).toBeNull();
+  });
+
   it("scoped clear of pool A leaves pool B and locked fixtures intact; undo restores", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth, {
       kind: "group",
       pools: { count: 2 },
     });
+    const { courtA } = await seedCourts(auth);
     // schedule everything
     for (let i = 0; i < fixtures.length; i++) {
       await patchFixture(auth, fixtures[i]!.id, {
         scheduled_at: at(9 + i),
-        court_label: "C1",
+        court_id: courtA,
       });
     }
     const pools = await sql<{ id: string; key: string }[]>`
@@ -214,6 +400,7 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
       kind: "group",
       pools: { count: 2 },
     });
+    const { courtB } = await seedCourts(auth);
     const pools = await sql<{ id: string }[]>`
       select id from pools where stage_id = ${fixtures[0]!.stage_id} order by key`;
     const poolA = pools[0]!.id;
@@ -229,10 +416,15 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
       select count(*)::int as n from fixtures where pool_id = ${poolA}`;
     expect(restored!.n).toBe(cleared.removed);
 
-    // scope lock site B (court C2): edits inside the scope are refused
+    // scope lock site B: edits inside the scope are refused — on the board
+    // APPLY path only (`applySchedule`'s `scopeLocked` check). `moveFixture`
+    // never consulted scope locks at all (see the assertion below), so the
+    // scope value itself is decorative here regardless of what it names —
+    // real or not, courtB is a real seeded court either way (P9 pass 3a:
+    // `court_id` is FK-checked, unlike the old free-text `court_label`).
     await patchFixture(auth, fixtures[0]!.id, {
       scheduled_at: at(9),
-      court_label: "C2",
+      court_id: courtB,
     });
     await setDivisionLocks(auth, division.id, {
       locked_scopes: [{ courts: ["C2"] }],
@@ -240,7 +432,7 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     await expect(
       patchFixture(auth, fixtures[0]!.id, {
         scheduled_at: at(10),
-        court_label: "C2",
+        court_id: courtB,
       }),
     ).resolves.toBeTruthy(); // moveFixture path is separate; board apply path enforces scope
   });
@@ -268,25 +460,26 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
   it("checkpoints: restore rewinds; second checkpoint is Pro", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth);
+    const { courtA, courtB } = await seedCourts(auth);
     await patchFixture(auth, fixtures[0]!.id, {
       scheduled_at: at(9),
-      court_label: "C1",
+      court_id: courtA,
     });
     const cp = await createCheckpoint(auth, division.id, "before reshuffle");
     await patchFixture(auth, fixtures[0]!.id, {
       scheduled_at: at(15),
-      court_label: "C2",
+      court_id: courtB,
     });
     await patchFixture(auth, fixtures[1]!.id, {
       scheduled_at: at(16),
-      court_label: "C2",
+      court_id: courtB,
     });
 
     const restored = await restoreCheckpoint(auth, division.id, cp.id, true);
     expect(restored.steps).toBe(2);
-    const [row] = await sql<{ court_label: string | null }[]>`
-      select court_label from fixtures where id = ${fixtures[0]!.id}`;
-    expect(row!.court_label).toBe("C1");
+    const [row] = await sql<{ court_id: string | null }[]>`
+      select court_id from fixtures where id = ${fixtures[0]!.id}`;
+    expect(row!.court_id).toBe(courtA);
 
     // Community holds two save points (V319 raised the cap 1 → 2). Since #382
     // the third does not 402 — it ROLLS, dropping the oldest and naming it.
@@ -668,7 +861,8 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     // still walks back past the watermark it named.
     const { auth } = await seedOrg("community");
     const { division, fixtures } = await seedDivision(auth);
-    await patchFixture(auth, fixtures[0]!.id, { scheduled_at: at(9), court_label: "C1" });
+    const { courtA } = await seedCourts(auth);
+    await patchFixture(auth, fixtures[0]!.id, { scheduled_at: at(9), court_id: courtA });
     const oldest = await createCheckpoint(auth, division.id, "ai-0", "ai");
     for (let i = 1; i < 4; i++) await createCheckpoint(auth, division.id, `ai-${i}`, "ai");
 
@@ -683,9 +877,10 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
   it("an evicted save point costs its label, not the rewind (#382)", async () => {
     const { auth } = await seedOrg("community");
     const { division, fixtures } = await seedDivision(auth);
-    await patchFixture(auth, fixtures[0]!.id, { scheduled_at: at(9), court_label: "C1" });
+    const { courtA, courtB } = await seedCourts(auth);
+    await patchFixture(auth, fixtures[0]!.id, { scheduled_at: at(9), court_id: courtA });
     const one = await createCheckpoint(auth, division.id, "one");
-    await patchFixture(auth, fixtures[0]!.id, { scheduled_at: at(10), court_label: "C2" });
+    await patchFixture(auth, fixtures[0]!.id, { scheduled_at: at(10), court_id: courtB });
     await createCheckpoint(auth, division.id, "two");
     const third = await createCheckpoint(auth, division.id, "three");
     expect(third.evicted?.label).toBe("one");
@@ -698,9 +893,9 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     // …but the LEDGER is untouched. One undo lands back on the state the
     // evicted save point named, and a second rewinds PAST its watermark.
     await undoDivision(auth, division.id);
-    const [back] = await sql<{ court_label: string | null }[]>`
-      select court_label from fixtures where id = ${fixtures[0]!.id}`;
-    expect(back!.court_label).toBe("C1");
+    const [back] = await sql<{ court_id: string | null }[]>`
+      select court_id from fixtures where id = ${fixtures[0]!.id}`;
+    expect(back!.court_id).toBe(courtA);
     await undoDivision(auth, division.id);
     const after = await divisionHistory(auth, division.id);
     expect(Number(after.watermark)).toBeLessThan(Number(one.seq));
@@ -709,9 +904,10 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
   it("stale optimistic token → SEQ_CONFLICT 409 contract", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth);
+    const { courtA } = await seedCourts(auth);
     await patchFixture(auth, fixtures[0]!.id, {
       scheduled_at: at(9),
-      court_label: "C1",
+      court_id: courtA,
     });
     await expect(undoDivision(auth, division.id, 1)).rejects.toSatisfy((err: unknown) =>
       EngineError.is(err, "SEQ_CONFLICT"),

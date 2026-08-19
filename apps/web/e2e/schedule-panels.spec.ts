@@ -1,5 +1,12 @@
 import { test, expect } from "@playwright/test";
-import { apiJson, seedScoredDivision, setOrgPlanBySql, TAG, divisionPath } from "./helpers";
+import {
+  apiJson,
+  seedScoredDivision,
+  setOrgPlanBySql,
+  TAG,
+  divisionPath,
+  seedVenueWithCourts,
+} from "./helpers";
 
 // PROMPT-22/23/24/26 schedule console (now tabbed): each panel mounts on its
 // tab AND its core interaction works end-to-end (real POSTs, not just render).
@@ -115,6 +122,9 @@ test("officials (#448): maxPerDay caps on the org day across a UTC midnight", as
   const fixtures = gen.data!.fixtures;
   expect(fixtures.length).toBe(6); // 4 entrants, round robin
 
+  const { courts } = await seedVenueWithCourts(request, ["Court 1"], { orgId: org.data!.id });
+  const courtId = courts[0]!.id;
+
   // 2026-07-11 in Los Angeles (PDT, UTC-7). 10:00 and 12:00 local are still
   // Saturday in UTC; 18:00 and 20:00 local are Sunday 01:00Z and 03:00Z.
   const localSaturday = [
@@ -126,7 +136,7 @@ test("officials (#448): maxPerDay caps on the org day across a UTC midnight", as
   for (const [i, at] of localSaturday.entries()) {
     await apiJson(request, `/api/v1/fixtures/${fixtures[i]!.id}`, "PATCH", {
       scheduled_at: at,
-      court_label: "1",
+      court_id: courtId,
     });
   }
   // The remaining two sit on their own days well clear of the Saturday, so they
@@ -134,7 +144,7 @@ test("officials (#448): maxPerDay caps on the org day across a UTC midnight", as
   for (const [i, f] of fixtures.slice(4).entries()) {
     await apiJson(request, `/api/v1/fixtures/${f.id}`, "PATCH", {
       scheduled_at: `2026-09-2${i}T18:00:00.000Z`,
-      court_label: "1",
+      court_id: courtId,
     });
   }
   await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");

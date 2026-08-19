@@ -688,6 +688,13 @@ async function main() {
   // Keyless, own Pro org, so it runs on every smoke invocation.
   await z3AutoScheduleSuite();
 
+  // --- P9 pass 5: a full schedule round on an org with TWO VENUES, not one
+  // venue with two courts (the shape every other court-seeding suite in this
+  // file, z3AutoScheduleSuite included, already uses). Asserts the build
+  // actually resolved courts across both venues, not just placed on two
+  // courts that happened to share one. Keyless, own Pro org.
+  await twoVenueScheduleSuite();
+
   // --- Task 11 placement cutover: a board sized so beating greedy is not
   // just possible but REQUIRED — the scenario the four-value engine
   // allow-list above cannot be. Self-gates on PLACEMENT_SERVICE_HOST and
@@ -1876,18 +1883,26 @@ async function smokePlanMatrix(): Promise<void> {
     "2026-07-12T01:00:00.000Z",
     "2026-07-12T03:00:00.000Z",
   ];
+  const capVenue = v1data<{ id: string }>(
+    await v1(plus, `/api/v1/orgs/${plusOrg}/venues`, "POST", { name: `Cap Venue ${tag}` }),
+  );
+  const capCourt = v1data<{ id: string }>(
+    await v1(plus, `/api/v1/orgs/${plusOrg}/venues/${capVenue.id}/courts`, "POST", {
+      name: "Court 1",
+    }),
+  );
   const capIds = plusFixtures.slice(0, 4).map((f) => f.id);
   for (const [i, id] of capIds.entries()) {
     await v1(plus, `/api/v1/fixtures/${id}`, "PATCH", {
       scheduled_at: localSaturday[i],
-      court_label: "Court 1",
+      court_id: capCourt.id,
     });
   }
   // Park every other fixture far away so it cannot compete for the capped ref.
   for (const [i, f] of plusFixtures.slice(4).entries()) {
     await v1(plus, `/api/v1/fixtures/${f.id}`, "PATCH", {
       scheduled_at: `2026-09-${String(i + 1).padStart(2, "0")}T18:00:00.000Z`,
-      court_label: "Court 1",
+      court_id: capCourt.id,
     });
   }
 
@@ -3745,9 +3760,17 @@ async function officialOnboardingSuite(
   const kickoffDate = new Date(Date.now() + 7 * 86_400_000);
   kickoffDate.setUTCHours(10, 0, 0, 0);
   const kickoff = kickoffDate.toISOString();
+  const onboardVenue = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `Whistle Venue ${tag}` }),
+  );
+  const onboardCourt = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${orgId}/venues/${onboardVenue.id}/courts`, "POST", {
+      name: "Court 9",
+    }),
+  );
   await v1(admin, `/api/v1/fixtures/${fixtures[0]!.id}`, "PATCH", {
     scheduled_at: kickoff,
-    court_label: "Court 9",
+    court_id: onboardCourt.id,
   });
 
   // Create + assign BEFORE the invite: the fresh assignment must be pending.
@@ -3995,9 +4018,17 @@ async function officialOnboardingSuite(
   // Same calendar day as this org's fixtures[0] kickoff, a few hours later —
   // the warning is a same-day match, not an exact-instant one.
   const busyKickoff = new Date(new Date(kickoff).getTime() + 3 * 3_600_000).toISOString();
+  const busyVenue = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${busyOrg.id}/venues`, "POST", { name: `Busy Venue ${tag}` }),
+  );
+  const busyCourt = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${busyOrg.id}/venues/${busyVenue.id}/courts`, "POST", {
+      name: "Court 5",
+    }),
+  );
   await v1(admin, `/api/v1/fixtures/${busyFixtures[0]!.id}`, "PATCH", {
     scheduled_at: busyKickoff,
-    court_label: "Court 5",
+    court_id: busyCourt.id,
   });
   await v1(admin, `/api/v1/fixtures/${busyFixtures[0]!.id}/officials`, "PATCH", {
     set: [{ official_id: busyOffId, role_key: "referee", locked: false }],
@@ -6316,7 +6347,20 @@ async function divisionSettingsSuite(admin: Session): Promise<void> {
  */
 async function scheduleCourtRemovalGuardSuite(): Promise<void> {
   const free = newSession();
-  await signIn(free, `dtx_free_${tag}@example.com`);
+  const freeOrgId = (await signIn(free, `dtx_free_${tag}@example.com`)).org_id;
+  const guardVenue = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${freeOrgId}/venues`, "POST", { name: `Guard Venue ${tag}` }),
+  );
+  const guardCourt1 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${freeOrgId}/venues/${guardVenue.id}/courts`, "POST", {
+      name: "Court 1",
+    }),
+  );
+  const guardCourt2 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${freeOrgId}/venues/${guardVenue.id}/courts`, "POST", {
+      name: "Court 2",
+    }),
+  );
   const comp = v1data<{ id: string }>(
     await v1(free, "/api/v1/competitions", "POST", {
       ends_on: "2030-12-31",
@@ -6358,14 +6402,14 @@ async function scheduleCourtRemovalGuardSuite(): Promise<void> {
         courts,
       },
     });
-  await putCourts(["Court 1", "Court 2"]);
+  await putCourts([guardCourt1.id, guardCourt2.id]);
   await v1(free, `/api/v1/fixtures/${fixtureId}`, "PATCH", {
     scheduled_at: new Date(Date.UTC(2026, 9, 19, 9, 0)).toISOString(),
-    court_label: "Court 2",
+    court_id: guardCourt2.id,
   });
   await v1(free, `/api/v1/fixtures/${fixtureId}`, "PATCH", { schedule_locked: true });
 
-  const refused = await putCourts(["Court 1"]);
+  const refused = await putCourts([guardCourt1.id]);
   const refusedMsg = (refused.json.error as { message?: string } | undefined)?.message ?? "";
   check(
     "schedule court-removal guard: dropping a court with a pinned fixture is refused (409, names the court + reason)",
@@ -6374,7 +6418,7 @@ async function scheduleCourtRemovalGuardSuite(): Promise<void> {
 
   // The control — the identically-shaped save once the fixture is unpinned.
   await v1(free, `/api/v1/fixtures/${fixtureId}`, "PATCH", { schedule_locked: false });
-  const allowed = await putCourts(["Court 1"]);
+  const allowed = await putCourts([guardCourt1.id]);
   check(
     "schedule court-removal guard: the identically-shaped save is allowed once unpinned",
     allowed.status === 200,
@@ -6389,7 +6433,15 @@ async function scheduleCourtRemovalGuardSuite(): Promise<void> {
  */
 async function capacityPrecheckSuite(): Promise<void> {
   const free = newSession();
-  await signIn(free, `dtx_free_${tag}@example.com`);
+  const capacityOrgId = (await signIn(free, `dtx_free_${tag}@example.com`)).org_id;
+  const capacityVenue = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${capacityOrgId}/venues`, "POST", { name: `Capacity Venue ${tag}` }),
+  );
+  const capacityCourt = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${capacityOrgId}/venues/${capacityVenue.id}/courts`, "POST", {
+      name: "Court 1",
+    }),
+  );
   const comp = v1data<{ id: string }>(
     await v1(free, "/api/v1/competitions", "POST", {
       ends_on: "2030-12-31",
@@ -6426,7 +6478,7 @@ async function capacityPrecheckSuite(): Promise<void> {
         endAt: "2026-08-01T23:59:00.000Z",
         matchMinutes: 60,
         gapMinutes: 0,
-        courts: ["Court 1"],
+        courts: [capacityCourt.id],
         perEntrantMinRest: 0,
         sessionWindows,
       },
@@ -6796,7 +6848,20 @@ async function stageProgressionSuite(): Promise<void> {
  */
 async function scheduleHealthSuite(): Promise<void> {
   const free = newSession();
-  await signIn(free, `dtx_health_${tag}@example.com`);
+  const healthOrgId = (await signIn(free, `dtx_health_${tag}@example.com`)).org_id;
+  const healthVenue = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${healthOrgId}/venues`, "POST", { name: `Health Venue ${tag}` }),
+  );
+  const healthCourt1 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${healthOrgId}/venues/${healthVenue.id}/courts`, "POST", {
+      name: "Court 1",
+    }),
+  );
+  const healthCourt2 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${healthOrgId}/venues/${healthVenue.id}/courts`, "POST", {
+      name: "Court 2",
+    }),
+  );
   const comp = v1data<{ id: string }>(
     await v1(free, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `DTX Health ${tag}` }),
   );
@@ -6834,19 +6899,19 @@ async function scheduleHealthSuite(): Promise<void> {
       endAt: "2026-09-01T23:59:00.000Z",
       matchMinutes: 60,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 2"],
+      courts: [healthCourt1.id, healthCourt2.id],
       perEntrantMinRest: 0,
       sessionWindows: [{ from: "2026-09-01T09:00:00.000Z", to: "2026-09-01T21:00:00.000Z" }],
     },
   });
   const auto = v1data<{
-    assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+    assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
   }>(await v1(free, `/api/v1/stages/${stage.id}/schedule/auto`, "POST", { only_unlocked: true }));
   await v1(free, `/api/v1/stages/${stage.id}/schedule/apply`, "POST", {
     assignments: auto.assignments.map((a) => ({
       fixture_id: a.fixture_id,
       scheduled_at: a.scheduled_at,
-      court_label: a.court_label,
+      court_id: a.court_id,
     })),
     source: "auto",
   });
@@ -7107,7 +7172,28 @@ async function scheduleRestFloorSuite(): Promise<void> {
  */
 async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
   const free = newSession();
-  await signIn(free, `dtx_roundorder_${tag}@example.com`);
+  const roundOrderOrgId = (await signIn(free, `dtx_roundorder_${tag}@example.com`)).org_id;
+  const roundOrderVenue = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${roundOrderOrgId}/venues`, "POST", {
+      name: `Round Order Venue ${tag}`,
+    }),
+  );
+  const roundOrderCourt1 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${roundOrderOrgId}/venues/${roundOrderVenue.id}/courts`, "POST", {
+      name: "Court 1",
+    }),
+  );
+  const roundOrderCourt2 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${roundOrderOrgId}/venues/${roundOrderVenue.id}/courts`, "POST", {
+      name: "Court 2",
+    }),
+  );
+  const roundOrderCourt3 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/orgs/${roundOrderOrgId}/venues/${roundOrderVenue.id}/courts`, "POST", {
+      name: "Court 3",
+    }),
+  );
+  const roundOrderCourts = [roundOrderCourt1, roundOrderCourt2, roundOrderCourt3];
   const comp = v1data<{ id: string }>(
     await v1(free, "/api/v1/competitions", "POST", {
       ends_on: "2030-12-31",
@@ -7151,7 +7237,7 @@ async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
       startAt: at(0),
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 2", "Court 3"],
+      courts: roundOrderCourts.map((c) => c.id),
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -7163,7 +7249,7 @@ async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
     assignments: gen.fixtures.map((f, i) => ({
       fixture_id: f.id,
       scheduled_at: at(i * 60),
-      court_label: "Court 1",
+      court_id: roundOrderCourt1.id,
     })),
     source: "manual",
   });
@@ -7176,7 +7262,7 @@ async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
   const beforeAt = (before.json.data as { scheduled_at: string }).scheduled_at;
   const refused = await v1(free, `/api/v1/fixtures/${laterRoundId}`, "PATCH", {
     scheduled_at: at(-60),
-    court_label: "Court 3",
+    court_id: roundOrderCourt3.id,
   });
   // `/api/v1`'s error envelope (server/api-v1/http.ts) spreads `extra`
   // straight onto `error` — `error: { code, message, ...extra }` — not
@@ -7202,7 +7288,7 @@ async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
   // some incidental clash on Court 3.
   const allowed = await v1(free, `/api/v1/fixtures/${laterRoundId}`, "PATCH", {
     scheduled_at: at(600),
-    court_label: "Court 3",
+    court_id: roundOrderCourt3.id,
   });
   check("round order: the identically-shaped legal move is allowed (200)", allowed.status === 200);
 
@@ -7249,6 +7335,15 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
       name: `DTX Joint Round Order ${tag}`,
     }),
   );
+  const jointVenue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `Joint Round Order Venue ${tag}` }),
+  );
+  const jointCourt1 = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${jointVenue.id}/courts`, "POST", { name: "Court 1" }),
+  );
+  const jointCourt3 = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${jointVenue.id}/courts`, "POST", { name: "Court 3" }),
+  );
 
   const T0 = Date.UTC(2026, 10, 9, 9, 0);
   const at = (minutes: number) => new Date(T0 + minutes * 60_000).toISOString();
@@ -7256,7 +7351,7 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
   async function seedRrDivision(
     name: string,
     entrantNames: string[],
-    court: string,
+    courtId: string,
   ): Promise<{ id: string; fixtureIds: string[] }> {
     const div = v1data<{ id: string }>(
       await v1(s, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
@@ -7289,7 +7384,7 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
         startAt: at(0),
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: [court],
+        courts: [courtId],
         perEntrantMinRest: 0,
         blackouts: [],
         sessionWindows: [],
@@ -7298,8 +7393,8 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
     return { id: div.id, fixtureIds: gen.fixtures.map((f) => f.id) };
   }
 
-  const alpha = await seedRrDivision("Alpha", ["A", "B", "C", "D"], "Court 1");
-  const bravo = await seedRrDivision("Bravo", ["X", "Y", "Z"], "Court 3");
+  const alpha = await seedRrDivision("Alpha", ["A", "B", "C", "D"], jointCourt1.id);
+  const bravo = await seedRrDivision("Bravo", ["X", "Y", "Z"], jointCourt3.id);
   check(
     "joint round order: Alpha generated a 4-entrant round robin (6 fixtures)",
     alpha.fixtureIds.length === 6,
@@ -7317,12 +7412,12 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
   const alphaViolating = alpha.fixtureIds.map((fixture_id, i) => ({
     fixture_id,
     scheduled_at: i === 0 ? at(last * 30) : i === last ? at(0) : at(i * 30),
-    court_label: "Court 1",
+    court_id: jointCourt1.id,
   }));
   const bravoClean = bravo.fixtureIds.map((fixture_id, i) => ({
     fixture_id,
     scheduled_at: at(i * 30),
-    court_label: "Court 3",
+    court_id: jointCourt3.id,
   }));
 
   const seqs1 = await divisionSeqs([alpha.id, bravo.id]);
@@ -7358,7 +7453,7 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
   const alphaClean = alpha.fixtureIds.map((fixture_id, i) => ({
     fixture_id,
     scheduled_at: at(i * 30),
-    court_label: "Court 1",
+    court_id: jointCourt1.id,
   }));
   const seqs2 = await divisionSeqs([alpha.id, bravo.id]);
   const cleanApply = await v1(s, `/api/v1/competitions/${comp.id}/schedule/apply`, "POST", {
@@ -7374,7 +7469,7 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
   try {
     for (const a of alphaViolating) {
       await sql`
-        update fixtures set scheduled_at = ${a.scheduled_at}, court_label = ${a.court_label}
+        update fixtures set scheduled_at = ${a.scheduled_at}, court_id = ${a.court_id}
         where id = ${a.fixture_id}`;
     }
   } finally {
@@ -7427,7 +7522,7 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
         // every other Alpha fixture, including round 3's (still at
         // `at(last*30)` from `alphaClean` above), stays right where it is
         // and is never named here.
-        assignments: [{ fixture_id: alpha.fixtureIds[0]!, scheduled_at: at(24 * 60), court_label: "Court 1" }],
+        assignments: [{ fixture_id: alpha.fixtureIds[0]!, scheduled_at: at(24 * 60), court_id: jointCourt1.id }],
       },
     ],
     source: "ai",
@@ -8011,6 +8106,20 @@ async function seedPlannableAiDivision(
   label: string,
   startAt: string | null = "2026-10-01T09:00:00.000Z",
 ): Promise<{ compId: string; divId: string; stageId: string }> {
+  const plannableOrgId = s.cookies["seazn_org"]!;
+  const plannableVenue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${plannableOrgId}/venues`, "POST", { name: `${label} Venue ${tag}` }),
+  );
+  const plannableCourtA = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${plannableOrgId}/venues/${plannableVenue.id}/courts`, "POST", {
+      name: "A",
+    }),
+  );
+  const plannableCourtB = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${plannableOrgId}/venues/${plannableVenue.id}/courts`, "POST", {
+      name: "B",
+    }),
+  );
   const comp = v1data<{ id: string }>(
     await v1(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `${label} ${tag}` }),
   );
@@ -8044,7 +8153,7 @@ async function seedPlannableAiDivision(
       ...(startAt !== null ? { startAt } : {}),
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["A", "B"],
+      courts: [plannableCourtA.id, plannableCourtB.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -8080,7 +8189,24 @@ async function seedBracketAiDivision(
   divId: string;
   personIds: string[];
   fixtures: { id: string; home_entrant_id: string | null; away_entrant_id: string | null }[];
+  /** [courtA, courtB] real ids, matching the "A"/"B" names courts used to be
+   *  configured/assigned by literally. */
+  courtIds: [string, string];
 }> {
+  const bracketOrgId = s.cookies["seazn_org"]!;
+  const bracketVenue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${bracketOrgId}/venues`, "POST", { name: `${label} Venue ${tag}` }),
+  );
+  const bracketCourtA = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${bracketOrgId}/venues/${bracketVenue.id}/courts`, "POST", {
+      name: "A",
+    }),
+  );
+  const bracketCourtB = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${bracketOrgId}/venues/${bracketVenue.id}/courts`, "POST", {
+      name: "B",
+    }),
+  );
   const comp = v1data<{ id: string }>(
     await v1(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `${label} ${tag}` }),
   );
@@ -8123,7 +8249,7 @@ async function seedBracketAiDivision(
       startAt: "2026-10-08T09:00:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["A", "B"],
+      courts: [bracketCourtA.id, bracketCourtB.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -8133,7 +8259,12 @@ async function seedBracketAiDivision(
   const gen = v1data<{
     fixtures: { id: string; home_entrant_id: string | null; away_entrant_id: string | null }[];
   }>(await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"));
-  return { divId: div.id, personIds, fixtures: gen.fixtures };
+  return {
+    divId: div.id,
+    personIds,
+    fixtures: gen.fixtures,
+    courtIds: [bracketCourtA.id, bracketCourtB.id],
+  };
 }
 
 /** #397 (calendar anchor): a time that never left 1970 — what the pack handed
@@ -8258,6 +8389,15 @@ async function schedulingConstraintsSuite(): Promise<void> {
   // is Pro, and so is the board apply path.
   const orgId = (await signIn(s, `smoke-sched-constraints-${tag}@example.com`)).org_id;
   await setPlan(orgId, "pro", s);
+  const constraintsVenue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `Constraints Venue ${tag}` }),
+  );
+  const courtA = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${constraintsVenue.id}/courts`, "POST", { name: "A" }),
+  );
+  const courtB = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${constraintsVenue.id}/courts`, "POST", { name: "B" }),
+  );
 
   // ======================================================================
   // 1. A durable feeder→dependent rest rule on a real bracket (#443, #447)
@@ -8309,7 +8449,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
       startAt: "2026-11-05T09:00:00.000Z",
       matchMinutes: 30,
       gapMinutes,
-      courts: ["A", "B"],
+      courts: [courtA.id, courtB.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -8347,7 +8487,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
   );
 
   interface AutoOut {
-    assignments: { fixture_id: string; scheduled_at: string; ends_at: string; court_label: string }[];
+    assignments: { fixture_id: string; scheduled_at: string; ends_at: string; court_id: string }[];
     conflicts: ScheduleConflictLite[];
     solver?: { status?: string };
   }
@@ -8467,10 +8607,10 @@ async function schedulingConstraintsSuite(): Promise<void> {
   }
   const cupBoard = (round2At: string) => ({
     assignments: [
-      { fixture_id: semis[0]!.id, scheduled_at: "2026-11-05T09:00:00.000Z", court_label: "A" },
-      { fixture_id: semis[1]!.id, scheduled_at: "2026-11-05T09:00:00.000Z", court_label: "B" },
-      { fixture_id: round2[0]!.id, scheduled_at: round2At, court_label: "A" },
-      { fixture_id: round2[1]!.id, scheduled_at: round2At, court_label: "B" },
+      { fixture_id: semis[0]!.id, scheduled_at: "2026-11-05T09:00:00.000Z", court_id: courtA.id },
+      { fixture_id: semis[1]!.id, scheduled_at: "2026-11-05T09:00:00.000Z", court_id: courtB.id },
+      { fixture_id: round2[0]!.id, scheduled_at: round2At, court_id: courtA.id },
+      { fixture_id: round2[1]!.id, scheduled_at: round2At, court_id: courtB.id },
     ],
   });
   const validateCup = async (): Promise<ScheduleConflictLite[]> =>
@@ -8599,7 +8739,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
       startAt: "2026-11-12T09:00:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["A", "B"],
+      courts: [courtA.id, courtB.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -8661,12 +8801,12 @@ async function schedulingConstraintsSuite(): Promise<void> {
   // and its absence is what proves the reported set is the PAIR and not the pool.
   const poolBoard = (strictSecond: string, laxSecond: string) => ({
     assignments: [
-      { fixture_id: sf[0]!.id, scheduled_at: at("09:00"), court_label: "A" },
-      { fixture_id: sf[1]!.id, scheduled_at: strictSecond, court_label: "A" },
-      { fixture_id: sf[2]!.id, scheduled_at: at("14:00"), court_label: "A" },
-      { fixture_id: lf[0]!.id, scheduled_at: at("09:00"), court_label: "B" },
-      { fixture_id: lf[1]!.id, scheduled_at: laxSecond, court_label: "B" },
-      { fixture_id: lf[2]!.id, scheduled_at: at("14:00"), court_label: "B" },
+      { fixture_id: sf[0]!.id, scheduled_at: at("09:00"), court_id: courtA.id },
+      { fixture_id: sf[1]!.id, scheduled_at: strictSecond, court_id: courtA.id },
+      { fixture_id: sf[2]!.id, scheduled_at: at("14:00"), court_id: courtA.id },
+      { fixture_id: lf[0]!.id, scheduled_at: at("09:00"), court_id: courtB.id },
+      { fixture_id: lf[1]!.id, scheduled_at: laxSecond, court_id: courtB.id },
+      { fixture_id: lf[2]!.id, scheduled_at: at("14:00"), court_id: courtB.id },
     ],
   });
   const validatePools = async (): Promise<ScheduleConflictLite[]> =>
@@ -8738,7 +8878,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
   // blocks), and the pool rule follows the card in both directions.
   await v1(s, `/api/v1/fixtures/${sf[1]!.id}`, "PATCH", {
     scheduled_at: at("10:30"),
-    court_label: "A",
+    court_id: courtA.id,
   });
   const draggedIn = idsWithCode(await validatePools(), "warn.rest");
   check(
@@ -8747,7 +8887,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
   );
   await v1(s, `/api/v1/fixtures/${sf[1]!.id}`, "PATCH", {
     scheduled_at: at("11:00"),
-    court_label: "A",
+    court_id: courtA.id,
   });
   check(
     "#452 pools/drag: ...and dragging it back out clears it again",
@@ -8854,6 +8994,19 @@ async function z3AutoScheduleSuite(): Promise<void> {
   const SLOT_MIN = 30;
   const slotAt = (n: number) =>
     new Date(Date.parse(START) + n * SLOT_MIN * 60_000).toISOString();
+
+  // ScheduleConfig.courts is real court ids now (V374 cutover), not display
+  // labels — one venue, two courts, same shape venuesSuite() already uses.
+  const venue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `Z3 Venue ${tag}` }),
+  );
+  const courtA = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${venue.id}/courts`, "POST", { name: "Court A" }),
+  );
+  const courtB = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${venue.id}/courts`, "POST", { name: "Court B" }),
+  );
+
   // `perEntrantMinRest: 0` on purpose: a rest shortfall is warn-only, and a
   // board carrying warnings would make "the solver produced a legal board" and
   // "the solver produced something it had to apologise for" look alike.
@@ -8863,7 +9016,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
       startAt: START,
       matchMinutes: SLOT_MIN,
       gapMinutes: 0,
-      courts: ["Court A", "Court B"],
+      courts: [courtA.id, courtB.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -8883,7 +9036,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
     lost?: number;
   }
   interface AutoRun {
-    assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+    assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
     metrics?: {
       makespan_minutes: number;
       worst_idle_gap_minutes: number;
@@ -8896,10 +9049,10 @@ async function z3AutoScheduleSuite(): Promise<void> {
   const auto = async (body: Record<string, unknown>): Promise<AutoRun | undefined> =>
     v1data<AutoRun>(await v1(s, `/api/v1/stages/${stage.id}/schedule/auto`, "POST", body));
   const fixtureSlot = async (id: string): Promise<string> => {
-    const f = v1data<{ scheduled_at: string | null; court_label: string | null }>(
+    const f = v1data<{ scheduled_at: string | null; court_id: string | null }>(
       await v1(s, `/api/v1/fixtures/${id}`),
     );
-    return `${f?.scheduled_at ?? "-"}@${f?.court_label ?? "-"}`;
+    return `${f?.scheduled_at ?? "-"}@${f?.court_id ?? "-"}`;
   };
 
   // ======================================================================
@@ -8956,7 +9109,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
     (build?.assignments ?? []).length === 6 &&
       build?.metrics?.placed === 6 &&
       build.metrics.total === 6 &&
-      new Set((build.assignments ?? []).map((a) => a.court_label)).size === 2,
+      new Set((build.assignments ?? []).map((a) => a.court_id)).size === 2,
   );
   check(
     // Telemetry POPULATED, not merely present: a strip full of structural zeros
@@ -8977,7 +9130,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
     assignments: (build?.assignments ?? []).map((a) => ({
       fixture_id: a.fixture_id,
       scheduled_at: a.scheduled_at,
-      court_label: a.court_label,
+      court_id: a.court_id,
     })),
     source: "auto",
   });
@@ -9019,7 +9172,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
   check(
     "z3 reflow: the pinned card is handed back on exactly the slot it already held",
     !!pinnedProposed &&
-      `${pinnedProposed.scheduled_at}@${pinnedProposed.court_label}` === pinnedBefore,
+      `${pinnedProposed.scheduled_at}@${pinnedProposed.court_id}` === pinnedBefore,
   );
 
   // ======================================================================
@@ -9035,7 +9188,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
     assignments: generated.map((f, i) => ({
       fixture_id: f.id,
       scheduled_at: slotAt(i),
-      court_label: "Court A",
+      court_id: courtA.id,
     })),
     source: "manual",
   });
@@ -9066,7 +9219,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
   check(
     "z3 polish: the locked card keeps its exact time AND court",
     !!lockedProposed &&
-      `${lockedProposed.scheduled_at}@${lockedProposed.court_label}` === lockedBefore,
+      `${lockedProposed.scheduled_at}@${lockedProposed.court_id}` === lockedBefore,
   );
   check(
     // The other half. A polish that froze the whole board would satisfy the
@@ -9075,7 +9228,142 @@ async function z3AutoScheduleSuite(): Promise<void> {
     (polish?.assignments ?? []).length === 6 &&
       polish?.metrics?.placed === 6 &&
       (polish.metrics.makespan_minutes ?? POOR_MAKESPAN_MIN) < POOR_MAKESPAN_MIN &&
-      new Set((polish.assignments ?? []).map((a) => a.court_label)).size === 2,
+      new Set((polish.assignments ?? []).map((a) => a.court_id)).size === 2,
+  );
+}
+
+/**
+ * P9 pass 5 — a full schedule round on an org with TWO VENUES (not one venue
+ * with two courts, which is the shape every other court-seeding suite in
+ * this file — `z3AutoScheduleSuite` immediately above included — already
+ * uses). `ScheduleConfig.courts` is a plain array of court ids with no venue
+ * structure of its own (V374 cutover), so a build that silently only ever
+ * resolved courts through ONE venue's row would still pass every existing
+ * "2 distinct courts" check in this file if it happened to seed both under
+ * the same venue. This suite is the one place cross-venue resolution is the
+ * thing under test: two venues, one court each, both configured as build
+ * candidates, and the assertion is that the solved board used BOTH venues'
+ * courts, not just one.
+ */
+async function twoVenueScheduleSuite(): Promise<void> {
+  const s = newSession();
+  const orgId = (await signIn(s, `smoke-two-venue-${tag}@example.com`)).org_id;
+  await setPlan(orgId, "pro", s);
+
+  const venueNorth = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `North Sports Hall ${tag}` }),
+  );
+  const venueSouth = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `South Leisure Centre ${tag}` }),
+  );
+  const courtNorth = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${venueNorth.id}/courts`, "POST", {
+      name: "Hall Court",
+    }),
+  );
+  const courtSouth = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${venueSouth.id}/courts`, "POST", {
+      name: "Centre Court",
+    }),
+  );
+
+  const comp = v1data<{ id: string }>(
+    await v1(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Two Venue ${tag}` }),
+  );
+  const div = v1data<{ id: string }>(
+    await v1(s, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Two Venues",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  await v1(
+    s,
+    `/api/v1/divisions/${div.id}/entrants`,
+    "POST",
+    ["A", "B", "C", "D"].map((n, i) => ({
+      kind: "individual",
+      display_name: `TV ${n}${tag}`,
+      seed: i + 1,
+    })),
+  );
+  const stage = v1data<{ id: string }>(
+    await v1(s, `/api/v1/divisions/${div.id}/stages`, "POST", {
+      seq: 1,
+      kind: "league",
+      name: "League",
+    }),
+  );
+  const generated = v1data<{ fixtures: { id: string }[] }>(
+    await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"),
+  ).fixtures;
+  check("two venues: a 4-entrant round robin generated 6 fixtures", generated.length === 6);
+
+  const START = "2026-09-22T09:00:00.000Z";
+  await v1(s, `/api/v1/divisions/${div.id}/schedule-settings`, "PUT", {
+    tz: "UTC",
+    config: {
+      startAt: START,
+      matchMinutes: 30,
+      gapMinutes: 0,
+      // Both venues' courts configured as candidates — the point is which
+      // ones the SOLVER actually chooses, not "empty falls back to every
+      // org court".
+      courts: [courtNorth.id, courtSouth.id],
+      perEntrantMinRest: 0,
+      blackouts: [],
+      sessionWindows: [],
+    },
+  });
+
+  interface AutoRun {
+    assignments: {
+      fixture_id: string;
+      scheduled_at: string;
+      court_id: string;
+      court_name: string | null;
+    }[];
+    metrics?: { placed: number; total: number };
+  }
+  const build = v1data<AutoRun>(
+    await v1(s, `/api/v1/stages/${stage.id}/schedule/auto`, "POST", { only_unlocked: false }),
+  );
+  check(
+    "two venues: build placed every fixture, with a real court name on each",
+    (build?.assignments ?? []).length === 6 &&
+      build?.metrics?.placed === 6 &&
+      (build?.assignments ?? []).every(
+        (a) => a.court_name === "Hall Court" || a.court_name === "Centre Court",
+      ),
+  );
+  const usedCourtIds = new Set((build?.assignments ?? []).map((a) => a.court_id));
+  check(
+    // Not just "2 distinct courts" — z3AutoScheduleSuite already proves that
+    // shape for a single-venue board. This is the one place the two courts
+    // used are asserted to come from two DIFFERENT venues.
+    "two venues: the board used courts from BOTH venues, not one",
+    usedCourtIds.has(courtNorth.id) && usedCourtIds.has(courtSouth.id),
+  );
+
+  const applied = v1data<{ applied: number }>(
+    await v1(s, `/api/v1/stages/${stage.id}/schedule/apply`, "POST", {
+      assignments: (build?.assignments ?? []).map((a) => ({
+        fixture_id: a.fixture_id,
+        scheduled_at: a.scheduled_at,
+        court_id: a.court_id,
+      })),
+      source: "auto",
+    }),
+  );
+  check("two venues: the full cross-venue board applied", applied?.applied === 6);
+
+  const validated = v1data<{ conflicts: unknown[] }>(
+    await v1(s, `/api/v1/divisions/${div.id}/schedule/validate`, "POST"),
+  );
+  check(
+    "two venues: /validate is clean after a real cross-venue schedule round",
+    (validated?.conflicts ?? []).length === 0,
   );
 }
 
@@ -9148,6 +9436,15 @@ async function placementOptimizedSuite(): Promise<void> {
   const s = newSession();
   const orgId = (await signIn(s, `smoke-placement-opt-${tag}@example.com`)).org_id;
   await setPlan(orgId, "pro", s);
+  const optVenue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `Optimized Venue ${tag}` }),
+  );
+  const optCourtA = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${optVenue.id}/courts`, "POST", { name: "Court A" }),
+  );
+  const optCourtB = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${optVenue.id}/courts`, "POST", { name: "Court B" }),
+  );
 
   const comp = v1data<{ id: string }>(
     await v1(s, "/api/v1/competitions", "POST", {
@@ -9211,7 +9508,7 @@ async function placementOptimizedSuite(): Promise<void> {
       startAt: "2026-09-21T09:00:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["Court A", "Court B"],
+      courts: [optCourtA.id, optCourtB.id],
       perEntrantMinRest: 45,
       blackouts: [],
       sessionWindows: [],
@@ -9219,7 +9516,7 @@ async function placementOptimizedSuite(): Promise<void> {
   });
 
   interface OptRun {
-    assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+    assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
     metrics?: { placed: number; total: number };
     solver?: { engine: string; status: string };
   }
@@ -9242,7 +9539,7 @@ async function placementOptimizedSuite(): Promise<void> {
     (build?.assignments ?? []).length === 9 &&
       build?.metrics?.placed === 9 &&
       build.metrics.total === 9 &&
-      new Set((build.assignments ?? []).map((a) => a.court_label)).size === 2,
+      new Set((build.assignments ?? []).map((a) => a.court_id)).size === 2,
   );
 }
 
@@ -9283,6 +9580,15 @@ async function placementPerCourtBlackoutSuite(): Promise<void> {
   const s = newSession();
   const orgId = (await signIn(s, `smoke-placement-pcg-${tag}@example.com`)).org_id;
   await setPlan(orgId, "pro", s);
+  const perCourtVenue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `PerCourt Venue ${tag}` }),
+  );
+  const perCourtC1 = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${perCourtVenue.id}/courts`, "POST", { name: "C1" }),
+  );
+  const perCourtC2 = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/venues/${perCourtVenue.id}/courts`, "POST", { name: "C2" }),
+  );
 
   const comp = v1data<{ id: string }>(
     await v1(s, "/api/v1/competitions", "POST", {
@@ -9343,14 +9649,16 @@ async function placementPerCourtBlackoutSuite(): Promise<void> {
       startAt: new Date(startAtMs).toISOString(),
       matchMinutes: 30,
       gapMinutes: 10,
-      courts: ["C1", "C2"],
+      courts: [perCourtC1.id, perCourtC2.id],
       perEntrantMinRest: 40,
       // C2 alone loses its back half; C1 is untouched -- the two courts'
       // offered start times now genuinely differ, the exact shape that used
-      // to be refused before ever reaching placement.
+      // to be refused before ever reaching placement. blackouts[].court is
+      // matched verbatim against an assignment's own court id (calendar.ts),
+      // not resolved through a name, so this must be the real id too.
       blackouts: [
         {
-          court: "C2",
+          court: perCourtC2.id,
           from: new Date(startAtMs + 90 * 60_000).toISOString(),
           to: new Date(startAtMs + 180 * 60_000).toISOString(),
         },
@@ -9360,7 +9668,7 @@ async function placementPerCourtBlackoutSuite(): Promise<void> {
   });
 
   interface PerCourtRun {
-    assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+    assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
     metrics?: { placed: number; total: number };
     solver?: { engine: string; status: string; not_searched_reason?: string };
   }
@@ -9383,7 +9691,7 @@ async function placementPerCourtBlackoutSuite(): Promise<void> {
     (build?.assignments ?? []).length === 2 &&
       build?.metrics?.placed === 2 &&
       build.metrics.total === 2 &&
-      new Set((build.assignments ?? []).map((a) => a.court_label)).size === 2,
+      new Set((build.assignments ?? []).map((a) => a.court_id)).size === 2,
   );
 }
 
@@ -9650,10 +9958,14 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
       );
 
       const applied = await v1(plus, `/api/v1/stages/${stageId}/schedule/apply`, "POST", {
+        // ApplyScheduleRequest.assignments[] wants court_id — the AI plan's
+        // own proposal keeps the court_label field NAME (it already carries a
+        // real court id as its value, P9 pass 3b), so this is a rename at the
+        // wire boundary, not a value change.
         assignments: plan.proposal.map((a) => ({
           fixture_id: a.fixture_id,
           scheduled_at: a.scheduled_at,
-          court_label: a.court_label,
+          court_id: a.court_label,
         })),
         source: "ai",
         ai: {
@@ -9836,12 +10148,12 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
         ...decided.map((f, i) => ({
           fixture_id: f.id,
           scheduled_at: "2026-10-08T09:00:00.000Z",
-          court_label: i === 0 ? "A" : "B",
+          court_label: bracket.courtIds[i === 0 ? 0 : 1],
         })),
         ...[...tbdIds].map((id, i) => ({
           fixture_id: id,
           scheduled_at: "2026-10-08T09:30:00.000Z",
-          court_label: i === 0 ? "A" : "B",
+          court_label: bracket.courtIds[i === 0 ? 0 : 1],
         })),
       ];
       const refinedRes = await v1(
@@ -10025,7 +10337,21 @@ async function scheduleAiRoundOrderSuite(): Promise<void> {
 async function seedJointAiCompetition(
   s: Session,
   label: string,
-): Promise<{ compId: string; divIds: string[] }> {
+): Promise<{ compId: string; divIds: string[]; courtIds: [string, string] }> {
+  const jointAiOrgId = s.cookies["seazn_org"]!;
+  const jointAiVenue = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${jointAiOrgId}/venues`, "POST", { name: `${label} Venue ${tag}` }),
+  );
+  const jointAiCourt1 = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${jointAiOrgId}/venues/${jointAiVenue.id}/courts`, "POST", {
+      name: "Court 1",
+    }),
+  );
+  const jointAiCourt2 = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${jointAiOrgId}/venues/${jointAiVenue.id}/courts`, "POST", {
+      name: "Court 2",
+    }),
+  );
   const comp = v1data<{ id: string }>(
     await v1(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `${label} ${tag}` }),
   );
@@ -10061,7 +10387,7 @@ async function seedJointAiCompetition(
         startAt: "2026-11-02T09:00:00.000Z",
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: ["Court 1", "Court 2"],
+        courts: [jointAiCourt1.id, jointAiCourt2.id],
         perEntrantMinRest: 0,
         blackouts: [],
         sessionWindows: [],
@@ -10071,7 +10397,7 @@ async function seedJointAiCompetition(
     await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST");
     divIds.push(div.id);
   }
-  return { compId: comp.id, divIds };
+  return { compId: comp.id, divIds, courtIds: [jointAiCourt1.id, jointAiCourt2.id] };
 }
 
 interface JointPlanLite {
@@ -10251,12 +10577,14 @@ async function jointAiSuite(): Promise<void> {
     const byDivision = divIds.map((id) => ({
       division_id: id,
       expected_seq: seqs[id] ?? 0,
+      // ApplyCompetitionScheduleRequest wants court_id — same field-name
+      // rename at the wire boundary as the single-division apply above.
       assignments: plan.proposal
         .filter((p) => p.division_id === id)
         .map((p) => ({
           fixture_id: p.fixture_id,
           scheduled_at: p.scheduled_at,
-          court_label: p.court_label,
+          court_id: p.court_label,
         })),
     }));
     const applied = await v1(s, `/api/v1/competitions/${compId}/schedule/apply`, "POST", {
@@ -11245,6 +11573,19 @@ async function schedRegV3Suite(
   proOrgSlug: string,
   proOrgId: string,
 ): Promise<void> {
+  const schedV3Venue = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${proOrgId}/venues`, "POST", { name: `Sched v3 Venue ${tag}` }),
+  );
+  const schedV3CourtA = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${proOrgId}/venues/${schedV3Venue.id}/courts`, "POST", {
+      name: "A",
+    }),
+  );
+  const schedV3CourtB = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${proOrgId}/venues/${schedV3Venue.id}/courts`, "POST", {
+      name: "B",
+    }),
+  );
   // --- Pro path: competition + division + timetable + board page ---
   const comp = v1data<{ id: string; slug: string }>(
     await v1(admin, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
@@ -11280,7 +11621,7 @@ async function schedRegV3Suite(
       startAt: "2026-10-01T09:00:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["A", "B"],
+      courts: [schedV3CourtA.id, schedV3CourtB.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -11303,7 +11644,7 @@ async function schedRegV3Suite(
       startAt: "2026-10-01T09:00:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["A", "B"],
+      courts: [schedV3CourtA.id, schedV3CourtB.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -11316,7 +11657,7 @@ async function schedRegV3Suite(
         startAt: "2026-10-01T09:00:00.000Z",
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: ["A", "B"],
+        courts: [schedV3CourtA.id, schedV3CourtB.id],
         perEntrantMinRest: 0,
         blackouts: [],
         sessionWindows: [],
@@ -11330,7 +11671,7 @@ async function schedRegV3Suite(
         startAt: "2026-10-01T09:00:00.000Z",
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: ["A", "B"],
+        courts: [schedV3CourtA.id, schedV3CourtB.id],
         perEntrantMinRest: 0,
         blackouts: [],
         sessionWindows: [],
@@ -11590,13 +11931,13 @@ async function schedRegV3Suite(
   const seq0 = v1data<{ seq: number }>(await v1(admin, `/api/v1/divisions/${div.id}`)).seq;
   const move = await v1(admin, `/api/v1/fixtures/${fixture}`, "PATCH", {
     scheduled_at: "2026-10-01T09:00:00.000Z",
-    court_label: "A",
+    court_id: schedV3CourtA.id,
     expected_seq: Number(seq0),
   });
   check("sched seq-tokened reschedule lands", move.status === 200);
   const stale = await v1(admin, `/api/v1/fixtures/${fixture}`, "PATCH", {
     scheduled_at: "2026-10-01T10:00:00.000Z",
-    court_label: "A",
+    court_id: schedV3CourtA.id,
     expected_seq: Number(seq0),
   });
   check(
@@ -11745,6 +12086,22 @@ async function schedRegV3Suite(
 // competitionEnd with no URL override — smoke has no browser, so it only
 // ever sees whatever day the SSR'd page opens on by default.
 async function boardRedesignSuite(admin: Session, orgSlug: string): Promise<void> {
+  const redesignOrgId = admin.cookies["seazn_org"]!;
+  const redesignVenue = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${redesignOrgId}/venues`, "POST", {
+      name: `Board Redesign Venue ${tag}`,
+    }),
+  );
+  const redesignCourtA = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${redesignOrgId}/venues/${redesignVenue.id}/courts`, "POST", {
+      name: "A",
+    }),
+  );
+  const redesignCourtB = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${redesignOrgId}/venues/${redesignVenue.id}/courts`, "POST", {
+      name: "B",
+    }),
+  );
   const comp = v1data<{ id: string; slug: string }>(
     await v1(admin, "/api/v1/competitions", "POST", {
       starts_on: "2026-10-05",
@@ -11778,9 +12135,15 @@ async function boardRedesignSuite(admin: Session, orgSlug: string): Promise<void
       startAt: "2026-10-05T09:00:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["A", "B"],
+      courts: [redesignCourtA.id, redesignCourtB.id],
       perEntrantMinRest: 0,
-      blackouts: [{ court: "A", from: "2026-10-05T09:00:00.000Z", to: "2026-10-05T09:30:00.000Z" }],
+      blackouts: [
+        {
+          court: redesignCourtA.id,
+          from: "2026-10-05T09:00:00.000Z",
+          to: "2026-10-05T09:30:00.000Z",
+        },
+      ],
       sessionWindows: [],
     },
   });
@@ -11791,7 +12154,7 @@ async function boardRedesignSuite(admin: Session, orgSlug: string): Promise<void
   // FixtureBlock renders on the initial page load for the pin-icon check.
   await v1(admin, `/api/v1/fixtures/${genA.fixtures[0]!.id}`, "PATCH", {
     scheduled_at: "2026-10-05T09:00:00.000Z",
-    court_label: "B",
+    court_id: redesignCourtB.id,
   });
 
   // Division B exists purely so the division-filter legend has 2+ divisions
@@ -11989,6 +12352,19 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
     "v1 scoring before start → 422 WRONG_PHASE",
     early.status === 422 && early.json.error?.code === "WRONG_PHASE",
   );
+  // No explicit schedule-settings PUT for this division — relies on the
+  // "empty configured list falls back to the org's non-archived courts"
+  // default, so two real courts just need to EXIST in the org before the
+  // auto call, not be wired into this division's own config.
+  const v1Venue = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `v1 Venue ${tag}` }),
+  );
+  const v1Court1 = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${orgId}/venues/${v1Venue.id}/courts`, "POST", { name: "Court 1" }),
+  );
+  const v1Court9 = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${orgId}/venues/${v1Venue.id}/courts`, "POST", { name: "Court 9" }),
+  );
   const auto = await v1(admin, `/api/v1/stages/${stageId}/schedule/auto`, "POST", {});
   check(
     "v1 schedule/auto proposes all fixtures",
@@ -12001,13 +12377,13 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
   // board it left behind is still editable.
   {
     const assignments = v1data<
-      { assignments: { fixture_id: string; scheduled_at: string; court_label: string }[] }
+      { assignments: { fixture_id: string; scheduled_at: string; court_id: string }[] }
     >(auto).assignments;
     const applyRes = await v1(admin, `/api/v1/stages/${stageId}/schedule/apply`, "POST", {
       assignments: assignments.map((a) => ({
         fixture_id: a.fixture_id,
         scheduled_at: a.scheduled_at,
-        court_label: a.court_label,
+        court_id: a.court_id,
       })),
       // "auto", not "manual": a manual apply is board editing and needs the Pro
       // `scheduling.board` key, and this section runs on a community org.
@@ -12023,12 +12399,15 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
     // Four entrants, one round robin. Round 1's two fixtures cover all four
     // entrants, so ANY later-round fixture shares an entrant with each of them.
     // The auto pass emits in round order, so [0] and [2] are always such a pair.
-    // Same instant, DIFFERENT court — the only defect is the human.
+    // Same instant, DIFFERENT court — the only defect is the human. Whichever
+    // of the two real courts the solver put the anchor on, the OTHER one is
+    // what proves this — not a hardcoded id that might collide with it.
     const anchor = assignments[0]!;
     const sharer = assignments[2]!;
+    const otherCourtId = anchor.court_id === v1Court1.id ? v1Court9.id : v1Court1.id;
     const clash = await v1(admin, `/api/v1/fixtures/${sharer.fixture_id}`, "PATCH", {
       scheduled_at: anchor.scheduled_at,
-      court_label: "Court 9",
+      court_id: otherCourtId,
     });
     check(
       "v1 W4: a move that introduces a clash → 409 SCHEDULE_CONFLICT",
@@ -12039,8 +12418,19 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
       (clash.json.error?.conflicts ?? []).some((c) => !!c.rule && c.blocking === true),
     );
     // And the board still moves: the refusal was about the change, not the board.
+    //
+    // P9: this used to move the card to `court_label: "Court 9"` — a free-text
+    // label for a court that was not on the board at all, so it could never
+    // clash. Courts are entities now and a fixture can only sit on a real one,
+    // so the edit has to be made non-clashing HONESTLY: same court, a slot an
+    // hour past the last thing the solver placed, which nothing else occupies.
+    // An hour past the last slot was the first attempt and it 409s too — it
+    // lands outside the competition window. The edit that is clash-free BY
+    // CONSTRUCTION is unplacing the card: `PatchFixture.court_id` is nullable
+    // (schemas.ts), a tray card occupies no slot, and the point of the check
+    // is only that the board still accepts a change after refusing one.
     const legal = await v1(admin, `/api/v1/fixtures/${sharer.fixture_id}`, "PATCH", {
-      court_label: "Court 9",
+      court_id: null,
     });
     check("v1 W4: an unrelated edit on the same board still applies", legal.status === 200);
   }
@@ -12061,7 +12451,7 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
       endAt: "2030-01-02T23:00:00.000Z",
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 9"],
+      courts: [v1Court1.id, v1Court9.id],
       perEntrantMinRest: 0,
       blackouts: [],
       sessionWindows: [],
@@ -12409,9 +12799,15 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
   check("jul3 officials manual assign", patchOff.status === 200);
 
   // -- PROMPT-24: bulk shift + wait report ------------------------------
+  const jul3Venue = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `Jul3 Venue ${tag}` }),
+  );
+  const jul3Court = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${orgId}/venues/${jul3Venue.id}/courts`, "POST", { name: "C1" }),
+  );
   await v1(admin, `/api/v1/fixtures/${fixtures[0]!.id}`, "PATCH", {
     scheduled_at: "2026-07-20T09:00:00.000Z",
-    court_label: "C1",
+    court_id: jul3Court.id,
   });
   const shift = await v1(admin, "/api/v1/schedule/shift", "POST", {
     division_id: divId,
@@ -14189,6 +14585,11 @@ async function cleanup(tag: string): Promise<void> {
     // T14 z3AutoScheduleSuite — its own Pro org (one competition, one division
     // and its six fixtures all cascade with it).
     `smoke-z3-solver-${tag}@example.com`,
+    // P9 review: twoVenueSuite's own Pro org (its two venues and their
+    // courts) — was missing from this list entirely, so every smoke run
+    // leaked the org along with its venues/courts (the courts/venues purge
+    // below is keyed off this SAME `emails` array via `doomedOrgs`).
+    `smoke-two-venue-${tag}@example.com`,
     `p72comm_${tag}@example.com`,
     `smoke-community-${tag}@example.com`,
     `smoke-pro-${tag}@example.com`,
@@ -14257,6 +14658,25 @@ async function cleanup(tag: string): Promise<void> {
       delete from sponsor_orders
       where org_id in (select id from organizations
                        where created_by in (select id from users where email = any(${emails})))`;
+    // P9: courts must go BEFORE venues, and both before the org. P8 made
+    // `courts.venue_id` ON DELETE RESTRICT on purpose (amendment A3 — a venue
+    // with courts must not vanish through the API), and a RESTRICT sitting
+    // inside the organizations cascade path blocks the whole delete:
+    //   update or delete on table "venues" violates foreign key constraint
+    //   "courts_venue_id_org_id_fkey" on table "courts"
+    // No product code deletes an organisation — this is a harness-only
+    // ordering problem, so it is fixed here rather than by weakening a
+    // constraint that exists to protect real data.
+    const doomedOrgs = sql`select id from organizations
+                           where created_by in (select id from users where email = any(${emails}))`;
+    // `fixtures.court_id` is ON DELETE RESTRICT as well (same A3 reasoning), so
+    // the cards have to let go of their courts before the courts can go.
+    await sql`update fixtures set court_id = null, venue_id = null
+              where org_id in (${doomedOrgs})`;
+    await sql`delete from court_exceptions where org_id in (${doomedOrgs})`;
+    await sql`delete from court_hours where org_id in (${doomedOrgs})`;
+    await sql`delete from courts where org_id in (${doomedOrgs})`;
+    await sql`delete from venues where org_id in (${doomedOrgs})`;
     const orgs = await sql`
       delete from organizations
       where created_by in (select id from users where email = any(${emails}))`;

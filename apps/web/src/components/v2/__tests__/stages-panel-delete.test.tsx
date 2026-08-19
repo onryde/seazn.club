@@ -32,7 +32,7 @@ const baseProps = {
 const fixture = (status: string) => ({
   id: "f1", stage_id: "s1", pool_id: null, round_no: 1, seq_in_round: 1,
   fixture_no: 1, home_entrant_id: "e1", away_entrant_id: "e2",
-  scheduled_at: "2026-08-16T13:30:00.000Z", venue: null, court_label: null,
+  scheduled_at: "2026-08-16T13:30:00.000Z", venue: null, court_label: null, court_id: null, court_name: null,
   status, outcome: null,
 });
 

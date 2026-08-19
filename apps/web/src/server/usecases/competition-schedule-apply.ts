@@ -103,6 +103,7 @@ import { appendDivisionEvent } from "@/server/engine-db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { AiApplyMeta, ScheduleConfig } from "@/server/api-v1/schemas";
 import { withLegacyDetail } from "@/server/api-v1/conflict-detail-legacy";
+import type { ConflictDetail } from "@seazn/engine/scheduling";
 import {
   conflictKey,
   deltaConflicts,
@@ -117,7 +118,10 @@ import {
   applyWindow,
   assertFreshSeq,
   divisionFixtures,
+  courtNamesById,
+  courtVenueIds,
   divisionLockState,
+  withCourtNames,
   feedDependencies,
   loadSettings,
   peopleByEntrant,
@@ -169,7 +173,16 @@ export interface CompetitionApplyDivision {
    *  that skipped the check on one division would let a stale board silently
    *  overwrite a concurrent edit there while every other division was guarded. */
   expected_seq: number;
-  assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+  /** P9 pass 3b: `court_id` (a real `courts.id`), not the legacy `court_label`
+   *  — mirrors `ApplyCompetitionScheduleRequest`'s wire shape (schemas.ts) and
+   *  `applySchedule`'s (schedule.ts) already-converted single-division twin.
+   *  `venue_id` optional, same coalesce-over-unchanged semantics as there. */
+  assignments: {
+    fixture_id: string;
+    scheduled_at: string;
+    court_id: string;
+    venue_id?: string | null;
+  }[];
 }
 
 export interface CompetitionApplyInput {
@@ -497,7 +510,7 @@ export async function applyCompetitionSchedule(
         const startAt = ms(a.scheduled_at);
         return {
           fixtureId: a.fixture_id,
-          court: a.court_label,
+          court: a.court_id,
           startAt,
           endAt: startAt + d.settings.config.matchMinutes * MS_PER_MIN,
           entrants: [f.home_entrant_id, f.away_entrant_id].filter((e): e is string => e !== null),
@@ -526,9 +539,12 @@ export async function applyCompetitionSchedule(
     // Fixtures of the run's own divisions that this apply is NOT moving: fixed
     // occupancy, carrying their entrants and people, exactly as the
     // single-division apply treats them.
+    // P9 pass 3b: `court_id`, not the legacy `court_label` — the latter is
+    // null on every fixture scheduled since the cutover, which silently
+    // dropped every real placement from the "already occupying a court" set.
     const untouched: Assignment[] = order.flatMap((d) =>
       d.fixtures
-        .filter((f) => !seenFixture.has(f.id) && f.scheduled_at !== null && f.court_label !== null)
+        .filter((f) => !seenFixture.has(f.id) && f.scheduled_at !== null && f.court_id !== null)
         .map((f) => toAssignment(f, d.settings.config.matchMinutes, people, roundRobinByDivision.get(d.id))),
     );
     // Divisions of this competition that are NOT in the run. One call: passing
@@ -571,7 +587,8 @@ export async function applyCompetitionSchedule(
     const current: Assignment[] = order.flatMap((d) =>
       d.input.assignments
         .map((a) => d.byId.get(a.fixture_id)!)
-        .filter((f) => f.scheduled_at !== null && f.court_label !== null)
+        // P9 pass 3b: `court_id`, the fixture's real pre-apply identity.
+        .filter((f) => f.scheduled_at !== null && f.court_id !== null)
         // `toAssignment` stamps `divisionId` from the fixture's own
         // `division_id` (#446), so this pass does NOT re-write it from `d.id`.
         // The two agree — `d.byId` only holds that division's fixtures — and
@@ -581,6 +598,15 @@ export async function applyCompetitionSchedule(
         // round is round-robin-generated, never `d.id` alone.
         .map((f) => toAssignment(f, d.settings.config.matchMinutes, people, roundRobinByDivision.get(d.id))),
     );
+
+    // The venue-qualified court NAMES this run's conflicts resolve through, so
+    // a 409 never quotes a bare uuid at the organiser. Defined BEFORE the
+    // refusal path below, not beside the write further down — it is used by
+    // both, and a const declared after its first use is a dead-zone throw at
+    // runtime that no type check catches.
+    const jointCourtNames = await courtNamesById(tx);
+    const withJointCourtNames = <C extends { details?: ConflictDetail }>(c: C): C =>
+      c.details !== undefined ? { ...c, details: withCourtNames(c.details, jointCourtNames) } : c;
 
     // ---- one pass per division, over the merged board ---------------------
     const seenConflict = new Set<string>();
@@ -722,11 +748,19 @@ export async function applyCompetitionSchedule(
         // engine stopped producing (C3, 2026-08-13 design amendment) — this
         // list rides on the 409's `extra.conflicts` verbatim (http.ts), same
         // "carries `Conflict` verbatim" contract `AiPlanConflict` documents.
-        conflicts: blocking.map(withLegacyDetail),
+        // Review wave 3: resolve the court NAME first. This list is the 409
+        // an organiser reads, and `withLegacyDetail` renders
+        // `details.courtName ?? details.court` — so unresolved it named a raw
+        // court uuid. Same resolver every other server path in this cutover
+        // uses; `courtNamesById` is exported from `./schedule`.
+        conflicts: blocking.map((c) => withLegacyDetail(withJointCourtNames(c))),
       });
     }
 
     // ---- write ------------------------------------------------------------
+    // Resolved ONCE for the whole joint apply: the venue is derived from the
+    // court, never accepted from the client (see `courtVenueIds`' own note).
+    const courtVenues = await courtVenueIds(tx);
     let applied = 0;
     for (const d of order) {
       // Interleaved with the writes on purpose — see the module header. A
@@ -735,19 +769,36 @@ export async function applyCompetitionSchedule(
       const moves: { fixture: string; from: unknown; to: unknown }[] = [];
       for (const a of d.input.assignments) {
         const f = d.byId.get(a.fixture_id)!;
+        // P9 pass 3a ruling, applied here in pass 3b: writers stop writing
+        // court_label/venue (owner ruling, FULL cutover) — court_id/venue_id
+        // only. Mirrors `applySchedule`'s (schedule.ts) identical write.
+        //
+        // Review wave 2: `venue_id` is DERIVED from the court, exactly as
+        // `applySchedule` now does. It used to be
+        // `coalesce(${a.venue_id ?? null}, venue_id)`, and no client sends
+        // `venue_id` (`jointApplyDivisions` emits fixture_id/scheduled_at/
+        // court_id only) — so a joint apply that moved a fixture from one
+        // venue's court to another's LEFT the old venue in place, and every
+        // player-facing venue string (ICS LOCATION, /me, /my-matches, the
+        // public fixture page and its JSON-LD) then named the wrong one. The
+        // single-division path was fixed first and this twin was missed,
+        // which is the same second-call-site shape this cutover kept hitting.
         await tx`
           update fixtures set
             scheduled_at = ${a.scheduled_at},
-            court_label = ${a.court_label},
+            court_id = ${a.court_id},
+            venue_id = ${a.court_id !== null ? (courtVenues.get(a.court_id) ?? null) : null},
             schedule_source = ${input.source}
           where id = ${a.fixture_id}`;
+        // `court` here is a courts.id, not a label — see `applySchedule`'s
+        // identical note on its own `moves` ledger payload.
         moves.push({
           fixture: a.fixture_id,
           from: {
             at: f.scheduled_at !== null ? iso(ms(f.scheduled_at)) : null,
-            court: f.court_label,
+            court: f.court_id,
           },
-          to: { at: a.scheduled_at, court: a.court_label },
+          to: { at: a.scheduled_at, court: a.court_id },
         });
       }
       // The same `schedule_applied` row the per-stage apply writes, so the
@@ -795,7 +846,9 @@ export async function applyCompetitionSchedule(
       // `withLegacyDetail` restores the deprecated `detail` string the engine
       // stopped producing (C3, 2026-08-13 design amendment) — `CompetitionApplyOut`
       // carries `Conflict` verbatim otherwise, same as `AiPlanConflict`.
-      conflicts: conflicts.filter((c) => !allSiblingIds.has(c.fixtureId)).map(withLegacyDetail),
+      conflicts: conflicts
+        .filter((c) => !allSiblingIds.has(c.fixtureId))
+        .map((c) => withLegacyDetail(withJointCourtNames(c))),
       divisionIds: order.map((d) => d.id),
     };
   });

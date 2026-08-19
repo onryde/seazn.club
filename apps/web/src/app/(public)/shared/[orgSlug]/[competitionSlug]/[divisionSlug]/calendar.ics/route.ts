@@ -12,7 +12,11 @@ export async function GET(
   {
     params,
   }: {
-    params: Promise<{ orgSlug: string; competitionSlug: string; divisionSlug: string }>;
+    params: Promise<{
+      orgSlug: string;
+      competitionSlug: string;
+      divisionSlug: string;
+    }>;
   },
 ) {
   const { orgSlug, competitionSlug, divisionSlug } = await params;
@@ -20,7 +24,9 @@ export async function GET(
   if (!data) notFound();
 
   const entrantId = new URL(req.url).searchParams.get("entrant");
-  const entrantNames = Object.fromEntries(data.entrants.map((e) => [e.id, e.display_name]));
+  const entrantNames = Object.fromEntries(
+    data.entrants.map((e) => [e.id, e.display_name]),
+  );
   // Spectator-facing locale (v5 i18n §4) — the org's own default, resolved
   // the same way every other public surface does (data.ts:502-503).
   // Deliberately NOT resolveLocale(): a subscribed calendar has no single
@@ -29,12 +35,17 @@ export async function GET(
   // 'TBD vs TBD' for the final is the exact product value TBD fixtures
   // exist to deliver."
   const orgLocale = toLocale(data.org.default_locale);
-  const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
-    msgFor(orgLocale, k, v);
+  const lookup = (
+    k: Parameters<typeof msgFor>[1],
+    v?: Record<string, string | number>,
+  ) => msgFor(orgLocale, k, v);
   const nameOrLabel = (
     id: string | null,
     label: (typeof data.fixtures)[number]["home_slot_label"],
-  ): string => (id ? (entrantNames[id] ?? "TBD") : resolveSlotLabel(label, lookup, "schedule.tbd"));
+  ): string =>
+    id
+      ? (entrantNames[id] ?? "TBD")
+      : resolveSlotLabel(label, lookup, "schedule.tbd");
 
   // A fixture that exists but has no time is the whole point of day-one
   // fixtures: it is anchored to the competition's last day as an all-day
@@ -48,7 +59,9 @@ export async function GET(
   const events: IcsEvent[] = data.fixtures
     .filter(
       (f) =>
-        !entrantId || f.home_entrant_id === entrantId || f.away_entrant_id === entrantId,
+        !entrantId ||
+        f.home_entrant_id === entrantId ||
+        f.away_entrant_id === entrantId,
     )
     // No competition dates means no defensible anchor; emitting a guessed
     // DTSTART into somebody's calendar is worse than omitting the event.
@@ -58,12 +71,24 @@ export async function GET(
       const common = {
         uid: f.id,
         summary: `${nameOrLabel(f.home_entrant_id, f.home_slot_label)} vs ${nameOrLabel(f.away_entrant_id, f.away_slot_label)} — ${data.division.name}`,
-        ...(f.venue
-          ? { location: f.court_label ? `${f.venue} (${f.court_label})` : f.venue }
+        // P9 cutover: venue_name/court_name are DERIVED (fixtures.venue_id/
+        // court_id via data.ts's withCourtVenueNames) -- venue/court_label
+        // are frozen, no writer touches them any more.
+        ...(f.venue_name
+          ? {
+              location: f.court_name
+                ? `${f.venue_name} (${f.court_name})`
+                : f.venue_name,
+            }
           : {}),
       };
       return f.scheduled_at !== null
-        ? { ...common, start: new Date(f.scheduled_at), durationMinutes: 90, description }
+        ? {
+            ...common,
+            start: new Date(f.scheduled_at),
+            durationMinutes: 90,
+            description,
+          }
         : {
             ...common,
             allDayOn: anchorDate as string,
