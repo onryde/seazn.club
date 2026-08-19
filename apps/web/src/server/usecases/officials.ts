@@ -21,6 +21,10 @@ import { requireFeature } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { AiApplyMeta } from "@/server/api-v1/schemas";
 import { sendOfficialAssignedEmail } from "@/lib/email";
+import { toLocale } from "@/lib/i18n-constants";
+import { msgFor } from "@/lib/messages-i18n";
+import { resolveSlotLabel } from "@/lib/slot-label";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { createClaimInvite, type ClaimRow } from "./person-claims";
 import { parseUpload } from "./import-parse";
 import { loadSettings } from "./schedule";
@@ -577,8 +581,15 @@ async function assignedNotices(
     select id, display_name, email from officials
     where id in ${tx(officialIds)} and email is not null`;
   if (officials.length === 0) return [];
-  const [org] = await tx<{ name: string }[]>`
-    select name from organizations where id = ${orgId}`;
+  const [org] = await tx<{ name: string; default_locale: string | null }[]>`
+    select name, default_locale from organizations where id = ${orgId}`;
+  // Copy locale for a document nobody is "viewing" — same reasoning as
+  // exports.ts's exportLookup / calendar.ics/route.ts: the assignment-notice
+  // email has no single reader whose cookie could be consulted, so it uses
+  // the org's own default locale.
+  const locale = toLocale(org?.default_locale ?? null);
+  const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
+    msgFor(locale, k, v);
   // P9 cutover: `venue`/`court_label` below are the DERIVED names (from
   // venues/courts via venue_id/court_id) despite the field names — these
   // feed `officialAssignedTemplate`'s rendered "where" line
@@ -589,11 +600,13 @@ async function assignedNotices(
     id: string; scheduled_at: string | null; venue: string | null;
     court_label: string | null; venue_tz: string | null;
     home_name: string | null; away_name: string | null;
+    home_slot_label: SlotLabel | null; away_slot_label: SlotLabel | null;
   }[]>`
     -- venue lane (V305): division override → org timezone → UTC
     select f.id, f.scheduled_at, ven.name as venue, crt.name as court_label,
            coalesce(ss.tz, fo.timezone, 'UTC') as venue_tz,
-           h.display_name as home_name, a.display_name as away_name
+           h.display_name as home_name, a.display_name as away_name,
+           f.home_slot_label, f.away_slot_label
     from fixtures f
     left join schedule_settings ss on ss.division_id = f.division_id
     left join organizations fo on fo.id = f.org_id
@@ -612,7 +625,7 @@ async function assignedNotices(
       .map((f) => {
         const fx = byId.get(f.fixture_id);
         return {
-          label: `${fx?.home_name ?? "TBD"} vs ${fx?.away_name ?? "TBD"}`,
+          label: `${fx?.home_name ?? resolveSlotLabel(fx?.home_slot_label ?? null, lookup, "schedule.tbd")} vs ${fx?.away_name ?? resolveSlotLabel(fx?.away_slot_label ?? null, lookup, "schedule.tbd")}`,
           role_key: f.role_key,
           scheduled_at: fx?.scheduled_at ?? null,
           venue_tz: fx?.venue_tz ?? null,

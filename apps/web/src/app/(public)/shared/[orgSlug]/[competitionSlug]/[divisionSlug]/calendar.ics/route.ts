@@ -44,7 +44,7 @@ export async function GET(
     label: (typeof data.fixtures)[number]["home_slot_label"],
   ): string =>
     id
-      ? (entrantNames[id] ?? "TBD")
+      ? (entrantNames[id] ?? lookup("calendar.unknownEntrant"))
       : resolveSlotLabel(label, lookup, "schedule.tbd");
 
   // A fixture that exists but has no time is the whole point of day-one
@@ -102,7 +102,7 @@ export async function GET(
     });
 
   const name = entrantId
-    ? `${entrantNames[entrantId] ?? "Entrant"} — ${data.division.name}`
+    ? `${entrantNames[entrantId] ?? lookup("calendar.unknownEntrant")} — ${data.division.name}`
     : `${data.division.name} — ${data.competition.name}`;
 
   return new Response(buildIcs(name, events), {

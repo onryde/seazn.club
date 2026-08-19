@@ -18,6 +18,7 @@
 import { describe, expect, it } from "vitest";
 import { STAGE_TEMPLATES, buildTemplateStages, clampKnob, detectTemplate } from "../format-templates";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
+import { ProgressionSchema } from "@/server/api-v1/schemas";
 import {
   descriptorKey,
   expandSources,
@@ -192,12 +193,14 @@ describe("format-templates emit progression, not qualification", () => {
     });
   });
 
-  it("every qualification: null site becomes progression: null (mechanical rename)", () => {
+  it("every stage's progression is either null or a schema-valid ProgressionSpec (mechanical rename)", () => {
     for (const t of STAGE_TEMPLATES) {
       const stages = t.build({ qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });
       for (const stage of stages) {
         expect(stage).not.toHaveProperty("qualification");
-        expect("progression" in stage).toBe(true);
+        if (stage.progression === null) continue;
+        const parsed = ProgressionSchema.safeParse(stage.progression);
+        expect(parsed.success, JSON.stringify(parsed.success ? undefined : parsed.error.issues)).toBe(true);
       }
     }
   });

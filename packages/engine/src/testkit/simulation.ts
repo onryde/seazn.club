@@ -56,16 +56,34 @@ const STRICT_ALL = { strictFromSeq: 0 } as const;
 // ---------------------------------------------------------------------------
 
 // The stage-graph templates the harness exercises (PROMPT-14 §1; v3/09 §3
-// added league_legs2 — the Jul3/08 §2 multi-leg round robin).
+// added league_legs2 — the Jul3/08 §2 multi-leg round robin; F5 Task 3 added
+// groups_wildcard_ko — the first template whose ProgressionSpec has TWO
+// sources, so `tables[1]`/`shapes[1]` are reached under fuzz at all).
+// simulation.test.ts iterates this list directly, so a new entry here IS the
+// fuzz wiring — sim-replay.ts's matrix picks it up from the same const.
 export const FORMAT_TEMPLATES = [
   "league",
   "league_legs2",
   "group_knockout",
+  "groups_wildcard_ko",
   "swiss_knockout",
   "double_elim",
   "stepladder",
 ] as const;
 export type FormatTemplate = (typeof FORMAT_TEMPLATES)[number];
+
+// Per-template entrant floor, applied to the SEED-DERIVED count only (an
+// explicit `entrantCount` is honoured, then refused if it cannot realise the
+// template — see simulateDivision). Only groups_wildcard_ko needs one above
+// the global floor of 2: it plays TWO independent prior stages whose QUALIFIER
+// sets must be disjoint (a shared qualifier is refused by the resolver's
+// entrant-dedupe, QUALIFICATION_INVALID), and a table stage needs ≥1 fixture to
+// count as complete (competition/stage.ts:117), so the shape is unrealisable
+// below 4 entrants: one pool of ≥2 to produce a group winner, plus ≥2 more
+// left over to play a wildcard stage at all.
+const FORMAT_MIN_ENTRANTS: Partial<Record<FormatTemplate, number>> = {
+  groups_wildcard_ko: 4,
+};
 
 // Per-sport simulation configs. Most modules default-parse ({}); generic has
 // no defaults (v1 semantics are explicit), cricket is shortened to 5-over
@@ -791,15 +809,26 @@ function playBracketStage(
 function qualify(
   stageRecord: SimStageRecord,
   spec: ProgressionSpec,
-  tables: SourceTables,
+  tables: readonly SourceTables[],
 ): EntrantId[] {
-  // The simulation harness only ever builds single-source specs, so
-  // `spec.sources[0]!.take` is exact for progressionSize (not an
-  // approximation), and `[{ poolKeys: [] }]` is safe regardless of the
-  // source's real pool shape — neither rankRange nor picks (the only two
-  // TakeRule kinds this harness emits) reads shape.poolKeys.
-  const size = progressionSize(spec.sources[0]!.take);
-  const { qualifiers } = resolveProgression(spec, [{ poolKeys: [] }], [tables]);
+  // MULTI-SOURCE AWARE (F5 Task 3): `tables[i]` is `spec.sources[i]`'s
+  // completed stage, POSITIONALLY. That ordering is the resolver's own
+  // contract, not a convention this harness invented: resolveProgression
+  // reads its source tables as `tables[slot.sourceIndex]`
+  // (competition/progression.ts:621) and its shapes as `shapes[i]`
+  // (expandSources' `shapeOf`, progression.ts:612/181-190) — it never reads
+  // `ProgressionSource.stage` at all, so a `{ stageId: "…" }` source is
+  // resolved by ARRAY POSITION and the id string is documentation only
+  // (apps/web is where "previous"/stageId is turned into a real stage).
+  //
+  // The size is the sum over EVERY source (mirroring apps/web's own
+  // multi-source total, server/usecases/stages.ts), not just sources[0]'s.
+  // One `{ poolKeys: [] }` shape per source stays safe regardless of each
+  // source's real pool shape — none of rankRange/picks (the TakeRule kinds
+  // this harness emits) reads shape.poolKeys; only topNPerGroup does.
+  const size = spec.sources.reduce((n, source) => n + progressionSize(source.take), 0);
+  const shapes = spec.sources.map(() => ({ poolKeys: [] }));
+  const { qualifiers } = resolveProgression(spec, shapes, tables);
   const seeds = qualifiers.map((q) => q.entrantId);
   stageRecord.qualification = { spec, seeds };
   if (seeds.length !== size) {
@@ -822,8 +851,16 @@ export function simulateDivision(opts: SimOptions): SimulationResult {
   const module = opts.module;
   const cfg: unknown = module.configSchema.parse(opts.cfg ?? {});
   const seed = opts.seed;
-  const n = opts.entrantCount ?? drawEntrantCount(seed);
+  const minEntrants = FORMAT_MIN_ENTRANTS[opts.format] ?? 2;
+  // drawEntrantCount skews hard toward the low end (2 + rng*rng*63), so a
+  // template with a floor above 2 would otherwise be unrealisable on a large
+  // share of seeds. Raising the DRAWN count keeps every seed a valid run and
+  // keeps determinism (the floor is a pure function of the format).
+  const n = opts.entrantCount ?? Math.max(minEntrants, drawEntrantCount(seed));
   if (n < 2 || n > 64) throw new Error(`entrantCount ${n} outside 2–64`);
+  if (n < minEntrants) {
+    throw new Error(`format "${opts.format}" needs at least ${minEntrants} entrants (got ${n})`);
+  }
 
   const entrants: EntrantId[] = Array.from({ length: n }, (_, i) =>
     `t${String(i + 1).padStart(2, "0")}`,
@@ -897,7 +934,81 @@ export function simulateDivision(opts: SimOptions): SimulationResult {
               ],
               placement: "rank_order",
             };
-      const qualified = qualify(groups.record, spec, groups.tables);
+      const qualified = qualify(groups.record, spec, [groups.tables]);
+      const koSeeds = seedMap(qualified);
+      const ko = playBracketStage(
+        ctx,
+        "ko",
+        "knockout",
+        generateSingleElim({ entrants: qualified, seeds: koSeeds }).fixtures,
+        koSeeds,
+      );
+      stages.push(ko.record);
+      finalRanks = ko.finalRanks;
+      break;
+    }
+
+    case "groups_wildcard_ko": {
+      // The multi-source shape this harness had never simulated (F5 Task 3):
+      // a knockout seeded from TWO INDEPENDENT prior stages — every group's
+      // winner AND a separate wildcard mini-stage — i.e. a ProgressionSpec
+      // with two `sources` entries, mirroring the multi-source picker
+      // templates F3 shipped to production. Every other case here builds a
+      // single-source `sources: [{ stage: "previous", … }]`, so `tables[1]`/
+      // `shapes[1]` were dead in the harness until this case existed.
+      //
+      // The two sources' QUALIFIER sets must be disjoint — resolveProgression
+      // refuses an entrant reached through two sources (QUALIFICATION_INVALID,
+      // progression.ts:682-688). That is guaranteed structurally here, not
+      // statistically: the wildcard stage's FIELD is the entrants who did not
+      // win a group, so no wildcard qualifier can also be a group winner.
+      const poolCount = Math.max(1, Math.floor(n / 4));
+      const pools = Array.from({ length: poolCount }, (_, p) => ({
+        poolId: `P${p + 1}`,
+        entrants: entrants.filter((_, i) => i % poolCount === p),
+      }));
+      const groups = playRoundRobinStage(ctx, "groups", "group", pools, seeds);
+      stages.push(groups.record);
+
+      // Source 0's qualifiers, resolved here only to keep them OUT of the
+      // wildcard field. The spec below re-derives them through the resolver.
+      const groupWinners = new Set<EntrantId>(
+        groups.tables.pools.map((pool) => {
+          const top = pool.rows.find((row) => row.rank === 1);
+          if (top === undefined) {
+            throw new SimInvariantError(`pool "${pool.pool}" completed without a rank-1 row`, {
+              pool: pool.pool,
+            });
+          }
+          return top.entrantId;
+        }),
+      );
+      // n ≥ 4 and poolCount = floor(n / 4), so at least 3 non-winners always
+      // remain — enough for a swiss stage (≥2 entrants) that can yield the two
+      // wildcard seeds the spec takes. Capped at 8 so a 64-entrant division
+      // does not pay for a second full-size stage on every seed.
+      const wildcardEntrants = entrants.filter((id) => !groupWinners.has(id)).slice(0, 8);
+      const wildcard = playSwissStage(ctx, "wildcard", wildcardEntrants, seeds);
+      stages.push(wildcard.record);
+
+      const spec: ProgressionSpec = {
+        sources: [
+          // Pool-keyed picks against the GROUPS tables (tables[0]).
+          {
+            stage: { stageId: "groups" },
+            take: [{ kind: "picks", picks: pools.map((pool) => ({ pool: pool.poolId, rank: 1 })) }],
+          },
+          // A rankRange against the WILDCARD tables (tables[1]) — a different
+          // TakeRule kind against a differently-shaped source (the swiss stage
+          // has one unkeyed pool), so this cannot degenerate into a spec that
+          // one source could have produced alone.
+          { stage: { stageId: "wildcard" }, take: [{ kind: "rankRange", from: 1, to: 2 }] },
+        ],
+        placement: "rank_order",
+      };
+      // Positional, per resolveProgression's contract (see qualify's comment):
+      // sources[0] ⇒ tables[0] (groups), sources[1] ⇒ tables[1] (wildcard).
+      const qualified = qualify(groups.record, spec, [groups.tables, wildcard.tables]);
       const koSeeds = seedMap(qualified);
       const ko = playBracketStage(
         ctx,
@@ -919,7 +1030,7 @@ export function simulateDivision(opts: SimOptions): SimulationResult {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: Math.min(4, n) }] }],
         placement: "rank_order",
       };
-      const qualified = qualify(swiss.record, spec, swiss.tables);
+      const qualified = qualify(swiss.record, spec, [swiss.tables]);
       const koSeeds = seedMap(qualified);
       const ko = playBracketStage(
         ctx,
@@ -1161,8 +1272,12 @@ export function assertDivisionInvariants(
     // Qualification counts (spec 05 §6): output size = next stage's input size.
     if (stage.qualification !== undefined) {
       const { spec, seeds } = stage.qualification;
-      // Single-source only, per the harness's own qualify() — see its comment.
-      if (seeds.length !== progressionSize(spec.sources[0]!.take)) {
+      // Summed across EVERY source (F5 Task 3): this read `sources[0]` alone
+      // while the harness only ever built single-source specs, which made it
+      // silently under-count the moment a genuinely multi-source format
+      // (groups_wildcard_ko) started feeding one stage from two prior ones.
+      const want = spec.sources.reduce((n, source) => n + progressionSize(source.take), 0);
+      if (seeds.length !== want) {
         fail(sim, `stage "${stage.id}" qualification size mismatch`, stage.qualification);
       }
       for (const id of seeds) {

@@ -555,3 +555,45 @@ describe.skipIf(!HAS_DB)("P9: assignment-notice email carries the live venue/cou
     expect(args.fixtures[0]!.court_label).not.toBe("Stale Court");
   });
 });
+
+// F5/Task 9: assignedNotices() (officials.ts) used to build its "X vs Y"
+// label from `fx?.home_name ?? "TBD"` — a bare literal, never selecting
+// home_slot_label/away_slot_label. An official can be pre-assigned to a
+// court/time slot before the bracket resolves entrants, so the digest must
+// resolve the SAME slot label every other surface already shows for it.
+describe.skipIf(!HAS_DB)("F5/Task 9: assignment digest resolves slot labels, not bare TBD", () => {
+  it("uses the resolved slot label for a day-one fixture with unresolved entrants", async () => {
+    const { auth } = await seedOrg("pro_plus");
+    const { fixtures } = await seedScheduledDivision(auth);
+    const fixtureId = fixtures[0]!.id;
+    // Day-one placeholder: null entrant ids with a real home_slot_label
+    // (the shape stage-seeding.ts's descriptorLabel() actually produces),
+    // away deliberately left null so its fallback to schedule.tbd stays
+    // visible in the assertion and this test doesn't false-positive on a
+    // whole-row check.
+    await sql`
+      update fixtures
+      set home_entrant_id = null, away_entrant_id = null,
+          home_slot_label = ${sql.json({ key: "bracket.round.roundOf", params: { n: 4 } })},
+          away_slot_label = null
+      where id = ${fixtureId}`;
+    const email = `slot-label-${randomUUID().slice(0, 8)}@example.com`;
+    const official = await createOfficial(auth, {
+      display_name: "Slot Label Ref",
+      role_keys: ["referee"],
+      email,
+    });
+    sendOfficialAssignedEmail.mockClear();
+
+    await patchFixtureOfficials(auth, fixtureId, {
+      set: [{ official_id: official.id, role_key: "referee", locked: false }],
+    });
+
+    const call = sendOfficialAssignedEmail.mock.calls.find((c) => c[0] === email);
+    expect(call, "sendOfficialAssignedEmail was never called for this official").toBeTruthy();
+    const args = call![1] as { fixtures: { label: string }[] };
+    expect(args.fixtures).toHaveLength(1);
+    expect(args.fixtures[0]!.label).toBe("Round of 4 vs TBD");
+    expect(args.fixtures[0]!.label).not.toBe("TBD vs TBD");
+  });
+});

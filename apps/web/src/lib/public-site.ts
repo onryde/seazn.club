@@ -73,7 +73,7 @@ function nextDay(ymd: string): string {
 }
 
 // RFC 5545 §3.3.11 TEXT escaping + §3.1 line folding at 75 octets.
-function icsText(text: string): string {
+export function icsText(text: string): string {
   return text.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
 }
 

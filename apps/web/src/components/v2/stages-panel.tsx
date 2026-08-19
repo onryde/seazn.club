@@ -1091,6 +1091,7 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
             router.refresh();
           }}
           onError={setError}
+          onPaywall={setPaywallFeature}
         />
       )}
     </div>
@@ -1124,16 +1125,18 @@ export function addStageProgression(topN: number) {
   };
 }
 
-function AddStageForm({
+export function AddStageForm({
   divisionId,
   nextSeq,
   onDone,
   onError,
+  onPaywall,
 }: {
   divisionId: string;
   nextSeq: number;
   onDone: (msg: string) => void;
   onError: (msg: string) => void;
+  onPaywall: (featureKey: string) => void;
 }) {
   const msg = useMsg();
   const [open, setOpen] = useState(false);
@@ -1145,6 +1148,7 @@ function AddStageForm({
   async function add() {
     setBusy(true);
     onError("");
+    onPaywall("");
     try {
       const stage = await apiV1<{ id: string }>(`/api/v1/divisions/${divisionId}/stages`, {
         method: "POST",
@@ -1173,7 +1177,11 @@ function AddStageForm({
       }
       setOpen(false);
     } catch (err) {
-      onError(err instanceof Error ? err.message : msg("schedule.error.failed"));
+      if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
+        onPaywall(String(err.extra.feature_key ?? ""));
+      } else {
+        onError(err instanceof Error ? err.message : msg("schedule.error.failed"));
+      }
     } finally {
       setBusy(false);
     }

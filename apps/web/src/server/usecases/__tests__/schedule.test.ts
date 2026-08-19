@@ -4,7 +4,7 @@
 // start, score round 1, rain-reschedule remaining. Plus the Community gates
 // (doc 12 §5): constraints/board are Pro, quick-start unaffected.
 // Real Postgres required; skipped without DATABASE_URL (CI runs them).
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { EngineError } from "@seazn/engine/core";
 import { buildGrid, slotFixtures } from "@seazn/engine/scheduling";
@@ -41,8 +41,24 @@ import {
   ScheduleSolverInfo,
 } from "@/server/api-v1/schemas";
 import { seedOrg as seedOfficialsOrg, seedFutureDivision } from "./_seed";
+import { createOfficial } from "../officials";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// F5/Task 9: the officials schedule-change notice email used to coalesce an
+// unfilled home/away name straight to the bare literal "TBD", never
+// selecting home_slot_label/away_slot_label at all — so a court/time
+// reassignment on an unresolved (day-one) fixture emailed "TBD vs TBD"
+// instead of the same slot text every HTML surface already shows for that
+// fixture. vi.hoisted for the same reason officials.test.ts uses it: the
+// vi.mock factory below hoists above this const otherwise.
+const { sendOfficialAssignmentChangedEmail } = vi.hoisted(() => ({
+  sendOfficialAssignmentChangedEmail: vi.fn().mockResolvedValue(true),
+}));
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return { ...actual, sendOfficialAssignmentChangedEmail };
+});
 
 const DIVISION_CONFIG = {
   resultMode: "score",
@@ -826,6 +842,54 @@ describe.skipIf(!HAS_DB)("official conflicts on the board", () => {
     const { conflicts } = await validateSchedule(auth, division.id);
     expect(conflicts.some((c) => c.code === "warn.official_declined" && c.fixture_id === fixtureId)).toBe(true);
     expect(conflicts.find((c) => c.code === "warn.official_declined")!.blocking).toBe(false);
+  });
+});
+
+// F5/Task 9: moveFixture's officials change-notice email used to build its
+// "X vs Y" label from `n.home_name ?? "TBD"` — a bare literal, never
+// resolving home_slot_label/away_slot_label. A day-one fixture (unresolved
+// entrants, real scheduled time) can still have its court/time reassigned
+// before the bracket fills in, so the notice must resolve the SAME slot
+// label every other surface already shows for it.
+describe.skipIf(!HAS_DB)("moveFixture officials change-notice email resolves slot labels (F5/Task 9)", () => {
+  it("uses the resolved slot label, not the bare TBD literal, for an unresolved fixture", async () => {
+    const { auth } = await seedOfficialsOrg("pro");
+    const { division, fixtures } = await seedFutureDivision(auth);
+    const fixtureId = fixtures[0]!.id;
+    // Day-one placeholder: null entrant ids with a real home_slot_label
+    // (the shape stage-seeding.ts's descriptorLabel() actually produces),
+    // away deliberately left null so its fallback to schedule.tbd stays
+    // visible in the assertion below and this test doesn't false-positive
+    // on a whole-row check.
+    await sql`
+      update fixtures
+      set home_entrant_id = null, away_entrant_id = null,
+          home_slot_label = ${sql.json({ key: "bracket.round.roundOf", params: { n: 4 } })},
+          away_slot_label = null
+      where id = ${fixtureId}`;
+    const official = await createOfficial(auth, {
+      display_name: "Notice Ref",
+      role_keys: ["referee"],
+      email: `notice-ref-${randomUUID().slice(0, 8)}@example.com`,
+    });
+    await sql`insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
+              values (${auth.orgId}, ${fixtureId}, ${official.id}, 'referee', 'accepted')`;
+    const venue = await createVenue(auth, { name: "Notice Venue", sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Notice Court", sort: 0, tags: [] });
+    const [before] = await sql<{ scheduled_at: Date }[]>`
+      select scheduled_at from fixtures where id = ${fixtureId}`;
+
+    sendOfficialAssignmentChangedEmail.mockClear();
+    await moveFixture(auth, fixtureId, {
+      scheduled_at: new Date(before!.scheduled_at.getTime() + 60 * MIN).toISOString(),
+      court_id: court.id,
+    });
+
+    const call = sendOfficialAssignmentChangedEmail.mock.calls.find((c) => c[0] === official.email);
+    expect(call, "sendOfficialAssignmentChangedEmail was never called for this official").toBeTruthy();
+    const args = call![1] as { label: string };
+    expect(args.label).toBe("Round of 4 vs TBD");
+    expect(args.label).not.toBe("TBD vs TBD");
   });
 });
 

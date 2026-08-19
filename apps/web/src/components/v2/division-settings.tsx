@@ -7,7 +7,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
-import { apiV1 } from "@/lib/client-v1";
+import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { divisionAccent, monogram } from "@/lib/division-hue";
 import { MatchRuleFields, buildRuleOverride } from "./match-rules";
 import { STAGE_TEMPLATES, buildTemplateStages, clampKnob, detectTemplate, type StageDraft } from "./format-templates";
@@ -286,6 +286,7 @@ export function DivisionSettings({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [paywallFeature, setPaywallFeature] = useState<string | null>(null);
   const fileInputId = `division-logo-${division.id}`;
   const hue = divisionAccent(division.id);
 
@@ -320,13 +321,18 @@ export function DivisionSettings({
   async function run(fn: () => Promise<void>, done: string) {
     setBusy(true);
     setError(null);
+    setPaywallFeature(null);
     setNotice(null);
     try {
       await fn();
       setNotice(done);
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : msg("divset.failed"));
+      if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
+        setPaywallFeature(String(err.extra.feature_key ?? ""));
+      } else {
+        setError(err instanceof Error ? err.message : msg("divset.failed"));
+      }
     } finally {
       setBusy(false);
     }
@@ -929,6 +935,7 @@ export function DivisionSettings({
         {danger}
       </Group>
 
+      {paywallFeature && <UpgradeGate feature={paywallFeature} />}
       {notice && <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{notice}</p>}
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
     </div>

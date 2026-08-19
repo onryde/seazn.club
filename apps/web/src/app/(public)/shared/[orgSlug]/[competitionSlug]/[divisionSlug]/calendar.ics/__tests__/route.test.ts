@@ -376,3 +376,69 @@ describe("GET .../calendar.ics — LOCATION from the derived court/venue name (P
     expect(text).not.toMatch(/LOCATION:/);
   });
 });
+
+describe("GET .../calendar.ics — entrant name fallback localization (F5 task 7)", () => {
+  // Edge case: an entrant_id is set on a fixture but missing from the
+  // fetched roster (data-integrity issue). The route must use a localized
+  // fallback, not hardcoded English "TBD" or "Entrant".
+  it("a fixture with entrant_id missing from roster uses a localized fallback, not hardcoded English", async () => {
+    getPublicDivision.mockResolvedValue(
+      baseData(
+        "es",
+        [
+          F({
+            id: "missing-entrant",
+            home_entrant_id: "e-missing",
+            away_entrant_id: "e1",
+          }),
+        ],
+        {},
+        ENTRANTS, // Only e1 is in the roster; e-missing is not
+      ),
+    );
+    const { text } = await get();
+    // The fixture name summary should NOT contain the bare English fallbacks
+    // "TBD" or "Entrant", only a localized string.
+    expect(text).not.toMatch(/\bTBD\b/);
+    expect(text).not.toMatch(/SUMMARY:Entrant vs/);
+  });
+
+  it("the ?entrant= query feed with a missing entrant also uses a localized fallback", async () => {
+    getPublicDivision.mockResolvedValue(
+      baseData(
+        "fr",
+        [
+          F({
+            id: "feed-test",
+            home_entrant_id: "e1",
+            away_entrant_id: "e-missing",
+          }),
+        ],
+        {},
+        ENTRANTS,
+      ),
+    );
+    const { GET } = await import("../route");
+    const res = await GET(
+      new Request(
+        `http://t/shared/test-org/test-comp/open/calendar.ics?entrant=e-missing`,
+      ),
+      {
+        params: Promise.resolve({
+          orgSlug: "test-org",
+          competitionSlug: "test-comp",
+          divisionSlug: "open",
+        }),
+      },
+    );
+    const text = await res.text();
+    // The feed name must carry the fr-resolved fallback ("Participant
+    // inconnu", from calendar.unknownEntrant in fr/ui.json) on the real
+    // X-WR-CALNAME: property buildIcs emits — not the bare English fallback
+    // "Entrant" the route used to fall back to. A bare `/^NAME:/m` probe is
+    // vacuous here: buildIcs never emits a property called NAME, only
+    // X-WR-CALNAME, so that regex can never match either way.
+    expect(text).toContain("X-WR-CALNAME:Participant inconnu");
+    expect(text).not.toMatch(/^X-WR-CALNAME:Entrant\b/m);
+  });
+});

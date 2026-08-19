@@ -153,8 +153,14 @@ describe("placeDescriptors", () => {
     ]);
     expect(placed[4]!.descriptor).toEqual({ kind: "best_nth", nth: 3, position: 2 });
     expect(placed[5]!.descriptor).toEqual({ kind: "best_nth", nth: 3, position: 1 });
-    // unclaimed seats (the four group winners) fill 1..4 in their own order
+    // unclaimed seats (the four group winners) fill 1..4 in their own order —
+    // asserting only placed[0] let a position-slicing implementation pass
+    // byte-identically; these four together prove it filters by "not
+    // claimed by the map", not by array index.
     expect(placed[0]!.descriptor).toEqual({ kind: "group_rank", pool: "A", rank: 1 });
+    expect(placed[1]!.descriptor).toEqual({ kind: "group_rank", pool: "B", rank: 1 });
+    expect(placed[2]!.descriptor).toEqual({ kind: "group_rank", pool: "C", rank: 1 });
+    expect(placed[3]!.descriptor).toEqual({ kind: "group_rank", pool: "D", rank: 1 });
   });
 
   it("seeded_map still 422s on an out-of-range slot or an unknown source (carried verbatim)", () => {
@@ -825,6 +831,54 @@ describe("resolveProgression", () => {
     // key that used to collide (stages.ts's computeSeedProposal).
     expect(bySourceIndex.get(0)?.descriptors[0]?.descriptor).toEqual({ kind: "rank_range", rank: 1 });
     expect(bySourceIndex.get(1)?.descriptors[0]?.descriptor).toEqual({ kind: "rank_range", rank: 1 });
+  });
+
+  // Every tie test above reaches the shared tieUnbroken-gated block
+  // (progression.ts:700-708) via a rankRange descriptor, whose row comes
+  // straight from rowAtRank/rankRangeSource — the RAW fixture row, verbatim,
+  // tieUnbroken/tieBreak included. bestNth is a documented cross-pool source
+  // (picks the Nth-best across multiple pools) where a genuine cross-pool tie
+  // is exactly this block's reason to exist, but no test reached it that way.
+  //
+  // bestNth's candidate does NOT come from the raw fixture row the same way:
+  // resolveProgression's best_nth branch runs every pool's nth-place row
+  // through crossGroupOrder (progression.ts:668), which is rankStandings
+  // (tiebreakers.ts:577) under a ["points","diff","for","wins"] cascade.
+  // rankStandings CLONES each row (`{ ...row, metrics: { ...row.metrics } }`)
+  // and then computes tieUnbroken/tieBreak itself from that cascade — it does
+  // NOT trust whatever tieUnbroken/tieBreak the input row already carried (a
+  // clone with cls.length>1 always calls markTieBreak + sets tieUnbroken=true
+  // fresh, discarding the input's values). So hardcoding
+  // tieUnbroken/tieBreak on the input rows the way the rankRange tests do
+  // would be inert here — it wouldn't be what makes the assertions pass.
+  // Instead this gives a3/b3 identical points/won and no diff/for metrics, so
+  // the cascade genuinely cannot separate them and rankStandings computes the
+  // tie for real — proving the shared block is reachable through bestNth's
+  // OWN tie-detection path, not just replaying a flag the fixture set.
+  it("flags a tie reached through bestNth — the shared tie block proven via rankRange only until now", () => {
+    const poolA = [
+      { entrantId: "a1", rank: 1 },
+      { entrantId: "a2", rank: 2 },
+      { entrantId: "a3", rank: 3, points: 5, won: 1 },
+    ] as StandingsRow[];
+    const poolB = [
+      { entrantId: "b1", rank: 1 },
+      { entrantId: "b2", rank: 2 },
+      { entrantId: "b3", rank: 3, points: 5, won: 1 },
+    ] as StandingsRow[];
+    const spec: ProgressionSpec = {
+      sources: [{ stage: "previous", take: [{ kind: "bestNth", nth: 3, count: 1 }] }],
+      placement: "rank_order",
+    };
+    const { ties } = resolveProgression(
+      spec,
+      [{ poolKeys: ["A", "B"] }],
+      [{ pools: [{ pool: "A", rows: poolA }, { pool: "B", rows: poolB }] }],
+    );
+    expect(ties).toHaveLength(1);
+    expect(ties[0]!.entrantIds.sort()).toEqual(["a3", "b3"]);
+    expect(ties[0]!.reason).toBe("seed");
+    expect(ties[0]!.descriptors).toEqual([{ sourceIndex: 0, descriptor: { kind: "best_nth", nth: 3, position: 1 } }]);
   });
 
   // F2 Task 6 review (defect 3): euro24's real shape — topNPerGroup +

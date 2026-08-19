@@ -5,7 +5,7 @@
 //  3. the recommendation function's golden ranking for 16 entrants /
 //     2 courts / 4 hours.
 import { describe, expect, it } from "vitest";
-import { StageKind } from "@/server/api-v1/schemas";
+import { StageKind, ProgressionSchema } from "@/server/api-v1/schemas";
 import { FORMAT_FAMILIES, familyForKind, formatFamily } from "@/config/format-gallery";
 import { previewDivisionFixtures } from "@/server/usecases/stages";
 import { recommendFormats } from "@/lib/format-recommend";
@@ -84,10 +84,13 @@ describe("cannedStages emit progression, not qualification (F2)", () => {
     });
   });
 
-  it("no family's cannedStages carries the old qualification key", () => {
+  it("every family's cannedStages progression is either null or a schema-valid ProgressionSpec", () => {
     for (const f of FORMAT_FAMILIES) {
       for (const stage of f.cannedStages) {
         expect(stage).not.toHaveProperty("qualification");
+        if (stage.progression === null) continue;
+        const parsed = ProgressionSchema.safeParse(stage.progression);
+        expect(parsed.success, JSON.stringify(parsed.success ? undefined : parsed.error.issues)).toBe(true);
       }
     }
   });
