@@ -30,7 +30,7 @@ concurrency:
 jobs:
   sweep:
     name: Replay stuck Stripe events (staging)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
