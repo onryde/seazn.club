@@ -31,6 +31,57 @@ const AUTH_STATE = "e2e/.auth/pro.json";
 const SERIAL_SPECS =
   /(journey-pro|journey-community|org-management|billing|billing-states|billing-groups|billing-groups-journey|members-roles|scorer|device-links|division-delete|pricing-v3|player-accounts|fixture-config-snapshot)\.spec\.ts/;
 
+// --- how e2e.yml splits the `parallel` project across three jobs ------------
+//
+// Playwright's own `--shard` splits by TEST COUNT over a CONTIGUOUS run of
+// test groups in file order (`filterForShard` in the runner: it sums
+// `group.tests.length` and takes a slice). It knows nothing about how long a
+// test takes, and e2e/scorepad-v3-cricket.spec.ts alone is ~90s of this
+// project's ~368s — a quarter of the work in ONE file, sitting in the
+// alphabetical tail, so `--shard=3/3` always inherited it.
+//
+// Measured Playwright-step times, shards 1/2/3:
+//   run 32272599493   89s /  87s / 176s
+//   run 32269332414   87s /  77s / 170s
+//   run 32214432854  147s / 112s / 227s
+// The third shard was not merely uneven, it was the whole workflow's
+// wall-clock floor — the run finished when it finished.
+//
+// E2E_PARALLEL_SLICE moves the expensive files into a leg of their own and
+// lets the other two shard the remainder:
+//   "heavy"  -> only PARALLEL_HEAVY
+//   "rest"   -> everything except PARALLEL_HEAVY, then --shard=N/2
+//   unset    -> the whole project, unchanged — every local run, and
+//               `npm run test:e2e`, take this path
+//
+// PARALLEL_HEAVY holds three files, not one, and the count is derived rather
+// than chosen. Carving out only the cricket spec leaves the remainder's own
+// alphabetical first half heavy (marketing-ai-demo, ai-architect, board-v3,
+// games all land there) and predicts 90 / 158 / 120s — better than 176s, but
+// still 29% off balance. Searched over the subsets of the twelve most
+// expensive files, against per-file durations recovered from the line
+// reporter's timestamps on runs 32272599493 / 32269332414 / 32214432854, this
+// set is the flattest available: a predicted 128 / 126 / 115s against a
+// perfect-split floor of 123s.
+//
+// Read the target as a WORKFLOW property, the way this file's e2e.yml header
+// already insists. At ~128s plus ~106s of setup these legs land at ~234s,
+// just under `e2e-mobile`'s phones-small leg (244s). That leg becomes the
+// run's floor, so balancing this project any harder — or sharding it any
+// finer — buys nothing at all. Revisit against the new floor, not these
+// numbers.
+//
+// "rest" is a CATCH-ALL by construction: it ignores PARALLEL_HEAVY and nothing
+// else. A new spec file therefore joins the sharded remainder automatically.
+// Only a file NAMED here can leave it — which is the whole reason this is a
+// single carve-out regex rather than three explicit per-shard file lists, a
+// shape that drops a new spec on the floor the moment someone forgets to add
+// it. apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts pins that property,
+// and proves every file named here is real — a typo would otherwise give the
+// heavy leg fewer tests than it thinks and go green while they run nowhere.
+const PARALLEL_HEAVY = /(scorepad-v3-cricket|marketing-ai-demo|board-v3)\.spec\.ts/;
+const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
+
 export default defineConfig({
   testDir: "./e2e",
   // Runs before EVERY project, `setup` included: proves the server on BASE is a
@@ -57,7 +108,15 @@ export default defineConfig({
       // the v2 pad has been removed entirely — v2 is the only pad — so that
       // spec runs here like any other now, against the one server every
       // other parallel spec already uses.
-      testIgnore: [SERIAL_SPECS, /mobile\.spec\.ts/],
+      // Spread rather than `testMatch: cond ? X : undefined` so the unset and
+      // "rest" slices leave the key ABSENT and keep Playwright's default
+      // testMatch, instead of handing it an explicit undefined.
+      ...(PARALLEL_SLICE === "heavy" ? { testMatch: PARALLEL_HEAVY } : {}),
+      testIgnore: [
+        SERIAL_SPECS,
+        /mobile\.spec\.ts/,
+        ...(PARALLEL_SLICE === "rest" ? [PARALLEL_HEAVY] : []),
+      ],
       use: { ...devices["Desktop Chrome"], storageState: AUTH_STATE },
       dependencies: ["setup"],
     },
