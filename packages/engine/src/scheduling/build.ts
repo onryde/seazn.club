@@ -1900,7 +1900,16 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     roundBearingSequences.size === 1 ? [...roundBearingSequences][0] : undefined;
 
   const placementInput: SolveBuildInput = {
-    courts: config.courts,
+    // The wire index space, not the placement domain (that's `grid.slots`
+    // below, still `config.courts`-only). `courtIndexOf` (placement-client.ts)
+    // refuses ANY `existing`/pinned row whose court is not declared here, so
+    // an obstacle or sibling-division booking parked on a court this run
+    // never configured — legitimate; see "the lattice is the configured
+    // courts" describe block in build.test.ts — needs its own name in this
+    // list too, or the request throws `invalid_request` before it ever
+    // reaches the wire and `buildSchedule`'s catch-all silently downgrades
+    // the whole solve to greedy (P9 sibling-court gap).
+    courts: [...new Set([...config.courts, ...existing.map((a) => a.court), ...pinnedAssignments.map((a) => a.court)])],
     fixtures: freeFixtures.map((f) => ({
       fixtureId: f.id,
       entrantIds: [f.home, f.away].filter((e): e is string => e !== undefined),
