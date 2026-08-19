@@ -28,6 +28,10 @@ import {
   type StandingsRow,
 } from "@seazn/engine/competition";
 import { generateSingleElim } from "@seazn/engine/scheduling";
+import enUi from "@/dictionaries/en/ui.json";
+import esUi from "@/dictionaries/es/ui.json";
+import frUi from "@/dictionaries/fr/ui.json";
+import nlUi from "@/dictionaries/nl/ui.json";
 
 describe("ko_plate template", () => {
   it("builds a main knockout + a plate seeded by roundLosers, count = the qualified knob", () => {
@@ -47,13 +51,6 @@ describe("ko_plate template", () => {
         timing: "setup",
       },
     });
-  });
-
-  it("is listed with a label and help text", () => {
-    const t = STAGE_TEMPLATES.find((s) => s.key === "ko_plate");
-    expect(t).toBeDefined();
-    expect(t!.label.length).toBeGreaterThan(0);
-    expect(t!.help.length).toBeGreaterThan(0);
   });
 
   it("round-trips through detectTemplate", () => {
@@ -482,6 +479,68 @@ describe("clampKnob — guards poolCount/qualified before buildTemplateStages (B
       for (const [key, value] of Object.entries(rule)) {
         if (key === "kind") continue;
         expect(Number.isFinite(value), `${key} must be a finite number, got ${value}`).toBe(true);
+      }
+    }
+  });
+});
+
+// F3 Task 6 (i18n): STAGE_TEMPLATES no longer carries its own English
+// `label`/`help` — both render to organisers (division-builder.tsx's picker
+// cards, division-settings.tsx's format <select>), so they were REMOVED from
+// this array and now live as `format.template.<key>.label` / `.help` in the
+// dictionaries, read via useMsg() at both call sites (division-builder.tsx,
+// division-settings.tsx — see their own "F3 Task 6" comments at the render
+// sites for the MessageKey-cast rationale).
+//
+// This replaces the old per-object "is listed with a label and help text"
+// test, which only ever probed ko_plate's two fields directly on the array
+// entry. That check is now IMPOSSIBLE (the fields don't exist), and would
+// have been the wrong shape anyway once the dictionary became the source of
+// truth: this loop is the regression net that actually matches the new
+// contract — every template key resolves BOTH keys, in ALL FOUR locales,
+// non-empty, and es/fr/nl are real translations rather than English left in
+// place under a different key.
+describe("STAGE_TEMPLATES — every key has dictionary-backed label/help copy (F3 Task 6)", () => {
+  const DICTS: [string, Record<string, unknown>][] = [
+    ["en", enUi as Record<string, unknown>],
+    ["es", esUi as Record<string, unknown>],
+    ["fr", frUi as Record<string, unknown>],
+    ["nl", nlUi as Record<string, unknown>],
+  ];
+
+  // A regression net on the loops below: if STAGE_TEMPLATES ever collapsed
+  // to empty, every `for` loop in this describe block would pass vacuously
+  // (zero iterations, zero assertions) instead of proving anything.
+  it("STAGE_TEMPLATES is non-empty", () => {
+    expect(STAGE_TEMPLATES.length).toBeGreaterThanOrEqual(14);
+  });
+
+  for (const [locale, dict] of DICTS) {
+    it(`every STAGE_TEMPLATES key resolves format.template.<key>.label/.help to a non-empty string in ${locale}`, () => {
+      for (const t of STAGE_TEMPLATES) {
+        const label = dict[`format.template.${t.key}.label`];
+        const help = dict[`format.template.${t.key}.help`];
+        expect(typeof label, `${locale} is missing format.template.${t.key}.label`).toBe("string");
+        expect((label as string).length, `${locale}/format.template.${t.key}.label is empty`).toBeGreaterThan(0);
+        expect(typeof help, `${locale} is missing format.template.${t.key}.help`).toBe("string");
+        expect((help as string).length, `${locale}/format.template.${t.key}.help is empty`).toBeGreaterThan(0);
+      }
+    });
+  }
+
+  it("es/fr/nl are real translations, not English left in place (label OR help differs from en per key — a couple of short proper nouns/cognates, e.g. \"Ladder\"/\"Americano (padel)\", are legitimately identical in one field, so this only requires at least one of the two to differ)", () => {
+    const en = enUi as Record<string, string>;
+    for (const t of STAGE_TEMPLATES) {
+      const enLabel = en[`format.template.${t.key}.label`];
+      const enHelp = en[`format.template.${t.key}.help`];
+      for (const [locale, dict] of DICTS) {
+        if (locale === "en") continue;
+        const label = dict[`format.template.${t.key}.label`];
+        const help = dict[`format.template.${t.key}.help`];
+        expect(
+          label !== enLabel || help !== enHelp,
+          `${locale}/${t.key}: label AND help are both byte-identical to en — looks like an English copy, not a translation`,
+        ).toBe(true);
       }
     }
   });

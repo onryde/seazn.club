@@ -24,6 +24,19 @@
 // detectTemplate's own parameter type below can't drift apart the way
 // api-v1/schemas.ts's zod TakeRuleSchema and this plain-TS shape already
 // have to be kept in lockstep by hand (see that file's own comment).
+//
+// F3 Task 6 (i18n): this array used to carry its own English `label`/`help`
+// strings. Both render to organisers (division-builder.tsx's picker cards,
+// division-settings.tsx's format <select>), so they now live in the
+// dictionaries as `format.template.<key>.label` / `.help` (see
+// dictionaries/en/ui.json), read via useMsg() at both call sites. The fields
+// were REMOVED here rather than kept-and-ignored: a grep of every reader
+// (division-builder.tsx, division-settings.tsx, format-templates.test.ts,
+// format-catalogue.test.ts) turned up nothing else that touched `.label`/
+// `.help` on these objects, so a dead English copy sitting unrendered next
+// to the real dictionary source was pure drift risk with no offsetting
+// benefit. format-templates.test.ts's dictionary-coverage test is the
+// regression net that replaces the old "has a label/help" field check.
 import type { TakeRule } from "@seazn/engine/competition";
 
 export interface StageDraft {
@@ -48,20 +61,14 @@ export interface TemplateKnobs {
 
 export const STAGE_TEMPLATES: {
   key: string;
-  label: string;
-  help: string;
   build: (knobs: TemplateKnobs) => StageDraft[];
 }[] = [
   {
     key: "league",
-    label: "League",
-    help: "Single round robin, table decides.",
     build: () => [{ kind: "league", name: "League", config: { legs: 1 }, progression: null }],
   },
   {
     key: "league_ko",
-    label: "League + Finals",
-    help: "Round robin, then top N knockout.",
     build: ({ qualified: q }) => [
       { kind: "league", name: "League", config: { legs: 1 }, progression: null },
       { kind: "knockout", name: "Finals", config: {}, progression: {
@@ -73,8 +80,6 @@ export const STAGE_TEMPLATES: {
   },
   {
     key: "groups_ko",
-    label: "Groups + Knockout",
-    help: "Round robin in pools (2-8), top finishers cross into a knockout.",
     build: ({ qualified: q, poolCount }) => {
       // Cross-pool draw (owner ruling R5): take the top `n` finisher from
       // EVERY pool, plus a `bestNth` remainder for the qualifier count that
@@ -152,8 +157,6 @@ export const STAGE_TEMPLATES: {
   },
   {
     key: "group_stepladder",
-    label: "Group + Stepladder",
-    help: "Round robin, then a stepladder final — lowest seed climbs.",
     build: ({ qualified: q }) => [
       { kind: "league", name: "League", config: { legs: 1 }, progression: null },
       { kind: "stepladder", name: "Stepladder finals", config: {}, progression: {
@@ -165,8 +168,6 @@ export const STAGE_TEMPLATES: {
   },
   {
     key: "group_playoffs",
-    label: "Group + Playoffs (IPL style)",
-    help: "Round robin, then Qualifier 1, Eliminator, Qualifier 2 and the Final — the top two get a second life.",
     build: () => [
       { kind: "league", name: "League", config: { legs: 1 }, progression: null },
       { kind: "page_playoff", name: "Playoffs", config: {}, progression: {
@@ -178,60 +179,44 @@ export const STAGE_TEMPLATES: {
   },
   {
     key: "swiss",
-    label: "Swiss",
-    help: "Score-group pairings, fixed rounds.",
     build: () => [
       { kind: "swiss", name: "Swiss", config: { rounds: 5 }, progression: null },
     ],
   },
   {
     key: "knockout",
-    label: "Knockout",
-    help: "Single elimination bracket.",
     build: () => [{ kind: "knockout", name: "Knockout", config: {}, progression: null }],
   },
   {
     key: "double_elim",
-    label: "Double elimination",
-    help: "Losers bracket + grand final (Pro).",
     build: () => [
       { kind: "double_elim", name: "Double elimination", config: {}, progression: null },
     ],
   },
   {
     key: "triple_rr",
-    label: "Triple round robin",
-    help: "Everyone plays everyone three times.",
     build: () => [{ kind: "league", name: "Triple RR", config: { legs: 3 }, progression: null }],
   },
   {
     key: "americano",
-    label: "Americano (padel)",
-    help: "Individuals rotate partners each round; personal points (Pro).",
     build: () => [
       { kind: "americano", name: "Americano", config: { mode: "americano", courtCount: 2, rounds: 7 }, progression: null },
     ],
   },
   {
     key: "mexicano",
-    label: "Mexicano (padel)",
-    help: "Re-rank each round: 1+4 vs 2+3 from live points (Pro).",
     build: () => [
       { kind: "americano", name: "Mexicano", config: { mode: "mexicano", courtCount: 2, rounds: 7 }, progression: null },
     ],
   },
   {
     key: "ladder",
-    label: "Ladder",
-    help: "Open standings; players challenge upward over a long window (Pro).",
     build: () => [
       { kind: "ladder", name: "Ladder", config: { challengeRange: 3 }, progression: null },
     ],
   },
   {
     key: "ko_plate",
-    label: "Knockout + Plate",
-    help: "Main knockout draw; round-1 losers play a plate bracket for a second chance.",
     build: ({ qualified: q }) => [
       { kind: "knockout", name: "Main draw", config: {}, progression: null },
       {
@@ -248,8 +233,6 @@ export const STAGE_TEMPLATES: {
   },
   {
     key: "qualifying_main",
-    label: "Qualifying + Main draw",
-    help: "A smaller knockout decides who advances into the main knockout draw.",
     build: ({ qualified: q }) => [
       { kind: "knockout", name: "Qualifying", config: {}, progression: null },
       { kind: "knockout", name: "Main draw", config: {}, progression: {

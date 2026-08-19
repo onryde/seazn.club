@@ -233,6 +233,10 @@ export function DivisionSettings({
   // Competition format = the stage structure (League / Groups + Knockout…).
   const detected = detectTemplate(stages);
   const [template, setTemplate] = useState(detected ?? "league");
+  // F3 Task 6: hoisted out of the JSX so the format <select>'s help caption
+  // (:597) doesn't re-run STAGE_TEMPLATES.find for the same lookup the
+  // <option> loop already keys off of.
+  const selectedTemplate = STAGE_TEMPLATES.find((t) => t.key === template);
   const [qualified, setQualified] = useState(currentQualifiedFromStages(stages));
   const [poolCount, setPoolCount] = useState(
     ((stages.find((st) => st.kind === "group")?.config as { pools?: { count?: number } } | null)?.pools?.count) ?? 2,
@@ -578,14 +582,23 @@ export function DivisionSettings({
                   className="input mt-1 w-full"
                   data-testid="format-template"
                 >
+                  {/* F3 Task 6: t.key is a plain `string` (STAGE_TEMPLATES
+                      isn't narrowed to a literal-key union — see
+                      format-templates.ts), so this template-literal lookup
+                      can't be checked against MessageKey's literal union
+                      without a cast. Narrow, not `as any`: a typo in the
+                      "format.template."/".label" literals themselves would
+                      still fail to compile. format-templates.test.ts's
+                      dictionary-coverage test backstops every t.key actually
+                      resolving. */}
                   {STAGE_TEMPLATES.map((t) => (
                     <option key={t.key} value={t.key}>
-                      {t.label}
+                      {msg(`format.template.${t.key}.label` as MessageKey)}
                     </option>
                   ))}
                 </select>
                 <span className="mt-0.5 block text-[11px] text-slate-400">
-                  {STAGE_TEMPLATES.find((t) => t.key === template)?.help}
+                  {selectedTemplate && msg(`format.template.${selectedTemplate.key}.help` as MessageKey)}
                 </span>
               </label>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
