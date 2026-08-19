@@ -86,6 +86,59 @@ export function scheduleWindowErrorMessage(
   });
 }
 
+/** The wire code thrown by `putScheduleSettings`'s court-removal guard
+ *  (`server/usecases/schedule.ts`) when a dropped court still holds a fixture
+ *  the schedule cannot relocate. Deliberately NOT `venues.ts`'s
+ *  `COURT_IN_USE` — same shape of problem, different guard, different
+ *  remedy set (that one blocks archiving; this one blocks removing a court
+ *  from `config.courts`). */
+export const SCHEDULE_COURT_STILL_IN_USE = "SCHEDULE_COURT_STILL_IN_USE";
+
+/** The `extra` the court-removal guard rides along with. Same "arrives off
+ *  the wire, every field optional" discipline as `ScheduleWindowExtra`: a
+ *  payload missing both booleans, or carrying a non-string `courtsDetail`,
+ *  must degrade to the fallback rather than render a sentence with nothing
+ *  to name. */
+export interface ScheduleCourtInUseExtra {
+  anyPinned?: unknown;
+  anyFixed?: unknown;
+  courtsDetail?: unknown;
+}
+
+/**
+ * `ApiV1Error` (code, extra) -> localized copy for the court-removal guard,
+ * or `fallback` verbatim.
+ *
+ * THREE variants, picked by two independent booleans rather than one
+ * template with optional clauses — same reasoning as
+ * `scheduleWindowErrorMessage` above. Which remedy applies is a different
+ * sentence depending on whether the block is a pin (unpin or reschedule), a
+ * fixed/completed fixture (nothing to unpin — archive the court instead),
+ * or both in the same refusal.
+ */
+export function courtStillInUseErrorMessage(
+  locale: Locale,
+  code: string,
+  extra: ScheduleCourtInUseExtra | undefined,
+  fallback: string,
+): string {
+  if (code !== SCHEDULE_COURT_STILL_IN_USE) return fallback;
+  const anyPinned = extra?.anyPinned === true;
+  const anyFixed = extra?.anyFixed === true;
+  const courtsDetail =
+    typeof extra?.courtsDetail === "string" && extra.courtsDetail !== "" ? extra.courtsDetail : null;
+
+  // Which variant the payload can actually SUPPORT: no usable `courtsDetail`
+  // means every variant is a sentence with a hole in it, and neither boolean
+  // true means there is no remedy to name at all.
+  if (courtsDetail === null) return fallback;
+  const variant = anyPinned && anyFixed ? "mixed" : anyFixed ? "fixed" : anyPinned ? "pinned" : null;
+  if (variant === null) return fallback;
+
+  const dict = BY_LOCALE[locale] ?? BY_LOCALE[DEFAULT_LOCALE];
+  return t(dict, `schedule.${SCHEDULE_COURT_STILL_IN_USE}.${variant}`, { courtsDetail });
+}
+
 /**
  * A failed schedule-settings save, as the organiser should read it.
  *
@@ -99,13 +152,17 @@ export function scheduleWindowErrorMessage(
  * in `schedule-board.tsx` and importing it from `board/settings-panel.tsx`
  * would close an import cycle (the board renders the panel).
  *
- * Only the one code this pass authored copy for is translated. Everything else
- * still shows the server's message: a localized guess at copy that does not
- * exist would read worse than an accurate English sentence, and `generic` is
- * reserved for a throw that is not an `Error` at all.
+ * Two codes have authored copy — `SCHEDULE_OUTSIDE_COMPETITION` and
+ * `SCHEDULE_COURT_STILL_IN_USE`. Everything else still shows the server's own
+ * message: a localized guess at copy that does not exist would read worse
+ * than an accurate English sentence, and `generic` is reserved for a throw
+ * that is not an `Error` at all.
  */
 export function settingsErrorText(err: unknown, locale: Locale, generic: string): string {
   if (err instanceof ApiV1Error) {
+    if (err.code === SCHEDULE_COURT_STILL_IN_USE) {
+      return courtStillInUseErrorMessage(locale, err.code, err.extra, err.message);
+    }
     return scheduleWindowErrorMessage(locale, err.code, err.extra, err.message);
   }
   return err instanceof Error ? err.message : generic;

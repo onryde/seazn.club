@@ -15,5 +15,8 @@
   "seeding.SEEDING_FIXTURES_ALREADY_FILLED": "Een van de doelposities is al ingevuld. Bereken het voorstel opnieuw om te zien wat er nog over is.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.before": "Het schema van deze divisie begint vóór de competitie opent op {startsOn}. Verruim de competitiedata of breng de divisie erbinnen.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.after": "Het schema van deze divisie eindigt na het sluiten van de competitie op {endsOn}. Verruim de competitiedata of breng de divisie erbinnen.",
-  "schedule.SCHEDULE_OUTSIDE_COMPETITION.both": "Het schema van deze divisie begint vóór de competitie opent op {startsOn} en eindigt na het sluiten op {endsOn}. Verruim de competitiedata of breng de divisie erbinnen."
+  "schedule.SCHEDULE_OUTSIDE_COMPETITION.both": "Het schema van deze divisie begint vóór de competitie opent op {startsOn} en eindigt na het sluiten op {endsOn}. Verruim de competitiedata of breng de divisie erbinnen.",
+  "schedule.SCHEDULE_COURT_STILL_IN_USE.pinned": "Een baan die nog vastgezette wedstrijden heeft, kan niet worden verwijderd: {courtsDetail}. Maak ze los of verplaats ze voordat je de baan verwijdert.",
+  "schedule.SCHEDULE_COURT_STILL_IN_USE.fixed": "Een baan die nog wedstrijden heeft die het schema niet kan verplaatsen, kan niet worden verwijderd: {courtsDetail}. Ze zijn bezig of al afgerond, dus er is niets om los te maken of te verplaatsen. Wil je er geen nieuwe wedstrijden meer inplannen, archiveer de baan dan via de directory in plaats van hem hier te verwijderen.",
+  "schedule.SCHEDULE_COURT_STILL_IN_USE.mixed": "Een baan die nog wedstrijden heeft die het schema niet kan verplaatsen, kan niet worden verwijderd: {courtsDetail}. Maak de vastgezette wedstrijden los of verplaats ze. Archiveer de baan via de directory voor wedstrijden die al bezig of afgerond zijn, in plaats van hem hier te verwijderen."
 }

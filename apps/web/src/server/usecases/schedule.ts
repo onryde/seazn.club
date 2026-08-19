@@ -350,9 +350,21 @@ export async function putScheduleSettings(
             return `${courtNames.get(r.court_id) ?? r.court_id} (${why.join(" + ")})`;
           })
           .join(", ");
+        // `code` + `extra` let the panel (`lib/schedule-error.ts`) pick the
+        // remedy that actually applies instead of always saying "unpin or
+        // reschedule" — a court blocked purely by a completed fixture has
+        // neither a pin to release nor a future slot to move (P9 fix 3).
+        // `SCHEDULE_COURT_STILL_IN_USE`, never venues.ts's `COURT_IN_USE` —
+        // same shape of problem, different guard, different remedy set.
         throw new HttpError(
           409,
           `cannot remove a court that still holds fixtures the schedule cannot move: ${detail} — unpin or reschedule them first`,
+          "SCHEDULE_COURT_STILL_IN_USE",
+          {
+            courtsDetail: detail,
+            anyPinned: blocked.some((r) => r.pinned > 0),
+            anyFixed: blocked.some((r) => r.fixed > 0),
+          },
         );
       }
     }
