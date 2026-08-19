@@ -1,0 +1,82 @@
+name: E2E cache warm
+
+# Writes the Playwright browser cache ON MAIN so every PR can read it.
+#
+# e2e.yml is `on: pull_request` only, and GitHub Actions caches are scoped by
+# ref: a cache written during a PR run lands in that PR's own scope and is
+# invisible to every other branch. Only caches on the DEFAULT branch are
+# readable by all of them. So the seven e2e jobs were in an unwinnable
+# position — they were the only writers, and nothing they wrote could ever be
+# read by the next PR.
+#
+# It showed up twice in the logs, and both halves are fixed here rather than
+# in e2e.yml:
+#
+#   * All seven jobs raced the one key on save and six lost it every run:
+#     "Failed to save: Unable to reserve cache with key playwright-…, another
+#     job may be creating this cache" (run 32272599493, six of seven jobs).
+#   * Whichever job did win wrote into the PR scope, so the next PR started
+#     cold anyway. Runs 32259950122, 32269332414 and 32272599493 — three
+#     different branches, one identical lockfile hash — each logged "Cache not
+#     found for input keys: playwright-Linux-1a8dcaff…" and re-downloaded
+#     ~274 MB of Chromium in all seven jobs.
+#
+# One writer, on main, no race. e2e.yml now restores only
+# (actions/cache/restore@v4), so a PR can never write this key again.
+#
+# Trigger is deliberately narrow: the cache key is a hash of pnpm-lock.yaml, so
+# a new key only comes into existence when that file changes. Every other push
+# to main would re-run this job to confirm a cache it already has.
+# workflow_dispatch is how you seed it the first time, including right after
+# this workflow merges.
+on:
+  push:
+    branches: [main]
+    paths:
+      - pnpm-lock.yaml
+      - .github/workflows/e2e-cache-warm.yml
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-cache-warm
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    name: Warm the Playwright browser cache (main scope)
+    # Two vCPU, not the four every e2e job takes: this job downloads a browser
+    # and writes a cache. It never builds or runs a test, and nothing here is
+    # CPU-bound, so the extra cores would idle at full price.
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      # Also warms the pnpm store cache in the main scope, which is why PR runs
+      # already hit `node-cache-Linux-x64-pnpm-…` while missing the Playwright
+      # one — that key has main-branch writers elsewhere and this one had none.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Key and path must stay byte-identical to the restore step in e2e.yml's
+      # three jobs, or this warms a cache nobody reads. On a re-run where the
+      # key already exists this restores and skips the save, so the job is
+      # idempotent and cheap.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      # No `--with-deps`, matching e2e.yml: every dependency it installs was
+      # already at the newest version on this image (run 32272599493), so it
+      # only bought an apt-get update. The browser binaries are the payload.
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+        working-directory: apps/web

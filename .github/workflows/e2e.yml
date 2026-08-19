@@ -44,6 +44,15 @@ name: E2E
 # `e2e-parallel` ever gets faster, revisit the leg count against its new
 # slowest shard rather than against this job in isolation.
 #
+# That last sentence has now come due, and this paragraph is kept above rather
+# than rewritten because its ARITHMETIC is the part that expired, not its
+# method. `e2e-parallel` no longer shards by test count: its slowest leg is
+# predicted at ~234s (see that job's own comment), where phones-small measured
+# 244s on run 32272599493. THIS job is therefore the workflow's floor now, and
+# it is the leg count here — not there — that is worth revisiting next. Do it
+# the same way: against the other jobs' slowest leg, never against this one in
+# isolation.
+#
 # Each job independently migrates its own fresh Postgres and mints its own
 # `setup`-project org — GitHub Actions `services:` are job-scoped, so there
 # is no live database or server to share across jobs (see ci.yml's
@@ -83,8 +92,16 @@ jobs:
   # playwright.config.ts's `parallel` project.
   # ---------------------------------------------------------------------
   e2e-parallel:
-    name: Playwright e2e — parallel ${{ matrix.shard }}/3 (Postgres container)
+    name: Playwright e2e — ${{ matrix.group }} (Postgres container)
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    # No job here had a timeout, so GitHub's 360-minute default applied. Over
+    # the 100 runs to 2026-08-19, 15 e2e jobs ran past 30 minutes and burned
+    # 46% of this workflow's entire runner time (2,499 of 5,403 minutes); five
+    # of them ran the full 360 before being killed (runs 32157900228,
+    # 32084592754). A hung Playwright job is not a slow job — it never
+    # finishes, and on a 4-vCPU runner six hours of it bills 1,440 minutes,
+    # more than a normal month of this whole workflow. p95 is ~7 minutes.
+    timeout-minutes: 20
 
     # Sharded because this project is the wall-clock floor of a PR. Measured on
     # run 31691106751: 8.2 min total, of which the Playwright step alone was
@@ -108,10 +125,46 @@ jobs:
     # Each shard is a separate JOB, so each gets its own Postgres service and
     # its own `auth.setup` orgs — no cross-shard state, which is what makes
     # this safe for a project whose tests share an org within a run.
+    #
+    # Still three jobs, but no longer `--shard=N/3`. Playwright shards by TEST
+    # COUNT over a contiguous, file-ordered slice, and it has no idea what a
+    # test costs: e2e/scorepad-v3-cricket.spec.ts alone is ~90s of the
+    # project's ~368s and sits in the alphabetical tail, so shard 3/3 measured
+    # 176s against 89s and 87s (run 32272599493), 170s against 87s and 77s
+    # (32269332414), and 227s against 147s and 112s (32214432854). That shard,
+    # not e2e-mobile, was this workflow's wall-clock floor.
+    #
+    # So: one leg for the expensive files, two legs sharding everything else.
+    # Predicted 128 / 126 / 115s against a perfect-split floor of 123s. The
+    # slice is selected in playwright.config.ts via E2E_PARALLEL_SLICE, where
+    # "rest" is a catch-all — a new spec joins the sharded remainder on its
+    # own, and only a file named in PARALLEL_HEAVY can leave it. Read that
+    # file's comment, which carries the derivation, before changing the split.
+    #
+    # Why not four legs or more: at ~128s + ~106s setup these land at ~234s,
+    # just under where e2e-mobile's phones-small leg already sits (244s). The
+    # floor moves there, so a finer split buys nothing and pays setup again —
+    # the same arithmetic this file's header applies to e2e-mobile, run in the
+    # other direction.
     strategy:
-      fail-fast: false # one shard's failure must not hide another's
+      fail-fast: false # one leg's failure must not hide another's
       matrix:
-        shard: [1, 2, 3]
+        # `slug` is the artifact-safe name, for the same reason e2e-mobile
+        # carries one: upload-artifact@v4 rejects "/" and fails the job on a
+        # duplicate name.
+        include:
+          - group: parallel 1/2
+            slug: parallel-1
+            slice: rest
+            args: --shard=1/2
+          - group: parallel 2/2
+            slug: parallel-2
+            slice: rest
+            args: --shard=2/2
+          - group: parallel heavy
+            slug: parallel-heavy
+            slice: heavy
+            args: ""
 
     services:
       postgres:
@@ -191,30 +244,18 @@ jobs:
       - name: Sync sport catalog from the engine registry
         run: npm run sync:sports
 
-      # Persist the compiler cache between runs so the production build only
-      # pays for what changed (nextjs.org/docs/pages/guides/ci-build-caching).
-      # Source-hash key with a lockfile restore-key: exact hit on unchanged
-      # source, warm partial cache otherwise. Mirrors the CI smoke job.
-      - name: Cache Next.js build cache
-        uses: actions/cache@v4
-        with:
-          path: apps/web/.next/cache
-          key: ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('apps/web/src/**/*.js', 'apps/web/src/**/*.jsx', 'apps/web/src/**/*.ts', 'apps/web/src/**/*.tsx') }}
-          restore-keys: |
-            ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
+      # There is no "Cache Next.js build cache" step here any more. It claimed
+      # the build "only pays for what changed"; it did not. Next 16 builds with
+      # Turbopack, which does not write a build cache to .next/cache unless
+      # experimental.turbopackFileSystemCacheForBuild is on — so the step
+      # restored an exact-key hit of 40 KB ("Cache Size: ~0 MB (40528 B)") in
+      # every job of every run while each one still paid a full 29-58s cold
+      # compile, and then lost the save to the same seven-way race the
+      # Playwright cache lost. Turning that flag on is a change to what we
+      # BUILD, not to how we cache it, so it is deliberately not bundled here;
+      # reinstate this step in the same commit that enables it. ci.yml's smoke
+      # job still carries the identical dead step.
 
-      # Pre-compiled production build, not `next dev`: `next dev` pins its V8
-      # heap to half the runner RAM and restarts past ~80% use (transient 404s
-      # from Turbopack's on-demand compiles near the ceiling) — flaky under a
-      # full Playwright run. The standalone server has neither watchdog nor
-      # per-request compiles, and is what production runs.
-      #
-      # SKIP_TYPECHECK=1 matches ci.yml's build step. Without it `next build`
-      # runs `tsc` inside the build worker on top of the compile it just
-      # finished, and the worker dies on the runner's default ~2 GB V8 heap
-      # ("FATAL ERROR: Ineffective mark-compacts near heap limit") before a
-      # single spec runs. Types are already gated by `tsc --noEmit` in ci.yml's
-      # test job, so nothing is lost here.
       #
       # Backgrounded. This is the long pole of the setup phase (52-55s across
       # all five e2e runners on run 32008189967) and nothing before the `wait:`
@@ -287,15 +328,29 @@ jobs:
       # Playwright version. The cache RESTORE stays in the foreground (it is
       # ~3s, and a backgrounded actions/cache loses its outputs — see the note
       # on the image build above); only the download is backgrounded.
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
+      # RESTORE ONLY. All seven jobs used to race one key on save and six of
+      # them lost it every run — "Failed to save: Unable to reserve cache with
+      # key playwright-…, another job may be creating this cache". Worse, this
+      # workflow is pull_request-only, so whichever job did win wrote into that
+      # PR's cache scope, which no other branch can read: runs 32259950122,
+      # 32269332414 and 32272599493 all logged "Cache not found" on the same
+      # lockfile hash from three different branches, and re-downloaded ~274 MB
+      # of Chromium seven times each. The single writer now lives on main, in
+      # e2e-cache-warm.yml, whose caches every PR can read.
+      - name: Restore Playwright browsers
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      # No `--with-deps`. It installed NOTHING on this image — every package it
+      # names came back "is already the newest version" on run 32272599493 —
+      # while still paying a full `apt-get update` in all seven jobs. Chromium
+      # refuses to launch with a clear host-dependency error if that ever stops
+      # being true, so the failure mode is loud, not silent.
       - name: Install Playwright Chromium
         id: chromium
         background: true
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
         working-directory: apps/web
 
       # The setup phase's join. Everything past this point needs the artefacts
@@ -363,20 +418,21 @@ jobs:
           fi
           echo "static assets serve ($asset)"
 
-      - name: Run Playwright e2e (parallel project)
-        run: npx playwright test --project=parallel --shard=${{ matrix.shard }}/3
+      - name: Run Playwright e2e (${{ matrix.group }})
+        run: npx playwright test --project=parallel ${{ matrix.args }}
         working-directory: apps/web
         env:
           PLAYWRIGHT_BASE: http://localhost:3000
+          E2E_PARALLEL_SLICE: ${{ matrix.slice }}
 
       - name: Upload Playwright report (on failure)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          # Per shard: three jobs uploading one artifact name collide and the
+          # Per leg: three jobs uploading one artifact name collide and the
           # later ones fail the upload, losing the report for the failure you
           # actually wanted to read.
-          name: playwright-report-parallel-${{ matrix.shard }}
+          name: playwright-report-${{ matrix.slug }}
           path: apps/web/playwright-report
           retention-days: 7
 
@@ -406,6 +462,9 @@ jobs:
   e2e-serial:
     name: Playwright e2e — serial (Postgres container)
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    # See e2e-parallel's timeout note: no job here had one, so a hung
+    # Playwright run burned GitHub's 360-minute default. p95 is ~7 minutes.
+    timeout-minutes: 20
 
     services:
       postgres:
@@ -459,13 +518,17 @@ jobs:
       - name: Sync sport catalog from the engine registry
         run: npm run sync:sports
 
-      - name: Cache Next.js build cache
-        uses: actions/cache@v4
-        with:
-          path: apps/web/.next/cache
-          key: ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('apps/web/src/**/*.js', 'apps/web/src/**/*.jsx', 'apps/web/src/**/*.ts', 'apps/web/src/**/*.tsx') }}
-          restore-keys: |
-            ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
+      # There is no "Cache Next.js build cache" step here any more. It claimed
+      # the build "only pays for what changed"; it did not. Next 16 builds with
+      # Turbopack, which does not write a build cache to .next/cache unless
+      # experimental.turbopackFileSystemCacheForBuild is on — so the step
+      # restored an exact-key hit of 40 KB ("Cache Size: ~0 MB (40528 B)") in
+      # every job of every run while each one still paid a full 29-58s cold
+      # compile, and then lost the save to the same seven-way race the
+      # Playwright cache lost. Turning that flag on is a change to what we
+      # BUILD, not to how we cache it, so it is deliberately not bundled here;
+      # reinstate this step in the same commit that enables it. ci.yml's smoke
+      # job still carries the identical dead step.
 
       #
       # Backgrounded. This is the long pole of the setup phase (52-55s across
@@ -514,15 +577,29 @@ jobs:
       # Playwright version. The cache RESTORE stays in the foreground (it is
       # ~3s, and a backgrounded actions/cache loses its outputs — see the note
       # on the image build above); only the download is backgrounded.
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
+      # RESTORE ONLY. All seven jobs used to race one key on save and six of
+      # them lost it every run — "Failed to save: Unable to reserve cache with
+      # key playwright-…, another job may be creating this cache". Worse, this
+      # workflow is pull_request-only, so whichever job did win wrote into that
+      # PR's cache scope, which no other branch can read: runs 32259950122,
+      # 32269332414 and 32272599493 all logged "Cache not found" on the same
+      # lockfile hash from three different branches, and re-downloaded ~274 MB
+      # of Chromium seven times each. The single writer now lives on main, in
+      # e2e-cache-warm.yml, whose caches every PR can read.
+      - name: Restore Playwright browsers
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      # No `--with-deps`. It installed NOTHING on this image — every package it
+      # names came back "is already the newest version" on run 32272599493 —
+      # while still paying a full `apt-get update` in all seven jobs. Chromium
+      # refuses to launch with a clear host-dependency error if that ever stops
+      # being true, so the failure mode is loud, not silent.
       - name: Install Playwright Chromium
         id: chromium
         background: true
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
         working-directory: apps/web
 
       # The setup phase's join. Everything past this point needs the artefacts
@@ -621,6 +698,9 @@ jobs:
   e2e-mobile:
     name: Playwright e2e — ${{ matrix.group }} (Postgres container)
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    # See e2e-parallel's timeout note: no job here had one, so a hung
+    # Playwright run burned GitHub's 360-minute default. p95 is ~7 minutes.
+    timeout-minutes: 20
 
     # Grouped by device class, not round-robin, so a red leg names a coherent
     # band ("tablets are broken") instead of an arbitrary third of the matrix.
@@ -698,13 +778,17 @@ jobs:
       - name: Sync sport catalog from the engine registry
         run: npm run sync:sports
 
-      - name: Cache Next.js build cache
-        uses: actions/cache@v4
-        with:
-          path: apps/web/.next/cache
-          key: ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('apps/web/src/**/*.js', 'apps/web/src/**/*.jsx', 'apps/web/src/**/*.ts', 'apps/web/src/**/*.tsx') }}
-          restore-keys: |
-            ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
+      # There is no "Cache Next.js build cache" step here any more. It claimed
+      # the build "only pays for what changed"; it did not. Next 16 builds with
+      # Turbopack, which does not write a build cache to .next/cache unless
+      # experimental.turbopackFileSystemCacheForBuild is on — so the step
+      # restored an exact-key hit of 40 KB ("Cache Size: ~0 MB (40528 B)") in
+      # every job of every run while each one still paid a full 29-58s cold
+      # compile, and then lost the save to the same seven-way race the
+      # Playwright cache lost. Turning that flag on is a change to what we
+      # BUILD, not to how we cache it, so it is deliberately not bundled here;
+      # reinstate this step in the same commit that enables it. ci.yml's smoke
+      # job still carries the identical dead step.
 
       #
       # Backgrounded. This is the long pole of the setup phase (52-55s across
@@ -753,15 +837,29 @@ jobs:
       # Playwright version. The cache RESTORE stays in the foreground (it is
       # ~3s, and a backgrounded actions/cache loses its outputs — see the note
       # on the image build above); only the download is backgrounded.
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
+      # RESTORE ONLY. All seven jobs used to race one key on save and six of
+      # them lost it every run — "Failed to save: Unable to reserve cache with
+      # key playwright-…, another job may be creating this cache". Worse, this
+      # workflow is pull_request-only, so whichever job did win wrote into that
+      # PR's cache scope, which no other branch can read: runs 32259950122,
+      # 32269332414 and 32272599493 all logged "Cache not found" on the same
+      # lockfile hash from three different branches, and re-downloaded ~274 MB
+      # of Chromium seven times each. The single writer now lives on main, in
+      # e2e-cache-warm.yml, whose caches every PR can read.
+      - name: Restore Playwright browsers
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      # No `--with-deps`. It installed NOTHING on this image — every package it
+      # names came back "is already the newest version" on run 32272599493 —
+      # while still paying a full `apt-get update` in all seven jobs. Chromium
+      # refuses to launch with a clear host-dependency error if that ever stops
+      # being true, so the failure mode is loud, not silent.
       - name: Install Playwright Chromium
         id: chromium
         background: true
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
         working-directory: apps/web
 
       # The setup phase's join. Everything past this point needs the artefacts
