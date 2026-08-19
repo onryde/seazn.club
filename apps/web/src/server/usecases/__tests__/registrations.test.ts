@@ -68,6 +68,8 @@ import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { HANDLED_EVENT_TYPES, processStripeEvent } from "../billing-events";
+import { createCompetition } from "../competitions";
+import { createDivision } from "../divisions";
 import {
   ageAt,
   applicationFeeCents,
@@ -3148,5 +3150,54 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)",
       mintGroupCheckout(res.registration.group_id, division.id, "http://test.local", res.access_token),
     ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_CURRENCY_UNAVAILABLE" });
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("registrationIcs: escapes RFC 5545 TEXT values (commas, semicolons, backslashes)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+
+    // Create competition and division with names containing special characters
+    // that require RFC 5545 TEXT escaping (§3.3.11)
+    const competition = await createCompetition(owner, {
+      name: "Spring Cup, Round 2; Finals",
+      visibility: "public",
+      branding: {},
+      starts_on: "2026-09-15",
+      ends_on: "2026-09-20",
+    });
+    const division = await createDivision(owner, competition.id, {
+      name: "Open; Quarterfinals, Round 1",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      eligibility: [],
+    });
+
+    // Create registration with display name containing special characters
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const reg = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Test; Entrant, Inc.",
+    });
+
+    // Get the ICS output
+    const ics = await registrationIcs(reg.registration.id, reg.access_token);
+
+    // Assert RFC 5545 TEXT escaping: commas and semicolons must be escaped
+    // SUMMARY should be: "Spring Cup\, Round 2\; Finals — Open\; Quarterfinals\, Round 1"
+    expect(ics).toContain("SUMMARY:Spring Cup\\, Round 2\\; Finals — Open\\; Quarterfinals\\, Round 1");
+    // DESCRIPTION should have escaped text: "Registration for Test\; Entrant\, Inc. (pending)"
+    expect(ics).toContain("DESCRIPTION:Registration for Test\\; Entrant\\, Inc. (pending)");
+    // Ensure the raw unescaped versions are NOT in the output
+    expect(ics).not.toContain("SUMMARY:Spring Cup, Round 2; Finals");
+    expect(ics).not.toContain("DESCRIPTION:Registration for Test; Entrant, Inc.");
   });
 });

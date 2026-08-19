@@ -32,6 +32,7 @@ import { routes } from "@/lib/routes";
 import { toLocale } from "@/lib/i18n-constants";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
+import { icsText } from "@/lib/public-site";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { PutRegistrationSettings, RegistrationFormField } from "@/server/api-v1/schemas";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
@@ -3015,8 +3016,8 @@ export async function registrationIcs(regId: string, token: string): Promise<str
     `DTSTAMP:${stamp}`,
     `DTSTART;VALUE=DATE:${start}`,
     `DTEND;VALUE=DATE:${end}`,
-    `SUMMARY:${view.competition_name} — ${view.division_name}`,
-    `DESCRIPTION:Registration for ${view.display_name} (${view.status})`,
+    `SUMMARY:${icsText(`${view.competition_name} — ${view.division_name}`)}`,
+    `DESCRIPTION:${icsText(`Registration for ${view.display_name} (${view.status})`)}`,
     "END:VEVENT",
     "END:VCALENDAR",
     "",
