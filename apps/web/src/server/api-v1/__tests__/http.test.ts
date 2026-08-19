@@ -4,6 +4,7 @@ import { z } from "zod";
 import { EngineError, EngineErrorCode } from "@seazn/engine/core";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { getRequestContext } from "@/server/request-context";
+import { log } from "@/server/logger";
 import {
   ENGINE_HTTP,
   v1,
@@ -114,6 +115,36 @@ describe("v1 envelope", () => {
     });
     expect(dup.status).toBe(500);
     expect(sentry.captureException).toHaveBeenCalledTimes(1);
+  });
+
+  // A 500 must be BOTH paged (Sentry) and queryable (pino) — one tool alerts
+  // a human, the other is what they search once alerted. A 4xx the caller can
+  // fix (retype a period, retry a rate limit) pages/logs neither.
+  it("log.error fires alongside Sentry.captureException on every 500 path, and only 500s", async () => {
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+    try {
+      await v1(async () => {
+        throw new EngineError("UNKNOWN_PHASE", "not our bug — 422");
+      });
+      expect(logged).not.toHaveBeenCalled();
+
+      await v1(async () => {
+        throw new EngineError("MODULE_DUPLICATE", "two modules claim icehockey@1.0.0");
+      });
+      expect(logged).toHaveBeenCalledTimes(1);
+
+      await v1(async () => {
+        throw new HttpError(500, "db is down");
+      });
+      expect(logged).toHaveBeenCalledTimes(2);
+
+      await v1(async () => {
+        throw new Error("unhandled");
+      });
+      expect(logged).toHaveBeenCalledTimes(3);
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it("SEQ_CONFLICT carries current_seq (doc 08 §4)", async () => {

@@ -1,9 +1,13 @@
 // Non-versioned route wrapper (lib/http.ts's handler()): unlike /api/v1's
 // v1(), no requestId rides in the response envelope, so the only way to
 // prove the request-context ALS is wired is to observe it from inside fn().
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getRequestContext } from "@/server/request-context";
-import { handler } from "../http";
+import { log } from "@/server/logger";
+import { handler, HttpError } from "../http";
+
+const sentry = vi.hoisted(() => ({ captureException: vi.fn() }));
+vi.mock("@sentry/nextjs", () => sentry);
 
 describe("handler (lib/http.ts)", () => {
   it("runs fn inside a request-context scope with a generated requestId", async () => {
@@ -27,5 +31,32 @@ describe("handler (lib/http.ts)", () => {
       return { ok: true };
     });
     expect(ids[0]).not.toBe(ids[1]);
+  });
+
+  // Same pairing as api-v1/http.ts's v1(): a 500 pages (Sentry) AND logs
+  // (pino) — a 4xx the caller can fix does neither.
+  it("log.error fires alongside Sentry.captureException on every 500 path, and only 500s", async () => {
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+    try {
+      await handler(async () => {
+        throw new HttpError(404, "not found");
+      });
+      expect(logged).not.toHaveBeenCalled();
+      expect(sentry.captureException).not.toHaveBeenCalled();
+
+      await handler(async () => {
+        throw new HttpError(500, "db is down");
+      });
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(sentry.captureException).toHaveBeenCalledTimes(1);
+
+      await handler(async () => {
+        throw new Error("unhandled");
+      });
+      expect(logged).toHaveBeenCalledTimes(2);
+      expect(sentry.captureException).toHaveBeenCalledTimes(2);
+    } finally {
+      logged.mockRestore();
+    }
   });
 });

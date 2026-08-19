@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
+import { log } from "@/server/logger";
 import { runRequestContext } from "@/server/request-context";
 import * as Sentry from "@sentry/nextjs";
 
@@ -57,7 +58,10 @@ function handlerInner<T>(fn: () => Promise<T>) {
       }
       if (err instanceof HttpError) {
         // 4xx are expected; only capture 5xx
-        if (err.status >= 500) Sentry.captureException(err);
+        if (err.status >= 500) {
+          Sentry.captureException(err);
+          log.error({ err, status: err.status, code: err.code }, "handler: HttpError reached 500");
+        }
         return NextResponse.json(
           { ok: false, error: err.message },
           { status: err.status },
@@ -66,6 +70,7 @@ function handlerInner<T>(fn: () => Promise<T>) {
       // Unexpected error — always capture
       Sentry.captureException(err);
       const message = err instanceof Error ? err.message : "Server error";
+      log.error({ err }, "handler: unhandled error");
       return NextResponse.json({ ok: false, error: message }, { status: 500 });
     });
 }
