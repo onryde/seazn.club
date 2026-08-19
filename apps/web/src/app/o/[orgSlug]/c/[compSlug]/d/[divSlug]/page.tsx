@@ -163,10 +163,24 @@ export default async function DivisionPage({
   const seedingStages = stages.filter(
     (s) => (s.progression as { timing?: string } | null)?.timing === "setup",
   );
+  // F3 Task 5c (ruling 14 — seeding stays propose-and-confirm, no
+  // auto-confirm). Fetched on EVERY tab, not just fixtures: ruling 14's whole
+  // consequence is that a stage now fills only when the organiser confirms, so
+  // a proposal that nobody is told about leaves a published bracket full of
+  // placeholders after the results are already in. The organiser is usually on
+  // entrants or standings when the group stage finishes, which is exactly when
+  // the proposal appears. Cost is one indexed read per setup-timing stage, and
+  // there is at most a handful per division.
   const seedProposals =
-    tab === "fixtures" && editable && seedingStages.length > 0
+    editable && seedingStages.length > 0
       ? await Promise.all(seedingStages.map((s) => getSeedProposal(auth, s.id)))
       : [];
+  // "draft" = computed, waiting for the organiser to confirm it. "stale" = a
+  // source's standings moved underneath it and it needs recomputing. Both are
+  // waiting on a human; "confirmed" is done and never nags.
+  const pendingSeedProposals = seedProposals.filter(
+    (p) => p?.status === "draft" || p?.status === "stale",
+  ).length;
   // F3 Task 5 (5a) — the roster-drift banner StagesPanel renders per stage.
   // Only the ROOT stage (no progression source) draws fixtures directly from
   // the live active roster (getStageRosterDrift's own doc comment,
@@ -325,6 +339,24 @@ export default async function DivisionPage({
                 }`}
               >
                 {tabKey === "discipline" ? t(dict, "disc.tab") : t(dict, `div.detail.tab.${tabKey}`)}
+                {/* F3 Task 5c (ruling 14): a seed proposal is waiting on the
+                    organiser. The dot rides INSIDE the tab label so it adds no
+                    layout width of its own — this strip is `.scroll-x` and its
+                    active tab can already scroll out of view, so anything that
+                    widens a tab makes that worse at 320px. Screen readers get
+                    the count as words; sighted users get the dot plus the
+                    title. */}
+                {tabKey === "fixtures" && pendingSeedProposals > 0 && (
+                  <span
+                    className="ml-1.5 inline-block h-2 w-2 rounded-full bg-amber-500 align-middle"
+                    data-pending-seed-proposals={pendingSeedProposals}
+                    title={t(dict, "progression.pendingProposal.hint")}
+                  >
+                    <span className="sr-only">
+                      {t(dict, "progression.pendingProposal.badge")}
+                    </span>
+                  </span>
+                )}
               </Link>
             ),
           )}

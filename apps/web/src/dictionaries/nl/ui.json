@@ -3996,5 +3996,7 @@
   "bracket.round.rung": "Trede {n}",
   "bracket.round.plain": "Ronde {n}",
   "bracket.slot.bye": "Bye",
-  "calendar.time_tbc": "Tijd nog te bepalen"
+  "calendar.time_tbc": "Tijd nog te bepalen",
+  "progression.pendingProposal.badge": "Een voorstel voor geplaatsten wacht op je bevestiging",
+  "progression.pendingProposal.hint": "Een voorstel voor geplaatsten wacht: open Wedstrijden om het te bekijken en te bevestigen"
 }

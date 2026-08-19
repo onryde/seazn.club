@@ -3996,5 +3996,7 @@
   "bracket.round.rung": "Peldaño {n}",
   "bracket.round.plain": "Ronda {n}",
   "bracket.slot.bye": "Bye",
-  "calendar.time_tbc": "Hora por confirmar"
+  "calendar.time_tbc": "Hora por confirmar",
+  "progression.pendingProposal.badge": "Hay una propuesta de clasificados esperando tu confirmación",
+  "progression.pendingProposal.hint": "Hay una propuesta de clasificados esperando: abre Partidos para revisarla y confirmarla"
 }

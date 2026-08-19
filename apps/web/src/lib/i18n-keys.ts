@@ -3141,6 +3141,8 @@ export type DictionaryKey =
   | "progression.genericError"
   | "progression.heading"
   | "progression.noProposalYet"
+  | "progression.pendingProposal.badge"
+  | "progression.pendingProposal.hint"
   | "progression.rankHeader"
   | "progression.recompute"
   | "progression.recomputing"

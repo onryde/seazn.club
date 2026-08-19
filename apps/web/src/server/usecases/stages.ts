@@ -1614,6 +1614,22 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     //     event landing.
     // So block on the evidence itself as well as on status: if a fixture has
     // anything recorded against it, it is not ours to delete.
+    //
+    // One latent trapdoor, checked and currently INERT (2026-08-19): fixtures
+    // .parent_fixture_id is a self-FK declared ON DELETE CASCADE (V214:18), so
+    // a fixture that is someone's parent takes its children with it. Nothing
+    // in apps/web writes that column today (zero rows), and its only intended
+    // use — table-tennis rubbers under a tie (sports/setbased/tabletennis.ts)
+    // — is same-stage, where taking the children with the parent is correct.
+    // If a writer ever creates CROSS-STAGE parent links, this delete would
+    // silently remove another stage's board and the guard below would not see
+    // it. Note the cascade RECURSES on a self-FK: a chain deeper than one
+    // level takes the whole subtree, not just direct children, so the blast
+    // radius is not bounded at one hop. Verify with
+    //   select count(*) from fixtures c join fixtures p
+    //     on c.parent_fixture_id = p.id where c.stage_id <> p.stage_id;
+    // (fixtures.court_id is RESTRICT but points OUT at courts, so it
+    // constrains deleting a COURT, never this delete.)
     const [blocked] = await tx<{ id: string }[]>`
       select f.id from fixtures f
       where f.stage_id = ${stageId}
