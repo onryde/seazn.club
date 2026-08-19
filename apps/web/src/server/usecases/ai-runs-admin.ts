@@ -4,6 +4,7 @@
 // ledger; the payload columns arrived with the cost work, so pre-existing rows
 // surface as nulls rather than being filtered out.
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { aiRunUnitNoun } from "@/lib/ai-pricing";
 // lib/credits is a leaf w.r.t. server/usecases (it imports only other lib
 // modules), so reading it here closes no import cycle.
@@ -278,7 +279,7 @@ export async function maybeAlertExpensiveRun(opts: {
       ...(opts.packUnits != null ? { packUnits: opts.packUnits } : {}),
     });
   } catch (err) {
-    console.error(`[ai-runs] expensive-run alert check failed (org ${opts.orgId})`, err);
+    log.error({ err, orgId: opts.orgId }, "ai-runs: expensive-run alert check failed");
   }
 }
 

@@ -193,7 +193,7 @@ export async function createConnectDashboardLink(
     }
     // Anything else: log the detail, answer clean — Stripe's raw message
     // names the platform key and account id and must never reach a client.
-    console.error("createConnectDashboardLink failed", err);
+    log.error({ err }, "createConnectDashboardLink failed");
     throw new HttpError(502, "Stripe couldn't create a dashboard link for this account");
   }
 }

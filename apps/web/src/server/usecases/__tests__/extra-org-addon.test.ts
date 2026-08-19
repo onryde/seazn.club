@@ -84,6 +84,7 @@ import { walletIdFor } from "@/lib/credits";
 import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
 import { groupOrgLimit } from "@/lib/billing-group";
 import { HttpError } from "@/lib/errors";
+import { log } from "@/server/logger";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { ORG_ADDONS } from "@/lib/org-addons";
 import {
@@ -106,6 +107,15 @@ import {
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
+
+// pino's log.{warn,error} take (fields, message) — a bare String() on the
+// fields object gives "[object Object]" and loses every id it carries.
+// JSON-serialise objects, leave strings as-is, and search across all args
+// (not just c[0]) since the identifier under test may be in either position.
+const stringifyLogArg = (arg: unknown): string =>
+  typeof arg === "string" ? arg : JSON.stringify(arg);
+const logCallIncludes = (call: unknown[], needle: string): boolean =>
+  call.some((arg) => stringifyLogArg(arg).includes(needle));
 
 async function makeUser(): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
@@ -1864,7 +1874,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // "no update call" alone is satisfied by the duplicate guard refusing the
     // write, which is a different reason and one that logs.
     vi.clearAllMocks();
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
     await convergeOrgAddonPrices(sub, walletId);
     expect(itemUpdateSpy).not.toHaveBeenCalled();
     expect(logged).not.toHaveBeenCalled();
@@ -1883,7 +1893,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
   it("a plan with no rider SKU does nothing — no write, no throw, no noise, rows still sync", async () => {
     const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     await setOrgPlan(orgId, "community");
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     await processStripeEvent(
       updatedEvent(stripeSubId, walletId, [riderItem(riderId, proEntry.lookupKey, 1)]),
@@ -1909,7 +1919,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
   it("an unsynced catalog is LOGGED, never thrown — the row sync still runs", async () => {
     const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
     pricesListSpy.mockResolvedValue({ data: [] }); // resolveOrgAddonPriceId 503s
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     // A throw here would fail the whole webhook, which Stripe retries for ever
     // and which would skip every handler after it — including the row sync the
@@ -1922,7 +1932,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
 
     expect(itemUpdateSpy).not.toHaveBeenCalled();
     // Actionable identifiers, not just "something failed".
-    const messages = logged.mock.calls.map((c) => String(c[0]));
+    const messages = logged.mock.calls.map((c) => c.map(stringifyLogArg).join(" "));
     expect(messages.some((m) => m.includes(walletId) && m.includes(stripeSubId))).toBe(true);
     logged.mockRestore();
 
@@ -1936,7 +1946,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
   it("a failing Stripe update is LOGGED, never thrown — the row sync still runs", async () => {
     const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
     itemUpdateSpy.mockRejectedValue(new Error("stripe is having a day"));
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     await expect(
       processStripeEvent(
@@ -1944,7 +1954,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
       ),
     ).resolves.toBeUndefined();
 
-    const messages = logged.mock.calls.map((c) => String(c[0]));
+    const messages = logged.mock.calls.map((c) => c.map(stringifyLogArg).join(" "));
     expect(messages.some((m) => m.includes(riderId))).toBe(true);
     logged.mockRestore();
 
@@ -1974,7 +1984,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // would fail the second call for nothing. Tidying the shape is the purchase
     // path's job; the webhook's job is that the RATE is right.
     const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
     await convergeOrgAddonPrices(
       subFor(stripeSubId, [
         planItem,
@@ -1985,7 +1995,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     );
     expect(itemUpdateSpy).toHaveBeenCalledTimes(1);
     expect(itemUpdateSpy.mock.calls[0]![0]).toBe(dupA);
-    expect(logged.mock.calls.some((c) => String(c[0]).includes(dupB))).toBe(true);
+    expect(logged.mock.calls.some((c) => logCallIncludes(c, dupB))).toBe(true);
     logged.mockRestore();
     // …and the loser is ALERTED, not just logged: it bills the wrong rate until
     // a human or a purchase consolidates it, and nothing here retries.
@@ -2067,16 +2077,16 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
       quantity: 5,
       price: { id: "price_stripe_actually_holds", lookup_key: proEntry.lookupKey },
     };
-    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warned = vi.spyOn(log, "warn").mockImplementation(() => {});
 
     await processStripeEvent(updatedEvent(stripeSubId, walletId, [stale]));
 
     // The success log names the price STRIPE held, not the payload's, for the
     // same reason the failure alert does: a responder reading "re-priced from
     // X" must be able to trust X.
-    expect(warned.mock.calls.some((c) => String(c[0]).includes("price_stripe_actually_holds"))).toBe(
-      true,
-    );
+    expect(
+      warned.mock.calls.some((c) => logCallIncludes(c, "price_stripe_actually_holds")),
+    ).toBe(true);
     warned.mockRestore();
 
     expect(itemRetrieveSpy).toHaveBeenCalledWith(riderId);
@@ -2142,7 +2152,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
         code: "price_currency_mismatch",
       }),
     );
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     await processStripeEvent(updatedEvent(stripeSubId, walletId, [stale]));
     logged.mockRestore();
@@ -2206,15 +2216,15 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
       quantity: 7,
       price: { id: "price_loser_actually_on", lookup_key: proEntry.lookupKey },
     };
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     await processStripeEvent(updatedEvent(stripeSubId, walletId, [winner, loser]));
 
     // Both the alert and the log name what Stripe holds, not the payload's
     // price — this is the field a responder acts on.
-    expect(logged.mock.calls.some((c) => String(c[0]).includes("price_loser_actually_on"))).toBe(
-      true,
-    );
+    expect(
+      logged.mock.calls.some((c) => logCallIncludes(c, "price_loser_actually_on")),
+    ).toBe(true);
     logged.mockRestore();
 
     // The winner converges; the loser is alerted, not written to Stripe.
@@ -2249,7 +2259,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     const a = riderItem(dupA, proPlusEntry.lookupKey, 0);
     const b = riderItem(dupB, proEntry.lookupKey, 2);
     liveItems[dupB] = { ...(liveItems[dupB] as object), quantity: 9 };
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     await processStripeEvent(updatedEvent(stripeSubId, walletId, [a, b]));
     logged.mockRestore();
@@ -2277,7 +2287,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
       ...(liveItems[dupA] as object),
       price: { id: livePriceFor(proPlusEntry.lookupKey), lookup_key: proPlusEntry.lookupKey },
     };
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     await processStripeEvent(updatedEvent(stripeSubId, walletId, [a, b]));
     logged.mockRestore();
@@ -2303,7 +2313,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
       ...(liveItems[dupB] as object),
       price: { id: livePriceFor(proPlusEntry.lookupKey), lookup_key: proPlusEntry.lookupKey },
     };
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     await processStripeEvent(updatedEvent(stripeSubId, walletId, [a, b]));
     logged.mockRestore();
@@ -2322,7 +2332,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
       code: "resource_missing",
     });
     itemRetrieveSpy.mockRejectedValue(gone);
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     await convergeOrgAddonPrices(subFor(stripeSubId, [planItem, item]), walletId);
 
@@ -2343,7 +2353,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
   it("ALERTS staff when the catalog cannot name a price, with the identifiers to act on", async () => {
     const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
     pricesListSpy.mockResolvedValue({ data: [] }); // stripe:sync never run here
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     await processStripeEvent(
       updatedEvent(stripeSubId, walletId, [riderItem(riderId, proEntry.lookupKey, 2)]),
@@ -2376,7 +2386,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
       price: { id: "price_stripe_actually_holds", lookup_key: proEntry.lookupKey },
     };
     itemUpdateSpy.mockRejectedValue(new Error("nope"));
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     await convergeOrgAddonPrices(subFor(stripeSubId, [planItem, stale]), walletId);
     logged.mockRestore();
@@ -2400,7 +2410,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
         { code: "price_currency_mismatch", type: "StripeInvalidRequestError" },
       ),
     );
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     // Never throws: a rejected currency must not fail the whole webhook.
     await expect(
@@ -2409,7 +2419,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
       ),
     ).resolves.toBeUndefined();
 
-    expect(logged.mock.calls.some((c) => String(c[0]).includes(riderId))).toBe(true);
+    expect(logged.mock.calls.some((c) => logCallIncludes(c, riderId))).toBe(true);
     logged.mockRestore();
 
     expect(repriceAlertSpy).toHaveBeenCalledTimes(1);
@@ -2433,7 +2443,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     vi.stubEnv("STAFF_ALERT_EMAIL", "");
     const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
     pricesListSpy.mockResolvedValue({ data: [] });
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     await processStripeEvent(
       updatedEvent(stripeSubId, walletId, [riderItem(riderId, proEntry.lookupKey, 2)]),
@@ -2446,7 +2456,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
     pricesListSpy.mockResolvedValue({ data: [] });
     repriceAlertSpy.mockRejectedValue(new Error("resend is down"));
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     // Telemetry on a failure path must never turn "the rate is stale" into
     // "the webhook fails and Stripe retries it for ever".
@@ -2464,7 +2474,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
 
   it("maybeAlertOrgRepriceFailed resolves rather than throwing when the send throws", async () => {
     repriceAlertSpy.mockRejectedValue(new Error("resend is down"));
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
     await expect(
       maybeAlertOrgRepriceFailed({
         subscriptionId: "grp",
@@ -2485,7 +2495,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // `deleted`. Re-pricing an item on a dead subscription fails, and alerting
     // about a group that is leaving anyway is noise, not signal.
     const { walletId, stripeSubId } = await makeBilledGroupOrg("pro_plus");
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
     const sub = subFor(stripeSubId, [planItem, riderItem(riderId, proEntry.lookupKey, 2)]);
     (sub as { status?: string }).status = "canceled";
 

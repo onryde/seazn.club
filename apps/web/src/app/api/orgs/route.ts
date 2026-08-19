@@ -2,6 +2,7 @@ import { createOrgForUser, getUserOrgs, requireUser, setActiveOrgId } from "@/li
 import { handler } from "@/lib/http";
 import { consumeReferralCookie } from "@/lib/referral";
 import { createOrgSchema } from "@/lib/types";
+import { log } from "@/server/logger";
 
 /** List the organizations the current user belongs to (with their role). */
 export async function GET() {
@@ -37,7 +38,7 @@ export async function POST(req: Request) {
       // The org already exists on its own bill — the new default. Surface why
       // it did not join rather than failing the whole creation.
       const reason = err instanceof Error ? err.message : "Could not add it to that bill.";
-      console.error(`[billing] create-org attach to ${attachToGroupId} failed for org ${org.id}`, err);
+      log.error({ err, attachToGroupId, orgId: org.id }, "billing: create-org attach failed");
       return { ...org, attach: { ok: false, reason } };
     }
   });

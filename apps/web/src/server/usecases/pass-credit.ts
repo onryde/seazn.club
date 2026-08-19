@@ -2,6 +2,7 @@ import "server-only";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { HttpError } from "@/lib/errors";
 import { sendPassCreditReversalIncompleteAlertEmail } from "@/lib/email";
 import type { PassKey } from "@/lib/currency";
@@ -440,6 +441,10 @@ export async function creditPassTowardSubscription(orgId: string): Promise<PassC
     return none("redemption_unrecorded", intent);
   }
 
+  log.info(
+    { orgId, paymentIntent: intent, amountMinor: paid.amountMinor, currency: paid.currency },
+    "billing: pass credit granted toward subscription",
+  );
   return {
     outcome: "credited",
     amountMinor: paid.amountMinor,
@@ -554,9 +559,9 @@ export async function reversePassCreditOnRefund(
     // group that already had a customer id at credit time — but never assume.
     // This file's rule is "unproven state yields no credit outcome"; the
     // mirror of that here is "unproven state performs no reversal".
-    console.error(
-      `[billing] pass credit reversal for intent ${intent}: subscription ` +
-        `${redemption.subscription_id} has no stripe_customer_id`,
+    log.error(
+      { intent, subscriptionId: redemption.subscription_id },
+      "billing: pass credit reversal — subscription has no stripe_customer_id",
     );
     return;
   }
@@ -578,13 +583,13 @@ export async function reversePassCreditOnRefund(
     try {
       customer = await getStripe().customers.retrieve(sub.stripe_customer_id);
     } catch (err) {
-      console.error(`[billing] pass credit reversal failed for intent ${intent}: ${err}`);
+      log.error({ err, intent }, "billing: pass credit reversal failed");
       return;
     }
     if (customer.deleted) {
-      console.error(
-        `[billing] pass credit reversal for intent ${intent}: customer ` +
-          `${sub.stripe_customer_id} is deleted`,
+      log.error(
+        { intent, customerId: sub.stripe_customer_id },
+        "billing: pass credit reversal — customer is deleted",
       );
       return;
     }
@@ -635,7 +640,7 @@ export async function reversePassCreditOnRefund(
       } catch (err) {
         // No `reversed_at` write below: a redelivered webhook must get a
         // genuine retry, not a false "already handled".
-        console.error(`[billing] pass credit reversal failed for intent ${intent}: ${err}`);
+        log.error({ err, intent }, "billing: pass credit reversal failed");
         return;
       }
     }
@@ -675,6 +680,10 @@ export async function reversePassCreditOnRefund(
         where payment_intent = ${intent} and reversed_at is null
         returning payment_intent`;
   if (!won) return;
+  log.info(
+    { intent, orgId: redemption.org_id, reverseAmount, unsafe },
+    "billing: pass credit reversed",
+  );
 
   if (unsafe || reverseAmount < redemption.amount_minor) {
     // Two distinct reasons to alert, both money the business is not (or

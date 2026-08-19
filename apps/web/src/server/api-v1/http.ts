@@ -10,6 +10,8 @@ import * as Sentry from "@sentry/nextjs";
 import { EngineError, type EngineErrorCode } from "@seazn/engine/core";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
+import { log } from "@/server/logger";
+import { runRequestContext } from "@/server/request-context";
 import { rateLimitHeaders, runV1Context } from "./context";
 
 // EngineError.code → HTTP status (doc 08 §1, spec 03 §7). Central map — the
@@ -122,8 +124,10 @@ function errorResponse(
 export async function v1<T>(fn: () => Promise<T | Reply<T>>): Promise<NextResponse> {
   const requestId = randomUUID();
   // ALS context so deep layers (API-key auth) can surface X-RateLimit-*
-  // counters onto whatever response this request ends up with (v3/08 §2).
-  return runV1Context(() => v1Inner(requestId, fn));
+  // counters onto whatever response this request ends up with (v3/08 §2),
+  // and so every log line for this request carries the same requestId
+  // (server/request-context.ts, read by server/logger.ts's mixin).
+  return runRequestContext(requestId, () => runV1Context(() => v1Inner(requestId, fn)));
 }
 
 async function v1Inner<T>(
@@ -152,7 +156,10 @@ async function v1Inner<T>(
     }
     if (EngineError.is(err)) {
       const status = ENGINE_HTTP[err.code] ?? 422;
-      if (status >= 500) Sentry.captureException(err);
+      if (status >= 500) {
+        Sentry.captureException(err);
+        log.error({ err, code: err.code, status }, "v1: unmapped EngineError reached 500");
+      }
       // 409 contract (doc 08 §4): the client resyncs from current_seq.
       let extra: Record<string, unknown> | undefined;
       if (
@@ -222,7 +229,10 @@ async function v1Inner<T>(
       return errorResponse(requestId, 401, "UNAUTHENTICATED", err.message);
     }
     if (err instanceof HttpError) {
-      if (err.status >= 500) Sentry.captureException(err);
+      if (err.status >= 500) {
+        Sentry.captureException(err);
+        log.error({ err, status: err.status, code: err.code }, "v1: HttpError reached 500");
+      }
       return errorResponse(
         requestId,
         err.status,
@@ -233,6 +243,7 @@ async function v1Inner<T>(
     }
     Sentry.captureException(err);
     const message = err instanceof Error ? err.message : "Server error";
+    log.error({ err }, "v1: unhandled error");
     return errorResponse(requestId, 500, "INTERNAL", message);
   }
 }

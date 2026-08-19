@@ -22,6 +22,7 @@ vi.mock("@/server/usecases/pass-credit", () => ({
 }));
 
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { processStripeEvent } from "../billing-events";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -153,7 +154,7 @@ describe.skipIf(!HAS_DB)("handleSubscriptionChanged → pass-to-Pro credit wirin
       stripeSubId: "sub_pc_current_" + uniq(),
       stripeCustomerId: customer,
     });
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
     try {
       await processStripeEvent(
         subEvent("customer.subscription.updated", {

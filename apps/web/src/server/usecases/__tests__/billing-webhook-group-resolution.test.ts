@@ -17,6 +17,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { processStripeEvent } from "../billing-events";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -175,7 +176,7 @@ describe.skipIf(!HAS_DB)("webhook → billing group resolution", () => {
 
   it("(d) falls back to metadata.org_id for a legacy row, and says so", async () => {
     const group = await seedGroup({ stripeSubId: null, stripeCustomerId: null });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {
       await processStripeEvent(
         subEvent("customer.subscription.updated", {
@@ -270,7 +271,7 @@ describe.skipIf(!HAS_DB)("webhook → refuses a demonstrably wrong row", () => {
       stripeSubId: "sub_current_" + uniq(),
       stripeCustomerId: customer,
     });
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = vi.spyOn(log, "error").mockImplementation(() => {});
     try {
       await processStripeEvent(
         subEvent("customer.subscription.updated", {

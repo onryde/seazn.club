@@ -2,6 +2,7 @@ import { headers } from "next/headers";
 import { handler } from "@/lib/http";
 import { HttpError } from "@/lib/errors";
 import { checkEarnGrantVolumeAlert, grantMonthlyForAllWallets } from "@/lib/credits";
+import { log } from "@/server/logger";
 
 /** POST /api/cron/billing-grant — daily: grant every billing wallet its
  *  `ai.credits.monthly(plan) * quantity_paid` allowance for this period
@@ -42,7 +43,7 @@ export async function POST() {
     try {
       await checkEarnGrantVolumeAlert();
     } catch (err) {
-      console.error("[cron/billing-grant] earn_grant volume check failed", err);
+      log.error({ err }, "cron/billing-grant: earn_grant volume check failed");
     }
     return result;
   });

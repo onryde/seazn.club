@@ -65,6 +65,7 @@ vi.mock("@/lib/credits", async (importOriginal) => {
 });
 
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { HANDLED_EVENT_TYPES, processStripeEvent } from "../billing-events";
@@ -555,7 +556,7 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     await sql`update organizations set referred_by_org_id = ${referrerOrgId} where id = ${orgId}`;
     const owner = asOwner(orgId, ownerId);
     creditsMock.failWalletFor.add(referrerOrgId);
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const spy = vi.spyOn(log, "error").mockImplementation(() => {});
 
     const { competition, division } = await rig(owner);
     const settings = await putRegistrationSettings(owner, division.id, {

@@ -13,6 +13,7 @@ import { deferred } from "@/lib/deferred";
 import { EngineError } from "@seazn/engine/core";
 import { appendEvent, resolveModule } from "@/server/engine-db";
 import { recomputeStandings } from "@/server/engine-db";
+import { log } from "@/server/logger";
 import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
 import {
   fireDivisionRevalidate,
@@ -310,7 +311,7 @@ async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<void> {
       await draftPostsForDecidedFixture(tx, fixtureId, newsAuto);
     });
   } catch (err) {
-    console.error("news auto-draft failed (score write unaffected)", err);
+    log.error({ err }, "scoring: news auto-draft failed (score write unaffected)");
   }
 }
 

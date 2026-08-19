@@ -15,6 +15,7 @@ import { withLegacyDetail } from "@/server/api-v1/conflict-detail-legacy";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { log } from "@/server/logger";
 import { recomputePlayerStats } from "./player-stats";
 import {
   courtNamesById,
@@ -284,6 +285,11 @@ export async function mergePersons(
     return { merge_id: merge!.id, survivor: updated! };
   });
 
+  log.info(
+    { orgId: auth.orgId, mergeId: merged.merge_id, survivorId, absorbedId },
+    "persons: merge executed",
+  );
+
   // 8. Re-verify, AFTER the write has committed. Two people on two courts at
   //    once was a legal board a moment ago; one person on two courts is not, and
   //    the organiser is the only one who can move a card. `.catch` mirrors the
@@ -294,7 +300,7 @@ export async function mergePersons(
   //    presents as "a merge never reveals anything", which is indistinguishable
   //    from a clean board and would go unnoticed indefinitely.
   const revealed = await reverifyBoards(auth, survivorId).catch((err: unknown) => {
-    console.error(`[persons] post-merge re-verify failed for survivor ${survivorId}`, err);
+    log.error({ err, survivorId }, "persons: post-merge re-verify failed");
     return [];
   });
   return { ...merged, revealed };

@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { EngineError, EngineErrorCode } from "@seazn/engine/core";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
+import { getRequestContext } from "@/server/request-context";
+import { log } from "@/server/logger";
 import {
   ENGINE_HTTP,
   v1,
@@ -31,6 +33,20 @@ describe("v1 envelope", () => {
     expect(json.ok).toBe(true);
     expect(json.data).toEqual({ hello: "world" });
     expect(typeof json.requestId).toBe("string");
+  });
+
+  // server/request-context.ts: the requestId every log line for this
+  // request carries (via server/logger.ts's mixin) must be the SAME id the
+  // client sees in the response envelope, not an independently-generated one.
+  it("runs the handler inside the request-context ALS with the response's requestId", async () => {
+    let seenDuringHandler: string | undefined;
+    const res = await v1(async () => {
+      seenDuringHandler = getRequestContext().requestId;
+      return { ok: true };
+    });
+    const json = await body(res);
+    expect(seenDuringHandler).toBeDefined();
+    expect(seenDuringHandler).toBe(json.requestId);
   });
 
   it("honours reply() status and headers", async () => {
@@ -99,6 +115,36 @@ describe("v1 envelope", () => {
     });
     expect(dup.status).toBe(500);
     expect(sentry.captureException).toHaveBeenCalledTimes(1);
+  });
+
+  // A 500 must be BOTH paged (Sentry) and queryable (pino) — one tool alerts
+  // a human, the other is what they search once alerted. A 4xx the caller can
+  // fix (retype a period, retry a rate limit) pages/logs neither.
+  it("log.error fires alongside Sentry.captureException on every 500 path, and only 500s", async () => {
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+    try {
+      await v1(async () => {
+        throw new EngineError("UNKNOWN_PHASE", "not our bug — 422");
+      });
+      expect(logged).not.toHaveBeenCalled();
+
+      await v1(async () => {
+        throw new EngineError("MODULE_DUPLICATE", "two modules claim icehockey@1.0.0");
+      });
+      expect(logged).toHaveBeenCalledTimes(1);
+
+      await v1(async () => {
+        throw new HttpError(500, "db is down");
+      });
+      expect(logged).toHaveBeenCalledTimes(2);
+
+      await v1(async () => {
+        throw new Error("unhandled");
+      });
+      expect(logged).toHaveBeenCalledTimes(3);
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it("SEQ_CONFLICT carries current_seq (doc 08 §4)", async () => {

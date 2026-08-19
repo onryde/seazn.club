@@ -33,6 +33,7 @@ import { toLocale } from "@/lib/i18n-constants";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { log } from "@/server/logger";
 import type { PutRegistrationSettings, RegistrationFormField } from "@/server/api-v1/schemas";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { resolveLogoUrl } from "@/server/public-site/data";
@@ -1685,6 +1686,10 @@ async function confirmPaidRegistration(
     return;
   }
   if (outcome.kind === "confirmed") {
+    log.info(
+      { registrationId: regId, orgId: outcome.orgId, divisionId: outcome.divisionId },
+      "registration: checkout confirmed",
+    );
     fireDivisionRevalidate(outcome.divisionId, outcome.competitionId);
     // Growth loop (SPEC-5 §2 C): the organiser's FIRST competition to take a paid
     // registration earns free AI credits. Fires only on a genuine first-time paid
@@ -1711,7 +1716,7 @@ async function confirmPaidRegistration(
         await recordEarnGrant(referrerWallet, referrerOrgId, "referral", outcome.orgId, REFERRAL_EARN);
       }
     } catch (err) {
-      console.error(`[credits] referral grant failed for referrer of org ${outcome.orgId}`, err);
+      log.error({ err, orgId: outcome.orgId }, "credits: referral grant failed for referrer");
     }
     return;
   }
@@ -2427,6 +2432,10 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
     | { locked: RegistrationWithGroupRow; promoted: RegistrationWithGroupRow | null }
     | null;
   if (!outcome) return;
+  log.info(
+    { registrationId: reg.id, orgId: ctx.org_id, by: actorId ? "organiser" : "registrant" },
+    "registration: withdrawn",
+  );
 
   fireDivisionRevalidate(reg.division_id, ctx.competition_id);
   if (outcome.promoted) {

@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { suppress } from "@/lib/email";
+import { log } from "@/server/logger";
 
 // Resend signs webhooks with Svix — verify if RESEND_WEBHOOK_SECRET is set.
 // Without it we accept but log a warning (safe for dev; lock down in prod).
 async function verifySignature(req: NextRequest, body: string): Promise<boolean> {
   const secret = process.env.RESEND_WEBHOOK_SECRET;
   if (!secret) {
-    console.warn("[resend-webhook] RESEND_WEBHOOK_SECRET not set — skipping signature verify");
+    log.warn("resend-webhook: RESEND_WEBHOOK_SECRET not set — skipping signature verify");
     return true;
   }
 
@@ -53,18 +54,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const id = data.email_id as string | undefined;
     if (email) {
       await suppress(email, "bounce", id).catch((e) =>
-        console.error("[resend-webhook] suppress bounce failed:", e),
+        log.error({ err: e }, "resend-webhook: suppress bounce failed"),
       );
-      console.info(`[resend-webhook] bounce suppressed: ${email}`);
+      log.info({ email }, "resend-webhook: bounce suppressed");
     }
   } else if (type === "email.complained") {
     const email = (data.to as string[] | undefined)?.[0] ?? (data.email as string | undefined);
     const id = data.email_id as string | undefined;
     if (email) {
       await suppress(email, "complaint", id).catch((e) =>
-        console.error("[resend-webhook] suppress complaint failed:", e),
+        log.error({ err: e }, "resend-webhook: suppress complaint failed"),
       );
-      console.info(`[resend-webhook] complaint suppressed: ${email}`);
+      log.info({ email }, "resend-webhook: complaint suppressed");
     }
   }
   // Ignore other event types (email.sent, email.opened, etc.)
