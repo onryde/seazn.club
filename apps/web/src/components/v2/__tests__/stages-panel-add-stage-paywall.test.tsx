@@ -80,7 +80,7 @@ describe("AddStageForm — PAYMENT_REQUIRED wiring (F5 task 5a)", () => {
     expect(onDone).not.toHaveBeenCalled();
   });
 
-  it("regression: a non-PAYMENT_REQUIRED failure still calls onError, never onPaywall", async () => {
+  it("regression: a non-PAYMENT_REQUIRED failure still calls onError, never with a real paywall feature key", async () => {
     net.impl = () => Promise.reject(new Error("network down"));
     const onDone = vi.fn();
     const onError = vi.fn();
@@ -92,6 +92,60 @@ describe("AddStageForm — PAYMENT_REQUIRED wiring (F5 task 5a)", () => {
     await flush();
 
     expect(onError.mock.calls).toEqual([[""], ["network down"]]);
-    expect(onPaywall).not.toHaveBeenCalled();
+    // onPaywall("") IS called — the pre-submit clear (see the sequential
+    // test below for why this matters) — but never with a real key.
+    expect(onPaywall.mock.calls).toEqual([[""]]);
+  });
+
+  // Review finding: add()'s pre-submit reset cleared `error` on every
+  // attempt but never cleared the parent's `paywallFeature` the same way,
+  // unlike act()/rebuildStage() elsewhere in this file which both call
+  // setPaywallFeature(null) at their own entry. So: submit → PAYMENT_
+  // REQUIRED → paywall card shows; resubmit → a DIFFERENT failure → the
+  // stale paywall card stayed on screen alongside the new red banner,
+  // since nothing cleared it. Fixed by adding onPaywall("") alongside the
+  // existing onError("") in add()'s pre-submit reset — the parent's own
+  // `{paywallFeature && <UpgradeGate .../>}` render condition (stages-panel
+  // .tsx:662) already treats "" as falsy, so no parent-side change is
+  // needed.
+  //
+  // AddStageForm never renders <UpgradeGate> itself (the PARENT does, from
+  // the state these callbacks feed) — so this drives the callbacks across
+  // TWO sequential submissions and mirrors the parent's own falsy-gated
+  // state exactly, rather than re-implementing StagesPanel's render tree
+  // here. `paywallFeature`/`error` below are that mirror: truthy iff the
+  // parent's <UpgradeGate>/red-banner would be showing.
+  it("regression: a PAYMENT_REQUIRED submit followed by a DIFFERENT failure clears the stale paywall card", async () => {
+    let paywallFeature: string | null = null;
+    let error: string | null = null;
+    const onDone = vi.fn();
+    const onError = vi.fn((msg: string) => {
+      error = msg || null;
+    });
+    const onPaywall = vi.fn((key: string) => {
+      paywallFeature = key || null;
+    });
+    const island = renderIsland(AddStageForm, { ...baseProps, onDone, onError, onPaywall });
+    clickButton(island.tree(), "+ Add stage");
+
+    // First submit: PAYMENT_REQUIRED — the paywall card would be showing.
+    net.impl = () =>
+      Promise.reject(
+        new ApiV1Error("upgrade required", 402, "PAYMENT_REQUIRED", { feature_key: "formats.finals" }),
+      );
+    clickButton(island.tree(), "Add stage");
+    await flush();
+    expect(paywallFeature).toBe("formats.finals");
+    expect(error).toBeNull();
+
+    // Resubmit: a DIFFERENT, non-PAYMENT_REQUIRED failure.
+    net.impl = () => Promise.reject(new Error("network down"));
+    clickButton(island.tree(), "Add stage");
+    await flush();
+
+    // The stale card must be gone AND the fresh red banner must show — not
+    // both stacked, which was the bug.
+    expect(paywallFeature).toBeNull();
+    expect(error).toBe("network down");
   });
 });

@@ -1148,6 +1148,7 @@ export function AddStageForm({
   async function add() {
     setBusy(true);
     onError("");
+    onPaywall("");
     try {
       const stage = await apiV1<{ id: string }>(`/api/v1/divisions/${divisionId}/stages`, {
         method: "POST",
