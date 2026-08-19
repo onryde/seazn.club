@@ -599,6 +599,15 @@ export async function applyCompetitionSchedule(
         .map((f) => toAssignment(f, d.settings.config.matchMinutes, people, roundRobinByDivision.get(d.id))),
     );
 
+    // The venue-qualified court NAMES this run's conflicts resolve through, so
+    // a 409 never quotes a bare uuid at the organiser. Defined BEFORE the
+    // refusal path below, not beside the write further down — it is used by
+    // both, and a const declared after its first use is a dead-zone throw at
+    // runtime that no type check catches.
+    const jointCourtNames = await courtNamesById(tx);
+    const withJointCourtNames = <C extends { details?: ConflictDetail }>(c: C): C =>
+      c.details !== undefined ? { ...c, details: withCourtNames(c.details, jointCourtNames) } : c;
+
     // ---- one pass per division, over the merged board ---------------------
     const seenConflict = new Set<string>();
     const blockingKeys = new Set<string>();
@@ -752,11 +761,6 @@ export async function applyCompetitionSchedule(
     // Resolved ONCE for the whole joint apply: the venue is derived from the
     // court, never accepted from the client (see `courtVenueIds`' own note).
     const courtVenues = await courtVenueIds(tx);
-    // …and the venue-qualified court NAMES this run's conflicts resolve
-    // through, so a 409 never quotes a bare uuid at the organiser.
-    const jointCourtNames = await courtNamesById(tx);
-    const withJointCourtNames = <C extends { details?: ConflictDetail }>(c: C): C =>
-      c.details !== undefined ? { ...c, details: withCourtNames(c.details, jointCourtNames) } : c;
     let applied = 0;
     for (const d of order) {
       // Interleaved with the writes on purpose — see the module header. A

@@ -105,6 +105,30 @@ type DemoPack = {
  * and Women's land at 55 and 55.5 against an `s1` of 60 — so a board-derived
  * quote is one recapture away from printing a rung the run never paid.
  */
+
+/**
+ * Court NAMES for the divergent-courts note, or an empty list.
+ *
+ * P9: every court value in a recorded fixture is a UUID since the cutover, and
+ * this component renders on the PUBLIC marketing site — so an id that cannot be
+ * resolved is DROPPED rather than shown. A shorter list is a fine outcome;
+ * three raw uuids in a caution box is not. Fixtures recorded before the capture
+ * started writing `courtNames` resolve nothing, and the caller hides the note.
+ *
+ * Exported so both branches are testable: the component loads its fixtures
+ * through a dynamic `import()` of the JSON, which a test cannot substitute
+ * without mocking the module for the whole file.
+ */
+export function resolveDivergentCourtNames(
+  fixture: AiDemoFixture | null,
+  divergent: readonly string[] | undefined,
+): string[] {
+  const names = fixture?.courtNames ?? {};
+  return (divergent ?? [])
+    .map((id) => names[id])
+    .filter((n): n is string => typeof n === "string" && n.length > 0);
+}
+
 export function demoQuoteLines(fixture: AiDemoFixture): QuoteLineInput[] {
   const pack = fixture.pack as DemoPack;
   const fallbackCourts = fixture.board.courts.length;
@@ -238,12 +262,10 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
   // is dropped rather than shown — a shorter list is a fine outcome, three
   // raw uuids in a caution box is not. Fixtures recorded before `courtNames`
   // existed simply resolve nothing and the block hides itself.
-  const divergentCourtNames = useMemo(() => {
-    const names = fixture?.courtNames ?? {};
-    return (plan?.divergent_courts ?? [])
-      .map((id) => names[id])
-      .filter((n): n is string => typeof n === "string" && n.length > 0);
-  }, [fixture, plan]);
+  const divergentCourtNames = useMemo(
+    () => resolveDivergentCourtNames(fixture ?? null, plan?.divergent_courts),
+    [fixture, plan],
+  );
 
   // The referee trace, composed by the console's own composer over the recorded
   // response — never a script written for the demo.
