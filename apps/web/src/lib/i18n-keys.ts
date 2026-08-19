@@ -3576,6 +3576,7 @@ export type DictionaryKey =
   | "sched.board.status.placed"
   | "sched.board.trayAria"
   | "schedule.SCHEDULE_COURT_STILL_IN_USE.fixed"
+  | "schedule.SCHEDULE_COURT_STILL_IN_USE.inPlay"
   | "schedule.SCHEDULE_COURT_STILL_IN_USE.mixed"
   | "schedule.SCHEDULE_COURT_STILL_IN_USE.pinned"
   | "schedule.SCHEDULE_OUTSIDE_COMPETITION.after"

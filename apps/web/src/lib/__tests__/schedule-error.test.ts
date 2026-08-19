@@ -167,11 +167,16 @@ describe("settingsErrorText", () => {
 
 // SCHEDULE_COURT_STILL_IN_USE -> localized organiser copy (Fix 3).
 //
-// Mirrors the `scheduleWindowErrorMessage` contract above, but with THREE
-// variants selected by two independent booleans rather than one: a court can
-// be blocked by a pin (`anyPinned`), a fixed/completed fixture (`anyFixed`),
-// or both in the same refusal (`mixed`). Precedence when both are true is
-// "mixed", never one half silently winning.
+// Mirrors the `scheduleWindowErrorMessage` contract above, but with FOUR
+// variants selected by three independent booleans rather than one: a court
+// can be blocked by a pin (`anyPinned`), a live match (`anyInPlay`), a
+// genuinely archivable completed fixture (`anyFixed`), or more than one
+// reason at once (`mixed`). `anyInPlay` is its own boolean, not folded into
+// `anyFixed`, because the remedy differs: `archiveCourt` blocks on the same
+// still-unplayed statuses, which include `in_play` — the "archive it
+// instead" copy is only safe to show when `anyFixed` is true WITHOUT
+// `anyInPlay` also being true. Precedence when more than one boolean is true
+// is "mixed", never one reason silently winning.
 describe("courtStillInUseErrorMessage", () => {
   it("picks the PINNED variant and interpolates courtsDetail", () => {
     const out = courtStillInUseErrorMessage(
@@ -205,11 +210,61 @@ describe("courtStillInUseErrorMessage", () => {
     );
   });
 
+  it("picks the IN_PLAY variant — distinct from FIXED, since archiving is not a valid remedy for a live match", () => {
+    const out = courtStillInUseErrorMessage(
+      "en",
+      SCHEDULE_COURT_STILL_IN_USE,
+      { anyPinned: false, anyInPlay: true, anyFixed: false, courtsDetail: COURTS_DETAIL },
+      "fb",
+    );
+    expect(out).toBe(
+      (en as Record<string, string>)[`schedule.${SCHEDULE_COURT_STILL_IN_USE}.inPlay`].replace(
+        "{courtsDetail}",
+        COURTS_DETAIL,
+      ),
+    );
+    // The FIXED copy's "archive it instead" advice must not leak into the
+    // IN_PLAY copy — that advice does not work for a live match. (The IN_PLAY
+    // copy DOES say the word "archived", but only to say it won't work — the
+    // substring to rule out is the RECOMMENDATION, not the word itself.)
+    expect(out).not.toContain("archive it");
+  });
+
   it("picks the MIXED variant when both a pin and a fixed fixture are reported", () => {
     const out = courtStillInUseErrorMessage(
       "en",
       SCHEDULE_COURT_STILL_IN_USE,
       { anyPinned: true, anyFixed: true, courtsDetail: COURTS_DETAIL },
+      "fb",
+    );
+    expect(out).toBe(
+      (en as Record<string, string>)[`schedule.${SCHEDULE_COURT_STILL_IN_USE}.mixed`].replace(
+        "{courtsDetail}",
+        COURTS_DETAIL,
+      ),
+    );
+  });
+
+  it("picks the MIXED variant when a pin and a live match are reported (not IN_PLAY or PINNED alone)", () => {
+    const out = courtStillInUseErrorMessage(
+      "en",
+      SCHEDULE_COURT_STILL_IN_USE,
+      { anyPinned: true, anyInPlay: true, anyFixed: false, courtsDetail: COURTS_DETAIL },
+      "fb",
+    );
+    expect(out).toBe(
+      (en as Record<string, string>)[`schedule.${SCHEDULE_COURT_STILL_IN_USE}.mixed`].replace(
+        "{courtsDetail}",
+        COURTS_DETAIL,
+      ),
+    );
+  });
+
+  it("picks the MIXED variant when a live match and a fixed fixture are reported — never promises archiving unconditionally", () => {
+    const out = courtStillInUseErrorMessage(
+      "en",
+      SCHEDULE_COURT_STILL_IN_USE,
+      { anyPinned: false, anyInPlay: true, anyFixed: true, courtsDetail: COURTS_DETAIL },
       "fb",
     );
     expect(out).toBe(
@@ -300,12 +355,12 @@ describe("courtStillInUseErrorMessage", () => {
     ).toBe(SERVER_COURT_MESSAGE);
   });
 
-  it("treats a non-boolean anyPinned/anyFixed as absent — the wire is not trusted", () => {
+  it("treats a non-boolean anyPinned/anyInPlay/anyFixed as absent — the wire is not trusted", () => {
     expect(
       courtStillInUseErrorMessage(
         "en",
         SCHEDULE_COURT_STILL_IN_USE,
-        { anyPinned: "true", anyFixed: 1, courtsDetail: COURTS_DETAIL },
+        { anyPinned: "true", anyInPlay: "1", anyFixed: 1, courtsDetail: COURTS_DETAIL },
         SERVER_COURT_MESSAGE,
       ),
     ).toBe(SERVER_COURT_MESSAGE);

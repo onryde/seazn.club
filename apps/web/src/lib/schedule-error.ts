@@ -101,6 +101,7 @@ export const SCHEDULE_COURT_STILL_IN_USE = "SCHEDULE_COURT_STILL_IN_USE";
  *  to name. */
 export interface ScheduleCourtInUseExtra {
   anyPinned?: unknown;
+  anyInPlay?: unknown;
   anyFixed?: unknown;
   courtsDetail?: unknown;
 }
@@ -109,12 +110,18 @@ export interface ScheduleCourtInUseExtra {
  * `ApiV1Error` (code, extra) -> localized copy for the court-removal guard,
  * or `fallback` verbatim.
  *
- * THREE variants, picked by two independent booleans rather than one
+ * FOUR variants, picked by three independent booleans rather than one
  * template with optional clauses — same reasoning as
- * `scheduleWindowErrorMessage` above. Which remedy applies is a different
- * sentence depending on whether the block is a pin (unpin or reschedule), a
- * fixed/completed fixture (nothing to unpin — archive the court instead),
- * or both in the same refusal.
+ * `scheduleWindowErrorMessage` above. `anyFixed` here means "genuinely
+ * archivable" (completed/decided/finalized/forfeited) — `anyInPlay` is
+ * deliberately its own boolean, not folded into `anyFixed`: archiving a
+ * court blocks on the exact same still-unplayed statuses `venues.ts`'s
+ * `archiveCourt` guards on, which INCLUDES `in_play`. Telling an organiser
+ * to "archive it instead" for a live match would send them straight into a
+ * second 409 with no remedy at all — the bug this split closes. Two or more
+ * booleans true falls through to `mixed`, which names every reason without
+ * promising a specific single-step remedy (a per-court breakdown, not a
+ * per-reason one, is what `courtsDetail` already carries).
  */
 export function courtStillInUseErrorMessage(
   locale: Locale,
@@ -124,15 +131,18 @@ export function courtStillInUseErrorMessage(
 ): string {
   if (code !== SCHEDULE_COURT_STILL_IN_USE) return fallback;
   const anyPinned = extra?.anyPinned === true;
+  const anyInPlay = extra?.anyInPlay === true;
   const anyFixed = extra?.anyFixed === true;
   const courtsDetail =
     typeof extra?.courtsDetail === "string" && extra.courtsDetail !== "" ? extra.courtsDetail : null;
 
   // Which variant the payload can actually SUPPORT: no usable `courtsDetail`
-  // means every variant is a sentence with a hole in it, and neither boolean
-  // true means there is no remedy to name at all.
+  // means every variant is a sentence with a hole in it, and no boolean true
+  // means there is no remedy to name at all.
   if (courtsDetail === null) return fallback;
-  const variant = anyPinned && anyFixed ? "mixed" : anyFixed ? "fixed" : anyPinned ? "pinned" : null;
+  const reasonCount = [anyPinned, anyInPlay, anyFixed].filter(Boolean).length;
+  const variant =
+    reasonCount > 1 ? "mixed" : anyPinned ? "pinned" : anyInPlay ? "inPlay" : anyFixed ? "fixed" : null;
   if (variant === null) return fallback;
 
   const dict = BY_LOCALE[locale] ?? BY_LOCALE[DEFAULT_LOCALE];
