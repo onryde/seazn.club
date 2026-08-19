@@ -328,15 +328,13 @@ jobs:
       # Playwright version. The cache RESTORE stays in the foreground (it is
       # ~3s, and a backgrounded actions/cache loses its outputs — see the note
       # on the image build above); only the download is backgrounded.
-      # RESTORE ONLY. All seven jobs used to race one key on save and six of
-      # them lost it every run — "Failed to save: Unable to reserve cache with
-      # key playwright-…, another job may be creating this cache". Worse, this
-      # workflow is pull_request-only, so whichever job did win wrote into that
-      # PR's cache scope, which no other branch can read: runs 32259950122,
-      # 32269332414 and 32272599493 all logged "Cache not found" on the same
-      # lockfile hash from three different branches, and re-downloaded ~274 MB
-      # of Chromium seven times each. The single writer now lives on main, in
-      # e2e-cache-warm.yml, whose caches every PR can read.
+      # RESTORE ONLY. All seven jobs used to race one key on save and six lost
+      # it every run — "Failed to save: Unable to reserve cache with key
+      # playwright-…, another job may be creating this cache" (run
+      # 32272599493). No writer here at all means no race, and it means the
+      # key must be written somewhere a PR can read it: on main, by
+      # e2e-cache-warm.yml, whose comment carries the full diagnosis of why
+      # these jobs were missing a cache that already existed.
       - name: Restore Playwright browsers
         uses: actions/cache/restore@v4
         with:
@@ -577,15 +575,13 @@ jobs:
       # Playwright version. The cache RESTORE stays in the foreground (it is
       # ~3s, and a backgrounded actions/cache loses its outputs — see the note
       # on the image build above); only the download is backgrounded.
-      # RESTORE ONLY. All seven jobs used to race one key on save and six of
-      # them lost it every run — "Failed to save: Unable to reserve cache with
-      # key playwright-…, another job may be creating this cache". Worse, this
-      # workflow is pull_request-only, so whichever job did win wrote into that
-      # PR's cache scope, which no other branch can read: runs 32259950122,
-      # 32269332414 and 32272599493 all logged "Cache not found" on the same
-      # lockfile hash from three different branches, and re-downloaded ~274 MB
-      # of Chromium seven times each. The single writer now lives on main, in
-      # e2e-cache-warm.yml, whose caches every PR can read.
+      # RESTORE ONLY. All seven jobs used to race one key on save and six lost
+      # it every run — "Failed to save: Unable to reserve cache with key
+      # playwright-…, another job may be creating this cache" (run
+      # 32272599493). No writer here at all means no race, and it means the
+      # key must be written somewhere a PR can read it: on main, by
+      # e2e-cache-warm.yml, whose comment carries the full diagnosis of why
+      # these jobs were missing a cache that already existed.
       - name: Restore Playwright browsers
         uses: actions/cache/restore@v4
         with:
@@ -837,15 +833,13 @@ jobs:
       # Playwright version. The cache RESTORE stays in the foreground (it is
       # ~3s, and a backgrounded actions/cache loses its outputs — see the note
       # on the image build above); only the download is backgrounded.
-      # RESTORE ONLY. All seven jobs used to race one key on save and six of
-      # them lost it every run — "Failed to save: Unable to reserve cache with
-      # key playwright-…, another job may be creating this cache". Worse, this
-      # workflow is pull_request-only, so whichever job did win wrote into that
-      # PR's cache scope, which no other branch can read: runs 32259950122,
-      # 32269332414 and 32272599493 all logged "Cache not found" on the same
-      # lockfile hash from three different branches, and re-downloaded ~274 MB
-      # of Chromium seven times each. The single writer now lives on main, in
-      # e2e-cache-warm.yml, whose caches every PR can read.
+      # RESTORE ONLY. All seven jobs used to race one key on save and six lost
+      # it every run — "Failed to save: Unable to reserve cache with key
+      # playwright-…, another job may be creating this cache" (run
+      # 32272599493). No writer here at all means no race, and it means the
+      # key must be written somewhere a PR can read it: on main, by
+      # e2e-cache-warm.yml, whose comment carries the full diagnosis of why
+      # these jobs were missing a cache that already existed.
       - name: Restore Playwright browsers
         uses: actions/cache/restore@v4
         with:

@@ -1,34 +1,43 @@
 name: E2E cache warm
 
-# Writes the Playwright browser cache ON MAIN so every PR can read it.
+# Writes the Playwright browser cache ON MAIN, so the seven e2e jobs can read
+# one 261 MB entry instead of each downloading Chromium for itself.
 #
-# e2e.yml is `on: pull_request` only, and GitHub Actions caches are scoped by
-# ref: a cache written during a PR run lands in that PR's own scope and is
-# invisible to every other branch. Only caches on the DEFAULT branch are
-# readable by all of them. So the seven e2e jobs were in an unwinnable
-# position — they were the only writers, and nothing they wrote could ever be
-# read by the next PR.
+# What was actually wrong here is worth recording, because the first version of
+# this comment got it wrong and the wrong version was plausible. The claim was
+# that nothing wrote this key on the default branch and PR-scoped caches are
+# invisible across branches. The second half is true; the first half is not.
+# A 261 MB `playwright-Linux-<pnpm-lock hash>` entry has sat on refs/heads/main
+# since 2026-08-17, written by help-shots.yml's weekly cron, which happens to
+# use a byte-identical key.
 #
-# It showed up twice in the logs, and both halves are fixed here rather than
-# in e2e.yml:
+# The e2e jobs missed it anyway — runs 32259950122 and 32272599493 both logged
+# "Cache not found for input keys: playwright-Linux-1a8dcaff…" against exactly
+# that key — because they were the first runs after this repo moved to
+# Blacksmith runners, whose colocated Actions cache is a SEPARATE store from
+# GitHub's. The 261 MB entry was in the old one. Its last_accessed_at,
+# 2026-08-19T11:15Z, minutes before the migration and never since, says so.
+# The run at 04:04 that morning hit the cache and carried the label
+# `ubuntu-latest`; the ones at 13:45 and 15:52 missed and carried
+# `blacksmith-4vcpu-ubuntu-2404`.
 #
-#   * All seven jobs raced the one key on save and six lost it every run:
-#     "Failed to save: Unable to reserve cache with key playwright-…, another
-#     job may be creating this cache" (run 32272599493, six of seven jobs).
-#   * Whichever job did win wrote into the PR scope, so the next PR started
-#     cold anyway. Runs 32259950122, 32269332414 and 32272599493 — three
-#     different branches, one identical lockfile hash — each logged "Cache not
-#     found for input keys: playwright-Linux-1a8dcaff…" and re-downloaded
-#     ~274 MB of Chromium in all seven jobs.
+# So that particular cold start was a one-off and would have healed itself.
+# Three things that are NOT one-offs are why this file exists anyway:
 #
-# One writer, on main, no race. e2e.yml now restores only
-# (actions/cache/restore@v4), so a PR can never write this key again.
+#   * The key is a hash of pnpm-lock.yaml, and help-shots.yml only runs on
+#     Mondays at 04:43 UTC. Every lockfile change re-cools the key for up to a
+#     week of PRs. This job runs on exactly that change, and nothing else.
+#   * e2e.yml now restores without saving, so a lockfile bump has no writer at
+#     all until the next Monday cron. Making e2e.yml restore-only without
+#     adding a writer would be the actual regression.
+#   * Seven jobs racing one key on save is a real, observed failure — six of
+#     seven logged "Failed to save: Unable to reserve cache with key
+#     playwright-…" on run 32272599493. One writer cannot race itself.
 #
-# Trigger is deliberately narrow: the cache key is a hash of pnpm-lock.yaml, so
-# a new key only comes into existence when that file changes. Every other push
-# to main would re-run this job to confirm a cache it already has.
-# workflow_dispatch is how you seed it the first time, including right after
-# this workflow merges.
+# Depending on help-shots.yml for this would be an accident rather than a
+# design: it is a screenshot job that happens to install a browser, and
+# nothing stops it changing its key or its schedule.
+#
 on:
   push:
     branches: [main]
