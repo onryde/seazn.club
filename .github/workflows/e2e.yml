@@ -84,7 +84,7 @@ jobs:
   # ---------------------------------------------------------------------
   e2e-parallel:
     name: Playwright e2e — parallel ${{ matrix.shard }}/3 (Postgres container)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     # Sharded because this project is the wall-clock floor of a PR. Measured on
     # run 31691106751: 8.2 min total, of which the Playwright step alone was
@@ -255,7 +255,8 @@ jobs:
       # which is the opposite of its purpose. Same pattern as ci.yml's smoke
       # job and placement-ci.yml's `integration` job; the image build is
       # cached (type=gha) and shared with them.
-      - uses: docker/setup-buildx-action@v3
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
       #
       # Backgrounded, alongside the production build above. `background:` on a
       # `uses:` step is NOT documented anywhere — it was measured on this repo
@@ -273,15 +274,13 @@ jobs:
       - name: Build the placement service image
         id: image
         background: true
-        uses: docker/build-push-action@v6
+        uses: useblacksmith/build-push-action@v2
         with:
           context: services/placement
           file: services/placement/Dockerfile
           push: false
           load: true
           tags: placement-service:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
       # Moved UP from after "Start server", where it used to sit: nothing about
       # downloading a browser needs a database, a build or a running server, so
       # down there it was ~16s of dead serial time. Browsers cached per
@@ -406,7 +405,7 @@ jobs:
   # ---------------------------------------------------------------------
   e2e-serial:
     name: Playwright e2e — serial (Postgres container)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     services:
       postgres:
@@ -483,7 +482,8 @@ jobs:
         env:
           SKIP_TYPECHECK: "1"
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
       #
       # Backgrounded, alongside the production build above. `background:` on a
       # `uses:` step is NOT documented anywhere — it was measured on this repo
@@ -501,15 +501,13 @@ jobs:
       - name: Build the placement service image
         id: image
         background: true
-        uses: docker/build-push-action@v6
+        uses: useblacksmith/build-push-action@v2
         with:
           context: services/placement
           file: services/placement/Dockerfile
           push: false
           load: true
           tags: placement-service:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
       # Moved UP from after "Start server", where it used to sit: nothing about
       # downloading a browser needs a database, a build or a running server, so
       # down there it was ~16s of dead serial time. Browsers cached per
@@ -622,7 +620,7 @@ jobs:
   # ---------------------------------------------------------------------
   e2e-mobile:
     name: Playwright e2e — ${{ matrix.group }} (Postgres container)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     # Grouped by device class, not round-robin, so a red leg names a coherent
     # band ("tablets are broken") instead of an arbitrary third of the matrix.
@@ -723,7 +721,8 @@ jobs:
         env:
           SKIP_TYPECHECK: "1"
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
       #
       # Backgrounded, alongside the production build above. `background:` on a
       # `uses:` step is NOT documented anywhere — it was measured on this repo
@@ -741,15 +740,13 @@ jobs:
       - name: Build the placement service image
         id: image
         background: true
-        uses: docker/build-push-action@v6
+        uses: useblacksmith/build-push-action@v2
         with:
           context: services/placement
           file: services/placement/Dockerfile
           push: false
           load: true
           tags: placement-service:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
       # Moved UP from after "Start server", where it used to sit: nothing about
       # downloading a browser needs a database, a build or a running server, so
       # down there it was ~16s of dead serial time. Browsers cached per

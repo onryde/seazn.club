@@ -32,7 +32,7 @@ concurrency:
 jobs:
   reconcile:
     name: Reconcile Stripe seat quantity (staging)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     env:
       CRON_SECRET: ${{ secrets.CRON_SECRET }}

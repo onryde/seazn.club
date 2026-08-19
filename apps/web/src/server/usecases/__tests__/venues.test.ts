@@ -209,7 +209,17 @@ async function seedFixtureOnCourt(
  *  `pg_stat_activity.wait_event_type = 'Lock'` (a `transactionid` wait
  *  internally) — not as a `pg_locks` row scoped to the `venues`/`courts`
  *  relation, which is why this checks activity rather than trying to join
- *  `pg_locks` to a specific table. */
+ *  `pg_locks` to a specific table.
+ *
+ *  This poll only proves contention if T1 ALREADY HOLDS the lock when the
+ *  contender starts. Every caller therefore awaits a `locked` handshake
+ *  resolved from inside T1's transaction before launching the contender:
+ *  starting both from the same tick races T1's own `for update` against the
+ *  contender's whole transaction, and on a fast runner the contender wins
+ *  outright — it locks, checks, commits, and no session ever waits, so this
+ *  poll times out (observed on CI 2026-08-19, `archiveCourt` leg). A timeout
+ *  here also strands T1's open transaction, which then blocks `afterAll`'s
+ *  cleanup deletes into a hook timeout. */
 async function waitForLockContention(timeoutMs = 4000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -593,6 +603,10 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
     const gate = new Promise<void>((resolve) => {
       releaseT1 = resolve;
     });
+    let t1Locked = () => {};
+    const locked = new Promise<void>((resolve) => {
+      t1Locked = resolve;
+    });
     let insertedCourtId = "";
     const t1 = sql.begin(async (tx1) => {
       // Mirrors createCourt's own locking SELECT — holds the venue row FOR
@@ -603,9 +617,13 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
         values (${venue.id}, ${orgId}, 'Racer Court', 0, '{}')
         returning id`;
       insertedCourtId = c!.id;
+      t1Locked();
       await gate;
     });
 
+    // T1 must already HOLD the lock before the contender starts — see
+    // waitForLockContention's note on why this handshake is required.
+    await Promise.race([locked, t1]);
     const deleteCall = deleteVenue(auth, venue.id);
 
     // Proves genuine contention, not a lucky non-overlapping interleave.
@@ -627,15 +645,23 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
     const gate = new Promise<void>((resolve) => {
       releaseT1 = resolve;
     });
+    let t1Locked = () => {};
+    const locked = new Promise<void>((resolve) => {
+      t1Locked = resolve;
+    });
     const t1 = sql.begin(async (tx1) => {
       // Mirrors deleteVenue's own locking SELECT — holds the venue row FOR
       // UPDATE (the venue has no courts yet, so the real guard would pass),
       // then PAUSES before actually deleting it.
       await tx1`select id from venues where id = ${venue.id} for update`;
+      t1Locked();
       await gate;
       await tx1`delete from venues where id = ${venue.id}`;
     });
 
+    // T1 must already HOLD the lock before the contender starts — see
+    // waitForLockContention's note on why this handshake is required.
+    await Promise.race([locked, t1]);
     const createCall = createCourt(auth, venue.id, { name: "Late Court", sort: 0, tags: [] });
 
     await waitForLockContention();
@@ -681,6 +707,10 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
     const gate = new Promise<void>((resolve) => {
       releaseT1 = resolve;
     });
+    let t1Locked = () => {};
+    const locked = new Promise<void>((resolve) => {
+      t1Locked = resolve;
+    });
     const t1 = sql.begin(async (tx1) => {
       // Simulates a future fixture-writer (P9, not built yet this session):
       // locks the court row FOR UPDATE — the same lock archiveCourt takes —
@@ -690,9 +720,13 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
       await tx1`
         insert into fixtures (stage_id, division_id, round_no, seq_in_round, court_id, status)
         values (${stageId}, ${division.id}, 1, 1, ${court.id}, 'scheduled')`;
+      t1Locked();
       await gate;
     });
 
+    // T1 must already HOLD the lock before the contender starts — see
+    // waitForLockContention's note on why this handshake is required.
+    await Promise.race([locked, t1]);
     const archiveCall = archiveCourt(auth, court.id);
 
     await waitForLockContention();
