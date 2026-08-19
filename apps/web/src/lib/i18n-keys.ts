@@ -1008,6 +1008,7 @@ export type DictionaryKey =
   | "breadcrumb.schedule"
   | "breadcrumb.settings"
   | "calendar.time_tbc"
+  | "calendar.unknownEntrant"
   | "card.actions"
   | "card.empty.competitions"
   | "card.empty.competitions.cta"

@@ -4030,6 +4030,7 @@
   "bracket.round.plain": "Tour {n}",
   "bracket.slot.bye": "Bye",
   "calendar.time_tbc": "Heure à confirmer",
+  "calendar.unknownEntrant": "Participant inconnu",
   "progression.pendingProposal.badge": "Une proposition de qualifiés attend votre confirmation",
   "progression.pendingProposal.hint": "Une proposition de qualifiés attend : ouvrez Matches pour la vérifier et la confirmer",
   "export.time.tbc": "À confirmer",
