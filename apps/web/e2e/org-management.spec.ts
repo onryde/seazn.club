@@ -55,8 +55,15 @@ test.describe.serial("org management", () => {
 
     // Over to the second org…
     await page.goto("/settings");
+    let beforeSwitch = new URL(page.url()).pathname;
     await page.getByRole("button", { name: /switch organi[sz]ation/i }).click();
     await page.getByRole("button", { name: new RegExp(secondOrgName) }).click();
+    // OrgSwitcher flips the cookie with a POST and THEN hard-navigates
+    // (window.location.assign). The cookie is already observable (so the poll
+    // below passes) while that load is still in flight, and a page.goto issued
+    // into it is cancelled with net::ERR_ABORTED. Wait for the switcher's own
+    // navigation to land before driving the page again.
+    await page.waitForURL((u) => u.pathname !== beforeSwitch, { timeout: 20_000 });
     await expect
       .poll(async () => (await activeOrg(page)).name, { timeout: 20_000 })
       .toBe(secondOrgName);
@@ -68,8 +75,10 @@ test.describe.serial("org management", () => {
     });
 
     // …and back to the original.
+    beforeSwitch = new URL(page.url()).pathname;
     await page.getByRole("button", { name: /switch organi[sz]ation/i }).click();
     await page.getByRole("button", { name: new RegExp(original.name) }).click();
+    await page.waitForURL((u) => u.pathname !== beforeSwitch, { timeout: 20_000 });
     await expect
       .poll(async () => (await activeOrg(page)).id, { timeout: 20_000 })
       .toBe(original.id);
