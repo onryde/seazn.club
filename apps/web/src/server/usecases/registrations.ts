@@ -33,6 +33,7 @@ import { toLocale } from "@/lib/i18n-constants";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { log } from "@/server/logger";
 import type { PutRegistrationSettings, RegistrationFormField } from "@/server/api-v1/schemas";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { resolveLogoUrl } from "@/server/public-site/data";
@@ -1711,7 +1712,7 @@ async function confirmPaidRegistration(
         await recordEarnGrant(referrerWallet, referrerOrgId, "referral", outcome.orgId, REFERRAL_EARN);
       }
     } catch (err) {
-      console.error(`[credits] referral grant failed for referrer of org ${outcome.orgId}`, err);
+      log.error({ err, orgId: outcome.orgId }, "credits: referral grant failed for referrer");
     }
     return;
   }

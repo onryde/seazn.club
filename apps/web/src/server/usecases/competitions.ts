@@ -8,6 +8,7 @@ import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { invalidateOrgEntitlements, requireFeature, withinLimit } from "@/lib/entitlements";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS, type AnalyticsEvent } from "@/lib/analytics-events";
+import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { page, type ListQuery, type Page } from "@/server/api-v1/http";
 import { CompetitionStatus, type CreateCompetition, type PatchCompetition } from "@/server/api-v1/schemas";
@@ -511,7 +512,7 @@ export async function patchCompetition(
         await tryEarnGrant(auth.orgId, "referral_welcome", REFERRAL_WELCOME_EARN);
       }
     } catch (err) {
-      console.error(`[competitions] growth earn grants failed (org ${auth.orgId})`, err);
+      log.error({ err, orgId: auth.orgId }, "competitions: growth earn grants failed");
     }
   }
   return row;

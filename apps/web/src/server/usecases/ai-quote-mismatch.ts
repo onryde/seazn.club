@@ -15,6 +15,7 @@
 // alters a plan: the organiser already paid, and refusing here would take their
 // credit and give them nothing. It is recorded and reported.
 import { withTenant } from "@/lib/db";
+import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
 /** What the response carries when the two disagree — see `AiRunPriceFields`. */
@@ -76,7 +77,7 @@ export async function recordQuoteMismatch(
                 } as never)}, ${auth.userId})`;
     });
   } catch (err) {
-    console.warn("[quote-mismatch] record failed:", err);
+    log.warn({ err }, "quote-mismatch: record failed");
   }
   return { quoted, charged };
 }

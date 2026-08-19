@@ -6,6 +6,7 @@ import { HttpError } from "@/lib/errors";
 import { sendExtraOrgAllowanceAlertEmail } from "@/lib/email";
 import { hasLiveSubscription } from "@/lib/subscription-status";
 import { capacityBasis, MAX_EXTRA_ORGS, ridersInUse } from "@/lib/billing-group";
+import { log } from "@/server/logger";
 import { requireBillingOwner } from "@/server/usecases/billing-manage";
 import {
   ORG_ADDON_FEATURE_KEY,
@@ -407,9 +408,9 @@ export async function maybeAlertOrgAllowance(opts: {
       threshold: ORG_ALLOWANCE_ALERT_THRESHOLD,
     });
   } catch (err) {
-    console.error(
-      `[billing] extra-org allowance alert failed (group ${opts.subscriptionId})`,
-      err,
+    log.error(
+      { err, subscriptionId: opts.subscriptionId },
+      "billing: extra-org allowance alert failed",
     );
   }
 }

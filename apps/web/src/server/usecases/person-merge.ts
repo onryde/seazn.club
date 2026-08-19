@@ -15,6 +15,7 @@ import { withLegacyDetail } from "@/server/api-v1/conflict-detail-legacy";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { log } from "@/server/logger";
 import { recomputePlayerStats } from "./player-stats";
 import {
   courtNamesById,
@@ -294,7 +295,7 @@ export async function mergePersons(
   //    presents as "a merge never reveals anything", which is indistinguishable
   //    from a clean board and would go unnoticed indefinitely.
   const revealed = await reverifyBoards(auth, survivorId).catch((err: unknown) => {
-    console.error(`[persons] post-merge re-verify failed for survivor ${survivorId}`, err);
+    log.error({ err, survivorId }, "persons: post-merge re-verify failed");
     return [];
   });
   return { ...merged, revealed };
