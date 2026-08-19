@@ -53,8 +53,15 @@ test("court picker: two venues sharing a court name stay distinguishable at ever
   // coverage. These two differ only at the very end.
   const venueA = `Riverside Centre ${TAG}`;
   const venueB = `Riverside Hall ${TAG}`;
-  await seedVenueWithCourts(request, ["Court 1"], { orgId, venueName: venueA });
-  await seedVenueWithCourts(request, ["Court 1", "Show Court"], { orgId, venueName: venueB });
+  // TAG-unique court names. The ambiguity under test is the SAME name in two
+  // different venues — not the literal string "Court 1", which CI's shared Pro
+  // org already carries several of from other specs (`seedVenueWithCourts`
+  // defaults to it). Without this the option locator matched four checkboxes
+  // and picked two courts this test never created.
+  const shared = `Shared Court ${TAG}`;
+  const solo = `Solo Court ${TAG}`;
+  await seedVenueWithCourts(request, [shared], { orgId, venueName: venueA });
+  await seedVenueWithCourts(request, [shared, solo], { orgId, venueName: venueB });
 
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
@@ -79,7 +86,7 @@ test("court picker: two venues sharing a court name stay distinguishable at ever
   // group and the bare court name on each checkbox — so the two "Court 1"s
   // are told apart there by their heading. That is unchanged by this pass and
   // is asserted here only as the premise: there really are two of them.
-  const options = page.getByRole("checkbox", { name: "Court 1" });
+  const options = page.getByRole("checkbox", { name: shared, exact: true });
   await expect(options).toHaveCount(2);
   // `.first()`: each venue name now appears TWICE on this surface — as the
   // option list's group heading and, once selected, as the strip's own venue
@@ -100,15 +107,17 @@ test("court picker: two venues sharing a court name stay distinguishable at ever
   const strip = page
     .getByRole("listitem")
     .filter({ has: page.getByRole("button", { name: "Move up" }) });
-  await expect(strip).toHaveCount(2);
+  // Scoped to the seeded name: a bare list-item count is hostage to anything
+  // else on the page that happens to be reorderable.
+  await expect(strip.filter({ hasText: shared })).toHaveCount(2);
   await expect(strip.filter({ hasText: venueA })).toHaveCount(1);
   await expect(strip.filter({ hasText: venueB })).toHaveCount(1);
 
   // The unambiguous court keeps its BARE name — qualification is applied where
   // it is needed, not sprayed across every court. Without this the assertions
   // above would also pass a blanket "always append the venue" implementation.
-  await page.getByRole("checkbox", { name: "Show Court", exact: true }).check();
-  const showCourt = strip.filter({ hasText: "Show Court" });
+  await page.getByRole("checkbox", { name: solo, exact: true }).check();
+  const showCourt = strip.filter({ hasText: solo });
   await expect(showCourt).toHaveCount(1);
   // The unambiguous court carries NO venue line at all.
   await expect(showCourt).not.toContainText("Riverside");
