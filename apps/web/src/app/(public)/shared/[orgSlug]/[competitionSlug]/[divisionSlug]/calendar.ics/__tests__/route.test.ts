@@ -432,7 +432,13 @@ describe("GET .../calendar.ics — entrant name fallback localization (F5 task 7
       },
     );
     const text = await res.text();
-    // The feed name should NOT contain the bare English fallback "Entrant".
-    expect(text).not.toMatch(/^NAME:Entrant/m);
+    // The feed name must carry the fr-resolved fallback ("Participant
+    // inconnu", from calendar.unknownEntrant in fr/ui.json) on the real
+    // X-WR-CALNAME: property buildIcs emits — not the bare English fallback
+    // "Entrant" the route used to fall back to. A bare `/^NAME:/m` probe is
+    // vacuous here: buildIcs never emits a property called NAME, only
+    // X-WR-CALNAME, so that regex can never match either way.
+    expect(text).toContain("X-WR-CALNAME:Participant inconnu");
+    expect(text).not.toMatch(/^X-WR-CALNAME:Entrant\b/m);
   });
 });

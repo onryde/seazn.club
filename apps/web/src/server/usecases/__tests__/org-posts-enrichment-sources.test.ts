@@ -24,6 +24,7 @@ import {
   assembleDigestLeaders,
   assembleDigestClaimed,
   assembleDigestUpcoming,
+  generateWeeklyDigest,
   draftPostsForDecidedFixture,
   listPosts,
   type FixtureCtx,
@@ -336,5 +337,38 @@ describe.skipIf(!HAS_DB)("P3 review finding 3 — genuine-throw fail-open, per s
     // concatenation would.
     expect(line!.awayName).toBe("TBD");
     expect(line!.homeName).not.toBe("TBD");
+  });
+
+  // Final-review finding (2026-08-19): the test above (and its officials.ts/
+  // schedule.ts siblings) only ever asserted "en" output, so a hardcoded
+  // "en" swapped in for the real `toLocale(org.default_locale)` call at the
+  // production call sites would leave all three green — the locale THREADING
+  // itself was never pinned. This one drives the real production path
+  // end-to-end instead of calling assembleDigestUpcoming directly: a
+  // French-default_locale org, through generateWeeklyDigest -> digestForOrg
+  // (org lookup -> toLocale -> assembleDigestUpcoming's 5th param), so a
+  // regression to a hardcoded "en" — or to dropping the `, locale` argument
+  // at org-posts.ts's digestForOrg call site — genuinely fails this test.
+  it("digestUpcoming via the real generateWeeklyDigest path: a FR-locale org renders the slot label and TBD fallback in French, not English", async () => {
+    const ctx = await seedOrg();
+    await sql`update organizations set default_locale = 'fr' where id = ${ctx.orgId}`;
+    const div = await seedDivision(ctx);
+    const scheduledAt = new Date(Date.now() + 2 * 24 * 3600_000).toISOString();
+    await sql`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round,
+        home_entrant_id, away_entrant_id, home_slot_label, away_slot_label, status, scheduled_at)
+      values (${div.stageId}, ${div.divisionId}, ${ctx.orgId}, 1, 1,
+        null, null, ${sql.json({ key: "bracket.round.roundOf", params: { n: 4 } })}, null,
+        'scheduled', ${scheduledAt})`;
+
+    const post = await generateWeeklyDigest(ctx.auth, ctx.orgId);
+    // fr's "bracket.round.roundOf" is "Ronde des {n}" and "schedule.tbd" is
+    // "À déterminer" — both distinct from the English strings the earlier
+    // "en" test above asserts, so this can only pass if digestForOrg's real
+    // org-locale resolution actually reached assembleDigestUpcoming.
+    expect(post.bodyMd).toContain("Ronde des 4");
+    expect(post.bodyMd).toContain("À déterminer");
+    expect(post.bodyMd).not.toContain("Round of 4");
+    expect(post.bodyMd).not.toMatch(/\bTBD\b/);
   });
 });
