@@ -140,11 +140,27 @@ export function currentQualifiedFromStages(
     progression: Record<string, unknown> | null;
   }[],
 ): number {
-  const stage = stages.find((st) => st.progression);
+  const stageIdx = stages.findIndex((st) => st.progression);
+  const stage = stageIdx === -1 ? undefined : stages[stageIdx];
   const sources = (stage?.progression as { sources?: { take?: unknown[] }[] } | undefined)?.sources;
   const take = sources?.flatMap((s) => s.take ?? []) ?? [];
+  // F3 ultrareview finding 8 — was `stages.find((st) => st.kind === "group")`,
+  // the FIRST group stage in the division regardless of which stage this
+  // progression actually reads. In a graph with two group phases (a
+  // qualifying pool round into a main group stage, then a knockout) that
+  // sized the knockout off the QUALIFYING round's pool count. Every template
+  // this reads today declares `stage: "previous"`, so the correct source is
+  // the stage immediately before the one carrying the progression — search
+  // backwards from there rather than forwards from the start of the graph.
+  // (An explicit `{stageId}` source is not resolvable here: these props are
+  // draft/unsaved stages with no ids. Nearest-earlier remains the best
+  // available answer for one, and is the exactly-right answer for the
+  // "previous" every shipped template emits.)
   const poolCount =
-    (stages.find((st) => st.kind === "group")?.config as { pools?: { count?: number } } | undefined)?.pools
+    (stages
+      .slice(0, stageIdx === -1 ? 0 : stageIdx)
+      .reverse()
+      .find((st) => st.kind === "group")?.config as { pools?: { count?: number } } | undefined)?.pools
       ?.count ?? 1;
   let total = 0;
   let matched = false;

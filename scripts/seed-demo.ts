@@ -15,6 +15,7 @@
 // divisions that already exist, so tweak the PLANs below and rerun.
 import { writeFileSync, readFileSync } from "node:fs";
 import { findOrCreateCompetition } from "./seed-resume.ts";
+import { TEMPLATES } from "./seed-demo-templates.ts";
 
 const BASE = process.env.SEED_BASE ?? "http://localhost:3000";
 const STATE = new URL("./.seed-demo-state.json", import.meta.url).pathname;
@@ -127,123 +128,6 @@ function entrantsFor(kind: "individual" | "team" | "pair", n: number) {
     seed: i + 1,
   }));
 }
-
-// ── stage templates (mirror division-builder) ───────────────────────────────
-// F2 (unified progression field): was `qualification` — mirrors
-// components/v2/format-templates.ts's own conversion field-for-field.
-// `topN: n` collapses onto `rankRange{from:1,to:n}` (owner ruling 4); the
-// bare `{take: [...]}` (picks) shape becomes a kind-tagged `picks` TakeRule.
-// `timing: "on_complete"` throughout — every one of these templates
-// reproduces today's auto-seed-on-complete behaviour unchanged (Decision 1).
-type StageSpec = {
-  kind: string;
-  name: string;
-  config: Record<string, unknown>;
-  progression: Record<string, unknown> | null;
-};
-const TEMPLATES: Record<string, (q: number) => StageSpec[]> = {
-  league: () => [
-    {
-      kind: "league",
-      name: "League",
-      config: { legs: 1 },
-      progression: null,
-    },
-  ],
-  league_ko: (q) => [
-    {
-      kind: "league",
-      name: "League",
-      config: { legs: 1 },
-      progression: null,
-    },
-    {
-      kind: "knockout",
-      name: "Finals",
-      config: {},
-      progression: {
-        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
-        placement: "rank_order",
-        timing: "on_complete",
-      },
-    },
-  ],
-  groups_ko: (q) => [
-    {
-      kind: "group",
-      name: "Group stage",
-      config: { legs: 1, pools: { count: 2 } },
-      progression: null,
-    },
-    {
-      kind: "knockout",
-      name: "Knockout",
-      config: {},
-      progression: {
-        sources: [
-          {
-            stage: "previous",
-            take: [
-              {
-                kind: "picks",
-                picks: Array.from({ length: q }, (_, i) => ({
-                  pool: i % 2 === 0 ? "A" : "B",
-                  rank: Math.floor(i / 2) + 1,
-                })),
-              },
-            ],
-          },
-        ],
-        placement: "rank_order",
-        timing: "on_complete",
-      },
-    },
-  ],
-  swiss: () => [
-    {
-      kind: "swiss",
-      name: "Swiss",
-      config: { rounds: 5 },
-      progression: null,
-    },
-  ],
-  knockout: () => [{ kind: "knockout", name: "Knockout", config: {}, progression: null }],
-  double_elim: () => [
-    {
-      kind: "double_elim",
-      name: "Double elimination",
-      config: {},
-      progression: null,
-    },
-  ],
-  group_stepladder: (q) => [
-    {
-      kind: "league",
-      name: "League",
-      config: { legs: 1 },
-      progression: null,
-    },
-    {
-      kind: "stepladder",
-      name: "Stepladder finals",
-      config: {},
-      progression: {
-        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
-        placement: "rank_order",
-        timing: "on_complete",
-      },
-    },
-  ],
-  // Jul3/08 formats
-  triple_rr: () => [
-    {
-      kind: "league",
-      name: "Triple RR",
-      config: { legs: 3 },
-      progression: null,
-    },
-  ],
-};
 
 // ── per-sport result events (winner side chosen by us) ─────────────────────
 type Ev = { type: string; payload: unknown };

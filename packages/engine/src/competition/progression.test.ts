@@ -596,6 +596,43 @@ describe("resolveProgression", () => {
     }
   });
 
+  // F3 ultrareview finding 1 — the per-resolution bestNth cache was keyed
+  // `${sourceIndex}:${nth}` alone, dropping normaliseUnequalPools. Two rules
+  // on one source at the same nth but a different flag then SHARED an
+  // ordering, and because the unequal-pools guard lives inside the
+  // cache-miss branch, the second rule skipped its own refusal entirely and
+  // silently read rows normalised under a setting it never asked for.
+  it("two bestNth rules at the same nth do NOT share a cached ordering across different normaliseUnequalPools", () => {
+    const tables: SourceTables = {
+      pools: [
+        { pool: "A", rows: [{ entrantId: "a1", rank: 1 }, { entrantId: "a2", rank: 2 }] as StandingsRow[] },
+        { pool: "B", rows: [{ entrantId: "b1", rank: 1 }, { entrantId: "b2", rank: 2 }, { entrantId: "b3", rank: 3 }] as StandingsRow[] },
+      ],
+    };
+    const spec: ProgressionSpec = {
+      sources: [
+        {
+          stage: "previous",
+          take: [
+            { kind: "bestNth", nth: 2, count: 1, normaliseUnequalPools: true },
+            { kind: "bestNth", nth: 2, count: 1 }, // no flag: MUST refuse on its own terms
+          ],
+        },
+      ],
+      placement: "rank_order",
+    };
+    try {
+      resolveProgression(spec, [{ poolKeys: ["A", "B"] }], [tables]);
+      expect.fail("expected resolveProgression to throw");
+    } catch (err) {
+      // Its OWN guard, reached because it missed the cache. With the shared
+      // key it read the first rule's normalised ordering and fell through to
+      // the entrant-dedupe refusal instead — a different error, for a
+      // different reason, hiding a real misconfiguration.
+      expect((err as Error).message).toMatch(/normaliseUnequalPools/);
+    }
+  });
+
   it("bestNth with normaliseUnequalPools:true silences the refusal — Decision 2b, absorbed not newly wired", () => {
     const tables: SourceTables = {
       pools: [

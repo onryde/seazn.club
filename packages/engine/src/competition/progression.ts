@@ -637,7 +637,16 @@ export function resolveProgression(
       // best_nth — every pool's nth-place row, compared together (once per
       // distinct nth), exactly like resolveQualification.bestOfRank used to
       // — never one candidate at a time.
-      const cacheKey = `${slot.sourceIndex}:${d.nth}`;
+      // The flag is part of the key, not just the nth: two bestNth take
+      // rules on one source at the same nth but a DIFFERENT
+      // normaliseUnequalPools describe two different orderings, and the
+      // unequal-pools guard below sits INSIDE the cache-miss branch — so a
+      // shared key let the second rule skip its own guard and read rows
+      // normalised under a setting it never asked for. Every such pair
+      // collides on position 1 and is refused a few lines down by the
+      // entrant-dedupe, so no wrong seat escapes today; this keeps that
+      // true if bestNth positions ever stop starting at 1.
+      const cacheKey = `${slot.sourceIndex}:${d.nth}:${d.normaliseUnequalPools === true}`;
       let ordered = bestNthCache.get(cacheKey);
       if (!ordered) {
         const candidates = src.pools.map((p) => {
