@@ -132,7 +132,11 @@ test("F3 Task 5a/5b — roster-drift banner + Rebuild button, real drift state, 
   expect(stage.status, JSON.stringify(stage.error)).toBe(201);
   const stageId = stage.data!.id;
 
-  const gen = await apiJson<{ created: number }>(page.request, `/api/v1/stages/${stageId}/generate`, "POST");
+  const gen = await apiJson<{ created: number; fixtures: { id: string }[] }>(
+    page.request,
+    `/api/v1/stages/${stageId}/generate`,
+    "POST",
+  );
   expect(gen.status, JSON.stringify(gen.error)).toBe(200);
   expect(gen.data!.created).toBe(3); // 3-entrant round robin
 
@@ -166,6 +170,65 @@ test("F3 Task 5a/5b — roster-drift banner + Rebuild button, real drift state, 
     await page.waitForTimeout(200);
     await assertNoHorizontalScroll(page, width);
     await shot(page, `roster-drift-banner-${width}`);
+
+    // F3 ultrareview finding 5 — the confirm dialog now names the organiser
+    // SETUP the rebuild clears alongside the fixtures (referee appointments,
+    // team sheets, paired devices), so the body is roughly twice as long as
+    // the one this dialog shipped with. Shot at all three widths because a
+    // longer body in a `max-h-[85dvh]` sheet is exactly where a 320px
+    // regression would hide. This division has no officials or lineups
+    // assigned, so the extra sentence is correctly ABSENT here — that IS the
+    // common case, and "adds no boilerplate to click through when there is
+    // nothing attached" is the behaviour worth pinning at the widths.
+    await banner.getByTestId("roster-drift-rebuild").click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    await expect(dialog).toContainText("deleted and regenerated");
+    await expect(dialog).not.toContainText("official assignment");
+    await assertNoHorizontalScroll(page, width);
+    await shot(page, `roster-drift-confirm-${width}`);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden({ timeout: 10_000 });
+
+  }
+
+  // …and the LONG copy, which is the one that can break a layout: with a
+  // referee actually appointed, the dialog names what the rebuild clears
+  // besides the fixtures (F3 ultrareview finding 5). Appointed once, then
+  // shot at all three widths — a second pass rather than a branch inside the
+  // loop above, so the no-attachments state stays covered at every width too.
+  const official = await apiJson<{ id: string }>(page.request, `/api/v1/officials`, "POST", {
+    display_name: `Ref Rita ${TAG}`,
+    role_keys: ["referee"],
+  });
+  expect(official.status, JSON.stringify(official.error)).toBe(201);
+  const assigned = await apiJson(
+    page.request,
+    `/api/v1/fixtures/${gen.data!.fixtures[0]!.id}/officials`,
+    "PATCH",
+    { set: [{ official_id: official.data!.id, role_key: "referee" }] },
+  );
+  expect(assigned.status, JSON.stringify(assigned.error)).toBe(200);
+
+  for (const { width, height } of VIEWPORTS) {
+    await page.setViewportSize({ width, height });
+    await page.goto(`/o/${org.slug}/c/${comp.data!.slug}/d/${divSlug}?tab=fixtures`, { waitUntil: "load" });
+
+    const banner = page.getByTestId("roster-drift-banner");
+    await expect(banner).toBeVisible({ timeout: 20_000 });
+    await banner.getByTestId("roster-drift-rebuild").click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    // The count is real, and the sentence names what the organiser loses.
+    await expect(dialog).toContainText("1 official assignment(s)");
+    await expect(dialog).toContainText("set those up again");
+    await assertNoHorizontalScroll(page, width);
+    await shot(page, `roster-drift-confirm-attachments-${width}`);
+    // Leave the board untouched: the rebuild itself is covered by
+    // stage-roster-drift.spec.ts, and a rebuild here would clear the very
+    // drift the next viewport iteration needs.
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden({ timeout: 10_000 });
   }
 });
 
