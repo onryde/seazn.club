@@ -92,7 +92,12 @@ import {
 // tag-filter loop here would be this subsystem's recurring bug) — the AI
 // draft placer must never be able to choose an archived or tag-mismatched
 // court just because a second copy of the filter was missing.
-import { resolveCandidateCourts } from "@/server/usecases/court-candidates";
+// P9 (stage court tags): unionRequiredCourtTags too — buildSchedulePack used
+// to resolve only the DIVISION's candidateCourtIds, the same gap review
+// finding #11 closed in validateScheduleIn (schedule.ts) — a stage's own
+// required_court_tags was invisible to the model. See buildSchedulePack's
+// stageCandidateCourts for the per-stage resolution this enables.
+import { resolveCandidateCourts, unionRequiredCourtTags } from "@/server/usecases/court-candidates";
 import { consumePreview, PREVIEW_STALE, releasePreview } from "@/server/usecases/schedule-ai-preview";
 import {
   assignOfficials,
@@ -286,6 +291,21 @@ export interface PackFixture {
   feeds: { winner_to: string | null; after: string[] };
   current: { at: string | null; court: string | null };
   pinned: boolean;
+  /** P9 (stage court tags): present only when this fixture's stage genuinely
+   *  narrows the division-wide candidate set — `unionRequiredCourtTags(division,
+   *  stage)` resolves to a STRICT SUBSET of `settings.courts` (see
+   *  buildSchedulePack's `stageCandidateCourts`/`narrowedCourtsByStage`).
+   *  Raw court ids, in `resolveCandidateCourts`'s own order (ruling 1,
+   *  candidate-courts.ts) — relabelled to names by `toModelPayload`, exactly
+   *  like `settings.courts` and every other court-shaped field.
+   *
+   *  Omitted, not `[]`, whenever the stage's own tags add nothing beyond the
+   *  division's (the common case: most stages have no `required_court_tags`
+   *  of their own). Both the model and `structuralCheck` fall back to
+   *  `settings.courts` when this key is absent, so most fixtures pay no cost
+   *  and `schedule-ai-pack.test.ts`'s golden snapshot (no stage in that
+   *  fixture data has its own required tags) stays byte-identical. */
+  courts?: string[];
 }
 
 export interface PackObstacle {
@@ -551,6 +571,10 @@ export function toModelPayload(
       movable: pack.fixtures.movable.map((f) => ({
         ...f,
         current: { ...f.current, court: f.current.court !== null ? label(f.current.court) : null },
+        // P9 (stage court tags): PackFixture.courts (present only when
+        // narrower than settings.courts) needs the SAME id -> label
+        // translation every other court-shaped field on this fixture gets.
+        ...(f.courts !== undefined ? { courts: f.courts.map(label) } : {}),
       })),
       obstacles: pack.fixtures.obstacles.map((o) => ({ ...o, court: label(o.court) })),
     },
@@ -778,6 +802,46 @@ export async function buildSchedulePack(
       courts,
       division.required_court_tags,
     );
+
+    // P9 (stage court tags): candidateCourtIds above is DIVISION-wide only —
+    // a stage's own required_court_tags was invisible to the model, unlike
+    // the deterministic placer (autoSchedule, schedule.ts) which additionally
+    // unions in the STAGE's own tags via unionRequiredCourtTags(division,
+    // stage). validateScheduleIn (schedule.ts, review finding #11) closed the
+    // identical gap on the verify side, for the identical reason documented
+    // there: two stages' DIFFERENT required tags must never be flattened into
+    // one combined list fed to a single resolve — unionRequiredCourtTags/
+    // candidateCourts read a required-tag list as AND (a qualifying court
+    // needs EVERY tag in it), so a court disqualified by stage B's tags would
+    // wrongly disqualify a stage-A fixture too. Resolved PER STAGE instead,
+    // one memoised resolveCandidateCourts call per DISTINCT tag union — most
+    // stages share the empty union (division tags alone, no stage tags of
+    // their own), which is already `candidateCourtIds` above and needs no
+    // second query.
+    const stageCourtTagRows = await tx<{ id: string; required_court_tags: string[] }[]>`
+      select id, required_court_tags from stages where division_id = ${divisionId}`;
+    const divisionOnlyKey = [...unionRequiredCourtTags(division.required_court_tags, [])]
+      .sort()
+      .join(" ");
+    const candidateIdsByUnion = new Map<string, readonly string[]>([
+      [divisionOnlyKey, candidateCourtIds.ids],
+    ]);
+    // Every stage's own resolved candidate set — a subset of
+    // `candidateCourtIds.ids` whenever the stage's tags genuinely narrow it,
+    // otherwise the identical array (served from the memo above). Consumed
+    // by `packMovable` below (`narrowedCourtsByStage`) to decide, per
+    // fixture, whether `PackFixture.courts` is needed at all.
+    const stageCandidateCourts = new Map<string, ReadonlySet<string>>();
+    for (const stage of stageCourtTagRows) {
+      const union = unionRequiredCourtTags(division.required_court_tags, stage.required_court_tags);
+      const key = [...union].sort().join(" ");
+      let ids = candidateIdsByUnion.get(key);
+      if (ids === undefined) {
+        ids = (await resolveCandidateCourts(tx, divisionId, courts, union)).ids;
+        candidateIdsByUnion.set(key, ids);
+      }
+      stageCandidateCourts.set(stage.id, new Set(ids));
+    }
 
     // P9 pass 3d: id -> {label, venue, tags} for every court in the org, not
     // just this division's candidate set — an obstacle, a pin or a stored
@@ -1336,6 +1400,30 @@ export async function buildSchedulePack(
       movable.flatMap((f) => (f.pool_id !== null ? [[f.id, f.pool_id] as const] : [])),
     );
 
+    // P9 (stage court tags): `PackFixture.courts` input, computed once per
+    // STAGE — a division has few stages, so deriving this inside the
+    // per-fixture map below would repeat the same subset check for every
+    // fixture sharing one. Populated ONLY for a stage whose own resolved set
+    // (`stageCandidateCourts` above) is a STRICT subset of
+    // `candidateCourtIds.ids` — the overwhelming common case (a stage with no
+    // `required_court_tags` of its own resolves to the exact same set as the
+    // division, via the memo above) takes no entry here, which is what keeps
+    // `schedule-ai-pack.test.ts`'s byte-identical golden snapshot untouched:
+    // no stage in that fixture data carries extra required tags.
+    const candidateCourtIdSet = new Set(candidateCourtIds.ids);
+    const narrowedCourtsByStage = new Map<string, string[]>();
+    for (const [stageId, ids] of stageCandidateCourts) {
+      if (ids.size >= candidateCourtIdSet.size) continue;
+      let isSubset = true;
+      for (const id of ids) {
+        if (!candidateCourtIdSet.has(id)) {
+          isSubset = false;
+          break;
+        }
+      }
+      if (isSubset) narrowedCourtsByStage.set(stageId, [...ids]);
+    }
+
     const packMovable: PackFixture[] = movable
       .map((f) => ({
         id: f.id,
@@ -1364,6 +1452,12 @@ export async function buildSchedulePack(
           court: f.court_id,
         },
         pinned: lockedIds.has(f.id),
+        // P9 (stage court tags): present only when this fixture's stage
+        // genuinely narrows the division-wide set — see `PackFixture.courts`'s
+        // own doc comment and `narrowedCourtsByStage` just above.
+        ...(narrowedCourtsByStage.has(f.stage_id)
+          ? { courts: narrowedCourtsByStage.get(f.stage_id)! }
+          : {}),
       }))
       // Same comparator as `participantView` above — see `byBoardOrder`.
       .sort(byBoardOrder);
@@ -1860,6 +1954,16 @@ const toMs = (iso: string): number => new Date(iso).getTime();
 export function structuralCheck(plan: AiSchedulePlan, movableIds: Set<string>, pack: SchedulePack): string | null {
   const courts = new Set(pack.settings.courts);
   const pinned = new Map(pack.fixtures.movable.filter((f) => f.pinned).map((f) => [f.id, f]));
+  // P9 (stage court tags): a fixture whose stage narrows the division-wide
+  // set (`PackFixture.courts` present — see that field's own doc comment)
+  // must land on one of ITS OWN candidate courts, not merely any
+  // division-wide one — checked below, alongside the `courts.has(...)` check
+  // this narrows.
+  const narrowedCourts = new Map(
+    pack.fixtures.movable
+      .filter((f) => f.courts !== undefined)
+      .map((f) => [f.id, new Set(f.courts!)] as const),
+  );
   const seen = new Set<string>();
   const placed = new Set<string>();
   for (const a of plan.assignments) {
@@ -1868,6 +1972,10 @@ export function structuralCheck(plan: AiSchedulePlan, movableIds: Set<string>, p
     seen.add(a.fixture_id);
     placed.add(a.fixture_id);
     if (!courts.has(a.court_label)) return `assignment uses a court not in settings.courts: ${a.court_label}`;
+    const narrow = narrowedCourts.get(a.fixture_id);
+    if (narrow && !narrow.has(a.court_label)) {
+      return `assignment uses a court not permitted for fixture ${a.fixture_id}'s stage: ${a.court_label}`;
+    }
     const pin = pinned.get(a.fixture_id);
     if (pin && (pin.current.at === null || toMs(pin.current.at) !== toMs(a.scheduled_at) || pin.current.court !== a.court_label)) {
       return `pinned fixture ${a.fixture_id} must not move`;

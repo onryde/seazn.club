@@ -16,7 +16,8 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { createVenue, createCourt } from "../venues";
-import { buildSchedulePack } from "../schedule-ai";
+import { buildSchedulePack, structuralCheck } from "../schedule-ai";
+import type { AiSchedulePlan } from "../schedule-ai-prompt";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -199,3 +200,111 @@ describe.skipIf(!HAS_DB)("inScope() matches a repair scope's courts on court_id 
     expect(pack.fixtures.obstacles.some((o) => o.court === other.id)).toBe(true);
   });
 });
+
+// P9 (stage court tags): buildSchedulePack used to resolve ONE division-wide
+// candidateCourtIds and stop — a stage's own required_court_tags was invisible
+// to the model, unlike autoSchedule (schedule.ts) which unions the stage's own
+// tags in. This mirrors validateScheduleIn's identical fix (review finding
+// #11) on the verify side.
+describe.skipIf(!HAS_DB)(
+  "buildSchedulePack resolves candidate courts PER STAGE, not just per division",
+  () => {
+    it("narrows PackFixture.courts to a stage's own required-tag set; a stage with no tags of its own carries no courts key at all", async () => {
+      const { auth, divisionId, venueId } = await seedDivision(4);
+      const courtA = await createCourt(auth, venueId, { name: "Court A", sort: 0, tags: [] });
+      const courtB = await createCourt(auth, venueId, { name: "Court B", sort: 1, tags: [] });
+      const courtC = await createCourt(auth, venueId, { name: "Court C", sort: 2, tags: ["special"] });
+      await setCourts(divisionId, [courtA.id, courtB.id, courtC.id]);
+      // division.required_court_tags stays at its column default ('{}') —
+      // every one of A/B/C qualifies division-wide.
+
+      const [s1, s2] = await createStages(auth, divisionId, [
+        { seq: 1, kind: "league", name: "S1", config: {} },
+        { seq: 2, kind: "league", name: "S2", config: {} },
+      ]);
+      // S1 requires a tag only C carries. S2 is left at the column default
+      // ('{}') on purpose — the common case this pass must not disturb.
+      await sql`update stages set required_court_tags = ${sql.array(["special"])} where id = ${s1!.id}`;
+      await generateStageFixtures(auth, s1!.id);
+      await generateStageFixtures(auth, s2!.id);
+
+      const { pack } = await buildSchedulePack(auth, divisionId, {
+        now: NOW,
+        mode: "generate",
+        instruction: "x",
+      });
+
+      // Division-wide set is unchanged by this pass — all three courts.
+      expect([...pack.settings.courts].sort()).toEqual([courtA.id, courtB.id, courtC.id].sort());
+
+      const s1FixtureIds = new Set(
+        Object.entries(pack.stageIds)
+          .filter(([, sid]) => sid === s1!.id)
+          .map(([fid]) => fid),
+      );
+      const s2FixtureIds = new Set(
+        Object.entries(pack.stageIds)
+          .filter(([, sid]) => sid === s2!.id)
+          .map(([fid]) => fid),
+      );
+      // Sanity: both stages actually produced movable fixtures, or the
+      // assertions below would pass vacuously over empty sets.
+      expect(s1FixtureIds.size).toBeGreaterThan(0);
+      expect(s2FixtureIds.size).toBeGreaterThan(0);
+
+      for (const f of pack.fixtures.movable) {
+        if (s1FixtureIds.has(f.id)) {
+          expect(f.courts).toEqual([courtC.id]);
+        } else if (s2FixtureIds.has(f.id)) {
+          // Absent, not `[]` and not the full division set — S2's own union
+          // equals the division-only tags, so buildSchedulePack must reuse
+          // candidateCourtIds rather than stamping a (redundant) narrower key.
+          expect("courts" in f).toBe(false);
+        }
+      }
+    });
+
+    it("structuralCheck rejects a plan that places a stage-narrowed fixture on a court outside that stage's own set, even though the court is in the division-wide settings.courts", async () => {
+      const { auth, divisionId, venueId } = await seedDivision(4);
+      const courtA = await createCourt(auth, venueId, { name: "Court A", sort: 0, tags: [] });
+      const courtB = await createCourt(auth, venueId, { name: "Court B", sort: 1, tags: [] });
+      const courtC = await createCourt(auth, venueId, { name: "Court C", sort: 2, tags: ["special"] });
+      await setCourts(divisionId, [courtA.id, courtB.id, courtC.id]);
+
+      const [s1] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "S1", config: {} });
+      await sql`update stages set required_court_tags = ${sql.array(["special"])} where id = ${s1!.id}`;
+      await generateStageFixtures(auth, s1!.id);
+
+      const { pack } = await buildSchedulePack(auth, divisionId, {
+        now: NOW,
+        mode: "generate",
+        instruction: "x",
+      });
+
+      const s1FixtureId = Object.keys(pack.stageIds).find((fid) => pack.stageIds[fid] === s1!.id);
+      expect(s1FixtureId).toBeDefined();
+      const s1Fixture = pack.fixtures.movable.find((f) => f.id === s1FixtureId)!;
+      // Sanity on both sides of the bug this closes: A is a real
+      // division-wide candidate...
+      expect(pack.settings.courts).toContain(courtA.id);
+      // ...but not in S1's own narrower set (only C carries "special").
+      expect(s1Fixture.courts).toEqual([courtC.id]);
+
+      // A deliberately minimal movableIds (just the one fixture under test) —
+      // isolates the court-narrowing check from the unrelated "every movable
+      // fixture must appear in the plan" rule, which a single-assignment plan
+      // would otherwise trip for every OTHER S1 fixture and mask the real
+      // assertion behind the wrong failure reason.
+      const plan: AiSchedulePlan = {
+        assignments: [
+          { fixture_id: s1FixtureId!, scheduled_at: "2026-08-10T09:00:00+00:00", court_label: courtA.id },
+        ],
+        unschedulable: [],
+        explanations: [],
+        summary: "x",
+      };
+      const note = structuralCheck(plan, new Set([s1FixtureId!]), pack);
+      expect(note).not.toBeNull();
+    });
+  },
+);
