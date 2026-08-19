@@ -235,6 +235,18 @@ export function SettingsPanel({
     // selector cannot resolve client-side and stays undercounted on this
     // card. Same "client hint, server authority" split as demandCap; the
     // server guard (competition-schedule-ai.ts) supplies all three.
+    //
+    // An empty `courts` selection is UNCONSTRAINED here too, mirroring
+    // `resolveCandidateCourts` (court-candidates.ts): "an empty
+    // configuredCourtIds means UNCONSTRAINED, not 'no courts'" — it falls
+    // back to every non-archived org court server-side, not to zero. Feeding
+    // the raw (possibly empty) `courts` state straight into the precheck
+    // under-reports supply relative to what Save will actually schedule
+    // against: a division that has simply never had its court list touched
+    // showed "impossible" here even though the server-side build would
+    // happily fall back to the whole org court list and succeed.
+    // `flattenCourts` is already archived-filtered (see its own doc comment).
+    const effectiveCourts = courts.length > 0 ? courts : flattenCourts(venues).map((c) => c.id);
     const input = capacityInputForFixtures(
       movable.map((f) => ({
         home: f.home_entrant_id ?? undefined,
@@ -243,7 +255,7 @@ export function SettingsPanel({
         id: f.id,
       })),
       {
-        courts,
+        courts: effectiveCourts,
         sessionWindows: config.sessionWindows.map((w) => ({ from: Date.parse(w.from), to: Date.parse(w.to) })),
         blackouts: config.blackouts.map((b) => ({ ...(b.court !== undefined ? { court: b.court } : {}), from: Date.parse(b.from), to: Date.parse(b.to) })),
         matchMinutes,
@@ -256,7 +268,7 @@ export function SettingsPanel({
       divisionId,
     );
     return input === null ? null : assessCapacity(input);
-  }, [startAt, endAt, matchMinutes, gapMinutes, rest, courts, fixtures, config, orgTz, divisionId]);
+  }, [startAt, endAt, matchMinutes, gapMinutes, rest, courts, fixtures, config, orgTz, divisionId, venues]);
 
   // "Add a court" can only offer a REAL, currently-unselected org court now
   // (no more fabricating "Court N" out of thin air) — the next one in the
