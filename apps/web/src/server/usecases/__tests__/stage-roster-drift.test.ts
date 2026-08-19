@@ -21,6 +21,7 @@ import {
   createStages,
   generateStageFixtures,
   getStageRosterDrift,
+  isRosterDriftEligible,
   rebuildStageFixtures,
 } from "../stages";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
@@ -71,6 +72,35 @@ async function decideFixture(auth: AuthCtx, fixtureId: string): Promise<void> {
   await appendEvent(auth.orgId, fixtureId, 1, { type: "generic.result", payload: { p1Score: 2, p2Score: 0 } });
 }
 
+// F3 ultrareview finding 9 — no DB: the SELECTION rule the division page
+// applies to decide which stages to ask about. It used to be an inline
+// `progression === null`, which is looser than the usecase's own gate, so a
+// division whose first roster-drawn stage is a ladder handed the page the
+// ladder (ineligible -> always empty drift) and never asked the league
+// stage behind it. Runs without Postgres on purpose: this is the rule, and
+// the rule should not need a database to pin.
+describe("isRosterDriftEligible — the shared eligibility rule", () => {
+  const ladder = { kind: "ladder", progression: null };
+  const league = { kind: "league", progression: null };
+  const ko = { kind: "knockout", progression: { sources: [] } };
+
+  it("picks the league stage out of a ladder-first division, not the ladder", () => {
+    // The old rule: `[ladder, league].find((s) => s.progression === null)`
+    // returns the LADDER, and a ladder never reports drift.
+    expect([ladder, league].filter(isRosterDriftEligible)).toEqual([league]);
+  });
+
+  it("covers EVERY eligible stage, not just the first", () => {
+    const second = { kind: "group", progression: null };
+    expect([league, second, ko].filter(isRosterDriftEligible)).toEqual([league, second]);
+  });
+
+  it("excludes americano (mints its own pair entrants) and any stage with a progression", () => {
+    expect(isRosterDriftEligible({ kind: "americano", progression: null })).toBe(false);
+    expect(isRosterDriftEligible(ko)).toBe(false);
+  });
+});
+
 describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
   it("reports both directions: a withdrawn entrant still referenced (ghost), and a newly active entrant referenced by nothing (unplaced)", async () => {
     const { auth } = await seedOrg();
@@ -112,6 +142,32 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
 
     const drift = await getStageRosterDrift(auth, stage!.id);
     expect(drift.ghosts.map((e) => e.id)).toEqual([entrantByName.get("A")]);
+  });
+
+  // F3 ultrareview finding 6 — drift is defined against a BOARD. A stage
+  // that has never been generated has none, so every active entrant looked
+  // "unplaced" and the banner fired on a division where nothing was wrong.
+  // The most common state a stage is ever in, so this fired constantly.
+  it("a stage whose fixtures have never been generated reports NO drift — an empty board is not a drifted board", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedDivision(auth, ["A", "B", "C"]);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "L", config: {}, progression: null,
+    });
+    // deliberately NO generateStageFixtures
+
+    const drift = await getStageRosterDrift(auth, stage!.id);
+    expect(drift.unplaced).toEqual([]);
+    expect(drift.ghosts).toEqual([]);
+
+    // …and the same stage DOES report drift once it has a board, so this is
+    // an empty-board carve-out, not a blanket mute.
+    await generateStageFixtures(auth, stage!.id);
+    const added = await createEntrants(auth, divisionId, [
+      { kind: "individual", display_name: "D", seed: 4, members: [] },
+    ]);
+    const after = await getStageRosterDrift(auth, stage!.id);
+    expect(after.unplaced.map((e) => e.id)).toEqual([added[0]!.id]);
   });
 
   it("a stage with a progression source (not the root) reports no drift at all", async () => {

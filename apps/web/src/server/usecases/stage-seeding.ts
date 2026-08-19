@@ -33,7 +33,7 @@ import {
 } from "@seazn/engine/competition";
 import { EngineError } from "@seazn/engine/core";
 import { HttpError } from "@/lib/errors";
-import { poolCount, POOL_KEYS, BRACKET_KINDS, loadBracketFixtures } from "./stages";
+import { poolCount, POOL_KEYS, BRACKET_KINDS, loadBracketFixtures, americanoPlacementTables } from "./stages";
 
 type Tx = postgres.TransactionSql;
 
@@ -267,7 +267,15 @@ export async function sourcesToTables(
     }
     resolved.push(source);
     shapes.push(await sourceShapeOf(tx, source));
-    const pools = await sourceStandingsTables(tx, source);
+    // americano is NOT readable from `standings_snapshots` — its snapshot
+    // folds over ephemeral per-round PAIR entrants, so reading it here seats
+    // ids the next stage's roster does not contain. Shares the on_complete
+    // path's reader rather than re-deriving it (see its doc comment,
+    // stages.ts).
+    const pools =
+      source.kind === "americano"
+        ? await americanoPlacementTables(tx, source.id, target.division_id)
+        : await sourceStandingsTables(tx, source);
     const bracket = BRACKET_KINDS.has(source.kind) ? await loadBracketFixtures(tx, source.id) : undefined;
     tables.push({ pools, ...(bracket ? { bracket } : {}) });
   }

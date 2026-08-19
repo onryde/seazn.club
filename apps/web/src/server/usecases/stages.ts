@@ -1500,6 +1500,22 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
 // ---------------------------------------------------------------------------
 const ROSTER_DRIFT_INELIGIBLE_KINDS = new Set(["ladder", "americano"]);
 
+/** Does this stage draw its fixtures from the live active roster, and so
+ *  have a board that CAN drift? The condition both `getStageRosterDrift` and
+ *  `rebuildStageFixtures` gate on, exported (F3 ultrareview finding 9) so
+ *  the page choosing which stages to ask about applies the SAME rule rather
+ *  than a looser `progression === null` stand-in — that stand-in picked the
+ *  FIRST progression-less stage, which in a ladder-then-league division is
+ *  the ladder, and the ladder is ineligible, so the whole division silently
+ *  lost its drift signal. Two readers of one rule is the recurring bug in
+ *  this area (see americanoPlacementTables); now there is one. */
+export function isRosterDriftEligible(stage: {
+  kind: string;
+  progression: unknown;
+}): boolean {
+  return stage.progression === null && !ROSTER_DRIFT_INELIGIBLE_KINDS.has(stage.kind);
+}
+
 export interface StageRosterDriftEntrant {
   id: string;
   display_name: string;
@@ -1529,6 +1545,18 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
     if (stage.progression !== null || ROSTER_DRIFT_INELIGIBLE_KINDS.has(stage.kind)) {
       return { ghosts: [], unplaced: [] };
     }
+
+    // A stage with NO fixtures has no BOARD, and drift is defined against a
+    // board — "the names on your fixtures no longer match your roster".
+    // Without this, a freshly-created stage (the single most common state a
+    // stage is ever in: created, not yet generated) reported EVERY active
+    // entrant as "unplaced", so the banner fired on a division where nothing
+    // had gone wrong and the one-click rebuild it offers would have been a
+    // no-op regenerate. F3 ultrareview finding 6. `Generate` is the call to
+    // action there, and stages-panel already renders it prominently.
+    const [{ count: fixtureCount }] = await tx<{ count: number }[]>`
+      select count(*)::int as count from fixtures where stage_id = ${stageId}`;
+    if (fixtureCount === 0) return { ghosts: [], unplaced: [] };
 
     const [active, referenced] = await Promise.all([
       tx<StageRosterDriftEntrant[]>`
@@ -2320,6 +2348,44 @@ export async function completeStage(auth: AuthCtx, stageId: string): Promise<Com
 // pools.key letters ('A'…); a single-table stage is the unnamed pool '' /
 // `overall`.
 
+/** An americano stage's ranked table, as the DOWNSTREAM stage must read it.
+ *
+ *  Rank by personal points, then map each ranked person to the division's
+ *  persistent INDIVIDUAL entrant — never the ephemeral `pair` entrant a
+ *  fixture actually ran on (pairEntrantsFor above); the next stage's
+ *  generator only ever draws from real, registered division entrants
+ *  (generateStageFixtures's `active` query).
+ *
+ *  Exported (F3 ultrareview finding 11) because this is NOT an optimisation
+ *  — it is the only correct way to read an americano source, and it was
+ *  forked. `tablesForCompletedStage` (the `on_complete` path, below) had it;
+ *  `sourcesToTables` (stage-seeding.ts, the `timing:"setup"` propose/confirm
+ *  path this session introduced) went straight to `sourceStandingsTables`,
+ *  which reads `standings_snapshots` verbatim. An americano stage's own
+ *  snapshot folds over the EPHEMERAL per-round pair entrants (Jul3/08 §3),
+ *  so the setup path resolved qualifiers to pair-entrant ids that the next
+ *  stage's roster does not contain — a silent wrong draw, the same class of
+ *  defect as ruling 10's groups_ko pools-C/D miss, reachable the moment an
+ *  organiser puts a `timing:"setup"` stage behind an americano. Two readers
+ *  of one rule is the recurring bug in this area; now there is one. */
+export async function americanoPlacementTables(
+  tx: Tx,
+  stageId: string,
+  divisionId: string,
+): Promise<PoolTable[]> {
+  const leaderboard = await personalPointsLeaderboard(tx, stageId);
+  const memberRows = await tx<{ entrant_id: string; person_id: string }[]>`
+    select e.id as entrant_id, em.person_id
+    from entrants e
+    join entrant_members em on em.entrant_id = e.id
+    where e.division_id = ${divisionId} and e.kind = 'individual'`;
+  const entrantOf = new Map(memberRows.map((r) => [r.person_id, r.entrant_id]));
+  const ordered = leaderboard
+    .map((row) => entrantOf.get(row.person_id))
+    .filter((id): id is string => id !== undefined);
+  return [placementTable(ordered)];
+}
+
 /** Build the SourceTables (pools + bracket) a COMPLETED stage offers a
  *  downstream progression — factored out of seedNextStage's own inline
  *  construction (unchanged logic: the americano/table/bracket branches
@@ -2333,22 +2399,7 @@ async function tablesForCompletedStage(
 ): Promise<SourceTables> {
   let pools: PoolTable[];
   if (stage.kind === "americano") {
-    // Rank by personal points, then map each ranked person to the
-    // division's persistent INDIVIDUAL entrant — never the ephemeral
-    // `pair` entrant a fixture actually ran on (pairEntrantsFor above); the
-    // next stage's generator only ever draws from real, registered
-    // division entrants (generateStageFixtures's `active` query).
-    const leaderboard = await personalPointsLeaderboard(tx, stage.id);
-    const memberRows = await tx<{ entrant_id: string; person_id: string }[]>`
-      select e.id as entrant_id, em.person_id
-      from entrants e
-      join entrant_members em on em.entrant_id = e.id
-      where e.division_id = ${divisionId} and e.kind = 'individual'`;
-    const entrantOf = new Map(memberRows.map((r) => [r.person_id, r.entrant_id]));
-    const ordered = leaderboard
-      .map((row) => entrantOf.get(row.person_id))
-      .filter((id): id is string => id !== undefined);
-    pools = [placementTable(ordered)];
+    pools = await americanoPlacementTables(tx, stage.id, divisionId);
   } else {
     // Ranked tables from the completion snapshot(s); translate pool uuids
     // back to their spec-facing keys.

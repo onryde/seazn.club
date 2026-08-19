@@ -11,7 +11,13 @@ import { requireDivisionPage } from "@/server/page-auth";
 import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
 import { getCompetition } from "@/server/usecases/competitions";
-import { listStages, getStandings, getSeedProposal, getStageRosterDrift } from "@/server/usecases/stages";
+import {
+  listStages,
+  getStandings,
+  getSeedProposal,
+  getStageRosterDrift,
+  isRosterDriftEligible,
+} from "@/server/usecases/stages";
 import { listDivisionFixtures, listFixtureHeadlines } from "@/server/usecases/fixtures";
 import { BracketPanel } from "@/components/v2/bracket-panel";
 import { listEntrants } from "@/server/usecases/entrants";
@@ -188,10 +194,23 @@ export default async function DivisionPage({
   // list or is structurally insulated from entrant churn, so there is at
   // most one stage worth asking. Same conditional-fetch shape as
   // seedProposals just above: organiser-only, fixtures-tab-only.
-  const rosterDriftStage = stages.find((s) => s.progression === null);
+  //
+  // F3 ultrareview finding 9 — was `stages.find((s) => s.progression === null)`,
+  // which is a LOOSER rule than the one the usecase itself applies: a ladder
+  // or americano stage has no progression but is ineligible (it mints its own
+  // entrants / has no bulk-generated board), so in a division whose first
+  // roster-drawn stage is a ladder, `find` landed on the ladder, the usecase
+  // returned an empty drift for it, and the real league stage behind it was
+  // never asked. `filter` over the SHARED predicate covers every eligible
+  // stage — normally exactly one, so normally the same single query.
+  const rosterDriftStages = stages.filter(isRosterDriftEligible);
   const rosterDrift =
-    tab === "fixtures" && editable && rosterDriftStage
-      ? { [rosterDriftStage.id]: await getStageRosterDrift(auth, rosterDriftStage.id) }
+    tab === "fixtures" && editable && rosterDriftStages.length > 0
+      ? Object.fromEntries(
+          await Promise.all(
+            rosterDriftStages.map(async (s) => [s.id, await getStageRosterDrift(auth, s.id)] as const),
+          ),
+        )
       : {};
   const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
   // Badge chips on standings rows (v3/03 §5) — resolved once per render.
