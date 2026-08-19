@@ -40,6 +40,29 @@ const VIEWPORTS = [
   { width: 320, height: 568 },
 ] as const;
 
+/** Pre-dismiss the app-wide cookie-consent banner, exactly as auth.setup.ts
+ *  does for every other spec. This file runs on an EMPTY storageState (the
+ *  credits-tab-shots idiom), so it does not inherit that dismissal — and the
+ *  banner is a fixed overlay that sat directly on top of the roster-drift
+ *  banner in the first run. The DOM assertions still passed, so the shots
+ *  looked "verified" while the picture showed a cookie dialog instead of the
+ *  surface it was evidence for. Screenshot evidence has to be checked by
+ *  LOOKING at it, not by the assertions that ran beside it.
+ *  "rejected" keeps analytics off; both keys are required or the re-prompt
+ *  logic reopens the banner. */
+async function dismissConsent(page: Page): Promise<void> {
+  const { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } = await import(
+    "../src/lib/consent"
+  );
+  await page.evaluate(
+    ([k, vk, v]) => {
+      localStorage.setItem(k, "rejected");
+      localStorage.setItem(vk, v);
+    },
+    [CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION] as const,
+  );
+}
+
 async function shot(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: resolve(SHOTS, `${name}.png`), fullPage: true });
 }
@@ -128,6 +151,8 @@ test("F3 Task 5a/5b — roster-drift banner + Rebuild button, real drift state, 
   for (const { width, height } of VIEWPORTS) {
     await page.setViewportSize({ width, height });
     await page.goto(`/o/${org.slug}/c/${comp.data!.slug}/d/${divSlug}?tab=fixtures`, { waitUntil: "load" });
+    await dismissConsent(page);
+    await page.reload({ waitUntil: "load" });
 
     // Real assertions, not just a screenshot: the banner names the actual
     // withdrawn entrant and carries the "ghosts" drift state, not merely
@@ -255,6 +280,8 @@ test("F3 Task 5c — pending-seed-proposal dot on the Fixtures tab, visible from
     // visible from wherever the organiser actually is when the source
     // stage finishes, not only if they happen to be on Fixtures already.
     await page.goto(`/o/${org.slug}/c/${comp.data!.slug}/d/${divSlug}?tab=standings`, { waitUntil: "load" });
+    await dismissConsent(page);
+    await page.reload({ waitUntil: "load" });
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
 
     const badge = page.locator("[data-pending-seed-proposals]");
