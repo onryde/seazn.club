@@ -28,6 +28,12 @@ import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
+/** F3 ultrareview finding 5 — the "nothing attached" shape of
+ *  StageRosterDrift.attachments, spelled once so a whole-object toEqual
+ *  stays a whole-object toEqual (a partial match would stop noticing a
+ *  field appearing that should not be there). */
+const NO_ATTACH = { officials: 0, lineups: 0, deviceLinks: 0 };
+
 afterAll(async () => {
   if (!HAS_DB) return;
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
@@ -170,6 +176,58 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
     expect(after.unplaced.map((e) => e.id)).toEqual([added[0]!.id]);
   });
 
+  // F3 ultrareview finding 5 — the rebuild deletes fixtures, and three other
+  // tables CASCADE off that: referee appointments, team sheets, paired
+  // scoring devices. None of them BLOCKS the rebuild (only a recorded result
+  // does), so the organiser has to be told what the click costs before they
+  // make it. That means the counts have to be real.
+  it("counts the organiser setup a rebuild would clear: officials, team sheets, device links", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedDivision(auth, ["A", "B"]);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "L", config: {}, progression: null,
+    });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    const fixtureId = fixtures[0]!.id;
+
+    const clean = await getStageRosterDrift(auth, stage!.id);
+    expect(clean.attachments).toEqual({ officials: 0, lineups: 0, deviceLinks: 0 });
+
+    const [person] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name) values (${auth.orgId}, 'Ref X') returning id`;
+    const [official] = await sql<{ id: string }[]>`
+      insert into officials (org_id, person_id, display_name, role_keys)
+      values (${auth.orgId}, ${person!.id}, 'Ref X', ${sql.json(["referee"])}) returning id`;
+    await sql`insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
+              values (${auth.orgId}, ${fixtureId}, ${official!.id}, 'referee', 'accepted')`;
+    const [{ home_entrant_id: entrantId }] = await sql<{ home_entrant_id: string }[]>`
+      select home_entrant_id from fixtures where id = ${fixtureId}`;
+    await sql`insert into lineups (fixture_id, entrant_id, person_id, org_id, slot, order_no)
+              values (${fixtureId}, ${entrantId}, ${person!.id}, ${auth.orgId}, 'starting', 1)`;
+    await sql`insert into device_links (org_id, fixture_id, token_hash, label, issued_by, expires_at)
+              values (${auth.orgId}, ${fixtureId}, 'hash-' || ${randomUUID()}, 'Court 1 tablet',
+                      ${auth.userId}, now() + interval '1 day')`;
+
+    const drift = await getStageRosterDrift(auth, stage!.id);
+    expect(drift.attachments).toEqual({ officials: 1, lineups: 1, deviceLinks: 1 });
+
+    // Scoped to THIS stage's fixtures — a second stage's attachments never
+    // inflate the warning the organiser reads for this one.
+    const [other] = await createStages(auth, divisionId, {
+      seq: 2, kind: "league", name: "L2", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, other!.id);
+    const otherDrift = await getStageRosterDrift(auth, other!.id);
+    expect(otherDrift.attachments).toEqual({ officials: 0, lineups: 0, deviceLinks: 0 });
+
+    // …and none of them blocks: this is a warning, not a guard. The rebuild
+    // goes through, and takes them with it (the CASCADE this warns about).
+    await rebuildStageFixtures(auth, stage!.id);
+    const [{ count }] = await sql<{ count: number }[]>`
+      select count(*)::int as count from fixture_officials where fixture_id = ${fixtureId}`;
+    expect(count).toBe(0);
+  });
+
   it("a stage with a progression source (not the root) reports no drift at all", async () => {
     const { auth } = await seedOrg();
     const { divisionId } = await seedDivision(auth, ["A", "B", "C", "D"]);
@@ -191,7 +249,7 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
     await generateStageFixtures(auth, koStage.id); // TBD placeholders, no entrant refs
 
     const drift = await getStageRosterDrift(auth, koStage.id);
-    expect(drift).toEqual({ ghosts: [], unplaced: [] });
+    expect(drift).toEqual({ ghosts: [], unplaced: [], attachments: NO_ATTACH });
   });
 });
 
@@ -383,6 +441,6 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5b) — rebuildStageFixtures", () => {
     expect(referenced.has(added[0]!.id)).toBe(true);
 
     const after = await getStageRosterDrift(auth, stage!.id);
-    expect(after).toEqual({ ghosts: [], unplaced: [] });
+    expect(after).toEqual({ ghosts: [], unplaced: [], attachments: NO_ATTACH });
   });
 });

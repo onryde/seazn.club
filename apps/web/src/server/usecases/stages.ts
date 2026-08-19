@@ -1499,6 +1499,7 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
 // signal would misreport ~100% of entrants "unplaced" for both.
 // ---------------------------------------------------------------------------
 const ROSTER_DRIFT_INELIGIBLE_KINDS = new Set(["ladder", "americano"]);
+const NO_ATTACHMENTS = { officials: 0, lineups: 0, deviceLinks: 0 } as const;
 
 /** Does this stage draw its fixtures from the live active roster, and so
  *  have a board that CAN drift? The condition both `getStageRosterDrift` and
@@ -1530,6 +1531,23 @@ export interface StageRosterDrift {
    *  fixture in this stage — registered after the last Generate, or Generate
    *  has never run since. */
   unplaced: StageRosterDriftEntrant[];
+  /** Organiser WORK attached to this stage's fixtures that a rebuild would
+   *  take with them (F3 ultrareview finding 5). `delete from fixtures`
+   *  CASCADEs into all three, and unlike a result none of them BLOCKS the
+   *  rebuild: an organiser who has already appointed referees is exactly the
+   *  organiser most likely to need a rebuild before match day, so refusing
+   *  would make the feature useless when it matters most. Refusing is wrong,
+   *  but so is destroying it silently — these counts let the confirm dialog
+   *  name what the rebuild clears, so the choice is made with the cost
+   *  visible. Zero for a stage with no board. */
+  attachments: {
+    /** `fixture_officials` — referee/umpire appointments (officials.ts). */
+    officials: number;
+    /** `lineups` — team sheets (fixtures.ts). */
+    lineups: number;
+    /** `device_links` — paired scoring devices (device-links.ts). */
+    deviceLinks: number;
+  };
 }
 
 /** Derived, never stored (ruling 7) — a plain join over `entrants` and
@@ -1543,7 +1561,7 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
     >`select division_id, kind, progression from stages where id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
     if (stage.progression !== null || ROSTER_DRIFT_INELIGIBLE_KINDS.has(stage.kind)) {
-      return { ghosts: [], unplaced: [] };
+      return { ghosts: [], unplaced: [], attachments: NO_ATTACHMENTS };
     }
 
     // A stage with NO fixtures has no BOARD, and drift is defined against a
@@ -1556,7 +1574,7 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
     // action there, and stages-panel already renders it prominently.
     const [{ count: fixtureCount }] = await tx<{ count: number }[]>`
       select count(*)::int as count from fixtures where stage_id = ${stageId}`;
-    if (fixtureCount === 0) return { ghosts: [], unplaced: [] };
+    if (fixtureCount === 0) return { ghosts: [], unplaced: [], attachments: NO_ATTACHMENTS };
 
     const [active, referenced] = await Promise.all([
       tx<StageRosterDriftEntrant[]>`
@@ -1575,9 +1593,24 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
     ]);
     const activeIds = new Set(active.map((e) => e.id));
     const referencedIds = new Set(referenced.map((e) => e.id));
+    // One round trip for all three — each is a plain count over the stage's
+    // own fixture ids, and none of them is large enough to want three.
+    const [counts] = await tx<{ officials: number; lineups: number; device_links: number }[]>`
+      select
+        (select count(*) from fixture_officials fo
+           join fixtures f on f.id = fo.fixture_id where f.stage_id = ${stageId})::int as officials,
+        (select count(*) from lineups l
+           join fixtures f on f.id = l.fixture_id where f.stage_id = ${stageId})::int as lineups,
+        (select count(*) from device_links dl
+           join fixtures f on f.id = dl.fixture_id where f.stage_id = ${stageId})::int as device_links`;
     return {
       ghosts: referenced.filter((e) => !activeIds.has(e.id)),
       unplaced: active.filter((e) => !referencedIds.has(e.id)),
+      attachments: {
+        officials: counts?.officials ?? 0,
+        lineups: counts?.lineups ?? 0,
+        deviceLinks: counts?.device_links ?? 0,
+      },
     };
   });
 }
@@ -1642,6 +1675,17 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     //     event landing.
     // So block on the evidence itself as well as on status: if a fixture has
     // anything recorded against it, it is not ours to delete.
+    //
+    // What this deliberately does NOT block on (F3 ultrareview finding 5):
+    // `lineups`, `fixture_officials` and `device_links` also CASCADE away
+    // with the fixtures, but they are organiser SETUP, not a result. An
+    // organiser who has already appointed referees is the one most likely to
+    // need a rebuild before match day, so blocking would disable the feature
+    // exactly when it earns its keep. Destroying them silently is equally
+    // wrong, so `getStageRosterDrift` counts all three and the confirm
+    // dialog names them before the click (progression.rosterDrift.confirm*).
+    // If a future table holds real RESULT data, it belongs in the guard
+    // below, not in that count.
     //
     // One latent trapdoor, checked and currently INERT (2026-08-19): fixtures
     // .parent_fixture_id is a self-FK declared ON DELETE CASCADE (V214:18), so

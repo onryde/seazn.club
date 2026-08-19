@@ -14,7 +14,7 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { TipCallout } from "@/components/ui/tip";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
@@ -109,6 +109,11 @@ interface RosterDriftEntrant {
 interface RosterDrift {
   ghosts: RosterDriftEntrant[];
   unplaced: RosterDriftEntrant[];
+  /** Organiser setup that a rebuild clears along with the fixtures — see
+   *  StageRosterDrift.attachments (usecases/stages.ts) for why these do not
+   *  BLOCK the rebuild the way a recorded result does. Optional: hand-built
+   *  props in this panel's own __tests__ predate the field. */
+  attachments?: { officials: number; lineups: number; deviceLinks: number };
 }
 
 interface Props {
@@ -326,6 +331,12 @@ export function capacityForStage(
 
 export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport }: Props) {
   const msg = useMsg();
+  // Only for Intl.ListFormat in attachmentWarning below — the rebuild
+  // confirm dialog joins its "this also clears …" list per locale. The
+  // non-throwing reader on purpose: this panel is rendered bare (no
+  // DictProvider) throughout its own component tests, and the locale is
+  // formatting-only here.
+  const locale = useLocaleOrDefault();
   const confirmDialog = useConfirm();
   const router = useRouter();
   // P9 pass 4d: id -> venue-qualified display name, reusing the SAME
@@ -578,7 +589,9 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
   async function rebuildStage(stageId: string) {
     const ok = await confirmDialog({
       title: msg("progression.rosterDrift.confirmTitle"),
-      body: msg("progression.rosterDrift.confirmBody"),
+      body: [msg("progression.rosterDrift.confirmBody"), attachmentWarning(rosterDrift[stageId], msg, locale)]
+        .filter(Boolean)
+        .join(" "),
       confirmLabel: msg("progression.rosterDrift.confirmLabel"),
       tone: "danger",
     });
@@ -1228,6 +1241,36 @@ const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_pl
  * STAGE_NOT_ROOT this panel's own gating never triggers) falls through to
  * the caller's generic handling, same as generatePreconditionMessage's null.
  */
+/**
+ * F3 ultrareview finding 5 — the sentence appended to the rebuild confirm
+ * dialog naming the organiser SETUP the rebuild clears along with the
+ * fixtures: referee appointments, team sheets, paired scoring devices. All
+ * three CASCADE off `delete from fixtures` and none of them blocks the
+ * rebuild (a result does; see rebuildStageFixtures' guard) — so without this
+ * the dialog said "every fixture is deleted and regenerated" while silently
+ * also dropping a Saturday's worth of appointments.
+ *
+ * Returns "" when there is nothing attached, so the common case adds no
+ * boilerplate to click through — only non-zero pieces are listed. Joined
+ * with `Intl.ListFormat` on the caller's own locale rather than a hardcoded
+ * ", " and " and ": the conjunction and the separator differ per language,
+ * and this repo's four dictionaries would otherwise need two more keys that
+ * exist only to spell out punctuation. Exported (pure) for the same reason
+ * rebuildBlockedMessage is: testable without a jsdom harness.
+ */
+export function attachmentWarning(drift: RosterDrift | undefined, msg: Msg, locale: string): string {
+  const a = drift?.attachments;
+  if (!a) return "";
+  const parts = [
+    a.officials > 0 ? msg("progression.rosterDrift.alsoOfficials", { count: a.officials }) : null,
+    a.lineups > 0 ? msg("progression.rosterDrift.alsoLineups", { count: a.lineups }) : null,
+    a.deviceLinks > 0 ? msg("progression.rosterDrift.alsoDevices", { count: a.deviceLinks }) : null,
+  ].filter((p): p is string => p !== null);
+  if (parts.length === 0) return "";
+  const items = new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(parts);
+  return msg("progression.rosterDrift.alsoCleared", { items });
+}
+
 export function rebuildBlockedMessage(err: unknown, msg: Msg): string | null {
   if (!(err instanceof ApiV1Error) || err.code !== "STAGE_HAS_RESULTS") return null;
   return msg("progression.rosterDrift.blockedNotice");

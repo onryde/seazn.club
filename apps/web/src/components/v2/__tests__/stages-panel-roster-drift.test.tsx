@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { StagesPanel, rebuildBlockedMessage } from "@/components/v2/stages-panel";
+import { StagesPanel, attachmentWarning, rebuildBlockedMessage } from "@/components/v2/stages-panel";
 import { ApiV1Error } from "@/lib/client-v1";
 import { msg } from "@/lib/messages";
+import { msgFor } from "@/lib/messages-i18n";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -105,5 +106,54 @@ describe("rebuildBlockedMessage — StagesPanel rebuild-click classifier", () =>
   it("returns null for PAYMENT_REQUIRED so the paywall gate still wins", () => {
     const err = new ApiV1Error("upgrade", 402, "PAYMENT_REQUIRED", { feature_key: "formats.advanced" });
     expect(rebuildBlockedMessage(err, msg)).toBeNull();
+  });
+});
+
+// F3 ultrareview finding 5 — `delete from fixtures` CASCADEs into
+// fixture_officials, lineups and device_links, none of which blocks the
+// rebuild the way a recorded result does. Before this, the confirm dialog
+// said only "every fixture is deleted and regenerated" while silently taking
+// a whole day's referee appointments with it.
+describe("attachmentWarning — what the rebuild clears besides fixtures", () => {
+  const drift = (attachments: { officials: number; lineups: number; deviceLinks: number }) => ({
+    ghosts: [],
+    unplaced: [],
+    attachments,
+  });
+
+  it("names every non-zero kind, joined for the locale", () => {
+    const out = attachmentWarning(drift({ officials: 6, lineups: 2, deviceLinks: 1 }), msg, "en");
+    expect(out).toContain("6 official assignment(s)");
+    expect(out).toContain("2 team sheet(s)");
+    expect(out).toContain("1 linked scoring device(s)");
+    expect(out).toContain("and"); // Intl.ListFormat conjunction, not a hardcoded ", "
+  });
+
+  it("lists only the non-zero kinds", () => {
+    const out = attachmentWarning(drift({ officials: 4, lineups: 0, deviceLinks: 0 }), msg, "en");
+    expect(out).toContain("4 official assignment(s)");
+    expect(out).not.toContain("team sheet");
+    expect(out).not.toContain("scoring device");
+  });
+
+  it("adds nothing to click through when nothing is attached", () => {
+    expect(attachmentWarning(drift({ officials: 0, lineups: 0, deviceLinks: 0 }), msg, "en")).toBe("");
+  });
+
+  it("is inert for a drift payload that predates the field, and for no drift at all", () => {
+    expect(attachmentWarning({ ghosts: [], unplaced: [] }, msg, "en")).toBe("");
+    expect(attachmentWarning(undefined, msg, "en")).toBe("");
+  });
+
+  // `msg` is the English-only lookup (lib/messages.ts); the localized path
+  // is msgFor/useMsg. Bound here so this covers the real four-locale copy,
+  // not just the en catalog — a missing fr key would fall back to English
+  // and fail these two `toContain`s.
+  it("localises — the fr dictionary's own wording", () => {
+    const frMsg: typeof msg = (key, vars) => msgFor("fr", key, vars);
+    const out = attachmentWarning(drift({ officials: 2, lineups: 1, deviceLinks: 0 }), frMsg, "fr");
+    expect(out).toContain("2 désignation(s) d'officiel");
+    expect(out).toContain("1 feuille(s) de match");
+    expect(out).toContain("Elle supprime aussi");
   });
 });
