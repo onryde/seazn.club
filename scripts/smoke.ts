@@ -807,6 +807,21 @@ async function main() {
   // --- v8: division settings — format lock + logo upload URL.
   await divisionSettingsSuite(admin);
 
+  // --- F5 test debt Task 4 (F1's owed check, 2026-08-17 design §5): the
+  // bracket round-role columns (lane/is_final/third_place, V368) and the bye
+  // slot label, proven over real HTTP. Own fresh session — not an
+  // entitlement gate. Deliberately NOT called from inside the `aiConfigured`
+  // block seedBracketAiDivision's own AI-plan callers live in (~line 10333):
+  // that block's checks skip outright when SCHEDULING_AI_BASE_URL is unset,
+  // and this check asserts nothing AI-related, so gating it there would make
+  // it skip for the same reason #452's schedulingConstraintsSuite
+  // deliberately did NOT hang off that seed either.
+  {
+    const roundRole = newSession();
+    await signIn(roundRole, `smoke-roundrole-${tag}@example.com`);
+    await smokeBracketRoundRoleAndByes(roundRole);
+  }
+
   // --- Date/time UX programme, Prompt 09: the court-removal guard added in
   // P08 (own fresh free session — not an entitlement gate).
   await scheduleCourtRemovalGuardSuite();
@@ -8460,6 +8475,84 @@ async function seedBracketAiDivision(
     fixtures: gen.fixtures,
     courtIds: [bracketCourtA.id, bracketCourtB.id],
   };
+}
+
+/** F1's owed smoke check (2026-08-17 design §5): the bracket round-role
+ *  columns (lane/is_final/third_place, V368) and the bye slot label, proven
+ *  over real HTTP rather than asserted only at the unit level. 6 entrants —
+ *  single-elim pads to 8 slots and seeds 2 byes into round 1 (seeds 1 and 2
+ *  skip straight to round 2), giving a real bye AND a real 3-round bracket
+ *  in one seed.
+ *
+ *  Own session, own org, keyless — deliberately NOT called from inside the
+ *  `aiConfigured` block `seedBracketAiDivision`'s own AI-plan callers live in
+ *  (schedRegV3Suite's #396 seed, ~line 10333): that block's checks skip
+ *  outright when SCHEDULING_AI_BASE_URL is unset, and this check asserts
+ *  nothing AI-related, so gating it there would make it skip for the same
+ *  reason #452's schedulingConstraintsSuite deliberately did NOT hang off
+ *  that seed either (see the comment above that suite). Runs unconditionally
+ *  on every smoke invocation instead. */
+async function smokeBracketRoundRoleAndByes(s: Session): Promise<void> {
+  const comp = v1data<{ id: string }>(
+    await v1(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `RoundRole ${tag}` }),
+  );
+  const div = v1data<{ id: string }>(
+    await v1(s, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Cup",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  const entrants = Array.from({ length: 6 }, (_, i) => ({
+    kind: "individual",
+    display_name: `RR${i + 1} ${tag}`,
+    seed: i + 1,
+  }));
+  await v1(s, `/api/v1/divisions/${div.id}/entrants`, "POST", entrants);
+  const stage = v1data<{ id: string }>(
+    await v1(s, `/api/v1/divisions/${div.id}/stages`, "POST", {
+      seq: 1,
+      kind: "knockout",
+      name: "Cup",
+      config: {},
+    }),
+  );
+  const gen = v1data<{
+    fixtures: {
+      id: string;
+      round_no: number;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+      lane: "WB" | "LB" | "GF" | null;
+      is_final?: boolean;
+      third_place?: boolean;
+      away_slot_label?: { key: string; params: Record<string, unknown> } | null;
+    }[];
+  }>(await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"));
+
+  const round1 = gen.fixtures.filter((f) => f.round_no === 1);
+  const round1Byes = round1.filter((f) => f.away_entrant_id === null && f.home_entrant_id !== null);
+  check("6-entrant single-elim: round 1 has exactly 2 byes", round1Byes.length === 2);
+  check(
+    "each round-1 bye fixture carries the bye slot label on the phantom side",
+    round1Byes.every((f) => f.away_slot_label?.key === "bracket.slot.bye"),
+  );
+
+  const final = gen.fixtures.find((f) => f.is_final === true);
+  check("bracket carries exactly one fixture flagged is_final", gen.fixtures.filter((f) => f.is_final).length === 1);
+  check(
+    "the final's round_no is the bracket's last round (round 3 for 6 entrants)",
+    final !== undefined && final.round_no === 3,
+  );
+  check(
+    "no fixture in a single-lane knockout carries a losers/grand-final lane",
+    gen.fixtures.every((f) => f.lane === null || f.lane === "WB"),
+  );
+  check(
+    "no fixture is flagged third_place (this stage did not enable it)",
+    gen.fixtures.every((f) => f.third_place !== true),
+  );
 }
 
 /** #397 (calendar anchor): a time that never left 1970 — what the pack handed
