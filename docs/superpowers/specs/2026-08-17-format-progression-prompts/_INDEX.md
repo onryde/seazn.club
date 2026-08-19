@@ -28,7 +28,7 @@ and those two `stages.ts` functions; F1 is fenced off `qualification.ts`,
 |---|---|---|---|
 | F1 | `F1-bracket-round-role.md` | — | **MERGED** as #606 (2026-08-18), plus #613 which named the knockout tree's rounds — the one bracket shape F1 left with no captions at all |
 | F2 | `F2-unified-progression-field.md` | — | **MERGED** as #616 (2026-08-18, `ef473f586`), 60 commits. One `progression` field; `qualification` and `seeding` dropped. Migrations V371-V373, no version collision on main |
-| F3 | plans: `../../plans/2026-08-18-f3-day-one-fixtures.md` + `../../plans/2026-08-18-f3-task5-entrant-churn.md` | F2 **merged** ✅ | **ALL SIX DELIVERABLES DONE** 2026-08-19, DRAFT PR **#617**, branch `feat/f3-day-one-fixtures`, rebased onto `e7ccdd7eb` (post-P9). Six: nine emitters flipped to `timing:"setup"`; `groups_ko` draws from every pool; P6 resolved as a 422; §7 P1 **proven by execution** (day-one fixtures reach the board and survive a BUILD — same fixture id, byte-identical labels, entrant ids still null); entrant-churn detection + a rebuild that refuses once anything has been played; all 14 picker strings in 4 locales with a reader. Plus ruling 14's waiting-proposal prompt and ruling 12's amendment (carry was NEVER deliverable → F6). Gates: engine 3988/0/4001, web 5210 passed/12 failed/5290 (12 = 3 known-unrelated files: `org-addon-price-sweep` main-inherited, `org-posts-digest` cross-suite, `schedule-build-honours-locks` needs the placement service), gate 0 errors, i18n parity + key-union clean, OpenAPI drift found and closed (`e1e541692`) |
+| F3 | plans: `../../plans/2026-08-18-f3-day-one-fixtures.md` + `../../plans/2026-08-18-f3-task5-entrant-churn.md` | F2 **merged** ✅ | **ALL SIX DELIVERABLES DONE** 2026-08-19, DRAFT PR **#617**, branch `feat/f3-day-one-fixtures`, rebased onto `e7ccdd7eb` (post-P9). Six: nine emitters flipped to `timing:"setup"`; `groups_ko` draws from every pool; P6 resolved as a 422; §7 P1 **proven by execution** (day-one fixtures reach the board and survive a BUILD — same fixture id, byte-identical labels, entrant ids still null); entrant-churn detection + a rebuild that refuses once anything has been played; all 14 picker strings in 4 locales with a reader. Plus ruling 14's waiting-proposal prompt and ruling 12's amendment (carry was NEVER deliverable → F6). Gates: engine 3988/0/4001, web 5210 passed/12 failed/5290 (12 = 3 known-unrelated files: `org-addon-price-sweep` main-inherited, `org-posts-digest` cross-suite, `schedule-build-honours-locks` needs the placement service), gate 0 errors, i18n parity + key-union clean, OpenAPI drift found and closed (`e1e541692`). **Ultrareview run 2026-08-19 (13 findings): 9 fixed, 4 rejected with reasons — rulings 15-18 below.** Gates re-run after: engine 3989/0/4002, web 9325 passed/12 failed/9411 (the SAME 12 the branch started with), scripts 33/0/36, turbo typecheck+lint 4/4 with 0 errors, i18n parity 4904 x 4, no OpenAPI drift |
 | F4 | **MERGED** as #619 (2026-08-18, `27af0f30d`), 16 commits. Export path + `.ics` feed + bracket poster | — | premise RETIRED (no sport/format-kind gap in either direction; its mexicano comment folds into F3). Slot **repurposed** to the export + calendar day-one leaks (§7 P5, P2). Does NOT wait for F3 — three catalogue templates already emit `timing: "setup"`. Owner CONFIRMED the repurpose 2026-08-18 |
 | F5 | **prompt ready** — same doc §8 | all | scope fixed by the §5 table |
 | F6 | **NEW, unwritten** — scoped by ruling 12's 2026-08-19 amendment | F3 | Make the SOLD entitlement `standings.carry_over` actually reachable. Wire `carryDeltas` + `config.carry_deltas` + the `standings_carried` event at `confirmSeedProposal` (mirroring `seedNextStage:2206-2247`, which already does it on the `on_complete` path); surface `REAL_TABLE_KINDS`' non-real-source rejection at propose time; relax the `schemas.ts` refine; add a carry control to the picker, which has none. Engine needs NO change — `config.carry_deltas → openingDeltas` already folds. Update `custom-points.test.ts`, `progression-multi-source.test.ts`, `progression-schema.test.ts`, which currently assert the rejection |
@@ -275,6 +275,68 @@ prompts for F3, F5 and two standalone product fixes.
     the organiser needs a VISIBLE prompt that a proposal is waiting — without
     one, "always confirm" means a published bracket sits full of placeholders
     after the results are already in.
+
+15. **An americano source had TWO readers and they had drifted**
+    (2026-08-19, ultrareview finding 11 — the highest-value find of the
+    review). An americano stage's `standings_snapshots` fold over the
+    EPHEMERAL per-round `pair` entrants it mints per fixture, not the
+    division's registered individuals. `tablesForCompletedStage` (the
+    `on_complete` path) has known this since L3/#414 and re-ranks from the
+    personal-points leaderboard instead. `sourcesToTables` — the
+    `timing:"setup"` propose/confirm path F3 itself introduced — went
+    straight to `sourceStandingsTables`, so a knockout behind an americano
+    was seeded with entrant ids its own roster does not contain. A silent
+    wrong draw, reachable from one `timing` value, in the same class as
+    ruling 10's `groups_ko` pools-C/D miss. Fixed by extracting
+    `americanoPlacementTables` and pointing both readers at it.
+    **The pattern, stated once for whoever picks up F5/F6:** every defect
+    of consequence found on this branch — rulings 10, 15, and ultrareview
+    findings 8, 9 — was one rule with two readers that had drifted, not a
+    rule that was wrong. When adding a path, look for the existing reader
+    of the same rule before writing a second one.
+
+16. **The churn banner must not fire on a stage nobody has generated yet**
+    (2026-08-19, ultrareview finding 6). `getStageRosterDrift` compared the
+    active roster against fixture-referenced entrants with no check that the
+    stage HAS a board, so a freshly-created stage — the most common state a
+    stage is ever in — reported every entrant as "unplaced" and offered a
+    rebuild that would have been a no-op regenerate. Drift is defined
+    against a board; no board, no drift. `Generate` is the call to action
+    there, and the panel already renders it prominently.
+
+17. **The rebuild warns about organiser SETUP; it does not block on it**
+    (2026-08-19, ultrareview finding 5; an owner-level product call, made
+    here rather than parked). `delete from fixtures` CASCADEs into
+    `lineups`, `fixture_officials` and `device_links` — team sheets, referee
+    appointments, paired scoring devices — none of which the guard checked.
+    Blocking on them was rejected: an organiser who has already appointed
+    referees is exactly the one most likely to need a rebuild before match
+    day, so refusing would disable the feature when it earns its keep.
+    Destroying them silently was equally rejected. The drift payload counts
+    all three and the confirm dialog names them before the click. **The
+    rule for anything added later: a RESULT belongs in the guard, organiser
+    SETUP belongs in the count.**
+
+18. **Four of the thirteen ultrareview findings were rejected**, recorded so
+    a later review does not re-raise them as new:
+    - *`seeded_map` collision uses `JSON.stringify` equality.* Deliberate and
+      documented in place — a same-source duplicate descriptor is refused a
+      few lines later by `resolveProgression`'s own entrant dedupe, and only
+      `best_nth`'s key is genuinely ambiguous within one source (which it
+      still refuses).
+    - *Preview sizing derives the qualifier pool from the array-adjacent
+      stage, not the stage the source names.* `PreviewStageInput` carries no
+      stage id (its three callers pass draft/canned stages), so a
+      `{stageId}` source is unresolvable in a preview by construction, and
+      "previous" — what every shipped template emits — IS the adjacent one.
+    - *`previewSourceShape` duplicates `poolCount()`.* The divergence is the
+      point and is documented at both ends: a preview read path must fall
+      back to 1 pool on malformed knob data, never 422 a gallery render.
+    - *`format-templates.ts:379` hand-writes `timing:"setup"` per template.*
+      That file is 317 lines. The underlying concern — three independent
+      defaults for one concept — was real for `scripts/seed-demo.ts` and is
+      closed by finding 12's fix and its drift gate
+      (`scripts/__tests__/seed-demo-templates.test.ts`).
 
 ## F4's brief contains one false premise (found 2026-08-18)
 
