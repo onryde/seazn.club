@@ -49,7 +49,7 @@ on:
 jobs:
   deploy-prod:
     name: Deploy (production)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     concurrency:
       group: deploy-prod
       # Serialise, don't cancel: an in-flight production rollout must not be

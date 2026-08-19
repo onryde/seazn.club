@@ -57,7 +57,7 @@ jobs:
   # -------------------------------------------------------------------------
   gates:
     name: Typecheck + lint + drift gates
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
@@ -181,7 +181,7 @@ jobs:
   # -------------------------------------------------------------------------
   test:
     name: Unit tests (apps/web) ${{ matrix.shard }}/2
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       fail-fast: false # one shard's failure must not hide the other's
       matrix:
@@ -271,7 +271,7 @@ jobs:
   # -------------------------------------------------------------------------
   engine:
     name: Engine coverage + sim matrix
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # paths-filter reads the PR's changed files via the API; the repo's
     # default GITHUB_TOKEN is restricted and 403s without this.
     permissions:
@@ -350,7 +350,7 @@ jobs:
   # -------------------------------------------------------------------------
   security:
     name: Security scan
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
         with:
@@ -387,7 +387,7 @@ jobs:
 
   container:
     name: docker build + TS 7 musl exec
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
 
@@ -450,7 +450,7 @@ jobs:
   # -------------------------------------------------------------------------
   smoke-db:
     name: Smoke — DB + Redis suites (Postgres container)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     services:
       postgres:
@@ -841,7 +841,7 @@ jobs:
   # -------------------------------------------------------------------------
   smoke-db-usecases:
     name: Smoke — usecases [i-z] (Postgres container)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     services:
       postgres:
@@ -1108,7 +1108,7 @@ jobs:
   # -------------------------------------------------------------------------
   smoke-e2e:
     name: Smoke — build + server + e2e (Postgres container)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     services:
       postgres:

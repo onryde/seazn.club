@@ -49,7 +49,7 @@ on:
 jobs:
   deploy-stg:
     name: Deploy to placement-stg
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # Its OWN group. A staging deploy must never queue behind, or cancel, a
     # production rollout — and, symmetrically, must not be cancelled
     # mid-flight by the next merge either (a killed `flyctl deploy` can leave

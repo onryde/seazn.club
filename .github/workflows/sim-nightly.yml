@@ -21,7 +21,7 @@ concurrency:
 jobs:
   simulate:
     name: Deep simulation (SIM_RUNS=${{ inputs.sim_runs || '10000' }})
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v5

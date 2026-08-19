@@ -34,7 +34,7 @@ on:
 jobs:
   deploy:
     name: Deploy to fly (production)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # Serialise: a second tag must not race a rollout mid-flight.
     concurrency:
       group: placement-deploy

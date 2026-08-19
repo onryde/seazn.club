@@ -84,7 +84,7 @@ jobs:
   # ---------------------------------------------------------------------
   e2e-parallel:
     name: Playwright e2e — parallel ${{ matrix.shard }}/3 (Postgres container)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     # Sharded because this project is the wall-clock floor of a PR. Measured on
     # run 31691106751: 8.2 min total, of which the Playwright step alone was
@@ -406,7 +406,7 @@ jobs:
   # ---------------------------------------------------------------------
   e2e-serial:
     name: Playwright e2e — serial (Postgres container)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     services:
       postgres:
@@ -622,7 +622,7 @@ jobs:
   # ---------------------------------------------------------------------
   e2e-mobile:
     name: Playwright e2e — ${{ matrix.group }} (Postgres container)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     # Grouped by device class, not round-robin, so a red leg names a coherent
     # band ("tablets are broken") instead of an arbitrary third of the matrix.

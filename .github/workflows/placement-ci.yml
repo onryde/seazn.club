@@ -55,7 +55,7 @@ jobs:
   # ---------------------------------------------------------------------
   test:
     name: Test (pytest, Python 3.14)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
@@ -140,7 +140,7 @@ jobs:
   # ---------------------------------------------------------------------
   docker:
     name: Docker build + image smoke test
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
       - uses: docker/setup-buildx-action@v3
@@ -252,7 +252,7 @@ jobs:
   # ---------------------------------------------------------------------
   proto-drift:
     name: Cross-language proto stub drift gate
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
@@ -328,7 +328,7 @@ jobs:
   # ---------------------------------------------------------------------
   integration:
     name: TypeScript ↔ live service (real gRPC, no mocks)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
       - uses: docker/setup-buildx-action@v3

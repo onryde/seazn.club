@@ -29,7 +29,7 @@ on:
 jobs:
   deploy-stg:
     name: Deploy (stg)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     concurrency:
       group: deploy-stg
       # Staging is latest-wins: stacked merges to main supersede the deploy in
