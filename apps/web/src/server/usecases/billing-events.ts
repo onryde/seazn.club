@@ -579,6 +579,14 @@ async function handleSubscriptionChanged(stripeSub: Stripe.Subscription) {
   if (!resolved) return;
   if (!(await mayWriteGroup(resolved, stripeSub))) return;
   await syncSubscriptionForGroup(resolved.subscriptionId, stripeSub);
+  log.info(
+    {
+      subscriptionId: resolved.subscriptionId,
+      stripeSubscriptionId: stripeSub.id,
+      status: stripeSub.status,
+    },
+    "billing: subscription row synced from webhook",
+  );
   // Plan/status just moved on the shared row: every org in the group resolves
   // through it, so a single-org invalidation would leave siblings on the old
   // plan for the 300s TTL.
@@ -1622,6 +1630,10 @@ async function handleSubscriptionDeleted(stripeSub: Stripe.Subscription) {
        and stripe_item_id is not null and status = 'active'`;
   // A cancel drops EVERY org in the group to Community at once.
   await invalidateGroupEntitlements(subscriptionId);
+  log.info(
+    { subscriptionId, stripeSubscriptionId: stripeSub.id },
+    "billing: subscription canceled — group dropped to community",
+  );
   // Attribution only. Prefer the org the checkout named, but ONLY if it still
   // bills through this group — otherwise a cancel would be reported against an
   // org that has since moved elsewhere.

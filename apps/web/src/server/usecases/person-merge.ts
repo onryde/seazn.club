@@ -285,6 +285,11 @@ export async function mergePersons(
     return { merge_id: merge!.id, survivor: updated! };
   });
 
+  log.info(
+    { orgId: auth.orgId, mergeId: merged.merge_id, survivorId, absorbedId },
+    "persons: merge executed",
+  );
+
   // 8. Re-verify, AFTER the write has committed. Two people on two courts at
   //    once was a legal board a moment ago; one person on two courts is not, and
   //    the organiser is the only one who can move a card. `.catch` mirrors the

@@ -378,6 +378,16 @@ export async function syncGroupQuantity(
     return { quantity: active, charged, synced };
   })) as unknown as QuantitySync;
 
+  // Only when something actually moved — the overwhelming majority of calls
+  // find the item already converged and would make this the loudest,
+  // least useful line in the file if logged unconditionally.
+  if (res.synced) {
+    log.info(
+      { subscriptionId, quantity: res.quantity, charged: res.charged },
+      "billing: group quantity synced to Stripe",
+    );
+  }
+
   // A live subscription with no organisations bills for nothing and can never be
   // corrected by a quantity (Stripe rejects 0). Returning quietly left the sweep
   // re-selecting it for ever — a group whose last org was SOFT DELETED rather

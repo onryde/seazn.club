@@ -441,6 +441,10 @@ export async function creditPassTowardSubscription(orgId: string): Promise<PassC
     return none("redemption_unrecorded", intent);
   }
 
+  log.info(
+    { orgId, paymentIntent: intent, amountMinor: paid.amountMinor, currency: paid.currency },
+    "billing: pass credit granted toward subscription",
+  );
   return {
     outcome: "credited",
     amountMinor: paid.amountMinor,
@@ -676,6 +680,10 @@ export async function reversePassCreditOnRefund(
         where payment_intent = ${intent} and reversed_at is null
         returning payment_intent`;
   if (!won) return;
+  log.info(
+    { intent, orgId: redemption.org_id, reverseAmount, unsafe },
+    "billing: pass credit reversed",
+  );
 
   if (unsafe || reverseAmount < redemption.amount_minor) {
     // Two distinct reasons to alert, both money the business is not (or

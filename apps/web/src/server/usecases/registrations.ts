@@ -1686,6 +1686,10 @@ async function confirmPaidRegistration(
     return;
   }
   if (outcome.kind === "confirmed") {
+    log.info(
+      { registrationId: regId, orgId: outcome.orgId, divisionId: outcome.divisionId },
+      "registration: checkout confirmed",
+    );
     fireDivisionRevalidate(outcome.divisionId, outcome.competitionId);
     // Growth loop (SPEC-5 §2 C): the organiser's FIRST competition to take a paid
     // registration earns free AI credits. Fires only on a genuine first-time paid
@@ -2428,6 +2432,10 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
     | { locked: RegistrationWithGroupRow; promoted: RegistrationWithGroupRow | null }
     | null;
   if (!outcome) return;
+  log.info(
+    { registrationId: reg.id, orgId: ctx.org_id, by: actorId ? "organiser" : "registrant" },
+    "registration: withdrawn",
+  );
 
   fireDivisionRevalidate(reg.division_id, ctx.competition_id);
   if (outcome.promoted) {
