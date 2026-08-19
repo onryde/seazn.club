@@ -967,4 +967,166 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
       "Finale",
     ]);
   });
+
+  // F5/Task 6: Wave A localized the fixture NAMES in these documents but left
+  // the chrome around them hardcoded — build.ts's TIMETABLE_COLUMNS/ROTA_
+  // COLUMNS/participants columns and its "TBD" no-time cell were English
+  // literals with no caller override, and exports.ts's DESCRIPTIONS map plus
+  // the generic scoresheet's formLines/signatures were bare English strings.
+  // A French org's printed timetable therefore read "Time | Court | Home"
+  // above French entrant names. Every assertion below is French-only on
+  // purpose: an English-locale probe passes against the old code too.
+  describe("document chrome is localized, not hardcoded English (F5/Task 6)", () => {
+    it("timetable columns + the no-time cell come from the org locale", async () => {
+      const { auth } = await seedOrg();
+      await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+      const { division, fixtures } = await seedDivision(auth);
+      // Force one fixture to have no kick-off time — the cell that used to
+      // read the engine's literal "TBD" regardless of locale.
+      await sql`update fixtures set scheduled_at = null where id = ${fixtures[0]!.id}`;
+      const model = await buildDivisionDocModel(auth, division.id, "timetable", {
+        printedAt: PRINTED,
+      });
+
+      const columns = model.sections[0]!.table!.columns;
+      expect(columns).toEqual([
+        msgFor("fr", "export.column.time"),
+        msgFor("fr", "export.column.court"),
+        msgFor("fr", "export.column.home"),
+        "",
+        msgFor("fr", "export.column.away"),
+        msgFor("fr", "export.column.stage"),
+      ]);
+      // Anchored on the exact header words the old constant carried, so this
+      // fails against the pre-change engine and passes against this one.
+      for (const english of ["Time", "Court", "Home", "Away", "Stage"]) {
+        expect(columns).not.toContain(english);
+      }
+
+      const noTimeRow = model.sections
+        .flatMap((s) => s.table?.rows ?? [])
+        .find((r) => r[0] === msgFor("fr", "export.time.tbc"));
+      expect(noTimeRow).toBeTruthy(); // the fixture we blanked above
+      expect(noTimeRow![0]).not.toBe("TBD");
+
+      // The per-kind blurb was a module-level English map (DESCRIPTIONS).
+      expect(model.description).toBe(msgFor("fr", "export.description.timetable"));
+    });
+
+    it("participants columns come from the org locale", async () => {
+      const { auth } = await seedOrg();
+      await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+      const { division } = await seedDivision(auth);
+      const model = await buildDivisionDocModel(auth, division.id, "participants", {
+        printedAt: PRINTED,
+      });
+      const columns = model.sections[0]!.table!.columns;
+      expect(columns).toContain(msgFor("fr", "export.column.entrant"));
+      expect(columns).toContain(msgFor("fr", "export.column.position"));
+      expect(columns).not.toContain("Entrant");
+      expect(columns).not.toContain("Position");
+      expect(model.description).toBe(msgFor("fr", "export.description.participants"));
+    });
+
+    it("the generic scoresheet's form lines + signatures come from the org locale", async () => {
+      const { auth } = await seedOrg();
+      await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+      const { division } = await seedDivision(auth);
+      // The 'generic' sport has no exportTemplates.scoresheet, so this hits the
+      // fallback result-form arm in exports.ts — the one that hardcoded
+      // "Referee" / "Captain — X" / "Result:" / "Notes:".
+      const model = await buildDivisionDocModel(auth, division.id, "scoresheet", {
+        printedAt: PRINTED,
+      });
+      const section = model.sections[0]!;
+      expect(section.formLines).toEqual([
+        msgFor("fr", "export.scoresheet.result"),
+        msgFor("fr", "export.scoresheet.notes"),
+      ]);
+      expect(section.signatures![0]).toBe(msgFor("fr", "export.scoresheet.referee"));
+      expect(section.signatures).not.toContain("Referee");
+      // The captain lines interpolate the side's own label, so assert the
+      // localized frame around it rather than the whole string.
+      expect(section.signatures![1]).toMatch(/^Capitaine — /);
+      expect(section.signatures![1]).not.toMatch(/^Captain — /);
+      expect(model.description).toBe(msgFor("fr", "export.description.scoresheet"));
+    });
+
+    it("officials rota columns + title + description come from the org locale", async () => {
+      const { auth } = await seedOrg("pro");
+      await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+      const { division, fixtures } = await seedDivision(auth);
+      const [{ id: officialId }] = await sql<{ id: string }[]>`
+        insert into officials (org_id, display_name) values (${auth.orgId}, 'Sam Ref')
+        returning id`;
+      await sql`
+        insert into fixture_officials (fixture_id, official_id, role_key, response)
+        values (${fixtures[0]!.id}, ${officialId}, 'referee', 'accepted')`;
+
+      const model = await buildOfficialsRotaDoc(auth, division.id, { printedAt: PRINTED });
+      const columns = model.sections.find((s) => s.heading === "Sam Ref")!.table!.columns;
+      expect(columns).toEqual([
+        msgFor("fr", "export.column.when"),
+        msgFor("fr", "export.column.court"),
+        msgFor("fr", "export.column.competitionDivision"),
+        msgFor("fr", "export.column.role"),
+        msgFor("fr", "export.column.match"),
+        msgFor("fr", "export.column.response"),
+      ]);
+      expect(columns).not.toContain("When");
+      expect(columns).not.toContain("Response");
+      expect(model.title).toContain(msgFor("fr", "export.title.officialsRota"));
+      expect(model.title).not.toContain("Officials rota");
+      expect(model.description).toBe(msgFor("fr", "export.description.officialsRota"));
+    });
+
+    it("competition-wide timetable columns + description come from the org locale", async () => {
+      const { auth } = await seedOrg("pro");
+      await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+      const { comp } = await seedDivision(auth);
+      const model = await buildCompetitionTimetable(auth, comp.id, { printedAt: PRINTED });
+      expect(model.sections[0]!.table!.columns).toContain(msgFor("fr", "export.column.stage"));
+      expect(model.sections[0]!.table!.columns).not.toContain("Stage");
+      expect(model.description).toBe(msgFor("fr", "export.description.allFixtures"));
+    });
+
+    it("admit tickets take their description from the org locale", async () => {
+      const { auth } = await seedOrg("pro");
+      await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+      const { comp } = await seedDivision(auth);
+      const model = await buildAdmitTicketsDoc(auth, comp.id, { printedAt: PRINTED });
+      expect(model.description).toBe(msgFor("fr", "export.description.ticket"));
+      expect(model.description).not.toContain("check-in");
+    });
+
+    // The cross-org exception, resolved deliberately: buildMyRotaDoc has no
+    // single org locale for its OWN chrome, but it does have exactly one
+    // reader, so the doc level follows `users.locale` (V281). The per-duty
+    // rows keep following each duty's own org locale — covered by "my rota
+    // shows slot labels, localized per owning org" above.
+    it("my rota's own title/description/columns follow the reader's users.locale", async () => {
+      const suffix = randomUUID().slice(0, 8);
+      const [{ id: userId }] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified, locale)
+        values (${"rota+" + suffix + "@example.com"}, 'Sam Ref', true, 'fr')
+        returning id`;
+      const model = await buildMyRotaDoc(userId, { printedAt: PRINTED });
+      expect(model.title).toBe(msgFor("fr", "export.title.myRota"));
+      expect(model.title).not.toBe("My officiating rota");
+      expect(model.description).toBe(msgFor("fr", "export.description.myRota"));
+    });
+
+    it("my rota falls back to the default locale when the reader never picked one", async () => {
+      const suffix = randomUUID().slice(0, 8);
+      const [{ id: userId }] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified)
+        values (${"rota+" + suffix + "@example.com"}, 'Pat Ref', true)
+        returning id`;
+      const [row] = await sql<{ locale: string | null }[]>`
+        select locale from users where id = ${userId}`;
+      expect(row!.locale).toBeNull(); // the arrangement this test exists to cover
+      const model = await buildMyRotaDoc(userId, { printedAt: PRINTED });
+      expect(model.title).toBe(msgFor("en", "export.title.myRota"));
+    });
+  });
 });

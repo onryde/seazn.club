@@ -37,11 +37,16 @@ function base(
   };
 }
 
-const timeOf = (f: ExportFixture): string => (f.at === null ? "TBD" : f.at);
-
-function fixtureRows(fixtures: readonly ExportFixture[]): (string | number)[][] {
+/** `timeTbc` is caller-supplied for the same reason `home`/`away` already are:
+ *  the engine has no locale of its own, so the ONE user-facing word this row
+ *  builder emits arrives pre-resolved. Callers that pass nothing keep the
+ *  historic English literal. */
+function fixtureRows(
+  fixtures: readonly ExportFixture[],
+  timeTbc: string,
+): (string | number)[][] {
   return fixtures.map((f) => [
-    timeOf(f),
+    f.at === null ? timeTbc : f.at,
     f.court ?? "—",
     f.home,
     f.result ?? "vs",
@@ -50,6 +55,9 @@ function fixtureRows(fixtures: readonly ExportFixture[]): (string | number)[][] 
   ]);
 }
 
+// English defaults, kept as the fallback for every caller that passes no
+// `opts.i18n` (engine unit tests, any consumer outside apps/web).
+const TIME_TBC = "TBD";
 const TIMETABLE_COLUMNS = ["Time", "Court", "Home", "", "Away", "Stage"];
 
 /** Timetable (2 Jul "pretty PDF"): grouped by page-break scope; stages keep
@@ -60,6 +68,8 @@ export function buildTimetable(
   opts: BuildOpts,
 ): DocModel {
   const mode = opts.pageBreaks ?? "auto";
+  const timeTbc = opts.i18n?.timeTbc ?? TIME_TBC;
+  const columns = [...(opts.i18n?.timetableColumns ?? TIMETABLE_COLUMNS)];
   const sections: DocSection[] = [];
   const keyOf = (f: ExportFixture): string =>
     mode === "per_pitch"
@@ -83,7 +93,7 @@ export function buildTimetable(
       sections.push({
         ...(group !== "" && first ? { heading: group } : {}),
         subheading: stageName,
-        table: { columns: TIMETABLE_COLUMNS, rows: fixtureRows(stageFixtures) },
+        table: { columns, rows: fixtureRows(stageFixtures, timeTbc) },
         ...(group !== "" && first && sections.length > 0 ? { pageBreakBefore: true } : {}),
       });
       first = false;
@@ -140,6 +150,8 @@ export function buildRoster(
   return base("roster", title, sections, opts);
 }
 
+const PARTICIPANTS_COLUMNS = ["Club", "Team", "Division", "Entrant", "Player", "#", "Position"];
+
 /** Participant overview (17 Mar / 30 Jan): club + division columns, Empty-
  *  Spot labels never blank. */
 export function buildParticipants(
@@ -153,7 +165,7 @@ export function buildParticipants(
     [
       {
         table: {
-          columns: ["Club", "Team", "Division", "Entrant", "Player", "#", "Position"],
+          columns: [...(opts.i18n?.participantsColumns ?? PARTICIPANTS_COLUMNS)],
           rows: rows.map((r) => [
             r.club,
             r.team,
@@ -180,13 +192,14 @@ export function buildOfficialsRota(
   opts: BuildOpts,
 ): DocModel {
   const perOfficial = (opts.pageBreaks ?? "auto") === "per_team";
+  const columns = [...(opts.i18n?.rotaColumns ?? ROTA_COLUMNS)];
   const sections: DocSection[] = officials.map((o, i) => ({
     heading: o.officialName,
     ...(o.duties.length === 0 ? { subheading: "No duties assigned" } : {}),
     ...(o.duties.length > 0
       ? {
           table: {
-            columns: ROTA_COLUMNS,
+            columns,
             rows: o.duties.map((d) => [
               d.at,
               d.court ?? "—",

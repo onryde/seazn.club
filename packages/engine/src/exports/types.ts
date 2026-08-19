@@ -268,4 +268,15 @@ export interface BuildOpts {
   description?: string;
   landscape?: boolean;
   metricColumns?: string[]; // standings extra columns, in order
+  /** Pre-resolved (caller's locale) strings for table chrome that build.ts
+   *  itself has no locale to render — mirrors how home/away are already
+   *  resolved via resolveSlotLabel before reaching this module. Every field
+   *  optional; build.ts falls back to the current English literals when
+   *  omitted, so no existing caller/test needs to change. */
+  i18n?: {
+    timeTbc?: string;
+    timetableColumns?: readonly string[];
+    rotaColumns?: readonly string[];
+    participantsColumns?: readonly string[];
+  };
 }

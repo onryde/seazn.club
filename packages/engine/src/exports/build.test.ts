@@ -149,6 +149,74 @@ describe("buildDocModel goldens (Jul3/06 §2)", () => {
   });
 });
 
+// F5/Task 6: build.ts used to hardcode its table chrome ("Time"/"Court"/…) and
+// its no-kick-off-time cell ("TBD") as English literals with no way for a
+// caller to override them, so a French org's printed timetable carried English
+// headers over French entrant names. `BuildOpts.i18n` carries pre-resolved
+// strings the same way `home`/`away` already arrive pre-resolved — the engine
+// still holds no locale of its own.
+describe("BuildOpts.i18n — caller-supplied table chrome (F5/Task 6)", () => {
+  // Stand-ins for what exports.ts resolves out of fr/ui.json. Deliberately not
+  // imported from apps/web: the engine must not reach across that boundary.
+  const FR = {
+    timeTbc: "À confirmer",
+    timetableColumns: ["Heure", "Terrain", "Domicile", "", "Extérieur", "Phase"],
+    rotaColumns: ["Quand", "Terrain", "Compétition · Division", "Rôle", "Match", "Réponse"],
+    participantsColumns: ["Club", "Équipe", "Division", "Participant", "Joueur", "#", "Poste"],
+  };
+
+  it("timetable: columns and the no-time cell come from opts.i18n, not English", () => {
+    const model = buildTimetable("Coupe d'été", FIXTURES, { ...OPTS, i18n: FR });
+    expect(DocModel.parse(model)).toBeTruthy();
+    for (const s of model.sections) {
+      expect(s.table!.columns).toEqual(FR.timetableColumns);
+    }
+    // f3 has `at: null` — the cell that used to read the literal "TBD".
+    const ko = model.sections[1]!.table!.rows[0]!;
+    expect(ko[0]).toBe("À confirmer");
+    expect(ko[0]).not.toBe("TBD");
+    // Nothing anywhere in the doc still says the English header words.
+    const json = JSON.stringify(model);
+    for (const english of ["Time", "Court", "Home", "Away", "Stage", "TBD"]) {
+      expect(json).not.toContain(`"${english}"`);
+    }
+  });
+
+  it("officials rota: columns come from opts.i18n, not English", () => {
+    const m = buildOfficialsRota("Planning", [
+      { officialName: "Sam Ref", duties: [
+        { at: "sam. 19 juil. 09:00", court: "1", compDivision: "Été · Div 1",
+          role: "Arbitre", opponents: "Falcons vs Hawks", response: "accepted" },
+      ] },
+    ], { printedAt: "2026-07-19", pageBreaks: "per_team", i18n: FR });
+    expect(m.sections[0]!.table!.columns).toEqual(FR.rotaColumns);
+    expect(m.sections[0]!.table!.columns).not.toContain("When");
+  });
+
+  it("participants: columns come from opts.i18n, not English", () => {
+    const m = buildParticipants(
+      "Participants",
+      [{ club: "", team: "", division: "Open", entrant: "Empty Spot 3", player: "", number: null, position: "" }],
+      { ...OPTS, i18n: FR },
+    );
+    expect(m.sections[0]!.table!.columns).toEqual(FR.participantsColumns);
+    expect(m.sections[0]!.table!.columns).not.toContain("Entrant");
+  });
+
+  it("a caller that omits i18n (or omits one field) still gets the English defaults", () => {
+    // The whole point of the field being optional — every pre-existing engine
+    // caller must be byte-identical to before.
+    const plain = buildTimetable("Cup", FIXTURES, OPTS);
+    expect(plain.sections[0]!.table!.columns).toEqual(["Time", "Court", "Home", "", "Away", "Stage"]);
+    expect(plain.sections[1]!.table!.rows[0]![0]).toBe("TBD");
+
+    // A partially-filled block falls back per field, not all-or-nothing.
+    const partial = buildTimetable("Cup", FIXTURES, { ...OPTS, i18n: { timeTbc: "À confirmer" } });
+    expect(partial.sections[0]!.table!.columns).toEqual(["Time", "Court", "Home", "", "Away", "Stage"]);
+    expect(partial.sections[1]!.table!.rows[0]![0]).toBe("À confirmer");
+  });
+});
+
 describe("buildStandings — row badges (PROMPT-60)", () => {
   it("threads badge URLs into the table when any row carries one", () => {
     const model = buildStandings(

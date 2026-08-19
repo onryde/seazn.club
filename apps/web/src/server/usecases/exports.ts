@@ -17,6 +17,7 @@ import {
   buildStandings,
   buildTimetable,
   DocModel,
+  type BuildOpts,
   type DocBranding,
   type DocSection,
   type ExportFixture,
@@ -61,7 +62,7 @@ type Tx = postgres.TransactionSql;
  *  own default locale. This mirrors `calendar.ics/route.ts:32-33` exactly;
  *  the reasoning is recorded at that file's :24-30 and is the same reasoning
  *  here. Do NOT swap this for resolveLocale(). */
-function exportLookup(defaultLocale: string): SlotLabelLookup {
+function exportLookup(defaultLocale: string | null): SlotLabelLookup {
   const locale = toLocale(defaultLocale);
   return (key, vars) => msgFor(locale, key, vars);
 }
@@ -299,15 +300,71 @@ function toExportFixture(
   };
 }
 
-// v12: per-kind blurb shown under the masthead (doc-render §Task 3).
-const DESCRIPTIONS: Record<string, string> = {
-  timetable: "All fixtures across every court, in play order.",
-  standings: "Current table, updated as results land.",
-  roster: "Squads by team — sign each player in before play.",
-  participants: "All registered players by club and division.",
-  scoresheet: "One sheet per match — record the score and sign off.",
-  bracket: "The knockout tree — filled from live results.",
-};
+// v12: per-kind blurb shown under the masthead (doc-render §Task 3). Was a
+// module-level English map; the blurb is user-facing copy on a printed
+// document, so it resolves through the document's own locale like every other
+// string here. The key set lives in ui.json as `export.description.<kind>`.
+// Spelled out rather than built as `export.description.${kind}`: a template
+// literal is NOT assignable to the generated MsgKey union (i18n-keys.ts), so
+// tsc could not tell a real key from a typo. This map is checked key-by-key,
+// and adding a doc kind without adding its blurb is a compile error.
+const DESCRIPTION_KEYS = {
+  timetable: "export.description.timetable",
+  standings: "export.description.standings",
+  roster: "export.description.roster",
+  participants: "export.description.participants",
+  scoresheet: "export.description.scoresheet",
+  bracket: "export.description.bracket",
+} as const;
+
+type ExportDocKind = keyof typeof DESCRIPTION_KEYS;
+
+function descriptionFor(kind: ExportDocKind, lookup: SlotLabelLookup): string {
+  return lookup(DESCRIPTION_KEYS[kind]);
+}
+
+/** Table chrome `build.ts` cannot resolve itself.
+ *
+ *  The engine carries no locale (engine-boundary / round-role.ts's header), so
+ *  its column headers and its "no time yet" cell arrive pre-resolved from here
+ *  — the same treatment `home`/`away` already get via `resolveSlotLabel`.
+ *  Passing the whole block at every call site is deliberate: each builder reads
+ *  only the sub-field it needs, and a doc kind gaining a table later then
+ *  inherits the localized chrome instead of silently falling back to English.
+ *
+ *  `export.time.tbc` is a SEPARATE key from `schedule.tbd` on purpose: that one
+ *  names an unknown ENTRANT ("TBD" as an opponent), this one names an unknown
+ *  KICK-OFF TIME. They read alike in English and diverge in every other locale. */
+function exportChrome(lookup: SlotLabelLookup): NonNullable<BuildOpts["i18n"]> {
+  return {
+    timeTbc: lookup("export.time.tbc"),
+    timetableColumns: [
+      lookup("export.column.time"),
+      lookup("export.column.court"),
+      lookup("export.column.home"),
+      "", // result/"vs" column — deliberately unlabeled, as it always has been
+      lookup("export.column.away"),
+      lookup("export.column.stage"),
+    ],
+    rotaColumns: [
+      lookup("export.column.when"),
+      lookup("export.column.court"),
+      lookup("export.column.competitionDivision"),
+      lookup("export.column.role"),
+      lookup("export.column.match"),
+      lookup("export.column.response"),
+    ],
+    participantsColumns: [
+      lookup("export.column.club"),
+      lookup("export.column.team"),
+      lookup("export.column.division"),
+      lookup("export.column.entrant"),
+      lookup("export.column.player"),
+      "#", // squad number — a glyph, not a word; nothing to translate
+      lookup("export.column.position"),
+    ],
+  };
+}
 
 /** The pure model for a division export — separated for golden-style tests;
  *  the route renders it to bytes. */
@@ -334,7 +391,8 @@ export async function buildDivisionDocModel(
     const title = `${meta.competition_name} — ${meta.name}`;
     const common = {
       printedAt: opts.printedAt,
-      description: DESCRIPTIONS[kind],
+      description: descriptionFor(kind, slotLookup),
+      i18n: exportChrome(slotLookup),
       ...(branding !== undefined ? { branding } : {}),
       ...(opts.pageBreaks !== undefined ? { pageBreaks: opts.pageBreaks } : {}),
       ...(opts.landscape !== undefined ? { landscape: opts.landscape } : {}),
@@ -477,8 +535,15 @@ export async function buildDivisionDocModel(
               subheading: [f.scheduled_at, f.court_name, f.stage_name]
                 .filter((x): x is string => x !== null)
                 .join(" · "),
-              formLines: ["Result: ________________", "Notes: ________________"],
-              signatures: ["Referee", `Captain — ${homeLabel}`, `Captain — ${awayLabel}`],
+              formLines: [
+                slotLookup("export.scoresheet.result"),
+                slotLookup("export.scoresheet.notes"),
+              ],
+              signatures: [
+                slotLookup("export.scoresheet.referee"),
+                slotLookup("export.scoresheet.captainOf", { name: homeLabel }),
+                slotLookup("export.scoresheet.captainOf", { name: awayLabel }),
+              ],
             });
           }
           const start = sections[firstSection];
@@ -489,7 +554,7 @@ export async function buildDivisionDocModel(
         return DocModel.parse({
           kind: "scoresheet",
           title,
-          description: DESCRIPTIONS.scoresheet,
+          description: descriptionFor("scoresheet", slotLookup),
           meta: { printedAt: opts.printedAt },
           ...(branding !== undefined ? { branding } : {}),
           sections,
@@ -572,7 +637,7 @@ export async function buildDivisionDocModel(
             eliminator: slotLookup("bracket.round.eliminator"),
             q2: slotLookup("bracket.round.qualifier2"),
             final: slotLookup("bracket.round.final"),
-          }, { ...buildOpts, description: "The Page playoffs — the top two get a second chance." });
+          }, { ...buildOpts, description: slotLookup("export.description.pagePlayoff") });
         }
         if (stage.kind === "stepladder") {
           return buildLadderPoster(
@@ -655,7 +720,8 @@ export async function buildCompetitionTimetable(
     }
     return buildTimetable(comp.name, all, {
       printedAt: opts.printedAt,
-      description: "Every fixture across all divisions.",
+      description: slotLookup("export.description.allFixtures"),
+      i18n: exportChrome(slotLookup),
       ...(branding !== undefined ? { branding } : {}),
       pageBreaks: opts.pageBreaks ?? "per_division",
     });
@@ -750,11 +816,15 @@ export async function buildOfficialsRotaDoc(
       byOfficial.set(r.official_id, s);
     }
     return buildOfficialsRota(
-      `${meta.competition_name} — Officials rota`,
+      // Title is user-facing copy on the same printed page as the description
+      // directly below it — leaving it English while translating the blurb
+      // would ship a half-translated masthead.
+      `${meta.competition_name} — ${slotLookup("export.title.officialsRota")}`,
       [...byOfficial.values()],
       {
         printedAt: opts.printedAt,
-        description: "Assigned officials and their duties.",
+        description: slotLookup("export.description.officialsRota"),
+        i18n: exportChrome(slotLookup),
         ...(branding !== undefined ? { branding } : {}),
         pageBreaks: "per_team",
       },
@@ -768,12 +838,16 @@ interface CompetitionTicketMeta {
   ends_on: string | null;
   org_id: string;
   org_name: string;
+  /** Copy locale for the ticket's own chrome — the printed document has no
+   *  single reader, so it takes the org's default, same rule as every other
+   *  export here (`exportLookup`'s doc comment). */
+  default_locale: string;
 }
 
 async function competitionTicketMeta(tx: Tx, competitionId: string): Promise<CompetitionTicketMeta> {
   const [row] = await tx<CompetitionTicketMeta[]>`
     select c.name, c.starts_on::text as starts_on, c.ends_on::text as ends_on,
-           c.org_id, org.name as org_name
+           c.org_id, org.name as org_name, org.default_locale
     from competitions c
     join organizations org on org.id = c.org_id
     where c.id = ${competitionId}`;
@@ -833,7 +907,7 @@ export async function buildAdmitTicketsDoc(
     }));
     return buildAdmitTickets(meta.name, tickets, {
       printedAt: opts.printedAt,
-      description: "Present at check-in — scan or show the reference below.",
+      description: exportLookup(meta.default_locale)("export.description.ticket"),
       ...(branding !== undefined ? { branding } : {}),
     });
   });
@@ -847,6 +921,20 @@ export async function buildMyRotaDoc(
   opts: ExportOpts,
 ): Promise<DocModel> {
   const { assignments } = await getMyOfficiating(userId);
+  // Cross-org doc, so there is no single org `default_locale` to take the
+  // document's OWN title/description/columns from. Checked (F5/Task 6): there
+  // IS a reader-level preference — `users.locale` (V281: "the signed-in pick",
+  // nullable, CHECK-constrained to the four locales), reachable from the
+  // `userId` already in hand, and this document has exactly one reader. So the
+  // doc-level chrome follows the READER; the per-duty rows below keep following
+  // each duty's own org locale, which is right for a row naming that org's
+  // competition. `toLocale` (inside exportLookup) turns a never-chosen null
+  // into the default, so a user who has never picked still gets English.
+  // Superuser read, deliberately: `buildMyRotaDoc` never opens a tenant door
+  // (an official is usually not an org member — see me-officiating.ts's header).
+  const [me] = await sql<{ locale: string | null }[]>`
+    select locale from users where id = ${userId}`;
+  const docLookup = exportLookup(me?.locale ?? null);
   const byOfficial = new Map<string, ExportOfficialSchedule>();
   for (const a of assignments) {
     const key = a.official_id;
@@ -864,9 +952,10 @@ export async function buildMyRotaDoc(
     });
     byOfficial.set(key, s);
   }
-  return buildOfficialsRota("My officiating rota", [...byOfficial.values()], {
+  return buildOfficialsRota(docLookup("export.title.myRota"), [...byOfficial.values()], {
     printedAt: opts.printedAt,
-    description: "Your upcoming duties across every organisation.",
+    description: docLookup("export.description.myRota"),
+    i18n: exportChrome(docLookup),
     pageBreaks: "per_team",
   });
 }
