@@ -12,6 +12,7 @@ import { grantMonthly, walletIdFor } from "@/lib/credits";
 import { isReservedSlug } from "@/lib/public-site";
 import { consumeReferralCookie } from "@/lib/referral";
 import { routes } from "@/lib/routes";
+import { setRequestActor } from "@/server/request-context";
 import { slugify, uniqueSlug } from "@/server/usecases/slugs";
 
 const COOKIE_NAME = "seazn_session";
@@ -460,6 +461,7 @@ export async function requireOrgRole(
   const role = await getOrgRole(orgId, user.id);
   if (!role) throw new AuthError("You are not a member of this organization");
   if (!roles.includes(role)) throw new AuthError("Insufficient permissions");
+  setRequestActor({ orgId, userId: user.id });
   return { user, role };
 }
 

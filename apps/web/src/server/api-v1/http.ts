@@ -10,6 +10,7 @@ import * as Sentry from "@sentry/nextjs";
 import { EngineError, type EngineErrorCode } from "@seazn/engine/core";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
+import { runRequestContext } from "@/server/request-context";
 import { rateLimitHeaders, runV1Context } from "./context";
 
 // EngineError.code → HTTP status (doc 08 §1, spec 03 §7). Central map — the
@@ -122,8 +123,10 @@ function errorResponse(
 export async function v1<T>(fn: () => Promise<T | Reply<T>>): Promise<NextResponse> {
   const requestId = randomUUID();
   // ALS context so deep layers (API-key auth) can surface X-RateLimit-*
-  // counters onto whatever response this request ends up with (v3/08 §2).
-  return runV1Context(() => v1Inner(requestId, fn));
+  // counters onto whatever response this request ends up with (v3/08 §2),
+  // and so every log line for this request carries the same requestId
+  // (server/request-context.ts, read by server/logger.ts's mixin).
+  return runRequestContext(requestId, () => runV1Context(() => v1Inner(requestId, fn)));
 }
 
 async function v1Inner<T>(

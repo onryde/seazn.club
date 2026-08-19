@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { EngineError, EngineErrorCode } from "@seazn/engine/core";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
+import { getRequestContext } from "@/server/request-context";
 import {
   ENGINE_HTTP,
   v1,
@@ -31,6 +32,20 @@ describe("v1 envelope", () => {
     expect(json.ok).toBe(true);
     expect(json.data).toEqual({ hello: "world" });
     expect(typeof json.requestId).toBe("string");
+  });
+
+  // server/request-context.ts: the requestId every log line for this
+  // request carries (via server/logger.ts's mixin) must be the SAME id the
+  // client sees in the response envelope, not an independently-generated one.
+  it("runs the handler inside the request-context ALS with the response's requestId", async () => {
+    let seenDuringHandler: string | undefined;
+    const res = await v1(async () => {
+      seenDuringHandler = getRequestContext().requestId;
+      return { ok: true };
+    });
+    const json = await body(res);
+    expect(seenDuringHandler).toBeDefined();
+    expect(seenDuringHandler).toBe(json.requestId);
   });
 
   it("honours reply() status and headers", async () => {

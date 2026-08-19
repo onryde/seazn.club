@@ -10,6 +10,7 @@ import { requireFeature } from "@/lib/entitlements";
 import { cacheEnabled, incrWindow } from "@/lib/cache";
 import { rateLimit } from "@/lib/rate-limit";
 import { EDITOR_ROLES, READ_ROLES, type OrgRole } from "@/lib/types";
+import { setRequestActor } from "@/server/request-context";
 import { matchKeyRoute, scopeSatisfies, type PinKind } from "./key-scopes";
 import { setRateLimitInfo } from "./context";
 
@@ -26,6 +27,14 @@ export interface AuthCtx {
   keyId: string | null;
   /** Set only for via='device_link' — rides onto score_events.device_link_id. */
   deviceLinkId?: string;
+}
+
+/** Every AuthCtx passes through here so the request-context ALS (and thus
+ *  every subsequent log line's mixin) picks up orgId/userId as soon as auth
+ *  resolves, without each call site doing it by hand. */
+function recordAuthContext(ctx: AuthCtx): AuthCtx {
+  setRequestActor({ orgId: ctx.orgId, userId: ctx.userId });
+  return ctx;
 }
 
 const KEY_PREFIX = "sc_";
@@ -165,7 +174,7 @@ async function apiKeyAuth(req: Request, token: string, orgId: string | null): Pr
   await apiKeyRateLimit(key);
   // Observability only — never block the request on it.
   void sql`update api_keys set last_used_at = now() where id = ${key.id}`.catch(() => null);
-  return { orgId: key.org_id, via: "api_key", userId: null, role: null, keyId: key.id };
+  return recordAuthContext({ orgId: key.org_id, via: "api_key", userId: null, role: null, keyId: key.id });
 }
 
 function bearerToken(req: Request): string | null {
@@ -213,7 +222,7 @@ export async function requireOrgAuth(req: Request, orgId: string, scope: Scope):
     const { assertMemberNotFrozen } = await import("@/server/usecases/entitlement-freeze");
     await assertMemberNotFrozen(orgId, user.id);
   }
-  return { orgId, via: "session", userId: user.id, role, keyId: null };
+  return recordAuthContext({ orgId, via: "session", userId: user.id, role, keyId: null });
 }
 
 /**
@@ -246,21 +255,21 @@ export async function requireFixtureActor(
     if (intent === "score") {
       await rateLimit(`dlv1:${link.id}`, { max: 10, windowSeconds: 1 });
     }
-    return {
+    return recordAuthContext({
       orgId: link.org_id,
       via: "device_link",
       userId: link.issued_by, // attribution: recorded_by = issued_by
       role: null,
       keyId: null,
       deviceLinkId: link.id,
-    };
+    });
   }
   const orgId = await resourceOrg("fixture", fixtureId);
   const token = bearerToken(req);
   if (token) return apiKeyAuth(req, token, orgId);
   const user = await requireUser();
   const role = await getOrgRole(orgId, user.id);
-  const ctx: AuthCtx = { orgId, via: "session", userId: user.id, role, keyId: null };
+  const ctx: AuthCtx = recordAuthContext({ orgId, via: "session", userId: user.id, role, keyId: null });
   if (role === "owner" || role === "admin") return ctx;
   if (role === "viewer" && intent === "read") return ctx;
   if (!role) {
@@ -295,7 +304,7 @@ export async function requireAuth(req: Request, scope: Scope): Promise<AuthCtx> 
   if (!org) throw new AuthError("No organization for this account");
   const roles: readonly OrgRole[] = scope === "write" ? EDITOR_ROLES : READ_ROLES;
   if (!roles.includes(org.role)) throw new HttpError(403, "Insufficient permissions");
-  return { orgId: org.id, via: "session", userId: user.id, role: org.role, keyId: null };
+  return recordAuthContext({ orgId: org.id, via: "session", userId: user.id, role: org.role, keyId: null });
 }
 
 // Resource kind → table holding its denormalized org_id. Whitelist keeps the
