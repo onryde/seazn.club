@@ -6668,7 +6668,7 @@ async function templateInstantiationSuite(): Promise<void> {
  */
 async function stageProgressionSuite(): Promise<void> {
   const free = newSession();
-  await signIn(free, `dtx_seed_${tag}@example.com`);
+  const { org_id: freeOrgId } = await signIn(free, `dtx_seed_${tag}@example.com`);
   const comp = v1data<{ id: string }>(
     await v1(free, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `DTX Seed ${tag}` }),
   );
@@ -6710,7 +6710,12 @@ async function stageProgressionSuite(): Promise<void> {
   type SlotLabelWire = { key: string; params: Record<string, unknown> } | null;
   const koGen = v1data<{
     created: number;
-    fixtures: { home_entrant_id: string | null; home_slot_label: SlotLabelWire; away_slot_label: SlotLabelWire }[];
+    fixtures: {
+      id: string;
+      home_entrant_id: string | null;
+      home_slot_label: SlotLabelWire;
+      away_slot_label: SlotLabelWire;
+    }[];
   }>(await v1(free, `/api/v1/stages/${koId}/generate`, "POST"));
   check(
     "stage progression: setup-timing KO generates 1 fully-TBD fixture before the group stage runs at all",
@@ -6732,6 +6737,79 @@ async function stageProgressionSuite(): Promise<void> {
         typeof home.params.g === "string" &&
         typeof away.params.g === "string" &&
         home.params.g !== away.params.g,
+    );
+  }
+
+  // F3 Task 4 — day-one fixtures must SURVIVE a schedule BUILD, not just
+  // exist. Runs BEFORE the group stage is even generated (same "before the
+  // group stage runs at all" moment the check above proves) — the fully-TBD
+  // KO fixture from `koGen` above is the day-one placeholder under test. No
+  // placement service is assumed reachable here (a bare smoke run), so BUILD
+  // legitimately falls back to its greedy path; that fallback surviving
+  // cleanly is exactly the claim, not a solved-optimal board.
+  {
+    const koFixtureIdPreBuild = koGen.fixtures[0]!.id;
+    const homeLabelBefore = koGen.fixtures[0]!.home_slot_label;
+    const awayLabelBefore = koGen.fixtures[0]!.away_slot_label;
+    const buildVenue = v1data<{ id: string }>(
+      await v1(free, `/api/v1/orgs/${freeOrgId}/venues`, "POST", { name: `DTX Build ${tag}` }),
+    );
+    const buildCourt = v1data<{ id: string }>(
+      await v1(free, `/api/v1/orgs/${freeOrgId}/venues/${buildVenue.id}/courts`, "POST", { name: "Court 1" }),
+    );
+    await v1(free, `/api/v1/divisions/${div.id}/schedule-settings`, "PUT", {
+      tz: "UTC",
+      config: {
+        startAt: "2026-08-01T09:00:00.000Z",
+        matchMinutes: 60,
+        gapMinutes: 0,
+        courts: [buildCourt.id],
+        perEntrantMinRest: 0,
+        sessionWindows: [],
+      },
+    });
+    const koBuild = v1data<{
+      assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
+    }>(await v1(free, `/api/v1/stages/${koId}/schedule/auto`, "POST", { only_unlocked: false, mode: "build" }));
+    check(
+      "day-one BUILD: the fully-TBD KO fixture is schedulable — BUILD proposes it a slot, same as any real fixture",
+      koBuild.assignments.length === 1 && koBuild.assignments[0]!.fixture_id === koFixtureIdPreBuild,
+    );
+    await v1(free, `/api/v1/stages/${koId}/schedule/apply`, "POST", {
+      assignments: koBuild.assignments.map((a) => ({
+        fixture_id: a.fixture_id,
+        scheduled_at: a.scheduled_at,
+        court_id: a.court_id,
+      })),
+      source: "auto",
+    });
+    const koAfterBuild = v1data<{
+      id: string;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+      home_slot_label: SlotLabelWire;
+      away_slot_label: SlotLabelWire;
+      scheduled_at: string | null;
+      court_id: string | null;
+    }>(await v1(free, `/api/v1/fixtures/${koFixtureIdPreBuild}`));
+    check(
+      "day-one BUILD: the SAME fixture id survives — BUILD did not delete/regenerate the placeholder",
+      koAfterBuild.id === koFixtureIdPreBuild,
+    );
+    check(
+      "day-one BUILD: still fully TBD after BUILD+apply — no entrant silently attached",
+      koAfterBuild.home_entrant_id === null && koAfterBuild.away_entrant_id === null,
+    );
+    check(
+      "day-one BUILD: both slot labels survive BUILD+apply unchanged (still real descriptors, not TBD/null)",
+      koAfterBuild.home_slot_label?.key === "slot.winner_group" &&
+        koAfterBuild.away_slot_label?.key === "slot.winner_group" &&
+        koAfterBuild.home_slot_label?.params.g === homeLabelBefore?.params.g &&
+        koAfterBuild.away_slot_label?.params.g === awayLabelBefore?.params.g,
+    );
+    check(
+      "day-one BUILD: the placeholder actually landed on the timetable (real scheduled_at + its court)",
+      koAfterBuild.scheduled_at !== null && koAfterBuild.court_id === buildCourt.id,
     );
   }
 
