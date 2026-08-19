@@ -19351,7 +19351,19 @@
                                   }
                                 ]
                               },
-                              "venue": {
+                              "court_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "court_name": {
                                 "anyOf": [
                                   {
                                     "type": "string"
@@ -19361,7 +19373,19 @@
                                   }
                                 ]
                               },
-                              "court_label": {
+                              "venue_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "venue_name": {
                                 "anyOf": [
                                   {
                                     "type": "string"
@@ -19458,8 +19482,10 @@
                               "home_slot_label",
                               "away_slot_label",
                               "scheduled_at",
-                              "venue",
-                              "court_label",
+                              "court_id",
+                              "court_name",
+                              "venue_id",
+                              "venue_name",
                               "officials",
                               "status",
                               "outcome",
@@ -19515,8 +19541,10 @@
                           "params": {}
                         },
                         "scheduled_at": "example",
-                        "venue": "example",
-                        "court_label": "example",
+                        "court_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "court_name": "example",
+                        "venue_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "venue_name": "example",
                         "officials": [
                           null
                         ],
