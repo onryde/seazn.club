@@ -1,6 +1,7 @@
 {
   "seeding.SEEDING_MAP_SLOT_INVALID": "This stage's seeding map has an invalid position. Fix the seeding rules and try again.",
   "seeding.SEEDING_MAP_SOURCE_INVALID": "This stage's seeding map points to a qualifier that doesn't exist. Fix the seeding rules and try again.",
+  "seeding.SEEDING_MAP_SOURCE_AMBIGUOUS": "This stage's seeding map points to a qualifier that exists in more than one place. Fix the seeding rules and try again.",
   "seeding.SEEDING_RULES_MISSING": "This stage has no seeding rules, or its generated fixtures no longer match them. Add seeding rules, or regenerate this stage's fixtures.",
   "seeding.SEEDING_SOURCE_INCOMPLETE": "The source stage isn't finished yet. Complete it before computing this proposal.",
   "seeding.SEEDING_BESTNTH_UNEQUAL_POOLS": "These groups have played different numbers of games, so their standings can't be compared yet.",

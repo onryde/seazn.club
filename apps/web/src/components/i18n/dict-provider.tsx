@@ -6,7 +6,7 @@
 // Only the ACTIVE locale's dict crosses the RSC boundary (a plain object) — no
 // multi-locale bundle bloat, no server-only import in client code.
 import { createContext, useContext, useMemo, type ReactNode } from "react";
-import type { Dict, Locale } from "@/lib/i18n-constants";
+import { DEFAULT_LOCALE, type Dict, type Locale } from "@/lib/i18n-constants";
 import { plural as pluralRuntime, t as tRuntime, type TKey } from "@/lib/i18n-runtime";
 import { messages, type MessageKey } from "@/lib/messages";
 
@@ -59,6 +59,18 @@ export function usePlural(): (
 /** The resolved active locale, for islands that need it directly (formatting). */
 export function useLocale(): Locale {
   return useDictContext().locale;
+}
+
+/** The active locale, falling back to English OUTSIDE a provider instead of
+ *  throwing — the same contract `useDict`/`useMsg` below already document,
+ *  for the same reason: islands are rendered bare in this repo's component
+ *  tests (renderToStaticMarkup, no provider), so an island that needs the
+ *  locale only for FORMATTING (Intl.ListFormat/NumberFormat) should degrade
+ *  to English there rather than red every unrelated assertion in the file.
+ *  Use `useLocale` above when the locale is load-bearing and a silent English
+ *  fallback would be a bug. */
+export function useLocaleOrDefault(): Locale {
+  return useContext(DictContext)?.locale ?? DEFAULT_LOCALE;
 }
 
 /** The raw active dict, for islands that pass it to a `t(dict, …)` child (e.g.

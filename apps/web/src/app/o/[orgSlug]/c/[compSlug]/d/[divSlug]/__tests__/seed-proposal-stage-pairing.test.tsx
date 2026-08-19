@@ -35,6 +35,13 @@ const stagesSpies = vi.hoisted(() => ({
   listStages: vi.fn(),
   getStandings: vi.fn(async () => ({ rows: [] })),
   getSeedProposal: vi.fn(),
+  // F3 Task 5 (5a) — page.tsx now also calls getStageRosterDrift for the
+  // one root (progression === null) stage, gated the same as getSeedProposal
+  // just above (tab==="fixtures" && editable). The "third, non-seeding
+  // stage" case below sets stageMid's progression to null specifically to
+  // prove IT gets no ProgressionPanel — which makes it a root stage too, so
+  // this mock has to exist or that render throws instead of asserting.
+  getStageRosterDrift: vi.fn(async () => ({ ghosts: [], unplaced: [] })),
 }));
 
 vi.mock("@/server/page-auth", () => pageAuth);

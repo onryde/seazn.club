@@ -189,21 +189,24 @@ describe.skipIf(!HAS_DB)("D4a/P5 — propose + confirm (groups -> complete -> pr
     expect(confirmed.fixtures.filter((f) => f.round_no === 1).every((f) => f.home_slot_label === null && f.away_slot_label === null)).toBe(true);
   });
 
-  it("snake placement interleaves waves — different bracket than rank_order for the SAME standings", async () => {
-    const { auth, groupStageId, koStageId, entrantBySeed } = await setupGroupsToKnockout("snake");
-    await generateStageFixtures(auth, koStageId);
-    await generateStageFixtures(auth, groupStageId);
-    await decideAllGroupFixtures(auth, groupStageId, entrantBySeed);
-    await completeStage(auth, groupStageId);
-    const [proposal] = await sql<{ id: string }[]>`select id from stage_seed_proposals where stage_id = ${koStageId} and status = 'draft'`;
-    const confirmed = await confirmSeedProposal(auth, koStageId, { proposalId: proposal.id });
-    // snake: seed order [E1,E2,E3,E4,E5,E6,E7,E8] (wave2 reversed back to
-    // ascending) -> seedPositions pairs (1,8)=(E1,E8), (5,4)=(E5,E4),
-    // (3,6)=(E3,E6), (7,2)=(E7,E2) — E1 now meets E8 in round 1, NOT E5 as
-    // rank_order produced above.
-    const e = entrantBySeed;
-    const pairs = confirmed.fixtures.filter((f) => f.home_entrant_id !== null).map((f) => new Set([f.home_entrant_id, f.away_entrant_id]));
-    expect(pairs).toContainEqual(new Set([e.get(1), e.get(8)]));
+  // F3 round-3 review, Task 1 (BLOCKER) — this case used to assert the
+  // self-pairing draw (E1 v E8, both pool A) as CORRECT: snake over
+  // topNPerGroup(2) reverses wave 2 back to ascending order
+  // ([E1,E2,E3,E4,E5,E6,E7,E8]), and seedPositions(8)'s fold then pairs
+  // seed1 v seed8 = E1 v E8 — pool A's OWN winner against pool A's OWN
+  // runner-up in round 1 (ruling 13's worked example, verbatim shape: 4
+  // pools, topNPerGroup(2), snake). Every one of this setup's 4 round-1
+  // pairs is a group replaying its own final, not just the one this test
+  // happened to assert. Inverted, not deleted: createStages now REFUSES this
+  // progression at save time (placeDescriptors' new bracket-target guard,
+  // targetKind="knockout") rather than silently producing the broken draw.
+  // The correct cross-pool draw for this exact standings shape (E1 v E5, not
+  // E1 v E8) is already covered by rank_order above (lines 174-186).
+  it("snake placement over a topNPerGroup wave into a bracket-kind (knockout) target is refused at save time — ruling 13's self-pairing draw, not silently produced", async () => {
+    const err = await setupGroupsToKnockout("snake").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as { code?: string }).code).toBe("CONFIG_INVALID");
+    expect((err as Error).message).toMatch(/bracket-kind stage \("knockout"\)/);
   });
 
   it("non-destructive guarantee: confirm leaves scheduled_at/court/pins BYTE-IDENTICAL on already-scheduled TBD fixtures", async () => {
@@ -246,6 +249,140 @@ describe.skipIf(!HAS_DB)("D4a/P5 — propose + confirm (groups -> complete -> pr
     const filled = await sql<{ home_entrant_id: string | null }[]>`
       select home_entrant_id from fixtures where id in ${sql(round0Ids)}`;
     expect(filled.every((f) => f.home_entrant_id !== null)).toBe(true);
+  });
+});
+
+describe.skipIf(!HAS_DB)("D4a/P5 — bestNth position-key collision (F3 round-3 review, Task 2)", () => {
+  it("two bestNth rules at the same position but different nth must not collide on descriptorKey's bare best:${position} — a tie's displayed slot must match its OWN seed, not the other rule's", async () => {
+    // Engine descriptorKey renders best_nth as `best:${position}`, dropping
+    // `nth` (progression.ts's own doc comment) — deliberate, since it is
+    // also the seeded_map.source wire vocabulary. Two bestNth rules on the
+    // SAME source at the same position (nth:1/count:1 and nth:2/count:1,
+    // both -> position:1) therefore share that bare key even though they
+    // describe different qualifiers (best pool WINNER vs best pool LOSER).
+    //
+    // 3 pools of 2 so nth:1 (pool winners) and nth:2 (pool losers) can be
+    // made to tie/not-tie independently (a 2-pool, single-match-per-pool
+    // setup forces winner and loser stats to be exact negations of each
+    // other, so identical scorelines across pools always tie BOTH nth:1 and
+    // nth:2 together — a 3rd pool with a DIFFERENT scoreline breaks that):
+    //   Pool A: E1 beats E6 2-0   Pool B: E2 beats E5 2-0   Pool C: E3 beats E4 2-1
+    // nth:1 candidates (winners, cross-pool): E1(diff+2), E2(diff+2) TIE,
+    // E3(diff+1) distinct — position:1 ties E1 against E2. WHICH of the two
+    // is the SELECTED qualifier is not under this test's control:
+    // crossGroupOrder (progression.ts) calls rankStandings without a `seeds`
+    // context, so the tiebreak fallback sorts by raw entrant-id string, not
+    // tournament seed — the test asks the proposal which one won rather than
+    // assuming.
+    // nth:2 candidates (losers, cross-pool): E6(diff-2), E5(diff-2) tied with
+    // each other but NOT selected (count:1 only takes position:1), E4(diff-1)
+    // ranks BEST among losers — position:1 is E4 alone, no tie.
+    // Exactly one ProgressionTieFlag: E1 vs E2, on the nth:1/position:1
+    // descriptor. Pre-fix, seedOfKey's map (keyed by bare descriptorKey) is
+    // built by iterating qualifiers in take-declaration order — nth:1/pos:1
+    // (the selected one of E1/E2) is inserted first, then nth:2/pos:1 (E4)
+    // OVERWRITES the same "0:best:1" key — so the tie's displayed slot
+    // silently resolves to E4's fixture slot, not its own.
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "BestNthKey " + randomUUID().slice(0, 6),
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    const entrants = await createEntrants(
+      auth,
+      division.id,
+      Array.from({ length: 6 }, (_, i) => ({
+        kind: "individual" as const,
+        display_name: `E${i + 1}`,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const e = new Map(entrants.map((x) => [x.seed as number, x.id]));
+
+    const stages = await createStages(auth, division.id, [
+      { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 3 } } },
+      {
+        seq: 2,
+        kind: "knockout",
+        name: "KO",
+        config: {},
+        progression: {
+          sources: [
+            {
+              stage: "previous",
+              take: [
+                { kind: "bestNth", nth: 1, count: 1 },
+                { kind: "bestNth", nth: 2, count: 1 },
+              ],
+            },
+          ],
+          placement: "rank_order",
+          timing: "setup",
+        },
+      },
+    ]);
+    const groupStageId = stages.find((s) => s.kind === "group")!.id;
+    const koStageId = stages.find((s) => s.kind === "knockout")!.id;
+    await generateStageFixtures(auth, koStageId);
+    await generateStageFixtures(auth, groupStageId);
+
+    async function decide(winnerId: string, loserId: string, w: number, l: number): Promise<void> {
+      const [f] = await sql<{ id: string; home_entrant_id: string; away_entrant_id: string }[]>`
+        select id, home_entrant_id, away_entrant_id from fixtures where stage_id = ${groupStageId}
+        and ((home_entrant_id = ${winnerId} and away_entrant_id = ${loserId})
+          or (home_entrant_id = ${loserId} and away_entrant_id = ${winnerId}))`;
+      const homeIsWinner = f!.home_entrant_id === winnerId;
+      await appendEvent(auth.orgId, f!.id, 0, { type: "core.start", payload: {} });
+      await appendEvent(auth.orgId, f!.id, 1, {
+        type: "generic.result",
+        payload: homeIsWinner ? { p1Score: w, p2Score: l } : { p1Score: l, p2Score: w },
+      });
+    }
+    await decide(e.get(1)!, e.get(6)!, 2, 0);
+    await decide(e.get(2)!, e.get(5)!, 2, 0);
+    await decide(e.get(3)!, e.get(4)!, 2, 1);
+
+    const result = await completeStage(auth, groupStageId);
+    expect(result.seed_proposal).toBeDefined();
+    const [proposal] = await sql<
+      {
+        id: string;
+        computed: {
+          qualifiers: { entrantId: string; destinationSlot: string }[];
+          ties: { slots: string[]; entrantIds: string[] }[];
+        };
+      }[]
+    >`select id, computed from stage_seed_proposals where id = ${result.seed_proposal!.id}`;
+
+    expect(proposal.computed.ties).toHaveLength(1);
+    const tie = proposal.computed.ties[0]!;
+    expect([...tie.entrantIds].sort()).toEqual([e.get(1)!, e.get(2)!].sort());
+
+    // WHICH of E1/E2 actually became the nth:1/position:1 qualifier depends
+    // on rankStandings' seed/id tiebreak fallback — bestNth's crossGroupOrder
+    // (progression.ts) calls rankStandings without a `seeds` context, so ties
+    // break by raw entrant-id string, not by the tournament seed number this
+    // test otherwise controls. Ask the proposal which one qualified rather
+    // than assuming E1 wins.
+    const selected = proposal.computed.qualifiers.find((q) => q.entrantId === e.get(1) || q.entrantId === e.get(2))!;
+    expect(selected).toBeDefined();
+    const e4Slot = proposal.computed.qualifiers.find((q) => q.entrantId === e.get(4))!.destinationSlot;
+    expect(selected.destinationSlot).not.toBe(e4Slot); // sanity: two distinct slots exist
+    // The tie's displayed slot must be the SELECTED qualifier's OWN
+    // destination slot — never E4's (nth:2/position:1), which is what the
+    // bare-descriptorKey collision silently substitutes pre-fix.
+    expect(tie.slots).toEqual([selected.destinationSlot]);
   });
 });
 

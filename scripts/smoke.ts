@@ -836,6 +836,12 @@ async function main() {
   // next stage playable (own fresh free session — not an entitlement gate).
   await stageProgressionSuite();
 
+  // --- F3 Task 5: roster-drift rebuild — withdraw pre-start, rebuild drops
+  // the stale name and picks up a late registration; a separate division
+  // proves the 409 refusal once a fixture already has a result (own fresh
+  // free session — not an entitlement gate).
+  await stageRosterDriftSuite();
+
   // --- C1 fix-loop (G2/3rd instance): the drag path's round-robin delta-gate
   // blind spot, over real HTTP — a round-order violation against an
   // untouched sibling 409s, writes nothing, and an identically-shaped legal
@@ -6662,7 +6668,7 @@ async function templateInstantiationSuite(): Promise<void> {
  */
 async function stageProgressionSuite(): Promise<void> {
   const free = newSession();
-  await signIn(free, `dtx_seed_${tag}@example.com`);
+  const { org_id: freeOrgId } = await signIn(free, `dtx_seed_${tag}@example.com`);
   const comp = v1data<{ id: string }>(
     await v1(free, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `DTX Seed ${tag}` }),
   );
@@ -6704,7 +6710,12 @@ async function stageProgressionSuite(): Promise<void> {
   type SlotLabelWire = { key: string; params: Record<string, unknown> } | null;
   const koGen = v1data<{
     created: number;
-    fixtures: { home_entrant_id: string | null; home_slot_label: SlotLabelWire; away_slot_label: SlotLabelWire }[];
+    fixtures: {
+      id: string;
+      home_entrant_id: string | null;
+      home_slot_label: SlotLabelWire;
+      away_slot_label: SlotLabelWire;
+    }[];
   }>(await v1(free, `/api/v1/stages/${koId}/generate`, "POST"));
   check(
     "stage progression: setup-timing KO generates 1 fully-TBD fixture before the group stage runs at all",
@@ -6726,6 +6737,79 @@ async function stageProgressionSuite(): Promise<void> {
         typeof home.params.g === "string" &&
         typeof away.params.g === "string" &&
         home.params.g !== away.params.g,
+    );
+  }
+
+  // F3 Task 4 — day-one fixtures must SURVIVE a schedule BUILD, not just
+  // exist. Runs BEFORE the group stage is even generated (same "before the
+  // group stage runs at all" moment the check above proves) — the fully-TBD
+  // KO fixture from `koGen` above is the day-one placeholder under test. No
+  // placement service is assumed reachable here (a bare smoke run), so BUILD
+  // legitimately falls back to its greedy path; that fallback surviving
+  // cleanly is exactly the claim, not a solved-optimal board.
+  {
+    const koFixtureIdPreBuild = koGen.fixtures[0]!.id;
+    const homeLabelBefore = koGen.fixtures[0]!.home_slot_label;
+    const awayLabelBefore = koGen.fixtures[0]!.away_slot_label;
+    const buildVenue = v1data<{ id: string }>(
+      await v1(free, `/api/v1/orgs/${freeOrgId}/venues`, "POST", { name: `DTX Build ${tag}` }),
+    );
+    const buildCourt = v1data<{ id: string }>(
+      await v1(free, `/api/v1/orgs/${freeOrgId}/venues/${buildVenue.id}/courts`, "POST", { name: "Court 1" }),
+    );
+    await v1(free, `/api/v1/divisions/${div.id}/schedule-settings`, "PUT", {
+      tz: "UTC",
+      config: {
+        startAt: "2026-08-01T09:00:00.000Z",
+        matchMinutes: 60,
+        gapMinutes: 0,
+        courts: [buildCourt.id],
+        perEntrantMinRest: 0,
+        sessionWindows: [],
+      },
+    });
+    const koBuild = v1data<{
+      assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
+    }>(await v1(free, `/api/v1/stages/${koId}/schedule/auto`, "POST", { only_unlocked: false, mode: "build" }));
+    check(
+      "day-one BUILD: the fully-TBD KO fixture is schedulable — BUILD proposes it a slot, same as any real fixture",
+      koBuild.assignments.length === 1 && koBuild.assignments[0]!.fixture_id === koFixtureIdPreBuild,
+    );
+    await v1(free, `/api/v1/stages/${koId}/schedule/apply`, "POST", {
+      assignments: koBuild.assignments.map((a) => ({
+        fixture_id: a.fixture_id,
+        scheduled_at: a.scheduled_at,
+        court_id: a.court_id,
+      })),
+      source: "auto",
+    });
+    const koAfterBuild = v1data<{
+      id: string;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+      home_slot_label: SlotLabelWire;
+      away_slot_label: SlotLabelWire;
+      scheduled_at: string | null;
+      court_id: string | null;
+    }>(await v1(free, `/api/v1/fixtures/${koFixtureIdPreBuild}`));
+    check(
+      "day-one BUILD: the SAME fixture id survives — BUILD did not delete/regenerate the placeholder",
+      koAfterBuild.id === koFixtureIdPreBuild,
+    );
+    check(
+      "day-one BUILD: still fully TBD after BUILD+apply — no entrant silently attached",
+      koAfterBuild.home_entrant_id === null && koAfterBuild.away_entrant_id === null,
+    );
+    check(
+      "day-one BUILD: both slot labels survive BUILD+apply unchanged (still real descriptors, not TBD/null)",
+      koAfterBuild.home_slot_label?.key === "slot.winner_group" &&
+        koAfterBuild.away_slot_label?.key === "slot.winner_group" &&
+        koAfterBuild.home_slot_label?.params.g === homeLabelBefore?.params.g &&
+        koAfterBuild.away_slot_label?.params.g === awayLabelBefore?.params.g,
+    );
+    check(
+      "day-one BUILD: the placeholder actually landed on the timetable (real scheduled_at + its court)",
+      koAfterBuild.scheduled_at !== null && koAfterBuild.court_id === buildCourt.id,
     );
   }
 
@@ -6833,6 +6917,117 @@ async function stageProgressionSuite(): Promise<void> {
     payload: { p1Score: 2, p2Score: 1 },
   });
   check("stage progression: next stage is playable — the now-filled KO fixture scores 201", koScore.status === 201);
+}
+
+/**
+ * F3 Task 5 (5a/5b, 2026-08-18 plan) — the roster-drift rebuild, over real
+ * HTTP (own fresh free session — not an entitlement gate). 5c (a GET read
+ * path for the derived signal) is a separate, later task — not built here —
+ * so the proof is the rebuild's own observable effect, not a dedicated read:
+ * withdraw BEFORE the division starts (a plain status flip on the real
+ * withdraw route — generateStageFixtures is additive-only, so Generate alone
+ * can never drop the withdrawn entrant's name, the plan's "corrected
+ * premise"), then rebuild actually drops it and picks up an entrant
+ * registered after the original generate. A second, unrelated division
+ * proves the separate 409 refusal once a fixture already carries a result.
+ */
+async function stageRosterDriftSuite(): Promise<void> {
+  const free = newSession();
+  await signIn(free, `dtx_drift_${tag}@example.com`);
+  const comp = v1data<{ id: string }>(
+    await v1(free, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `DTX Drift ${tag}` }),
+  );
+  const div = v1data<{ id: string }>(
+    await v1(free, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  await v1(free, `/api/v1/divisions/${div.id}/entrants`, "POST", [
+    { kind: "individual", display_name: "Drift Alice", seed: 1 },
+    { kind: "individual", display_name: "Drift Bob", seed: 2 },
+    { kind: "individual", display_name: "Drift Cleo", seed: 3 },
+  ]);
+  const entrantsBefore = v1data<{ id: string; display_name: string }[]>(
+    await v1(free, `/api/v1/divisions/${div.id}/entrants`),
+  );
+  const byName = new Map(entrantsBefore.map((e) => [e.display_name, e.id]));
+  const aliceId = byName.get("Drift Alice")!;
+
+  const stage = v1data<{ id: string }>(
+    await v1(free, `/api/v1/divisions/${div.id}/stages`, "POST", {
+      seq: 1, kind: "league", name: "L", config: {},
+    }),
+  );
+  const gen = v1data<{ created: number }>(await v1(free, `/api/v1/stages/${stage.id}/generate`, "POST"));
+  check("roster drift: a 3-entrant league generates all 3 pairings", gen.created === 3);
+
+  // "Additive only" (generateStageFixtures's own doc comment, the plan's
+  // corrected premise): withdrawing BEFORE the division starts is a plain
+  // status flip on the real withdraw route — no fixture surgery — so
+  // Alice's name stays on the board exactly as the plan describes.
+  const withdrawn = v1data<{ policy: string }>(await v1(free, `/api/v1/entrants/${aliceId}/withdraw`, "POST"));
+  check(
+    "roster drift: pre-start withdrawal is a plain status flip, not the mid-tournament cascade",
+    withdrawn.policy === "none",
+  );
+
+  await v1(free, `/api/v1/divisions/${div.id}/entrants`, "POST", [
+    { kind: "individual", display_name: "Drift Dee", seed: 4 },
+  ]);
+  const entrantsAfter = v1data<{ id: string; display_name: string }[]>(
+    await v1(free, `/api/v1/divisions/${div.id}/entrants`),
+  );
+  const deeId = entrantsAfter.find((e) => e.display_name === "Drift Dee")!.id;
+
+  // "5b — a rebuild that can actually fix it": replaces the whole stage,
+  // not a top-up. removed=3 (the stale Alice/Bob/Cleo set), created=3 (the
+  // fresh Bob/Cleo/Dee round robin).
+  const rebuilt = v1data<{
+    removed: number;
+    created: number;
+    fixtures: { home_entrant_id: string | null; away_entrant_id: string | null }[];
+  }>(await v1(free, `/api/v1/stages/${stage.id}/rebuild`, "POST"));
+  check("roster drift: rebuild removes all 3 stale fixtures and generates 3 fresh ones", rebuilt.removed === 3 && rebuilt.created === 3);
+  const referenced = new Set(rebuilt.fixtures.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]));
+  check("roster drift: the withdrawn entrant's name is gone from the rebuilt board", !referenced.has(aliceId));
+  check("roster drift: the entrant registered after the original generate is now on the board", referenced.has(deeId));
+
+  // Separate division: rebuild refuses once ANY fixture already has a
+  // result (hard constraint 1) — never a partial rebuild.
+  const div2 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Played",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  await v1(free, `/api/v1/divisions/${div2.id}/entrants`, "POST", [
+    { kind: "individual", display_name: "Played One", seed: 1 },
+    { kind: "individual", display_name: "Played Two", seed: 2 },
+  ]);
+  const stage2 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/divisions/${div2.id}/stages`, "POST", {
+      seq: 1, kind: "league", name: "L2", config: {},
+    }),
+  );
+  const gen2 = v1data<{ fixtures: { id: string }[] }>(await v1(free, `/api/v1/stages/${stage2.id}/generate`, "POST"));
+  await v1(free, `/api/v1/divisions/${div2.id}/start`, "POST");
+  const f2 = gen2.fixtures[0]!;
+  const state2 = v1data<{ last_seq: number }>(await v1(free, `/api/v1/fixtures/${f2.id}/state`));
+  await v1(free, `/api/v1/fixtures/${f2.id}/events`, "POST", {
+    expected_seq: state2.last_seq,
+    type: "generic.result",
+    payload: { p1Score: 2, p2Score: 0 },
+  });
+  const refused = await v1(free, `/api/v1/stages/${stage2.id}/rebuild`, "POST");
+  check(
+    "roster drift: rebuild refuses 409 STAGE_HAS_RESULTS once a fixture is decided, never a partial rebuild",
+    refused.status === 409 && refused.json.error?.code === "STAGE_HAS_RESULTS",
+  );
 }
 
 /**
@@ -15113,11 +15308,19 @@ async function pagePlayoffSuite(admin: Session): Promise<void> {
 }
 
 /**
- * L3/#414 pass 3 — a multi-stage format built end to end over real HTTP:
- * knockout main draw -> plate, seeded from round-1 losers (losersOfRound).
- * Proves the whole chain a template like ko_plate exercises: generate,
- * decide every round (regenerating between passes so later rounds' winner
- * feeds wire up), complete, and the plate seeds in bracket order.
+ * L3/#414 pass 3 / F3 review item 5 — a multi-stage format built end to end
+ * over real HTTP: knockout main draw -> plate, seeded from round-1 losers
+ * (roundLosers). Proves the whole chain the ko_plate TEMPLATE actually
+ * exercises today: `timing: "setup"` (F3 flipped every picker template to
+ * day-one fixtures) means the plate's TBD bracket exists before Main is even
+ * generated, and completing Main computes a DRAFT seed proposal rather than
+ * auto-filling (owner ruling 12 — propose-and-confirm, never auto-confirm).
+ * This used to assert the OLD on_complete wire shape (`done.qualified`),
+ * which no picker template has emitted since F3's flip — fixed alongside the
+ * `sourcesToTables` gap it uncovered (stage-seeding.ts never fetched a
+ * roundLosers source's bracket fixtures, so `computeSeedProposal` could
+ * never resolve one; silently swallowed by completeStage's best-effort
+ * catch).
  */
 async function qualifyFromAnyStageSuite(admin: Session): Promise<void> {
   const comp = v1data<{ id: string; slug: string }>(
@@ -15158,7 +15361,7 @@ async function qualifyFromAnyStageSuite(admin: Session): Promise<void> {
       progression: {
         sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 4 }] }],
         placement: "rank_order",
-        timing: "on_complete",
+        timing: "setup",
       },
     }),
   );
@@ -15171,6 +15374,18 @@ async function qualifyFromAnyStageSuite(admin: Session): Promise<void> {
     home_entrant_id: string | null;
     away_entrant_id: string | null;
   };
+
+  // Day-one: the plate's TBD bracket exists before Main has even generated —
+  // the whole point of F3's flip to timing:"setup".
+  const plateDayOne = v1data<{ created: number; fixtures: Fx[] }>(
+    await v1(admin, `/api/v1/stages/${plate.id}/generate`, "POST"),
+  );
+  check(
+    "qfa plate generates a 4-entrant TBD bracket on day one (3 fixtures)",
+    plateDayOne.created === 3 &&
+      plateDayOne.fixtures.every((f) => f.home_entrant_id === null && f.away_entrant_id === null),
+  );
+
   const gen = v1data<{ fixtures: Fx[] }>(await v1(admin, `/api/v1/stages/${main.id}/generate`, "POST"));
   await v1(admin, `/api/v1/divisions/${div.id}/start`, "POST");
 
@@ -15210,18 +15425,44 @@ async function qualifyFromAnyStageSuite(admin: Session): Promise<void> {
     }
   }
 
-  const done = v1data<{ completed: boolean; qualified?: { stage_id: string; entrants: string[] } }>(
+  // "complete": guarded progression computes a DRAFT proposal, never
+  // auto-fills (ruling 12 — same propose-and-confirm contract every
+  // timing:"setup" stage gets, not just groups -> KO).
+  const done = v1data<{ completed: boolean; seed_proposal?: { id: string; status: string } }>(
     await v1(admin, `/api/v1/stages/${main.id}/complete`, "POST"),
   );
   check("qfa main stage completes", done.completed === true);
-  check("qfa plate seeded from main", done.qualified?.stage_id === plate.id);
   check(
-    "qfa plate entrants = round-1 losers, in bracket order",
-    JSON.stringify(done.qualified?.entrants) === JSON.stringify(expectedLosers),
+    "qfa main completion computes a draft seed proposal for the plate, never auto-fills",
+    done.seed_proposal?.status === "draft",
   );
 
-  const plateGen = v1data<{ created: number; existing: number }>(
-    await v1(admin, `/api/v1/stages/${plate.id}/generate`, "POST"),
+  // "propose": explicit recompute (the real endpoint an organiser's UI hits;
+  // completeStage's own auto-compute above is best-effort and gets marked
+  // stale by this call, matching the panel's actual sequence).
+  const proposal = v1data<{
+    id: string;
+    computed: { qualifiers: { entrantId: string; destinationSlot: string }[]; ties: unknown[] };
+  }>(await v1(admin, `/api/v1/stages/${plate.id}/seed-proposal`, "POST"));
+  check(
+    "qfa plate proposal names the 4 round-1 losers, in bracket order",
+    JSON.stringify(proposal.computed.qualifiers.map((q) => q.entrantId)) === JSON.stringify(expectedLosers),
   );
-  check("qfa plate generates a 4-entrant bracket (3 fixtures)", plateGen.created + plateGen.existing === 3);
+  check("qfa plate proposal has no ties", proposal.computed.ties.length === 0);
+
+  // "confirm": fills the plate's TBD fixtures through the same fillSlot
+  // pathway intra-bracket advancement uses.
+  const confirmed = v1data<{ filled: number; fixtures: Fx[] }>(
+    await v1(admin, `/api/v1/stages/${plate.id}/seed-proposal/confirm`, "POST", { proposalId: proposal.id }),
+  );
+  check("qfa plate confirm seats all 4 losers", confirmed.filled === 4);
+  const seated = new Set(
+    confirmed.fixtures
+      .flatMap((f) => [f.home_entrant_id, f.away_entrant_id])
+      .filter((id): id is string => id !== null),
+  );
+  check(
+    "qfa plate fixtures hold exactly the expected losers",
+    expectedLosers.every((id) => seated.has(id as string)),
+  );
 }

@@ -34,7 +34,11 @@ const TABLE_KINDS = new Set(["league", "group", "swiss", "americano"]);
 // branch below is exhaustive by construction, not by the type checker (kind
 // is validated from a raw DB string at the loadStageInputs boundary, so TS
 // can't prove the three branches cover it statically — see parseStageKind).
-const BRACKET_KINDS = ["knockout", "double_elim", "stepladder", "page_playoff"] as const;
+// Exported (round-4 review, B) so bracket-kinds-sync.test.ts can pin this
+// literal against its two hand-copied siblings (usecases/stages.ts's own
+// BRACKET_KINDS, the engine's BRACKET_STAGE_KINDS) — see that test's header
+// comment for why an unsynced 5th bracket kind is a silent, fail-open hazard.
+export const BRACKET_KINDS = ["knockout", "double_elim", "stepladder", "page_playoff"] as const;
 function isBracketKind(kind: StageKind): kind is BracketStage["kind"] {
   return (BRACKET_KINDS as readonly string[]).includes(kind);
 }

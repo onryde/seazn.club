@@ -14,7 +14,9 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { TipCallout } from "@/components/ui/tip";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
+import { seedingErrorMessage } from "@/lib/seeding-error";
+import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
@@ -99,6 +101,23 @@ interface FixtureRow {
   conditional?: boolean;
 }
 
+/** F3 Task 5 (5a) — getStageRosterDrift's wire shape (usecases/stages.ts),
+ *  hand-declared like StageRow/FixtureRow above: this panel only ever reads
+ *  these two fields. */
+interface RosterDriftEntrant {
+  id: string;
+  display_name: string;
+}
+interface RosterDrift {
+  ghosts: RosterDriftEntrant[];
+  unplaced: RosterDriftEntrant[];
+  /** Organiser setup that a rebuild clears along with the fixtures — see
+   *  StageRosterDrift.attachments (usecases/stages.ts) for why these do not
+   *  BLOCK the rebuild the way a recorded result does. Optional: hand-built
+   *  props in this panel's own __tests__ predate the field. */
+  attachments?: { officials: number; lineups: number; deviceLinks: number };
+}
+
 interface Props {
   divisionId: string;
   /** The division's event-ledger head (`DivisionRow.seq`, gap 10) at render
@@ -123,6 +142,13 @@ interface Props {
    *  `venues` already uses for the identical purpose. Defaults to `[]` below
    *  so existing hand-built test props don't all need updating. */
   venues?: Venue[];
+  /** F3 Task 5 (5a) — keyed by stage id, computed server-side by
+   *  getStageRosterDrift. Only ever non-empty for the one root stage whose
+   *  fixtures reference the live roster (see that function's own doc
+   *  comment) — every other stage is absent or `{ghosts:[],unplaced:[]}`.
+   *  Optional: pre-existing hand-built props in this panel's own __tests__
+   *  predate this field. */
+  rosterDrift?: Record<string, RosterDrift>;
   canEdit: boolean;
   /** Competition timezone (schedule settings) — every time renders in it. */
   tz: string;
@@ -305,8 +331,14 @@ export function capacityForStage(
   return input === null ? null : assessCapacity(input);
 }
 
-export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], canEdit, tz, orgTz, canExport }: Props) {
+export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport }: Props) {
   const msg = useMsg();
+  // Only for Intl.ListFormat in attachmentWarning below — the rebuild
+  // confirm dialog joins its "this also clears …" list per locale. The
+  // non-throwing reader on purpose: this panel is rendered bare (no
+  // DictProvider) throughout its own component tests, and the locale is
+  // formatting-only here.
+  const locale = useLocaleOrDefault();
   const confirmDialog = useConfirm();
   const router = useRouter();
   // P9 pass 4d: id -> venue-qualified display name, reusing the SAME
@@ -540,9 +572,55 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywallFeature(String(err.extra.feature_key ?? ""));
       } else {
-        const precondition = generatePreconditionMessage(err, msg);
-        if (precondition) {
-          setWarning(precondition);
+        const classified = classifyActError(err, msg, locale);
+        if (classified.tone === "warning") setWarning(classified.text);
+        else setError(classified.text);
+        if (classified.refresh) router.refresh();
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // F3 Task 5 (5b) — replace, not top up: confirm (destructive, so the same
+  // danger-tone dialog as delete), then POST /rebuild. Never auto-run
+  // (ruling 7, restated in the F3 Task 5 plan) — this only ever runs from
+  // the organiser's own click on the banner above.
+  async function rebuildStage(stageId: string) {
+    const ok = await confirmDialog({
+      title: msg("progression.rosterDrift.confirmTitle"),
+      body: [msg("progression.rosterDrift.confirmBody"), attachmentWarning(rosterDrift[stageId], msg, locale)]
+        .filter(Boolean)
+        .join(" "),
+      confirmLabel: msg("progression.rosterDrift.confirmLabel"),
+      tone: "danger",
+    });
+    if (!ok) return;
+    setError(null);
+    setPaywallFeature(null);
+    setNotice(null);
+    setWarning(null);
+    setLastRun(null);
+    setBusy(stageId);
+    try {
+      const out = await apiV1<{ created: number; existing: number; removed: number }>(
+        `/api/v1/stages/${stageId}/rebuild`,
+        { method: "POST", json: {} },
+      );
+      setNotice(msg("progression.rosterDrift.rebuiltNotice", { removed: out.removed }));
+      router.refresh();
+    } catch (err) {
+      if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
+        setPaywallFeature(String(err.extra.feature_key ?? ""));
+      } else {
+        // 409 STAGE_HAS_RESULTS (hard constraint 1): a ghost can be reported
+        // by getStageRosterDrift even when its fixture already has a result
+        // — the signal and the guard are independent (plan, required test
+        // coverage) — so this is a real, reachable outcome, not just a
+        // defence-in-depth 422 the UI never offers a button for.
+        const blocked = rebuildBlockedMessage(err, msg);
+        if (blocked) {
+          setWarning(blocked);
         } else {
           setError(err instanceof Error ? err.message : msg("schedule.error.failed"));
         }
@@ -696,6 +774,12 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         // Bracket stages: one card per named round (Quarter-finals, Semi-finals,
         // Final / Rung N) instead of one long card with anonymous round breaks.
         const splitRounds = BRACKET_KINDS.has(stage.kind) && rounds.length > 0;
+        // F3 Task 5 (5a) — only ever non-empty for the one stage
+        // getStageRosterDrift finds eligible (usecases/stages.ts); every
+        // other stage's entry is absent or both arrays empty, so this is a
+        // no-op read for the common case.
+        const drift = rosterDrift[stage.id];
+        const hasDrift = Boolean(drift && (drift.ghosts.length > 0 || drift.unplaced.length > 0));
         return (
           <div key={stage.id} className="space-y-6">
           <section className="card overflow-hidden">
@@ -794,6 +878,50 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                 </button>
               )}
             </header>
+
+            {/* F3 Task 5 (5a/5b) — the board no longer matches the roster:
+                a withdrawn entrant is still named on a fixture, an added
+                entrant has none yet, or both. Reuses the house "needs
+                attention" treatment (progression-panel.tsx's amber
+                border/background + data-* state hook), never auto-run —
+                the organiser presses Rebuild. Gated the same as Generate/
+                Complete just above: once the stage is complete the rebuild
+                would always refuse (every fixture has a result by then), so
+                there is nothing actionable left to show. */}
+            {canEdit && stage.status !== "complete" && hasDrift && drift && (
+              <div
+                className="border-b border-dashed border-amber-200 bg-amber-50 px-4 py-3"
+                data-testid="roster-drift-banner"
+                data-roster-drift-state={drift.ghosts.length > 0 ? "ghosts" : "unplaced"}
+              >
+                <p className="text-xs font-semibold text-amber-900">
+                  {msg("progression.rosterDrift.heading")}
+                </p>
+                {drift.ghosts.length > 0 && (
+                  <p className="mt-1 text-xs text-amber-800">
+                    {msg("progression.rosterDrift.ghostsLabel")}{" "}
+                    {drift.ghosts.map((e) => e.display_name).join(", ")}
+                  </p>
+                )}
+                {drift.unplaced.length > 0 && (
+                  <p className="mt-1 text-xs text-amber-800">
+                    {msg("progression.rosterDrift.unplacedLabel")}{" "}
+                    {drift.unplaced.map((e) => e.display_name).join(", ")}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  data-testid="roster-drift-rebuild"
+                  disabled={busy !== null}
+                  onClick={() => void rebuildStage(stage.id)}
+                  className="btn btn-danger mt-2 min-h-11 px-3 py-1.5 text-xs"
+                >
+                  {busy === stage.id
+                    ? msg("progression.rosterDrift.rebuilding")
+                    : msg("progression.rosterDrift.rebuildCta")}
+                </button>
+              </div>
+            )}
 
             {/* PROMPT-66: inline ad-hoc match form (replay / friendly / tie-breaker). */}
             {addingTo === stage.id && (
@@ -1103,6 +1231,52 @@ function AddStageForm({
 const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
 
 /**
+ * F3 Task 5 (5b) — the rebuild-click classifier, mirroring
+ * generatePreconditionMessage's shape just below (same pure/exported-for-
+ * direct-unit-testing rationale). rebuildStageFixtures (usecases/stages.ts)
+ * refuses 409 STAGE_HAS_RESULTS the moment any fixture in the stage already
+ * carries a score, is in progress, or is completed — this turns that refusal
+ * into the actionable, localized amber banner rather than the generic red
+ * error text. Every other error (including the defence-in-depth 422
+ * STAGE_NOT_ROOT this panel's own gating never triggers) falls through to
+ * the caller's generic handling, same as generatePreconditionMessage's null.
+ */
+/**
+ * F3 ultrareview finding 5 — the sentence appended to the rebuild confirm
+ * dialog naming the organiser SETUP the rebuild clears along with the
+ * fixtures: referee appointments, team sheets, paired scoring devices. All
+ * three CASCADE off `delete from fixtures` and none of them blocks the
+ * rebuild (a result does; see rebuildStageFixtures' guard) — so without this
+ * the dialog said "every fixture is deleted and regenerated" while silently
+ * also dropping a Saturday's worth of appointments.
+ *
+ * Returns "" when there is nothing attached, so the common case adds no
+ * boilerplate to click through — only non-zero pieces are listed. Joined
+ * with `Intl.ListFormat` on the caller's own locale rather than a hardcoded
+ * ", " and " and ": the conjunction and the separator differ per language,
+ * and this repo's four dictionaries would otherwise need two more keys that
+ * exist only to spell out punctuation. Exported (pure) for the same reason
+ * rebuildBlockedMessage is: testable without a jsdom harness.
+ */
+export function attachmentWarning(drift: RosterDrift | undefined, msg: Msg, locale: string): string {
+  const a = drift?.attachments;
+  if (!a) return "";
+  const parts = [
+    a.officials > 0 ? msg("progression.rosterDrift.alsoOfficials", { count: a.officials }) : null,
+    a.lineups > 0 ? msg("progression.rosterDrift.alsoLineups", { count: a.lineups }) : null,
+    a.deviceLinks > 0 ? msg("progression.rosterDrift.alsoDevices", { count: a.deviceLinks }) : null,
+  ].filter((p): p is string => p !== null);
+  if (parts.length === 0) return "";
+  const items = new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(parts);
+  return msg("progression.rosterDrift.alsoCleared", { items });
+}
+
+export function rebuildBlockedMessage(err: unknown, msg: Msg): string | null {
+  if (!(err instanceof ApiV1Error) || err.code !== "STAGE_HAS_RESULTS") return null;
+  return msg("progression.rosterDrift.blockedNotice");
+}
+
+/**
  * "Générer les matchs" precondition failure (design/fix-ui/03 §"misleading
  * success message"): generateStageFixtures throws STAGE_NOT_READY with
  * `data.reason: "group_too_few_entrants"` when a group stage passed the
@@ -1113,6 +1287,51 @@ const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_pl
  * Exported (pure, no state) so this classification is unit-testable without
  * a DOM/jsdom harness, which this repo's component tests don't set up.
  */
+/**
+ * How a failed generate/complete/delete is shown to the organiser: amber
+ * (something specific to fix) vs red (it failed), and whether the board
+ * needs re-reading. Exported pure for the same reason its two siblings above
+ * are — this panel's tests render it with renderToStaticMarkup, which never
+ * fires a handler, so a classifier left inline in the catch block is untested
+ * code on the path an organiser only reaches when something has gone wrong.
+ */
+export function classifyActError(
+  err: unknown,
+  msg: Msg,
+  locale: Locale,
+): { tone: "warning" | "error"; text: string; refresh: boolean } {
+  // F3 ultrareview finding 4 — the completion COMMITTED in its own
+  // transaction; only the next stage's seed proposal failed afterwards
+  // (completeStage, usecases/stages.ts). Amber, because the stage really is
+  // complete and the organiser has one concrete thing to fix — and a refresh,
+  // because otherwise the board keeps showing a completed stage as active and
+  // the next click lands on an already-complete stage.
+  if (err instanceof ApiV1Error && err.code === "STAGE_COMPLETED_SEEDING_FAILED") {
+    return {
+      tone: "warning",
+      text: msg("schedule.error.completedSeedingFailed", { reason: err.message }),
+      refresh: true,
+    };
+  }
+  const precondition = generatePreconditionMessage(err, msg);
+  if (precondition) return { tone: "warning", text: precondition, refresh: false };
+  // F3 ultrareview finding 10 — was `err.message` verbatim, i.e. raw English
+  // regardless of locale for every SEEDING_* code this panel can raise
+  // (generateProgressionSetupFixtures throws SEEDING_MAP_SOURCE_AMBIGUOUS
+  // straight out of `generate`). The copy already existed in all four
+  // errors.json; nothing on THIS path read it. No codes were added to that
+  // allowlist — see seeding-error.ts's own scope note — this is a second
+  // reader of copy that was already written and already tested.
+  if (err instanceof ApiV1Error) {
+    return { tone: "error", text: seedingErrorMessage(locale, err.code, err.message), refresh: false };
+  }
+  return {
+    tone: "error",
+    text: err instanceof Error ? err.message : msg("schedule.error.failed"),
+    refresh: false,
+  };
+}
+
 export function generatePreconditionMessage(err: unknown, msg: Msg): string | null {
   if (!(err instanceof ApiV1Error) || err.code !== "STAGE_NOT_READY") return null;
   if (err.extra.reason === "group_too_few_entrants") {

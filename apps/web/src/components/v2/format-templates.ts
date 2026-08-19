@@ -7,16 +7,36 @@
 // below emits `progression` (mirrors api-v1/schemas.ts's ProgressionSchema
 // field-for-field: sources[].take[]/placement/map?/timing). Collapse (owner
 // ruling 4, F2 plan Decision 2): `topN: n` is now `rankRange{from:1,to:n}`;
-// `losersOfRound` is now `roundLosers`. Every writer here sets
-// `timing: "on_complete"` — Decision 1's explicit statement that no writer's
-// default timing changes in this session; the picker still waits for its
-// source stage to complete before generating, exactly as before.
+// `losersOfRound` is now `roundLosers`.
+//
+// F3 (day-one fixtures, owner ruling R1 — supersedes F2 Decision 1 above):
+// every progression-bearing writer here now sets `timing: "setup"`. The
+// whole draw, final included, is generated with placeholder
+// home/away_slot_label the moment the division is created
+// (generateProgressionSetupFixtures, stages.ts) — the picker no longer
+// waits for the source stage to complete before a later stage's fixtures
+// exist. `stages-panel.tsx`'s ad-hoc AddStageForm and the seed scripts
+// still default to "on_complete" (R4 scoped the flip to this file plus
+// config/format-gallery.tsx's cannedStages) — this file's templates do not.
 //
 // `take`'s element type reuses the engine's own TakeRule (rather than a
 // hand-rolled `unknown[]`/`{kind:string}[]` restated here) so this file and
 // detectTemplate's own parameter type below can't drift apart the way
 // api-v1/schemas.ts's zod TakeRuleSchema and this plain-TS shape already
 // have to be kept in lockstep by hand (see that file's own comment).
+//
+// F3 Task 6 (i18n): this array used to carry its own English `label`/`help`
+// strings. Both render to organisers (division-builder.tsx's picker cards,
+// division-settings.tsx's format <select>), so they now live in the
+// dictionaries as `format.template.<key>.label` / `.help` (see
+// dictionaries/en/ui.json), read via useMsg() at both call sites. The fields
+// were REMOVED here rather than kept-and-ignored: a grep of every reader
+// (division-builder.tsx, division-settings.tsx, format-templates.test.ts,
+// format-catalogue.test.ts) turned up nothing else that touched `.label`/
+// `.help` on these objects, so a dead English copy sitting unrendered next
+// to the real dictionary source was pure drift risk with no offsetting
+// benefit. format-templates.test.ts's dictionary-coverage test is the
+// regression net that replaces the old "has a label/help" field check.
 import type { TakeRule } from "@seazn/engine/competition";
 
 export interface StageDraft {
@@ -41,148 +61,163 @@ export interface TemplateKnobs {
 
 export const STAGE_TEMPLATES: {
   key: string;
-  label: string;
-  help: string;
-  build: (q: number) => StageDraft[];
+  build: (knobs: TemplateKnobs) => StageDraft[];
 }[] = [
   {
     key: "league",
-    label: "League",
-    help: "Single round robin, table decides.",
     build: () => [{ kind: "league", name: "League", config: { legs: 1 }, progression: null }],
   },
   {
     key: "league_ko",
-    label: "League + Finals",
-    help: "Round robin, then top N knockout.",
-    build: (q) => [
+    build: ({ qualified: q }) => [
       { kind: "league", name: "League", config: { legs: 1 }, progression: null },
       { kind: "knockout", name: "Finals", config: {}, progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
         placement: "rank_order",
-        timing: "on_complete",
+        timing: "setup",
       } },
     ],
   },
   {
     key: "groups_ko",
-    label: "Groups + Knockout",
-    help: "Two pools, top of each cross over.",
-    build: (q) => [
-      {
-        kind: "group",
-        name: "Group stage",
-        config: { legs: 1, pools: { count: 2 } },
-        progression: null,
-      },
-      {
-        kind: "knockout",
-        name: "Knockout",
-        config: {},
-        progression: {
-          sources: [
-            {
-              stage: "previous",
-              take: [
-                {
-                  kind: "picks",
-                  picks: Array.from({ length: q }, (_, i) => ({
-                    pool: i % 2 === 0 ? "A" : "B",
-                    rank: Math.floor(i / 2) + 1,
-                  })),
-                },
-              ],
-            },
-          ],
-          placement: "rank_order",
-          timing: "on_complete",
+    build: ({ qualified: q, poolCount }) => {
+      // Cross-pool draw (owner ruling R5): take the top `n` finisher from
+      // EVERY pool, plus a `bestNth` remainder for the qualifier count that
+      // doesn't divide evenly across pools. topNPerGroup already expands
+      // wave-major (every pool's winner, then every pool's runner-up, …).
+      //
+      // Placement is `rank_order`, NOT `snake` (owner ruling 13, found by
+      // review before it shipped — F3 programme index). `snake` is chosen
+      // by the TARGET stage's kind, not the source's: t20-super8's `snake`
+      // (server/templates/catalog/*.json) is correct because ITS target is
+      // a group stage, where reversing alternate wave-major pots
+      // distributes strength across pools. This template's target is a
+      // KNOCKOUT, which must not reverse — generateSingleElim's
+      // seedPositions fold (scheduling/bracket.ts:52-63, used at :156-163)
+      // pairs seed i against seed N+1-i, so snake's reversal would put seed
+      // N/2+1 (a pool's OWN runner-up) opposite seed N/2 (that same pool's
+      // winner) in round 1: every pool replaying its own final. Plain
+      // rank_order over the same wave-major pots pairs each pool's winner
+      // against a DIFFERENT pool's runner-up instead — see
+      // format-templates.test.ts's "round 1 never pairs a group against
+      // itself" for the worked example. Replaces the old hand-rolled
+      // `picks` interleave, which hardcoded pools "A"/"B" and silently
+      // produced zero qualifiers from any pool beyond the second.
+      //
+      // n === 0 (q < poolCount) collapses to a no-op topNPerGroup(0) — the
+      // engine's expandOne loops `wave <= rule.n`, so n=0 contributes zero
+      // pots — so it's omitted here, and the whole take becomes
+      // bestNth(nth:1, count:q): the best q pool-winners by cross-pool
+      // rank, i.e. "topNPerGroup 1" (every pool's winner) truncated to q.
+      // Reachable from EITHER the Settings tab's free 2-32 qualified input
+      // (division-settings.tsx) OR the builder's own dropdown (qualified 2,
+      // pools >= 3, division-builder.tsx) — not the Settings tab alone.
+      const n = Math.floor(q / poolCount);
+      const r = q - n * poolCount;
+      const take: TakeRule[] = [];
+      if (n > 0) take.push({ kind: "topNPerGroup", n });
+      // normaliseUnequalPools:true (round-4 review, MAJOR — A1): pools are
+      // built by snakeDistribute (stages.ts), which produces unequal-sized
+      // pools whenever entrants don't divide evenly by poolCount — the
+      // common case, not an edge case. Without this flag, bestNth's
+      // cross-pool compare throws SEEDING_BESTNTH_UNEQUAL_POOLS the moment
+      // pool sizes differ (progression.ts) — silently, at SEEDING time on
+      // real rows, long after day-one fixture generation (which runs on
+      // SHAPES, never on real row counts) looked healthy. The normalisation
+      // itself is already implemented (normalisedRow, progression.ts) — this
+      // only had to ask for it. See format-templates.test.ts and
+      // progression.test.ts for the end-to-end proof.
+      //
+      // NOT covered by this flag: nth (= n+1) can still exceed a genuinely
+      // SHORT pool's row count (e.g. a pool with fewer than n+1 entrants at
+      // all) — rowAtRank looks up rank `nth` on every pool before
+      // normalisation ever runs, so that still throws STAGE_NOT_READY
+      // regardless of this flag. Deliberately not fixed here — see
+      // progression.test.ts's "the sibling hazard" test.
+      if (r > 0) take.push({ kind: "bestNth", nth: n + 1, count: r, normaliseUnequalPools: true });
+      return [
+        {
+          kind: "group",
+          name: "Group stage",
+          config: { legs: 1, pools: { count: poolCount } },
+          progression: null,
         },
-      },
-    ],
+        {
+          kind: "knockout",
+          name: "Knockout",
+          config: {},
+          progression: {
+            sources: [{ stage: "previous", take }],
+            placement: "rank_order",
+            timing: "setup",
+          },
+        },
+      ];
+    },
   },
   {
     key: "group_stepladder",
-    label: "Group + Stepladder",
-    help: "Round robin, then a stepladder final — lowest seed climbs.",
-    build: (q) => [
+    build: ({ qualified: q }) => [
       { kind: "league", name: "League", config: { legs: 1 }, progression: null },
       { kind: "stepladder", name: "Stepladder finals", config: {}, progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
         placement: "rank_order",
-        timing: "on_complete",
+        timing: "setup",
       } },
     ],
   },
   {
     key: "group_playoffs",
-    label: "Group + Playoffs (IPL style)",
-    help: "Round robin, then Qualifier 1, Eliminator, Qualifier 2 and the Final — the top two get a second life.",
     build: () => [
       { kind: "league", name: "League", config: { legs: 1 }, progression: null },
       { kind: "page_playoff", name: "Playoffs", config: {}, progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
         placement: "rank_order",
-        timing: "on_complete",
+        timing: "setup",
       } },
     ],
   },
   {
     key: "swiss",
-    label: "Swiss",
-    help: "Score-group pairings, fixed rounds.",
     build: () => [
       { kind: "swiss", name: "Swiss", config: { rounds: 5 }, progression: null },
     ],
   },
   {
     key: "knockout",
-    label: "Knockout",
-    help: "Single elimination bracket.",
     build: () => [{ kind: "knockout", name: "Knockout", config: {}, progression: null }],
   },
   {
     key: "double_elim",
-    label: "Double elimination",
-    help: "Losers bracket + grand final (Pro).",
     build: () => [
       { kind: "double_elim", name: "Double elimination", config: {}, progression: null },
     ],
   },
   {
     key: "triple_rr",
-    label: "Triple round robin",
-    help: "Everyone plays everyone three times.",
     build: () => [{ kind: "league", name: "Triple RR", config: { legs: 3 }, progression: null }],
   },
   {
     key: "americano",
-    label: "Americano (padel)",
-    help: "Individuals rotate partners each round; personal points (Pro).",
     build: () => [
       { kind: "americano", name: "Americano", config: { mode: "americano", courtCount: 2, rounds: 7 }, progression: null },
     ],
   },
   {
     key: "mexicano",
-    label: "Mexicano (padel)",
-    help: "Re-rank each round: 1+4 vs 2+3 from live points (Pro).",
     build: () => [
       { kind: "americano", name: "Mexicano", config: { mode: "mexicano", courtCount: 2, rounds: 7 }, progression: null },
     ],
   },
   {
     key: "ladder",
-    label: "Ladder",
-    help: "Open standings; players challenge upward over a long window (Pro).",
     build: () => [
       { kind: "ladder", name: "Ladder", config: { challengeRange: 3 }, progression: null },
     ],
   },
   {
     key: "ko_plate",
-    label: "Knockout + Plate",
-    help: "Main knockout draw; round-1 losers play a plate bracket for a second chance.",
-    build: (q) => [
+    build: ({ qualified: q }) => [
       { kind: "knockout", name: "Main draw", config: {}, progression: null },
       {
         kind: "knockout",
@@ -191,30 +226,46 @@ export const STAGE_TEMPLATES: {
         progression: {
           sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: q }] }],
           placement: "rank_order",
-          timing: "on_complete",
+          timing: "setup",
         },
       },
     ],
   },
   {
     key: "qualifying_main",
-    label: "Qualifying + Main draw",
-    help: "A smaller knockout decides who advances into the main knockout draw.",
-    build: (q) => [
+    build: ({ qualified: q }) => [
       { kind: "knockout", name: "Qualifying", config: {}, progression: null },
       { kind: "knockout", name: "Main draw", config: {}, progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
         placement: "rank_order",
-        timing: "on_complete",
+        timing: "setup",
       } },
     ],
   },
 ];
 
+/** Clamps a knob (poolCount, qualified) into [min,max] — called at both UI
+ *  call sites (division-builder.tsx, division-settings.tsx) right before
+ *  buildTemplateStages, not on every keystroke. A `<input type="number"
+ *  min={2}>`'s HTML `min` does NOT stop a CLEARED field from reading as
+ *  `Number("") === 0`: with poolCount:0, groups_ko's `Math.floor(q/poolCount)`
+ *  mints `n:Infinity` (serialises over the wire as `n:null` — Infinity has no
+ *  JSON form) and `r` becomes `q - Infinity*0 = q - NaN = NaN`, so the
+ *  organiser gets a raw schema 422 instead of a knob validation message
+ *  (round-4 review, B). `buildTemplateStages` itself stays trusting — its
+ *  `TemplateKnobs` type already promises real numbers — this is the guard at
+ *  the boundary where untrusted `Number(e.target.value)` input actually
+ *  enters. Non-finite (0 from a cleared field, NaN from a bad read) clamps to
+ *  `min`, same as any other out-of-range value. */
+export function clampKnob(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
 /** Template + knob values → the stage specs the API accepts. */
 export function buildTemplateStages(templateKey: string, knobs: TemplateKnobs): StageDraft[] {
   const t = STAGE_TEMPLATES.find((s) => s.key === templateKey) ?? STAGE_TEMPLATES[0]!;
-  return t.build(knobs.qualified).map((d) => {
+  return t.build(knobs).map((d) => {
     const config = { ...d.config };
     if (d.kind === "swiss") config.rounds = knobs.swissRounds;
     if (d.kind === "league" || d.kind === "group") config.legs = knobs.legs;

@@ -7,6 +7,7 @@ import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { HttpError } from "@/lib/errors";
+import { ROSTER_DRIFT_INELIGIBLE_KINDS, isRosterDriftEligible } from "@/lib/roster-drift-eligibility";
 import { assertWithinLimit, getLimit, requireFeature } from "@/lib/entitlements";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
@@ -76,6 +77,7 @@ import {
   descriptorLabel,
   destinationSlotsBySeed,
   expandSources,
+  expandTake,
   placeDescriptors,
   resolveProgressionSource,
   sourceShapeOf,
@@ -835,17 +837,75 @@ function alphaLabel(i: number): string {
 
 // F2 — delegates to the engine's `progressionSize` (TOTAL across every
 // TakeRule kind, never throws) instead of re-deriving per-shape counts by
-// hand. previewDivisionFixtures never sees a multi-source progression (no
-// writer in this session emits one — Task 1's SourcedSlot doc comment), so
-// reading only `sources[0]` is complete, not a simplification: summing every
-// source's count would double-count entrants a REAL resolve would dedupe.
-// This is a READ path fed straight from a DB column — never let a malformed
-// value reach `progressionSize`.
-function qualifierCount(progression: unknown): number {
+// hand. This is a READ path fed straight from a DB column — never let a
+// malformed value reach `progressionSize`.
+//
+// F3 Task 2b (regression fix, commit 6351fd2ce): `progressionSize`
+// deliberately contributes 0 for `topNPerGroup` (its own comment:
+// "group-count-dependent; callers with a real shape use expandTake
+// instead") — groups_ko's switch to `topNPerGroup` made every
+// group-into-knockout preview collapse through the `|| 4` guard below
+// regardless of the real qualifier count (4 pools x 4 qualifiers/pool
+// previewed a 4-team bracket, not 16). `previewDivisionFixtures` has the
+// whole stage array, so the previous stage's real pool count is knowable
+// with no DB read — `previewSourceShape` derives it the same way
+// stage-seeding.ts's `sourceShapeOf` does for a preset (non-DB) source.
+// Only a take that actually contains `topNPerGroup` pays for this: every
+// rankRange/bestNth/picks/roundLosers-only take (league_ko,
+// group_stepladder, group_playoffs, ko_plate, qualifying_main) still goes
+// straight through `progressionSize`, unchanged — `expandTake` would
+// compute the identical total for those kinds, so there is no reason to
+// risk it on the common path.
+function previewSourceShape(prev: PreviewStageInput | undefined): SourceShape {
+  // A non-"group" (or absent) previous stage has no pools. Matches
+  // sourceShapeOf's own convention: topNPerGroup then degenerates to one
+  // implicit pool (expandOne's `pools.length > 0 ? shape.poolKeys : [""]`),
+  // the same "ungrouped source" fallback getStandings/seedNextStage use.
+  if (!prev || prev.kind !== "group") return { poolKeys: [] };
+  const cfg = (prev.config ?? {}) as { pools?: { count?: unknown } };
+  const raw = cfg.pools?.count;
+  // Mirrors poolCount()'s own default-to-1, but never throws on an
+  // out-of-range value — this is a preview read path (malformed knob data
+  // must fall back to 1 pool, not 422 a gallery render).
+  const count = typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= POOL_KEYS.length ? raw : 1;
+  return { poolKeys: POOL_KEYS.slice(0, count).split("") };
+}
+
+// F3 review item 3 (RESOLVED) — was `spec.sources?.[0]?.take` only: complete
+// while previewDivisionFixtures never saw a multi-source progression, but
+// item 1's fix makes multi-source a genuinely reachable `setup` spec
+// (progression-multi-source.test.ts creates one end to end), and this preview
+// undersized the downstream stage for one exactly the way commit 0ec159e52
+// fixed for `topNPerGroup` — the "preview that lies" class this programme
+// exists to end. Sums every source, each sized by the SAME per-source rule
+// this function always applied to `sources[0]` alone (topNPerGroup needs the
+// previous stage's real shape; everything else is a plain progressionSize),
+// so single-source behaviour is byte-identical (a one-source sum reduces to
+// the same single term). "Summing every source's count would double-count
+// entrants a REAL resolve would dedupe" (the old comment here) does not apply
+// to a preview: this sizes SLOTS from static take-rule counts, never real
+// entrant ids, and multiple sources describe entrants from DIFFERENT earlier
+// stages by construction — there is nothing to dedupe.
+function qualifierCount(progression: unknown, prevStage?: PreviewStageInput): number {
   if (!progression || typeof progression !== "object") return 0;
   const spec = progression as { sources?: { take?: unknown }[] };
-  const take = spec.sources?.[0]?.take;
-  return Array.isArray(take) ? progressionSize(take as TakeRule[]) : 0;
+  const sources = spec.sources;
+  if (!Array.isArray(sources)) return 0;
+  return sources.reduce((total, source) => {
+    const take = source?.take;
+    if (!Array.isArray(take)) return total;
+    const rules = take as TakeRule[];
+    if (rules.some((r) => (r as { kind?: unknown } | null)?.kind === "topNPerGroup")) {
+      try {
+        return total + expandTake(rules, previewSourceShape(prevStage)).reduce((sum, pot) => sum + pot.length, 0);
+      } catch {
+        // A malformed sibling rule despite the topNPerGroup check above —
+        // fall through to progressionSize's own graceful degradation; this
+        // read path must never throw.
+      }
+    }
+    return total + progressionSize(rules);
+  }, 0);
 }
 
 /** Preview a whole stage graph. Stage 1 uses A,B,C… entrants; later (qualifier)
@@ -860,7 +920,14 @@ export function previewDivisionFixtures(
 
   return stages.map((stage, stageIdx) => {
     const firstStage = stageIdx === 0;
-    const entrantCount = firstStage ? n : Math.max(2, qualifierCount(stage.progression) || 4);
+    // `|| 4` is now genuinely unknowable only: an absent/malformed
+    // progression, or a take whose rules all resolve to 0 real qualifiers.
+    // A real topNPerGroup/rankRange/bestNth/picks/roundLosers take is sized
+    // exactly by qualifierCount (shape-aware for topNPerGroup via the
+    // previous array entry, progressionSize otherwise — see its comment).
+    const entrantCount = firstStage
+      ? n
+      : Math.max(2, qualifierCount(stage.progression, stages[stageIdx - 1]) || 4);
     const label = (i: number) => (firstStage ? alphaLabel(i) : `Seed ${i + 1}`);
 
     // Formats whose pairings depend on live results — no static draw exists.
@@ -1413,6 +1480,252 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
   return outcome;
 }
 
+// ---------------------------------------------------------------------------
+// Roster drift (F3 Task 5, 2026-08-18 plan — supersedes ruling 7's framing;
+// see the plan's "Corrected premise"). Only a stage with NO progression
+// source draws fixtures directly from the live active roster — the exact
+// same condition `generateStageFixtures`'s own `pre` gate above tests
+// (`if (!stage.progression) return null`, which falls through to the plain
+// `select ... from entrants where status in (...)` path). A later stage
+// either reads a FROZEN qualified list at completion (`timing:"on_complete"`
+// — intentionally excludes non-qualifiers, that's not drift) or generates
+// pure-topology placeholders with no entrant reference at all
+// (`timing:"setup"` — structurally insulated, stage-seeding.ts's
+// sourceShapeOf reads pool shape, never entrant rows). `ladder` and
+// `americano` are excluded for a different reason: a ladder's fixtures come
+// from individual challenges (issueChallenge), never a bulk generate
+// (generateStageFixtures returns `[]` for it above), and americano mints its
+// own `pair` entrants on the fly per fixture (americanoGen above) rather
+// than referencing the division's registered entrants directly — this
+// signal would misreport ~100% of entrants "unplaced" for both.
+// ---------------------------------------------------------------------------
+// Re-exported so existing `import { … } from "./stages"` call sites need no
+// churn; the rule itself lives in a DB-free module (lib/roster-drift-
+// eligibility.ts) so the division page and its tests can import the REAL
+// function rather than restating it in a mock of this server-only file.
+export { ROSTER_DRIFT_INELIGIBLE_KINDS, isRosterDriftEligible };
+
+const NO_ATTACHMENTS = { officials: 0, lineups: 0, deviceLinks: 0 } as const;
+
+export interface StageRosterDriftEntrant {
+  id: string;
+  display_name: string;
+}
+
+export interface StageRosterDrift {
+  /** Referenced by a fixture in this stage (home or away) but no longer in
+   *  the active roster (withdrawn/disqualified) — a wrong name still on a
+   *  board an organiser may have already shared publicly. */
+  ghosts: StageRosterDriftEntrant[];
+  /** Active in the division (registered/confirmed) but referenced by no
+   *  fixture in this stage — registered after the last Generate, or Generate
+   *  has never run since. */
+  unplaced: StageRosterDriftEntrant[];
+  /** Organiser WORK attached to this stage's fixtures that a rebuild would
+   *  take with them (F3 ultrareview finding 5). `delete from fixtures`
+   *  CASCADEs into all three, and unlike a result none of them BLOCKS the
+   *  rebuild: an organiser who has already appointed referees is exactly the
+   *  organiser most likely to need a rebuild before match day, so refusing
+   *  would make the feature useless when it matters most. Refusing is wrong,
+   *  but so is destroying it silently — these counts let the confirm dialog
+   *  name what the rebuild clears, so the choice is made with the cost
+   *  visible. Zero for a stage with no board. */
+  attachments: {
+    /** `fixture_officials` — referee/umpire appointments (officials.ts). */
+    officials: number;
+    /** `lineups` — team sheets (fixtures.ts). */
+    lineups: number;
+    /** `device_links` — paired scoring devices (device-links.ts). */
+    deviceLinks: number;
+  };
+}
+
+/** Derived, never stored (ruling 7) — a plain join over `entrants` and
+ *  `fixtures`, computed fresh on every call. No migration: `entrants` keeps
+ *  `created_at` only (no `updated_at`) because "since when" is not needed to
+ *  answer "does the board match the roster" (plan, 5a). */
+export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promise<StageRosterDrift> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [stage] = await tx<
+      { division_id: string; kind: string; progression: Record<string, unknown> | null }[]
+    >`select division_id, kind, progression from stages where id = ${stageId}`;
+    if (!stage) throw new HttpError(404, "stage not found");
+    if (stage.progression !== null || ROSTER_DRIFT_INELIGIBLE_KINDS.has(stage.kind)) {
+      return { ghosts: [], unplaced: [], attachments: NO_ATTACHMENTS };
+    }
+
+    // A stage with NO fixtures has no BOARD, and drift is defined against a
+    // board — "the names on your fixtures no longer match your roster".
+    // Without this, a freshly-created stage (the single most common state a
+    // stage is ever in: created, not yet generated) reported EVERY active
+    // entrant as "unplaced", so the banner fired on a division where nothing
+    // had gone wrong and the one-click rebuild it offers would have been a
+    // no-op regenerate. F3 ultrareview finding 6. `Generate` is the call to
+    // action there, and stages-panel already renders it prominently.
+    const [{ count: fixtureCount }] = await tx<{ count: number }[]>`
+      select count(*)::int as count from fixtures where stage_id = ${stageId}`;
+    if (fixtureCount === 0) return { ghosts: [], unplaced: [], attachments: NO_ATTACHMENTS };
+
+    const [active, referenced] = await Promise.all([
+      tx<StageRosterDriftEntrant[]>`
+        select id, display_name from entrants
+        where division_id = ${stage.division_id} and status in ('registered', 'confirmed')
+        order by display_name`,
+      tx<StageRosterDriftEntrant[]>`
+        select distinct e.id, e.display_name
+        from entrants e
+        where e.id in (
+          select home_entrant_id from fixtures where stage_id = ${stageId} and home_entrant_id is not null
+          union
+          select away_entrant_id from fixtures where stage_id = ${stageId} and away_entrant_id is not null
+        )
+        order by e.display_name`,
+    ]);
+    const activeIds = new Set(active.map((e) => e.id));
+    const referencedIds = new Set(referenced.map((e) => e.id));
+    // One round trip for all three — each is a plain count over the stage's
+    // own fixture ids, and none of them is large enough to want three.
+    const [counts] = await tx<{ officials: number; lineups: number; device_links: number }[]>`
+      select
+        (select count(*) from fixture_officials fo
+           join fixtures f on f.id = fo.fixture_id where f.stage_id = ${stageId})::int as officials,
+        (select count(*) from lineups l
+           join fixtures f on f.id = l.fixture_id where f.stage_id = ${stageId})::int as lineups,
+        (select count(*) from device_links dl
+           join fixtures f on f.id = dl.fixture_id where f.stage_id = ${stageId})::int as device_links`;
+    return {
+      ghosts: referenced.filter((e) => !activeIds.has(e.id)),
+      unplaced: active.filter((e) => !referencedIds.has(e.id)),
+      attachments: {
+        officials: counts?.officials ?? 0,
+        lineups: counts?.lineups ?? 0,
+        deviceLinks: counts?.device_links ?? 0,
+      },
+    };
+  });
+}
+
+export interface RebuildOutcome extends GenerateOutcome {
+  /** Fixtures deleted before regenerating (0 only when the stage had none). */
+  removed: number;
+}
+
+/**
+ * Replace a root stage's fixtures wholesale — the fix for the defect the
+ * roster-drift signal surfaces: `generateStageFixtures` is additive only
+ * (idempotent via `fixtures.ext_key`, doc comment above), so a withdrawn
+ * entrant's name never comes off the board on its own (F3 Task 5 plan,
+ * "The defect this uncovers"). Two transactions, same pattern as
+ * `replaceStages` above (delete, then re-`createStages`): the delete commits
+ * under its own advisory lock, then `generateStageFixtures` — completely
+ * unmodified, so every invariant it already holds (ext_key stability, feed
+ * rewiring, slot labels, the division-events ledger, analytics) applies to
+ * the rebuild for free — runs as an ordinary regenerate against the
+ * now-empty stage.
+ *
+ * Refuses outright — never a partial rebuild (owner ruling, plan 5b) — the
+ * moment ANY fixture in the stage carries a real result: a partial rebuild
+ * would silently change who plays whom in a stage that's already half
+ * played, which is unrecoverable once the organiser has acted on it.
+ */
+export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Promise<RebuildOutcome> {
+  const removed = await withTenant(auth.orgId, async (tx) => {
+    const [stage] = await tx<
+      { id: string; division_id: string; kind: string; progression: Record<string, unknown> | null }[]
+    >`select id, division_id, kind, progression from stages where id = ${stageId}`;
+    if (!stage) throw new HttpError(404, "stage not found");
+    if (stage.progression !== null || ROSTER_DRIFT_INELIGIBLE_KINDS.has(stage.kind)) {
+      throw new HttpError(
+        422,
+        "rebuild only applies to a stage that draws its fixtures directly from the active roster — a stage with a progression rule, a ladder stage, or an americano stage is not eligible",
+        "STAGE_NOT_ROOT",
+      );
+    }
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+
+    // Never destroy a real result (hard constraint 1). Mirrors deleteStage's
+    // guard above (same three statuses), with one refinement: 'forfeited'
+    // alone doesn't distinguish a generation-time BYE (structural — one side
+    // never had an opponent, isBye in stages-panel.tsx) from a mid-tournament
+    // WITHDRAWAL WALKOVER (withdrawal.ts's core.forfeit — append-event.ts:116
+    // maps it to this SAME 'forfeited' status). A walkover has two real
+    // entrants and a real winner; destroying it would erase the reason the
+    // opponent advanced. Only a two-sided 'forfeited' fixture blocks — a bye
+    // (one side null by construction) does not.
+    // Status alone is NOT a sufficient test, because `delete from fixtures`
+    // CASCADEs into score_events, match_states, match_reports, lineups,
+    // official_marks, fixture_officials and device_links, and SET NULLs
+    // suspensions.fixture_id. Two holes a status-only guard leaves:
+    //   - 'abandoned' is a match that was PLAYED and stopped. match-reports.ts
+    //     (:40 REPORTABLE) accepts a report on exactly this status, so a
+    //     status-only guard deletes the report along with the fixture.
+    //   - any fixture carrying evidence rows under a status this list does not
+    //     name — the scoring pad writes score_events/match_states, and nothing
+    //     here should depend on WHEN a status flips relative to the first
+    //     event landing.
+    // So block on the evidence itself as well as on status: if a fixture has
+    // anything recorded against it, it is not ours to delete.
+    //
+    // What this deliberately does NOT block on (F3 ultrareview finding 5):
+    // `lineups`, `fixture_officials` and `device_links` also CASCADE away
+    // with the fixtures, but they are organiser SETUP, not a result. An
+    // organiser who has already appointed referees is the one most likely to
+    // need a rebuild before match day, so blocking would disable the feature
+    // exactly when it earns its keep. Destroying them silently is equally
+    // wrong, so `getStageRosterDrift` counts all three and the confirm
+    // dialog names them before the click (progression.rosterDrift.confirm*).
+    // If a future table holds real RESULT data, it belongs in the guard
+    // below, not in that count.
+    //
+    // One latent trapdoor, checked and currently INERT (2026-08-19): fixtures
+    // .parent_fixture_id is a self-FK declared ON DELETE CASCADE (V214:18), so
+    // a fixture that is someone's parent takes its children with it. Nothing
+    // in apps/web writes that column today (zero rows), and its only intended
+    // use — table-tennis rubbers under a tie (sports/setbased/tabletennis.ts)
+    // — is same-stage, where taking the children with the parent is correct.
+    // If a writer ever creates CROSS-STAGE parent links, this delete would
+    // silently remove another stage's board and the guard below would not see
+    // it. Note the cascade RECURSES on a self-FK: a chain deeper than one
+    // level takes the whole subtree, not just direct children, so the blast
+    // radius is not bounded at one hop. Verify with
+    //   select count(*) from fixtures c join fixtures p
+    //     on c.parent_fixture_id = p.id where c.stage_id <> p.stage_id;
+    // (fixtures.court_id is RESTRICT but points OUT at courts, so it
+    // constrains deleting a COURT, never this delete.)
+    const [blocked] = await tx<{ id: string }[]>`
+      select f.id from fixtures f
+      where f.stage_id = ${stageId}
+        and (
+          f.status in ('in_play', 'decided', 'finalized', 'abandoned')
+          or (f.status = 'forfeited' and f.home_entrant_id is not null and f.away_entrant_id is not null)
+          or exists (select 1 from score_events se where se.fixture_id = f.id)
+          or exists (select 1 from match_states ms where ms.fixture_id = f.id)
+          or exists (select 1 from match_reports mr where mr.fixture_id = f.id)
+          or exists (select 1 from official_marks om where om.fixture_id = f.id)
+          or exists (select 1 from suspensions s where s.fixture_id = f.id)
+        )
+      limit 1`;
+    if (blocked) {
+      throw new HttpError(
+        409,
+        "this stage has fixtures with a recorded result — rebuild refuses to touch a stage that has already been played, even partly; complete it as it stands, or use Generate to add missing entrants without disturbing what's already been decided",
+        "STAGE_HAS_RESULTS",
+      );
+    }
+
+    const deleted = await tx<{ id: string }[]>`
+      delete from fixtures where stage_id = ${stageId} returning id`;
+    return deleted.length;
+  });
+
+  const outcome = await generateStageFixtures(auth, stageId);
+  log.info(
+    { event: "stage_fixtures_rebuilt", stageId, removed, created: outcome.created },
+    "stage_fixtures_rebuilt",
+  );
+  return { ...outcome, removed };
+}
+
 interface CrossFeed {
   from_ext_key: string;
   side: "winner" | "loser";
@@ -1497,7 +1810,14 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
       shapes.push(await sourceShapeOf(tx, source));
     }
     const pots = expandSources(progression.sources, (i) => shapes[i]!);
-    const placed = placeDescriptors(pots, progression.placement, progression.map);
+    // F3 round-3 review, Task 1 — `stage.kind` is THIS stage's own kind (the
+    // progression's target), threaded through so placeDescriptors can refuse
+    // an illegal snake-into-a-bracket-target combo (ruling 13) here too, not
+    // just at createStages/replaceStages' save-time validateStageProgression
+    // call — a `.setup` progression generates from a synthetic seed order
+    // with no live standings, so this direct call is the day-one path ruling
+    // 13's self-pairing draw actually reaches.
+    const placed = placeDescriptors(pots, progression.placement, progression.map, stage.kind);
     if (placed.length < 2) {
       throw new EngineError("STAGE_NOT_READY", "this stage's progression rules produce fewer than 2 qualifiers", {
         stageId,
@@ -1505,6 +1825,15 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
       });
     }
 
+    // P6 (F3 Task 3) verified: this map does NOT need sourceIndex-qualified
+    // keys. It's keyed by the synthetic per-SEAT id `slot:${i+1}` (i = array
+    // position in `placed`, already unique — never `descriptorKey`), so two
+    // same-keyed descriptors from different sources (the multi-source
+    // collision placeDescriptors now guards, progression.ts) already survive
+    // here untouched: each gets its own seat regardless of what its
+    // descriptor's key is. The actual fix for that collision lives entirely
+    // in placeDescriptors (SEEDING_MAP_SOURCE_AMBIGUOUS) — see its doc
+    // comment and _INDEX.md's P6 entry.
     const slotOf = new Map<string, SlotDescriptor>();
     const entrants: ActiveEntrant[] = placed.map((slot, i) => {
       const id = `slot:${i + 1}`;
@@ -1799,7 +2128,10 @@ export async function fillSlot(
 // competition.ts's own (unexported) list — losersOfRound only makes sense
 // sourced from one of these.
 const REAL_TABLE_KINDS = new Set(["league", "group", "swiss"]);
-const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
+// Exported (F3 review item 5): stage-seeding.ts's sourcesToTables needs the
+// SAME set to know when a source needs bracket data for a roundLosers take
+// rule — see loadBracketFixtures' own export note below.
+export const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
 
 // Mirrors engine-db/competition.ts's private toEngineStatus (not exported):
 // DB fixtures.status -> engine FixtureStatus (spec 05 §1 vocabulary). Needed
@@ -1840,7 +2172,17 @@ function toBracketFixtureStatus(dbStatus: string): FixtureStatus {
 // resolveProgression's round_loser branch trusts ITS CALLER for bracket-position
 // order (there is nothing left for it to sort by) — `order by round_no,
 // seq_in_round` below is what makes THIS the ordering authority.
-async function loadBracketFixtures(tx: Tx, stageId: string): Promise<BracketFixture[]> {
+// F3 review item 5 (RESOLVED) — exported so stage-seeding.ts's
+// sourcesToTables (the `timing:"setup"` propose/confirm path's own table
+// builder) can populate SourceTables.bracket too, not just this file's own
+// seedNextStage/tablesForCompletedStage (the `timing:"on_complete"` path).
+// Before this, sourcesToTables NEVER fetched bracket data at all — a
+// roundLosers take rule under `timing:"setup"` (ko_plate's real catalogue
+// shape once F3 flipped every picker template to day-one fixtures) could
+// never resolve: progression.ts's loserAt throws STAGE_NOT_READY without
+// `bracket`, silently swallowed by completeStage's best-effort catch, so an
+// organiser's plate stage stayed on TBD forever with no visible error.
+export async function loadBracketFixtures(tx: Tx, stageId: string): Promise<BracketFixture[]> {
   const rows = await tx<
     {
       id: string;
@@ -1928,10 +2270,64 @@ export async function completeStage(auth: AuthCtx, stageId: string): Promise<Com
     // Best-effort, same spirit as the on_complete path's generation step
     // below: completion stands even if the proposal compute trips (e.g. the
     // source stage this points at isn't THIS one and isn't ready yet).
+    // Narrowed the same INTENT as the on_complete branch just below (A4,
+    // round-4 review): this used to be a bare `catch { return result }`, no
+    // narrowing, no logging, despite this comment already claiming
+    // "best-effort, same spirit" — so a genuine progression-config bug (e.g.
+    // A1's SEEDING_BESTNTH_UNEQUAL_POOLS, or QUALIFICATION_INVALID) reached
+    // an organiser as "nothing happened": the stage completed, no
+    // seed_proposal, no error anywhere.
+    //
+    // The exact TYPE this checks differs from the on_complete sibling below
+    // on purpose, not by oversight: that branch's own completeness gate
+    // (seedNextStage, this file) throws EngineError STAGE_NOT_READY
+    // directly, but THIS path's completeness gate is computeSeedProposal ->
+    // sourcesToTables (stage-seeding.ts), which throws HttpError 409
+    // SEEDING_SOURCE_INCOMPLETE instead — confirmed by a real red test
+    // (progression-multi-source.test.ts) that first tried mirroring the
+    // sibling's EngineError check verbatim and broke the legitimate
+    // "another named source isn't complete yet" case, which is exactly the
+    // regression this fix must not introduce. By the time resolveProgression
+    // runs in this path, sourcesToTables has already gated every source on
+    // DB-status "complete", so an EngineError STAGE_NOT_READY reaching this
+    // catch (e.g. rowAtRank's "not enough entrants ranked yet") is a genuine
+    // misconfiguration, not a "wait for it" case, and must propagate — same
+    // as QUALIFICATION_INVALID does.
     try {
       const proposal = await computeSeedProposal(auth, next!.id);
       return { ...result, seed_proposal: { id: proposal.id, status: proposal.status } };
-    } catch {
+    } catch (err) {
+      // F3 ultrareview finding 4 — this stage's completion committed in its
+      // OWN transaction, several statements ago. A bare re-throw therefore
+      // reached the organiser as a plain failure for an action that actually
+      // SUCCEEDED: the board still showed the stage as active (the client's
+      // catch has nothing to refresh on an error), so the next click hit an
+      // already-complete stage. Re-throwing is still right — A4 above added
+      // it precisely so a genuine progression misconfiguration stops being
+      // silent — but it has to say WHICH half failed. Wrapped in a code the
+      // panel classifies into "completed, but the next stage's seeding
+      // couldn't be prepared", so the organiser gets the real reason AND a
+      // refreshed board.
+      if (
+        !(err instanceof HttpError && err.code === "SEEDING_SOURCE_INCOMPLETE") &&
+        !(err instanceof HttpError && err.code === "STAGE_COMPLETED_SEEDING_FAILED")
+      ) {
+        log.warn(
+          { event: "seed_proposal_compute_failed", stageId, nextStageId: next!.id, err: String(err) },
+          "stage completed, but computing the next stage's seed proposal failed",
+        );
+        throw new HttpError(
+          409,
+          err instanceof Error ? err.message : String(err),
+          "STAGE_COMPLETED_SEEDING_FAILED",
+          { stageId, nextStageId: next!.id },
+        );
+      }
+      if (!(err instanceof HttpError && err.code === "SEEDING_SOURCE_INCOMPLETE")) throw err;
+      log.warn(
+        { event: "seed_proposal_compute_skipped", stageId, nextStageId: next!.id, err: String(err) },
+        "seed proposal compute skipped: a named progression source is not ready yet",
+      );
       return result;
     }
   }
@@ -2012,6 +2408,44 @@ export async function completeStage(auth: AuthCtx, stageId: string): Promise<Com
 // pools.key letters ('A'…); a single-table stage is the unnamed pool '' /
 // `overall`.
 
+/** An americano stage's ranked table, as the DOWNSTREAM stage must read it.
+ *
+ *  Rank by personal points, then map each ranked person to the division's
+ *  persistent INDIVIDUAL entrant — never the ephemeral `pair` entrant a
+ *  fixture actually ran on (pairEntrantsFor above); the next stage's
+ *  generator only ever draws from real, registered division entrants
+ *  (generateStageFixtures's `active` query).
+ *
+ *  Exported (F3 ultrareview finding 11) because this is NOT an optimisation
+ *  — it is the only correct way to read an americano source, and it was
+ *  forked. `tablesForCompletedStage` (the `on_complete` path, below) had it;
+ *  `sourcesToTables` (stage-seeding.ts, the `timing:"setup"` propose/confirm
+ *  path this session introduced) went straight to `sourceStandingsTables`,
+ *  which reads `standings_snapshots` verbatim. An americano stage's own
+ *  snapshot folds over the EPHEMERAL per-round pair entrants (Jul3/08 §3),
+ *  so the setup path resolved qualifiers to pair-entrant ids that the next
+ *  stage's roster does not contain — a silent wrong draw, the same class of
+ *  defect as ruling 10's groups_ko pools-C/D miss, reachable the moment an
+ *  organiser puts a `timing:"setup"` stage behind an americano. Two readers
+ *  of one rule is the recurring bug in this area; now there is one. */
+export async function americanoPlacementTables(
+  tx: Tx,
+  stageId: string,
+  divisionId: string,
+): Promise<PoolTable[]> {
+  const leaderboard = await personalPointsLeaderboard(tx, stageId);
+  const memberRows = await tx<{ entrant_id: string; person_id: string }[]>`
+    select e.id as entrant_id, em.person_id
+    from entrants e
+    join entrant_members em on em.entrant_id = e.id
+    where e.division_id = ${divisionId} and e.kind = 'individual'`;
+  const entrantOf = new Map(memberRows.map((r) => [r.person_id, r.entrant_id]));
+  const ordered = leaderboard
+    .map((row) => entrantOf.get(row.person_id))
+    .filter((id): id is string => id !== undefined);
+  return [placementTable(ordered)];
+}
+
 /** Build the SourceTables (pools + bracket) a COMPLETED stage offers a
  *  downstream progression — factored out of seedNextStage's own inline
  *  construction (unchanged logic: the americano/table/bracket branches
@@ -2025,22 +2459,7 @@ async function tablesForCompletedStage(
 ): Promise<SourceTables> {
   let pools: PoolTable[];
   if (stage.kind === "americano") {
-    // Rank by personal points, then map each ranked person to the
-    // division's persistent INDIVIDUAL entrant — never the ephemeral
-    // `pair` entrant a fixture actually ran on (pairEntrantsFor above); the
-    // next stage's generator only ever draws from real, registered
-    // division entrants (generateStageFixtures's `active` query).
-    const leaderboard = await personalPointsLeaderboard(tx, stage.id);
-    const memberRows = await tx<{ entrant_id: string; person_id: string }[]>`
-      select e.id as entrant_id, em.person_id
-      from entrants e
-      join entrant_members em on em.entrant_id = e.id
-      where e.division_id = ${divisionId} and e.kind = 'individual'`;
-    const entrantOf = new Map(memberRows.map((r) => [r.person_id, r.entrant_id]));
-    const ordered = leaderboard
-      .map((row) => entrantOf.get(row.person_id))
-      .filter((id): id is string => id !== undefined);
-    pools = [placementTable(ordered)];
+    pools = await americanoPlacementTables(tx, stage.id, divisionId);
   } else {
     // Ranked tables from the completion snapshot(s); translate pool uuids
     // back to their spec-facing keys.
@@ -2119,7 +2538,11 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
         sourceTables.push(await tablesForCompletedStage(tx, source, current.division_id));
       }
     }
-    const { qualifiers } = resolveProgression(progression, shapes, sourceTables);
+    // A2 (round-4 review) — `next` here IS the progression's own target
+    // (seedNextStage seeds INTO it), so `next.kind` is the real targetKind
+    // ruling 13's snake/bracket-target guard needs on this resolution path
+    // too, not just at createStages' save-time validateStageProgression call.
+    const { qualifiers } = resolveProgression(progression, shapes, sourceTables, next.kind);
     const entrants = qualifiers.map((q) => q.entrantId);
     log.info(
       { event: "qualification_resolved", stageId: completedStageId, nextStageId: next.id, kind: current.kind, count: entrants.length },
@@ -2299,6 +2722,23 @@ export interface SeedProposalOut {
   };
 }
 
+/** F3 round-3 review, Task 2 (MAJOR) — engine `descriptorKey` renders
+ *  `best_nth` as `best:${position}`, deliberately dropping `nth` (it is also
+ *  the `seeded_map.source` wire vocabulary, which stays narrow on purpose —
+ *  see progression.ts's own doc comment; NOT widened here). Two bestNth take
+ *  rules on the SAME source at the same position but a DIFFERENT nth (e.g.
+ *  `{nth:3,count:2}` and `{nth:4,count:2}`, both producing positions 1,2)
+ *  therefore collide on that bare key within one source index — a `Map`
+ *  keyed by it silently keeps whichever qualifier was inserted LAST. This
+ *  local, wider key folds `nth` in for `best_nth` only (every other
+ *  descriptor kind is unaffected — `descriptorKey` already fully determines
+ *  them); used on BOTH the seedOfKey build and the tie-lookup read below so
+ *  the two sides can never drift apart. */
+function seedProposalKey(sourceIndex: number, d: SlotDescriptor): string {
+  const base = d.kind === "best_nth" ? `best:${d.nth}:${d.position}` : descriptorKey(d);
+  return `${sourceIndex}:${base}`;
+}
+
 /**
  * Compute (or recompute) a DRAFT seed proposal for a `timing: "setup"`
  * stage (design's API contract: POST /stages/{id}/seed-proposal). Never
@@ -2340,7 +2780,12 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // its standings — same 409 SEEDING_SOURCE_INCOMPLETE contract this
     // function has always had, generalised from one source to N.
     const { shapes, tables, resolved } = await sourcesToTables(tx, stage, progression.sources);
-    const { qualifiers, ties } = resolveProgression(progression, shapes, tables);
+    // A2 (round-4 review) — `stage` here IS the progression's own target
+    // (computeSeedProposal proposes seeds INTO it), so `stage.kind` is the
+    // real targetKind ruling 13's snake/bracket-target guard needs to fire
+    // on this resolution path too, not just at createStages' save-time
+    // validateStageProgression call.
+    const { qualifiers, ties } = resolveProgression(progression, shapes, tables, stage.kind);
 
     const slotBySeed = await destinationSlotsBySeed(tx, stageId);
     if (slotBySeed.size === 0) {
@@ -2351,7 +2796,29 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
         { stageId },
       );
     }
-    const seedOfKey = new Map(qualifiers.map((q) => [descriptorKey(q.descriptor), q.seed] as const));
+    // P6 (F3 review item 1, RESOLVED) — was keyed by bare descriptorKey,
+    // colliding across two sources that emit the same descriptor (trivially:
+    // two rankRange sources, or two group_rank sources sharing a pool letter
+    // — the default pool naming). The Map construction's last-write-wins
+    // meant a tie flagged on one source's slot could resolve to a DIFFERENT
+    // source's slot instead — the rightful qualifier silently dropped there
+    // while the real tie's slot kept the engine's unconfirmed default pick,
+    // exactly the "a tie is FLAGGED, never silently ordered" invariant
+    // confirmSeedProposal's own tie-resolution check below exists to uphold.
+    // Keyed by `${sourceIndex}:${descriptorKey}` instead, now that
+    // `ProgressionTieFlag.descriptors` carries sourceIndex (widened to
+    // SourcedSlot — progression.ts). Reachable today: createStages/
+    // replaceStages persist a multi-source `setup` progression with no
+    // progression-aware gate (format-gates.ts checks kind/byes/cross_feeds/
+    // placements only); progression-multi-source.test.ts exercises it end to
+    // end.
+    //
+    // F3 round-3 review, Task 2 — that alone still collides for two bestNth
+    // rules on the SAME source at the same position but a different nth
+    // (descriptorKey's `best:${position}` drops `nth`); seedProposalKey folds
+    // `nth` in for best_nth so this map (and the tie lookup below) can tell
+    // them apart. See its own doc comment.
+    const seedOfKey = new Map(qualifiers.map((q) => [seedProposalKey(q.sourceIndex, q.descriptor), q.seed] as const));
 
     const computedQualifiers = qualifiers.map((q) => ({
       rank: q.seed,
@@ -2377,9 +2844,13 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
       );
     }
     const computedTies = ties.map((t) => ({
-      slots: t.descriptors.map((d) => {
-        const seed = seedOfKey.get(descriptorKey(d));
-        return (seed !== undefined ? slotBySeed.get(seed)?.[0] : undefined) ?? descriptorKey(d);
+      slots: t.descriptors.map((sourced) => {
+        // seedProposalKey on the read side too (Task 2) — must match the
+        // build side above exactly, or a best_nth tie resolves to whichever
+        // OTHER same-position/different-nth qualifier happened to be
+        // inserted last.
+        const seed = seedOfKey.get(seedProposalKey(sourced.sourceIndex, sourced.descriptor));
+        return (seed !== undefined ? slotBySeed.get(seed)?.[0] : undefined) ?? descriptorKey(sourced.descriptor);
       }),
       entrantIds: t.entrantIds,
       reason: t.reason,

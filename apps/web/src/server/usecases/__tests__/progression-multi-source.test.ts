@@ -21,13 +21,21 @@ import { describe, expect, it, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { EngineError } from "@seazn/engine/core";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { completeStage, createStages, generateStageFixtures } from "../stages";
+import {
+  completeStage,
+  computeSeedProposal,
+  confirmSeedProposal,
+  createStages,
+  generateStageFixtures,
+  type FixtureRow,
+} from "../stages";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -113,6 +121,18 @@ async function decideLeagueWithWinner(auth: AuthCtx, stageId: string, winnerId: 
           : { p1Score: 0, p2Score: 2 }
         : { p1Score: 1, p2Score: 1 },
     });
+  }
+}
+
+/** Decide every fixture in `stageId` as a 1-1 draw — with exactly 2
+ *  entrants, both finish level on every metric, an inescapable tie for rank
+ *  1 (rankStandings' seed/id fallback flags BOTH rows tieUnbroken), same
+ *  recipe as stage-progression.test.ts's "never silently ordered" case. */
+async function decideLeagueAsDraw(auth: AuthCtx, stageId: string): Promise<void> {
+  const fixtures = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${stageId}`;
+  for (const f of fixtures) {
+    await appendEvent(auth.orgId, f.id, 0, { type: "core.start", payload: {} });
+    await appendEvent(auth.orgId, f.id, 1, { type: "generic.result", payload: { p1Score: 1, p2Score: 1 } });
   }
 }
 
@@ -262,6 +282,105 @@ describe.skipIf(!HAS_DB)("multi-source progression (F2 Decision 4 / Finding 1)",
     expect(finalRow!.config.qualified).toBeUndefined();
   });
 
+  // A4 (round-4 review, MAJOR) — the SAME two cases as the two on_complete
+  // tests above (F2 Task 6 review, finding 1, and this file's earlier
+  // QUALIFICATION_INVALID test), but for the `timing: "setup"` branch in
+  // completeStage (stages.ts): computeSeedProposal, not seedNextStage. That
+  // branch used to be a bare `catch { return result }` — no narrowing, no
+  // logging — despite its OWN comment already claiming "best-effort, same
+  // spirit as the on_complete path" below it. So a genuine
+  // QUALIFICATION_INVALID (or A1's SEEDING_BESTNTH_UNEQUAL_POOLS, or
+  // anything else) reached an organiser as "nothing happened": the stage
+  // completed, no seed_proposal, no error anywhere. Narrowed the same way
+  // seedNextStage's call is narrowed a few lines below it in stages.ts.
+  it("timing:setup — an entrant qualifying through two sources REJECTS the completion, not swallowed (A4 fix — was silently absorbed pre-fix)", async () => {
+    const { auth } = await seedOrg();
+    const { division, entrants, a, b } = await seedDivisionWithTwoLeagues(auth);
+    const [e1] = entrants;
+
+    const [final] = await createStages(auth, division.id, {
+      seq: 3,
+      kind: "knockout",
+      name: "Final",
+      config: {},
+      progression: {
+        sources: [
+          { stage: { stageId: a.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+          { stage: { stageId: b.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+        ],
+        placement: "rank_order",
+        timing: "setup",
+      },
+    });
+
+    await generateStageFixtures(auth, final!.id); // TBD fixtures up front, .setup convention
+    await generateStageFixtures(auth, a.id);
+    await generateStageFixtures(auth, b.id);
+    // SAME entrant (e1) wins BOTH A and B — same duplicate-qualifier shape
+    // as the on_complete test above, now against a setup-timing target.
+    await decideLeagueWithWinner(auth, a.id, e1!.id);
+    await decideLeagueWithWinner(auth, b.id, e1!.id);
+
+    await completeStage(auth, a.id); // no-op for Final: A's own seq-adjacent successor is B
+    // F3 ultrareview finding 4 — still REJECTS (A4's point: a genuine
+    // progression misconfiguration must not be silent), but no longer as a
+    // bare EngineError. B's completion committed in its own transaction
+    // before this ran, so a plain failure told the organiser "nothing
+    // happened" about an action that half-succeeded, and the client had
+    // nothing to distinguish and so never refreshed the board. The wrapper
+    // says which half failed while carrying the original reason verbatim.
+    await expect(completeStage(auth, b.id)).rejects.toSatisfy((err: unknown) => {
+      if (!(err instanceof HttpError)) return false;
+      if (err.code !== "STAGE_COMPLETED_SEEDING_FAILED") return false;
+      // The real cause survives — an organiser must be able to act on it.
+      return /qualifies through more than one/.test(err.message);
+    });
+    // Same non-destructive guarantee as the on_complete sibling: B's OWN
+    // completion is unaffected by the downstream seed-proposal failure.
+    const [bRow] = await sql<{ status: string }[]>`select status from stages where id = ${b.id}`;
+    expect(bRow!.status).toBe("complete");
+    // And no draft proposal was left behind from the failed attempt.
+    const proposals = await sql<{ id: string }[]>`select id from stage_seed_proposals where stage_id = ${final!.id}`;
+    expect(proposals).toHaveLength(0);
+  });
+
+  it("timing:setup — completing a source stage while another named source isn't ready does not fail the completion (STAGE_NOT_READY is still best-effort, unchanged by the A4 fix)", async () => {
+    const { auth } = await seedOrg();
+    const { division, entrants, a, b } = await seedDivisionWithTwoLeagues(auth);
+    const [, e2] = entrants;
+
+    const [final] = await createStages(auth, division.id, {
+      seq: 3,
+      kind: "knockout",
+      name: "Final",
+      config: {},
+      progression: {
+        sources: [
+          { stage: { stageId: a.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+          { stage: { stageId: b.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+        ],
+        placement: "rank_order",
+        timing: "setup",
+      },
+    });
+
+    await generateStageFixtures(auth, final!.id);
+    await generateStageFixtures(auth, a.id);
+    await generateStageFixtures(auth, b.id);
+    // Only B is decided. A is left with no results at all — its own
+    // completion predicate isn't satisfied, so it stays incomplete, and
+    // computeSeedProposal's sourcesToTables hits that incompleteness and
+    // throws STAGE_NOT_READY — the legitimate case the try/catch exists for.
+    await decideLeagueWithWinner(auth, b.id, e2!.id);
+
+    const completedB = await completeStage(auth, b.id);
+    expect(completedB.completed).toBe(true);
+    expect(completedB.seed_proposal).toBeUndefined();
+
+    const [bRow] = await sql<{ status: string }[]>`select status from stages where id = ${b.id}`;
+    expect(bRow!.status).toBe("complete");
+  });
+
   // F2 Task 6 review, finding 2: seedNextStage's carry-over step IS already
   // multi-source-aware in production (it unions qualified rows across every
   // resolved source, then guards each source's kind via CONFIG_INVALID) but
@@ -361,5 +480,197 @@ describe.skipIf(!HAS_DB)("multi-source progression (F2 Decision 4 / Finding 1)",
       select count(*)::int as n from division_events
       where division_id = ${division.id} and type = 'standings_carried'`;
     expect(ev!.n).toBe(1);
+  });
+
+  // P6 (F3 Task 3) — createStages validates a seeded_map at SAVE time
+  // (stage-seeding.ts's validateStageProgression -> the engine's
+  // validateProgressionAgainstShapes -> placeDescriptors), the "422 at rule
+  // save, not at proposal time" contract placeDescriptors' own doc comment
+  // names. Two independent league sources both using rankRange{from:1,to:1}
+  // produce the SAME descriptorKey ("rank:1") regardless of shape — this
+  // needs no completed results or standings, proving the ambiguity check
+  // fires purely from the two sources' SHAPES, before either stage has even
+  // generated fixtures. validateStageProgression converts the engine's
+  // EngineError into an HttpError (its own catch block), so — unlike the
+  // pure engine test in progression.test.ts — the code arrives as
+  // HttpError.code here, not via EngineError.is.
+  it("createStages rejects a seeded_map whose source is ambiguous across two real DB-backed sources", async () => {
+    const { auth } = await seedOrg();
+    const { division, a, b } = await seedDivisionWithTwoLeagues(auth);
+
+    let caught: unknown;
+    try {
+      await createStages(auth, division.id, {
+        seq: 3,
+        kind: "knockout",
+        name: "Final",
+        config: {},
+        progression: {
+          sources: [
+            { stage: { stageId: a.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+            { stage: { stageId: b.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+          ],
+          placement: "seeded_map",
+          map: [{ slot: "1", source: "rank:1" }],
+          timing: "on_complete",
+        },
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HttpError);
+    const err = caught as HttpError;
+    expect(err.status).toBe(422);
+    expect(err.code).toBe("SEEDING_MAP_SOURCE_AMBIGUOUS");
+    expect(err.message).toContain("rank:1");
+
+    // Nothing was left half-created — the whole stage graph is one
+    // transaction, so the ambiguous Final never landed and A/B are
+    // unaffected (still exactly the two league stages from the fixture).
+    const rows = await sql<{ id: string }[]>`select id from stages where division_id = ${division.id}`;
+    expect(rows.map((r) => r.id).sort()).toEqual([a.id, b.id].sort());
+  });
+
+  // Same shape, but the seeded_map references a key ONLY ONE source
+  // produces (rank:1 from A alone; B contributes rank:2 via a distinct
+  // rankRange) — createStages must accept it: an ambiguous key existing
+  // elsewhere in the progression must not poison an unrelated reference.
+  it("createStages still accepts a seeded_map whose source is unambiguous, even alongside a same-shaped sibling source", async () => {
+    const { auth } = await seedOrg();
+    const { division, a, b } = await seedDivisionWithTwoLeagues(auth);
+
+    const [final] = await createStages(auth, division.id, {
+      seq: 3,
+      kind: "knockout",
+      name: "Final",
+      config: {},
+      progression: {
+        sources: [
+          { stage: { stageId: a.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+          { stage: { stageId: b.id }, take: [{ kind: "rankRange", from: 2, to: 2 }] },
+        ],
+        placement: "seeded_map",
+        map: [{ slot: "1", source: "rank:1" }],
+        timing: "on_complete",
+      },
+    });
+    expect(final!.id).toBeDefined();
+  });
+
+  // F3 review item 1 (BLOCKER, owner-authorised widening) — computeSeedProposal's
+  // seedOfKey used to key ties by BARE descriptorKey, colliding across two
+  // sources that emit the same descriptor (trivially: two rankRange sources
+  // both producing "rank:1"). The Map construction's last-write-wins meant a
+  // tie flagged on source A's slot silently pointed the organiser at source
+  // B's (already-unambiguous) slot instead — resolving it there overwrote
+  // B's rightful qualifier and left A's real tie on the engine's unconfirmed
+  // default pick. Reproduced end to end: two 2-entrant leagues, A drawn (an
+  // inescapable 2-way tie at rank 1) and B decisive, feeding a
+  // `timing: "setup"` knockout Final via two rankRange{1,1} sources — exactly
+  // the "any format with customised stage graphs" reachability path F3
+  // exists to cover. `createStages`/`replaceStages` have no progression-aware
+  // gate (format-gates.ts checks kind/byes/cross_feeds/placements only).
+  it("resolves a tie on ONE of two same-keyed sources into that source's own slot, not the other source's", async () => {
+    const { auth } = await seedOrg();
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Ms Collide Cup " + randomUUID().slice(0, 6),
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    const entrants = await createEntrants(
+      auth,
+      division.id,
+      ["X1", "X2", "Y1", "Y2"].map((name, i) => ({
+        kind: "individual" as const,
+        display_name: name,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [x1, x2, y1, y2] = entrants;
+
+    const [a, b] = await createStages(auth, division.id, [
+      { seq: 1, kind: "league", name: "A", config: { qualified: [x1!.id, x2!.id] } },
+      { seq: 2, kind: "league", name: "B", config: { qualified: [y1!.id, y2!.id] } },
+    ]);
+    const [final] = await createStages(auth, division.id, {
+      seq: 3,
+      kind: "knockout",
+      name: "Final",
+      config: {},
+      progression: {
+        // BOTH sources take rankRange{from:1,to:1} — identical descriptorKey
+        // "rank:1" from two DIFFERENT sources, the collision seedOfKey never
+        // guarded against.
+        sources: [
+          { stage: { stageId: a!.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+          { stage: { stageId: b!.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+        ],
+        placement: "rank_order",
+        timing: "setup",
+      },
+    });
+
+    // Final's TBD bracket exists independent of A/B's completion — the
+    // day-one fixtures this whole programme is for.
+    await generateStageFixtures(auth, final!.id);
+
+    await generateStageFixtures(auth, a!.id);
+    await generateStageFixtures(auth, b!.id);
+    // A: a 1-1 draw is an inescapable 2-way tie for rank 1. B: a clean
+    // decisive winner, no tie at all.
+    await decideLeagueAsDraw(auth, a!.id);
+    await decideLeagueWithWinner(auth, b!.id, y1!.id);
+
+    await completeStage(auth, a!.id);
+    await completeStage(auth, b!.id);
+
+    const proposal = await computeSeedProposal(auth, final!.id);
+    expect(proposal.computed.ties).toHaveLength(1);
+    const tie = proposal.computed.ties[0]!;
+
+    const aQualifier = proposal.computed.qualifiers.find((q) => q.source.stageId === a!.id);
+    const bQualifier = proposal.computed.qualifiers.find((q) => q.source.stageId === b!.id);
+    expect(aQualifier).toBeDefined();
+    expect(bQualifier).toBeDefined();
+    // B produced no tie and resolves unambiguously — the flagged tie belongs
+    // to A alone, and MUST name A's own destination slot. On the pre-fix
+    // code this was B's slot instead (seedOfKey's last-write-wins collapsed
+    // "rank:1" onto B's seed).
+    expect(tie.slots).toEqual([aQualifier!.destinationSlot]);
+    expect([...tie.entrantIds].sort()).toEqual([x1!.id, x2!.id].sort());
+
+    // The organiser deliberately picks whichever of the tied pair the engine
+    // did NOT default to, so a pass here cannot be a coincidence of the
+    // default order.
+    const organiserPick = tie.entrantIds.find((id) => id !== aQualifier!.entrantId)!;
+    expect(organiserPick).toBeDefined();
+
+    const confirmed = await confirmSeedProposal(auth, final!.id, {
+      proposalId: proposal.id,
+      tiePicks: [{ slots: tie.slots, order: [organiserPick] }],
+    });
+
+    const [aSlotFixtureId, aSlotSide] = aQualifier!.destinationSlot.split(":");
+    const [bSlotFixtureId, bSlotSide] = bQualifier!.destinationSlot.split(":");
+    const aFixture = confirmed.fixtures.find((f) => f.id === aSlotFixtureId)!;
+    const bFixture = confirmed.fixtures.find((f) => f.id === bSlotFixtureId)!;
+    const entrantAt = (f: FixtureRow, side: string) => (side === "home" ? f.home_entrant_id : f.away_entrant_id);
+
+    // The organiser's actual pick lands in A's contested slot...
+    expect(entrantAt(aFixture, aSlotSide!)).toBe(organiserPick);
+    // ...and B's rightful, never-tied qualifier is untouched — not silently
+    // dropped in favour of the tie resolution (the mis-seat this test
+    // guards against).
+    expect(entrantAt(bFixture, bSlotSide!)).toBe(y1!.id);
   });
 });

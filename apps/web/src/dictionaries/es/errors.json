@@ -1,6 +1,7 @@
 {
   "seeding.SEEDING_MAP_SLOT_INVALID": "El mapa de posiciones de esta fase tiene una posición no válida. Corrige las reglas de clasificación e inténtalo de nuevo.",
   "seeding.SEEDING_MAP_SOURCE_INVALID": "El mapa de posiciones de esta fase apunta a un clasificado que no existe. Corrige las reglas de clasificación e inténtalo de nuevo.",
+  "seeding.SEEDING_MAP_SOURCE_AMBIGUOUS": "El mapa de posiciones de esta fase apunta a un clasificado que existe en más de un lugar. Corrige las reglas de clasificación e inténtalo de nuevo.",
   "seeding.SEEDING_RULES_MISSING": "Esta fase no tiene reglas de clasificación, o sus partidos generados ya no coinciden con ellas. Añade reglas de clasificación o vuelve a generar los partidos de esta fase.",
   "seeding.SEEDING_SOURCE_INCOMPLETE": "La fase de origen todavía no ha terminado. Complétala antes de calcular esta propuesta.",
   "seeding.SEEDING_BESTNTH_UNEQUAL_POOLS": "Estos grupos han jugado un número distinto de partidos, así que sus clasificaciones todavía no se pueden comparar.",

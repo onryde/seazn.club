@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { MatchRuleFields, SPORT_RULES, buildRuleOverride } from "./match-rules";
-import { STAGE_TEMPLATES, buildTemplateStages, type StageDraft } from "./format-templates";
+import { STAGE_TEMPLATES, buildTemplateStages, clampKnob, type StageDraft } from "./format-templates";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { routes } from "@/lib/routes";
 import { UpgradeGate } from "@/components/upgrade-gate";
@@ -21,6 +21,7 @@ import { CourtMultiPicker } from "@/components/v2/shared/court-multi-picker";
 // P9: BOARD-side Venue — no calendar (see court-multi-picker.tsx).
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { useMsg, useLocale } from "@/components/i18n/dict-provider";
+import type { MessageKey } from "@/lib/messages";
 import { sportLabel } from "@/lib/scoring-vocab";
 import {
   divisionEndBounds,
@@ -299,7 +300,20 @@ export function DivisionBuilder({
   }
 
   function buildStages(): StageDraft[] {
-    return buildTemplateStages(template, { qualified, swissRounds, poolCount, legs });
+    // B (round-4 review): poolCount is a free `<input type="number" min={2}
+    // max={8}>` — HTML `min` doesn't stop a cleared field reading as
+    // Number("")===0, which mints groups_ko's take rule with n:Infinity
+    // (serialises as n:null over the wire) instead of a clean validation
+    // message. qualified is a fixed <select> here (always one of a known-good
+    // set) so this is defence-in-depth for it, not a live gap — same guard as
+    // division-settings.tsx's free-text qualified input, for one shared
+    // clampKnob (format-templates.ts) rather than two divergent ones.
+    return buildTemplateStages(template, {
+      qualified: clampKnob(qualified, 2, 32),
+      swissRounds,
+      poolCount: clampKnob(poolCount, 2, 8),
+      legs,
+    });
   }
 
   async function submit() {
@@ -681,8 +695,22 @@ export function DivisionBuilder({
                 }}
                 className="sr-only"
               />
-              <span className="block font-medium">{t.label}</span>
-              <span className="mt-0.5 block text-xs text-slate-500">{t.help}</span>
+              {/* F3 Task 6: t.key is a plain `string` (STAGE_TEMPLATES isn't
+                  narrowed to a literal-key union — see format-templates.ts),
+                  so this template-literal lookup can't be checked against
+                  MessageKey's literal union without a cast. The cast is
+                  narrow (still a real key of the dictionary type, just not
+                  provably one of THESE 14) rather than `as any`: a typo in
+                  the "format.template."/".label"/".help" literals themselves
+                  would still fail to compile. format-templates.test.ts's
+                  dictionary-coverage test is the runtime backstop that every
+                  t.key actually resolves. */}
+              <span className="block font-medium">
+                {msg(`format.template.${t.key}.label` as MessageKey)}
+              </span>
+              <span className="mt-0.5 block text-xs text-slate-500">
+                {msg(`format.template.${t.key}.help` as MessageKey)}
+              </span>
             </label>
           ))}
         </div>

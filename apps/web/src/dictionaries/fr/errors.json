@@ -1,6 +1,7 @@
 {
   "seeding.SEEDING_MAP_SLOT_INVALID": "La correspondance des positions de cette phase contient une position invalide. Corrigez les règles de qualification et réessayez.",
   "seeding.SEEDING_MAP_SOURCE_INVALID": "La correspondance des positions de cette phase pointe vers un qualifié qui n'existe pas. Corrigez les règles de qualification et réessayez.",
+  "seeding.SEEDING_MAP_SOURCE_AMBIGUOUS": "La correspondance des positions de cette phase pointe vers un qualifié qui existe à plusieurs endroits. Corrigez les règles de qualification et réessayez.",
   "seeding.SEEDING_RULES_MISSING": "Cette phase n'a pas de règles de qualification, ou ses matchs générés ne correspondent plus. Ajoutez des règles de qualification ou régénérez les matchs de cette phase.",
   "seeding.SEEDING_SOURCE_INCOMPLETE": "La phase source n'est pas encore terminée. Terminez-la avant de calculer cette proposition.",
   "seeding.SEEDING_BESTNTH_UNEQUAL_POOLS": "Ces groupes n'ont pas joué le même nombre de matchs, leurs classements ne peuvent donc pas encore être comparés.",

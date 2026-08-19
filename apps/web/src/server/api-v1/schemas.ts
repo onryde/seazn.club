@@ -618,8 +618,20 @@ export const ProgressionSchema = z
   // worse than either rejecting it or ignoring it silently — so it is
   // rejected here, at the edge, with a message naming the actual problem.
   .refine((s) => s.timing === "on_complete" || s.carry === undefined || s.carry === "none", {
+    // F3, ruling 12's 2026-08-19 amendment: this message USED to claim a
+    // "setup"-timing stage "seeds placeholders independently of source
+    // completion and never reads carry". That is false, and a future reader
+    // acting on it would conclude carry is impossible here rather than
+    // unwired. Fixture GENERATION is independent of source completion;
+    // SEEDING is not — confirmSeedProposal runs only once every named source
+    // is complete, holding the same freshness-verified tables carryDeltas
+    // needs (stages.ts, seedNextStage does exactly this on the on_complete
+    // path). Nothing reads carry on the setup path because nobody wired it.
+    // Reachability is the real gap: standings.carry_over is sold on the public
+    // pricing page in four locales and has never been emitted by any template,
+    // gallery entry, catalogue file or picker control. Scoped as F6.
     message:
-      'carry is only meaningful when timing is "on_complete" — a "setup"-timing stage seeds placeholders independently of source completion and never reads carry',
+      'carry is not yet supported when timing is "setup" — carry-over is applied when a stage is seeded, and the setup path does not do that yet (see F6). Use timing "on_complete", or omit carry',
     path: ["carry"],
   });
 export type ProgressionInput = z.infer<typeof ProgressionSchema>;
@@ -950,6 +962,12 @@ export const GenerateResult = z.object({
   created: z.number().int(),
   existing: z.number().int(),
   fixtures: z.array(Fixture),
+});
+
+/** F3 Task 5 (5b) — POST /stages/{id}/rebuild's response: GenerateResult plus
+ *  how many stale fixtures were deleted before regenerating. */
+export const RebuildResult = GenerateResult.extend({
+  removed: z.number().int(),
 });
 
 export const CompleteResult = z.object({

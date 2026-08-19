@@ -198,26 +198,126 @@ function snakeMerge(pots: readonly SourcedSlot[][]): SourcedSlot[] {
  *  out-of-range or duplicate slot) — the "422 at rule save, not at proposal
  *  time" contract carried forward from stage-seeding.ts.
  *
- *  KNOWN LIMITATION, not fixed here: `seeded_map`'s `source` string matches
- *  against `descriptorKey`, which does not encode which SOURCE a descriptor
- *  came from. A seeded_map entry against a multi-source progression whose
- *  two sources happen to emit the same descriptor key (e.g. both have a
- *  "group_rank A1") resolves to whichever pot's copy `flat()` visits first.
- *  This is the same single-source assumption stage-seeding.ts always made;
- *  F2 does not test or fix the seeded_map + multi-source combination — no
- *  shipped writer produces it. */
+ *  P6 (F3 Task 3) — RESOLVED, was a KNOWN LIMITATION: `seeded_map`'s
+ *  `source` string matches against `descriptorKey`, which does not encode
+ *  which SOURCE a descriptor came from. A multi-source progression whose two
+ *  sources happen to emit the same descriptor key (e.g. both have a
+ *  "group_rank A1") is now a genuine ambiguity: if a `seeded_map` entry
+ *  names that key, this throws `SEEDING_MAP_SOURCE_AMBIGUOUS` naming the key
+ *  and every colliding source index, rather than silently resolving to
+ *  whichever source's copy happened to be visited last (the old `Map`
+ *  construction's last-write-wins behaviour — the wrong team's placeholder
+ *  in the wrong bracket seat, every test green). A shared key that is NOT
+ *  referenced by any `seeded_map` entry is not an error — both copies flow
+ *  through untouched, same as `rank_order`/`snake` (plain array
+ *  concatenation/reversal, never keyed by `descriptorKey`, so they never had
+ *  this bug). This was unreachable from the picker before F3: every writer
+ *  in this codebase emits a single-source progression; multi-source is new
+ *  capability this module unlocked (SourcedSlot's own doc comment). */
+// Bracket-kind targets — mirrors apps/web's BRACKET_KINDS
+// (server/usecases/stages.ts:1813, server/engine-db/competition.ts:37) and
+// BracketStage.kind's Extract union (./stage.ts). Kept as a loose
+// `ReadonlySet<string>`, not core's `StageKind`, so BOTH apps/web callers
+// (stages.ts, stage-seeding.ts) can pass their DB row's `kind: string`
+// verbatim — no cast, no new parse/throw path. An unrecognised value simply
+// isn't in the set, which is the same "don't refuse" outcome as omitting
+// `targetKind` altogether (see placeDescriptors' doc comment) — this module
+// stays tolerant of loose caller data the way progressionSize/
+// previewSourceShape already are elsewhere. Keep the four names in sync with
+// those two apps/web sites if a new bracket stage kind ever ships.
+// Exported (round-4 review, B) so apps/web's bracket-kinds-sync.test.ts can
+// pin this literal against its two hand-copied siblings — see that test's
+// own header comment for why an unsynced 5th bracket kind is a silent,
+// fail-open hazard rather than a loud one.
+export const BRACKET_STAGE_KINDS: ReadonlySet<string> = new Set([
+  "knockout",
+  "double_elim",
+  "stepladder",
+  "page_playoff",
+]);
+
 export function placeDescriptors(
   pots: readonly SourcedSlot[][],
   placement: "rank_order" | "snake" | "seeded_map",
   map?: readonly SeededMapEntry[],
+  // F3 round-3 review, Task 1 — the target stage's raw `kind` (apps/web's
+  // stages.kind column), OPTIONAL: absent/unrecognised means "unknown,
+  // don't refuse" rather than "always refuse", so a caller that hasn't been
+  // taught to pass it yet (or is validating a shape with no real target in
+  // hand) doesn't regress into an always-throwing guard.
+  targetKind?: string,
 ): SourcedSlot[] {
+  // Ruling 13 (F3 programme index, round-3 review): snake is chosen by the
+  // TARGET stage's kind, not the source's. Rule of record: "snake for a
+  // group/pool target, rank_order for a bracket target." Two refusals
+  // enforce it, both snake-specific:
+  //
+  // (1) The bestNth corollary (caught in the same review as ruling 13):
+  // snakeMerge reverses a pot's ARRAY ORDER but never touches each
+  // descriptor's own `position` (its cross-group strength rank), so
+  // reversing a bestNth pot would seed the WEAKEST wildcard into the
+  // STRONGEST bracket slot. There is no target for which that reversal is
+  // ever correct, so this refuses unconditionally — target-kind known or
+  // not.
+  if (placement === "snake") {
+    const potIndex = pots.findIndex((pot) => pot.some((s) => s.descriptor.kind === "best_nth"));
+    if (potIndex !== -1) {
+      throw new EngineError(
+        "CONFIG_INVALID",
+        `placement "snake" cannot be combined with a bestNth-sourced pot (pot ${potIndex}) — snakeMerge reverses a pot's array order without moving each descriptor's cross-group strength rank ("position"), so the weakest wildcard would seed into the strongest slot; use "rank_order" for a bestNth take`,
+        { placement, potIndex },
+      );
+    }
+    // (2) The rule itself (Task 1 — the corollary above is not the rule,
+    // it's one instance of it). A WAVE-major pot (topNPerGroup's shape —
+    // expandOne's own comment: "every group's winner (wave 1) before any
+    // group's runner-up (wave 2)"; >1 descriptor, every one `group_rank`;
+    // `picks`' singleton group_rank pots are immune — reversing a 1-element
+    // pot is a no-op) placed into a bracket-kind TARGET is refused: snakeMerge
+    // reverses alternate waves, and a single-elimination seed fold then pairs
+    // seed i against seed N+1-i (scheduling/bracket.ts:52-63,156-163) — which
+    // lands every pool's OWN wave-1 qualifier against its OWN wave-2
+    // qualifier in round 1 (ruling 13's worked example: 4 pools,
+    // topNPerGroup(2) => round 1 is A1 v A2, B1 v B2 — every group replaying
+    // its own final). `targetKind` unknown/not a bracket kind => this check
+    // is skipped entirely (see the param's own doc comment); t20-super8's
+    // real usage (a GROUP target) is exactly the skip case.
+    if (targetKind !== undefined && BRACKET_STAGE_KINDS.has(targetKind)) {
+      const waveIndex = pots.findIndex(
+        (pot) => pot.length > 1 && pot.every((s) => s.descriptor.kind === "group_rank"),
+      );
+      if (waveIndex !== -1) {
+        throw new EngineError(
+          "CONFIG_INVALID",
+          `placement "snake" cannot target a bracket-kind stage ("${targetKind}") together with a multi-pool wave (pot ${waveIndex}) — snakeMerge reverses alternate waves, and a single-elimination seed fold then pairs each pool's OWN qualifiers against each other in round 1 (e.g. group A's winner meets group A's runner-up); use "rank_order" for a bracket target — snake is only correct for a group/pool target`,
+          { placement, targetKind, potIndex: waveIndex },
+        );
+      }
+    }
+  }
   const flat = placement === "snake" ? snakeMerge(pots) : pots.flat();
   if (placement !== "seeded_map" || !map || map.length === 0) return flat;
 
   const total = flat.length;
-  const byKey = new Map(flat.map((s) => [descriptorKey(s.descriptor), s] as const));
+  // Grouped by key (never collapsed to one) — a multi-source progression can
+  // legitimately produce the same descriptorKey from two different sources,
+  // and `seeded_map.source` is a bare key with no source qualifier, so
+  // resolving it can be genuinely ambiguous (see this function's own doc
+  // comment above).
+  const byKey = new Map<string, SourcedSlot[]>();
+  for (const s of flat) {
+    const key = descriptorKey(s.descriptor);
+    const list = byKey.get(key);
+    if (list) list.push(s);
+    else byKey.set(key, [s]);
+  }
   const seats = new Array<SourcedSlot | undefined>(total).fill(undefined);
-  const claimed = new Set<string>();
+  // Claimed by OBJECT identity, not by key string: two flat entries can
+  // share a descriptorKey without being the same slot (the ambiguous-but-
+  // unreferenced case above), and only the ONE explicitly-mapped slot may be
+  // removed from the auto-fill pool — a key-based claim would silently drop
+  // its unclaimed sibling too.
+  const claimed = new Set<SourcedSlot>();
 
   for (const entry of map) {
     const seat = Number(entry.slot);
@@ -228,24 +328,73 @@ export function placeDescriptors(
         { slot: entry.slot, total },
       );
     }
-    const slot = byKey.get(entry.source);
-    if (!slot) {
+    const candidates = byKey.get(entry.source);
+    if (!candidates || candidates.length === 0) {
       throw new EngineError(
         "SEEDING_MAP_SOURCE_INVALID",
         `seeded_map source "${entry.source}" does not match any qualifier this stage's rules produce`,
         { source: entry.source, available: [...byKey.keys()] },
       );
     }
+    if (candidates.length > 1) {
+      const sourceIndexes = candidates.map((c) => c.sourceIndex);
+      const distinctSources = new Set(sourceIndexes);
+      // F3 review item 2 (RESOLVED) — was `candidates.length > 1` alone, so
+      // a SINGLE source with two overlapping take rules (e.g. two
+      // overlapping rankRanges) also threw here, with `sourceIndexes: [0,
+      // 0]` while the message claimed ">1 progression source" — a
+      // same-source collision is a different condition and (for every
+      // descriptorKey EXCEPT best_nth's) a harmless one: descriptorKey fully
+      // determines every other kind's descriptor, so a same-key match within
+      // one source can only be the identical descriptor twice — an
+      // overlapping/duplicate take rule that resolveProgression's own
+      // entrant-dedupe guard (QUALIFICATION_INVALID) already refuses the
+      // moment BOTH copies are placed, whichever one `seeded_map` picks
+      // here. best_nth's key (`best:${position}`) is the one exception —
+      // it drops `nth`, so two bestNth rules at the same position but a
+      // DIFFERENT nth collide on key while resolving to different entrants;
+      // that is genuinely ambiguous even within a single source, so it still
+      // refuses rather than silently picking the wrong nth-tier entrant.
+      const distinctDescriptors = new Set(candidates.map((c) => JSON.stringify(c.descriptor)));
+      if (distinctSources.size > 1 || distinctDescriptors.size > 1) {
+        throw new EngineError(
+          "SEEDING_MAP_SOURCE_AMBIGUOUS",
+          distinctSources.size > 1
+            ? `seeded_map source "${entry.source}" matches qualifiers from more than one progression source (indexes ${[...distinctSources].join(", ")}) — seeded_map cannot tell them apart; use rank_order/snake placement instead, or make each source's pool keys distinct`
+            : `seeded_map source "${entry.source}" matches more than one qualifier within the same progression source (source ${sourceIndexes[0]}) — its take rules produce this key more than once (e.g. two bestNth rules at the same position with a different nth); remove the overlap or duplicate rule`,
+          { source: entry.source, sourceIndexes },
+        );
+      }
+      // Same source, identical descriptor: interchangeable — fall through
+      // and let `candidates[0]` claim the seat, same as any other match.
+    }
+    const slot = candidates[0]!;
     if (seats[seat - 1] !== undefined) {
       throw new EngineError("SEEDING_MAP_SLOT_INVALID", `seeded_map assigns seed ${seat} more than once`, {
         slot: seat,
       });
     }
+    // B (round-4 review) — two DIFFERENT entries naming the SAME source both
+    // resolve `candidates[0]` to this identical SourcedSlot object; `claimed`
+    // already exists to keep it out of the auto-fill pool below, so it also
+    // doubles as the duplicate-source check here for free: a second entry
+    // reusing an already-claimed source would otherwise silently duplicate
+    // that seat's descriptor into a second seed and leave the real qualifier
+    // for the now-orphaned seat unplaced — surfacing far downstream as a
+    // confusing QUALIFICATION_INVALID at resolve time instead of refusing
+    // the malformed map right here.
+    if (claimed.has(slot)) {
+      throw new EngineError(
+        "SEEDING_MAP_SLOT_INVALID",
+        `seeded_map source "${entry.source}" is already assigned to another seed — each source may be named by at most one seeded_map entry`,
+        { source: entry.source, slot: seat },
+      );
+    }
     seats[seat - 1] = slot;
-    claimed.add(entry.source);
+    claimed.add(slot);
   }
 
-  const remaining = flat.filter((s) => !claimed.has(descriptorKey(s.descriptor)));
+  const remaining = flat.filter((s) => !claimed.has(s));
   let ri = 0;
   for (let i = 0; i < total; i++) {
     if (seats[i] === undefined) seats[i] = remaining[ri++];
@@ -257,13 +406,18 @@ export function placeDescriptors(
  *  must run before trusting it (createStages/replaceStages, and
  *  templates.ts's instantiateTemplate): expand every source's take against
  *  its real shape, let placeDescriptors validate a seeded_map's
- *  slot/source references, then require at least 2 qualifiers total. */
+ *  slot/source references AND (F3 round-3 review, Task 1) an illegal
+ *  snake-into-a-bracket-target combo, then require at least 2 qualifiers
+ *  total. `targetKind` is this progression's OWN stage's raw `kind` —
+ *  optional, forwarded verbatim to placeDescriptors (see its doc comment for
+ *  the "unknown => don't refuse" default). */
 export function validateProgressionAgainstShapes(
   shapes: readonly SourceShape[],
   progression: Pick<ProgressionSpec, "sources" | "placement" | "map">,
+  targetKind?: string,
 ): void {
   const pots = expandSources(progression.sources, (i) => shapes[i]!);
-  placeDescriptors(pots, progression.placement, progression.map); // throws on a bad seeded_map
+  placeDescriptors(pots, progression.placement, progression.map, targetKind); // throws on a bad seeded_map or an illegal snake/bracket-target combo
   const total = pots.reduce((n, p) => n + p.length, 0);
   if (total < 2) {
     throw new EngineError("SEEDING_RULES_MISSING", "this stage's progression rules produce fewer than 2 qualifiers");
@@ -311,7 +465,15 @@ export interface ResolvedProgressionEntry {
   tieUnbroken: boolean;
 }
 export interface ProgressionTieFlag {
-  descriptors: SlotDescriptor[];
+  // Widened from SlotDescriptor[] (F3 review item 1): a tie descriptor with
+  // no sourceIndex is indistinguishable from an identically-keyed descriptor
+  // on a DIFFERENT source (trivially: two rankRange sources, or two
+  // group_rank sources sharing a pool letter) — exactly the collision
+  // apps/web's computeSeedProposal (stages.ts) used to mis-seat a confirmed
+  // tie pick against, because its seedOfKey Map could only key by bare
+  // descriptorKey. SourcedSlot already carries sourceIndex — reuse it rather
+  // than invent a parallel shape.
+  descriptors: SourcedSlot[];
   entrantIds: EntrantId[];
   reason: string;
 }
@@ -438,9 +600,17 @@ export function resolveProgression(
   spec: ProgressionSpec,
   shapes: readonly SourceShape[],
   tables: readonly SourceTables[],
+  // A2 (round-4 review, MAJOR) — this stage's own raw `kind`, forwarded
+  // verbatim to placeDescriptors so ruling 13's bracket-target snake guard
+  // can fire on the actual seed-RESOLUTION path, not just at save-time
+  // validation (validateProgressionAgainstShapes). OPTIONAL, same "unknown,
+  // don't refuse" default as placeDescriptors' own targetKind param (see its
+  // doc comment) — an old caller that hasn't been taught to pass one yet
+  // does not regress into an always-throwing guard.
+  targetKind?: string,
 ): { qualifiers: ResolvedProgressionEntry[]; ties: ProgressionTieFlag[] } {
   const pots = expandSources(spec.sources, (i) => shapes[i]!);
-  const placed = placeDescriptors(pots, spec.placement, spec.map);
+  const placed = placeDescriptors(pots, spec.placement, spec.map, targetKind);
 
   const qualifiers: ResolvedProgressionEntry[] = [];
   const tieGroups = new Map<string, ProgressionTieFlag>();
@@ -467,7 +637,16 @@ export function resolveProgression(
       // best_nth — every pool's nth-place row, compared together (once per
       // distinct nth), exactly like resolveQualification.bestOfRank used to
       // — never one candidate at a time.
-      const cacheKey = `${slot.sourceIndex}:${d.nth}`;
+      // The flag is part of the key, not just the nth: two bestNth take
+      // rules on one source at the same nth but a DIFFERENT
+      // normaliseUnequalPools describe two different orderings, and the
+      // unequal-pools guard below sits INSIDE the cache-miss branch — so a
+      // shared key let the second rule skip its own guard and read rows
+      // normalised under a setting it never asked for. Every such pair
+      // collides on position 1 and is refused a few lines down by the
+      // entrant-dedupe, so no wrong seat escapes today; this keeps that
+      // true if bestNth positions ever stop starting at 1.
+      const cacheKey = `${slot.sourceIndex}:${d.nth}:${d.normaliseUnequalPools === true}`;
       let ordered = bestNthCache.get(cacheKey);
       if (!ordered) {
         const candidates = src.pools.map((p) => {
@@ -481,7 +660,7 @@ export function resolveProgression(
               "SEEDING_BESTNTH_UNEQUAL_POOLS",
               `bestNth cannot compare rank-${d.nth} finishers across pools of different sizes (${[...sizes]
                 .sort((a, b) => a - b)
-                .join(",")}) — UEFA normalisation for unequal pools isn't implemented`,
+                .join(",")}) without normaliseUnequalPools — set normaliseUnequalPools: true on this take rule to compare them via UEFA drop-the-bottom-result normalisation`,
               { nth: d.nth, poolSizes: src.pools.map((p) => ({ pool: p.pool, size: p.rows.length })) },
             );
           }
@@ -522,8 +701,10 @@ export function resolveProgression(
       const group = [row.entrantId, ...(row.tieBreak?.with ?? [])].sort();
       const key = group.join(",");
       const existing = tieGroups.get(key);
-      if (existing) existing.descriptors.push(d);
-      else tieGroups.set(key, { descriptors: [d], entrantIds: group, reason: row.tieBreak?.key ?? "seed" });
+      // Push the whole SourcedSlot (sourceIndex + descriptor), not just `d`
+      // — see ProgressionTieFlag's own doc comment.
+      if (existing) existing.descriptors.push(slot);
+      else tieGroups.set(key, { descriptors: [slot], entrantIds: group, reason: row.tieBreak?.key ?? "seed" });
     }
   });
 

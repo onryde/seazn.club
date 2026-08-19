@@ -10,7 +10,7 @@ import { useRouter } from "next/navigation";
 import { apiV1 } from "@/lib/client-v1";
 import { divisionAccent, monogram } from "@/lib/division-hue";
 import { MatchRuleFields, buildRuleOverride } from "./match-rules";
-import { STAGE_TEMPLATES, buildTemplateStages, detectTemplate, type StageDraft } from "./format-templates";
+import { STAGE_TEMPLATES, buildTemplateStages, clampKnob, detectTemplate, type StageDraft } from "./format-templates";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
@@ -118,23 +118,72 @@ async function fileToWebp(file: File, max: number): Promise<Blob> {
  *  `take.length`); now reads the FIRST stage's `.progression`, matching
  *  whichever TakeRule kind format-templates.ts's real specs emit —
  *  rankRange -> to-from+1 (league_ko/group_stepladder/group_playoffs/
- *  qualifying_main), picks -> picks.length (groups_ko), roundLosers ->
- *  count (ko_plate). Falls back to 4, same default as before. */
+ *  qualifying_main), roundLosers -> count (ko_plate), picks -> picks.length
+ *  (a hand-built custom graph only — no current template emits it since
+ *  ruling 11's groups_ko conversion).
+ *
+ *  A3 (round-4 review, MAJOR): groups_ko emits topNPerGroup (+ a bestNth
+ *  remainder), never picks — this used to fall through every branch above
+ *  and hit the `4` fallback for EVERY groups_ko division, regardless of its
+ *  real qualifier count. topNPerGroup -> n × the group stage's pool count
+ *  (config.pools.count on whichever earlier stage is kind:"group" — the take
+ *  rule itself is pool-count-agnostic, so the count has to come from the
+ *  sibling stage); bestNth -> its count. Summed, not early-returned, because
+ *  groups_ko's real shape carries BOTH in the same take array (the
+ *  cross-pool remainder — format-templates.ts) — every other template still
+ *  emits exactly one recognised rule per take, so summing changes nothing
+ *  for them. Falls back to 4, same default as before. */
 export function currentQualifiedFromStages(
-  stages: { progression: Record<string, unknown> | null }[],
+  stages: {
+    kind?: string;
+    config?: Record<string, unknown> | null;
+    progression: Record<string, unknown> | null;
+  }[],
 ): number {
-  const stage = stages.find((st) => st.progression);
+  const stageIdx = stages.findIndex((st) => st.progression);
+  const stage = stageIdx === -1 ? undefined : stages[stageIdx];
   const sources = (stage?.progression as { sources?: { take?: unknown[] }[] } | undefined)?.sources;
   const take = sources?.flatMap((s) => s.take ?? []) ?? [];
+  // F3 ultrareview finding 8 — was `stages.find((st) => st.kind === "group")`,
+  // the FIRST group stage in the division regardless of which stage this
+  // progression actually reads. In a graph with two group phases (a
+  // qualifying pool round into a main group stage, then a knockout) that
+  // sized the knockout off the QUALIFYING round's pool count. Every template
+  // this reads today declares `stage: "previous"`, so the correct source is
+  // the stage immediately before the one carrying the progression — search
+  // backwards from there rather than forwards from the start of the graph.
+  // (An explicit `{stageId}` source is not resolvable here: these props are
+  // draft/unsaved stages with no ids. Nearest-earlier remains the best
+  // available answer for one, and is the exactly-right answer for the
+  // "previous" every shipped template emits.)
+  const poolCount =
+    (stages
+      .slice(0, stageIdx === -1 ? 0 : stageIdx)
+      .reverse()
+      .find((st) => st.kind === "group")?.config as { pools?: { count?: number } } | undefined)?.pools
+      ?.count ?? 1;
+  let total = 0;
+  let matched = false;
   for (const t of take) {
-    const rule = t as { kind?: string; from?: number; to?: number; count?: number; picks?: unknown[] };
+    const rule = t as { kind?: string; from?: number; to?: number; count?: number; picks?: unknown[]; n?: number };
     if (rule.kind === "rankRange" && typeof rule.from === "number" && typeof rule.to === "number") {
-      return rule.to - rule.from + 1;
+      total += rule.to - rule.from + 1;
+      matched = true;
+    } else if (rule.kind === "picks" && Array.isArray(rule.picks)) {
+      total += rule.picks.length;
+      matched = true;
+    } else if (rule.kind === "roundLosers" && typeof rule.count === "number") {
+      total += rule.count;
+      matched = true;
+    } else if (rule.kind === "topNPerGroup" && typeof rule.n === "number") {
+      total += rule.n * poolCount;
+      matched = true;
+    } else if (rule.kind === "bestNth" && typeof rule.count === "number") {
+      total += rule.count;
+      matched = true;
     }
-    if (rule.kind === "picks" && Array.isArray(rule.picks)) return rule.picks.length;
-    if (rule.kind === "roundLosers" && typeof rule.count === "number") return rule.count;
   }
-  return 4;
+  return matched ? total : 4;
 }
 
 export function DivisionSettings({
@@ -200,6 +249,10 @@ export function DivisionSettings({
   // Competition format = the stage structure (League / Groups + Knockout…).
   const detected = detectTemplate(stages);
   const [template, setTemplate] = useState(detected ?? "league");
+  // F3 Task 6: hoisted out of the JSX so the format <select>'s help caption
+  // (:597) doesn't re-run STAGE_TEMPLATES.find for the same lookup the
+  // <option> loop already keys off of.
+  const selectedTemplate = STAGE_TEMPLATES.find((t) => t.key === template);
   const [qualified, setQualified] = useState(currentQualifiedFromStages(stages));
   const [poolCount, setPoolCount] = useState(
     ((stages.find((st) => st.kind === "group")?.config as { pools?: { count?: number } } | null)?.pools?.count) ?? 2,
@@ -323,7 +376,18 @@ export function DivisionSettings({
 
   const applyStructure = () =>
     run(async () => {
-      const drafts = buildTemplateStages(template, { qualified, swissRounds, poolCount, legs });
+      // B (round-4 review): both poolCount AND qualified here are free
+      // `<input type="number">` fields — HTML `min` doesn't stop a cleared
+      // field reading as Number("")===0, which mints groups_ko's take rule
+      // with n:Infinity (serialises as n:null over the wire) rather than a
+      // clean validation message. Clamp right before buildTemplateStages,
+      // not on every keystroke (which would fight the organiser mid-edit).
+      const drafts = buildTemplateStages(template, {
+        qualified: clampKnob(qualified, 2, 32),
+        swissRounds,
+        poolCount: clampKnob(poolCount, 2, 8),
+        legs,
+      });
       await apiV1(`/api/v1/divisions/${division.id}/stages`, {
         method: "PUT",
         json: drafts.map((d, i) => ({ ...d, seq: i + 1 })),
@@ -534,14 +598,23 @@ export function DivisionSettings({
                   className="input mt-1 w-full"
                   data-testid="format-template"
                 >
+                  {/* F3 Task 6: t.key is a plain `string` (STAGE_TEMPLATES
+                      isn't narrowed to a literal-key union — see
+                      format-templates.ts), so this template-literal lookup
+                      can't be checked against MessageKey's literal union
+                      without a cast. Narrow, not `as any`: a typo in the
+                      "format.template."/".label" literals themselves would
+                      still fail to compile. format-templates.test.ts's
+                      dictionary-coverage test backstops every t.key actually
+                      resolving. */}
                   {STAGE_TEMPLATES.map((t) => (
                     <option key={t.key} value={t.key}>
-                      {t.label}
+                      {msg(`format.template.${t.key}.label` as MessageKey)}
                     </option>
                   ))}
                 </select>
                 <span className="mt-0.5 block text-[11px] text-slate-400">
-                  {STAGE_TEMPLATES.find((t) => t.key === template)?.help}
+                  {selectedTemplate && msg(`format.template.${selectedTemplate.key}.help` as MessageKey)}
                 </span>
               </label>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">

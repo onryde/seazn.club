@@ -33,7 +33,7 @@ import {
 } from "@seazn/engine/competition";
 import { EngineError } from "@seazn/engine/core";
 import { HttpError } from "@/lib/errors";
-import { poolCount, POOL_KEYS } from "./stages";
+import { poolCount, POOL_KEYS, BRACKET_KINDS, loadBracketFixtures, americanoPlacementTables } from "./stages";
 
 type Tx = postgres.TransactionSql;
 
@@ -142,20 +142,28 @@ export async function sourceShapeOf(
 }
 
 /** Validate a progression rule at SAVE time (createStages/replaceStages,
- *  templates.ts's instantiateTemplate) — a bad `seeded_map` reference or a
- *  too-small shape 422s here, never discovered later at proposal/generate
- *  time (design's Edge inventory). Cheap: only needs every source's SHAPE
- *  (pool keys / count), not its standings.
+ *  templates.ts's instantiateTemplate) — a bad `seeded_map` reference, an
+ *  illegal snake-into-a-bracket-target combo (F3 round-3 review, Task 1,
+ *  ruling 13), or a too-small shape 422s here, never discovered later at
+ *  proposal/generate time (design's Edge inventory). Cheap: only needs every
+ *  source's SHAPE (pool keys / count), not its standings.
  *
  *  `presetSources[i]`, when given, is used INSTEAD of resolving
  *  `progression.sources[i].stage` against the DB — templates.ts already has
  *  the just-inserted sibling stage's `{kind, config}` in hand (from the SAME
  *  transaction, a moment ago) and passes it directly rather than re-querying
  *  for a row it already has. Absent entries (or an absent array entirely)
- *  fall back to the normal DB resolution. */
+ *  fall back to the normal DB resolution.
+ *
+ *  `target.kind` (optional — see progression.ts's `placeDescriptors` doc
+ *  comment for the "unknown => don't refuse" default) is THIS progression's
+ *  OWN stage's kind, forwarded to the engine as the snake/bracket-target
+ *  check's `targetKind`. Both call sites already have it in hand (createStages'
+ *  freshly-inserted row, instantiateTemplate's TemplateStage) — passed
+ *  straight through, no DB read added. */
 export async function validateStageProgression(
   tx: Tx,
-  target: { division_id: string; seq: number },
+  target: { division_id: string; seq: number; kind?: string },
   progression: Pick<ProgressionSpec, "sources" | "placement" | "map">,
   presetSources?: readonly ({ kind: string; config: Record<string, unknown> } | undefined)[],
 ): Promise<void> {
@@ -166,7 +174,7 @@ export async function validateStageProgression(
     shapes.push(await sourceShapeOf(tx, source));
   }
   try {
-    validateProgressionAgainstShapes(shapes, progression);
+    validateProgressionAgainstShapes(shapes, progression, target.kind);
   } catch (err) {
     if (EngineError.is(err)) throw new HttpError(422, err.message, err.code, err.data as never);
     throw err;
@@ -225,13 +233,19 @@ export async function sourceStandingsTables(tx: Tx, source: { id: string }): Pro
  *  SEEDING_SOURCE_INCOMPLETE naming the first source stage that isn't ready
  *  — same contract computeSeedProposal has always had.
  *
- *  Bracket fixtures (needed only by a `roundLosers` take rule) are
- *  deliberately NOT fetched here: no `timing:"setup"` writer emits
- *  `roundLosers` today (`ko_plate` is `on_complete` — see the F2 plan,
- *  Task 5 Step 6), so a propose/confirm-flow progression never needs
- *  `SourceTables.bracket`, matching this file's behaviour before this
- *  session. seedNextStage (stages.ts), the `on_complete` flow, builds its
- *  own tables locally and does fetch bracket fixtures when relevant. */
+ *  Bracket fixtures (needed only by a `roundLosers` take rule) ARE fetched
+ *  here (F3 review item 5, RESOLVED) — a prior comment said they weren't,
+ *  reasoning "no `timing:"setup"` writer emits `roundLosers` today (`ko_plate`
+ *  is `on_complete`)". That premise died when F3 flipped every picker
+ *  template's `timing` to `"setup"` (day-one fixtures): `ko_plate`'s plate
+ *  stage IS a `roundLosers` take under `timing:"setup"` now, so this function
+ *  needed `SourceTables.bracket` for real — without it, `resolveProgression`'s
+ *  `loserAt` always threw `STAGE_NOT_READY`, silently swallowed by
+ *  completeStage's best-effort catch (stages.ts), leaving an organiser's
+ *  plate stuck on TBD forever with no visible error. Mirrors
+ *  `tablesForCompletedStage`'s (stages.ts, the `on_complete` flow's own table
+ *  builder) `BRACKET_KINDS.has(kind) ? loadBracketFixtures(...) : undefined`
+ *  exactly — same condition, same helper, now shared rather than forked. */
 export async function sourcesToTables(
   tx: Tx,
   target: { division_id: string; seq: number },
@@ -253,8 +267,17 @@ export async function sourcesToTables(
     }
     resolved.push(source);
     shapes.push(await sourceShapeOf(tx, source));
-    const pools = await sourceStandingsTables(tx, source);
-    tables.push({ pools });
+    // americano is NOT readable from `standings_snapshots` — its snapshot
+    // folds over ephemeral per-round PAIR entrants, so reading it here seats
+    // ids the next stage's roster does not contain. Shares the on_complete
+    // path's reader rather than re-deriving it (see its doc comment,
+    // stages.ts).
+    const pools =
+      source.kind === "americano"
+        ? await americanoPlacementTables(tx, source.id, target.division_id)
+        : await sourceStandingsTables(tx, source);
+    const bracket = BRACKET_KINDS.has(source.kind) ? await loadBracketFixtures(tx, source.id) : undefined;
+    tables.push({ pools, ...(bracket ? { bracket } : {}) });
   }
   return { shapes, tables, resolved };
 }

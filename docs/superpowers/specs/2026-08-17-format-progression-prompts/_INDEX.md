@@ -28,9 +28,10 @@ and those two `stages.ts` functions; F1 is fenced off `qualification.ts`,
 |---|---|---|---|
 | F1 | `F1-bracket-round-role.md` | — | **MERGED** as #606 (2026-08-18), plus #613 which named the knockout tree's rounds — the one bracket shape F1 left with no captions at all |
 | F2 | `F2-unified-progression-field.md` | — | **MERGED** as #616 (2026-08-18, `ef473f586`), 60 commits. One `progression` field; `qualification` and `seeding` dropped. Migrations V371-V373, no version collision on main |
-| F3 | **prompt ready** — `../2026-08-18-format-progression-f3-f5-design.md` §8 | F2 **merged** ✅ | design written 2026-08-18 against the shipped shape. Paste §8's F3 block as a whole prompt |
+| F3 | plans: `../../plans/2026-08-18-f3-day-one-fixtures.md` + `../../plans/2026-08-18-f3-task5-entrant-churn.md` | F2 **merged** ✅ | **ALL SIX DELIVERABLES DONE** 2026-08-19, DRAFT PR **#617**, branch `feat/f3-day-one-fixtures`, rebased onto `e7ccdd7eb` (post-P9). Six: nine emitters flipped to `timing:"setup"`; `groups_ko` draws from every pool; P6 resolved as a 422; §7 P1 **proven by execution** (day-one fixtures reach the board and survive a BUILD — same fixture id, byte-identical labels, entrant ids still null); entrant-churn detection + a rebuild that refuses once anything has been played; all 14 picker strings in 4 locales with a reader. Plus ruling 14's waiting-proposal prompt and ruling 12's amendment (carry was NEVER deliverable → F6). Gates: engine 3988/0/4001, web 5210 passed/12 failed/5290 (12 = 3 known-unrelated files: `org-addon-price-sweep` main-inherited, `org-posts-digest` cross-suite, `schedule-build-honours-locks` needs the placement service), gate 0 errors, i18n parity + key-union clean, OpenAPI drift found and closed (`e1e541692`). **Ultrareview run 2026-08-19 (13 findings): 9 fixed, 4 rejected with reasons — rulings 15-18 below.** Gates re-run after: engine 3989/0/4002, web 9325 passed/12 failed/9411 (the SAME 12 the branch started with), scripts 33/0/36, turbo typecheck+lint 4/4 with 0 errors, i18n parity 4904 x 4, no OpenAPI drift |
 | F4 | **MERGED** as #619 (2026-08-18, `27af0f30d`), 16 commits. Export path + `.ics` feed + bracket poster | — | premise RETIRED (no sport/format-kind gap in either direction; its mexicano comment folds into F3). Slot **repurposed** to the export + calendar day-one leaks (§7 P5, P2). Does NOT wait for F3 — three catalogue templates already emit `timing: "setup"`. Owner CONFIRMED the repurpose 2026-08-18 |
 | F5 | **prompt ready** — same doc §8 | all | scope fixed by the §5 table |
+| F6 | **NEW, unwritten** — scoped by ruling 12's 2026-08-19 amendment | F3 | Make the SOLD entitlement `standings.carry_over` actually reachable. Wire `carryDeltas` + `config.carry_deltas` + the `standings_carried` event at `confirmSeedProposal` (mirroring `seedNextStage:2206-2247`, which already does it on the `on_complete` path); surface `REAL_TABLE_KINDS`' non-real-source rejection at propose time; relax the `schemas.ts` refine; add a carry control to the picker, which has none. Engine needs NO change — `config.carry_deltas → openingDeltas` already folds. Update `custom-points.test.ts`, `progression-multi-source.test.ts`, `progression-schema.test.ts`, which currently assert the rejection |
 
 **Why F3–F5 are not written.** They consume F2's field shape, and this repo has
 a repeated failure where a session authored against a design meets an
@@ -180,6 +181,163 @@ prompts for F3, F5 and two standalone product fixes.
    feed is tentative all-day and converts at publish. Nothing new is exposed —
    slot labels are already unmasked by V362 itself.
 
+10. **F3 flip scope: the six picker templates PLUS the format gallery**
+    (2026-08-18). `config/format-gallery.tsx:277,308,321` carries its own
+    `cannedStages` with `timing: "on_complete"` — a second user-reachable format
+    surface the F3 brief did not name. Flipping only `format-templates.ts` would
+    leave a gallery-created division with no day-one fixtures, which is the
+    owner's ask leaking on a live surface. `stages-panel.tsx`'s ad-hoc
+    `AddStageForm` (`:944`) and the seed scripts STAY on `on_complete`: that form
+    POSTs and immediately calls `/generate`, which is on_complete semantics by
+    construction, and moving it onto the propose/confirm flow is a different
+    session's work.
+
+11. **`groups_ko` converts `picks` → `topNPerGroup`** (2026-08-18; this
+    ruling originally said "+ `snake`" and **ruling 13 overrode that** — the
+    knockout target takes `rank_order`).
+    Design §2.3 said the picker emits a flat ranked list that lets group-mates
+    meet in the quarter-final. That is NOT the mechanism — `groups_ko`'s take is
+    `picks` alternating `A1,B1,A2,B2…`, a hand-rolled 2-pool snake that is
+    correct for two pools. The LIVE defect is different and worse: the builder
+    offers a **pools 2–8 knob** (`division-builder.tsx:694-706`) that
+    `buildTemplateStages` applies to the group stage, while the knockout's
+    `picks` stay pinned to pools A and B — **with 4 pools, groups C and D
+    qualify nobody**. The fix is `topNPerGroup n` (+ `bestNth` for the
+    remainder, euro24's shape) with `placement: "snake"`, which is pool-count
+    agnostic. A fresh session reading §2.3 alone will re-derive this wrongly.
+
+12. **`timing: "setup"` + `carry` is rejected by the schema** — an OPEN product
+    decision, not a defect (2026-08-18). `ProgressionSchema`'s second `.refine`
+    (`api-v1/schemas.ts`) rejects the combination, so once F3 flips every picker
+    format to `setup`, the marketed Pro entitlement `standings.carry_over`
+    (`feature-copy.ts:51`, priced in all four marketing dictionaries) is
+    unreachable on every picker format — via the API too, since no UI writes
+    `carry` today. Nothing regresses for any current organiser (no template,
+    gallery entry or catalogue file emits `carry`), so F3 does NOT change it.
+    Making both work means carrying points at `confirmSeedProposal` time on the
+    setup path.
+    **AMENDED 2026-08-19, after scouting the code: the premise above is wrong
+    in the organiser's favour and wrong in ours.** Two corrections:
+    (a) `standings.carry_over` was NEVER deliverable, before F3 or after. No
+    picker template, gallery entry, catalogue JSON, `AddStageForm` (which
+    hardcodes `timing: "on_complete"` and has no carry control) or seed script
+    emits `carry`; the only working path in the repo's history is a hand-built
+    API payload inside `custom-points.test.ts`. F3 did not make a working
+    feature unreachable — it exposed one that never shipped. The entitlement is
+    gated Pro/Pro Plus/Business (`V246:10-12`, `V290:31`) and advertised on the
+    PUBLIC pricing page in all four locales (`marketing.json:149`).
+    (b) The refine's stated reason is not backed by the code. It claims a
+    `setup` stage "seeds placeholders independently of source completion and
+    never reads carry" — that describes fixture GENERATION, which happens at
+    division setup. Carry would be computed at SEEDING time, and
+    `confirmSeedProposal` already runs only after every named source is
+    complete, with freshness-verified tables in hand (the same data
+    `carryDeltas` needs). It simply never calls it. The incompatibility is
+    unwired plumbing, not physics.
+    Owner decision APPLIED 2026-08-19: **build it rather than un-sell it.** F3
+    corrects the false message only (it is in scope, zero product risk); the
+    wiring is scoped as its own session — see the F6 row in the table above.
+    Do NOT quietly drop `standings.carry_over` from pricing as the cheap fix:
+    selling a feature nobody can reach is the worse of the two states, and the
+    engine already does the hard half (`config.carry_deltas → openingDeltas`
+    folds regardless of which usecase wrote it, so the engine needs NO change).
+
+13. **`snake` is chosen by the TARGET stage's kind, not the source's**
+    (2026-08-18, found by review before it shipped). Design §2.3 says "a
+    group-stage source implies `snake`". That rule is wrong and produces a
+    materially broken draw. `snakeMerge` reverses alternate wave-major pots, so
+    `topNPerGroup n:2` over pools A–D yields seeds `A1,B1,C1,D1,D2,C2,B2,A2`;
+    `generateSingleElim` then folds seed *i* against seed *N+1-i*
+    (`scheduling/bracket.ts:52-63,156-163`), so round 1 is **A1 v A2, B1 v B2**
+    — every group replaying its own final. Plain `rank_order` over the same
+    wave-major pots gives `A1 v D2, B1 v C2, C1 v B2, D1 v A2`, which is the
+    correct cross-pool draw. `t20-super8.json` uses `snake` legitimately because
+    its target is a GROUP stage, where reversal distributes strength across
+    pools; a knockout target must not reverse. Rule of record: **snake for a
+    group/pool target, rank_order for a bracket target.**
+    Corollary caught in the same review: `snakeMerge` reverses a `bestNth` pot's
+    array order without moving each descriptor's `position` (its cross-group
+    strength rank), so a reversed wildcard pot seeds the weakest wildcard best.
+    Never snake a `bestNth`-sourced pot.
+
+14. **Seeding stays PROPOSE-AND-CONFIRM; no auto-confirm** (2026-08-18).
+    Flipping to `timing: "setup"` also changes how a downstream stage FILLS,
+    which the F3 design never states: `completeStage` (`stages.ts:1920`)
+    computes a seed proposal and returns it, while `seedNextStage`'s automatic
+    fill runs only on the `on_complete` branch (`:1933`). So every multi-stage
+    picker format now needs the organiser to confirm a proposal before real
+    names replace the placeholders. Auto-confirming unambiguous proposals was
+    considered and **rejected** by the owner: every seeding decision stays
+    explicitly the organiser's, and a tie must never resolve without someone
+    looking at it.
+    Two consequences F3 owes: the `ko_plate` e2e (`e2e/formats.spec.ts:41`)
+    must drive propose→confirm rather than expecting `/generate` to seed, and
+    the organiser needs a VISIBLE prompt that a proposal is waiting — without
+    one, "always confirm" means a published bracket sits full of placeholders
+    after the results are already in.
+
+15. **An americano source had TWO readers and they had drifted**
+    (2026-08-19, ultrareview finding 11 — the highest-value find of the
+    review). An americano stage's `standings_snapshots` fold over the
+    EPHEMERAL per-round `pair` entrants it mints per fixture, not the
+    division's registered individuals. `tablesForCompletedStage` (the
+    `on_complete` path) has known this since L3/#414 and re-ranks from the
+    personal-points leaderboard instead. `sourcesToTables` — the
+    `timing:"setup"` propose/confirm path F3 itself introduced — went
+    straight to `sourceStandingsTables`, so a knockout behind an americano
+    was seeded with entrant ids its own roster does not contain. A silent
+    wrong draw, reachable from one `timing` value, in the same class as
+    ruling 10's `groups_ko` pools-C/D miss. Fixed by extracting
+    `americanoPlacementTables` and pointing both readers at it.
+    **The pattern, stated once for whoever picks up F5/F6:** every defect
+    of consequence found on this branch — rulings 10, 15, and ultrareview
+    findings 8, 9 — was one rule with two readers that had drifted, not a
+    rule that was wrong. When adding a path, look for the existing reader
+    of the same rule before writing a second one.
+
+16. **The churn banner must not fire on a stage nobody has generated yet**
+    (2026-08-19, ultrareview finding 6). `getStageRosterDrift` compared the
+    active roster against fixture-referenced entrants with no check that the
+    stage HAS a board, so a freshly-created stage — the most common state a
+    stage is ever in — reported every entrant as "unplaced" and offered a
+    rebuild that would have been a no-op regenerate. Drift is defined
+    against a board; no board, no drift. `Generate` is the call to action
+    there, and the panel already renders it prominently.
+
+17. **The rebuild warns about organiser SETUP; it does not block on it**
+    (2026-08-19, ultrareview finding 5; an owner-level product call, made
+    here rather than parked). `delete from fixtures` CASCADEs into
+    `lineups`, `fixture_officials` and `device_links` — team sheets, referee
+    appointments, paired scoring devices — none of which the guard checked.
+    Blocking on them was rejected: an organiser who has already appointed
+    referees is exactly the one most likely to need a rebuild before match
+    day, so refusing would disable the feature when it earns its keep.
+    Destroying them silently was equally rejected. The drift payload counts
+    all three and the confirm dialog names them before the click. **The
+    rule for anything added later: a RESULT belongs in the guard, organiser
+    SETUP belongs in the count.**
+
+18. **Four of the thirteen ultrareview findings were rejected**, recorded so
+    a later review does not re-raise them as new:
+    - *`seeded_map` collision uses `JSON.stringify` equality.* Deliberate and
+      documented in place — a same-source duplicate descriptor is refused a
+      few lines later by `resolveProgression`'s own entrant dedupe, and only
+      `best_nth`'s key is genuinely ambiguous within one source (which it
+      still refuses).
+    - *Preview sizing derives the qualifier pool from the array-adjacent
+      stage, not the stage the source names.* `PreviewStageInput` carries no
+      stage id (its three callers pass draft/canned stages), so a
+      `{stageId}` source is unresolvable in a preview by construction, and
+      "previous" — what every shipped template emits — IS the adjacent one.
+    - *`previewSourceShape` duplicates `poolCount()`.* The divergence is the
+      point and is documented at both ends: a preview read path must fall
+      back to 1 pool on malformed knob data, never 422 a gallery render.
+    - *`format-templates.ts:379` hand-writes `timing:"setup"` per template.*
+      That file is 317 lines. The underlying concern — three independent
+      defaults for one concept — was real for `scripts/seed-demo.ts` and is
+      closed by finding 12's fix and its drift gate
+      (`scripts/__tests__/seed-demo-templates.test.ts`).
+
 ## F4's brief contains one false premise (found 2026-08-18)
 
 The F3–F5 design §7 P5 and its §8 pickup prompt both state that
@@ -292,6 +450,66 @@ Emitters F2 must migrate because the shape they emit is being deleted:
   F3 already opens this file, so it wires all 14 through the dictionary in one
   pass, with a reader. **Watch `feedback_ui_text_breaks_e2e`** — e2e specs pin
   the English picker labels.
+
+## F3 Task 2b + Task 3 — findings during implementation (2026-08-18)
+
+- **Ruling 11's `topNPerGroup` switch (Task 2, commit `6351fd2ce`) shipped a
+  NEW preview regression**, caught and fixed same-session as Task 2b:
+  `qualifierCount` (`stages.ts:809`) sized a later stage from the engine's
+  `progressionSize`, which deliberately returns 0 for `topNPerGroup`
+  ("group-count-dependent; callers with a real shape use expandTake
+  instead" — its own comment). Every `groups_ko`-shaped preview therefore
+  fell through the `|| 4` guard to a 4-team bracket regardless of the real
+  qualifier count (4 pools x 4/pool previewed 4, not 16) — silent, every
+  test green, live on the builder's Format tab before an organiser even
+  creates the division. Fixed: `qualifierCount` now expands the take
+  against the PREVIOUS array stage's real shape (`previewSourceShape` — no
+  DB read; the preview already has the whole stage array) whenever the
+  take contains `topNPerGroup`. Every other take kind
+  (rankRange/bestNth/picks/roundLosers-only — `league_ko`,
+  `group_stepladder`, `group_playoffs`, `ko_plate`, `qualifying_main`) is
+  untouched, still `progressionSize` alone — verified unchanged by test.
+- **P6 (multi-source `seeded_map` key collision) was real, is now RESOLVED,
+  and was never reachable from the picker.** `descriptorKey`
+  (`` `${pool}${rank}` ``) does not encode which `sources[]` entry produced
+  it; a `seeded_map` entry whose `source` string matched descriptors from
+  two different sources used to resolve silently to whichever one a plain
+  `Map` construction visited last — the wrong team's placeholder in the
+  wrong bracket seat, every test green. `placeDescriptors`
+  (`packages/engine/src/competition/progression.ts`) now throws
+  `SEEDING_MAP_SOURCE_AMBIGUOUS` (422 — wired in `apps/web/src/server/api-v1/
+  http.ts`'s `ENGINE_HTTP` and `lib/scoring-vocab.ts`'s `ENGINE_ERROR_KEY`;
+  deliberately NOT added to `lib/seeding-error.ts`'s closed 13-code
+  allowlist, per that file's own "no fresh owner ruling" note — an
+  organiser sees the raw engine message, same fallback path
+  `STAGE_NOT_READY` already uses) instead of silently mis-seating. A key
+  shared between sources but never referenced by a `seeded_map` entry is
+  not an error — both copies still flow through untouched, same as
+  `rank_order`/`snake` always did (plain array ops, never a `descriptorKey`-
+  keyed Map). Unreachable today: every writer in this codebase emits a
+  single-source progression (`SourcedSlot`'s own doc comment) — multi-source
+  is new capability this fix unlocked, not a live organiser-facing defect
+  until a multi-source writer ships.
+  - `apps/web/src/server/usecases/stages.ts`'s `slotOf`
+    (`generateProgressionSetupFixtures`) needed NO code change on
+    inspection — it's keyed by the synthetic per-seat id `slot:${i+1}`
+    (array position), never by `descriptorKey`, so it was already immune to
+    this collision. The task brief named `slotOf` as a fix site; traced and
+    verified safe instead of changed, documented in place (`stages.ts`
+    comment above the `slotOf` map).
+  - One residual noted at the time — SINCE RESOLVED on this same branch
+    (F3 round-3 review, Task 2), correcting the stale claim below (found by
+    the round-4 review, 2026-08-18): `computeSeedProposal`'s `seedOfKey`
+    (`stages.ts`) used to key by bare `descriptorKey` for the ties-display
+    lookup, genuinely the same bug class as P6 above. This paragraph
+    originally said fixing it would mean widening
+    `ProgressionTieFlag.descriptors` past `SlotDescriptor[]` — a bigger
+    blast radius than that session's authorized file set, so it was left
+    unfixed and documented in place. It WAS widened since, to `SourcedSlot[]`
+    (`progression.ts` — carries `sourceIndex`, no parallel shape invented).
+    `stages.ts`'s `seedOfKey`/`seedProposalKey` now key ties by
+    `sourceIndex` directly — `stages.ts:2452` reads `sourced.sourceIndex`.
+    Not a live gap; a future reader should not re-derive this as one.
 
 ## Evidence
 

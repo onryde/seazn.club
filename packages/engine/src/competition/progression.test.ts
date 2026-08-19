@@ -192,6 +192,252 @@ describe("placeDescriptors", () => {
       expect(EngineError.is(err, "SEEDING_MAP_SLOT_INVALID")).toBe(true);
     }
   });
+
+  // B (round-4 review, "smaller, still real" — pre-existing, but this block
+  // was rewritten on this branch). Two DIFFERENT map entries naming the SAME
+  // source both resolve candidates[0] to the IDENTICAL SourcedSlot object —
+  // `claimed` (below) dedupes by object identity, so the second entry's seat
+  // silently receives a COPY of the first entry's descriptor instead of
+  // being refused, and the real candidate for that seat's rank never gets
+  // auto-filled anywhere — one qualifier is left unplaced. Before this test,
+  // that surfaced only much later as a confusing QUALIFICATION_INVALID
+  // ("qualifies through more than one source or take rule") at RESOLVE time,
+  // far from the actual malformed-map cause. Refuse here instead, at
+  // validate time, next to the duplicate-SLOT check above.
+  it("seeded_map still 422s when two DIFFERENT entries name the SAME source (not just the same slot)", () => {
+    const pots = expandSources(
+      [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+      () => UNGROUPED,
+    );
+    const map = [
+      { slot: "1", source: "rank:1" },
+      { slot: "2", source: "rank:1" },
+    ];
+    expect(() => placeDescriptors(pots, "seeded_map", map)).toThrow(/already assigned to another seed/);
+    try {
+      placeDescriptors(pots, "seeded_map", map);
+      expect.fail("expected placeDescriptors to throw");
+    } catch (err) {
+      expect(EngineError.is(err, "SEEDING_MAP_SLOT_INVALID")).toBe(true);
+    }
+  });
+
+  // P6 (F3 Task 3): two SOURCES that each expose a pool "A" produce the same
+  // descriptorKey "A1" for their winners. A seeded_map entry naming "A1" used
+  // to resolve silently to whichever source's copy the old single-slot
+  // `byKey` Map construction visited last — the wrong team's placeholder in
+  // the wrong bracket seat, every test green. It must now refuse instead.
+  it("seeded_map source ambiguous across two sources sharing a pool key now 422s SEEDING_MAP_SOURCE_AMBIGUOUS", () => {
+    const sources: ProgressionSource[] = [
+      { stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] },
+      { stage: { stageId: "s2" }, take: [{ kind: "topNPerGroup", n: 1 }] },
+    ];
+    const pots = expandSources(sources, () => ({ poolKeys: ["A"] }));
+    const map = [{ slot: "1", source: "A1" }];
+    expect(() => placeDescriptors(pots, "seeded_map", map)).toThrow(/matches qualifiers from more than one/);
+    try {
+      placeDescriptors(pots, "seeded_map", map);
+      expect.fail("expected placeDescriptors to throw");
+    } catch (err) {
+      expect(EngineError.is(err, "SEEDING_MAP_SOURCE_AMBIGUOUS")).toBe(true);
+      // Names the key and both source indexes (the dispatch's own wording).
+      expect((err as EngineError).message).toContain("A1");
+      expect((err as EngineError).data).toMatchObject({ source: "A1", sourceIndexes: [0, 1] });
+    }
+  });
+
+  // Same two-source, same-pool-key shape, but WITHOUT a seeded_map entry
+  // naming the ambiguous key: rank_order/snake never go through a
+  // descriptorKey-keyed Map (they're plain array concatenation/reversal), so
+  // both "A1"s always survived here — this pins that down explicitly and
+  // demonstrates the keying pattern a caller MUST use if it ever needs to
+  // look one back up by key (apps/web's stages.ts has no such caller today —
+  // see the F3 Task 3 index note).
+  it("two same-keyed descriptors from different sources both survive rank_order/snake, distinguishable by sourceIndex", () => {
+    const sources: ProgressionSource[] = [
+      { stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] },
+      { stage: { stageId: "s2" }, take: [{ kind: "topNPerGroup", n: 1 }] },
+    ];
+    const pots = expandSources(sources, () => ({ poolKeys: ["A"] }));
+    const placed = placeDescriptors(pots, "rank_order");
+    expect(placed).toHaveLength(2);
+    expect(placed.every((s) => descriptorKey(s.descriptor) === "A1")).toBe(true);
+    expect(placed.map((s) => s.sourceIndex)).toEqual([0, 1]);
+
+    // The disambiguating key pattern: bare descriptorKey collapses to ONE
+    // entry (the bug); sourceIndex-qualified holds both.
+    const collapsed = new Map(placed.map((s) => [descriptorKey(s.descriptor), s]));
+    expect(collapsed.size).toBe(1);
+    const disambiguated = new Map(placed.map((s) => [`${s.sourceIndex}:${descriptorKey(s.descriptor)}`, s]));
+    expect(disambiguated.size).toBe(2);
+  });
+
+  it("seeded_map still works when an ambiguous key exists but is NOT the one referenced (only the referenced key must be unambiguous)", () => {
+    // Source 0 has pools A and B; source 1 has only pool A — "A1" is
+    // ambiguous between them, "B1" is not (only source 0 produces it).
+    const sources: ProgressionSource[] = [
+      { stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] },
+      { stage: { stageId: "s2" }, take: [{ kind: "topNPerGroup", n: 1 }] },
+    ];
+    const pots = expandSources(sources, (i) => (i === 0 ? { poolKeys: ["A", "B"] } : { poolKeys: ["A"] }));
+    const placed = placeDescriptors(pots, "seeded_map", [{ slot: "1", source: "B1" }]);
+    expect(placed).toHaveLength(3);
+    expect(placed[0]).toEqual({ sourceIndex: 0, descriptor: { kind: "group_rank", pool: "B", rank: 1 } });
+    // Both ambiguous-but-unreferenced "A1"s survive, one per source, neither
+    // silently dropped by the remaining-seat fill.
+    const rest = placed.slice(1);
+    expect(rest.every((s) => descriptorKey(s.descriptor) === "A1")).toBe(true);
+    expect(rest.map((s) => s.sourceIndex).sort()).toEqual([0, 1]);
+  });
+
+  // F3 review item 2 — the ambiguity gate used to fire on `candidates.length
+  // > 1` alone, so a SINGLE source with two overlapping rankRanges (both
+  // producing a "rank:2" descriptor) also 422d SEEDING_MAP_SOURCE_AMBIGUOUS,
+  // with a message claiming ">1 progression source" even though
+  // sourceIndexes was [0, 0]. A same-source overlap like this is harmless —
+  // both candidates are the literal same descriptor — so it must resolve.
+  it("seeded_map source matching TWO overlapping take rules within the SAME source resolves — not ambiguous, just a same-source duplicate", () => {
+    const sources: ProgressionSource[] = [
+      { stage: "previous", take: [{ kind: "rankRange", from: 1, to: 3 }, { kind: "rankRange", from: 2, to: 4 }] },
+    ];
+    const pots = expandSources(sources, () => ({ poolKeys: [] }));
+    const placed = placeDescriptors(pots, "seeded_map", [{ slot: "1", source: "rank:2" }]);
+    expect(placed[0]).toEqual({ sourceIndex: 0, descriptor: { kind: "rank_range", rank: 2 } });
+  });
+
+  // The residual danger the broadened same-source case must still catch:
+  // best_nth's descriptorKey is `best:${position}` alone (no `nth`), so two
+  // bestNth rules at the same position but a DIFFERENT nth collide on key
+  // while resolving to DIFFERENT entrants — not interchangeable. Silently
+  // picking `candidates[0]` here would mis-seed the wrong nth-tier entrant
+  // with no error at all; refuse instead, same code, an accurate message.
+  it("seeded_map source matching two DIFFERENT-nth bestNth descriptors within the SAME source still refuses — not interchangeable", () => {
+    const sources: ProgressionSource[] = [
+      {
+        stage: "previous",
+        take: [
+          { kind: "bestNth", nth: 1, count: 2 },
+          { kind: "bestNth", nth: 2, count: 2 },
+        ],
+      },
+    ];
+    const pots = expandSources(sources, () => ({ poolKeys: [] }));
+    const map = [{ slot: "1", source: "best:1" }];
+    expect(() => placeDescriptors(pots, "seeded_map", map)).toThrow(/more than one qualifier within the same progression source/);
+    try {
+      placeDescriptors(pots, "seeded_map", map);
+      expect.fail("expected placeDescriptors to throw");
+    } catch (err) {
+      expect(EngineError.is(err, "SEEDING_MAP_SOURCE_AMBIGUOUS")).toBe(true);
+      expect((err as EngineError).data).toMatchObject({ source: "best:1", sourceIndexes: [0, 0] });
+    }
+  });
+
+  // Corollary caught in the same review as F3's ruling 13 (F3 programme
+  // index): snakeMerge reverses a bestNth pot's ARRAY ORDER but never
+  // touches each descriptor's own `position` (its cross-group strength
+  // rank), so a reversed wildcard pot would seed the WEAKEST wildcard into
+  // the STRONGEST bracket slot. No shipped writer combines snake with
+  // bestNth today (groups_ko takes rank_order — see format-templates.ts),
+  // but the hazard is live for anyone who writes one; refuse it outright
+  // rather than silently mis-seed.
+  it("snake placement combined with a bestNth-sourced pot throws CONFIG_INVALID", () => {
+    const pots = expandSources(
+      [
+        {
+          stage: "previous",
+          take: [
+            { kind: "topNPerGroup", n: 1 },
+            { kind: "bestNth", nth: 2, count: 2 },
+          ],
+        },
+      ],
+      () => GROUPED,
+    );
+    expect(() => placeDescriptors(pots, "snake")).toThrow(/bestNth/);
+    try {
+      placeDescriptors(pots, "snake");
+      expect.fail("expected placeDescriptors to throw");
+    } catch (err) {
+      expect(EngineError.is(err, "CONFIG_INVALID")).toBe(true);
+    }
+  });
+
+  it("the same bestNth-sourced pot under rank_order does not throw — the guard is snake-specific", () => {
+    const pots = expandSources(
+      [
+        {
+          stage: "previous",
+          take: [
+            { kind: "topNPerGroup", n: 1 },
+            { kind: "bestNth", nth: 2, count: 2 },
+          ],
+        },
+      ],
+      () => GROUPED,
+    );
+    expect(() => placeDescriptors(pots, "rank_order")).not.toThrow();
+  });
+
+  it("snake without any bestNth pot does not throw — ordinary group-target snake (t20-super8's shape) keeps working", () => {
+    const pots = expandSources([{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }], () => GROUPED);
+    expect(() => placeDescriptors(pots, "snake")).not.toThrow();
+  });
+
+  // F3 round-3 review, Task 1 (BLOCKER) — the bestNth corollary above is not
+  // THE rule, it's one instance of it. Rule of record (ruling 13): snake for
+  // a group/pool TARGET, rank_order for a bracket target — regardless of
+  // what's in the pot. `topNPerGroup`'s wave-major pot (>1 descriptor, every
+  // one `group_rank`) is the shape that actually breaks: snakeMerge reverses
+  // alternate waves, and generateSingleElim's seed fold (seed i vs seed
+  // N+1-i, scheduling/bracket.ts:52-63,156-163) then pairs each pool's OWN
+  // wave-1 qualifier against its OWN wave-2 qualifier in round 1 — every
+  // group replaying its own final (this exact 4-pool/topNPerGroup(2) example
+  // is the worked case in ruling 13). `targetKind` is a new, OPTIONAL 4th
+  // arg — apps/web's two writers (stages.ts, stage-seeding.ts) pass their
+  // stage row's raw `kind` string; an absent/unrecognised value means
+  // "unknown, don't refuse" (see the two skip-cases below), not "always
+  // refuse".
+  it("snake placement over a wave-major (topNPerGroup) pot INTO A BRACKET-KIND TARGET throws CONFIG_INVALID", () => {
+    const pots = expandSources([{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }], () => GROUPED);
+    expect(() => placeDescriptors(pots, "snake", undefined, "knockout")).toThrow(/bracket/);
+    try {
+      placeDescriptors(pots, "snake", undefined, "knockout");
+      expect.fail("expected placeDescriptors to throw");
+    } catch (err) {
+      expect(EngineError.is(err, "CONFIG_INVALID")).toBe(true);
+    }
+  });
+
+  it("the same wave-major pot under snake into every other bracket kind (double_elim, stepladder, page_playoff) also throws", () => {
+    const pots = expandSources([{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }], () => GROUPED);
+    for (const targetKind of ["double_elim", "stepladder", "page_playoff"]) {
+      expect(() => placeDescriptors(pots, "snake", undefined, targetKind)).toThrow(/bracket/);
+    }
+  });
+
+  it("snake into a GROUP-kind target does not throw — t20-super8's actual shape (ruling 13's legitimate case)", () => {
+    const pots = expandSources([{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }], () => GROUPED);
+    expect(() => placeDescriptors(pots, "snake", undefined, "group")).not.toThrow();
+  });
+
+  it("snake with an UNRECOGNISED targetKind does not throw — degrades to 'unknown, don't refuse' rather than always-throwing", () => {
+    const pots = expandSources([{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }], () => GROUPED);
+    expect(() => placeDescriptors(pots, "snake", undefined, "not_a_real_kind")).not.toThrow();
+  });
+
+  it("rank_order over the same wave-major pot into a bracket target does not throw — the new guard is snake-specific too", () => {
+    const pots = expandSources([{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }], () => GROUPED);
+    expect(() => placeDescriptors(pots, "rank_order", undefined, "knockout")).not.toThrow();
+  });
+
+  it("a single-element group_rank pot (picks' shape) into a bracket target does not throw — reversing a 1-element pot is a no-op, never wave-major", () => {
+    const pots = expandSources(
+      [{ stage: "previous", take: [{ kind: "picks", picks: [{ pool: "B", rank: 1 }, { pool: "A", rank: 1 }] }] }],
+      () => GROUPED,
+    );
+    expect(() => placeDescriptors(pots, "snake", undefined, "knockout")).not.toThrow();
+  });
 });
 
 describe("descriptorKey / descriptorLabel", () => {
@@ -287,6 +533,42 @@ describe("resolveProgression", () => {
     }
   });
 
+  // A2 (round-4 review, MAJOR): resolveProgression used to call
+  // placeDescriptors with NO targetKind at all, so ruling 13's bracket-target
+  // snake guard (already proven under the `placeDescriptors` describe block
+  // above) could never fire on the actual seed-RESOLUTION path — only at
+  // save-time validation (validateProgressionAgainstShapes/createStages).
+  // Both apps/web writers (computeSeedProposal, seedNextStage) already have a
+  // real kind in scope and now pass it through. Defence in depth: every
+  // current writer validates at save time too, so this was not a live bug —
+  // but an optional param a caller can forget is the same failure mode
+  // ruling 13 exists to close.
+  it("resolveProgression forwards targetKind to placeDescriptors — a persisted snake+topNPerGroup progression against a knockout target is refused, not silently resolved", () => {
+    const tables: SourceTables = {
+      pools: [
+        { pool: "A", rows: [{ entrantId: "a1", rank: 1 }, { entrantId: "a2", rank: 2 }] as StandingsRow[] },
+        { pool: "B", rows: [{ entrantId: "b1", rank: 1 }, { entrantId: "b2", rank: 2 }] as StandingsRow[] },
+      ],
+    };
+    const spec: ProgressionSpec = {
+      sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }],
+      placement: "snake",
+    };
+    const shape: SourceShape = { poolKeys: ["A", "B"] };
+    expect(() => resolveProgression(spec, [shape], [tables], "knockout")).toThrow(/bracket-kind stage \("knockout"\)/);
+    try {
+      resolveProgression(spec, [shape], [tables], "knockout");
+      expect.fail("expected resolveProgression to throw");
+    } catch (err) {
+      expect(EngineError.is(err, "CONFIG_INVALID")).toBe(true);
+    }
+    // No targetKind (every caller that hasn't been taught to pass one) still
+    // degrades to "unknown, don't refuse" — placeDescriptors' own documented
+    // default — proving the new 4th arg is genuinely optional, not a silent
+    // behaviour change for existing callers.
+    expect(() => resolveProgression(spec, [shape], [tables])).not.toThrow();
+  });
+
   it("bestNth refuses unequal pool sizes by default (carried from stage-seeding.ts, never silently ranks raw stats)", () => {
     const tables: SourceTables = {
       pools: [
@@ -301,6 +583,54 @@ describe("resolveProgression", () => {
     expect(() => resolveProgression(spec, [{ poolKeys: ["A", "B"] }], [tables])).toThrow(
       /cannot compare rank-2 finishers across pools of different sizes/,
     );
+    // A1 (round-4 review): the message used to claim "UEFA normalisation for
+    // unequal pools isn't implemented" — false, normalisedRow implements it a
+    // few lines above (Decision 2b) and the test right above this one proves
+    // it works. Only the message was wrong; guard against it drifting back.
+    try {
+      resolveProgression(spec, [{ poolKeys: ["A", "B"] }], [tables]);
+      expect.fail("expected resolveProgression to throw");
+    } catch (err) {
+      expect((err as Error).message).not.toMatch(/isn't implemented/);
+      expect((err as Error).message).toMatch(/normaliseUnequalPools/);
+    }
+  });
+
+  // F3 ultrareview finding 1 — the per-resolution bestNth cache was keyed
+  // `${sourceIndex}:${nth}` alone, dropping normaliseUnequalPools. Two rules
+  // on one source at the same nth but a different flag then SHARED an
+  // ordering, and because the unequal-pools guard lives inside the
+  // cache-miss branch, the second rule skipped its own refusal entirely and
+  // silently read rows normalised under a setting it never asked for.
+  it("two bestNth rules at the same nth do NOT share a cached ordering across different normaliseUnequalPools", () => {
+    const tables: SourceTables = {
+      pools: [
+        { pool: "A", rows: [{ entrantId: "a1", rank: 1 }, { entrantId: "a2", rank: 2 }] as StandingsRow[] },
+        { pool: "B", rows: [{ entrantId: "b1", rank: 1 }, { entrantId: "b2", rank: 2 }, { entrantId: "b3", rank: 3 }] as StandingsRow[] },
+      ],
+    };
+    const spec: ProgressionSpec = {
+      sources: [
+        {
+          stage: "previous",
+          take: [
+            { kind: "bestNth", nth: 2, count: 1, normaliseUnequalPools: true },
+            { kind: "bestNth", nth: 2, count: 1 }, // no flag: MUST refuse on its own terms
+          ],
+        },
+      ],
+      placement: "rank_order",
+    };
+    try {
+      resolveProgression(spec, [{ poolKeys: ["A", "B"] }], [tables]);
+      expect.fail("expected resolveProgression to throw");
+    } catch (err) {
+      // Its OWN guard, reached because it missed the cache. With the shared
+      // key it read the first rule's normalised ordering and fell through to
+      // the entrant-dedupe refusal instead — a different error, for a
+      // different reason, hiding a real misconfiguration.
+      expect((err as Error).message).toMatch(/normaliseUnequalPools/);
+    }
   });
 
   it("bestNth with normaliseUnequalPools:true silences the refusal — Decision 2b, absorbed not newly wired", () => {
@@ -318,6 +648,81 @@ describe("resolveProgression", () => {
     };
     const { qualifiers } = resolveProgression(spec, [{ poolKeys: ["A", "B"] }], [tables]);
     expect(qualifiers).toHaveLength(2);
+  });
+
+  // A1 (round-4 review, MAJOR): groups_ko (format-templates.ts) emits a
+  // bestNth remainder with no normaliseUnequalPools, and pools are built by
+  // snakeDistribute (stages.ts), which produces unequal-sized pools
+  // whenever entrants don't divide evenly by poolCount — the common case,
+  // not an edge case. Day-one fixture generation runs on SHAPES and never
+  // hits bestNth's cross-pool compare, so the format looks healthy right up
+  // until real seeding, where it throws SEEDING_BESTNTH_UNEQUAL_POOLS. These
+  // two tests separate the two hazards the round-4 review raised.
+  it("groups_ko's real bestNth remainder resolves against unequal pools once normaliseUnequalPools is set", () => {
+    // Mirrors qualified:7, poolCount:4 against pool sizes [3,3,2,2] — exactly
+    // what snakeDistribute produces for e.g. 10 entrants in 4 pools. Every
+    // pool DOES have a rank-2 row (min size is 2), so this isolates the
+    // cross-pool SIZE-comparison refusal from the separate "rank exceeds a
+    // short pool's row count" hazard covered by the next test.
+    const pool = (key: string, size: number) => ({
+      pool: key,
+      rows: Array.from({ length: size }, (_, i) => ({ entrantId: `${key}${i + 1}`, rank: i + 1 }) as StandingsRow),
+    });
+    const tables: SourceTables = { pools: [pool("A", 3), pool("B", 3), pool("C", 2), pool("D", 2)] };
+    const spec: ProgressionSpec = {
+      sources: [
+        {
+          stage: "previous",
+          take: [
+            { kind: "topNPerGroup", n: 1 },
+            { kind: "bestNth", nth: 2, count: 3, normaliseUnequalPools: true },
+          ],
+        },
+      ],
+      placement: "rank_order",
+    };
+    const shape: SourceShape = { poolKeys: ["A", "B", "C", "D"] };
+    expect(() => resolveProgression(spec, [shape], [tables])).not.toThrow();
+    const { qualifiers } = resolveProgression(spec, [shape], [tables]);
+    expect(qualifiers).toHaveLength(7);
+    // Wave 1 (topNPerGroup) took every pool's own winner — always present
+    // regardless of which 3 of the 4 rank-2 finishers the cross-pool
+    // bestNth remainder's tie order happens to pick (crossGroupOrder has no
+    // seeds context — don't assert which one wins a tie, see this repo's
+    // implementer memory on bestNth's tiebreak).
+    expect(qualifiers.map((q) => q.entrantId)).toEqual(expect.arrayContaining(["A1", "B1", "C1", "D1"]));
+  });
+
+  it("the sibling hazard: nth exceeding a SHORT pool's row count still throws even with normaliseUnequalPools:true — normalisation compares already-existing rows, it does not invent a missing one", () => {
+    // The round-4 review explicitly asked whether normaliseUnequalPools
+    // covers this. It does not: rowAtRank (progression.ts) looks up rank
+    // `nth` on EVERY pool, including the short one, BEFORE normalisedRow
+    // ever runs — so a pool with fewer than `nth` rows throws
+    // STAGE_NOT_READY unconditionally, regardless of the flag. Concretely:
+    // qualified:9, poolCount:4 against pool sizes [3,3,2,2] ->
+    // topNPerGroup(2) + bestNth(nth:3,...) — the two 2-row pools have no
+    // rank-3 finisher at all. Deliberately NOT fixed this session (a real
+    // fix means teaching bestNth to treat a pool with no row at `nth` as
+    // simply not contributing a candidate, rather than refusing outright —
+    // an engine semantics change wider than this session's brief).
+    // Documented here so a future reader doesn't re-derive it as a fresh
+    // bug, per this repo's own "say so rather than paper over it" norm.
+    const pool = (key: string, size: number) => ({
+      pool: key,
+      rows: Array.from({ length: size }, (_, i) => ({ entrantId: `${key}${i + 1}`, rank: i + 1 }) as StandingsRow),
+    });
+    const tables: SourceTables = { pools: [pool("A", 3), pool("B", 3), pool("C", 2), pool("D", 2)] };
+    const spec: ProgressionSpec = {
+      sources: [{ stage: "previous", take: [{ kind: "bestNth", nth: 3, count: 1, normaliseUnequalPools: true }] }],
+      placement: "rank_order",
+    };
+    const shape: SourceShape = { poolKeys: ["A", "B", "C", "D"] };
+    expect(() => resolveProgression(spec, [shape], [tables])).toThrow(/takes rank 3, but only 2 entrant/);
+    try {
+      resolveProgression(spec, [shape], [tables]);
+    } catch (err) {
+      expect(EngineError.is(err, "STAGE_NOT_READY")).toBe(true);
+    }
   });
 
   it("roundLosers reads the source's bracket, equality-filters by round, never sorts by it (sparse round numbering)", () => {
@@ -371,11 +776,55 @@ describe("resolveProgression", () => {
     ]);
     expect(qualifiers.map((q) => q.entrantId)).toEqual(["a", "b"]);
     expect(ties).toHaveLength(1);
+    // F3 review item 1: descriptors widened from SlotDescriptor[] to
+    // SourcedSlot[] (carries sourceIndex) — this spec has one source, so
+    // sourceIndex is 0 throughout.
     expect(ties[0]).toEqual({
-      descriptors: [{ kind: "rank_range", rank: 2 }],
+      descriptors: [{ sourceIndex: 0, descriptor: { kind: "rank_range", rank: 2 } }],
       entrantIds: ["b", "c"],
       reason: "seed",
     });
+  });
+
+  // F3 review item 1 — the collision this widening exists to fix: two
+  // DIFFERENT sources each carry their OWN 2-way tie at rank 1, so
+  // descriptorKey ("rank:1") is IDENTICAL for both, but the two tie groups
+  // have different entrant sets and must stay distinguishable. Before this
+  // session, apps/web's computeSeedProposal had nothing to key on but the
+  // bare descriptorKey (stages.ts's seedOfKey Map), so the second source's
+  // seed silently overwrote the first's in that Map — a tie flagged on
+  // source 0 resolved against source 1's (already-unambiguous) slot instead.
+  it("keeps two same-keyed ties from different sources distinguishable by sourceIndex (colliding descriptorKey)", () => {
+    const sourceATied = [
+      { entrantId: "a1", rank: 1, tieUnbroken: true, tieBreak: { key: "seed", with: ["a2"] } },
+      { entrantId: "a2", rank: 2, tieUnbroken: true, tieBreak: { key: "seed", with: ["a1"] } },
+    ] as StandingsRow[];
+    const sourceBTied = [
+      { entrantId: "b1", rank: 1, tieUnbroken: true, tieBreak: { key: "seed", with: ["b2"] } },
+      { entrantId: "b2", rank: 2, tieUnbroken: true, tieBreak: { key: "seed", with: ["b1"] } },
+    ] as StandingsRow[];
+    const spec: ProgressionSpec = {
+      sources: [
+        { stage: "previous", take: [{ kind: "rankRange", from: 1, to: 1 }] },
+        { stage: { stageId: "s2" }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+      ],
+      placement: "rank_order",
+    };
+    const { ties } = resolveProgression(
+      spec,
+      [{ poolKeys: [] }, { poolKeys: [] }],
+      [{ pools: [{ pool: "", rows: sourceATied }] }, { pools: [{ pool: "", rows: sourceBTied }] }],
+    );
+    expect(ties).toHaveLength(2);
+    const bySourceIndex = new Map(ties.map((t) => [t.descriptors[0]!.sourceIndex, t]));
+    expect(bySourceIndex.get(0)?.entrantIds).toEqual(["a1", "a2"]);
+    expect(bySourceIndex.get(1)?.entrantIds).toEqual(["b1", "b2"]);
+    // Both descriptors are the SAME rank_range/rank:1 shape — the collision
+    // itself — but tagged with a different sourceIndex, which is what lets a
+    // consumer key by `${sourceIndex}:${descriptorKey}` instead of the bare
+    // key that used to collide (stages.ts's computeSeedProposal).
+    expect(bySourceIndex.get(0)?.descriptors[0]?.descriptor).toEqual({ kind: "rank_range", rank: 1 });
+    expect(bySourceIndex.get(1)?.descriptors[0]?.descriptor).toEqual({ kind: "rank_range", rank: 1 });
   });
 
   // F2 Task 6 review (defect 3): euro24's real shape — topNPerGroup +

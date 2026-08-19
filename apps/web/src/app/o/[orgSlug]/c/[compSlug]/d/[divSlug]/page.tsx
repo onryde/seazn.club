@@ -11,7 +11,12 @@ import { requireDivisionPage } from "@/server/page-auth";
 import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
 import { getCompetition } from "@/server/usecases/competitions";
-import { listStages, getStandings, getSeedProposal } from "@/server/usecases/stages";
+import { listStages, getStandings, getSeedProposal, getStageRosterDrift } from "@/server/usecases/stages";
+// From the DB-free module, not through the server-only usecase above: this
+// page's tests mock `@/server/usecases/stages` wholesale, and a mocked
+// predicate is a second copy of the rule (F3 ultrareview finding 9 was a
+// second copy of this exact rule).
+import { isRosterDriftEligible } from "@/lib/roster-drift-eligibility";
 import { listDivisionFixtures, listFixtureHeadlines } from "@/server/usecases/fixtures";
 import { BracketPanel } from "@/components/v2/bracket-panel";
 import { listEntrants } from "@/server/usecases/entrants";
@@ -163,10 +168,49 @@ export default async function DivisionPage({
   const seedingStages = stages.filter(
     (s) => (s.progression as { timing?: string } | null)?.timing === "setup",
   );
+  // F3 Task 5c (ruling 14 — seeding stays propose-and-confirm, no
+  // auto-confirm). Fetched on EVERY tab, not just fixtures: ruling 14's whole
+  // consequence is that a stage now fills only when the organiser confirms, so
+  // a proposal that nobody is told about leaves a published bracket full of
+  // placeholders after the results are already in. The organiser is usually on
+  // entrants or standings when the group stage finishes, which is exactly when
+  // the proposal appears. Cost is one indexed read per setup-timing stage, and
+  // there is at most a handful per division.
   const seedProposals =
-    tab === "fixtures" && editable && seedingStages.length > 0
+    editable && seedingStages.length > 0
       ? await Promise.all(seedingStages.map((s) => getSeedProposal(auth, s.id)))
       : [];
+  // "draft" = computed, waiting for the organiser to confirm it. "stale" = a
+  // source's standings moved underneath it and it needs recomputing. Both are
+  // waiting on a human; "confirmed" is done and never nags.
+  const pendingSeedProposals = seedProposals.filter(
+    (p) => p?.status === "draft" || p?.status === "stale",
+  ).length;
+  // F3 Task 5 (5a) — the roster-drift banner StagesPanel renders per stage.
+  // Only the ROOT stage (no progression source) draws fixtures directly from
+  // the live active roster (getStageRosterDrift's own doc comment,
+  // usecases/stages.ts) — every other stage either reads a frozen qualified
+  // list or is structurally insulated from entrant churn, so there is at
+  // most one stage worth asking. Same conditional-fetch shape as
+  // seedProposals just above: organiser-only, fixtures-tab-only.
+  //
+  // F3 ultrareview finding 9 — was `stages.find((s) => s.progression === null)`,
+  // which is a LOOSER rule than the one the usecase itself applies: a ladder
+  // or americano stage has no progression but is ineligible (it mints its own
+  // entrants / has no bulk-generated board), so in a division whose first
+  // roster-drawn stage is a ladder, `find` landed on the ladder, the usecase
+  // returned an empty drift for it, and the real league stage behind it was
+  // never asked. `filter` over the SHARED predicate covers every eligible
+  // stage — normally exactly one, so normally the same single query.
+  const rosterDriftStages = stages.filter(isRosterDriftEligible);
+  const rosterDrift =
+    tab === "fixtures" && editable && rosterDriftStages.length > 0
+      ? Object.fromEntries(
+          await Promise.all(
+            rosterDriftStages.map(async (s) => [s.id, await getStageRosterDrift(auth, s.id)] as const),
+          ),
+        )
+      : {};
   const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
   // Badge chips on standings rows (v3/03 §5) — resolved once per render.
   // PROMPT-62: the bracket panel on the fixtures tab shows them too.
@@ -313,6 +357,24 @@ export default async function DivisionPage({
                 }`}
               >
                 {tabKey === "discipline" ? t(dict, "disc.tab") : t(dict, `div.detail.tab.${tabKey}`)}
+                {/* F3 Task 5c (ruling 14): a seed proposal is waiting on the
+                    organiser. The dot rides INSIDE the tab label so it adds no
+                    layout width of its own — this strip is `.scroll-x` and its
+                    active tab can already scroll out of view, so anything that
+                    widens a tab makes that worse at 320px. Screen readers get
+                    the count as words; sighted users get the dot plus the
+                    title. */}
+                {tabKey === "fixtures" && pendingSeedProposals > 0 && (
+                  <span
+                    className="ml-1.5 inline-block h-2 w-2 rounded-full bg-amber-500 align-middle"
+                    data-pending-seed-proposals={pendingSeedProposals}
+                    title={t(dict, "progression.pendingProposal.hint")}
+                  >
+                    <span className="sr-only">
+                      {t(dict, "progression.pendingProposal.badge")}
+                    </span>
+                  </span>
+                )}
               </Link>
             ),
           )}
@@ -398,6 +460,7 @@ export default async function DivisionPage({
               fixtures={fixtures}
               entrantNames={entrantNames}
               venues={panelVenues}
+              rosterDrift={rosterDrift}
               canEdit={editable}
               tz={scheduleSettings.tz}
               // The GOVERNING clock, resolved here exactly as the schedule page

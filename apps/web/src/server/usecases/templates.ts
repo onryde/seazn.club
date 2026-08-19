@@ -303,9 +303,17 @@ export async function instantiateTemplate(
             // THIS loop.
             const [sourceRow] = await tx<{ kind: string; config: Record<string, unknown> }[]>`
               select kind, config from stages where id = ${stageResults[si - 1]!.id}`;
-            await validateStageProgression(tx, { division_id: divisionId, seq: si + 1 }, templateStage.progression, [
-              { kind: sourceRow!.kind, config: sourceRow!.config },
-            ]);
+            // F3 round-3 review, Task 1 — `kind: templateStage.kind` lets
+            // validateStageProgression forward THIS stage's own kind as the
+            // snake/bracket-target check's targetKind (ruling 13); already
+            // in hand from the TemplateStage this loop is iterating, no new
+            // read.
+            await validateStageProgression(
+              tx,
+              { division_id: divisionId, seq: si + 1, kind: templateStage.kind },
+              templateStage.progression,
+              [{ kind: sourceRow!.kind, config: sourceRow!.config }],
+            );
           }
           const stageName = t(dict, templateStage.i18nNameKey);
           const [stage] = await tx<{ id: string }[]>`

@@ -21,7 +21,7 @@ describe("previewDivisionFixtures — bye label (F1 Task 5)", () => {
           progression: {
             sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 6 }] }],
             placement: "rank_order",
-            timing: "on_complete",
+            timing: "setup",
           },
         },
       ],
@@ -43,7 +43,7 @@ describe("previewDivisionFixtures — bye label (F1 Task 5)", () => {
           progression: {
             sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 6 }] }],
             placement: "rank_order",
-            timing: "on_complete",
+            timing: "setup",
           },
         },
       ],
@@ -69,15 +69,32 @@ describe("format catalogue — shape regression (F1 Task 5)", () => {
     // below): format-templates.ts's StageDraft carries `progression` now,
     // never `qualification` — reading the old field here would silently
     // read undefined for every stage and always emit "-", masking real
-    // shape drift. This ONE line is fixed so the marker stays meaningful;
-    // the test as a whole stays red (snapshot mismatch) until Task 6
-    // converts previewDivisionFixtures/qualifierCount to read
-    // `.progression` — every later-stage entrant count currently falls
-    // back to qualifierCount's `|| 4` default regardless of the real
-    // take-rule count, which is a real (if silent) behaviour gap this file
-    // cannot close on its own. Do not regenerate this snapshot until then.
+    // shape drift. This ONE line is fixed so the marker stays meaningful.
+    // previewDivisionFixtures/qualifierCount already read `.progression`
+    // (not a Task still owed here). F3 round-3 review correction
+    // (2026-08-18): this comment used to say qualifierCount falls back to
+    // its `|| 4` default for a topNPerGroup-only take (progressionSize's own
+    // deliberate 0 for that kind) — that was true before commit 6351fd2ce's
+    // same-session follow-up fix (stages.ts's qualifierCount now expands a
+    // topNPerGroup take against the PREVIOUS stage's real shape via
+    // expandTake + previewSourceShape) and is no longer what the code does.
+    // Re-verified against the CURRENT code (F3 Tasks 1-2: setup timing +
+    // groups_ko's topNPerGroup/bestNth draw) that neither change moves this
+    // snapshot's numbers, for two SEPARATE reasons: previewDivisionFixtures
+    // never reads `.timing` at all (the setup-timing flip is structurally
+    // invisible to it — this snapshot can prove the stage graph and round
+    // titles are unchanged, never that day-one fixtures exist); and
+    // groups_ko's knockout entrantCount below (qualified:4, poolCount:2)
+    // computes to 4 via the real expandTake path (2 pools x
+    // topNPerGroup(n:2) = 4 qualifiers, genuinely counted, not a fallback)
+    // — coincidentally the SAME number the old picks-based shape produced
+    // (picks.length was 4) and the same number the `|| 4` guard would have
+    // produced anyway. Re-verify by rerunning this test before trusting that
+    // coincidence for any OTHER knob combination — a different
+    // qualified/poolCount pair would move this snapshot today, now that
+    // qualifierCount counts topNPerGroup for real instead of falling back.
     const summary = STAGE_TEMPLATES.map((t) => {
-      const stages = t.build(4);
+      const stages = t.build({ qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });
       const phases = previewDivisionFixtures(stages, 8);
       return {
         key: t.key,
