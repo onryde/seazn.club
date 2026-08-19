@@ -952,6 +952,12 @@ export const GenerateResult = z.object({
   fixtures: z.array(Fixture),
 });
 
+/** F3 Task 5 (5b) — POST /stages/{id}/rebuild's response: GenerateResult plus
+ *  how many stale fixtures were deleted before regenerating. */
+export const RebuildResult = GenerateResult.extend({
+  removed: z.number().int(),
+});
+
 export const CompleteResult = z.object({
   completed: z.boolean(),
   events: z.array(z.record(z.string(), z.unknown())),

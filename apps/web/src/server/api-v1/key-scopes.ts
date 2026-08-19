@@ -219,6 +219,7 @@ const RULES: RouteRule[] = [
   { method: "POST", path: "/stages/:id/fixtures", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/generate", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/officials/source", scope: "manage", pin: "stage" },
+  { method: "POST", path: "/stages/:id/rebuild", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/schedule/apply", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/schedule/auto", scope: "manage", pin: "stage" },
   { method: "GET", path: "/stages/:id/schedule/health", scope: "read", pin: "stage" },

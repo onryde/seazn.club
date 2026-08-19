@@ -11,7 +11,7 @@ import { requireDivisionPage } from "@/server/page-auth";
 import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
 import { getCompetition } from "@/server/usecases/competitions";
-import { listStages, getStandings, getSeedProposal } from "@/server/usecases/stages";
+import { listStages, getStandings, getSeedProposal, getStageRosterDrift } from "@/server/usecases/stages";
 import { listDivisionFixtures, listFixtureHeadlines } from "@/server/usecases/fixtures";
 import { BracketPanel } from "@/components/v2/bracket-panel";
 import { listEntrants } from "@/server/usecases/entrants";
@@ -167,6 +167,18 @@ export default async function DivisionPage({
     tab === "fixtures" && editable && seedingStages.length > 0
       ? await Promise.all(seedingStages.map((s) => getSeedProposal(auth, s.id)))
       : [];
+  // F3 Task 5 (5a) — the roster-drift banner StagesPanel renders per stage.
+  // Only the ROOT stage (no progression source) draws fixtures directly from
+  // the live active roster (getStageRosterDrift's own doc comment,
+  // usecases/stages.ts) — every other stage either reads a frozen qualified
+  // list or is structurally insulated from entrant churn, so there is at
+  // most one stage worth asking. Same conditional-fetch shape as
+  // seedProposals just above: organiser-only, fixtures-tab-only.
+  const rosterDriftStage = stages.find((s) => s.progression === null);
+  const rosterDrift =
+    tab === "fixtures" && editable && rosterDriftStage
+      ? { [rosterDriftStage.id]: await getStageRosterDrift(auth, rosterDriftStage.id) }
+      : {};
   const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
   // Badge chips on standings rows (v3/03 §5) — resolved once per render.
   // PROMPT-62: the bracket panel on the fixtures tab shows them too.
@@ -398,6 +410,7 @@ export default async function DivisionPage({
               fixtures={fixtures}
               entrantNames={entrantNames}
               venues={panelVenues}
+              rosterDrift={rosterDrift}
               canEdit={editable}
               tz={scheduleSettings.tz}
               // The GOVERNING clock, resolved here exactly as the schedule page

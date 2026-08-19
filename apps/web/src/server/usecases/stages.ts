@@ -1479,6 +1479,175 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
   return outcome;
 }
 
+// ---------------------------------------------------------------------------
+// Roster drift (F3 Task 5, 2026-08-18 plan — supersedes ruling 7's framing;
+// see the plan's "Corrected premise"). Only a stage with NO progression
+// source draws fixtures directly from the live active roster — the exact
+// same condition `generateStageFixtures`'s own `pre` gate above tests
+// (`if (!stage.progression) return null`, which falls through to the plain
+// `select ... from entrants where status in (...)` path). A later stage
+// either reads a FROZEN qualified list at completion (`timing:"on_complete"`
+// — intentionally excludes non-qualifiers, that's not drift) or generates
+// pure-topology placeholders with no entrant reference at all
+// (`timing:"setup"` — structurally insulated, stage-seeding.ts's
+// sourceShapeOf reads pool shape, never entrant rows). `ladder` and
+// `americano` are excluded for a different reason: a ladder's fixtures come
+// from individual challenges (issueChallenge), never a bulk generate
+// (generateStageFixtures returns `[]` for it above), and americano mints its
+// own `pair` entrants on the fly per fixture (americanoGen above) rather
+// than referencing the division's registered entrants directly — this
+// signal would misreport ~100% of entrants "unplaced" for both.
+// ---------------------------------------------------------------------------
+const ROSTER_DRIFT_INELIGIBLE_KINDS = new Set(["ladder", "americano"]);
+
+export interface StageRosterDriftEntrant {
+  id: string;
+  display_name: string;
+}
+
+export interface StageRosterDrift {
+  /** Referenced by a fixture in this stage (home or away) but no longer in
+   *  the active roster (withdrawn/disqualified) — a wrong name still on a
+   *  board an organiser may have already shared publicly. */
+  ghosts: StageRosterDriftEntrant[];
+  /** Active in the division (registered/confirmed) but referenced by no
+   *  fixture in this stage — registered after the last Generate, or Generate
+   *  has never run since. */
+  unplaced: StageRosterDriftEntrant[];
+}
+
+/** Derived, never stored (ruling 7) — a plain join over `entrants` and
+ *  `fixtures`, computed fresh on every call. No migration: `entrants` keeps
+ *  `created_at` only (no `updated_at`) because "since when" is not needed to
+ *  answer "does the board match the roster" (plan, 5a). */
+export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promise<StageRosterDrift> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [stage] = await tx<
+      { division_id: string; kind: string; progression: Record<string, unknown> | null }[]
+    >`select division_id, kind, progression from stages where id = ${stageId}`;
+    if (!stage) throw new HttpError(404, "stage not found");
+    if (stage.progression !== null || ROSTER_DRIFT_INELIGIBLE_KINDS.has(stage.kind)) {
+      return { ghosts: [], unplaced: [] };
+    }
+
+    const [active, referenced] = await Promise.all([
+      tx<StageRosterDriftEntrant[]>`
+        select id, display_name from entrants
+        where division_id = ${stage.division_id} and status in ('registered', 'confirmed')
+        order by display_name`,
+      tx<StageRosterDriftEntrant[]>`
+        select distinct e.id, e.display_name
+        from entrants e
+        where e.id in (
+          select home_entrant_id from fixtures where stage_id = ${stageId} and home_entrant_id is not null
+          union
+          select away_entrant_id from fixtures where stage_id = ${stageId} and away_entrant_id is not null
+        )
+        order by e.display_name`,
+    ]);
+    const activeIds = new Set(active.map((e) => e.id));
+    const referencedIds = new Set(referenced.map((e) => e.id));
+    return {
+      ghosts: referenced.filter((e) => !activeIds.has(e.id)),
+      unplaced: active.filter((e) => !referencedIds.has(e.id)),
+    };
+  });
+}
+
+export interface RebuildOutcome extends GenerateOutcome {
+  /** Fixtures deleted before regenerating (0 only when the stage had none). */
+  removed: number;
+}
+
+/**
+ * Replace a root stage's fixtures wholesale — the fix for the defect the
+ * roster-drift signal surfaces: `generateStageFixtures` is additive only
+ * (idempotent via `fixtures.ext_key`, doc comment above), so a withdrawn
+ * entrant's name never comes off the board on its own (F3 Task 5 plan,
+ * "The defect this uncovers"). Two transactions, same pattern as
+ * `replaceStages` above (delete, then re-`createStages`): the delete commits
+ * under its own advisory lock, then `generateStageFixtures` — completely
+ * unmodified, so every invariant it already holds (ext_key stability, feed
+ * rewiring, slot labels, the division-events ledger, analytics) applies to
+ * the rebuild for free — runs as an ordinary regenerate against the
+ * now-empty stage.
+ *
+ * Refuses outright — never a partial rebuild (owner ruling, plan 5b) — the
+ * moment ANY fixture in the stage carries a real result: a partial rebuild
+ * would silently change who plays whom in a stage that's already half
+ * played, which is unrecoverable once the organiser has acted on it.
+ */
+export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Promise<RebuildOutcome> {
+  const removed = await withTenant(auth.orgId, async (tx) => {
+    const [stage] = await tx<
+      { id: string; division_id: string; kind: string; progression: Record<string, unknown> | null }[]
+    >`select id, division_id, kind, progression from stages where id = ${stageId}`;
+    if (!stage) throw new HttpError(404, "stage not found");
+    if (stage.progression !== null || ROSTER_DRIFT_INELIGIBLE_KINDS.has(stage.kind)) {
+      throw new HttpError(
+        422,
+        "rebuild only applies to a stage that draws its fixtures directly from the active roster — a stage with a progression rule, a ladder stage, or an americano stage is not eligible",
+        "STAGE_NOT_ROOT",
+      );
+    }
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+
+    // Never destroy a real result (hard constraint 1). Mirrors deleteStage's
+    // guard above (same three statuses), with one refinement: 'forfeited'
+    // alone doesn't distinguish a generation-time BYE (structural — one side
+    // never had an opponent, isBye in stages-panel.tsx) from a mid-tournament
+    // WITHDRAWAL WALKOVER (withdrawal.ts's core.forfeit — append-event.ts:116
+    // maps it to this SAME 'forfeited' status). A walkover has two real
+    // entrants and a real winner; destroying it would erase the reason the
+    // opponent advanced. Only a two-sided 'forfeited' fixture blocks — a bye
+    // (one side null by construction) does not.
+    // Status alone is NOT a sufficient test, because `delete from fixtures`
+    // CASCADEs into score_events, match_states, match_reports, lineups,
+    // official_marks, fixture_officials and device_links, and SET NULLs
+    // suspensions.fixture_id. Two holes a status-only guard leaves:
+    //   - 'abandoned' is a match that was PLAYED and stopped. match-reports.ts
+    //     (:40 REPORTABLE) accepts a report on exactly this status, so a
+    //     status-only guard deletes the report along with the fixture.
+    //   - any fixture carrying evidence rows under a status this list does not
+    //     name — the scoring pad writes score_events/match_states, and nothing
+    //     here should depend on WHEN a status flips relative to the first
+    //     event landing.
+    // So block on the evidence itself as well as on status: if a fixture has
+    // anything recorded against it, it is not ours to delete.
+    const [blocked] = await tx<{ id: string }[]>`
+      select f.id from fixtures f
+      where f.stage_id = ${stageId}
+        and (
+          f.status in ('in_play', 'decided', 'finalized', 'abandoned')
+          or (f.status = 'forfeited' and f.home_entrant_id is not null and f.away_entrant_id is not null)
+          or exists (select 1 from score_events se where se.fixture_id = f.id)
+          or exists (select 1 from match_states ms where ms.fixture_id = f.id)
+          or exists (select 1 from match_reports mr where mr.fixture_id = f.id)
+          or exists (select 1 from official_marks om where om.fixture_id = f.id)
+          or exists (select 1 from suspensions s where s.fixture_id = f.id)
+        )
+      limit 1`;
+    if (blocked) {
+      throw new HttpError(
+        409,
+        "this stage has fixtures with a recorded result — rebuild refuses to touch a stage that has already been played, even partly; complete it as it stands, or use Generate to add missing entrants without disturbing what's already been decided",
+        "STAGE_HAS_RESULTS",
+      );
+    }
+
+    const deleted = await tx<{ id: string }[]>`
+      delete from fixtures where stage_id = ${stageId} returning id`;
+    return deleted.length;
+  });
+
+  const outcome = await generateStageFixtures(auth, stageId);
+  log.info(
+    { event: "stage_fixtures_rebuilt", stageId, removed, created: outcome.created },
+    "stage_fixtures_rebuilt",
+  );
+  return { ...outcome, removed };
+}
+
 interface CrossFeed {
   from_ext_key: string;
   side: "winner" | "loser";
