@@ -1160,6 +1160,13 @@ describe("buildSchedule — lexicographic tiers", () => {
 });
 
 describe("buildSchedule — the lattice is the configured courts", () => {
+  // Same reasoning as `describe("buildSchedule", ...)`'s own afterEach: with
+  // `isolate: false` a `vi.spyOn` left standing here is still active in
+  // "the solver queue cap" describe right below, whose own tests assert
+  // exact `solveBuild` call counts.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   /** An immovable row parked on a court the organiser never configured. It is
    *  what drags "C2" into `repairCourts`, and therefore into the lattice. */
@@ -1201,6 +1208,37 @@ describe("buildSchedule — the lattice is the configured courts", () => {
     // may not join it there even though C2 has free time.
     expect(built.assignments.filter((x) => x.court === "C2").map((x) => x.fixtureId)).toEqual(["a"]);
   }, 180_000);
+
+  it("declares an obstacle's off-config court on the wire, not just config.courts", async () => {
+    // P9 sibling-court gap: `onC2` is a fixed obstacle parked on a court the
+    // organiser never configured for THIS division (a sibling division's
+    // booking, or another stage's, sharing a physical court). The wire
+    // `courts` list used to be sourced from `config.courts` alone, so
+    // `courtIndexOf` threw "court \"C2\" ... does not appear in courts" the
+    // moment it tried to resolve the obstacle's own court -- caught by
+    // `buildSchedule`'s catch-all and silently downgraded to greedy. This
+    // does NOT reopen C2 for a NEW placement (see the sibling test above,
+    // "places nothing on a court the organiser did not configure") --
+    // eligibility for movable fixtures is governed separately by
+    // `grid.slots`, unaffected by this list.
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return {
+        assignments: [],
+        status: "OPTIMAL",
+        tiersCompleted: TIER_COUNT,
+        objectiveValues: provedTiers(),
+        elapsedMs: 1200,
+        wallExhausted: false,
+      };
+    });
+    const config = cfg({ courts: ["C1"], sessionWindows: [{ from: T0, to: T0 + 30 * MIN }] });
+    const fixtures = [fx("a", "E1", "E2")];
+    await buildSchedule({ fixtures, config, existing: onC2 });
+    expect(captured).toBeDefined();
+    expect(captured!.courts).toEqual(expect.arrayContaining(["C1", "C2"]));
+  });
 });
 
 describe("buildSchedule — the solver queue cap", () => {
