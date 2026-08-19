@@ -31,6 +31,7 @@ and those two `stages.ts` functions; F1 is fenced off `qualification.ts`,
 | F3 | plan: `../../plans/2026-08-18-f3-day-one-fixtures.md` | F2 **merged** ✅ | **IN FLIGHT** 2026-08-18 as DRAFT PR **#617**, worktree `f3-day-one`, branch `feat/f3-day-one-fixtures`. Plan written against real code; four findings below changed its scope |
 | F4 | **MERGED** as #619 (2026-08-18, `27af0f30d`), 16 commits. Export path + `.ics` feed + bracket poster | — | premise RETIRED (no sport/format-kind gap in either direction; its mexicano comment folds into F3). Slot **repurposed** to the export + calendar day-one leaks (§7 P5, P2). Does NOT wait for F3 — three catalogue templates already emit `timing: "setup"`. Owner CONFIRMED the repurpose 2026-08-18 |
 | F5 | **prompt ready** — same doc §8 | all | scope fixed by the §5 table |
+| F6 | **NEW, unwritten** — scoped by ruling 12's 2026-08-19 amendment | F3 | Make the SOLD entitlement `standings.carry_over` actually reachable. Wire `carryDeltas` + `config.carry_deltas` + the `standings_carried` event at `confirmSeedProposal` (mirroring `seedNextStage:2206-2247`, which already does it on the `on_complete` path); surface `REAL_TABLE_KINDS`' non-real-source rejection at propose time; relax the `schemas.ts` refine; add a carry control to the picker, which has none. Engine needs NO change — `config.carry_deltas → openingDeltas` already folds. Update `custom-points.test.ts`, `progression-multi-source.test.ts`, `progression-schema.test.ts`, which currently assert the rejection |
 
 **Why F3–F5 are not written.** They consume F2's field shape, and this repo has
 a repeated failure where a session authored against a design meets an
@@ -214,7 +215,32 @@ prompts for F3, F5 and two standalone product fixes.
     `carry` today. Nothing regresses for any current organiser (no template,
     gallery entry or catalogue file emits `carry`), so F3 does NOT change it.
     Making both work means carrying points at `confirmSeedProposal` time on the
-    setup path. Owner decision pending.
+    setup path.
+    **AMENDED 2026-08-19, after scouting the code: the premise above is wrong
+    in the organiser's favour and wrong in ours.** Two corrections:
+    (a) `standings.carry_over` was NEVER deliverable, before F3 or after. No
+    picker template, gallery entry, catalogue JSON, `AddStageForm` (which
+    hardcodes `timing: "on_complete"` and has no carry control) or seed script
+    emits `carry`; the only working path in the repo's history is a hand-built
+    API payload inside `custom-points.test.ts`. F3 did not make a working
+    feature unreachable — it exposed one that never shipped. The entitlement is
+    gated Pro/Pro Plus/Business (`V246:10-12`, `V290:31`) and advertised on the
+    PUBLIC pricing page in all four locales (`marketing.json:149`).
+    (b) The refine's stated reason is not backed by the code. It claims a
+    `setup` stage "seeds placeholders independently of source completion and
+    never reads carry" — that describes fixture GENERATION, which happens at
+    division setup. Carry would be computed at SEEDING time, and
+    `confirmSeedProposal` already runs only after every named source is
+    complete, with freshness-verified tables in hand (the same data
+    `carryDeltas` needs). It simply never calls it. The incompatibility is
+    unwired plumbing, not physics.
+    Owner decision APPLIED 2026-08-19: **build it rather than un-sell it.** F3
+    corrects the false message only (it is in scope, zero product risk); the
+    wiring is scoped as its own session — see the F6 row in the table above.
+    Do NOT quietly drop `standings.carry_over` from pricing as the cheap fix:
+    selling a feature nobody can reach is the worse of the two states, and the
+    engine already does the hard half (`config.carry_deltas → openingDeltas`
+    folds regardless of which usecase wrote it, so the engine needs NO change).
 
 13. **`snake` is chosen by the TARGET stage's kind, not the source's**
     (2026-08-18, found by review before it shipped). Design §2.3 says "a
