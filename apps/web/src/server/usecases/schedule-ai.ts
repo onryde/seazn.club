@@ -1972,11 +1972,20 @@ export function structuralCheck(plan: AiSchedulePlan, movableIds: Set<string>, p
     seen.add(a.fixture_id);
     placed.add(a.fixture_id);
     if (!courts.has(a.court_label)) return `assignment uses a court not in settings.courts: ${a.court_label}`;
+    const pin = pinned.get(a.fixture_id);
+    // A pin's OWN current court is exempt from the narrow check: a pin forces
+    // its assignment to echo `pin.current.court` exactly (the "must not
+    // move" check just below), so if a stage's required_court_tags narrowed
+    // the candidate set out from under an already-pinned fixture's current
+    // court (a retroactive tag change), the narrow check would otherwise
+    // reject the only court the pin check will ever accept — no valid plan
+    // could exist for that fixture again. Same "an existing placement must
+    // keep validating clean against a retroactive tag change" principle
+    // court-candidates.ts's ruling 3 already protects on the verify path.
     const narrow = narrowedCourts.get(a.fixture_id);
-    if (narrow && !narrow.has(a.court_label)) {
+    if (narrow && !narrow.has(a.court_label) && !(pin && pin.current.court === a.court_label)) {
       return `assignment uses a court not permitted for fixture ${a.fixture_id}'s stage: ${a.court_label}`;
     }
-    const pin = pinned.get(a.fixture_id);
     if (pin && (pin.current.at === null || toMs(pin.current.at) !== toMs(a.scheduled_at) || pin.current.court !== a.court_label)) {
       return `pinned fixture ${a.fixture_id} must not move`;
     }
@@ -2534,7 +2543,7 @@ export async function runAiPlan(
         role: "user",
         content: JSON.stringify({
           structural_error: structuralError,
-          note: "Your previous output was rejected before verification. Resend the full plan: every movable fixture exactly once (in assignments or unschedulable), only movable ids, court_label drawn from settings.courts, and never move a pinned fixture.",
+          note: "Your previous output was rejected before verification. Resend the full plan: every movable fixture exactly once (in assignments or unschedulable), only movable ids, court_label drawn from settings.courts (or the fixture's own narrower courts list, when it carries one), and never move a pinned fixture.",
         }),
       });
       continue;

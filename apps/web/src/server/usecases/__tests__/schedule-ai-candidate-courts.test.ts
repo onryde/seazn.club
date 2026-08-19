@@ -264,6 +264,41 @@ describe.skipIf(!HAS_DB)(
       }
     });
 
+    it("carries no courts key when a stage's OWN non-empty tags resolve to the identical court set as the division-wide one — narrowing compares resolved ids, not the tag list itself", async () => {
+      // Review coverage gap: the sibling test above only proves the "no
+      // narrowing" branch for a LITERALLY EMPTY stage tag set. A stage whose
+      // tags are non-empty but happen to resolve to the same court ids (every
+      // court in the division-wide set already carries this stage's tag too)
+      // must be recognised as non-narrowing the same way — the comparison is
+      // resolved-id-set equality, never "are the tag lists the same string".
+      const { auth, divisionId, venueId } = await seedDivision(4);
+      const courtA = await createCourt(auth, venueId, { name: "Court A", sort: 0, tags: ["grass"] });
+      const courtB = await createCourt(auth, venueId, { name: "Court B", sort: 1, tags: ["grass"] });
+      await setCourts(divisionId, [courtA.id, courtB.id]);
+      // Division-wide set is already filtered to "grass" — both courts carry
+      // it, so it excludes nothing.
+      await sql`update divisions set required_court_tags = ${sql.array(["grass"])} where id = ${divisionId}`;
+
+      const [s1] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "S1", config: {} });
+      // S1's OWN tag is non-empty and DIFFERENT from the division's, but every
+      // court in the division-wide set happens to carry it too — the resolved
+      // id set is identical, even though the tag lists themselves are not.
+      await sql`update stages set required_court_tags = ${sql.array(["grass"])} where id = ${s1!.id}`;
+      await generateStageFixtures(auth, s1!.id);
+
+      const { pack } = await buildSchedulePack(auth, divisionId, {
+        now: NOW,
+        mode: "generate",
+        instruction: "x",
+      });
+
+      expect([...pack.settings.courts].sort()).toEqual([courtA.id, courtB.id].sort());
+      expect(pack.fixtures.movable.length).toBeGreaterThan(0);
+      for (const f of pack.fixtures.movable) {
+        expect("courts" in f).toBe(false);
+      }
+    });
+
     it("structuralCheck rejects a plan that places a stage-narrowed fixture on a court outside that stage's own set, even though the court is in the division-wide settings.courts", async () => {
       const { auth, divisionId, venueId } = await seedDivision(4);
       const courtA = await createCourt(auth, venueId, { name: "Court A", sort: 0, tags: [] });
@@ -305,6 +340,62 @@ describe.skipIf(!HAS_DB)(
       };
       const note = structuralCheck(plan, new Set([s1FixtureId!]), pack);
       expect(note).not.toBeNull();
+    });
+
+    it("does not reject a pinned fixture's own unchanged court, even when a since-added stage tag would otherwise narrow it out", async () => {
+      // Review finding (Important #1): a pin FORCES its assignment to echo
+      // `pin.current.court` exactly (the "must not move" check just below the
+      // narrow check) — if the stage's required_court_tags narrows the
+      // candidate set out from under an already-pinned fixture's current
+      // court, no valid plan could ever be built for it: the narrow check
+      // rejects the only court the pin check will accept. This is the same
+      // "an existing placement must keep validating clean against a
+      // retroactive tag change" principle court-candidates.ts's ruling 3
+      // already protects on the deterministic verify path.
+      const { auth, divisionId, venueId } = await seedDivision(4);
+      const courtA = await createCourt(auth, venueId, { name: "Court A", sort: 0, tags: [] });
+      const courtC = await createCourt(auth, venueId, { name: "Court C", sort: 1, tags: ["special"] });
+      await setCourts(divisionId, [courtA.id, courtC.id]);
+
+      const [s1] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "S1", config: {} });
+      const { fixtures } = await generateStageFixtures(auth, s1!.id);
+      const pinnedFixture = fixtures[0]!;
+      const pinnedAt = "2026-08-10T09:00:00.000Z";
+      // Pinned on A, BEFORE the stage is tagged — a placement that was legal
+      // when it was made.
+      await sql`
+        update fixtures set scheduled_at = ${new Date(pinnedAt).toISOString()},
+          court_id = ${courtA.id}, schedule_locked = true
+        where id = ${pinnedFixture.id}`;
+      // Now the stage is retroactively tagged "special" — only C qualifies
+      // going forward, but A is where the pin already sits.
+      await sql`update stages set required_court_tags = ${sql.array(["special"])} where id = ${s1!.id}`;
+
+      const { pack } = await buildSchedulePack(auth, divisionId, {
+        now: NOW,
+        mode: "generate",
+        instruction: "x",
+      });
+      const packFixture = pack.fixtures.movable.find((f) => f.id === pinnedFixture.id)!;
+      expect(packFixture.pinned).toBe(true);
+      expect(packFixture.courts).toEqual([courtC.id]);
+      expect(packFixture.current.court).toBe(courtA.id);
+
+      // The ONLY legal echo of a pin is its own current court+time — and that
+      // court (A) is now outside the fixture's own narrowed set (C only). A
+      // deliberately minimal movableIds (just the pinned fixture) isolates the
+      // narrow/pin interaction from the unrelated "every movable fixture must
+      // appear in the plan" rule, same reasoning as the sibling test above.
+      const plan: AiSchedulePlan = {
+        assignments: [
+          { fixture_id: pinnedFixture.id, scheduled_at: pinnedAt, court_label: courtA.id },
+        ],
+        unschedulable: [],
+        explanations: [],
+        summary: "x",
+      };
+      const note = structuralCheck(plan, new Set([pinnedFixture.id]), pack);
+      expect(note).toBeNull();
     });
   },
 );
