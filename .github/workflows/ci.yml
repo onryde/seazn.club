@@ -42,11 +42,13 @@ jobs:
   # them would have bought nothing.)
   #
   # Those three are now three jobs. Deliberately separate JOBS rather than
-  # concurrent steps inside one: `ubuntu-latest` is 4 cores, apps/web's
-  # typecheck peaks ~2.5 GB RSS, and both vitest invocations fork their own
-  # workers — running them concurrently on one runner buys contention and
-  # heap pressure, and this repo's timing-sensitive suites go red under load.
-  # Separate jobs get separate 4-core runners and cannot contend at all.
+  # concurrent steps inside one: apps/web's typecheck peaks ~2.5 GB RSS, and
+  # both vitest invocations fork their own workers — running them concurrently
+  # on one runner buys contention and heap pressure, and this repo's
+  # timing-sensitive suites go red under load. Separate jobs get separate
+  # runners and cannot contend with each other. The DB-free jobs below use
+  # GitHub-hosted runners so they spend the included Actions minutes and leave
+  # Blacksmith capacity for the DB/Docker/Playwright-heavy jobs.
   #
   # New floor is smoke-db (350s on the same run), so do not split these finer
   # expecting more wall clock — measure smoke-db first.
@@ -57,7 +59,7 @@ jobs:
   # -------------------------------------------------------------------------
   gates:
     name: Typecheck + lint + drift gates
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
@@ -181,7 +183,7 @@ jobs:
   # -------------------------------------------------------------------------
   test:
     name: Unit tests (apps/web) ${{ matrix.shard }}/2
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false # one shard's failure must not hide the other's
       matrix:
@@ -350,7 +352,7 @@ jobs:
   # -------------------------------------------------------------------------
   security:
     name: Security scan
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
