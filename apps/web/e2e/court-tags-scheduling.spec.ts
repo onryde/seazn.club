@@ -50,6 +50,10 @@ interface FixtureRow {
   scheduled_at: string | null;
   court_id: string | null;
   court_name: string | null;
+  /** #622 — the round-scoped spec sorts a knockout's fixtures by round to tell
+   *  the final from the semis. Always served (`Fixture` in schemas.ts); the
+   *  original spec above simply had no use for it. */
+  round_no: number;
 }
 const getFixture = async (request: APIRequestContext, id: string): Promise<FixtureRow> =>
   (await apiJson<FixtureRow>(request, `/api/v1/fixtures/${id}`)).data!;
@@ -316,3 +320,179 @@ test.fixme(
     expect(saved.data!.config.courts).not.toContain(courtIds["Back Court"]!);
   },
 );
+
+// #622 — ROUND-SCOPED tags, the third scope. The spec above proves the
+// DIVISION scope end to end; this one proves that a tag attached to a single
+// round ROLE constrains that round and leaves its siblings alone, which is the
+// exact thing the stage scope could not express (QF, SF and the final share
+// one `stages` row, so a stage tag is inherited by all three).
+//
+// The positive half is solver behaviour: the final must land on the tagged
+// court. The proof that the SEMIS stayed unconstrained is deliberately NOT a
+// solver assertion — which court a free fixture happens to get is the placer's
+// choice and not a contract — but a /validate one, forcing each of the two
+// fixtures onto the untagged court in turn. The final must report
+// `court_tag_mismatch`; the semi must report nothing. That pair is
+// deterministic, and it fails loudly against the pre-#622 behaviour in both
+// directions: a stage-wide tag would flag the semi too, and no tag at all
+// would flag neither.
+test("a tag scoped to one round role constrains that round only: the final needs the tagged court, the semis do not (#622)", async ({
+  request,
+}) => {
+  const { tagged, untagged } = await seedTaggedCourts(request, `E2E Round Tag Venue ${TAG}`);
+
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Round Court Tag ${TAG}`,
+    visibility: "private",
+  });
+  const div = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Round Tagged Courts",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  const divisionId = div.data!.id;
+
+  // NOTE the division is left UNTAGGED, unlike the spec above. The only tag
+  // rule in play is the round one, so nothing else can account for the
+  // placement — and a semi landing on the untagged court is legal.
+  await addEntrantsViaApi(request, divisionId, ["Ash", "Brook", "Clay", "Dune"]);
+  const { stageId, fixtureIds } = await createStageAndGenerate(request, divisionId, {
+    kind: "knockout",
+    name: "Cup",
+  });
+  expect(fixtureIds.length).toBe(3); // 2 semis + final
+
+  const rows = await Promise.all(fixtureIds.map((id) => getFixture(request, id)));
+  const finalRow = rows.reduce((a, b) => (b.round_no > a.round_no ? b : a));
+  const semis = rows.filter((r) => r.id !== finalRow.id);
+  expect(semis).toHaveLength(2);
+
+  // The picker source: roles this stage's fixtures actually occupy, so an
+  // organiser is offered "Final"/"Semi-final" rather than a round number.
+  const before = await apiJson<{
+    required_court_tags: string[];
+    rounds: { round_role: string; required_court_tags: string[] }[];
+    available_round_roles: string[];
+  }>(request, `/api/v1/stages/${stageId}/court-tags`);
+  expect(before.status).toBe(200);
+  expect(before.data!.rounds).toEqual([]);
+  expect(before.data!.available_round_roles).toContain("final");
+  expect(before.data!.available_round_roles).toContain("semi_final");
+
+  const put = await apiJson(request, `/api/v1/stages/${stageId}/court-tags`, "PUT", {
+    rounds: [{ round_role: "final", required_court_tags: ["clay"] }],
+  });
+  expect(put.status).toBe(200);
+
+  // Round rule persisted, and the STAGE-wide list is still empty — the two
+  // scopes are stored and served separately, not folded together on write.
+  const after = await apiJson<{
+    required_court_tags: string[];
+    rounds: { round_role: string; required_court_tags: string[] }[];
+  }>(request, `/api/v1/stages/${stageId}/court-tags`);
+  expect(after.data!.required_court_tags).toEqual([]);
+  expect(after.data!.rounds).toEqual([{ round_role: "final", required_court_tags: ["clay"] }]);
+
+  const settings = await apiJson(
+    request,
+    `/api/v1/divisions/${divisionId}/schedule-settings`,
+    "PUT",
+    {
+      tz: "UTC",
+      config: {
+        startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts: [tagged.id, untagged.id],
+        perEntrantMinRest: 0,
+        blackouts: [],
+        sessionWindows: [],
+      },
+    },
+  );
+  expect(settings.status).toBe(200);
+
+  const auto = await apiJson<{
+    assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
+  }>(request, `/api/v1/stages/${stageId}/schedule/auto`, "POST", {});
+  expect(auto.status).toBe(200);
+  expect(auto.data!.assignments.length).toBe(3);
+
+  // The final is on the tagged court because its ROUND says so.
+  const finalAssignment = auto.data!.assignments.find((a) => a.fixture_id === finalRow.id);
+  expect(finalAssignment, "the final was not scheduled at all").toBeTruthy();
+  expect(finalAssignment!.court_id).toBe(tagged.id);
+
+  const applied = await apiJson<{ applied: number }>(
+    request,
+    `/api/v1/stages/${stageId}/schedule/apply`,
+    "POST",
+    {
+      assignments: auto.data!.assignments.map((a) => ({
+        fixture_id: a.fixture_id,
+        scheduled_at: a.scheduled_at,
+        court_id: a.court_id,
+      })),
+      source: "auto",
+    },
+  );
+  expect(applied.status).toBe(200);
+  expect(applied.data!.applied).toBe(3);
+
+  const clean = await apiJson<{ conflicts: ScheduleConflictRow[] }>(
+    request,
+    `/api/v1/divisions/${divisionId}/schedule/validate`,
+    "POST",
+  );
+  expect(clean.status).toBe(200);
+  expect(clean.data!.conflicts.some((c) => c.details?.kind === "court_tag_mismatch")).toBe(false);
+
+  // A SEMI on the untagged court is legal — no rule names its role. This is
+  // the assertion that fails if round tags are resolved stage-wide.
+  const semi = semis[0]!;
+  const movedSemi = await apiJson(request, `/api/v1/fixtures/${semi.id}`, "PATCH", {
+    court_id: untagged.id,
+  });
+  expect(movedSemi.status).toBe(200);
+  const afterSemi = await apiJson<{ conflicts: ScheduleConflictRow[] }>(
+    request,
+    `/api/v1/divisions/${divisionId}/schedule/validate`,
+    "POST",
+  );
+  expect(afterSemi.status).toBe(200);
+  expect(
+    afterSemi.data!.conflicts.filter((c) => c.details?.kind === "court_tag_mismatch"),
+    "a semi-final was reported for a tag rule that only names the final",
+  ).toHaveLength(0);
+
+  // The FINAL on the same court is not — reported, and non-blocking for the
+  // reason ruling 3 gives (see the division-scoped spec above).
+  const movedFinal = await apiJson(request, `/api/v1/fixtures/${finalRow.id}`, "PATCH", {
+    court_id: untagged.id,
+  });
+  expect(movedFinal.status).toBe(200);
+  const afterFinal = await apiJson<{ conflicts: ScheduleConflictRow[] }>(
+    request,
+    `/api/v1/divisions/${divisionId}/schedule/validate`,
+    "POST",
+  );
+  expect(afterFinal.status).toBe(200);
+  const mismatches = afterFinal.data!.conflicts.filter(
+    (c) => c.details?.kind === "court_tag_mismatch",
+  );
+  expect(
+    mismatches,
+    "the final was moved off its required court and /validate stayed silent",
+  ).toHaveLength(1);
+  expect(mismatches[0]!.fixture_id).toBe(finalRow.id);
+  expect(mismatches[0]!.code).toBe("conflict.court");
+  expect(mismatches[0]!.blocking).toBe(false);
+  expect(mismatches[0]!.details!.court).toBe(untagged.id);
+});
