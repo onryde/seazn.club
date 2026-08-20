@@ -146,18 +146,81 @@ commands:
                   git checkout --detach FETCH_HEAD
 
   node_toolchain:
-    description: Node 26 + pnpm 10.34.5, pinned to match the GHA setup steps.
+    description: >
+      Node 26 + pnpm 10.34.5, pinned to match the GHA setup-node /
+      pnpm/action-setup steps.
+
+      This is not a bare `nvm install 26`, and the reason is the failure that
+      brought you here. CircleCI runs every step in a NON-INTERACTIVE bash,
+      and Ubuntu's stock ~/.bashrc returns at the top for exactly that case
+      (`case $- in *i*) ;; *) return;; esac`). nvm is a shell FUNCTION defined
+      by that file, so in a step it does not exist at all: the step dies with
+      `nvm: command not found` / exit 127 before it ever reaches Node. It has
+      to be sourced explicitly from $NVM_DIR.
+
+      The second half of the bug outlives this step, which is why the fix is
+      not simply "source nvm and carry on". Sourcing fixes THIS shell only;
+      `echo 'nvm use 26' >> $BASH_ENV` then runs in every later step, in the
+      same non-interactive shell, and fails the same way — one red step
+      becomes eight, with the real cause four steps behind the first symptom.
+      So what goes into BASH_ENV is the RESOLVED bin directory on PATH, not
+      an nvm call. Later steps get a plain node/npm/pnpm and never touch nvm.
+
+      Corepack is gone too. It was the other unpinned assumption here: it
+      ships disabled, its presence in the Node distribution is deprecated and
+      on its way out, and `corepack enable` symlinks into the same bin dir a
+      global pnpm would use, so the two can collide. `npm install -g
+      pnpm@10.34.5` pins the identical version with no dependency on
+      corepack existing.
     steps:
       - run:
           name: Install Node 26 and pnpm 10.34.5
           command: |
-            set -eo pipefail   # NOT -u: nvm trips over unset vars
-            nvm install 26
-            nvm alias default 26
-            echo 'nvm use 26 >/dev/null' >> "$BASH_ENV"
-            corepack enable
-            corepack prepare pnpm@10.34.5 --activate
-            node --version && pnpm --version
+            set -eo pipefail   # NOT -u: nvm's own scripts read unset vars
+
+            export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+
+            install_nvm() {
+              curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+              # shellcheck disable=SC1091
+              . "$NVM_DIR/nvm.sh"
+            }
+
+            if [ -s "$NVM_DIR/nvm.sh" ]; then
+              # shellcheck disable=SC1091
+              . "$NVM_DIR/nvm.sh"
+            else
+              install_nvm
+            fi
+
+            # Retry once against a freshly installed nvm: the image's bundled
+            # copy can predate Node 26 and fail to resolve the version rather
+            # than fail to run. Both causes present as a red on this step.
+            nvm install 26 || { install_nvm; nvm install 26; }
+            nvm use 26
+
+            NODE_BIN="$(dirname "$(nvm which node)")"
+            export PATH="$NODE_BIN:$PATH"
+
+            # Deterministic store path, independent of how pnpm was installed.
+            # pnpm's default moves with XDG_DATA_HOME / install method, and
+            # the save_cache path below has to name it literally.
+            npm install -g "pnpm@10.34.5"
+            pnpm config set store-dir "$HOME/.pnpm-store" --global
+
+            # Hand PATH to every subsequent step. Nothing downstream calls nvm.
+            {
+              echo "export NVM_DIR=\"$NVM_DIR\""
+              echo "export PATH=\"$NODE_BIN:\$PATH\""
+            } >> "$BASH_ENV"
+
+            # Fail here, loudly, rather than three steps later on a subtle
+            # engine mismatch.
+            node --version
+            pnpm --version
+            node --version | grep -q '^v26\.' || {
+              echo "expected Node 26, got $(node --version)"; exit 1
+            }
 
   pnpm_install:
     description: Dependency install, backed by the pnpm store cache.
@@ -174,7 +237,12 @@ commands:
           # happens when dependencies actually change.
           key: pnpm-v1-{{ arch }}-{{ checksum "pnpm-lock.yaml" }}
           paths:
-            - ~/.local/share/pnpm/store
+            # Matches the store-dir pinned in node_toolchain. This used to
+            # name pnpm's default (~/.local/share/pnpm/store), which moves
+            # with XDG_DATA_HOME and with the install method — the cache
+            # would have saved an empty directory and every install would
+            # have been cold, silently.
+            - ~/.pnpm-store
 
   start_own_postgres:
     description: >
