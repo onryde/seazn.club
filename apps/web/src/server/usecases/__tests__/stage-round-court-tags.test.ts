@@ -334,13 +334,41 @@ describe.skipIf(!HAS_DB)("autoSchedule — honours a round-scoped tag per fixtur
     vi.restoreAllMocks();
   });
 
-  it("places the final on the championship court while the rest of the bracket uses the whole stage-wide set", async () => {
+  // WHY THE BRACKET CASE IS ASSERTED OVER AN ALREADY-PLACED BOARD, and not
+  // over an empty one. The greedy seed is the path this file forces (the
+  // placement service is stubbed to fail), and greedy is ROUND-BLIND for a
+  // bracket stage on purpose: `autoSchedule` stamps `roundNo` only for
+  // `league`/`group` stages (`roundRobinStageIds`), because for a bracket the
+  // column is a display label rather than an ordering. So greedy places an
+  // 8-entrant bracket in fixture-ID order, routinely puts the final before its
+  // own semi-finals, and `greedySeed`'s legalisation pass then DROPS it for a
+  // blocking `order_before_feeder` — measured against this exact seed, with no
+  // round rule at all, the final never survives. An empty-board assertion on
+  // "the final is on the championship court" is therefore not testing #622: it
+  // passes only when the narrowing happens to delay the final past its feeders,
+  // which depends on the random UUID order of seven fixtures. It was flaky
+  // roughly one run in three.
+  //
+  // LOCKING the six earlier fixtures removes greedy's ordering from the
+  // question entirely — they are committed at their own slots before the free
+  // cards are considered (`slotFixtures` step 1), so the final is the only card
+  // greedy chooses a slot for, and the narrowing is the ONLY thing deciding
+  // where it lands. A lock, not merely a placement: REFLOW freezes an
+  // already-placed card for the SOLVER and reconciles it afterwards, but
+  // `greedySeed` re-places anything without `locked` from scratch, so a bare
+  // `scheduled_at` would leave the ordering exactly as unstable as before.
+  it("makes the final WAIT for the championship court instead of taking the free untagged court beside it", async () => {
     // `allowedCourts` is stamped PER FIXTURE by autoSchedule now; the stage's
     // `config.courts` deliberately stays the full stage-wide set, because a
     // lattice narrowed to the intersection would delete the very slots the
-    // un-narrowed rounds need. Without #622 the final carries no narrowing at
-    // all and the greedy placer is free to drop it on whichever court comes
-    // first — the assertion below is the one that fails.
+    // un-narrowed rounds need.
+    //
+    // The board below is built so the two answers are far apart. Outer 2 is
+    // EMPTY all day, so an un-narrowed final is placed on it at the very start
+    // of the window (and, being before its own semi-finals, is then dropped as
+    // a feed-order breach); a narrowed final can only go on the championship
+    // court, which is occupied until 01:30. Both the court and the time below
+    // therefore fail without #622.
     const auth = await seedOrg();
     const solveBuild = await spyOnPlacement();
     const venue = await createVenue(auth, { name: "Main", sort: 0 });
@@ -360,23 +388,97 @@ describe.skipIf(!HAS_DB)("autoSchedule — honours a round-scoped tag per fixtur
       rounds: [{ round_role: "final", required_court_tags: ["championship"] }],
     });
 
+    const fixtures = await stageFixtures(stageId);
+    // 8 entrants -> 4 QFs (round 1), 2 SFs (round 2), 1 final (round 3).
+    expect(fixtures.length).toBe(7);
+    const finalId = fixtures.at(-1)!.id;
+    // The organiser's own LOCKED board, in feed order: each semi-final sits
+    // after both of the quarter-finals that feed it, so nothing here is a
+    // breach the verifier could confuse with the one under test. Two courts
+    // busy until 01:30, Outer 2 untouched.
+    const board: [FixtureRow, string, string][] = [
+      [fixtures[0]!, championship.id, "2026-08-01T00:00:00.000Z"],
+      [fixtures[1]!, championship.id, "2026-08-01T00:30:00.000Z"],
+      [fixtures[2]!, outer1.id, "2026-08-01T00:00:00.000Z"],
+      [fixtures[3]!, outer1.id, "2026-08-01T00:30:00.000Z"],
+      [fixtures[4]!, championship.id, "2026-08-01T01:00:00.000Z"],
+      [fixtures[5]!, outer1.id, "2026-08-01T01:00:00.000Z"],
+    ];
+    for (const [fixture, court, at] of board) {
+      await sql`
+        update fixtures
+        set scheduled_at = ${at}, court_id = ${court}, schedule_locked = true
+        where id = ${fixture.id}`;
+    }
+
     const out = await autoSchedule(auth, stageId, { only_unlocked: true, mode: "reflow" });
     // The real placement service is stubbed to fail, so this is the
     // deterministic greedy path — the same forcing schedule-court-candidates
     // .test.ts uses, and the reason the court choice below is assertable.
     expect(solveBuild).toHaveBeenCalled();
 
+    const byFixture = new Map(out.assignments.map((a) => [a.fixture_id, a] as const));
+    expect(byFixture.get(finalId)?.court_id).toBe(championship.id);
+    // The time, not just the court: 01:30 is the first instant the championship
+    // court is free, and Outer 2 was free from 00:00 the whole time. This is
+    // what "narrowed" means for the placer — it waited.
+    expect(byFixture.get(finalId)?.scheduled_at).toBe("2026-08-01T01:30:00.000Z");
+    // The rest of the bracket is NOT narrowed: `config.courts` stayed the
+    // stage-wide set, so every earlier round comes back exactly where the
+    // organiser had it, three of them on an untagged court — which is precisely
+    // what a STAGE-wide championship tag could not have done, and the failure
+    // mode #622 exists to avoid.
+    for (const [fixture, court, at] of board) {
+      expect(byFixture.get(fixture.id)?.court_id).toBe(court);
+      expect(byFixture.get(fixture.id)?.scheduled_at).toBe(at);
+    }
+  });
+
+  it("sends BOTH of a league round's fixtures to the tagged court while the other rounds keep the whole set", async () => {
+    // The same placer property over a board the pass builds from nothing — a
+    // league stage has no feed edges and stamps `roundNo`, so greedy's order is
+    // round-major and every fixture is placed, which is what makes a
+    // from-scratch assertion deterministic here and not in the bracket above.
+    //
+    // TWO fixtures share the one tagged court here, which is what the round
+    // scope has to survive: un-narrowed, the placer sends the pair out in
+    // parallel at the same instant, one per court, so exactly one of them lands
+    // on the untagged court beside it.
+    const auth = await seedOrg();
+    const solveBuild = await spyOnPlacement();
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const showCourt = await createCourt(auth, venue.id, {
+      name: "Show",
+      sort: 0,
+      tags: ["show court"],
+    });
+    const side = await createCourt(auth, venue.id, { name: "Side", sort: 1, tags: [] });
+    // 4 entrants -> a 3-round round robin of 6 fixtures, 2 per round.
+    const { stageId } = await seedStage(auth, "league", 4, [showCourt.id, side.id]);
+    await putStageCourtTags(auth, stageId, {
+      rounds: [{ round_role: "plain_round_2", required_court_tags: ["show court"] }],
+    });
+
+    const out = await autoSchedule(auth, stageId, { only_unlocked: true, mode: "reflow" });
+    expect(solveBuild).toHaveBeenCalled();
+
     const fixtures = await stageFixtures(stageId);
-    const finalId = fixtures.at(-1)!.id;
+    expect(fixtures.length).toBe(6);
     const byFixture = new Map(out.assignments.map((a) => [a.fixture_id, a.court_id] as const));
-    expect(byFixture.get(finalId)).toBe(championship.id);
-    // The rest of the bracket is NOT narrowed — the championship court is a
-    // legal choice for a quarter-final too, so this asserts only that the
-    // narrowing did not collapse the whole stage onto one court (which is
-    // exactly what a stage-wide tag would have done, and the failure mode
-    // #622 exists to avoid).
-    const others = fixtures.slice(0, -1).map((f) => byFixture.get(f.id));
-    expect(others.some((court) => court !== undefined && court !== championship.id)).toBe(true);
+    // Nothing was dropped: a narrowing that made a round unplaceable would show
+    // up here first, and an assertion about the courts of a half-empty board
+    // would be reading the wrong failure.
+    expect(byFixture.size).toBe(6);
+    const roundTwo = fixtures.filter((f) => f.round_no === 2);
+    expect(roundTwo.length).toBe(2);
+    // BOTH of them, on the one tagged court — so they are necessarily
+    // serialised onto it rather than one spilling onto the untagged court
+    // beside it, which is what the un-narrowed placer does with them.
+    expect(roundTwo.map((f) => byFixture.get(f.id))).toEqual([showCourt.id, showCourt.id]);
+    // …and the rounds with no rule of their own still have both courts.
+    expect(
+      fixtures.filter((f) => f.round_no !== 2).some((f) => byFixture.get(f.id) === side.id),
+    ).toBe(true);
   });
 });
 
