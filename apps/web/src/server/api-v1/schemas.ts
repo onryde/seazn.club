@@ -662,6 +662,54 @@ export const CreateStages = z.union([CreateStage, z.array(CreateStage).min(1).ma
  *  it still took a free-text `venue`. Real venue/court by id now, same as
  *  `PatchFixture`. `.strict()` for the same reason that schema documents: a
  *  client still sending `venue` gets a loud 400 instead of a silent no-op. */
+// ---------------------------------------------------------------------------
+// #622 — stage- and round-scoped required court tags
+// ---------------------------------------------------------------------------
+
+/** A `roundRoleKey()` value from `@seazn/engine/competition` — `final`,
+ *  `semi_final`, `quarter_final`, `round_of_16`, `losers_round_2`,
+ *  `grand_final`, `rung_3`, `plain_round_4`, … The usecase re-validates with
+ *  `isRoundRoleKey()`, which is the authoritative vocabulary; this pattern is
+ *  the cheap shape gate in front of it, deliberately not a duplicate of the
+ *  role list (a second copy would go stale the next time a stage format ships
+ *  a new role). */
+const RoundRoleKey = z
+  .string()
+  .min(1)
+  .max(40)
+  .regex(/^[a-z][a-z0-9_]*$/, "not a round role key");
+
+/** Same bounds as `PatchDivision.required_court_tags` — one tag vocabulary,
+ *  three scopes. */
+const RequiredCourtTags = z.array(z.string().min(1).max(40)).max(50);
+
+export const StageRoundCourtTags = z.object({
+  round_role: RoundRoleKey,
+  required_court_tags: RequiredCourtTags,
+});
+
+/** PUT semantics on `rounds`: whole-list replace, so an omitted round is
+ *  DELETED. Omitting the KEY itself leaves the stage's round rules untouched —
+ *  the two are different, which is why neither field has a default. */
+export const PutStageCourtTags = z
+  .object({
+    required_court_tags: RequiredCourtTags,
+    rounds: z.array(StageRoundCourtTags).max(64),
+  })
+  .partial()
+  .refine((p) => Object.keys(p).length > 0, "empty patch");
+export type PutStageCourtTags = z.infer<typeof PutStageCourtTags>;
+
+export const StageCourtTags = z.object({
+  stage_id: Uuid,
+  required_court_tags: z.array(z.string()),
+  rounds: z.array(StageRoundCourtTags),
+  /** The roles this stage's fixtures currently occupy, in bracket order — a
+   *  picker source, never a constraint on what may be written (a stage whose
+   *  fixtures are not generated yet occupies none). */
+  available_round_roles: z.array(z.string()),
+});
+
 export const AddFixture = z
   .object({
     home_entrant_id: Uuid,

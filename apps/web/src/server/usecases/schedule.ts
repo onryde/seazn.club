@@ -64,9 +64,12 @@ import { resolveSlotLabel } from "@/lib/slot-label";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { capacityInputForFixtures, guardCapacity } from "./capacity-guard";
 import {
+  candidateCourtsByFixture,
   guardNoMatchingCourt,
+  requiredCourtTagsByFixture,
   resolveCandidateCourts,
   resolveTagQualifiedCourtIds,
+  tagQualifiedCourtIdsByFixture,
   unionRequiredCourtTags,
 } from "./court-candidates";
 import { buildEngineConstraints } from "./engine-constraints";
@@ -1386,6 +1389,71 @@ export async function autoSchedule(
     // "is this fixture locked" is exactly how the pin the solver honours and
     // the pin the caller sees drifted apart in the first place.
     const pinnedIds = lockedFixtureIds(movable, scopes, body.ignore_locks ?? false);
+
+    // P9 pass 2b: the candidate court set for THIS stage — the organiser's
+    // configured `settings.config.courts`, filtered to non-archived courts
+    // carrying every tag the division OR the stage requires, through the
+    // ONE engine filter (court-candidates.ts's own header explains why a
+    // second, inlined tag-filter loop here is this subsystem's recurring
+    // bug). `settingsForEngine` overrides ONLY `config.courts` — every other
+    // read of `settings` below (matchMinutes, orgTz, …) stays untouched —
+    // so `toVerifyConfig`/`toSlotConfig` need no changes of their own:
+    // `courts: [...c.courts]` already does the right thing once the courts
+    // it's handed already ARE the filtered set.
+    const requiredCourtTags = unionRequiredCourtTags(
+      stage.division_required_court_tags,
+      stage.stage_required_court_tags,
+    );
+    const candidateCourtIds = await resolveCandidateCourts(
+      tx,
+      stage.division_id,
+      settings.config.courts,
+      requiredCourtTags,
+    );
+    // #622: the stage-wide set above is now a FLOOR, not the whole answer. A
+    // round-scoped tag narrows individual fixtures BELOW it (only the final
+    // needs the championship court), so each movable fixture carries its own
+    // `allowedCourts` and `config.courts` stays the stage-wide set — which is
+    // exactly what the lattice needs, because a lattice narrowed to the
+    // intersection would delete the slots the un-narrowed rounds must use.
+    //
+    // Resolved through the shared `requiredCourtTagsByFixture`/
+    // `candidateCourtsByFixture` pair, the SAME two `validateScheduleIn` and
+    // `buildSchedulePack` resolve through, so the three cannot disagree about
+    // a fixture's candidate set — the fork court-candidates.ts's header opens
+    // by warning about, now with a third scope to fork over.
+    const fixtureTags = await requiredCourtTagsByFixture(
+      tx,
+      stage.division_id,
+      stage.division_required_court_tags,
+    );
+    const fixtureCandidates = await candidateCourtsByFixture(
+      tx,
+      stage.division_id,
+      settings.config.courts,
+      fixtureTags,
+    );
+    const settingsForEngine = {
+      ...settings,
+      config: { ...settings.config, courts: [...candidateCourtIds.ids] },
+    };
+
+    // #622: which of this stage's movable fixtures are narrowed BELOW the
+    // stage-wide candidate set by a round-scoped tag, as `allowedCourts` for
+    // the solver and the greedy placer. A fixture whose set already equals the
+    // stage-wide one gets nothing at all — that is every fixture on every
+    // board with no round rules, so the ordinary solve is unchanged down to
+    // the wire bytes (`build.ts`'s `allowedCourtsFor`, and `model.py` section
+    // 1c which emits no constraint for an unconstrained fixture).
+    const stageWideCourts = new Set(candidateCourtIds.ids);
+    const narrowedCourtsFor = (fixtureId: string): readonly string[] | undefined => {
+      const ids = fixtureCandidates.get(fixtureId);
+      if (ids === undefined) return undefined;
+      if (ids.length === stageWideCourts.size && ids.every((id) => stageWideCourts.has(id))) {
+        return undefined;
+      }
+      return ids;
+    };
     const schedulable: SchedulableFixture[] = movable.map((f) => ({
       id: f.id,
       // C1 (2026-08-12 round-order design). `roundNo` used to be stamped
@@ -1410,6 +1478,14 @@ export async function autoSchedule(
       ...(pinnedIds.has(f.id)
         ? { locked: { court: f.court_id as string, startAt: ms(f.scheduled_at as string | Date) } }
         : {}),
+      // #622 — omitted, never `[]`, when this fixture is not narrowed: an
+      // empty array reads as UNCONSTRAINED everywhere downstream (the wire,
+      // `slotFixtures`, `allowedCourtsFor`), so sending one would be
+      // indistinguishable from the un-narrowed case anyway and would only
+      // make the difference harder to see in a test snapshot.
+      ...(narrowedCourtsFor(f.id) !== undefined
+        ? { allowedCourts: narrowedCourtsFor(f.id) as readonly string[] }
+        : {}),
     }));
 
     // ONE config for both halves of this pass (#447). The placer reads the
@@ -1430,30 +1506,6 @@ export async function autoSchedule(
       .filter((f) => pinnedIds.has(f.id))
       .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
 
-    // P9 pass 2b: the candidate court set for THIS stage — the organiser's
-    // configured `settings.config.courts`, filtered to non-archived courts
-    // carrying every tag the division OR the stage requires, through the
-    // ONE engine filter (court-candidates.ts's own header explains why a
-    // second, inlined tag-filter loop here is this subsystem's recurring
-    // bug). `settingsForEngine` overrides ONLY `config.courts` — every other
-    // read of `settings` below (matchMinutes, orgTz, …) stays untouched —
-    // so `toVerifyConfig`/`toSlotConfig` need no changes of their own:
-    // `courts: [...c.courts]` already does the right thing once the courts
-    // it's handed already ARE the filtered set.
-    const requiredCourtTags = unionRequiredCourtTags(
-      stage.division_required_court_tags,
-      stage.stage_required_court_tags,
-    );
-    const candidateCourtIds = await resolveCandidateCourts(
-      tx,
-      stage.division_id,
-      settings.config.courts,
-      requiredCourtTags,
-    );
-    const settingsForEngine = {
-      ...settings,
-      config: { ...settings.config, courts: [...candidateCourtIds.ids] },
-    };
     const declaredConfig = toVerifyConfig(settingsForEngine, all, roundToMinute(Date.now()), siblings.ruleFixtures);
     const windowedConfig = boundSolverWindow(
       declaredConfig,
@@ -3030,46 +3082,35 @@ async function validateScheduleIn(
   // `resolveTagQualifiedCourtIds`'s own doc comment for the archived-neutral
   // mechanics.
   //
-  // Review finding #11: this used to resolve against `requiredCourtTags`
-  // alone — the DIVISION's tags, exactly what feeds `resolveCandidateCourts`
-  // above. `autoSchedule` instead unions in the STAGE's own tags too
-  // (`unionRequiredCourtTags(division, stage)`), because it is scoped to one
-  // stage; a stage-level `required_court_tags` therefore constrained the
-  // placer but was invisible here, and the placer/verifier fork this pass
-  // claims to close was only half closed. This function has no single stage
-  // to union in the same way `autoSchedule` does — it validates the WHOLE
-  // division's board, spanning however many stages it has — so it is
-  // resolved per STAGE instead: one `unionRequiredCourtTags` /
-  // `resolveTagQualifiedCourtIds` call per stage, and the QUALIFIED COURT
-  // SETS merged (a court qualifies board-wide if it satisfies ANY stage
-  // actually present), not the required-tag lists themselves.
-  // `unionRequiredCourtTags`/`candidateCourts` read a required-tag list as
-  // AND — a qualifying court needs EVERY tag in it — so flattening two
-  // stages' DIFFERENT tags into one combined list would demand a court carry
-  // tags from a stage a given fixture has nothing to do with, trading the
-  // old blind spot for a new false positive.
-  const stageCourtTagRows = await tx<{ required_court_tags: string[] }[]>`
-    select required_court_tags from stages where division_id = ${divisionId}`;
-  const stageTagSets: string[][] = stageCourtTagRows.map((s) => s.required_court_tags);
-  // A division with no stages yet (before its first is generated) has no
-  // stage tags to union in — division tags alone, exactly pre-#11 behaviour.
-  if (stageTagSets.length === 0) stageTagSets.push([]);
-  // Review wave 3: memoised on the tag UNION, not called per stage. Each call
-  // re-runs the full org court+venue join, so a division with N stages issued N
-  // scans on every validate, publish and start — and stages overwhelmingly
-  // share the same union (usually the empty one).
-  const courtTagQualifiedIds = new Set<string>();
-  const qualifiedByUnion = new Map<string, ReadonlySet<string>>();
-  for (const stageTags of stageTagSets) {
-    const union = unionRequiredCourtTags(requiredCourtTags, stageTags);
-    const key = [...union].sort().join("\u0000");
-    let ids = qualifiedByUnion.get(key);
-    if (ids === undefined) {
-      ids = await resolveTagQualifiedCourtIds(tx, union);
-      qualifiedByUnion.set(key, ids);
-    }
-    for (const id of ids) courtTagQualifiedIds.add(id);
-  }
+  // Review finding #11 -> #622. This used to resolve against
+  // `requiredCourtTags` alone (the DIVISION's tags), which made a
+  // stage-level tag invisible to the verifier while `autoSchedule` honoured
+  // it. #11 closed that with the closest safe approximation available at the
+  // time: resolve once per STAGE and merge the QUALIFIED COURT SETS, so a
+  // court qualifies board-wide if it satisfies ANY stage actually present.
+  // Its own comment recorded why the required-tag LISTS could not simply be
+  // flattened instead (`candidateCourts` reads a list as AND, so combining
+  // two stages' tags demands a court carry tags from a stage a given fixture
+  // has nothing to do with).
+  //
+  // #622 replaces the approximation with the exact answer, because a third
+  // scope made the approximation's error reachable rather than merely
+  // theoretical: with round-scoped tags, the union across stages ALSO unions
+  // across rounds, so the championship court the final requires would satisfy
+  // every quarter-final too and the conflict would never fire. The resolution
+  // unit is the fixture, through the same shared pair `autoSchedule` and
+  // `buildSchedulePack` use.
+  //
+  // `courtTagQualifiedIds` (the flat, division-wide list) is still sent
+  // alongside as the fallback for any assignment whose fixture is not in the
+  // map — an obstacle from another division, or a row for a fixture deleted
+  // between the two reads. `validateAssignments` prefers the per-fixture
+  // entry and falls back to the flat one; see its own doc comment.
+  const fixtureTags = await requiredCourtTagsByFixture(tx, divisionId, requiredCourtTags);
+  const courtTagQualifiedIdsByFixture = await tagQualifiedCourtIdsByFixture(tx, fixtureTags);
+  const courtTagQualifiedIds = new Set<string>(
+    await resolveTagQualifiedCourtIds(tx, requiredCourtTags),
+  );
   // C1 follow-up (2026-08-12, task 3 / G1). This function backs BOTH
   // `validateSchedule` (the board's live conflict report) and, through
   // `assertPublishable`, `publishSchedule`/`startDivision` — the write gate.
@@ -3134,7 +3175,14 @@ async function validateScheduleIn(
           // parameter list, which would touch its other three callers
           // (autoSchedule, the AI planning path, every test in this
           // package) for a question only THIS path asks.
-          { ...toVerifyConfig(settingsForEngine, all, 0, siblings.ruleFixtures), courtTagQualifiedIds: [...courtTagQualifiedIds] },
+          {
+            ...toVerifyConfig(settingsForEngine, all, 0, siblings.ruleFixtures),
+            courtTagQualifiedIds: [...courtTagQualifiedIds],
+            // #622 — the per-fixture override. Both are sent: the map is the
+            // exact answer for this division's own fixtures, the flat list is
+            // what any OTHER row falls back to.
+            courtTagQualifiedIdsByFixture,
+          },
           siblings.assignments,
           feedDependencies(all),
         ),

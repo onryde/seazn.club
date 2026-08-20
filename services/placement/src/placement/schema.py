@@ -169,6 +169,21 @@ Only `Fixture` was widened, not `PinnedRow`: `PinnedRow.entrant_indices` (C6)
 has no `person_indices` counterpart on the wire this round, so a pin can
 still only be attributed entrants, never people, for participant-rest
 purposes. Deliberate scope, not an oversight -- see the PR body.
+
+--- #622: Fixture.allowed_court_indices ------------------------------------
+
+Round-scoped required court tags gave a fixture a candidate court set of its
+own, narrower than the request-wide `court_names`. `Fixture.allowed_court_
+indices` carries it, `ModelInput.allowed_courts` is its parallel list, and
+`placement.model`'s section 1c is the only reader. `main.py` now calls
+`build_model` with FOURTEEN positional arguments: `allowed_courts` joins the
+thirteen above, last.
+
+Empty on the wire means UNCONSTRAINED (the same reading `candidateCourts`
+gives an empty required-tag list), and `_validated_fixtures` normalises that
+to `None` so `build_model` never has to know the wire convention -- and so an
+empty `set()` reaching it stays readable as the caller bug it would be,
+rather than as "every court".
 """
 
 from __future__ import annotations
@@ -280,6 +295,20 @@ class ModelInput:
     # `Fixture` was (see this module's own module docstring and the PR body
     # for why that is a deliberate scope line, not an oversight).
     person_indices: list[list[int]]
+    # #622 (round-scoped required court tags) -- parallel to `fixtures` the
+    # same way `fixture_rounds` and `person_indices` are, and kept off
+    # `fixtures`'s own tuple shape for the identical reason: `model.py`
+    # unpacks it as a bare 2-tuple.
+    #
+    # `allowed_courts[i]` is the set of court indices `fixtures[i]` may be
+    # placed on, or `None` when the wire sent none. `None`, not an empty set:
+    # the proto reads an empty `allowed_court_indices` as UNCONSTRAINED, and
+    # an empty `set()` here would read as "no court at all" and make the
+    # fixture silently unplaceable -- the exact "unset vs. legitimately
+    # empty" trap this module exists to close, on a repeated field instead of
+    # a singular one. Normalised to `None` at parse time so `build_model` can
+    # test one thing (`is None`) and never has to know the wire convention.
+    allowed_courts: list[set[int] | None]
 
 
 def _require_index_present(has_field: bool, where: str) -> None:
@@ -317,8 +346,10 @@ def _require_index_range(value: int, bound: int, where: str) -> int:
 
 
 def _validated_fixtures(
-    proto_fixtures, entrant_count: int, division_count: int, person_count: int
-) -> tuple[list[tuple[list[int], int]], list[int | None], list[list[int]]]:
+    proto_fixtures, entrant_count: int, division_count: int, person_count: int, num_courts: int
+) -> tuple[
+    list[tuple[list[int], int]], list[int | None], list[list[int]], list[set[int] | None]
+]:
     """The movable fixtures, with every index they carry checked for range,
     plus their C1 round numbers and C10 person indices as SEPARATE parallel
     lists (see `ModelInput.fixture_rounds`/`ModelInput.person_indices`'s own
@@ -335,6 +366,7 @@ def _validated_fixtures(
     fixtures: list[tuple[list[int], int]] = []
     fixture_rounds: list[int | None] = []
     fixture_people: list[list[int]] = []
+    fixture_allowed_courts: list[set[int] | None] = []
     for i, f in enumerate(proto_fixtures):
         # C10 (2026-08-16, wire person indices design) -- narrowed from "must
         # not be empty" to "neither entrants nor people": a genuinely
@@ -397,10 +429,25 @@ def _validated_fixtures(
         division_index = _require_index_range(
             f.division_index, division_count, f"fixtures[{i}].division_index"
         )
+        # #622 -- the courts this fixture may use. Range-checked against
+        # `court_names` like every other index, and de-duplicated into a set
+        # rather than refused on a repeat: unlike `entrant_indices`/
+        # `person_indices` above, where a duplicate silently makes the fixture
+        # overlap ITSELF in a NoOverlap group and become unplaceable, a
+        # repeated court index states the same permission twice and is
+        # harmless. A refusal there would be a behaviour difference with no
+        # hazard behind it.
+        allowed_courts = {
+            _require_index_range(c, num_courts, f"fixtures[{i}].allowed_court_indices[{j}]")
+            for j, c in enumerate(f.allowed_court_indices)
+        }
         fixtures.append((entrant_indices, division_index))
         fixture_rounds.append(f.round if f.HasField("round") else None)
         fixture_people.append(person_indices)
-    return fixtures, fixture_rounds, fixture_people
+        # Empty on the wire == unconstrained, normalised to `None` here. See
+        # `ModelInput.allowed_courts`.
+        fixture_allowed_courts.append(allowed_courts if allowed_courts else None)
+    return fixtures, fixture_rounds, fixture_people, fixture_allowed_courts
 
 
 def _validated_rule_groups(
@@ -717,8 +764,8 @@ def request_to_model_input(req) -> ModelInput:
     division_count = req.division_count
     person_count = req.person_count
 
-    fixtures, fixture_rounds, fixture_people = _validated_fixtures(
-        req.fixtures, entrant_count, division_count, person_count
+    fixtures, fixture_rounds, fixture_people, fixture_allowed_courts = _validated_fixtures(
+        req.fixtures, entrant_count, division_count, person_count, num_courts
     )
     _log_person_only_fixtures(req.request_id, fixtures, fixture_people)
     # C1. Must run before `existing` below: `existing[].rule_group_indices`
@@ -763,6 +810,7 @@ def request_to_model_input(req) -> ModelInput:
         fixture_rounds=fixture_rounds,
         pinned_round=pinned_round,
         person_indices=fixture_people,
+        allowed_courts=fixture_allowed_courts,
     )
 
 

@@ -1921,6 +1921,19 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
       // undecided knockout slot's participant set reaches the placement
       // service the same way it always reached z3's in-process encoder.
       people: [...(f.people ?? [])],
+      // #622 (round-scoped required court tags). Forwarded verbatim, and
+      // INTERSECTED with `config.courts` first: `courts` on the wire above is
+      // deliberately wider than `config.courts` (it also names every court an
+      // obstacle or pin sits on, so `courtIndexOf` can resolve those rows),
+      // and a fixture's allowed set must not be able to re-admit a court this
+      // BUILD excluded — that is the ghost-court hole R20 closed for pins and
+      // `restrictToConfiguredCourts` closes for the lattice.
+      //
+      // The result is omitted rather than sent empty whenever it names every
+      // configured court: empty means UNCONSTRAINED on the wire, so an
+      // un-narrowed fixture costs nothing, and `model.py`'s section 1c emits
+      // no constraint for it either.
+      ...allowedCourtsFor(f, config.courts),
     })),
     grid: {
       slots: grid.slots.map((s) => ({
@@ -2399,6 +2412,40 @@ export function seedPinsOf(
  * lattice would have fitted. Conservative in the safe direction, and the cap is
  * two orders of magnitude away from any real board.
  */
+/**
+ * A fixture's own allowed court list as the wire wants it (#622), narrowed to
+ * the courts this BUILD actually configured.
+ *
+ * Returns `{}` — the key ABSENT, not an empty array — whenever the fixture is
+ * unconstrained or its set already covers every configured court, because an
+ * empty `allowed_court_indices` is exactly how the wire spells
+ * "unconstrained". So the ordinary board sends a byte-identical request to the
+ * one it sent before this field existed.
+ *
+ * An intersection that comes back EMPTY is still sent (as a one-element-short
+ * impossibility, i.e. an explicitly empty allowed set is unrepresentable) —
+ * see the call site: the case cannot arise from `autoSchedule`, whose
+ * `guardNoMatchingCourt` refuses a division-level empty candidate set with a
+ * typed 422 long before the solver is reached, and which resolves a fixture's
+ * allowed set from the SAME `resolveCandidateCourts` that produced
+ * `config.courts`. Rather than invent a solver-level meaning for it, an empty
+ * intersection degrades to "unconstrained" and the verifier reports the
+ * resulting placement as a non-blocking `court_tag_mismatch`, which is the
+ * documented outcome for every other way a board can end up on a court its
+ * tags do not qualify (ruling 3, candidate-courts.ts).
+ */
+function allowedCourtsFor(
+  f: SchedulableFixture,
+  configuredCourts: readonly string[],
+): { allowedCourts?: string[] } {
+  const allowed = f.allowedCourts;
+  if (allowed === undefined || allowed.length === 0) return {};
+  const allowedSet = new Set(allowed);
+  const narrowed = configuredCourts.filter((c) => allowedSet.has(c));
+  if (narrowed.length === 0 || narrowed.length === configuredCourts.length) return {};
+  return { allowedCourts: narrowed };
+}
+
 function restrictToConfiguredCourts(
   grid: BuildGrid,
   courts: readonly string[],

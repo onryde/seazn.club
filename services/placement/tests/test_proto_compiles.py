@@ -149,6 +149,8 @@ EXPECTED_MESSAGE_FIELDS = {
         "round":           (3, FieldDescriptor.TYPE_UINT32, False, True),
         # C10 (2026-08-16, wire person indices design).
         "person_indices":  (4, FieldDescriptor.TYPE_UINT32, True,  False),
+        # #622 (round-scoped required court tags).
+        "allowed_court_indices": (5, FieldDescriptor.TYPE_UINT32, True, False),
     },
     "PinnedRow": {
         "court_index":        (1, FieldDescriptor.TYPE_UINT32, False, True),

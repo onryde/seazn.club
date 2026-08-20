@@ -1792,6 +1792,140 @@ def test_per_court_domain_adds_constraints_only_when_courts_disagree():
     )
 
 
+# --- #622: per-fixture allowed courts (round-scoped required court tags) -----
+
+
+def _two_court_constraints():
+    return {
+        "match_minutes": 30,
+        "gap_minutes": 0,
+        "rest_by_division": {},
+        "day_cap_by_division": {},
+    }
+
+
+def test_a_narrowed_fixture_is_placed_only_on_a_court_it_is_allowed():
+    """The whole point of #622, on the smallest board that shows it.
+
+    Two courts, both offering the same single tick, and two fixtures sharing
+    no participant — so absent the restriction either fixture may take either
+    court and the board is symmetric. Fixture 0 is narrowed to court 1 alone
+    (the round-scoped tag case: "the final needs the championship court").
+    The solve must place it there and put fixture 0's neighbour on the other
+    court, rather than choosing by search luck.
+    """
+    t = 3_600_000
+    grid_slots = [(0, t, 0), (1, t, 0)]
+    model = build_model(
+        [([0], 0), ([1], 0)],
+        2,
+        grid_slots,
+        40,
+        _two_court_constraints(),
+        [],
+        [],
+        allowed_courts=[{1}, None],
+    )
+    outcome = solve(model, wall_seconds=5.0)
+    by_fixture = {f: c for f, c, _start in outcome.assignments}
+    assert by_fixture.get(0) == 1, (
+        f"fixture 0 is allowed only court 1, got {outcome.assignments}"
+    )
+
+
+def test_a_narrowed_fixture_cannot_be_forced_onto_a_disallowed_court():
+    """The deterministic half of the test above, in the shape
+    `test_a_fixture_cannot_be_forced_onto_a_court_at_a_tick_it_does_not_offer`
+    already uses: a free solve landing on the right court proves the objective
+    preferred it, not that the model FORBIDS the other one. Forcing the
+    presence boolean and asserting INFEASIBLE is what proves the constraint.
+    """
+    t = 3_600_000
+    grid_slots = [(0, t, 0), (1, t, 0)]
+    model = build_model(
+        [([0], 0)],
+        2,
+        grid_slots,
+        40,
+        _two_court_constraints(),
+        [],
+        [],
+        allowed_courts=[{1}],
+    )
+    model.Add(model.fixture_vars.presence_court[0][0] == 1)
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+    assert status == cp_model.INFEASIBLE, (
+        f"fixture 0 is allowed only court 1 yet was forced onto court 0 and the model "
+        f"allowed it: status={solver.StatusName(status)}"
+    )
+
+
+def test_an_unconstrained_fixture_adds_no_constraints_at_all():
+    """`None` (and a set already covering every court) must cost NOTHING.
+
+    The efficiency claim section 1c makes, checked structurally the same way
+    `test_per_court_domain_adds_constraints_only_when_courts_disagree` checks
+    section 1b's: a board that does not use round-scoped tags — every board in
+    production today — must produce a model byte-identical to one built before
+    the parameter existed.
+    """
+    t = 3_600_000
+    grid_slots = [(c, t + k * 40 * MIN_MS, 0) for c in (0, 1) for k in range(2)]
+    args = ([([0], 0)], 2, grid_slots, 40, _two_court_constraints(), [], [])
+
+    baseline = build_model(*args)
+    unset = build_model(*args, allowed_courts=None)
+    explicit_none = build_model(*args, allowed_courts=[None])
+    every_court = build_model(*args, allowed_courts=[{0, 1}])
+    narrowed = build_model(*args, allowed_courts=[{0}])
+
+    # `str(model.Proto())` (protobuf text format) rather than
+    # `SerializeToString`: ortools' CpModelProto wrapper exposes no
+    # serialisation method, and the text form compares the whole model --
+    # every constraint, in order -- not merely its length, so a swap that
+    # kept the count identical would still be caught.
+    baseline_proto = str(baseline.Proto())
+    assert str(unset.Proto()) == baseline_proto
+    assert str(explicit_none.Proto()) == baseline_proto
+    assert str(every_court.Proto()) == baseline_proto, (
+        "a fixture allowed every court is unconstrained -- stating it must not "
+        "change the model"
+    )
+    assert str(narrowed.Proto()) != baseline_proto, (
+        "a genuinely narrowed fixture must change the model, or the three "
+        "equality assertions above prove nothing"
+    )
+
+
+def test_narrowing_two_rounds_of_one_stage_apart_is_expressible():
+    """#622's motivating case, end to end at the model layer.
+
+    A knockout stage's semi-finals and its final, in ONE request: the two
+    semis may use either court, the final is restricted to the championship
+    court (court 1). This is precisely what a stage-level tag cannot express —
+    a single tag list for the whole stage would either confine all three
+    fixtures to court 1 or confine none of them.
+    """
+    t = 3_600_000
+    later = t + 40 * MIN_MS
+    grid_slots = [(c, start, 0) for c in (0, 1) for start in (t, later)]
+    model = build_model(
+        [([0], 0), ([1], 0), ([2], 0)],
+        2,
+        grid_slots,
+        40,
+        _two_court_constraints(),
+        [],
+        [],
+        allowed_courts=[None, None, {1}],
+    )
+    outcome = solve(model, wall_seconds=5.0)
+    placed = {f: (c, start) for f, c, start in outcome.assignments}
+    assert len(placed) == 3, f"all three fixtures should place, got {outcome.assignments}"
+    assert placed[2][0] == 1, f"the final must be on court 1, got {outcome.assignments}"
+
+
 def test_a_pin_past_the_last_admissible_tick_does_not_brick_the_whole_solve():
     """#511 REGRESSION. `mk_hi >= pin + dur_ms` is a HARD constraint, so the
     horizon `mk_hi` is declared over has to cover pins and not only admissible

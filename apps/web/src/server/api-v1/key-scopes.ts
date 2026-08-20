@@ -216,6 +216,8 @@ const RULES: RouteRule[] = [
   { method: "GET", path: "/stages/:id/americano", scope: "read", pin: "stage" },
   { method: "POST", path: "/stages/:id/challenges", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/complete", scope: "manage", pin: "stage" },
+  { method: "GET", path: "/stages/:id/court-tags", scope: "read", pin: "stage" },
+  { method: "PUT", path: "/stages/:id/court-tags", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/fixtures", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/generate", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/officials/source", scope: "manage", pin: "stage" },
