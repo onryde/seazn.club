@@ -155,8 +155,7 @@ commands:
             nvm install 26
             nvm alias default 26
             echo 'nvm use 26 >/dev/null' >> "$BASH_ENV"
-            corepack enable
-            corepack prepare pnpm@10.34.5 --activate
+            npm install -g pnpm@10.34.5
             node --version && pnpm --version
 
   pnpm_install:
