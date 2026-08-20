@@ -1,0 +1,650 @@
+version: 2.1
+
+# ============================================================================
+# E2E — Playwright UI suite. Ported from .github/workflows/e2e.yml.
+#
+# WHAT CHANGED IN THE PORT, and why. Read this before editing.
+#
+# 1. THREE JOBS -> ONE PARAMETERISED JOB, SEVEN INVOCATIONS.
+#    The GHA file carried e2e-parallel / e2e-serial / e2e-mobile as three
+#    near-identical job bodies: the same checkout, pnpm install, Flyway
+#    migrate, sport sync, production build, placement image, Chromium
+#    download, server start and teardown, copy-pasted three times. Everything
+#    that differed between them was ONE `npx playwright test` argument list
+#    plus one env var. So there is now a single `e2e` job taking
+#    `playwright_args` and `parallel_slice`, invoked seven times in the
+#    workflow below. The three original groupings survive as names and as the
+#    comment blocks on those invocations, which is where their reasoning
+#    belongs — it was never structural.
+#
+# 2. EACH LEG STILL GETS ITS OWN DATABASE. This is load-bearing and survived
+#    the deduplication intact. GHA `services:` are job-scoped; a CircleCI
+#    `machine` executor is a fresh VM per job, so each of the seven legs
+#    starts its own `postgres:16` container, runs its own Flyway migrate and
+#    mints its own `setup`-project org. Nothing is shared, in either
+#    direction: not across the three parallel shards, not across the three
+#    mobile width bands, not between the bands and serial. The two
+#    constraints the GHA header separated still read the same way here:
+#      * WITHIN a leg the widths must stay serialized (`--workers=1`),
+#        because they share that leg's one `setup` org — the documented
+#        "7 widths race one org" flakiness.
+#      * ACROSS legs there is no race at all, because of the paragraph above.
+#    Do not consolidate the legs onto one database to "save time". The whole
+#    reason the widths are safe to spread is that each leg is isolated.
+#
+# 3. THE BUILD IS NOW PAID ONCE, NOT SEVEN TIMES. The production build
+#    (52-55s per runner) and the placement image build (~18s) produce
+#    byte-identical artefacts in every leg — unlike the database, they have
+#    no per-leg state to preserve. They move to a `build` job that runs once
+#    and hands `.next/standalone` (with `.next/static` already staged into
+#    it) and a `docker save` tarball to the legs over a workspace. Seven legs
+#    x ~70s of duplicated compile becomes one x ~70s plus ~15-25s of
+#    workspace attach each. The DB steps deliberately did NOT move: they are
+#    the part that must stay duplicated.
+#
+# 4. `background:` / `wait:` DO NOT EXIST HERE. Those were Blacksmith
+#    extensions. CircleCI has `background: true` on `run` steps but no join
+#    primitive and no failure propagation — a backgrounded step that dies is
+#    silently ignored. So backgrounded work writes an .ok/.fail sentinel into
+#    /tmp/join and a foreground `Join` step polls for it and re-prints the
+#    captured log. Same shape, same caveat as the GHA version: a red on the
+#    join means "read the log the join just dumped", not "the join is broken".
+#
+# 5. PLAYWRIGHT CACHE: RESTORE-ONLY IN THE LEGS, unchanged in spirit. GHA had
+#    seven jobs racing one key on save and six losing it every run. CircleCI
+#    cache keys are immutable — a second writer is a no-op rather than an
+#    error — but the fix is the same and cheaper: only `warm-playwright-cache`
+#    (main only) writes the key; the legs restore it. A miss is not fatal,
+#    just slow: the leg falls through to a real download.
+#
+# 6. NO CONFIG EQUIVALENT for two GHA features, both handled outside this file:
+#    * `concurrency: cancel-in-progress` -> Project Settings > Advanced >
+#      "Auto-cancel redundant workflows".
+#    * `timeout-minutes: 20` -> there is no job-level wall clock in config.
+#      The hang that burned 360 minutes was always inside Playwright, so the
+#      test step wraps in `timeout 18m` and sets `no_output_timeout`. That
+#      covers the observed failure mode; a hang in `pnpm install` would still
+#      ride CircleCI's 5-hour ceiling.
+# ============================================================================
+
+parameters:
+  pr:
+    type: string
+    default: ""
+    description: >
+      PR number to run the e2e suite against (empty = the branch that
+      triggered the pipeline). Replaces the workflow_dispatch input; pass it
+      through the CircleCI API when triggering a run manually.
+
+# --- Shared environment ------------------------------------------------------
+# One anchor instead of the three verbatim copies the GHA file carried. Every
+# comment on these values is a real constraint, not decoration.
+x_e2e_env: &e2e_env
+  # Superuser connection so the app can `set role app_user` (RLS). Local =>
+  # no SSL. Port 5432 keeps prepared statements on (not the Supabase pooler).
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+  DATABASE_SSL: disable
+  # Session signing secret (jose HS256) — CI-only dummy.
+  AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+  # Stub, not empty: publicStorageUrl("") hides every badge/crest, making logo
+  # assertions untestable. No real Supabase call rides on it in e2e.
+  NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
+  NEXT_TELEMETRY_DISABLED: "1"
+  # Production builds never dev-expose `login_url`, so the auth helpers mint
+  # login tokens straight in this leg's own Postgres and skip the specs that
+  # assert dev link exposure. Runs leave TAG-prefixed users/orgs behind in
+  # that throwaway DB, which dies with the VM.
+  E2E_PROD_TARGET: "1"
+  # payments-hardening.spec.ts fires signed synthetic webhooks at the REAL
+  # /api/webhooks/stripe route. constructEvent needs a non-empty secret key
+  # (any value — verification uses the webhook secret) and the known webhook
+  # secret to sign against. No real Stripe call is made.
+  STRIPE_SECRET_KEY: sk_test_ci_e2e_dummy
+  STRIPE_WEBHOOK_SECRET: whsec_e2e_payments
+  # ai-architect.spec.ts starts a model fixture server on 4319; the app server
+  # must point anthropicClient() at it and carry a non-empty key so the
+  # ai-plan routes never 503. No real Anthropic call is made.
+  SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
+  ANTHROPIC_API_KEY: sk-ant-e2e-fixture
+
+executors:
+  # `machine`, not `docker`, and the choice is forced. The suite needs the
+  # placement service reachable on localhost:50051 from both the Next server
+  # and the specs. Under a docker executor that container would live behind
+  # `setup_remote_docker`, on a different host with no localhost path back —
+  # `build.ts` would catch the transport failure, return a greedy board, and
+  # placement-cutover.spec.ts would fail by design. A machine VM runs Docker
+  # on the same host, so `-p 50051:50051` lands where the app expects it.
+  #
+  # `large` is 4 vCPU / 15 GB, matching the blacksmith-4vcpu runners these
+  # timings were measured on. Do not raise it to "fix" flakiness: both
+  # failures on 2026-08-13 were timeouts under contention, which is what
+  # `--workers=1` and the leg split address.
+  linux-vm:
+    machine:
+      image: ubuntu-2404:current
+      docker_layer_caching: true
+    resource_class: large
+    working_directory: ~/repo
+
+# ============================================================================
+# Commands — every step that appeared three times in the GHA file lives here
+# exactly once.
+# ============================================================================
+commands:
+  checkout_ref:
+    description: Checkout, honouring the optional `pr` pipeline parameter.
+    steps:
+      - checkout
+      - when:
+          condition: << pipeline.parameters.pr >>
+          steps:
+            - run:
+                name: Check out PR << pipeline.parameters.pr >> head
+                command: |
+                  git fetch --no-tags origin "pull/<< pipeline.parameters.pr >>/head"
+                  git checkout --detach FETCH_HEAD
+
+  node_toolchain:
+    description: Node 26 + pnpm 10.34.5, pinned to match the GHA setup steps.
+    steps:
+      - run:
+          name: Install Node 26 and pnpm 10.34.5
+          command: |
+            set -eo pipefail   # NOT -u: nvm trips over unset vars
+            nvm install 26
+            nvm alias default 26
+            echo 'nvm use 26 >/dev/null' >> "$BASH_ENV"
+            corepack enable
+            corepack prepare pnpm@10.34.5 --activate
+            node --version && pnpm --version
+
+  pnpm_install:
+    description: Dependency install, backed by the pnpm store cache.
+    steps:
+      - restore_cache:
+          keys:
+            - pnpm-v1-{{ arch }}-{{ checksum "pnpm-lock.yaml" }}
+            - pnpm-v1-{{ arch }}-
+      - run:
+          name: pnpm install --frozen-lockfile
+          command: pnpm install --frozen-lockfile
+      - save_cache:
+          # Keyed on the lockfile, so a hit is exact and a re-save only
+          # happens when dependencies actually change.
+          key: pnpm-v1-{{ arch }}-{{ checksum "pnpm-lock.yaml" }}
+          paths:
+            - ~/.local/share/pnpm/store
+
+  start_own_postgres:
+    description: >
+      THIS LEG'S OWN DATABASE. Nothing is shared with any other leg — see
+      point 2 of the header. Backgrounded because the image pull and the
+      Chromium download have no reason to queue behind each other.
+    steps:
+      - run:
+          name: Start this leg's own Postgres 16 (background)
+          background: true
+          command: |
+            if docker run -d --name pg-e2e \
+                 -e POSTGRES_USER=postgres \
+                 -e POSTGRES_PASSWORD=postgres \
+                 -e POSTGRES_DB=postgres \
+                 -p 5432:5432 postgres:16 > /tmp/join/postgres.log 2>&1; then
+              touch /tmp/join/postgres.ok
+            else
+              touch /tmp/join/postgres.fail
+            fi
+      # No Redis, on purpose: without REDIS_URL the rate limiter is inert
+      # (lib/rate-limit.ts), so the suite's magic-link logins can't trip the
+      # fail-closed 5-per-5-min email budget.
+
+  await_postgres:
+    steps:
+      - run:
+          name: Wait for this leg's Postgres to accept connections
+          command: |
+            set -euo pipefail
+            for _ in $(seq 1 30); do
+              [ -f /tmp/join/postgres.fail ] && { cat /tmp/join/postgres.log; exit 1; }
+              if docker exec pg-e2e pg_isready -U postgres >/dev/null 2>&1; then
+                echo "postgres ready"; exit 0
+              fi
+              sleep 2
+            done
+            echo "postgres never became ready"
+            cat /tmp/join/postgres.log || true
+            docker logs pg-e2e || true
+            exit 1
+
+  bootstrap_db:
+    description: >
+      Flyway migrate + sport sync. Stays PER LEG — this is the duplication
+      the header argues for, not against. Each leg migrates the database it
+      just started for itself.
+    steps:
+      - restore_cache:
+          # Flyway CLI is downloaded by scripts/flyway.sh on first use; cache
+          # it per pinned version so CI doesn't re-download every run.
+          keys:
+            - flyway-cli-10.22.0-linux-x64
+      - run:
+          name: Bootstrap database (Flyway migrate)
+          command: npm run db:apply
+      - run:
+          name: Sync sport catalog from the engine registry
+          command: npm run sync:sports
+      - save_cache:
+          key: flyway-cli-10.22.0-linux-x64
+          paths:
+            - ~/.cache/seazn-flyway
+
+  start_placement_service:
+    description: >
+      A REAL solver, not a stub. placement-cutover.spec.ts exists to prove an
+      organiser clicking Auto-schedule gets a board the OPTIMISER produced,
+      and asserts `data-engine="optimized"` on the result strip. With no
+      reachable service, build.ts catches the transport failure and returns a
+      greedy board — correct behaviour, and it makes that spec fail by design
+      (its negative control is "service down -> FAIL"). Without this
+      container the spec could only ever prove the fallback.
+    steps:
+      - run:
+          name: Load the placement image built upstream
+          command: docker load -i .ci-artifacts/placement-service.tar
+      - run:
+          name: Start the placement service
+          command: |
+            set -euo pipefail
+            docker run -d --name placement-e2e -p 50051:50051 \
+              -e PLACEMENT_SERVICE_SECRET=ci-e2e-secret \
+              placement-service:ci
+            opened=""
+            for _ in $(seq 1 15); do
+              if timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/50051' 2>/dev/null; then opened=1; break; fi
+              sleep 1
+            done
+            if [ -z "$opened" ]; then
+              echo "placement port 50051 never accepted a TCP connection within 15s"
+              docker logs placement-e2e || true
+              exit 1
+            fi
+
+  start_web_server:
+    description: >
+      Serve the standalone output, the way fly.toml does (#356), and never
+      `next dev`: dev pins its V8 heap to half the runner's RAM and restarts
+      itself past ~80% use, with transient 404s from Turbopack's on-demand
+      compiles as it nears the ceiling. `next start` has neither the watchdog
+      nor per-request compiles, and is what production runs anyway.
+
+      `.next/static` was already staged into the standalone tree by the
+      `build` job — that used to be a per-job `rm -rf` + `cp -R`, and it is
+      the one piece of the old server-start step that was safe to hoist,
+      because it is a property of the build and not of the leg. Without it
+      the server answers /api/health and HTML 200 while every
+      /_next/static/*.js 404s, and specs fail one at a time on clicks that
+      look like product bugs (#342).
+    parameters:
+      env_prefix:
+        type: string
+        default: ""
+    steps:
+      - run:
+          name: Start server
+          # PLACEMENT_SERVICE_HOST goes on the SERVER, not on the Playwright
+          # step: build.ts runs server-side, so the server is what dials the
+          # solver. Set only on the test step, the app would keep dialling
+          # the production default (placement.flycast:50051) — unreachable
+          # from a runner — and every board would come back greedy while the
+          # suite reported on it.
+          environment:
+            PLACEMENT_SERVICE_HOST: localhost:50051
+            PLACEMENT_SERVICE_SECRET: ci-e2e-secret
+          command: |
+            set -euo pipefail
+            STANDALONE=apps/web/.next/standalone/apps/web
+            node "$STANDALONE/server.js" > dev-server.log 2>&1 &
+            echo "waiting for server…"
+            up=""
+            for i in $(seq 1 90); do
+              if curl -sf http://localhost:3000/api/health >/dev/null; then
+                echo "server up after ${i}s window"; up=1; break
+              fi
+              sleep 2
+            done
+            if [ -z "$up" ]; then
+              echo "server did not become healthy"; cat dev-server.log; exit 1
+            fi
+            chunk=$(ls "$STANDALONE"/.next/static/chunks/*.js 2>/dev/null | head -1)
+            if [ -z "$chunk" ]; then
+              echo "no built chunks found — build output is not where expected"; exit 1
+            fi
+            asset="/_next/${chunk#"$STANDALONE"/.next/}"
+            if ! curl -sf "http://localhost:3000$asset" >/dev/null; then
+              echo "static asset $asset 404s — standalone tree not staged"
+              cat dev-server.log; exit 1
+            fi
+            echo "static assets serve ($asset)"
+
+  collect_diagnostics:
+    description: >
+      Reports, server log, container logs. Teardown runs LAST so the
+      container outlives every step that needs it — in ci.yml an earlier
+      revision tore its container down straight after the vitest step and the
+      smoke run failed eleven steps later with a message that named the WASM
+      and had nothing to do with it.
+    steps:
+      - store_artifacts:
+          # Unlike upload-artifact@v4, CircleCI namespaces artifacts by job,
+          # so the `slug` field the GHA matrix carried purely to dodge "/" in
+          # a name and duplicate-name failures is gone.
+          path: apps/web/playwright-report
+          destination: playwright-report
+          when: on_fail
+      - store_test_results:
+          # Requires the junit reporter in playwright.config.ts. Harmless if
+          # absent; gives CircleCI per-test timing and flake detection, which
+          # is what the leg-count arithmetic below needs to stay honest.
+          path: apps/web/test-results
+      - run:
+          name: Dev server log (on failure)
+          when: on_fail
+          command: cat dev-server.log || true
+      - run:
+          name: Placement service logs and teardown
+          when: always
+          command: |
+            docker logs placement-e2e || true
+            docker rm -f placement-e2e >/dev/null 2>&1 || true
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Built ONCE for all seven legs. See header point 3: the production build
+  # and the placement image are identical in every leg and have no per-leg
+  # state, unlike the database.
+  #
+  # There is no "Cache Next.js build cache" step, and its absence is
+  # deliberate. It claimed the build "only pays for what changed"; it did
+  # not. Next 16 builds with Turbopack, which does not write a build cache to
+  # .next/cache unless experimental.turbopackFileSystemCacheForBuild is on —
+  # so the step restored an exact-key hit of 40 KB in every job of every run
+  # while each one still paid a full 29-58s cold compile. Turning that flag
+  # on is a change to what we BUILD, not to how we cache it; reinstate the
+  # step in the same commit that enables it.
+  # ---------------------------------------------------------------------
+  build:
+    executor: linux-vm
+    steps:
+      - checkout_ref
+      - node_toolchain
+      - pnpm_install
+      - run:
+          name: Prepare join directory
+          command: mkdir -p /tmp/join .ci-artifacts
+      - run:
+          name: Build (production, background)
+          background: true
+          environment:
+            SKIP_TYPECHECK: "1"
+          command: |
+            if npm run build --workspace apps/web > /tmp/join/build.log 2>&1; then
+              touch /tmp/join/build.ok
+            else
+              touch /tmp/join/build.fail
+            fi
+      - run:
+          name: Build the placement service image (background)
+          background: true
+          command: |
+            if docker build -t placement-service:ci \
+                 -f services/placement/Dockerfile services/placement \
+                 > /tmp/join/image.log 2>&1; then
+              touch /tmp/join/image.ok
+            else
+              touch /tmp/join/image.fail
+            fi
+      - run:
+          name: Wait for build and placement image
+          # The join. A backgrounded step's failure surfaces HERE rather than
+          # where it happened, so a red on this step means "read the log this
+          # step just dumped", not "the join is broken".
+          no_output_timeout: 20m
+          command: |
+            set -euo pipefail
+            join() {
+              for _ in $(seq 1 600); do
+                [ -f "/tmp/join/$1.ok" ] && { echo "== $1 ok =="; cat "/tmp/join/$1.log"; return 0; }
+                [ -f "/tmp/join/$1.fail" ] && { echo "== $1 FAILED =="; cat "/tmp/join/$1.log"; return 1; }
+                sleep 2
+              done
+              echo "== $1 timed out =="; cat "/tmp/join/$1.log" || true; return 1
+            }
+            join build
+            join image
+      - run:
+          name: Stage .next/static into the standalone tree
+          # Hoisted out of the seven per-leg server starts: this is a property
+          # of the build, not of the leg. `rm -rf` first because `cp -R src
+          # dst` with dst present copies INTO it.
+          command: |
+            set -euo pipefail
+            rm -rf apps/web/.next/standalone/apps/web/.next/static
+            cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
+      - run:
+          name: Export the placement image for the legs
+          command: docker save placement-service:ci -o .ci-artifacts/placement-service.tar
+      - persist_to_workspace:
+          root: .
+          paths:
+            - apps/web/.next/standalone
+            - .ci-artifacts/placement-service.tar
+
+  # ---------------------------------------------------------------------
+  # Writes the Playwright browser cache key. Main only, and the ONLY writer.
+  # In GHA all seven jobs raced this key on save and six lost it every run
+  # ("Unable to reserve cache with key playwright-…, another job may be
+  # creating this cache", run 32272599493). One writer, on a branch PRs
+  # inherit from, means the key exists before any PR needs it.
+  # ---------------------------------------------------------------------
+  warm-playwright-cache:
+    executor: linux-vm
+    steps:
+      - checkout_ref
+      - node_toolchain
+      - pnpm_install
+      - restore_cache:
+          keys:
+            - playwright-v1-{{ arch }}-{{ checksum "pnpm-lock.yaml" }}
+      - run:
+          name: Install Playwright Chromium
+          command: npx playwright install chromium
+          working_directory: ~/repo/apps/web
+      - save_cache:
+          key: playwright-v1-{{ arch }}-{{ checksum "pnpm-lock.yaml" }}
+          paths:
+            - ~/.cache/ms-playwright
+
+  # ---------------------------------------------------------------------
+  # THE one e2e job. Seven invocations below; the only things that vary are
+  # the Playwright arguments and one env var.
+  # ---------------------------------------------------------------------
+  e2e:
+    executor: linux-vm
+    parameters:
+      playwright_args:
+        type: string
+        description: Project selection, sharding and worker count for this leg.
+      parallel_slice:
+        type: string
+        default: ""
+        description: >
+          E2E_PARALLEL_SLICE — "heavy" or "rest", consumed by
+          playwright.config.ts. Empty for the serial and mobile legs.
+    environment:
+      <<: *e2e_env
+    steps:
+      - checkout_ref
+      - node_toolchain
+      - run:
+          name: Prepare join directory
+          command: mkdir -p /tmp/join
+      - start_own_postgres
+      - attach_workspace:
+          at: ~/repo
+      - pnpm_install
+      - restore_cache:
+          # RESTORE ONLY — warm-playwright-cache is the sole writer.
+          keys:
+            - playwright-v1-{{ arch }}-{{ checksum "pnpm-lock.yaml" }}
+      - run:
+          name: Install Playwright Chromium (background)
+          # No `--with-deps`. It installed NOTHING on this image — every
+          # package it names came back "already the newest version" (run
+          # 32272599493) — while still paying a full apt-get update in all
+          # seven jobs. Chromium refuses to launch with a clear
+          # host-dependency error if that stops being true, so the failure
+          # mode is loud, not silent.
+          background: true
+          command: |
+            if (cd apps/web && npx playwright install chromium) > /tmp/join/chromium.log 2>&1; then
+              touch /tmp/join/chromium.ok
+            else
+              touch /tmp/join/chromium.fail
+            fi
+      - await_postgres
+      - bootstrap_db
+      - run:
+          name: Wait for Chromium
+          command: |
+            set -euo pipefail
+            for _ in $(seq 1 300); do
+              [ -f /tmp/join/chromium.ok ] && { cat /tmp/join/chromium.log; exit 0; }
+              [ -f /tmp/join/chromium.fail ] && { cat /tmp/join/chromium.log; exit 1; }
+              sleep 2
+            done
+            echo "chromium install timed out"; cat /tmp/join/chromium.log || true; exit 1
+      - start_placement_service
+      - start_web_server
+      - run:
+          name: Run Playwright e2e
+          working_directory: ~/repo/apps/web
+          # `timeout` stands in for GHA's timeout-minutes: 20. Over the 100
+          # runs to 2026-08-19, 15 e2e jobs ran past 30 minutes and burned 46%
+          # of this workflow's runner time (2,499 of 5,403 minutes); five ran
+          # the full 360-minute default before being killed. A hung Playwright
+          # job is not a slow job — it never finishes. p95 is ~7 minutes.
+          no_output_timeout: 10m
+          environment:
+            PLAYWRIGHT_BASE: http://localhost:3000
+            E2E_PARALLEL_SLICE: << parameters.parallel_slice >>
+          command: timeout --signal=TERM 18m npx playwright test << parameters.playwright_args >>
+      - collect_diagnostics
+
+workflows:
+  e2e:
+    jobs:
+      - build
+
+      - warm-playwright-cache:
+          filters:
+            branches:
+              only: main
+
+      # -----------------------------------------------------------------
+      # parallel — specs that only touch state they create (own
+      # competitions/divisions), safe at several workers and within a file.
+      # See playwright.config.ts's `parallel` project, which pins CI to 2
+      # workers; the legs get their own VMs, so each keeps 2 workers on its
+      # own 4 cores rather than contending for one runner's.
+      #
+      # Not `--shard=N/3`. Playwright shards by TEST COUNT over a contiguous,
+      # file-ordered slice and has no idea what a test costs:
+      # e2e/scorepad-v3-cricket.spec.ts alone is ~90s of the project's ~368s
+      # and sits in the alphabetical tail, so shard 3/3 measured 176s against
+      # 89s and 87s (run 32272599493), 170s against 87s and 77s (32269332414),
+      # 227s against 147s and 112s (32214432854). One leg for the expensive
+      # files, two sharding everything else: predicted 128 / 126 / 115s
+      # against a perfect-split floor of 123s. The slice is selected in
+      # playwright.config.ts via E2E_PARALLEL_SLICE, where "rest" is a
+      # catch-all — a new spec joins the sharded remainder on its own, and
+      # only a file named in PARALLEL_HEAVY can leave it. Read that file's
+      # comment, which carries the derivation, before changing the split.
+      # -----------------------------------------------------------------
+      - e2e:
+          name: e2e-parallel-1
+          requires: [build]
+          playwright_args: "--project=parallel --shard=1/2"
+          parallel_slice: rest
+      - e2e:
+          name: e2e-parallel-2
+          requires: [build]
+          playwright_args: "--project=parallel --shard=2/2"
+          parallel_slice: rest
+      - e2e:
+          name: e2e-parallel-heavy
+          requires: [build]
+          playwright_args: "--project=parallel"
+          parallel_slice: heavy
+
+      # -----------------------------------------------------------------
+      # serial — specs entangled with shared org-level state: owned-org quota
+      # (billing, billing-states, org-management all mint orgs on the shared
+      # Pro user — cap + reasoning in e2e/auth.setup.ts, "ORG BUDGET"), the
+      # community org's competitions.max_active slots (journey-community,
+      # device-links), org renames, plan flips, and the single Pro scorer
+      # seat. One worker, one file at a time. playwright.config.ts's `serial`
+      # project sets fullyParallel: false too — belt and suspenders with the
+      # --workers=1 here.
+      # -----------------------------------------------------------------
+      - e2e:
+          name: e2e-serial
+          requires: [build]
+          playwright_args: "--project=serial --workers=1"
+
+      # -----------------------------------------------------------------
+      # mobile — v3/02 §4 viewport gate + #349 responsive matrix. All SEVEN
+      # widths, spread over three legs. playwright.config.ts has always
+      # defined mobile-320/360/430 and tablet-768/834, but before the split
+      # no workflow ever invoked them: only mobile-se (375) and mobile-14
+      # (390) ever ran. AGENTS.md calls the seven-width matrix "the
+      # enforcement backstop"; it was 2 of 7 in practice.
+      #
+      # `--workers=1` is per leg and must NOT be raised: fullyParallel: true
+      # is global, and the widths within a leg all exercise mobile.spec.ts
+      # against the SAME org minted by that leg's `setup` project — the
+      # documented "7 widths race one org" flakiness (a settings-rename hangs
+      # 60s on a disabled Save under contention). Across legs there is no
+      # such race: each leg is its own VM with its own Postgres and its own
+      # org. Full suite per width (owner decision, spec §1); LCP self-pins to
+      # 375/390 inside the test, so no leg needs to own both.
+      #
+      # Grouped by device class, not round-robin, so a red leg names a
+      # coherent band ("tablets are broken") instead of an arbitrary third of
+      # the matrix. 3/2/2 rather than 3/3/1: the legs are ~21 tests per
+      # width, so the longest sets the wall clock and 3/3/1 would waste a
+      # runner on 21 tests behind a full setup.
+      #
+      # LEG COUNT, and how to revisit it. Under GHA this job was the
+      # workflow's floor: phones-small measured 244s on run 32272599493
+      # against e2e-parallel's predicted ~234s. That comparison is now stale
+      # in ONE direction only — the shared `build` job removed ~70s of
+      # compile from every leg here and there alike, so the ordering is
+      # probably unchanged but the absolute numbers are not. Re-measure
+      # before splitting further, and do it the way both jobs' comments
+      # always insisted: against the other jobs' slowest leg, never against
+      # this one in isolation. Splitting finer than the floor buys NOTHING in
+      # wall clock while paying per-leg setup again.
+      # -----------------------------------------------------------------
+      - e2e:
+          name: e2e-mobile-phones-small
+          requires: [build]
+          playwright_args: "--project=mobile-320 --project=mobile-360 --project=mobile-se --workers=1"
+      - e2e:
+          name: e2e-mobile-phones-large
+          requires: [build]
+          playwright_args: "--project=mobile-14 --project=mobile-430 --workers=1"
+      - e2e:
+          name: e2e-mobile-tablets
+          requires: [build]
+          playwright_args: "--project=tablet-768 --project=tablet-834 --workers=1"
