@@ -18,6 +18,14 @@ export const Uuid = z.uuid();
  *  named separately so a stored `ScheduleConfig.courts` entry documents what
  *  it actually references (never a free-text court name post-migration). */
 export const CourtId = Uuid;
+
+/** One tag vocabulary, every scope it is required at: a court's own `tags`
+ *  (`CreateCourt`), and every `required_court_tags` list matched against them —
+ *  division (`PatchDivision`), stage and round role (`StageRoundCourtTags`,
+ *  #622). ONE bounds declaration rather than a fourth hand-copy of
+ *  `z.array(z.string().min(1).max(40)).max(50)` that can drift from the rest
+ *  the next time the cap changes. */
+export const RequiredCourtTags = z.array(z.string().min(1).max(40)).max(50);
 /** A real `venues.id` (V374 cutover — `fixtures.venue_id`, backfilled from
  *  the legacy free-text `fixtures.venue`). P9 pass 3a's own sibling of
  *  `CourtId`, same reasoning. */
@@ -191,7 +199,7 @@ export const PatchDivision = z
      *  candidates.ts`'s `resolveCandidateCourts`, unioned with the sibling
      *  `stages.required_court_tags` (V367) — that column's own CRUD still
      *  does not exist, only its read into this union. */
-    required_court_tags: z.array(z.string().min(1).max(40)).max(50),
+    required_court_tags: RequiredCourtTags,
   })
   .partial()
   .refine((p) => Object.keys(p).length > 0, "empty patch");
@@ -678,10 +686,6 @@ const RoundRoleKey = z
   .min(1)
   .max(40)
   .regex(/^[a-z][a-z0-9_]*$/, "not a round role key");
-
-/** Same bounds as `PatchDivision.required_court_tags` — one tag vocabulary,
- *  three scopes. */
-const RequiredCourtTags = z.array(z.string().min(1).max(40)).max(50);
 
 export const StageRoundCourtTags = z.object({
   round_role: RoundRoleKey,
@@ -3920,7 +3924,7 @@ export const PatchVenue = CreateVenue.partial();
 export const CreateCourt = z.object({
   name: z.string().min(1).max(200),
   sort: z.number().int().default(0),
-  tags: z.array(z.string().min(1).max(40)).max(50).default([]),
+  tags: RequiredCourtTags.default([]),
 });
 
 export const PatchCourt = CreateCourt.partial();

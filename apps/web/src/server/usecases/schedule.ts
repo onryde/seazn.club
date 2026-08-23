@@ -66,9 +66,9 @@ import { capacityInputForFixtures, guardCapacity } from "./capacity-guard";
 import {
   candidateCourtsByFixture,
   guardNoMatchingCourt,
+  guardNoMatchingCourtPerFixture,
   requiredCourtTagsByFixture,
   resolveCandidateCourts,
-  resolveTagQualifiedCourtIds,
   tagQualifiedCourtIdsByFixture,
   unionRequiredCourtTags,
 } from "./court-candidates";
@@ -1404,12 +1404,14 @@ export async function autoSchedule(
       stage.division_required_court_tags,
       stage.stage_required_court_tags,
     );
-    const candidateCourtIds = await resolveCandidateCourts(
-      tx,
-      stage.division_id,
-      settings.config.courts,
-      requiredCourtTags,
-    );
+    // #622 review (finding #9): these two are independent reads over the same
+    // open tx — `resolveCandidateCourts` resolves the STAGE-WIDE set,
+    // `requiredCourtTagsByFixture` the per-fixture tag map `candidateCourtsByFixture`
+    // narrows below — so there is no ordering dependency to serialise them for.
+    const [candidateCourtIds, fixtureTags] = await Promise.all([
+      resolveCandidateCourts(tx, stage.division_id, settings.config.courts, requiredCourtTags),
+      requiredCourtTagsByFixture(tx, stage.division_id, stage.division_required_court_tags),
+    ]);
     // #622: the stage-wide set above is now a FLOOR, not the whole answer. A
     // round-scoped tag narrows individual fixtures BELOW it (only the final
     // needs the championship court), so each movable fixture carries its own
@@ -1418,15 +1420,11 @@ export async function autoSchedule(
     // intersection would delete the slots the un-narrowed rounds must use.
     //
     // Resolved through the shared `requiredCourtTagsByFixture`/
-    // `candidateCourtsByFixture` pair, the SAME two `validateScheduleIn` and
-    // `buildSchedulePack` resolve through, so the three cannot disagree about
-    // a fixture's candidate set — the fork court-candidates.ts's header opens
-    // by warning about, now with a third scope to fork over.
-    const fixtureTags = await requiredCourtTagsByFixture(
-      tx,
-      stage.division_id,
-      stage.division_required_court_tags,
-    );
+    // `candidateCourtsByFixture` pair (fetched alongside `candidateCourtIds`
+    // above), the SAME two `validateScheduleIn` and `buildSchedulePack`
+    // resolve through, so the three cannot disagree about a fixture's
+    // candidate set — the fork court-candidates.ts's header opens by warning
+    // about, now with a third scope to fork over.
     const fixtureCandidates = await candidateCourtsByFixture(
       tx,
       stage.division_id,
@@ -1603,6 +1601,15 @@ export async function autoSchedule(
   // `declaredConfig`), the same "read declaredConfig" discipline
   // `guardCapacity` just below follows for the identical reason.
   guardNoMatchingCourt(plan.capacityConfig.courts, {
+    requiredTags: plan.requiredCourtTags,
+    divisionId: plan.divisionId,
+    stageId,
+  });
+  // #622 review: the stage-wide guard above cannot see a round-scoped tag
+  // that narrows a SINGLE fixture's own candidate set to empty while the
+  // stage-wide set stays non-empty (other rounds still have candidates) —
+  // see `guardNoMatchingCourtPerFixture`'s own doc comment.
+  guardNoMatchingCourtPerFixture(schedulable, {
     requiredTags: plan.requiredCourtTags,
     divisionId: plan.divisionId,
     stageId,
@@ -3107,10 +3114,24 @@ async function validateScheduleIn(
   // between the two reads. `validateAssignments` prefers the per-fixture
   // entry and falls back to the flat one; see its own doc comment.
   const fixtureTags = await requiredCourtTagsByFixture(tx, divisionId, requiredCourtTags);
-  const courtTagQualifiedIdsByFixture = await tagQualifiedCourtIdsByFixture(tx, fixtureTags);
-  const courtTagQualifiedIds = new Set<string>(
-    await resolveTagQualifiedCourtIds(tx, requiredCourtTags),
-  );
+  // #622 review (finding #9): the flat, division-wide fallback set used to be
+  // its own separate `resolveTagQualifiedCourtIds` call — a third DB scan that,
+  // for the overwhelmingly common case (no fixture's own stage/round narrows
+  // beyond the division), re-resolved a tag union `tagQualifiedCourtIdsByFixture`
+  // below already resolves and memoises for every fixture with no narrowing of
+  // its own (`requiredCourtTagsByFixture`'s `unionRequiredCourtTags(divisionTags,
+  // stageTags)` with an empty `stageTags` IS `requiredCourtTags`). A sentinel key
+  // that cannot collide with a fixture uuid rides through the SAME memoised
+  // resolver so the flat set costs nothing extra when a fixture already shares
+  // its tag union, and still resolves independently on the rare board where
+  // every fixture's own scope narrows past it.
+  const FLAT_FALLBACK_KEY = "__division_flat__";
+  const tagsForResolve = new Map(fixtureTags);
+  tagsForResolve.set(FLAT_FALLBACK_KEY, requiredCourtTags);
+  const qualifiedByFixtureAndFlat = await tagQualifiedCourtIdsByFixture(tx, tagsForResolve);
+  const courtTagQualifiedIds = new Set<string>(qualifiedByFixtureAndFlat.get(FLAT_FALLBACK_KEY)!);
+  const courtTagQualifiedIdsByFixture = new Map(qualifiedByFixtureAndFlat);
+  courtTagQualifiedIdsByFixture.delete(FLAT_FALLBACK_KEY);
   // C1 follow-up (2026-08-12, task 3 / G1). This function backs BOTH
   // `validateSchedule` (the board's live conflict report) and, through
   // `assertPublishable`, `publishSchedule`/`startDivision` — the write gate.

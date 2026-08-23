@@ -1854,7 +1854,7 @@ function AddMatchForm({
 // except a load failure here IS surfaced, because an empty editor that silently
 // failed to load would look like "no requirement" and a Save would then wipe
 // real rules.
-function StageCourtTagsEditor({
+export function StageCourtTagsEditor({
   stageId,
   canEdit,
   suggestions,
@@ -1890,6 +1890,8 @@ function StageCourtTagsEditor({
         setRounds(data.rounds);
         setAvailableRoles(data.available_round_roles);
         setLoaded(true);
+        setLoadError(false);
+        setError(null);
       })
       .catch((err: unknown) => {
         if (cancelled) return;

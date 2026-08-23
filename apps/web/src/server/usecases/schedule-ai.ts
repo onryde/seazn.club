@@ -2110,6 +2110,12 @@ export function toSchedulableFixtures(pack: SchedulePack): SchedulableFixture[] 
     ...(pack.poolIds[f.id] !== undefined ? { poolId: pack.poolIds[f.id]! } : {}),
     divisionId: pack.division.id,
     ...(pack.stageIds[f.id] !== undefined ? { stageId: pack.stageIds[f.id]! } : {}),
+    // #622 review: `PackFixture.courts` (present only when this fixture's own
+    // division ∪ stage ∪ round tags narrow it below the pack-wide set — see
+    // that field's own doc comment) was never copied here, so the CP-SAT
+    // repair round this feeds (`solveBoard`, below) had no idea a round-scoped
+    // tag existed and could relocate a tagged fixture onto any court.
+    ...(f.courts !== undefined ? { allowedCourts: f.courts } : {}),
   }));
 }
 

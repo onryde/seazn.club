@@ -204,6 +204,41 @@ export function guardNoMatchingCourt(
   });
 }
 
+/**
+ * The PER-FIXTURE sibling of `guardNoMatchingCourt` above (#622 review): that
+ * guard only sees the STAGE-WIDE candidate set, so a round-scoped tag that
+ * narrows a single fixture's own set to empty — the stage-wide set stays
+ * non-empty, since other rounds still have candidates — sailed straight past
+ * it and into the solver, which (`build.ts`'s `allowedCourtsFor`) degrades an
+ * empty allowed set to "unconstrained" rather than inventing a solver-level
+ * meaning for it. That degrade is the documented, deliberate behaviour for a
+ * board the solver is merely REPORTING on; it is the wrong behaviour for a
+ * fresh SOLVE, which is exactly what `guardNoMatchingCourt`'s own doc comment
+ * says about calling it from `validateScheduleIn` — the same reasoning, one
+ * scope narrower.
+ *
+ * A LOCKED fixture is exempt: an organiser's own pin outranks a tag rule
+ * (ruling 3, this module's header) and is never filtered by `allowedCourts`
+ * (`calendar.ts`'s own doc comment on the field) — the verifier reports it as
+ * a non-blocking `court_tag_mismatch` instead of refusing a board that
+ * already exists.
+ */
+export function guardNoMatchingCourtPerFixture(
+  fixtures: readonly { id: string; locked?: unknown; allowedCourts?: readonly string[] }[],
+  context: { requiredTags: readonly string[]; divisionId: string; [key: string]: unknown },
+): void {
+  const victim = fixtures.find(
+    (f) => f.locked === undefined && f.allowedCourts !== undefined && f.allowedCourts.length === 0,
+  );
+  if (victim === undefined) return;
+  throw new HttpError(
+    422,
+    "No configured court matches this fixture's round-scoped required tags",
+    NO_MATCHING_COURT_CODE,
+    { requiredTags: [...context.requiredTags], candidateCount: 0, fixtureId: victim.id },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // #622 — PER-FIXTURE required court tags (division ∪ stage ∪ round role).
 //
@@ -339,21 +374,22 @@ function tagKey(tags: readonly string[]): string {
 }
 
 /**
- * `requiredCourtTagsByFixture` resolved the rest of the way: fixture id -> the
- * candidate court ids that fixture may be placed on.
- *
- * MEMOISED ON THE TAG UNION, not called per fixture. `resolveCandidateCourts`
- * re-runs the full org court+venue join every call, and fixtures overwhelmingly
- * share a handful of distinct unions (usually one: the division's own tags), so
- * a 200-fixture division issues one or two scans rather than 200 — the same
- * memoisation `validateScheduleIn` and `buildSchedulePack` each already had to
- * hand-roll per stage, now written once.
+ * `candidateCourtsByFixture` and `tagQualifiedCourtIdsByFixture` below both
+ * turn a fixture-id -> tag-list map into a fixture-id -> court-id-list map,
+ * MEMOISED ON THE TAG UNION rather than called once per fixture —
+ * `resolveCandidateCourts`/`resolveTagQualifiedCourtIds` each re-run the full
+ * org court+venue join, and fixtures overwhelmingly share a handful of
+ * distinct unions (usually one: the division's own tags), so a 200-fixture
+ * division issues one or two `resolve` calls rather than 200. The two
+ * exported functions differ only in which single-tag-list resolver they
+ * memoise, so this is that memoisation written once rather than hand-copied
+ * per resolver — the same duplication `validateScheduleIn` and
+ * `buildSchedulePack` each already had to hand-roll per stage before either
+ * existed.
  */
-export async function candidateCourtsByFixture(
-  tx: Tx,
-  divisionId: string,
-  configuredCourtIds: readonly string[],
+async function memoisedByTagUnion(
   tagsByFixture: ReadonlyMap<string, readonly string[]>,
+  resolve: (tags: readonly string[]) => Promise<readonly string[]>,
 ): Promise<Map<string, readonly string[]>> {
   const byUnion = new Map<string, readonly string[]>();
   const out = new Map<string, readonly string[]>();
@@ -361,12 +397,27 @@ export async function candidateCourtsByFixture(
     const key = tagKey(tags);
     let ids = byUnion.get(key);
     if (ids === undefined) {
-      ids = (await resolveCandidateCourts(tx, divisionId, configuredCourtIds, tags)).ids;
+      ids = await resolve(tags);
       byUnion.set(key, ids);
     }
     out.set(fixtureId, ids);
   }
   return out;
+}
+
+/** `requiredCourtTagsByFixture` resolved the rest of the way: fixture id -> the
+ *  candidate court ids that fixture may be placed on. See `memoisedByTagUnion`
+ *  just above for the memoisation this hands off to. */
+export async function candidateCourtsByFixture(
+  tx: Tx,
+  divisionId: string,
+  configuredCourtIds: readonly string[],
+  tagsByFixture: ReadonlyMap<string, readonly string[]>,
+): Promise<Map<string, readonly string[]>> {
+  return memoisedByTagUnion(
+    tagsByFixture,
+    async (tags) => (await resolveCandidateCourts(tx, divisionId, configuredCourtIds, tags)).ids,
+  );
 }
 
 /**
@@ -380,23 +431,14 @@ export async function candidateCourtsByFixture(
  * and why answering it with the placer's set would retroactively red every
  * board sitting on a since-archived court.
  *
- * Memoised on the tag union exactly as `candidateCourtsByFixture` is, for the
- * identical reason.
+ * Memoised on the tag union exactly as `candidateCourtsByFixture` is (see
+ * `memoisedByTagUnion`, above), for the identical reason.
  */
 export async function tagQualifiedCourtIdsByFixture(
   tx: Tx,
   tagsByFixture: ReadonlyMap<string, readonly string[]>,
 ): Promise<Map<string, readonly string[]>> {
-  const byUnion = new Map<string, readonly string[]>();
-  const out = new Map<string, readonly string[]>();
-  for (const [fixtureId, tags] of tagsByFixture) {
-    const key = tagKey(tags);
-    let ids = byUnion.get(key);
-    if (ids === undefined) {
-      ids = [...(await resolveTagQualifiedCourtIds(tx, tags))];
-      byUnion.set(key, ids);
-    }
-    out.set(fixtureId, ids);
-  }
-  return out;
+  return memoisedByTagUnion(tagsByFixture, async (tags) => [
+    ...(await resolveTagQualifiedCourtIds(tx, tags)),
+  ]);
 }

@@ -34,7 +34,7 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { autoSchedule, putScheduleSettings, validateSchedule } from "../schedule";
 import { createVenue, createCourt } from "../venues";
-import { requiredCourtTagsByFixture } from "../court-candidates";
+import { NO_MATCHING_COURT_CODE, requiredCourtTagsByFixture } from "../court-candidates";
 import { getStageCourtTags, putStageCourtTags } from "../stage-court-tags";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -479,6 +479,56 @@ describe.skipIf(!HAS_DB)("autoSchedule — honours a round-scoped tag per fixtur
     expect(
       fixtures.filter((f) => f.round_no !== 2).some((f) => byFixture.get(f.id) === side.id),
     ).toBe(true);
+  });
+
+  it("refuses with 422 NO_MATCHING_COURT when a round tag matches no court — never places that round unconstrained", async () => {
+    // The wire, greedy, and CP-SAT all read `allowedCourts: []` as
+    // UNCONSTRAINED. Stamping that for a round whose tags match no court
+    // would place the round on any stage-wide court and only warn later.
+    // Stage-level empty already 422s; round-level empty must too.
+    const auth = await seedOrg();
+    const solveBuild = await spyOnPlacement();
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const side = await createCourt(auth, venue.id, { name: "Side", sort: 0, tags: [] });
+    const { stageId } = await seedStage(auth, "league", 4, [side.id]);
+    await putStageCourtTags(auth, stageId, {
+      rounds: [{ round_role: "plain_round_2", required_court_tags: ["championship"] }],
+    });
+
+    let caught: unknown;
+    try {
+      await autoSchedule(auth, stageId, { only_unlocked: true, mode: "reflow" });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toMatchObject({ status: 422, code: NO_MATCHING_COURT_CODE });
+    expect(solveBuild).not.toHaveBeenCalled();
+  });
+
+  it("does not refuse when the only empty-candidate fixtures are locked — a pin outranks the tag", async () => {
+    const auth = await seedOrg();
+    const solveBuild = await spyOnPlacement();
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const side = await createCourt(auth, venue.id, { name: "Side", sort: 0, tags: [] });
+    const { stageId } = await seedStage(auth, "league", 4, [side.id]);
+    await putStageCourtTags(auth, stageId, {
+      rounds: [{ round_role: "plain_round_2", required_court_tags: ["championship"] }],
+    });
+    const fixtures = await stageFixtures(stageId);
+    const roundTwo = fixtures.filter((f) => f.round_no === 2);
+    expect(roundTwo.length).toBe(2);
+    for (const [i, f] of roundTwo.entries()) {
+      await sql`
+        update fixtures
+        set scheduled_at = ${`2026-08-01T0${i}:00:00.000Z`},
+            court_id = ${side.id},
+            schedule_locked = true
+        where id = ${f.id}`;
+    }
+
+    const out = await autoSchedule(auth, stageId, { only_unlocked: true, mode: "reflow" });
+    expect(out).toBeDefined();
+    expect(solveBuild).toHaveBeenCalled();
   });
 });
 
