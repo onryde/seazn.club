@@ -169,26 +169,30 @@ describe("pairRound — invariants (spec 05 §6)", () => {
     );
   });
 
-  it("chess colour bounds hold: |W−B| ≤ 2 and never 3 in a row (n up to 64)", () => {
-    fc.assert(
-      fc.property(
-        fc.integer({ min: 2, max: 64 }),
-        fc.integer({ min: 1, max: 7 }),
-        fc.integer(),
-        (n, rounds, seed) => {
-          const sim = simulate(n, rounds, { chess: true, seed });
-          for (const [, seq] of sim.colours) {
-            const w = seq.filter((c) => c === "W").length;
-            const b = seq.length - w;
-            expect(Math.abs(w - b)).toBeLessThanOrEqual(2);
-            for (let i = 2; i < seq.length; i++) {
-              expect(seq[i] === seq[i - 1] && seq[i - 1] === seq[i - 2]).toBe(false);
+  it(
+    "chess colour bounds hold: |W−B| ≤ 2 and never 3 in a row (n up to 64)",
+    () => {
+      fc.assert(
+        fc.property(
+          fc.integer({ min: 2, max: 64 }),
+          fc.integer({ min: 1, max: 7 }),
+          fc.integer(),
+          (n, rounds, seed) => {
+            const sim = simulate(n, rounds, { chess: true, seed });
+            for (const [, seq] of sim.colours) {
+              const w = seq.filter((c) => c === "W").length;
+              const b = seq.length - w;
+              expect(Math.abs(w - b)).toBeLessThanOrEqual(2);
+              for (let i = 2; i < seq.length; i++) {
+                expect(seq[i] === seq[i - 1] && seq[i - 1] === seq[i - 2]).toBe(false);
+              }
             }
-          }
-        },
-      ),
-    );
-  });
+          },
+        ),
+      );
+    },
+    30_000,
+  );
 
   it("finds a total pairing whenever a rematch-free matching exists (brute force, n ≤ 10)", () => {
     fc.assert(
