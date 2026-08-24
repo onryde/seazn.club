@@ -9,17 +9,6 @@ import {
   type RegistrationHubRowContext,
 } from "@/components/registration-hub-division-row";
 import { RegistrationHubConfigPanel } from "@/components/registration-hub-config-panel";
-// TEMP(RS004 variants) — sign-off scaffold for the row/config-panel taste
-// round (see registration-hub-variant.ts's header for the full
-// explanation). Delete these four imports, the `variant` prop below, and
-// the RowComponent/PanelComponent selection once the owner picks a
-// direction — the surviving component becomes the only one this file
-// renders, exactly as it did before this task.
-import { RegistrationHubDivisionRowB } from "@/components/registration-hub-division-row-b";
-import { RegistrationHubDivisionRowC } from "@/components/registration-hub-division-row-c";
-import { RegistrationHubConfigPanelB } from "@/components/registration-hub-config-panel-b";
-import { RegistrationHubConfigPanelC } from "@/components/registration-hub-config-panel-c";
-import type { RegistrationHubVariant } from "@/components/registration-hub-variant";
 
 /**
  * Registration hub — Settings tab (RS004 W3/W3c, design §5).
@@ -40,7 +29,6 @@ export function RegistrationHubSettingsPanel({
   orgSlug,
   feePercentPct,
   cardUnsupportedCurrency,
-  variant = "a",
 }: {
   title: string;
   body: string;
@@ -54,26 +42,9 @@ export function RegistrationHubSettingsPanel({
   /** Non-null when the org's connected Stripe account settles outside the
    *  registration currency allowlist. */
   cardUnsupportedCurrency: string | null;
-  /** TEMP(RS004 variants): which design direction to render — "a" (the
-   *  default, today's shipped look, the control) or one of the two
-   *  alternatives under review, "b"/"c". Presentation-only: every variant
-   *  reads/writes the exact same data through the exact same endpoints.
-   *  Delete this prop once the owner picks a direction. */
-  variant?: RegistrationHubVariant;
 }) {
   const router = useRouter();
   const [openDivisionId, setOpenDivisionId] = useState<string | null>(null);
-
-  // TEMP(RS004 variants): select which row/panel component this render
-  // uses. Both members of each pair share an identical prop signature by
-  // construction (see each variant file's own header), so this swap is the
-  // ONLY variant-aware code in this component — everything below it (which
-  // row is open, the save-refresh wiring) is unchanged from before this
-  // task and works identically regardless of variant.
-  const RowComponent =
-    variant === "b" ? RegistrationHubDivisionRowB : variant === "c" ? RegistrationHubDivisionRowC : RegistrationHubDivisionRow;
-  const PanelComponent =
-    variant === "b" ? RegistrationHubConfigPanelB : variant === "c" ? RegistrationHubConfigPanelC : RegistrationHubConfigPanel;
 
   if (rows.length === 0) {
     return (
@@ -98,13 +69,13 @@ export function RegistrationHubSettingsPanel({
       <ul data-registration-hub-settings-panel className="flex flex-col gap-3">
         {rows.map((row) => (
           <li key={row.division_id}>
-            <RowComponent row={row} context={rowContext} />
+            <RegistrationHubDivisionRow row={row} context={rowContext} />
           </li>
         ))}
       </ul>
 
       {openRow && (
-        <PanelComponent
+        <RegistrationHubConfigPanel
           // Keyed by division so switching rows REMOUNTS the panel with fresh
           // state, instead of the panel resetting its own state from inside an
           // effect — that shape is a cascading render (react-hooks lint) and

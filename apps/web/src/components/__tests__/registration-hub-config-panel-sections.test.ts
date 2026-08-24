@@ -1,6 +1,6 @@
-// TEMP(RS004 variants) — shared section/field grouping for config-panel
-// variants B (accordion) and C (tabs). See registration-hub-config-panel-
-// sections.ts's header. Pure, so tested directly with no harness.
+// Registration hub config panel — section/field grouping (RS004 W3c/W4).
+// See registration-hub-config-panel-sections.ts's header. Pure, so tested
+// directly with no harness.
 import { describe, expect, it } from "vitest";
 import {
   SECTION_IDS,

@@ -28,12 +28,6 @@ import {
   resolveRegistrationHubTab,
   type RegistrationHubTab,
 } from "@/components/registration-hub-tab";
-// TEMP(RS004 variants) — sign-off scaffold for the division-row/config-
-// panel taste round: the owner has not yet approved a look, so `?variant=`
-// picks which of three presentation-only directions renders (see
-// registration-hub-variant.ts's header for the full explanation and what
-// to delete once a direction is picked).
-import { resolveRegistrationHubVariant, type RegistrationHubVariant } from "@/components/registration-hub-variant";
 import { RegistrationHubSettingsPanel } from "@/components/registration-hub-settings-panel";
 import { RegistrationHubRegistrantsPanel } from "@/components/registration-hub-registrants-panel";
 import type {
@@ -142,16 +136,9 @@ export default async function RegistrationHubPage({
   searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string }>;
-  // TEMP(RS004 variants): `variant` added alongside `tab` — see the import
-  // above. Remove this key once the owner picks a direction.
-  searchParams: Promise<{ tab?: string; variant?: string }>;
+  searchParams: Promise<{ tab?: string }>;
 }) {
-  const [{ orgSlug, compSlug }, { tab: rawTab, variant: rawVariant }] = await Promise.all([params, searchParams]);
-  // TEMP(RS004 variants): resolved alongside `tab` via the identical
-  // whitelist-with-fallback pattern. Only the Settings tab's row/panel
-  // components read this (see settingsContext below) — it has no effect on
-  // the Registrants tab, which has no row/panel of its own yet (RS005).
-  const variant: RegistrationHubVariant = resolveRegistrationHubVariant(rawVariant);
+  const [{ orgSlug, compSlug }, { tab: rawTab }] = await Promise.all([params, searchParams]);
   const page = await requireCompetitionPage(orgSlug, compSlug, { tail: "/registration" });
   const { auth, canEdit } = page;
   // requireCompetitionPage (page-auth.ts:192-201) only 404s a SCORER — a
@@ -268,7 +255,6 @@ export default async function RegistrationHubPage({
           orgSlug={orgSlug}
           feePercentPct={feePercentPct}
           cardUnsupportedCurrency={cardUnsupportedCurrency}
-          variant={variant} // TEMP(RS004 variants)
         />
       )}
     </main>

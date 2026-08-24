@@ -1,16 +1,14 @@
-// TEMP(RS004 variants) — shared section/field grouping for config-panel
-// variants B (accordion, registration-hub-config-panel-b.tsx) and C (tabs,
-// registration-hub-config-panel-c.tsx). Both variants group the SAME
+// Registration hub config panel — section/field grouping (RS004 W3c/W4).
+// The accordion panel (registration-hub-config-panel.tsx) groups the SAME
 // EligibilitySection/OpenCloseSection/CapacitySection/MoneySection (plus an
-// inline sign-up-form block) into named zones, and both need to know which
-// zone a given field lives in so a 422 on a field inside a collapsed
-// accordion section or an inactive tab can reveal itself — otherwise the
-// error renders into the DOM (mapSaveError still returns it) but is
-// invisible to the organiser, which would read as data loss even though
-// nothing was actually lost.
+// inline sign-up-form block) into named zones, and needs to know which zone
+// a given field lives in so a 422 on a field inside a collapsed accordion
+// section can reveal itself — otherwise the error renders into the DOM
+// (mapSaveError still returns it) but is invisible to the organiser, which
+// would read as data loss even though nothing was actually lost.
 //
 // Pure and dependency-light (one type-only import), so it's unit-testable
-// with no harness. Delete alongside every other TEMP(RS004 variants) file.
+// with no harness.
 import type { ConfigFieldKey } from "@/components/registration-hub-save-error";
 
 export const SECTION_IDS = ["eligibility", "schedule", "capacity", "money", "form"] as const;
