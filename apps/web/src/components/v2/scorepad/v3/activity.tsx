@@ -244,11 +244,44 @@ export interface ActivityPanelProps {
    * `priorActivityEvents`'s own doc (above) and `SkinDefV3.
    * activityDetail`/`ActivityDetailContext`'s own doc (types.ts).
    */
-  resolveDetail?: (
-    eventType: string,
-    payload: Record<string, unknown>,
-    history?: readonly { type: string; payload: Record<string, unknown> }[],
-  ) => string | undefined;
+  resolveDetail?: ActivityDetailResolver;
+}
+
+/**
+ * The shape `pad-host.tsx` builds once from `props.skin.activityDetail` and
+ * hands to BOTH readers of it — this panel, and `buildTopRibbon` (pad-host.tsx)
+ * for the top ribbon. Named rather than inlined for exactly that reason: it was
+ * inlined here while only one caller existed, and the second caller (R3/F, F1)
+ * was written without it for four waves.
+ */
+export type ActivityDetailResolver = (
+  eventType: string,
+  payload: Record<string, unknown>,
+  history?: readonly { type: string; payload: Record<string, unknown> }[],
+) => string | undefined;
+
+/**
+ * The detail for the NEWEST row — the one the TOP RIBBON shows.
+ *
+ * R3/F (F1). The ribbon and this panel's first row describe the same event, so
+ * they must read identically; before this they could not, because the ribbon
+ * called `buildRibbon` with no `detail` at all. Resolved through the SAME
+ * `orderedActivity` + `priorActivityEvents` pair the panel's own row uses, in
+ * this file rather than in `pad-host.tsx`, so the ordering and voided-skip
+ * rules have exactly one implementation and cannot fork.
+ *
+ * `undefined` for an empty stream, and for a skin that declares no
+ * `activityDetail` — both of which mean "no detail", not "no ribbon".
+ */
+export function latestRowDetail(
+  events: readonly ActivityEvent[],
+  resolveDetail: ActivityDetailResolver | undefined,
+): string | undefined {
+  if (resolveDetail === undefined) return undefined;
+  const rows = orderedActivity(events);
+  const newest = rows[0];
+  if (newest === undefined) return undefined;
+  return resolveDetail(newest.type, (newest.payload ?? {}) as Record<string, unknown>, priorActivityEvents(rows, 0));
 }
 
 export function ActivityPanel({

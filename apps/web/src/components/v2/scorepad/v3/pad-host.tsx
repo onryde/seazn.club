@@ -65,8 +65,8 @@ import { ContextStrip, type PoolView, type TFn } from "./context-strip";
 import { SwapSheet, refusalMessage, type PolicyVerdict, type SwapSheetSpec } from "./swap-sheet";
 import { GuidedSheet } from "./guided-sheet";
 import { RecordingChip } from "./recording-chip";
-import { buildRibbon } from "./ribbon";
-import { ActivityPanel, type ActivityEvent } from "./activity";
+import { buildRibbon, type Ribbon } from "./ribbon";
+import { ActivityPanel, latestRowDetail, type ActivityDetailResolver, type ActivityEvent } from "./activity";
 import { MORE_SHEET_KEY, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
 import { sportThemeAttr, sportThemeStyle } from "./sport-theme";
 
@@ -160,6 +160,40 @@ export function entitledBandsFrom(
     if (needed === undefined || entitlements[needed]) out.add(band);
   }
   return out;
+}
+
+/**
+ * The TOP RIBBON's line for the most recent event, or null with nothing
+ * recorded.
+ *
+ * R3/F (F1) — extracted from `PadHostV3`'s render body so the composition it
+ * performs is assertable at all. `buildRibbon` has accepted a `detail` since
+ * the 2026-08-17 sign-off review, and every converted skin builds one, but the
+ * host called it with FOUR arguments here and threaded `activityDetail` into
+ * `<ActivityPanel>` ONLY: `pad.ribbon.withDetail` never fired on the ribbon,
+ * so a 320 capture showed "Goal recorded" on the ribbon while the dock
+ * directly beneath it held the scorer's name.
+ *
+ * The detail comes from `latestRowDetail` (activity.tsx), NOT from a second
+ * ordering rule written here — the ribbon and the panel's newest row describe
+ * the same event and must read identically, which
+ * `__tests__/top-ribbon.test.ts` pins against the panel's own rendered markup.
+ */
+export function buildTopRibbon(
+  events: readonly ActivityEvent[],
+  nameOf: (personId: string) => string,
+  t: MsgFn,
+  resolveDetail: ActivityDetailResolver | undefined,
+): Ribbon | null {
+  const latest = events.length > 0 ? events[events.length - 1] : undefined;
+  if (latest === undefined) return null;
+  return buildRibbon(
+    latest.type,
+    (latest.payload ?? {}) as Record<string, unknown>,
+    nameOf,
+    t,
+    latestRowDetail(events, resolveDetail),
+  );
 }
 
 /** Every event type ALREADY reachable through a dedicated tile, a guided
@@ -782,17 +816,44 @@ export function PadHostV3(props: PadHostV3Props) {
 
   const events = pipeline.events;
   const latestEvent = events.length > 0 ? events[events.length - 1]! : null;
-  const ribbon = latestEvent
-    ? buildRibbon(latestEvent.type, latestEvent.payload as Record<string, unknown>, (id) => personNames[id] ?? id, t)
-    : null;
 
   // The activity panel reads four fields; `voids` is what makes a row show
   // as cancelled (activity.tsx derives it by looking for some OTHER event
   // pointing back at this id, never a flag on the target itself).
+  //
+  // Declared ABOVE the ribbon (R3/F, F1): the ribbon needs the same rows the
+  // panel does, because it now resolves the same per-event detail for the
+  // newest of them.
   const activityEvents = useMemo<ActivityEvent[]>(
     () => events.map((e) => ({ id: e.id, seq: e.seq, type: e.type, payload: e.payload, voids: e.voids ?? null })),
     [events],
   );
+
+  // ONE resolver, built once and handed to BOTH readers — the ribbon and the
+  // panel. It used to be an inline closure at the `<ActivityPanel>` call site
+  // only, which is precisely how the ribbon went four waves without a detail.
+  //
+  // R2b-cricket-over review fix (item 1): builds the single
+  // `ActivityDetailContext` object (types.ts) the skin's `activityDetail`
+  // takes, instead of seven positional arguments. `history` is forwarded
+  // verbatim from the caller (the panel resolves per-row history itself —
+  // `priorActivityEvents`, activity.tsx; `latestRowDetail` uses the same pair
+  // for the newest row). `view.cfg` and `personNames` are CAPTURED from this
+  // closure's own scope rather than crossing `ActivityPanel`'s prop contract:
+  // both are static per render, not per-row facts. `personNames` is the SAME
+  // map this component already resolves above for the ribbon and for
+  // `<ActivityPanel personNames={personNames}>` (R2b owner ruling, live-tile
+  // audit wave — "name the bowler").
+  const resolveDetail = useMemo<ActivityDetailResolver | undefined>(
+    () =>
+      props.skin.activityDetail
+        ? (eventType, payload, history) =>
+            props.skin.activityDetail!({ t, eventType, payload, history, cfg: view.cfg, personNames })
+        : undefined,
+    [props.skin, t, view.cfg, personNames],
+  );
+
+  const ribbon = buildTopRibbon(activityEvents, (id) => personNames[id] ?? id, t, resolveDetail);
 
   const [voidingId, setVoidingId] = useState<string | null>(null);
 
@@ -1020,33 +1081,11 @@ export function PadHostV3(props: PadHostV3Props) {
           // helper and its tests landed without this line, which made the fix
           // INERT in the product while green in CI — the exact shape of defect
           // this wave already fixed three times.
-          resolveDetail={
-            props.skin.activityDetail
-              ? // R2b-cricket-over review fix (item 1): builds the single
-                // `ActivityDetailContext` object (types.ts) the skin's
-                // `activityDetail` now takes, instead of seven positional
-                // arguments. `history` is forwarded verbatim from
-                // ActivityPanel's own call (it already resolves per-row
-                // history — `priorActivityEvents`, activity.tsx; item 2
-                // removed the separate `prev` argument this used to also
-                // forward — a skin derives that single fact itself from
-                // `history`'s own last element, see ActivityDetailContext's
-                // doc). `view.cfg` and `personNames` are CAPTURED from this
-                // closure's own enclosing scope, not passed through
-                // ActivityPanel's own prop contract at all — both are static
-                // per render (not a per-row fact), and this keeps
-                // ActivityPanel itself from ever having to learn either
-                // exists. `personNames` (R2b, owner ruling, live-tile audit
-                // wave — "name the bowler"): the SAME map this component
-                // already resolves above (`const personNames =
-                // props.personNames ?? NO_NAMES`) for the ribbon and for
-                // `<ActivityPanel personNames={personNames}>` itself — no
-                // new plumbing, just one more forward at a boundary `cfg`
-                // already crosses.
-                (eventType, payload, history) =>
-                  props.skin.activityDetail!({ t, eventType, payload, history, cfg: view.cfg, personNames })
-              : undefined
-          }
+          //
+          // R3/F (F1): the SAME `resolveDetail` the top ribbon uses, built
+          // once above rather than inlined here. It was inlined, this was its
+          // only reader, and the ribbon spent four waves with no detail at all.
+          resolveDetail={resolveDetail}
         />
       </div>
     </div>
