@@ -29,6 +29,167 @@ test("every fixture row has a Score entry point", async ({ page, request }) => {
   });
 });
 
+/** The fixture's own event ledger — the authority on what a click actually
+ *  recorded. Mirrors `scorepad-v3-cricket.spec.ts`'s helper of the same name. */
+async function ledger(
+  request: import("@playwright/test").APIRequestContext,
+  fixtureId: string,
+): Promise<{ id: string; seq: number; type: string; payload: Record<string, unknown> }[]> {
+  const res = await apiJson<{ id: string; seq: number; type: string; payload: Record<string, unknown> }[]>(
+    request,
+    `/api/v1/fixtures/${fixtureId}/events?since_seq=0`,
+  );
+  expect(res.status, `ledger read failed: ${JSON.stringify(res.error)}`).toBe(200);
+  return res.data ?? [];
+}
+
+/** A started division with one live knockout fixture between two named
+ *  entrants — the same shape the forfeit-dropdown test below builds, lifted so
+ *  the terminal-outcome tests do not each repeat it. */
+async function seedLiveFixture(
+  request: import("@playwright/test").APIRequestContext,
+  label: string,
+): Promise<{ fixtureId: string; home: string; away: string }> {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `${label} ${TAG}`,
+    visibility: "private",
+  });
+  const div = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    { name: "MS", sport_key: "badminton", variant_key: "bwf", config: {}, eligibility: [] },
+  );
+  const divisionId = div.data!.id;
+  const home = `Asha ${label} ${TAG}`;
+  const away = `Bala ${label} ${TAG}`;
+  await addEntrantsViaApi(request, divisionId, [home, away]);
+  const { fixtureIds } = await createStageAndGenerate(request, divisionId, {
+    kind: "knockout",
+    name: "Final",
+  });
+  await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+  return { fixtureId: fixtureIds[0], home, away };
+}
+
+// ---------------------------------------------------------------------------
+// The two TERMINAL outcomes, end to end (2026-08-24).
+//
+// Both were effectively uncovered before this. The only forfeit test in the
+// repo was the dropdown-dismissal one below — it opens the menu, checks an item
+// is visible, and dismisses it, so it never forfeits anything and asserts
+// nothing about the ledger. Abandon had no e2e at all; its single mention in
+// `scorepad-v3-football.spec.ts` is a COMMENT about card colours.
+//
+// That gap matters more than an ordinary one: these two events END a fixture
+// and set its outcome (`core.forfeit` -> an award to the other side,
+// `core.abandon` -> `no_result`, pinned in the engine's own
+// `core/events.test.ts`). The engine side is well covered; what nothing proved
+// is that the button a person presses reaches the right event with the right
+// payload.
+// ---------------------------------------------------------------------------
+
+test("Start match takes the fixture live and records core.start", async ({ page, request }) => {
+  const { fixtureId } = await seedLiveFixture(request, "Start");
+  await page.goto(await fixturePath(page.request, fixtureId));
+
+  await expect(await ledger(request, fixtureId), "nothing is recorded before the first tap").toHaveLength(0);
+  await page.getByRole("button", { name: "Start match", exact: true }).click({ timeout: 20_000 });
+
+  await expect
+    .poll(async () => (await ledger(request, fixtureId)).map((e) => e.type), { timeout: 20_000 })
+    .toEqual(["core.start"]);
+  // Started, so the control that starts it is gone — the fixture is live, not
+  // merely holding an event.
+  await expect(page.getByRole("button", { name: "Start match", exact: true })).toHaveCount(0);
+});
+
+test("forfeit records core.forfeit with the side and the reason, and ends the fixture", async ({
+  page,
+  request,
+}) => {
+  const { fixtureId, home } = await seedLiveFixture(request, "Forfeit");
+  await page.goto(await fixturePath(page.request, fixtureId));
+
+  await page.getByRole("button", { name: /Forfeit/ }).click({ timeout: 20_000 });
+  await page.getByRole("button", { name: /forfeits$/ }).first().click();
+
+  // Not a native prompt — `TextPromptDialog` (fixture-console.tsx), which is
+  // the whole reason `fixture-console-no-native-prompt.test.ts` exists.
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  await dialog.locator('input[name="reason"]').fill("no-show");
+  await dialog.getByRole("button", { name: "Apply", exact: true }).click();
+
+  await expect
+    .poll(async () => (await ledger(request, fixtureId)).map((e) => e.type), { timeout: 20_000 })
+    .toContain("core.forfeit");
+  const forfeit = (await ledger(request, fixtureId)).find((e) => e.type === "core.forfeit")!;
+  expect(forfeit.payload.reason, "the reason the scorer typed must reach the ledger").toBe("no-show");
+  expect(
+    forfeit.payload.by,
+    "the payload names WHICH side forfeited — the engine awards the OTHER one",
+  ).toBeTruthy();
+
+  // `!decided` gates both controls (fixture-console.tsx), so a decided fixture
+  // offers neither. This is the user-visible half of the same claim.
+  await expect(page.getByRole("button", { name: /Forfeit/ })).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.getByRole("button", { name: "Abandon", exact: true })).toHaveCount(0);
+  expect(home).toBeTruthy();
+});
+
+test("abandon records core.abandon with its reason and ends the fixture", async ({
+  page,
+  request,
+}) => {
+  const { fixtureId } = await seedLiveFixture(request, "Abandon");
+  await page.goto(await fixturePath(page.request, fixtureId));
+
+  await page.getByRole("button", { name: "Abandon", exact: true }).click({ timeout: 20_000 });
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  await dialog.locator('input[name="reason"]').fill("rain");
+  await dialog.getByRole("button", { name: "Apply", exact: true }).click();
+
+  await expect
+    .poll(async () => (await ledger(request, fixtureId)).map((e) => e.type), { timeout: 20_000 })
+    .toContain("core.abandon");
+  const abandon = (await ledger(request, fixtureId)).find((e) => e.type === "core.abandon")!;
+  expect(abandon.payload.reason).toBe("rain");
+
+  await expect(page.getByRole("button", { name: "Abandon", exact: true })).toHaveCount(0, {
+    timeout: 20_000,
+  });
+  await expect(page.getByRole("button", { name: /Forfeit/ })).toHaveCount(0);
+});
+
+// The negative control, and the reason these tests are not merely "the click
+// worked": an EMPTY reason must close the dialog and write NOTHING.
+// `TextPromptDialog`'s submit handler is `if (value) onSubmit(value); else
+// onClose()`, and a test that only ever fills the box would pass just as
+// happily against a version that submitted regardless.
+test("abandon with an empty reason writes nothing — the fixture stays live", async ({
+  page,
+  request,
+}) => {
+  const { fixtureId } = await seedLiveFixture(request, "AbandonEmpty");
+  await page.goto(await fixturePath(page.request, fixtureId));
+
+  await page.getByRole("button", { name: "Abandon", exact: true }).click({ timeout: 20_000 });
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  await dialog.getByRole("button", { name: "Apply", exact: true }).click();
+
+  await expect(dialog).toHaveCount(0, { timeout: 10_000 });
+  // Still offered, because nothing was decided.
+  await expect(page.getByRole("button", { name: "Abandon", exact: true })).toBeVisible();
+  expect(
+    (await ledger(request, fixtureId)).map((e) => e.type),
+    "an empty reason must never reach the ledger",
+  ).toEqual([]);
+});
+
 test("forfeit dropdown closes when clicking outside", async ({ page, request }) => {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
     name: `Badminton ${TAG}`,
