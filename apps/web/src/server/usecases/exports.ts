@@ -1028,12 +1028,22 @@ export async function auditLedgerDoc(
     const divMeta = await divisionMeta(tx, meta!.division_id);
     const lookup = exportLookup(divMeta.default_locale);
     const branding = layerDivisionBranding(baseBranding, divMeta);
-    // No slot-label fallback here, deliberately: an audit ledger is the
-    // forensic record of a fixture that has already been scored, so both
-    // sides are always filled entrants. A placeholder cannot reach this doc.
+    // Repair pass (review of F5 remainder, round 2): this used to claim "both
+    // sides are always filled entrants. A placeholder cannot reach this doc"
+    // -- false. home_entrant_id/away_entrant_id are independently nullable
+    // (fixtures.ts's readAuditLedger nulls whichever side has none, and never
+    // selects a slot label to fall back on), and this route applies no
+    // fixture-status gate before calling here (route.ts: "In-play fixtures
+    // export too"). The routine state of a later bracket round whose sibling
+    // parent hasn't finished yet reaches this title with exactly one side
+    // null. No slot-label data is available to resolve through
+    // (resolveSlotLabel), so the missing side falls back to the same
+    // "bracket.tbd" key the bracket poster's own exportFixtures mapping uses
+    // for the identical concept (this file's `case "bracket":` above,
+    // :642/:645).
     const vs =
       ledger.fixture.home !== null || ledger.fixture.away !== null
-        ? ` — ${ledger.fixture.home ?? "TBD"} ${lookup("schedule.vs")} ${ledger.fixture.away ?? "TBD"}`
+        ? ` — ${ledger.fixture.home ?? lookup("bracket.tbd")} ${lookup("schedule.vs")} ${ledger.fixture.away ?? lookup("bracket.tbd")}`
         : "";
     return buildAuditLedger(
       `${divMeta.competition_name} — ${divMeta.name}${vs}`,

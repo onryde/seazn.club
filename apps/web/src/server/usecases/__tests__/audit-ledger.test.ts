@@ -168,4 +168,30 @@ describe.skipIf(!HAS_DB)("audit PDF (PROMPT-63 §2)", () => {
     expect(model.title).toContain(`Home ${msgFor("fr", "schedule.vs")} Away`);
     expect(model.title).not.toContain("Home vs Away");
   });
+
+  // Repair pass (review of F5 remainder, round 2): the header comment above
+  // auditLedgerDoc's `vs` block claimed "both sides are always filled
+  // entrants. A placeholder cannot reach this doc" -- false. home_entrant_id/
+  // away_entrant_id are independently nullable, readAuditLedger never selects
+  // a slot-label fallback for the null side (fixtures.ts), and the route
+  // applies no fixture-status gate ("In-play fixtures export too"). The
+  // routine state of a later bracket round whose sibling parent hasn't
+  // finished yet reaches this title with exactly one side null -- and the
+  // other test above only ever seeds a fully two-sided fixture, so it never
+  // exercised this branch.
+  it("a fixture with only one entrant known localizes the missing side, not a hardcoded 'TBD'", async () => {
+    const { auth, fixtureId, orgId } = await seedFixture("pro");
+    await sql`update organizations set default_locale = 'fr' where id = ${orgId}`;
+    await sql`update fixtures set away_entrant_id = null where id = ${fixtureId}`;
+    const { auditLedgerDoc } = await import("../exports");
+    const ledger = await readAuditLedger(auth, fixtureId);
+    expect(ledger.fixture).toMatchObject({ home: "Home", away: null });
+    const model = await auditLedgerDoc(auth, fixtureId, ledger, null, {
+      printedAt: "2026-07-18T12:00:00Z",
+    });
+    expect(model.title).toContain(
+      `Home ${msgFor("fr", "schedule.vs")} ${msgFor("fr", "bracket.tbd")}`,
+    );
+    expect(model.title).not.toContain("TBD");
+  });
 });
