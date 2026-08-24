@@ -29,12 +29,34 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 /** Open `withTenant` frames, how many were opened, and the depth each solver
- *  entry point saw. */
-const tx = vi.hoisted(() => ({
-  depth: 0,
-  opens: 0,
-  solveDepths: [] as number[],
-}));
+ *  entry point saw.
+ *
+ *  `depth` is a PROCESS-WIDE counter and `als` is the same depth carried down
+ *  one async call chain. The difference is the whole reason this file has an
+ *  AsyncLocalStorage in it: `seedStage` fires cache-invalidation and revalidate
+ *  work it does not await, so a frame belonging to the SEED is often still open
+ *  when `autoSchedule` starts. Reading the process-wide counter at the solver
+ *  entry point therefore records somebody else's transaction as this call's
+ *  nesting depth — which failed CI on 2026-08-24 (run 32787553112, polish leg,
+ *  `expected [ 1 ] to deeply equal [ +0 ]`) on a branch that touches no
+ *  scheduling code at all. The store answers the question the spec actually
+ *  asks: was the solve nested inside a transaction OF ITS OWN CALL CHAIN. */
+const tx = await vi.hoisted(async () => {
+  const { AsyncLocalStorage } = await import("node:async_hooks");
+  const state = {
+    depth: 0,
+    opens: 0,
+    solveDepths: [] as number[],
+    als: new AsyncLocalStorage<number>(),
+    /** What the solver mock records. Named so the harness spec at the bottom of
+     *  this file can call the SAME function the mock calls, and therefore catch
+     *  a regression to `state.depth` here. */
+    recordSolveDepth: () => {
+      state.solveDepths.push(state.als.getStore() ?? 0);
+    },
+  };
+  return state;
+});
 
 vi.mock("@/lib/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db")>();
@@ -46,8 +68,11 @@ vi.mock("@/lib/db", async (importOriginal) => {
     ): Promise<T> => {
       tx.depth++;
       tx.opens++;
+      const nested = (tx.als.getStore() ?? 0) + 1;
       try {
-        return await actual.withTenant(orgId, fn as never);
+        return await tx.als.run(nested, () =>
+          actual.withTenant(orgId, fn as never),
+        );
       } finally {
         tx.depth--;
       }
@@ -62,8 +87,12 @@ vi.mock("@seazn/engine/scheduling", async (importOriginal) => {
     ...actual,
     // Recorded at CALL time, before awaiting: the question is what was open when
     // the solver was entered, not what is open when it finishes.
+    //
+    // From the STORE, not `tx.depth` — see the comment on `tx`. An unawaited
+    // frame from elsewhere in the process must not be read as this solve's
+    // nesting.
     buildSchedule: (input: Parameters<typeof actual.buildSchedule>[0]) => {
-      tx.solveDepths.push(tx.depth);
+      tx.recordSolveDepth();
       return actual.buildSchedule(input);
     },
   };
@@ -269,3 +298,40 @@ describe.skipIf(!HAS_DB)(
     }, 120_000);
   },
 );
+
+// Not DB-gated: this pins the HARNESS property the three specs above depend on.
+// It calls `recordSolveDepth` — the same function the `buildSchedule` mock
+// calls — so reverting that function to the process-wide `tx.depth` reds this
+// spec. Without it the fix for the 2026-08-24 polish flake would be a change no
+// test can see: the flake itself only reproduces on a loaded box.
+describe("the depth recorded at the solver entry point", () => {
+  it("is scoped to its own call chain, not the process", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // A frame belonging to somebody else — the shape `seedStage`'s unawaited
+    // cache-invalidation work leaves behind while the next call is starting.
+    const foreign = tx.als.run(1, async () => {
+      tx.depth++;
+      try {
+        await held;
+      } finally {
+        tx.depth--;
+      }
+    });
+    await Promise.resolve();
+
+    // The process-wide counter sees the foreign frame…
+    expect(tx.depth).toBe(1);
+    // …and what the solver mock records, from a chain that opened nothing,
+    // does not.
+    tx.solveDepths = [];
+    tx.recordSolveDepth();
+    expect(tx.solveDepths).toEqual([0]);
+
+    release();
+    await foreign;
+    expect(tx.depth).toBe(0);
+  });
+});
