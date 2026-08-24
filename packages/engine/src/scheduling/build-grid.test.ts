@@ -86,6 +86,33 @@ describe("buildGrid — the pack window bounds the lattice (P9.5)", () => {
   });
 });
 
+describe("buildGrid — config.startAt is deliberately NOT the lattice's floor", () => {
+  // Pinned, not fixed. P9.5 first read "the solver places before config.startAt
+  // while greedy does not" as a defect and floored the lattice at `startAt`.
+  // That is WRONG, and `build-day-gate.test.ts`'s `dayOpenConfig` says so in as
+  // many words: "config.startAt IS NOT THE SOLVER'S FLOOR, and that is the
+  // whole fixture." The grid opens at `window.from`; greedy's cursor opens at
+  // max(startAt, notBefore). The two producers legitimately see different first
+  // ticks, and the solver's earlier board WINS on `dayStartOffsetMinutes` — a
+  // rung `isStrictlyBetter` ranks and greedy cannot reach (measured on the real
+  // service: 0 against 540).
+  //
+  // Flooring the lattice reds four engine tests, two of them that gate exactly
+  // this. This guard exists so the next session to notice the asymmetry finds
+  // the ruling instead of re-deriving the same wrong fix.
+  it("opens at window.from even when startAt is nine hours later", () => {
+    const midnight = Date.UTC(2026, 7, 8, 0, 0);
+    const nine = midnight + 9 * 60 * MIN;
+
+    const g = buildGrid({
+      config: cfg({ startAt: nine, window: { from: midnight, to: midnight + DAY } }),
+    });
+
+    expect(g.slots.some((s) => s.startAt < nine)).toBe(true);
+    expect(g.slots[0]!.startAt).toBe(midnight);
+  });
+});
+
 describe("buildGrid — court calendars narrow the lattice (P9.5)", () => {
   // P8 shipped court_hours/court_exceptions (V367) and a calendar editor whose
   // data NOTHING in scheduling read: the scheduler would place at 09:00 on a
