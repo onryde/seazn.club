@@ -1,25 +1,15 @@
 "use client";
 
-// TEMP(RS004 variants) — shared fetch/patch/save state for config-panel
-// variants B (registration-hub-config-panel-b.tsx, accordion) and C
-// (registration-hub-config-panel-c.tsx, tabs). Extracted so the two
-// variants — which differ ONLY in how they arrange the same fields, never
-// in what they fetch or send — don't carry two copies of the identical
-// Promise.allSettled dual-save logic.
+// Registration hub config panel — fetch/patch/save state (RS004 W3c/W4).
+// Extracted out of the panel component itself so the state machine (GET on
+// mount, local edits, the two-endpoint dual save, error reconciliation) is
+// independently reason-about-able from the accordion chrome around it.
 //
-// Variant A (registration-hub-config-panel.tsx) does NOT use this hook and
-// is not touched by this file — it keeps its own inline copy of the same
-// shape. That duplication is deliberate: A is the control and must stay
-// exactly what it was before this task; this hook exists only for the two
-// NEW variants, both of which are deleted alongside it once the owner
-// picks a direction (see registration-hub-variant.ts).
-//
-// Byte-for-byte the same behaviour as variant A's inline logic: same GET
-// endpoint, same initialConfigState/toDivisionPatchBody/
+// Same GET endpoint, same initialConfigState/toDivisionPatchBody/
 // toRegistrationSettingsPutBody builders, same Promise.allSettled dual
 // save, same mapSaveError reconciliation, same saveOutcome naming (RS004
 // review finding 1 — named by what FAILED, so the two partial states read
-// naturally at call sites).
+// naturally at call sites) as the panel always had.
 import { useEffect, useState } from "react";
 import { apiV1 } from "@/lib/client-v1";
 import {
@@ -37,8 +27,7 @@ export interface RegistrationHubConfigDivisionLike extends DivisionEligibility {
   name: string;
 }
 
-/** Outcome of the two save requests, named by what FAILED — same shape and
- *  reasoning as variant A's own (private) SaveOutcome type. */
+/** Outcome of the two save requests, named by what FAILED. */
 export type SaveOutcome = "success" | "patch-failed" | "put-failed" | "both-failed";
 
 /** What the GET response carries but is never sent back on save. */
@@ -63,10 +52,10 @@ export function useRegistrationConfigPanelState(
   const [formError, setFormError] = useState<string | null>(null);
   const [saveOutcome, setSaveOutcome] = useState<SaveOutcome | null>(null);
 
-  // No reset of loaded/loadError here, same as variant A: the mount site
-  // keys this component by division id, so a different row arrives as a
-  // REMOUNT with useState's own initial null — resetting synchronously
-  // inside the effect instead is a cascading render (react-hooks lint).
+  // No reset of loaded/loadError here: the mount site keys this component
+  // by division id, so a different row arrives as a REMOUNT with useState's
+  // own initial null — resetting synchronously inside the effect instead is
+  // a cascading render (react-hooks lint).
   useEffect(() => {
     let cancelled = false;
     apiV1<RegistrationSettingsResponse>(`/api/v1/divisions/${division.division_id}/registration-settings`)

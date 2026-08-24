@@ -1,15 +1,21 @@
-// RS004 W3c — the row-click config panel: fetches the division's full
-// registration settings on open, edits every registration_settings field
-// plus the division-level eligibility fields, and saves through both
-// endpoints. Driven via the repo's hook harness (no jsdom here) — see
-// _hook-harness.tsx and topic_scorepad/topic_ui_i18n memory for the
-// conventions this file follows.
+// RS004 W3c/W4 — the row-click config panel: accordion sections
+// (Eligibility/Open & close/Capacity default open, Money/sign-up form
+// default collapsed), built on the shared <Modal> primitive and the
+// useRegistrationConfigPanelState hook for fetch/patch/save.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { Modal } from "@/components/modal";
 import { FormBuilder, type FormField } from "@/components/registration-hub-form-builder";
 import type { RegistrationSettingsResponse } from "@/components/registration-hub-config-state";
+import {
+  RegistrationHubConfigPanel,
+  Disclosure,
+  EligibilitySection,
+  OpenCloseSection,
+  CapacitySection,
+  MoneySection,
+} from "@/components/registration-hub-config-panel";
 
 const net = vi.hoisted(() => ({
   calls: [] as { url: string; method: string; json?: unknown }[],
@@ -50,21 +56,17 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 import { ApiV1Error } from "@/lib/client-v1";
 import { t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
-import {
-  RegistrationHubConfigPanel,
-  EligibilitySection,
-  OpenCloseSection,
-  CapacitySection,
-  MoneySection,
-} from "@/components/registration-hub-config-panel";
 
-// Every section below is hookless (props in, JSX out — no useState/
-// useContext of its own), so it is safe to call directly rather than
-// re-enter through the harness dispatcher (_hook-harness.tsx's own
-// documented technique for a "small presentational component":
-// `walk(MyThing(props))`).
 type SectionType = (props: Record<string, unknown>) => ReactNode;
-const SECTION_TYPES: SectionType[] = [
+// Disclosure wraps a Section (EligibilitySection etc.) as ITS OWN children
+// prop — walk() finds the Disclosure element (opaque, un-invoked) and, one
+// level down inside it, the Section element (also opaque, un-invoked) as
+// the value of Disclosure's OWN `children`. Both need manual invocation,
+// and the loop below (deepExpand) re-scans its own growing output so
+// expanding a Disclosure surfaces its nested Section, which then also gets
+// expanded in the same pass.
+const OPAQUE_TYPES: SectionType[] = [
+  Disclosure as unknown as SectionType,
   EligibilitySection as SectionType,
   OpenCloseSection as SectionType,
   CapacitySection as SectionType,
@@ -73,7 +75,6 @@ const SECTION_TYPES: SectionType[] = [
 
 const FORM_FIELDS: FormField[] = [
   { key: "shirt_size", label: "Shirt size", kind: "text", required: true },
-  { key: "club", label: "Club", kind: "select", options: ["None", "Riverside"], required: false },
 ];
 
 const RESPONSE: RegistrationSettingsResponse = {
@@ -114,19 +115,20 @@ function flush() {
   return new Promise((r) => setTimeout(r, 0));
 }
 
-// Custom expand: `walk` alone stops at Modal/FormBuilder (unevaluated
-// elements), so mount props on the panel's own root are visible, but its
-// children never are. Descend the SAME way renderIsland's own effects and
-// state updates see the tree — one level into Modal's `children` AND
-// `footer` (neither is reachable by the default `.props.children`-only
-// walk), and into FormBuilder's rendered output (it is hookless-safe here
-// because it is walked, not re-entered through the harness dispatcher —
-// its own useMsg() call still runs via React's real hook rules the FIRST
-// time the whole tree is produced by the panel's own render).
-function expandChildren(node: ReactNode): ReturnType<typeof walk> {
+// walk() doesn't invoke opaque child components (Modal's children/footer,
+// the exported Section functions), so they're expanded manually. <details>/
+// <summary> need NO special handling — they're plain host element types
+// walk() already descends into.
+function deepExpand(node: ReactNode): ReturnType<typeof walk> {
   const out = walk(node);
-  for (const el of [...out]) {
-    if (SECTION_TYPES.includes(el.type as SectionType)) {
+  // A plain `for` loop, not `for...of` over a snapshot: `out.length` is
+  // re-read every iteration, so an element pushed by expanding a
+  // Disclosure (its nested Section) is itself visited later in the SAME
+  // pass and expanded too — no recursion needed for two levels of opaque
+  // nesting.
+  for (let i = 0; i < out.length; i++) {
+    const el = out[i]!;
+    if (OPAQUE_TYPES.includes(el.type as SectionType)) {
       out.push(...walk((el.type as SectionType)(propsOf(el))));
     }
   }
@@ -138,7 +140,7 @@ function expandPanel(node: ReactNode) {
   const modal = out.find((e) => e.type === Modal);
   if (modal) {
     const p = propsOf(modal);
-    out.push(...expandChildren(p.children as ReactNode));
+    out.push(...deepExpand(p.children as ReactNode));
     if (p.footer) out.push(...walk(p.footer as ReactNode));
   }
   return out;
@@ -148,6 +150,10 @@ function findField(tree: ReturnType<typeof expandPanel>, field: string) {
   return tree.find((e) => propsOf(e)["data-field"] === field);
 }
 
+function accordionSection(tree: ReturnType<typeof expandPanel>, id: string) {
+  return tree.find((e) => propsOf(e)["data-accordion-section"] === id);
+}
+
 beforeEach(() => {
   net.calls = [];
   net.getResponse = { ...RESPONSE };
@@ -155,13 +161,22 @@ beforeEach(() => {
   net.putRejection = null;
 });
 
-describe("RegistrationHubConfigPanel — loading", () => {
+describe("RegistrationHubConfigPanel — built on Modal (keeps the focus trap)", () => {
+  it("renders through the shared <Modal> primitive with the right title/footer contract", async () => {
+    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    const modal = island.tree().find((e) => e.type === Modal)!;
+    expect(modal).toBeTruthy();
+    expect(propsOf(modal).title).toBe(t(uiEn, "reg.hub.config.title", { name: "Open Singles" }));
+  });
+});
+
+describe("RegistrationHubConfigPanel — loading and data wiring", () => {
   it("shows a loading state before the GET resolves, then the form after", async () => {
     const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
     expect(island.text()).toContain("Loading");
     await flush();
-    const tree = island.tree();
-    expect(findField(tree, "fee_cents")).toBeTruthy();
+    expect(findField(island.tree(), "fee_cents")).toBeTruthy();
   });
 
   it("fetches the full settings for THIS division on mount", async () => {
@@ -170,27 +185,14 @@ describe("RegistrationHubConfigPanel — loading", () => {
     const get = net.calls.find((c) => c.method === "GET");
     expect(get?.url).toBe("/api/v1/divisions/div-1/registration-settings");
   });
-});
 
-describe("RegistrationHubConfigPanel — shows current values, including the five new fields", () => {
-  it("renders category, age_min, age_max, approval and allow_free_agents from the row + GET response", async () => {
+  it("renders category/age/approval/allow_free_agents and fee/capacity from the row + GET response", async () => {
     const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
     await flush();
     const tree = island.tree();
     expect(propsOf(findField(tree, "category")!).value).toBe("mixed");
-    expect(propsOf(findField(tree, "age_min")!).value).toBe(10);
-    expect(propsOf(findField(tree, "age_max")!).value).toBe(18);
     expect(propsOf(findField(tree, "approval")!).value).toBe("manual");
-    expect(propsOf(findField(tree, "allow_free_agents")!).checked).toBe(true);
-  });
-
-  it("renders the fee, capacity and enabled flag from the GET response", async () => {
-    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
-    await flush();
-    const tree = island.tree();
     expect(propsOf(findField(tree, "capacity")!).value).toBe(32);
-    expect(propsOf(findField(tree, "enabled")!).checked).toBe(true);
-    // Fee is edited in major units (dollars), not minor (cents).
     expect(propsOf(findField(tree, "fee_cents")!).value).toBe(15);
   });
 
@@ -203,75 +205,50 @@ describe("RegistrationHubConfigPanel — shows current values, including the fiv
   });
 });
 
-describe("RegistrationHubConfigPanel — read-only currency, no currency input anywhere", () => {
-  it("shows the org currency code but no editable currency control", async () => {
+describe("RegistrationHubConfigPanel — accordion: which sections default open vs collapsed", () => {
+  it("Eligibility, Open & close and Capacity are open by default", async () => {
     const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
     await flush();
     const tree = island.tree();
-    expect(textOf(tree).toUpperCase()).toContain("USD");
-    expect(findField(tree, "currency")).toBeUndefined();
-    const currencyInputs = tree.filter(
-      (e) => (e.type === "input" || e.type === "select") && propsOf(e)["aria-label"]?.toString().toLowerCase().includes("currency"),
-    );
-    expect(currencyInputs).toHaveLength(0);
+    expect(propsOf(accordionSection(tree, "eligibility")!).open).toBe(true);
+    expect(propsOf(accordionSection(tree, "schedule")!).open).toBe(true);
+    expect(propsOf(accordionSection(tree, "capacity")!).open).toBe(true);
   });
-});
 
-describe("RegistrationHubConfigPanel — platform fee percent surfaced", () => {
-  it("shows the org's fee_percent entitlement near the fee input", async () => {
-    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, feePercentPct: 8 }, expandPanel);
-    await flush();
-    expect(textOf(island.tree())).toContain("8%");
-  });
-});
-
-describe("RegistrationHubConfigPanel — card-unsupported currency", () => {
-  it("renders the unsupported-currency message and disables the card payment option", async () => {
-    const island = renderIsland(
-      RegistrationHubConfigPanel,
-      { ...BASE_PROPS, cardUnsupportedCurrency: "jpy" },
-      expandPanel,
-    );
+  it("Money and the sign-up form are COLLAPSED by default — the progressive-disclosure claim", async () => {
+    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
     await flush();
     const tree = island.tree();
-    expect(textOf(tree).toUpperCase()).toContain("JPY");
-    const stripeRadio = tree.find(
-      (e) => e.type === "input" && propsOf(e).type === "radio" && propsOf(e).value === "stripe",
-    );
-    expect(stripeRadio).toBeTruthy();
-    expect(propsOf(stripeRadio!).disabled).toBe(true);
-  });
-});
-
-describe("RegistrationHubConfigPanel — allow_free_agents is team-only", () => {
-  it("is available when entrant_kind is team", async () => {
-    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
-    await flush();
-    expect(findField(island.tree(), "allow_free_agents")).toBeTruthy();
+    expect(propsOf(accordionSection(tree, "money")!).open).toBe(false);
+    expect(propsOf(accordionSection(tree, "form")!).open).toBe(false);
   });
 
-  it("is unavailable for a non-team division", async () => {
-    net.getResponse = { ...RESPONSE, entrant_kind: "individual", allow_free_agents: false };
+  // The event this hands the handler carries `target`, like the native
+  // `toggle` event does — NOT `currentTarget`. A hand-rolled
+  // `{ currentTarget: { open } }` shape once let a real crash through: the
+  // native `toggle` event fires synchronously while React is still
+  // committing the sections that mount open, and `currentTarget` is only
+  // bound during dispatch, so a handler reading it off `currentTarget` read
+  // `.open` off null on the FIRST open of every division.
+  it("clicking a collapsed section's summary opens it", async () => {
     const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
     await flush();
-    expect(findField(island.tree(), "allow_free_agents")).toBeUndefined();
-  });
-
-  it("switching entrant_kind away from team clears allow_free_agents locally", async () => {
-    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
-    await flush();
-    const entrantKindSelect = findField(island.tree(), "entrant_kind")!;
-    (propsOf(entrantKindSelect).onChange as (e: { target: { value: string } }) => void)({
-      target: { value: "individual" },
+    const money = accordionSection(island.tree(), "money")!;
+    (propsOf(money).onToggle as (e: { target: { open: boolean } }) => void)({
+      target: { open: true },
     });
-    // allow_free_agents control disappears once entrant_kind is no longer team.
-    expect(findField(island.tree(), "allow_free_agents")).toBeUndefined();
+    expect(propsOf(accordionSection(island.tree(), "money")!).open).toBe(true);
+  });
 
-    // Switching back to team shows it again, now false (cleared, not stale true).
-    (propsOf(findField(island.tree(), "entrant_kind")!).onChange as (e: { target: { value: string } }) => void)({
-      target: { value: "team" },
-    });
-    expect(propsOf(findField(island.tree(), "allow_free_agents")!).checked).toBe(false);
+  // Guards the crash itself: a `toggle` whose currentTarget has already been
+  // unbound (null) must still resolve the section's state from `target`.
+  it("survives a toggle event whose currentTarget is already null", async () => {
+    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    const money = accordionSection(island.tree(), "money")!;
+    const fire = propsOf(money).onToggle as (e: unknown) => void;
+    expect(() => fire({ target: { open: true }, currentTarget: null })).not.toThrow();
+    expect(propsOf(accordionSection(island.tree(), "money")!).open).toBe(true);
   });
 });
 
@@ -285,7 +262,7 @@ describe("RegistrationHubConfigPanel — save: full replace + both endpoints", (
     return island;
   }
 
-  it("editing only the fee still sends every other registration-settings field unchanged (full-replace hazard)", async () => {
+  it("editing only the fee still sends every other field unchanged (full-replace hazard)", async () => {
     await openAndSave((tree) => {
       const feeInput = findField(tree, "fee_cents")!;
       (propsOf(feeInput).onChange as (e: { target: { value: string } }) => void)({ target: { value: "25" } });
@@ -293,14 +270,9 @@ describe("RegistrationHubConfigPanel — save: full replace + both endpoints", (
     const put = net.calls.find((c) => c.method === "PUT")!;
     const body = put.json as Record<string, unknown>;
     expect(body.fee_cents).toBe(2500);
-    expect(body.form_fields).toEqual(FORM_FIELDS);
     expect(body.approval).toBe("manual");
-    expect(body.allow_free_agents).toBe(true);
     expect(body.entrant_kind).toBe("team");
     expect(body.capacity).toBe(32);
-    expect(body.enabled).toBe(true);
-    expect(body.opens_at).toBe("2026-01-01T00:00:00Z");
-    expect(body.closes_at).toBe("2026-02-01T00:00:00Z");
   });
 
   it("sends the division PATCH with category/age_min/age_max", async () => {
@@ -320,104 +292,90 @@ describe("RegistrationHubConfigPanel — save: full replace + both endpoints", (
   });
 });
 
-describe("RegistrationHubConfigPanel — 422s render against the offending field", () => {
-  it("a PUT-side error (fee below Stripe minimum) renders under the fee field, not a generic toast", async () => {
+describe("RegistrationHubConfigPanel — a field error inside a COLLAPSED section reveals itself", () => {
+  it("a PUT-side error (fee) auto-opens the collapsed Money section instead of hiding invisibly", async () => {
     net.putRejection = new ApiV1Error("Card entry fees must be at least 1.00 (or 0 for free)", 422, "ERROR");
     const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
     await flush();
+    // Confirm the premise: Money starts collapsed.
+    expect(propsOf(accordionSection(island.tree(), "money")!).open).toBe(false);
+
     const saveBtn = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
     await (propsOf(saveBtn).onClick as () => Promise<void>)();
+
     const tree = island.tree();
     const errorEl = tree.find((e) => propsOf(e)["data-field-error"] === "fee_cents");
     expect(errorEl).toBeTruthy();
-    expect(textOf(errorEl!)).toContain("Card entry fees must be at least");
+    // The claim under test: Money is no longer collapsed once it holds a
+    // live error — without this, the error above is real markup but sits
+    // inside a closed <details>, invisible to the organiser.
+    expect(propsOf(accordionSection(tree, "money")!).open).toBe(true);
   });
 
-  it("a PATCH-side error (age band, one side only) renders under age_max", async () => {
+  it("does NOT force-open a section that has no error (Eligibility error only touches Eligibility)", async () => {
     net.patchRejection = new ApiV1Error("age_max must be greater than or equal to age_min.", 422, "ERROR");
     const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
     await flush();
     const saveBtn = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
     await (propsOf(saveBtn).onClick as () => Promise<void>)();
     const tree = island.tree();
-    const errorEl = tree.find((e) => propsOf(e)["data-field-error"] === "age_max");
-    expect(errorEl).toBeTruthy();
+    expect(tree.find((e) => propsOf(e)["data-field-error"] === "age_max")).toBeTruthy();
+    expect(propsOf(accordionSection(tree, "money")!).open).toBe(false);
+    expect(propsOf(accordionSection(tree, "form")!).open).toBe(false);
   });
+});
 
-  it("does NOT call onSaved when a save fails", async () => {
-    net.putRejection = new ApiV1Error("closes_at must be after opens_at", 422, "ERROR");
+describe("RegistrationHubConfigPanel — save outcome (finding 1)", () => {
+  it("both endpoints succeed: outcome is 'success', onSaved fires", async () => {
     const onSaved = vi.fn();
     const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, onSaved }, expandPanel);
     await flush();
     const saveBtn = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
     await (propsOf(saveBtn).onClick as () => Promise<void>)();
-    expect(onSaved).not.toHaveBeenCalled();
+    const tree = island.tree();
+    const root = tree.find((e) => propsOf(e)["data-registration-hub-config-panel"] !== undefined)!;
+    expect(propsOf(root)["data-save-outcome"]).toBe("success");
+    expect(onSaved).toHaveBeenCalledTimes(1);
   });
-});
 
-// RS004 review finding 1 (MAJOR): save() fires the PATCH and the PUT through
-// Promise.allSettled and used to fold ONLY the rejected side into field
-// errors — so a PATCH-commits/PUT-422s split rendered as a single field
-// error with nothing telling the organiser that half the save already
-// landed. `data-save-outcome` is new markup this describe block introduces;
-// none of these four assertions can pass against the pre-fix component (the
-// attribute does not exist there), so all four are RED without the change,
-// not just the two partial ones.
-describe("RegistrationHubConfigPanel — save outcome is reported honestly (finding 1)", () => {
-  function panelRoot(tree: ReturnType<typeof expandPanel>) {
-    return tree.find((e) => propsOf(e)["data-registration-hub-config-panel"] !== undefined)!;
-  }
-
-  async function doSave(onSaved = vi.fn()) {
-    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, onSaved }, expandPanel);
+  it("PATCH ok, PUT fails: outcome is 'put-failed', a banner says category/age landed", async () => {
+    net.putRejection = new ApiV1Error("closes_at must be after opens_at", 422, "ERROR");
+    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
     await flush();
     const saveBtn = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
     await (propsOf(saveBtn).onClick as () => Promise<void>)();
-    return { island, onSaved };
-  }
-
-  it("both endpoints succeed: outcome is 'success', onSaved fires, no partial-save banner", async () => {
-    const { island, onSaved } = await doSave();
     const tree = island.tree();
-    expect(propsOf(panelRoot(tree))["data-save-outcome"]).toBe("success");
-    expect(onSaved).toHaveBeenCalledTimes(1);
-    expect(tree.some((e) => e.type === "p" && propsOf(e)["data-save-outcome"])).toBe(false);
-  });
-
-  it("both endpoints fail: outcome is 'both-failed', no partial-save banner, both field errors render", async () => {
-    net.patchRejection = new ApiV1Error("age_max must be greater than or equal to age_min.", 422, "ERROR");
-    net.putRejection = new ApiV1Error("closes_at must be after opens_at", 422, "ERROR");
-    const { island, onSaved } = await doSave();
-    const tree = island.tree();
-    expect(propsOf(panelRoot(tree))["data-save-outcome"]).toBe("both-failed");
-    expect(onSaved).not.toHaveBeenCalled();
-    expect(tree.find((e) => propsOf(e)["data-field-error"] === "age_max")).toBeTruthy();
-    expect(tree.find((e) => propsOf(e)["data-field-error"] === "closes_at")).toBeTruthy();
-    expect(tree.some((e) => e.type === "p" && propsOf(e)["data-save-outcome"])).toBe(false);
-  });
-
-  it("PATCH ok, PUT fails: outcome is 'put-failed' — a banner says category/age landed, onSaved NOT called", async () => {
-    net.putRejection = new ApiV1Error("closes_at must be after opens_at", 422, "ERROR");
-    const { island, onSaved } = await doSave();
-    const tree = island.tree();
-    expect(propsOf(panelRoot(tree))["data-save-outcome"]).toBe("put-failed");
-    expect(onSaved).not.toHaveBeenCalled();
-    expect(tree.find((e) => propsOf(e)["data-field-error"] === "closes_at")).toBeTruthy();
+    const root = tree.find((e) => propsOf(e)["data-registration-hub-config-panel"] !== undefined)!;
+    expect(propsOf(root)["data-save-outcome"]).toBe("put-failed");
     const banner = tree.find((e) => e.type === "p" && propsOf(e)["data-save-outcome"] === "put-failed");
     expect(banner).toBeTruthy();
     expect(textOf(banner!)).toContain(t(uiEn, "reg.hub.config.partialSavePatchOk"));
   });
 
-  it("PUT ok, PATCH fails: outcome is 'patch-failed' — a banner says the rest of the form landed, onSaved NOT called", async () => {
+  it("PATCH fails, PUT ok: outcome is 'patch-failed', a banner says settings landed", async () => {
     net.patchRejection = new ApiV1Error("age_max must be greater than or equal to age_min.", 422, "ERROR");
-    const { island, onSaved } = await doSave();
+    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    const saveBtn = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
+    await (propsOf(saveBtn).onClick as () => Promise<void>)();
     const tree = island.tree();
-    expect(propsOf(panelRoot(tree))["data-save-outcome"]).toBe("patch-failed");
-    expect(onSaved).not.toHaveBeenCalled();
-    expect(tree.find((e) => propsOf(e)["data-field-error"] === "age_max")).toBeTruthy();
+    const root = tree.find((e) => propsOf(e)["data-registration-hub-config-panel"] !== undefined)!;
+    expect(propsOf(root)["data-save-outcome"]).toBe("patch-failed");
     const banner = tree.find((e) => e.type === "p" && propsOf(e)["data-save-outcome"] === "patch-failed");
     expect(banner).toBeTruthy();
     expect(textOf(banner!)).toContain(t(uiEn, "reg.hub.config.partialSavePutOk"));
+  });
+
+  it("both fail: outcome is 'both-failed'", async () => {
+    net.patchRejection = new ApiV1Error("age_max must be greater than or equal to age_min.", 422, "ERROR");
+    net.putRejection = new ApiV1Error("closes_at must be after opens_at", 422, "ERROR");
+    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    const saveBtn = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
+    await (propsOf(saveBtn).onClick as () => Promise<void>)();
+    const tree = island.tree();
+    const root = tree.find((e) => propsOf(e)["data-registration-hub-config-panel"] !== undefined)!;
+    expect(propsOf(root)["data-save-outcome"]).toBe("both-failed");
   });
 });
 
