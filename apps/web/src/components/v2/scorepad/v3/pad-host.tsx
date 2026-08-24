@@ -161,30 +161,48 @@ export function entitledBandsFrom(
   return out;
 }
 
-/** Every event type ALREADY reachable through a dedicated tile or a guided
- *  sheet — the "More" sheet's own exclusion set (item 4: a future engine
- *  action must appear WITHOUT a skin edit, which only holds if this set is
- *  derived from the skin's declarations, never hand-listed).
+/** Every event type ALREADY reachable through a dedicated tile, a guided
+ *  sheet, or a swap slot — the "More" sheet's own exclusion set (item 4: a
+ *  future engine action must appear WITHOUT a skin edit, which only holds if
+ *  this set is derived from the skin's declarations, never hand-listed).
  *
- *  A `{swap: id}` tile still contributes NOTHING, but the reason changed with
- *  R3 and is worth stating precisely, because the ORIGINAL reason is now
- *  false. It used to be "a swap's event cannot be known statically"; R3's
- *  defect-3 fix gives `SwapSlot` a declared `eventType` exactly so it CAN be.
- *  What this function lacks is the slot TABLE — it is handed `tiles` and
- *  `sheets`, and a `{swap}` action carries only a slot id, so it has nothing
- *  to resolve that id against. Consequence, recorded rather than silently
- *  accepted: a sport whose substitution is also declared in `padSpec(cfg)`
- *  lists it BOTH on its swap tile and again as a generic form inside "More".
- *  Widening this signature is a MORE-sheet behaviour change with no test
- *  asked for in R3's chassis brief — routed to the football skin task, which
- *  is the first wave that can actually observe the duplicate. */
+ *  R3/football closed the one hole left here. A `{swap: id}` tile used to
+ *  contribute NOTHING, so a sport whose substitution is also declared in
+ *  `padSpec(cfg)` listed it BOTH on its Sub tile and again as a generic form
+ *  inside "More". The original justification ("a swap's event cannot be known
+ *  statically") stopped being true with R3's defect-3 fix, which gives
+ *  `SwapSlot` a declared `eventType` precisely so it CAN be; all that was
+ *  missing was the slot TABLE, since a `{swap}` action carries only an id.
+ *  It is now a parameter, resolved through the SAME `resolveSwapSlot` the
+ *  band filter uses — one resolution, so a tile cannot be band-filtered as
+ *  one event and de-duplicated as another.
+ *
+ *  Why fixing it beat living with it (football's own ruling, `_INDEX.md`):
+ *  the duplicate is not cosmetic. The generic More form for a substitution
+ *  bypasses everything the swap sheet exists to provide — the module's own
+ *  `lineupPolicy` verdict, the narrowed on/off lists, the reason an
+ *  already-substituted player is ineligible, and the skin's stale-stamp guard
+ *  on `at` — so the un-narrowed path sat one tap from the narrowed one. That
+ *  is the same two-divergent-entry-points defect R2c closed for
+ *  `cricket.retire`, which the sheet's own `event` already de-duplicates.
+ *
+ *  `swaps` is REQUIRED, not optional-with-a-default: an omitted argument
+ *  would default a forgetful caller straight back to the duplicate, silently
+ *  — the same reasoning `swapCandidates`'s own `offId` parameter states. A
+ *  skin with no swap passes `[]`, which reads as the deliberate statement it
+ *  is. */
 export function dedicatedEventTypes(
   tiles: readonly TileSpec[],
   sheets: Record<string, GuidedSheetSpec> | undefined,
+  swaps: readonly SwapSlot[],
 ): Set<string> {
   const out = new Set<string>();
   for (const tile of tiles) {
     if ("event" in tile.action) out.add(tile.action.event.type);
+    else if ("swap" in tile.action) {
+      const slot = resolveSwapSlot(tile.action.swap, swaps);
+      if (slot) out.add(slot.eventType);
+    }
   }
   if (sheets) for (const spec of Object.values(sheets)) out.add(spec.event);
   return out;
@@ -671,7 +689,10 @@ export function PadHostV3(props: PadHostV3Props) {
   // `sheets` is declared once, further up — it had to move above the tile
   // build so the band filter can resolve a sheet-opening tile's event type.
   // G4's reasoning for not memoizing it lives with that declaration.
-  const dedicated = useMemo(() => dedicatedEventTypes(tiles, sheets), [tiles, sheets]);
+  // R3/football: `swapSlots` is the third argument — without it a swap's own
+  // event stays listed in the More sheet as an un-narrowed generic form
+  // beside its Sub tile (see dedicatedEventTypes' own doc).
+  const dedicated = useMemo(() => dedicatedEventTypes(tiles, sheets, swapSlots), [tiles, sheets, swapSlots]);
   const moreActionsList = useMemo(() => moreActions(spec, padViewCtx, dedicated), [spec, padViewCtx, dedicated]);
 
   // The ONE dispatch gateway (task brief item 5): every event this host

@@ -189,13 +189,19 @@ function sweep(): SweepResult {
     for (const t of tileEventTypes(tiles)) viaTiles.add(t);
     for (const t of sheetEventTypes(sheets)) viaSheets.add(t);
 
-    let dedicated = dedicatedEventTypes(tiles, sheets);
+    // R3/football widened `dedicatedEventTypes` with the swap slot table, so a
+    // Sub tile's own event stops being duplicated into the More sheet. Cricket
+    // declares NO swap at all (skins/cricket.tsx's own "swap() — DROPPED"
+    // section), so the honest argument here is the empty one — which is also
+    // what keeps this sweep's own answer identical to what it was before that
+    // widening landed.
+    let dedicated = dedicatedEventTypes(tiles, sheets, []);
 
     if (probeSuperOver) {
       const so = baseView(cfg, superOverState());
       const soTiles = buildTiles(so);
       for (const t of tileEventTypes(soTiles)) viaTiles.add(t);
-      dedicated = new Set([...dedicated, ...dedicatedEventTypes(soTiles, buildSheets(so, (k: string) => k))]);
+      dedicated = new Set([...dedicated, ...dedicatedEventTypes(soTiles, buildSheets(so, (k: string) => k), [])]);
     }
 
     const spec = padSpecFor(cfg);

@@ -197,6 +197,7 @@ describe("dedicatedEventTypes", () => {
         tile({ id: "t2", action: { event: { type: "cricket.declare", payload: {} } } }),
       ],
       undefined,
+      [],
     );
     expect([...types].sort()).toEqual(["cricket.declare", "cricket.toss"]);
   });
@@ -205,13 +206,38 @@ describe("dedicatedEventTypes", () => {
     const sheets: Record<string, GuidedSheetSpec> = {
       wicket: { event: "cricket.wicket", steps: [], buildPayload: () => ({}) },
     };
-    const types = dedicatedEventTypes([tile({ action: { sheet: "wicket" } })], sheets);
+    const types = dedicatedEventTypes([tile({ action: { sheet: "wicket" } })], sheets, []);
     expect([...types]).toEqual(["cricket.wicket"]);
   });
 
-  it("a {swap: id} tile contributes nothing — this function is never handed the slot table, so a slot id resolves to no event type here", () => {
-    const types = dedicatedEventTypes([tile({ action: { swap: "subHome" } })], undefined);
-    expect(types.size).toBe(0);
+  // R3/football — the ruling the chassis wave routed here (`_INDEX.md`: "a
+  // sport whose substitution is also declared in `padSpec(cfg)` lists it BOTH
+  // on its swap tile and again as a generic form inside More ... football is
+  // the first wave that can actually observe the duplicate, so it rules on
+  // it"). RULED: FIX IT. The duplicate is not cosmetic — the generic More
+  // form for `football.sub` bypasses every guarantee the swap sheet exists to
+  // give: no `lineupPolicy` verdict, no candidate narrowing, no
+  // already-substituted-off reason, no stale-`asOf` guard on the stamp. Two
+  // entry points, one of which is the un-narrowed one, is exactly the defect
+  // R2c closed for `cricket.retire`; the ONLY reason it survived here is that
+  // this function was never handed the slot table.
+  it("resolves a {swap: id} tile through the slot table — a swap's event is DEDICATED, never duplicated into the More sheet", () => {
+    const swaps: SwapSlot[] = [
+      { id: "subHome", offLabel: "off", onLabel: "on", side: "home", eventType: "football.sub", policyOk: true, buildEvent: () => ({ type: "football.sub", payload: {} }) },
+    ];
+    const types = dedicatedEventTypes([tile({ action: { swap: "subHome" } })], undefined, swaps);
+    expect([...types]).toEqual(["football.sub"]);
+  });
+
+  it("a {swap: id} naming no declared slot still contributes nothing — same fail-open resolution tileEventType uses", () => {
+    const swaps: SwapSlot[] = [
+      { id: "subHome", offLabel: "off", onLabel: "on", side: "home", eventType: "football.sub", policyOk: true, buildEvent: () => ({ type: "football.sub", payload: {} }) },
+    ];
+    expect(dedicatedEventTypes([tile({ action: { swap: "typo" } })], undefined, swaps).size).toBe(0);
+  });
+
+  it("an EMPTY slot table leaves a swap tile contributing nothing — the pre-R3/football behaviour, for a skin with no swap at all", () => {
+    expect(dedicatedEventTypes([tile({ action: { swap: "subHome" } })], undefined, []).size).toBe(0);
   });
 });
 
