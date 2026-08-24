@@ -384,6 +384,18 @@ export function exportChrome(lookup: SlotLabelLookup): NonNullable<BuildOpts["i1
     rotaResponseDeclined: lookup("officials.respDeclined"),
     rotaResponsePending: lookup("officials.respPending"),
     entrantTbd: lookup("bracket.tbd"),
+    // Repair pass (review of F5 remainder): build.ts:152/228's roster/rota
+    // `signatures` arrays had no opts.i18n override at all — every sibling
+    // field above them, added in the same original pass, already had one.
+    rotaSignatures: [
+      lookup("export.rota.signatureOfficial"),
+      lookup("export.rota.signatureTimeOn"),
+      lookup("export.rota.signatureTimeOff"),
+    ],
+    rosterSignatures: [
+      lookup("export.roster.signatureCaptain"),
+      lookup("export.roster.signatureOfficial"),
+    ],
   };
 }
 
@@ -552,7 +564,7 @@ export async function buildDivisionDocModel(
           } else {
             // sport without a bespoke sheet: a generic result form
             sections.push({
-              heading: `${homeLabel} vs ${awayLabel}`,
+              heading: `${homeLabel} ${slotLookup("schedule.vs")} ${awayLabel}`,
               subheading: [f.scheduled_at, f.court_name, f.stage_name]
                 .filter((x): x is string => x !== null)
                 .join(" · "),
@@ -831,7 +843,7 @@ export async function buildOfficialsRotaDoc(
         court: r.court_name,
         compDivision: `${r.comp_name} · ${r.div_name}`,
         role: r.role_key,
-        opponents: `${r.home ?? resolveSlotLabel(r.home_slot_label, slotLookup, "schedule.tbd")} vs ${r.away ?? resolveSlotLabel(r.away_slot_label, slotLookup, "schedule.tbd")}`,
+        opponents: `${r.home ?? resolveSlotLabel(r.home_slot_label, slotLookup, "schedule.tbd")} ${slotLookup("schedule.vs")} ${r.away ?? resolveSlotLabel(r.away_slot_label, slotLookup, "schedule.tbd")}`,
         response: r.response,
       });
       byOfficial.set(r.official_id, s);
@@ -979,7 +991,7 @@ export async function buildMyRotaDoc(
       court: a.court_name,
       compDivision: `${a.competition_name} · ${a.division_name}`,
       role: a.role_key,
-      opponents: `${a.home_name ?? resolveSlotLabel(a.home_slot_label, lookup, "schedule.tbd")} vs ${a.away_name ?? resolveSlotLabel(a.away_slot_label, lookup, "schedule.tbd")}`,
+      opponents: `${a.home_name ?? resolveSlotLabel(a.home_slot_label, lookup, "schedule.tbd")} ${lookup("schedule.vs")} ${a.away_name ?? resolveSlotLabel(a.away_slot_label, lookup, "schedule.tbd")}`,
       response: a.response,
     });
     byOfficial.set(key, s);
@@ -1014,13 +1026,14 @@ export async function auditLedgerDoc(
     : undefined;
   return withTenant(auth.orgId, async (tx) => {
     const divMeta = await divisionMeta(tx, meta!.division_id);
+    const lookup = exportLookup(divMeta.default_locale);
     const branding = layerDivisionBranding(baseBranding, divMeta);
     // No slot-label fallback here, deliberately: an audit ledger is the
     // forensic record of a fixture that has already been scored, so both
     // sides are always filled entrants. A placeholder cannot reach this doc.
     const vs =
       ledger.fixture.home !== null || ledger.fixture.away !== null
-        ? ` — ${ledger.fixture.home ?? "TBD"} vs ${ledger.fixture.away ?? "TBD"}`
+        ? ` — ${ledger.fixture.home ?? "TBD"} ${lookup("schedule.vs")} ${ledger.fixture.away ?? "TBD"}`
         : "";
     return buildAuditLedger(
       `${divMeta.competition_name} — ${divMeta.name}${vs}`,

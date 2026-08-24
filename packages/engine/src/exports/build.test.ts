@@ -176,6 +176,11 @@ describe("BuildOpts.i18n — caller-supplied table chrome (F5/Task 6)", () => {
     rotaResponseDeclined: "Déclinée",
     rotaResponsePending: "En attente",
     entrantTbd: "À définir",
+    // Repair pass (review of F5 remainder): the officials-rota sign-on/off
+    // block and the roster's sign-at-start block were still hardcoded
+    // English `signatures` arrays in build.ts — see build.ts:152,228.
+    rotaSignatures: ["Signature de l'officiel", "Arrivée", "Départ"] as const,
+    rosterSignatures: ["Capitaine de l'équipe", "Officiel"] as const,
   };
 
   it("timetable: columns and the no-time cell come from opts.i18n, not English", () => {
@@ -204,6 +209,30 @@ describe("BuildOpts.i18n — caller-supplied table chrome (F5/Task 6)", () => {
     ], { printedAt: "2026-07-19", pageBreaks: "per_team", i18n: FR });
     expect(m.sections[0]!.table!.columns).toEqual(FR.rotaColumns);
     expect(m.sections[0]!.table!.columns).not.toContain("When");
+  });
+
+  // Repair pass: build.ts:228 hardcoded the rota's sign-on/off block
+  // ("Official signature"/"Time on"/"Time off") six lines below the
+  // rotaResponse* fields this same F5 remainder pass already wired.
+  it("officials rota: sign-on/off signature labels come from opts.i18n, not English", () => {
+    const m = buildOfficialsRota("Planning", [
+      { officialName: "Sans tâche", duties: [] },
+    ], { printedAt: "2026-07-19", i18n: FR });
+    expect(m.sections[0]!.signatures).toEqual(FR.rotaSignatures);
+    expect(m.sections[0]!.signatures).not.toEqual(["Official signature", "Time on", "Time off"]);
+  });
+
+  // Repair pass: build.ts:152 hardcoded the roster's sign-at-start block
+  // ("Team captain"/"Official") the same way — buildRoster had no opts.i18n
+  // field at all before this pass.
+  it("roster: sign-at-start signature labels come from opts.i18n, not English", () => {
+    const m = buildRoster(
+      "Rosters",
+      [{ teamName: "U12", clubName: "Acme SC", players: [{ name: "Ada", dob: "2014-01-01", number: 7 }] }],
+      { ...OPTS, i18n: FR },
+    );
+    expect(m.sections[0]!.signatures).toEqual(FR.rosterSignatures);
+    expect(m.sections[0]!.signatures).not.toEqual(["Team captain", "Official"]);
   });
 
   it("participants: columns come from opts.i18n, not English", () => {
@@ -343,6 +372,12 @@ describe("BuildOpts.i18n — caller-supplied table chrome (F5/Task 6)", () => {
 
     const plainRota = buildOfficialsRota("Rota", [{ officialName: "X", duties: [] }], OPTS);
     expect(plainRota.sections[0]!.subheading).toBe("No duties assigned");
+    // Repair pass: the rota's sign-on/off block, same byte-identical rule.
+    expect(plainRota.sections[0]!.signatures).toEqual(["Official signature", "Time on", "Time off"]);
+
+    // Repair pass: the roster's sign-at-start block, same byte-identical rule.
+    const plainRoster = buildRoster("Rosters", [{ teamName: "U12", players: [] }], OPTS);
+    expect(plainRoster.sections[0]!.signatures).toEqual(["Team captain", "Official"]);
 
     const plainBracket = buildBracket("Cup", [bracketFx("a", 0, 1)], () => "R", OPTS);
     expect(plainBracket.bracket!.nodes[0]).toMatchObject({ home: "TBD", away: "TBD" });

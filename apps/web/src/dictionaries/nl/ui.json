@@ -4087,5 +4087,10 @@
   "export.description.officialsRota": "Aangewezen scheidsrechters en hun taken.",
   "export.description.myRota": "Je komende taken bij alle organisaties.",
   "export.description.ticket": "Toon bij de check-in — scan of laat de onderstaande referentie zien.",
-  "export.rota.noDuties": "Geen aanstellingen toegewezen"
+  "export.rota.noDuties": "Geen aanstellingen toegewezen",
+  "export.roster.signatureCaptain": "Teamaanvoerder",
+  "export.roster.signatureOfficial": "Official",
+  "export.rota.signatureOfficial": "Handtekening official",
+  "export.rota.signatureTimeOn": "Tijd van aankomst",
+  "export.rota.signatureTimeOff": "Tijd van vertrek"
 }

@@ -4087,5 +4087,10 @@
   "export.description.officialsRota": "Arbitres désignés et leurs fonctions.",
   "export.description.myRota": "Vos prochaines fonctions dans toutes les organisations.",
   "export.description.ticket": "À présenter à l'accueil : scannez ou montrez la référence ci-dessous.",
-  "export.rota.noDuties": "Aucune désignation attribuée"
+  "export.rota.noDuties": "Aucune désignation attribuée",
+  "export.roster.signatureCaptain": "Capitaine de l'équipe",
+  "export.roster.signatureOfficial": "Officiel",
+  "export.rota.signatureOfficial": "Signature de l'officiel",
+  "export.rota.signatureTimeOn": "Heure d'arrivée",
+  "export.rota.signatureTimeOff": "Heure de départ"
 }

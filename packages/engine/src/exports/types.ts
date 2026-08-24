@@ -297,5 +297,15 @@ export interface BuildOpts {
      *  same way ExportBracketFixture's `home`/`away` already arrive
      *  pre-resolved from the caller for every FILLED side. */
     entrantTbd?: string;
+    /** F5 remainder repair: officials-rota sign-on/off block — the fixed
+     *  3-line "Official signature" / "Time on" / "Time off" footer every
+     *  rota section prints (buildOfficialsRota), whether or not the
+     *  official has duties this competition. */
+    rotaSignatures?: readonly [string, string, string];
+    /** F5 remainder repair: roster sign-at-start block — one line per team,
+     *  "Team captain" / "Official" (buildRoster). Unrelated to the rota
+     *  block above — a roster is signed by players' captains before play,
+     *  a rota is signed by the official at the end of their duty. */
+    rosterSignatures?: readonly [string, string];
   };
 }

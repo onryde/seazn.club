@@ -4087,5 +4087,10 @@
   "export.description.officialsRota": "Assigned officials and their duties.",
   "export.description.myRota": "Your upcoming duties across every organisation.",
   "export.description.ticket": "Present at check-in — scan or show the reference below.",
-  "export.rota.noDuties": "No duties assigned"
+  "export.rota.noDuties": "No duties assigned",
+  "export.roster.signatureCaptain": "Team captain",
+  "export.roster.signatureOfficial": "Official",
+  "export.rota.signatureOfficial": "Official signature",
+  "export.rota.signatureTimeOn": "Time on",
+  "export.rota.signatureTimeOff": "Time off"
 }

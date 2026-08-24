@@ -4,7 +4,7 @@ import { loginUi, apiJson, TAG } from "./helpers";
 // F5 remainder: build.ts's per-value i18n fallbacks (BuildOpts.i18n's new
 // resultVs/courtUnassigned/rotaNoDuties/rotaResponse*/entrantTbd fields —
 // see packages/engine/src/exports/build.ts and exports.ts's exportChrome()).
-// This spec covers the two gaps a real product flow can actually reach today
+// This spec covers the gaps a real product flow can actually reach today
 // — the timetable's undecided-result "vs" separator and its per_pitch
 // "no court" grouping heading. entrantTbd/rotaNoDuties/rotaResponse* have no
 // reachable path through the current product (a fresh fixture's home/away
@@ -12,6 +12,12 @@ import { loginUi, apiJson, TAG } from "./helpers";
 // only ever returns officials who already have at least one duty) — those are
 // proven at the engine/vitest layer instead: build.test.ts and exports.test.ts
 // (exports.ts's exportChrome, unit-tested directly, no DB needed).
+//
+// Repair pass: the roster's sign-at-start block and the rota's sign-on/off
+// block (rosterSignatures/rotaSignatures) ARE reachable here — unlike the
+// fields above, both print unconditionally on every section, so this test
+// also exports a roster (the entrants already created below suffice) and an
+// officials rota (one real duty assignment, added below).
 //
 // A rendered PDF's content stream is compressed (pdfkit's default), so
 // grepping the response bytes for "vs"/"Unassigned" would prove nothing
@@ -79,7 +85,11 @@ test("a French-locale org's day-one timetable export still renders (F5 remainder
 
   // No court, no result — the day-one default that used to render the
   // engine's hardcoded "Unassigned"/"vs" regardless of locale.
-  const gen = await apiJson(page.request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
+  const gen = await apiJson<{ fixtures: { id: string }[] }>(
+    page.request,
+    `/api/v1/stages/${stage.data!.id}/generate`,
+    "POST",
+  );
   expect(gen.status, JSON.stringify(gen.error)).toBe(200);
 
   const res = await page.request.get(
@@ -88,4 +98,28 @@ test("a French-locale org's day-one timetable export still renders (F5 remainder
   expect(res.status()).toBe(200);
   const bytes = await res.body();
   expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
+
+  // Repair pass: the roster's sign-at-start block (rosterSignatures) —
+  // FR Alice/FR Bob above are registered entrants, so this section already
+  // exists; no day-one state to engineer.
+  const rosterRes = await page.request.get(`/api/v1/divisions/${divisionId}/exports/roster?format=pdf`);
+  expect(rosterRes.status()).toBe(200);
+  expect((await rosterRes.body()).subarray(0, 5).toString()).toBe("%PDF-");
+
+  // Repair pass: the rota's sign-on/off block (rotaSignatures) — the rota
+  // query only returns officials with >=1 duty, so give it one real
+  // assignment first (same idiom as officials-directory.spec.ts).
+  const official = await apiJson<{ id: string }>(page.request, "/api/v1/officials", "POST", {
+    display_name: `FR Ref ${TAG}`,
+    role_keys: ["referee"],
+  });
+  expect(official.status, JSON.stringify(official.error)).toBe(201);
+  const assign = await apiJson(page.request, `/api/v1/fixtures/${gen.data!.fixtures[0]!.id}/officials`, "PATCH", {
+    set: [{ official_id: official.data!.id, role_key: "referee", locked: false }],
+  });
+  expect(assign.status, JSON.stringify(assign.error)).toBe(200);
+
+  const rotaRes = await page.request.get(`/api/v1/divisions/${divisionId}/exports/officials_rota?format=pdf`);
+  expect(rotaRes.status()).toBe(200);
+  expect((await rotaRes.body()).subarray(0, 5).toString()).toBe("%PDF-");
 });

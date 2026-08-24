@@ -4087,5 +4087,10 @@
   "export.description.officialsRota": "Árbitros asignados y sus funciones.",
   "export.description.myRota": "Tus próximas funciones en todas las organizaciones.",
   "export.description.ticket": "Preséntalo en la entrada: escanea o muestra la referencia de abajo.",
-  "export.rota.noDuties": "Sin designaciones asignadas"
+  "export.rota.noDuties": "Sin designaciones asignadas",
+  "export.roster.signatureCaptain": "Capitán del equipo",
+  "export.roster.signatureOfficial": "Oficial",
+  "export.rota.signatureOfficial": "Firma del oficial",
+  "export.rota.signatureTimeOn": "Hora de entrada",
+  "export.rota.signatureTimeOff": "Hora de salida"
 }

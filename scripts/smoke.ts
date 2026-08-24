@@ -1000,9 +1000,9 @@ async function main() {
   await addonChurnWebhookSuite();
 
   // F5 remainder: build.ts's per-value i18n fallbacks (see BuildOpts.i18n's
-  // resultVs/courtUnassigned fields). Own fresh org — never flip the shared
-  // org's default_locale, which would leak French copy into every other
-  // check in this run.
+  // resultVs/courtUnassigned/rosterSignatures/rotaSignatures fields). Own
+  // fresh org — never flip the shared org's default_locale, which would
+  // leak French copy into every other check in this run.
   await f5RemainderExportLocaleSuite();
 }
 
@@ -1016,7 +1016,13 @@ async function main() {
  *  nothing either way — what only a real HTTP round-trip can show is that the
  *  new fallback-resolution code, threaded through exportChrome() and
  *  buildTimetable, does not throw for a French-locale org's fixtures in their
- *  default day-one state (no court, no result). */
+ *  default day-one state (no court, no result).
+ *
+ *  Repair pass: roster/officials-rota signature blocks (rosterSignatures/
+ *  rotaSignatures) are added below too. Unlike the fields above they need no
+ *  special "empty" state — every roster/rota section carries the signature
+ *  footer regardless of data — so the same French org exercises both once it
+ *  has a registered entrant (roster) and one real duty assignment (rota). */
 async function f5RemainderExportLocaleSuite(): Promise<void> {
   const s = newSession();
   const orgId = (await signIn(s, `smoke-f5-fr-locale-${tag}@example.com`)).org_id;
@@ -1044,7 +1050,9 @@ async function f5RemainderExportLocaleSuite(): Promise<void> {
   // Freshly generated: no court_id, no result — the exact day-one state
   // build.ts used to render as hardcoded "Unassigned"/"vs" regardless of
   // locale.
-  await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST");
+  const gen = v1data<{ fixtures: { id: string }[] }>(
+    await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"),
+  );
 
   const timetable = await fetch(
     `${BASE}/api/v1/divisions/${div.id}/exports/timetable?format=pdf&pageBreaks=per_pitch`,
@@ -1054,6 +1062,42 @@ async function f5RemainderExportLocaleSuite(): Promise<void> {
   check(
     "f5 remainder: a French-locale org's courtless/undecided timetable (per_pitch) still renders a content-bearing PDF",
     timetable.status === 200 && timetableBytes.subarray(0, 5).toString() === "%PDF-",
+  );
+
+  // Repair pass: build.ts:152/228 hardcoded the roster's sign-at-start block
+  // and the rota's sign-on/off block — opts.i18n.rosterSignatures/
+  // rotaSignatures now cover them (exportChrome()). Unlike resultVs/
+  // courtUnassigned above, both print unconditionally on every section, so
+  // the entrants already registered above are enough for the roster — no
+  // day-one/empty state to engineer.
+  const roster = await fetch(`${BASE}/api/v1/divisions/${div.id}/exports/roster?format=pdf`, {
+    headers: { cookie: cookieHeader(s) },
+  });
+  const rosterBytes = Buffer.from(await roster.arrayBuffer());
+  check(
+    "f5 remainder: a French-locale org's roster export still renders a content-bearing PDF",
+    roster.status === 200 && rosterBytes.subarray(0, 5).toString() === "%PDF-",
+  );
+
+  // The rota query only returns officials with >=1 duty (exports.ts's
+  // officialDutyRows), so a section — and its signature block — needs a real
+  // assignment first, same idiom as the officials-onboarding suite below.
+  const official = v1data<{ id: string }>(
+    await v1(s, "/api/v1/officials", "POST", {
+      display_name: `FR Ref ${tag}`,
+      role_keys: ["referee"],
+    }),
+  );
+  await v1(s, `/api/v1/fixtures/${gen.fixtures[0]!.id}/officials`, "PATCH", {
+    set: [{ official_id: official.id, role_key: "referee", locked: false }],
+  });
+  const rota = await fetch(`${BASE}/api/v1/divisions/${div.id}/exports/officials_rota?format=pdf`, {
+    headers: { cookie: cookieHeader(s) },
+  });
+  const rotaBytes = Buffer.from(await rota.arrayBuffer());
+  check(
+    "f5 remainder: a French-locale org's officials-rota export still renders a content-bearing PDF",
+    rota.status === 200 && rotaBytes.subarray(0, 5).toString() === "%PDF-",
   );
 }
 

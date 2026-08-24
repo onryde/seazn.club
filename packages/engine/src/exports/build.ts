@@ -136,6 +136,8 @@ export function buildStandings(
   return base("standings", title, [{ table }], opts);
 }
 
+const ROSTER_SIGNATURES: readonly [string, string] = ["Team captain", "Official"];
+
 /** Roster form (13 May): team + player list with sign-at-start lines. */
 export function buildRoster(
   title: string,
@@ -143,13 +145,14 @@ export function buildRoster(
   opts: BuildOpts,
 ): DocModel {
   const perTeam = (opts.pageBreaks ?? "auto") === "per_team";
+  const signatures = opts.i18n?.rosterSignatures ?? ROSTER_SIGNATURES;
   const sections: DocSection[] = teams.map((t, i) => ({
     heading: t.clubName !== undefined ? `${t.clubName} — ${t.teamName}` : t.teamName,
     table: {
       columns: ["#", "Name", "DOB", "Signature"],
       rows: t.players.map((p) => [p.number ?? "", p.name, p.dob ?? "", ""]),
     },
-    signatures: ["Team captain", "Official"],
+    signatures: [...signatures],
     ...(perTeam && i > 0 ? { pageBreakBefore: true } : {}),
   }));
   return base("roster", title, sections, opts);
@@ -192,6 +195,7 @@ const ROTA_NO_DUTIES = "No duties assigned";
 const ROTA_RESPONSE_ACCEPTED = "Accepted";
 const ROTA_RESPONSE_DECLINED = "Declined";
 const ROTA_RESPONSE_PENDING = "Pending";
+const ROTA_SIGNATURES: readonly [string, string, string] = ["Official signature", "Time on", "Time off"];
 
 /** Officials rota (v12/PROMPT-58): one section per official, duties table +
  *  sign-on/off block; zero-duty officials still get a page (13 May pattern). */
@@ -206,6 +210,7 @@ export function buildOfficialsRota(
   const responseAccepted = opts.i18n?.rotaResponseAccepted ?? ROTA_RESPONSE_ACCEPTED;
   const responseDeclined = opts.i18n?.rotaResponseDeclined ?? ROTA_RESPONSE_DECLINED;
   const responsePending = opts.i18n?.rotaResponsePending ?? ROTA_RESPONSE_PENDING;
+  const signatures = opts.i18n?.rotaSignatures ?? ROTA_SIGNATURES;
   const sections: DocSection[] = officials.map((o, i) => ({
     heading: o.officialName,
     ...(o.duties.length === 0 ? { subheading: noDuties } : {}),
@@ -225,7 +230,7 @@ export function buildOfficialsRota(
           },
         }
       : {}),
-    signatures: ["Official signature", "Time on", "Time off"],
+    signatures: [...signatures],
     ...(perOfficial && i > 0 ? { pageBreakBefore: true } : {}),
   }));
   return base("officials_rota", title, sections, opts);
