@@ -58,7 +58,10 @@ type Tx = postgres.TransactionSql;
  */
 type ApprovalSettingsRow = RegistrationSettingsRow;
 
-async function loadApprovalSettings(tx: Tx, divisionId: string): Promise<ApprovalSettingsRow | null> {
+// Exported for its own DB-backed test (finding 5: the hand-written SELECT
+// below omitted allow_free_agents even though ApprovalSettingsRow requires
+// it) — otherwise a private helper, called only from this file.
+export async function loadApprovalSettings(tx: Tx, divisionId: string): Promise<ApprovalSettingsRow | null> {
   const [row] = await tx<ApprovalSettingsRow[]>`
     select division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
            fee_cents, refund_lock_at, form_fields, payment_method,

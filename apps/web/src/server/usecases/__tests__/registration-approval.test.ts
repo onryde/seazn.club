@@ -35,6 +35,7 @@ import {
   rejectRegistration,
   withdrawRegistration,
   promoteFromWaitlist,
+  loadApprovalSettings,
 } from "../registration-approval";
 import {
   listRegistrations,
@@ -176,6 +177,37 @@ async function auditCount(type: string, regId: string): Promise<number> {
     where type = ${type} and payload->>'registration_id' = ${regId}`;
   return rows[0]!.n;
 }
+
+// ---------------------------------------------------------------------------
+// loadApprovalSettings (finding 5)
+// ---------------------------------------------------------------------------
+
+// ApprovalSettingsRow is a bare alias of RegistrationSettingsRow, which
+// REQUIRES allow_free_agents — but loadApprovalSettings's own hand-written
+// SELECT omitted the column, so the field was typed `boolean` and was
+// actually `undefined` at runtime, silently reaching
+// promoteOldestWaitlisted/promoteWaitlistedRow that way.
+describe.skipIf(!HAS_DB)("loadApprovalSettings", () => {
+  it("the loaded row carries allow_free_agents, not undefined", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "team", allow_free_agents: true });
+
+    const row = await sql.begin((tx) => loadApprovalSettings(tx, division.id));
+    expect(row?.allow_free_agents).toBe(true);
+  });
+
+  it("also carries allow_free_agents: false accurately (not just truthy coverage)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", allow_free_agents: false });
+
+    const row = await sql.begin((tx) => loadApprovalSettings(tx, division.id));
+    expect(row?.allow_free_agents).toBe(false);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // approveRegistration / rejectRegistration
