@@ -3910,6 +3910,7 @@
   "scorepad.timeline.devicePad": "Recorded from a linked device",
   "scorepad.header.score": "Score",
   "schedule.capacity.title": "Capacity check",
+  "schedule.capacity.stale": "Updating…",
   "schedule.capacity.verdict.ok": "Comfortable",
   "schedule.capacity.verdict.tight": "Tight",
   "schedule.capacity.verdict.impossible": "Won't fit",

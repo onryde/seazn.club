@@ -3910,6 +3910,7 @@
   "scorepad.timeline.devicePad": "Enregistré depuis un appareil lié",
   "scorepad.header.score": "Score",
   "schedule.capacity.title": "Vérification de capacité",
+  "schedule.capacity.stale": "Actualisation…",
   "schedule.capacity.verdict.ok": "Confortable",
   "schedule.capacity.verdict.tight": "Serré",
   "schedule.capacity.verdict.impossible": "Ne tiendra pas",

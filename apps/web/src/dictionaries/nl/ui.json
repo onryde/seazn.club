@@ -3910,6 +3910,7 @@
   "scorepad.timeline.devicePad": "Geregistreerd vanaf een gekoppeld apparaat",
   "scorepad.header.score": "Score",
   "schedule.capacity.title": "Capaciteitscontrole",
+  "schedule.capacity.stale": "Bijwerken…",
   "schedule.capacity.verdict.ok": "Ruim voldoende",
   "schedule.capacity.verdict.tight": "Krap",
   "schedule.capacity.verdict.impossible": "Past niet",

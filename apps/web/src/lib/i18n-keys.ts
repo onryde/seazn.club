@@ -3690,6 +3690,7 @@ export type DictionaryKey =
   | "schedule.capacity.apply"
   | "schedule.capacity.blockedReason"
   | "schedule.capacity.restViolations"
+  | "schedule.capacity.stale"
   | "schedule.capacity.suggestion.addCourt"
   | "schedule.capacity.suggestion.addDay"
   | "schedule.capacity.suggestion.raiseCap"

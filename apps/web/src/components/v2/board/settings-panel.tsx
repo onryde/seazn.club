@@ -12,7 +12,7 @@
 // `toLocalInput(iso)`, i.e. the organiser's own zone — self-consistent on
 // screen, so the mistake was invisible, and off by the whole offset in the
 // instant the solver actually reads.
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { RestFloorNote, restFloorNoteShown } from "@/components/v2/rest-floor-note";
 import { apiV1 } from "@/lib/client-v1";
@@ -38,18 +38,108 @@ import { CourtMultiPicker, flattenCourts } from "@/components/v2/shared/court-mu
 // P9: BOARD-side Venue — no calendar (see court-multi-picker.tsx).
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 // D2 capacity pre-check (design doc bench-product-value/designs/2026-08-13-
-// capacity-precheck-design.md): both imports are CLIENT-SAFE leaves — see
-// capacity-input.ts's header for why this file must never reach
-// `@seazn/engine/scheduling` (the barrel) or `capacity-guard.ts`
-// (server-only).
+// capacity-precheck-design.md): CLIENT-SAFE leaf — see capacity-input.ts's
+// header for why this file must never reach `@seazn/engine/scheduling`
+// (the barrel) or `capacity-guard.ts` (server-only). P10 §4/Task 6: the
+// report itself no longer comes from a local `capacityInputForFixtures` +
+// `assessCapacity` call — see useCapacityReport's own header for why —
+// this file only builds the WIRE BODY the hook sends, which still needs
+// `dayKeyInTz`/`ymdAddDays`/`zonedTimeToUtc` for the window math.
 import { dayKeyInTz, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling/tz";
-import { assessCapacity } from "@seazn/engine/scheduling/capacity";
-import { capacityInputForFixtures } from "@/lib/capacity-input";
+import type { CapacityFixtureInput } from "@/lib/capacity-input";
+import { useCapacityReport, type CapacityReportConfig } from "@/lib/use-capacity-report";
 import { CapacityCard } from "@/components/v2/board/capacity-card";
 
 /** The end DATE field bounds a whole day, so it is stored as that day's last
  *  minute. One definition, used by the PUT and by the play-hours expansion. */
 const DAY_END_HHMM = "23:59";
+
+/**
+ * D2 capacity pre-check (P10 §4/Task 6): this panel's own live draft state
+ * (startAt/endAt/matchMinutes/gapMinutes/rest/courts — NEVER `config.*` for
+ * those four numeric knobs, the same "live, not last-saved" reasoning the
+ * removed useMemo carried) -> the wire body `useCapacityReport` sends.
+ * `sessionWindows`/`blackouts`/`constraints` come off `config` UNCHANGED
+ * (last-saved): this panel's play-hours fields only expand into
+ * `sessionWindows` on Save, and live-previewing that expansion is out of
+ * scope here — same split the removed useMemo documented.
+ *
+ * Pure and exported so it is unit-testable without a fetch/effect-capable
+ * render: renderToStaticMarkup (this repo's client-component convention)
+ * never fires an effect, so a report computed behind useCapacityReport
+ * cannot be observed that way any more — this is what
+ * settings-panel-capacity.test.tsx asserts against instead now.
+ *
+ * An empty `courts` selection falls back to every non-archived org court
+ * (`flattenCourts(venues)`), mirroring `resolveCandidateCourts`'
+ * server-side "empty configuredCourtIds means UNCONSTRAINED" rule — feeding
+ * the raw (possibly empty) draft selection straight through would
+ * under-report supply relative to what Save will actually schedule
+ * against.
+ */
+export function capacityRequestFromDraft(
+  fixtures: readonly {
+    id: string;
+    status: string;
+    home_entrant_id: string | null;
+    away_entrant_id: string | null;
+    pool_id: string | null;
+  }[],
+  draft: {
+    startAt: string;
+    endAt: string;
+    matchMinutes: number;
+    gapMinutes: number;
+    rest: number;
+    courts: string[];
+  },
+  config: BoardConfig,
+  orgTz: string,
+  venues: Venue[],
+): { fixtures: CapacityFixtureInput[]; config: CapacityReportConfig } {
+  const startIso =
+    draft.startAt === "" ? null : (isoFromZonedDateTime(draft.startAt, orgTz) ?? config.startAt ?? null);
+  const endIso =
+    draft.endAt === "" ? null : (isoFromZonedParts(draft.endAt, DAY_END_HHMM, orgTz) ?? config.endAt ?? null);
+  const window =
+    startIso === null && endIso === null
+      ? undefined
+      : {
+          from: startIso ? zonedTimeToUtc(dayKeyInTz(Date.parse(startIso), orgTz), "00:00", orgTz) : -Infinity,
+          to: endIso ? zonedTimeToUtc(ymdAddDays(dayKeyInTz(Date.parse(endIso), orgTz), 1), "00:00", orgTz) : Infinity,
+        };
+  const movable = fixtures.filter((f) => f.status === "scheduled"); // MOVABLE_STATUS (schedule.ts) — a client component can't import it (server-only)
+  const effectiveCourts = draft.courts.length > 0 ? draft.courts : flattenCourts(venues).map((c) => c.id);
+  return {
+    // `id` lets an `id`-kind fixture_on_date/fixture_on_weekday selector
+    // resolve into a forcedDemand floor server-side too. `extKey`/`winnerTo`
+    // are NOT available here — the page's fetched fixture list never
+    // carries `ext_key`/`winner_to_fixture`, and neither is in the public
+    // API schema — so a `terminal`/`ext_key` selector cannot resolve and
+    // stays undercounted on this card. Same "client hint, server
+    // authority" split as demandCap.
+    fixtures: movable.map((f) => ({
+      home: f.home_entrant_id ?? undefined,
+      away: f.away_entrant_id ?? undefined,
+      poolId: f.pool_id ?? undefined,
+      id: f.id,
+    })),
+    config: {
+      courts: effectiveCourts,
+      sessionWindows: config.sessionWindows.map((w) => ({ from: Date.parse(w.from), to: Date.parse(w.to) })),
+      blackouts: config.blackouts.map((b) => ({
+        ...(b.court !== undefined ? { court: b.court } : {}),
+        from: Date.parse(b.from),
+        to: Date.parse(b.to),
+      })),
+      matchMinutes: draft.matchMinutes,
+      gapMinutes: draft.gapMinutes,
+      perEntrantMinRest: draft.rest,
+      window,
+      ...(config.constraints !== undefined ? { constraints: config.constraints } : {}),
+    },
+  };
+}
 
 /** Self-contained wrapper for RSC pages (constraints tab): owns the saved/
  *  error notice the board would otherwise host. Opens expanded — on a
@@ -208,67 +298,25 @@ export function SettingsPanel({
     ...(config.constraints !== undefined ? { constraints: config.constraints } : {}),
   };
 
-  // D2 capacity pre-check: LIVE for startAt/endAt/matchMinutes/gapMinutes/
-  // rest/courts (this panel's own draft state, recomputed as the organiser
-  // types — same reasoning as restNoteConfig above), but sessionWindows/
-  // blackouts/constraints come off `config` UNCHANGED (last-saved) — this
-  // panel's play-hours fields expand into sessionWindows only on Save
-  // (`dailyHoursToWindows`), and live-previewing that expansion too is out
-  // of scope here. "Client hint, server authority" (design doc): the SAVED
-  // config is what the server actually guards on regardless.
-  const capacityReport = useMemo(() => {
-    const startIso = startAt === "" ? null : (isoFromZonedDateTime(startAt, orgTz) ?? config.startAt ?? null);
-    const endIso = endAt === "" ? null : (isoFromZonedParts(endAt, DAY_END_HHMM, orgTz) ?? config.endAt ?? null);
-    const window =
-      startIso === null && endIso === null
-        ? undefined
-        : {
-            from: startIso ? zonedTimeToUtc(dayKeyInTz(Date.parse(startIso), orgTz), "00:00", orgTz) : -Infinity,
-            to: endIso ? zonedTimeToUtc(ymdAddDays(dayKeyInTz(Date.parse(endIso), orgTz), 1), "00:00", orgTz) : Infinity,
-          };
-    const movable = fixtures.filter((f) => f.status === "scheduled"); // MOVABLE_STATUS (schedule.ts) — a client component can't import it (server-only)
-    // `id` lets an `id`-kind fixture_on_date/fixture_on_weekday selector
-    // resolve into a forcedDemand floor on this card too (CapacityFixtureInput,
-    // capacity-input.ts). `extKey`/`winnerTo` are NOT available here — the
-    // page's fetched fixture list never carries `ext_key`/`winner_to_fixture`,
-    // and neither is in the public API schema — so a `terminal`/`ext_key`
-    // selector cannot resolve client-side and stays undercounted on this
-    // card. Same "client hint, server authority" split as demandCap; the
-    // server guard (competition-schedule-ai.ts) supplies all three.
-    //
-    // An empty `courts` selection is UNCONSTRAINED here too, mirroring
-    // `resolveCandidateCourts` (court-candidates.ts): "an empty
-    // configuredCourtIds means UNCONSTRAINED, not 'no courts'" — it falls
-    // back to every non-archived org court server-side, not to zero. Feeding
-    // the raw (possibly empty) `courts` state straight into the precheck
-    // under-reports supply relative to what Save will actually schedule
-    // against: a division that has simply never had its court list touched
-    // showed "impossible" here even though the server-side build would
-    // happily fall back to the whole org court list and succeed.
-    // `flattenCourts` is already archived-filtered (see its own doc comment).
-    const effectiveCourts = courts.length > 0 ? courts : flattenCourts(venues).map((c) => c.id);
-    const input = capacityInputForFixtures(
-      movable.map((f) => ({
-        home: f.home_entrant_id ?? undefined,
-        away: f.away_entrant_id ?? undefined,
-        poolId: f.pool_id ?? undefined,
-        id: f.id,
-      })),
-      {
-        courts: effectiveCourts,
-        sessionWindows: config.sessionWindows.map((w) => ({ from: Date.parse(w.from), to: Date.parse(w.to) })),
-        blackouts: config.blackouts.map((b) => ({ ...(b.court !== undefined ? { court: b.court } : {}), from: Date.parse(b.from), to: Date.parse(b.to) })),
-        matchMinutes,
-        gapMinutes,
-        perEntrantMinRest: rest,
-        window,
-        tz: orgTz,
-        ...(config.constraints !== undefined ? { constraints: config.constraints } : {}),
-      },
-      divisionId,
-    );
-    return input === null ? null : assessCapacity(input);
-  }, [startAt, endAt, matchMinutes, gapMinutes, rest, courts, fixtures, config, orgTz, divisionId, venues]);
+  // D2 capacity pre-check (P10 §4/Task 6): the report itself now comes from
+  // the server — see useCapacityReport's own header for why a client
+  // computation could only ever overstate supply. This panel's job is only
+  // to build the wire body from its own LIVE draft state
+  // (capacityRequestFromDraft, above) and hand it to the hook; the hook
+  // debounces, aborts a superseded request, and holds the previous report
+  // (marked stale) while a newer one is pending.
+  const capacityRequest = capacityRequestFromDraft(
+    fixtures,
+    { startAt, endAt, matchMinutes, gapMinutes, rest, courts },
+    config,
+    orgTz,
+    venues,
+  );
+  const { report: capacityReport, stale: capacityStale } = useCapacityReport(
+    divisionId,
+    capacityRequest.fixtures,
+    capacityRequest.config,
+  );
 
   // "Add a court" can only offer a REAL, currently-unselected org court now
   // (no more fabricating "Court N" out of thin air) — the next one in the
@@ -420,7 +468,7 @@ export function SettingsPanel({
         <p className="mt-0.5 text-xs text-slate-400">{msg("schedule.tz.caption", { tz: orgTz })}</p>
       </div>
 
-      <CapacityCard report={capacityReport} onApply={applyCapacitySuggestion} venueLabel={venue} />
+      <CapacityCard report={capacityReport} stale={capacityStale} onApply={applyCapacitySuggestion} venueLabel={venue} />
 
       {constrained && <UpgradeGate feature="scheduling.constraints" compact />}
 

@@ -124,4 +124,52 @@ describe("CapacityCard", () => {
     const html = render(<CapacityCard report={baseReport()} />);
     expect(html).not.toContain(en["schedule.capacity.suggestions.title"]);
   });
+
+  // P10 §4/Task 6 — the stale state (a debounced refetch pending or in
+  // flight, useCapacityReport's own `stale` flag). Must never blank the
+  // card or replace real numbers with a spinner: the report is still
+  // right there, so every assertion above (verdict chip, summary numbers,
+  // bars, suggestions) still has to hold true here too.
+  describe("stale", () => {
+    it("defaults to not-stale when the prop is omitted — existing callers keep their prior behaviour untouched", () => {
+      const html = render(<CapacityCard report={baseReport()} />);
+      expect(html).not.toContain("data-capacity-stale");
+    });
+
+    it("marks the card stale via a data attribute, without hiding the verdict or the numbers", () => {
+      const html = render(<CapacityCard report={baseReport()} stale />);
+      expect(html).toContain('data-capacity-stale="true"');
+      expect(html).toContain('data-capacity-verdict="ok"'); // verdict still there
+      expect(html).toContain("4"); // demand
+      expect(html).toContain("6"); // supply
+    });
+
+    it("shows a visible stale indicator with its own copy, distinct from the verdict chip's copy", () => {
+      const html = render(<CapacityCard report={baseReport()} stale />);
+      expect(html).toContain(en["schedule.capacity.stale"]);
+      expect(html).toContain(en["schedule.capacity.verdict.ok"]); // both present, not swapped
+    });
+
+    it("shows no stale indicator when stale is false", () => {
+      const html = render(<CapacityCard report={baseReport()} stale={false} />);
+      expect(html).not.toContain(en["schedule.capacity.stale"]);
+    });
+
+    it("renders the impossible verdict AND stays stale-marked at the same time — the two are independent axes", () => {
+      const html = render(<CapacityCard report={baseReport({ verdict: "impossible" })} stale />);
+      expect(html).toContain('data-capacity-verdict="impossible"');
+      expect(html).toContain('data-capacity-stale="true"');
+    });
+
+    it("keeps suggestions and their Apply buttons rendered while stale", () => {
+      const html = render(
+        <CapacityCard
+          report={baseReport({ verdict: "impossible", suggestions: [{ kind: "add_day", amount: 1, flipsVerdict: true }] })}
+          onApply={{ add_day: () => {} }}
+          stale
+        />,
+      );
+      expect(html).toContain(en["schedule.capacity.apply"]);
+    });
+  });
 });
