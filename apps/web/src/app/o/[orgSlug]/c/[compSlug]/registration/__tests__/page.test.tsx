@@ -36,6 +36,12 @@ const h = vi.hoisted(() => ({
   // org_stripe_unsupported_currency so a test can prove which source won.
   orgStripeUnsupportedCurrency: null as string | null,
   withTenantCalls: 0,
+  // How many times each zero-rows fallback query actually ran. The Registrants
+  // tab renders a panel that takes no context, so the resolved VALUES are not
+  // observable through props there — the only honest probe is whether the page
+  // bothered to ask (RS004 gap-pass review).
+  currencyQueries: 0,
+  unsupportedQueries: 0,
 }));
 
 const feePercentForMock = vi.hoisted(() => vi.fn(async () => 8));
@@ -87,9 +93,11 @@ vi.mock("@/lib/db", () => ({
       }
       const first = String((strings as string[])[0] ?? "").trim();
       if (first.startsWith("select currency from organizations")) {
+        h.currencyQueries += 1;
         return Promise.resolve([{ currency: h.orgCurrency }]);
       }
       if (first.startsWith("select stripe_unsupported_currency from organizations")) {
+        h.unsupportedQueries += 1;
         return Promise.resolve([{ stripe_unsupported_currency: h.orgStripeUnsupportedCurrency }]);
       }
       return Promise.resolve(h.rows);
@@ -122,6 +130,8 @@ beforeEach(() => {
   h.orgCurrency = "usd";
   h.orgStripeUnsupportedCurrency = null;
   h.withTenantCalls = 0;
+  h.currencyQueries = 0;
+  h.unsupportedQueries = 0;
   feePercentForMock.mockClear();
   feePercentForMock.mockResolvedValue(8);
 });
@@ -277,6 +287,43 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
     const tree = walk(await Page({ params, searchParams: noTab }));
     const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
     expect((propsOf(panel).context as { currency: string }).currency).toBe("eur");
+  });
+
+  // The gap-pass review caught finding 6's fix leaving one branch behind: both
+  // fallbacks were `tab === "settings" ? … : <hardcoded default>`, and the
+  // Registrants tab's rows list is ALWAYS empty, so it took "usd" and "card
+  // payments are fine" every time. Resolving them for real on that tab would
+  // have traded a wrong value for a wasted pair of queries — the test above
+  // pins that tab at zero reads. The page now builds no context there at all,
+  // so there is no value to be wrong about.
+  // CHARACTERISATION, deliberately: both of these pass against the pre-fix
+  // code too. The old shape fabricated "usd" into a context the Registrants
+  // tab never renders, so no output was ever wrong and there is no regression
+  // to prove. What the fix removes is the ABILITY to be wrong — the value
+  // RS005 would otherwise inherit and start reading. These tests pin the
+  // shape so that inheritance cannot happen silently.
+  it("builds no context at all on the Registrants tab, rather than defaulting one", async () => {
+    h.rows = [];
+    h.orgCurrency = "eur";
+    h.orgStripeUnsupportedCurrency = "sek";
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    expect(tree.find((e) => e.type === RegistrationHubSettingsPanel)).toBeUndefined();
+    expect(h.currencyQueries).toBe(0);
+    expect(h.unsupportedQueries).toBe(0);
+  });
+
+  // The Settings tab is where the fallbacks must actually fire: a competition
+  // with zero divisions still renders a currency and still needs to know the
+  // org's card state. "sek" is outside REGISTRATION_CURRENCIES on purpose —
+  // it can only have come from the fallback query, never from a row.
+  it("resolves BOTH org fallbacks on the Settings tab when rows is empty (finding 6)", async () => {
+    h.rows = [];
+    h.orgStripeUnsupportedCurrency = "sek";
+    const tree = walk(await Page({ params, searchParams: noTab }));
+    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
+    expect(propsOf(panel).cardUnsupportedCurrency).toBe("sek");
+    expect(h.currencyQueries).toBe(1);
+    expect(h.unsupportedQueries).toBe(1);
   });
 });
 

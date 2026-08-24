@@ -182,26 +182,39 @@ export default async function RegistrationHubPage({
   // Finding 6: resolved independently of rawRows[0] rather than defaulting
   // to "usd" whenever there are no rows to read it off (Registrants tab, or
   // a Settings-tab competition with zero divisions) — see fetchOrgCurrency.
-  const orgCurrency =
-    rawRows[0]?.org_currency ?? (tab === "settings" ? await fetchOrgCurrency(auth) : "usd");
-  // Same finding-6 shape for the config panel's card-unsupported message —
-  // see fetchOrgCardUnsupportedCurrency. null (never gated) on the
-  // Registrants tab, which never mounts the config panel that reads this.
+  //
+  // Both org-level fallbacks below, and the context that carries them, are
+  // built ONLY for the Settings tab.
+  //
+  // The gap-pass review flagged the previous shape — `tab === "settings" ? …
+  // : "usd"` — because the Registrants tab's rows list is ALWAYS empty, so it
+  // took the hardcoded default every time. Resolving the real values there
+  // instead would have been worse in a different way: it costs two queries to
+  // compute what that tab renders nothing from, and the suite already pins
+  // "the Registrants tab runs no division query — no wasted read".
+  //
+  // So neither fabricate nor fetch: on the Registrants tab there is no context
+  // at all, and `undefined` cannot be mistaken for "usd" or for "this org's
+  // card payments are fine". RS005 builds its own context when it has
+  // something that actually reads one.
+  const settingsContext: Omit<RegistrationHubRowContext, "onOpen"> | null =
+    tab === "settings"
+      ? {
+          dict,
+          now: new Date(),
+          orgTz,
+          currency: asCurrency(rawRows[0]?.org_currency ?? (await fetchOrgCurrency(auth))),
+          registerHref: routes.publicRegister(orgSlug, compSlug),
+          registerQrFileName: `register-${competition.slug}.png`,
+          showRegisterLink: competition.visibility !== "private",
+        }
+      : null;
   const cardUnsupportedCurrency =
-    rawRows[0]?.org_stripe_unsupported_currency ??
-    (tab === "settings" ? await fetchOrgCardUnsupportedCurrency(auth) : null);
-  // The config panel's platform-cut copy (owner decision 3) — gated the
-  // same way as the row query, since only the Settings tab ever mounts it.
+    tab === "settings"
+      ? (rawRows[0]?.org_stripe_unsupported_currency ??
+        (await fetchOrgCardUnsupportedCurrency(auth)))
+      : null;
   const feePercentPct = tab === "settings" ? await feePercentFor(auth.orgId, id) : 0;
-  const registrationContext: Omit<RegistrationHubRowContext, "onOpen"> = {
-    dict,
-    now: new Date(),
-    orgTz,
-    currency: asCurrency(orgCurrency),
-    registerHref: routes.publicRegister(orgSlug, compSlug),
-    registerQrFileName: `register-${competition.slug}.png`,
-    showRegisterLink: competition.visibility !== "private",
-  };
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8">
@@ -223,7 +236,10 @@ export default async function RegistrationHubPage({
         ))}
       </nav>
 
-      {tab === "registrants" ? (
+      {/* Branch on the CONTEXT, not on `tab`: the context is null exactly
+          when the tab is "registrants", and narrowing on it is what lets the
+          settings panel take a non-nullable prop without an assertion. */}
+      {settingsContext === null ? (
         <RegistrationHubRegistrantsPanel
           title={t(dict, "reg.hub.registrants.title")}
           body={t(dict, "reg.hub.registrants.body")}
@@ -235,7 +251,7 @@ export default async function RegistrationHubPage({
           title={t(dict, "reg.hub.settings.title")}
           body={t(dict, "reg.hub.settings.body")}
           rows={rows}
-          context={registrationContext}
+          context={settingsContext}
           orgSlug={orgSlug}
           feePercentPct={feePercentPct}
           cardUnsupportedCurrency={cardUnsupportedCurrency}

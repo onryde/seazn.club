@@ -68,6 +68,44 @@ for (const key of [
   if (fileOnly(key)) delete process.env[key];
 }
 
+// The DEV database is never a test target. Standing project rule: DB-backed
+// suites run against a FRESH schema, never `localhost:5432/seazn`.
+//
+// The rule needs enforcing here rather than in the suites because of how the
+// two halves above interact: the .env.local load exists so a bare `npx vitest
+// run` exercises the DB suites, and every suite gates on
+// `const HAS_DB = !!process.env.DATABASE_URL`. So a run with nothing exported
+// does not skip — it picks up the DEVELOPER's own DATABASE_URL and writes test
+// fixtures into the database they work in all day. Measured on 2026-08-24:
+// 4,811 fixture organisations created in one session, on top of 22,634 from
+// earlier ones. Nothing failed; that is the problem.
+//
+// Refusing loudly is the point. Deleting the variable would send the run back
+// to silently skipping ~700 tests while still exiting 0, which this file's own
+// header calls out as "coverage it was not providing".
+//
+// Scoped to `fileOnly` deliberately: CI supplies DATABASE_URL through the job
+// environment, and an operator who exports one has said what they mean. Only a
+// value that arrived from .env.local by accident is refused.
+if (fileOnly("DATABASE_URL")) {
+  const url = process.env.DATABASE_URL ?? "";
+  let devDb = false;
+  try {
+    devDb = new URL(url).port === "5432";
+  } catch {
+    devDb = /:5432\//.test(url);
+  }
+  if (devDb) {
+    throw new Error(
+      "Refusing to run: DATABASE_URL came from .env.local and points at the dev " +
+        "database (port 5432). DB-backed suites must run against a fresh schema.\n" +
+        "  seazn-env up --label <name>            # fresh pg + db:apply + sync:sports\n" +
+        '  eval "$(seazn-env env --label <name>)"  # exports DATABASE_URL\n' +
+        "An explicitly exported DATABASE_URL (or CI's) is never touched by this check.",
+    );
+  }
+}
+
 export default defineConfig({
   test: {
     environment: "node",

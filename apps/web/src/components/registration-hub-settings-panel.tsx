@@ -76,6 +76,11 @@ export function RegistrationHubSettingsPanel({
 
       {openRow && (
         <RegistrationHubConfigPanel
+          // Keyed by division so switching rows REMOUNTS the panel with fresh
+          // state, instead of the panel resetting its own state from inside an
+          // effect — that shape is a cascading render (react-hooks lint) and
+          // leaves one frame showing the previous division's values.
+          key={openRow.division_id}
           division={{
             division_id: openRow.division_id,
             name: openRow.name,

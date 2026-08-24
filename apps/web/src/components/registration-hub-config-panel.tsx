@@ -87,10 +87,12 @@ export function RegistrationHubConfigPanel({
   const [errors, setErrors] = useState<Partial<Record<ConfigFieldKey, string>>>({});
   const [formError, setFormError] = useState<string | null>(null);
 
+  // No `setLoaded(null)`/`setLoadError(null)` reset here: the mount site keys
+  // this component by division id, so a different row arrives as a REMOUNT
+  // with `useState`'s own initial null. Resetting synchronously inside the
+  // effect instead is what react-hooks flags as a cascading render.
   useEffect(() => {
     let cancelled = false;
-    setLoaded(null);
-    setLoadError(null);
     apiV1<RegistrationSettingsResponse>(`/api/v1/divisions/${division.division_id}/registration-settings`)
       .then((data) => {
         if (cancelled) return;
