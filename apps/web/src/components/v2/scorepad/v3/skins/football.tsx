@@ -827,13 +827,33 @@ function cardSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
   const state = asState(view.state);
   const by = entrantOf(state, side);
   const asksOffence = view.band >= 2;
-  // R3 review round: a second yellow with nobody on a caution is a card that
-  // cannot be attributed to anyone. BLOCKED with its reason, never dropped —
-  // the colour list is three long and a scorer notices when it is two.
-  const blockedColours: Record<string, string> =
-    cardCandidates(state, side, "second_yellow").length === 0
-      ? { second_yellow: t("pad.football.context.card.blocked.noPriorYellow") }
-      : {};
+  // R3 review round: a card with nobody to carry it cannot be attributed to
+  // anyone, and the dock that opens after it commits would render zero chips.
+  // BLOCKED with its reason, never dropped — the colour list is three long and
+  // a scorer notices when it is two.
+  //
+  // Round 2 widened this from `second_yellow` alone. Each colour has its OWN
+  // candidate set (`cardCandidates`), so each empties for its own reason: a
+  // second yellow needs somebody already booked, a first yellow needs somebody
+  // NOT yet booked, and a red needs only an unsent player on the pitch. Every
+  // side booked to a man is the reachable one — guarding one arm of a
+  // three-way split left the same defect open in the other two.
+  // `red` IS the eligibility universe — on the pitch and not sent off, with no
+  // caution condition either way — so the other two are subsets of it. Reading
+  // it first is what keeps the reason honest: with an empty pitch all three
+  // sets are empty, and "everyone is already booked" would be a false sentence
+  // about a side that has nobody to book.
+  const eligible = cardCandidates(state, side, "red");
+  const blockedColours: Record<string, string> = {};
+  for (const colour of CARD_COLORS) {
+    if (cardCandidates(state, side, colour).length > 0) continue;
+    blockedColours[colour] =
+      eligible.length === 0
+        ? t("pad.football.context.card.blocked.nobodyOnPitch")
+        : colour === "yellow"
+          ? t("pad.football.context.card.blocked.allBooked")
+          : t("pad.football.context.card.blocked.noPriorYellow");
+  }
   const steps: GuidedSheetStep[] = [
     {
       id: "color",

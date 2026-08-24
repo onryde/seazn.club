@@ -3739,6 +3739,8 @@
   "pad.football.context.sub.blocked.reentry.short": "Already substituted off",
   "pad.football.context.sub.blocked.sentOff.short": "Sent off",
   "pad.football.context.period.blocked.wrongPhase": "Not during {phase}",
+  "pad.football.context.card.blocked.allBooked": "Everyone on the pitch is already booked",
+  "pad.football.context.card.blocked.nobodyOnPitch": "Nobody is on the pitch to book",
   "pad.football.context.card.blocked.noPriorYellow": "Nobody is on a yellow",
   "pad.football.sheet.card.color.title": "Which card?",
   "pad.football.sheet.card.reason.title": "What was the offence?",

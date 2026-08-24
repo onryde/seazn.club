@@ -1391,7 +1391,10 @@ rather than guesses on layer-vs-layer ordering and on `>`/`+`/`~`.
   var(--sport-led) }` passed and `.pad-board` was satisfied by the substring
   inside `.pad-board-2`; now matched as a whole class token against parsed
   selectors.
-- `contrast.test.ts:479`'s non-text-tone licence grepped the literal
+- `contrast.test.ts`'s non-text-tone licence (the `describe` named "the tones are
+  NON-TEXT colours, and this is where that stops being a comment" — cited by NAME
+  because an earlier `:479` here had already rotted to `:546` by the next commit)
+  grepped the literal
   `color: var(--sport-<tone>)` and missed the unspaced form, `color-mix`
   wrappers, arbitrary Tailwind values, inline styles and — the one that matters
   — `var(--pad-tone)`, the indirection every tone actually ships through. It now

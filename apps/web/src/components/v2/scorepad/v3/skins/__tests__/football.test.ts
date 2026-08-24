@@ -1445,6 +1445,56 @@ describe("second_yellow needs someone on a caution (R3 review, the unattributabl
     }
   });
 
+  // R3 review round 2. The guard above was written for `second_yellow` alone,
+  // but `cardCandidates` splits three ways and each arm empties for its own
+  // reason. A side booked to a man is the REACHABLE one: every player on the
+  // pitch already holds a yellow, so the first-yellow set is empty while the
+  // second-yellow set is full — the sheet offered "Yellow", and the dock that
+  // opens after it commits had zero chips to show. Same defect, other arm.
+  const allBooked = () =>
+    state({
+      cards: ["h1", "h2", "h3"].map((person) => ({ side: "home", person, color: "yellow" })),
+    });
+
+  it("blocks a FIRST yellow when every player on that pitch is already booked", () => {
+    expect(colourStep(view({ state: allBooked() })).blocked!({}).yellow).toBe(
+      "pad.football.context.card.blocked.allBooked",
+    );
+  });
+
+  it("leaves the other two open in that state — a second yellow and a red are both still attributable", () => {
+    const blocked = colourStep(view({ state: allBooked() })).blocked!({});
+    expect(Object.keys(blocked)).toEqual(["yellow"]);
+  });
+
+  it("is per SIDE the same way — booking out the home pitch does not block the away first yellow", () => {
+    expect(colourStep(view({ state: allBooked() }), "card-away").blocked!({}).yellow).toBeUndefined();
+  });
+
+  // The empty-pitch state is not reachable through the pad today, but the
+  // reason string is what a scorer READS, and "everyone is already booked" is
+  // a false sentence about a side with nobody on the field. All three arms
+  // collapse to one honest reason rather than three confident wrong ones.
+  it("says nobody is on the pitch — not that everyone is booked — when the side has no eligible player", () => {
+    const empty = state({
+      squads: { home: footballSquad({ onPitch: [] }), away: footballSquad({ onPitch: ["a1"] }) },
+    });
+    expect(colourStep(view({ state: empty })).blocked!({})).toEqual({
+      yellow: "pad.football.context.card.blocked.nobodyOnPitch",
+      red: "pad.football.context.card.blocked.nobodyOnPitch",
+      second_yellow: "pad.football.context.card.blocked.nobodyOnPitch",
+    });
+  });
+
+  it("both new reasons exist in all four dictionaries", () => {
+    for (const key of [
+      "pad.football.context.card.blocked.allBooked",
+      "pad.football.context.card.blocked.nobodyOnPitch",
+    ]) {
+      expect(Object.keys(uiEn), key).toContain(key);
+    }
+  });
+
   it("unblocks it the moment someone on that side is cautioned", () => {
     expect(colourStep(view({ state: yellowFor("h2") })).blocked!({})).toEqual({});
   });

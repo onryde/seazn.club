@@ -3739,6 +3739,8 @@
   "pad.football.context.sub.blocked.reentry.short": "Déjà remplacé",
   "pad.football.context.sub.blocked.sentOff.short": "Expulsé",
   "pad.football.context.period.blocked.wrongPhase": "Pas pendant {phase}",
+  "pad.football.context.card.blocked.allBooked": "Tous les joueurs sur le terrain sont déjà avertis",
+  "pad.football.context.card.blocked.nobodyOnPitch": "Personne sur le terrain à avertir",
   "pad.football.context.card.blocked.noPriorYellow": "Personne n'a d'avertissement",
   "pad.football.sheet.card.color.title": "Quel carton ?",
   "pad.football.sheet.card.reason.title": "Quelle était la faute ?",
