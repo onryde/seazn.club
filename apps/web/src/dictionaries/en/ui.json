@@ -1646,6 +1646,8 @@
   "documents.standings": "Standings",
   "documents.participants": "Participants",
   "documents.error": "Couldn't prepare that document.",
+  "documents.ticketsUnavailable": "No confirmed registrations yet, so there are no tickets to print.",
+  "documents.bracketUnavailable": "This division has no knockout bracket yet.",
   "documents.pdf": "PDF",
   "documents.xlsx": "XLSX",
   "schedule.working": "Working…",

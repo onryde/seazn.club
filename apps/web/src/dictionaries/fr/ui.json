@@ -1646,6 +1646,8 @@
   "documents.standings": "Classement",
   "documents.participants": "Participants",
   "documents.error": "Impossible de préparer ce document.",
+  "documents.ticketsUnavailable": "Aucune inscription confirmée pour l’instant : il n’y a pas de billets à imprimer.",
+  "documents.bracketUnavailable": "Cette division n’a pas encore de tableau à élimination directe.",
   "documents.pdf": "PDF",
   "documents.xlsx": "XLSX",
   "schedule.working": "Traitement en cours…",
