@@ -88,6 +88,49 @@ describe("FormBuilder — adding a field", () => {
     const addBtn = island.tree().find((e) => e.type === "button" && !propsOf(e).className?.toString().includes("text-red-500"));
     expect(addBtn).toBeUndefined();
   });
+
+  // Finding 2: add() used to mint `question_${fields.length + 1}` — a length-
+  // derived suffix that repeats once the array shrinks. Add Q1, add Q2,
+  // delete Q1 (leaving just Q2 = question_2), add again: length is back to 1
+  // so the old code minted "question_2" a second time — a silent duplicate
+  // key the PUT 422s on ("duplicate form field keys"), invisible to the
+  // organiser per finding 1. The fix must survive exactly this sequence.
+  it("does not reintroduce a duplicate key after delete-then-add", () => {
+    const onChange = vi.fn();
+    const island = renderIsland(FormBuilder, { fields: [] as FormField[], canEdit: true, onChange });
+
+    function clickAdd() {
+      const addBtn = island
+        .tree()
+        .find((e) => e.type === "button" && !propsOf(e).className?.toString().includes("text-red-500"))!;
+      (propsOf(addBtn).onClick as Click)();
+    }
+    function rerenderWithLatest(): FormField[] {
+      const latest = onChange.mock.calls.at(-1)![0] as FormField[];
+      island.rerender({ fields: latest, canEdit: true, onChange });
+      return latest;
+    }
+
+    clickAdd(); // -> question_1
+    rerenderWithLatest();
+    clickAdd(); // -> question_2
+    const afterTwoAdds = rerenderWithLatest();
+    expect(afterTwoAdds.map((f) => f.key)).toEqual(["question_1", "question_2"]);
+
+    // Delete the FIRST entry (question_1), leaving only question_2 — this is
+    // the step that makes `fields.length` (1) collide with the surviving
+    // key's own suffix (2) on the next add.
+    const removeButtons = island
+      .tree()
+      .filter((e) => e.type === "button" && propsOf(e).className?.toString().includes("text-red-500"));
+    (propsOf(removeButtons[0]!).onClick as Click)();
+    rerenderWithLatest();
+
+    clickAdd(); // must NOT mint "question_2" again
+    const finalFields = rerenderWithLatest();
+    const keys = finalFields.map((f) => f.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
 });
 
 describe("FormBuilder — editing a field", () => {
