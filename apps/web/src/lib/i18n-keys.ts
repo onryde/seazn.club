@@ -803,6 +803,7 @@ export type DictionaryKey =
   | "board.conflict.detail.person_overlap"
   | "board.conflict.detail.round_order_day"
   | "board.conflict.detail.round_order_same_day"
+  | "board.conflict.detail.stranded_fixture"
   | "board.conflict.warn.blackout"
   | "board.conflict.warn.instruction"
   | "board.conflict.warn.no_slot"

@@ -79,6 +79,10 @@ describe("stranded_fixture", () => {
       ...base,
       strandedCourtIds: ["court-archived"],
     });
+    // Assert the REPORT first. Without this line the test passes trivially if
+    // the push block is deleted while the carve-out survives: no conflicts at
+    // all also filters to an empty blocking list.
+    expect(conflicts.filter((c) => c.details?.kind === "stranded_fixture")).toHaveLength(1);
     expect(conflicts.filter(isBlockingConflict)).toEqual([]);
   });
 });

@@ -134,6 +134,7 @@ const LEGACY_PROSE: Record<ConflictDetailKind, (d: ConflictDetail) => string> = 
   // court_tag_mismatch/court_double_booking neighbours, including the same
   // `courtName ?? court` id-to-name fallback.
   outside_court_hours: (d) => `court ${d.courtName ?? d.court} is closed at this time`,
+  stranded_fixture: (d) => `court ${d.courtName ?? d.court} is no longer available`,
   inside_blackout: () => "inside a blackout window",
   outside_session_windows: () => "outside session windows",
   entrant_overlap: (d) => `entrant ${d.entrantIds![0]} overlap with ${d.otherFixtureId}`,

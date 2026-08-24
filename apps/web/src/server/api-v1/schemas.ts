@@ -1264,6 +1264,7 @@ const CONFLICT_DETAIL_KIND_WITNESS: Record<ConflictDetailKind, true> = {
   round_order_same_day: true,
   no_slot_lattice: true,
   no_slot_budget: true,
+  stranded_fixture: true,
 };
 const CONFLICT_DETAIL_KINDS = Object.keys(CONFLICT_DETAIL_KIND_WITNESS) as [
   ConflictDetailKind,

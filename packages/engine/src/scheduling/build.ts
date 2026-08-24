@@ -1713,8 +1713,23 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // window) reproduced exactly this — `isBlockingConflict` alone turned one
   // unremarkable pin into a false `infeasible`, deterministically, with no
   // service involved.
+  // The same unary/pairwise argument the `window` paragraph above makes applies
+  // INSIDE `reason: "court"`. Only `court_double_booking` is a contradiction
+  // between two pins — two rows cannot hold one court at one time. The other
+  // court details are unary facts about a single row's placement: its court
+  // lacks a required tag (`court_tag_mismatch`, P9), sits outside declared
+  // opening hours (`outside_court_hours`, P9.5), or has been archived away
+  // underneath it (`stranded_fixture`, P10). All three are advisory in
+  // `isBlockingConflict` for the same reason, and returning `infeasible` over
+  // one here would refuse a board before placement is even asked — the exact
+  // false-infeasible this function's own comment records for `window`.
   const isPairwiseBlockingConflict = (c: Conflict): boolean =>
-    c.reason === "court" || c.reason === "person_overlap" || (c.reason === "order" && c.direct === true);
+    (c.reason === "court" &&
+      c.details?.kind !== "court_tag_mismatch" &&
+      c.details?.kind !== "outside_court_hours" &&
+      c.details?.kind !== "stranded_fixture") ||
+    c.reason === "person_overlap" ||
+    (c.reason === "order" && c.direct === true);
   if (pins.length > 0) {
     const pinConflicts = validateAssignments(pinnedAssignments, verifyConfig, existing, dependencies);
     if (pinConflicts.some(isPairwiseBlockingConflict)) {
