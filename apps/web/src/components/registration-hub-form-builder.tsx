@@ -43,7 +43,16 @@ export function FormBuilder({
   function add() {
     // A blank label fails validation and blocks the whole save, so seed a
     // valid default the organiser can rename.
-    const n = fields.length + 1;
+    //
+    // Finding 2: `fields.length + 1` alone repeats a key once the array has
+    // shrunk from a delete (add Q1/Q2, delete Q1, add again — length is back
+    // to 1, minting "question_2" a second time). Start from the same
+    // length-derived guess, but keep incrementing past any key already in
+    // use — covers both the delete-then-add case and a coincidental
+    // collision with a manually relabelled field's slugified key.
+    const existing = new Set(fields.map((f) => f.key));
+    let n = fields.length + 1;
+    while (existing.has(`question_${n}`)) n++;
     onChange([
       ...fields,
       { key: `question_${n}`, label: msg("reg.form.questionN", { n }), kind: "text", required: false },
