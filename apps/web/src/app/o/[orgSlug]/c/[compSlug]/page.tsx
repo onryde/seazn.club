@@ -13,6 +13,7 @@ import { ViewToggleContainer } from "@/components/ui/view-toggle";
 import { StatusChip, divisionChipState, CHIP_SORT } from "@/components/ui/status-chip";
 import { divisionAccent, monogram } from "@/lib/division-hue";
 import { resolveLogoUrl } from "@/server/public-site/data";
+import { RegistrationHubNavEntry } from "@/components/registration-hub-nav-entry";
 import { CompetitionPassEntry } from "@/components/competition-pass-entry";
 import { CompetitionWrapUpPrompt } from "@/components/competition-wrap-up-prompt";
 import { needsWrapUp } from "@/lib/competition-wrapup";
@@ -55,6 +56,16 @@ export default async function CompetitionPage({
   const trialAvailable = checkoutTrialDays(subRow) > 0;
   const publicPath =
     competition.visibility !== "private" ? routes.shared(orgSlug, competition.slug) : null;
+  // RS004 W2 scope item 2: the Registration hub's nav entry carries live
+  // counts, computed from the SAME card-stats query this page already runs
+  // above — no second query, no client fetch, no N+1 per division.
+  const openRegistrationDivisions = divisions.filter(
+    (d) => stats.get(d.id)?.registration_open,
+  ).length;
+  const totalRegistered = divisions.reduce(
+    (sum, d) => sum + (stats.get(d.id)?.entrants ?? 0),
+    0,
+  );
 
   return (
     <>
@@ -140,6 +151,18 @@ export default async function CompetitionPage({
                 <Printer className="h-4 w-4" strokeWidth={1.75} />
                 <span className="hidden sm:inline">{t(dict, "action.qr")}</span>
               </a>
+            )}
+            {canEdit && (
+              // Owner/admin only (RS004 prompt scope item 1) — a viewer or
+              // scorer never sees this entry, matching the hub page's own
+              // canEdit guard (registration/page.tsx).
+              <RegistrationHubNavEntry
+                href={routes.competitionRegistration(orgSlug, compSlug)}
+                label={t(dict, "action.registration")}
+                ariaLabel={t(dict, "aria.registration")}
+                openBadge={`${openRegistrationDivisions} ${plural(dict, "reg.hub.openCount", openRegistrationDivisions, locale)}`}
+                registeredBadge={`${totalRegistered} ${plural(dict, "reg.hub.registeredCount", totalRegistered, locale)}`}
+              />
             )}
             <Link
               href={routes.competitionSettings(orgSlug, compSlug)}

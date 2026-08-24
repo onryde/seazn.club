@@ -29,15 +29,17 @@ export const routes = {
   /** Event Pass purchase page — embedded one-time checkout (v3/07 §3). */
   competitionUpgrade: (org: Slug, comp: Slug) => `/o/${org}/c/${comp}/upgrade`,
   competitionSchedule: (org: Slug, comp: Slug) => `/o/${org}/c/${comp}/schedule`,
+  /** Competition-level Registration hub (design §5) — replaces the
+   *  division-level `divisionRegistrations` route RS001 deleted. Settings is
+   *  the landing tab; `?tab=registrants` switches panels
+   *  (registration/page.tsx's `resolveRegistrationHubTab`). */
+  competitionRegistration: (org: Slug, comp: Slug, tab?: string) =>
+    tab ? `/o/${org}/c/${comp}/registration?tab=${tab}` : `/o/${org}/c/${comp}/registration`,
   divisionNew: (org: Slug, comp: Slug) => `/o/${org}/c/${comp}/d/new`,
   division: (org: Slug, comp: Slug, div: Slug, tab?: string) =>
     tab ? `/o/${org}/c/${comp}/d/${div}?tab=${tab}` : `/o/${org}/c/${comp}/d/${div}`,
   divisionSchedule: (org: Slug, comp: Slug, div: Slug) =>
     `/o/${org}/c/${comp}/d/${div}/schedule`,
-  // divisionRegistrations (division-level registration route) removed in the
-  // RS001 registration demolition — the org IA moves to a
-  // competition-level Registration hub (design section 5); RS004 adds
-  // `competitionRegistration` here.
   /** Fixtures are addressed by per-division ordinal — human-quotable ("match 14"). */
   fixture: (org: Slug, comp: Slug, div: Slug, no: number) =>
     `/o/${org}/c/${comp}/d/${div}/f/${no}`,
