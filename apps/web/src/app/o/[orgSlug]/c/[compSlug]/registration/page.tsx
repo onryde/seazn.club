@@ -84,7 +84,7 @@ export async function fetchDivisionRows(
       from divisions d
       left join registration_settings rs on rs.division_id = d.id
       where d.competition_id = ${competitionId} and d.archived_at is null
-      order by d.name`,
+      order by d.name, d.id`,
   );
 }
 
