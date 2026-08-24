@@ -2726,6 +2726,46 @@
                               }
                             ]
                           },
+                          "category": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "open",
+                                  "mens",
+                                  "womens",
+                                  "mixed"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "age_min": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "age_max": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "status": {
                             "type": "string",
                             "enum": [
@@ -2783,6 +2823,9 @@
                           "module_version",
                           "eligibility",
                           "tiebreakers",
+                          "category",
+                          "age_min",
+                          "age_max",
                           "status",
                           "officials_hide_names",
                           "scheduling_mode",
@@ -2820,6 +2863,9 @@
                       "tiebreakers": [
                         "points"
                       ],
+                      "category": "open",
+                      "age_min": -9007199254740991,
+                      "age_max": -9007199254740991,
                       "status": "setup",
                       "officials_hide_names": true,
                       "scheduling_mode": "timed",
@@ -3191,6 +3237,46 @@
                             }
                           ]
                         },
+                        "category": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "open",
+                                "mens",
+                                "womens",
+                                "mixed"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_min": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_max": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -3248,6 +3334,9 @@
                         "module_version",
                         "eligibility",
                         "tiebreakers",
+                        "category",
+                        "age_min",
+                        "age_max",
                         "status",
                         "officials_hide_names",
                         "scheduling_mode",
@@ -3283,6 +3372,9 @@
                     "tiebreakers": [
                       "points"
                     ],
+                    "category": "open",
+                    "age_min": -9007199254740991,
+                    "age_max": -9007199254740991,
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -3641,6 +3733,46 @@
                             }
                           ]
                         },
+                        "category": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "open",
+                                "mens",
+                                "womens",
+                                "mixed"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_min": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_max": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -3698,6 +3830,9 @@
                         "module_version",
                         "eligibility",
                         "tiebreakers",
+                        "category",
+                        "age_min",
+                        "age_max",
                         "status",
                         "officials_hide_names",
                         "scheduling_mode",
@@ -3733,6 +3868,9 @@
                     "tiebreakers": [
                       "points"
                     ],
+                    "category": "open",
+                    "age_min": -9007199254740991,
+                    "age_max": -9007199254740991,
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -3975,6 +4113,46 @@
                       }
                     ]
                   },
+                  "category": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "open",
+                          "mens",
+                          "womens",
+                          "mixed"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "age_min": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 120
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "age_max": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 120
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "status": {
                     "type": "string",
                     "enum": [
@@ -4151,6 +4329,46 @@
                             }
                           ]
                         },
+                        "category": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "open",
+                                "mens",
+                                "womens",
+                                "mixed"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_min": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_max": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -4208,6 +4426,9 @@
                         "module_version",
                         "eligibility",
                         "tiebreakers",
+                        "category",
+                        "age_min",
+                        "age_max",
                         "status",
                         "officials_hide_names",
                         "scheduling_mode",
@@ -4243,6 +4464,9 @@
                     "tiebreakers": [
                       "points"
                     ],
+                    "category": "open",
+                    "age_min": -9007199254740991,
+                    "age_max": -9007199254740991,
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -5071,6 +5295,46 @@
                             }
                           ]
                         },
+                        "category": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "open",
+                                "mens",
+                                "womens",
+                                "mixed"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_min": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_max": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -5128,6 +5392,9 @@
                         "module_version",
                         "eligibility",
                         "tiebreakers",
+                        "category",
+                        "age_min",
+                        "age_max",
                         "status",
                         "officials_hide_names",
                         "scheduling_mode",
@@ -5163,6 +5430,9 @@
                     "tiebreakers": [
                       "points"
                     ],
+                    "category": "open",
+                    "age_min": -9007199254740991,
+                    "age_max": -9007199254740991,
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -5475,6 +5745,46 @@
                             }
                           ]
                         },
+                        "category": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "open",
+                                "mens",
+                                "womens",
+                                "mixed"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_min": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_max": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -5532,6 +5842,9 @@
                         "module_version",
                         "eligibility",
                         "tiebreakers",
+                        "category",
+                        "age_min",
+                        "age_max",
                         "status",
                         "officials_hide_names",
                         "scheduling_mode",
@@ -5567,6 +5880,9 @@
                     "tiebreakers": [
                       "points"
                     ],
+                    "category": "open",
+                    "age_min": -9007199254740991,
+                    "age_max": -9007199254740991,
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -47939,6 +48255,16 @@
                             }
                           ]
                         },
+                        "approval": {
+                          "type": "string",
+                          "enum": [
+                            "auto",
+                            "manual"
+                          ]
+                        },
+                        "allow_free_agents": {
+                          "type": "boolean"
+                        },
                         "org_payment_instructions": {
                           "anyOf": [
                             {
@@ -47979,6 +48305,8 @@
                         "form_fields",
                         "payment_method",
                         "payment_instructions",
+                        "approval",
+                        "allow_free_agents",
                         "org_payment_instructions",
                         "org_default_payment_method",
                         "charges_enabled",
@@ -48017,6 +48345,8 @@
                     ],
                     "payment_method": "offline",
                     "payment_instructions": "example",
+                    "approval": "auto",
+                    "allow_free_agents": true,
                     "org_payment_instructions": "example",
                     "org_default_payment_method": "example",
                     "charges_enabled": true,
@@ -48327,6 +48657,18 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "approval": {
+                    "default": "auto",
+                    "type": "string",
+                    "enum": [
+                      "auto",
+                      "manual"
+                    ]
+                  },
+                  "allow_free_agents": {
+                    "default": false,
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -48334,7 +48676,9 @@
                   "entrant_kind",
                   "fee_cents",
                   "form_fields",
-                  "payment_method"
+                  "payment_method",
+                  "approval",
+                  "allow_free_agents"
                 ],
                 "additionalProperties": false
               },
@@ -48355,7 +48699,9 @@
                     "required": true
                   }
                 ],
-                "payment_method": "offline"
+                "payment_method": "offline",
+                "approval": "auto",
+                "allow_free_agents": true
               }
             }
           }
@@ -48510,6 +48856,16 @@
                             }
                           ]
                         },
+                        "approval": {
+                          "type": "string",
+                          "enum": [
+                            "auto",
+                            "manual"
+                          ]
+                        },
+                        "allow_free_agents": {
+                          "type": "boolean"
+                        },
                         "org_payment_instructions": {
                           "anyOf": [
                             {
@@ -48550,6 +48906,8 @@
                         "form_fields",
                         "payment_method",
                         "payment_instructions",
+                        "approval",
+                        "allow_free_agents",
                         "org_payment_instructions",
                         "org_default_payment_method",
                         "charges_enabled",
@@ -48588,6 +48946,8 @@
                     ],
                     "payment_method": "offline",
                     "payment_instructions": "example",
+                    "approval": "auto",
+                    "allow_free_agents": true,
                     "org_payment_instructions": "example",
                     "org_default_payment_method": "example",
                     "charges_enabled": true,
