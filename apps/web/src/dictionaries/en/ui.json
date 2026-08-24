@@ -3726,6 +3726,7 @@
   "pad.football.context.sub.blocked.subWindows": "{side} has used all {windows} substitution windows",
   "pad.football.context.sub.blocked.reentry.short": "Already substituted off",
   "pad.football.context.sub.blocked.sentOff.short": "Sent off",
+  "pad.football.sheet.card.color.title": "Which card?",
   "pad.football.sheet.card.reason.title": "What was the offence?",
   "pad.football.sheet.period.marker.title": "Which break?",
   "pad.football.sheet.penalty.by.title": "Who was awarded it?",

@@ -3726,6 +3726,7 @@
   "pad.football.context.sub.blocked.subWindows": "{side} heeft alle {windows} wisselmomenten gebruikt",
   "pad.football.context.sub.blocked.reentry.short": "Al gewisseld",
   "pad.football.context.sub.blocked.sentOff.short": "Van het veld gestuurd",
+  "pad.football.sheet.card.color.title": "Welke kaart?",
   "pad.football.sheet.card.reason.title": "Wat was de overtreding?",
   "pad.football.sheet.period.marker.title": "Welke rust?",
   "pad.football.sheet.penalty.by.title": "Aan wie is die toegekend?",

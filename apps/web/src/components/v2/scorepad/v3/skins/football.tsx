@@ -365,19 +365,33 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
 // tiles() — §2.5. Per-side Goal / Card / Sub columns, Period shared, Pen
 // minor, More carrying the rest (ruling R3-4).
 //
-// The card column is THREE tiles per side, not one: ruling R3-1 puts the
-// colour choice INLINE ("[Yellow] [Red] [2nd Yellow] on the tile"), and a
-// `TileSpec` has no multi-button affordance — the grid itself is the inline
-// surface. Yellow + Red take one column each and 2nd Yellow spans two, so each
-// side's cards fill exactly one row of the chassis's 4-column grid rather than
-// wrapping across sides.
+// TWO VERTICAL LANES ARE THE BOARD'S ORGANISING IDEA: Home on the left, Away
+// on the right, so a scorer addresses a team by POSITION and never has to
+// select one. Every tile that belongs to a side therefore spans exactly HALF
+// the chassis's 4-column grid, and the two sides of one action are pushed
+// adjacently so each pair fills one row:
+//
+//   [ Goal · Home ][ Goal · Away ]
+//   [ Card · Home ][ Card · Away ]
+//   [ Sub  · Home ][ Sub  · Away ]
+//   [ End of period ][ Penalty   ]
+//   [           More             ]
+//
+// B3 (rendered-board review, 2026-08-24) found the card column breaking it:
+// three tiles per side (yellow 1 + red 1 + second yellow 2) filled a FULL row
+// per side, so Home's second yellow rendered in columns 3-4 — bodily inside
+// the AWAY lane, directly under "Goal · Away". Ruling R3-1's "[Yellow] [Red]
+// [2nd Yellow] inline" was read as a row of TILES; it is one Card tile whose
+// sheet opens on the colour. The cost is deliberate and was weighed: a card
+// now takes two taps rather than one, and cards are far rarer than goals.
+// `__tests__/football.test.ts` pins the lane geometry itself (span AND the
+// column each side lands in) so the next wave cannot re-break it silently.
 // ---------------------------------------------------------------------------
 
-/** Sheet key for one side's one colour. Six card sheets rather than one with a
- *  colour step, because the colour is answered by the TILE (R3-1) — the sheet
- *  only ever asks what the tile could not. */
-export function cardSheetKey(side: Side, colour: CardColor): string {
-  return `card-${side}-${colour}`;
+/** Sheet key for one side's card. ONE per side, not one per colour: the colour
+ *  is the sheet's own first step, so the tile stays inside its lane. */
+export function cardSheetKey(side: Side): string {
+  return `card-${side}`;
 }
 
 export function swapSlotId(side: Side): string {
@@ -415,6 +429,25 @@ export function buildTiles(view: PadHostView): TileSpec[] {
     }
   }
 
+  // Card — legal in every phase except a decided match (`applyCard`), so
+  // deliberately NOT gated on `inPlay`: a card during the shoot-out is a real
+  // scoring moment this pad must still reach. ONE tile per side (see this
+  // section's header): the colour is the sheet's first step, and the person
+  // still arrives through the dock, exactly as R3-1 rules.
+  if (!POST_PHASES.has(readPhase(state)) && withinBand("football.card", band)) {
+    for (const side of SIDES) {
+      tiles.push({
+        id: cardSheetKey(side),
+        label: "pad.football.action.card",
+        sublabel: SIDE_LABEL[side],
+        kind: "standard",
+        span: 2,
+        phases: ["live"],
+        action: { sheet: cardSheetKey(side) },
+      });
+    }
+  }
+
   // Sub — one tile per side, each addressing its OWN `SwapSlot` (R3-5's
   // defect 1: a bare `{swap:true}` could only ever open one sheet, so per-side
   // Sub tiles were structurally unreachable before the chassis fix).
@@ -429,27 +462,6 @@ export function buildTiles(view: PadHostView): TileSpec[] {
         phases: ["live"],
         action: { swap: swapSlotId(side) },
       });
-    }
-  }
-
-  // Card — legal in every phase except a decided match (`applyCard`), so
-  // deliberately NOT gated on `inPlay`: a card during the shoot-out is a real
-  // scoring moment this pad must still reach.
-  if (!POST_PHASES.has(readPhase(state)) && withinBand("football.card", band)) {
-    for (const side of SIDES) {
-      for (const colour of CARD_COLORS) {
-        tiles.push({
-          id: `card-${side}-${colour}`,
-          // The colour IS the label — `cardColor.*` is the shared vocabulary
-          // both lanes already use, so no new copy and no second wording.
-          label: vocabKey("color", colour) ?? "pad.football.action.card",
-          sublabel: SIDE_LABEL[side],
-          kind: colour === "yellow" ? "standard" : "destructive",
-          span: colour === "second_yellow" ? 2 : 1,
-          phases: ["live"],
-          action: { sheet: cardSheetKey(side, colour) },
-        });
-      }
     }
   }
 
@@ -500,25 +512,41 @@ export function buildTiles(view: PadHostView): TileSpec[] {
 // ---------------------------------------------------------------------------
 
 /**
- * The card sheet for one side + colour. ONE step, `Offence?`, gated at band ≥2
- * (R3-1).
+ * The card sheet for one side. `Which card?` then `Offence?`, the second gated
+ * at band ≥2 (R3-1); the PERSON is not asked here at all — the dock offers the
+ * on-pitch chips after the card commits, which is what keeps one field to one
+ * entry point.
+ *
+ * The colour step is B3's: it was six TILES until the rendered board showed
+ * what that did to the two lanes (see `buildTiles`'s header). `color` is
+ * REQUIRED on `FootballCard`, so this step carries no `when` — the sheet can
+ * never be fully gated off, and `second_yellow` stays its own colour rather
+ * than a red with a note, because the engine reads the suspension tariff off
+ * the reason and not the colour.
  *
  * `reason` is `.optional()` on `FootballCard` (football.ts:249), which is what
- * makes the gate honest rather than a shortcut: at bands 0-1 the engine
+ * makes its gate honest rather than a shortcut: at bands 0-1 the engine
  * accepts a card with no offence, so asking would be a wasted tap — the D-15
  * defect this chassis exists to remove.
  *
  * The predicate closes over the view's band rather than reading an answer,
  * which `StepPredicate` permits (it is evaluated at render, against whatever
- * the skin knows). The CONSEQUENCE is load-bearing and is why `buildTiles`
- * withholds the card tiles below band 2 entirely: `GuidedSheet` renders
- * `null` when no step is visible (guided-sheet.tsx), so a tile opening a
- * fully-gated-off sheet would be a tap with no visible response at all.
+ * the skin knows). `buildTiles` still withholds the card tile below band 2
+ * entirely — `football.card` is a band-2 event, and a tile the ACTIVE band
+ * refuses would throw through `createSkinDispatch` on tap.
  */
-function cardSheet(view: PadHostView, side: Side, colour: CardColor): GuidedSheetSpec {
+function cardSheet(view: PadHostView, side: Side): GuidedSheetSpec {
   const by = entrantOf(asState(view.state), side);
   const asksOffence = view.band >= 2;
   const steps: GuidedSheetStep[] = [
+    {
+      id: "color",
+      kind: "choice",
+      title: "pad.football.sheet.card.color.title",
+      // `cardColor.*` is the shared vocabulary both lanes already use, so no
+      // new copy and no second wording for a colour.
+      options: CARD_COLORS.map((colour) => ({ id: colour, label: vocabKey("color", colour) ?? colour })),
+    },
     {
       id: "reason",
       kind: "choice",
@@ -532,7 +560,7 @@ function cardSheet(view: PadHostView, side: Side, colour: CardColor): GuidedShee
     steps,
     buildPayload: (answers) => ({
       by,
-      color: colour,
+      color: answers.color,
       ...(answers.reason ? { reason: answers.reason } : {}),
     }),
   };
@@ -590,9 +618,7 @@ export function buildSheets(view: PadHostView): Record<string, GuidedSheetSpec> 
     period: periodSheet(view),
     penalty: penaltySheet(view),
   };
-  for (const side of SIDES) {
-    for (const colour of CARD_COLORS) sheets[cardSheetKey(side, colour)] = cardSheet(view, side, colour);
-  }
+  for (const side of SIDES) sheets[cardSheetKey(side)] = cardSheet(view, side);
   return sheets;
 }
 

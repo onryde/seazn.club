@@ -18,6 +18,7 @@
 // that precedent deliberately rather than inventing a shared one for two
 // callers.
 import { describe, expect, it } from "vitest";
+import uiEn from "@/dictionaries/en/ui.json";
 import type { AnySportModule, PadAction, PadField } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
@@ -133,6 +134,16 @@ function view(over: Partial<PadHostView> = {}): PadHostView {
 }
 
 const tileById = (tiles: readonly TileSpec[], id: string): TileSpec | undefined => tiles.find((tile) => tile.id === id);
+
+/** Which lane a tile belongs to, read the way the SCREEN reads it — off the
+ *  side sublabel, not the id, so a renamed tile cannot slip the lane guard. */
+function sideOfTile(tile: TileSpec): "home" | "away" | null {
+  if (tile.sublabel === "scorepad.attribution.home") return "home";
+  if (tile.sublabel === "scorepad.attribution.away") return "away";
+  return null;
+}
+
+const BANDS = [0, 1, 2, 3] as const;
 
 // The engine module itself — every mirrored vocabulary below is pinned
 // against its own `padSpec(cfg)`, never a hand-copied list.
@@ -280,16 +291,55 @@ describe("buildTiles", () => {
     expect(home.kind).toBe("primary");
   });
 
-  it("declares three INLINE card colours per side — yellow, red AND second yellow (R3-1)", () => {
+  // B3/fix 1. Six card tiles (yellow 1 + red 1 + second yellow 2 = a FULL
+  // 4-column row per side) put Home's second yellow in columns 3-4 — bodily
+  // inside the AWAY lane, under "Goal · Away". One Card tile per side, colour
+  // chosen INSIDE the sheet, is what keeps the two lanes readable.
+  it("declares ONE Card tile per side, spanning its own lane — the colour choice lives in the SHEET (R3-1)", () => {
     const tiles = buildTiles(view());
-    for (const side of ["home", "away"]) {
-      for (const colour of CARD_COLORS) {
-        const tile = tileById(tiles, `card-${side}-${colour}`);
-        expect(tile, `card-${side}-${colour}`).toBeDefined();
-        expect(tile!.sublabel).toBe(side === "home" ? "scorepad.attribution.home" : "scorepad.attribution.away");
+    for (const side of ["home", "away"] as const) {
+      const tile = tileById(tiles, `card-${side}`);
+      expect(tile, `card-${side}`).toBeDefined();
+      expect(tile!.label).toBe("pad.football.action.card");
+      expect(tile!.kind).toBe("standard");
+      expect(tile!.span).toBe(2);
+      expect(tile!.sublabel).toBe(side === "home" ? "scorepad.attribution.home" : "scorepad.attribution.away");
+      expect(tile!.action).toEqual({ sheet: `card-${side}` });
+    }
+    for (const colour of CARD_COLORS) {
+      expect(tileById(tiles, `card-home-${colour}`), `card-home-${colour}`).toBeUndefined();
+      expect(tileById(tiles, `card-away-${colour}`), `card-away-${colour}`).toBeUndefined();
+    }
+  });
+
+  // THE regression guard for the whole board idea: two vertical lanes, Home
+  // left and Away right, so a scorer addresses a team by POSITION and never
+  // has to select one. Every unit test in this file passed while the card
+  // tiles broke it, which is why this pins the geometry itself.
+  it("gives every SIDE tile exactly half the 4-column grid, in every band and phase", () => {
+    for (const band of BANDS) {
+      for (const phase of ["H1", "H2", "ET_H1", "SHOOTOUT"]) {
+        for (const tile of buildTiles(view({ band, state: state({ phase }) }))) {
+          if (sideOfTile(tile) === null) continue;
+          expect(tile.span, `${tile.id} @band ${band} ${phase}`).toBe(2);
+        }
       }
     }
-    expect(tileById(tiles, "card-home-second_yellow")!.label).toBe("cardColor.second_yellow");
+  });
+
+  it("lands every Home tile in the LEFT lane and every Away tile in the RIGHT one, row after row", () => {
+    for (const band of BANDS) {
+      for (const phase of ["H1", "SHOOTOUT"]) {
+        let col = 0;
+        for (const tile of buildTiles(view({ band, state: state({ phase }) }))) {
+          const span = tile.span ?? 1;
+          if (col + span > 4) col = 0; // what CSS grid auto-placement does
+          const side = sideOfTile(tile);
+          if (side !== null) expect(col, `${tile.id} @band ${band} ${phase}`).toBe(side === "home" ? 0 : 2);
+          col = (col + span) % 4;
+        }
+      }
+    }
   });
 
   it("declares a Sub tile per side, each addressing its OWN swap slot", () => {
@@ -332,14 +382,14 @@ describe("buildTiles", () => {
     expect(ids).toContain("goal-home");
     expect(ids).toContain("period");
     expect(ids).toContain("more");
-    expect(ids).not.toContain("card-home-yellow");
+    expect(ids).not.toContain("card-home");
     expect(ids).not.toContain("sub-home");
     expect(ids).not.toContain("penalty");
   });
 
   it("offers every band-2 tile once the active band reaches 2", () => {
     const ids = buildTiles(view({ band: 2 })).map((tile) => tile.id);
-    expect(ids).toContain("card-home-yellow");
+    expect(ids).toContain("card-home");
     expect(ids).toContain("sub-home");
     expect(ids).toContain("penalty");
   });
@@ -350,7 +400,7 @@ describe("buildTiles", () => {
     expect(ids).not.toContain("sub-home");
     expect(ids).not.toContain("penalty");
     expect(ids).not.toContain("period");
-    expect(ids).toContain("card-home-yellow");
+    expect(ids).toContain("card-home");
     expect(ids).toContain("more");
   });
 });
@@ -370,41 +420,59 @@ function drive(spec: GuidedSheetSpec, answers: readonly string[]) {
 }
 
 describe("buildSheets — the card flow (R3-1)", () => {
-  it("asks the offence at band 2+, offering all 13 CardReason values, and commits colour + side + reason", () => {
-    const sheets = buildSheets(view({ band: 2 }));
-    const spec = sheets["card-home-yellow"]!;
+  it("asks the COLOUR first — all three, in the shared cardColor.* wording, never a second vocabulary", () => {
+    const spec = buildSheets(view({ band: 2 }))["card-home"]!;
     const step = currentStep(spec, initialSheetState());
-    expect(step?.id).toBe("reason");
-    expect(step?.kind === "choice" && step.options).toHaveLength(13);
-    expect(drive(spec, ["dissent"])).toEqual({
+    expect(step?.id).toBe("color");
+    expect(step?.kind === "choice" && step.options.map((o) => o.id)).toEqual([...CARD_COLORS]);
+    expect(step?.kind === "choice" && step.options.map((o) => o.label)).toEqual([
+      "cardColor.yellow",
+      "cardColor.red",
+      "cardColor.second_yellow",
+    ]);
+  });
+
+  it("then asks the offence at band 2+, offering all 13 CardReason values, and commits colour + side + reason", () => {
+    const spec = buildSheets(view({ band: 2 }))["card-home"]!;
+    const advanced = answerStep(spec, initialSheetState(), "yellow");
+    expect(advanced.done).toBe(false);
+    const second = advanced.done ? null : currentStep(spec, advanced.state);
+    expect(second?.id).toBe("reason");
+    expect(second?.kind === "choice" && second.options).toHaveLength(13);
+    expect(drive(spec, ["yellow", "dissent"])).toEqual({
       type: "football.card",
       payload: { by: "home-1", color: "yellow", reason: "dissent" },
     });
   });
 
-  it("HIDES the offence step below band 2 — `reason` is optional in the engine, so bands 0-1 commit without it", () => {
-    const spec = buildSheets(view({ band: 1 }))["card-home-yellow"]!;
-    expect(currentStep(spec, initialSheetState())).toBeNull();
-  });
-
-  // The consequence of the line above, and the reason the tile action is
-  // band-dependent: `GuidedSheet` renders `null` when no step is visible, so a
-  // {sheet} tile at band 0-1 would open an invisible sheet — a dead-end tap
-  // with no visible feedback at all.
-  it("the card TILE dispatches directly below band 2 and opens the sheet at band 2+, so no tap can open an empty sheet", () => {
-    const low = tileById(buildTiles(view({ band: 1 })), "card-home-yellow");
-    expect(low).toBeUndefined(); // band 2 event: withheld entirely at band 1
-
-    const high = tileById(buildTiles(view({ band: 2 })), "card-home-yellow")!;
-    expect(high.action).toEqual({ sheet: "card-home-yellow" });
-  });
-
-  it("declares one sheet per side x colour, each carrying its OWN side and colour into the payload", () => {
-    const sheets = buildSheets(view());
-    expect(drive(sheets["card-away-second_yellow"]!, ["violent_conduct"])).toEqual({
+  // `second_yellow` is its OWN colour, never a red with a note: the engine
+  // computes the suspension tariff from the reason, not the colour.
+  it("carries second_yellow through as its own colour, from either side's sheet", () => {
+    expect(drive(buildSheets(view())["card-away"]!, ["second_yellow", "violent_conduct"])).toEqual({
       type: "football.card",
       payload: { by: "away-1", color: "second_yellow", reason: "violent_conduct" },
     });
+  });
+
+  it("HIDES the offence step below band 2 and commits on the colour alone — `reason` is optional in the engine", () => {
+    const spec = buildSheets(view({ band: 1 }))["card-home"]!;
+    expect(currentStep(spec, initialSheetState())?.id).toBe("color");
+    expect(drive(spec, ["red"])).toEqual({
+      type: "football.card",
+      payload: { by: "home-1", color: "red" },
+    });
+  });
+
+  // The card is a band-2 event, so its tile is withheld below that entirely
+  // (`EVENT_BAND`) — a tile whose every sheet step is gated off would open a
+  // sheet that renders `null`, a tap with no visible response at all.
+  it("withholds the card TILE below band 2 and opens ONE sheet per side at band 2+", () => {
+    expect(tileById(buildTiles(view({ band: 1 })), "card-home")).toBeUndefined();
+    expect(tileById(buildTiles(view({ band: 2 })), "card-home")!.action).toEqual({ sheet: "card-home" });
+    expect(Object.keys(buildSheets(view())).filter((key) => key.startsWith("card-"))).toEqual([
+      "card-home",
+      "card-away",
+    ]);
   });
 });
 
@@ -796,6 +864,52 @@ describe("footballSkinV3", () => {
 
   it("leaves cricket alone: it still declares NO swap at all", () => {
     expect(cricketSkinV3(t).swap).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Copy truth — every key this skin puts on screen has to EXIST.
+//
+// Nothing else here can catch a missing one: `TileSpec.label`, a step title
+// and an option label are plain strings the chassis resolves through `t()`,
+// so a key with no dictionary entry renders as the key itself and every unit
+// test above still passes (the local `t` returns its own argument). B3 minted
+// this after the card sheet's new colour step shipped with no copy at all.
+// Keys are COLLECTED from the built specs rather than listed by hand, so a
+// later wave's new tile or step is covered the day it lands.
+// ---------------------------------------------------------------------------
+
+function labelKeys(): Set<string> {
+  const keys = new Set<string>();
+  for (const band of BANDS) {
+    for (const phase of ["pre", "H1", "SHOOTOUT", "final"]) {
+      const v = view({ band, state: state({ phase }) });
+      for (const tile of buildTiles(v)) {
+        keys.add(tile.label);
+        if (tile.sublabel !== undefined) keys.add(tile.sublabel);
+      }
+      for (const spec of Object.values(buildSheets(v))) {
+        for (const step of spec.steps) {
+          keys.add(step.title);
+          if (step.kind === "choice") for (const option of step.options) keys.add(option.label);
+        }
+      }
+      for (const slot of buildSwap(v, t)) {
+        keys.add(slot.offLabel);
+        keys.add(slot.onLabel);
+      }
+    }
+  }
+  return keys;
+}
+
+describe("copy truth", () => {
+  it("every tile, step, option and picker label this skin declares exists in the dictionary", () => {
+    const dict = uiEn as Record<string, string>;
+    const missing = [...labelKeys()].filter(
+      (key) => key !== "__pad-host/more__" && !Object.prototype.hasOwnProperty.call(dict, key),
+    );
+    expect(missing).toEqual([]);
   });
 });
 

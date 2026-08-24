@@ -2792,6 +2792,7 @@ export type DictionaryKey =
   | "pad.football.ribbon.sinbin.start"
   | "pad.football.ribbon.sub"
   | "pad.football.ribbon.sub.pair"
+  | "pad.football.sheet.card.color.title"
   | "pad.football.sheet.card.reason.title"
   | "pad.football.sheet.penalty.by.title"
   | "pad.football.sheet.penalty.outcome.title"

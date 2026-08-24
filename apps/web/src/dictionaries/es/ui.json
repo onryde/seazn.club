@@ -3726,6 +3726,7 @@
   "pad.football.context.sub.blocked.subWindows": "{side} ha usado las {windows} ventanas de sustitución",
   "pad.football.context.sub.blocked.reentry.short": "Ya fue sustituido",
   "pad.football.context.sub.blocked.sentOff.short": "Expulsado",
+  "pad.football.sheet.card.color.title": "¿Qué tarjeta?",
   "pad.football.sheet.card.reason.title": "¿Cuál fue la infracción?",
   "pad.football.sheet.period.marker.title": "¿Qué descanso?",
   "pad.football.sheet.penalty.by.title": "¿A quién se le concedió?",
