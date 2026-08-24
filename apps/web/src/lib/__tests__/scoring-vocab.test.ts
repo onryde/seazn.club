@@ -6,6 +6,7 @@ import {
   EVENT_KEY, ENUM_VOCAB, ENGINE_ERROR_KEY, POSITION_KEY, PAD_LABEL_KEYS,
   SCORING_VOCAB_KEYS, SPORT_KEY, type MsgFn,
 } from "@/lib/scoring-vocab";
+import { buildRibbon, ribbonKeyFor } from "@/components/v2/scorepad/v3/ribbon";
 import { builtinModules } from "@seazn/engine/sports";
 import { EngineErrorCode, matchPositionOf, SquadRole } from "@seazn/engine/core";
 import { buildStream, defaultLineupPair } from "@seazn/engine/testkit";
@@ -365,6 +366,58 @@ describe("scoring-vocab covers every PadSpec label key the engine declares (#427
     for (const key of PAD_LABEL_KEYS) {
       if (isRibbonKey.test(key)) continue;
       expect([...declared.keys()], `PAD_LABEL_KEYS has "${key}", which no module emits`).toContain(key);
+    }
+  });
+
+  // R3/task C — football's v3 ribbon copy. `buildRibbon` (v3/ribbon.ts) gates
+  // its per-sport lookup on PAD_LABEL_KEYS membership BEFORE calling padLabel,
+  // so a missing entry — or an entry with no copy in one of the four locales —
+  // degrades SILENTLY to the generic `pad.ribbon.fallback` ("{event}
+  // recorded"), printing a raw internal type to a scorer with nothing failing.
+  // The test above cannot catch it: ribbon keys are exempt there by
+  // construction, since no module DECLARES one.
+  //
+  // Nothing is hand-copied here. The event types come from the engine's own
+  // fidelity tiers (`declaredEventTypes`) and the key from `ribbonKeyFor` —
+  // the SAME function buildRibbon calls, so the
+  // `pad.<sport>.ribbon.<rest-of-type>` convention is read off the code rather
+  // than restated. Add a football event type in packages/engine and this reds
+  // until its ribbon copy lands in all four dictionaries.
+  //
+  // Football-only on purpose: cricket (R2/R2b) deliberately registers ribbon
+  // copy for 8 of its 16 declared types and leaves the "More"-sheet remainder
+  // on the graceful fallback, so a sport-agnostic version of this assertion
+  // would red on that shipped decision.
+  it("registers four-locale ribbon copy for every football event type the engine declares", () => {
+    const types = declaredEventTypes().filter((t) => t.startsWith("football."));
+    // Vacuity guard: an empty derivation would satisfy the loop below.
+    expect(types).toHaveLength(9);
+    for (const type of types) {
+      const key = ribbonKeyFor(type);
+      expect(PAD_LABEL_KEYS, `no PAD_LABEL_KEYS entry for ribbon key "${key}" (${type})`).toContain(key);
+      for (const [locale, dict] of Object.entries(LOCALES)) {
+        expect(dict, `missing ${locale} ribbon copy for "${key}" (${type})`).toHaveProperty(key);
+      }
+    }
+  });
+
+  // …and the registration above actually CHANGES what a scorer reads. The
+  // membership test alone would still pass if buildRibbon's gate regressed,
+  // so drive the real builder: every football event must now render its own
+  // sentence, and must NEVER render the generic `pad.ribbon.fallback`
+  // ("{event} recorded"), which prints the raw internal type — "football.goal
+  // recorded" is the exact string this task exists to prevent.
+  it("renders football's own ribbon sentence, never the raw-event-type fallback", () => {
+    const t = (key: string, vars?: Record<string, string | number>) => {
+      const raw = LOCALES.en[key] ?? `«${key}»`;
+      return raw.replace(/\{(\w+)\}/g, (_m, v: string) => String(vars?.[v] ?? `{${v}}`));
+    };
+    const types = declaredEventTypes().filter((x) => x.startsWith("football."));
+    expect(types).toHaveLength(9);
+    for (const type of types) {
+      const { text } = buildRibbon(type, {}, () => "", t);
+      expect(text, `${type} fell through to the generic fallback`).not.toContain(type);
+      expect(text, `${type} did not resolve to its own copy`).toBe(LOCALES.en[ribbonKeyFor(type)]);
     }
   });
 
