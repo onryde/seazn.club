@@ -1554,3 +1554,64 @@ measured at 213px/369px. `block: "nearest"` then reveals only the top edge.
 The observation is sound and the arithmetic is right. The fix is a flow change
 (scorer first, assist after) that alters how every goal is recorded, which is a
 design ruling this review has no standing to make.
+
+
+---
+
+## R3 — OWNER VISUAL SIGN-OFF, RECORDED (2026-08-24)
+
+`_RULES.md` §1: visual sign-off is a MERGE GATE, and the gate is these
+verdicts being written here — not the sheet existing. All fifteen states
+**APPROVED**, no changes requested, nothing blocked.
+
+Sheet: https://claude.ai/code/artifact/f1a30e65-076e-41c1-9d1b-2b2953a9391a
+Captured from a production build at `2f4ac70c4` (46 commits on
+`feat/scorepad-v3-r3-football`), 45 captures, 3 widths each.
+
+| Sport | State | Verdict |
+| --- | --- | --- |
+| football | 01-pre | APPROVE |
+| football | 02-live | APPROVE |
+| football | 03-scored | APPROVE |
+| football | 04-dock | APPROVE |
+| football | 05-devicelink | APPROVE |
+| cricket | 01-pre | APPROVE |
+| cricket | 02-live | APPROVE |
+| cricket | 03-scored | APPROVE |
+| cricket | 04-dock | APPROVE |
+| cricket | 05-devicelink | APPROVE |
+| cricket | 06-overtile | APPROVE |
+| cricket | 07-oversheet | APPROVE |
+| cricket | 08-bowlerpicker | APPROVE |
+| cricket | 09-retiresheet | APPROVE |
+| cricket | 10-reviewblocked | APPROVE |
+
+**Cricket was re-signed deliberately, not carried over.** R2's sign-off did
+not cover this wave: three R3 commits change chassis code shared by eleven
+skins, so cricket's ten states were re-captured from the same build as
+football's and re-approved. `04-dock` is the one that genuinely moved — the
+recording chip now renders the detail suffix ("Ball recorded — Caught…") that
+`ad55ec356` finally passes into `buildRibbon`.
+
+**Three limits were stated ON the sheet and approved with them in view** — they
+are not discovered afterwards, and they are the honest boundary of what this
+sign-off covers:
+
+1. The crowded 11-a-side goal dock is **not pictured**. The capture fixture
+   rosters two or three players a side, so what was approved is the dock's
+   SHAPE, not its length. The 24 -> 13/12 chip reduction is covered by unit
+   test only.
+2. Cricket's focus ring is **invisible to this harness** by construction — it
+   paints on `:focus-visible` and the capture focuses nothing. Approved on the
+   cascade reasoning and `focus-ring-cascade.test.ts`, not on any pixel.
+3. 44 of 45 files differ byte-for-byte from the previous sheet purely because
+   the harness re-seeds fixture names per run. That is not 44 changed screens.
+
+**Gate at sign-off:** v3 unit 867/867 (0 files resolving outside the worktree),
+engine football 266/266, tsc EXIT=0 from the worktree root, eslint clean, i18n
+parity 5010 keys x 4 locales, 320px overflow 0px across all 15 states.
+
+**Merge is no longer blocked on sign-off.** What remains before merge is the PR
+itself, whose body owes: smoke deferred to **R8 by name**; the engine exception
+`b00c85162` (band 3 -> `scoring.ball_by_ball`) called out as deliberate; and the
+entitlement-override backfill this wave records but does not perform.
