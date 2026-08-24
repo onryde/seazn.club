@@ -96,7 +96,7 @@ export async function fetchDivisionRows(
  *  exist) keeps reading org_currency off rawRows[0] at zero extra queries,
  *  so this never runs alongside a non-empty result and fetchDivisionRows
  *  itself still costs exactly one round trip. */
-async function fetchOrgCurrency(auth: Pick<AuthCtx, "orgId">): Promise<string> {
+export async function fetchOrgCurrency(auth: Pick<AuthCtx, "orgId">): Promise<string> {
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<{ currency: string }[]>`
       select currency from organizations where id = ${auth.orgId}`;
