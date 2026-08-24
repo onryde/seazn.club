@@ -209,10 +209,22 @@ export default async function RegistrationHubPage({
           showRegisterLink: competition.visibility !== "private",
         }
       : null;
+  // Finding 4 (whole-branch review): org_stripe_unsupported_currency is
+  // legitimately NULL for every org whose connected Stripe account is fine —
+  // `rawRows[0]?.col ?? fallback()` treated that null exactly like "rows is
+  // empty" and ran the fallback query on nearly every Settings-tab load, the
+  // opposite of "only when there are no rows". Gated on rawRows.length
+  // instead: a real (possibly-null) column value from an existing row is
+  // used as-is, and the fallback query runs only when there is no row to
+  // read it off at all. The sibling `org_currency` read above does NOT share
+  // this bug — that column is NOT NULL (RawDivisionRow types it `string`),
+  // so `rawRows[0]?.org_currency` is only ever undefined when rawRows itself
+  // is empty, which is exactly the case the fallback is for.
   const cardUnsupportedCurrency =
     tab === "settings"
-      ? (rawRows[0]?.org_stripe_unsupported_currency ??
-        (await fetchOrgCardUnsupportedCurrency(auth)))
+      ? rawRows.length === 0
+        ? await fetchOrgCardUnsupportedCurrency(auth)
+        : rawRows[0]!.org_stripe_unsupported_currency
       : null;
   const feePercentPct = tab === "settings" ? await feePercentFor(auth.orgId, id) : 0;
 
