@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { canonConflictDetail, type ConflictDetail, type ConflictDetailKind } from "./conflict-detail.ts";
 import { conflictKey, type Conflict } from "./calendar.ts";
 
-// The 26-kind table, field-for-field, written out explicitly rather than
+// The 28-kind table, field-for-field, written out explicitly rather than
 // generated so it reads beside the design doc's table and a missing kind is a
 // `Record<ConflictDetailKind, …>` type error rather than a silently skipped
 // row — the same reasoning `RULE_BY_REASON` uses for `ConflictReason`.
@@ -48,6 +48,11 @@ const FULL_DETAIL: Record<ConflictDetailKind, ConflictDetail> = {
   // breach is against a constraint the COURT declares (its opening hours, V367)
   // rather than against another fixture, so there is no `otherFixtureId`.
   outside_court_hours: { kind: "outside_court_hours", court: "C1" },
+  // P10's 28th kind (A6, ruling 1). Same shape and same reasoning as
+  // outside_court_hours: the breach is against the court's own STATUS
+  // (archived or deleted), not against another fixture, so there is no
+  // `otherFixtureId`.
+  stranded_fixture: { kind: "stranded_fixture", court: "C1" },
   inside_blackout: { kind: "inside_blackout" },
   outside_session_windows: { kind: "outside_session_windows" },
   entrant_overlap: { kind: "entrant_overlap", entrantIds: ["e1", "e2"], otherFixtureId: "f-other" },
@@ -100,7 +105,7 @@ const ALT_VALUE: { [K in keyof Omit<ConflictDetail, "kind">]-?: NonNullable<Conf
   requiredCount: 3,
 };
 
-describe("canonConflictDetail — per-kind field participation (all 25 kinds)", () => {
+describe("canonConflictDetail — per-kind field participation (all 28 kinds)", () => {
   for (const kind of ALL_KINDS) {
     const base = FULL_DETAIL[kind];
     const fields = Object.keys(base).filter((k) => k !== "kind") as (keyof Omit<ConflictDetail, "kind">)[];

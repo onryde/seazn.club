@@ -49,10 +49,24 @@
 // fixtures must not hard-refuse publish with no way out. That stranding case is
 // P10's (A6), and it stays an advisory there too.
 
+// `stranded_fixture` (P10, A6, 2026-08-24 stranded-fixtures-and-capacity
+// design, Ruling 1) is the 28th. A stranded fixture sits on a court that is
+// archived (`courts.archived_at is not null`) or absent from `courts`
+// entirely — deliberately NOT "a court with no calendar rows", which is the
+// `outside_court_hours` short-circuit's own load-bearing `undefined` case and
+// must stay silent. The engine holds no database handle, so the server
+// resolves the archived-or-absent set and passes it through
+// `VerifyConfig.strandedCourtIds`, the same way `courtCalendars` already
+// arrives (`strandedCourtIdsForDivision`, apps/web `court-candidates.ts`).
+// `court` is its uuid, same convention as the three kinds above; REPORTED but
+// never BLOCKING, same precedent — ruling 3 (candidate-courts.ts) forbids
+// retroactively refusing an assignment on a since-archived court, and
+// surfacing a conflict is not refusing it.
+
 /** One member per family template. The design doc's own table enumerates 25;
- *  a 26th (`court_tag_mismatch`) and a 27th (`outside_court_hours`) have since
- *  been added by owner ruling — closed at exactly these 27, and a 28th needs
- *  the same, not a cast. */
+ *  a 26th (`court_tag_mismatch`), a 27th (`outside_court_hours`) and a 28th
+ *  (`stranded_fixture`) have since been added by owner ruling — closed at
+ *  exactly these 28, and a 29th needs the same, not a cast. */
 export type ConflictDetailKind =
   | "person_double_booking"
   | "locked_slot_clash"
@@ -69,6 +83,7 @@ export type ConflictDetailKind =
   | "court_double_booking"
   | "court_tag_mismatch"
   | "outside_court_hours"
+  | "stranded_fixture"
   | "inside_blackout"
   | "outside_session_windows"
   | "entrant_overlap"
