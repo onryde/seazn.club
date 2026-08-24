@@ -38,7 +38,6 @@ import type { ReactEventHandler, ReactNode } from "react";
 import { Modal } from "@/components/modal";
 import Link from "@/components/ui/console-link";
 import { useMsg } from "@/components/i18n/dict-provider";
-import { apiV1 } from "@/lib/client-v1";
 import { routes } from "@/lib/routes";
 import type { Currency } from "@/lib/currency";
 import type { MessageKey } from "@/lib/messages";
