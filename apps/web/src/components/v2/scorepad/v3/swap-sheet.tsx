@@ -46,8 +46,9 @@
 // noRoster` empty state attribution-picker.tsx already uses, rather than a
 // fabricated second string.
 //
-// SCOPE NOTE: the OFF list (who can come off) is `resolvePool({pool:
-// "onfield"}, view)` directly, no policy gate — spec §2.7 says "both
+// SCOPE NOTE: the OFF list (who can come off) is `spec.offCandidates ??
+// resolvePool({pool: "onfield"}, view)` (R3/football added the first half —
+// see `SwapSlot.offCandidates`, types.ts), no policy gate — spec §2.7 says "both
 // filtered by lineupPolicy(cfg)", but a per-sport rule about WHO may be
 // taken off (e.g. a keeper mid-passage-of-play) needs a concrete engine
 // call this sport-agnostic primitive is not positioned to make; deferred
@@ -208,6 +209,15 @@ export interface SwapSheetSpec {
    *  purpose: a rename at the adapter is exactly where two narrowing idioms
    *  start to drift apart. */
   readonly candidates?: readonly string[];
+  /** R3/football — SCOPE for the OFF list, `SwapSlot.offCandidates` carried
+   *  through verbatim by `adaptSwapSlot` (pad-host.tsx). Resolved by the same
+   *  `?? resolvePool(...)` line the ON list uses, so the two narrow by ONE
+   *  idiom; an EMPTY array means "nobody may come off" and renders the empty
+   *  state rather than falling back to the on-field pool. Absent keeps R1's
+   *  behaviour exactly (`pool: "onfield"`). See `SwapSlot.offCandidates`
+   *  (types.ts) for why a stale pool, not a per-candidate rule, is what
+   *  needed this. */
+  readonly offCandidates?: readonly string[];
   /** R3 — ELIGIBILITY for the ON list, `SwapSlot.blocked` carried through
    *  verbatim. Pre-localised person-id -> reason; an absent key means
    *  selectable. Rendered by `renderCandidateRow`, the same function the
@@ -278,7 +288,7 @@ export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap, o
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <p className="mk-eyebrow px-4 pt-3 text-slate-600">{t(spec.offLabel)}</p>
         <div className="px-4 py-3">
-          {renderCandidateRow(resolvePool({ pool: "onfield" }, view), personNames, t, setOffId, emptyText)}
+          {renderCandidateRow(spec.offCandidates ?? resolvePool({ pool: "onfield" }, view), personNames, t, setOffId, emptyText)}
         </div>
         <div className="flex justify-end px-4 pb-3">
           <button type="button" onClick={handleCancel} style={{ minHeight: 44 }} className={cancelButtonClass}>

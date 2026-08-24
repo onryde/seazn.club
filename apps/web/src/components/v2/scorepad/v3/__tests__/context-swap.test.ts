@@ -903,6 +903,95 @@ describe("swapCandidates — R3 scope narrowing (SwapSlot.candidates)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// R3/football — SCOPE for the OFF list (`SwapSlot.offCandidates`).
+//
+// The R3 chassis sub-wave narrowed the ON list only, and priced the OFF list's
+// own deferral in explicitly ("no shipped sport has a per-candidate rule about
+// who may be taken OFF ... `offCandidates`/`offBlocked` stay purely additive
+// for whichever wave first has one"). Football is that wave, and the reason is
+// not a per-candidate RULE at all — it is that the POOL itself is stale for
+// this sport. `squadStateOf` degrades football's private squad projection to
+// `initSquads(lineups)` (it is not a kernel `SquadState`), which is the
+// KICKOFF team sheet and never moves again: after one substitution the
+// on-field pool still lists the player who came off and still omits the one
+// who came on, so the off picker offers a swap the engine refuses
+// (`reduceLineupEvent`: "not on the field") and withholds one it would accept.
+// A dead-end tap either way.
+//
+// Field-for-field the contract `candidates` already ships — same `?? pool`
+// resolution, same "empty means nobody, never fall back", same name on both
+// sides of `adaptSwapSlot` — so the two lists cannot narrow by two idioms.
+// `offBlocked` is deliberately NOT minted alongside it: no sport has a reason
+// to show someone on the pitch as visibly-ineligible-to-leave, and a field
+// with no caller is a field with no test that could fail.
+// ---------------------------------------------------------------------------
+
+describe("SwapSheet — R3/football scope narrowing (SwapSlot.offCandidates) on the OFF list", () => {
+  const names = { a: "Player A", b: "Player B", c: "Player C", d: "Player D" };
+  // The kickoff sheet: a+b started, c+d benched. A live football fold that has
+  // already substituted b -> c has c on the pitch and b off it, which is
+  // exactly what this stale pool cannot say.
+  const kickoff = squad([
+    member({ personId: "a", onField: true }),
+    member({ personId: "b", onField: true }),
+    member({ personId: "c", onField: false }),
+    member({ personId: "d", onField: false }),
+  ]);
+
+  function openOff(over: Partial<SwapSheetProps["spec"]>) {
+    return renderIsland(SwapSheet, {
+      spec: { ...swapSpec, ...over },
+      view: { squad: kickoff },
+      policyVerdict: { ok: true },
+      personNames: names,
+      t,
+      onSwap: () => {},
+    });
+  }
+
+  it("an explicit offCandidates list SUPERSEDES the on-field pool entirely", () => {
+    const island = openOff({ offCandidates: ["a", "c"] });
+    const labels = buttonsOf(island.tree()).map((btn) => textOf(btn));
+    expect(labels).toContain("Player A");
+    expect(labels).toContain("Player C"); // came on: benched at kickoff, on the pitch now
+    expect(labels).not.toContain("Player B"); // came off: on the kickoff sheet, not on the pitch now
+  });
+
+  it("an EMPTY offCandidates list means 'nobody may come off' — it must not fall back to the pool", () => {
+    const island = openOff({ offCandidates: [] });
+    const labels = buttonsOf(island.tree()).map((btn) => textOf(btn));
+    expect(labels).not.toContain("Player A");
+    expect(labels).not.toContain("Player B");
+    expect(island.text()).toContain("scorepad.attribution.noRoster");
+  });
+
+  it("an ABSENT offCandidates list still resolves the on-field pool — every pre-R3/football caller is unchanged", () => {
+    const island = openOff({});
+    const labels = buttonsOf(island.tree()).map((btn) => textOf(btn));
+    expect(labels).toContain("Player A");
+    expect(labels).toContain("Player B");
+    expect(labels).not.toContain("Player C");
+  });
+
+  it("picking from offCandidates still drives the on step and completes the swap", () => {
+    let swapped: [string, string] | null = null;
+    const island = renderIsland(SwapSheet, {
+      spec: { ...swapSpec, offCandidates: ["c"], candidates: ["b"] },
+      view: { squad: kickoff },
+      policyVerdict: { ok: true },
+      personNames: names,
+      t,
+      onSwap: (off, on) => {
+        swapped = [off, on];
+      },
+    });
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn) === "Player C")!);
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn) === "Player B")!);
+    expect(swapped).toEqual(["c", "b"]);
+  });
+});
+
 describe("SwapSheet — R3 eligibility narrowing (SwapSlot.blocked) on the ON list", () => {
   const s = squad([
     member({ personId: "a", onField: true }),

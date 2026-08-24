@@ -323,6 +323,24 @@ describe("adaptSwapSlot", () => {
     expect(adapted.spec.blocked).toEqual({ "sub-2": "Already substituted off" });
   });
 
+  // R3/football, the OFF half of the same argument: `SwapSheet`'s own tests
+  // can pass `spec.offCandidates` directly, so only this assertion proves the
+  // field survives the one adapter the production path actually goes through.
+  it("carries the skin's OFF-list scope through to the sheet spec, verbatim, under the SAME field name", () => {
+    const slot = {
+      id: "subHome",
+      offLabel: "pad.football.swap.off",
+      onLabel: "pad.football.swap.on",
+      side: "home" as const,
+      eventType: "football.sub",
+      policyOk: true,
+      offCandidates: ["on-pitch-1", "came-on-2"],
+      buildEvent: () => ({ type: "football.sub", payload: {} }),
+    };
+    const adapted = adaptSwapSlot(slot, squads());
+    expect(adapted.spec.offCandidates).toEqual(["on-pitch-1", "came-on-2"]);
+  });
+
   it("leaves both narrowing fields undefined when the skin declares neither — an absent list must never become an empty one", () => {
     const slot = {
       id: "subHome",
@@ -335,6 +353,7 @@ describe("adaptSwapSlot", () => {
     };
     const adapted = adaptSwapSlot(slot, squads());
     expect(adapted.spec.candidates).toBeUndefined();
+    expect(adapted.spec.offCandidates).toBeUndefined();
     expect(adapted.spec.blocked).toBeUndefined();
   });
 });

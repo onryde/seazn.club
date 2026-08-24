@@ -607,6 +607,29 @@ export interface SwapSlot {
    */
   candidates?: readonly string[];
   /**
+   * R3/football — SCOPE for the OFF list (who may come off), the additive
+   * counterpart `candidates` above priced in for "whichever wave first has
+   * one". Same `?? resolvePool(...)` resolution, same absent-vs-EMPTY
+   * distinction (an empty array means "nobody may come off" and must never
+   * read as "no narrowing"), same field name across `adaptSwapSlot`.
+   *
+   * The reason is NOT a per-candidate rule about who may be taken off — it is
+   * that the on-field POOL is stale for a sport whose fold does not adopt the
+   * kernel's `SquadState`. `squadStateOf` (pad-host.tsx) degrades football's
+   * own private squad projection to `initSquads(lineups)`, i.e. the KICKOFF
+   * team sheet, which never moves again: one substitution later the pool still
+   * offers the player who came off and still omits the one who came on. Both
+   * halves are dead-end taps — `reduceLineupEvent` refuses "off" for someone
+   * not on the field, and a substitute who came on could never be withdrawn.
+   * A skin whose engine state DOES track the live pitch states it here.
+   *
+   * No `offBlocked` alongside it, deliberately: no shipped sport has a reason
+   * to render someone on the pitch as visibly-ineligible-to-leave, and a field
+   * with no caller is a field with no test that could fail. Adding one later
+   * stays purely additive, exactly as this one was.
+   */
+  offCandidates?: readonly string[];
+  /**
    * R3 chassis sub-wave (owner ruling 2026-08-24, defect 4) — ELIGIBILITY for
    * the ON list, applied AFTER `candidates`/the pool resolves so scope and
    * eligibility never fight. Same `Blocked` type, same pre-localised

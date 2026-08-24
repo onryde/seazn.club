@@ -464,7 +464,13 @@ export function adaptSwapSlot(
     // both sides. A rename here is exactly where two narrowing idioms start to
     // drift, and dropping them here would leave the whole contract dead on the
     // production path while the sheet's own unit tests still passed.
-    spec: { offLabel: slot.offLabel, onLabel: slot.onLabel, candidates: slot.candidates, blocked: slot.blocked },
+    spec: {
+      offLabel: slot.offLabel,
+      onLabel: slot.onLabel,
+      candidates: slot.candidates,
+      offCandidates: slot.offCandidates,
+      blocked: slot.blocked,
+    },
     view: sidePool(slot.side, squads),
     policyVerdict: slot.policyOk
       ? { ok: true }
