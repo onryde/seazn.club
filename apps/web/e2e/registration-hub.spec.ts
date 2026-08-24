@@ -359,6 +359,19 @@ test.describe("RS004 registration hub", () => {
       divisionName: "Register Link",
       visibility: "public",
     });
+    // RS004 promotion review finding 3: a closed division no longer renders
+    // the register-link controls at all (a closed window would only refuse
+    // the visitor). seedDivision alone leaves NO registration_settings row,
+    // which coalesces to enabled:false -> status "closed" -- this control
+    // only exists to prove the URL VALUE the hub hands out, so it needs a
+    // genuinely open division to have anything to assert on.
+    const settings = await apiJson(
+      request,
+      `/api/v1/divisions/${divisionId}/registration-settings`,
+      "PUT",
+      { enabled: true, entrant_kind: "individual", fee_cents: 0, approval: "auto" },
+    );
+    expect(settings.status).toBeLessThan(300);
 
     await page.goto(hubPath(org.slug, competitionSlug), { waitUntil: "load" });
     const row = page.locator(`[data-registration-hub-row][data-division-id="${divisionId}"]`);
