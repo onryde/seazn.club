@@ -52,11 +52,11 @@ type Tx = postgres.TransactionSql;
  * ownership still keeps `registrations.ts`'s shared
  * `SETTINGS_COLS`/`RegistrationSettingsRow` to export-only edits, and
  * `loadApprovalSettings` below hand-writes its own SELECT instead of
- * calling the shared `loadSettings`. Structurally assignable back to
+ * calling the shared `loadSettings`. An alias, not a subtype, so it stays assignable to
  * `RegistrationSettingsRow` wherever `promoteOldestWaitlisted`/
  * `promoteWaitlistedRow` expect the base shape.
  */
-interface ApprovalSettingsRow extends RegistrationSettingsRow {}
+type ApprovalSettingsRow = RegistrationSettingsRow;
 
 async function loadApprovalSettings(tx: Tx, divisionId: string): Promise<ApprovalSettingsRow | null> {
   const [row] = await tx<ApprovalSettingsRow[]>`

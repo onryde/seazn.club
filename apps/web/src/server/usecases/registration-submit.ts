@@ -163,10 +163,10 @@ function mintRegistrationToken(): string {
  *  name, rather than using `RegistrationSettingsRow` directly, because
  *  `loadSubmitSettings` below hand-writes its own SELECT instead of
  *  calling the shared `loadSettings` — this wave's file ownership still
- *  keeps `registrations.ts` to export-only edits. Extends
- *  `RegistrationSettingsRow` structurally so it satisfies `windowOpen`'s
+ *  keeps `registrations.ts` to export-only edits. An alias of
+ *  `RegistrationSettingsRow`, so it satisfies `windowOpen`'s
  *  parameter type unchanged. */
-interface SubmitSettingsRow extends RegistrationSettingsRow {}
+type SubmitSettingsRow = RegistrationSettingsRow;
 
 async function loadSubmitSettings(divisionId: string): Promise<SubmitSettingsRow | null> {
   const [row] = await sql<SubmitSettingsRow[]>`

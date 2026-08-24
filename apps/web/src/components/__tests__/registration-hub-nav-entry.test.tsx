@@ -7,11 +7,12 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { RegistrationHubNavEntry } from "@/components/registration-hub-nav-entry";
+import { routes } from "@/lib/routes";
 
 function render(): string {
   return renderToStaticMarkup(
     <RegistrationHubNavEntry
-      href="/o/acme/c/summer-smash/registration"
+      href={routes.competitionRegistration("acme", "summer-smash")}
       label="Registration"
       ariaLabel="Registration"
       openBadge="2 divisions open"
@@ -22,7 +23,9 @@ function render(): string {
 
 describe("RegistrationHubNavEntry", () => {
   it("links to the href it is given", () => {
-    expect(render()).toContain('href="/o/acme/c/summer-smash/registration"');
+    expect(render()).toContain(
+      `href="${routes.competitionRegistration("acme", "summer-smash")}"`,
+    );
   });
 
   it("renders the label and both live-count badges it is given", () => {
