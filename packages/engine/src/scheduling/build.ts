@@ -691,7 +691,18 @@ export interface BuildResult {
  */
 /**
  * Blocking AT THIS GATE, which is deliberately a WIDER set than
- * `isBlockingConflict`'s — the shared predicate plus `instruction`.
+ * `isBlockingConflict`'s — the shared predicate plus `instruction` and
+ * `start_window`.
+ *
+ * TWO VOCABULARIES, ONE IDEA (P9.5). The reasoning below was written about
+ * "typed rules" and cites `constraints.startWindows` as its example, but a
+ * startWindows breach does not report `instruction` — that family is the
+ * durable typed rules (calendar.ts:1279-1372, rule code H8). A startWindows
+ * breach reports `start_window` (calendar.ts:1608 verifying, :945 in greedy).
+ * So for two waves this gate argued the startWindows case and then caught only
+ * the other family, and a solver board breaching an organiser's start window
+ * was reported but never rejected. Both reasons are listed now. Everything
+ * below applies verbatim to both.
  *
  * WHY THE BUILD GATE NEEDS ITS OWN. `isBlockingConflict` answers "may this be
  * WRITTEN", and it is shared by the apply gate, the drag path and the AI
@@ -732,7 +743,7 @@ export interface BuildResult {
  * a blast radius far past what this gate needs.
  */
 function isBlockingForBuild(c: Conflict): boolean {
-  return isBlockingConflict(c) || c.reason === "instruction";
+  return isBlockingConflict(c) || c.reason === "instruction" || c.reason === "start_window";
 }
 
 export function rejectedBlockingConflicts(

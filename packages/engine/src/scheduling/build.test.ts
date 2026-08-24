@@ -831,6 +831,33 @@ describe("rejectedBlockingConflicts", () => {
     expect(isBlockingConflict(after[0]!)).toBe(false);
   });
 
+  // P9.5. The comment above names `constraints.startWindows` as a motivating
+  // example of "typed rules are not on the wire", but a startWindows breach does
+  // NOT report `reason: "instruction"` — that family is the durable typed rules
+  // (calendar.ts:1279-1372, rule code H8). A startWindows breach reports
+  // `reason: "start_window"` (calendar.ts:1608 on the verify side, :945 on the
+  // greedy side). So it falls through this gate entirely: the solver, which was
+  // never sent the constraint, can introduce one and nothing rejects the board.
+  //
+  // Same class, same asymmetry, same argument — two vocabularies for one idea,
+  // and the gate only learned one of them.
+  it("rejects a start-window breach the solver introduced, for the same reason as a typed rule", () => {
+    const after = [c({ fixtureId: "a", reason: "start_window", details: { kind: "outside_start_window" } })];
+    expect(rejectedBlockingConflicts([], after, new Set(["a"]))).toEqual(after);
+    // The shared predicate stays unchanged, exactly as for `instruction`: an
+    // organiser must still be able to edit a board that already breaches one.
+    expect(isBlockingConflict(after[0]!)).toBe(false);
+  });
+
+  it("passes a start-window breach greedy shares, because refusing it would be a lock-out", () => {
+    // The start-date case: move a division's start date and every absolute
+    // startWindow can fall outside the new range. Neither producer can satisfy
+    // it, so it appears on both sides and cancels rather than stranding the
+    // organiser with a board they cannot publish or fix.
+    const both = [c({ fixtureId: "a", reason: "start_window", details: { kind: "outside_start_window" } })];
+    expect(rejectedBlockingConflicts(both, both, new Set(["a"]))).toEqual([]);
+  });
+
   it("passes a typed-rule breach greedy shares, because refusing it would be a lock-out", () => {
     // A rule NEITHER producer can satisfy appears on both sides and cancels —
     // the same reason `ours` scopes out conflicts between two `existing` rows.
