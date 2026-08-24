@@ -157,7 +157,12 @@ export const CapacityPrecheckInput = z.object({
     constraints: z
       .object({
         restMin: z.number().int().min(0).optional(),
-        restByGroup: z.record(z.string(), z.number()).optional(),
+        // Bounded like every sibling here: an unbounded record was the one
+        // uncapped field on a client-supplied body (P10 Task 5 review).
+        restByGroup: z
+          .record(z.string(), z.number().int().min(0).max(24 * 60))
+          .refine((r) => Object.keys(r).length <= 200, { message: "at most 200 groups" })
+          .optional(),
         noBackToBack: z.boolean().optional(),
         hard: z.array(HardConstraint).max(200).optional(),
       })

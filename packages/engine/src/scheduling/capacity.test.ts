@@ -161,6 +161,58 @@ describe("assessCapacity — rest lower bound (need_e = k_e·m + (k_e−1)·max(
   });
 });
 
+describe("assessCapacity — the per-day union is computed once per day, not once per entrant-day", () => {
+  // P10 Task 5 review. The rest-bound loop called `dayUnionMinutes(day)` once
+  // per ENTRANT per day, so cost grew as entrants × days for an answer that
+  // depends only on the day. That was affordable while this ran in one browser
+  // over one board; §4 puts it behind a POST endpoint accepting up to 2000
+  // fixtures and 4000 days, on a session-authenticated route with no
+  // per-request throttle.
+  //
+  // Counting calls directly would mean reaching into a module-private function,
+  // so this measures the observable consequence instead: the same day object
+  // shared by many entrants must not multiply the work. A getter on `courts`
+  // counts how many times the day's windows are actually read.
+  it("reads each day's windows the same number of times for 50 entrants as for 400", () => {
+    const readsFor = (entrantCount: number): { reads: number; bounds: number } => {
+      let reads = 0;
+      const windows = [{ from: DAY1, to: DAY1 + 600 * MS_PER_MIN }];
+      const day = {
+        date: "2026-10-19",
+        get courts() {
+          reads++;
+          return [{ court: "Court 1", windows }];
+        },
+      };
+      const report = assessCapacity({
+        matchMinutes: 60,
+        gapMinutes: 15,
+        perEntrantMinRest: 0,
+        fixtureCount: entrantCount,
+        days: [day],
+        entrants: Array.from({ length: entrantCount }, (_, i) => ({
+          entrantId: `E${i}`,
+          fixtures: 1,
+        })),
+      });
+      // Every entrant still gets a real bound — this must not pass by doing
+      // nothing.
+      expect(report.restBound.every((b) => b.available === 600)).toBe(true);
+      return { reads, bounds: report.restBound.length };
+    };
+
+    const small = readsFor(50);
+    const large = readsFor(400);
+    expect(small.bounds).toBe(50);
+    expect(large.bounds).toBe(400);
+    // The assertion is INVARIANCE, not a magic ceiling: other passes (the
+    // supply walk, the day cap) legitimately read the day too, and pinning
+    // their exact count would just break on unrelated edits. Pre-fix this
+    // grew one read per entrant, so 400 entrants read 8× what 50 did.
+    expect(large.reads).toBe(small.reads);
+  });
+});
+
 describe("assessCapacity — per-day caps (Hall-style day walk over ordered days)", () => {
   it("is impossible when a binding per-day rule cap front-loads demand past what capped days can absorb, even though TOTAL court supply is ample", () => {
     // Day1: 1 court, 300-minute window, m=30 g=0 -> slot=30 -> supply=10.

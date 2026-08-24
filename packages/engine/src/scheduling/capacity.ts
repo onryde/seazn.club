@@ -283,6 +283,22 @@ function computeCore(input: CapacityInput): CapacityCore {
   let anyRestViolated = false;
   let minSlackMinutes = Number.POSITIVE_INFINITY;
   const dayByDate = new Map(input.days.map((d) => [d.date, d]));
+  // `dayUnionMinutes` is a pure function of the day, and the loop below used to
+  // call it once per ENTRANT per day — so the work grew as entrants × days even
+  // though the answer per day never changes. Harmless while this only ran in one
+  // browser over one division's board; P10 §4 moves it behind a POST endpoint
+  // whose schema admits up to 2000 fixtures (≈4000 entrants) and 4000 days, and
+  // that route authenticates by session, which carries no per-request throttle
+  // (only the bearer-token branch is rate limited). Memoized per date: same
+  // numbers, one computation per day instead of one per entrant-day.
+  const unionMinutesByDate = new Map<string, number>();
+  const unionMinutesFor = (date: string, day: CapacityDay): number => {
+    const memo = unionMinutesByDate.get(date);
+    if (memo !== undefined) return memo;
+    const computed = dayUnionMinutes(day);
+    unionMinutesByDate.set(date, computed);
+    return computed;
+  };
   for (const e of input.entrants) {
     if (e.fixtures <= 0) continue;
     // THE placer/verifier rest floor, not a re-derivation of it (header
@@ -302,7 +318,7 @@ function computeCore(input: CapacityInput): CapacityCore {
     let available = 0;
     for (const date of availableDays) {
       const day = dayByDate.get(date);
-      if (day !== undefined) available += dayUnionMinutes(day);
+      if (day !== undefined) available += unionMinutesFor(date, day);
     }
     const violated = need > available;
     if (violated) anyRestViolated = true;
