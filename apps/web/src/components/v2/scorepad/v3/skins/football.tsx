@@ -46,6 +46,7 @@
 import type { FidelityBand } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
+import type { SportTone } from "../sport-theme";
 import {
   MORE_SHEET_KEY,
   type ActivityDetailContext,
@@ -79,6 +80,35 @@ export type CardColor = "yellow" | "red" | "second_yellow";
  *  own suspension tariff, and already has copy in all four locales
  *  (`cardColor.second_yellow`, scoring-vocab.ts). */
 export const CARD_COLORS: readonly CardColor[] = ["yellow", "red", "second_yellow"];
+
+/**
+ * R3-6 / task B4 — the CARD CODE, and the load-bearing argument for the whole
+ * per-sport-identity ruling. Yellow and red are the only colours in football's
+ * visual language that carry MEANING: a referee does not raise a "destructive
+ * action". Before B4 this pad discarded that entirely — a red rendered in the
+ * chassis's generic `destructive` red, indistinguishable from Abandon, and a
+ * yellow rendered as neutral `standard`.
+ *
+ * NAMES, never values: these are `SportTone`s from the chassis's closed
+ * vocabulary (../sport-theme.ts), which resolve to `--sport-caution` /
+ * `--sport-dismissal`. This skin supplies no colour of its own — that is the
+ * point of the token layer, and `__tests__/sport-theme.test.ts` fails if any
+ * hex ever appears in this file.
+ *
+ * `second_yellow` carries BOTH, in offence order: it is a yellow card and a
+ * red one, not a red with a note — the same reason the engine keeps it as its
+ * own colour. The chassis draws one swatch per entry and takes the OUTCOME
+ * (the last) for the option's wash.
+ *
+ * They land on the SHEET, not on a tile: B3 collapsed cards to one neutral
+ * `Card` tile per side to keep the two lanes intact, so the colour step inside
+ * `card-<side>` is now the only place a card colour can be shown at all.
+ */
+const CARD_TONES: Readonly<Record<CardColor, readonly SportTone[]>> = {
+  yellow: ["caution"],
+  red: ["dismissal"],
+  second_yellow: ["caution", "dismissal"],
+};
 
 /** Law 12.3 cautionable + Law 12.4 sending-off offences, in the engine's own
  *  order. `FootballCard.reason` is `.optional()`, which is what lets bands 0-1
@@ -387,25 +417,50 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   const contextParts = [t("pad.football.context.smallSided", { size: cfg.teamSize ?? 11 })];
   if (cfg.halves === 4) contextParts.push(t("pad.football.context.quarters"));
 
-  // strip = period · clock (the wave brief's own words for this scorebug).
+  // THE STRIP IS THE FOURTH OFFICIAL'S ADDED-TIME BOARD (R3-6, task B4). Every
+  // item takes `tone: "led"`, which the chassis renders as an inset amber LED
+  // panel (types.ts's `StripItem.tone`, globals.css `.pad-led-panel`) — one
+  // memorable element, unmistakably football, occupying the space the
+  // permanently-dead `Clock —` field used to hold rather than adding furniture.
+  //
+  // IT IS HONEST WHEN THERE IS NOTHING TO SHOW, which is the NORMAL case on a
+  // pad-only stream: `state.asOf` is set only from an event's own `at`, and no
+  // v3 tile sends one (see `readClock`), so neither the clock nor added time
+  // may ever arrive. Both are OMITTED rather than lit empty, so a fresh match
+  // reads as one quiet period panel — a board with nothing added yet, which is
+  // exactly what a fourth official's board looks like before a stoppage. There
+  // is no placeholder, no em-dash, and no zero.
+  //
   // The period is PROSE — `phaseLabel` above, which reads the cfg because the
   // "H1" token means quarter 1 in quarters mode. v2 showed the raw token here
   // (football-skin.tsx:141) and B2 carried that over; B3 closes it.
   const strip: StripItem[] = [
-    { id: "period", label: t("scorepad.skin.football.header.period"), value: phaseLabel(phase, view.cfg, t) },
+    {
+      id: "period",
+      label: t("scorepad.skin.football.header.period"),
+      value: phaseLabel(phase, view.cfg, t),
+      tone: "led",
+    },
   ];
-  // OMITTED, not blanked, when nothing has stamped a clock (see `readClock`):
-  // a labelled em-dash that can never fill in is dead weight on the most
-  // space-constrained surface in the product.
   const clock = readClock(state, phase);
   if (clock !== undefined) {
-    strip.push({ id: "clock", label: t("scorepad.skin.football.header.clock"), value: clock, accent: true });
+    strip.push({ id: "clock", label: t("scorepad.skin.football.header.clock"), value: clock, tone: "led" });
   }
-  // Law 7 added time, stamped by the fold on the period a marker CLOSES. A
-  // bare "+3" is locale-invariant (the same reasoning `TileSpec.sublabelText`
-  // documents for a bare number), so it needs no key of its own.
+  // Law 7 added time, stamped by the fold on the period a marker CLOSES. The
+  // "+3" itself is locale-invariant (the same reasoning `TileSpec.sublabelText`
+  // documents for a bare number); B4 gives it a LABEL because the board is now
+  // a real panel rather than a run-on strip item — an unlabelled amber figure
+  // beside a period is ambiguous to a scorer and silent to a screen reader,
+  // which is the one thing a signature element must not be.
   const added = state.periods?.[state.periods.length - 1]?.addedMinutes;
-  if (typeof added === "number" && added > 0) strip.push({ id: "added", value: `+${added}` });
+  if (typeof added === "number" && added > 0) {
+    strip.push({
+      id: "added",
+      label: t("scorepad.skin.football.header.added"),
+      value: `+${added}`,
+      tone: "led",
+    });
+  }
 
   return {
     context: contextParts.join(" · "),
@@ -607,8 +662,14 @@ function cardSheet(view: PadHostView, side: Side): GuidedSheetSpec {
       kind: "choice",
       title: "pad.football.sheet.card.color.title",
       // `cardColor.*` is the shared vocabulary both lanes already use, so no
-      // new copy and no second wording for a colour.
-      options: CARD_COLORS.map((colour) => ({ id: colour, label: vocabKey("color", colour) ?? colour })),
+      // new copy and no second wording for a colour. `tone` (B4) is the card
+      // CODE beside that label — see CARD_TONES above for why it is a name and
+      // not a colour, and why a second yellow carries two.
+      options: CARD_COLORS.map((colour) => ({
+        id: colour,
+        label: vocabKey("color", colour) ?? colour,
+        tone: CARD_TONES[colour],
+      })),
     },
     {
       id: "reason",

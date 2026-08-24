@@ -3920,6 +3920,7 @@ export type DictionaryKey =
   | "scorepad.skin.football.group.period"
   | "scorepad.skin.football.group.shots"
   | "scorepad.skin.football.group.subs"
+  | "scorepad.skin.football.header.added"
   | "scorepad.skin.football.header.clock"
   | "scorepad.skin.football.header.period"
   | "scorepad.skin.football.header.score"

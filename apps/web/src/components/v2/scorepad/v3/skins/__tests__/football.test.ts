@@ -45,6 +45,7 @@ import {
   resolvePhase,
 } from "../football";
 import type { TFn } from "../football";
+import { SPORT_TONES } from "../../sport-theme";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -277,7 +278,11 @@ describe("buildScorebug", () => {
     const stamped = view({ state: state({ asOf: { period: "H1", elapsed: 754 } }) });
     const clock = buildScorebug(stamped, t).strip.find((item) => item.id === "clock");
     expect(clock?.value).toBe("12:34");
-    expect(clock?.accent).toBe(true);
+    // B4: emphasis moved from `accent` (the plain strip's own bold/muted
+    // switch) to `tone: "led"`, which replaces the rendering entirely — an
+    // `accent` left beside it would be a field nothing reads. The LED
+    // treatment is asserted for every item, together, below.
+    expect(clock?.tone).toBe("led");
   });
 
   // B3/fix 3. The strip printed `Period H1` — "H1"/"ET_H2"/"SHOOTOUT" are the
@@ -319,6 +324,48 @@ describe("buildScorebug", () => {
     const withAdded = view({ state: state({ periods: [{ phase: "H1", home: 1, away: 0, addedMinutes: 3 }] }) });
     expect(buildScorebug(withAdded, t).strip.map((i) => i.value)).toContain("+3");
     expect(buildScorebug(view(), t).strip.map((i) => i.id)).not.toContain("added");
+  });
+
+  // -------------------------------------------------------------------------
+  // B4 (owner ruling R3-6): the strip IS the fourth official's added-time
+  // board. Not a decoration test — the ruling names this as football's ONE
+  // signature element, and every failure mode below has already shipped once
+  // in this programme in some form.
+  // -------------------------------------------------------------------------
+
+  it("puts EVERY strip item on the LED board, so the strip reads as one panel and not a mixed row", () => {
+    const full = view({
+      state: state({
+        asOf: { period: "H1", elapsed: 754 },
+        periods: [{ phase: "H1", home: 1, away: 0, addedMinutes: 3 }],
+      }),
+    });
+    const strip = buildScorebug(full, t).strip;
+    expect(strip.map((item) => item.id)).toEqual(["period", "clock", "added"]);
+    for (const item of strip) expect(item.tone, `strip item "${item.id}" is off the board`).toBe("led");
+  });
+
+  it("is HONEST AND QUIET with no time to show — one period panel, no empty well, no placeholder", () => {
+    // The NORMAL case, not an edge one: `state.asOf` is only ever set from an
+    // event's own `at`, and no v3 tile sends one, so a pad-only stream never
+    // gets a clock or an added-time figure at all. A board that lit an empty
+    // well here would look broken on every fresh match — which is exactly
+    // what the em-dash B3 removed used to do.
+    const fresh = buildScorebug(view({ state: state({ phase: "H1", periods: [] }) }), t);
+    expect(fresh.strip.map((item) => item.id)).toEqual(["period"]);
+    expect(fresh.strip[0]?.tone).toBe("led");
+    expect(fresh.strip[0]?.value).toBe("pad.football.phase.H1");
+    for (const item of fresh.strip) {
+      expect(item.value, "the board lit a placeholder rather than staying dark").not.toMatch(/^[-\u2014\u2013\s]*$/);
+    }
+  });
+
+  it("labels the added-time figure — an unlabelled amber number is silent to a screen reader", () => {
+    const withAdded = view({ state: state({ periods: [{ phase: "H1", home: 1, away: 0, addedMinutes: 3 }] }) });
+    const added = buildScorebug(withAdded, t).strip.find((item) => item.id === "added");
+    expect(added?.label).toBe("scorepad.skin.football.header.added");
+    expect(added?.value).toBe("+3");
+    expect(added?.tone).toBe("led");
   });
 
   it("the context line states the FORMAT, which is the one thing cfg shrinks for a small-sided variant", () => {
@@ -513,6 +560,53 @@ describe("buildSheets — the card flow (R3-1)", () => {
       "cardColor.red",
       "cardColor.second_yellow",
     ]);
+  });
+
+  // -------------------------------------------------------------------------
+  // B4 (owner ruling R3-6): the CARD CODE. This is the load-bearing argument
+  // for the whole per-sport-identity ruling — yellow and red are the only
+  // colours in football's visual language that carry MEANING, and before B4
+  // this pad discarded both (a red rendered in the chassis's generic
+  // `destructive` red, identical to Abandon; a yellow rendered neutral).
+  // B3 collapsed cards to ONE neutral tile per side to keep the two lanes
+  // intact, so this step is now the only place a card colour can appear.
+  // -------------------------------------------------------------------------
+
+  it("colours each option with the CARD CODE, and gives second yellow BOTH cards in offence order", () => {
+    const spec = buildSheets(view({ band: 2 }))["card-home"]!;
+    const step = currentStep(spec, initialSheetState());
+    const tones = step?.kind === "choice" ? step.options.map((o) => [o.id, o.tone] as const) : [];
+    expect(tones).toEqual([
+      ["yellow", ["caution"]],
+      ["red", ["dismissal"]],
+      // Two, not one: a second yellow IS a yellow card and a red one, which is
+      // also why the engine keeps it as its own colour rather than a red with
+      // a note. Order matters — the chassis washes the option in the LAST
+      // tone, i.e. the outcome.
+      ["second_yellow", ["caution", "dismissal"]],
+    ]);
+  });
+
+  it("names TONES, never colours — a skin that supplied a hex would have forked the token layer", () => {
+    const spec = buildSheets(view({ band: 2 }))["card-home"]!;
+    const step = currentStep(spec, initialSheetState());
+    const declared = step?.kind === "choice" ? step.options.flatMap((o) => [...(o.tone ?? [])]) : [];
+    expect(declared.length).toBeGreaterThan(0); // vacuity guard
+    for (const tone of declared) expect(SPORT_TONES).toContain(tone);
+  });
+
+  it("leaves every OTHER choice step untoned — colour here is information, not decoration", () => {
+    // The offence list, the period markers and the penalty outcomes carry no
+    // colour at all. If a later wave starts tinting those, the card code stops
+    // meaning anything, which is the failure this assertion exists to catch.
+    for (const [key, spec] of Object.entries(buildSheets(view({ band: 3 })))) {
+      for (const step of spec.steps) {
+        if (step.kind !== "choice" || (key.startsWith("card-") && step.id === "color")) continue;
+        for (const option of step.options) {
+          expect(option.tone, `${key}/${step.id}/${option.id} is tinted`).toBeUndefined();
+        }
+      }
+    }
   });
 
   it("then asks the offence at band 2+, offering all 13 CardReason values, and commits colour + side + reason", () => {
@@ -980,6 +1074,15 @@ function labelKeys(): Set<string> {
       for (const slot of buildSwap(v, t)) {
         keys.add(slot.offLabel);
         keys.add(slot.onLabel);
+      }
+      // B4: the LED board's own labels. The strip carries RESOLVED text and
+      // the local `t` returns its key, so a label reads back as its key here —
+      // the same trick `periodOf` above already relies on. Collected rather
+      // than listed, so the next wave's new strip item is gated the day it
+      // lands: R3/B2 shipped the card sheet's colour step with no copy at all
+      // precisely because nothing collected it.
+      for (const item of buildScorebug(v, t).strip) {
+        if (item.label !== undefined) keys.add(item.label);
       }
     }
   }
