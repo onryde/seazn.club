@@ -12052,12 +12052,15 @@ async function courtHoursSuite(): Promise<void> {
     // pre-existing behaviours make any such claim wrong, and both were learned
     // by watching this check fail rather than by reading:
     //   * `applyWindow` sets `window.from` to local MIDNIGHT of the start day,
-    //     not to `startAt`, and `repairUniverse` returns that window verbatim
-    //     as the lattice universe — so the solver may legitimately place BEFORE
-    //     the organiser's stated earliest slot. Greedy honours `startAt`
-    //     (`ready = max(config.startAt, ...)`), so the two producers disagree.
-    //     Reported, not fixed here: a different defect from this suite's
-    //     subject, and changing `applyWindow` moves every schedule.
+    //     so the lattice opens there while greedy's cursor opens at
+    //     max(startAt, notBefore) — the solver may place EARLIER than the
+    //     stated start. DELIBERATE, not a defect: `build-day-gate.test.ts`'s
+    //     `dayOpenConfig` states it outright ("config.startAt IS NOT THE
+    //     SOLVER'S FLOOR, and that is the whole fixture"), because the earlier
+    //     board wins on `dayStartOffsetMinutes`, a rung isStrictlyBetter ranks
+    //     and greedy cannot reach. An earlier revision of this comment called
+    //     it a defect; flooring the lattice at startAt reds four engine tests
+    //     and is now pinned against in build-grid.test.ts.
     //   * Given a week of free slots the solver has no objective preferring
     //     earliness, so it placed these on day 5. That is not a defect at all,
     //     and a test that pinned the instant would be asserting solver taste.
