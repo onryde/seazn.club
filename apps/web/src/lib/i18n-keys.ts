@@ -1010,6 +1010,7 @@ export type DictionaryKey =
   | "breadcrumb.registrations"
   | "breadcrumb.schedule"
   | "breadcrumb.settings"
+  | "calendar.registrationDescription"
   | "calendar.time_tbc"
   | "calendar.unknownEntrant"
   | "card.actions"

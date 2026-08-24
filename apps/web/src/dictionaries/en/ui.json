@@ -4051,6 +4051,7 @@
   "bracket.slot.bye": "Bye",
   "calendar.time_tbc": "Time to be confirmed",
   "calendar.unknownEntrant": "Unknown entrant",
+  "calendar.registrationDescription": "Registration for {name} ({status})",
   "progression.pendingProposal.badge": "A seed proposal is waiting for you to confirm",
   "progression.pendingProposal.hint": "A seed proposal is waiting — open Fixtures to review and confirm it",
   "export.time.tbc": "TBD",

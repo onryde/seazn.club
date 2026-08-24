@@ -203,6 +203,36 @@ test.describe("RS003 public registration API", () => {
     expect(rows).toHaveLength(1);
   });
 
+  // B2 review findings: registrationIcs (usecases/registrations.ts) had ZERO
+  // e2e/smoke coverage before this — the DB-integration suite pins the exact
+  // VALUE correctness (folding, localized DESCRIPTION), this proves the real
+  // route serves it over HTTP with the fix's new CALSCALE/METHOD lines.
+  test("the registration confirmation .ics downloads over HTTP with a well-formed VCALENDAR", async ({
+    request,
+  }) => {
+    const rig = await seedRig();
+    const { data } = await submitCart(
+      request,
+      rig,
+      cart({ entries: [individualEntry(rig.divisionId, "Cal One")] }),
+    );
+    expect(data?.access_token, "a real token to fetch the .ics with").toBeTruthy();
+    const regId = data!.entries[0]!.registration_id;
+
+    const res = await request.get(
+      `/api/v1/public/registrations/${regId}/ics?token=${data!.access_token}`,
+    );
+    expect(res.status()).toBe(200);
+    expect(res.headers()["content-type"]).toContain("text/calendar");
+
+    const body = await res.text();
+    expect(body).toContain("BEGIN:VCALENDAR");
+    expect(body).toContain("CALSCALE:GREGORIAN");
+    expect(body).toContain("METHOD:PUBLISH");
+    expect(body).toContain(`UID:registration-${regId}@seazn.club`);
+    expect(body.endsWith("END:VCALENDAR\r\n")).toBe(true);
+  });
+
   test("one cart spanning two divisions creates one group and two entries", async ({ request }) => {
     const rig = await seedRig();
     const { status, data } = await submitCart(

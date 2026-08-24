@@ -3201,4 +3201,174 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)",
     expect(ics).not.toContain("SUMMARY:Spring Cup, Round 2; Finals");
     expect(ics).not.toContain("DESCRIPTION:Registration for Test; Entrant, Inc.");
   });
+
+  // B2 review findings: registrationIcs hand-rolled a second VCALENDAR
+  // instead of reusing buildIcs. This block pins the fix without adopting
+  // buildIcs directly — a naive swap is LOSSY (see the four "PRESERVED"
+  // tests below) — via a local builder that reuses foldLine + icsText.
+  describe("registrationIcs: CALSCALE/METHOD, localized DESCRIPTION, octet-correct folding (B2)", () => {
+    it("REGRESSION: emits CALSCALE and METHOD, missing from today's hand-rolled VCALENDAR", async () => {
+      const { orgId, ownerId } = await seedOrg("pro");
+      const owner = asOwner(orgId, ownerId);
+      const { competition, division } = await rig(owner);
+      const settings = await putRegistrationSettings(owner, division.id, {
+        enabled: true, entrant_kind: "individual", fee_cents: 0, form_fields: [],
+        opens_at: null, closes_at: null, capacity: null, refund_lock_at: null,
+      });
+      const reg = await seedRegistration(competition.id, division.id, settings);
+      const ics = await registrationIcs(reg.registration.id, reg.access_token);
+      expect(ics).toContain("CALSCALE:GREGORIAN");
+      expect(ics).toContain("METHOD:PUBLISH");
+    });
+
+    it("REGRESSION: localizes the DESCRIPTION via the registrant's OWN locale (fr) — the same signal notifyRefund/other post-signup emails already resolve via toLocale(reg.locale) — not hardcoded English", async () => {
+      const { orgId, ownerId } = await seedOrg("pro");
+      const owner = asOwner(orgId, ownerId);
+      const { competition, division } = await rig(owner);
+      const settings = await putRegistrationSettings(owner, division.id, {
+        enabled: true, entrant_kind: "individual", fee_cents: 0, form_fields: [],
+        opens_at: null, closes_at: null, capacity: null, refund_lock_at: null,
+      });
+      const reg = await seedRegistration(competition.id, division.id, settings, {
+        displayName: "Alex Test",
+        locale: "fr",
+      });
+      const ics = await registrationIcs(reg.registration.id, reg.access_token);
+      // fr's reg.status.pending is "en attente" — the raw enum word "pending"
+      // (what the old hardcoded English literally printed) must not survive.
+      expect(ics).toMatch(/DESCRIPTION:.*Alex Test.*en attente/);
+      expect(ics).not.toMatch(/DESCRIPTION:Registration for/);
+      expect(ics).not.toContain("(pending)");
+    });
+
+    it("REGRESSION: folds a line crossing 75 UTF-8 octets, and never splits multi-byte text mid-character — an ASCII-only fixture (registrations.test.ts:779) cannot prove this", async () => {
+      const { orgId, ownerId } = await seedOrg("pro");
+      const owner = asOwner(orgId, ownerId);
+      // A French competition name: long enough, in OCTETS, to force a fold —
+      // its .length (UTF-16 units) stays comfortably under 74, exactly the
+      // case a naive UTF-16-based fold misses (the accented chars below are
+      // each 2 UTF-8 octets but 1 UTF-16 code unit).
+      const longName =
+        "Championnat Départemental Été Régional des Étudiants Généreux et Décorés";
+      expect(
+        longName.length,
+        "precondition: under 74 UTF-16 units — a UTF-16-length-based fold would wrongly skip this line",
+      ).toBeLessThan(74);
+      expect(
+        Buffer.byteLength(longName, "utf8"),
+        "precondition: over 75 UTF-8 octets — the actual RFC 5545 §3.1 budget",
+      ).toBeGreaterThan(75);
+      const competition = await createCompetition(owner, {
+        name: longName,
+        visibility: "public",
+        branding: {},
+        starts_on: "2026-09-15",
+        ends_on: "2026-09-20",
+      });
+      const division = await createDivision(owner, competition.id, {
+        name: "Open",
+        sport_key: "generic",
+        variant_key: "score",
+        config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+        eligibility: [],
+      });
+      const settings = await putRegistrationSettings(owner, division.id, {
+        enabled: true, entrant_kind: "individual", fee_cents: 0, form_fields: [],
+        opens_at: null, closes_at: null, capacity: null, refund_lock_at: null,
+      });
+      const reg = await seedRegistration(competition.id, division.id, settings);
+      const ics = await registrationIcs(reg.registration.id, reg.access_token);
+
+      // Folding does NOT remove the "SUMMARY:" prefix from the property's
+      // first physical line — it splits the CONTENT after it — so the right
+      // proof is that the first physical line stays inside the octet
+      // budget, and a continuation line (a lone leading space, RFC 5545
+      // §3.1) immediately follows it.
+      const lines = ics.split("\r\n");
+      const summaryStart = lines.findIndex((l) => l.startsWith("SUMMARY:"));
+      expect(summaryStart, "a SUMMARY line must exist").toBeGreaterThanOrEqual(0);
+      expect(
+        Buffer.byteLength(lines[summaryStart]!, "utf8"),
+        "today's code emits this whole property on one unfolded line, over the 74-octet budget",
+      ).toBeLessThanOrEqual(74);
+      expect(
+        lines[summaryStart + 1]?.startsWith(" "),
+        "no fold continuation line followed — the property was never split",
+      ).toBe(true);
+      // No accented character was corrupted by the fold — the escaped name
+      // still appears intact (icsText only touches \ ; , and newlines, none
+      // of which this name contains, so it must round-trip byte-for-byte
+      // once the CRLF+space fold markers are stripped back out).
+      expect(ics.replace(/\r\n /g, "")).toContain(longName);
+      // Every physical line in the whole output fits the octet budget, not
+      // just the ones this test happens to inspect above.
+      for (const line of lines) {
+        expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(74);
+      }
+    });
+  });
+
+  // Four behaviours a naive "swap the body for a buildIcs call" would have
+  // silently broken (review finding), each pinned by its own test so a
+  // future refactor trips on the right one immediately.
+  describe("registrationIcs: behaviours a buildIcs swap must NOT change (B2)", () => {
+    it("PRESERVED: UID stays registration-<id>@seazn.club — not double-suffixed by routing through buildIcs's own @seazn.club append", async () => {
+      const { orgId, ownerId } = await seedOrg("pro");
+      const owner = asOwner(orgId, ownerId);
+      const { competition, division } = await rig(owner);
+      const settings = await putRegistrationSettings(owner, division.id, {
+        enabled: true, entrant_kind: "individual", fee_cents: 0, form_fields: [],
+        opens_at: null, closes_at: null, capacity: null, refund_lock_at: null,
+      });
+      const reg = await seedRegistration(competition.id, division.id, settings);
+      const ics = await registrationIcs(reg.registration.id, reg.access_token);
+      const uidLine = ics.split("\r\n").find((l) => l.startsWith("UID:"));
+      expect(uidLine).toBe(`UID:registration-${reg.registration.id}@seazn.club`);
+      expect(uidLine).not.toContain("@seazn.club@seazn.club");
+    });
+
+    it("PRESERVED: the all-day span still runs starts_on..ends_on+1 (multi-day), not collapsed to buildIcs's one-day allDayOn default", async () => {
+      const { orgId, ownerId } = await seedOrg("pro");
+      const owner = asOwner(orgId, ownerId);
+      const { competition, division } = await rig(owner); // starts_on 2026-09-15, ends_on 2026-09-20
+      const settings = await putRegistrationSettings(owner, division.id, {
+        enabled: true, entrant_kind: "individual", fee_cents: 0, form_fields: [],
+        opens_at: null, closes_at: null, capacity: null, refund_lock_at: null,
+      });
+      const reg = await seedRegistration(competition.id, division.id, settings);
+      const ics = await registrationIcs(reg.registration.id, reg.access_token);
+      expect(ics).toContain("DTSTART;VALUE=DATE:20260915");
+      // Exclusive DTEND the day AFTER ends_on (2026-09-21) — a one-day
+      // collapse would instead emit 20260916 (the day after DTSTART).
+      expect(ics).toContain("DTEND;VALUE=DATE:20260921");
+      expect(ics).not.toContain("DTEND;VALUE=DATE:20260916");
+    });
+
+    it("PRESERVED: no STATUS line — a confirmed registration is not TENTATIVE, unlike buildIcs's all-day default", async () => {
+      const { orgId, ownerId } = await seedOrg("pro");
+      const owner = asOwner(orgId, ownerId);
+      const { competition, division } = await rig(owner);
+      const settings = await putRegistrationSettings(owner, division.id, {
+        enabled: true, entrant_kind: "individual", fee_cents: 0, form_fields: [],
+        opens_at: null, closes_at: null, capacity: null, refund_lock_at: null,
+      });
+      const reg = await seedRegistration(competition.id, division.id, settings);
+      const ics = await registrationIcs(reg.registration.id, reg.access_token);
+      expect(ics).not.toContain("STATUS:");
+    });
+
+    it("PRESERVED: PRODID stays the registration namespace, not buildIcs's hardcoded public-dashboard one", async () => {
+      const { orgId, ownerId } = await seedOrg("pro");
+      const owner = asOwner(orgId, ownerId);
+      const { competition, division } = await rig(owner);
+      const settings = await putRegistrationSettings(owner, division.id, {
+        enabled: true, entrant_kind: "individual", fee_cents: 0, form_fields: [],
+        opens_at: null, closes_at: null, capacity: null, refund_lock_at: null,
+      });
+      const reg = await seedRegistration(competition.id, division.id, settings);
+      const ics = await registrationIcs(reg.registration.id, reg.access_token);
+      expect(ics).toContain("PRODID:-//seazn.club//registration//EN");
+      expect(ics).not.toContain("PRODID:-//seazn.club//public-dashboard//EN");
+    });
+  });
 });

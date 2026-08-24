@@ -12814,6 +12814,26 @@ async function schedRegV3Suite(
     icsBody.includes(`UID:${finalFixtureId}@seazn.club`),
   );
 
+  // B1 (owner ruling 2026-08-24): the OLD ?entrant= predicate excluded every
+  // unresolved fixture by construction (both entrant ids null satisfies
+  // neither `=== entrantId` comparison), so a subscribing player never
+  // received the final they were heading toward. Reuses the same day-one KO
+  // stage — one semi's own entrant is the subscriber; the still-unresolved
+  // final is what the fix must add back to THEIR feed.
+  const dayOneSemi = dayOneGen.fixtures.find((f) => f.home_entrant_id !== null);
+  const entrantIcs = await fetch(
+    `${BASE}/shared/${proOrgSlug}/${comp.slug}/${div.slug}/calendar.ics?entrant=${dayOneSemi?.home_entrant_id}`,
+  );
+  const entrantIcsBody = await entrantIcs.text();
+  check(
+    "public .ics ?entrant= feed still carries the subscriber's own fixture",
+    entrantIcs.status === 200 && entrantIcsBody.includes(`UID:${dayOneSemi?.id}@seazn.club`),
+  );
+  check(
+    "public .ics ?entrant= feed also carries the unresolved final that names neither side",
+    entrantIcsBody.includes(`UID:${finalFixtureId}@seazn.club`),
+  );
+
   // Backwards date ranges are refused server-side on BOTH endpoints the
   // organiser can reach them through. The panels now refuse first, in the
   // organiser's own language — these are the backstop for every other caller,

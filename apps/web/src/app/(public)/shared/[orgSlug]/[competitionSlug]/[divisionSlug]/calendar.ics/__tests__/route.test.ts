@@ -340,6 +340,96 @@ describe("GET .../calendar.ics — day-one fixtures (F4 wave B)", () => {
     expect(text).toContain("Heure à confirmer");
     expect(text).not.toContain("Time to be confirmed");
   });
+
+  // B1 (owner ruling 2026-08-24): the OLD predicate was
+  // `!entrantId || home_entrant_id === entrantId || away_entrant_id ===
+  // entrantId` — a day-one fixture has BOTH sides null, which satisfies
+  // neither comparison, so it was dropped from every ?entrant= feed by
+  // construction. A subscribing player never received the final they were
+  // heading toward. The fix: a personal feed carries the subscriber's own
+  // resolved fixtures PLUS EVERY unresolved fixture in their division —
+  // deliberately NOT walking the progression graph to prove the subscriber
+  // can actually reach that fixture (considered and explicitly deferred).
+  it("REGRESSION: the ?entrant= feed keeps an unresolved (day-one) fixture even though neither slot names the subscriber", async () => {
+    const semi = unscheduledFinal({
+      id: "semi-e1",
+      scheduled_at: "2026-09-10T09:00:00.000Z",
+      home_entrant_id: "e1",
+      away_entrant_id: "e2",
+      home_slot_label: null,
+      away_slot_label: null,
+    });
+    getPublicDivision.mockResolvedValue(
+      baseData(
+        "en",
+        [semi, unscheduledFinal()],
+        { starts_on: "2026-09-01", ends_on: "2026-09-13" },
+        [E({ id: "e1", display_name: "Lions" }), E({ id: "e2", display_name: "Tigers", seed: 2 })],
+      ),
+    );
+    const { GET } = await import("../route");
+    const res = await GET(
+      new Request("http://t/shared/test-org/test-comp/open/calendar.ics?entrant=e1"),
+      {
+        params: Promise.resolve({
+          orgSlug: "test-org",
+          competitionSlug: "test-comp",
+          divisionSlug: "open",
+        }),
+      },
+    );
+    const text = await res.text();
+    // The subscriber's own fixture still rides the feed…
+    expect(text).toContain("UID:semi-e1@seazn.club");
+    // …and so, now, does the day-one final neither of its slots names e1.
+    expect(text).toContain("UID:fix-final@seazn.club");
+  });
+
+  it("REGRESSION: an entrant's feed still excludes a resolved fixture belonging to two OTHER entrants — over-inclusion is bounded to unresolved fixtures, not every fixture in the division", async () => {
+    const ownFixture = unscheduledFinal({
+      id: "own-fixture",
+      scheduled_at: "2026-09-10T09:00:00.000Z",
+      home_entrant_id: "e1",
+      away_entrant_id: "e2",
+      home_slot_label: null,
+      away_slot_label: null,
+    });
+    const otherFixture = unscheduledFinal({
+      id: "other-fixture",
+      scheduled_at: "2026-09-11T09:00:00.000Z",
+      home_entrant_id: "e3",
+      away_entrant_id: "e4",
+      home_slot_label: null,
+      away_slot_label: null,
+    });
+    getPublicDivision.mockResolvedValue(
+      baseData(
+        "en",
+        [ownFixture, otherFixture],
+        { starts_on: "2026-09-01", ends_on: "2026-09-13" },
+        [
+          E({ id: "e1", display_name: "Lions" }),
+          E({ id: "e2", display_name: "Tigers", seed: 2 }),
+          E({ id: "e3", display_name: "Bears", seed: 3 }),
+          E({ id: "e4", display_name: "Wolves", seed: 4 }),
+        ],
+      ),
+    );
+    const { GET } = await import("../route");
+    const res = await GET(
+      new Request("http://t/shared/test-org/test-comp/open/calendar.ics?entrant=e1"),
+      {
+        params: Promise.resolve({
+          orgSlug: "test-org",
+          competitionSlug: "test-comp",
+          divisionSlug: "open",
+        }),
+      },
+    );
+    const text = await res.text();
+    expect(text).toContain("UID:own-fixture@seazn.club");
+    expect(text).not.toContain("UID:other-fixture@seazn.club");
+  });
 });
 
 // P9 pass 3c-3: fixtures.venue/court_label are frozen since pass 3a — the

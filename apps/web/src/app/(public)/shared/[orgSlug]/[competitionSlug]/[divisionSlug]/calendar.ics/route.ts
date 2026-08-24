@@ -61,7 +61,19 @@ export async function GET(
       (f) =>
         !entrantId ||
         f.home_entrant_id === entrantId ||
-        f.away_entrant_id === entrantId,
+        f.away_entrant_id === entrantId ||
+        // Owner ruling (2026-08-24): a personal feed carries the
+        // subscriber's own resolved fixtures PLUS EVERY unresolved fixture
+        // in their division — "your route through the draw" is the whole
+        // product claim these placeholder events exist to deliver. This is
+        // NOT "walk the progression graph to prove the subscriber can
+        // actually reach this fixture" — that was considered and
+        // explicitly deferred. Over-inclusion is accepted and intended: an
+        // unresolved fixture always renders below as an all-day
+        // STATUS:TENTATIVE placeholder (never mistaken for a real,
+        // committed slot), and `data.fixtures` is already scoped to this
+        // one division, so nothing here can leak a fixture from elsewhere.
+        (f.home_entrant_id === null && f.away_entrant_id === null),
     )
     // No competition dates means no defensible anchor; emitting a guessed
     // DTSTART into somebody's calendar is worse than omitting the event.

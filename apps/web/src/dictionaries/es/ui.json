@@ -4051,6 +4051,7 @@
   "bracket.slot.bye": "Bye",
   "calendar.time_tbc": "Hora por confirmar",
   "calendar.unknownEntrant": "Participante desconocido",
+  "calendar.registrationDescription": "Inscripción de {name} ({status})",
   "progression.pendingProposal.badge": "Hay una propuesta de clasificados esperando tu confirmación",
   "progression.pendingProposal.hint": "Hay una propuesta de clasificados esperando: abre Partidos para revisarla y confirmarla",
   "export.time.tbc": "Por confirmar",

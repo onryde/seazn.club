@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   isReservedSlug,
   buildIcs,
+  foldLine,
   sportsEventJsonLd,
   standingsColumns,
   formatMetric,
@@ -10,6 +11,23 @@ import {
   stripLiveSetPoints,
   type StandingsRowLike,
 } from "@/lib/public-site";
+
+/** True if `s` contains a high surrogate with no immediately-following low
+ *  surrogate, or a low surrogate with no immediately-preceding high one —
+ *  i.e. a UTF-16 surrogate pair (one astral codepoint) that got split. */
+function hasUnpairedSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = s.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      i++;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
 
 describe("reserved slugs (doc 09 §1)", () => {
   it("blocks every existing top-level app route", () => {
@@ -49,6 +67,45 @@ describe("ICS feed (doc 09 §2)", () => {
     const folded = long.split("\r\n").find((l) => l.startsWith(" "));
     expect(folded).toBeDefined();
     expect(long.split("\r\n").every((l) => l.length <= 74)).toBe(true);
+  });
+
+  // B2 folding-octet finding: RFC 5545 §3.1 counts OCTETS, not UTF-16 code
+  // units. A test built only from ASCII (like the one above — "A".repeat
+  // (120), where .length === byte length) cannot tell an octet-correct fold
+  // apart from a naive one; it passes either way. These two use genuinely
+  // multi-byte text to prove the distinction actually holds.
+  describe("foldLine counts UTF-8 octets, not UTF-16 code units", () => {
+    it("an accented string UNDER 74 chars but OVER 74 octets still folds", () => {
+      // "é" is 1 UTF-16 code unit but 2 UTF-8 octets. 74 of them satisfy a
+      // naive `line.length <= 74` check (so a UTF-16-based fold returns it
+      // completely unfolded) while totalling 148 octets — a real RFC 5545
+      // violation a French/Dutch competition name reproduces routinely.
+      const line = "é".repeat(74);
+      expect(line.length).toBe(74);
+      const folded = foldLine(line);
+      expect(folded).toContain("\r\n");
+      const enc = new TextEncoder();
+      for (const part of folded.split("\r\n")) {
+        expect(enc.encode(part).length).toBeLessThanOrEqual(74);
+      }
+      // Stripping the fold markers (CRLF + the single continuation space)
+      // must reconstruct the original text exactly.
+      expect(folded.replace(/\r\n /g, "")).toBe(line);
+    });
+
+    it("never splits a surrogate pair (an astral codepoint) across a fold boundary", () => {
+      // U+1F3C6 TROPHY is one codepoint but a 2-unit UTF-16 surrogate pair.
+      // 73 ASCII chars put the pair exactly across a naive slice(0, 74)
+      // boundary — reproducing "slice(0, 74) can split a surrogate pair
+      // outright" verbatim: the old code would cut after the lone high
+      // surrogate, orphaning it on one physical line and starting the next
+      // with a lone low surrogate. Both are invalid UTF-16 on their own.
+      const trophy = "\u{1F3C6}";
+      const line = "A".repeat(73) + trophy + "B".repeat(10);
+      const folded = foldLine(line);
+      expect(hasUnpairedSurrogate(folded)).toBe(false);
+      expect(folded.replace(/\r\n /g, "")).toBe(line);
+    });
   });
 
   it("an all-day event emits DATE-typed bounds and TENTATIVE status", () => {
