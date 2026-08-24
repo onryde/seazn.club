@@ -71,6 +71,7 @@ import {
   requiredCourtTagsByFixture,
   resolveCandidateCourts,
   resolveCourtCalendars,
+  guardNoUsableCourtWindows,
   tagQualifiedCourtIdsByFixture,
   unionRequiredCourtTags,
 } from "./court-candidates";
@@ -1643,6 +1644,34 @@ export async function autoSchedule(
     divisionId: plan.divisionId,
     stageId,
   });
+  // P9.5, edge matrix row 3: the same refusal one constraint over. If every
+  // candidate court is CLOSED for the whole run — hours that miss the session
+  // window, or a closed exception on the only day — the lattice would be empty
+  // and the solver would answer "infeasible", which tells an organiser nothing
+  // about the court calendar they just edited. Placed here, after the tag
+  // guards and before capacity, for the same reason the tag guard sits ahead of
+  // capacity: "no court is open then" is more specific and more actionable than
+  // anything the capacity arithmetic would derive from an empty supply.
+  //
+  // Reads `plan.config`, which already carries the loaded calendars and the org
+  // zone — the same object the placer and the verifier read, so the guard
+  // cannot refuse a run the lattice would have allowed.
+  {
+    const cfg = plan.config;
+    const span = cfg.window ?? { from: cfg.startAt, to: cfg.startAt };
+    // `applyWindow` yields -Infinity/Infinity for an unbounded window, and
+    // `dayKeyInTz(Infinity)` THROWS. An unbounded run also has no finite set of
+    // days to prove closed, so there is nothing here to refuse.
+    if (cfg.tz !== undefined && Number.isFinite(span.from) && Number.isFinite(span.to)) {
+      guardNoUsableCourtWindows(
+        cfg.courts,
+        cfg.courtCalendars ?? [],
+        { from: dayKeyInTz(span.from, cfg.tz), to: dayKeyInTz(span.to, cfg.tz) },
+        { tz: cfg.tz, sessionWindows: cfg.sessionWindows, blackouts: cfg.blackouts },
+        { divisionId: plan.divisionId },
+      );
+    }
+  }
   // D2 capacity pre-check: arithmetic-provable impossibility refuses with a
   // typed 422 BEFORE either solver is reached — no db connection is held
   // here (phase 1 already closed), so this costs nothing a real solve

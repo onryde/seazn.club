@@ -10,6 +10,7 @@ import "server-only";
 // subsystem's recurring bug (the placer/verifier fork), not a style nit.
 import {
   candidateCourts,
+  usableWindows,
   type CandidateCourts,
   type CourtCalendar,
   type CourtMeta,
@@ -285,6 +286,65 @@ export async function resolveTagQualifiedCourtIds(
  * touched, exactly what that ruling exists to prevent. Only a fresh SOLVE has
  * nothing yet placed to protect.
  */
+/**
+ * P9.5, edge matrix row 3: when NO candidate court can host anything for the
+ * whole run, refuse with a typed error rather than hand the solver a zero-slot
+ * lattice and let it come back "infeasible" with no reason an organiser can act
+ * on. P9 set this precedent for the tag filter (`guardNoMatchingCourt` below);
+ * opening hours are the same shape of "nothing can ever be placed here", so
+ * they share its code — the row calls for "the `NO_MATCHING_COURT` family", and
+ * a second code would need its own wire enum entry and four translations to say
+ * a thing this one already says.
+ *
+ * Three deliberate non-firings, each of which would otherwise be a lock-out:
+ *
+ *   * NO TZ — court hours are day-shaped and there is no local midnight to
+ *     resolve a weekday against, so the placer and the verifier both SKIP them.
+ *     A guard that fired here would refuse a run neither side constrains.
+ *   * A CANDIDATE WITH NO CALENDAR — absent means unrestricted (calendars
+ *     strictly SUBTRACT), so one such court makes the run placeable on its own.
+ *     This is the guard's most important negative case: firing here would make
+ *     every org that has never opened the calendar editor unschedulable.
+ *   * SOME DAYS DARK — a multi-day run whose Sunday is closed is not a
+ *     zero-slot lattice; the event still runs on the other days. Only a range
+ *     with no usable window ANYWHERE refuses.
+ */
+export function guardNoUsableCourtWindows(
+  candidateCourtIds: readonly string[],
+  courtCalendars: readonly CourtCalendar[],
+  range: { readonly from: string; readonly to: string },
+  config: {
+    readonly tz?: string;
+    readonly sessionWindows?: readonly { from: number; to: number }[];
+    readonly blackouts?: readonly { court?: string; from: number; to: number }[];
+  },
+  context: { divisionId: string },
+): void {
+  const tz = config.tz;
+  if (tz === undefined || courtCalendars.length === 0 || candidateCourtIds.length === 0) return;
+  const byCourt = new Map(courtCalendars.map((c) => [c.courtId, c] as const));
+  for (const courtId of candidateCourtIds) {
+    const calendar = byCourt.get(courtId);
+    if (calendar === undefined) return; // no calendar declared -> unrestricted
+    const windows = usableWindows(calendar, range, {
+      tz,
+      sessionWindows: config.sessionWindows,
+      blackouts: config.blackouts,
+    });
+    if (windows.length > 0) return;
+  }
+  log.info(
+    { event: "schedule_no_usable_court_window", divisionId: context.divisionId, from: range.from, to: range.to },
+    "schedule_no_usable_court_window",
+  );
+  throw new HttpError(
+    422,
+    "No configured court is open during this schedule's dates",
+    NO_MATCHING_COURT_CODE,
+    { candidateCount: 0, from: range.from, to: range.to },
+  );
+}
+
 export function guardNoMatchingCourt(
   candidateCourtIds: readonly string[],
   context: { requiredTags: readonly string[]; divisionId: string; [key: string]: unknown },
