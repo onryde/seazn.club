@@ -278,6 +278,51 @@ export function periodMarkersOf(cfg: unknown): readonly string[] {
   ];
 }
 
+/**
+ * The period a SCORER would name it, never the fold's own token.
+ *
+ * B3 (rendered-board review): the scorebug strip printed `Period H1`. "H1",
+ * "ET_H2" and "SHOOTOUT" are internal literals of football's `Phase` union
+ * (football.ts:458) — the strip is the most space-constrained surface in the
+ * product and not the place to teach a scorer the engine's vocabulary.
+ *
+ * Skin-local rather than a `matchPhase.*` addition, for a reason the shared
+ * table structurally cannot hold: "H1" is AMBIGUOUS. Quarters mode
+ * (`cfg.halves === 4`) reuses it as quarter 1 — deliberately, so `core.start`
+ * always pushes "H1" and needs no cfg branch (football.ts:454's own comment)
+ * — so only football's own cfg can read the token. Extra time is the other
+ * way round and is DELEGATED below: `matchPhase.ET_H1`/`ET_H2` already carry
+ * exactly this prose, and one value must not gain a second wording.
+ */
+const PHASE_LABEL: Readonly<Record<string, MessageKey>> = {
+  pre: "pad.football.phase.pre",
+  H1: "pad.football.phase.H1",
+  H2: "pad.football.phase.H2",
+  Q2: "pad.football.phase.Q2",
+  Q3: "pad.football.phase.Q3",
+  Q4: "pad.football.phase.Q4",
+  SHOOTOUT: "pad.football.phase.SHOOTOUT",
+  done: "pad.football.phase.done",
+  final: "pad.football.phase.final",
+  abandoned: "pad.football.phase.abandoned",
+};
+
+/** The ONE literal quarters mode renames. Q2-Q4 have their own literals and
+ *  read identically in both modes, so they are not repeated here. */
+const QUARTER_PHASE_LABEL: Readonly<Record<string, MessageKey>> = {
+  H1: "pad.football.phase.Q1",
+};
+
+export function phaseLabel(phase: string, cfg: unknown, t: TFn): string {
+  const own = (asCfg(cfg).halves === 4 ? QUARTER_PHASE_LABEL[phase] : undefined) ?? PHASE_LABEL[phase];
+  if (own !== undefined) return t(own);
+  const shared = vocabKey("phase", phase); // ET_H1 / ET_H2
+  // An unmapped token prints VERBATIM, the same position `vocabText` takes: a
+  // missing label is a copy finding, and printing the token is what makes it
+  // visible instead of a plausible-looking guess.
+  return shared !== null ? t(shared) : phase;
+}
+
 // ---------------------------------------------------------------------------
 // Vocabulary lookup — the same `ENUM_VOCAB` path cricket's own skin uses, so
 // one enum value has one label across both lanes and every sport.
@@ -334,14 +379,11 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   if (cfg.halves === 4) contextParts.push(t("pad.football.context.quarters"));
 
   // strip = period · clock (the wave brief's own words for this scorebug).
-  // The period is the ENGINE's own token ("H1", "ET_H2", "SHOOTOUT") rather
-  // than translated prose: the shared `matchPhase.*` vocabulary covers the
-  // period MARKERS (HT/FT/QT/3QT/ET_*) — which the period sheet does use —
-  // but not the play phases themselves, and a strip mixing one translated
-  // label with one raw token reads worse than two consistent tokens. It is
-  // also what v2's own header field shows today (football-skin.tsx:141).
+  // The period is PROSE — `phaseLabel` above, which reads the cfg because the
+  // "H1" token means quarter 1 in quarters mode. v2 showed the raw token here
+  // (football-skin.tsx:141) and B2 carried that over; B3 closes it.
   const strip: StripItem[] = [
-    { id: "period", label: t("scorepad.skin.football.header.period"), value: phase },
+    { id: "period", label: t("scorepad.skin.football.header.period"), value: phaseLabel(phase, view.cfg, t) },
     { id: "clock", label: t("scorepad.skin.football.header.clock"), value: readClock(state, phase), accent: true },
   ];
   // Law 7 added time, stamped by the fold on the period a marker CLOSES. A

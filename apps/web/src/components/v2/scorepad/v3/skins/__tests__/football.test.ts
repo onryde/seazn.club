@@ -145,6 +145,14 @@ function sideOfTile(tile: TileSpec): "home" | "away" | null {
 
 const BANDS = [0, 1, 2, 3] as const;
 
+/** What the scorebug's period item actually SAYS — the strip carries resolved
+ *  text, and the local `t` returns its own key, so this reads as the key. */
+const periodOf = (v: PadHostView): string | undefined =>
+  buildScorebug(v, t).strip.find((item) => item.id === "period")?.value;
+
+/** Every value football's own `Phase` union can hold (football.ts:458). */
+const ENGINE_PHASES = ["pre", "H1", "H2", "Q2", "Q3", "Q4", "ET_H1", "ET_H2", "SHOOTOUT", "done", "final", "abandoned"];
+
 // The engine module itself — every mirrored vocabulary below is pinned
 // against its own `padSpec(cfg)`, never a hand-copied list.
 const footballModule = (builtinModules as readonly AnySportModule[]).find((m) => m.key === "football");
@@ -248,7 +256,7 @@ describe("buildScorebug", () => {
   it("the strip is period · clock, each with a stable id", () => {
     const spec = buildScorebug(view({ state: state({ asOf: { period: "H1", elapsed: 754 } }) }), t);
     expect(spec.strip.map((item) => item.id)).toEqual(["period", "clock"]);
-    expect(spec.strip[0]?.value).toBe("H1");
+    expect(spec.strip[0]?.value).toBe("pad.football.phase.H1");
     expect(spec.strip[1]?.value).toBe("12:34");
   });
 
@@ -256,6 +264,41 @@ describe("buildScorebug", () => {
     expect(buildScorebug(view(), t).strip[1]?.value).toBe("—");
     const stale = view({ state: state({ phase: "H2", asOf: { period: "H1", elapsed: 100 } }) });
     expect(buildScorebug(stale, t).strip[1]?.value).toBe("—");
+  });
+
+  // B3/fix 3. The strip printed `Period H1` — "H1"/"ET_H2"/"SHOOTOUT" are the
+  // fold's internal tokens, and the strip is the most space-constrained
+  // surface in the product, not the place to teach a scorer the engine's
+  // vocabulary.
+  it("names the period in prose, never the engine's own phase token", () => {
+    expect(periodOf(view())).toBe("pad.football.phase.H1");
+    expect(periodOf(view({ state: state({ phase: "H2" }) }))).toBe("pad.football.phase.H2");
+    expect(periodOf(view({ state: state({ phase: "SHOOTOUT" }) }))).toBe("pad.football.phase.SHOOTOUT");
+    expect(periodOf(view({ state: state({ phase: "pre" }) }))).toBe("pad.football.phase.pre");
+    expect(periodOf(view({ state: state({ phase: "done" }) }))).toBe("pad.football.phase.done");
+    expect(periodOf(view({ state: state({ phase: "final" }) }))).toBe("pad.football.phase.final");
+    expect(periodOf(view({ state: state({ phase: "abandoned" }) }))).toBe("pad.football.phase.abandoned");
+  });
+
+  it("reuses the SHARED matchPhase.* copy for extra time rather than minting a second wording", () => {
+    expect(periodOf(view({ state: state({ phase: "ET_H1" }) }))).toBe("matchPhase.ET_H1");
+    expect(periodOf(view({ state: state({ phase: "ET_H2" }) }))).toBe("matchPhase.ET_H2");
+  });
+
+  // football.ts:454 — quarter 1 is deliberately NOT "Q1": it reuses "H1", the
+  // literal halves mode opens on, so `core.start` needed no cfg branch. The
+  // token is therefore ambiguous and only cfg can read it.
+  it("reads H1 as the FIRST QUARTER under a quarters cfg, and the quarter literals in both modes", () => {
+    const quarters = (phase: string) => periodOf(view({ cfg: cfg({ halves: 4 }), state: state({ phase }) }));
+    expect(quarters("H1")).toBe("pad.football.phase.Q1");
+    expect(quarters("Q2")).toBe("pad.football.phase.Q2");
+    expect(quarters("Q3")).toBe("pad.football.phase.Q3");
+    expect(quarters("Q4")).toBe("pad.football.phase.Q4");
+    expect(periodOf(view({ state: state({ phase: "H1" }) }))).toBe("pad.football.phase.H1");
+  });
+
+  it("prints a token it has no label for VERBATIM — missing copy has to stay visible, never a plausible guess", () => {
+    expect(periodOf(view({ state: state({ phase: "MYSTERY" }) }))).toBe("MYSTERY");
   });
 
   it("appends Law 7 added time as a locale-invariant +N item only when the fold carries one", () => {
@@ -907,6 +950,14 @@ function labelKeys(): Set<string> {
         keys.add(slot.offLabel);
         keys.add(slot.onLabel);
       }
+    }
+  }
+  // The scorebug's period reads as prose, so its label is copy like any other
+  // — in BOTH modes, because quarters mode renames the phase the fold reuses.
+  for (const halves of [2, 4] as const) {
+    for (const phase of ENGINE_PHASES) {
+      const value = periodOf(view({ cfg: cfg({ halves }), state: state({ phase }) }));
+      if (value !== undefined) keys.add(value);
     }
   }
   return keys;
