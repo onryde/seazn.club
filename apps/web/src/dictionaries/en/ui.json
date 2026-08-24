@@ -3698,6 +3698,7 @@
   "pad.football.action.goal": "Goal",
   "pad.football.action.penalty": "Penalty",
   "pad.football.action.period": "Period marker",
+  "pad.football.action.periodEnd": "End of period",
   "pad.football.action.shootoutKick": "Shoot-out kick",
   "pad.football.action.shot": "Shot",
   "pad.football.action.sinbinEnd": "Sin bin return",

@@ -468,7 +468,13 @@ export function buildTiles(view: PadHostView): TileSpec[] {
   if (inPlay && withinBand("football.period", band)) {
     tiles.push({
       id: "period",
-      label: "pad.football.action.period",
+      // The SKIN's own word, not `pad.football.action.period` — that is the
+      // ENGINE's action label ("Period marker"), and nobody standing on a
+      // touchline thinks "period marker". This one has to generalise across
+      // halves, quarters AND extra time, because `periodMarkersOf` yields
+      // HT/FT, QT/3QT and ET_HT/ET_FT depending on cfg; the sheet behind it
+      // ("Which break?") names the specific one.
+      label: "pad.football.action.periodEnd",
       kind: "standard",
       span: 2,
       phases: ["live"],

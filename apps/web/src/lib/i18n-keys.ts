@@ -2754,6 +2754,7 @@ export type DictionaryKey =
   | "pad.football.action.goal"
   | "pad.football.action.penalty"
   | "pad.football.action.period"
+  | "pad.football.action.periodEnd"
   | "pad.football.action.shootoutKick"
   | "pad.football.action.shot"
   | "pad.football.action.sinbinEnd"

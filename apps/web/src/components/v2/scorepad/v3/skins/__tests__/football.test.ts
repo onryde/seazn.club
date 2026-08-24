@@ -356,6 +356,15 @@ describe("buildTiles", () => {
     expect(tileById(tiles, "more")).toBeDefined();
   });
 
+  // B3/fix 2. `pad.football.action.period` is the ENGINE's own action label,
+  // "Period marker" — system vocabulary. A scorer records the whistle that
+  // ends a half, a quarter or an extra-time period; the skin owns that word.
+  it("labels the Period tile in the SCORER's words, never the engine's `period marker`", () => {
+    const tile = tileById(buildTiles(view()), "period")!;
+    expect(tile.label).toBe("pad.football.action.periodEnd");
+    expect(tile.label).not.toBe("pad.football.action.period");
+  });
+
   it("every tile is declared for the LIVE phase only — padSpec declares no pre/post panel for this sport", () => {
     for (const tile of buildTiles(view())) expect(tile.phases, tile.id).toEqual(["live"]);
   });
