@@ -38,7 +38,7 @@ import type {
 // in Stripe/email clients this read-only page has no business loading).
 const SPOT_HOLDERS = ["pending", "paid", "confirmed"] as const;
 
-interface RawDivisionRow {
+export interface RawDivisionRow {
   division_id: string;
   name: string;
   category: RegistrationHubRowData["category"];
@@ -62,7 +62,7 @@ interface RawDivisionRow {
  *  competition, LEFT JOINed to its registration_settings (a division not yet
  *  configured has no row there at all), with the live spot-count and the
  *  org's registration currency riding along — no client fetch, no N+1. */
-async function fetchDivisionRows(
+export async function fetchDivisionRows(
   auth: Pick<AuthCtx, "orgId">,
   competitionId: string,
 ): Promise<RawDivisionRow[]> {
