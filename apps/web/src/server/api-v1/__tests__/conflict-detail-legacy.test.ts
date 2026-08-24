@@ -93,6 +93,13 @@ const CASES: Record<ConflictDetailKind, { detail: ConflictDetail; expected: stri
     detail: { kind: "court_tag_mismatch", court: "Court 1" },
     expected: "court Court 1 does not carry a required tag",
   },
+  // P9.5, D5b.5 — postdates the d0cd9a25 baseline the same way court_tag_mismatch
+  // does; new prose, no historical English to reproduce (see
+  // conflict-detail-legacy.ts's own comment on this entry).
+  outside_court_hours: {
+    detail: { kind: "outside_court_hours", court: "Court 1" },
+    expected: "court Court 1 is closed at this time",
+  },
   inside_blackout: {
     detail: { kind: "inside_blackout" },
     expected: "inside a blackout window",

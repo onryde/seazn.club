@@ -128,6 +128,12 @@ const LEGACY_PROSE: Record<ConflictDetailKind, (d: ConflictDetail) => string> = 
   // is new prose, styled to match its `court_double_booking` neighbour
   // above, including the same `courtName ?? court` id-to-name fallback.
   court_tag_mismatch: (d) => `court ${d.courtName ?? d.court} does not carry a required tag`,
+  // P9.5, D5b.5 — postdates the d0cd9a25 baseline the same way court_tag_mismatch
+  // does one wave earlier (this kind did not exist pre-C3 either), so there is no
+  // historical English to reproduce; new prose, styled to match its
+  // court_tag_mismatch/court_double_booking neighbours, including the same
+  // `courtName ?? court` id-to-name fallback.
+  outside_court_hours: (d) => `court ${d.courtName ?? d.court} is closed at this time`,
   inside_blackout: () => "inside a blackout window",
   outside_session_windows: () => "outside session windows",
   entrant_overlap: (d) => `entrant ${d.entrantIds![0]} overlap with ${d.otherFixtureId}`,
