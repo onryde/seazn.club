@@ -134,8 +134,15 @@ export function RegistrationHubDivisionRow({
 
   const feeText = row.fee_cents === 0 ? t(dict, "reg.hub.row.fee.free") : formatMinor(row.fee_cents, context.currency);
 
+  // Finding 2: resolveDivisionCategory maps null -> "open" so OTHER
+  // derivations never have to special-case "no restriction set" — but that
+  // same "open" is also the status pill's own vocabulary ("Open now").
+  // Rendering a badge for it read as "Closed … Open" on a closed division:
+  // two unrelated facts (status, category) colliding on the same word.
+  // Null/open carries no restriction to announce, so no badge; only an
+  // explicit mens/womens/mixed restriction is worth one.
   const category = resolveDivisionCategory(row.category);
-  const categoryLabel = t(dict, `reg.hub.row.category.${category}`);
+  const categoryLabel = category === "open" ? null : t(dict, `reg.hub.row.category.${category}`);
 
   const ageBand = deriveAgeBand(row.age_min, row.age_max);
   const ageLabel =
@@ -201,7 +208,7 @@ export function RegistrationHubDivisionRow({
         <span>{windowText}</span>
         <span>{entrantKindText}</span>
         <span>{approvalText}</span>
-        <Chip>{categoryLabel}</Chip>
+        {categoryLabel && <Chip>{categoryLabel}</Chip>}
         {ageLabel && <Chip>{ageLabel}</Chip>}
         {row.allow_free_agents && <Chip>{t(dict, "reg.hub.row.freeAgents")}</Chip>}
       </div>
