@@ -50,6 +50,12 @@ import { usePadPipeline } from "../use-pad-pipeline";
 import type { RejectionInfo } from "../use-pad-pipeline";
 import { HOLD_MS } from "../queue";
 import { buildPadView, summaryHeadline, type PadActionView, type PadViewCtx } from "../view-model";
+// R3/football: the STRUCTURAL `SquadState` check the legacy lane already
+// carries — see `squadStateOf` below for why a field-name check is not
+// enough. Imported, never re-stated: two structural checks for one shape is
+// exactly where the legacy and v3 lanes would start to disagree about which
+// squad a football pad is reading.
+import { isSquadState } from "../attribution-picker";
 import { createSkinDispatch } from "../skins/types";
 import { ActionFormList } from "./action-form";
 import { Scorebug } from "./scorebug";
@@ -76,10 +82,34 @@ import { MORE_SHEET_KEY, type DockSpec, type GuidedSheetSpec, type PadHostView, 
  * `initSquads(lineups)` — the SAME engine primitive every module's own
  * squad adopter falls back to internally — otherwise. A skin never
  * branches on which case it is.
+ *
+ * R3/football — `state.squads` IS NOT A RESERVED NAME, and this function used
+ * to read it blind. `sports/squad-state.ts`'s `SquadCarrier` is the ADOPTED
+ * shape (cricket and the period/setbased/nested kernels write it), but
+ * football manages its OWN private projection at the identical field name —
+ * `{home,away}` of `{onPitch, bench, offUsed, sentOff}`, with no `.members`
+ * array anywhere (`FootballSquad`, football.ts). Every consumer of this
+ * result reads `.members`: `combinedPool` spreads it, `sidePool` feeds
+ * `resolvePool` -> `playingSquad`/`onFieldPersons` (core/lineup.ts), and
+ * `ActionFormList` hands it to the shared attribution picker. So the blind
+ * read did not return a slightly-wrong pool for football — it THREW
+ * (`.members.filter is not a function`) the first time a swap sheet, a
+ * guided-sheet person step, or a More-sheet person picker resolved a pool,
+ * i.e. on football's very first substitution tap.
+ *
+ * The check is STRUCTURAL and REUSED, never a second copy: `isSquadState`
+ * (../attribution-picker.tsx) is the identical guard the legacy lane has
+ * carried since S10, written for this exact sport — its own header says
+ * "reading `state.squads` blind would silently misinterpret football's squad
+ * as empty/malformed". A non-adopting shape degrades to `initSquads(lineups)`,
+ * the same third tier the legacy picker degrades to, so both lanes read one
+ * squad for one fixture. Cricket and every other adopting module are
+ * unaffected — their `state.squads` passes the shape check and is returned
+ * verbatim, by reference, exactly as before.
  */
 export function squadStateOf(state: unknown, lineups: LineupPair): SquadState {
-  const squads = (state as { squads?: SquadState } | null | undefined)?.squads;
-  return squads ?? initSquads(lineups);
+  const squads = (state as { squads?: unknown } | null | undefined)?.squads;
+  return isSquadState(squads) ? squads : initSquads(lineups);
 }
 
 /**

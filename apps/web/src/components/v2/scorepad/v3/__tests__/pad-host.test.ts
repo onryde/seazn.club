@@ -65,6 +65,50 @@ describe("squadStateOf", () => {
     };
     expect(squadStateOf({ squads: recorded }, lineups)).toBe(recorded);
   });
+
+  // R3/football (first sport to reach this): `state.squads` is NOT a reserved
+  // name for the kernel's adopted `SquadState`. Football manages its OWN
+  // private projection at the identical field name — `{home,away}` of
+  // `{onPitch, bench, offUsed, sentOff}`, no `.members` anywhere
+  // (football.ts's `FootballSquad`) — and every consumer of this function's
+  // result (`combinedPool`, `sidePool` -> `resolvePool` -> `playingSquad`/
+  // `onFieldPersons`, `ActionFormList`'s own attribution picker) reads
+  // `.members`. Trusting the field name blind therefore does not merely
+  // return a slightly-wrong pool for football, it THROWS
+  // (`side.members.filter is not a function`) the first time a swap sheet,
+  // a person step, or a More-sheet person picker resolves a pool.
+  //
+  // The legacy lane already carries exactly this guard, named for exactly
+  // this sport (`isSquadState`/`resolveSquads`, ../../attribution-picker.tsx,
+  // whose own header says "reading `state.squads` blind would silently
+  // misinterpret football's squad as empty/malformed"). This is that guard,
+  // reused — never a second structural check that could disagree with it.
+  it("IGNORES a `squads` field that is not structurally a SquadState — football's private FootballSquad projection", () => {
+    const lineups = lineupPair();
+    const football = {
+      squads: {
+        home: { onPitch: ["h1"], bench: ["h2"], offUsed: [], sentOff: [] },
+        away: { onPitch: ["a1"], bench: ["a2"], offUsed: [], sentOff: [] },
+      },
+    };
+    const resolved = squadStateOf(football, lineups);
+    expect(resolved).toEqual(initSquads(lineups));
+    // The consequence the shape check exists to prevent, asserted directly
+    // rather than trusted: every real consumer reads `.members`.
+    expect(Array.isArray(resolved.home.members)).toBe(true);
+    expect(() => sidePool("home", resolved)).not.toThrow();
+  });
+
+  it("a half-shaped `squads` (one side only) is rejected too — both sides must be SquadState-shaped", () => {
+    const lineups = lineupPair();
+    const half = {
+      squads: {
+        home: { entrantId: "home-1", members: [], subsUsed: 0, exemptUsed: {} },
+        away: { onPitch: [], bench: [], offUsed: [], sentOff: [] },
+      },
+    };
+    expect(squadStateOf(half, lineups)).toEqual(initSquads(lineups));
+  });
 });
 
 // --- combinedPool / sidePool --------------------------------------------
