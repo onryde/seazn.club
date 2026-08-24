@@ -8,7 +8,8 @@ import type { ReactNode } from "react";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { Modal } from "@/components/modal";
 import { FormBuilder, type FormField } from "@/components/registration-hub-form-builder";
-import type { RegistrationSettingsResponse } from "@/components/registration-hub-config-state";
+import type { RegistrationConfigState, RegistrationSettingsResponse } from "@/components/registration-hub-config-state";
+import { ROUTABLE_FIELDS, type ConfigFieldKey } from "@/components/registration-hub-save-error";
 import {
   RegistrationHubConfigPanel,
   Disclosure,
@@ -16,6 +17,7 @@ import {
   OpenCloseSection,
   CapacitySection,
   MoneySection,
+  FormSection,
 } from "@/components/registration-hub-config-panel";
 
 const net = vi.hoisted(() => ({
@@ -72,6 +74,7 @@ const OPAQUE_TYPES: SectionType[] = [
   OpenCloseSection as SectionType,
   CapacitySection as SectionType,
   MoneySection as SectionType,
+  FormSection as SectionType,
 ];
 
 const FORM_FIELDS: FormField[] = [
@@ -111,6 +114,36 @@ const BASE_PROPS = {
   onClose: vi.fn(),
   onSaved: vi.fn(),
 };
+
+// Finding 1 fixtures — a real dictionary lookup (never a stub returning the
+// key back) so a section that forgot to route `msg` through at all still
+// reads as a real render, not a false pass.
+const testMsg = (key: string, vars?: Record<string, string | number>) => t(uiEn, key, vars);
+
+const FULL_STATE: RegistrationConfigState = {
+  category: "mixed",
+  age_min: 10,
+  age_max: 18,
+  enabled: true,
+  entrant_kind: "team",
+  opens_at: "2026-01-01T00:00:00Z",
+  closes_at: "2026-02-01T00:00:00Z",
+  capacity: 32,
+  fee_cents: 1500,
+  refund_lock_at: null,
+  form_fields: FORM_FIELDS,
+  payment_method: "offline",
+  payment_instructions: null,
+  approval: "manual",
+  allow_free_agents: true,
+};
+
+/** Every field mapSaveError can name, each carrying a distinct message —
+ *  built from ROUTABLE_FIELDS (not hand-copied) so a future field added to
+ *  that array is exercised here automatically. */
+const ALL_ROUTED_ERRORS: Partial<Record<ConfigFieldKey, string>> = Object.fromEntries(
+  ROUTABLE_FIELDS.map((f) => [f, `boom: ${f}`]),
+);
 
 function flush() {
   return new Promise((r) => setTimeout(r, 0));
@@ -290,6 +323,45 @@ describe("RegistrationHubConfigPanel — save: full replace + both endpoints", (
     const saveBtn = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
     await (propsOf(saveBtn).onClick as () => Promise<void>)();
     expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Finding 1: mapSaveError can name any of ROUTABLE_FIELDS, but four of them
+// — form_fields, opens_at, enabled, entrant_kind — had no data-field-error
+// render site anywhere in the panel. saveAndReveal still opened the right
+// accordion section (SECTION_FIELDS covers all 15), so the organiser saw a
+// section quietly expand with nothing inside — the save's error message
+// routed into a void. This walks every section directly (bypassing the
+// network-driven save flow, which never produces more than two field
+// errors at once) with EVERY routable field carrying an error simultaneously,
+// and asserts each one lands SOMEWHERE with a `data-field-error` — so a
+// future field added to ROUTABLE_FIELDS without a render site reds here
+// immediately, rather than shipping a silent repeat of this gap.
+describe("RegistrationHubConfigPanel — every routable field has a render site (finding 1)", () => {
+  it("mapSaveError's full set of routable fields is rendered, never routed into a void", () => {
+    const commonProps = { state: FULL_STATE, errors: ALL_ROUTED_ERRORS, patch: vi.fn(), msg: testMsg };
+    const rendered = [
+      ...walk(EligibilitySection(commonProps)),
+      ...walk(OpenCloseSection({ ...commonProps, orgTz: "UTC" })),
+      ...walk(CapacitySection(commonProps)),
+      ...walk(
+        MoneySection({
+          ...commonProps,
+          orgTz: "UTC",
+          orgSlug: "riverside",
+          currency: "usd" as const,
+          feePercentPct: 8,
+          cardUnsupportedCurrency: null,
+          chargesEnabled: true,
+          orgPaymentInstructions: null,
+        }),
+      ),
+      ...walk(FormSection(commonProps)),
+    ];
+    for (const field of ROUTABLE_FIELDS) {
+      const el = rendered.find((e) => propsOf(e)["data-field-error"] === field);
+      expect(el, `expected a data-field-error render site for "${field}"`).toBeTruthy();
+    }
   });
 });
 

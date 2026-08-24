@@ -272,7 +272,7 @@ export function RegistrationHubConfigPanel({
                     orgPaymentInstructions={readOnly!.orgPaymentInstructions}
                   />
                 ) : (
-                  <FormBuilder fields={state.form_fields} canEdit onChange={(form_fields) => patch({ form_fields })} />
+                  <FormSection state={state} errors={errors} patch={patch} />
                 );
               return (
                 <Disclosure
@@ -653,4 +653,19 @@ export function MoneySection({
       )}
     </section>
   );
+}
+
+// Extracted from an inline ternary in the panel's SECTION_IDS.map so it can
+// be invoked directly the same way the other four sections are (needed for
+// finding 1's enumerating test below).
+export function FormSection({
+  state,
+  errors,
+  patch,
+}: {
+  state: RegistrationConfigState;
+  errors: Partial<Record<ConfigFieldKey, string>>;
+  patch: (p: Partial<RegistrationConfigState>) => void;
+}) {
+  return <FormBuilder fields={state.form_fields} canEdit onChange={(form_fields) => patch({ form_fields })} />;
 }

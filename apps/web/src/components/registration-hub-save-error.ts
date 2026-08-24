@@ -33,7 +33,12 @@ export type ConfigFieldKey =
   | "approval"
   | "allow_free_agents";
 
-const KNOWN_FIELDS: ReadonlySet<string> = new Set<ConfigFieldKey>([
+/** Runtime companion to `ConfigFieldKey` — the type has no runtime
+ *  existence, so anything that needs to enumerate "every field this panel
+ *  can route an error to" (KNOWN_FIELDS below, and the config panel's own
+ *  test for finding 1: every routable field must have a render site) reads
+ *  this array rather than hand-copying the type's members out of sync. */
+export const ROUTABLE_FIELDS: readonly ConfigFieldKey[] = [
   "category",
   "age_min",
   "age_max",
@@ -49,7 +54,9 @@ const KNOWN_FIELDS: ReadonlySet<string> = new Set<ConfigFieldKey>([
   "payment_instructions",
   "approval",
   "allow_free_agents",
-]);
+];
+
+const KNOWN_FIELDS: ReadonlySet<string> = new Set(ROUTABLE_FIELDS);
 
 export interface SaveErrorInfo {
   /** Which field to show the message against; null renders as a banner. */
