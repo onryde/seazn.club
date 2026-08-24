@@ -232,7 +232,7 @@ describe("moreActions", () => {
 describe("adaptSwapSlot", () => {
   it("resolves the declared side's own pool and passes labels through verbatim", () => {
     const s = squads();
-    const slot = { id: "subHome", offLabel: "pad.cricket.swap.off", onLabel: "pad.cricket.swap.on", side: "home" as const, policyOk: true, buildEvent: () => ({ type: "core.lineup.substitution", payload: {} }) };
+    const slot = { id: "subHome", offLabel: "pad.cricket.swap.off", onLabel: "pad.cricket.swap.on", side: "home" as const, eventType: "core.lineup.substitution", policyOk: true, buildEvent: () => ({ type: "core.lineup.substitution", payload: {} }) };
     const adapted = adaptSwapSlot(slot, s);
     expect(adapted.spec).toEqual({ offLabel: "pad.cricket.swap.off", onLabel: "pad.cricket.swap.on" });
     expect(adapted.view).toEqual({ squad: s.home });
@@ -246,6 +246,7 @@ describe("adaptSwapSlot", () => {
       offLabel: "pad.cricket.swap.off",
       onLabel: "pad.cricket.swap.on",
       side: "away" as const,
+      eventType: "core.lineup.substitution",
       policyOk: false,
       policyMessage: "this side has used all 3 substitutions this variant allows",
       buildEvent: () => ({ type: "core.lineup.substitution", payload: {} }),
@@ -561,6 +562,7 @@ describe("resolveSwapSlot — per-side swap tiles reach DIFFERENT slots", () => 
       offLabel: "pad.football.swap.off",
       onLabel: "pad.football.swap.on",
       side: "home",
+      eventType: "football.sub",
       policyOk: true,
       buildEvent: () => ({ type: "football.sub", payload: {} }),
     },
@@ -569,6 +571,7 @@ describe("resolveSwapSlot — per-side swap tiles reach DIFFERENT slots", () => 
       offLabel: "pad.football.swap.off",
       onLabel: "pad.football.swap.on",
       side: "away",
+      eventType: "football.sub",
       policyOk: true,
       buildEvent: () => ({ type: "football.sub", payload: {} }),
     },

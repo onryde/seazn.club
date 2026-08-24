@@ -233,20 +233,40 @@ export function decideUndo(eventId: string, heldId: string | null): UndoDecision
  * The event type a tile will dispatch, or `null` when it cannot be known
  * statically.
  *
- * `{swap:true}` builds its event from the picked people at tap time, and the
- * MORE sheet hosts the whole `padSpec(cfg)` action list rather than one event,
- * so neither can be classified here — both return `null` and are therefore
- * never filtered. That is deliberate: the MORE sheet is exactly where a
- * LOW-band org reaches `cricket.innings.summary`, so hiding it by band would
- * remove the only recording action such an org has.
+ * THE MORE SHEET'S `null` IS LOAD-BEARING AND MUST NOT CHANGE. It hosts the
+ * whole `padSpec(cfg)` action list rather than one event, and it is exactly
+ * where a LOW-band org reaches its only recording action
+ * (`cricket.innings.summary`) — band-filtering it would remove that. It
+ * returns null because there is genuinely no single event to classify, and
+ * every future edit to this function must keep it that way.
+ *
+ * R3 chassis sub-wave (owner ruling 2026-08-24, defect 3): a `{swap: id}` tile
+ * NOW resolves, through the skin's own declared slots. It used to return null
+ * for the same surface reason as the MORE sheet — "the event is built from the
+ * picked people at tap time" — but the two nulls were never the same thing.
+ * MORE has no single event by construction; a swap has exactly one, just not
+ * yet built. `SwapSlot.eventType` (types.ts) declares it statically so the
+ * band filter can see it, because `football.sub` sits above tiers 0/1 and a
+ * band-0 scorer was otherwise shown a Sub tile that could only ever end in a
+ * refusal after two picks.
+ *
+ * An id no slot declares still returns null and is therefore kept — see
+ * `filterTilesByBand`'s fail-open reasoning below. (`resolveSwapSlot` fails
+ * CLOSED for the same input, which is not a contradiction: showing a tile
+ * nobody could classify is safe, whereas OPENING a sheet resolved to the wrong
+ * slot would swap the wrong team's player.)
  */
-export function tileEventType(tile: TileSpec, sheets: Record<string, GuidedSheetSpec>): string | null {
+export function tileEventType(
+  tile: TileSpec,
+  sheets: Record<string, GuidedSheetSpec>,
+  swaps: readonly SwapSlot[],
+): string | null {
   if ("event" in tile.action) return tile.action.event.type;
   if ("sheet" in tile.action) {
     if (tile.action.sheet === MORE_SHEET_KEY) return null;
     return sheets[tile.action.sheet]?.event ?? null;
   }
-  return null;
+  return resolveSwapSlot(tile.action.swap, swaps)?.eventType ?? null;
 }
 
 /**
@@ -269,11 +289,12 @@ export function tileEventType(tile: TileSpec, sheets: Record<string, GuidedSheet
 export function filterTilesByBand(
   tiles: readonly TileSpec[],
   sheets: Record<string, GuidedSheetSpec>,
+  swaps: readonly SwapSlot[],
   fidelity: PadSpec["fidelity"],
   entitledBands: ReadonlySet<FidelityBand>,
 ): TileSpec[] {
   return tiles.filter((tile) => {
-    const type = tileEventType(tile, sheets);
+    const type = tileEventType(tile, sheets, swaps);
     if (type === null) return true;
     const band = fidelity[type];
     if (band === undefined) return true;
@@ -576,6 +597,11 @@ export function PadHostV3(props: PadHostV3Props) {
   // a skin's sheet closes over live view state and a memo would let it go
   // stale the moment the match moves.
   const sheets = props.skin.sheets?.(view);
+  // R3 (defect 3): resolved BEFORE the tiles for the same reason `sheets` is —
+  // the band filter must resolve a `{swap: id}` tile's declared event type,
+  // and it can only do that against the slot table. Moving this line back
+  // below the tile build silently reinstates the unfiltered swap tile.
+  const swapSlots = useMemo(() => props.skin.swap?.(view) ?? [], [props.skin, view]);
   const entitledBands = useMemo(() => entitledBandsFrom(spec.fidelityEntitlements, entitlements), [spec, entitlements]);
 
   // Band filter applied BEFORE `phasesWithTiles`, not at render: the phase
@@ -584,8 +610,8 @@ export function PadHostV3(props: PadHostV3Props) {
   // empty grid.
   const allTiles = useMemo(() => props.skin.tiles(view), [props.skin, view]);
   const tiles = useMemo(
-    () => filterTilesByBand(allTiles, sheets ?? {}, spec.fidelity, entitledBands),
-    [allTiles, sheets, spec.fidelity, entitledBands],
+    () => filterTilesByBand(allTiles, sheets ?? {}, swapSlots, spec.fidelity, entitledBands),
+    [allTiles, sheets, swapSlots, spec.fidelity, entitledBands],
   );
   const availablePhases = useMemo(() => phasesWithTiles(tiles), [tiles]);
   // G3: a skin's own phase(view), when declared, overrides the self-correcting
@@ -596,7 +622,6 @@ export function PadHostV3(props: PadHostV3Props) {
 
   const scorebugSpec = useMemo(() => props.skin.scorebug(view), [props.skin, view]);
   const contextSpec = useMemo(() => props.skin.context?.(view) ?? null, [props.skin, view]);
-  const swapSlots = useMemo(() => props.skin.swap?.(view) ?? [], [props.skin, view]);
 
   const padViewCtx: PadViewCtx = useMemo(
     () => ({ state: pipeline.state, summary: pipeline.summary, phase, band: props.band, entitlements }),

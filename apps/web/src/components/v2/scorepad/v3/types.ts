@@ -547,6 +547,27 @@ export interface SwapSlot {
   /** Which side's squad the off/on pickers both draw from — a substitution
    *  is always within ONE team, unlike a guided sheet's person steps. */
   side: "home" | "away";
+  /**
+   * R3 chassis sub-wave (owner ruling 2026-08-24, defect 3): the event type
+   * `buildEvent` will produce — `"football.sub"` where the module declares
+   * one, `"core.lineup.substitution"` otherwise (design §2.7).
+   *
+   * Declared STATICALLY, and separately from `buildEvent`, for one reason: the
+   * band filter runs at TILE-BUILD time, long before any pick exists, and
+   * `buildEvent(off, on)` needs a concrete pair it cannot have yet. Without
+   * this, `tileEventType` (pad-host.tsx) returned null for every swap tile and
+   * the fail-open filter kept it unconditionally — so a band-0 org saw the Sub
+   * tile, picked two people, and only THEN earned a refusal at the scoring
+   * door (`assertEntitledToScore`, server/usecases/scoring.ts). A dead-end
+   * tap, the defect class this programme keeps closing.
+   *
+   * MUST equal the `.type` `buildEvent` actually returns. Nothing can check
+   * that here — the two are separated by a pick that only exists at tap time —
+   * so a skin owes its own test that the pair agree. `createSkinDispatch`'s "a
+   * skin cannot invent an event" guard still catches an invented type at
+   * dispatch, but only after the taps have already been spent.
+   */
+  eventType: string;
   /** The module's own `lineupPolicy(cfg)` verdict for whether a
    *  substitution is currently legal for this side at all (design §2.7) —
    *  `reduceLineupEvent`'s `{ok}`, computed by the skin from its own folded
