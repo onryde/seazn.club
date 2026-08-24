@@ -72,6 +72,7 @@ import {
   resolveCandidateCourts,
   resolveCourtCalendars,
   courtCalendarsForDivision,
+  strandedCourtIdsForDivision,
   guardNoUsableCourtWindows,
   tagQualifiedCourtIdsByFixture,
   unionRequiredCourtTags,
@@ -1032,13 +1033,57 @@ export function toVerifyConfig(
    *  has any". Both the placer and the verifier read it off ONE object here, so
    *  the two cannot be handed different court hours. */
   courtCalendars?: readonly CourtCalendar[],
+  /** P10 (A6/§1): archived-or-absent court ids among this run's OWN assigned
+   *  courts (`strandedCourtIdsForDivision`, court-candidates.ts's sibling of
+   *  `resolveCourtCalendars`). Same reasoning as `courtCalendars` immediately
+   *  above — a PARAMETER because this config is assembled explicitly, not
+   *  spread from `settings.config` — and same VerifyConfig-only shape as
+   *  `courtTagQualifiedIds`: absent on `SlotConfig`, so `BuildInput.config`'s
+   *  own narrower type does not name it either. It still reaches every
+   *  `validateAssignments` call inside `build.ts`, because `greedySeed`'s
+   *  `verifyConfig: BuildConfig = { ...config }` copies whatever the caller's
+   *  actual object carries, structurally, at runtime — regardless of what
+   *  `BuildInput.config`'s own type declares. Pinned by `build.test.ts`'s
+   *  "does not cry infeasible over a pin sitting on a court the server flagged
+   *  stranded" (0a74dbae7). Omitted means "no court in this run's assigned set
+   *  is stranded" — NOT "the server never checked". */
+  strandedCourtIds?: readonly string[],
 ): SlotConfig & VerifyConfig {
   return {
     ...toSlotConfig(settings, now),
     tz: settings.orgTz,
     ruleFixtures: [...fixtures.map(rowToRuleFixture), ...extraRuleFixtures],
     ...(courtCalendars !== undefined && courtCalendars.length > 0 ? { courtCalendars } : {}),
+    ...(strandedCourtIds !== undefined && strandedCourtIds.length > 0 ? { strandedCourtIds } : {}),
   };
+}
+
+/** P10 (§3): the ONE place a `VerifyConfig` gets both its court signals —
+ *  calendars AND stranded status. Five sites used to assemble a `VerifyConfig`
+ *  by hand; four passed `courtCalendars` and `person-merge.ts:382` passed
+ *  neither. Hand-assembly at five sites is how a blind sixth is born, so this
+ *  resolves both (in parallel — the two queries are independent reads over the
+ *  same open `tx`) and hands the result to `toVerifyConfig` above.
+ *
+ *  `assignedCourtIds` is the caller's OWN "which courts are actually in use on
+ *  this board" set — never re-derived here, because what counts as "assigned"
+ *  differs by caller (the whole division's board vs. one fixture's move) and a
+ *  second opinion on that question is exactly the placer/verifier fork this
+ *  subsystem keeps re-diagnosing. */
+export async function verifyConfigForDivision(
+  tx: Tx,
+  settings: ScheduleSettingsOut,
+  fixtures: readonly FixtureLite[],
+  now: number,
+  extraRuleFixtures: readonly RuleFixture[],
+  divisionId: string,
+  assignedCourtIds: readonly string[],
+): Promise<SlotConfig & VerifyConfig> {
+  const [courtCalendars, strandedCourtIds] = await Promise.all([
+    courtCalendarsForDivision(tx, divisionId, settings.config.courts),
+    strandedCourtIdsForDivision(tx, divisionId, assignedCourtIds),
+  ]);
+  return toVerifyConfig(settings, fixtures, now, extraRuleFixtures, courtCalendars, strandedCourtIds);
 }
 
 // ---------------------------------------------------------------------------
@@ -1460,6 +1505,15 @@ export async function autoSchedule(
     // from this list, and `usableWindows` reads absent as unrestricted. "The
     // court is gone" is P10's stranded-fixture case (A6), not this one.
     const courtCalendars = await resolveCourtCalendars(tx, candidateCourtIds.ids);
+    // P10 (A6/§1): this run's OWN assigned courts, so an existing card sitting
+    // on a since-archived court is flagged on the very board this pass hands
+    // back — not only on the NEXT /validate. `all`, not `movable`: an obstacle
+    // card this run cannot move is still on the board this pass reports on.
+    const strandedCourtIds = await strandedCourtIdsForDivision(
+      tx,
+      stage.division_id,
+      [...new Set(all.map((f) => f.court_id).filter((c): c is string => c !== null))],
+    );
 
     // #622: which of this stage's movable fixtures are narrowed BELOW the
     // stage-wide candidate set by a round-scoped tag, as `allowedCourts` for
@@ -1535,6 +1589,7 @@ export async function autoSchedule(
       roundToMinute(Date.now()),
       siblings.ruleFixtures,
       courtCalendars,
+      strandedCourtIds,
     );
     const windowedConfig = boundSolverWindow(
       declaredConfig,
@@ -2580,13 +2635,22 @@ export async function applySchedule(
     // are the rules this gate judges by. Warn-only — see `assertNoNewBlocking`.
     // P9.5 review finding 4: the apply gate sees court opening hours too, so a
     // board applied onto a closed court is reported HERE rather than only by
-    // the next /validate run — two surfaces, one answer.
-    const applyCourtCalendars = await courtCalendarsForDivision(
+    // the next /validate run — two surfaces, one answer. P10 (§3): routed
+    // through the ONE builder so this site gets the stranded-court signal too
+    // — hand-assembly at five sites is how person-merge.ts ended up with
+    // neither signal at all.
+    const assignedCourtIds = [
+      ...new Set(all.map((f) => f.court_id).filter((c): c is string => c !== null)),
+    ];
+    const slotConfig = await verifyConfigForDivision(
       tx,
+      settings,
+      all,
+      0,
+      siblings.ruleFixtures,
       stage.division_id,
-      settings.config.courts,
+      assignedCourtIds,
     );
-    const slotConfig = toVerifyConfig(settings, all, 0, siblings.ruleFixtures, applyCourtCalendars);
     const deps = feedDependencies(all);
     const board = [...untouched, ...siblings.assignments];
     // The SAME fixtures where they sit right now (#399). Anything the verifier
@@ -2936,17 +3000,21 @@ export async function moveFixture(
         // Same as the apply gate: a card DRAGGED onto a court that is closed at
       // that time is flagged at the drag, not silently accepted and then
       // reported by the next /validate.
-      const moveCourtCalendars = await courtCalendarsForDivision(
+      // P10 (§3): routed through the ONE builder so a card dragged onto a
+      // since-archived court is flagged the same way one dragged onto a
+      // closed court already is — hand-assembly at five sites is how
+      // person-merge.ts ended up with neither signal.
+      const assignedCourtIds = [
+        ...new Set(all.map((f) => f.court_id).filter((c): c is string => c !== null)),
+      ];
+      const slotConfig = await verifyConfigForDivision(
         tx,
-        fixture.division_id,
-        settings.config.courts,
-      );
-      const slotConfig = toVerifyConfig(
         settings,
         all,
         0,
         siblings.ruleFixtures,
-        moveCourtCalendars,
+        fixture.division_id,
+        assignedCourtIds,
       );
       const deps = feedDependencies(all);
       const board = [...others, ...siblings.assignments];
@@ -3185,6 +3253,15 @@ async function validateScheduleIn(
   // court's calendar rather than its tags. Scoped to candidate ids for the
   // archived-court reason spelled out on the build side.
   const courtCalendars = await resolveCourtCalendars(tx, candidateCourtIds.ids);
+  // P10 (A6/§1): this division's OWN assigned courts — never candidateCourtIds
+  // here either, for the identical archived-court reason spelled out just
+  // above: an archived court is already excluded from that set, so reusing it
+  // would make the stranded-fixture conflict impossible to ever report.
+  const strandedCourtIds = await strandedCourtIdsForDivision(
+    tx,
+    divisionId,
+    [...new Set(all.map((f) => f.court_id).filter((c): c is string => c !== null))],
+  );
   // P9 pass 2c: gives the VERIFIER a real consumer for the same constraint —
   // `candidateCourtIds` above (tag+archived filtered) becomes the new
   // `config.courts`, but `validateAssignments` has never read `.courts`
@@ -3305,7 +3382,14 @@ async function validateScheduleIn(
           // (autoSchedule, the AI planning path, every test in this
           // package) for a question only THIS path asks.
           {
-            ...toVerifyConfig(settingsForEngine, all, 0, siblings.ruleFixtures, courtCalendars),
+            ...toVerifyConfig(
+              settingsForEngine,
+              all,
+              0,
+              siblings.ruleFixtures,
+              courtCalendars,
+              strandedCourtIds,
+            ),
             courtTagQualifiedIds: [...courtTagQualifiedIds],
             // #622 — the per-fixture override. Both are sent: the map is the
             // exact answer for this division's own fixtures, the flat list is

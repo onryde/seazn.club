@@ -21336,7 +21336,8 @@
                                       "round_order_day",
                                       "round_order_same_day",
                                       "no_slot_lattice",
-                                      "no_slot_budget"
+                                      "no_slot_budget",
+                                      "stranded_fixture"
                                     ]
                                   },
                                   "entrant_ids": {
@@ -22187,7 +22188,8 @@
                                       "round_order_day",
                                       "round_order_same_day",
                                       "no_slot_lattice",
-                                      "no_slot_budget"
+                                      "no_slot_budget",
+                                      "stranded_fixture"
                                     ]
                                   },
                                   "entrant_ids": {
@@ -23072,7 +23074,8 @@
                                       "round_order_day",
                                       "round_order_same_day",
                                       "no_slot_lattice",
-                                      "no_slot_budget"
+                                      "no_slot_budget",
+                                      "stranded_fixture"
                                     ]
                                   },
                                   "entrant_ids": {
@@ -24869,7 +24872,8 @@
                                       "round_order_day",
                                       "round_order_same_day",
                                       "no_slot_lattice",
-                                      "no_slot_budget"
+                                      "no_slot_budget",
+                                      "stranded_fixture"
                                     ]
                                   },
                                   "entrant_ids": {
@@ -52589,7 +52593,8 @@
                                       "round_order_day",
                                       "round_order_same_day",
                                       "no_slot_lattice",
-                                      "no_slot_budget"
+                                      "no_slot_budget",
+                                      "stranded_fixture"
                                     ]
                                   },
                                   "courtName": {
@@ -52747,7 +52752,8 @@
                                       "round_order_day",
                                       "round_order_same_day",
                                       "no_slot_lattice",
-                                      "no_slot_budget"
+                                      "no_slot_budget",
+                                      "stranded_fixture"
                                     ]
                                   },
                                   "courtName": {
@@ -57475,7 +57481,8 @@
                                       "round_order_day",
                                       "round_order_same_day",
                                       "no_slot_lattice",
-                                      "no_slot_budget"
+                                      "no_slot_budget",
+                                      "stranded_fixture"
                                     ]
                                   },
                                   "courtName": {
@@ -57633,7 +57640,8 @@
                                       "round_order_day",
                                       "round_order_same_day",
                                       "no_slot_lattice",
-                                      "no_slot_budget"
+                                      "no_slot_budget",
+                                      "stranded_fixture"
                                     ]
                                   },
                                   "courtName": {
@@ -59152,7 +59160,8 @@
                                       "round_order_day",
                                       "round_order_same_day",
                                       "no_slot_lattice",
-                                      "no_slot_budget"
+                                      "no_slot_budget",
+                                      "stranded_fixture"
                                     ]
                                   },
                                   "courtName": {

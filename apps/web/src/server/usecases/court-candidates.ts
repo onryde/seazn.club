@@ -264,6 +264,40 @@ export async function courtCalendarsForDivision(
 }
 
 /**
+ * P10 (A6/§1, `strandedCourtIdsForDivision`): court ids among `assignedCourtIds`
+ * that are archived or no longer exist at all — the server-side half of the
+ * engine's `stranded_fixture` conflict (`calendar.ts`'s `VerifyConfig.strandedCourtIds`).
+ * The engine holds no database handle, so court STATUS has to arrive the way
+ * court CALENDARS already do, through this sibling of `courtCalendarsForDivision`
+ * just above.
+ *
+ * Deliberately NOT the candidate-set complement, and NOT `courtCalendarsForDivision`'s
+ * candidate resolution reused for a different question: a court a tag change drops
+ * from candidates is still a LIVE court, and redding its existing assignment is
+ * exactly what ruling 3 (this file's `orgCourtMetas` doc comment) forbids. Archived
+ * (`courts.archived_at is not null`) or absent from `courts` entirely — nothing else.
+ * A live court that simply has no calendar rows must also stay unflagged: absence of
+ * a calendar means unrestricted, never stranded (P10 ruling 1).
+ *
+ * `divisionId` is unused in the query today but stays in the signature so this
+ * reads identically to `courtCalendarsForDivision` at every call site and a future
+ * division-scoped rule (e.g. an org that wants archived-court reporting suppressed
+ * for one division) has a seam to land in without changing every caller.
+ */
+export async function strandedCourtIdsForDivision(
+  tx: Tx,
+  divisionId: string,
+  assignedCourtIds: readonly string[],
+): Promise<string[]> {
+  if (assignedCourtIds.length === 0) return [];
+  const live = await tx<{ id: string }[]>`
+    select id from courts
+    where id in ${tx(assignedCourtIds)} and archived_at is null`;
+  const liveIds = new Set(live.map((r) => r.id));
+  return assignedCourtIds.filter((id) => !liveIds.has(id));
+}
+
+/**
  * P9 pass 2c: TAG-only qualification, ignoring archived status entirely.
  * The verifier's `court_tag_mismatch` conflict (calendar.ts's
  * `validateAssignments`) needs to answer a narrower question than
