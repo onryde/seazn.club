@@ -3,6 +3,15 @@
 // ALREADY runs (`listDivisionCardStats`, card-stats.ts) — no second query, no
 // client fetch, no N+1 per division — and shown only to a role that may edit.
 //
+// RS004 W2b review finding 1: `registered`/`awaiting_confirmation` replaced
+// `entrants` as the pill's source (an `entrants` row only exists once an
+// entry is materialised — see card-stats-registration-counts.test.ts for the
+// real-Postgres proof that the QUERY counts correctly). This file proves the
+// separate, narrower thing: that the PAGE sums the right fields into the
+// right badge props. `registered` is deliberately set DIFFERENT from
+// `entrants` per division below — if the page regressed to reading
+// `entrants` again, these assertions would catch it.
+//
 // Mock recipe copied from the proven
 // competition-header-trial-promise.test.tsx (same page, same shape) plus the
 // two mocks this test actually varies: `listDivisions`/`listDivisionCardStats`
@@ -10,7 +19,65 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { propsOf, walk } from "@/components/__tests__/_hook-harness";
 
-const h = vi.hoisted(() => ({ canEdit: true }));
+const h = vi.hoisted(() => {
+  // Two open-for-registration divisions, one closed. `registered` sums to
+  // 17 (9 + 7 + 1) — NOT 14 (the old `entrants` sum, 9 + 5 + 0) — and
+  // `awaiting_confirmation` sums to 3 (0 + 2 + 1): d-2 carries 2 entries not
+  // yet confirmed (e.g. manual-approval pending/paid) on top of its 5
+  // materialised entrants, and d-3 carries 1 waitlisted entry despite being
+  // CLOSED (registration_open: false) and having zero entrants — exactly
+  // the "closed division with real registrations that read as zero" bug
+  // finding 1 reported.
+  const defaultStats = () =>
+    new Map<string, Record<string, unknown>>([
+      [
+        "d-1",
+        {
+          division_id: "d-1",
+          entrants: 9,
+          registered: 9,
+          awaiting_confirmation: 0,
+          capacity: null,
+          stage_kinds: [],
+          registration_open: true,
+          played: 0,
+          total: 0,
+          next: null,
+        },
+      ],
+      [
+        "d-2",
+        {
+          division_id: "d-2",
+          entrants: 5,
+          registered: 7,
+          awaiting_confirmation: 2,
+          capacity: null,
+          stage_kinds: [],
+          registration_open: true,
+          played: 0,
+          total: 0,
+          next: null,
+        },
+      ],
+      [
+        "d-3",
+        {
+          division_id: "d-3",
+          entrants: 0,
+          registered: 1,
+          awaiting_confirmation: 1,
+          capacity: null,
+          stage_kinds: [],
+          registration_open: false,
+          played: 0,
+          total: 0,
+          next: null,
+        },
+      ],
+    ]);
+  return { canEdit: true, stats: defaultStats(), defaultStats };
+});
 
 vi.mock("@/server/page-auth", () => ({
   requireCompetitionPage: async () => ({
@@ -51,48 +118,7 @@ vi.mock("@/server/usecases/divisions", () => ({
 }));
 
 vi.mock("@/server/usecases/card-stats", () => ({
-  listDivisionCardStats: async () =>
-    new Map([
-      [
-        "d-1",
-        {
-          division_id: "d-1",
-          entrants: 9,
-          capacity: null,
-          stage_kinds: [],
-          registration_open: true,
-          played: 0,
-          total: 0,
-          next: null,
-        },
-      ],
-      [
-        "d-2",
-        {
-          division_id: "d-2",
-          entrants: 5,
-          capacity: null,
-          stage_kinds: [],
-          registration_open: true,
-          played: 0,
-          total: 0,
-          next: null,
-        },
-      ],
-      [
-        "d-3",
-        {
-          division_id: "d-3",
-          entrants: 0,
-          capacity: null,
-          stage_kinds: [],
-          registration_open: false,
-          played: 0,
-          total: 0,
-          next: null,
-        },
-      ],
-    ]),
+  listDivisionCardStats: async () => h.stats,
   nextLine: () => null,
   formatLabel: () => null,
 }));
@@ -117,17 +143,33 @@ const params = Promise.resolve({ orgSlug: "riverside", compSlug: "summer-league"
 
 beforeEach(() => {
   h.canEdit = true;
+  h.stats = h.defaultStats();
 });
 
 describe("competition overview — the Registration nav entry", () => {
-  it("shows live counts computed from the existing card-stats query: 2 open divisions of 3, 14 registered", async () => {
+  it("shows live counts computed from the existing card-stats query: 2 open divisions of 3, 17 registered, 3 awaiting confirmation", async () => {
     const tree = walk(await Page({ params }));
     const entry = tree.find((e) => e.type === RegistrationHubNavEntry);
     expect(entry).toBeTruthy();
     const props = propsOf(entry!);
     expect(props.openBadge).toContain("2");
-    expect(props.registeredBadge).toContain("14");
+    // 9 + 7 + 1 = 17 (`registered`) — NOT 14 (the old `entrants` sum,
+    // 9 + 5 + 0). A regression back to reading `.entrants` would fail this.
+    expect(props.registeredBadge).toContain("17");
+    expect(props.registeredBadge).not.toContain("14");
+    // 0 + 2 + 1 = 3, including d-3's 1 waitlisted entry despite that
+    // division being CLOSED and having zero entrants.
+    expect(props.awaitingBadge).toContain("3");
     expect(props.href).toBe("/o/riverside/c/summer-league/registration");
+  });
+
+  it("omits the awaiting-confirmation badge entirely (not a literal '0') once nothing needs it", async () => {
+    h.stats = new Map(
+      [...h.defaultStats()].map(([id, s]) => [id, { ...s, awaiting_confirmation: 0 }]),
+    );
+    const tree = walk(await Page({ params }));
+    const entry = tree.find((e) => e.type === RegistrationHubNavEntry);
+    expect(propsOf(entry!).awaitingBadge).toBeUndefined();
   });
 
   it("hides the entry for a role that cannot edit (viewer/scorer)", async () => {

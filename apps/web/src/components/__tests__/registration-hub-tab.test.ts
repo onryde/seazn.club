@@ -33,4 +33,22 @@ describe("resolveRegistrationHubTab", () => {
   it("exposes exactly the two hub tabs, in landing order", () => {
     expect(REGISTRATION_HUB_TABS).toEqual(["settings", "registrants"]);
   });
+
+  // RS004 W2b review finding 3 — coverage only, not a behaviour fix: the
+  // whitelist `.includes()` check is safe by construction against ANY value
+  // it does not recognise, so both cases below already passed before this
+  // wave and still pass after it. Characterisation tests, pinning that
+  // safety rather than proving a bug was fixed.
+  it("characterisation: falls back to settings on a case-varying ?tab=Settings — no case-insensitive matching", () => {
+    expect(resolveRegistrationHubTab("Settings")).toBe("settings");
+  });
+
+  it("characterisation: falls back to settings on Next's array-valued repeated ?tab=a&tab=b", () => {
+    // Next's real runtime shape for a repeated query key is a string[],
+    // which the page's `{ tab?: string }` searchParams type doesn't
+    // capture — the cast exercises that shape directly (production code
+    // never manufactures this value itself; Next's own request parsing
+    // does) rather than asserting something TS would reject as written.
+    expect(resolveRegistrationHubTab(["a", "b"] as unknown as string)).toBe("settings");
+  });
 });

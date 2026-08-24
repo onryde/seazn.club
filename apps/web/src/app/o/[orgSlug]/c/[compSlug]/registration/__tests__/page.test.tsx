@@ -75,6 +75,12 @@ import { walk } from "@/components/__tests__/_hook-harness";
 import { propsOf } from "@/components/__tests__/_hook-harness";
 import { RegistrationHubSettingsPanel } from "@/components/registration-hub-settings-panel";
 import { RegistrationHubRegistrantsPanel } from "@/components/registration-hub-registrants-panel";
+// Real (unmocked) dictionary loader — only `@/lib/resolve-locale` is mocked
+// above (pinned to "en"), so this reads the SAME dictionary the page itself
+// resolves. Used below to assert the panel receives the actual translated
+// string, never a hardcoded English literal or a mis-keyed lookup (RS004 W2b
+// review finding 2).
+import { getDictionary, t } from "@/lib/i18n";
 
 const params = Promise.resolve({ orgSlug: "riverside", compSlug: "summer-league" });
 const noTab = Promise.resolve({});
@@ -109,6 +115,22 @@ describe("registration hub — ?tab= switching", () => {
     const tree = walk(await Page({ params, searchParams: noTab }));
     expect(tree.some((e) => e.type === RegistrationHubSettingsPanel)).toBe(true);
     expect(tree.some((e) => e.type === RegistrationHubRegistrantsPanel)).toBe(false);
+  });
+
+  it("passes the REAL Settings-tab title/body strings from the dictionary — never a hardcoded literal or a mis-keyed lookup", async () => {
+    // A mis-keyed lookup (e.g. `t(dict, "reg.hub.settings.titel")`) would
+    // render the raw key string, and the assertions above (which only check
+    // WHICH component type rendered) would stay green regardless — this is
+    // the gap RS004 W2b review finding 2 flagged. Comparing against the
+    // dictionary's OWN resolved value (not a hardcoded "Registration
+    // settings" string) means a real locale-copy change never breaks this
+    // test either.
+    const tree = walk(await Page({ params, searchParams: noTab }));
+    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
+    const props = propsOf(panel);
+    const dict = await getDictionary("en", "ui");
+    expect(props.title).toBe(t(dict, "reg.hub.settings.title"));
+    expect(props.body).toBe(t(dict, "reg.hub.settings.body"));
   });
 
   it("falls back to Settings on a garbage ?tab=", async () => {

@@ -9,7 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { RegistrationHubNavEntry } from "@/components/registration-hub-nav-entry";
 import { routes } from "@/lib/routes";
 
-function render(): string {
+function render(awaitingBadge?: string): string {
   return renderToStaticMarkup(
     <RegistrationHubNavEntry
       href={routes.competitionRegistration("acme", "summer-smash")}
@@ -17,6 +17,7 @@ function render(): string {
       ariaLabel="Registration"
       openBadge="2 divisions open"
       registeredBadge="14 registrants"
+      awaitingBadge={awaitingBadge}
     />,
   );
 }
@@ -41,5 +42,15 @@ describe("RegistrationHubNavEntry", () => {
 
   it("carries its own data hook for e2e/regression targeting", () => {
     expect(render()).toContain("data-registration-hub-entry");
+  });
+
+  it("renders a third badge when awaitingBadge is given (RS004 W2b review finding 1's distinct pending/waitlisted signal)", () => {
+    const html = render("3 awaiting confirmation");
+    expect(html).toContain("3 awaiting confirmation");
+    expect(html).toContain("data-registration-hub-awaiting");
+  });
+
+  it("renders no third badge (not even at zero) when awaitingBadge is omitted", () => {
+    expect(render(undefined)).not.toContain("data-registration-hub-awaiting");
   });
 });
