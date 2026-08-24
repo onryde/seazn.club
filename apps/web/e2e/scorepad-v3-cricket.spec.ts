@@ -1308,3 +1308,62 @@ test("cricket v3 (R2c/C3): a side with no reviews left cannot be picked, but an 
     "the side that still holds a review stays selectable",
   ).not.toHaveAttribute("data-blocked", "true");
 });
+
+// R3/F review round 2 — 8a66c00f6 ("put the soft-commit dock on screen when it
+// opens") shipped with NO automated coverage of the wiring that fires it. The
+// pure `revealDock(node)` helper is unit-tested against a fake node, but the
+// `ref` + `useEffect` that call it in production are not: `dock.test.ts` runs
+// environment:"node" with the island harness, where effects never run, and
+// `apps/web` has no jsdom anywhere — adding one for a single assertion is a new
+// test environment, not a minor fix. e2e is the only layer that can see this.
+//
+// `toBeVisible` CANNOT catch it: Playwright counts a rendered element below the
+// fold as visible, which is exactly the state the fix removes. The assertion has
+// to be about the VIEWPORT.
+//
+// The condition is constructed deliberately: the dock renders immediately after
+// `[data-role="v3-tiles"]` (pad-host.tsx), so scrolling the tile grid's top to
+// the top of a short viewport puts the grid's bottom — and therefore the dock —
+// below the fold. Without the reveal effect the dock opens off-screen and this
+// test fails; that was verified by reverting the effect, not assumed.
+test("cricket v3: the soft-commit dock is revealed on screen when it opens", async ({ page }) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket DockReveal ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 DR Striker ${TAG}` }, { fullName: `V3 DR NonStriker ${TAG}` }],
+    away: [{ fullName: `V3 DR Bowler ${TAG}` }],
+  });
+  await openLiveConsole(page, fx);
+
+  // Short viewport: the cricket tile grid is taller than this on its own, so
+  // whatever follows it starts below the fold.
+  await page.setViewportSize({ width: 390, height: 560 });
+  await pad(page)
+    .locator('[data-role="v3-tiles"]')
+    .evaluate((node) => node.scrollIntoView({ block: "start" }));
+
+  const tile = pad(page).getByRole("button", { name: "1", exact: true });
+  // `scrollIntoViewIfNeeded` on the tile itself would undo the setup; the tile
+  // is already at the top of the grid, so a plain click never scrolls.
+  await tile.click();
+
+  const dock = pad(page).locator('[data-role="v3-dock"]');
+  await expect(dock).toBeVisible({ timeout: 5_000 });
+
+  const box = await dock.boundingBox();
+  expect(box, "the dock has no layout box at all").not.toBeNull();
+  const viewport = page.viewportSize();
+  expect(viewport, "the viewport size was not set").not.toBeNull();
+  // Intersects the viewport in BOTH directions — "below the fold" and "scrolled
+  // past above" are both failures of the same fix.
+  expect(
+    box!.y,
+    "the dock opened BELOW the fold — the reveal effect did not run",
+  ).toBeLessThan(viewport!.height);
+  expect(
+    box!.y + box!.height,
+    "the dock opened above the viewport — the reveal effect scrolled the wrong way",
+  ).toBeGreaterThan(0);
+});

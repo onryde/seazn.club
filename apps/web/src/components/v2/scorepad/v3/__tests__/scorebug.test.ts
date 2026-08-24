@@ -166,21 +166,35 @@ function specWithWho(long: string): ScorebugSpec {
  * components, which the shared island harness does not expand, so the markup
  * is the only place these two facts are observable at all.
  */
-function enclosingClass(html: string, needle: string): string {
+function enclosingClasses(html: string, needle: string): string[] {
   // `>` + needle, never a bare `indexOf` — the tappable half's own aria-label
   // repeats every who-line name, so a bare search lands INSIDE an attribute
   // and reports the <button> as the enclosing element.
-  const at = html.indexOf(">" + needle) + 1;
-  expect(at, `"${needle}" is not in the rendered markup as a text node`).toBeGreaterThan(0);
-  const stack: string[] = [];
-  const tag = /<(\/?)([a-z0-9]+)([^>]*?)(\/?)>/g;
-  let match: RegExpExecArray | null;
-  while ((match = tag.exec(html)) !== null) {
-    if (match.index >= at) break;
-    if (match[1] === "/") stack.pop();
-    else if (match[4] !== "/") stack.push(/class="([^"]*)"/.exec(match[3] ?? "")?.[1] ?? "");
+  //
+  // R3/F review round 2: this returned the FIRST match only, which is the
+  // tappable (<button>) half. The plain (<div>) half renders the same name and
+  // was never independently checked — today both halves reach the same
+  // `HalfContent` span, so there is no live gap, but that shared path is
+  // exactly what a later wave might fork. Every occurrence is returned and the
+  // caller asserts on all of them.
+  const out: string[] = [];
+  for (let from = 0; ; ) {
+    const found = html.indexOf(">" + needle, from);
+    if (found === -1) break;
+    const at = found + 1;
+    from = at;
+    const stack: string[] = [];
+    const tag = /<(\/?)([a-z0-9]+)([^>]*?)(\/?)>/g;
+    let match: RegExpExecArray | null;
+    while ((match = tag.exec(html)) !== null) {
+      if (match.index >= at) break;
+      if (match[1] === "/") stack.pop();
+      else if (match[4] !== "/") stack.push(/class="([^"]*)"/.exec(match[3] ?? "")?.[1] ?? "");
+    }
+    out.push(stack[stack.length - 1] ?? "");
   }
-  return stack[stack.length - 1] ?? "";
+  expect(out.length, `"${needle}" is not in the rendered markup as a text node`).toBeGreaterThan(0);
+  return out;
 }
 
 describe("the scorebug who-line with a long unbroken name (R3/F)", () => {
@@ -198,8 +212,12 @@ describe("the scorebug who-line with a long unbroken name (R3/F)", () => {
     }
   });
 
-  it("gives the NAME itself a break opportunity, and lets its own box shrink", () => {
-    const cls = enclosingClass(html(), LONG_NAME);
+  it("gives the NAME itself a break opportunity, and lets its own box shrink — in BOTH halves", () => {
+    const all = enclosingClasses(html(), LONG_NAME);
+    // The tappable <button> half and the plain <div> half each render the name.
+    // Asserting only the first checked one element and read as covering two.
+    expect(all.length, "both halves render the long name as a text node").toBe(2);
+    for (const cls of all) {
     expect(cls, "a flex item at min-width:auto cannot shrink below its longest word").toContain("min-w-0");
     // `wrap-anywhere` (overflow-wrap: ANYWHERE), never `break-words`
     // (overflow-wrap: break-word). Only `anywhere` reduces the box's
@@ -209,5 +227,6 @@ describe("the scorebug who-line with a long unbroken name (R3/F)", () => {
     // when this was first "fixed" with it, and only the 320px measurement
     // caught that.
     expect(cls, "an unbroken word never wraps without an overflow-wrap opportunity").toContain("wrap-anywhere");
+    }
   });
 });
