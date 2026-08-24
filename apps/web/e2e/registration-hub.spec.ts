@@ -93,6 +93,35 @@ async function save(panel: Locator): Promise<void> {
   await panel.locator('[data-action="save"]').click();
 }
 
+/** Expand one accordion section and wait for it to actually be open.
+ *
+ *  The picked treatment ships Money and Form COLLAPSED, so a `fill()` on a
+ *  field inside them resolves a hidden element and times out after 60s with a
+ *  message that says nothing about accordions. Clicking the summary is what an
+ *  organiser does; doing it here keeps the failure mode legible. */
+async function openSection(panel: Locator, id: string): Promise<void> {
+  const section = panel.locator(`[data-accordion-section="${id}"]`);
+  await expect(section).toHaveCount(1, { timeout: 20_000 });
+  if (await section.evaluate((el) => (el as HTMLDetailsElement).open)) return;
+  await section.locator("summary").click();
+  await expect
+    .poll(async () => section.evaluate((el) => (el as HTMLDetailsElement).open), { timeout: 20_000 })
+    .toBe(true);
+}
+
+/** A banner that is NOT the partial-save notice.
+ *
+ *  A rejected save legitimately renders one direct-child alert: the
+ *  partial-save banner naming which half of the two-endpoint write landed
+ *  (it carries `data-save-outcome`). What must never appear is a bannered
+ *  copy of a FIELD error — that is the context-free toast these tests exist
+ *  to forbid. */
+function contextFreeBanner(panel: Locator): Locator {
+  return panel.locator(
+    '[data-registration-hub-config-panel] > p[role="alert"]:not([data-save-outcome])',
+  );
+}
+
 test.describe("RS004 registration hub", () => {
   // --- 1. Configure-persist round trip (headline acceptance criterion) -----
   test("configure-persist round trip: category, age band, approval and free agents survive a reload", async ({
@@ -156,7 +185,12 @@ test.describe("RS004 registration hub", () => {
     // config-panel]`; a field error is nested inside a <section><label> —
     // this is what tells "landed on the field" apart from "context-free
     // toast".
-    await expect(panel.locator('[data-registration-hub-config-panel] > p[role="alert"]')).toHaveCount(0);
+    await expect(contextFreeBanner(panel)).toHaveCount(0);
+    // The PATCH carrying the age band failed while the settings PUT committed,
+    // so the panel must say so rather than implying nothing saved.
+    await expect(
+      panel.locator('[data-registration-hub-config-panel] > p[data-save-outcome="patch-failed"]'),
+    ).toHaveCount(1);
     await expect(panel).toBeVisible(); // rejected save — panel stays open
   });
 
@@ -199,7 +233,12 @@ test.describe("RS004 registration hub", () => {
     const fieldError = panel.locator('[data-field-error="allow_free_agents"]');
     await expect(fieldError).toBeVisible({ timeout: 20_000 });
     await expect(fieldError).toContainText("allow_free_agents requires entrant_kind");
-    await expect(panel.locator('[data-registration-hub-config-panel] > p[role="alert"]')).toHaveCount(0);
+    await expect(contextFreeBanner(panel)).toHaveCount(0);
+    // Mirror image of the age-band case: here the settings PUT is the half
+    // that failed.
+    await expect(
+      panel.locator('[data-registration-hub-config-panel] > p[data-save-outcome="put-failed"]'),
+    ).toHaveCount(1);
   });
 
   // --- 3. Full-replace hazard -------------------------------------------------
@@ -215,6 +254,7 @@ test.describe("RS004 registration hub", () => {
     await panel.locator('[data-field="category"]').selectOption("mens");
     await panel.locator('[data-field="capacity"]').fill("40");
     await panel.locator('[data-field="approval"]').selectOption("manual");
+    await openSection(panel, "money");
     await panel.locator('[data-field="fee_cents"]').fill("5");
     await panel.locator('[data-field="payment_method_offline"]').check();
     await panel.locator('[data-field="payment_instructions"]').fill("Pay the club treasurer in cash.");
