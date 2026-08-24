@@ -177,6 +177,25 @@ All owner-ratified 2026-08-13 in the design session:
   `conflict.start_window` board label. `window-single-source.test.ts` enforces
   "one function, both sides" as a test rather than a convention.
 
+  **Owed, deferred by owner ruling after code review:** `courtCalendars` reaches
+  only TWO of the four `toVerifyConfig` call sites — `autoSchedule` and
+  `validateScheduleIn`. `applySchedule` (`schedule.ts:2559`), `moveFixture`
+  (`:2906`) and `person-merge.ts:382` do not get it, so a card dragged onto a
+  court that is closed at that time reports nothing until the next `/validate`
+  flags it — two surfaces, two answers about the same card. Non-blocking either
+  way, so no lock-out. NOT a one-liner: neither gate resolves candidate courts,
+  and scoping to the board's courts instead would flag ARCHIVED courts and break
+  P9's A10 split (archived stays clean). Whoever takes it adds
+  `resolveCandidateCourts` + `resolveCourtCalendars` to both, plus a test per gate.
+
+  Four other review findings were fixed in `860b7fc47`: the row-3 guard fired on
+  REFLOW/POLISH and could hard-refuse a board whose court hours had just been
+  narrowed (the exact lock-out `outside_court_hours` is carved out to avoid);
+  blackouts were double-reported as `outside_court_hours`; the year-long horizon
+  made court-window resolution construct tens of thousands of `Intl` formatters;
+  and the anti-fork guard died with a TypeError instead of an assertion when a
+  pattern vanished entirely.
+
 ### False premises found by P9.5 (rulings, do not re-derive)
 
 The session's prompt named two constraints `admits()` omits that the verifier
