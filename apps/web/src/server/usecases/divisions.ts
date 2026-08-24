@@ -40,6 +40,12 @@ export interface DivisionRow {
   module_version: string;
   eligibility: unknown[];
   tiebreakers: string[] | null;
+  /** V364 first-class eligibility columns (RS004): read alongside
+   *  `eligibility` above, never instead of it — see
+   *  registration-eligibility.ts's EligibilityDivision. */
+  category: string | null;
+  age_min: number | null;
+  age_max: number | null;
   status: string;
   officials_hide_names: boolean;
   scheduling_mode: string;
@@ -68,9 +74,10 @@ export interface DivisionRow {
 
 const COLS = [
   "id", "competition_id", "name", "slug", "description", "sport_key", "variant_key", "config",
-  "module_version", "eligibility", "tiebreakers", "status", "officials_hide_names",
-  "scheduling_mode", "auto_progress", "auto_posts", "schedule_locked", "archived_at", "created_at",
-  "seq", "youth", "player_name_display", "logo_url", "logo_storage_path", "required_court_tags",
+  "module_version", "eligibility", "tiebreakers", "category", "age_min", "age_max", "status",
+  "officials_hide_names", "scheduling_mode", "auto_progress", "auto_posts", "schedule_locked",
+  "archived_at", "created_at", "seq", "youth", "player_name_display", "logo_url",
+  "logo_storage_path", "required_court_tags",
 ] as const;
 
 /** Variant choices for the Settings tab's format editor (v8) — system

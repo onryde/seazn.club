@@ -208,6 +208,13 @@ export interface RegistrationSettingsRow {
   payment_method: "offline" | "stripe";
   /** Per-division override; null → org.payment_instructions. */
   payment_instructions: string | null;
+  /** V364/RS004. 'auto' reproduces pre-RS004 behaviour untouched — every
+   *  entry auto-confirms. Read by registration-approval.ts via its own
+   *  loadApprovalSettings, not via loadSettings above. */
+  approval: "auto" | "manual";
+  /** V364/RS004: team divisions only — putRegistrationSettings rejects
+   *  `true` on a non-team division. Read by registration-submit.ts. */
+  allow_free_agents: boolean;
   updated_at: Date | null;
 }
 
@@ -410,7 +417,7 @@ function regGroupCols(db: AnySql) {
 const SETTINGS_COLS = [
   "division_id", "enabled", "entrant_kind", "opens_at", "closes_at",
   "capacity", "fee_cents", "refund_lock_at", "form_fields",
-  "payment_method", "payment_instructions", "updated_at",
+  "payment_method", "payment_instructions", "approval", "allow_free_agents", "updated_at",
 ] as const;
 
 /** Statuses that hold a capacity spot. Exported for `registration-submit.ts`'s
@@ -939,6 +946,8 @@ const DEFAULT_SETTINGS: Omit<RegistrationSettingsRow, "division_id"> = {
   form_fields: [],
   payment_method: "offline",
   payment_instructions: null,
+  approval: "auto",
+  allow_free_agents: false,
   updated_at: null,
 };
 
@@ -997,6 +1006,16 @@ export async function putRegistrationSettings(
   const feeCents = input.fee_cents ?? 0;
   const entrantKind = input.entrant_kind ?? "individual";
   const formFields = input.form_fields ?? [];
+  const approval = input.approval ?? "auto";
+  const allowFreeAgents = input.allow_free_agents ?? false;
+  // Free agents (an entry with no roster yet, RS004/V364) only make sense
+  // where there IS a roster to join later — registration-submit.ts's own
+  // guard already refuses a free-agent submit outside entrant_kind 'team';
+  // this rejects the setting itself at save time instead of letting an
+  // organiser turn on a toggle that can never take effect.
+  if (allowFreeAgents && entrantKind !== "team") {
+    throw new HttpError(422, "allow_free_agents requires entrant_kind 'team'");
+  }
   if (method === "stripe") {
     if (!org.charges_enabled) {
       throw new HttpError(
@@ -1033,13 +1052,14 @@ export async function putRegistrationSettings(
       insert into registration_settings
         (division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
          fee_cents, refund_lock_at, form_fields,
-         payment_method, payment_instructions, updated_at)
+         payment_method, payment_instructions, approval, allow_free_agents, updated_at)
       values
         (${divisionId}, ${input.enabled}, ${entrantKind},
          ${input.opens_at ?? null}, ${input.closes_at ?? null},
          ${input.capacity ?? null}, ${feeCents},
          ${input.refund_lock_at ?? null}, ${tx.json(formFields as never)},
-         ${method}, ${input.payment_instructions?.trim() || null}, now())
+         ${method}, ${input.payment_instructions?.trim() || null},
+         ${approval}, ${allowFreeAgents}, now())
       on conflict (division_id) do update set
         enabled              = excluded.enabled,
         entrant_kind         = excluded.entrant_kind,
@@ -1051,6 +1071,8 @@ export async function putRegistrationSettings(
         form_fields          = excluded.form_fields,
         payment_method       = excluded.payment_method,
         payment_instructions = excluded.payment_instructions,
+        approval             = excluded.approval,
+        allow_free_agents    = excluded.allow_free_agents,
         updated_at           = now()
       returning ${sql(SETTINGS_COLS as unknown as string[])}`;
     return { ...row, ...org };
