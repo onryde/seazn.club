@@ -8,13 +8,13 @@
 // VALUE, never a throw (reduceLineupEvent, core/lineup.ts). v2 never
 // surfaced this from the pad; this file is the first chassis primitive
 // that does: an off-player picker (current on-field, via resolvePool) then
-// an on-player picker (bench, via swapCandidates) — a policy refusal
-// renders as inline sport-worded copy, never a dead or silently-disabled
-// control.
+// an on-player picker (the skin's declared candidates, else the bench, via
+// swapCandidates) — a policy refusal renders as inline sport-worded copy,
+// never a dead or silently-disabled control.
 //
-// swapCandidates(view, policyVerdict): `policyVerdict` is the module's own
-// already-resolved verdict for whether a substitution is currently legal
-// for this side at all — the shape a real caller builds from
+// swapCandidates(view, policyVerdict, offId, candidates?): `policyVerdict` is
+// the module's own already-resolved verdict for whether a substitution is
+// currently legal for this side at all — the shape a real caller builds from
 // reduceLineupEvent's refusal branch. This pure function takes it as an
 // opaque value rather than calling the reducer itself, since that needs a
 // concrete off/on pair this function does not have (it is building the
@@ -52,7 +52,33 @@
 // taken off (e.g. a keeper mid-passage-of-play) needs a concrete engine
 // call this sport-agnostic primitive is not positioned to make; deferred
 // to the skin wiring this sheet in R2+, the same deferral Ruling F already
-// prices in for resolvePool's own side-selection.
+// prices in for resolvePool's own side-selection. R3 did NOT close this:
+// its narrowing is the ON list only, because no shipped sport has an
+// OFF-side per-candidate rule. `offCandidates`/`offBlocked` stay purely
+// additive for whichever wave first has one.
+//
+// R3 CHASSIS SUB-WAVE (owner ruling 2026-08-24, `_INDEX.md` "R3 — owner
+// ruling: FIX SwapSheet in the chassis, then use it"). Cricket declined this
+// primitive, so football was the first skin ever to reach it, and first use
+// surfaced five defects. The owner ruled to fix the chassis rather than route
+// around it, because R4-R7 all inherit whatever stands here. What changed, so
+// this header is not read as pre-R3 truth:
+//
+//   1. `SkinDefV3.swap` returns `SwapSlot[]`, each with an `id`; a tile's
+//      `{swap: id}` addresses one. One slot per skin made per-side Sub tiles
+//      unreachable.
+//   3. `SwapSlot.eventType` is declared statically so the band filter can see
+//      a swap tile — `buildEvent(off, on)` cannot answer at tile-build time.
+//   4. `SwapSlot.candidates`/`blocked` bring R2c's SCOPE/ELIGIBILITY narrowing
+//      to the ON list, same field names and same renderer as the context strip.
+//   5. `swapCandidates` excludes the picked OFF person — nobody replaces
+//      themselves. Unreachable before 4, since the two pools were complements.
+//   6. A refused verdict ALWAYS states a reason; it used to fall through to
+//      "No roster available yet." when the module worded none.
+//
+// (Defect 2 is the tile-side half of 1 and lives in types.ts.) The paragraph
+// below about `noRoster` describes the OK-with-empty-bench case ONLY — that
+// path is unchanged and still correct; the REFUSED path no longer shares it.
 //
 // RENDERER DESIGN: see context-strip.tsx's own header for the shared token
 // reasoning (violet-600 = "engaged right now", slate neutral = resting,
