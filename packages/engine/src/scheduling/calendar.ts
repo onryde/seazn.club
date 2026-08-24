@@ -477,13 +477,28 @@ function earliestOnCourt(
   horizon: number,
   bookings: readonly Assignment[],
   blackouts: readonly Blackout[],
+  /** The court's usable windows (P9.5, `usableWindows`). `undefined` means the
+   *  court declares no calendar and is unrestricted. The GREEDY placer needs
+   *  this for the same reason `admits` does: without it greedy places at 00:00
+   *  on a court that opens at 15:00 and `validateAssignments` — which DOES
+   *  consult the calendar — immediately flags the board greedy just produced.
+   *  That is the placer/verifier fork this module's own header warns about,
+   *  and an end-to-end test caught it here after the lattice half was done. */
+  open?: readonly Window[],
 ): number | null {
   const candidates = [lowerBound];
   for (const b of bookings) if (b.court === court) candidates.push(b.endAt + gapMs);
   for (const bo of blackouts) if (bo.court === undefined || bo.court === court) candidates.push(bo.to);
+  // Each window's opening instant is a candidate in its own right: with hours
+  // 15:00-20:00 and a lower bound of 00:00, no booking or blackout end would
+  // ever propose 15:00 and the court would read as unusable all day.
+  for (const w of open ?? []) candidates.push(w.from);
   candidates.sort((a, b) => a - b);
   for (const start of candidates) {
     if (start < lowerBound || start > horizon) continue;
+    // The whole match must FIT inside one window — the same predicate `admits`
+    // and `validateAssignments` apply, never a looser "starts inside" test.
+    if (open !== undefined && !open.some((w) => start >= w.from && start + durMs <= w.to)) continue;
     if (courtBlocked(court, start, durMs, gapMs, bookings, blackouts) === null) return start;
   }
   return null;
@@ -507,6 +522,18 @@ export function slotFixtures(input: SlotInput): SlotResult {
   const lo = Math.min(config.startAt, ...pinned) - durMs;
   const hi = Math.max(horizon, ...pinned.map((t) => t + durMs)) + durMs;
   const blackouts = effectiveBlackouts(config, lo, hi);
+  // P9.5: per-court opening hours, resolved ONCE through the shared
+  // `usableWindows` — the same function the lattice and the verifier call.
+  // Skipped without `tz` on every side alike; a court with no calendar is
+  // absent from the map and stays unrestricted.
+  const courtOpenWindows = new Map<string, readonly Window[]>();
+  if (config.tz !== undefined && (config.courtCalendars ?? []).length > 0) {
+    const tz = config.tz;
+    const range = { from: dayKeyInTz(lo, tz), to: dayKeyInTz(hi, tz) };
+    for (const calendar of config.courtCalendars ?? []) {
+      courtOpenWindows.set(calendar.courtId, usableWindows(calendar, range, { tz, blackouts }));
+    }
+  }
 
   const bookings: Assignment[] = [...(input.existing ?? [])]; // court occupancy (incl. siblings)
   const siblings = input.existing ?? []; // other divisions' fixed board (parallelism=block)
@@ -906,7 +933,7 @@ export function slotFixtures(input: SlotInput): SlotResult {
       let lb = ready;
       let start: number | null = null;
       for (let i = 0; i < 64; i++) {
-        start = earliestOnCourt(court, lb, durMs, gapMs, horizon, bookings, blackouts);
+        start = earliestOnCourt(court, lb, durMs, gapMs, horizon, bookings, blackouts, courtOpenWindows.get(court));
         if (start === null) break;
         const person = personBlocked(f, start);
         const clash = person ?? blockModeBlocked(start);
