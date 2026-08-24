@@ -28,7 +28,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { Dict } from "@/lib/i18n-constants";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import en from "@/dictionaries/en/ui.json";
-import { SettingsPanel, capacityRequestFromDraft } from "../settings-panel";
+import { SettingsPanel, capacityRequestFromDraft, sanitizeNonNegativeInt } from "../settings-panel";
 import type { BoardConfig } from "../types";
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 
@@ -238,5 +238,40 @@ describe("SettingsPanel — no client-side fallback computation", () => {
       />,
     );
     expect(html).not.toContain("data-capacity-verdict");
+  });
+});
+
+// Review finding 4: `gapMinutes`/`rest` used a bare `Number(e.target.value)`,
+// unlike matchMinutes' own `|| 30` guard. Typing `-` yields NaN (serialises
+// to `null` on the wire); `1.5` yields a non-integer. Both are rejected by
+// CapacityPrecheckInput's `z.number().int().min(0)` (capacity-guard.ts) ->
+// 400 -> one retry -> `failed: true`, so the card sticks on "check failed"
+// until the organiser edits something else. `sanitizeNonNegativeInt` is the
+// fix, applied at the SAME point matchMinutes' guard already lives (the
+// onChange handler), so the state itself — not just one call site — is
+// always a valid non-negative integer.
+describe("sanitizeNonNegativeInt (review finding 4)", () => {
+  it("rounds a fractional value to the nearest integer", () => {
+    expect(sanitizeNonNegativeInt("1.5")).toBe(2);
+    expect(sanitizeNonNegativeInt("1.4")).toBe(1);
+  });
+
+  it("floors an invalid or non-numeric value to 0, never NaN", () => {
+    expect(sanitizeNonNegativeInt("-")).toBe(0);
+    expect(sanitizeNonNegativeInt("abc")).toBe(0);
+    expect(Number.isNaN(sanitizeNonNegativeInt("-"))).toBe(false);
+  });
+
+  it("clamps a negative value to 0 rather than sending it over the wire", () => {
+    expect(sanitizeNonNegativeInt("-5")).toBe(0);
+  });
+
+  it("passes a valid non-negative integer through unchanged", () => {
+    expect(sanitizeNonNegativeInt("10")).toBe(10);
+    expect(sanitizeNonNegativeInt("0")).toBe(0);
+  });
+
+  it("treats an emptied field as 0, matching both fields' own min={0}", () => {
+    expect(sanitizeNonNegativeInt("")).toBe(0);
   });
 });

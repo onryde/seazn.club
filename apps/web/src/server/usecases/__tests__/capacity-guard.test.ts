@@ -10,7 +10,7 @@ import { log } from "@/server/logger";
 import { v1 } from "@/server/api-v1/http";
 import { CAPACITY_REPORT_KEY } from "@/server/api-v1/schemas";
 import { capacityInputForFixtures as capacityInputForFixturesDirect } from "@/lib/capacity-input";
-import { capacityInputForFixtures, guardCapacity } from "../capacity-guard";
+import { CapacityPrecheckInput, capacityInputForFixtures, guardCapacity } from "../capacity-guard";
 
 const MS_PER_MIN = 60_000;
 const DAY_MS = 24 * 60 * MS_PER_MIN;
@@ -115,5 +115,43 @@ describe("guardCapacity", () => {
     const [payload] = spy.mock.calls[0]!;
     expect(payload).toMatchObject({ event: "capacity_assessed", verdict: "ok", scope: "stage", divisionId: "div-1" });
     spy.mockRestore();
+  });
+});
+
+// Review finding 3 (resource exhaustion): this is the schema `parseBody`
+// actually parses the live request with (route.ts) — see this schema's own
+// doc comment for why it stays independent from schemas.ts's CapacityPrecheck
+// rather than importing one from the other. `window: {from, to}` carried no
+// span bound — combined with `courts.max(50)` and calendarDays' own 4000-day
+// internal ceiling (capacity-input.ts), an authenticated POST could force
+// ~200k usableWindows calls, each intersecting up to 200 session windows and
+// 200 blackouts. Bounded to 365 days, matching schemas.test.ts's identical
+// guard on the wire-side twin and this repo's own precedent for a schedule's
+// default span (calendar.ts's `horizonMinutes ?? 365 * 24 * 60`).
+describe("CapacityPrecheckInput.config.window (review finding 3 — resource exhaustion)", () => {
+  const DAY_MS_LOCAL = 24 * 60 * 60 * 1000;
+  const YEAR_MS = 365 * DAY_MS_LOCAL;
+  const baseBody = (window?: { from: number; to: number }) => ({
+    fixtures: [],
+    config: {
+      courts: [] as string[],
+      matchMinutes: 30,
+      gapMinutes: 0,
+      perEntrantMinRest: 0,
+      ...(window !== undefined ? { window } : {}),
+    },
+  });
+
+  it("accepts a window at exactly the 365-day cap", () => {
+    expect(CapacityPrecheckInput.safeParse(baseBody({ from: 0, to: YEAR_MS })).success).toBe(true);
+  });
+
+  it("rejects a window spanning more than 365 days with a clear failure, not a silent truncation", () => {
+    const result = CapacityPrecheckInput.safeParse(baseBody({ from: 0, to: YEAR_MS + DAY_MS_LOCAL }));
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts a request with no window at all", () => {
+    expect(CapacityPrecheckInput.safeParse(baseBody()).success).toBe(true);
   });
 });

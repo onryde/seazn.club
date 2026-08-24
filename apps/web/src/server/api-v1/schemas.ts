@@ -1738,7 +1738,21 @@ export const CapacityPrecheck = z.object({
     matchMinutes: z.number().int().positive(),
     gapMinutes: z.number().int().min(0),
     perEntrantMinRest: z.number().int().min(0),
-    window: z.object({ from: z.number(), to: z.number() }).optional(),
+    // Review fix (finding 3, resource exhaustion): mirrors the same 365-day
+    // span cap capacity-guard.ts's CapacityPrecheckInput now carries (that
+    // schema — deliberately independent, see its own header — is what the
+    // route actually parses the live request with; this one governs the
+    // generated spec). Unbounded from/to let one authenticated POST force
+    // ~200k usableWindows calls (courts.max(50) x calendarDays' own 4000-day
+    // internal ceiling in capacity-input.ts). 365 days matches this repo's
+    // own precedent for a schedule's default span (calendar.ts's
+    // `horizonMinutes ?? 365 * 24 * 60`).
+    window: z
+      .object({ from: z.number(), to: z.number() })
+      .refine((w) => w.to - w.from <= 365 * 24 * 60 * 60 * 1000, {
+        message: "window must not span more than 365 days",
+      })
+      .optional(),
     constraints: z
       .object({
         restMin: z.number().int().min(0).optional(),

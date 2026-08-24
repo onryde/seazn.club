@@ -35,7 +35,7 @@ import { courtDisplayName, type BoardConfig } from "@/components/v2/board/types"
 // `courtGroups`/`resolveCourtNames` are the SAME shared pieces the board's
 // own `courtNamesById` and the settings tab's `CourtMultiPicker` already use
 // — reused here rather than a third court-name/court-picker implementation.
-import { courtGroups, resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
+import { courtGroups, flattenCourts, resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
 // P9: the BOARD-side Venue (no `hours`/`exceptions`) — this panel shows and
 // picks courts, it never reads a calendar. See court-multi-picker.tsx.
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
@@ -320,12 +320,17 @@ export function capacityGateBlocks(cap: UseCapacityReportResult | undefined): bo
  * the button must stay enabled either way, matching "client hint, server
  * authority": an unloaded precheck must never read as a false
  * "impossible".
+ *
+ * `venues` (review fix, finding 5): defaulted to `[]` so every pre-existing
+ * caller/test keeps compiling unchanged. Real callers should always pass the
+ * panel's own `venues` prop — see the courts fallback below.
  */
 export function capacityRequestForStage(
   stageId: string,
   fixtures: readonly Pick<FixtureRow, "id" | "stage_id" | "status" | "home_entrant_id" | "away_entrant_id" | "pool_id">[],
   config: DivisionScheduleSettings["config"] | undefined,
   orgTz: string,
+  venues: readonly Venue[] = [],
 ): CapacityStageRequest {
   if (config === undefined || config.matchMinutes === undefined || config.gapMinutes === undefined) return null;
   const movable = fixtures.filter((f) => f.stage_id === stageId && f.status === "scheduled");
@@ -345,7 +350,21 @@ export function capacityRequestForStage(
       id: f.id,
     })),
     config: {
-      courts: config.courts ?? ["Court 1"],
+      // Review fix (finding 5): `ScheduleConfig.courts` defaults to `[]` and
+      // is never nullish, so `?? ["Court 1"]` never actually fired in the
+      // real app — a division that never configured courts sent `courts:
+      // []` -> supply 0 -> verdict "impossible" -> Auto-schedule wrongly
+      // disabled, even though the server build falls back to every
+      // non-archived org court. Same effectiveCourts fallback
+      // settings-panel.tsx's capacityRequestFromDraft already uses, reused
+      // rather than a second implementation of "which courts count as
+      // unconstrained" — and the `["Court 1"]` literal is gone: it was also
+      // a guaranteed 400 against CapacityPrecheckInput's `z.uuid()` schema
+      // had it ever reached the wire.
+      courts:
+        config.courts && config.courts.length > 0
+          ? config.courts
+          : flattenCourts(venues).map((c) => c.id),
       sessionWindows: (config.sessionWindows ?? []).map((w) => ({ from: Date.parse(w.from), to: Date.parse(w.to) })),
       blackouts: (config.blackouts ?? []).map((b) => ({
         ...(b.court !== undefined ? { court: b.court } : {}),
@@ -460,10 +479,13 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
   const capacityRequestByStage = useMemo(() => {
     const byStage = new Map<string, CapacityStageRequest>();
     for (const stage of stages) {
-      byStage.set(stage.id, capacityRequestForStage(stage.id, fixtures, scheduleSettings?.config, orgTz));
+      byStage.set(
+        stage.id,
+        capacityRequestForStage(stage.id, fixtures, scheduleSettings?.config, orgTz, venues),
+      );
     }
     return byStage;
-  }, [scheduleSettings, stages, fixtures, orgTz]);
+  }, [scheduleSettings, stages, fixtures, orgTz, venues]);
   // The verdict itself is read live off ONE useCapacityReportsByStage
   // subscription (not one useCapacityReport call per stage — the button
   // below has to stay a DIRECT part of this component's own render output;

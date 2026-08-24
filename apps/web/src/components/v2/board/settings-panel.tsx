@@ -55,6 +55,26 @@ import { CapacityCard } from "@/components/v2/board/capacity-card";
 const DAY_END_HHMM = "23:59";
 
 /**
+ * Review fix (finding 4): `gapMinutes`/`rest` fed their onChange handlers a
+ * bare `Number(e.target.value)`, unlike `matchMinutes`' own `|| 30` guard —
+ * harmless while this only fed a local computation, not harmless now it is a
+ * wire body (`capacityRequestFromDraft` below, sent by `useCapacityReport`
+ * every keystroke). Typing `-` yields NaN (serialises to `null`); `1.5`
+ * yields a non-integer — both rejected by CapacityPrecheckInput's
+ * `z.number().int().min(0)` (capacity-guard.ts) -> 400 -> one retry ->
+ * `failed: true`, so the card sticks on "check failed" until the organiser
+ * edits something else. Applied at the SAME point matchMinutes' guard
+ * already lives (the onChange handler) so the STATE itself is always valid,
+ * not just one downstream call site — the PUT save body benefits too.
+ * Floors to 0 (both fields' own `min={0}`), matching `Number("")`'s own
+ * existing 0 coercion for an emptied field.
+ */
+export function sanitizeNonNegativeInt(raw: string): number {
+  const n = Math.round(Number(raw));
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+/**
  * D2 capacity pre-check (P10 §4/Task 6): this panel's own live draft state
  * (startAt/endAt/matchMinutes/gapMinutes/rest/courts — NEVER `config.*` for
  * those four numeric knobs, the same "live, not last-saved" reasoning the
@@ -559,7 +579,7 @@ export function SettingsPanel({
         </label>
         <label className="block">
           <span className="label">{msg("boardset.gap")}</span>
-          <input type="number" min={0} inputMode="numeric" value={gapMinutes} onChange={(e) => setGapMinutes(Number(e.target.value))} className="input w-full" disabled={!canEdit} />
+          <input type="number" min={0} inputMode="numeric" value={gapMinutes} onChange={(e) => setGapMinutes(sanitizeNonNegativeInt(e.target.value))} className="input w-full" disabled={!canEdit} />
           <span className="mt-0.5 block text-xs text-slate-400">{msg("boardset.gapHint", { venue })}</span>
         </label>
         {/* A <div> with an explicit htmlFor rather than a wrapping <label>:
@@ -592,7 +612,7 @@ export function SettingsPanel({
               reference, and an always-rendered empty span is an empty
               description. `restFloorNoteShown` is the component's own
               predicate, so the attribute and the markup cannot disagree. */}
-          <input id="boardset-rest" aria-describedby={restFloorNoteShown(restNoteConfig, "perEntrantMinRest") ? "boardset-rest-hint boardset-rest-floor" : "boardset-rest-hint"} type="number" min={0} inputMode="numeric" value={rest} onChange={(e) => setRest(Number(e.target.value))} className="input w-full" disabled={!canEdit || constrained} />
+          <input id="boardset-rest" aria-describedby={restFloorNoteShown(restNoteConfig, "perEntrantMinRest") ? "boardset-rest-hint boardset-rest-floor" : "boardset-rest-hint"} type="number" min={0} inputMode="numeric" value={rest} onChange={(e) => setRest(sanitizeNonNegativeInt(e.target.value))} className="input w-full" disabled={!canEdit || constrained} />
           <span id="boardset-rest-hint" className="mt-0.5 block text-xs text-slate-400">
             {msg("boardset.restHint")}{constrained ? msg("boardset.proSuffix") : ""}
           </span>

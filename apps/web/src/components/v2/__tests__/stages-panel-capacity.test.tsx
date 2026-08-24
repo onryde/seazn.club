@@ -3,6 +3,44 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { capacityGateBlocks, capacityRequestForStage, StagesPanel } from "@/components/v2/stages-panel";
 import type { UseCapacityReportResult } from "@/lib/use-capacity-report";
 import type { CapacityReport } from "@seazn/engine/scheduling/capacity";
+import type { Venue } from "@/components/v2/shared/court-multi-picker";
+
+// Two real org courts under one venue — same minimal shape
+// settings-panel-capacity.test.tsx's own orgVenues() fixture uses, for the
+// SAME fallback rule (review finding 5 reuses settings-panel.tsx's
+// effectiveCourts approach rather than inventing a second one).
+function orgVenues(): Venue[] {
+  return [
+    {
+      id: "venue-1",
+      name: "Riverside Centre",
+      address: null,
+      sort: 0,
+      archived_at: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      courts: [
+        {
+          id: "court-1",
+          venue_id: "venue-1",
+          name: "Court 1",
+          sort: 0,
+          tags: [],
+          archived_at: null,
+          created_at: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "court-2",
+          venue_id: "venue-1",
+          name: "Court 2",
+          sort: 1,
+          tags: [],
+          archived_at: null,
+          created_at: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    },
+  ];
+}
 
 // StagesPanel calls useRouter()/useConfirm() synchronously during render
 // (not just from effects) — same mocks stages-panel-auto-schedule-seq.test.tsx
@@ -129,9 +167,39 @@ describe("capacityRequestForStage", () => {
     ]);
   });
 
-  it("defaults courts to a single synthetic court when the division has none configured", () => {
+  // Review finding 5: this test used to pin the BUG — `config.courts ?? ["Court
+  // 1"]` sent a fake, non-uuid court label whenever a division had none
+  // configured, which is also a guaranteed 400 against CapacityPrecheckInput's
+  // `z.uuid()` schema if it ever reached the wire. `ScheduleConfig.courts`
+  // defaults to `[]`, never nullish, so the REAL failure mode was an EMPTY
+  // array (0 supply -> "impossible" -> Auto-schedule wrongly disabled), not
+  // just the `undefined` this test's own fixture happens to construct — see
+  // the two tests below for both shapes.
+  it("falls back to every non-archived org court (via venues) when the division has none configured — mirrors settings-panel.tsx's effectiveCourts", () => {
+    const req = capacityRequestForStage(
+      "s1",
+      [],
+      { matchMinutes: 30, gapMinutes: 0 },
+      ORG_TZ,
+      orgVenues(),
+    );
+    expect(req?.config.courts).toEqual(["court-1", "court-2"]);
+  });
+
+  it("falls back the same way when config.courts is an EMPTY array (the real shape a saved division sends), not just when the key is absent", () => {
+    const req = capacityRequestForStage(
+      "s1",
+      [],
+      { matchMinutes: 30, gapMinutes: 0, courts: [] },
+      ORG_TZ,
+      orgVenues(),
+    );
+    expect(req?.config.courts).toEqual(["court-1", "court-2"]);
+  });
+
+  it("returns an empty court list (never the retired ['Court 1'] literal) when no venues have loaded yet either", () => {
     const req = capacityRequestForStage("s1", [], { matchMinutes: 30, gapMinutes: 0 }, ORG_TZ);
-    expect(req?.config.courts).toEqual(["Court 1"]);
+    expect(req?.config.courts).toEqual([]);
   });
 
   it("defaults perEntrantMinRest to 0 when absent", () => {

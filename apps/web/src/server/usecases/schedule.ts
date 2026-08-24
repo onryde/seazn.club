@@ -2639,8 +2639,19 @@ export async function applySchedule(
     // through the ONE builder so this site gets the stranded-court signal too
     // — hand-assembly at five sites is how person-merge.ts ended up with
     // neither signal at all.
+    // Review fix (finding 2): `all` alone only ever names courts a STORED
+    // fixture already occupies. `proposed`'s own court_ids — the ones THIS
+    // apply is actively placing fixtures onto — must be unioned in too, or
+    // applying onto an archived court nothing else currently uses reports
+    // clean HERE and only surfaces on the next /validate, contradicting the
+    // "this apply gate sees ... the stranded-court signal too" comment just
+    // above: it did not, until now.
     const assignedCourtIds = [
-      ...new Set(all.map((f) => f.court_id).filter((c): c is string => c !== null)),
+      ...new Set(
+        [...all.map((f) => f.court_id), ...proposed.map((a) => a.court)].filter(
+          (c): c is string => c !== null,
+        ),
+      ),
     ];
     const slotConfig = await verifyConfigForDivision(
       tx,
@@ -3004,8 +3015,17 @@ export async function moveFixture(
       // since-archived court is flagged the same way one dragged onto a
       // closed court already is — hand-assembly at five sites is how
       // person-merge.ts ended up with neither signal.
+      // Review fix (finding 1): `all` alone only ever names courts a STORED
+      // fixture already occupies — never `nextCourtId`, the drag TARGET
+      // itself. So dragging a card onto an archived court no other fixture
+      // currently sits on produced NO stranded_fixture conflict, despite the
+      // comment above claiming this move is judged against the durable
+      // typed rules "too". Unioning `nextCourtId` in is what actually makes
+      // that true.
       const assignedCourtIds = [
-        ...new Set(all.map((f) => f.court_id).filter((c): c is string => c !== null)),
+        ...new Set(
+          [...all.map((f) => f.court_id), nextCourtId].filter((c): c is string => c !== null),
+        ),
       ];
       const slotConfig = await verifyConfigForDivision(
         tx,

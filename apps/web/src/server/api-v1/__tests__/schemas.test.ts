@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   AppendEventRequest,
   ApplyScheduleRequest,
+  CapacityPrecheck,
   CreateClubContact,
   CreateCompetition,
   CreateDivision,
@@ -478,5 +479,41 @@ describe("ApplyScheduleRequest (P9 pass 3a — venues/courts cutover)", () => {
     expect(
       ApplyScheduleRequest.safeParse({ assignments: [{ ...base, court_label: "Court 1" }] }).success,
     ).toBe(false);
+  });
+});
+
+// Review finding 3 (resource exhaustion): `window: {from, to}` carried no span
+// bound — combined with `courts.max(50)` and calendarDays' own 4000-day
+// internal ceiling (capacity-input.ts), an authenticated POST could force
+// ~200k usableWindows calls, each intersecting up to 200 session windows and
+// 200 blackouts. Bounded to 365 days here (the same horizon this repo's
+// engine already treats as a schedule's default span —
+// `calendar.ts`'s `horizonMinutes ?? 365 * 24 * 60`) so an over-large window
+// is a clear 400, never a silently-truncated, still-expensive 200.
+describe("CapacityPrecheck.config.window (review finding 3 — resource exhaustion)", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const YEAR_MS = 365 * DAY_MS;
+  const baseConfig = (window?: { from: number; to: number }) => ({
+    fixtures: [],
+    config: {
+      courts: [],
+      matchMinutes: 30,
+      gapMinutes: 0,
+      perEntrantMinRest: 0,
+      ...(window !== undefined ? { window } : {}),
+    },
+  });
+
+  it("accepts a window with no span bound violation (exactly 365 days)", () => {
+    expect(baseConfig({ from: 0, to: YEAR_MS }).config.window).toBeDefined();
+    expect(CapacityPrecheck.safeParse(baseConfig({ from: 0, to: YEAR_MS })).success).toBe(true);
+  });
+
+  it("rejects a window spanning more than 365 days", () => {
+    expect(CapacityPrecheck.safeParse(baseConfig({ from: 0, to: YEAR_MS + DAY_MS })).success).toBe(false);
+  });
+
+  it("accepts a request with no window at all — the bound applies only when a window is sent", () => {
+    expect(CapacityPrecheck.safeParse(baseConfig()).success).toBe(true);
   });
 });

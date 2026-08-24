@@ -153,7 +153,23 @@ export const CapacityPrecheckInput = z.object({
     matchMinutes: z.number().int().positive(),
     gapMinutes: z.number().int().min(0),
     perEntrantMinRest: z.number().int().min(0),
-    window: z.object({ from: z.number(), to: z.number() }).optional(),
+    // Review fix (finding 3, resource exhaustion): `window` carried no span
+    // bound — combined with `courts.max(50)` above and `calendarDays`' own
+    // 4000-day internal ceiling (capacity-input.ts), a single
+    // session-authenticated POST could force ~200k usableWindows calls, each
+    // intersecting/subtracting up to 200 session windows and 200 blackouts.
+    // Capped at 365 days — this repo's own precedent for a schedule's
+    // default span (calendar.ts's `horizonMinutes ?? 365 * 24 * 60`) — so an
+    // over-large window is a clear 400 here, never a silently-truncated,
+    // still-expensive 200. Mirrored on the wire-side CapacityPrecheck twin
+    // (schemas.ts) for the same reason every other bound in this object is
+    // duplicated there.
+    window: z
+      .object({ from: z.number(), to: z.number() })
+      .refine((w) => w.to - w.from <= 365 * 24 * 60 * 60 * 1000, {
+        message: "window must not span more than 365 days",
+      })
+      .optional(),
     constraints: z
       .object({
         restMin: z.number().int().min(0).optional(),
