@@ -2481,8 +2481,8 @@
                             "anyOf": [
                               {
                                 "type": "integer",
-                                "minimum": -9007199254740991,
-                                "maximum": 9007199254740991
+                                "minimum": 0,
+                                "maximum": 120
                               },
                               {
                                 "type": "null"
@@ -2493,8 +2493,8 @@
                             "anyOf": [
                               {
                                 "type": "integer",
-                                "minimum": -9007199254740991,
-                                "maximum": 9007199254740991
+                                "minimum": 0,
+                                "maximum": 120
                               },
                               {
                                 "type": "null"
@@ -2599,8 +2599,8 @@
                         "points"
                       ],
                       "category": "open",
-                      "age_min": -9007199254740991,
-                      "age_max": -9007199254740991,
+                      "age_min": 0,
+                      "age_max": 0,
                       "status": "setup",
                       "officials_hide_names": true,
                       "scheduling_mode": "timed",
@@ -2992,8 +2992,8 @@
                           "anyOf": [
                             {
                               "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
+                              "minimum": 0,
+                              "maximum": 120
                             },
                             {
                               "type": "null"
@@ -3004,8 +3004,8 @@
                           "anyOf": [
                             {
                               "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
+                              "minimum": 0,
+                              "maximum": 120
                             },
                             {
                               "type": "null"
@@ -3108,8 +3108,8 @@
                       "points"
                     ],
                     "category": "open",
-                    "age_min": -9007199254740991,
-                    "age_max": -9007199254740991,
+                    "age_min": 0,
+                    "age_max": 0,
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -3488,8 +3488,8 @@
                           "anyOf": [
                             {
                               "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
+                              "minimum": 0,
+                              "maximum": 120
                             },
                             {
                               "type": "null"
@@ -3500,8 +3500,8 @@
                           "anyOf": [
                             {
                               "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
+                              "minimum": 0,
+                              "maximum": 120
                             },
                             {
                               "type": "null"
@@ -3604,8 +3604,8 @@
                       "points"
                     ],
                     "category": "open",
-                    "age_min": -9007199254740991,
-                    "age_max": -9007199254740991,
+                    "age_min": 0,
+                    "age_max": 0,
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -4084,8 +4084,8 @@
                           "anyOf": [
                             {
                               "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
+                              "minimum": 0,
+                              "maximum": 120
                             },
                             {
                               "type": "null"
@@ -4096,8 +4096,8 @@
                           "anyOf": [
                             {
                               "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
+                              "minimum": 0,
+                              "maximum": 120
                             },
                             {
                               "type": "null"
@@ -4200,8 +4200,8 @@
                       "points"
                     ],
                     "category": "open",
-                    "age_min": -9007199254740991,
-                    "age_max": -9007199254740991,
+                    "age_min": 0,
+                    "age_max": 0,
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -4858,8 +4858,8 @@
                           "anyOf": [
                             {
                               "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
+                              "minimum": 0,
+                              "maximum": 120
                             },
                             {
                               "type": "null"
@@ -4870,8 +4870,8 @@
                           "anyOf": [
                             {
                               "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
+                              "minimum": 0,
+                              "maximum": 120
                             },
                             {
                               "type": "null"
@@ -4974,8 +4974,8 @@
                       "points"
                     ],
                     "category": "open",
-                    "age_min": -9007199254740991,
-                    "age_max": -9007199254740991,
+                    "age_min": 0,
+                    "age_max": 0,
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -5308,8 +5308,8 @@
                           "anyOf": [
                             {
                               "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
+                              "minimum": 0,
+                              "maximum": 120
                             },
                             {
                               "type": "null"
@@ -5320,8 +5320,8 @@
                           "anyOf": [
                             {
                               "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
+                              "minimum": 0,
+                              "maximum": 120
                             },
                             {
                               "type": "null"
@@ -5424,8 +5424,8 @@
                       "points"
                     ],
                     "category": "open",
-                    "age_min": -9007199254740991,
-                    "age_max": -9007199254740991,
+                    "age_min": 0,
+                    "age_max": 0,
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
