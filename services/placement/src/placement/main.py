@@ -190,6 +190,7 @@ class SchedulerServicer(scheduler_pb2_grpc.SchedulerServiceServicer):
                 parsed.fixture_rounds,
                 parsed.pinned_round,
                 parsed.person_indices,
+                parsed.allowed_courts,
             )
             solve_started = time.perf_counter()
             outcome = solve(model, wall_seconds=wall, knobs=self._knobs)

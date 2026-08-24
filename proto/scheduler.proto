@@ -74,6 +74,33 @@ message Fixture {
   // compares the two families in separate, non-crossing loops. This field
   // mirrors that semantics rather than inventing a new one.
   repeated uint32 person_indices = 4;
+  // #622 (round-scoped required court tags) -- the courts THIS fixture may be
+  // placed on, as indices into `SolveBuildRequest.court_names`. Range-checked
+  // only, like `entrant_indices`/`person_indices` above (a repeated field
+  // carries no presence ambiguity of its own).
+  //
+  // EMPTY MEANS UNCONSTRAINED, not "no court". That reading is not a
+  // convenience: it is the same one `candidateCourts`
+  // (packages/engine/src/scheduling/candidate-courts.ts, ruling 2) already
+  // gives an empty required-tag list, and it is what keeps this field free for
+  // every board that does not use it -- a request from a caller that never
+  // sets it is byte-identical to one sent before the field existed, so the
+  // homogeneous board (every fixture may use every court) pays nothing and
+  // `model.py` emits no extra constraint at all.
+  //
+  // WHY A PER-FIXTURE FIELD RATHER THAN A NARROWER `court_names`. Required
+  // court tags resolve at three scopes -- division, stage, and now round role
+  // -- and a division's fixtures span several stages while a stage's span
+  // several rounds. Narrowing the request-wide court list to the intersection
+  // would over-constrain every fixture by every other round's requirement (a
+  // court disqualified by the final's tags would disqualify the QFs too), and
+  // narrowing to the union would under-constrain all of them. Neither is the
+  // answer; the answer is per fixture, which is what this field carries.
+  //
+  // An index that names a court the fixture may use but the GRID offers no
+  // slot on is legal and inert -- `model.py` already keeps a fixture off a
+  // slotless court independently (section 1b).
+  repeated uint32 allowed_court_indices = 5;
 }
 
 message Slot {

@@ -19,6 +19,7 @@ import { createVenue, createCourt } from "../venues";
 import { buildSchedulePack, structuralCheck } from "../schedule-ai";
 import type { AiSchedulePlan } from "../schedule-ai-prompt";
 import { seedOrg } from "./_seed";
+import { putStageCourtTags } from "../stage-court-tags";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const NOW = Date.parse("2026-08-06T23:30:00Z");
@@ -396,6 +397,67 @@ describe.skipIf(!HAS_DB)(
       };
       const note = structuralCheck(plan, new Set([pinnedFixture.id]), pack);
       expect(note).toBeNull();
+    });
+
+    it("stamps courts:[] (unsatisfiable) for a round whose tags match no court — never omits the key", async () => {
+      // Opposite of autoSchedule's 422: the pack still has other placeable
+      // rounds, so the model must SEE the impossibility on that fixture.
+      // Omitting `courts` (the unconstrained encoding) would let the model
+      // put the round on any division-wide court — the placer/AI fork.
+      const { auth, divisionId, venueId } = await seedDivision(4);
+      const side = await createCourt(auth, venueId, { name: "Side", sort: 0, tags: [] });
+      await setCourts(divisionId, [side.id]);
+      const [stage] = await createStages(auth, divisionId, {
+        seq: 1,
+        kind: "league",
+        name: "League",
+        config: {},
+      });
+      await generateStageFixtures(auth, stage!.id);
+      await putStageCourtTags(auth, stage!.id, {
+        rounds: [{ round_role: "plain_round_2", required_court_tags: ["championship"] }],
+      });
+
+      const { pack } = await buildSchedulePack(auth, divisionId, {
+        now: NOW,
+        mode: "generate",
+        instruction: "x",
+      });
+      const roundTwoIds = new Set(
+        (
+          await sql<{ id: string }[]>`
+            select id from fixtures where stage_id = ${stage!.id} and round_no = 2`
+        ).map((r) => r.id),
+      );
+      expect(roundTwoIds.size).toBeGreaterThan(0);
+      const narrowed = pack.fixtures.movable.filter((f) => roundTwoIds.has(f.id));
+      expect(narrowed.length).toBe(roundTwoIds.size);
+      for (const f of narrowed) {
+        expect("courts" in f).toBe(true);
+        expect(f.courts).toEqual([]);
+      }
+      const other = pack.fixtures.movable.filter((f) => !roundTwoIds.has(f.id));
+      expect(other.length).toBeGreaterThan(0);
+      for (const f of other) expect("courts" in f).toBe(false);
+
+      const victim = narrowed[0]!;
+      const note = structuralCheck(
+        {
+          assignments: [
+            {
+              fixture_id: victim.id,
+              scheduled_at: "2026-08-10T09:00:00+00:00",
+              court_label: side.id,
+            },
+          ],
+          unschedulable: [],
+          explanations: [],
+          summary: "x",
+        },
+        new Set([victim.id]),
+        pack,
+      );
+      expect(note).not.toBeNull();
     });
   },
 );

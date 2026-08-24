@@ -82,6 +82,24 @@ export interface SolveBuildInput {
      * and this are empty.
      */
     people?: string[];
+    /**
+     * #622 (round-scoped required court tags) — the courts THIS fixture may
+     * be placed on, as ids resolved through the same `courtIndexOf` table
+     * {@link grid} slots use. Every id must also appear in {@link courts}, or
+     * the request is refused `invalid_request` before it reaches the wire,
+     * exactly as an unknown slot/pin court already is.
+     *
+     * Omitted/`undefined` is UNCONSTRAINED — every court in {@link courts} —
+     * and is the common case: only a fixture whose division ∪ stage ∪ round
+     * required tags resolve to a STRICT SUBSET of the request's court list
+     * needs one. An EMPTY array is deliberately the same reading rather than
+     * "no court": that is what `Fixture.allowed_court_indices` means on the
+     * wire and what `candidateCourts` means by an empty required-tag list,
+     * and a caller with a genuinely empty candidate set is refused earlier
+     * with `NO_MATCHING_COURT` (`court-candidates.ts`'s `guardNoMatchingCourt`)
+     * rather than being allowed to encode an unsolvable board here.
+     */
+    allowedCourts?: readonly string[];
   }[];
   /**
    * `dayIndex` is the CALLER's calendar day for the slot, resolved in the
@@ -302,7 +320,7 @@ function toRequest(input: SolveBuildInput, requestId: string, indices: IndexSpac
     // C10. Declared bound for every `personIndices` value below, exactly
     // `entrantCount`'s role one namespace over.
     personCount: indices.personCount,
-    fixtures: input.fixtures.map(({ entrantIds, divisionId, roundNo, people }) => ({
+    fixtures: input.fixtures.map(({ entrantIds, divisionId, roundNo, people, allowedCourts }) => ({
       entrantIndices: entrantIds.map((entrantId) => indices.entrantIndexOf(entrantId)),
       divisionIndex: indices.divisionIndexOf(divisionId),
       // C1. Straight passthrough — `round` is an opaque ordering key, not an
@@ -312,6 +330,12 @@ function toRequest(input: SolveBuildInput, requestId: string, indices: IndexSpac
       // `entrantIndexOf` (see `buildIndexSpace`): a person id and an entrant
       // id are different namespaces and must never share one index space.
       personIndices: (people ?? []).map((personId) => indices.personIndexOf(personId)),
+      // #622 — resolved through the SAME `courtIndexOf` the grid's own slots
+      // use just below, so a fixture's allowed court and the slot it may take
+      // can never name different indices for the same court. Absent stays
+      // absent: an empty repeated field is what the wire reads as
+      // unconstrained.
+      allowedCourtIndices: (allowedCourts ?? []).map((court) => indices.courtIndexOf(court)),
     })),
     slots: input.grid.slots.map(({ court, startAtMs, dayIndex }) => ({
       courtIndex: indices.courtIndexOf(court),

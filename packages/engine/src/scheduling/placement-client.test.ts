@@ -298,7 +298,14 @@ describe("solveBuild", () => {
     // groups and pinned rule/entrant references through the real encoder"
     // below, which covers it directly rather than duplicating it here.
     expect(decoded.slots).toEqual([{ courtIndex: 0, startAtMs: 1_700_000_000_000, dayIndex: 0 }]);
-    expect(decoded.fixtures).toEqual([{ entrantIndices: [0, 1], divisionIndex: 0, personIndices: [] }]);
+    // #622: `allowedCourtIndices: []` is what an UNCONSTRAINED fixture encodes
+    // to — empty means "every court", the same reading `candidateCourts` gives
+    // an empty required-tag list. Asserted rather than elided, because an
+    // absent-vs-empty slip here is the difference between an ordinary board
+    // placing and every fixture becoming unplaceable.
+    expect(decoded.fixtures).toEqual([
+      { entrantIndices: [0, 1], divisionIndex: 0, personIndices: [], allowedCourtIndices: [] },
+    ]);
     expect(decoded.wallSeconds).toBe(8);
   });
 
@@ -336,8 +343,8 @@ describe("solveBuild", () => {
     const decoded = SolveBuildRequest.decode(SolveBuildRequest.encode(request).finish());
 
     expect(decoded.fixtures).toEqual([
-      { entrantIndices: [0, 1], divisionIndex: 0, round: 3, personIndices: [] },
-      { entrantIndices: [2, 3], divisionIndex: 0, round: undefined, personIndices: [] },
+      { entrantIndices: [0, 1], divisionIndex: 0, round: 3, personIndices: [], allowedCourtIndices: [] },
+      { entrantIndices: [2, 3], divisionIndex: 0, round: undefined, personIndices: [], allowedCourtIndices: [] },
     ]);
     expect(decoded.existing[0]).toMatchObject({ round: 2 });
     expect(decoded.existing[1]?.round).toBeUndefined();
@@ -487,8 +494,8 @@ describe("solveBuild", () => {
     // own 0/1/2 despite counting from the same origin.
     expect(request.personCount).toBe(2); // priya, quinn
     expect(request.fixtures).toEqual([
-      { entrantIndices: [0, 1], divisionIndex: 0, personIndices: [0] }, // f1: alice=0, bob=1, div-a=0, priya=0
-      { entrantIndices: [1, 2], divisionIndex: 1, personIndices: [0, 1] }, // f2: bob=1, carol=2, div-b=1, priya=0 (reused), quinn=1
+      { entrantIndices: [0, 1], divisionIndex: 0, personIndices: [0], allowedCourtIndices: [] }, // f1: alice=0, bob=1, div-a=0, priya=0
+      { entrantIndices: [1, 2], divisionIndex: 1, personIndices: [0, 1], allowedCourtIndices: [] }, // f2: bob=1, carol=2, div-b=1, priya=0 (reused), quinn=1
     ]);
     expect(request.slots).toEqual([
       { courtIndex: 0, startAtMs: 1_700_000_000_000, dayIndex: 0 },
@@ -520,6 +527,48 @@ describe("solveBuild", () => {
       { fixtureId: "f2", court: "Court 1", startAtMs: 1_700_000_000_000 },
       { fixtureId: "f1", court: "Court 2", startAtMs: 1_700_003_600_000 },
     ]);
+  });
+
+  // #622 (round-scoped required court tags). `allowedCourts` resolves through
+  // the SAME `courtIndexOf` the grid's own slots use, so a fixture's allowed
+  // court and the slot it may take can never name different indices for the
+  // same court — the whole reason it is sent as ids rather than as indices the
+  // caller resolved itself.
+  it("resolves allowedCourts through the court index space, and refuses an unknown court", async () => {
+    const mockClient = respondingClient();
+    await solveBuild(
+      {
+        ...ROUND_TRIP_INPUT,
+        fixtures: [
+          // Narrowed to the SECOND court, so a bug that walked the list in
+          // order (or defaulted to 0) reads as index 0 and is caught.
+          { ...ROUND_TRIP_INPUT.fixtures[0]!, allowedCourts: ["Court 2"] },
+          // Absent — the common case, and what must stay byte-identical to a
+          // pre-#622 request.
+          ROUND_TRIP_INPUT.fixtures[1]!,
+        ],
+      },
+      { secret: "s", requestId: "r" },
+      mockClient,
+    );
+    const [request] = mockClient.solveBuild.mock.calls[0]!;
+    const decoded = SolveBuildRequest.decode(SolveBuildRequest.encode(request).finish());
+    expect(decoded.fixtures.map((f) => f.allowedCourtIndices)).toEqual([[1], []]);
+
+    // An id no court declares is refused BEFORE the wire, exactly as an
+    // obstacle or pin parked on an undeclared court already is — otherwise
+    // `courtIndexOf` would have to invent an index and the service would
+    // silently constrain the fixture to some other court.
+    await expect(
+      solveBuild(
+        {
+          ...ROUND_TRIP_INPUT,
+          fixtures: [{ ...ROUND_TRIP_INPUT.fixtures[0]!, allowedCourts: ["Court 9"] }],
+        },
+        { secret: "s", requestId: "r" },
+        respondingClient(),
+      ),
+    ).rejects.toThrow(PlacementError);
   });
 
   // "Duplicate court names are now legal and must round-trip" (round-6

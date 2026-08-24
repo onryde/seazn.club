@@ -137,6 +137,35 @@ export interface Fixture {
    * mirrors that semantics rather than inventing a new one.
    */
   personIndices: number[];
+  /**
+   * #622 (round-scoped required court tags) -- the courts THIS fixture may be
+   * placed on, as indices into `SolveBuildRequest.court_names`. Range-checked
+   * only, like `entrant_indices`/`person_indices` above (a repeated field
+   * carries no presence ambiguity of its own).
+   *
+   * EMPTY MEANS UNCONSTRAINED, not "no court". That reading is not a
+   * convenience: it is the same one `candidateCourts`
+   * (packages/engine/src/scheduling/candidate-courts.ts, ruling 2) already
+   * gives an empty required-tag list, and it is what keeps this field free for
+   * every board that does not use it -- a request from a caller that never
+   * sets it is byte-identical to one sent before the field existed, so the
+   * homogeneous board (every fixture may use every court) pays nothing and
+   * `model.py` emits no extra constraint at all.
+   *
+   * WHY A PER-FIXTURE FIELD RATHER THAN A NARROWER `court_names`. Required
+   * court tags resolve at three scopes -- division, stage, and now round role
+   * -- and a division's fixtures span several stages while a stage's span
+   * several rounds. Narrowing the request-wide court list to the intersection
+   * would over-constrain every fixture by every other round's requirement (a
+   * court disqualified by the final's tags would disqualify the QFs too), and
+   * narrowing to the union would under-constrain all of them. Neither is the
+   * answer; the answer is per fixture, which is what this field carries.
+   *
+   * An index that names a court the fixture may use but the GRID offers no
+   * slot on is legal and inert -- `model.py` already keeps a fixture off a
+   * slotless court independently (section 1b).
+   */
+  allowedCourtIndices: number[];
 }
 
 export interface Slot {
@@ -417,7 +446,7 @@ export interface SolveBuildResponse {
 }
 
 function createBaseFixture(): Fixture {
-  return { entrantIndices: [], divisionIndex: undefined, round: undefined, personIndices: [] };
+  return { entrantIndices: [], divisionIndex: undefined, round: undefined, personIndices: [], allowedCourtIndices: [] };
 }
 
 export const Fixture: MessageFns<Fixture> = {
@@ -435,6 +464,11 @@ export const Fixture: MessageFns<Fixture> = {
     }
     writer.uint32(34).fork();
     for (const v of message.personIndices) {
+      writer.uint32(v);
+    }
+    writer.join();
+    writer.uint32(42).fork();
+    for (const v of message.allowedCourtIndices) {
       writer.uint32(v);
     }
     writer.join();
@@ -500,6 +534,24 @@ export const Fixture: MessageFns<Fixture> = {
 
           break;
         }
+        case 5: {
+          if (tag === 40) {
+            message.allowedCourtIndices.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 42) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.allowedCourtIndices.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -527,6 +579,11 @@ export const Fixture: MessageFns<Fixture> = {
         : globalThis.Array.isArray(object?.person_indices)
         ? object.person_indices.map((e: any) => globalThis.Number(e))
         : [],
+      allowedCourtIndices: globalThis.Array.isArray(object?.allowedCourtIndices)
+        ? object.allowedCourtIndices.map((e: any) => globalThis.Number(e))
+        : globalThis.Array.isArray(object?.allowed_court_indices)
+        ? object.allowed_court_indices.map((e: any) => globalThis.Number(e))
+        : [],
     };
   },
 
@@ -544,6 +601,9 @@ export const Fixture: MessageFns<Fixture> = {
     if (message.personIndices?.length) {
       obj.personIndices = message.personIndices.map((e) => Math.round(e));
     }
+    if (message.allowedCourtIndices?.length) {
+      obj.allowedCourtIndices = message.allowedCourtIndices.map((e) => Math.round(e));
+    }
     return obj;
   },
 
@@ -556,6 +616,7 @@ export const Fixture: MessageFns<Fixture> = {
     message.divisionIndex = object.divisionIndex ?? undefined;
     message.round = object.round ?? undefined;
     message.personIndices = object.personIndices?.map((e) => e) || [];
+    message.allowedCourtIndices = object.allowedCourtIndices?.map((e) => e) || [];
     return message;
   },
 };

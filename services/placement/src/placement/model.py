@@ -596,6 +596,7 @@ def build_model(
     fixture_rounds: list[int | None] | None = None,
     existing_rounds: list[int | None] | None = None,
     person_indices: list[list[int]] | None = None,
+    allowed_courts: list[set[int] | None] | None = None,
 ) -> cp_model.CpModel:
     """Build the full constraint model. No objective is set — `solve()` owns
     that, so the tier chain (Prompt 03) can drive one model through several
@@ -675,12 +676,27 @@ def build_model(
             entrant-keyed pairs). No pinned equivalent: `existing` carries
             no person data on the wire this round, so `by_person` is built
             from these movable fixtures alone.
+        allowed_courts: #622 (round-scoped required court tags) — parallel to
+            `fixtures` the same way `person_indices` is: `allowed_courts[i]`
+            is the set of court indices `fixtures[i]` may be placed on, or
+            `None` for unconstrained. `None` is the common case and costs
+            nothing — section 1c below emits no constraint for it, so a board
+            that does not use the feature is byte-identical to one built
+            before this parameter existed.
+
+            NEVER an empty set. `placement.schema` normalises the wire's
+            "empty means unconstrained" to `None` before this module sees it,
+            so an empty set reaching here would be a caller bug; section 1c
+            treats it as "no court", which is the only honest reading of the
+            value and makes that bug loud (the fixture goes unplaced) rather
+            than silently unconstrained.
     """
     del step_minutes  # see the docstring: contractual, not load-bearing.
     rule_groups = rule_groups or []
     pinned_rule_group_indices = pinned_rule_group_indices or []
     pinned_entrant_indices = pinned_entrant_indices or []
     person_indices = person_indices or []
+    allowed_courts = allowed_courts or []
     fixture_rounds = fixture_rounds or []
     existing_rounds = existing_rounds or []
 
@@ -808,6 +824,31 @@ def build_model(
                 model.AddLinearExpressionInDomain(start[i], court_domain).OnlyEnforceIf(
                     presence_court[i][c]
                 )
+
+    # section 1c (#622 — round-scoped required court tags): a fixture whose
+    # candidate court set was narrowed below the request-wide `court_names`
+    # may not be placed on a court outside it. Stated by fixing the presence
+    # boolean to 0, the same unambiguous form section 1b just above uses for a
+    # court no slot mentions — not by an empty `Domain`, whose "never" relies
+    # on empty-domain propagation behaviour rather than saying so.
+    #
+    # WHY THIS IS PER FIXTURE AND NOT A SHORTER `court_names`. Required court
+    # tags resolve at three scopes (division, stage, round role) and the
+    # request spans fixtures from several of each, so there is no single court
+    # list that is right for all of them: an intersection over-constrains
+    # every fixture by every other round's requirement, a union constrains
+    # none of them. See `Fixture.allowed_court_indices` in the proto.
+    #
+    # Emitted only for a fixture that is ACTUALLY narrowed — `None`, or a set
+    # already covering every court, produces nothing at all, so the ordinary
+    # board pays no model size for a feature it does not use.
+    for i in range(n):
+        allowed = allowed_courts[i] if i < len(allowed_courts) else None
+        if allowed is None or len(allowed) >= num_courts:
+            continue
+        for c in range(num_courts):
+            if c not in allowed:
+                model.Add(presence_court[i][c] == 0)
 
     # sections 2+3 fused: one optional interval per (fixture, court), sized
     # matchMinutes+gapMinutes, all sharing that fixture's single `start[i]`.

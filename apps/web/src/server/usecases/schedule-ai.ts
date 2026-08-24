@@ -92,12 +92,18 @@ import {
 // tag-filter loop here would be this subsystem's recurring bug) — the AI
 // draft placer must never be able to choose an archived or tag-mismatched
 // court just because a second copy of the filter was missing.
-// P9 (stage court tags): unionRequiredCourtTags too — buildSchedulePack used
-// to resolve only the DIVISION's candidateCourtIds, the same gap review
-// finding #11 closed in validateScheduleIn (schedule.ts) — a stage's own
-// required_court_tags was invisible to the model. See buildSchedulePack's
-// stageCandidateCourts for the per-stage resolution this enables.
-import { resolveCandidateCourts, unionRequiredCourtTags } from "@/server/usecases/court-candidates";
+// P9 (stage court tags) -> #622 (round-scoped court tags): the per-FIXTURE
+// pair too. buildSchedulePack used to resolve only the DIVISION's
+// candidateCourtIds — the same gap review finding #11 closed in
+// validateScheduleIn (schedule.ts) — so a stage's own required_court_tags was
+// invisible to the model; #622 added a round-role scope that a per-stage
+// resolve cannot express at all. See buildSchedulePack's
+// fixtureCandidateCourts.
+import {
+  candidateCourtsByFixture,
+  requiredCourtTagsByFixture,
+  resolveCandidateCourts,
+} from "@/server/usecases/court-candidates";
 import { consumePreview, PREVIEW_STALE, releasePreview } from "@/server/usecases/schedule-ai-preview";
 import {
   assignOfficials,
@@ -291,10 +297,14 @@ export interface PackFixture {
   feeds: { winner_to: string | null; after: string[] };
   current: { at: string | null; court: string | null };
   pinned: boolean;
-  /** P9 (stage court tags): present only when this fixture's stage genuinely
-   *  narrows the division-wide candidate set — `unionRequiredCourtTags(division,
-   *  stage)` resolves to a STRICT SUBSET of `settings.courts` (see
-   *  buildSchedulePack's `stageCandidateCourts`/`narrowedCourtsByStage`).
+  /** P9 (stage court tags) / #622 (round-scoped court tags): present only when
+   *  THIS FIXTURE genuinely narrows the division-wide candidate set — its own
+   *  `division ∪ stage ∪ round role` tags resolve to a STRICT SUBSET of
+   *  `settings.courts` (see buildSchedulePack's `fixtureCandidateCourts`/
+   *  `narrowedCourtsByFixture`). Per fixture rather than per stage since #622:
+   *  a knockout stage's quarter-finals, semi-finals and final share one
+   *  `stages` row, so "only the final needs the championship court" is not
+   *  expressible at stage granularity.
    *  Raw court ids, in `resolveCandidateCourts`'s own order (ruling 1,
    *  candidate-courts.ts) — relabelled to names by `toModelPayload`, exactly
    *  like `settings.courts` and every other court-shaped field.
@@ -803,45 +813,37 @@ export async function buildSchedulePack(
       division.required_court_tags,
     );
 
-    // P9 (stage court tags): candidateCourtIds above is DIVISION-wide only —
-    // a stage's own required_court_tags was invisible to the model, unlike
-    // the deterministic placer (autoSchedule, schedule.ts) which additionally
-    // unions in the STAGE's own tags via unionRequiredCourtTags(division,
-    // stage). validateScheduleIn (schedule.ts, review finding #11) closed the
-    // identical gap on the verify side, for the identical reason documented
-    // there: two stages' DIFFERENT required tags must never be flattened into
-    // one combined list fed to a single resolve — unionRequiredCourtTags/
-    // candidateCourts read a required-tag list as AND (a qualifying court
-    // needs EVERY tag in it), so a court disqualified by stage B's tags would
-    // wrongly disqualify a stage-A fixture too. Resolved PER STAGE instead,
-    // one memoised resolveCandidateCourts call per DISTINCT tag union — most
-    // stages share the empty union (division tags alone, no stage tags of
-    // their own), which is already `candidateCourtIds` above and needs no
-    // second query.
-    const stageCourtTagRows = await tx<{ id: string; required_court_tags: string[] }[]>`
-      select id, required_court_tags from stages where division_id = ${divisionId}`;
-    const divisionOnlyKey = [...unionRequiredCourtTags(division.required_court_tags, [])]
-      .sort()
-      .join(" ");
-    const candidateIdsByUnion = new Map<string, readonly string[]>([
-      [divisionOnlyKey, candidateCourtIds.ids],
-    ]);
-    // Every stage's own resolved candidate set — a subset of
-    // `candidateCourtIds.ids` whenever the stage's tags genuinely narrow it,
-    // otherwise the identical array (served from the memo above). Consumed
-    // by `packMovable` below (`narrowedCourtsByStage`) to decide, per
-    // fixture, whether `PackFixture.courts` is needed at all.
-    const stageCandidateCourts = new Map<string, ReadonlySet<string>>();
-    for (const stage of stageCourtTagRows) {
-      const union = unionRequiredCourtTags(division.required_court_tags, stage.required_court_tags);
-      const key = [...union].sort().join(" ");
-      let ids = candidateIdsByUnion.get(key);
-      if (ids === undefined) {
-        ids = (await resolveCandidateCourts(tx, divisionId, courts, union)).ids;
-        candidateIdsByUnion.set(key, ids);
-      }
-      stageCandidateCourts.set(stage.id, new Set(ids));
-    }
+    // P9 (stage court tags) -> #622 (round-scoped tags). `candidateCourtIds`
+    // above is DIVISION-wide only, so a stage's own `required_court_tags` was
+    // invisible to the model while the deterministic placer honoured it. P9
+    // closed that per STAGE; #622 added a third scope (a round ROLE inside one
+    // stage), which a per-stage resolve cannot express at all — QF, SF and the
+    // final share one `stages` row.
+    //
+    // Resolved PER FIXTURE now, through the SAME shared
+    // `requiredCourtTagsByFixture`/`candidateCourtsByFixture` pair
+    // `autoSchedule` and `validateScheduleIn` resolve through, so the three
+    // paths cannot disagree about a fixture's candidate set. The reason the
+    // required-tag lists must never simply be flattened into one resolve is
+    // unchanged and now doubly true: `unionRequiredCourtTags`/
+    // `candidateCourts` read a required-tag list as AND, so a court
+    // disqualified by the FINAL's tags would wrongly disqualify a
+    // quarter-final too.
+    //
+    // The memoisation that used to live here (one resolve per DISTINCT tag
+    // union, because most stages share the empty union) moved into
+    // `candidateCourtsByFixture` itself — same behaviour, one copy.
+    const fixtureRequiredTags = await requiredCourtTagsByFixture(
+      tx,
+      divisionId,
+      division.required_court_tags,
+    );
+    const fixtureCandidateCourts = await candidateCourtsByFixture(
+      tx,
+      divisionId,
+      courts,
+      fixtureRequiredTags,
+    );
 
     // P9 pass 3d: id -> {label, venue, tags} for every court in the org, not
     // just this division's candidate set — an obstacle, a pin or a stored
@@ -1400,28 +1402,19 @@ export async function buildSchedulePack(
       movable.flatMap((f) => (f.pool_id !== null ? [[f.id, f.pool_id] as const] : [])),
     );
 
-    // P9 (stage court tags): `PackFixture.courts` input, computed once per
-    // STAGE — a division has few stages, so deriving this inside the
-    // per-fixture map below would repeat the same subset check for every
-    // fixture sharing one. Populated ONLY for a stage whose own resolved set
-    // (`stageCandidateCourts` above) is a STRICT subset of
-    // `candidateCourtIds.ids` — the overwhelming common case (a stage with no
-    // `required_court_tags` of its own resolves to the exact same set as the
-    // division, via the memo above) takes no entry here, which is what keeps
-    // `schedule-ai-pack.test.ts`'s byte-identical golden snapshot untouched:
-    // no stage in that fixture data carries extra required tags.
+    // P9 (stage court tags) -> #622: `PackFixture.courts` input, per FIXTURE.
+    // Populated ONLY for a fixture whose own resolved set is a STRICT subset
+    // of `candidateCourtIds.ids` — the overwhelming common case (no stage and
+    // no round carries required tags of its own, so every fixture resolves to
+    // the exact same set as the division) takes no entry at all, which is what
+    // keeps `schedule-ai-pack.test.ts`'s byte-identical golden snapshot
+    // untouched: nothing in that fixture data carries extra required tags.
     const candidateCourtIdSet = new Set(candidateCourtIds.ids);
-    const narrowedCourtsByStage = new Map<string, string[]>();
-    for (const [stageId, ids] of stageCandidateCourts) {
-      if (ids.size >= candidateCourtIdSet.size) continue;
-      let isSubset = true;
-      for (const id of ids) {
-        if (!candidateCourtIdSet.has(id)) {
-          isSubset = false;
-          break;
-        }
-      }
-      if (isSubset) narrowedCourtsByStage.set(stageId, [...ids]);
+    const narrowedCourtsByFixture = new Map<string, string[]>();
+    for (const [fixtureId, ids] of fixtureCandidateCourts) {
+      if (ids.length >= candidateCourtIdSet.size) continue;
+      if (!ids.every((id) => candidateCourtIdSet.has(id))) continue;
+      narrowedCourtsByFixture.set(fixtureId, [...ids]);
     }
 
     const packMovable: PackFixture[] = movable
@@ -1452,11 +1445,12 @@ export async function buildSchedulePack(
           court: f.court_id,
         },
         pinned: lockedIds.has(f.id),
-        // P9 (stage court tags): present only when this fixture's stage
-        // genuinely narrows the division-wide set — see `PackFixture.courts`'s
-        // own doc comment and `narrowedCourtsByStage` just above.
-        ...(narrowedCourtsByStage.has(f.stage_id)
-          ? { courts: narrowedCourtsByStage.get(f.stage_id)! }
+        // P9 (stage court tags) -> #622: present only when this fixture's own
+        // division ∪ stage ∪ round tags genuinely narrow the division-wide
+        // set — see `PackFixture.courts`'s own doc comment and
+        // `narrowedCourtsByFixture` just above.
+        ...(narrowedCourtsByFixture.has(f.id)
+          ? { courts: narrowedCourtsByFixture.get(f.id)! }
           : {}),
       }))
       // Same comparator as `participantView` above — see `byBoardOrder`.
@@ -2116,6 +2110,12 @@ export function toSchedulableFixtures(pack: SchedulePack): SchedulableFixture[] 
     ...(pack.poolIds[f.id] !== undefined ? { poolId: pack.poolIds[f.id]! } : {}),
     divisionId: pack.division.id,
     ...(pack.stageIds[f.id] !== undefined ? { stageId: pack.stageIds[f.id]! } : {}),
+    // #622 review: `PackFixture.courts` (present only when this fixture's own
+    // division ∪ stage ∪ round tags narrow it below the pack-wide set — see
+    // that field's own doc comment) was never copied here, so the CP-SAT
+    // repair round this feeds (`solveBoard`, below) had no idea a round-scoped
+    // tag existed and could relocate a tagged fixture onto any court.
+    ...(f.courts !== undefined ? { allowedCourts: f.courts } : {}),
   }));
 }
 

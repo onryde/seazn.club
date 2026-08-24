@@ -87,6 +87,29 @@ export interface SchedulableFixture {
    *  and what it disambiguates. */
   stageId?: string;
   locked?: { court: string; startAt: number }; // pinned assignment — honoured as-is
+  /**
+   * #622 — the courts THIS fixture may be placed on, a subset of
+   * `SlotConfig.courts`. Absent means unconstrained; an empty array is read
+   * the SAME way, never as "no court" (`candidateCourts`'s own reading of an
+   * empty required-tag list, and `Fixture.allowed_court_indices`'s on the
+   * wire).
+   *
+   * Exists because required court tags resolve at three scopes — division,
+   * stage, and round ROLE (#622) — and one solve spans fixtures from several
+   * rounds of one stage. `SlotConfig.courts` is a single list for the whole
+   * run and so cannot express "the final needs the championship court, the
+   * quarter-finals do not": narrowing it to the intersection over-constrains
+   * every earlier round, widening it to the union constrains none of them.
+   *
+   * READ BY BOTH the placer (`slotFixtures` below, which skips a disallowed
+   * court outright) and the BUILD solver (`build.ts` forwards it as
+   * `SolveBuildInput.fixtures[].allowedCourts`). A `locked` placement is
+   * deliberately NOT filtered by it — an organiser's own pin outranks a tag
+   * rule, and refusing it would make a board they already published
+   * unrepresentable (ruling 3, candidate-courts.ts). The verifier reports
+   * such a row as a non-blocking `court_tag_mismatch` instead.
+   */
+  allowedCourts?: readonly string[];
 }
 
 export interface Assignment {
@@ -847,7 +870,18 @@ export function slotFixtures(input: SlotInput): SlotResult {
     // this the same situation degrades to a bare "no court/time within horizon"
     // and the organiser loses the one fact that tells them what to change.
     let personBound: { person: string; other: string } | null = null;
+    // #622 — a fixture narrowed to its own candidate court set (round-scoped
+    // required tags) never even considers a court outside it. Skipped rather
+    // than filtered into a new array per fixture: `config.courts` order IS
+    // the organiser's preference order (ruling 1, candidate-courts.ts), and a
+    // rebuilt array would have to preserve it anyway.
+    const allowedCourts = f.allowedCourts;
+    const courtAllowed =
+      allowedCourts === undefined || allowedCourts.length === 0
+        ? null
+        : new Set(allowedCourts);
     for (const court of config.courts) {
+      if (courtAllowed !== null && !courtAllowed.has(court)) continue;
       // repair loop: person-clash / block-parallelism rejections push the
       // candidate later on the same court instead of silently placing
       let lb = ready;
@@ -990,6 +1024,29 @@ export type VerifyConfig = Pick<
      *  an empty `requiredTags` gives `candidateCourts` itself, and the
      *  reading every pre-pass-2c caller gets for free by omitting this field. */
     courtTagQualifiedIds?: readonly string[];
+    /**
+     * #622 — the PER-FIXTURE form of `courtTagQualifiedIds` above, for the
+     * round-scoped half of the same rule. `courtTagQualifiedIdsByFixture
+     * .get(fixtureId)` overrides the division-wide list for that one fixture;
+     * a fixture absent from the map falls back to `courtTagQualifiedIds`, and
+     * a map that is itself absent leaves every fixture on the old path.
+     *
+     * A SEPARATE field rather than a widening of `courtTagQualifiedIds`,
+     * because the two answer different questions and the caller resolves them
+     * from different scopes: the flat list is the division's own requirement,
+     * this map is `division ∪ stage ∪ round role` resolved for one fixture.
+     * Merging them would force the caller to materialise a full-length map
+     * even for a board with no round-scoped tags at all — the common case,
+     * which must stay free.
+     *
+     * Same archived-neutral construction as the flat field (the caller builds
+     * both through `court-candidates.ts`'s `resolveTagQualifiedCourtIds`), and
+     * the same non-blocking outcome: a violation is reported as
+     * `court_tag_mismatch`, an acknowledgeable warning, never a hard refusal —
+     * see `isBlockingConflict`'s own note for why this family alone is carved
+     * out of the blocking `"court"` reason.
+     */
+    courtTagQualifiedIdsByFixture?: ReadonlyMap<string, readonly string[]>;
   };
 
 /** Exactly the fields `scopeCoversFixture` reads. Named (#447) so the PLACER can
@@ -1501,6 +1558,20 @@ export function validateAssignments(
   // instead of the check being skipped entirely.
   const courtTagQualified =
     config.courtTagQualifiedIds !== undefined ? new Set(config.courtTagQualifiedIds) : undefined;
+  // #622: the per-fixture override, memoised per fixture id on first use.
+  // Built lazily rather than eagerly for the whole map because the common
+  // board carries no round-scoped tags at all and must pay nothing; when it
+  // does carry them, several fixtures typically share one resolved list
+  // (every quarter-final, say), and the `Set` is rebuilt per fixture rather
+  // than per distinct list only because the map is keyed by fixture id and a
+  // second de-dup layer would cost more than it saves at board sizes this
+  // verifier runs at.
+  const courtTagQualifiedByFixture = config.courtTagQualifiedIdsByFixture;
+  const qualifiedSetFor = (fixtureId: string): ReadonlySet<string> | undefined => {
+    const perFixture = courtTagQualifiedByFixture?.get(fixtureId);
+    if (perFixture !== undefined) return new Set(perFixture);
+    return courtTagQualified;
+  };
 
   for (const a of assignments) {
     // The pack window (#397): the whole occupancy must fall inside the days the
@@ -1572,7 +1643,8 @@ export function validateAssignments(
     // matching the pack-window/start-window checks above: `existing` is
     // another division's board or an outside booking, not what this run is
     // being asked to report on.
-    if (courtTagQualified !== undefined && !courtTagQualified.has(a.court)) {
+    const qualified = qualifiedSetFor(a.fixtureId);
+    if (qualified !== undefined && !qualified.has(a.court)) {
       conflicts.push({
         fixtureId: a.fixtureId,
         reason: "court",

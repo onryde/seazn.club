@@ -20,6 +20,8 @@ import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
+import { parseRoundRoleKey } from "@seazn/engine/competition";
+import { TagChipInput } from "@/components/ui/tag-chip-input";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { DocumentsMenu } from "@/components/v2/board/documents-menu";
 import { ScheduleResultStrip } from "@/components/v2/board/result-strip";
@@ -347,6 +349,15 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
   // "is this name ambiguous" implementation. Feeds both the "now playing"
   // strip below and every FixtureLine's badge/editor.
   const courtNamesById = useMemo(() => resolveCourtNames(venues), [venues]);
+  // #622 tag suggestions for the per-stage editors below: every tag any court
+  // in the loaded venues carries, ranked by use (the same rule
+  // division-settings.tsx and venues-panel.tsx apply). Read off the `venues`
+  // prop this panel already receives — never a second fetch per stage card.
+  const courtTagSuggestions = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const v of venues) for (const c of v.courts) for (const t of c.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([tag]) => tag);
+  }, [venues]);
   // Optimistic-concurrency token (v3/11 gap 10), mirroring use-board-actions
   // .ts's `seqRef` for this panel's one division: the ref is what
   // `autoScheduleStage` reads/bumps between writes, resynced from the prop on
@@ -1037,6 +1048,15 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                 })}
               </div>
             )}
+
+            {/* #622 — sits with the stage's other settings, last in the card so
+                it never pushes the fixture list below the fold. */}
+            <StageCourtTagsEditor
+              stageId={stage.id}
+              canEdit={canEdit}
+              suggestions={courtTagSuggestions}
+              msg={msg}
+            />
           </section>
 
           {splitRounds &&
@@ -1819,6 +1839,223 @@ function AddMatchForm({
       </div>
       <p className="mt-1 text-xs text-slate-500">{msg("stage.addMatch.hint")}</p>
       {error !== null && <p className="mt-1 text-xs text-red-600">{error}</p>}
+    </div>
+  );
+}
+
+// #622 — per-stage required court tags, stage-wide and per round role.
+//
+// Deliberately its own component with its own state and its own fetch rather
+// than more state on StagesPanel: the panel already renders N stage cards from
+// props, and hoisting a per-stage GET into it would mean N in-flight requests
+// on every mount for a control most organisers never open. The fetch fires on
+// FIRST OPEN instead (the `loaded` guard) — the same "soft enhancement, swallow
+// the failure" posture division-settings.tsx takes for its tag suggestions,
+// except a load failure here IS surfaced, because an empty editor that silently
+// failed to load would look like "no requirement" and a Save would then wipe
+// real rules.
+export function StageCourtTagsEditor({
+  stageId,
+  canEdit,
+  suggestions,
+  msg,
+}: {
+  stageId: string;
+  canEdit: boolean;
+  suggestions: string[];
+  msg: Msg;
+}) {
+  const [open, setOpen] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [stageTags, setStageTags] = useState<string[]>([]);
+  const [rounds, setRounds] = useState<{ round_role: string; required_court_tags: string[] }[]>([]);
+  const [availableRoles, setAvailableRoles] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || loaded) return;
+    let cancelled = false;
+    apiV1<{
+      stage_id: string;
+      required_court_tags: string[];
+      rounds: { round_role: string; required_court_tags: string[] }[];
+      available_round_roles: string[];
+    }>(`/api/v1/stages/${stageId}/court-tags`)
+      .then((data) => {
+        if (cancelled) return;
+        setStageTags(data.required_court_tags);
+        setRounds(data.rounds);
+        setAvailableRoles(data.available_round_roles);
+        setLoaded(true);
+        setLoadError(false);
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setLoadError(true);
+        setError(err instanceof Error ? err.message : msg("stagetags.loadFailed"));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, loaded, stageId, msg]);
+
+  /** A role key becomes text in exactly one place repo-wide (round-role-label
+   *  .ts). An unparseable key is rendered RAW rather than hidden: the server
+   *  accepts any RoundRoleKey the engine knows, and a client that is one
+   *  release behind must still show the organiser what rule exists. */
+  const roleLabel = (key: string): string => {
+    const role = parseRoundRoleKey(key);
+    return role === null ? key : roundRoleLabel(msg, role);
+  };
+
+  // Derived, never stored: a `setLoading(true)` in the effect body is exactly
+  // the cascading-render pattern the lint rule rejects, and the state it would
+  // hold is already implied by open + not-loaded + no-error.
+  const loading = open && !loaded && !loadError;
+
+  const unusedRoles = availableRoles.filter((r) => !rounds.some((row) => row.round_role === r));
+
+  const summary =
+    rounds.length > 0
+      ? msg("stagetags.summary.rounds", { n: rounds.length })
+      : stageTags.length > 0
+        ? stageTags.join(", ")
+        : msg("stagetags.any");
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      // Both keys always sent: `rounds` is a whole-list replace server-side, so
+      // omitting it would leave deleted rows alive (route.ts PUT contract).
+      await apiV1(`/api/v1/stages/${stageId}/court-tags`, {
+        method: "PUT",
+        json: { required_court_tags: stageTags, rounds },
+      });
+      setNotice(msg("stagetags.saved"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : msg("stagetags.saveFailed"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="border-t border-slate-100 px-4 py-3" data-testid="stage-court-tags">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="flex w-full min-w-0 items-baseline gap-2 text-left text-xs font-semibold text-slate-700"
+      >
+        <span>{msg("stagetags.title")}</span>
+        {loaded && <span className="min-w-0 truncate font-normal text-slate-500">{summary}</span>}
+      </button>
+
+      {open && (
+        // Everything stacks by default and only spreads out from `sm:` up —
+        // the panel's own narrow-width idiom (FixtureLine, line ~1589). At
+        // 320px nothing sits side by side, so nothing forces a page scroll.
+        <div className="mt-3 flex flex-col gap-3">
+          {loading && <p className="text-xs text-slate-500">{msg("stagetags.loading")}</p>}
+          {loaded && (
+            <>
+              <p className="text-xs text-slate-500">{msg("stagetags.desc")}</p>
+              <TagChipInput
+                value={stageTags}
+                onChange={setStageTags}
+                suggestions={suggestions}
+                disabled={!canEdit}
+                label={msg("stagetags.stageLabel")}
+                placeholder={msg("tags.placeholder")}
+                addLabel={msg("tags.add")}
+                removeLabelFor={(tag) => msg("tags.remove", { tag })}
+                suggestionsLabel={msg("tags.suggestions")}
+              />
+
+              <div className="flex flex-col gap-3 border-t border-dashed border-slate-200 pt-3">
+                <p className="text-xs font-semibold text-slate-700">{msg("stagetags.rounds.heading")}</p>
+                {availableRoles.length === 0 && rounds.length === 0 ? (
+                  <p className="text-xs text-slate-500">{msg("stagetags.rounds.none")}</p>
+                ) : (
+                  <>
+                    {rounds.map((row, i) => (
+                      <div key={row.round_role} className="flex flex-col gap-2">
+                        <div className="flex flex-wrap items-baseline gap-2">
+                          <span className="text-xs font-medium text-slate-700">{roleLabel(row.round_role)}</span>
+                          {canEdit && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost px-2 py-1 text-xs"
+                              onClick={() => setRounds(rounds.filter((_, j) => j !== i))}
+                            >
+                              {msg("stagetags.rounds.remove")}
+                            </button>
+                          )}
+                        </div>
+                        <TagChipInput
+                          value={row.required_court_tags}
+                          onChange={(next) =>
+                            setRounds(rounds.map((r, j) => (j === i ? { ...r, required_court_tags: next } : r)))
+                          }
+                          suggestions={suggestions}
+                          disabled={!canEdit}
+                          label={msg("stagetags.rounds.tagsLabel", { round: roleLabel(row.round_role) })}
+                          placeholder={msg("tags.placeholder")}
+                          addLabel={msg("tags.add")}
+                          removeLabelFor={(tag) => msg("tags.remove", { tag })}
+                          suggestionsLabel={msg("tags.suggestions")}
+                        />
+                      </div>
+                    ))}
+                    {canEdit && unusedRoles.length > 0 && (
+                      // Adding a round is a one-tap select, not a select+button
+                      // pair: the choice IS the action, and a second control
+                      // would be one more thing to fit at 320px.
+                      <label className="label flex flex-col gap-1 text-xs">
+                        {msg("stagetags.rounds.add")}
+                        <select
+                          className="input min-h-11 w-full py-1.5 text-sm"
+                          value=""
+                          onChange={(e) => {
+                            if (e.target.value === "") return;
+                            setRounds([...rounds, { round_role: e.target.value, required_court_tags: [] }]);
+                          }}
+                        >
+                          <option value="" />
+                          {unusedRoles.map((role) => (
+                            <option key={role} value={role}>
+                              {roleLabel(role)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {canEdit && (
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => void save()}
+                  className="btn btn-primary min-h-11 w-full px-3 py-1.5 text-xs sm:w-auto sm:self-start"
+                >
+                  {saving ? msg("schedule.working") : msg("stagetags.save")}
+                </button>
+              )}
+            </>
+          )}
+          {notice !== null && <p className="text-xs text-green-700">{notice}</p>}
+          {error !== null && <p className="text-xs text-red-600">{error}</p>}
+        </div>
+      )}
     </div>
   );
 }

@@ -912,7 +912,14 @@ def _maximal_request() -> scheduler_pb2.SolveBuildRequest:
         step_minutes=10,
         fixtures=[
             scheduler_pb2.Fixture(
-                entrant_indices=[0, 1], division_index=0, round=1, person_indices=[0, 1]
+                entrant_indices=[0, 1],
+                division_index=0,
+                round=1,
+                person_indices=[0, 1],
+                # #622 -- narrowed to court 0 only, so the sweep has a
+                # populated element to perturb and the unperturbed assertion
+                # below can tell a narrowed fixture from an unconstrained one.
+                allowed_court_indices=[0],
             ),
             scheduler_pb2.Fixture(entrant_indices=[2, 3], division_index=0, round=2),
         ],
@@ -947,6 +954,10 @@ INDEX_FIELDS = {
     "RuleGroup.fixture_indices": lambda r: r.rule_groups[0].fixture_indices.__setitem__(0, 999),
     # C10 (2026-08-16, wire person indices design).
     "Fixture.person_indices": lambda r: r.fixtures[0].person_indices.__setitem__(0, 999),
+    # #622 (round-scoped required court tags).
+    "Fixture.allowed_court_indices": lambda r: r.fixtures[0].allowed_court_indices.__setitem__(
+        0, 999
+    ),
 }
 
 #: Deliberately outside the range/presence policy, with the reason. Listed
@@ -1045,6 +1056,11 @@ def test_the_maximal_request_is_valid_unperturbed():
     # is a real, distinct answer from "some people", not a default that
     # collapses the two.
     assert parsed.person_indices == [[0, 1], []]
+    # #622: fixture 0 is narrowed to court 0, fixture 1 sends none at all --
+    # proves an empty `allowed_court_indices` maps to `None` (unconstrained)
+    # rather than to an empty set ("no court"), which is the one distinction
+    # that decides whether an ordinary board stays placeable.
+    assert parsed.allowed_courts == [{0}, None]
 
 
 def test_an_exempt_field_carries_no_range_or_presence_check():
@@ -1093,6 +1109,8 @@ REPEATED_INDEX_FIELDS = {
     "PinnedRow.entrant_indices",
     # C10 (2026-08-16, wire person indices design).
     "Fixture.person_indices",
+    # #622 (round-scoped required court tags).
+    "Fixture.allowed_court_indices",
 }
 
 

@@ -1967,6 +1967,18 @@ export function jointStructuralCheck(
   const fixtureById = new Map(pack.fixtures.movable.map((f) => [f.id, f]));
   const divisionById = new Map(pack.divisions.map((d) => [d.id, d]));
   const pinned = new Map(pack.fixtures.movable.filter((f) => f.pinned).map((f) => [f.id, f]));
+  // #622 review: the joint mirror of `structuralCheck`'s own `narrowedCourts`
+  // (schedule-ai.ts) — `CompetitionPackFixture` extends `PackFixture` and
+  // inherits its `courts` field unchanged from the per-division sub-pack
+  // (`buildJointPack`'s `movable` spread), so the data was always here; only
+  // this check never read it, letting a joint AI plan relocate a round-tagged
+  // fixture (e.g. a final requiring the championship court) onto any court in
+  // its division's list.
+  const narrowedCourts = new Map(
+    pack.fixtures.movable
+      .filter((f) => f.courts !== undefined)
+      .map((f) => [f.id, new Set(f.courts!)] as const),
+  );
   const seen = new Set<string>();
   const placed = new Set<string>();
   for (const a of plan.assignments) {
@@ -1980,6 +1992,12 @@ export function jointStructuralCheck(
       return `fixture ${a.fixture_id} uses a court its own division (${division.name}) does not have: ${a.court_label}`;
     }
     const pin = pinned.get(a.fixture_id);
+    // Same pin exemption `structuralCheck` grants — a retroactive tag change
+    // must not make an already-pinned fixture's own current court unsatisfiable.
+    const narrow = narrowedCourts.get(a.fixture_id);
+    if (narrow && !narrow.has(a.court_label) && !(pin && pin.current.court === a.court_label)) {
+      return `fixture ${a.fixture_id} uses a court not permitted for its stage: ${a.court_label}`;
+    }
     if (
       pin &&
       (pin.current.at === null ||

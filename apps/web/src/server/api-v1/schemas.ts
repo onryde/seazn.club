@@ -18,6 +18,14 @@ export const Uuid = z.uuid();
  *  named separately so a stored `ScheduleConfig.courts` entry documents what
  *  it actually references (never a free-text court name post-migration). */
 export const CourtId = Uuid;
+
+/** One tag vocabulary, every scope it is required at: a court's own `tags`
+ *  (`CreateCourt`), and every `required_court_tags` list matched against them —
+ *  division (`PatchDivision`), stage and round role (`StageRoundCourtTags`,
+ *  #622). ONE bounds declaration rather than a fourth hand-copy of
+ *  `z.array(z.string().min(1).max(40)).max(50)` that can drift from the rest
+ *  the next time the cap changes. */
+export const RequiredCourtTags = z.array(z.string().min(1).max(40)).max(50);
 /** A real `venues.id` (V374 cutover — `fixtures.venue_id`, backfilled from
  *  the legacy free-text `fixtures.venue`). P9 pass 3a's own sibling of
  *  `CourtId`, same reasoning. */
@@ -191,7 +199,7 @@ export const PatchDivision = z
      *  candidates.ts`'s `resolveCandidateCourts`, unioned with the sibling
      *  `stages.required_court_tags` (V367) — that column's own CRUD still
      *  does not exist, only its read into this union. */
-    required_court_tags: z.array(z.string().min(1).max(40)).max(50),
+    required_court_tags: RequiredCourtTags,
   })
   .partial()
   .refine((p) => Object.keys(p).length > 0, "empty patch");
@@ -662,6 +670,50 @@ export const CreateStages = z.union([CreateStage, z.array(CreateStage).min(1).ma
  *  it still took a free-text `venue`. Real venue/court by id now, same as
  *  `PatchFixture`. `.strict()` for the same reason that schema documents: a
  *  client still sending `venue` gets a loud 400 instead of a silent no-op. */
+// ---------------------------------------------------------------------------
+// #622 — stage- and round-scoped required court tags
+// ---------------------------------------------------------------------------
+
+/** A `roundRoleKey()` value from `@seazn/engine/competition` — `final`,
+ *  `semi_final`, `quarter_final`, `round_of_16`, `losers_round_2`,
+ *  `grand_final`, `rung_3`, `plain_round_4`, … The usecase re-validates with
+ *  `isRoundRoleKey()`, which is the authoritative vocabulary; this pattern is
+ *  the cheap shape gate in front of it, deliberately not a duplicate of the
+ *  role list (a second copy would go stale the next time a stage format ships
+ *  a new role). */
+const RoundRoleKey = z
+  .string()
+  .min(1)
+  .max(40)
+  .regex(/^[a-z][a-z0-9_]*$/, "not a round role key");
+
+export const StageRoundCourtTags = z.object({
+  round_role: RoundRoleKey,
+  required_court_tags: RequiredCourtTags,
+});
+
+/** PUT semantics on `rounds`: whole-list replace, so an omitted round is
+ *  DELETED. Omitting the KEY itself leaves the stage's round rules untouched —
+ *  the two are different, which is why neither field has a default. */
+export const PutStageCourtTags = z
+  .object({
+    required_court_tags: RequiredCourtTags,
+    rounds: z.array(StageRoundCourtTags).max(64),
+  })
+  .partial()
+  .refine((p) => Object.keys(p).length > 0, "empty patch");
+export type PutStageCourtTags = z.infer<typeof PutStageCourtTags>;
+
+export const StageCourtTags = z.object({
+  stage_id: Uuid,
+  required_court_tags: z.array(z.string()),
+  rounds: z.array(StageRoundCourtTags),
+  /** The roles this stage's fixtures currently occupy, in bracket order — a
+   *  picker source, never a constraint on what may be written (a stage whose
+   *  fixtures are not generated yet occupies none). */
+  available_round_roles: z.array(z.string()),
+});
+
 export const AddFixture = z
   .object({
     home_entrant_id: Uuid,
@@ -3872,7 +3924,7 @@ export const PatchVenue = CreateVenue.partial();
 export const CreateCourt = z.object({
   name: z.string().min(1).max(200),
   sort: z.number().int().default(0),
-  tags: z.array(z.string().min(1).max(40)).max(50).default([]),
+  tags: RequiredCourtTags.default([]),
 });
 
 export const PatchCourt = CreateCourt.partial();
