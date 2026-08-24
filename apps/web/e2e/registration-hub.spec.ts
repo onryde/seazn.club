@@ -70,15 +70,23 @@ async function seedDivision(
 /** Open a division's row-click config panel and wait past its own async GET
  *  (the panel renders a loading placeholder until that resolves — querying
  *  a field before it lands is an unawaited fetch, not a UI bug, and reads
- *  like one if this isn't done explicitly here). */
+ *  like one if this isn't done explicitly here).
+ *
+ *  Returns the DIALOG (`role="dialog"`, Modal's own root), not the inner
+ *  `[data-registration-hub-config-panel]` content div — Modal renders
+ *  `children` and `footer` as SIBLING divs inside the dialog, so the
+ *  Save/Cancel buttons (`data-action`, in `footer`) are not descendants of
+ *  the content div at all. Field/field-error queries still resolve fine
+ *  from the dialog (they're descendants either way); only the "is this a
+ *  banner, not a field error" check below needs the narrower selector. */
 async function openConfigPanel(page: Page, divisionId: string): Promise<Locator> {
   const row = page.locator(`[data-registration-hub-row][data-division-id="${divisionId}"]`);
   await expect(row).toBeVisible({ timeout: 20_000 });
   await row.locator("[data-registration-hub-row-configure]").click();
-  const panel = page.locator(`[data-registration-hub-config-panel][data-division-id="${divisionId}"]`);
-  await expect(panel).toBeVisible({ timeout: 20_000 });
-  await expect(panel.locator('[data-field="category"]')).toBeVisible({ timeout: 20_000 });
-  return panel;
+  const content = page.locator(`[data-registration-hub-config-panel][data-division-id="${divisionId}"]`);
+  await expect(content).toBeVisible({ timeout: 20_000 });
+  await expect(content.locator('[data-field="category"]')).toBeVisible({ timeout: 20_000 });
+  return page.getByRole("dialog").filter({ has: content });
 }
 
 async function save(panel: Locator): Promise<void> {
@@ -144,9 +152,11 @@ test.describe("RS004 registration hub", () => {
     const fieldError = panel.locator('[data-field-error="age_max"]');
     await expect(fieldError).toBeVisible({ timeout: 20_000 });
     await expect(fieldError).toContainText("age_max must be greater than or equal to age_min");
-    // The banner is a DIRECT child of the panel root; a field error is not —
-    // this is what tells "landed on the field" apart from "context-free toast".
-    await expect(panel.locator('> p[role="alert"]')).toHaveCount(0);
+    // The banner (`formError`) is a DIRECT child of `[data-registration-hub-
+    // config-panel]`; a field error is nested inside a <section><label> —
+    // this is what tells "landed on the field" apart from "context-free
+    // toast".
+    await expect(panel.locator('[data-registration-hub-config-panel] > p[role="alert"]')).toHaveCount(0);
     await expect(panel).toBeVisible(); // rejected save — panel stays open
   });
 
@@ -189,7 +199,7 @@ test.describe("RS004 registration hub", () => {
     const fieldError = panel.locator('[data-field-error="allow_free_agents"]');
     await expect(fieldError).toBeVisible({ timeout: 20_000 });
     await expect(fieldError).toContainText("allow_free_agents requires entrant_kind");
-    await expect(panel.locator('> p[role="alert"]')).toHaveCount(0);
+    await expect(panel.locator('[data-registration-hub-config-panel] > p[role="alert"]')).toHaveCount(0);
   });
 
   // --- 3. Full-replace hazard -------------------------------------------------
@@ -354,23 +364,36 @@ test.describe("RS004 registration hub", () => {
     const row = page.locator(`[data-registration-hub-row][data-division-id="${divisionId}"]`);
     await expect(row).toBeVisible({ timeout: 20_000 });
 
-    // Exercise the actual control the brief names, not just the value it
-    // holds — the click flips its own label, observable without touching
-    // the clipboard permission model (which this repo's e2e has no
-    // precedent for and headless CI makes unreliable).
-    const copyButton = row.getByRole("button", { name: "Copy" });
-    await expect(copyButton).toBeVisible();
-    await copyButton.click();
-    await expect(copyButton).toHaveText("Copied ✓");
-
-    // The URL VALUE (never the page it points at — RS006's job): the
-    // readonly input IS the exact string the Copy button writes to the
-    // clipboard (CopyLink's own `url` variable), asserted as an absolute
-    // origin+path match, not a loose suffix (a bare path would also satisfy
-    // a suffix check and silently stop proving the origin ever populated).
     const origin = new URL(page.url()).origin;
     const expectedUrl = `${origin}/shared/${org.slug}/${competitionSlug}/register`;
+
+    // The readonly input carries the same `url` CopyLink's own copy()
+    // writes to the clipboard — assert the FULL origin+path, not a suffix
+    // (a bare path would also satisfy a suffix check and silently stop
+    // proving the origin ever populated).
     await expect(row.locator("input[readonly]")).toHaveValue(expectedUrl);
+
+    // Exercise the actual button, not just the value it would copy:
+    // CopyLink's copy() calls navigator.clipboard.writeText inside a
+    // try/catch that silently no-ops on a denied permission (no toast, no
+    // thrown error — the button just never flips to "Copied ✓"), so the
+    // grant below is load-bearing, not decoration.
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin });
+    // NOT getByRole(..., { name: "Copy" }): that locator re-resolves by the
+    // button's CURRENT accessible name on every poll, so the instant the
+    // click flips the label to "Copied ✓" the query can no longer find the
+    // element at all — confirmed with a MutationObserver on a captured DOM
+    // reference that the label genuinely does flip; a name-bound locator
+    // just can never observe it happening. `hasText: "Cop"` matches the
+    // shared prefix of both "Copy" and "Copied ✓", so the same element
+    // stays resolvable across the transition.
+    const copyButton = row.locator("button", { hasText: "Cop" });
+    await expect(copyButton).toBeVisible();
+    await expect(copyButton).toHaveText("Copy");
+    await copyButton.click();
+    await expect(copyButton).toHaveText("Copied ✓");
+    const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clipboardText).toBe(expectedUrl);
   });
 
   // --- 7. Nav pill counts, including the amber awaiting badge -----------------
