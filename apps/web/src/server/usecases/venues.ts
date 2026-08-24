@@ -15,9 +15,12 @@ import "server-only";
 // would fail the FK, not silently pass).
 import { z } from "zod";
 import type postgres from "postgres";
-import { dayKeyInTz, hhmmInTz, weekdayOfYmd, type Weekday } from "@seazn/engine/scheduling/tz";
+import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
+import { usableWindows, type CourtCalendar, type Window } from "@seazn/engine/scheduling/court-windows";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { resolveVenueTz } from "@/lib/tz";
+import { ScheduleConfig } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
@@ -25,11 +28,6 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 // usecase that needs the transaction type redeclares this same one-liner
 // (see discipline.ts/entrants.ts/exports.ts for the precedent).
 type Tx = postgres.TransactionSql;
-
-// 0 = Sunday, matching `weekdayOfYmd`'s own `getUTCDay()`-based convention
-// (see V367's header comment) — court_hours.weekday and the advisory
-// stranded-fixture check below both key off this same order.
-const WEEKDAY_LABELS: readonly Weekday[] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 
 /** Fixture statuses that still need a court (per the owner ruling: the
  *  archive gate keys on STATUS, never date). Everything else — decided,
@@ -78,6 +76,8 @@ export interface CourtRow {
 }
 
 export interface CourtHoursRange {
+  /** 0 = Sunday, matching the engine tz module's own `getUTCDay()`-based
+   *  convention (see V367's header comment). */
   weekday: number;
   open_min: number;
   close_min: number;
@@ -226,35 +226,6 @@ function assertNoDuplicateExceptionDates(exceptions: readonly CourtException[]):
     }
     seen.add(e.date);
   }
-}
-
-/**
- * Resolves the windows open for a court on one calendar date: an exception
- * row for that date wins OUTRIGHT over the weekday's court_hours rows
- * (closed ⇒ no windows at all); with no exception, the weekday's hours apply
- * verbatim (possibly several ranges, possibly none). Pure, no I/O.
- *
- * This is NOT P10's `usableWindows` (packages/engine/src/scheduling/
- * court-windows.ts, session ruling #2) — that function additionally
- * intersects session windows and subtracts blackouts, both of which need
- * `ScheduleConfig`, out of scope this session. This helper is the P8-owned
- * subset: hours-vs-exception precedence only.
- */
-export function resolveCourtDay(
-  hours: readonly CourtHoursRange[],
-  exceptions: readonly CourtException[],
-  weekday: number,
-  date: string,
-): { open_min: number; close_min: number }[] {
-  const exception = exceptions.find((e) => e.date === date);
-  if (exception) {
-    if (exception.closed) return [];
-    return [{ open_min: exception.open_min!, close_min: exception.close_min! }];
-  }
-  return hours
-    .filter((h) => h.weekday === weekday)
-    .map((h) => ({ open_min: h.open_min, close_min: h.close_min }))
-    .sort((a, b) => a.open_min - b.open_min);
 }
 
 // ---------------------------------------------------------------------------
@@ -653,26 +624,52 @@ export async function unarchiveCourt(auth: AuthCtx, id: string): Promise<CourtRo
   return row;
 }
 
-/** Local minutes-since-midnight for one fixture's `scheduled_at`, resolved
- *  in `tz` (DST-correct — reuses the engine's `Intl`-backed helpers, never
- *  hand-rolled). Returns the Ymd alongside so the caller can resolve the
- *  right weekday/exception for that specific date. */
-function localFixtureSlot(scheduledAt: Date, tz: string): { ymd: string; weekday: number; minute: number } {
-  const ms = scheduledAt.getTime();
-  const ymd = dayKeyInTz(ms, tz);
-  const weekday = WEEKDAY_LABELS.indexOf(weekdayOfYmd(ymd));
-  const [h, m] = hhmmInTz(ms, tz).split(":").map(Number) as [number, number];
-  return { ymd, weekday, minute: h * 60 + m };
+/** Per-division inputs `usableWindows` needs beyond the court's own calendar:
+ *  match duration, session windows and blackouts. These live in
+ *  `schedule_settings.config` (the SAME jsonb column, parsed by the SAME
+ *  `ScheduleConfig` zod schema `loadSettings`, schedule.ts, uses for the
+ *  board itself) — read directly here rather than through `loadSettings`,
+ *  which takes a `Tx`: this advisory count runs on the pooled `sql` proxy
+ *  outside any `withTenant` block (see `countStrandedFixtures` below), and
+ *  wrapping it in a transaction to call a `Tx`-shaped helper would change
+ *  that concurrency model, which is out of this task's scope. Session
+ *  windows/blackouts are stored as ISO strings; `usableWindows` wants
+ *  epoch ms. */
+async function windowInputsForDivision(divisionId: string): Promise<{
+  matchMinutes: number;
+  sessionWindows: Window[];
+  blackouts: { court?: string; from: number; to: number }[];
+}> {
+  const [row] = await sql<{ config: unknown | null }[]>`
+    select config from schedule_settings where division_id = ${divisionId}`;
+  const config = ScheduleConfig.parse(row?.config ?? {});
+  return {
+    matchMinutes: config.matchMinutes,
+    sessionWindows: config.sessionWindows.map((w) => ({ from: Date.parse(w.from), to: Date.parse(w.to) })),
+    blackouts: config.blackouts.map((b) => ({ court: b.court, from: Date.parse(b.from), to: Date.parse(b.to) })),
+  };
 }
 
 /** Advisory-only (owner ruling): how many of this court's still-UNPLAYED
  *  fixtures now fall outside the just-written calendar. Non-blocking — the
- *  write already happened by the time this runs — because a real conflict
- *  code needs `usableWindows` (session windows, blackouts), which is P10's
- *  (out of scope this session; `ScheduleConfig` stays untouched). Uses the
- *  ORG's timezone uniformly rather than resolving each fixture's own
- *  division's `schedule_settings.tz` — a deliberate simplification for a
- *  best-effort count, not the scheduler's own authority. */
+ *  write already happened by the time this runs.
+ *
+ *  Computed on the engine's OWN `usableWindows` (P10 §2) rather than a
+ *  fourth private copy of the window rule (the deleted `resolveCourtDay`),
+ *  which tested only a fixture's START minute (so an overrunning fixture
+ *  counted as fitting), ignored blackouts and session windows entirely, and
+ *  read `organizations.timezone` raw instead of through `resolveVenueTz` —
+ *  the same resolver `settings.orgTz` uses (schedule.ts's `loadSettings`).
+ *  `usableWindows` returns windows in EPOCH MS, not local minutes — every
+ *  comparison below is an instant comparison over the fixture's WHOLE span,
+ *  start through end, not just its start.
+ *
+ *  Uses the ORG's timezone uniformly rather than resolving each fixture's
+ *  own division's `schedule_settings.tz` — a deliberate simplification for a
+ *  best-effort count, not the scheduler's own authority. Each fixture's own
+ *  division still supplies its own match duration/session windows/blackouts
+ *  via `windowInputsForDivision`, cached per division: one court can carry
+ *  fixtures from several divisions, and those ARE stored per-division. */
 async function countStrandedFixtures(
   orgId: string,
   courtId: string,
@@ -681,17 +678,40 @@ async function countStrandedFixtures(
 ): Promise<number> {
   const [org] = await sql<{ timezone: string | null }[]>`
     select timezone from organizations where id = ${orgId}`;
-  const tz = org?.timezone ?? "UTC";
-  const fixtures = await sql<{ scheduled_at: Date }[]>`
-    select scheduled_at from fixtures
+  const tz = resolveVenueTz(null, org?.timezone);
+  const fixtures = await sql<{ scheduled_at: Date; division_id: string }[]>`
+    select scheduled_at, division_id from fixtures
     where court_id = ${courtId} and scheduled_at is not null
       and status in ${sql(UNPLAYED_FIXTURE_STATUSES)}`;
+  if (fixtures.length === 0) return 0;
+
+  const calendar: CourtCalendar = {
+    courtId,
+    hours: hours.map((h) => ({ weekday: h.weekday, openMin: h.open_min, closeMin: h.close_min })),
+    exceptions: exceptions.map((e) => ({
+      date: e.date,
+      closed: e.closed,
+      ...(e.open_min !== null ? { openMin: e.open_min } : {}),
+      ...(e.close_min !== null ? { closeMin: e.close_min } : {}),
+    })),
+  };
+
+  const settingsByDivision = new Map<string, Awaited<ReturnType<typeof windowInputsForDivision>>>();
   let stranded = 0;
   for (const f of fixtures) {
-    const { ymd, weekday, minute } = localFixtureSlot(f.scheduled_at, tz);
-    const windows = resolveCourtDay(hours, exceptions, weekday, ymd);
-    const fits = windows.some((w) => minute >= w.open_min && minute < w.close_min);
-    if (!fits) stranded++;
+    let settings = settingsByDivision.get(f.division_id);
+    if (!settings) {
+      settings = await windowInputsForDivision(f.division_id);
+      settingsByDivision.set(f.division_id, settings);
+    }
+    const startAt = f.scheduled_at.getTime();
+    const endAt = startAt + settings.matchMinutes * 60_000;
+    const windows = usableWindows(
+      calendar,
+      { from: dayKeyInTz(startAt, tz), to: dayKeyInTz(endAt, tz) },
+      { tz, sessionWindows: settings.sessionWindows, blackouts: settings.blackouts },
+    );
+    if (!windows.some((w) => startAt >= w.from && endAt <= w.to)) stranded++;
   }
   return stranded;
 }

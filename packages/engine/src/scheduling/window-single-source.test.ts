@@ -24,6 +24,20 @@ const source = (file: string): string => readFileSync(new URL(file, import.meta.
 const calendar = source("./calendar.ts");
 const buildGrid = source("./build-grid.ts");
 
+// P10 §2: this guard used to read only files inside packages/engine, so a
+// fourth window-rule copy in apps/web (`venues.ts`'s `resolveCourtDay`)
+// survived P9.5's de-forking invisibly. Scan the other workspace too.
+const webSource = (file: string): string =>
+  readFileSync(new URL(`../../../../apps/web/src/${file}`, import.meta.url), "utf8");
+
+describe("apps/web has no second window rule", () => {
+  it("venues.ts resolves court days through the engine, not its own copy", () => {
+    const src = webSource("server/usecases/venues.ts");
+    expect(src).not.toMatch(/function resolveCourtDay/);
+    expect(src).toMatch(/usableWindows/);
+  });
+});
+
 /** Occurrences of a regex, ignoring the file's comment lines — a rule quoted
  *  in prose is documentation, not a second implementation.
  *
