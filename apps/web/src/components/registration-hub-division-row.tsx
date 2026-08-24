@@ -1,10 +1,19 @@
-// Registration hub — Settings tab, one division's row (RS004 W3/W3c, design
-// §5). Status pill, window (ORG timezone), capacity meter, fee, entrant
-// kind, category/age badges, approval mode, free-agent flag, the public
-// register link (or the private-competition notice), and (W3c) the
-// Configure button that opens the row-click config panel — wiring only,
-// `context.onOpen` is owned by the settings-panel that mounts the panel;
-// nothing else here changed shape or style from W3.
+// Registration hub — Settings tab, one division's row (RS004 W3/W3c/W4,
+// design §5, "Scan line" treatment). Status pill, window (ORG timezone),
+// capacity meter, fee, entrant kind, category/age badges, approval mode,
+// free-agent flag, the public register link (or the private-competition
+// notice), and the Configure button that opens the row-click config panel
+// — wiring only, `context.onOpen` is owned by the settings-panel that
+// mounts the panel.
+//
+// Built for an organiser scrolling a competition with ~20 divisions, who
+// scans for two things first — which divisions are OPEN, and which are
+// NEAR CAPACITY — before caring about anything else on the row. So the
+// status pill leads every row (proved by a test: status text precedes the
+// division name in reading order), capacity rides on the SAME primary
+// line right after the name, and every other fact (window, entrant kind,
+// approval, category/age, free agents) drops to one small muted secondary
+// line. Two lines per division at rest.
 import type { ReactNode } from "react";
 import { SlidersHorizontal } from "lucide-react";
 import { CopyLink } from "@/components/copy-link";
@@ -75,9 +84,9 @@ const STATUS_STYLE: Record<RegistrationHubStatus, string> = {
   closed: "bg-slate-100 text-slate-500",
 };
 
-function Badge({ children }: { children: ReactNode }) {
+function Chip({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-flex items-center rounded-full border border-purple-100 bg-purple-50/60 px-2.5 py-0.5 text-xs font-medium text-purple-700">
+    <span className="inline-flex items-center rounded-full border border-purple-100 bg-purple-50/60 px-2 py-0.5 text-[11px] font-medium text-purple-700">
       {children}
     </span>
   );
@@ -139,15 +148,35 @@ export function RegistrationHubDivisionRow({
     <div
       data-registration-hub-row
       data-division-id={row.division_id}
-      className="card flex flex-col gap-3 p-4 sm:p-5"
+      className="card flex flex-col gap-1.5 px-4 py-3"
     >
-      <div className="flex items-start justify-between gap-3">
-        <h3 className="min-w-0 flex-1 truncate text-base font-semibold text-slate-900">{row.name}</h3>
+      {/* Primary scan line: status leads (open/near-capacity is what an
+          organiser checks first across 20 rows), then name, then capacity
+          on the SAME line, fee, Configure. flex-wrap (never a fixed-column
+          grid) so a long name or a narrow viewport reflows a line instead
+          of overflowing — no min-width:0 trap, since nothing here is a
+          CSS grid item. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span
           data-registration-hub-status={status}
-          className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_STYLE[status]}`}
+          className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_STYLE[status]}`}
         >
           {t(dict, `reg.hub.row.status.${status}`)}
+        </span>
+        <h3 className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900">{row.name}</h3>
+        <div className="flex shrink-0 items-center gap-1.5 text-xs text-slate-600">
+          <span aria-hidden className="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-slate-100">
+            {capacity.percent !== null && (
+              <span
+                className="block h-full rounded-full bg-purple-500"
+                style={{ width: `${capacity.percent}%` }}
+              />
+            )}
+          </span>
+          <span className="tabular-nums">{capacityText}</span>
+        </div>
+        <span data-feature="registration.paid" className="shrink-0 text-xs font-semibold tabular-nums text-slate-700">
+          {feeText}
         </span>
         <button
           type="button"
@@ -160,34 +189,15 @@ export function RegistrationHubDivisionRow({
         </button>
       </div>
 
-      <p className="text-sm text-slate-500">{windowText}</p>
-
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-slate-600">
-        <div className="flex min-w-0 items-center gap-2">
-          <span
-            aria-hidden
-            className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-slate-100"
-          >
-            {capacity.percent !== null && (
-              <span
-                className="block h-full rounded-full bg-purple-500"
-                style={{ width: `${capacity.percent}%` }}
-              />
-            )}
-          </span>
-          <span>{capacityText}</span>
-        </div>
-        <span data-feature="registration.paid" className="font-medium text-slate-700">
-          {feeText}
-        </span>
+      {/* Secondary line: everything else, small and muted — present, never
+          dropped, just visually quieter than the scan line above. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+        <span>{windowText}</span>
         <span>{entrantKindText}</span>
         <span>{approvalText}</span>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge>{categoryLabel}</Badge>
-        {ageLabel && <Badge>{ageLabel}</Badge>}
-        {row.allow_free_agents && <Badge>{t(dict, "reg.hub.row.freeAgents")}</Badge>}
+        <Chip>{categoryLabel}</Chip>
+        {ageLabel && <Chip>{ageLabel}</Chip>}
+        {row.allow_free_agents && <Chip>{t(dict, "reg.hub.row.freeAgents")}</Chip>}
       </div>
 
       <div>
@@ -198,7 +208,7 @@ export function RegistrationHubDivisionRow({
             label={t(dict, "div.registrations.publicLink.title")}
           />
         ) : (
-          <p className="rounded-lg border border-amber-100 bg-amber-50 p-2.5 text-xs text-amber-800">
+          <p className="rounded-lg border border-amber-100 bg-amber-50 p-2 text-xs text-amber-800">
             {t(dict, "div.registrations.privateNotice")}
           </p>
         )}

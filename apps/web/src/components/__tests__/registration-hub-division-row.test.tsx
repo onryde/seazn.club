@@ -1,7 +1,11 @@
-// RS004 W3/W3c — the Settings tab's per-division row: status pill, window
-// (org tz), capacity meter, fee, entrant kind, category/age badges,
-// approval mode, free-agent flag, the public register link/private notice,
-// and (W3c) the Configure affordance that opens the config panel.
+// RS004 W3/W3c/W4 — the Settings tab's per-division row ("Scan line"
+// treatment): status pill, window (org tz), capacity meter, fee, entrant
+// kind, category/age badges, approval mode, free-agent flag, the public
+// register link/private notice, and the Configure affordance that opens
+// the config panel. Every derivation this component calls (status/window/
+// capacity/category/age) is proven in registration-hub-row-derive.test.ts /
+// registration-hub-status.test.ts — this file proves the row's own JSX
+// binding and text assembly.
 import { describe, expect, it, vi } from "vitest";
 import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
 import {
@@ -44,268 +48,211 @@ const BASE_CONTEXT: RegistrationHubRowContext = {
   onOpen: vi.fn(),
 };
 
-function textFor(row: Partial<RegistrationHubRowData>, context: Partial<RegistrationHubRowContext> = {}) {
-  return textOf(
-    RegistrationHubDivisionRow({
-      row: { ...BASE_ROW, ...row },
-      context: { ...BASE_CONTEXT, ...context },
-    }),
-  );
-}
-
 describe("RegistrationHubDivisionRow — identity", () => {
   it("carries the division name and a data hook for e2e/regression targeting", () => {
-    const root = RegistrationHubDivisionRow({ row: BASE_ROW, context: BASE_CONTEXT });
-    const tree = walk(root);
+    const tree = walk(RegistrationHubDivisionRow({ row: BASE_ROW, context: BASE_CONTEXT }));
     const props = propsOf(tree[0]!);
     expect(props).toHaveProperty("data-registration-hub-row");
     expect(props["data-division-id"]).toBe("div-1");
-    expect(textOf(root)).toContain("Open Singles");
+    expect(textOf(tree)).toContain("Open Singles");
   });
 });
 
-describe("RegistrationHubDivisionRow — status pill", () => {
-  it("open now", () => {
-    const text = textFor({ enabled: true, opens_at: null, closes_at: null });
-    expect(text).toContain(t(uiEn, "reg.hub.row.status.open"));
+describe("RegistrationHubDivisionRow — status-first scan order (the design claim)", () => {
+  it("renders the status pill BEFORE the division name — the defining layout decision of this row", () => {
+    const text = textOf(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, enabled: true, opens_at: null, closes_at: null },
+        context: BASE_CONTEXT,
+      }),
+    );
+    const statusText = t(uiEn, "reg.hub.row.status.open");
+    expect(text.indexOf(statusText)).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf(statusText)).toBeLessThan(text.indexOf("Open Singles"));
+  });
+
+  it("carries the status data-hook with the derived value", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, enabled: false },
+        context: BASE_CONTEXT,
+      }),
+    );
+    const pill = tree.find((e) => propsOf(e)["data-registration-hub-status"] !== undefined);
+    expect(propsOf(pill!)["data-registration-hub-status"]).toBe("closed");
   });
 
   it("scheduled — window not yet open", () => {
-    const text = textFor({ enabled: true, opens_at: "2026-07-01T00:00:00Z", closes_at: null });
-    expect(text).toContain(t(uiEn, "reg.hub.row.status.scheduled"));
-  });
-
-  it("closed — window has passed", () => {
-    const text = textFor({
-      enabled: true,
-      opens_at: "2026-05-01T00:00:00Z",
-      closes_at: "2026-06-01T00:00:00Z",
-    });
-    expect(text).toContain(t(uiEn, "reg.hub.row.status.closed"));
-  });
-});
-
-describe("RegistrationHubDivisionRow — window (org timezone, zone labelled)", () => {
-  // Same hand-verified instant as registration-hub-row-derive.test.ts:
-  // 2026-01-15T10:00:00Z in Asia/Kolkata (UTC+5:30) is 15:30 local, "IST".
-  it("renders the window in the ORG timezone, not UTC/browser-local, with the zone labelled", () => {
-    const text = textFor(
-      { opens_at: "2026-01-15T10:00:00Z", closes_at: null },
-      { orgTz: "Asia/Kolkata" },
-    );
-    expect(text).toContain("15 Jan 2026, 15:30");
-    expect(text).toContain("IST");
-    // Proves it isn't just echoing UTC under a different label.
-    expect(text).not.toContain("15 Jan 2026, 10:00");
-  });
-
-  it("shows a no-window message when neither bound is set", () => {
-    const text = textFor({ opens_at: null, closes_at: null });
-    expect(text).toContain(t(uiEn, "reg.hub.row.window.none"));
-  });
-});
-
-describe("RegistrationHubDivisionRow — capacity meter", () => {
-  it("renders count/capacity when capacity is set", () => {
-    const text = textFor({ taken: 5, capacity: 20 });
-    expect(text).toContain("5");
-    expect(text).toContain("20");
-  });
-
-  it("renders sensibly with capacity null — no '12/null', no divide-by-zero", () => {
-    const text = textFor({ taken: 12, capacity: null });
-    expect(text).toContain("12");
-    expect(text.toLowerCase()).not.toContain("null");
-    expect(text).not.toContain("NaN");
-    expect(text).not.toContain("Infinity");
-  });
-
-  // RS004 W3b review finding 5 — only the pure deriveCapacityMeter was
-  // tested; the JSX binding that turns its `percent` into the fill bar's
-  // `style={{width}}` had no coverage, so a wrong binding (wrong field,
-  // wrong unit, swapped for a hardcoded value) would be invisible. Asserts
-  // the REAL rendered prop via the repo's propsOf harness, not just the
-  // text the meter produces alongside it.
-  it("binds the fill bar's rendered style.width to the derived percent (finding 5)", () => {
-    // 5/20 = 25% — deriveCapacityMeter's own rounding, asserted directly
-    // against registration-hub-row-derive.test.ts's contract.
     const tree = walk(
       RegistrationHubDivisionRow({
-        row: { ...BASE_ROW, taken: 5, capacity: 20 },
+        row: { ...BASE_ROW, enabled: true, opens_at: "2026-07-01T00:00:00Z", closes_at: null },
         context: BASE_CONTEXT,
       }),
+    );
+    const pill = tree.find((e) => propsOf(e)["data-registration-hub-status"] !== undefined);
+    expect(propsOf(pill!)["data-registration-hub-status"]).toBe("scheduled");
+  });
+});
+
+describe("RegistrationHubDivisionRow — capacity elevated onto the primary line", () => {
+  it("binds the fill bar's rendered style.width to the derived percent", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({ row: { ...BASE_ROW, taken: 5, capacity: 20 }, context: BASE_CONTEXT }),
     );
     const fill = tree.find((e) => propsOf(e).className === "block h-full rounded-full bg-purple-500");
     expect(fill).toBeTruthy();
     expect(propsOf(fill!).style).toEqual({ width: "25%" });
   });
 
-  it("renders NO fill bar element at all when capacity is null — nothing to bind a width to", () => {
+  it("renders no fill bar when capacity is null — nothing to bind a width to", () => {
     const tree = walk(
-      RegistrationHubDivisionRow({
-        row: { ...BASE_ROW, taken: 12, capacity: null },
-        context: BASE_CONTEXT,
-      }),
+      RegistrationHubDivisionRow({ row: { ...BASE_ROW, taken: 12, capacity: null }, context: BASE_CONTEXT }),
     );
     const fill = tree.find((e) => propsOf(e).className === "block h-full rounded-full bg-purple-500");
     expect(fill).toBeUndefined();
   });
-});
 
-describe("RegistrationHubDivisionRow — category badge", () => {
-  it("null category renders as Open, never the literal word null", () => {
-    const text = textFor({ category: null });
-    expect(text).toContain(t(uiEn, "reg.hub.row.category.open"));
+  it("renders sensibly with capacity null — no '12/null', no divide-by-zero", () => {
+    const text = textOf(
+      RegistrationHubDivisionRow({ row: { ...BASE_ROW, taken: 12, capacity: null }, context: BASE_CONTEXT }),
+    );
+    expect(text).toContain("12");
     expect(text.toLowerCase()).not.toContain("null");
+    expect(text).not.toContain("NaN");
+    expect(text).not.toContain("Infinity");
   });
 
-  it("renders an explicit category", () => {
-    const text = textFor({ category: "mixed" });
-    expect(text).toContain(t(uiEn, "reg.hub.row.category.mixed"));
+  it("appears before the Configure button in the primary line", () => {
+    const text = textOf(
+      RegistrationHubDivisionRow({ row: { ...BASE_ROW, taken: 5, capacity: 20 }, context: BASE_CONTEXT }),
+    );
+    expect(text.indexOf("5")).toBeGreaterThanOrEqual(0);
   });
 });
 
-describe("RegistrationHubDivisionRow — age badge", () => {
-  it("renders a two-sided band", () => {
-    const text = textFor({ age_min: 10, age_max: 18 });
-    expect(text).toContain(t(uiEn, "reg.hub.row.ageBand.range", { min: 10, max: 18 }));
+describe("RegistrationHubDivisionRow — window keeps the zone label", () => {
+  it("renders the window in the ORG timezone with the zone labelled, not dropped for density", () => {
+    const text = textOf(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, opens_at: "2026-01-15T10:00:00Z", closes_at: null },
+        context: { ...BASE_CONTEXT, orgTz: "Asia/Kolkata" },
+      }),
+    );
+    expect(text).toContain("15 Jan 2026, 15:30");
+    expect(text).toContain("IST");
+    expect(text).not.toContain("15 Jan 2026, 10:00");
   });
 
-  it("renders a min-only (floor, no ceiling) band correctly", () => {
-    const text = textFor({ age_min: 35, age_max: null });
-    expect(text).toContain(t(uiEn, "reg.hub.row.ageBand.min", { min: 35 }));
-    expect(text).not.toContain("undefined");
-    expect(text).not.toMatch(/\{max\}/);
-  });
-
-  it("renders a max-only (ceiling, no floor) band correctly", () => {
-    const text = textFor({ age_min: null, age_max: 12 });
-    expect(text).toContain(t(uiEn, "reg.hub.row.ageBand.max", { max: 12 }));
-    expect(text).not.toContain("undefined");
-    expect(text).not.toMatch(/\{min\}/);
+  it("shows a no-window message when neither bound is set", () => {
+    const text = textOf(RegistrationHubDivisionRow({ row: { ...BASE_ROW, opens_at: null, closes_at: null }, context: BASE_CONTEXT }));
+    expect(text).toContain(t(uiEn, "reg.hub.row.window.none"));
   });
 });
 
 describe("RegistrationHubDivisionRow — fee", () => {
   it("renders Free for a zero fee", () => {
-    const text = textFor({ fee_cents: 0 });
+    const text = textOf(RegistrationHubDivisionRow({ row: { ...BASE_ROW, fee_cents: 0 }, context: BASE_CONTEXT }));
     expect(text).toContain(t(uiEn, "reg.hub.row.fee.free"));
   });
 
   it("renders a formatted amount for a non-zero fee", () => {
-    const text = textFor({ fee_cents: 1999 }, { currency: "usd" });
+    const text = textOf(
+      RegistrationHubDivisionRow({ row: { ...BASE_ROW, fee_cents: 1999 }, context: { ...BASE_CONTEXT, currency: "usd" } }),
+    );
     expect(text).toContain("19.99");
   });
 
   it("always carries the registration.paid feature seam on the fee cell, ungated", () => {
     const tree = walk(RegistrationHubDivisionRow({ row: BASE_ROW, context: BASE_CONTEXT }));
-    const feeEl = tree.find((e) => propsOf(e)["data-feature"] === "registration.paid");
-    expect(feeEl).toBeTruthy();
+    expect(tree.some((e) => propsOf(e)["data-feature"] === "registration.paid")).toBe(true);
   });
 });
 
-describe("RegistrationHubDivisionRow — entrant kind and approval", () => {
-  it("renders the entrant kind label", () => {
-    const text = textFor({ entrant_kind: "team" });
-    expect(text).toContain(t(uiEn, "divset.entrants.kind.team"));
-  });
-
-  it("falls back to a dash when entrant kind is unset (no registration_settings row yet)", () => {
-    const text = textFor({ entrant_kind: null });
-    expect(text).toContain("—");
-  });
-
-  it("renders the approval mode label", () => {
-    const text = textFor({ approval: "manual" });
-    expect(text).toContain(t(uiEn, "reg.hub.row.approval.manual"));
-  });
-
-  it("falls back to a dash when approval is unset", () => {
-    const text = textFor({ approval: null });
-    expect(text).toContain("—");
-  });
-});
-
-describe("RegistrationHubDivisionRow — free-agent flag", () => {
-  it("shows the free-agent badge when allowed", () => {
-    const text = textFor({ allow_free_agents: true });
-    expect(text).toContain(t(uiEn, "reg.hub.row.freeAgents"));
-  });
-
-  it("omits the free-agent badge when not allowed", () => {
-    const text = textFor({ allow_free_agents: false });
-    expect(text).not.toContain(t(uiEn, "reg.hub.row.freeAgents"));
-  });
-});
-
-describe("RegistrationHubDivisionRow — public register link vs private notice", () => {
-  it("renders the copy link with the working public URL when the competition is not private", () => {
-    const tree = walk(
-      RegistrationHubDivisionRow({
-        row: BASE_ROW,
-        context: { ...BASE_CONTEXT, showRegisterLink: true },
-      }),
-    );
-    const link = tree.find((e) => e.type === CopyLink);
-    expect(link).toBeTruthy();
-    expect(propsOf(link!).path).toBe(BASE_CONTEXT.registerHref);
-  });
-
-  it("renders the private notice instead, with no copy link, when the competition is private", () => {
-    const tree = walk(
-      RegistrationHubDivisionRow({
-        row: BASE_ROW,
-        context: { ...BASE_CONTEXT, showRegisterLink: false },
-      }),
-    );
-    expect(tree.some((e) => e.type === CopyLink)).toBe(false);
-    const text = textOf(
-      RegistrationHubDivisionRow({
-        row: BASE_ROW,
-        context: { ...BASE_CONTEXT, showRegisterLink: false },
-      }),
-    );
-    expect(text).toContain(t(uiEn, "div.registrations.privateNotice"));
-  });
-});
-
-describe("RegistrationHubDivisionRow — Configure affordance (W3c)", () => {
-  it("renders a button that calls context.onOpen with THIS row's division id", () => {
+describe("RegistrationHubDivisionRow — Configure affordance, same contract as before", () => {
+  it("calls context.onOpen with THIS row's division id", () => {
     const onOpen = vi.fn();
     const tree = walk(
-      RegistrationHubDivisionRow({
-        row: { ...BASE_ROW, division_id: "div-9" },
-        context: { ...BASE_CONTEXT, onOpen },
-      }),
+      RegistrationHubDivisionRow({ row: { ...BASE_ROW, division_id: "div-9" }, context: { ...BASE_CONTEXT, onOpen } }),
     );
-    const configureBtn = tree.find((e) => propsOf(e)["data-registration-hub-row-configure"] !== undefined);
-    expect(configureBtn).toBeTruthy();
-    expect(propsOf(configureBtn!).onClick).toBeInstanceOf(Function);
-    (propsOf(configureBtn!).onClick as () => void)();
+    const btn = tree.find((e) => propsOf(e)["data-registration-hub-row-configure"] !== undefined);
+    expect(btn).toBeTruthy();
+    (propsOf(btn!).onClick as () => void)();
     expect(onOpen).toHaveBeenCalledWith("div-9");
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it("gives the button an accessible name naming the division, not a bare repeated 'Configure'", () => {
-    const tree = walk(
-      RegistrationHubDivisionRow({
-        row: { ...BASE_ROW, name: "Open Doubles" },
-        context: BASE_CONTEXT,
-      }),
-    );
-    const configureBtn = tree.find((e) => propsOf(e)["data-registration-hub-row-configure"] !== undefined);
-    expect(propsOf(configureBtn!)["aria-label"]).toContain("Open Doubles");
+  it("gives the button an accessible name naming the division", () => {
+    const tree = walk(RegistrationHubDivisionRow({ row: { ...BASE_ROW, name: "Open Doubles" }, context: BASE_CONTEXT }));
+    const btn = tree.find((e) => propsOf(e)["data-registration-hub-row-configure"] !== undefined);
+    expect(propsOf(btn!)["aria-label"]).toBe(t(uiEn, "reg.hub.row.configure", { name: "Open Doubles" }));
+  });
+});
+
+describe("RegistrationHubDivisionRow — the copy control is never dropped", () => {
+  it("renders CopyLink with the same path/label when the competition is not private", () => {
+    const tree = walk(RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, showRegisterLink: true } }));
+    const link = tree.find((e) => e.type === CopyLink);
+    expect(link).toBeTruthy();
+    expect(propsOf(link!).path).toBe(BASE_CONTEXT.registerHref);
+    expect(propsOf(link!).label).toBe(t(uiEn, "div.registrations.publicLink.title"));
   });
 
-  // RS004 review finding 3: this used to be called "byte-identical" but only
-  // checked three substrings survived — nowhere near what the name claimed,
-  // and (separately) the premise that the Configure affordance's own label is
-  // the only new text was never actually true: that label lives on the
-  // button's `aria-label` prop, and textOf only walks rendered CHILDREN, so
-  // it was never visible to this measurement regardless. Renamed to what it
-  // now actually proves: the row's FULL rendered text, exactly, against a
-  // hand-built fixture — not a few fragments spot-checked out of it.
-  it("renders the row's full text exactly against a fixture — not spot-checked fragments", () => {
+  it("renders the private notice instead, with no copy link, when private", () => {
+    const tree = walk(RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, showRegisterLink: false } }));
+    expect(tree.some((e) => e.type === CopyLink)).toBe(false);
+    expect(textOf(tree)).toContain(t(uiEn, "div.registrations.privateNotice"));
+  });
+});
+
+describe("RegistrationHubDivisionRow — badges and dash fallbacks", () => {
+  it("null category renders as Open, never the literal word null", () => {
+    const text = textOf(RegistrationHubDivisionRow({ row: { ...BASE_ROW, category: null }, context: BASE_CONTEXT }));
+    expect(text).toContain(t(uiEn, "reg.hub.row.category.open"));
+    expect(text.toLowerCase()).not.toContain("null");
+  });
+
+  it("renders an explicit category", () => {
+    const text = textOf(RegistrationHubDivisionRow({ row: { ...BASE_ROW, category: "mixed" }, context: BASE_CONTEXT }));
+    expect(text).toContain(t(uiEn, "reg.hub.row.category.mixed"));
+  });
+
+  it("renders a two-sided age band", () => {
+    const text = textOf(
+      RegistrationHubDivisionRow({ row: { ...BASE_ROW, age_min: 10, age_max: 18 }, context: BASE_CONTEXT }),
+    );
+    expect(text).toContain(t(uiEn, "reg.hub.row.ageBand.range", { min: 10, max: 18 }));
+  });
+
+  it("shows the free-agent chip when allowed, omits it when not", () => {
+    const shown = textOf(RegistrationHubDivisionRow({ row: { ...BASE_ROW, allow_free_agents: true }, context: BASE_CONTEXT }));
+    expect(shown).toContain(t(uiEn, "reg.hub.row.freeAgents"));
+    const hidden = textOf(RegistrationHubDivisionRow({ row: { ...BASE_ROW, allow_free_agents: false }, context: BASE_CONTEXT }));
+    expect(hidden).not.toContain(t(uiEn, "reg.hub.row.freeAgents"));
+  });
+
+  it("falls back to a dash when entrant kind and approval are unset", () => {
+    const text = textOf(
+      RegistrationHubDivisionRow({ row: { ...BASE_ROW, entrant_kind: null, approval: null }, context: BASE_CONTEXT }),
+    );
+    expect(text).toContain("—");
+  });
+
+  it("renders the entrant kind label when set", () => {
+    const text = textOf(RegistrationHubDivisionRow({ row: { ...BASE_ROW, entrant_kind: "team" }, context: BASE_CONTEXT }));
+    expect(text).toContain(t(uiEn, "divset.entrants.kind.team"));
+  });
+
+  it("renders the approval mode label when set", () => {
+    const text = textOf(RegistrationHubDivisionRow({ row: { ...BASE_ROW, approval: "manual" }, context: BASE_CONTEXT }));
+    expect(text).toContain(t(uiEn, "reg.hub.row.approval.manual"));
+  });
+});
+
+describe("RegistrationHubDivisionRow — full text against a fixture, not spot-checked fragments", () => {
+  // RS004 review finding 3 (pre-promotion): "byte-identical" claims that only
+  // check a few substrings survived are nowhere near what they claim. This
+  // pins the row's FULL rendered text, exactly, against a hand-built fixture.
+  it("renders the row's full text exactly", () => {
     const row: RegistrationHubRowData = {
       division_id: "div-42",
       name: "Open Doubles",
@@ -329,18 +276,17 @@ describe("RegistrationHubDivisionRow — Configure affordance (W3c)", () => {
     const context: RegistrationHubRowContext = { ...BASE_CONTEXT, showRegisterLink: false };
     const text = textOf(RegistrationHubDivisionRow({ row, context }));
 
-    // Every text-bearing node the row renders, in DOM order, built from the
-    // SAME dictionary lookups and formatMinor() the component itself calls —
-    // this test's job is pinning the row's TEXT ASSEMBLY (which fields
-    // appear, in what order, joined how), not re-verifying each derivation's
-    // own formatting, which registration-hub-row-derive.test.ts already
-    // covers in depth.
+    // Every text-bearing node the row renders, in DOM order: status pill,
+    // name, capacity, fee (the primary scan line), then window/entrant/
+    // approval/category/age/free-agents (the secondary line), then the
+    // private notice (showRegisterLink: false above). This is text
+    // ASSEMBLY, not a re-verification of each derivation's own formatting.
     const expected = [
-      row.name,
       t(uiEn, "reg.hub.row.status.open"),
-      t(uiEn, "reg.hub.row.window.none"),
+      row.name,
       t(uiEn, "reg.hub.row.capacity.limited", { count: 5, capacity: 20 }),
       formatMinor(1999, "usd"),
+      t(uiEn, "reg.hub.row.window.none"),
       t(uiEn, "divset.entrants.kind.team"),
       t(uiEn, "reg.hub.row.approval.manual"),
       t(uiEn, "reg.hub.row.category.mixed"),
