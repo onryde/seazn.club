@@ -102,7 +102,13 @@ export interface DockController {
    *  is the DEFAULT a skin may point this at, not a second line — it earns
    *  a place in `DetailDock`'s render only as the surrounding group's
    *  accessible name. */
-  title: string;
+  readonly title: string;
+  /** Replace the spec this controller reads WITHOUT disturbing the selection
+   *  set, for a skin whose dock depends on the held payload (football's goal
+   *  dock: scorer, then assist). `DetailDock` rebuilds the controller only when
+   *  `heldId` changes, so without this a new `spec` prop for the SAME held
+   *  entry was silently ignored and the dock froze on its first step. */
+  setSpec(next: DockSpec): void;
   /** Live view of every chip + its selection state — a GETTER, not a
    *  snapshot, so a caller re-reading this after `tapChip` resolves sees
    *  the update without a fresh `dockController(...)` call, which would
@@ -150,15 +156,34 @@ export interface DockController {
  */
 export function dockController(spec: DockSpec | null, heldId: string, store: DockStore): DockController | null {
   if (spec === null) return null;
+  // R3 review round 4 — the spec is LIVE, not a snapshot.
+  //
+  // This closed over the `spec` it was built with, and `DetailDock` rebuilds
+  // the controller only when `heldId` changes. A skin whose dock depends on the
+  // held PAYLOAD — football's goal dock asks for the scorer, then the assist —
+  // therefore kept rendering its first step forever: the payload advanced, a
+  // new spec arrived as a prop, and both were ignored. The two-step split was
+  // inert in the running app while its unit tests passed, because those call
+  // `buildDock` directly and never mount anything.
+  //
+  // `setSpec` swaps the spec WITHOUT resetting `selectedIds`: the selection is
+  // per held entry, and the entry has not changed — only the question being
+  // asked about it has.
+  let current: DockSpec = spec;
   const selectedIds = new Set<string>();
   return {
-    title: spec.title,
+    get title(): string {
+      return current.title;
+    },
     get chips(): DockChipView[] {
-      return spec.chips.map((chip) => ({ chip, selected: selectedIds.has(chip.id) }));
+      return current.chips.map((chip) => ({ chip, selected: selectedIds.has(chip.id) }));
+    },
+    setSpec(next: DockSpec): void {
+      current = next;
     },
     async tapChip(chipId: string): Promise<void> {
       if (selectedIds.has(chipId)) return; // second tap (or a still in-flight one) on this chip: no-op, see this interface's own doc
-      const chip = spec.chips.find((c) => c.id === chipId);
+      const chip = current.chips.find((c) => c.id === chipId);
       if (chip === undefined) return; // unknown chip id: nothing to apply
       // FIX ROUND 1 finding 2: claim the id SYNCHRONOUSLY, before the
       // `await` below — not only once the store confirms it. Two taps
@@ -300,6 +325,13 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
     setHoldMsAtMount(Math.max(0, heldUntil - now()));
     setDepleted(false);
   }
+
+  // The spec is a PROP and changes for the same held entry whenever the skin's
+  // dock depends on the payload. Push it into the controller before render
+  // reads `chips`/`title`; assigning to a plain object (not React state) takes
+  // effect on THIS frame, where an effect would leave one stale frame on screen
+  // inside a ~6s window.
+  if (controller !== null && spec !== null) controller.setSpec(spec);
 
   const [, bump] = useReducer((n: number) => n + 1, 0);
   const mountedRef = useRef(true);

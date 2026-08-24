@@ -60,7 +60,7 @@ import { createSkinDispatch } from "../skins/types";
 import { ActionFormList } from "./action-form";
 import { Scorebug } from "./scorebug";
 import { TileGrid } from "./tile-grid";
-import { DetailDock, makeDockStore } from "./detail-dock";
+import { DetailDock, makeDockStore, type DockStore } from "./detail-dock";
 import { ContextStrip, type PoolView, type TFn } from "./context-strip";
 import { SwapSheet, refusalMessage, type PolicyVerdict, type SwapSheetSpec } from "./swap-sheet";
 import { GuidedSheet } from "./guided-sheet";
@@ -805,7 +805,35 @@ export function PadHostV3(props: PadHostV3Props) {
     [sheets],
   );
 
-  const dockStore = useMemo(() => makeDockStore(pipeline.queueStore), [pipeline.queueStore]);
+  // R3 review round 4 — the held PAYLOAD has to advance with the dock.
+  //
+  // `heldSubmit` records the payload as it was at tap time, and a dock chip
+  // mutates the QUEUE entry, never this state. So `resolveDockSpec` below kept
+  // being handed the original payload and every payload-dependent dock froze on
+  // its first step — football's goal dock asked for the scorer and never became
+  // the assist step. The unit tests could not see it: they call `buildDock`
+  // directly with whatever payload they like.
+  //
+  // `fn` is applied a second time here rather than read back from the store: a
+  // chip's `mutate` is a pure `(payload) => payload` (types.ts), the store has
+  // no read-one API, and re-reading would race the very drain that sends it.
+  const dockStore = useMemo<DockStore>(() => {
+    const base = makeDockStore(pipeline.queueStore);
+    return {
+      releaseHeld: (id) => base.releaseHeld(id),
+      mutateHeld: async (id, fn) => {
+        const applied = await base.mutateHeld(id, fn);
+        if (applied) {
+          setHeld((prev) =>
+            prev && prev.id === id
+              ? { ...prev, payload: fn((prev.payload ?? {}) as Record<string, unknown>) }
+              : prev,
+          );
+        }
+        return applied;
+      },
+    };
+  }, [pipeline.queueStore]);
   const dockSpec = resolveDockSpec(props.skin, held, view);
 
   // Blocker 1 — see rejectionText's own doc above.

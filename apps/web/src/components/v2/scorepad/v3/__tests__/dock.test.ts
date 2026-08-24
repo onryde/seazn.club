@@ -365,3 +365,88 @@ describe("DockChip.kind — a modifier is a tab, a person is a pill (R3/football
     }
   });
 });
+
+describe("the dock follows the PAYLOAD, not just the held id (R3 review round 4)", () => {
+  // THE DEFECT: `dockController` closed over the spec it was built with, and
+  // `DetailDock` rebuilds the controller only when `heldId` changes. A skin
+  // whose dock depends on the held payload — football's goal dock asks for the
+  // scorer, then the assist — kept rendering its first step forever. The
+  // two-step split was INERT in the running app while every unit test passed,
+  // because those call `buildDock` directly and never mount anything.
+  const chip = (id: string): DockChip => ({ id, label: `k.${id}`, mutate: (p) => p });
+  const step1: DockSpec = { title: "Who scored?", chips: [chip("scorer:h1"), chip("scorer:h2")] };
+  const step2: DockSpec = { title: "Who assisted?", chips: [chip("assist:h1")] };
+
+  it("re-renders the new step when the spec changes for the SAME held entry", () => {
+    const island = renderIsland(DetailDock, {
+      spec: step1,
+      heldId: "held-1",
+      store: { mutateHeld: async () => true, releaseHeld: async () => undefined },
+      heldUntil: 6000,
+      t: (key: string) => (key === "pad.dock.clears" ? "clears" : `T:${key}`),
+      now: () => 0,
+    });
+    expect(island.text()).toContain("Who scored?");
+
+    // Same heldId — only the question changed. This is exactly what
+    // `resolveDockSpec` hands down once a chip has advanced the payload.
+    island.rerender({
+      spec: step2,
+      heldId: "held-1",
+      store: { mutateHeld: async () => true, releaseHeld: async () => undefined },
+      heldUntil: 6000,
+      t: (key: string) => (key === "pad.dock.clears" ? "clears" : `T:${key}`),
+      now: () => 0,
+    });
+
+    const text = island.text();
+    expect(text, "the dock froze on its first step").toContain("Who assisted?");
+    expect(text).not.toContain("Who scored?");
+    const labels = island
+      .tree()
+      .filter((el) => el.type === "button")
+      .map((el) => textOf(el));
+    expect(labels, "the new step's chip never appeared").toContain("T:k.assist:h1");
+    expect(labels, "the first step's chips are still on screen").not.toContain("T:k.scorer:h1");
+    expect(labels).not.toContain("T:k.scorer:h2");
+  });
+
+  it("setSpec swaps the question WITHOUT clearing what was already chosen", async () => {
+    // The selection is per HELD ENTRY, and the entry has not changed — only the
+    // question about it has. Clearing here would un-tick a chip the scorer can
+    // see they tapped.
+    const controller = dockController(step1, "held-1", {
+      mutateHeld: async () => true,
+      releaseHeld: async () => undefined,
+    })!;
+    await controller.tapChip("scorer:h1");
+    expect(controller.chips.find((c) => c.chip.id === "scorer:h1")!.selected).toBe(true);
+
+    controller.setSpec({ title: "Who assisted?", chips: [chip("scorer:h1"), chip("assist:h2")] });
+    expect(controller.title).toBe("Who assisted?");
+    expect(
+      controller.chips.find((c) => c.chip.id === "scorer:h1")!.selected,
+      "the tap the scorer already made was forgotten",
+    ).toBe(true);
+    expect(controller.chips.find((c) => c.chip.id === "assist:h2")!.selected).toBe(false);
+  });
+
+  it("taps the chip from the CURRENT step, not the one the controller was built with", async () => {
+    const applied: string[] = [];
+    const controller = dockController(step1, "held-1", {
+      mutateHeld: async (_id, fn) => {
+        applied.push(JSON.stringify(fn({})));
+        return true;
+      },
+      releaseHeld: async () => undefined,
+    })!;
+    controller.setSpec({
+      title: "Who assisted?",
+      chips: [{ id: "assist:h9", label: "k", mutate: (p) => ({ ...p, assist: "h9" }) }],
+    });
+    await controller.tapChip("assist:h9");
+    expect(applied, "a chip that exists only on the new step must still apply").toEqual([
+      JSON.stringify({ assist: "h9" }),
+    ]);
+  });
+});

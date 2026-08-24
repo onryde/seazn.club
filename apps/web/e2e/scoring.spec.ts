@@ -49,7 +49,7 @@ async function ledger(
 async function seedLiveFixture(
   request: import("@playwright/test").APIRequestContext,
   label: string,
-): Promise<{ fixtureId: string; home: string; away: string }> {
+): Promise<{ fixtureId: string; home: string; away: string; homeId: string; awayId: string }> {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `${label} ${TAG}`,
@@ -64,13 +64,13 @@ async function seedLiveFixture(
   const divisionId = div.data!.id;
   const home = `Asha ${label} ${TAG}`;
   const away = `Bala ${label} ${TAG}`;
-  await addEntrantsViaApi(request, divisionId, [home, away]);
+  const { ids } = await addEntrantsViaApi(request, divisionId, [home, away]);
   const { fixtureIds } = await createStageAndGenerate(request, divisionId, {
     kind: "knockout",
     name: "Final",
   });
   await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
-  return { fixtureId: fixtureIds[0], home, away };
+  return { fixtureId: fixtureIds[0], home, away, homeId: ids[0]!, awayId: ids[1]! };
 }
 
 // ---------------------------------------------------------------------------
@@ -109,11 +109,14 @@ test("forfeit records core.forfeit with the side and the reason, and ends the fi
   page,
   request,
 }) => {
-  const { fixtureId, home } = await seedLiveFixture(request, "Forfeit");
+  const { fixtureId, home, homeId } = await seedLiveFixture(request, "Forfeit");
   await page.goto(await fixturePath(page.request, fixtureId));
 
   await page.getByRole("button", { name: /Forfeit/ }).click({ timeout: 20_000 });
-  await page.getByRole("button", { name: /forfeits$/ }).first().click();
+  // The NAMED side, not `.first()` — the payload's `by` is asserted against it
+  // below, so a swapped-side bug in `ForfeitButton` has to fail here rather
+  // than pass on a merely-truthy id.
+  await page.getByRole("button", { name: `${home} forfeits`, exact: true }).click();
 
   // Not a native prompt — `TextPromptDialog` (fixture-console.tsx), which is
   // the whole reason `fixture-console-no-native-prompt.test.ts` exists.
@@ -129,14 +132,13 @@ test("forfeit records core.forfeit with the side and the reason, and ends the fi
   expect(forfeit.payload.reason, "the reason the scorer typed must reach the ledger").toBe("no-show");
   expect(
     forfeit.payload.by,
-    "the payload names WHICH side forfeited — the engine awards the OTHER one",
-  ).toBeTruthy();
+    "the payload must name the side whose menu item was clicked — the engine awards the OTHER one",
+  ).toBe(homeId);
 
   // `!decided` gates both controls (fixture-console.tsx), so a decided fixture
   // offers neither. This is the user-visible half of the same claim.
   await expect(page.getByRole("button", { name: /Forfeit/ })).toHaveCount(0, { timeout: 20_000 });
   await expect(page.getByRole("button", { name: "Abandon", exact: true })).toHaveCount(0);
-  expect(home).toBeTruthy();
 });
 
 test("abandon records core.abandon with its reason and ends the fixture", async ({
@@ -162,6 +164,22 @@ test("abandon records core.abandon with its reason and ends the fixture", async 
     timeout: 20_000,
   });
   await expect(page.getByRole("button", { name: /Forfeit/ })).toHaveCount(0);
+
+  // `decided` gates THREE things, not the two the fix set out to close, and the
+  // third reaches every sport: the scoring pad itself
+  // (`scorePadV2 && scoring && !decided`, fixture-console.tsx). An ended
+  // fixture must stop offering a way to record more into it.
+  await expect(
+    pad(page),
+    "an abandoned fixture must not still offer the scoring pad",
+  ).toHaveCount(0);
+  // ...but the abandon stays REVERSIBLE. `decidedLock` is deliberately not
+  // widened, so Undo last is still reachable — over, but not sealed. This is
+  // the half the fix's own commit message claimed and did not prove.
+  await expect(
+    page.getByRole("button", { name: /Undo last/ }),
+    "an abandon recorded by mistake must still be undoable",
+  ).toBeVisible({ timeout: 20_000 });
 });
 
 // The negative control, and the reason these tests are not merely "the click
