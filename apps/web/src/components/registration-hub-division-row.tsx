@@ -8,7 +8,13 @@
 import type { ReactNode } from "react";
 import { SlidersHorizontal } from "lucide-react";
 import { CopyLink } from "@/components/copy-link";
-import { t, type Dict } from "@/lib/i18n";
+// `@/lib/i18n` is `server-only`, and this module is pulled into the client
+// bundle by registration-hub-settings-panel.tsx ("use client"). Importing it
+// here builds fine under tsc and vitest and fails only in `next build`
+// ("'server-only' cannot be imported from a Client Component module"), which
+// is how it got this far. `t` and the `Dict` type have server-free homes.
+import { t } from "@/lib/i18n-runtime";
+import type { Dict } from "@/lib/i18n-constants";
 import { formatMinor, type Currency } from "@/lib/currency";
 import { deriveRegistrationStatus, type RegistrationHubStatus } from "@/components/registration-hub-status";
 import {
