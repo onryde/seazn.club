@@ -118,7 +118,15 @@ describe("Modal — focus-trap wiring (source-level pins; see file header)", () 
   });
 
   it("wires Tab handling through the pure nextTrapFocus decision, not separate inline logic", () => {
-    expect(source).toMatch(/nextTrapFocus\(focusables\(\),\s*document\.activeElement,\s*e\.shiftKey\)/);
+    // Matches the ARGUMENT ROLES, not one spelling of them: the active element
+    // is read from document.activeElement and handed to nextTrapFocus together
+    // with the focusable list and the shift flag. The original regex pinned
+    // `document.activeElement` inline as the second argument and broke the
+    // moment that read was narrowed to a local — a test failing over a rename
+    // while the wiring is intact is a test that will get deleted rather than
+    // fixed.
+    expect(source).toMatch(/document\.activeElement as HTMLElement \| null/);
+    expect(source).toMatch(/nextTrapFocus\(focusables\(\),\s*\w+,\s*e\.shiftKey\)/);
   });
 
   it("restores focus to the captured pre-open target when the dialog closes", () => {

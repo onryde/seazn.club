@@ -54,7 +54,14 @@ export function Modal({
   // yanking focus out of whatever field the organiser is actively typing
   // into (RS004 review finding 4).
   const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  // Refreshed in an effect, not during render: writing a ref during render is
+  // an eslint error here ("Cannot access refs during render") because the
+  // React Compiler may run a render twice or discard it. An effect with no
+  // dependency array runs after EVERY committed render, so the ref still
+  // holds the latest onClose by the time any handler can fire.
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
   // Captured during RENDER (useState's lazy initialiser runs before commit),
   // not inside an effect: ConfirmModal's typeToConfirm input carries
   // `autoFocus`, which React applies during commit — before any passive
