@@ -877,6 +877,79 @@ note) and it still went into three briefs in one session. Counts reported by
 task A and task B1 were taken with it and are re-run at the wave boundary by
 the main thread rather than trusted.
 
+### R3-6 — owner ruling 2026-08-24: PER-SPORT VISUAL IDENTITY (reverses the theme lock)
+
+**This reverses a standing ruling. Do not "restore" the lock — read this first.**
+
+On 2026-08-15 (rulings round 3) the owner locked the theme: "daylight shell +
+stadium-night LCD scorebug tile", explicitly so eleven skins would share ONE
+family identity. R3 asked how ambitious football's visual design should be,
+with the theme lock named as the thing the largest option would break. The
+owner chose **full per-sport visual identity**.
+
+What that means, stated plainly so it is not softened later:
+- A per-sport TOKEN LAYER (`--sport-*`) lands in the chassis. Skins stop being
+  purely structural and gain a bounded visual voice.
+- Football gets its own palette, type treatment and board furniture.
+- **R4-R7 each now owe a visual identity too.** This is a permanent widening of
+  every remaining wave, not a one-off for football.
+- The programme's "one family identity" rationale is retired. `_RULES.md` and
+  the design of record (`2026-08-15-scoringpad-v3-redesign-design.md` §2) both
+  still assert it and are now STALE on this point.
+
+**Cricket does NOT have to be re-signed-off, and must not be re-themed as a
+side effect.** The option as put to the owner said cricket would need
+re-signing-off. That is avoidable and the cheaper design is also the safer one:
+build the token layer so that **cricket's current values ARE the default token
+set**. Cricket then renders byte-identical, its R2/R2b/R2c sign-offs stand, and
+only football overrides. Any implementation that changes a cricket pixel is
+wrong. A gallery diff of cricket before/after is the gate on that claim.
+
+### R3 — football's visual direction (design plan, before code)
+
+Calibration first, because the trap here is real: current AI-generated design
+clusters on (1) cream + high-contrast serif + terracotta, (2) near-black + one
+acid accent, (3) broadsheet hairlines. The locked product theme — night
+`#150b36` with lime `#a3e635` — already sits close to (2). Leaning football
+FURTHER into lime-on-night would be picking the default and calling it a
+decision.
+
+So football moves deliberately away from the family's lime, into its OWN
+vernacular:
+
+| token | value | why this, from football's own world |
+|---|---|---|
+| `--sport-board` | `#0b1f16` | floodlit turf at night: near-black with a green cast, NOT "pitch green" (the generic sports-app answer) |
+| `--sport-board-2` | `#122e21` | the band under the scores |
+| `--sport-led` | `#ffb703` | the FOURTH OFFICIAL'S BOARD amber — the signature |
+| `--sport-caution` | `#ffd60a` | a yellow card is yellow |
+| `--sport-dismissal` | `#d00000` | a red card is red |
+| `--sport-ink` | `#f2f7f4` | cool off-white, legible on the board in daylight |
+
+**Type:** condensed uppercase for the board, which is matchday-programme and
+scoreboard vernacular; tabular/monospaced figures for the scores so a 0->1
+change does not jitter the layout. Body face unchanged — the shell stays the
+product's.
+
+**Signature:** the strip becomes the **fourth official's added-time board** —
+an amber LED panel reading the period and added time. One memorable element,
+unmistakably football, and it replaces the dead `Clock —` field rather than
+adding furniture. Everything around it stays quiet.
+
+**The aesthetic risk, stated and justified:** football rejects the family's
+lime accent. Lime is the PRODUCT's brand colour; amber is the SPORT's. On a
+surface used pitch-side under floodlights, the sport's signal should win. If
+that reads as fragmentation rather than identity at sign-off, the token layer
+makes it a one-line revert per sport.
+
+**Cards carry their own colour, and this is the load-bearing argument.** Yellow
+and red are the only colours in football's visual language that CARRY MEANING —
+a referee does not raise a "destructive action". Today a red card renders in the
+chassis's generic `destructive` red, identical to every other destructive
+action, and a yellow renders as neutral `standard`. That is the one place in
+this pad where colour is INFORMATION rather than decoration, and the current
+build discards it.
+
 ### R3 — the gallery's per-width captures can RACE the fold (2026-08-24)
 
 Found on R3's first football capture, and it undermines the sign-off gate
