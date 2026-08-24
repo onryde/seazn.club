@@ -18,6 +18,7 @@
     "./scheduling": "./src/scheduling/index.ts",
     "./scheduling/bracket-layout": "./src/scheduling/bracket-layout.ts",
     "./scheduling/calendar": "./src/scheduling/calendar.ts",
+    "./scheduling/court-windows": "./src/scheduling/court-windows.ts",
     "./scheduling/capacity": "./src/scheduling/capacity.ts",
     "./scheduling/grid-step": "./src/scheduling/grid-step.ts",
     "./scheduling/health": "./src/scheduling/health.ts",
