@@ -268,7 +268,7 @@ const baseCtx: Omit<PadViewCtx, "state" | "summary"> = { phase: "live", band: 3,
 describe("moreActions", () => {
   it("returns every padSpec(cfg) action NOT in the dedicated set — a future engine action needs no skin edit to appear here", () => {
     const dedicated = new Set(["cricket.ball"]); // the skin's own dedicated run-keypad tile
-    const actions = moreActions(spec(), { ...baseCtx, state: {}, summary: {} }, dedicated);
+    const actions = moreActions(spec(), { ...baseCtx, state: {}, summary: {} }, dedicated, new Set());
     expect(actions.map((a) => a.type).sort()).toEqual(["cricket.declare", "cricket.toss"]);
   });
 
@@ -278,7 +278,7 @@ describe("moreActions", () => {
       fidelity: { "cricket.superover": 3 },
       fidelityEntitlements: { 3: "scoring.ball_by_ball" },
     };
-    const actions = moreActions(gated, { ...baseCtx, band: 3, entitlements: {}, state: {}, summary: {} }, new Set());
+    const actions = moreActions(gated, { ...baseCtx, band: 3, entitlements: {}, state: {}, summary: {} }, new Set(), new Set());
     expect(actions).toHaveLength(1);
     expect(actions[0]!.availability).toEqual({ kind: "locked", reason: expect.objectContaining({ key: "scorepad.locked.reason" }) });
   });
@@ -289,7 +289,7 @@ describe("moreActions", () => {
       fidelity: { "cricket.toss": 0, "cricket.declare": 0, "cricket.ball": 0 },
       fidelityEntitlements: {},
     };
-    const actions = moreActions(twoPanel, { ...baseCtx, state: {}, summary: {} }, new Set(["cricket.ball"]));
+    const actions = moreActions(twoPanel, { ...baseCtx, state: {}, summary: {} }, new Set(["cricket.ball"]), new Set());
     // buildPadView is phase-scoped (ctx.phase: "live"), so the "post" panel's
     // own copy of the same three types is invisible here regardless — this
     // proves the de-dup guard AND the phase scoping in one assertion.

@@ -927,6 +927,41 @@ export interface SkinDefV3<View = unknown> {
    * change for exactly that reason.
    */
   swap?(view: View): SwapSlot[];
+  /**
+   * R3 review round — the event types this sport's own fold will REFUSE in the
+   * current view, whatever the pad might otherwise draw. The generic More
+   * sheet's SECOND exclusion set, alongside `dedicatedEventTypes`.
+   *
+   * The two sets exclude for opposite reasons and are deliberately kept apart
+   * rather than unioned into one variable: `dedicated` means "already reachable
+   * through a better, narrowed surface", and this means "not reachable at all
+   * right now". Merging them would leave a later reader unable to tell a
+   * de-duplication from a phase refusal.
+   *
+   * WHY THE CHASSIS CANNOT COMPUTE THIS ITSELF. `padSpec(cfg)` carries a
+   * `PadGate` per panel, and a sport that expresses every phase rule as a gate
+   * needs nothing here. Football does not: `applyGoal`/`applySub`/`applyShot`/
+   * `applySinBin*`/`applyPenalty` each guard on `isPlayPhase(state.phase)`
+   * INSIDE the fold, while their panels are ungated `phase: "live"` — and
+   * football's own `PadPhase` mapping puts SHOOTOUT in "live" (it IS a phase of
+   * the match). So the More sheet listed goal, sub, shot and both sin-bin
+   * forms during a shoot-out, every one of them WRONG_PHASE on tap and two of
+   * them reachable at band 0. That was found by the R3 review pass, and it is
+   * the same "never offer what the engine will refuse" rule R2b and R2c each
+   * applied to cricket's tiles and candidate lists.
+   *
+   * A SKIN THAT DECLARES THIS IS MIRRORING ITS OWN ENGINE, which is the thing
+   * this programme keeps getting wrong — so the obligation comes with it: the
+   * skin owes a test that drives the real fold and proves nothing it leaves
+   * unrefused is refused (football's is the `phaseVerdict` sweep in
+   * `__tests__/football-dispatch-totality.test.ts`). A mirror agrees with
+   * itself; only the fold can referee.
+   *
+   * FAILS OPEN. Omit the method and nothing is excluded — every skin written
+   * before this renders exactly as it did, and a sport whose gates already
+   * live in `padSpec` never needs it.
+   */
+  refusedEventTypes?(view: View): readonly string[];
 }
 
 /**

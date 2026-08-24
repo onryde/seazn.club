@@ -13,31 +13,66 @@
 // `cricket-dispatch-totality.test.ts`, kept parallel on purpose.
 //
 // FOUR SURFACES, per ruling R3-4: dedicated TILES (the two Goal tiles), the
-// skin's GUIDED SHEETS (card ×6, period, penalty), its SWAP slots
+// skin's GUIDED SHEETS (card ×2, period, penalty), its SWAP slots
 // (`football.sub`), and the chassis's generic More sheet, which lists every
-// `padSpec(cfg)` action the skin does not already dedicate — cfg-gated exactly
-// as the engine gates it (the shoot-out panel needs `cfg.shootout` AND a
-// `state.phase === "SHOOTOUT"` runtime gate; ET markers need
-// `extraTime.enabled`).
+// `padSpec(cfg)` action the skin does not already dedicate.
 //
-// Driven off the engine's own `football.eventSchemas` and `variants`, never a
-// hand-written list of nine — so this reds the moment the engine's vocabulary
-// changes, not the moment someone forgets to update a constant here.
+// ---------------------------------------------------------------------------
+// R3 REVIEW ROUND — THIS FILE WAS FALSE-GREEN, and the way it was false-green
+// is the point of the rewrite.
+//
+// The previous sweep folded every situation into FOUR UNION SETS. For the
+// shoot-out it built the `dedicated` set as `live ∪ SHOOTOUT`
+// (`dedicated = new Set([...dedicated, ...dedicatedEventTypes(soTiles, …)])`)
+// while `pad-host.tsx` recomputes `dedicated` from the CURRENT state alone.
+// Production therefore drops `football.goal` and `football.sub` out of
+// `dedicated` at SHOOTOUT — the Goal tile and the swap slots are both withheld
+// there — and both reappear inside More as un-narrowed generic forms that
+// `applyGoal`/`applySub` refuse with WRONG_PHASE. The union hid it: because
+// the LIVE pass had already added them, `expect(viaMore.has("football.goal"))
+// .toBe(false)` passed in exactly the phase where the duplicate existed. A
+// band-0 org reaches that dead end in two taps.
+//
+// So the unit of measurement is now ONE SITUATION — one cfg, one really-folded
+// state, one band — measured the way the host measures it, and every assertion
+// quantifies over situations rather than over their union. Two consequences
+// worth keeping:
+//
+//   - The oracle is the ENGINE, not a table. `phaseVerdict` (_football-fold.ts)
+//     calls `football.apply` and reports whether the refusal was WRONG_PHASE.
+//     The four dead ends this round fixed were all written against a MIRROR of
+//     the engine's phase rules, and a mirror agrees with itself.
+//   - "Reachable" means a scorer can TAP it now: tiles are phase-filtered, and
+//     a sheet/swap slot counts only when some surviving tile opens it. The
+//     `dedicated` set fed to `moreActions` is deliberately NOT filtered that
+//     way — it mirrors the host, which passes the un-phase-filtered tiles.
 import { describe, expect, it } from "vitest";
-import type { AnySportModule } from "@seazn/engine/sport";
+import type { AnySportModule, FidelityBand } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import type { SquadState } from "@seazn/engine/core";
-import { buildSheets, buildSwap, buildTiles } from "../skins/football";
-import { dedicatedEventTypes, moreActions } from "../pad-host";
-import type { GuidedSheetSpec, PadHostView, SwapSlot, TileSpec } from "../types";
+import {
+  buildSheets,
+  buildSwap,
+  buildTiles,
+  periodMarkersOf,
+  refusedEventTypes,
+  resolvePhase,
+} from "../skins/football";
+import {
+  dedicatedEventTypes,
+  entitledBandsFrom,
+  filterTilesByBand,
+  moreActions,
+} from "../pad-host";
+import type { PadHostView, PadPhase, TileSpec } from "../types";
 import { grantAllEntitlements } from "../../__tests__/_cfg-space";
+import { foldedPhases, phaseVerdict, probePayload, type FoldedPhase } from "./_football-fold";
 
 const footballModule = (builtinModules as readonly AnySportModule[]).find((m) => m.key === "football");
 if (!footballModule?.padSpec || !footballModule.eventSchemas) {
   throw new Error("football module (with padSpec/eventSchemas) not found in builtinModules — engine export moved?");
 }
-const football = footballModule;
-// Read straight off `footballModule`, not the alias — `padSpec`/`eventSchemas`
+// Read straight off `footballModule`, not an alias — `padSpec`/`eventSchemas`
 // are OPTIONAL on AnySportModule and tsc's narrowing does not survive being
 // re-derived through a second variable (the same pattern
 // cricket-dispatch-totality.test.ts uses, for the same reason).
@@ -45,143 +80,118 @@ const padSpecFor = footballModule.padSpec;
 const ALL_EVENT_TYPES = new Set(Object.keys(footballModule.eventSchemas));
 
 const t = (key: string): string => key;
+const ALL_BANDS: readonly FidelityBand[] = [0, 1, 2, 3];
 
 // ---------------------------------------------------------------------------
-// cfg construction — every shipped variant preset, plus the two leaf overrides
-// no preset sets (the same "a cfg leaf no shipped variant turns on" trap
-// `__tests__/_cfg-space.ts` exists to close for the v2 skins' coverage sweep).
+// One situation = one cfg + one really-folded state + one band. The sweep is
+// the cross product; `foldedPhases()` already crosses every shipped variant
+// preset with the two cfg leaves no preset turns on (extra time, the kicks).
 // ---------------------------------------------------------------------------
 
-function variantNames(): string[] {
-  return Object.keys((football.variants ?? {}) as Record<string, unknown>);
+interface Situation extends FoldedPhase {
+  band: FidelityBand;
 }
 
-function cfgFor(variant: string, overrides: Record<string, unknown> = {}): unknown {
-  const presets = (football.variants ?? {}) as Record<string, Record<string, unknown>>;
-  const preset = presets[variant];
-  if (!preset) throw new Error(`football module has no "${variant}" variant preset`);
-  return football.configSchema.parse({ ...preset, ...overrides });
+function situations(): Situation[] {
+  return foldedPhases().flatMap((folded) =>
+    ALL_BANDS.map((band) => ({ ...folded, band, label: `${folded.label} band ${band}` })),
+  );
 }
 
-// ---------------------------------------------------------------------------
-// Minimal synthetic views — a real fold is not needed: every builder swept
-// here is a pure function of its input, and reachability depends only on
-// state.phase / cfg, never on realistic scoreline numbers. The squad shape IS
-// football's own private projection (`FootballSquad`), because that is what
-// the skin reads.
-// ---------------------------------------------------------------------------
-
-function squads(): SquadState {
+/** The squad projection the CHASSIS carries (`PadHostView.squads`), which is
+ *  the kernel's `SquadState` and NOT football's own `state.squads` — the two
+ *  are different shapes on purpose, and the skin reads the latter. Empty
+ *  members: nothing swept here reads it (the skin's `squadOf` goes to
+ *  `state.squads`), and filling it would imply otherwise. */
+function chassisSquads(): SquadState {
   return {
-    home: { entrantId: "home-1", members: [], subsUsed: 0, exemptUsed: {} },
-    away: { entrantId: "away-1", members: [], subsUsed: 0, exemptUsed: {} },
+    home: { entrantId: "H", members: [], subsUsed: 0, exemptUsed: {} },
+    away: { entrantId: "A", members: [], subsUsed: 0, exemptUsed: {} },
   };
 }
 
-function liveState(over: Record<string, unknown> = {}): Record<string, unknown> {
+function viewFor(s: Situation): PadHostView {
   return {
-    phase: "H1",
-    entrants: { home: "home-1", away: "away-1" },
-    goals: { home: 0, away: 0 },
-    periods: [],
-    cards: [],
-    squads: {
-      home: { onPitch: ["h1", "h2"], bench: ["h3"], offUsed: [], sentOff: [] },
-      away: { onPitch: ["a1", "a2"], bench: ["a3"], offUsed: [], sentOff: [] },
-    },
-    shootout: null,
-    ...over,
-  };
-}
-
-function baseView(cfg: unknown, state: unknown): PadHostView {
-  return {
-    cfg,
-    state,
+    cfg: s.cfg,
+    state: s.state,
     summary: {},
-    phase: "live",
-    band: 3,
+    phase: resolvePhase({ state: s.state }),
+    band: s.band,
     entitlements: {},
     personNames: {},
-    squads: squads(),
+    squads: chassisSquads(),
     events: [],
     contextOverrides: {},
   };
 }
 
-function tileEventTypes(tiles: readonly TileSpec[]): Set<string> {
-  const out = new Set<string>();
-  for (const tile of tiles) if ("event" in tile.action) out.add(tile.action.event.type);
-  return out;
-}
-
-function sheetEventTypes(sheets: Record<string, GuidedSheetSpec>): Set<string> {
-  return new Set(Object.values(sheets).map((s) => s.event));
-}
-
-function swapEventTypes(slots: readonly SwapSlot[]): Set<string> {
-  return new Set(slots.map((slot) => slot.eventType));
-}
-
-interface SweepResult {
+interface Reach {
+  /** Every type a scorer can dispatch RIGHT NOW, by surface. */
   viaTiles: Set<string>;
   viaSheets: Set<string>;
   viaSwap: Set<string>;
   viaMore: Set<string>;
+  /** The enabled marker options the period sheet currently offers. */
+  periodMarkers: string[];
 }
 
-function sweep(): SweepResult {
+function reachIn(s: Situation): Reach {
+  const view = viewFor(s);
+  const spec = padSpecFor(s.cfg);
+  const entitlements = grantAllEntitlements(spec);
+  const padPhase: PadPhase = view.phase;
+
+  const sheets = buildSheets(view, t);
+  const slots = buildSwap(view, t);
+  const allTiles = buildTiles(view);
+  // Exactly the host's own order of operations (pad-host.tsx): band-filter the
+  // tiles against the ENTITLED bands, then derive `dedicated` from THAT list —
+  // never from a union across phases, which is what this file used to do.
+  const entitledBands = entitledBandsFrom(spec.fidelityEntitlements, entitlements);
+  const tiles = filterTilesByBand(allTiles, sheets, slots, spec.fidelity, entitledBands);
+  const dedicated = dedicatedEventTypes(tiles, sheets, slots);
+
+  // A tile the current phase does not declare is not on screen, so nothing it
+  // would open is reachable either.
+  const tappable = tiles.filter((tile: TileSpec) => tile.phases.includes(padPhase));
   const viaTiles = new Set<string>();
   const viaSheets = new Set<string>();
   const viaSwap = new Set<string>();
-  const viaMore = new Set<string>();
-
-  const cases: { cfg: unknown; shootout?: boolean }[] = [
-    // Every shipped preset — 11-a-side, youth, small-sided, mini-soccer.
-    ...variantNames().map((name) => ({ cfg: cfgFor(name) })),
-    // The two leaves no preset turns on. Extra time widens the marker list;
-    // the shoot-out adds a whole panel with its own runtime gate.
-    { cfg: cfgFor("11-a-side", { extraTime: { enabled: true, halfMinutes: 15 } }) },
-    { cfg: cfgFor("11-a-side", { shootout: true }), shootout: true },
-  ];
-
-  for (const { cfg, shootout } of cases) {
-    const live = baseView(cfg, liveState());
-    const tiles = buildTiles(live);
-    const sheets = buildSheets(live);
-    const slots = buildSwap(live, t);
-    for (const type of tileEventTypes(tiles)) viaTiles.add(type);
-    for (const type of sheetEventTypes(sheets)) viaSheets.add(type);
-    for (const type of swapEventTypes(slots)) viaSwap.add(type);
-
-    let dedicated = dedicatedEventTypes(tiles, sheets, slots);
-    let ctxState: Record<string, unknown> = liveState();
-
-    if (shootout) {
-      // The panel's own runtime gate is `state.phase === "SHOOTOUT"`, so the
-      // kick is only reachable from a state that has actually reached one —
-      // exactly the state the fold produces under `cfg.shootout`.
-      const so = baseView(cfg, liveState({ phase: "SHOOTOUT", shootout: { kicks: [] } }));
-      const soTiles = buildTiles(so);
-      for (const type of tileEventTypes(soTiles)) viaTiles.add(type);
-      for (const type of swapEventTypes(buildSwap(so, t))) viaSwap.add(type);
-      dedicated = new Set([...dedicated, ...dedicatedEventTypes(soTiles, buildSheets(so), buildSwap(so, t))]);
-      ctxState = liveState({ phase: "SHOOTOUT", shootout: { kicks: [] } });
-    }
-
-    const spec = padSpecFor(cfg);
-    const entitlements = grantAllEntitlements(spec);
-    // Football declares every panel at "live" (football.ts's own comment), so
-    // "live" is the only phase that can reach anything at all — swept anyway
-    // so this stays honest if a pre/post panel is ever added.
-    for (const phase of ["live", "pre", "post"] as const) {
-      for (const action of moreActions(spec, { state: ctxState, summary: {}, phase, band: 3, entitlements }, dedicated)) {
-        viaMore.add(action.type);
-      }
+  for (const tile of tappable) {
+    if ("event" in tile.action) viaTiles.add(tile.action.event.type);
+    else if ("sheet" in tile.action) {
+      const sheet = sheets[tile.action.sheet];
+      if (sheet) viaSheets.add(sheet.event);
+    } else if ("swap" in tile.action) {
+      const swapId = tile.action.swap;
+      const slot = slots.find((candidate) => candidate.id === swapId);
+      if (slot) viaSwap.add(slot.eventType);
     }
   }
 
-  return { viaTiles, viaSheets, viaSwap, viaMore };
+  const viaMore = new Set(
+    moreActions(
+      spec,
+      { state: s.state, summary: {}, phase: padPhase, band: s.band, entitlements },
+      dedicated,
+      // The SKIN's own refusal set, exactly as `PadHostV3` passes it — not a
+      // set this test computes, or the sweep would be measuring itself.
+      new Set(refusedEventTypes(view)),
+    ).map((action) => action.type),
+  );
+
+  const periodSheet = sheets.period;
+  const blocked = periodSheet?.steps[0]?.kind === "choice" ? periodSheet.steps[0].blocked?.({}) : undefined;
+  const periodMarkers =
+    periodSheet?.steps[0]?.kind === "choice"
+      ? periodSheet.steps[0].options.filter((option) => blocked?.[option.id] === undefined).map((o) => o.id)
+      : [];
+
+  return { viaTiles, viaSheets, viaSwap, viaMore, periodMarkers };
+}
+
+function allReachable(reach: Reach): Set<string> {
+  return new Set([...reach.viaTiles, ...reach.viaSheets, ...reach.viaSwap, ...reach.viaMore]);
 }
 
 describe("football dispatch-guard totality (R3/task B2 headline)", () => {
@@ -190,16 +200,23 @@ describe("football dispatch-guard totality (R3/task B2 headline)", () => {
   });
 
   it("every football.* event type is reachable via tiles, sheets, the swap sheet or More — swept across every shipped cfg", () => {
-    const { viaTiles, viaSheets, viaSwap, viaMore } = sweep();
+    const surfaces = { tiles: new Set<string>(), sheets: new Set<string>(), swap: new Set<string>(), more: new Set<string>() };
+    for (const s of situations()) {
+      const reach = reachIn(s);
+      for (const type of reach.viaTiles) surfaces.tiles.add(type);
+      for (const type of reach.viaSheets) surfaces.sheets.add(type);
+      for (const type of reach.viaSwap) surfaces.swap.add(type);
+      for (const type of reach.viaMore) surfaces.more.add(type);
+    }
 
     // Each of the four surfaces pulls real weight — a vacuously empty bucket
     // would let the union assertion below pass for the wrong reason.
-    expect([...viaTiles], "tiles reached nothing").not.toEqual([]);
-    expect([...viaSheets], "guided sheets reached nothing").not.toEqual([]);
-    expect([...viaSwap], "the swap sheet reached nothing").not.toEqual([]);
-    expect([...viaMore], "the More sheet reached nothing").not.toEqual([]);
+    expect([...surfaces.tiles], "tiles reached nothing").not.toEqual([]);
+    expect([...surfaces.sheets], "guided sheets reached nothing").not.toEqual([]);
+    expect([...surfaces.swap], "the swap sheet reached nothing").not.toEqual([]);
+    expect([...surfaces.more], "the More sheet reached nothing").not.toEqual([]);
 
-    const union = new Set([...viaTiles, ...viaSheets, ...viaSwap, ...viaMore]);
+    const union = new Set([...surfaces.tiles, ...surfaces.sheets, ...surfaces.swap, ...surfaces.more]);
     const missing = [...ALL_EVENT_TYPES].filter((type) => !union.has(type)).sort();
     expect(missing, `unreachable football.* event types: ${missing.join(", ")}`).toEqual([]);
 
@@ -211,8 +228,67 @@ describe("football dispatch-guard totality (R3/task B2 headline)", () => {
     expect(invented, `reachable type not in the engine's own eventSchemas: ${invented.join(", ")}`).toEqual([]);
   });
 
+  // THE DEAD-END GUARD. The defect class this programme keeps re-finding, now
+  // measured against the fold instead of against a mirror of it: whatever the
+  // pad offers in a situation, `football.apply` must not answer WRONG_PHASE.
+  //
+  // `football.period` is excluded here and asserted below instead — it is the
+  // one type whose legality depends on the PAYLOAD (which marker) as well as
+  // the phase, so a single probe payload cannot answer for it.
+  it("nothing the pad offers is refused by the fold for being the wrong phase", () => {
+    const deadEnds: string[] = [];
+    for (const s of situations()) {
+      const reach = reachIn(s);
+      for (const type of allReachable(reach)) {
+        if (type === "football.period") continue;
+        const verdict = phaseVerdict(s.cfg, s.state, type, probePayload(type, s.state));
+        if (verdict === "wrong-phase") deadEnds.push(`${s.label}: ${type}`);
+      }
+    }
+    expect(deadEnds, `dead-end taps (the fold refuses these with WRONG_PHASE):\n${deadEnds.join("\n")}`).toEqual([]);
+  });
+
+  // E1's half of the same rule. `periodMarkersOf` mirrors the engine's private
+  // `periodMarkers`, which gates on MODE alone, while `applyPeriod` ALSO gates
+  // on `state.phase` — so in halves mode at H1 the sheet offered both HT and
+  // FT, and FT raises WRONG_PHASE. Every marker the sheet leaves ENABLED must
+  // be one the fold accepts here and now.
+  it("every enabled period marker is one applyPeriod accepts in the current phase", () => {
+    const offered: string[] = [];
+    for (const s of situations()) {
+      const reach = reachIn(s);
+      if (!reach.viaSheets.has("football.period")) continue;
+      for (const marker of reach.periodMarkers) {
+        const verdict = phaseVerdict(s.cfg, s.state, "football.period", { phase: marker });
+        if (verdict === "wrong-phase") offered.push(`${s.label}: ${marker}`);
+      }
+    }
+    expect(offered, `period markers the fold refuses in that phase:\n${offered.join("\n")}`).toEqual([]);
+  });
+
+  // The mirror of the assertion above: narrowing must not narrow to NOTHING.
+  // A sheet whose every option is blocked is a tile that opens a dead panel,
+  // which is the D-15 defect wearing the fix's coat.
+  it("wherever the period sheet is reachable, at least one marker is enabled", () => {
+    const empty: string[] = [];
+    for (const s of situations()) {
+      const reach = reachIn(s);
+      if (reach.viaSheets.has("football.period") && reach.periodMarkers.length === 0) empty.push(s.label);
+    }
+    expect(empty, `the period sheet is reachable with every marker blocked:\n${empty.join("\n")}`).toEqual([]);
+    // And the cfg mirror still holds: an enabled marker is always one this
+    // cfg's mode declares at all (quarters never offers a halves-only marker).
+    for (const s of situations()) {
+      const reach = reachIn(s);
+      for (const marker of reach.periodMarkers) {
+        expect(periodMarkersOf(s.cfg), `${s.label}: ${marker} is not a marker of this cfg`).toContain(marker);
+      }
+    }
+  });
+
   it("the four More-sheet types are exactly the ones ruling R3-4 routes there, and no dedicated type joins them", () => {
-    const { viaMore } = sweep();
+    const viaMore = new Set<string>();
+    for (const s of situations()) for (const type of reachIn(s).viaMore) viaMore.add(type);
     expect([...viaMore].sort()).toEqual([
       "football.shootout.kick",
       "football.shot",
@@ -222,27 +298,57 @@ describe("football dispatch-guard totality (R3/task B2 headline)", () => {
   });
 
   // The de-duplication ruling this wave took (see `dedicatedEventTypes`'
-  // own doc, pad-host.tsx). A swap tile used to contribute nothing to the
-  // dedicated set, so `football.sub` appeared BOTH on its Sub tile and again
-  // as an un-narrowed generic form inside More — the same two-divergent-entry-
-  // points defect R2c closed for `cricket.retire`.
-  it("football.sub is reachable through the swap sheet, and NO LONGER through the generic More sheet", () => {
-    const { viaSwap, viaMore } = sweep();
+  // own doc, pad-host.tsx) — now asserted PER SITUATION. The union form of
+  // this test is what let the shoot-out duplicate through.
+  it("no type is ever offered by a dedicated surface AND the generic More sheet in the same situation", () => {
+    const duplicates: string[] = [];
+    for (const s of situations()) {
+      const reach = reachIn(s);
+      const dedicatedNow = new Set([...reach.viaTiles, ...reach.viaSheets, ...reach.viaSwap]);
+      for (const type of reach.viaMore) {
+        if (dedicatedNow.has(type)) duplicates.push(`${s.label}: ${type}`);
+      }
+    }
+    expect(duplicates, `duplicated into More:\n${duplicates.join("\n")}`).toEqual([]);
+  });
+
+  it("football.sub is reachable through the swap sheet, and NEVER through the generic More sheet", () => {
+    const viaSwap = new Set<string>();
+    const leaks: string[] = [];
+    for (const s of situations()) {
+      const reach = reachIn(s);
+      for (const type of reach.viaSwap) viaSwap.add(type);
+      if (reach.viaMore.has("football.sub")) leaks.push(s.label);
+    }
     expect(viaSwap.has("football.sub")).toBe(true);
-    expect(viaMore.has("football.sub")).toBe(false);
+    expect(leaks, `football.sub offered as a generic More form in:\n${leaks.join("\n")}`).toEqual([]);
   });
 
   it("the card, period and penalty flows are the skin's own sheets, never a duplicate generic form", () => {
-    const { viaSheets, viaMore } = sweep();
+    const viaSheets = new Set<string>();
+    const leaks: string[] = [];
+    for (const s of situations()) {
+      const reach = reachIn(s);
+      for (const type of reach.viaSheets) viaSheets.add(type);
+      for (const type of ["football.card", "football.period", "football.penalty"]) {
+        if (reach.viaMore.has(type)) leaks.push(`${s.label}: ${type}`);
+      }
+    }
     for (const type of ["football.card", "football.period", "football.penalty"]) {
       expect(viaSheets.has(type), type).toBe(true);
-      expect(viaMore.has(type), `${type} is duplicated into More`).toBe(false);
     }
+    expect(leaks, `duplicated into More:\n${leaks.join("\n")}`).toEqual([]);
   });
 
   it("the goal is a direct tile tap — no sheet, no form, side-level on commit", () => {
-    const { viaTiles, viaMore } = sweep();
+    const viaTiles = new Set<string>();
+    const leaks: string[] = [];
+    for (const s of situations()) {
+      const reach = reachIn(s);
+      for (const type of reach.viaTiles) viaTiles.add(type);
+      if (reach.viaMore.has("football.goal")) leaks.push(s.label);
+    }
     expect(viaTiles.has("football.goal")).toBe(true);
-    expect(viaMore.has("football.goal")).toBe(false);
+    expect(leaks, `football.goal offered as a generic More form in:\n${leaks.join("\n")}`).toEqual([]);
   });
 });

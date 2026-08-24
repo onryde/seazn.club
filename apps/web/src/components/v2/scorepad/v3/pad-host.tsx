@@ -210,20 +210,45 @@ export function dedicatedEventTypes(
 }
 
 /** The "More" sheet's own content: every `padSpec(cfg)` action NOT in
- *  `dedicated`, phase/gate/band/entitlement-filtered exactly like the
- *  panel walk `buildPadView` already does for the legacy renderer — reused
- *  verbatim, never re-derived, so a locked/wrong-phase action can never
- *  leak in here either. De-duplicated by type: a module may legitimately
- *  declare the same wire type more than once across panels
- *  (skins/types.ts's own `actionByType` doc); the FIRST resolved view
- *  wins, same "first match" convention that file already documents. */
-export function moreActions(spec: PadSpec, ctx: PadViewCtx, dedicated: ReadonlySet<string>): PadActionView[] {
+ *  `dedicated` and NOT in `refused`, phase/gate/band/entitlement-filtered
+ *  exactly like the panel walk `buildPadView` already does for the legacy
+ *  renderer — reused verbatim, never re-derived. De-duplicated by type: a
+ *  module may legitimately declare the same wire type more than once across
+ *  panels (skins/types.ts's own `actionByType` doc); the FIRST resolved view
+ *  wins, same "first match" convention that file already documents.
+ *
+ *  TWO EXCLUSION SETS, ON PURPOSE (R3 review round). `dedicated` is "already
+ *  reachable through a narrowed surface" — see `dedicatedEventTypes` above.
+ *  `refused` is `SkinDefV3.refusedEventTypes(view)`: "the fold will not accept
+ *  this at all right now". They are not unioned into one parameter because a
+ *  later reader must be able to tell which reason applied, and because they
+ *  are computed from different things — the skin's own tile/sheet/swap
+ *  declarations versus its engine's phase gates.
+ *
+ *  The comment `buildPadView` earns above ("a locked/wrong-phase action can
+ *  never leak in here either") was TRUE OF THE PANEL GATE and false of the
+ *  fold: `padSpec`'s gates are the only phase rules the view model can see,
+ *  and football keeps most of its own inside `apply`. That gap is exactly what
+ *  `refused` closes — it shipped as four dead-end taps during the shoot-out,
+ *  two of them at band 0.
+ *
+ *  `refused` is REQUIRED, not optional-with-a-default, for the same reason
+ *  `swaps` is on `dedicatedEventTypes`: a defaulted argument would silently
+ *  restore the dead end for a forgetful caller. A skin that declares no
+ *  refusals passes an empty set, which reads as the deliberate statement it
+ *  is. */
+export function moreActions(
+  spec: PadSpec,
+  ctx: PadViewCtx,
+  dedicated: ReadonlySet<string>,
+  refused: ReadonlySet<string>,
+): PadActionView[] {
   const view = buildPadView(spec, ctx);
   const seen = new Set<string>();
   const out: PadActionView[] = [];
   for (const panel of view.panels) {
     for (const action of panel.actions) {
-      if (dedicated.has(action.type) || seen.has(action.type)) continue;
+      if (dedicated.has(action.type) || refused.has(action.type) || seen.has(action.type)) continue;
       seen.add(action.type);
       out.push(action);
     }
@@ -694,7 +719,18 @@ export function PadHostV3(props: PadHostV3Props) {
   // event stays listed in the More sheet as an un-narrowed generic form
   // beside its Sub tile (see dedicatedEventTypes' own doc).
   const dedicated = useMemo(() => dedicatedEventTypes(tiles, sheets, swapSlots), [tiles, sheets, swapSlots]);
-  const moreActionsList = useMemo(() => moreActions(spec, padViewCtx, dedicated), [spec, padViewCtx, dedicated]);
+  // R3 review round: the skin's own "the fold refuses this right now" set —
+  // `moreActions`' second exclusion set, see its doc for why the two are not
+  // one. Built from `view` (not `padViewCtx`), because it is a SKIN call and
+  // every skin method takes the same view bag.
+  const refusedTypes = useMemo(
+    () => new Set(props.skin.refusedEventTypes?.(view) ?? []),
+    [props.skin, view],
+  );
+  const moreActionsList = useMemo(
+    () => moreActions(spec, padViewCtx, dedicated, refusedTypes),
+    [spec, padViewCtx, dedicated, refusedTypes],
+  );
 
   // The ONE dispatch gateway (task brief item 5): every event this host
   // sends — tile taps, guided-sheet completions, action-form confirms,

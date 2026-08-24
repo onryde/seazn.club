@@ -211,7 +211,7 @@ function sweep(): SweepResult {
     // phase-scoped via buildPadView, pad-host.test.ts's own "never lists
     // the same type twice" test proves this scoping directly).
     for (const phase of ["live", "post"] as const) {
-      const actions = moreActions(spec, { state: liveState(), summary: {}, phase, band: 3, entitlements }, dedicated);
+      const actions = moreActions(spec, { state: liveState(), summary: {}, phase, band: 3, entitlements }, dedicated, new Set());
       for (const a of actions) viaMore.add(a.type);
     }
   }

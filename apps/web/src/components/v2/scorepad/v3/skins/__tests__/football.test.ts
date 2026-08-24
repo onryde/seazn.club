@@ -32,6 +32,7 @@ import {
   CARD_COLORS,
   CARD_REASONS,
   EVENT_BAND,
+  PENALTY_OFFENCES,
   PENALTY_OUTCOMES,
   buildDock,
   buildScorebug,
@@ -40,7 +41,10 @@ import {
   buildTiles,
   footballDetail,
   footballSkinV3,
+  legalPeriodMarkers,
   periodMarkersOf,
+  phaseAllows,
+  refusedEventTypes,
   readClock,
   resolvePhase,
 } from "../football";
@@ -493,7 +497,7 @@ describe("buildTiles", () => {
   it("every {swap} tile names a slot this skin's own swap() declares, and every {sheet} tile a sheet it builds", () => {
     const v = view();
     const slotIds = new Set(buildSwap(v, t).map((slot) => slot.id));
-    const sheetKeys = new Set(Object.keys(buildSheets(v)));
+    const sheetKeys = new Set(Object.keys(buildSheets(v, t)));
     for (const tile of buildTiles(v)) {
       if ("swap" in tile.action) expect(slotIds.has(tile.action.swap), tile.id).toBe(true);
       if ("sheet" in tile.action && tile.action.sheet !== "__pad-host/more__") {
@@ -551,7 +555,7 @@ function drive(spec: GuidedSheetSpec, answers: readonly string[]) {
 
 describe("buildSheets — the card flow (R3-1)", () => {
   it("asks the COLOUR first — all three, in the shared cardColor.* wording, never a second vocabulary", () => {
-    const spec = buildSheets(view({ band: 2 }))["card-home"]!;
+    const spec = buildSheets(view({ band: 2 }), t)["card-home"]!;
     const step = currentStep(spec, initialSheetState());
     expect(step?.id).toBe("color");
     expect(step?.kind === "choice" && step.options.map((o) => o.id)).toEqual([...CARD_COLORS]);
@@ -573,7 +577,7 @@ describe("buildSheets — the card flow (R3-1)", () => {
   // -------------------------------------------------------------------------
 
   it("colours each option with the CARD CODE, and gives second yellow BOTH cards in offence order", () => {
-    const spec = buildSheets(view({ band: 2 }))["card-home"]!;
+    const spec = buildSheets(view({ band: 2 }), t)["card-home"]!;
     const step = currentStep(spec, initialSheetState());
     const tones = step?.kind === "choice" ? step.options.map((o) => [o.id, o.tone] as const) : [];
     expect(tones).toEqual([
@@ -588,7 +592,7 @@ describe("buildSheets — the card flow (R3-1)", () => {
   });
 
   it("names TONES, never colours — a skin that supplied a hex would have forked the token layer", () => {
-    const spec = buildSheets(view({ band: 2 }))["card-home"]!;
+    const spec = buildSheets(view({ band: 2 }), t)["card-home"]!;
     const step = currentStep(spec, initialSheetState());
     const declared = step?.kind === "choice" ? step.options.flatMap((o) => [...(o.tone ?? [])]) : [];
     expect(declared.length).toBeGreaterThan(0); // vacuity guard
@@ -599,7 +603,7 @@ describe("buildSheets — the card flow (R3-1)", () => {
     // The offence list, the period markers and the penalty outcomes carry no
     // colour at all. If a later wave starts tinting those, the card code stops
     // meaning anything, which is the failure this assertion exists to catch.
-    for (const [key, spec] of Object.entries(buildSheets(view({ band: 3 })))) {
+    for (const [key, spec] of Object.entries(buildSheets(view({ band: 3 }), t))) {
       for (const step of spec.steps) {
         if (step.kind !== "choice" || (key.startsWith("card-") && step.id === "color")) continue;
         for (const option of step.options) {
@@ -610,7 +614,7 @@ describe("buildSheets — the card flow (R3-1)", () => {
   });
 
   it("then asks the offence at band 2+, offering all 13 CardReason values, and commits colour + side + reason", () => {
-    const spec = buildSheets(view({ band: 2 }))["card-home"]!;
+    const spec = buildSheets(view({ band: 2 }), t)["card-home"]!;
     const advanced = answerStep(spec, initialSheetState(), "yellow");
     expect(advanced.done).toBe(false);
     const second = advanced.done ? null : currentStep(spec, advanced.state);
@@ -625,14 +629,14 @@ describe("buildSheets — the card flow (R3-1)", () => {
   // `second_yellow` is its OWN colour, never a red with a note: the engine
   // computes the suspension tariff from the reason, not the colour.
   it("carries second_yellow through as its own colour, from either side's sheet", () => {
-    expect(drive(buildSheets(view())["card-away"]!, ["second_yellow", "violent_conduct"])).toEqual({
+    expect(drive(buildSheets(view(), t)["card-away"]!, ["second_yellow", "violent_conduct"])).toEqual({
       type: "football.card",
       payload: { by: "away-1", color: "second_yellow", reason: "violent_conduct" },
     });
   });
 
   it("HIDES the offence step below band 2 and commits on the colour alone — `reason` is optional in the engine", () => {
-    const spec = buildSheets(view({ band: 1 }))["card-home"]!;
+    const spec = buildSheets(view({ band: 1 }), t)["card-home"]!;
     expect(currentStep(spec, initialSheetState())?.id).toBe("color");
     expect(drive(spec, ["red"])).toEqual({
       type: "football.card",
@@ -646,7 +650,7 @@ describe("buildSheets — the card flow (R3-1)", () => {
   it("withholds the card TILE below band 2 and opens ONE sheet per side at band 2+", () => {
     expect(tileById(buildTiles(view({ band: 1 })), "card-home")).toBeUndefined();
     expect(tileById(buildTiles(view({ band: 2 })), "card-home")!.action).toEqual({ sheet: "card-home" });
-    expect(Object.keys(buildSheets(view())).filter((key) => key.startsWith("card-"))).toEqual([
+    expect(Object.keys(buildSheets(view(), t)).filter((key) => key.startsWith("card-"))).toEqual([
       "card-home",
       "card-away",
     ]);
@@ -655,21 +659,21 @@ describe("buildSheets — the card flow (R3-1)", () => {
 
 describe("buildSheets — period and penalty", () => {
   it("offers exactly the markers this cfg's own fold accepts", () => {
-    const halves = buildSheets(view())["period"]!;
+    const halves = buildSheets(view(), t)["period"]!;
     expect((halves.steps[0] as { options: { id: string }[] }).options.map((o) => o.id)).toEqual(["HT", "FT"]);
-    const quarters = buildSheets(view({ cfg: cfg({ halves: 4 }) }))["period"]!;
+    const quarters = buildSheets(view({ cfg: cfg({ halves: 4 }) }), t)["period"]!;
     expect((quarters.steps[0] as { options: { id: string }[] }).options.map((o) => o.id)).toEqual(["QT", "HT", "3QT", "FT"]);
   });
 
   it("commits a period marker with no side attribution — a whistle belongs to neither team", () => {
-    expect(drive(buildSheets(view())["period"]!, ["HT"])).toEqual({
+    expect(drive(buildSheets(view(), t)["period"]!, ["HT"])).toEqual({
       type: "football.period",
       payload: { phase: "HT" },
     });
   });
 
   it("asks which side was awarded the penalty, then what happened — outcome is REQUIRED in the engine", () => {
-    const spec = buildSheets(view())["penalty"]!;
+    const spec = buildSheets(view(), t)["penalty"]!;
     expect(spec.steps.map((s) => s.id)).toEqual(["by", "outcome"]);
     expect(drive(spec, ["away-1", "saved"])).toEqual({
       type: "football.penalty",
@@ -1065,7 +1069,7 @@ function labelKeys(): Set<string> {
         keys.add(tile.label);
         if (tile.sublabel !== undefined) keys.add(tile.sublabel);
       }
-      for (const spec of Object.values(buildSheets(v))) {
+      for (const spec of Object.values(buildSheets(v, t))) {
         for (const step of spec.steps) {
           keys.add(step.title);
           if (step.kind === "choice") for (const option of step.options) keys.add(option.label);
@@ -1143,12 +1147,16 @@ function envelope(seq: number, type: string, payload: Record<string, unknown>): 
 
 /** The view `PadHostV3` itself would build for this event stream — same
  *  `squadStateOf(state, lineups)` call, same folded state, no shortcut. */
-function foldedView(events: readonly EventEnvelope[], band: PadHostView["band"] = 3): PadHostView {
+function foldedView(
+  events: readonly EventEnvelope[],
+  band: PadHostView["band"] = 3,
+  cfgOver: Record<string, unknown> = {},
+): PadHostView {
   const lineups: LineupPair = {
     home: { entrantId: "H", slots: eleven("h") },
     away: { entrantId: "A", slots: eleven("a") },
   };
-  const engineCfgValue = footballModule!.configSchema.parse({ maxSubs: 3, subWindows: 3 });
+  const engineCfgValue = footballModule!.configSchema.parse({ maxSubs: 3, subWindows: 3, ...cfgOver });
   const folded = foldClient(footballModule as never, engineCfgValue, lineups, events) as Record<string, unknown>;
   return {
     cfg: engineCfgValue,
@@ -1224,5 +1232,278 @@ describe("against a real engine fold", () => {
     expect(() => skin.dock("football.goal", view, { by: "H" })).not.toThrow();
     expect(skin.phase!(view)).toBe("live");
     expect(buildScorebug(view, t).halves[0].big).toBe("1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3 REVIEW ROUND — the four "never offer what the engine refuses" fixes, plus
+// the one "never refuse what the engine allows" fix. Each is asserted against
+// the ENGINE where the engine can answer, and against the SKIN's own contract
+// (the reason copy, the band gate) where only the skin can.
+//
+// The sweep that drives the real fold across every phase and band lives in
+// ../../__tests__/football-dispatch-totality.test.ts; these are the unit-level
+// contracts that sweep cannot see — a reason string, a blocked flag, a chip.
+// ---------------------------------------------------------------------------
+
+describe("phaseAllows / legalPeriodMarkers — the fold's phase rules, stated once", () => {
+  it("every play phase has exactly ONE legal period marker, and it is the mode's own", () => {
+    expect(legalPeriodMarkers("H1", cfg())).toEqual(["HT"]);
+    expect(legalPeriodMarkers("H2", cfg())).toEqual(["FT"]);
+    expect(legalPeriodMarkers("H1", cfg({ halves: 4 }))).toEqual(["QT"]);
+    expect(legalPeriodMarkers("Q2", cfg({ halves: 4 }))).toEqual(["HT"]);
+    expect(legalPeriodMarkers("Q3", cfg({ halves: 4 }))).toEqual(["3QT"]);
+    expect(legalPeriodMarkers("Q4", cfg({ halves: 4 }))).toEqual(["FT"]);
+  });
+
+  it("extra-time phases take the ET markers in BOTH modes, and only with extra time enabled", () => {
+    const et = cfg({ extraTime: { enabled: true, halfMinutes: 15 } });
+    expect(legalPeriodMarkers("ET_H1", et)).toEqual(["ET_HT"]);
+    expect(legalPeriodMarkers("ET_H2", et)).toEqual(["ET_FT"]);
+    expect(legalPeriodMarkers("ET_H1", { ...et, halves: 4 })).toEqual(["ET_HT"]);
+    // The intersection with `periodMarkersOf` is what makes the two mirrors
+    // unable to disagree: an ET marker no cfg declares is dropped, not offered.
+    expect(legalPeriodMarkers("ET_H1", cfg())).toEqual([]);
+  });
+
+  it("there is no next whistle before kickoff, during the kicks, or once decided", () => {
+    for (const phase of ["pre", "SHOOTOUT", "done", "final", "abandoned"]) {
+      expect(legalPeriodMarkers(phase, cfg()), phase).toEqual([]);
+    }
+  });
+
+  it("SHOOTOUT allows only the card and the kick — the phase that shipped four dead ends", () => {
+    const allowed = Object.keys(EVENT_BAND).filter((type) => phaseAllows(type, "SHOOTOUT", cfg({ shootout: true })));
+    expect(allowed.sort()).toEqual(["football.card", "football.shootout.kick"]);
+  });
+
+  it("a decided match allows nothing at all, a card included", () => {
+    for (const phase of ["done", "final", "abandoned"]) {
+      expect(Object.keys(EVENT_BAND).filter((type) => phaseAllows(type, phase, cfg())), phase).toEqual([]);
+    }
+  });
+
+  it("fails OPEN for a type it does not know — a new engine event must not be silently hidden", () => {
+    expect(phaseAllows("football.var.review", "SHOOTOUT", cfg())).toBe(true);
+  });
+
+  it("refusedEventTypes is the complement, derived from EVENT_BAND rather than a second hand-list", () => {
+    const shootout = view({ state: state({ phase: "SHOOTOUT" }), cfg: cfg({ shootout: true }) });
+    expect(refusedEventTypes(shootout).sort()).toEqual([
+      "football.goal",
+      "football.penalty",
+      "football.period",
+      "football.shot",
+      "football.sinbin.end",
+      "football.sinbin.start",
+      "football.sub",
+    ]);
+    // In open play the only refusal is the kick, which needs the shoot-out.
+    expect(refusedEventTypes(view())).toEqual(["football.shootout.kick"]);
+  });
+});
+
+describe("the period sheet is narrowed by PHASE, and says why (R3 review, dead end 1)", () => {
+  const markerStep = (v: PadHostView) => {
+    const step = buildSheets(v, t)["period"]!.steps[0]!;
+    if (step.kind !== "choice") throw new Error("the period sheet's first step is not a choice step");
+    return step;
+  };
+
+  it("still OFFERS every marker this cfg declares — blocked, never removed (R2b's binding ruling)", () => {
+    const step = markerStep(view());
+    expect(step.options.map((o) => o.id)).toEqual([...periodMarkersOf(cfg())]);
+  });
+
+  it("blocks the ones applyPeriod would refuse in this phase, and only those", () => {
+    expect(Object.keys(markerStep(view()).blocked!({}))).toEqual(["FT"]);
+    expect(Object.keys(markerStep(view({ state: state({ phase: "H2" }) })).blocked!({}))).toEqual(["HT"]);
+    const quarters = view({ cfg: cfg({ halves: 4 }), state: state({ phase: "Q3" }) });
+    expect(Object.keys(markerStep(quarters).blocked!({})).sort()).toEqual(["FT", "HT", "QT"]);
+  });
+
+  it("the reason names the CURRENT period in the scorer's own words, never a bare 'not now'", () => {
+    // R2b's other binding ruling: never a generic error where the exact one is
+    // known. The local `t` echoes key+vars, so this reads the interpolation.
+    expect(markerStep(view()).blocked!({}).FT).toBe(
+      'pad.football.context.period.blocked.wrongPhase({"phase":"pad.football.phase.H1"})',
+    );
+  });
+
+  it("its key and the card's exist in all four dictionaries", () => {
+    for (const key of [
+      "pad.football.context.period.blocked.wrongPhase",
+      "pad.football.context.card.blocked.noPriorYellow",
+      "pad.football.dock.penalty.title",
+    ]) {
+      expect(Object.keys(uiEn), key).toContain(key);
+    }
+  });
+});
+
+describe("second_yellow needs someone on a caution (R3 review, the unattributable card)", () => {
+  const colourStep = (v: PadHostView, key = "card-home") => {
+    const step = buildSheets(v, t)[key]!.steps[0]!;
+    if (step.kind !== "choice") throw new Error("the card sheet's first step is not a choice step");
+    return step;
+  };
+  const yellowFor = (person: string) => state({ cards: [{ side: "home", person, color: "yellow" }] });
+
+  it("blocks it with a reason when nobody on that side is on a yellow", () => {
+    expect(colourStep(view()).blocked!({})).toEqual({
+      second_yellow: "pad.football.context.card.blocked.noPriorYellow",
+    });
+  });
+
+  it("never blocks a first yellow or a straight red — a person-less card of either is legal and useful", () => {
+    for (const colour of ["yellow", "red"]) {
+      expect(Object.keys(colourStep(view()).blocked!({})), colour).not.toContain(colour);
+    }
+  });
+
+  it("unblocks it the moment someone on that side is cautioned", () => {
+    expect(colourStep(view({ state: yellowFor("h2") })).blocked!({})).toEqual({});
+  });
+
+  it("is per SIDE — a home caution does not unblock the away card sheet", () => {
+    const v = view({ state: yellowFor("h2") });
+    expect(colourStep(v, "card-away").blocked!({})).toEqual({
+      second_yellow: "pad.football.context.card.blocked.noPriorYellow",
+    });
+  });
+
+  // THE DEFECT ITSELF: the sheet and the dock disagreed, so a colour the sheet
+  // offered produced a dock with zero chips and a card attributable to nobody.
+  it("the sheet leaves it enabled EXACTLY when the dock can name somebody", () => {
+    for (const fixture of [view(), view({ state: yellowFor("h2") })]) {
+      const enabled = colourStep(fixture).blocked!({}).second_yellow === undefined;
+      const chips = buildDock("football.card", fixture, t, { by: "home-1", color: "second_yellow" })!.chips;
+      expect(chips.length > 0, `enabled=${enabled} chips=${chips.length}`).toBe(enabled);
+    }
+  });
+
+  it("a sent-off player is not a second-yellow candidate, so their caution does not unblock it", () => {
+    const v = view({
+      state: state({
+        cards: [{ side: "home", person: "h2", color: "yellow" }],
+        squads: {
+          home: { onPitch: ["h1", "h3"], bench: ["h4", "h5"], offUsed: [], sentOff: ["h2"] },
+          away: { onPitch: ["a1", "a2", "a3"], bench: ["a4", "a5"], offUsed: [], sentOff: [] },
+        },
+      }),
+    });
+    expect(colourStep(v).blocked!({}).second_yellow).toBeDefined();
+  });
+});
+
+describe("the penalty's offence is askable again (R3 review, the v2 regression)", () => {
+  const dockFor = (band: 0 | 1 | 2 | 3) => buildDock("football.penalty", view({ band }), t, { by: "home-1" });
+
+  it("PENALTY_OFFENCES mirrors football.penalty's own offence enum — the IFAB Law 12 taxonomy", () => {
+    expect([...PENALTY_OFFENCES]).toEqual([
+      ...enumValues(engineAction(padSpecFor(engineCfg()), "football.penalty"), "offence"),
+    ]);
+    expect(PENALTY_OFFENCES).toHaveLength(8); // vacuity guard
+  });
+
+  it("offers one chip per offence at band >= 2, each mutating the `offence` field", () => {
+    const chips = dockFor(2)!.chips;
+    expect(chips.map((chip) => chip.id)).toEqual(PENALTY_OFFENCES.map((offence) => `offence:${offence}`));
+    expect(chips.map((chip) => chip.label)).toEqual(PENALTY_OFFENCES.map((offence) => `offence.${offence}`));
+    expect(chips[0]!.mutate({ by: "home-1", outcome: "saved" })).toEqual({
+      by: "home-1",
+      outcome: "saved",
+      offence: "kicking",
+    });
+  });
+
+  it("is silent below band 2 — the same boundary the card's own offence step takes (R3-1)", () => {
+    expect(dockFor(0)).toBeNull();
+    expect(dockFor(1)).toBeNull();
+  });
+
+  it("the sheet still asks only `by` and `outcome` — a required event is never held hostage to an optional field", () => {
+    const spec = buildSheets(view({ band: 3 }), t)["penalty"]!;
+    expect(spec.steps.map((step) => step.id)).toEqual(["by", "outcome"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3 review round — the "never REFUSE what the engine allows" half, against a
+// real fold. This one cannot be asserted against a hand-written fixture at
+// all: `exemptUsed` is written by the kernel's own `onLineup` hook when a
+// `core.lineup.replacement` folds through, and the number the cap is measured
+// against (`liftSide`'s `subsUsed = offUsed.length - exemptTotal`) exists only
+// inside the engine.
+// ---------------------------------------------------------------------------
+
+describe("the substitution cap counts ORDINARY substitutions (R3 review, the pad refusing a legal swap)", () => {
+  const bench = (n: number) => ({ personId: `h${n}`, slot: "bench" as const, orderNo: n });
+  /** A side that has spent its whole `maxSubs: 3` allowance, one of the three
+   *  as an IFAB concussion replacement — so `offUsed` is 3 and the kernel's own
+   *  `subsUsed` is 2, with one substitution still legally left. */
+  function concussionStream(): EventEnvelope[] {
+    return [
+      envelope(1, "core.start", {}),
+      envelope(2, "football.sub", { by: "H", off: "h7", on: "h12" }),
+      envelope(3, "football.sub", { by: "H", off: "h8", on: "h13" }),
+      envelope(4, "core.lineup.replacement", {
+        side: "H",
+        off: "h9",
+        on: { personId: "h14", slot: "bench", orderNo: 14 },
+        exemption: "concussion",
+      }),
+    ];
+  }
+  function viewAfter(events: readonly EventEnvelope[]): PadHostView {
+    const lineups: LineupPair = {
+      home: { entrantId: "H", slots: [...eleven("h").slice(0, 11), bench(12), bench(13), bench(14), bench(15)] },
+      away: { entrantId: "A", slots: eleven("a") },
+    };
+    const engineCfgValue = footballModule!.configSchema.parse({
+      maxSubs: 3,
+      subWindows: 3,
+      concussionSubs: 1,
+    });
+    const folded = foldClient(footballModule as never, engineCfgValue, lineups, events) as Record<string, unknown>;
+    return {
+      cfg: engineCfgValue,
+      state: folded,
+      summary: {},
+      phase: "live",
+      band: 3,
+      entitlements: {},
+      personNames: {},
+      squads: squadStateOf(folded, lineups),
+      events,
+      contextOverrides: {},
+    };
+  }
+
+  it("the fold really does put three players in offUsed and record one as exempt", () => {
+    const home = (viewAfter(concussionStream()).state as { squads: Record<string, Record<string, unknown>> }).squads.home;
+    expect(home.offUsed).toHaveLength(3);
+    expect(home.exemptUsed).toEqual({ concussion: 1 });
+  });
+
+  it("and the ENGINE accepts a fourth swap — the exempt replacement sits outside the cap", () => {
+    const events = [...concussionStream(), envelope(5, "football.sub", { by: "H", off: "h10", on: "h15" })];
+    expect(() => viewAfter(events)).not.toThrow();
+  });
+
+  it("so the swap slot must not refuse it: policyOk stays true with one ordinary substitution left", () => {
+    const slot = buildSwap(viewAfter(concussionStream()), t).find((s) => s.side === "home")!;
+    expect(slot.policyOk, "the pad refused a substitution reduceLineupEvent accepts").toBe(true);
+    expect(slot.policyMessage).toBeUndefined();
+  });
+
+  it("and it still refuses the one AFTER that, counting the exempt replacement out of the total", () => {
+    const events = [...concussionStream(), envelope(5, "football.sub", { by: "H", off: "h10", on: "h15" })];
+    const slot = buildSwap(viewAfter(events), t).find((s) => s.side === "home")!;
+    expect(slot.policyOk).toBe(false);
+    // The refusal states the ORDINARY count (3 of 3), never the raw `offUsed`
+    // length (4) — a scorer counting four names on the touchline still reads
+    // the number the Law actually caps.
+    expect(slot.policyMessage).toBe('pad.football.context.sub.blocked.maxSubs({"used":3,"max":3})');
   });
 });
