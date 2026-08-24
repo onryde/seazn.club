@@ -895,6 +895,44 @@ The only bootstrap is a More-sheet sinbin/shot form's own `at.*` fields.
 So `subWindows` still does not fire from the pad. Whoever wants it must give
 the pad a way to originate a stamp — engine-side, and not R3's.
 
+**F5 CLOSED (2026-08-24) — reachable, but only through the More sheet.** The
+sentence above ("the only bootstrap is a More-sheet sinbin/shot form's own
+`at.*` fields") was asserted, not shown, and a later session was going to have
+to re-derive it. It is CORRECT. The chain, end to end:
+
+1. `padSpec` spreads a shared `...stamp` — `{kind:"enum", path:"at.period"}` and
+   `{kind:"number", path:"at.elapsed"}` — across the football actions
+   (`football.ts`, `shootoutKickAction` / `penaltyAction` and their neighbours).
+2. The generic More form renders by `field.path` and never names the field, so
+   grepping the pad for a literal `"at"` finds NOTHING and reads as "no bootstrap
+   exists". That grep is the wrong instrument — it is how this was mis-called
+   once already.
+3. `ActionFormList` submits `buildActionPayload(action, values)`
+   (`v3/action-form.tsx`), which is `buildPathObject(entries)`
+   (`scorepad/view-model.ts:225-233`) — dotted paths NEST, so `at.period` +
+   `at.elapsed` arrive as `{ at: { period, elapsed } }`.
+4. `dedicatedEventTypes` (`v3/pad-host.tsx:229`) claims only types owning a
+   tile/sheet/swap. Football's board claims goal, card, sub, period, penalty —
+   so **`football.shot`, `football.sinbin.start`, `football.sinbin.end` and
+   `football.shootout.kick` stay in the More sheet, carrying `at.*`.**
+5. Any one of them submitted with the stamp filled sets `state.asOf`
+   (`football.ts:2528`). From then on `stampOf` (`skins/football.tsx:319`)
+   returns a stamp while `asOf.period === state.phase`, `football.sub` carries
+   `at` (`:1135`), windows accumulate, and `SUB_WINDOW_EXCEEDED`
+   (`football.ts:1211`) fires at the cfg cap.
+
+So the honest statement is NOT "inert". It is: **the dedicated Sub tile can
+never bootstrap the ledger by itself — a scorer must first stamp an unrelated
+More-sheet event — and until they do, `pad.football.context.sub.blocked.subWindows`
+is unreachable copy.** Whether that is acceptable is a DESIGN question for the
+wave that gives football a clock input (R6/R8), not a defect R3 can fix: R3 is
+engine-frozen apart from the spent `b00c85162` exception, and originating a
+stamp is engine-side work.
+
+No test is added for the More-sheet path here. It would pin a route the next
+wave is expected to replace, and the sub-side guard it would exercise is
+already covered by the skin's own `at` tests.
+
 **CORRECTION 2 — the ribbon does NOT render "Goal — Rivera, assist Okafor".**
 The ribbon section above describes that as the rendered result of
 `pad.ribbon.withDetail`. It is not: `buildRibbon` is called with four arguments
