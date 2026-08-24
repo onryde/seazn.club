@@ -47,4 +47,10 @@ describe("routes", () => {
       "/shared/acme/summer-smash/u16-boys",
     );
   });
+
+  it("builds the public register page — the registration hub's per-row copy link target", () => {
+    expect(routes.publicRegister("acme", "summer-smash")).toBe(
+      "/shared/acme/summer-smash/register",
+    );
+  });
 });

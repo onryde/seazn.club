@@ -49,6 +49,10 @@ export const routes = {
   /** Public dashboard — slug-based already, marker-less scheme, unchanged. */
   shared: (orgSlug: Slug, compSlug?: Slug, divSlug?: Slug) =>
     ["/shared", orgSlug, compSlug, divSlug].filter(Boolean).join("/"),
+  /** Public register page (design §5) — competition-scoped (one cart can
+   *  span divisions), so the SAME url is shown on every Registration hub
+   *  row rather than a per-division link. */
+  publicRegister: (orgSlug: Slug, compSlug: Slug) => `/shared/${orgSlug}/${compSlug}/register`,
   /** Public fixture page (spectator view — the link /me hands a player). */
   sharedFixture: (orgSlug: Slug, compSlug: Slug, divSlug: Slug, fixtureId: string) =>
     `/shared/${orgSlug}/${compSlug}/${divSlug}/fixtures/${fixtureId}`,
