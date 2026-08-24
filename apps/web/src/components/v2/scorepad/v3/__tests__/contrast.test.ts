@@ -457,6 +457,77 @@ describe.each(PALETTES)("card-code tones meet WCAG on the sheet — %s", (_name,
   });
 });
 
+// ---------------------------------------------------------------------------
+// R3/task D — THE TILE GRID's own translucent text, which this file had never
+// measured.
+//
+// Everything above measures the SCOREBUG. tile-grid.tsx renders a second
+// piece of alpha text — `TileSpec.sublabel`, the word that says WHICH SIDE a
+// tile belongs to — and nothing checked it, because until football no skin
+// declared one on a `primary` tile. On violet-600 that is the one tile ground
+// in this chassis that is neither white nor the night board, and white at 70%
+// composites there to #d9bdff: 3.55:1 at 11px, a real WCAG AA failure on the
+// most load-bearing word of a two-lane board. An axe scan in
+// scorepad-skins.spec.ts is what found it; this is the cheap gate that keeps
+// it found.
+//
+// BOTH halves are parsed out of tile-grid.tsx's own SOURCE — the opacity from
+// the sublabel span and the ground from `KIND_CLASS.primary` — so neither can
+// desync from what ships, the same stance `resolveAlphaClass` above takes for
+// the scorebug's classes.
+// ---------------------------------------------------------------------------
+
+describe("tile-grid.tsx's sublabel clears WCAG AA on every tile ground it can land on", () => {
+  const tileGridSrc = readFileSync(join(process.cwd(), "src/components/v2/scorepad/v3/tile-grid.tsx"), "utf8");
+  const codeOnly = tileGridSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+
+  /** Tailwind's own values for the two literals `KIND_CLASS` uses as a tile's
+   *  ground, and the text colour each pairs with. Hand-copied ONCE, here,
+   *  because Tailwind's palette is not importable — the CLASS NAMES are read
+   *  from the source below, so a change of class reds this rather than
+   *  silently measuring the old one. */
+  const TAILWIND: Readonly<Record<string, string>> = {
+    "violet-600": "#7f22fe",
+    white: "#ffffff",
+    // Read out of the BUILT stylesheet's own `--color-slate-700`, not from
+    // memory: v3's palette moved these (slate-700 is #314158, not the #334155
+    // several older references still quote), and the difference is enough to
+    // flip a 4.35 into a 4.5.
+    "slate-700": "#314158",
+  };
+
+  function sublabelAlpha(): number {
+    const spans = [...codeOnly.matchAll(/text-\[11px\]\s+opacity-(\d{2,3})/g)].map((m) => Number(m[1]));
+    expect(spans.length, "tile-grid.tsx must still render the sublabel as 11px alpha text").toBeGreaterThan(0);
+    expect(new Set(spans).size, "both sublabel branches must carry the SAME opacity").toBe(1);
+    return spans[0]! / 100;
+  }
+
+  it("the PRIMARY tile — white on violet-600, the ground football's Goal tiles use", () => {
+    // The pair that actually failed. `primary` is the only KIND_CLASS ground
+    // that is a saturated colour rather than white/transparent, so it is the
+    // binding case: pass here and every other kind passes with room.
+    expect(codeOnly, "KIND_CLASS.primary must still be white text on violet-600").toContain(
+      "bg-violet-600 font-semibold text-white",
+    );
+    const composited = compositeOver(TAILWIND.white!, sublabelAlpha(), TAILWIND["violet-600"]!);
+    expect(contrastRatio(composited, TAILWIND["violet-600"]!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("the STANDARD tile — slate-700 on white", () => {
+    expect(codeOnly).toContain("bg-white font-medium text-slate-700");
+    const composited = compositeOver(TAILWIND["slate-700"]!, sublabelAlpha(), TAILWIND.white!);
+    expect(contrastRatio(composited, TAILWIND.white!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("is measured at SMALL-text rules, never the score's large-text carve-out", () => {
+    // 11px regular is nowhere near WCAG's >=24px regular / >=18.66px bold
+    // carve-out, so 4.5 is the right floor above and 3.0 would be wrong.
+    expect(codeOnly).toContain("text-[11px]");
+    expect(codeOnly).not.toContain("text-[11px] font-bold");
+  });
+});
+
 describe("the tones are NON-TEXT colours, and this is where that stops being a comment", () => {
   it("football's dismissal red would FAIL as text on its own board — 3.01:1, under the 4.5 floor", () => {
     // The single most load-bearing number in this file. #d00000 on #0b1f16 is
