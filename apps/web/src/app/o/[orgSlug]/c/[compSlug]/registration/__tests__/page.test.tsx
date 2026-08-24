@@ -409,4 +409,36 @@ describe("registration hub — config panel context (RS004 W3c)", () => {
     const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
     expect(propsOf(panel).cardUnsupportedCurrency).toBe("jpy");
   });
+
+  // Finding 4 (whole-branch review): org_stripe_unsupported_currency is
+  // legitimately NULL for every healthy org's row, and `rawRows[0]?.col ??
+  // fallback()` treats that null exactly like "no rows at all" — so the
+  // fallback query fired on nearly every Settings-tab load, the opposite of
+  // "only when there are no rows" its own comment claims. h.rows is
+  // NON-EMPTY here (the common case) with the column explicitly null; the
+  // fallback must not run at all.
+  it("issues NO fallback query when rows exist, even though the row's own column is null", async () => {
+    h.rows = [
+      {
+        division_id: "div-1",
+        name: "Open Singles",
+        category: null,
+        age_min: null,
+        age_max: null,
+        enabled: true,
+        entrant_kind: "individual",
+        opens_at: null,
+        closes_at: null,
+        capacity: null,
+        fee_cents: 0,
+        approval: "auto",
+        allow_free_agents: false,
+        taken: 0,
+        org_currency: "usd",
+        org_stripe_unsupported_currency: null,
+      },
+    ];
+    await Page({ params, searchParams: noTab });
+    expect(h.unsupportedQueries).toBe(0);
+  });
 });
