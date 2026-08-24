@@ -278,5 +278,24 @@ export interface BuildOpts {
     timetableColumns?: readonly string[];
     rotaColumns?: readonly string[];
     participantsColumns?: readonly string[];
+    /** F5 remainder: the "vs" a timetable row shows between two sides while
+     *  the fixture has no `result` yet (fixtureRows/buildTimetable). */
+    resultVs?: string;
+    /** F5 remainder: the per_pitch grouping heading for fixtures with no
+     *  court assigned yet (buildTimetable). */
+    courtUnassigned?: string;
+    /** F5 remainder: officials-rota subheading for an official with zero
+     *  duties in this rota (buildOfficialsRota). */
+    rotaNoDuties?: string;
+    /** F5 remainder: officials-rota per-duty response-state labels
+     *  (buildOfficialsRota). */
+    rotaResponseAccepted?: string;
+    rotaResponseDeclined?: string;
+    rotaResponsePending?: string;
+    /** F5 remainder: fallback for an unresolved bracket-family side — shared
+     *  by buildBracket/buildBracketDe/buildLadderPoster/buildPagePoster, the
+     *  same way ExportBracketFixture's `home`/`away` already arrive
+     *  pre-resolved from the caller for every FILLED side. */
+    entrantTbd?: string;
   };
 }

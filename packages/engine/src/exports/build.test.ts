@@ -4,7 +4,10 @@ import {
   buildAdmitTickets,
   buildAuditLedger,
   buildBracket,
+  buildBracketDe,
+  buildLadderPoster,
   buildOfficialsRota,
+  buildPagePoster,
   buildParticipants,
   buildRoster,
   buildStandings,
@@ -163,6 +166,16 @@ describe("BuildOpts.i18n — caller-supplied table chrome (F5/Task 6)", () => {
     timetableColumns: ["Heure", "Terrain", "Domicile", "", "Extérieur", "Phase"],
     rotaColumns: ["Quand", "Terrain", "Compétition · Division", "Rôle", "Match", "Réponse"],
     participantsColumns: ["Club", "Équipe", "Division", "Participant", "Joueur", "#", "Poste"],
+    // F5 remainder: the VALUE fallbacks F5/Task 6 above left as English
+    // literals with no opts.i18n override — see build.ts:52,76,198,209 and
+    // the four bracket-family builders' `?? "TBD"` sites.
+    resultVs: "contre",
+    courtUnassigned: "Non attribué",
+    rotaNoDuties: "Aucune désignation attribuée",
+    rotaResponseAccepted: "Acceptée",
+    rotaResponseDeclined: "Déclinée",
+    rotaResponsePending: "En attente",
+    entrantTbd: "À définir",
   };
 
   it("timetable: columns and the no-time cell come from opts.i18n, not English", () => {
@@ -214,6 +227,154 @@ describe("BuildOpts.i18n — caller-supplied table chrome (F5/Task 6)", () => {
     const partial = buildTimetable("Cup", FIXTURES, { ...OPTS, i18n: { timeTbc: "À confirmer" } });
     expect(partial.sections[0]!.table!.columns).toEqual(["Time", "Court", "Home", "", "Away", "Stage"]);
     expect(partial.sections[1]!.table!.rows[0]![0]).toBe("À confirmer");
+  });
+
+  // F5 remainder: #630 localized the table CHROME above (columns, the
+  // no-time cell) but left five VALUE fallbacks hardcoded English —
+  // build.ts's undecided-result "vs" separator, its per_pitch "no court"
+  // grouping heading, the officials-rota "no duties" subheading and its
+  // three response-state labels, and the bracket-family "TBD" side.
+  const bracketFx = (id: string, round_no: number, seq_in_round: number) => ({
+    id,
+    round_no,
+    seq_in_round,
+    home: null as string | null,
+    away: null as string | null,
+    headline: null,
+    decided: false,
+  });
+
+  it("timetable: the undecided-result separator and the per_pitch 'no court' heading come from opts.i18n", () => {
+    const fixtures: ExportFixture[] = [
+      { id: "f1", at: "2026-07-20T09:00:00Z", court: null, stageName: "Prelim", round: 1, home: "A", away: "B" },
+    ];
+    const model = buildTimetable("Coupe", fixtures, { ...OPTS, pageBreaks: "per_pitch", i18n: FR });
+    expect(model.sections[0]!.heading).toBe("Non attribué");
+    expect(model.sections[0]!.heading).not.toBe("Unassigned");
+    const row = model.sections[0]!.table!.rows[0]!;
+    expect(row[3]).toBe("contre"); // result column — fixture has no `result` yet
+    expect(row[3]).not.toBe("vs");
+  });
+
+  it("officials rota: the no-duties subheading and the response labels come from opts.i18n", () => {
+    const m = buildOfficialsRota(
+      "Planning",
+      [
+        { officialName: "Sans tâche", duties: [] },
+        {
+          officialName: "Sam Ref",
+          duties: [
+            { at: "x", court: null, compDivision: "d", role: "r", opponents: "A vs B", response: "accepted" },
+            { at: "x", court: null, compDivision: "d", role: "r", opponents: "A vs B", response: "declined" },
+            { at: "x", court: null, compDivision: "d", role: "r", opponents: "A vs B", response: "pending" },
+          ],
+        },
+      ],
+      { ...OPTS, i18n: FR },
+    );
+    expect(m.sections[0]!.subheading).toBe("Aucune désignation attribuée");
+    const responses = m.sections[1]!.table!.rows.map((r) => r[5]);
+    expect(responses).toEqual(["Acceptée", "Déclinée", "En attente"]);
+    const json = JSON.stringify(m);
+    for (const english of ["No duties assigned", "Accepted", "Declined", "Pending"]) {
+      expect(json).not.toContain(`"${english}"`);
+    }
+  });
+
+  it("buildBracket: an unresolved side falls back to opts.i18n.entrantTbd", () => {
+    const model = buildBracket("Coupe", [bracketFx("a", 0, 1)], () => "Finale", { ...OPTS, i18n: FR });
+    expect(model.bracket!.nodes[0]).toMatchObject({ home: "À définir", away: "À définir" });
+    expect(JSON.stringify(model)).not.toContain('"TBD"');
+  });
+
+  it("buildBracketDe: an unresolved side falls back to opts.i18n.entrantTbd", () => {
+    // k=2 (4-entrant) double-elim, verified against doubleElimBracket()
+    // directly: WB round_no 1-2, LB 5-6, GF 9 (bracket-layout.ts).
+    const fixtures = [
+      bracketFx("wb1a", 1, 1), bracketFx("wb1b", 1, 2),
+      bracketFx("wb2", 2, 1),
+      bracketFx("lb1", 5, 1),
+      bracketFx("lb2", 6, 1),
+      bracketFx("gf", 9, 1),
+    ];
+    const model = buildBracketDe(
+      "Coupe",
+      fixtures,
+      { winners: "W", losers: "L", grandFinal: "GF", reset: "R" },
+      { ...OPTS, i18n: FR },
+    );
+    for (const n of model.bracketDe!.nodes) {
+      expect(n.home).toBe("À définir");
+      expect(n.away).toBe("À définir");
+    }
+  });
+
+  it("buildLadderPoster: an unresolved side falls back to opts.i18n.entrantTbd", () => {
+    const fixtures = [bracketFx("r1", 0, 1), bracketFx("r2", 1, 1)];
+    const model = buildLadderPoster("Coupe", fixtures, (i) => `Rung ${i}`, { ...OPTS, i18n: FR });
+    for (const rung of model.ladder!.rungs) {
+      expect(rung.home).toBe("À définir");
+      expect(rung.away).toBe("À définir");
+    }
+  });
+
+  it("buildPagePoster: an unresolved side falls back to opts.i18n.entrantTbd", () => {
+    const fixtures = [bracketFx("q1", 0, 1), bracketFx("elim", 0, 2), bracketFx("q2", 1, 1), bracketFx("final", 2, 1)];
+    const model = buildPagePoster(
+      "Coupe",
+      fixtures,
+      { q1: "Q1", eliminator: "E", q2: "Q2", final: "F" },
+      { ...OPTS, i18n: FR },
+    );
+    for (const n of model.pagePlayoff!.nodes) {
+      expect(n.home).toBe("À définir");
+      expect(n.away).toBe("À définir");
+    }
+  });
+
+  it("every new value fallback stays English when opts.i18n is absent — every pre-existing caller is byte-identical to before", () => {
+    const plainTimetable = buildTimetable(
+      "Cup",
+      [{ id: "f1", at: "2026-07-20T09:00:00Z", court: null, stageName: "Prelim", round: 1, home: "A", away: "B" }],
+      { ...OPTS, pageBreaks: "per_pitch" },
+    );
+    expect(plainTimetable.sections[0]!.heading).toBe("Unassigned");
+    expect(plainTimetable.sections[0]!.table!.rows[0]![3]).toBe("vs");
+
+    const plainRota = buildOfficialsRota("Rota", [{ officialName: "X", duties: [] }], OPTS);
+    expect(plainRota.sections[0]!.subheading).toBe("No duties assigned");
+
+    const plainBracket = buildBracket("Cup", [bracketFx("a", 0, 1)], () => "R", OPTS);
+    expect(plainBracket.bracket!.nodes[0]).toMatchObject({ home: "TBD", away: "TBD" });
+
+    const plainDe = buildBracketDe(
+      "Cup",
+      [bracketFx("wb1a", 1, 1), bracketFx("wb1b", 1, 2), bracketFx("wb2", 2, 1), bracketFx("lb1", 5, 1), bracketFx("lb2", 6, 1), bracketFx("gf", 9, 1)],
+      { winners: "W", losers: "L", grandFinal: "GF", reset: "R" },
+      OPTS,
+    );
+    expect(plainDe.bracketDe!.nodes[0]).toMatchObject({ home: "TBD", away: "TBD" });
+
+    const plainLadder = buildLadderPoster("Cup", [bracketFx("r1", 0, 1)], (i) => `Rung ${i}`, OPTS);
+    expect(plainLadder.ladder!.rungs[0]).toMatchObject({ home: "TBD", away: "TBD" });
+
+    const plainPage = buildPagePoster(
+      "Cup",
+      [bracketFx("q1", 0, 1), bracketFx("elim", 0, 2), bracketFx("q2", 1, 1), bracketFx("final", 2, 1)],
+      { q1: "Q1", eliminator: "E", q2: "Q2", final: "F" },
+      OPTS,
+    );
+    expect(plainPage.pagePlayoff!.nodes[0]).toMatchObject({ home: "TBD", away: "TBD" });
+
+    // Partial i18n (an unrelated field only) must not disturb these five —
+    // each falls back per field, not all-or-nothing (same rule as timeTbc above).
+    const partialTimetable = buildTimetable(
+      "Cup",
+      [{ id: "f1", at: "2026-07-20T09:00:00Z", court: null, stageName: "Prelim", round: 1, home: "A", away: "B" }],
+      { ...OPTS, pageBreaks: "per_pitch", i18n: { timeTbc: "À confirmer" } },
+    );
+    expect(partialTimetable.sections[0]!.heading).toBe("Unassigned");
+    expect(partialTimetable.sections[0]!.table!.rows[0]![3]).toBe("vs");
   });
 });
 

@@ -17,6 +17,7 @@ import {
   buildOfficialsRotaDoc,
   buildAdmitTicketsDoc,
   buildMyRotaDoc,
+  exportChrome,
 } from "../exports";
 import { docModelToPdf, docModelToXlsx } from "@/server/doc-render";
 import { msgFor } from "@/lib/messages-i18n";
@@ -1148,6 +1149,87 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
       expect(row!.locale).toBeNull(); // the arrangement this test exists to cover
       const model = await buildMyRotaDoc(userId, { printedAt: PRINTED });
       expect(model.title).toBe(msgFor("en", "export.title.myRota"));
+    });
+  });
+
+  // F5 remainder: #630 (F5/Task 6 above) localized the table chrome but left
+  // five VALUE fallbacks hardcoded English inside build.ts — the undecided-
+  // result "vs" separator, the per_pitch "no court" heading, the officials-
+  // rota "no duties" subheading + its three response labels, and the
+  // bracket-family "TBD" side. `exportChrome()` is the single seam every
+  // export kind resolves its i18n block through (exports.ts:338's doc
+  // comment) — a direct unit test of it, no DB, catches the "supplies English
+  // by mistake" class of bug immediately, the same risk the F5 design doc
+  // flagged for the three ALREADY-wired fields above ("confirm... or the
+  // English default is silently winning").
+  describe("document values are localized, not hardcoded English (F5 remainder)", () => {
+    it("exportChrome resolves every i18n field for a French locale, old and new", () => {
+      const fr = (key: Parameters<typeof msgFor>[1], vars?: Record<string, string | number>) =>
+        msgFor("fr", key, vars);
+      const chrome = exportChrome(fr);
+      // Pre-existing (F5/Task 6) — unaffected by this pass, asserted here too
+      // so a future regression on the SHARED seam fails in one place.
+      expect(chrome.timeTbc).toBe(msgFor("fr", "export.time.tbc"));
+      // New (F5 remainder).
+      expect(chrome.resultVs).toBe(msgFor("fr", "schedule.vs"));
+      expect(chrome.courtUnassigned).toBe(msgFor("fr", "board.unassigned"));
+      expect(chrome.rotaNoDuties).toBe(msgFor("fr", "export.rota.noDuties"));
+      expect(chrome.rotaResponseAccepted).toBe(msgFor("fr", "officials.respAccepted"));
+      expect(chrome.rotaResponseDeclined).toBe(msgFor("fr", "officials.respDeclined"));
+      expect(chrome.rotaResponsePending).toBe(msgFor("fr", "officials.respPending"));
+      expect(chrome.entrantTbd).toBe(msgFor("fr", "bracket.tbd"));
+      // None of these silently won the English literal instead.
+      for (const [v, english] of [
+        [chrome.resultVs, "vs"],
+        [chrome.courtUnassigned, "Unassigned"],
+        [chrome.rotaNoDuties, "No duties assigned"],
+        [chrome.rotaResponseAccepted, "Accepted"],
+        [chrome.rotaResponseDeclined, "Declined"],
+        [chrome.rotaResponsePending, "Pending"],
+        [chrome.entrantTbd, "TBD"],
+      ] as const) {
+        expect(v).not.toBe(english);
+      }
+    });
+
+    it("timetable: the undecided-result separator and the no-court grouping heading come from the org locale", async () => {
+      const { auth } = await seedOrg();
+      await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+      // Freshly generated fixtures: no court_id, no result yet — exactly the
+      // day-one state build.ts used to render as the English "Unassigned"
+      // heading and "vs" separator regardless of locale.
+      const { division } = await seedDivision(auth);
+      const model = await buildDivisionDocModel(auth, division.id, "timetable", {
+        printedAt: PRINTED,
+        pageBreaks: "per_pitch",
+      });
+      const heading = model.sections[0]!.heading;
+      expect(heading).toBe(msgFor("fr", "board.unassigned"));
+      expect(heading).not.toBe("Unassigned");
+      const row = model.sections[0]!.table!.rows[0]!;
+      expect(row[3]).toBe(msgFor("fr", "schedule.vs"));
+      expect(row[3]).not.toBe("vs");
+    });
+
+    it("officials rota: response-state labels come from the org locale", async () => {
+      const { auth } = await seedOrg("pro");
+      await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+      const { division, fixtures } = await seedDivision(auth);
+      const [{ id: officialId }] = await sql<{ id: string }[]>`
+        insert into officials (org_id, display_name) values (${auth.orgId}, 'Sam Ref')
+        returning id`;
+      await sql`
+        insert into fixture_officials (fixture_id, official_id, role_key, response)
+        values
+          (${fixtures[0]!.id}, ${officialId}, 'referee', 'declined'),
+          (${fixtures[1]!.id}, ${officialId}, 'linesman', 'pending')`;
+
+      const model = await buildOfficialsRotaDoc(auth, division.id, { printedAt: PRINTED });
+      const responses = model.sections.find((s) => s.heading === "Sam Ref")!.table!.rows.map((r) => r[5]);
+      expect(responses).toContain(msgFor("fr", "officials.respDeclined"));
+      expect(responses).toContain(msgFor("fr", "officials.respPending"));
+      expect(responses).not.toContain("Declined");
+      expect(responses).not.toContain("Pending");
     });
   });
 });

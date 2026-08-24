@@ -4086,5 +4086,6 @@
   "export.description.allFixtures": "Every fixture across all divisions.",
   "export.description.officialsRota": "Assigned officials and their duties.",
   "export.description.myRota": "Your upcoming duties across every organisation.",
-  "export.description.ticket": "Present at check-in — scan or show the reference below."
+  "export.description.ticket": "Present at check-in — scan or show the reference below.",
+  "export.rota.noDuties": "No duties assigned"
 }

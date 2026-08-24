@@ -335,7 +335,12 @@ function descriptionFor(kind: ExportDocKind, lookup: SlotLabelLookup): string {
  *  `export.time.tbc` is a SEPARATE key from `schedule.tbd` on purpose: that one
  *  names an unknown ENTRANT ("TBD" as an opponent), this one names an unknown
  *  KICK-OFF TIME. They read alike in English and diverge in every other locale. */
-function exportChrome(lookup: SlotLabelLookup): NonNullable<BuildOpts["i18n"]> {
+// Exported for a direct unit test (exports.test.ts) — this function has no
+// DB/tenant dependency of its own, so proving each field resolves for a
+// given locale doesn't need the DB-fixture ceremony every other test in that
+// file pays for. Every OTHER caller still goes through buildDivisionDocModel
+// et al.; nothing outside the test file imports this.
+export function exportChrome(lookup: SlotLabelLookup): NonNullable<BuildOpts["i18n"]> {
   return {
     timeTbc: lookup("export.time.tbc"),
     timetableColumns: [
@@ -363,6 +368,22 @@ function exportChrome(lookup: SlotLabelLookup): NonNullable<BuildOpts["i18n"]> {
       "#", // squad number — a glyph, not a word; nothing to translate
       lookup("export.column.position"),
     ],
+    // F5 remainder — the VALUE fallbacks #630 left unwired (build.ts:52,76,
+    // 198,209 and the four bracket-family builders' `?? "TBD"` sites).
+    // `schedule.vs`/`bracket.tbd` are reused verbatim: same word, same
+    // meaning, already resolved for exactly this concept elsewhere on this
+    // very page (stages-panel.tsx/fixture-console.tsx for "vs", this file's
+    // own bracket arm for "TBD" — see toExportFixture/the bracket case's
+    // resolveSlotLabel calls). `board.unassigned` and `officials.resp*` are
+    // the SAME reuse call for the same reason. `export.rota.noDuties` has no
+    // existing counterpart anywhere else in the product, so it is new.
+    resultVs: lookup("schedule.vs"),
+    courtUnassigned: lookup("board.unassigned"),
+    rotaNoDuties: lookup("export.rota.noDuties"),
+    rotaResponseAccepted: lookup("officials.respAccepted"),
+    rotaResponseDeclined: lookup("officials.respDeclined"),
+    rotaResponsePending: lookup("officials.respPending"),
+    entrantTbd: lookup("bracket.tbd"),
   };
 }
 

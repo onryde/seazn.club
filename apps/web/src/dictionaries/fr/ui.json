@@ -4086,5 +4086,6 @@
   "export.description.allFixtures": "Tous les matchs, toutes divisions confondues.",
   "export.description.officialsRota": "Arbitres désignés et leurs fonctions.",
   "export.description.myRota": "Vos prochaines fonctions dans toutes les organisations.",
-  "export.description.ticket": "À présenter à l'accueil : scannez ou montrez la référence ci-dessous."
+  "export.description.ticket": "À présenter à l'accueil : scannez ou montrez la référence ci-dessous.",
+  "export.rota.noDuties": "Aucune désignation attribuée"
 }

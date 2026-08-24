@@ -4086,5 +4086,6 @@
   "export.description.allFixtures": "Todos los partidos de todas las divisiones.",
   "export.description.officialsRota": "Árbitros asignados y sus funciones.",
   "export.description.myRota": "Tus próximas funciones en todas las organizaciones.",
-  "export.description.ticket": "Preséntalo en la entrada: escanea o muestra la referencia de abajo."
+  "export.description.ticket": "Preséntalo en la entrada: escanea o muestra la referencia de abajo.",
+  "export.rota.noDuties": "Sin designaciones asignadas"
 }

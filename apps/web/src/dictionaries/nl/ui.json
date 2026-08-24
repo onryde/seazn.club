@@ -4086,5 +4086,6 @@
   "export.description.allFixtures": "Elke wedstrijd in alle divisies.",
   "export.description.officialsRota": "Aangewezen scheidsrechters en hun taken.",
   "export.description.myRota": "Je komende taken bij alle organisaties.",
-  "export.description.ticket": "Toon bij de check-in — scan of laat de onderstaande referentie zien."
+  "export.description.ticket": "Toon bij de check-in — scan of laat de onderstaande referentie zien.",
+  "export.rota.noDuties": "Geen aanstellingen toegewezen"
 }

@@ -1851,6 +1851,7 @@ export type DictionaryKey =
   | "export.description.standings"
   | "export.description.ticket"
   | "export.description.timetable"
+  | "export.rota.noDuties"
   | "export.scoresheet.captainOf"
   | "export.scoresheet.notes"
   | "export.scoresheet.referee"
