@@ -5,8 +5,10 @@
 // the ONE surface that tells them their own instruction was broken.
 //
 // The twin of conflict-window-copy.test.tsx (#397), deliberately kept as a
-// separate file rather than folded into an every-REASON_CODE sweep:
-// `conflict.start_window` is knowingly unlabelled.
+// separate file rather than folded into an every-REASON_CODE sweep.
+// `conflict.start_window` was once the third, knowingly-unlabelled code this
+// comment named; it now has its own copy pinned in
+// conflict-start-window-copy.test.tsx (P95 windows pass).
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Dict, Locale } from "@/lib/i18n-constants";

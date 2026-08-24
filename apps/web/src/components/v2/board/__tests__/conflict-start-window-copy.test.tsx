@@ -1,14 +1,13 @@
-// #397 (W2 calendar anchor): the engine gained a `window` conflict reason and
-// schedule-board maps it to the API code `warn.window`. Without a matching
-// entry in the board's shared label/help tables — and in all four dictionaries
-// — the conflicts panel renders the raw code `warn.window` at an organiser.
-// These pin the user-facing half: the fallback tables, the four catalogs, and
-// the rendered panel.
+// Jul3/04 §3: an unsatisfiable start window is a hard bound, and schedule-board
+// maps it to the API code `conflict.start_window`. Without a matching entry in
+// the board's shared label/help tables — and in all four dictionaries — the
+// conflicts panel and the schedule-gate dialog render the raw code
+// `conflict.start_window` at an organiser.
 //
-// NOTE: `conflict.start_window` was once knowingly unlabelled; it now has its
-// own copy pinned in conflict-start-window-copy.test.tsx (P95 windows pass).
-// Still do not widen this into an every-REASON_CODE sweep — one file per code
-// keeps a future rewording's blast radius obvious.
+// The twin of conflict-window-copy.test.tsx (#397) and
+// conflict-instruction-copy.test.tsx (#398), which both explicitly called this
+// code out as "knowingly unlabelled and tracked separately" — this is that
+// separate tracking resolved (owner-approved fix, P95 windows pass).
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Dict, Locale } from "@/lib/i18n-constants";
@@ -27,9 +26,9 @@ const DICTS: [Locale, Record<string, string>][] = [
   ["fr", fr as Record<string, string>],
   ["es", es as Record<string, string>],
 ];
-const CODE = REASON_CODE.window; // "warn.window"
+const CODE = REASON_CODE.start_window; // "conflict.start_window"
 
-describe("warn.window organiser copy", () => {
+describe("conflict.start_window organiser copy", () => {
   it("has a short label and a plain-English help in the shared fallback tables", () => {
     expect(CONFLICT_LABEL[CODE], `CONFLICT_LABEL[${CODE}]`).toBeTruthy();
     expect(CONFLICT_LABEL[CODE]).not.toBe(CODE);
@@ -113,11 +112,11 @@ function decode(html: string): string {
     .replace(/&amp;/g, "&");
 }
 
-describe("ConflictsPanel renders a warn.window row in organiser language", () => {
+describe("ConflictsPanel renders a conflict.start_window row in organiser language", () => {
   it.each(DICTS)("shows the localized label and help (%s), never the raw code", (locale, dict) => {
     const html = decode(renderPanel(dict, locale));
     expect(html).toContain(dict[`board.conflict.${CODE}`]);
     expect(html).toContain(dict[`board.conflictHelp.${CODE}`]);
-    expect(html).not.toContain(CODE); // the raw `warn.window` never reaches the DOM
+    expect(html).not.toContain(CODE); // the raw `conflict.start_window` never reaches the DOM
   });
 });
