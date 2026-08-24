@@ -20,8 +20,10 @@
 import { describe, expect, it } from "vitest";
 import type { AnySportModule, PadAction, PadField } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import type { SquadState } from "@seazn/engine/core";
+import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
+import { foldClient } from "../../../module-client";
+import { squadStateOf } from "../../pad-host";
 import { answerStep, currentStep, initialSheetState } from "../../guided-sheet";
 import type { GuidedSheetSpec, PadHostView, TileSpec } from "../../types";
 import { cricketSkinV3 } from "../cricket";
@@ -794,5 +796,118 @@ describe("footballSkinV3", () => {
 
   it("leaves cricket alone: it still declares NO swap at all", () => {
     expect(cricketSkinV3(t).swap).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Against a REAL engine fold.
+//
+// Every test above drives hand-written fixtures, which is the right shape for
+// asserting a builder — but it cannot catch the class of defect this wave
+// actually found: `view.squads` is built by the HOST from the folded state
+// (`squadStateOf`), and football's fold writes its own private squad
+// projection at that field name. A fixture cannot disagree with itself about
+// that; a real fold can. So this block runs the module's OWN fold, resolves
+// the view exactly as `PadHostV3` does, and drives the skin against the
+// result — the only place the skin and the engine meet at full size.
+// ---------------------------------------------------------------------------
+
+function eleven(prefix: string): LineupPair["home"]["slots"] {
+  const starting = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((n) => ({
+    personId: `${prefix}${n}`,
+    slot: "starting" as const,
+    orderNo: n,
+  }));
+  return [...starting, { personId: `${prefix}12`, slot: "bench" as const, orderNo: 12 }];
+}
+
+function envelope(seq: number, type: string, payload: Record<string, unknown>): EventEnvelope {
+  return {
+    id: `e${seq}`,
+    fixtureId: "fx-1",
+    seq,
+    type,
+    payload,
+    recordedAt: "2026-01-01T00:00:00.000Z",
+    recordedBy: null,
+  } as EventEnvelope;
+}
+
+/** The view `PadHostV3` itself would build for this event stream — same
+ *  `squadStateOf(state, lineups)` call, same folded state, no shortcut. */
+function foldedView(events: readonly EventEnvelope[], band: PadHostView["band"] = 3): PadHostView {
+  const lineups: LineupPair = {
+    home: { entrantId: "H", slots: eleven("h") },
+    away: { entrantId: "A", slots: eleven("a") },
+  };
+  const engineCfgValue = footballModule!.configSchema.parse({ maxSubs: 3, subWindows: 3 });
+  const folded = foldClient(footballModule as never, engineCfgValue, lineups, events) as Record<string, unknown>;
+  return {
+    cfg: engineCfgValue,
+    state: folded,
+    summary: {},
+    phase: "live",
+    band,
+    entitlements: {},
+    personNames: { h7: "Seven", h9: "Nine", h12: "Twelve" },
+    squads: squadStateOf(folded, lineups),
+    events,
+    contextOverrides: {},
+  };
+}
+
+describe("against a real engine fold", () => {
+  const kickoff = [envelope(1, "core.start", {})];
+  const afterSub = [
+    ...kickoff,
+    envelope(2, "football.goal", { by: "H", scorer: "h9", at: { period: "H1", elapsed: 754 } }),
+    envelope(3, "football.sub", { by: "H", off: "h7", on: "h12", at: { period: "H1", elapsed: 1200 } }),
+  ];
+
+  it("the host resolves a USABLE SquadState for football, whose own state.squads is a private projection", () => {
+    const view = foldedView(kickoff);
+    // The degrade is to the kickoff sheet, and the shape is the kernel's —
+    // a blind read of football's own `state.squads` has no `.members` at all
+    // and throws in every pool resolver downstream.
+    expect(Array.isArray(view.squads.home.members)).toBe(true);
+    expect(view.squads.home.members.length).toBe(12);
+  });
+
+  it("the OFF list follows the LIVE pitch after a substitution the fold accepted, where the host's own pool cannot", () => {
+    const view = foldedView(afterSub);
+    const home = buildSwap(view, t)[0]!;
+    expect(home.offCandidates).toContain("h12"); // came on
+    expect(home.offCandidates).not.toContain("h7"); // came off
+    // The chassis pool this supersedes is frozen at kickoff and says the
+    // opposite on both counts — which is exactly why offCandidates exists.
+    const pool = view.squads.home.members.filter((m) => m.onField).map((m) => m.personId);
+    expect(pool).toContain("h7");
+    expect(pool).not.toContain("h12");
+  });
+
+  it("the substituted-off player stays VISIBLE in the ON list with the reentry reason", () => {
+    const home = buildSwap(foldedView(afterSub), t)[0]!;
+    expect(home.candidates).toContain("h7");
+    expect(home.blocked?.h7).toBe("pad.football.context.sub.blocked.reentry.short");
+  });
+
+  it("stamps the next substitution from the stamp the fold itself is now as-of", () => {
+    const home = buildSwap(foldedView(afterSub), t)[0]!;
+    expect(home.buildEvent("h1", "h12").payload).toMatchObject({
+      by: "H",
+      at: { period: "H1", elapsed: 1200 },
+    });
+  });
+
+  it("every skin method runs clean against the folded state — no builder throws on a real fixture", () => {
+    const view = foldedView(afterSub);
+    const skin = footballSkinV3(t);
+    expect(() => skin.scorebug(view)).not.toThrow();
+    expect(() => skin.tiles(view)).not.toThrow();
+    expect(() => skin.sheets!(view)).not.toThrow();
+    expect(() => skin.swap!(view)).not.toThrow();
+    expect(() => skin.dock("football.goal", view, { by: "H" })).not.toThrow();
+    expect(skin.phase!(view)).toBe("live");
+    expect(buildScorebug(view, t).halves[0].big).toBe("1");
   });
 });
