@@ -74,6 +74,7 @@ async function seedTaggedCourts(
   request: APIRequestContext,
   venueName: string,
 ): Promise<{
+  venueId: string;
   tagged: { id: string; name: string };
   untagged: { id: string; name: string };
 }> {
@@ -95,6 +96,7 @@ async function seedTaggedCourts(
     { name: "Hard Court" },
   );
   return {
+    venueId,
     tagged: { id: tagged.data!.id, name: "Clay Court" },
     untagged: { id: untagged.data!.id, name: "Hard Court" },
   };
@@ -352,7 +354,25 @@ test.fixme(
 test("a tag scoped to one round role constrains that round only: the final needs the tagged court, the semis do not (#622)", async ({
   request,
 }) => {
-  const { tagged, untagged } = await seedTaggedCourts(request, `E2E Round Tag Venue ${TAG}`);
+  const { tagged, untagged, venueId } = await seedTaggedCourts(
+    request,
+    `E2E Round Tag Venue ${TAG}`,
+  );
+  // A THIRD, untagged court. Both semis run in PARALLEL at the same start (one
+  // per court), so with only two courts EVERY court is occupied at that instant
+  // and the move below lands on top of the other semi — a genuine double
+  // booking, correctly refused with 409. This test passed only when `semis[0]`
+  // happened to be the semi already sitting on the untagged court, making the
+  // move a no-op: a fixture-ordering coin flip, and the flake that reds this
+  // spec on main. A third court guarantees a free untagged slot at the semis'
+  // own start, so the move below is always a real, legal one.
+  const spareRow = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/orgs/${await activeOrgIdFromRequest(request)}/venues/${venueId}/courts`,
+    "POST",
+    { name: "Spare Court" },
+  );
+  const spare = { id: spareRow.data!.id };
 
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
@@ -431,7 +451,7 @@ test("a tag scoped to one round role constrains that round only: the final needs
         startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
         matchMinutes: 30,
         gapMinutes: 0,
-        courts: [tagged.id, untagged.id],
+        courts: [tagged.id, untagged.id, spare.id],
         perEntrantMinRest: 0,
         blackouts: [],
         sessionWindows: [],
@@ -477,9 +497,27 @@ test("a tag scoped to one round role constrains that round only: the final needs
 
   // A SEMI on the untagged court is legal — no rule names its role. This is
   // the assertion that fails if round tags are resolved stage-wide.
-  const semi = semis[0]!;
+  // Picked from the board auto actually produced: a semi, and an untagged court
+  // that is FREE at that semi's own start. Choosing `semis[0]` and
+  // `untagged.id` blind is what made this racy.
+  const semiAssignments = auto.data!.assignments.filter((a) => a.fixture_id !== finalRow.id);
+  const untaggedIds = [untagged.id, spare.id];
+  const move = semiAssignments
+    .map((a) => ({
+      fixtureId: a.fixture_id,
+      target: untaggedIds.find(
+        (c) =>
+          c !== a.court_id &&
+          !auto.data!.assignments.some(
+            (o) => o.court_id === c && o.scheduled_at === a.scheduled_at,
+          ),
+      ),
+    }))
+    .find((m) => m.target !== undefined);
+  expect(move, "no semi could move to a free untagged court").toBeTruthy();
+  const semi = semis.find((f) => f.id === move!.fixtureId)!;
   const movedSemi = await apiJson(request, `/api/v1/fixtures/${semi.id}`, "PATCH", {
-    court_id: untagged.id,
+    court_id: move!.target,
   });
   expect(movedSemi.status).toBe(200);
   const afterSemi = await apiJson<{ conflicts: ScheduleConflictRow[] }>(
