@@ -4186,5 +4186,22 @@
   "export.roster.signatureOfficial": "Official",
   "export.rota.signatureOfficial": "Official signature",
   "export.rota.signatureTimeOn": "Time on",
-  "export.rota.signatureTimeOff": "Time off"
+  "export.rota.signatureTimeOff": "Time off",
+  "reg.hub.row.configure": "Configure {name}",
+  "reg.hub.config.title": "Configure {name}",
+  "reg.hub.config.cancel": "Cancel",
+  "reg.hub.config.save": "Save changes",
+  "reg.hub.config.saving": "Saving…",
+  "reg.hub.config.loading": "Loading…",
+  "reg.hub.config.loadError": "Couldn't load these settings. Try again.",
+  "reg.hub.config.eligibility": "Eligibility",
+  "reg.hub.config.category": "Category",
+  "reg.hub.config.ageMin": "Minimum age",
+  "reg.hub.config.ageMax": "Maximum age",
+  "reg.hub.config.approval": "Who approves entries?",
+  "reg.hub.config.freeAgentsHint": "Only available for team divisions.",
+  "reg.hub.config.currencyNote": "Entrants are charged in {currency}.",
+  "reg.hub.config.manageCurrency": "Manage in organisation settings",
+  "reg.hub.config.feeCut": "You keep {keep}% of every paid entry — Bench takes {pct}%. This rate locks in for this competition the moment your first entrant pays.",
+  "reg.hub.config.cardUnsupported": "Card payments aren't available — your connected Stripe account settles in {currency}, which entry fees can't be charged in."
 }

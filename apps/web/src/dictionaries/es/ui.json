@@ -4186,5 +4186,22 @@
   "export.roster.signatureOfficial": "Oficial",
   "export.rota.signatureOfficial": "Firma del oficial",
   "export.rota.signatureTimeOn": "Hora de entrada",
-  "export.rota.signatureTimeOff": "Hora de salida"
+  "export.rota.signatureTimeOff": "Hora de salida",
+  "reg.hub.row.configure": "Configurar {name}",
+  "reg.hub.config.title": "Configurar {name}",
+  "reg.hub.config.cancel": "Cancelar",
+  "reg.hub.config.save": "Guardar cambios",
+  "reg.hub.config.saving": "Guardando…",
+  "reg.hub.config.loading": "Cargando…",
+  "reg.hub.config.loadError": "No se pudieron cargar estos ajustes. Inténtalo de nuevo.",
+  "reg.hub.config.eligibility": "Elegibilidad",
+  "reg.hub.config.category": "Categoría",
+  "reg.hub.config.ageMin": "Edad mínima",
+  "reg.hub.config.ageMax": "Edad máxima",
+  "reg.hub.config.approval": "¿Quién aprueba las inscripciones?",
+  "reg.hub.config.freeAgentsHint": "Solo disponible para categorías de equipos.",
+  "reg.hub.config.currencyNote": "Se cobra a los inscritos en {currency}.",
+  "reg.hub.config.manageCurrency": "Gestionar en los ajustes de la organización",
+  "reg.hub.config.feeCut": "Te quedas con el {keep}% de cada inscripción de pago — Bench se queda con el {pct}%. Esta tasa se fija para esta competición en cuanto paga tu primer inscrito.",
+  "reg.hub.config.cardUnsupported": "Los pagos con tarjeta no están disponibles — tu cuenta de Stripe conectada liquida en {currency}, una moneda en la que no se pueden cobrar cuotas de inscripción."
 }

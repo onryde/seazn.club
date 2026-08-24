@@ -4186,5 +4186,22 @@
   "export.roster.signatureOfficial": "Officiel",
   "export.rota.signatureOfficial": "Signature de l'officiel",
   "export.rota.signatureTimeOn": "Heure d'arrivée",
-  "export.rota.signatureTimeOff": "Heure de départ"
+  "export.rota.signatureTimeOff": "Heure de départ",
+  "reg.hub.row.configure": "Configurer {name}",
+  "reg.hub.config.title": "Configurer {name}",
+  "reg.hub.config.cancel": "Annuler",
+  "reg.hub.config.save": "Enregistrer les modifications",
+  "reg.hub.config.saving": "Enregistrement…",
+  "reg.hub.config.loading": "Chargement…",
+  "reg.hub.config.loadError": "Impossible de charger ces paramètres. Réessayez.",
+  "reg.hub.config.eligibility": "Éligibilité",
+  "reg.hub.config.category": "Catégorie",
+  "reg.hub.config.ageMin": "Âge minimum",
+  "reg.hub.config.ageMax": "Âge maximum",
+  "reg.hub.config.approval": "Qui approuve les inscriptions ?",
+  "reg.hub.config.freeAgentsHint": "Disponible uniquement pour les divisions par équipe.",
+  "reg.hub.config.currencyNote": "Les inscrits sont facturés en {currency}.",
+  "reg.hub.config.manageCurrency": "Gérer dans les paramètres de l'organisation",
+  "reg.hub.config.feeCut": "Vous conservez {keep}% de chaque inscription payante — Bench prélève {pct}%. Ce taux se fixe pour cette compétition dès que votre premier inscrit paie.",
+  "reg.hub.config.cardUnsupported": "Les paiements par carte ne sont pas disponibles — votre compte Stripe connecté règle en {currency}, une devise dans laquelle les frais d'inscription ne peuvent pas être facturés."
 }
