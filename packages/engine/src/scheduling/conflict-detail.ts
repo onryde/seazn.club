@@ -36,9 +36,23 @@
 // tag-mismatched court by any other path (a hand-drag, an AI draft) validated
 // clean. `court` is its uuid, same convention as `court_double_booking`.
 
+// `outside_court_hours` (P9.5, D5b.5, owner ruling) is the 27th, added the way
+// the note below demands rather than by a cast. P8 shipped `court_hours` /
+// `court_exceptions` (V367) and a calendar editor whose data no scheduling path
+// read; P9.5 makes the lattice honour it, and this kind is what keeps the
+// verifier from forking away again — the identical argument that produced
+// `court_tag_mismatch` one wave earlier, for the court's OPENING HOURS rather
+// than its tags. `court` is its uuid, same convention as the two above.
+//
+// Like `court_tag_mismatch` it is REPORTED but never BLOCKING (see
+// `isBlockingConflict`): narrowing a court's hours under already-placed
+// fixtures must not hard-refuse publish with no way out. That stranding case is
+// P10's (A6), and it stays an advisory there too.
+
 /** One member per family template. The design doc's own table enumerates 25;
- *  a 26th (`court_tag_mismatch`, above) has since been added by owner ruling
- *  — closed at exactly these 26, and a 27th needs the same, not a cast. */
+ *  a 26th (`court_tag_mismatch`) and a 27th (`outside_court_hours`) have since
+ *  been added by owner ruling — closed at exactly these 27, and a 28th needs
+ *  the same, not a cast. */
 export type ConflictDetailKind =
   | "person_double_booking"
   | "locked_slot_clash"
@@ -54,6 +68,7 @@ export type ConflictDetailKind =
   | "outside_start_window"
   | "court_double_booking"
   | "court_tag_mismatch"
+  | "outside_court_hours"
   | "inside_blackout"
   | "outside_session_windows"
   | "entrant_overlap"

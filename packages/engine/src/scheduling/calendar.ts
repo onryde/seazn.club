@@ -16,6 +16,7 @@ import type {
 import { restFloor } from "./rest-floor.ts";
 import { dayKeyInTz, hhmmInTz, weekdayOfYmd, ymdAddDays, zonedTimeToUtc } from "./tz.ts";
 import { canonConflictDetail, type ConflictDetail } from "./conflict-detail.ts";
+import { usableWindows, type CourtCalendar, type Window } from "./court-windows.ts";
 
 // Re-exported beside `Conflict` itself (below) so the many call sites that
 // already do `import { ..., type Conflict, ... } from "./calendar.ts"` can
@@ -55,6 +56,17 @@ export interface SlotConfig {
    *  the pack edge — never by adding 86_400_000, because a DST day is 23 or 25
    *  hours long. */
   window?: { from: number; to: number };
+  /** Per-court availability from V367's `court_hours`/`court_exceptions` (P8's
+   *  calendar editor), loaded usecase-side and resolved by `usableWindows`
+   *  (court-windows.ts). Absent, or absent FOR A GIVEN COURT, means that court
+   *  is unrestricted — calendars strictly SUBTRACT, so a court nobody has
+   *  given hours to must not become unschedulable.
+   *
+   *  Day-shaped, so it needs `tz` for the same reason the typed rules do: with
+   *  no zone there is no local midnight to resolve a weekday against, and both
+   *  the placer and the verifier SKIP these rather than bucket them in UTC.
+   *  Spelled the same on `VerifyConfig` so one config object drives both. */
+  courtCalendars?: readonly CourtCalendar[];
   horizonMinutes?: number; // how far past startAt to search before reporting no_slot
   /** Constraints v2 (Jul3/04 §3) — extends, never replaces, the base pass. */
   constraints?: SchedulingConstraints;
@@ -303,7 +315,16 @@ export const conflictKey = (c: Conflict): string =>
  */
 export function isBlockingConflict(c: Conflict): boolean {
   return (
-    (c.reason === "court" && c.details?.kind !== "court_tag_mismatch") ||
+    (c.reason === "court" &&
+      c.details?.kind !== "court_tag_mismatch" &&
+      // `outside_court_hours` (P9.5) is carved out for exactly the reason above
+      // it: an organiser who narrows a court's opening hours under fixtures
+      // already placed there would otherwise be hard-refused at publish with no
+      // `acknowledge_warnings` route out, and no edit that fixes it. Reported,
+      // never blocking. The stranding case is P10's (A6) and is advisory there
+      // too. `court_double_booking` stays unconditionally blocking — that one
+      // is a physical impossibility, not a declared-constraint breach.
+      c.details?.kind !== "outside_court_hours") ||
     c.reason === "person_overlap" ||
     c.reason === "window" ||
     (c.reason === "order" && c.direct === true)
@@ -986,7 +1007,7 @@ export type VerifyConfig = Pick<
   SlotConfig,
   "perEntrantMinRest" | "gapMinutes" | "blackouts" | "sessionWindows"
 > &
-  Partial<Pick<SlotConfig, "matchMinutes" | "constraints" | "window">> & {
+  Partial<Pick<SlotConfig, "matchMinutes" | "constraints" | "window" | "courtCalendars">> & {
     /** The ORG zone (#397). Day buckets, weekday targets and HH:mm bounds are
      *  meaningless without it, so a rule that needs one is SKIPPED when it is
      *  absent rather than silently bucketed in UTC — reporting a violation the
@@ -1587,7 +1608,44 @@ export function validateAssignments(
     return courtTagQualified;
   };
 
+  // Per-court availability (P9.5), resolved through the SAME `usableWindows`
+  // the lattice calls — `build-grid.ts` asking one question and this loop
+  // asking a subtly different one is the placer/verifier fork this session
+  // exists to close, and P9's `court_tag_mismatch` is the worked example of
+  // what it costs. Skipped without `tz` on both sides alike: court hours are
+  // day-shaped and there is no local midnight to resolve a weekday against.
+  //
+  // A court absent from this map has no declared calendar and is unrestricted.
+  // An ARCHIVED or deleted court is likewise absent, which keeps its existing
+  // cards clean — "the court is gone" is the stranded-fixture case P10 owes
+  // (A6), distinct from "the court violates a declared constraint" (A10).
+  const courtHourWindows = new Map<string, readonly Window[]>();
+  if (config.tz !== undefined && (config.courtCalendars ?? []).length > 0 && board.length > 0) {
+    const tz = config.tz;
+    const range = {
+      from: dayKeyInTz(Math.min(...board.map((a) => a.startAt)), tz),
+      to: dayKeyInTz(Math.max(...board.map((a) => a.endAt)), tz),
+    };
+    for (const calendar of config.courtCalendars ?? []) {
+      courtHourWindows.set(
+        calendar.courtId,
+        usableWindows(calendar, range, { tz, blackouts: config.blackouts }),
+      );
+    }
+  }
+
   for (const a of assignments) {
+    // The court's own opening hours (V367, P8's calendar editor). The whole
+    // occupancy must fit, not merely start inside — edge matrix row 7, and the
+    // same predicate `admits` uses.
+    const openHours = courtHourWindows.get(a.court);
+    if (openHours !== undefined && !openHours.some((w) => a.startAt >= w.from && a.endAt <= w.to)) {
+      conflicts.push({
+        fixtureId: a.fixtureId,
+        reason: "court",
+        details: { kind: "outside_court_hours", court: a.court },
+      });
+    }
     // The pack window (#397): the whole occupancy must fall inside the days the
     // competition actually runs. Only `assignments` are bound — `existing` is
     // other divisions' board and outside bookings, which this run is not being
