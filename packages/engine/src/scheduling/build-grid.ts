@@ -121,7 +121,12 @@ export function buildGrid(input: BuildGridInput): BuildGrid {
     for (const calendar of config.courtCalendars ?? []) {
       courtWindows.set(
         calendar.courtId,
-        usableWindows(calendar, range, { tz: config.tz, blackouts }),
+        // No blackouts passed: `admits` below already rejects any slot
+        // overlapping one, so subtracting them here too is duplicated work for
+        // an identical decision — and on the VERIFIER side the same
+        // pass-through produced a second, wrongly-blamed conflict. One cause,
+        // one place, on all three sides.
+        usableWindows(calendar, range, { tz: config.tz }),
       );
     }
   }

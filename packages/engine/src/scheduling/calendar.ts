@@ -492,7 +492,15 @@ function earliestOnCourt(
   // Each window's opening instant is a candidate in its own right: with hours
   // 15:00-20:00 and a lower bound of 00:00, no booking or blackout end would
   // ever propose 15:00 and the court would read as unusable all day.
-  for (const w of open ?? []) candidates.push(w.from);
+  //
+  // Bounded to [lowerBound, horizon]: with no end date the horizon is a YEAR
+  // (`config.horizonMinutes ?? 365 * 24 * 60`), so an unfiltered push added
+  // ~365 candidates per fixture per court and then sorted them. Everything
+  // outside this range is discarded by the loop below anyway, so the filter
+  // changes no answer — it only stops building the array.
+  for (const w of open ?? []) {
+    if (w.from >= lowerBound && w.from <= horizon) candidates.push(w.from);
+  }
   candidates.sort((a, b) => a - b);
   for (const start of candidates) {
     if (start < lowerBound || start > horizon) continue;
@@ -531,7 +539,7 @@ export function slotFixtures(input: SlotInput): SlotResult {
     const tz = config.tz;
     const range = { from: dayKeyInTz(lo, tz), to: dayKeyInTz(hi, tz) };
     for (const calendar of config.courtCalendars ?? []) {
-      courtOpenWindows.set(calendar.courtId, usableWindows(calendar, range, { tz, blackouts }));
+      courtOpenWindows.set(calendar.courtId, usableWindows(calendar, range, { tz }));
     }
   }
 
@@ -1656,7 +1664,15 @@ export function validateAssignments(
     for (const calendar of config.courtCalendars ?? []) {
       courtHourWindows.set(
         calendar.courtId,
-        usableWindows(calendar, range, { tz, blackouts: config.blackouts }),
+        // NO blackouts passed. `usableWindows` CAN subtract them (the capacity
+        // precheck relies on that, having no separate blackout pass), but this
+        // loop already reports `inside_blackout` on its own a few lines down.
+        // Subtracting them here as well made a fixture inside a blackout on a
+        // CALENDARED court report twice — `inside_blackout` plus
+        // `outside_court_hours` ("this court is closed"), the second blaming
+        // the wrong cause — while the identical fixture on a court with no
+        // calendar reported once. One cause, one conflict.
+        usableWindows(calendar, range, { tz }),
       );
     }
   }

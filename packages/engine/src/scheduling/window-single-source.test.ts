@@ -25,13 +25,19 @@ const calendar = source("./calendar.ts");
 const buildGrid = source("./build-grid.ts");
 
 /** Occurrences of a regex, ignoring the file's comment lines — a rule quoted
- *  in prose is documentation, not a second implementation. */
+ *  in prose is documentation, not a second implementation.
+ *
+ *  `?? 0`, never `!`: when a guarded pattern disappears ENTIRELY — a rename,
+ *  which is precisely the regression this file exists to catch — `.match`
+ *  returns null, and a non-null assertion would kill the test with a TypeError
+ *  instead of reporting `expected 0 to be 1`. The guard has to fail legibly in
+ *  the case it was written for. */
 function countInCode(text: string, re: RegExp): number {
   return text
     .split("\n")
     .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
     .join("\n")
-    .match(re)!.length;
+    .match(re)?.length ?? 0;
 }
 
 describe("start windows have exactly one implementation", () => {

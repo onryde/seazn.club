@@ -1656,7 +1656,18 @@ export async function autoSchedule(
   // Reads `plan.config`, which already carries the loaded calendars and the org
   // zone — the same object the placer and the verifier read, so the guard
   // cannot refuse a run the lattice would have allowed.
-  {
+  //
+  // BUILD ONLY. A reflow or polish already HAS a board, and its window is
+  // widened to contain those cards — so an organiser who narrows the sole
+  // court's hours to Mon-Fri under a Saturday board would make every candidate
+  // court closed across that range and get a hard 422 with no
+  // `acknowledge_warnings` route out and no edit that fixes it. That is exactly
+  // the case `outside_court_hours` is carved out of `isBlockingConflict` to
+  // keep advisory (calendar.ts, and conflict-detail.ts's header says so in as
+  // many words), and this guard would have overridden that promise from the
+  // other side. The empty-lattice argument only applies to a FRESH solve,
+  // which is what `mode: "build"` is.
+  if (body.mode === "build") {
     const cfg = plan.config;
     const span = cfg.window ?? { from: cfg.startAt, to: cfg.startAt };
     // `applyWindow` yields -Infinity/Infinity for an unbounded window, and
