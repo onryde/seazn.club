@@ -37,6 +37,7 @@ import {
   type Conflict,
   type ConflictDetail,
   type HardConstraint,
+  type CourtCalendar,
   type OrderDependency,
   type RuleFixture,
   type SchedulableFixture,
@@ -69,6 +70,7 @@ import {
   guardNoMatchingCourtPerFixture,
   requiredCourtTagsByFixture,
   resolveCandidateCourts,
+  resolveCourtCalendars,
   tagQualifiedCourtIdsByFixture,
   unionRequiredCourtTags,
 } from "./court-candidates";
@@ -1014,11 +1016,26 @@ export function toVerifyConfig(
    *  `siblingAssignments` returns the two halves together rather than leaving
    *  this to a second call a caller can simply not make. */
   extraRuleFixtures: readonly RuleFixture[] = [],
+  /** P9.5: the candidate courts' own opening hours (`resolveCourtCalendars`).
+   *
+   *  A PARAMETER, not a field read off `settings.config`, for the reason
+   *  `toSlotConfig` above copies every field by hand: this config is assembled
+   *  explicitly, so anything merely added to the wire config is silently
+   *  dropped here — an inert seam that typechecks, renders as enforced and
+   *  binds nothing (the #443 shape, and the `tz` trap two doc paragraphs up).
+   *  Loading it needs a `tx` and an already-resolved candidate set, neither of
+   *  which `settings` carries, so the call site passes it in.
+   *
+   *  Omitted means "this path does not consult court calendars" — NOT "no court
+   *  has any". Both the placer and the verifier read it off ONE object here, so
+   *  the two cannot be handed different court hours. */
+  courtCalendars?: readonly CourtCalendar[],
 ): SlotConfig & VerifyConfig {
   return {
     ...toSlotConfig(settings, now),
     tz: settings.orgTz,
     ruleFixtures: [...fixtures.map(rowToRuleFixture), ...extraRuleFixtures],
+    ...(courtCalendars !== undefined && courtCalendars.length > 0 ? { courtCalendars } : {}),
   };
 }
 
@@ -1435,6 +1452,12 @@ export async function autoSchedule(
       ...settings,
       config: { ...settings.config, courts: [...candidateCourtIds.ids] },
     };
+    // P9.5: the candidate courts' own opening hours (V367). Scoped to the
+    // candidate ids, which is what keeps an ARCHIVED court's existing cards
+    // validating clean — an archived court is not a candidate, so it is absent
+    // from this list, and `usableWindows` reads absent as unrestricted. "The
+    // court is gone" is P10's stranded-fixture case (A6), not this one.
+    const courtCalendars = await resolveCourtCalendars(tx, candidateCourtIds.ids);
 
     // #622: which of this stage's movable fixtures are narrowed BELOW the
     // stage-wide candidate set by a round-scoped tag, as `allowedCourts` for
@@ -1504,7 +1527,13 @@ export async function autoSchedule(
       .filter((f) => pinnedIds.has(f.id))
       .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
 
-    const declaredConfig = toVerifyConfig(settingsForEngine, all, roundToMinute(Date.now()), siblings.ruleFixtures);
+    const declaredConfig = toVerifyConfig(
+      settingsForEngine,
+      all,
+      roundToMinute(Date.now()),
+      siblings.ruleFixtures,
+      courtCalendars,
+    );
     const windowedConfig = boundSolverWindow(
       declaredConfig,
       schedulable,
@@ -3077,6 +3106,12 @@ async function validateScheduleIn(
     ...settings,
     config: { ...settings.config, courts: [...candidateCourtIds.ids] },
   };
+  // P9.5: the SAME loader the build path calls, so the lattice and this
+  // verifier cannot be handed different opening hours — the placer/verifier
+  // fork court-candidates.ts's header opens by warning about, now for the
+  // court's calendar rather than its tags. Scoped to candidate ids for the
+  // archived-court reason spelled out on the build side.
+  const courtCalendars = await resolveCourtCalendars(tx, candidateCourtIds.ids);
   // P9 pass 2c: gives the VERIFIER a real consumer for the same constraint —
   // `candidateCourtIds` above (tag+archived filtered) becomes the new
   // `config.courts`, but `validateAssignments` has never read `.courts`
@@ -3197,7 +3232,7 @@ async function validateScheduleIn(
           // (autoSchedule, the AI planning path, every test in this
           // package) for a question only THIS path asks.
           {
-            ...toVerifyConfig(settingsForEngine, all, 0, siblings.ruleFixtures),
+            ...toVerifyConfig(settingsForEngine, all, 0, siblings.ruleFixtures, courtCalendars),
             courtTagQualifiedIds: [...courtTagQualifiedIds],
             // #622 — the per-fixture override. Both are sent: the map is the
             // exact answer for this division's own fixtures, the flat list is
