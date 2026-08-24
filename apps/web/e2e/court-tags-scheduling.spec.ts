@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import {
   TAG,
   apiJson,
@@ -6,6 +6,7 @@ import {
   createStageAndGenerate,
   divisionPath,
   activeOrgIdFromRequest,
+  seedVenueWithCourts,
 } from "./helpers";
 
 // P9's own acceptance criteria (portfolio pass 5), beyond converting the
@@ -495,4 +496,254 @@ test("a tag scoped to one round role constrains that round only: the final needs
   expect(mismatches[0]!.code).toBe("conflict.court");
   expect(mismatches[0]!.blocking).toBe(false);
   expect(mismatches[0]!.details!.court).toBe(untagged.id);
+});
+
+// P9.5 (D5b.5, court hours) + the P95-windows i18n pass — two BOARD-level
+// tests (not API-only, unlike everything above) proving a conflict CODE
+// renders as real localized copy, never the raw wire string.
+//
+// `conflicts-panel.tsx`'s own `conflictLabel(code)` resolves
+// `board.conflict.${code}` through the active locale's dictionary, falling
+// back to the hand-maintained `CONFLICT_LABEL` table (types.ts) and only then
+// to the bare code itself. Both codes exercised here share that same
+// resolution path with `court_tag_mismatch` above (`conflict.court`) or were
+// entirely unmapped before this pass (`conflict.start_window` — before P9.5
+// neither the dictionary key nor the CONFLICT_LABEL fallback existed for it,
+// so the board rendered the bare string `conflict.start_window` verbatim).
+//
+// Both are hand-placed via the normal PATCH/move path, not the solver, then
+// read off the BOARD's own conflicts panel — located by ARIA role + name, the
+// same convention scheduling-constraints.spec.ts's own `badge`/`panel`
+// locators use (`conflicts-panel.tsx` exposes no `data-*` hook to grab
+// instead). UNLIKE that file's stated convention, these two tests DO assert
+// on the rendered English — the copy itself, resolved end to end from the
+// dictionary, is the thing under test here, not row count or blocking state.
+const conflictsBadge = (page: Page) =>
+  page.getByRole("button", { name: /conflicts? — open the list/ });
+const conflictsPanel = (page: Page) => page.getByRole("region", { name: "Schedule conflicts" });
+
+/** One venue, one court, with a `court_hours` row PUT onto it (P8/P9.5's
+ *  calendar editor). Distinct from `seedTaggedCourts` above, which has no
+ *  hours param and exists for the TAG scope, not the HOURS one. */
+async function seedCourtWithHours(
+  request: APIRequestContext,
+  venueName: string,
+  hours: { weekday: number; open_min: number; close_min: number }[],
+): Promise<{ id: string }> {
+  const orgId = await activeOrgIdFromRequest(request);
+  const venue = await apiJson<{ id: string }>(request, `/api/v1/orgs/${orgId}/venues`, "POST", {
+    name: venueName,
+  });
+  const venueId = venue.data!.id;
+  const court = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/orgs/${orgId}/venues/${venueId}/courts`,
+    "POST",
+    { name: "Hours Court" },
+  );
+  const courtId = court.data!.id;
+  const put = await apiJson(request, `/api/v1/orgs/${orgId}/courts/${courtId}/calendar`, "PUT", {
+    hours,
+    exceptions: [],
+  });
+  expect(put.status).toBe(200);
+  return { id: courtId };
+}
+
+test("a fixture placed outside its court's declared hours shows a real localized label on the board, never the raw code (P9.5)", async ({
+  page,
+  request,
+}) => {
+  const weekday = new Date(Date.UTC(2026, 10, 4)).getUTCDay();
+  const court = await seedCourtWithHours(request, `E2E Court Hours Venue ${TAG}`, [
+    { weekday, open_min: 15 * 60, close_min: 20 * 60 },
+  ]);
+
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Court Hours Board ${TAG}`,
+    visibility: "private",
+  });
+  const div = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Court Hours Board",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  const divisionId = div.data!.id;
+  await addEntrantsViaApi(request, divisionId, ["Elm", "Fir"]);
+  const { stageId, fixtureIds } = await createStageAndGenerate(request, divisionId);
+  expect(fixtureIds.length).toBe(1);
+
+  const settings = await apiJson(
+    request,
+    `/api/v1/divisions/${divisionId}/schedule-settings`,
+    "PUT",
+    {
+      tz: "UTC",
+      config: {
+        startAt: new Date(Date.UTC(2026, 10, 4, 15, 0)).toISOString(),
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts: [court.id],
+        perEntrantMinRest: 0,
+        blackouts: [],
+        sessionWindows: [],
+      },
+    },
+  );
+  expect(settings.status).toBe(200);
+
+  // Legitimately scheduled first, INSIDE hours — moveFixture's
+  // MOVABLE_STATUS gate refuses to move a timetable for a fixture that was
+  // never placed at all, same as the negative control above.
+  const auto = await apiJson<{
+    assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
+  }>(request, `/api/v1/stages/${stageId}/schedule/auto`, "POST", {});
+  expect(auto.status).toBe(200);
+  expect(auto.data!.assignments.length).toBe(1);
+  const applied = await apiJson<{ applied: number }>(
+    request,
+    `/api/v1/stages/${stageId}/schedule/apply`,
+    "POST",
+    {
+      assignments: auto.data!.assignments.map((a) => ({
+        fixture_id: a.fixture_id,
+        scheduled_at: a.scheduled_at,
+        court_id: a.court_id,
+      })),
+      source: "auto",
+    },
+  );
+  expect(applied.status).toBe(200);
+
+  // Hand-place it OUTSIDE the 15:00-20:00 window — the normal PATCH/move
+  // path, not through the solver.
+  const moved = await apiJson(request, `/api/v1/fixtures/${fixtureIds[0]}`, "PATCH", {
+    court_id: court.id,
+    scheduled_at: new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString(),
+  });
+  expect(moved.status, "a non-blocking conflict must never refuse the write").toBe(200);
+
+  await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
+  await expect(page.getByText("Elm").first()).toBeVisible({ timeout: 20_000 });
+
+  await conflictsBadge(page).click();
+  const list = conflictsPanel(page);
+  await expect(list).toBeVisible();
+  await expect(list.getByRole("listitem")).toHaveCount(1);
+  const row = list.getByRole("listitem").first();
+  // The dictionary value for `board.conflict.conflict.court` (en/ui.json) —
+  // the exact label court_tag_mismatch/court_double_booking already render,
+  // since outside_court_hours shares the same wire code (`conflict.court`,
+  // REASON_CODE["court"]). Never the raw code, and never any bare
+  // `conflict.*`/`warn.*`-shaped token.
+  await expect(row).toContainText("court clash");
+  const rowText = (await row.textContent()) ?? "";
+  expect(rowText).not.toMatch(/\bconflict\.\w+\b/);
+});
+
+test("a start-window breach shows a real localized label on the board, not the raw 'conflict.start_window' string (P9.5)", async ({
+  page,
+  request,
+}) => {
+  const { courts } = await seedVenueWithCourts(request, ["Start Window Court"], {
+    venueName: `E2E Start Window Venue ${TAG}`,
+  });
+  const court = courts[0]!;
+
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Start Window Board ${TAG}`,
+    visibility: "private",
+  });
+  const div = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Start Window Board",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  const divisionId = div.data!.id;
+  await addEntrantsViaApi(request, divisionId, ["Gale", "Holt"]);
+  const { stageId, fixtureIds } = await createStageAndGenerate(request, divisionId);
+  expect(fixtureIds.length).toBe(1);
+
+  const notAfter = new Date(Date.UTC(2026, 10, 4, 12, 0)).toISOString();
+  const settings = await apiJson(
+    request,
+    `/api/v1/divisions/${divisionId}/schedule-settings`,
+    "PUT",
+    {
+      tz: "UTC",
+      config: {
+        startAt: new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString(),
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts: [court.id],
+        perEntrantMinRest: 0,
+        blackouts: [],
+        sessionWindows: [],
+        constraints: {
+          startWindows: [{ target: { kind: "division", id: divisionId }, notAfter }],
+        },
+      },
+    },
+  );
+  expect(settings.status).toBe(200);
+
+  // Legitimately scheduled first, INSIDE the window — same MOVABLE_STATUS
+  // reasoning as the court-hours test above.
+  const auto = await apiJson<{
+    assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
+  }>(request, `/api/v1/stages/${stageId}/schedule/auto`, "POST", {});
+  expect(auto.status).toBe(200);
+  expect(auto.data!.assignments.length).toBe(1);
+  const applied = await apiJson<{ applied: number }>(
+    request,
+    `/api/v1/stages/${stageId}/schedule/apply`,
+    "POST",
+    {
+      assignments: auto.data!.assignments.map((a) => ({
+        fixture_id: a.fixture_id,
+        scheduled_at: a.scheduled_at,
+        court_id: a.court_id,
+      })),
+      source: "auto",
+    },
+  );
+  expect(applied.status).toBe(200);
+
+  // Hand-place it AFTER notAfter — breaches the bound. Non-blocking (H5 is
+  // never in isBlockingConflict), so the write is not refused either.
+  const moved = await apiJson(request, `/api/v1/fixtures/${fixtureIds[0]}`, "PATCH", {
+    court_id: court.id,
+    scheduled_at: new Date(Date.UTC(2026, 10, 4, 14, 0)).toISOString(),
+  });
+  expect(moved.status, "a non-blocking conflict must never refuse the write").toBe(200);
+
+  await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
+  await expect(page.getByText("Gale").first()).toBeVisible({ timeout: 20_000 });
+
+  await conflictsBadge(page).click();
+  const list = conflictsPanel(page);
+  await expect(list).toBeVisible();
+  await expect(list.getByRole("listitem")).toHaveCount(1);
+  const row = list.getByRole("listitem").first();
+  // `board.conflict.conflict.start_window` (en/ui.json): "outside a start
+  // window". Before P9.5 this code had neither a dictionary key nor a
+  // CONFLICT_LABEL fallback, so this rendered the bare string
+  // `conflict.start_window` verbatim (see conflicts-panel.tsx's own comment).
+  await expect(row).toContainText("outside a start window");
+  const rowText = (await row.textContent()) ?? "";
+  expect(rowText).not.toContain("conflict.start_window");
 });
