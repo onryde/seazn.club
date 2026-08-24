@@ -277,7 +277,12 @@ test.describe("RS004 registration hub", () => {
     await expect(panel.locator('[data-field="capacity"]')).toHaveValue("75");
     await expect(panel.locator('[data-field="category"]')).toHaveValue("mens");
     await expect(panel.locator('[data-field="approval"]')).toHaveValue("manual");
-    await expect(panel.locator('[data-field="fee_cents"]')).toHaveValue("5");
+    // "5.00", not "5": the fee field is a text input with a decimal draft and
+    // an onBlur normalise (the number-input version could not accept "12.50" —
+    // at the intermediate "12." a number input reports value === "", which
+    // clobbered the keystroke). Normalising to 2dp is the visible half of that
+    // fix, so this assertion pins it rather than tolerating either form.
+    await expect(panel.locator('[data-field="fee_cents"]')).toHaveValue("5.00");
     await expect(panel.locator('[data-field="payment_method_offline"]')).toBeChecked();
     await expect(panel.locator('[data-field="payment_instructions"]')).toHaveValue(
       "Pay the club treasurer in cash.",
