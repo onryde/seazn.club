@@ -1051,15 +1051,42 @@ body {
   border-color: var(--sport-led);
 }
 /* Replaces the tappable half's `hover:bg-cream/[0.04]` +
-   `focus-visible:outline-lime-400`. Both are on one class because both belong
-   to the same element; globals.css's own `:where(a,button,…):focus-visible`
-   rule is zero-specificity, so this wins without `!important`. */
+   `focus-visible:outline-lime-400`. */
 @media (hover: hover) {
   .pad-half:hover {
     background-color: color-mix(in oklab, var(--sport-ink) 4%, transparent);
   }
 }
-.pad-half:focus-visible {
+
+/* THE FOCUS RING IS SCOPED TO A SPORT THAT HAS A COLOUR OF ITS OWN, and the
+   scope is the fix for a real defect rather than caution.
+
+   B4 shipped this as a bare `.pad-half:focus-visible`. That selector is
+   UNLAYERED at (0,2,0); the platform's own ring above
+   (`:where(a, button, summary, [role="tab"]):focus-visible`) is unlayered at
+   (0,1,0), because `:where()` scores zero. So the pad rule won everywhere and
+   CRICKET's scorebug ring changed from violet `--ps-accent` to the default LED
+   lime — a moved pixel on a signed-off surface, which ruling R3-6 forbids.
+   B4's own comment here claimed the platform rule was "zero-specificity" and
+   read that as permission; it is the `:where()` that is zero, not the rule.
+
+   The Tailwind utility this replaced (`focus-visible:outline-lime-400`) never
+   won either: `@layer utilities` loses to every unlayered rule. So the ring
+   had ALWAYS been the platform violet, on every skin, and nothing but leaving
+   the layer changed it.
+
+   `data-sport-theme` is emitted by `PadHostV3` only when the mounted skin
+   declares a palette (`sportThemeAttr`, v3/sport-theme.ts), so:
+     - cricket, tennis and the eight legacy skins never match this rule and
+       keep the platform ring, with no per-sport CSS;
+     - `--sport-led` inside this rule can only ever be an overriding sport's
+       OWN colour, never the shared default;
+     - R4-R7 inherit both properties by declaring a palette, with no edit here.
+
+   (0,3,0) and unlayered, so it outranks the platform ring without
+   `!important`. `__tests__/focus-ring-cascade.test.ts` computes that cascade
+   rather than asserting the text of this rule. */
+[data-sport-theme] .pad-half:focus-visible {
   outline-color: var(--sport-led);
 }
 

@@ -68,7 +68,7 @@ import { RecordingChip } from "./recording-chip";
 import { buildRibbon } from "./ribbon";
 import { ActivityPanel, type ActivityEvent } from "./activity";
 import { MORE_SHEET_KEY, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
-import { sportThemeStyle } from "./sport-theme";
+import { sportThemeAttr, sportThemeStyle } from "./sport-theme";
 
 // ---------------------------------------------------------------------------
 // Pure builders — every decision this file makes, tested directly
@@ -825,7 +825,19 @@ export function PadHostV3(props: PadHostV3Props) {
      * defaults live in globals.css's `:root` as ALIASES of the product's
      * `--mk-*` vars, so an un-overridden pad paints exactly what it painted
      * before the token layer existed. */
-    <div data-role="pad-v3" className="space-y-3" style={sportThemeStyle(props.skin.key)}>
+    <div
+      data-role="pad-v3"
+      className="space-y-3"
+      style={sportThemeStyle(props.skin.key)}
+      /* R3 review round — the ATTRIBUTE twin of the style above, emitted from
+       * the same key on the same element. A CSS rule can read a `--sport-*`
+       * property but cannot ask whether anyone overrode it, so a rule painting
+       * "the sport's colour" had no way to leave an un-overriding sport alone:
+       * B4's `.pad-half:focus-visible` turned cricket's focus ring lime. This
+       * is what globals.css scopes such a rule to. `undefined` for a sport
+       * with no palette, so its markup is unchanged. */
+      data-sport-theme={sportThemeAttr(props.skin.key)}
+    >
       {/* Sign-off review 2026-08-17: the legacy renderer showed the fold's own
        *  headline (pad-renderer.tsx:192,296, added by S10/#419 as a fix) and
        *  v3 dropped it — `ScorebugSpec` carries no result field, so a finished

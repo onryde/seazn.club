@@ -38,10 +38,13 @@ import {
   SPORT_TOKENS,
   SPORT_TONES,
   resolveSportPalette,
+  sportCustomProperty,
+  sportThemeAttr,
   sportThemeStyle,
 } from "../sport-theme";
 import { NIGHT_TILE_CLASSES } from "../tokens";
 import { Scorebug } from "../scorebug";
+import { parseCss, readGlobalsCss, splitSelectorList } from "./_globals-css";
 import type { ScorebugSpec } from "../types";
 import type { MsgFn } from "../ribbon";
 
@@ -133,6 +136,31 @@ describe("CRICKET IS UNCHANGED — lock 1: data", () => {
     expect(sportThemeStyle("tennis")).toBeUndefined();
   });
 
+  it("and NO data-sport-theme either, which is what keeps a sport-scoped CSS rule off it", () => {
+    // R3 review round. `sportThemeAttr` is the twin of `sportThemeStyle` and
+    // must agree with it on EVERY key, or a scoped rule fires where the
+    // properties were never emitted (or fails to fire where they were).
+    expect(sportThemeAttr("cricket")).toBeUndefined();
+    expect(sportThemeAttr("tennis")).toBeUndefined();
+    expect(sportThemeAttr("football")).toBe("football");
+    for (const key of ["cricket", "tennis", "football", "no-such-sport"]) {
+      expect(
+        (sportThemeAttr(key) === undefined) === (sportThemeStyle(key) === undefined),
+        `${key}: the attribute and the style disagree about whether this sport is themed`,
+      ).toBe(true);
+    }
+  });
+
+  it("every token the resolver names is a property globals.css also declares — one prefix, one source", () => {
+    // `sportCustomProperty` is production; the `:root` block is the CSS
+    // authority. Reading both kills the old "the JS table agrees with itself"
+    // shape at the property-name level too.
+    const css = readGlobalsCss();
+    for (const token of SPORT_TOKENS) {
+      expect(css, `globals.css declares no ${sportCustomProperty(token)}`).toContain(`${sportCustomProperty(token)}:`);
+    }
+  });
+
   it("opts into neither of the new spec fields (StripItem.tone / option tone)", () => {
     const src = readFileSync(
       join(process.cwd(), "src/components/v2/scorepad/v3/skins/cricket.tsx"),
@@ -160,21 +188,54 @@ describe("CRICKET IS UNCHANGED — lock 2: resolution", () => {
   });
 });
 
-// The class -> resolved-hex table for globals.css's `.pad-*` rules with NO
-// `--sport-*` override in scope. Independently sourced from those rules'
-// fallback chain, exactly as TAILWIND_UTILITY_HEX is sourced from the
-// `@theme inline` block — deriving it from DEFAULT_SPORT_PALETTE would make
-// the render lock below circular.
-const PAD_CLASS_HEX: Record<string, string> = {
-  "pad-board": "#150b36",
-  "pad-board-2": "#1d1145",
-  "pad-ink": "#f5f0e8",
-  "pad-ink-70": "#f5f0e8",
-  "pad-ink-80": "#f5f0e8",
-  "pad-led": "#9ae600",
-  "pad-led-dot": "#9ae600",
-  "pad-led-edge": "#9ae600",
-};
+// ---------------------------------------------------------------------------
+// R3 REVIEW ROUND — THIS FILE'S RENDER LOCK WAS A TAUTOLOGY, and its CSS lock
+// bound rules BY NAME ONLY. Both are rewritten to run through a production
+// symbol; the fix is recorded here because the shape recurs.
+//
+// The old lock compared `PAD_CLASS_HEX` (hand-typed, ~90 lines below
+// PRE_R3_RENDERED_HEX) against `PRE_R3_RENDERED_HEX` (hand-typed, above) — two
+// constants in the SAME NEW FILE, with no production symbol on either side. No
+// edit to sport-theme.ts, tokens.ts or globals.css could red it; only editing
+// this file could. And `css.toContain(".pad-" + base)` asserted that a NAME
+// appears somewhere in globals.css, so `.pad-board { background-color:
+// var(--sport-led) }` passed, and `.pad-board` was satisfied by the substring
+// inside `.pad-board-2`.
+//
+// The chain now has production on one side and the independent table on the
+// other, with globals.css itself as the middle term:
+//
+//   class  --(globals.css's own rule)-->  token
+//   token  --(DEFAULT_SPORT_PALETTE)-->   hex        <- production symbol
+//   hex    ==  PRE_R3_RENDERED_HEX                   <- independent table
+//
+// `PRE_R3_RENDERED_HEX` stays hand-typed and stays independent — that is the
+// point of it (see its own comment). What changed is that the OTHER side is no
+// longer hand-typed too.
+// ---------------------------------------------------------------------------
+
+const cssRules = parseCss(readGlobalsCss());
+
+/** Every `--sport-*` token globals.css's own rules for `.<base>` reference.
+ *  Read off the parsed rule, so a rule that paints the wrong token — the
+ *  `.pad-board { background-color: var(--sport-led) }` case the old
+ *  name-only assertion waved through — is visible here. */
+function tokensBoundTo(base: string): string[] {
+  const out = new Set<string>();
+  for (const rule of cssRules) {
+    if (!declaresClass(rule.selector, base)) continue;
+    for (const match of rule.declarations.matchAll(/var\(--sport-([a-z0-9-]+)/g)) out.add(match[1]!);
+  }
+  return [...out].sort();
+}
+
+/** Whether a selector actually targets `.<base>` — a real class-token match,
+ *  never a substring. `.pad-board` must NOT be satisfied by `.pad-board-2`,
+ *  which is exactly what the old `css.toContain(".pad-board")` did. */
+function declaresClass(selector: string, base: string): boolean {
+  const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return splitSelectorList(selector).some((one) => new RegExp(`\\.${escaped}(?![\\w-])`).test(one));
+}
 
 /** Every branch of Scorebug that paints anything: a tappable half (hint text
  *  + serving dot), a plain half, the context band, an accented strip item and
@@ -208,8 +269,11 @@ describe("CRICKET IS UNCHANGED — lock 3: render", () => {
   });
 
   it("paints only through classes whose no-override value is the pre-B4 colour", () => {
-    // Mutation-proved: swapping NIGHT_TILE_CLASSES.tileBg to "pad-board-2"
-    // reds this (the tile ground would resolve to #1d1145, not #150b36).
+    // Mutation-proved twice: swapping NIGHT_TILE_CLASSES.tileBg to
+    // "pad-board-2" reds it (the Scorebug stops rendering `.pad-board`), and
+    // so does repointing globals.css's own `.pad-board` rule at
+    // `var(--sport-led)` — which the previous hand-typed version could not
+    // see at all.
     const painted = [
       [NIGHT_TILE_CLASSES.tileBg, "board"],
       [NIGHT_TILE_CLASSES.bandBg, "board-2"],
@@ -222,7 +286,13 @@ describe("CRICKET IS UNCHANGED — lock 3: render", () => {
     ] as const;
     for (const [cls, token] of painted) {
       expect(html, `Scorebug never renders ${cls}`).toContain(cls);
-      expect(PAD_CLASS_HEX[cls], `no PAD_CLASS_HEX entry for ${cls}`).toBe(PRE_R3_RENDERED_HEX[token]);
+      // globals.css is the middle term: which token does the rule for THIS
+      // class actually paint?
+      expect(tokensBoundTo(cls), `globals.css paints .${cls} from the wrong token`).toEqual([token]);
+      // …and the production resolver's value for that token is the colour the
+      // pre-B4 build painted. Two different sources, neither of them a second
+      // copy of the other.
+      expect(DEFAULT_SPORT_PALETTE[token], `${token} moved off its pre-B4 value`).toBe(PRE_R3_RENDERED_HEX[token]);
     }
   });
 
@@ -283,8 +353,9 @@ describe("the token layer is actually WIRED, not merely defined", () => {
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
 
-  it("pad-host imports the resolver rather than reimplementing a palette", () => {
-    expect(host).toContain('import { sportThemeStyle } from "./sport-theme"');
+  it("pad-host imports the resolvers rather than reimplementing a palette", () => {
+    expect(host).toMatch(/import \{[^}]*\bsportThemeStyle\b[^}]*\} from "\.\/sport-theme"/);
+    expect(host).toMatch(/import \{[^}]*\bsportThemeAttr\b[^}]*\} from "\.\/sport-theme"/);
   });
 
   it("applies it to the pad ROOT, off the mounted skin's own key — one place, every descendant", () => {
@@ -292,6 +363,14 @@ describe("the token layer is actually WIRED, not merely defined", () => {
     // them: scorebug, tiles, sheets, dock and swap all resolve the sport's
     // palette without any of them knowing which sport is mounted.
     expect(host).toMatch(/data-role="pad-v3"[^>]*style=\{sportThemeStyle\(props\.skin\.key\)\}/);
+  });
+
+  // R3 review round: the ATTRIBUTE must ride the same element as the style, or
+  // globals.css's `[data-sport-theme] .pad-half:focus-visible` can match a
+  // subtree whose `--sport-*` properties were never set — and would then paint
+  // the DEFAULT led, which is the cricket pixel that moved in the first place.
+  it("emits data-sport-theme on that SAME element, from that same key", () => {
+    expect(host).toMatch(/data-role="pad-v3"[^>]*data-sport-theme=\{sportThemeAttr\(props\.skin\.key\)\}/);
   });
 
   it("and nothing else in the chassis emits a --sport-* property of its own", () => {
@@ -325,11 +404,28 @@ describe("globals.css is the token AUTHORITY — the JS table only mirrors it", 
     expect(css).toContain("--sport-led: var(--color-lime-400");
   });
 
-  it("defines a rule for every .pad-* class the chassis renders", () => {
+  it("defines a real rule for every .pad-* class the chassis renders — a class token, never a substring", () => {
+    // `css.toContain(".pad-board")` was satisfied by the `.pad-board-2` rule,
+    // so deleting `.pad-board` outright would not have reddened it. This walks
+    // the PARSED selectors and matches whole class tokens.
     for (const cls of Object.values(NIGHT_TILE_CLASSES)) {
-      const base = cls.split(":")[0];
+      const base = cls.split(":")[0]!;
       if (!base.startsWith("pad-")) continue;
-      expect(css, `globals.css has no rule for .${base}`).toContain(`.${base}`);
+      const declaring = cssRules.filter((rule) => declaresClass(rule.selector, base));
+      expect(declaring.length, `globals.css has no rule whose selector targets .${base}`).toBeGreaterThan(0);
+    }
+  });
+
+  it("and every one of those rules paints from a --sport-* token, never a literal", () => {
+    // The other half of the name-only hole: a rule can exist under the right
+    // name and still hard-code a colour, which would take that class straight
+    // back off the token layer.
+    for (const cls of Object.values(NIGHT_TILE_CLASSES)) {
+      const base = cls.split(":")[0]!;
+      if (!base.startsWith("pad-")) continue;
+      for (const rule of cssRules.filter((r) => declaresClass(r.selector, base))) {
+        expect(/#[0-9a-fA-F]{3,8}\b/.test(rule.declarations), `.${base} hard-codes a colour`).toBe(false);
+      }
     }
   });
 });

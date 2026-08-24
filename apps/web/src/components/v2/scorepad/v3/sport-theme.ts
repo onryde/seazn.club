@@ -157,6 +157,30 @@ export function resolveSportPalette(skinKey: string): SportPalette {
  * board but not the ink should keep inheriting whatever `:root` says the ink
  * is, so a later product-theme change still reaches it.
  */
+/**
+ * The pad root's `data-sport-theme` value, or `undefined` for a sport that
+ * overrides nothing.
+ *
+ * R3 review round. Custom properties alone cannot carry this: a CSS rule can
+ * READ `var(--sport-led)` but cannot ask "did anyone override it", and the
+ * default value is a real colour, so `.pad-half:focus-visible { outline-color:
+ * var(--sport-led) }` painted CRICKET'S ring lime — a moved pixel on a
+ * signed-off surface, which ruling R3-6 forbids outright. The attribute is
+ * what lets globals.css scope a sport-coloured rule to the sports that
+ * actually have a colour, so every un-overriding skin keeps the platform's own
+ * value BY CONSTRUCTION rather than by a per-sport carve-out.
+ *
+ * Exactly the same `undefined` discipline `sportThemeStyle` documents below,
+ * and for the same reason: React omits an `undefined` attribute entirely, so
+ * cricket's root markup is byte-identical to what it was before the token
+ * layer existed. Deliberately paired with `sportThemeStyle` on ONE element —
+ * `sport-theme.test.ts` pins that the two are emitted together, so a rule
+ * scoped to the attribute can never find itself without the properties.
+ */
+export function sportThemeAttr(skinKey: string): string | undefined {
+  return SPORT_PALETTES[skinKey] === undefined ? undefined : skinKey;
+}
+
 export function sportThemeStyle(skinKey: string): CSSProperties | undefined {
   const overrides = SPORT_PALETTES[skinKey];
   if (overrides === undefined) return undefined;
