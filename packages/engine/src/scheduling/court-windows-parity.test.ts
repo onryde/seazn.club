@@ -117,6 +117,38 @@ describe("court hours: the lattice and /validate agree", () => {
     expect(courtHourConflicts(at(9), config)).toEqual([]);
   });
 
+  it("leaves a no-calendar org's lattice byte-identical — the pure-refactor proof", () => {
+    // The acceptance criterion P9.5 owes: an org that has declared no court
+    // calendars must get EXACTLY the lattice it got before this feature existed.
+    // Enumerated analytically rather than snapshotted, because a snapshot taken
+    // after the change can only prove the change is stable, never that it was
+    // inert — and "inert for existing orgs" is the whole claim.
+    //
+    // 24 hourly starts per court, minus the two a 12:00-13:00 global blackout
+    // eats on both courts, minus the one more a C1-scoped 09:00-10:00 blackout
+    // eats. Sessions and blackouts only; no courtCalendars key at all.
+    const config = cfg({
+      blackouts: [
+        { from: SAT + 12 * 60 * MIN, to: SAT + 13 * 60 * MIN },
+        { court: "C1", from: SAT + 9 * 60 * MIN, to: SAT + 10 * 60 * MIN },
+      ],
+    });
+    const hours = (...skip: number[]) =>
+      Array.from({ length: 24 }, (_, h) => h)
+        .filter((h) => !skip.includes(h))
+        .map((h) => SAT + h * 60 * MIN);
+
+    const g = buildGrid({ config });
+
+    expect((g.byCourt.get("C1") ?? []).map((i) => g.slots[i]!.startAt)).toEqual(hours(9, 12));
+    expect((g.byCourt.get("C2") ?? []).map((i) => g.slots[i]!.startAt)).toEqual(hours(12));
+    // And declaring the key EMPTY must be indistinguishable from omitting it —
+    // a caller that loads calendars and finds none must not get a different
+    // board from one that never asked.
+    const withEmpty = buildGrid({ config: { ...config, courtCalendars: [] } });
+    expect(withEmpty.slots).toEqual(g.slots);
+  });
+
   it("leaves an ARCHIVED court's existing card clean, per P9's A10 split", () => {
     // "The court violates a declared constraint" is this conflict. "The court is
     // gone" is the stranded-fixture case P10 owes (A6) and must stay clean here
