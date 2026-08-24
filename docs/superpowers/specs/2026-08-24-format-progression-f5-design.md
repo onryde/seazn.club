@@ -1,231 +1,170 @@
-# F5 — closing the format-progression programme
+# F5 — shipped, and what survived it
 
-*Design of record, 2026-08-24. Supersedes the F5 scope in
-`2026-08-18-format-progression-f3-f5-design.md` §5 and §8, and the "Left for
-F5" block in `2026-08-17-format-progression-prompts/_INDEX.md`. Both remain
-accurate about **why** each item exists; neither is accurate about the code as
-shipped. Read §1 before either of them.*
+*Rewritten 2026-08-24, same day, replacing this file's first revision entirely.*
 
-Owner rulings, 2026-08-24: F5 ships **both** accumulated scopes in one PR — the
-F4 leftovers *and* the §5 test debt — plus the day-one full-draw poster and the
-two adjacent paywall defects. F1–F4 are merged (`#606`, `#616`, `#617`, `#619`).
-F6 (`#625`, `standings.carry_over`) is unaffected and still follows.
+**Read this first: F5 is MERGED.** It shipped as PR **#630**
+(`feat/f5-test-debt`, merge `45a5b835c`). The first revision of this document
+was a "design of record" that re-planned work already on `main`, because it was
+written from `_INDEX.md`'s "Left for F5" block and from reading the code,
+without checking merged PRs. Nearly every premise it stated was false for that
+one reason. It has been replaced rather than amended, because an amended
+version would still read as an open wave.
+
+What this file is now: a record of what #630 covered, the small remainder that
+genuinely survived it, and — most importantly — the prescriptions the first
+revision got *wrong*, so nobody implements them.
 
 ---
 
-## 1. Premises that are already false
+## 1. What #630 shipped
 
-F5 inherited its task list from F4's final review. Three entries no longer
-describe `main`. This is the programme's own recurring failure — §6 of the
-F3–F5 design named it — so the corrections are recorded here rather than
-discovered again by whoever implements.
+```
+fix(exports): localize table chrome, descriptions and scoresheet copy
+fix(calendar): localize the two remaining hardcoded entrant-name fallbacks
+fix(registrations): escape ICS TEXT values in the single-registration download
+fix(notifications): resolve day-one placeholder labels instead of bare TBD in
+                    3 digest/notice emails
+fix(ui): render the paywall card, not a plain error banner, on PAYMENT_REQUIRED
+fix(ui): clear the stale paywall card on AddStageForm resubmit
+test(smoke): prove bracket round-role columns and the bye slot label over real data
+feat(engine-testkit): teach the simulation harness genuinely multi-source
+                      progression specs
+test(engine): full seeded_map unclaimed-seat assertion + best_nth cross-pool
+              tie coverage
+test(formats): replace tautological qualification-absence checks with
+               schema-valid progression checks
+```
 
-| Inherited claim | What `main` actually does |
+That is the §5 test debt AND F4's leftover i18n/placeholder cleanup, in one
+branch. Both paywall defects, the `seeded_map` assertion, the `best_nth` tie
+test, the multi-source fuzz and the F1 smoke check are **done**.
+
+---
+
+## 2. What genuinely survived — verified against `main` on 2026-08-24
+
+Each line was checked by reading `main`, not inherited from any list. Line
+numbers decay fast in this repo; re-pin every one before editing.
+
+| Item | Evidence |
 |---|---|
-| `packages/engine/src/exports/build.ts:40` — `timeOf()` hardcodes `"TBD"` for every day-one fixture | **Half-fixed.** F4 built the caller-supplied seam: `fixtureRows(fixtures, timeTbc)` takes the word as a parameter, and `TIME_TBC = "TBD"` (`:60`) is only the fallback for callers passing no `opts.i18n`. The engine has no locale of its own and correctly does not acquire one. What is still English is listed in §2. |
-| `calendar.ics/route.ts:37,80` — `?? "TBD"` and `?? "Entrant"` hardcoded | **Fixed.** The route resolves `toLocale(data.org.default_locale)` and routes both through `msgFor` — `calendar.unknownEntrant` for a missing entrant, `resolveSlotLabel(label, lookup, "schedule.tbd")` for an unresolved slot. It also already anchors untimed fixtures as all-day `STATUS:TENTATIVE` events under a stable UID. |
-| `registrations.ts:3001-3024` — second VCALENDAR builder applies no escaping, injection risk on comma/semicolon | **False.** Both `SUMMARY` and `DESCRIPTION` are wrapped in `icsText()`, which does RFC 5545 §3.3.11 escaping. The builder has real defects, but they are different ones — see §4. There is no injection risk here and F5 should not claim to have fixed one. |
-
-Two line references also drifted: the tautological assertion in
-`format-gallery.test.ts` is at `:90`, not `:97`; and of the five stray
-`?? "TBD"` sites, `schedule.ts:2598` and `officials.ts:600` no longer exist.
-
-**The pattern, stated once more:** every one of these was written by a careful
-reviewer against code that was correct at the time. Line numbers and premises
-in this repo decay within days. Verify each item against `main` before
-implementing it, including the items in this document.
+| `packages/engine/src/exports/build.ts` values #630 did not reach: `f.result ?? "vs"`, `f.court ?? "Unassigned"`, `"No duties assigned"`, `"Accepted"/"Declined"`, and `home/away ?? "TBD"` ×8 in the bracket builders | #630 localized the table CHROME through the `BuildOpts["i18n"]` seam; these row and section VALUES were not part of it |
+| `buildOfficialsRota` and `buildRoster` hardcode their `signatures` arrays | same file, same `opts.i18n?.x ?? CONST` idiom as the fields #630 added |
+| Hardcoded `' vs '` separators baked into template literals in `exports.ts` (rota duty rows, my-rota, scoresheet heading, audit-ledger title) | `schedule.vs` is already resolved in `exportChrome()` — no new key needed |
+| The `?entrant=` calendar feed drops **every** day-one fixture | predicate is `!entrantId \|\| home===id \|\| away===id`; an unresolved fixture has both ids null. #630 fixed the *vacuous assertion* over this feed, not the filter |
+| `registrationIcs` still hand-rolls a second VCALENDAR | escaping landed in `afbfda4eb`; folding, `CALSCALE`/`METHOD` and the English `DESCRIPTION` did not |
+| Stray `?? "TBD"` in `org-posts.ts` (4 sites) and `match-reports.ts` (1) | the notifications commit covered 3 digest/notice emails, not these |
+| `poster.pdf` renders QR + branding only, and its own copy is hardcoded English with an `en-GB` date format | nobody had listed the poster's own strings before |
 
 ---
 
-## 2. Wave 1 — finish the engine export i18n seam
+## 3. Prescriptions the first revision got WRONG
 
-F4 built the seam and wired three of its fields. The rest of the document
-builder still emits English.
+These are recorded because each one, implemented as written, produces a green
+suite and a broken product. They came out of a review of that revision plus
+direct verification.
 
-- `BuildOpts["i18n"]` (`packages/engine/src/exports/types.ts:276`) carries
-  `timeTbc`, `timetableColumns`, `rotaColumns`, `participantsColumns`.
-- Still English on a French poster:
-  - `home ?? "TBD"` / `away ?? "TBD"` at `build.ts:288,289,326,327,359,360,387,388`.
-    These are **reachable through the bracket arm** — an earlier F4 note calling
-    them dead was wrong.
-  - `PARTICIPANTS_COLUMNS` (`:153`) has an `opts.i18n` override at `:168`, so
-    confirm at implementation time whether `exportChrome` actually supplies it
-    or the English default is silently winning. The same check applies to
-    `timetableColumns` and `rotaColumns`.
+**"Keep a fixture whose slot label cites that entrant" is impossible.** No slot
+label ever cites an entrant. Every label is structural — pool letters, ranks,
+round positions ("Winner of Group A"). A filter written to that instruction
+matches zero rows, the feed keeps dropping day-one fixtures, and the test stays
+green. **Owner ruling 2026-08-24:** a personal feed carries the subscriber's own
+resolved fixtures PLUS every unresolved fixture in their division. Do not walk
+the progression graph for reachability — that was considered and deferred.
+Over-inclusion is intended; the events are already all-day `STATUS:TENTATIVE`.
 
-**Approach.** Widen `BuildOpts["i18n"]` with the missing fields (an
-`entrantTbd` for the bracket arm, plus whatever the audit above finds unwired)
-and populate them in `exportChrome()`
-(`apps/web/src/server/usecases/exports.ts:338`), which already resolves the org
-locale through `msgFor`. English literals stay in the engine as the no-i18n
-fallback — that is a deliberate boundary, not debt.
+**"Replace the body with a `buildIcs` call" is lossy.** `buildIcs` differs from
+`registrationIcs` in four ways that would break existing subscribers:
 
-**Do not** give the engine a locale, a dictionary, or an `Accept-Language`
-reader. `apps/web` has no server-side i18n either; the org's `default_locale`
-is the only defensible locale for a document nobody is viewing, and both
-`exports.ts:58-67` and the calendar route already say so in comments.
+- it emits `UID:<uid>@seazn.club`, appending the suffix itself, while
+  `registrationIcs` already builds `registration-<id>@seazn.club` — passing that
+  through double-suffixes it and changes every subscriber's event identity;
+- its all-day branch hardcodes `DTEND = nextDay(allDayOn)`, one day, while
+  `registrationIcs` deliberately spans `starts_on … ends_on + 1`, so a
+  multi-day competition collapses to a single day;
+- it emits `STATUS:TENTATIVE` + `SEQUENCE:0`; a confirmed registration is not
+  tentative;
+- it uses a different `PRODID`.
 
----
+Either extend `buildIcs` to carry a multi-day span, an optional status and an
+already-suffixed UID, or keep a local builder that REUSES `foldLine`/`icsText`.
+Preserve all four behaviours, each pinned by its own test.
 
-## 3. Wave 2 — the English prose on documents organisers hand out
+**The folding is not RFC-correct, and a naive test cannot see it.** `foldLine`
+slices on JS string length — UTF-16 code units — while RFC 5545 §3.1 counts
+OCTETS. Accented text still emits over-long lines, and `slice(0, 74)` can split
+a surrogate pair. A folding test written with ASCII passes while the violation
+stands; write it with genuinely multi-byte text.
 
-`exports.ts` localized its bracket chrome in F4 and left the surrounding prose
-untouched, so a French scoresheet has French round names and English form
-lines.
+**"The existing test will pass through the swap either way" is false.**
+`registrations.test.ts` also asserts `DTSTART;VALUE=DATE:20260915`, and a second
+test asserts exact `SUMMARY`/`DESCRIPTION` strings that localizing the
+description turns red. Both are correct to update deliberately, not delete.
 
-- Scoresheet form lines and signature labels ("Referee", "Captain — ").
-- The Page-playoff description, and every section description.
+**The board payload budget was already re-baselined.** `91e5c0b20`
+("test(e2e): re-baseline the board payload budget 250KB -> 300KB
+(owner-approved)") moved the gate; the live assertion is
+`toBeLessThan(300_000)` with an owner-approved rationale block above it (P9
+court-label→UUID cutover, ~9KB structural growth), and it budgets flight bytes
+MINUS the serialised `en/ui.json`. The "roughly 250003 against 250000" figure
+was arithmetic, and stale as well. **Measured 2026-08-24: the ceiling is
+300_000.** The first revision's ruling — "if it is already over, report and
+stop" — is retained as owner policy but is unlikely to fire.
 
-Route them through the existing `slotLookup` / `msgFor` path. New keys go in
-all four locale dictionaries.
-
-**Both fixture paths.** The bracket poster runs its **own** fixture query in
-the `exports.ts` bracket arm and never calls `exportFixtures`. F4's first pass
-missed it for exactly that reason. Anything changing how exported fixtures
-resolve must touch both or it silently covers one.
-
-**Adding a key is not finished until `npm run i18n:gen-keys` has run and
-`apps/web/src/lib/i18n-keys.ts` is committed.** `i18n:check` and the parity
-script both stay green against a stale generated file, because they compare the
-locales to each other. Only CI's drift gate sees it. F4 lost a CI cycle to
-this and `#618` hit it the same day (`315ef26c0`).
-
----
-
-## 4. Wave 3 — calendar correctness
-
-**The `?entrant=` feed drops every day-one fixture by construction.** The
-predicate is `!entrantId || f.home_entrant_id === entrantId || f.away_entrant_id === entrantId`.
-An unresolved fixture has both ids null, so a subscribing player never receives
-the final they are heading toward. "A player can subscribe to their own route
-through the draw" is the product claim day-one fixtures exist to deliver, and
-it is not delivered today. Fix: keep a fixture whose *slot label* cites that
-entrant, alongside the id match. The unfiltered feed already handles these
-correctly — only the per-entrant filter is wrong.
-
-**`registrationIcs` (`registrations.ts`) hand-rolls a second VCALENDAR.** Not an
-injection risk (§1), but it diverges from `buildIcs` (`lib/public-site.ts:92`)
-in ways that matter: no `foldLine` (so a long competition name emits a line
-over 75 octets, invalid per RFC 5545 §3.1), no `CALSCALE`/`METHOD`, and a
-hardcoded English `DESCRIPTION` ("Registration for X (status)"). Replace the
-body with a `buildIcs` call and localize the description. Its existing test
-(`registrations.test.ts:779`) asserts only `toContain("BEGIN:VCALENDAR")` and
-will pass through the swap either way — ship a folding test that fails first.
-
-**Triage the survivors.** `org-posts.ts:533,534,580,581` and
-`match-reports.ts:224` still hold bare `?? "TBD"`. Determine reachability with
-a day-one fixture for each; localize the reachable ones, comment the rest with
-why they cannot be reached.
+**Three bad citations, corrected.** Only TWO tautological
+`not.toHaveProperty("qualification")` tests existed, not three;
+`catalog.test.ts`'s assertion is an unrelated `progression` absence check on a
+byte-stable P4-era template, and that file sits inside this document's own
+exclusion list. And `format-catalogue.test.ts` carries no "stays red until Task
+6" blocker wording — the lines cited are load-bearing F2/F3 rationale that a
+future re-baseline needs. Do not delete them.
 
 ---
 
-## 5. Wave 4 — the day-one full-draw poster
+## 4. Where the remainder is being worked
 
-Owner ruling: **a new page on the public `poster.pdf`**, not a mode of the
-staff-facing bracket export.
+Branch `feat/f5-remainder`, in a worktree, stacked on `fix/admit-tickets-empty`.
+Sequenced by file-group rather than fanned out, because four of the groups all
+edit the four locale dictionaries and the generated `i18n-keys.ts` — file sets
+that are not disjoint cannot run in parallel.
 
-`src/app/(public)/shared/[orgSlug]/[competitionSlug]/poster.pdf/route.ts` is
-today a single A4 pdfkit page — org name, competition name, dates, a 320pt QR,
-"Scan to follow live". It is public, unauthenticated, `revalidate = 300`, and
-already the artifact an organiser pins to a wall. The draw becomes page 2+.
-
-It is also, unlisted by anyone, the same defect class as waves 1–3: `"Scan to
-follow live"`, `"Live scores · fixtures · standings — no app needed"` and
-`toLocaleDateString("en-GB", …)` are hardcoded. Fix them in the same pass —
-the poster is the one export whose audience is least likely to read English.
-
-The existing landscape bracket poster in the `exports.ts` bracket arm stays as
-it is. It is org-authenticated and a spectator cannot reach it; it is not the
-wall poster and is not being replaced.
-
-This is the only wave that is new UI rather than cleanup: it needs the
-frontend-design bar and print output inspected as a rendered PDF, not asserted
-by byte count.
+`fix/admit-tickets-empty` is separate and covers a defect found the same day:
+admit tickets read `registrations`, not `entrants`, so a competition whose
+organiser added entrants directly rendered a blank branded page as a **200 PDF**.
+It now refuses with 422 `TICKETS_NOT_AVAILABLE`, mirroring the bracket arm's
+`BRACKET_NOT_AVAILABLE`, and the status stamp no longer overprints the
+reference (its x is measured off the ref rather than fixed; a real ref is 12
+characters and ran ~10pt past the old offset).
 
 ---
 
-## 6. Wave 5 — the paywall defects
-
-Both are missing UI rather than wrong behaviour, and F5 is already touching
-user-facing strings and dictionaries, so the i18n cost is shared.
-
-- `AddStageForm` renders a plain error banner where a paywall card belongs.
-- `division-settings.tsx`'s `buildTemplateStages` call has no
-  `PAYMENT_REQUIRED` handling at all.
-
-Note `lib/seeding-error.ts`'s scope note forbids adding to its code list; a new
-resolver, if one is needed, goes in `lib/` — not beside either caller, because
-a resolver placed beside a caller closes an import cycle when two surfaces
-share it (`#580`).
-
----
-
-## 7. Wave 6 — the inherited test debt
-
-Worked from the F3–F5 design §5 table, top to bottom, with these amendments:
-
-- **F1's owed smoke check** — round naming and byes. Deferred at F1 to avoid
-  conflicting with F2's `smoke.ts` conversion, which has since landed.
-- **Three tautological tests** — `catalog.test.ts:68`,
-  `format-templates.test.ts:200`, `format-gallery.test.ts:90` assert
-  `not.toHaveProperty("qualification")` on a type that no longer has the field.
-  They would pass if the code under test were deleted. **Replace the
-  assertion; do not delete the test** — assert the `progression` shape that
-  should be there.
-- **Multi-source fuzz** — the property harness builds single-source specs only,
-  by its own comment at `testkit/simulation.ts:796-797`. Multi-source is the
-  newest code in the programme and has directed tests but no fuzz.
-- **Board payload budget** — `e2e/board-v3.spec.ts:228`. The inherited "roughly 250003
-  against 250000" is arithmetic, not measurement. **Measure first.** Owner
-  ruling: if the measurement shows `main` is already over the ceiling, report
-  the real number, leave the gate untouched, and raise it as its own issue.
-  F5 does not silently absorb a payload regression it did not cause, and does
-  not open-endedly shrink the payload.
-- **Weak `seeded_map` assertion** — `progression.test.ts:157` checks only
-  `placed[0]` of four unclaimed seats; an implementation slicing by position
-  rather than filtering by claimed key passes byte-identically.
-- **Stale blocker comment** — `format-catalogue.test.ts:67-89` says it stays red
-  until Task 6 converts and forbids regenerating the snapshot. Task 6 landed;
-  it passes 3/3. Delete the comment.
-- **Missing `best_nth` cross-pool tie-flagging test** — the deleted
-  `stage-seeding.test.ts` had one; the shared tie block at
-  `progression.ts:521-527` is proven via `rank_range` only.
-
----
-
-## 8. Exclusions
+## 5. Exclusions
 
 - `packages/engine/src/sport/**`, the fidelity-tier scale, the scoring pad, the
   `StageKind` enum.
-- `ticketRegistrationRows` is **not** part of P5 and never was — it selects
-  `registrations.display_name`/`ref_code` and joins neither `fixtures` nor
-  `entrants`. Verified twice by two reviewers. Do not "fix" it.
-- The staff-facing landscape bracket poster (§5).
-- `standings.carry_over` — that is F6 / `#625`.
+- `ticketRegistrationRows` is **not** part of P5 and never was. Verified twice
+  by two reviewers. Do not "fix" it.
+- `/r/[ref]/page.tsx` is a deliberate stub — it renders "Registration is
+  closed" for every ref, valid or not, and **RS007 owns re-pointing it at group
+  refs**. Note the consequence: every admit-ticket QR, printed and digital,
+  currently lands on that stub. `regByRef` itself works.
+- The staff-facing landscape bracket poster in the `exports.ts` bracket arm.
+- `standings.carry_over` — that is F6 / `#625`, which is what "next" now means.
 
 ---
 
-## 9. Verification
+## 6. Verification
 
-- **`turbo run lint typecheck` from the repo root is the CI gate.**
-  `npm run lint` alone is not, and `rtk` hides lint output entirely — use
-  `rtk proxy` and read `✖ N problems`.
-- Run vitest with `--reporter=json --outputFile=<path>` and judge only
-  `numPassedTests` / `numTotalTests`. Readable summaries print `PASS(0)
-  FAIL(0)` for a suite that failed to **collect**.
-- All four test types per task: unit, e2e, smoke, regression. Every change
-  ships a test that fails without it.
-- `.github/workflows/e2e.yml` is **live on pull requests** — read it for the
-  current job shape rather than trusting any written count.
-- The poster (§5) is verified by opening the rendered PDF. The paywall cards
-  (§6) are verified by screenshot at 1280, 320 and 768 with no horizontal page
-  scroll at any width.
-- **Verify by looking, not by counting.** Every serious defect in F1–F4 was
-  silent: a dropped key returning 200, a filter matching nothing, a CHECK
-  constraint accepting what it was written to reject, a test asserting a defect
-  approvingly. None crashed; all passed their suites. Three of F5's own
-  inherited premises (§1) were wrong for the same reason.
-- **Before writing the task list**, grep `apps/web/src`, `scripts/`,
-  `apps/web/e2e/`, `db/` and `packages/` in ONE pass for every symbol the
-  session touches. F2's unowned work surfaced in four separate waves because
-  each sweep was scoped to whatever that author happened to be editing.
+- `turbo run lint typecheck` from the repo root is the CI gate. `npm run lint`
+  alone is not, and `rtk` hides lint output — use `rtk proxy` and read
+  `✖ N problems`.
+- vitest via `--reporter=json --outputFile`, judged on
+  `numPassedTests`/`numTotalTests`, with your own file confirmed present in
+  `.testResults[].name`. The positional is a **substring** filter, not a regex:
+  `"a|b"` matches nothing and still reports a green total.
+- All four test types per task; every change ships a test that fails without it.
+- Pre-commit: `npm run openapi:gen` then `git status --porcelain` must be empty.
+- New dictionary key ⇒ `npm run i18n:gen-keys` and commit `i18n-keys.ts`.
+  `i18n:check` stays green against a stale generated file; only CI sees it.
+- **Check merged PRs before treating any programme item as open.** That is the
+  single lesson of this document's first revision.
