@@ -239,6 +239,72 @@ describe("RegistrationHubConfigPanel — loading and data wiring", () => {
   });
 });
 
+// Finding 3: the fee input was `type="number"`, whose `value` coerces to
+// `""` on an intermediate string a real number can't parse yet (e.g.
+// "12."), and the old onChange mapped that "" straight to fee_cents: 0 —
+// so React wrote 0 back into the box mid-keystroke and a decimal fee was
+// effectively unenterable. Ported the pre-deletion component's fix
+// (`git show 850cc6308^:apps/web/src/components/v2/registration-settings.tsx`,
+// :204-221): a text input with a separate draft string, normalised on
+// blur. RESPONSE.fee_cents is 1500 ($15.00), so every test here starts
+// from a "15.00" display.
+describe("RegistrationHubConfigPanel — decimal entry fees (finding 3)", () => {
+  async function openPanel() {
+    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    return island;
+  }
+  function fire(island: ReturnType<typeof renderIsland>, handler: "onChange" | "onBlur", value?: string) {
+    const feeInput = findField(island.tree(), "fee_cents")!;
+    if (handler === "onChange") {
+      (propsOf(feeInput).onChange as (e: { target: { value: string } }) => void)({ target: { value: value! } });
+    } else {
+      (propsOf(feeInput).onBlur as () => void)();
+    }
+  }
+
+  it("typing '12.50' yields fee_cents: 1250", async () => {
+    const island = await openPanel();
+    fire(island, "onChange", "12.50");
+    const saveBtn = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
+    await (propsOf(saveBtn).onClick as () => Promise<void>)();
+    const put = net.calls.find((c) => c.method === "PUT")!;
+    expect((put.json as Record<string, unknown>).fee_cents).toBe(1250);
+  });
+
+  it("an intermediate '12.' does not clobber the draft", async () => {
+    const island = await openPanel();
+    fire(island, "onChange", "12.");
+    expect(propsOf(findField(island.tree(), "fee_cents")!).value).toBe("12.");
+  });
+
+  it("blur normalises the draft to two decimals", async () => {
+    const island = await openPanel();
+    fire(island, "onChange", "12.5");
+    fire(island, "onBlur");
+    expect(propsOf(findField(island.tree(), "fee_cents")!).value).toBe("12.50");
+  });
+
+  it("'0' means free", async () => {
+    const island = await openPanel();
+    fire(island, "onChange", "0");
+    const saveBtn = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
+    await (propsOf(saveBtn).onClick as () => Promise<void>)();
+    const put = net.calls.find((c) => c.method === "PUT")!;
+    expect((put.json as Record<string, unknown>).fee_cents).toBe(0);
+  });
+
+  it("a non-numeric entry does not produce NaN and leaves fee_cents unchanged", async () => {
+    const island = await openPanel();
+    fire(island, "onChange", "abc");
+    expect(propsOf(findField(island.tree(), "fee_cents")!).value).not.toContain("NaN");
+    const saveBtn = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
+    await (propsOf(saveBtn).onClick as () => Promise<void>)();
+    const put = net.calls.find((c) => c.method === "PUT")!;
+    expect((put.json as Record<string, unknown>).fee_cents).toBe(1500);
+  });
+});
+
 describe("RegistrationHubConfigPanel — accordion: which sections default open vs collapsed", () => {
   it("Eligibility, Open & close and Capacity are open by default", async () => {
     const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
