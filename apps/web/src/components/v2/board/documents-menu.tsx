@@ -23,6 +23,24 @@ export function dismissesMenu(
   return !root.contains(target);
 }
 
+/** Wire codes for "this document does not apply to this competition yet",
+ *  which are a normal state rather than a failure and so are worth saying in
+ *  the organiser's own language. Anything absent from this map falls back to
+ *  the server's English message — never to a generic error, which would throw
+ *  away detail the server took trouble to provide. */
+const DOC_ERROR_KEYS: Record<string, "documents.ticketsUnavailable" | "documents.bracketUnavailable"> = {
+  TICKETS_NOT_AVAILABLE: "documents.ticketsUnavailable",
+  BRACKET_NOT_AVAILABLE: "documents.bracketUnavailable",
+};
+
+export function localisedDocError(
+  code: string | undefined,
+  msg: (key: "documents.ticketsUnavailable" | "documents.bracketUnavailable") => string,
+): string | null {
+  const key = code ? DOC_ERROR_KEYS[code] : undefined;
+  return key ? msg(key) : null;
+}
+
 /** One place builds the URL, so the busy-state comparison can never drift
  *  from the URL the download actually requests. */
 function docUrl(row: DocRow, format: "pdf" | "xlsx"): string {
@@ -86,11 +104,17 @@ export function DocumentsMenu({
       const res = await fetch(url);
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as
-          | { error?: { message?: string } }
+          | { error?: { message?: string; code?: string } }
           | null;
+        // The server has no i18n (every HttpError message is English prose),
+        // so a document that is merely INAPPLICABLE — as opposed to broken —
+        // is localised here off its wire code, with the server's message kept
+        // as the fallback for anything unmapped. Same shape as
+        // lib/seeding-error.ts and lib/schedule-error.ts.
+        const localised = localisedDocError(body?.error?.code, msg);
         setErrors((e) => ({
           ...e,
-          [row.base]: body?.error?.message ?? msg("documents.error"),
+          [row.base]: localised ?? body?.error?.message ?? msg("documents.error"),
         }));
         return;
       }

@@ -1646,6 +1646,8 @@
   "documents.standings": "Clasificación",
   "documents.participants": "Participantes",
   "documents.error": "No se pudo preparar ese documento.",
+  "documents.ticketsUnavailable": "Aún no hay inscripciones confirmadas, así que no hay entradas para imprimir.",
+  "documents.bracketUnavailable": "Esta división aún no tiene cuadro eliminatorio.",
   "documents.pdf": "PDF",
   "documents.xlsx": "XLSX",
   "schedule.working": "Procesando…",

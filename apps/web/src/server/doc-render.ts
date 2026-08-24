@@ -247,6 +247,10 @@ function stampColorFor(status: string): string {
 /** The courtside pass — mirrors r/[ref]/ticket.png as a printable card.
  *  Night masthead card, mono ref + rotated status stamp, dashed
  *  perforation, QR on the stub, "ADMIT ONE". Two per A4 via columnsHint. */
+/** Letter-spacing on the ticket status chip; counted into its measured
+ *  width so the border never clips the label. */
+const STAMP_TRACKING = 2;
+
 function drawTicket(
   doc: PDFKit.PDFDocument,
   t: NonNullable<DocSection["ticket"]>,
@@ -280,12 +284,23 @@ function drawTicket(
   doc.font(FONT.displayBold).fontSize(16).fillColor(PALETTE.ink).text(t.maskedName, MARGIN + 16, top + 112);
   doc.font(FONT.body).fontSize(9).fillColor(PALETTE.mute).text("YOUR REFERENCE", MARGIN + 16, top + 140, { characterSpacing: 2 });
   doc.font("Courier-Bold").fontSize(20).fillColor(PALETTE.ink).text(t.ref, MARGIN + 16, top + 152);
-  // status stamp beside the reference block — a colour-coded underline plus
-  // matching text, mirroring ticket.png's bordered STAMP chip.
+  // Status stamp beside the reference — ticket.png's bordered chip, not the
+  // underline this used to draw. Its x is MEASURED off the reference instead
+  // of fixed at MARGIN + 150: a real ref is 12 characters (`SZ-98PJ-DYGY`,
+  // lib/ref-code.ts) and at Courier-Bold 20 it runs ~10pt past that offset, so
+  // the stamp printed over the digits an organiser reads out when a QR will
+  // not scan. Measured while Courier-Bold 20 is still the active font.
+  const refRight = MARGIN + 16 + doc.widthOfString(t.ref);
   const stampColor = stampColorFor(t.status);
-  doc.rect(MARGIN + 150, top + 163, 60, 2).fill(stampColor);
-  doc.font(FONT.displayBold).fontSize(11).fillColor(stampColor)
-    .text(t.status.toUpperCase(), MARGIN + 150, top + 148, { characterSpacing: 2, lineBreak: false });
+  const stampLabel = t.status.toUpperCase();
+  doc.font(FONT.displayBold).fontSize(11);
+  const stampTextW = doc.widthOfString(stampLabel) + stampLabel.length * STAMP_TRACKING;
+  const chipX = refRight + 16;
+  const chipY = top + 148;
+  doc.roundedRect(chipX, chipY, stampTextW + 20, 22, 4)
+    .lineWidth(1.2).strokeColor(stampColor).stroke();
+  doc.fillColor(stampColor)
+    .text(stampLabel, chipX + 10, chipY + 6, { characterSpacing: STAMP_TRACKING, lineBreak: false });
   // stub
   const stubX = MARGIN + w - 150;
   doc.moveTo(stubX, top).lineTo(stubX, top + cardH).dash(3, { space: 3 }).strokeColor(PALETTE.hairline).stroke().undash();

@@ -895,6 +895,17 @@ export async function buildAdmitTicketsDoc(
   return withTenant(auth.orgId, async (tx) => {
     const meta = await competitionTicketMeta(tx, competitionId);
     const rows = await ticketRegistrationRows(tx, competitionId);
+    // Tickets come from `registrations`, not `entrants`: a competition whose
+    // organiser added entrants directly has nothing to admit anyone with.
+    // Rendering that as an empty branded page returned a 200 PDF that looked
+    // exactly like a working export, so refuse the way the bracket arm does.
+    if (rows.length === 0) {
+      throw new HttpError(
+        422,
+        "this competition has no confirmed registrations to ticket",
+        "TICKETS_NOT_AVAILABLE",
+      );
+    }
     const dates = `${meta.starts_on ?? "—"} – ${meta.ends_on ?? meta.starts_on ?? "—"}`;
     const tickets: ExportTicket[] = rows.map((r, i) => ({
       maskedName: maskDisplayName(r.display_name, resolveNameDisplay(r.player_name_display, r.youth)),

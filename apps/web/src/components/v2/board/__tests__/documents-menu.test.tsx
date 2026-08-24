@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DocumentsMenu } from "@/components/v2/board/documents-menu";
+import { DocumentsMenu, localisedDocError } from "@/components/v2/board/documents-menu";
 
 // Regression (v12 task 15): the schedule board used to link straight to the
 // timetable PDF only. The Documents menu must surface all four matchday
@@ -40,5 +40,27 @@ describe("DocumentsMenu", () => {
   it("links admit tickets to the competition-scoped tickets export, PDF only", () => {
     expect(html).not.toContain('href="/api/v1/competitions/c1/exports/tickets?format=pdf"');
     expect(html).not.toContain('href="/api/v1/competitions/c1/exports/tickets?format=xlsx"');
+  });
+});
+
+// The server has no i18n, so an INAPPLICABLE document (no confirmed
+// registrations, no bracket stage) would otherwise show English prose in all
+// four locales. Same extract-the-rule pattern as `dismissesMenu`: this
+// workspace runs vitest with environment "node" and has no jsdom, so the
+// error branch that consumes this cannot be exercised through a render.
+describe("localisedDocError", () => {
+  const msg = ((k: string) => `t:${k}`) as never;
+
+  it("localises a competition with nothing to ticket", () => {
+    expect(localisedDocError("TICKETS_NOT_AVAILABLE", msg)).toBe("t:documents.ticketsUnavailable");
+  });
+
+  it("localises a division with no bracket stage", () => {
+    expect(localisedDocError("BRACKET_NOT_AVAILABLE", msg)).toBe("t:documents.bracketUnavailable");
+  });
+
+  it("returns null for an unmapped code so the caller keeps the server's own message", () => {
+    expect(localisedDocError("SOMETHING_ELSE", msg)).toBeNull();
+    expect(localisedDocError(undefined, msg)).toBeNull();
   });
 });

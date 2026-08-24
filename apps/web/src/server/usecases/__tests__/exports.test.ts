@@ -89,6 +89,24 @@ async function seedDivision(auth: AuthCtx) {
   return { comp, division, stage: stage!, fixtures, entrants };
 }
 
+/** Admit tickets are built from CONFIRMED registrations, not entrants: a
+ *  competition with none refuses 422 TICKETS_NOT_AVAILABLE rather than
+ *  returning an empty branded PDF. `seedDivision` only makes entrants, so
+ *  any test that wants a ticket doc back has to put one on the books. */
+async function seedConfirmedRegistration(competitionId: string, divisionId: string) {
+  const suffix = randomUUID().slice(0, 8);
+  const [group] = await sql<{ id: string; ref_code: string }[]>`
+    insert into registration_groups
+      (competition_id, contact_name, contact_email, access_token_hash, ref_code, currency)
+    values
+      (${competitionId}, 'Jamie Doe', ${"jamie+" + suffix + "@example.com"},
+       ${randomUUID()}, ${"TIX-" + suffix}, 'gbp')
+    returning id, ref_code`;
+  await sql`insert into registrations (division_id, group_id, status, display_name)
+    values (${divisionId}, ${group!.id}, 'confirmed', 'Jamie Doe')`;
+  return group!;
+}
+
 afterAll(async () => {
   if (!HAS_DB) return;
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
@@ -392,6 +410,7 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
   it("Task 14: officials rota + admit tickets export plain for Community (V285), branded for Pro", async () => {
     const { auth: freeAuth } = await seedOrg("community");
     const { division: freeDiv, comp: freeComp } = await seedDivision(freeAuth);
+    await seedConfirmedRegistration(freeComp.id, freeDiv.id);
     const freeRota = await buildOfficialsRotaDoc(freeAuth, freeDiv.id, {
       printedAt: PRINTED,
     });
@@ -403,6 +422,7 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
 
     const { auth: proAuth } = await seedOrg("pro");
     const { division: proDiv, comp: proComp } = await seedDivision(proAuth);
+    await seedConfirmedRegistration(proComp.id, proDiv.id);
     await expect(
       buildOfficialsRotaDoc(proAuth, proDiv.id, { printedAt: PRINTED }),
     ).resolves.toBeTruthy();
@@ -1093,7 +1113,8 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
     it("admit tickets take their description from the org locale", async () => {
       const { auth } = await seedOrg("pro");
       await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
-      const { comp } = await seedDivision(auth);
+      const { comp, division } = await seedDivision(auth);
+      await seedConfirmedRegistration(comp.id, division.id);
       const model = await buildAdmitTicketsDoc(auth, comp.id, { printedAt: PRINTED });
       expect(model.description).toBe(msgFor("fr", "export.description.ticket"));
       expect(model.description).not.toContain("check-in");

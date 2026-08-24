@@ -1646,6 +1646,8 @@
   "documents.standings": "Stand",
   "documents.participants": "Deelnemers",
   "documents.error": "Kon dat document niet voorbereiden.",
+  "documents.ticketsUnavailable": "Nog geen bevestigde inschrijvingen, dus er zijn geen tickets om af te drukken.",
+  "documents.bracketUnavailable": "Deze divisie heeft nog geen knock-outschema.",
   "documents.pdf": "PDF",
   "documents.xlsx": "XLSX",
   "schedule.working": "Bezig…",

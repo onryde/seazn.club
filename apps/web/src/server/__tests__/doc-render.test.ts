@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 // Font-encoding-proof spy: records every draw call by intercepting pdfkit.
-const rec = { text: [] as string[], images: 0, fills: [] as string[] };
+const rec = { text: [] as string[], images: 0, fills: [] as string[], strokes: [] as string[] };
 vi.mock("pdfkit", () => {
   class FakeDoc {
     page = { width: 595.28, height: 841.89 };
@@ -10,7 +10,9 @@ vi.mock("pdfkit", () => {
     on(ev: string, cb: () => void) { if (ev === "end") this.endCb = cb; return this; }
     registerFont() { return this; }
     font() { return this; } fontSize() { return this; }
-    fillColor() { return this; } strokeColor() { return this; } lineWidth() { return this; }
+    fillColor() { return this; }
+    strokeColor(c?: string) { if (typeof c === "string") rec.strokes.push(c); return this; }
+    lineWidth() { return this; }
     text(s: unknown) { rec.text.push(String(s)); return this; }
     image() { rec.images++; return this; }
     rect() { return this; } roundedRect() { return this; } circle() { return this; }
@@ -38,7 +40,7 @@ const model = (branding?: DocModel["branding"]): DocModel => ({
 });
 
 async function render(m: DocModel) {
-  rec.text = []; rec.images = 0; rec.fills = [];
+  rec.text = []; rec.images = 0; rec.fills = []; rec.strokes = [];
   await docModelToPdf(m);
   return rec;
 }
@@ -118,7 +120,9 @@ describe("doc-render tickets", () => {
 
   it("stamps a CONFIRMED ticket green, not the generic ball-red (Task 12b)", async () => {
     const r = await render(ticketModel("CONFIRMED"));
-    expect(r.fills).toContain("#047857");
+    // The stamp is a bordered chip (ticket.png's shape), so its colour is
+    // stroked rather than filled — assert over both channels.
+    expect([...r.fills, ...r.strokes]).toContain("#047857");
     // the brand ball itself is legitimately ball-red — one on the page
     // masthead (branded ticketModel) + one on the ticket card — but the
     // CONFIRMED stamp colour must never reuse ball-red, so no THIRD hit.
@@ -129,12 +133,12 @@ describe("doc-render tickets", () => {
     // real domain value is "waitlisted" (registrations.status enum;
     // r/[ref]/ticket.png/route.tsx STAMP map) — not "waitlist".
     const r = await render(ticketModel("WAITLISTED"));
-    expect(r.fills).toContain("#0369a1");
+    expect([...r.fills, ...r.strokes]).toContain("#0369a1");
   });
 
   it("falls back to pending amber for an unrecognized status (Task 12b)", async () => {
     const r = await render(ticketModel("SOME_UNKNOWN_STATUS"));
-    expect(r.fills).toContain("#b45309");
+    expect([...r.fills, ...r.strokes]).toContain("#b45309");
     // brand ball contributes two #ef4444 fills (masthead + ticket card, see
     // above); the fallback stamp colour itself must not add a third.
     expect(r.fills.filter((c) => c === "#ef4444")).toHaveLength(2);
