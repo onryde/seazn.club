@@ -45,8 +45,8 @@ S13-gated. New-branch-in-worktree rule applies to every session.
 | P7 | D1b multi-stage templates | `P07-templates-multi-stage.md` | P4, P5 (StageSeeding merged) | green-light | **MERGED `98e95c9e` (#582)** — 3 templates + seeding persisted + progression map; stages now named not kinded (owner ruling); `validateStageSeeding` shared with instantiation; 2 defects found and reported unfixed (`uniqueSlug` race, modal 320 fold). Status: `docs/superpowers/plans/2026-08-16-p7-session-status.md` |
 | P8 | D5a venues/courts schema + API + **Directory** UI | `P08-venues-schema-ui.md` | — | green-light + **release-2 C-chain done** (cleared: C7 `298da0af`, C8 `e9a7c54a`) | **DONE 2026-08-17** — V367 (4 tables, RLS forced, composite FKs, `on delete restrict`), 8 routes, archive at court AND venue level, Directory venues tab (NOT org settings — amendment A2), calendar editor, reusable tag-chip input, 84 i18n keys ×4. Gates: unit 8401/8329/4 (the 4 = pre-existing `schedule-build-honours-locks`), e2e 2/2 + an active-tab guard at 320/430/768, smoke 8/8 venues checks, screenshots 1280/320/768. **Six design amendments A1–A6** corrected in place in the D5 spec with a log at its foot. Status: `docs/superpowers/plans/2026-08-17-p8-session-status.md` |
 | P9 | D5b scheduler integration + stored-config migration | `P09-venues-scheduler.md` | P8 | same as P8 | **IN REVIEW** — V374 (renumbered twice: main took V368, then V371), `ScheduleConfig.courts` = court uuids, one shared candidate filter used by build/validate/AI, `NO_MATCHING_COURT` 422, `court_tag_mismatch` (26th conflict kind), court multi-picker, AI pack speaks court NAMES while storage stays ids. 17 defects found, all one mechanism — identity changed under code that read it. Status: `docs/superpowers/plans/2026-08-17-p9-session-status.md` **MERGED** — #621 (main) + #623 (third-review follow-ups) + #633 (round-scoped court tags, spun out as #622). |
-| P9.5 | D5b.5 one court-availability function + the two constraints the placer never learned | `P09-5-window-unification.md` | P9 | same as P8 | **DONE 2026-08-24** (branch `feat/p95-window-unification`, not yet PR'd) — `court-windows.ts` `usableWindows` shipped (all 14 edge-matrix rows, mutation-proven); lattice AND `/validate` now honour V367 court hours via `outside_court_hours`, the 27th conflict kind; start-window rule un-forked; solver start-window breaches now rejected at the build gate. **Both of the prompt's premises were FALSE — see the status log.** |
-| P10 | D5c calendars + window compiler | `P10-venues-calendars.md` | **P9.5** | same as P8 | TODO — its "consume `usableWindows`" premise is only true once P9.5 lands; it also still owes the stranded-fixture conflict code (D5 amendment A6) |
+| P9.5 | D5b.5 one court-availability function + the two constraints the placer never learned | `P09-5-window-unification.md` | P9 | same as P8 | **MERGED 2026-08-24 `203395b6a` (#638, squashed, 20/20 CI green)** — `court-windows.ts` `usableWindows` shipped (all 14 edge-matrix rows, mutation-proven); lattice, GREEDY and `/validate` now honour V367 court hours via `outside_court_hours`, the 27th conflict kind; start-window rule un-forked; solver start-window breaches now rejected at the build gate. **Both of the prompt's premises were FALSE — see the status log.** |
+| P10 | D5c calendars + window compiler | `P10-venues-calendars.md` | **P9.5** (cleared) | same as P8 | **IN FLIGHT 2026-08-24** — branch `feat/p10-venues-calendars`. **Prompt scope items 1–2 are SUPERSEDED by P9.5 and the calendar editor was P8's (A4) — do NOT re-plan P10 from the prompt file.** Corrected scope, owner-ruled 2026-08-24: A6 stranded-fixture conflict (archived/deleted courts only, reported never blocking), de-fork `resolveCourtDay`, one verify-config builder, capacity precheck moved server-side. Design: `docs/superpowers/specs/bench-product-value/designs/2026-08-24-p10-stranded-fixtures-and-capacity-design.md`; plan: `docs/superpowers/plans/2026-08-24-p10-stranded-fixtures-and-capacity.md` |
 | P11 | D6 batch import | `P11-batch-import.md` | — | green-light + **ScoringPad S13 done** | TODO |
 
 ## Decisions already made (do not re-open)
@@ -795,3 +795,51 @@ set, both real):
 Also: `templateStageKinds` (`server/templates/summary.ts`) lost its last
 production caller when the card moved to the shared helper. Only its own test
 calls it now. Function kept, comment corrected — a later session may delete both.
+
+### False premises found by P10 at re-pin (2026-08-24, AS DISCOVERED)
+
+P10 opened by re-pinning its own prompt and found most of it already built.
+Recorded here before any code was written, per `_RULES.md` §5.
+
+1. **`P10-venues-calendars.md` scope items 1 and 2 are dead.** "Create
+   `court-windows.ts` with `usableWindows`" and "make the lattice and
+   `/validate` consume it" both shipped in P9.5 (#638). All six sub-features
+   the prompt lists — weekly hours, exception full-close, exception partial
+   override, session intersection, blackout subtraction, org-tz day
+   boundaries — are present at `court-windows.ts:187`, with DST-both-directions
+   and no-calendar byte-identity regressions already in the suite.
+2. **P10 owes no UI and no schema.** The calendar editor and the
+   `court_hours`/`court_exceptions` tables belong to P8 (amendment A4, shipped
+   at `/directory?tab=venues`, V367:114/136).
+3. **D3 was already satisfied.** The prompt's "health offenders show court
+   names" is true today: `schedule-health.ts:279-281` resolves names through
+   `courtNamesById` → `buildCourtDirectory`, including A12 `Name (Venue)`
+   disambiguation and a deliberate raw-id fallback for since-deleted courts.
+   Recorded as already-satisfied, NOT implemented by P10.
+4. **The P9.5 memory's "`courtCalendars` reaches only 2 of 4 `toVerifyConfig`
+   sites" undercounted the sites and overcounted the gap.** There are FIVE
+   construction sites; four pass calendars (`schedule.ts:1532`, `:2589`,
+   `:2944`, `:3308`). Exactly one is blind: `person-merge.ts:382`.
+5. **A fourth copy of the window rule was live and outside its own guard's
+   reach.** `resolveCourtDay` (`venues.ts:243`) backs the advisory stranded
+   count P8's editor shows organisers. `window-single-source.test.ts` reads
+   only `calendar.ts` and `build-grid.ts` via `import.meta.url` and never
+   scans `apps/web`, so the guard that exists to prevent exactly this could
+   not see it. It also carries three defects: start-minute-only (ignores
+   fixture duration), no blackouts or session windows, and
+   `organizations.timezone` read raw instead of through the resolver
+   `settings.orgTz` uses.
+
+**Ruling (owner, 2026-08-24):** a stranded fixture is one on an **archived or
+deleted** court — never merely an uncalendared one. The
+`calendar.ts:1763` `openHours === undefined` short-circuit stays: it is
+load-bearing for orgs that have never configured a calendar, and reporting on
+absence would fire on every fixture of every such org. Reported, never
+blocking — which keeps ruling 3 intact, because surfacing an assignment on a
+since-archived court is not refusing it.
+
+**Ruling (owner, 2026-08-24):** the capacity precheck becomes calendar-aware by
+moving server-side, NOT by re-inflating the board payload P9 shrank. Accepted
+cost: an instant client recompute becomes a debounced round trip, with the last
+report held and marked stale. No client-side fallback computation — a fallback
+is the placer/verifier fork wearing a different hat.

@@ -19,6 +19,10 @@
 - `grep -a` always — this repo reports source files as `Binary file … matches`.
 - `settings.orgTz` is the governing clock. `settings.tz` is display only.
 - Every user-facing string lands in **all four** dictionaries: `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`, flat dotted keys, then `npm run i18n:gen-keys` (`i18n-keys.ts` is generated — parity green, drift red).
+- **Any changed UI text gets grepped across `apps/web/e2e/**` before merge** (`_RULES.md` §1). Playwright `name:` matching is a SUBSTRING match, so a reworded label breaks specs that never mention the key.
+- **Skills are loaded, not cited** (`_RULES.md` §6): `superpowers:test-driven-development` before code, `superpowers:systematic-debugging` on ANY unexpected red — before proposing a fix, `superpowers:verification-before-completion` before claiming any task done, `frontend-design` on Task 6, `seazn-local-env` for env bring-up or red triage, `superpowers:requesting-code-review` + `/code-review` before the PR.
+- **Tasks are sequential, never parallel.** Tasks 1→4 share `calendar.ts`/`conflict-detail.ts` lineage and Tasks 3, 5, 6 all reach `schedule.ts`/`capacity-input.ts`. `_RULES.md` §4: tasks sharing files get one implementer pass. Ownership lists do not hold here.
+- No migration in this wave, so `schema:snapshot` and the RLS-on-new-tenant-table rule are N/A. If a task turns out to need DDL, stop and re-plan — that changes the gate set.
 - **Do NOT widen `isBlockingConflict` or `isBlockingForBuild`.** The new conflict is reported, never blocking.
 - Do not touch: P8's calendar CRUD/editor, the placement service or its proto, `toSlotConfig`'s AI-pack carve-out.
 - New server code gets pino structured logging with a named event. Never log in tests.
@@ -694,7 +698,16 @@ jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/p
 
 Same command as Step 3. Expected: zero failures.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 8: Grep the new and changed strings across e2e**
+
+```bash
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/p10-calendars && \
+  grep -ran 'no longer available\|Court unavailable\|is closed at this time' apps/web/e2e/
+```
+
+Playwright `name:` matching is a SUBSTRING match, so a spec anchored on a court-conflict label breaks without ever naming the dictionary key. This task only ADDS keys, so the expected result is no hits — but run it, because Task 6 reworks the capacity card's copy and the same grep is owed there for any label it changes.
+
+- [ ] **Step 9: Commit**
 
 ```bash
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/p10-calendars && \
