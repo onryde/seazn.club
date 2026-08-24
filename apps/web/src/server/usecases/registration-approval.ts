@@ -65,7 +65,7 @@ export async function loadApprovalSettings(tx: Tx, divisionId: string): Promise<
   const [row] = await tx<ApprovalSettingsRow[]>`
     select division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
            fee_cents, refund_lock_at, form_fields, payment_method,
-           payment_instructions, updated_at, approval
+           payment_instructions, updated_at, approval, allow_free_agents
     from registration_settings where division_id = ${divisionId}`;
   return row ?? null;
 }
