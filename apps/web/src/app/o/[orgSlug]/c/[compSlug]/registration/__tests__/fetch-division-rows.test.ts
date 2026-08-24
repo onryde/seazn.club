@@ -84,4 +84,34 @@ describe.skipIf(!HAS_DB)("fetchDivisionRows — real Postgres", () => {
     });
     expect(configuredRow.org_currency).toBeTruthy();
   });
+
+  // RS004 W3b review finding 3 — `order by d.name` alone has no tiebreaker,
+  // so two same-named divisions have no guaranteed relative order (Postgres
+  // may return them in either order, and that order may change between
+  // requests). Seed enough duplicate-name divisions that a coincidental
+  // match between insertion order and id order is vanishingly unlikely
+  // (1/5! ≈ 0.8%), then assert the query's actual return order for those
+  // rows equals `d.id` ascending — the contract `order by d.name, d.id`
+  // promises.
+  it("orders duplicate-name divisions stably by id, not by insertion order (finding 3)", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition } = await rig(owner);
+
+    const dupeIds: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const division = await createDivision(owner, competition.id, {
+        name: "Same Name Division",
+        sport_key: "generic",
+        variant_key: "score",
+        config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+        eligibility: [],
+      });
+      dupeIds.push(division.id);
+    }
+
+    const rows = await fetchDivisionRows(owner, competition.id);
+    const dupeRowOrder = rows.filter((r) => dupeIds.includes(r.division_id)).map((r) => r.division_id);
+    expect(dupeRowOrder).toEqual([...dupeIds].sort());
+  });
 });
