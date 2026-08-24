@@ -48,6 +48,8 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 });
 
 import { ApiV1Error } from "@/lib/client-v1";
+import { t } from "@/lib/i18n-runtime";
+import uiEn from "@/dictionaries/en/ui.json";
 import {
   RegistrationHubConfigPanel,
   EligibilitySection,
@@ -350,6 +352,72 @@ describe("RegistrationHubConfigPanel — 422s render against the offending field
     const saveBtn = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
     await (propsOf(saveBtn).onClick as () => Promise<void>)();
     expect(onSaved).not.toHaveBeenCalled();
+  });
+});
+
+// RS004 review finding 1 (MAJOR): save() fires the PATCH and the PUT through
+// Promise.allSettled and used to fold ONLY the rejected side into field
+// errors — so a PATCH-commits/PUT-422s split rendered as a single field
+// error with nothing telling the organiser that half the save already
+// landed. `data-save-outcome` is new markup this describe block introduces;
+// none of these four assertions can pass against the pre-fix component (the
+// attribute does not exist there), so all four are RED without the change,
+// not just the two partial ones.
+describe("RegistrationHubConfigPanel — save outcome is reported honestly (finding 1)", () => {
+  function panelRoot(tree: ReturnType<typeof expandPanel>) {
+    return tree.find((e) => propsOf(e)["data-registration-hub-config-panel"] !== undefined)!;
+  }
+
+  async function doSave(onSaved = vi.fn()) {
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, onSaved }, expandPanel);
+    await flush();
+    const saveBtn = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
+    await (propsOf(saveBtn).onClick as () => Promise<void>)();
+    return { island, onSaved };
+  }
+
+  it("both endpoints succeed: outcome is 'success', onSaved fires, no partial-save banner", async () => {
+    const { island, onSaved } = await doSave();
+    const tree = island.tree();
+    expect(propsOf(panelRoot(tree))["data-save-outcome"]).toBe("success");
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(tree.some((e) => e.type === "p" && propsOf(e)["data-save-outcome"])).toBe(false);
+  });
+
+  it("both endpoints fail: outcome is 'both-failed', no partial-save banner, both field errors render", async () => {
+    net.patchRejection = new ApiV1Error("age_max must be greater than or equal to age_min.", 422, "ERROR");
+    net.putRejection = new ApiV1Error("closes_at must be after opens_at", 422, "ERROR");
+    const { island, onSaved } = await doSave();
+    const tree = island.tree();
+    expect(propsOf(panelRoot(tree))["data-save-outcome"]).toBe("both-failed");
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(tree.find((e) => propsOf(e)["data-field-error"] === "age_max")).toBeTruthy();
+    expect(tree.find((e) => propsOf(e)["data-field-error"] === "closes_at")).toBeTruthy();
+    expect(tree.some((e) => e.type === "p" && propsOf(e)["data-save-outcome"])).toBe(false);
+  });
+
+  it("PATCH ok, PUT fails: outcome is 'put-failed' — a banner says category/age landed, onSaved NOT called", async () => {
+    net.putRejection = new ApiV1Error("closes_at must be after opens_at", 422, "ERROR");
+    const { island, onSaved } = await doSave();
+    const tree = island.tree();
+    expect(propsOf(panelRoot(tree))["data-save-outcome"]).toBe("put-failed");
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(tree.find((e) => propsOf(e)["data-field-error"] === "closes_at")).toBeTruthy();
+    const banner = tree.find((e) => e.type === "p" && propsOf(e)["data-save-outcome"] === "put-failed");
+    expect(banner).toBeTruthy();
+    expect(textOf(banner!)).toContain(t(uiEn, "reg.hub.config.partialSavePatchOk"));
+  });
+
+  it("PUT ok, PATCH fails: outcome is 'patch-failed' — a banner says the rest of the form landed, onSaved NOT called", async () => {
+    net.patchRejection = new ApiV1Error("age_max must be greater than or equal to age_min.", 422, "ERROR");
+    const { island, onSaved } = await doSave();
+    const tree = island.tree();
+    expect(propsOf(panelRoot(tree))["data-save-outcome"]).toBe("patch-failed");
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(tree.find((e) => propsOf(e)["data-field-error"] === "age_max")).toBeTruthy();
+    const banner = tree.find((e) => e.type === "p" && propsOf(e)["data-save-outcome"] === "patch-failed");
+    expect(banner).toBeTruthy();
+    expect(textOf(banner!)).toContain(t(uiEn, "reg.hub.config.partialSavePutOk"));
   });
 });
 
