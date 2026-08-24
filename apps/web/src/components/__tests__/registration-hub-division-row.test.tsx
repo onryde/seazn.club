@@ -118,6 +118,37 @@ describe("RegistrationHubDivisionRow — capacity meter", () => {
     expect(text).not.toContain("NaN");
     expect(text).not.toContain("Infinity");
   });
+
+  // RS004 W3b review finding 5 — only the pure deriveCapacityMeter was
+  // tested; the JSX binding that turns its `percent` into the fill bar's
+  // `style={{width}}` had no coverage, so a wrong binding (wrong field,
+  // wrong unit, swapped for a hardcoded value) would be invisible. Asserts
+  // the REAL rendered prop via the repo's propsOf harness, not just the
+  // text the meter produces alongside it.
+  it("binds the fill bar's rendered style.width to the derived percent (finding 5)", () => {
+    // 5/20 = 25% — deriveCapacityMeter's own rounding, asserted directly
+    // against registration-hub-row-derive.test.ts's contract.
+    const tree = walk(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, taken: 5, capacity: 20 },
+        context: BASE_CONTEXT,
+      }),
+    );
+    const fill = tree.find((e) => propsOf(e).className === "block h-full rounded-full bg-purple-500");
+    expect(fill).toBeTruthy();
+    expect(propsOf(fill!).style).toEqual({ width: "25%" });
+  });
+
+  it("renders NO fill bar element at all when capacity is null — nothing to bind a width to", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, taken: 12, capacity: null },
+        context: BASE_CONTEXT,
+      }),
+    );
+    const fill = tree.find((e) => propsOf(e).className === "block h-full rounded-full bg-purple-500");
+    expect(fill).toBeUndefined();
+  });
 });
 
 describe("RegistrationHubDivisionRow — category badge", () => {
