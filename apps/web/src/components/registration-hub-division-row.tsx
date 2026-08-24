@@ -84,7 +84,13 @@ const STATUS_STYLE: Record<RegistrationHubStatus, string> = {
   closed: "bg-slate-100 text-slate-500",
 };
 
-function Chip({ children }: { children: ReactNode }) {
+// Exported (not a private closure) so a test can identify a rendered badge
+// by element TYPE — _hook-harness.tsx's walk() never invokes a child
+// component (it only reads the static `.props.children` already authored on
+// it), so the outer `<Chip>` element in the tree carries no `className` of
+// its own; that lives on the `<span>` INSIDE Chip's own render output,
+// which walk() never reaches without calling Chip(props) directly.
+export function Chip({ children }: { children: ReactNode }) {
   return (
     <span className="inline-flex items-center rounded-full border border-purple-100 bg-purple-50/60 px-2 py-0.5 text-[11px] font-medium text-purple-700">
       {children}

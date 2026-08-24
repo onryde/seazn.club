@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
 import {
   RegistrationHubDivisionRow,
+  Chip,
   type RegistrationHubRowData,
   type RegistrationHubRowContext,
 } from "@/components/registration-hub-division-row";
@@ -204,16 +205,50 @@ describe("RegistrationHubDivisionRow — the copy control is never dropped", () 
   });
 });
 
+// Every Chip element's own rendered text — a Chip's `children` prop IS its
+// label text directly (`<Chip>{categoryLabel}</Chip>`), so no manual
+// invocation is needed to read it, only a type match. This is the reason a
+// plain textOf(...).toContain("Open") can't test badge presence/absence on
+// its own here: the status pill's OWN text for an open division is
+// "Open now" (and this file's fixture row is even named "Open Singles"),
+// both of which contain the substring "Open" regardless of whether the
+// category badge renders — the check has to target Chip elements
+// specifically, not scan the row's whole text.
+function chipTexts(tree: ReturnType<typeof walk>): unknown[] {
+  return tree.filter((e) => e.type === Chip).map((e) => propsOf(e).children);
+}
+
 describe("RegistrationHubDivisionRow — badges and dash fallbacks", () => {
-  it("null category renders as Open, never the literal word null", () => {
-    const text = textOf(RegistrationHubDivisionRow({ row: { ...BASE_ROW, category: null }, context: BASE_CONTEXT }));
-    expect(text).toContain(t(uiEn, "reg.hub.row.category.open"));
-    expect(text.toLowerCase()).not.toContain("null");
+  // Finding 2: the status pill already owns the word "Open" ("Open now"),
+  // and resolveDivisionCategory maps null -> "open" for OTHER derivations'
+  // benefit (never having to special-case "no restriction set") — but
+  // rendering a category badge for it collided with the status vocabulary:
+  // a closed division read "Closed … Open" side by side. Null/open carries
+  // no restriction to announce, so no badge, never the literal word null.
+  it("renders no category badge for an explicit open category", () => {
+    const tree = walk(RegistrationHubDivisionRow({ row: { ...BASE_ROW, category: "open" }, context: BASE_CONTEXT }));
+    expect(chipTexts(tree)).not.toContain(t(uiEn, "reg.hub.row.category.open"));
+    expect(textOf(tree).toLowerCase()).not.toContain("null");
   });
 
-  it("renders an explicit category", () => {
-    const text = textOf(RegistrationHubDivisionRow({ row: { ...BASE_ROW, category: "mixed" }, context: BASE_CONTEXT }));
-    expect(text).toContain(t(uiEn, "reg.hub.row.category.mixed"));
+  it("renders no category badge when category is null, never the literal word null", () => {
+    const tree = walk(RegistrationHubDivisionRow({ row: { ...BASE_ROW, category: null }, context: BASE_CONTEXT }));
+    expect(chipTexts(tree)).not.toContain(t(uiEn, "reg.hub.row.category.open"));
+    expect(textOf(tree).toLowerCase()).not.toContain("null");
+  });
+
+  it("a closed division with no category restriction has no 'Open' category badge (finding 2 collision)", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({ row: { ...BASE_ROW, enabled: false, category: null }, context: BASE_CONTEXT }),
+    );
+    const pill = tree.find((e) => propsOf(e)["data-registration-hub-status"] !== undefined);
+    expect(propsOf(pill!)["data-registration-hub-status"]).toBe("closed");
+    expect(chipTexts(tree)).not.toContain(t(uiEn, "reg.hub.row.category.open"));
+  });
+
+  it("renders an explicit category as a Chip", () => {
+    const tree = walk(RegistrationHubDivisionRow({ row: { ...BASE_ROW, category: "mixed" }, context: BASE_CONTEXT }));
+    expect(chipTexts(tree)).toContain(t(uiEn, "reg.hub.row.category.mixed"));
   });
 
   it("renders a two-sided age band", () => {
