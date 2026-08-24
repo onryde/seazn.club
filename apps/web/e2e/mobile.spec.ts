@@ -1899,3 +1899,55 @@ test("density-pair sweep: four more .select/.input controls hold the 44px floor 
   await assertFloor(page.getByPlaceholder("e.g. before rain reshuffle"), "history save-point input");
   await expectNoHorizontalScroll(page);
 });
+
+// ---------------------------------------------------------------------------
+// RS004 registration hub — the row-click config panel, open, at every width
+// (v3/02 §4 viewport gate). Lives here rather than in the new
+// registration-hub.spec.ts for the same reason every other mobile-matrix
+// case in this file does: a spec file outside this one runs desktop-only and
+// never sees 320/360/375/390/430/768/834 — exactly the shape this check
+// exists to catch (a modal sized in `vh` or pinned `inset-0` passes at
+// desktop and breaks at 320). `projectTag()` (top of file) is folded into
+// this test's own account because it MUTATES registration settings (opening
+// the panel triggers its GET; this test doesn't save, but the account still
+// needs to be per-project) — seven width projects start near-simultaneously
+// and share helpers.ts's per-PROCESS `TAG`, so an un-tagged email can log two
+// of them into the same user/org/division (see the P6 comment above).
+// ---------------------------------------------------------------------------
+const REG_HUB_MOBILE_EMAIL = () => `reghub-${TAG}-${projectTag()}@example.com`;
+
+test("registration hub: the config panel has no horizontal scroll, open", async ({ page }) => {
+  await loginUi(page, REG_HUB_MOBILE_EMAIL());
+  const comp = await apiJson<{ id: string; slug: string }>(page.request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Reg Hub Mobile ${TAG}-${projectTag()}`,
+    visibility: "private",
+  });
+  expect(comp.status).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(
+    page.request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  expect(div.status).toBeLessThan(300);
+  const divisionIdReg = div.data!.id;
+
+  const org = await activeOrg(page);
+  await page.goto(`/o/${org.slug}/c/${comp.data!.slug}/registration`, { waitUntil: "load" });
+  const row = page.locator(`[data-registration-hub-row][data-division-id="${divisionIdReg}"]`);
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  await row.locator("[data-registration-hub-row-configure]").click();
+
+  const panel = page.locator(`[data-registration-hub-config-panel][data-division-id="${divisionIdReg}"]`);
+  await expect(panel).toBeVisible({ timeout: 20_000 });
+  // Past the panel's own async GET/loading placeholder — a known field is
+  // the signal its state actually landed.
+  await expect(panel.locator('[data-field="category"]')).toBeVisible({ timeout: 20_000 });
+  await expectNoHorizontalScroll(page);
+});

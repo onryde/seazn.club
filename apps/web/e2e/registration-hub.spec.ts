@@ -1,0 +1,432 @@
+// RS004 — the Registration hub (org-side Settings tab + its row-click config
+// panel), driven over a real browser against a real prod build. The PUBLIC
+// register page is still in its RS001 closed state until RS006 ships it, so
+// this file never asserts on THAT page's content — only on the org-side hub
+// itself, and on the VALUE the hub hands a visitor (item 6 below).
+//
+// Every test seeds its own competition/division through the real API (the
+// same fast-setup convention every other spec in this directory uses) and
+// then drives the ACTUAL hub UI for the behaviour under test — component/
+// integration suites already cover this at the unit level
+// (src/components/__tests__/registration-hub-*.test.tsx); this file exists
+// to prove the real routes, the real two-endpoint save, and the real DOM
+// agree with them end to end.
+//
+// Selectors used throughout (registration-hub-{division-row,config-panel}.tsx):
+//   [data-registration-hub-row][data-division-id]     one Settings-tab row
+//   [data-registration-hub-row-configure]              opens that row's panel
+//   [data-registration-hub-config-panel][data-division-id]
+//   [data-field="<name>"]                              an editable panel input
+//   [data-field-error="<name>"]                         that field's own error
+//   [data-action="save" | "cancel"]                     panel footer buttons
+//   [data-registration-hub-entry]                       the overview nav pill
+//   [data-registration-hub-awaiting]                    its amber sub-badge
+import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import {
+  TAG,
+  apiJson,
+  activeOrg,
+  loginUi,
+  orgTimezoneSql,
+  forceFreeAgentsTeamMismatchSql,
+} from "./helpers";
+
+const GENERIC_CONFIG = { points: { w: 3, d: 1, l: 0 }, progressScore: false };
+
+const hubPath = (orgSlug: string, compSlug: string) => `/o/${orgSlug}/c/${compSlug}/registration`;
+const overviewPath = (orgSlug: string, compSlug: string) => `/o/${orgSlug}/c/${compSlug}`;
+
+/** One competition + one division, through the real API — the same shape
+ *  officials-directory.spec.ts / registration-public-api.spec.ts already
+ *  seed with. Public/unlisted by default: the public register endpoint
+ *  (item 6/7) 404s a private competition, and most tests here don't care
+ *  either way, so the permissive default keeps every call site short. */
+async function seedDivision(
+  request: APIRequestContext,
+  opts: { divisionName?: string; visibility?: "public" | "private" | "unlisted" } = {},
+): Promise<{ competitionId: string; competitionSlug: string; divisionId: string }> {
+  const suffix = `${TAG}-${Math.random().toString(36).slice(2, 7)}`;
+  const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+    name: `Reg Hub ${suffix}`,
+    ends_on: "2030-12-31",
+    visibility: opts.visibility ?? "public",
+  });
+  if (comp.status >= 300) throw new Error(`seedDivision: competition create ${comp.status}`);
+  const div = await apiJson<{ id: string; slug: string }>(
+    request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: opts.divisionName ?? "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    },
+  );
+  if (div.status >= 300) throw new Error(`seedDivision: division create ${div.status}`);
+  return { competitionId: comp.data!.id, competitionSlug: comp.data!.slug, divisionId: div.data!.id };
+}
+
+/** Open a division's row-click config panel and wait past its own async GET
+ *  (the panel renders a loading placeholder until that resolves — querying
+ *  a field before it lands is an unawaited fetch, not a UI bug, and reads
+ *  like one if this isn't done explicitly here). */
+async function openConfigPanel(page: Page, divisionId: string): Promise<Locator> {
+  const row = page.locator(`[data-registration-hub-row][data-division-id="${divisionId}"]`);
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  await row.locator("[data-registration-hub-row-configure]").click();
+  const panel = page.locator(`[data-registration-hub-config-panel][data-division-id="${divisionId}"]`);
+  await expect(panel).toBeVisible({ timeout: 20_000 });
+  await expect(panel.locator('[data-field="category"]')).toBeVisible({ timeout: 20_000 });
+  return panel;
+}
+
+async function save(panel: Locator): Promise<void> {
+  await panel.locator('[data-action="save"]').click();
+}
+
+test.describe("RS004 registration hub", () => {
+  // --- 1. Configure-persist round trip (headline acceptance criterion) -----
+  test("configure-persist round trip: category, age band, approval and free agents survive a reload", async ({
+    page,
+    request,
+  }) => {
+    const org = await activeOrg(page);
+    const { competitionSlug, divisionId } = await seedDivision(request, { divisionName: "Round Trip" });
+
+    await page.goto(hubPath(org.slug, competitionSlug), { waitUntil: "load" });
+    const panel = await openConfigPanel(page, divisionId);
+
+    await panel.locator('[data-field="category"]').selectOption("mixed");
+    await panel.locator('[data-field="age_min"]').fill("18");
+    await panel.locator('[data-field="age_max"]').fill("35");
+    await panel.locator('[data-field="approval"]').selectOption("manual");
+    // Free agents is team-only (RS004 decision 1) — switch entrant_kind
+    // FIRST, which is what makes the checkbox exist in the DOM at all.
+    await panel.locator('[data-field="entrant_kind"]').selectOption("team");
+    await panel.locator('[data-field="allow_free_agents"]').check();
+    await save(panel);
+    await expect(panel).toBeHidden({ timeout: 20_000 });
+
+    await page.reload({ waitUntil: "load" });
+    const reopened = await openConfigPanel(page, divisionId);
+    await expect(reopened.locator('[data-field="category"]')).toHaveValue("mixed");
+    await expect(reopened.locator('[data-field="age_min"]')).toHaveValue("18");
+    await expect(reopened.locator('[data-field="age_max"]')).toHaveValue("35");
+    await expect(reopened.locator('[data-field="approval"]')).toHaveValue("manual");
+    await expect(reopened.locator('[data-field="entrant_kind"]')).toHaveValue("team");
+    await expect(reopened.locator('[data-field="allow_free_agents"]')).toBeChecked();
+  });
+
+  // --- 2a. 422: inverted age band renders on the field ----------------------
+  test("422: an inverted age band renders on the age_max field, not a toast", async ({ page, request }) => {
+    const org = await activeOrg(page);
+    const { competitionSlug, divisionId } = await seedDivision(request, { divisionName: "Age Band" });
+
+    await page.goto(hubPath(org.slug, competitionSlug), { waitUntil: "load" });
+    let panel = await openConfigPanel(page, divisionId);
+    await panel.locator('[data-field="age_max"]').fill("18");
+    await save(panel);
+    await expect(panel).toBeHidden({ timeout: 20_000 });
+
+    // Reopen so the STORED age_max=18 is what the next save patches against
+    // — a real organiser session, not a same-request coincidence.
+    await page.reload({ waitUntil: "load" });
+    panel = await openConfigPanel(page, divisionId);
+    await expect(panel.locator('[data-field="age_max"]')).toHaveValue("18");
+
+    // One-sided edit: only age_min is touched. age_max rides along in the
+    // wire body unchanged (the panel always sends both — see the full-
+    // replace test below) but the ORGANISER only edited the one field.
+    await panel.locator('[data-field="age_min"]').fill("25");
+    await save(panel);
+
+    const fieldError = panel.locator('[data-field-error="age_max"]');
+    await expect(fieldError).toBeVisible({ timeout: 20_000 });
+    await expect(fieldError).toContainText("age_max must be greater than or equal to age_min");
+    // The banner is a DIRECT child of the panel root; a field error is not —
+    // this is what tells "landed on the field" apart from "context-free toast".
+    await expect(panel.locator('> p[role="alert"]')).toHaveCount(0);
+    await expect(panel).toBeVisible(); // rejected save — panel stays open
+  });
+
+  // --- 2b. 422: allow_free_agents on a non-team division ---------------------
+  test("422: allow_free_agents on a non-team division renders on the field, not a toast", async ({
+    page,
+    request,
+  }) => {
+    const org = await activeOrg(page);
+    const { competitionSlug, divisionId } = await seedDivision(request, {
+      divisionName: "Free Agents Guard",
+    });
+
+    // A valid combo first, through the real API (team + allow_free_agents) —
+    // the same shape the panel itself would PUT — so registration_settings
+    // has a row before the desync below (updating zero rows would be a rig
+    // bug, not the scenario under test).
+    const seeded = await apiJson(
+      request,
+      `/api/v1/divisions/${divisionId}/registration-settings`,
+      "PUT",
+      { enabled: true, entrant_kind: "team", allow_free_agents: true, fee_cents: 0, approval: "auto" },
+    );
+    expect(seeded.status).toBeLessThan(300);
+    // The UI can never PRODUCE this combo itself — the entrant_kind
+    // <select>'s onChange clears allow_free_agents the instant it leaves
+    // "team" — so this is the only way to LOAD the panel already
+    // inconsistent and prove the re-save 422s against the field.
+    await forceFreeAgentsTeamMismatchSql(divisionId);
+
+    await page.goto(hubPath(org.slug, competitionSlug), { waitUntil: "load" });
+    const panel = await openConfigPanel(page, divisionId);
+    await expect(panel.locator('[data-field="entrant_kind"]')).toHaveValue("individual");
+    // isTeam is false, so the checkbox itself is gone — only the hint text
+    // stands in its place; the loaded `true` is still in local state.
+    await expect(panel.locator('[data-field="allow_free_agents"]')).toHaveCount(0);
+
+    await save(panel);
+
+    const fieldError = panel.locator('[data-field-error="allow_free_agents"]');
+    await expect(fieldError).toBeVisible({ timeout: 20_000 });
+    await expect(fieldError).toContainText("allow_free_agents requires entrant_kind");
+    await expect(panel.locator('> p[role="alert"]')).toHaveCount(0);
+  });
+
+  // --- 3. Full-replace hazard -------------------------------------------------
+  test("full-replace hazard: editing one field leaves the others intact after reload", async ({
+    page,
+    request,
+  }) => {
+    const org = await activeOrg(page);
+    const { competitionSlug, divisionId } = await seedDivision(request, { divisionName: "Full Replace" });
+
+    await page.goto(hubPath(org.slug, competitionSlug), { waitUntil: "load" });
+    let panel = await openConfigPanel(page, divisionId);
+    await panel.locator('[data-field="category"]').selectOption("mens");
+    await panel.locator('[data-field="capacity"]').fill("40");
+    await panel.locator('[data-field="approval"]').selectOption("manual");
+    await panel.locator('[data-field="fee_cents"]').fill("5");
+    await panel.locator('[data-field="payment_method_offline"]').check();
+    await panel.locator('[data-field="payment_instructions"]').fill("Pay the club treasurer in cash.");
+    await save(panel);
+    await expect(panel).toBeHidden({ timeout: 20_000 });
+    await page.reload({ waitUntil: "load" });
+
+    // PUT /registration-settings replaces the whole row every time — edit
+    // ONLY capacity from here. If the panel ever regresses to a partial/diff
+    // payload, this is the assertion that would still pass; the reload below
+    // proves it stayed a full replace.
+    panel = await openConfigPanel(page, divisionId);
+    await expect(panel.locator('[data-field="capacity"]')).toHaveValue("40");
+    await panel.locator('[data-field="capacity"]').fill("75");
+    await save(panel);
+    await expect(panel).toBeHidden({ timeout: 20_000 });
+    await page.reload({ waitUntil: "load" });
+
+    panel = await openConfigPanel(page, divisionId);
+    await expect(panel.locator('[data-field="capacity"]')).toHaveValue("75");
+    await expect(panel.locator('[data-field="category"]')).toHaveValue("mens");
+    await expect(panel.locator('[data-field="approval"]')).toHaveValue("manual");
+    await expect(panel.locator('[data-field="fee_cents"]')).toHaveValue("5");
+    await expect(panel.locator('[data-field="payment_method_offline"]')).toBeChecked();
+    await expect(panel.locator('[data-field="payment_instructions"]')).toHaveValue(
+      "Pay the club treasurer in cash.",
+    );
+  });
+
+  // --- 4. Windows are org-timezone -------------------------------------------
+  test("registration windows round-trip in the ORG timezone, with the zone labelled", async ({
+    page,
+    request,
+  }) => {
+    const org = await activeOrg(page);
+    const originalTz = await orgTimezoneSql(org.id);
+    // Pacific/Auckland: a large, unambiguous offset from this runner's own
+    // zone (Europe/London) in either direction — the assertion this test
+    // exists for (a browser-local regression) would otherwise land on a
+    // coincidentally-correct value if the two zones were ever close.
+    const TZ = "Pacific/Auckland";
+    const expectZone = new Intl.DateTimeFormat("en-GB", { timeZone: TZ, timeZoneName: "short" })
+      .formatToParts(new Date())
+      .find((p) => p.type === "timeZoneName")!.value;
+
+    try {
+      const patched = await apiJson(page.request, `/api/orgs/${org.id}`, "PATCH", { timezone: TZ });
+      expect(patched.status).toBeLessThan(300);
+
+      const { competitionSlug, divisionId } = await seedDivision(request, { divisionName: "TZ Window" });
+      await page.goto(hubPath(org.slug, competitionSlug), { waitUntil: "load" });
+      let panel = await openConfigPanel(page, divisionId);
+
+      await expect(panel).toContainText(expectZone);
+      await panel.locator('[data-field="opens_at"]').fill("2026-09-01T14:00");
+      await panel.locator('[data-field="closes_at"]').fill("2026-09-10T09:30");
+      await save(panel);
+      await expect(panel).toBeHidden({ timeout: 20_000 });
+
+      await page.reload({ waitUntil: "load" });
+      panel = await openConfigPanel(page, divisionId);
+      // Same wall-clock string back out — a regression that swapped either
+      // conversion direction to browser-local would shift this by the
+      // London/Auckland offset instead of round-tripping exactly.
+      await expect(panel.locator('[data-field="opens_at"]')).toHaveValue("2026-09-01T14:00");
+      await expect(panel.locator('[data-field="closes_at"]')).toHaveValue("2026-09-10T09:30");
+      await expect(panel).toContainText(expectZone);
+    } finally {
+      await apiJson(page.request, `/api/orgs/${org.id}`, "PATCH", { timezone: originalTz });
+    }
+  });
+
+  // --- 5. Guard: viewer and scorer both 404, nav entry absent -----------------
+  test("guard: a viewer and a scorer both 404 on the hub, and see no nav entry", async ({ browser }) => {
+    // A FRESH, throwaway org (not the shared Pro org) — scorer.spec.ts's own
+    // comment records that the shared org's scorers.max entitlement is 1 and
+    // that spec (the SERIAL project) already claims that one seat; e2e-
+    // parallel and e2e-serial are independent CI jobs with no `needs:`
+    // between them, so a second scorer-consuming test in this (parallel)
+    // spec racing it there is a real, repeatable way to break both. A
+    // brand-new org has zero pre-existing scorer members, so its own
+    // scorers.max pool (1 on every plan, including community —
+    // scorers.test.ts) has full headroom for the one this test needs, with
+    // no shared resource at all.
+    const suffix = `${TAG}-${Math.random().toString(36).slice(2, 7)}`;
+    const ownerCtx = await browser.newContext();
+    const ownerPage = await ownerCtx.newPage();
+    try {
+      await loginUi(ownerPage, `e2e-reghub-owner-${suffix}@example.com`);
+      const org = await activeOrg(ownerPage);
+      const comp = await apiJson<{ id: string; slug: string }>(
+        ownerPage.request,
+        "/api/v1/competitions",
+        "POST",
+        { name: `Reg Hub Guard ${suffix}`, ends_on: "2030-12-31", visibility: "private" },
+      );
+      expect(comp.status).toBeLessThan(300);
+      const compSlug = comp.data!.slug;
+
+      for (const role of ["viewer", "scorer"] as const) {
+        const invite = await apiJson<{ token: string }>(
+          ownerPage.request,
+          `/api/orgs/${org.id}/invites`,
+          "POST",
+          { role, max_uses: 1 },
+        );
+        expect(invite.status, `${role} invite create`).toBeLessThan(300);
+
+        const guestCtx = await browser.newContext();
+        const guestPage = await guestCtx.newPage();
+        try {
+          await loginUi(guestPage, `e2e-reghub-${role}-${suffix}@example.com`);
+          const accepted = await guestPage.request.post(`/api/invites/${invite.data!.token}/accept`, {
+            data: {},
+          });
+          expect(accepted.ok(), `${role} invite accept`).toBe(true);
+
+          const res = await guestPage.goto(hubPath(org.slug, compSlug));
+          expect(res!.status(), `${role} should 404 on the hub, not redirect or 403`).toBe(404);
+          expect(new URL(guestPage.url()).pathname, `${role} should not be redirected off the hub URL`).toBe(
+            hubPath(org.slug, compSlug),
+          );
+
+          await guestPage.goto(overviewPath(org.slug, compSlug), { waitUntil: "load" });
+          await expect(
+            guestPage.locator("[data-registration-hub-entry]"),
+            `${role} should not see the Registration nav entry`,
+          ).toHaveCount(0);
+        } finally {
+          await guestCtx.close();
+        }
+      }
+    } finally {
+      await ownerCtx.close();
+    }
+  });
+
+  // --- 6. The register link ----------------------------------------------------
+  test("register link: the copy control holds the public register URL value", async ({ page, request }) => {
+    const org = await activeOrg(page);
+    const { competitionSlug, divisionId } = await seedDivision(request, {
+      divisionName: "Register Link",
+      visibility: "public",
+    });
+
+    await page.goto(hubPath(org.slug, competitionSlug), { waitUntil: "load" });
+    const row = page.locator(`[data-registration-hub-row][data-division-id="${divisionId}"]`);
+    await expect(row).toBeVisible({ timeout: 20_000 });
+
+    // Exercise the actual control the brief names, not just the value it
+    // holds — the click flips its own label, observable without touching
+    // the clipboard permission model (which this repo's e2e has no
+    // precedent for and headless CI makes unreliable).
+    const copyButton = row.getByRole("button", { name: "Copy" });
+    await expect(copyButton).toBeVisible();
+    await copyButton.click();
+    await expect(copyButton).toHaveText("Copied ✓");
+
+    // The URL VALUE (never the page it points at — RS006's job): the
+    // readonly input IS the exact string the Copy button writes to the
+    // clipboard (CopyLink's own `url` variable), asserted as an absolute
+    // origin+path match, not a loose suffix (a bare path would also satisfy
+    // a suffix check and silently stop proving the origin ever populated).
+    const origin = new URL(page.url()).origin;
+    const expectedUrl = `${origin}/shared/${org.slug}/${competitionSlug}/register`;
+    await expect(row.locator("input[readonly]")).toHaveValue(expectedUrl);
+  });
+
+  // --- 7. Nav pill counts, including the amber awaiting badge -----------------
+  test("nav pill: registered and awaiting-confirmation counts are separated", async ({ page, request }) => {
+    const org = await activeOrg(page);
+    const { competitionSlug, divisionId } = await seedDivision(request, { divisionName: "Nav Pill" });
+    const suffix = `${TAG}-${Math.random().toString(36).slice(2, 7)}`;
+
+    async function submit(who: string) {
+      const res = await apiJson<{ entries: { status: string }[] }>(
+        request,
+        `/api/v1/public/orgs/${org.slug}/competitions/${competitionSlug}/register`,
+        "POST",
+        {
+          contact: { name: who, email: `${who.toLowerCase().replace(/\W+/g, "-")}@example.com` },
+          privacy_consent: true,
+          entries: [
+            { division_id: divisionId, entrant_kind: "individual", players: [{ full_name: who }], answers: {} },
+          ],
+        },
+      );
+      expect(res.status, JSON.stringify(res.error)).toBe(201);
+      return res.data!;
+    }
+
+    // Entry 1: approval "auto" + free -> materialises INLINE at submit
+    // (registration-submit.ts) -> status "confirmed" immediately.
+    let settings = await apiJson(
+      request,
+      `/api/v1/divisions/${divisionId}/registration-settings`,
+      "PUT",
+      { enabled: true, entrant_kind: "individual", fee_cents: 0, approval: "auto" },
+    );
+    expect(settings.status).toBeLessThan(300);
+    const confirmed = await submit(`Auto Confirmed ${suffix}`);
+    expect(confirmed.entries[0]!.status).toBe("confirmed");
+
+    // Entry 2: flip to manual approval — this one stays "pending".
+    settings = await apiJson(
+      request,
+      `/api/v1/divisions/${divisionId}/registration-settings`,
+      "PUT",
+      { enabled: true, entrant_kind: "individual", fee_cents: 0, approval: "manual" },
+    );
+    expect(settings.status).toBeLessThan(300);
+    const pending = await submit(`Awaiting Approval ${suffix}`);
+    expect(pending.entries[0]!.status).toBe("pending");
+
+    await page.goto(overviewPath(org.slug, competitionSlug), { waitUntil: "load" });
+    const entry = page.locator("[data-registration-hub-entry]");
+    await expect(entry).toBeVisible({ timeout: 20_000 });
+    // registeredBadge (solid purple pill) counts BOTH: card-stats.ts's
+    // `registered` is pending|paid|confirmed|waitlisted.
+    await expect(entry.locator(".bg-purple-600")).toHaveText(/^2\b/);
+    // The amber sub-badge is the strict subset still needing the organiser's
+    // attention — only the pending one.
+    await expect(entry.locator("[data-registration-hub-awaiting]")).toHaveText(/^1\b/);
+  });
+});
