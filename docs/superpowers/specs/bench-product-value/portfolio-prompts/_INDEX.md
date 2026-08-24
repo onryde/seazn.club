@@ -45,7 +45,7 @@ S13-gated. New-branch-in-worktree rule applies to every session.
 | P7 | D1b multi-stage templates | `P07-templates-multi-stage.md` | P4, P5 (StageSeeding merged) | green-light | **MERGED `98e95c9e` (#582)** — 3 templates + seeding persisted + progression map; stages now named not kinded (owner ruling); `validateStageSeeding` shared with instantiation; 2 defects found and reported unfixed (`uniqueSlug` race, modal 320 fold). Status: `docs/superpowers/plans/2026-08-16-p7-session-status.md` |
 | P8 | D5a venues/courts schema + API + **Directory** UI | `P08-venues-schema-ui.md` | — | green-light + **release-2 C-chain done** (cleared: C7 `298da0af`, C8 `e9a7c54a`) | **DONE 2026-08-17** — V367 (4 tables, RLS forced, composite FKs, `on delete restrict`), 8 routes, archive at court AND venue level, Directory venues tab (NOT org settings — amendment A2), calendar editor, reusable tag-chip input, 84 i18n keys ×4. Gates: unit 8401/8329/4 (the 4 = pre-existing `schedule-build-honours-locks`), e2e 2/2 + an active-tab guard at 320/430/768, smoke 8/8 venues checks, screenshots 1280/320/768. **Six design amendments A1–A6** corrected in place in the D5 spec with a log at its foot. Status: `docs/superpowers/plans/2026-08-17-p8-session-status.md` |
 | P9 | D5b scheduler integration + stored-config migration | `P09-venues-scheduler.md` | P8 | same as P8 | **IN REVIEW** — V374 (renumbered twice: main took V368, then V371), `ScheduleConfig.courts` = court uuids, one shared candidate filter used by build/validate/AI, `NO_MATCHING_COURT` 422, `court_tag_mismatch` (26th conflict kind), court multi-picker, AI pack speaks court NAMES while storage stays ids. 17 defects found, all one mechanism — identity changed under code that read it. Status: `docs/superpowers/plans/2026-08-17-p9-session-status.md` **MERGED** — #621 (main) + #623 (third-review follow-ups) + #633 (round-scoped court tags, spun out as #622). |
-| P9.5 | D5b.5 one court-availability function + the two constraints the placer never learned | `P09-5-window-unification.md` | P9 | same as P8 | **IN PROGRESS 2026-08-24** — `court-windows.ts` `usableWindows` shipped (all 14 edge-matrix rows, mutation-proven); lattice AND `/validate` now honour V367 court hours via `outside_court_hours`, the 27th conflict kind; start-window rule un-forked; solver start-window breaches now rejected at the build gate. **Both of the prompt's premises were FALSE — see the status log.** |
+| P9.5 | D5b.5 one court-availability function + the two constraints the placer never learned | `P09-5-window-unification.md` | P9 | same as P8 | **DONE 2026-08-24** (branch `feat/p95-window-unification`, not yet PR'd) — `court-windows.ts` `usableWindows` shipped (all 14 edge-matrix rows, mutation-proven); lattice AND `/validate` now honour V367 court hours via `outside_court_hours`, the 27th conflict kind; start-window rule un-forked; solver start-window breaches now rejected at the build gate. **Both of the prompt's premises were FALSE — see the status log.** |
 | P10 | D5c calendars + window compiler | `P10-venues-calendars.md` | **P9.5** | same as P8 | TODO — its "consume `usableWindows`" premise is only true once P9.5 lands; it also still owes the stranded-fixture conflict code (D5 amendment A6) |
 | P11 | D6 batch import | `P11-batch-import.md` | — | green-light + **ScoringPad S13 done** | TODO |
 
@@ -161,7 +161,21 @@ All owner-ratified 2026-08-13 in the design session:
   concurrently — mid-wave `V<n>` collision), W4 = P6 ∥ P7. P8→P9→P10 and
   P11 stay strictly sequential behind their external gates.
 
-- 2026-08-24 — **P9.5 (D5b.5) in progress.** Branch `feat/p95-window-unification`.
+- 2026-08-24 — **P9.5 (D5b.5) DONE.** Branch `feat/p95-window-unification`, 18
+  commits, not yet PR'd. Gates, all measured at the wave boundary: engine
+  **4068 passed / 0 failed**; apps/web **9430 / 0**; smoke against a standalone
+  prod build with placement live **877 / 0**; e2e `court-tags-scheduling` 6/0/1
+  skipped; turbo lint+typecheck 0 errors (0 cached, so it really ran); i18n
+  parity 4961 keys x4; zero OpenAPI/i18n-key drift. Engine scheduling run BOTH
+  ways — 731/0 with placement, 724/0 without.
+
+  Shipped: `court-windows.ts`'s `usableWindows` (all 14 edge-matrix rows,
+  every assertion mutation-proven); lattice, GREEDY and `/validate` all routed
+  through it; `outside_court_hours` as the 27th conflict kind, REPORTED but
+  never blocking; the start-window rule un-forked; solver start-window breaches
+  rejected at the build gate; `guardNoUsableCourtWindows` for row 3; the missing
+  `conflict.start_window` board label. `window-single-source.test.ts` enforces
+  "one function, both sides" as a test rather than a convention.
 
 ### False premises found by P9.5 (rulings, do not re-derive)
 
