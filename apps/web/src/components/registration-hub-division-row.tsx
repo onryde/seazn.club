@@ -157,6 +157,15 @@ export function RegistrationHubDivisionRow({
   const entrantKindText = row.entrant_kind ? t(dict, `divset.entrants.kind.${row.entrant_kind}`) : "—";
   const approvalText = row.approval ? t(dict, `reg.hub.row.approval.${row.approval}`) : "—";
 
+  // Finding 3: a closed division's public register link would only ever
+  // refuse the visitor, so Copy/Open/QR controls for it are dead weight at
+  // best and misleading at worst. A SCHEDULED division still gets them — an
+  // organiser needs the link before the window opens, to share it in
+  // advance. The private-competition gate applies on top, unconditionally
+  // on status: a private competition always shows the notice, never the
+  // link, exactly as before this fix.
+  const showLinkControls = context.showRegisterLink && status !== "closed";
+
   return (
     <div
       data-registration-hub-row
@@ -213,19 +222,22 @@ export function RegistrationHubDivisionRow({
         {row.allow_free_agents && <Chip>{t(dict, "reg.hub.row.freeAgents")}</Chip>}
       </div>
 
-      <div>
-        {context.showRegisterLink ? (
+      {!context.showRegisterLink && (
+        <div>
+          <p className="rounded-lg border border-amber-100 bg-amber-50 p-2 text-xs text-amber-800">
+            {t(dict, "div.registrations.privateNotice")}
+          </p>
+        </div>
+      )}
+      {showLinkControls && (
+        <div>
           <CopyLink
             path={context.registerHref}
             qrFileName={context.registerQrFileName}
             label={t(dict, "div.registrations.publicLink.title")}
           />
-        ) : (
-          <p className="rounded-lg border border-amber-100 bg-amber-50 p-2 text-xs text-amber-800">
-            {t(dict, "div.registrations.privateNotice")}
-          </p>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
