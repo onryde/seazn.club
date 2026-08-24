@@ -20,6 +20,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import { withTenant } from "@/lib/db";
 import { isValidIana, DEFAULT_TZ } from "@/lib/tz";
 import { asCurrency } from "@/lib/currency";
+import { SPOT_HOLDERS } from "@/lib/registration-status";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
   REGISTRATION_HUB_TABS,
@@ -32,11 +33,6 @@ import type {
   RegistrationHubRowData,
   RegistrationHubRowContext,
 } from "@/components/registration-hub-division-row";
-
-// Statuses that hold a capacity spot — mirrors registrations.ts's own
-// SPOT_HOLDERS constant (kept local rather than imported: that module pulls
-// in Stripe/email clients this read-only page has no business loading).
-const SPOT_HOLDERS = ["pending", "paid", "confirmed"] as const;
 
 export interface RawDivisionRow {
   division_id: string;

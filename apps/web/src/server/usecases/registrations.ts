@@ -21,6 +21,7 @@ import { getLimit, hasFeature, requireFeature } from "@/lib/entitlements";
 import { platformFeeDefault } from "@/lib/platform-settings";
 import { getStripe } from "@/lib/stripe";
 import { isRegistrationCurrency } from "@/lib/currency";
+import { SPOT_HOLDERS } from "@/lib/registration-status";
 import {
   sendPaymentReminderEmail,
   sendRegistrationPromotedEmail,
@@ -420,10 +421,14 @@ const SETTINGS_COLS = [
   "payment_method", "payment_instructions", "approval", "allow_free_agents", "updated_at",
 ] as const;
 
-/** Statuses that hold a capacity spot. Exported for `registration-submit.ts`'s
- *  capacity count (RS002 W4) — kept in ONE place so the two files' notion of
- *  "holds a spot" cannot drift apart. */
-export const SPOT_HOLDERS = ["pending", "paid", "confirmed"] as const;
+/** Statuses that hold a capacity spot. Imported from `@/lib/registration-
+ *  status` (RS004 W3b review finding 1) rather than declared here: that
+ *  module is dependency-free, so the registration hub's read-only page.tsx
+ *  can import the SAME array without dragging this module's Stripe/email
+ *  clients along. Re-exported below so `registration-submit.ts` and
+ *  `registration-approval.ts` keep importing it from `"./registrations"`
+ *  unchanged. */
+export { SPOT_HOLDERS };
 
 // Both the superuser client and a withTenant tx serve the shared helpers
 // (TransactionSql omits connection controls, so it isn't a plain Sql).
