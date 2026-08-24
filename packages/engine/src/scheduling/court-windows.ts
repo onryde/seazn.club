@@ -41,8 +41,15 @@ export interface Window {
 
 /** A blackout as the scheduler stores it. An unset `court` means GLOBAL —
  *  every court — which is the semantics all three pre-P9.5 implementations
- *  already agreed on (and A11: the value is a court ID, not a name). */
-export interface Blackout {
+ *  already agreed on (and A11: the value is a court ID, not a name).
+ *
+ *  Deliberately NOT exported: `calendar.ts` already exports a `Blackout` of
+ *  this shape, and two same-named exports off `scheduling/index.ts` is an
+ *  ambiguous re-export. Callers pass object literals, which structurally
+ *  satisfy both. Kept as a local name rather than imported from calendar.ts so
+ *  this module keeps its "no scheduling imports" property — it is a leaf, and
+ *  calendar.ts imports IT. */
+interface Blackout {
   readonly court?: string;
   readonly from: number;
   readonly to: number;

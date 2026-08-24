@@ -8,7 +8,12 @@ import "server-only";
 // header (packages/engine/src/scheduling/candidate-courts.ts) for why a
 // second, inlined tag-filter loop at either web call site is this
 // subsystem's recurring bug (the placer/verifier fork), not a style nit.
-import { candidateCourts, type CandidateCourts, type CourtMeta } from "@seazn/engine/scheduling";
+import {
+  candidateCourts,
+  type CandidateCourts,
+  type CourtCalendar,
+  type CourtMeta,
+} from "@seazn/engine/scheduling";
 import type postgres from "postgres";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
@@ -135,6 +140,93 @@ export async function resolveCandidateCourts(
     "schedule_court_filtered",
   );
   return result;
+}
+
+/**
+ * P9.5 (D5b.5): the court calendars `usableWindows` resolves, for the courts a
+ * run actually has in play.
+ *
+ * The loader lives HERE, usecase-side, because the engine stays pure — it never
+ * touches a DB — and because this module is already the one place the build,
+ * validate and AI-pack paths agree about courts. A second loader at any of those
+ * three call sites would be the same fork this file exists to prevent, one field
+ * over: they would diverge on what "this court has no calendar" means.
+ *
+ * ABSENT MEANS UNRESTRICTED, and that distinction is load-bearing. A court with
+ * no `court_hours` rows is simply omitted from the result, which `usableWindows`
+ * reads as "open all day" — calendars strictly SUBTRACT (D5 normative step 1),
+ * so a court nobody has given hours to must not become unschedulable. A court
+ * that HAS hours but none for a given weekday is closed that weekday; that is a
+ * declared calendar saying "not Tuesdays", and it is the engine's job to tell
+ * the two apart, not this loader's.
+ *
+ * Scoped to `courtIds` rather than the whole org: unlike `orgCourtMetas` above,
+ * which needs every court so an empty configured list can fall back to all of
+ * them, this is only ever asked about a candidate set that has already been
+ * resolved. `court_exceptions.date` comes back as `string | Date` depending on
+ * the driver's type parsing, so it is normalised to a bare `YYYY-MM-DD` here —
+ * the engine takes a `Ymd` and does no date parsing of its own.
+ */
+export async function resolveCourtCalendars(
+  tx: Tx,
+  courtIds: readonly string[],
+): Promise<CourtCalendar[]> {
+  if (courtIds.length === 0) return [];
+  const ids = [...courtIds];
+  const hours = await tx<{ court_id: string; weekday: number; open_min: number; close_min: number }[]>`
+    select court_id, weekday, open_min, close_min from court_hours
+    where court_id in ${tx(ids)}
+    order by court_id, weekday, open_min`;
+  const exceptions = await tx<
+    {
+      court_id: string;
+      date: string | Date;
+      closed: boolean;
+      open_min: number | null;
+      close_min: number | null;
+    }[]
+  >`
+    select court_id, date, closed, open_min, close_min from court_exceptions
+    where court_id in ${tx(ids)}
+    order by court_id, date`;
+
+  const byCourt = new Map<string, { hours: CourtCalendar["hours"]; exceptions: CourtCalendar["exceptions"] }>();
+  const slot = (courtId: string) => {
+    const existing = byCourt.get(courtId);
+    if (existing !== undefined) return existing;
+    const fresh = { hours: [] as CourtCalendar["hours"], exceptions: [] as CourtCalendar["exceptions"] };
+    byCourt.set(courtId, fresh);
+    return fresh;
+  };
+  for (const h of hours) {
+    (slot(h.court_id).hours as { weekday: number; openMin: number; closeMin: number }[]).push({
+      weekday: h.weekday,
+      openMin: h.open_min,
+      closeMin: h.close_min,
+    });
+  }
+  for (const e of exceptions) {
+    const date = typeof e.date === "string" ? e.date.slice(0, 10) : e.date.toISOString().slice(0, 10);
+    (
+      slot(e.court_id).exceptions as {
+        date: string;
+        closed: boolean;
+        openMin?: number;
+        closeMin?: number;
+      }[]
+    ).push({
+      date,
+      closed: e.closed,
+      ...(e.open_min !== null ? { openMin: e.open_min } : {}),
+      ...(e.close_min !== null ? { closeMin: e.close_min } : {}),
+    });
+  }
+  // Order follows `courtIds` so the result is deterministic for a caller that
+  // logs or snapshots it; a court with neither hours nor exceptions is omitted.
+  return ids.flatMap((courtId) => {
+    const found = byCourt.get(courtId);
+    return found === undefined ? [] : [{ courtId, hours: found.hours, exceptions: found.exceptions }];
+  });
 }
 
 /**

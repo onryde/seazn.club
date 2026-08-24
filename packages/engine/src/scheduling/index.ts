@@ -87,3 +87,4 @@ export * from "./repair-decompose-cpsat.ts";
 // excluded, id order preserved) — the ONE function both the build-input
 // assembly and validateScheduleIn filter through. Pure, zero imports.
 export * from "./candidate-courts.ts";
+export * from "./court-windows.ts";
