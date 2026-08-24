@@ -369,6 +369,23 @@ describe("buildTiles", () => {
     }
   });
 
+  // The rows themselves, in the order the grid lays them out. The lane test
+  // below pins WHICH column a side lands in; this pins WHICH ROW an action
+  // gets, so Card cannot drift back below Sub and split the pairs apart.
+  it("emits the board in ROW order — Goal, Card, Sub per side, then Period + Pen, then More", () => {
+    expect(buildTiles(view()).map((tile) => tile.id)).toEqual([
+      "goal-home",
+      "goal-away",
+      "card-home",
+      "card-away",
+      "sub-home",
+      "sub-away",
+      "period",
+      "penalty",
+      "more",
+    ]);
+  });
+
   // THE regression guard for the whole board idea: two vertical lanes, Home
   // left and Away right, so a scorer addresses a team by POSITION and never
   // has to select one. Every unit test in this file passed while the card
