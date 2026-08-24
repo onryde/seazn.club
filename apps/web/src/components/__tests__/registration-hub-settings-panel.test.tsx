@@ -12,6 +12,12 @@ import {
   type RegistrationHubRowData,
   type RegistrationHubRowContext,
 } from "@/components/registration-hub-division-row";
+// TEMP(RS004 variants) — sign-off scaffold components, see
+// registration-hub-variant.ts's header. Deleted alongside it.
+import { RegistrationHubDivisionRowB } from "@/components/registration-hub-division-row-b";
+import { RegistrationHubDivisionRowC } from "@/components/registration-hub-division-row-c";
+import { RegistrationHubConfigPanelB } from "@/components/registration-hub-config-panel-b";
+import { RegistrationHubConfigPanelC } from "@/components/registration-hub-config-panel-c";
 import { t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
 
@@ -185,5 +191,75 @@ describe("RegistrationHubSettingsPanel — opening/closing/saving the config pan
     (propsOf(panel).onSaved as () => void)();
     expect(island.tree().some((e) => e.type === RegistrationHubConfigPanel)).toBe(false);
     expect(nav.refresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+// TEMP(RS004 variants) — the sign-off scaffold's row/panel switch. See
+// registration-hub-variant.ts's header comment for the full explanation;
+// deleted alongside every other TEMP(RS004 variants) file/edit once the
+// owner picks a direction.
+describe("RegistrationHubSettingsPanel — variant switch (TEMP(RS004 variants))", () => {
+  it("defaults to variant A's row/panel components when `variant` is omitted", () => {
+    const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
+    const rows = island.tree().filter((e) => e.type === RegistrationHubDivisionRow);
+    expect(rows).toHaveLength(2);
+    (propsOf(rows[0]!).context as RegistrationHubRowContext).onOpen("div-1");
+    expect(island.tree().some((e) => e.type === RegistrationHubConfigPanel)).toBe(true);
+  });
+
+  it("variant b renders RegistrationHubDivisionRowB, and opening a row mounts RegistrationHubConfigPanelB", () => {
+    const island = renderIsland(RegistrationHubSettingsPanel, { ...BASE_PROPS, variant: "b" });
+    const rows = island.tree().filter((e) => e.type === RegistrationHubDivisionRowB);
+    expect(rows).toHaveLength(2);
+    expect(island.tree().some((e) => e.type === RegistrationHubDivisionRow)).toBe(false);
+
+    (propsOf(rows[0]!).context as RegistrationHubRowContext).onOpen("div-1");
+    const panel = island.tree().find((e) => e.type === RegistrationHubConfigPanelB);
+    expect(panel).toBeTruthy();
+    expect(propsOf(panel!).division).toMatchObject({ division_id: "div-1" });
+    expect(island.tree().some((e) => e.type === RegistrationHubConfigPanel)).toBe(false);
+  });
+
+  it("variant c renders RegistrationHubDivisionRowC, and opening a row mounts RegistrationHubConfigPanelC", () => {
+    const island = renderIsland(RegistrationHubSettingsPanel, { ...BASE_PROPS, variant: "c" });
+    const rows = island.tree().filter((e) => e.type === RegistrationHubDivisionRowC);
+    expect(rows).toHaveLength(2);
+
+    (propsOf(rows[0]!).context as RegistrationHubRowContext).onOpen("div-1");
+    const panel = island.tree().find((e) => e.type === RegistrationHubConfigPanelC);
+    expect(panel).toBeTruthy();
+    expect(propsOf(panel!).division).toMatchObject({ division_id: "div-1" });
+  });
+
+  it("variant a (explicit) is identical to omitting it — the row/panel components used today", () => {
+    const island = renderIsland(RegistrationHubSettingsPanel, { ...BASE_PROPS, variant: "a" });
+    expect(island.tree().filter((e) => e.type === RegistrationHubDivisionRow)).toHaveLength(2);
+  });
+
+  it("still threads the same row/context data to variant B's rows as variant A's", () => {
+    const island = renderIsland(RegistrationHubSettingsPanel, { ...BASE_PROPS, variant: "b" });
+    const row = island.tree().find((e) => e.type === RegistrationHubDivisionRowB)!;
+    expect(propsOf(row).row).toMatchObject({ division_id: "div-1" });
+    expect(propsOf(row).context).toMatchObject(CONTEXT);
+  });
+
+  it("still passes orgTz/currency/orgSlug/feePercentPct/cardUnsupportedCurrency to variant C's panel", () => {
+    const island = renderIsland(RegistrationHubSettingsPanel, {
+      ...BASE_PROPS,
+      variant: "c",
+      context: { ...CONTEXT, orgTz: "Asia/Kolkata", currency: "inr" as const },
+      feePercentPct: 5,
+      cardUnsupportedCurrency: "jpy",
+    });
+    const row = island.tree().find((e) => e.type === RegistrationHubDivisionRowC)!;
+    (propsOf(row).context as RegistrationHubRowContext).onOpen("div-1");
+    const panel = island.tree().find((e) => e.type === RegistrationHubConfigPanelC)!;
+    expect(propsOf(panel)).toMatchObject({
+      orgTz: "Asia/Kolkata",
+      orgSlug: "riverside",
+      currency: "inr",
+      feePercentPct: 5,
+      cardUnsupportedCurrency: "jpy",
+    });
   });
 });
