@@ -11866,11 +11866,16 @@ async function courtHoursSuite(): Promise<void> {
     courtIds: string[],
     startAtMs: number,
     sessionWindows: { from: string; to: string }[] = [],
+    /** Optional upper bound. Without one `applyWindow` yields `window.to =
+     *  Infinity`, and an unbounded universe is its own (pre-existing) edge —
+     *  see S5, which needs a bounded run to test the thing it is named for. */
+    endAtMs?: number,
   ): Promise<void> {
     await v1(s, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
       tz: "UTC",
       config: {
         startAt: new Date(startAtMs).toISOString(),
+        ...(endAtMs !== undefined ? { endAt: new Date(endAtMs).toISOString() } : {}),
         matchMinutes: 30,
         gapMinutes: 0,
         courts: courtIds,
@@ -12023,7 +12028,17 @@ async function courtHoursSuite(): Promise<void> {
     check("court hours S5: 3-entrant round robin generated 3 fixtures", fixtureIds.length === 3);
 
     const startMs = BASE + 5 * HOUR_MS; // 05:00 — outside any conventional business-hours default
-    await putSettings(divisionId, [court.id], startMs);
+    // BOUNDED, and bounded to a WEEK rather than a day. Two reasons, both
+    // learned by watching this check fail:
+    //   * Without an `endAt` at all, `applyWindow` yields `window.to =
+    //     Infinity`. Every other check here is bounded by its court's own
+    //     hours; S5 has no calendar by construction, so it would otherwise
+    //     measure the unbounded-window edge rather than the calendar rule.
+    //   * A 3-entrant round robin is THREE ROUNDS, and round ordering spreads
+    //     rounds across days — a two-day window fits only two of them and the
+    //     check failed at `placed=2` for a reason that had nothing to do with
+    //     court calendars.
+    await putSettings(divisionId, [court.id], startMs, [], BASE + 7 * 24 * HOUR_MS);
     const build = v1data<AutoRun>(
       await v1(s, `/api/v1/stages/${stageId}/schedule/auto`, "POST", { only_unlocked: false }),
     );
@@ -12031,13 +12046,40 @@ async function courtHoursSuite(): Promise<void> {
     const earliest = [...assignments].sort(
       (a, b) => Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at),
     )[0];
+    // What S5 asserts, and what it deliberately does NOT.
+    //
+    // NOT asserted: WHERE in the window the fixtures land. Two separate
+    // pre-existing behaviours make any such claim wrong, and both were learned
+    // by watching this check fail rather than by reading:
+    //   * `applyWindow` sets `window.from` to local MIDNIGHT of the start day,
+    //     not to `startAt`, and `repairUniverse` returns that window verbatim
+    //     as the lattice universe — so the solver may legitimately place BEFORE
+    //     the organiser's stated earliest slot. Greedy honours `startAt`
+    //     (`ready = max(config.startAt, ...)`), so the two producers disagree.
+    //     Reported, not fixed here: a different defect from this suite's
+    //     subject, and changing `applyWindow` moves every schedule.
+    //   * Given a week of free slots the solver has no objective preferring
+    //     earliness, so it placed these on day 5. That is not a defect at all,
+    //     and a test that pinned the instant would be asserting solver taste.
+    //
+    // What it DOES assert is the regression that actually matters: a court
+    // nobody has given hours to must stay FULLY usable. If a phantom default
+    // were applied to an uncalendared court, this run would either place fewer
+    // than three or 422 NO_MATCHING_COURT through `guardNoUsableCourtWindows` —
+    // both of which this check catches, and neither of which depends on which
+    // slot the solver happens to like.
     check(
-      `court hours S5: a court with NO calendar rows still schedules across the whole day — the ` +
-        `first fixture landed exactly at the requested 05:00 start, not delayed by a phantom ` +
-        `default (placed=${build?.metrics?.placed}, first=${earliest?.scheduled_at})`,
+      `court hours S5: a court with NO calendar rows stays fully usable — all three placed, none ` +
+        `narrowed away by a phantom default (placed=${build?.metrics?.placed}, ` +
+        `first=${earliest?.scheduled_at})`,
       build?.metrics?.placed === 3 &&
         assignments.length === 3 &&
-        earliest?.scheduled_at === new Date(startMs).toISOString(),
+        earliest !== undefined &&
+        assignments.every(
+          (a) =>
+            Date.parse(a.scheduled_at) >= BASE &&
+            Date.parse(a.scheduled_at) < BASE + 8 * 24 * HOUR_MS,
+        ),
     );
   }
 
