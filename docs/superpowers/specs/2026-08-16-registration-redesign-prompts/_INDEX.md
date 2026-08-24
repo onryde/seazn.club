@@ -26,7 +26,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS001 | `RS001-schema-and-demolition.md` | — | **DONE** — PR #592 merged `850cc630` (2026-08-17) |
 | RS001b | `RS001b-org-currency-allowlist.md` | RS001 | **DONE** — PR #598 merged `a7cca608` (2026-08-17) |
 | RS002 | `RS002-core-usecases.md` | RS001b | **DONE** — PR #607 merged `4ff0bf8f` (2026-08-17) |
-| RS003 | `RS003-public-endpoints.md` | RS002 | **IN FLIGHT** — branch `feat/rs003-registration-endpoints` |
+| RS003 | `RS003-public-endpoints.md` | RS002 | **DONE** — PR #615 merged `29690ec8c` (2026-08-18) |
 | RS004 | `RS004-hub-settings-tab.md` | RS003 | TODO |
 | RS005 | `RS005-hub-registrants-tab.md` | RS004 | TODO |
 | RS006 | `RS006-public-stepper.md` | RS003 | TODO |
@@ -236,8 +236,8 @@ serves its closed/unavailable state during that window.
 
 ### RS002 (2026-08-17) — branch `feat/rs002-registration-usecases`
 
-**LIVE SESSION STATE** (update this block as waves close; it is what a resumed
-or compacted session reads first).
+**DONE — merged 2026-08-17 as PR #607** (`4ff0bf8f`). Worktree and gate DBs
+below are gone; the rulings they carry still hold.
 
 - Worktree `.claude/worktrees/rs002`, rebased onto `main` @ `c2cb1f3fb`
   (P8 venues & courts, #605). **All five waves CLOSED and reviewed.**
@@ -759,26 +759,19 @@ claim below carries its `path:line`.
 
 ### RS003 (2026-08-18) — branch `feat/rs003-registration-endpoints`
 
-**LIVE SESSION STATE.** Worktree `.claude/worktrees/rs003`, rebased onto `main`
-@ `604767c63`. **W1 CLOSED. W2/W3/W4 not started** — a resumed session starts at
-W2 (routes).
+**DONE — merged 2026-08-18 as PR #615**, merge commit `29690ec8c` on `main`
+(branch tip `a07184627`, now an ancestor of `main`). All six waves closed; the
+worktree `.claude/worktrees/rs003` and its environment (DB `seazn_rs003b`,
+prod server, placement service) were torn down after the merge.
 
-- **Environment is LEFT UP for tomorrow** (owner's call, 2026-08-18): DB label
-  `rs003b` on `127.0.0.1:54671/seazn_rs003b`, schema at **v370**, worktree
-  `node_modules` already installed. The **placement service was stopped** — it
-  goes stale the moment `services/placement/src/**` changes and the next run
-  would dial it and pass against code that no longer exists. Restart it with
-  `seazn-env up --label rs003b --placement` (venv is warm now, ~9s), and
-  re-export `PLACEMENT_SERVICE_HOST` from `seazn-env env --label rs003b`,
-  because the port is re-derived and will NOT be 50633 again.
-- **Before trusting that DB tomorrow, check whether `main` moved.** If a rebase
-  brings any new delta, this DB's Flyway history no longer matches the tree and
-  it must be destroyed and rebuilt, not migrated — that is exactly what happened
-  to its predecessor today (see the V368 collision below).
-- **Wave plan** (sequential — the file sets overlap, so never parallel):
+- **Wave plan as run** (sequential — the file sets overlap, so never parallel):
   W1 schemas → W2 routes (`app/api/v1/public/.../register/**`) → W3 payment
   orchestration + webhook re-key (`registrations.ts`, `billing-events.ts`) →
-  W4 whole-branch review.
+  W4 deep-dive tests → W5 live Stripe probe → W6 e2e + whole-branch review.
+- The session-environment notes that used to sit here (DB label `rs003b` on
+  `127.0.0.1:54671`, prod server, placement port) are dropped — that environment
+  is gone. The V-number-collision and watchdog rulings below are NOT
+  session-local and apply to every later RS session.
 - **The V-number collision recurred, one merge after RS002 recorded it.** `main`
   briefly held TWO V368s — F1's `V368__fixture_round_role.sql` (#606) and
   RS002's `V368__registration_entry_refunds.sql` (#607) — and Flyway refuses to
