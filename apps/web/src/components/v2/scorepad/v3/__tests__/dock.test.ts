@@ -17,7 +17,7 @@
 // QueueStore/PendingEvent at all.
 import { describe, expect, it, vi } from "vitest";
 import { renderIsland, textOf } from "@/components/__tests__/_hook-harness";
-import { DetailDock, dockController, makeDockStore, type DockStore } from "../detail-dock";
+import { DetailDock, dockController, makeDockStore, revealDock, type DockStore } from "../detail-dock";
 import type { DockChip, DockSpec } from "../types";
 import { enqueueHeld, peekInOrder } from "../../queue";
 import { memoryQueueStore } from "../../queue-store";
@@ -280,5 +280,49 @@ describe("DetailDock chip labels — DockChip.labelText (R3/football)", () => {
     const labels = chipButtonLabels(island);
     expect(labels).toContain("Assist L. Costa");
     expect(labels.join(" ")).not.toContain("pad.football.dock.assist");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3/F (F4) — THE DOCK HAS TO BE ON SCREEN WHEN IT OPENS.
+//
+// The dock renders AFTER the tile grid, and the grid is tall enough at every
+// width that the dock lands below the fold. Measured against the real prod
+// server, football's nine-tile board, tapping Goal · Home:
+//
+//   width  viewport h   dock h   pixels of the dock visible after the tap
+//   1280   720          213       88   (125px below the fold)
+//    768  1024          213      -16   (entirely below the fold — and the
+//                                       scorer did not even have to scroll to
+//                                       reach the tile)
+//    320   568          369       12
+//
+// A soft-commit window the scorer cannot see always expires, which silently
+// defeats the "tap commits, dock enriches" model the whole v3 design rests on.
+//
+// `revealDock` is the whole fix: `scrollIntoView({ block: "nearest" })`, which
+// is a NO-OP when the element is already fully in view (so nothing moves at a
+// width where the dock already fits) and otherwise scrolls the MINIMUM. It is
+// exported and takes its node as a parameter purely so this contract is
+// assertable — apps/web vitest is environment:"node" and `DetailDock`'s JSX
+// has no harness, so the WIRING is proved in a browser, not here.
+// ---------------------------------------------------------------------------
+
+describe("revealDock (R3/F, F4)", () => {
+  it("scrolls the node the MINIMUM needed, in both axes", () => {
+    const calls: unknown[] = [];
+    const node = { scrollIntoView: (opts: unknown) => calls.push(opts) };
+    expect(revealDock(node)).toBe(true);
+    // `nearest` on both axes: `start`/`center` would move a dock that is
+    // already fully visible, which at 1280 is a page that jumps for nothing.
+    expect(calls).toEqual([{ block: "nearest", inline: "nearest" }]);
+  });
+
+  it("is a no-op with no node, and where scrollIntoView does not exist", () => {
+    // Both are real: the dock renders `null` until there is a held entry, and
+    // jsdom-less/SSR environments have no such method. Neither may throw —
+    // this runs inside a commit, so a throw here would blank the pad.
+    expect(revealDock(null)).toBe(false);
+    expect(revealDock({} as { scrollIntoView?: (o: unknown) => void })).toBe(false);
   });
 });

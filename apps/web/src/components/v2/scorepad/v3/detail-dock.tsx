@@ -235,6 +235,47 @@ export interface DetailDockProps {
  * fresh on every render would silently wipe out in-progress chip
  * selections on every countdown tick.
  */
+/**
+ * Bring the just-opened dock ON SCREEN — R3/F (F4).
+ *
+ * The dock renders after the tile grid (pad-host.tsx), and the grid is tall
+ * enough at EVERY width that the dock lands below the fold. Measured against
+ * the real prod server on football's nine-tile board, tapping Goal · Home:
+ * 88px of a 213px dock visible at 1280x720, MINUS 16 at 768x1024 (entirely
+ * below the fold, without the scorer even having to scroll to reach the tile),
+ * 12px of a 369px dock at 320x568. A soft-commit window the scorer cannot see
+ * always expires, which silently defeats the "tap commits, dock enriches"
+ * model the whole v3 design rests on.
+ *
+ * `block: "nearest"` and nothing else — the smallest fix that achieves it:
+ *
+ *  - it is a NO-OP when the element is already fully visible, so a width where
+ *    the dock already fits never moves;
+ *  - it scrolls the MINIMUM otherwise, so the top of the board stays on screen
+ *    above the dock rather than the whole grid being pushed away;
+ *  - the layout itself is untouched. A sticky/fixed bottom sheet was the other
+ *    candidate and was rejected: at 320 a 369px dock pinned to the bottom
+ *    COVERS the entire board, and an overlaying dock can intercept a tap meant
+ *    for a tile — which would also break `apps/web/e2e/**` specs this task is
+ *    barred from editing.
+ *
+ * No `behavior: "smooth"`: a scroll in flight makes every element the specs
+ * click "unstable" for Playwright's actionability check, and an instant reveal
+ * is also the right answer for `prefers-reduced-motion`, which removes the
+ * branch entirely.
+ *
+ * Takes its node as a parameter and returns whether it scrolled so the
+ * contract is assertable in a node environment (`__tests__/dock.test.ts`);
+ * the WIRING below is proved in a browser, because it cannot be proved here.
+ * Total on a missing node and a node without the method — this runs inside a
+ * commit, where a throw would blank the pad.
+ */
+export function revealDock(node: { scrollIntoView?: (options: ScrollIntoViewOptions) => void } | null): boolean {
+  if (node === null || typeof node.scrollIntoView !== "function") return false;
+  node.scrollIntoView({ block: "nearest", inline: "nearest" });
+  return true;
+}
+
 export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }: DetailDockProps) {
   // Render-phase state reset (React's own sanctioned "adjust state during
   // render" recipe — https://react.dev/reference/react/useState#storing-
@@ -262,6 +303,7 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
 
   const [, bump] = useReducer((n: number) => n + 1, 0);
   const mountedRef = useRef(true);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   useEffect(
     () => () => {
       mountedRef.current = false;
@@ -292,6 +334,18 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [controller]);
 
+  // R3/F (F4) — reveal on OPEN. Keyed on `controller`, the same identity the
+  // tick effect above re-arms on: a genuinely new held entry, never a
+  // countdown tick or an ordinary parent re-render, so the page is never
+  // pulled around while a scorer is reading the dock they already have. See
+  // `revealDock` above for the measurements and for why this is a scroll
+  // rather than a sticky layout.
+  useEffect(() => {
+    if (controller === null) return;
+    revealDock(rootRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controller]);
+
   if (controller === null) return null;
 
   const handleTap = (chipId: string) => {
@@ -310,6 +364,7 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
 
   return (
     <div
+      ref={rootRef}
       role="group"
       aria-label={t("pad.dock.title")}
       className="overflow-hidden rounded-2xl border-t-2 border-lime-400 bg-cream shadow-lg"
