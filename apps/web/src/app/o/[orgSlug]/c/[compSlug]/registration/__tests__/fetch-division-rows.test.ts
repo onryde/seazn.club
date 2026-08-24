@@ -114,4 +114,35 @@ describe.skipIf(!HAS_DB)("fetchDivisionRows — real Postgres", () => {
     const dupeRowOrder = rows.filter((r) => dupeIds.includes(r.division_id)).map((r) => r.division_id);
     expect(dupeRowOrder).toEqual([...dupeIds].sort());
   });
+
+  // RS004 W3b review finding 4 — fetchDivisionRows had no cross-org test.
+  // CHARACTERISATION, not a bug fix: `divisions` and `registration_settings`
+  // both carry org-scoped FORCE ROW LEVEL SECURITY, enforced through
+  // withTenant's `set_config('app.current_org', …)` — this is proof that
+  // isolation already holds, exercised here for the first time. Org A's
+  // auth is used to query org B's competition id DIRECTLY (not just "org A's
+  // own data looks right") — the WHERE clause alone (`d.competition_id =
+  // ${competitionId}`) would happily return org B's rows if RLS were not
+  // enforcing app.current_org underneath it.
+  it("never returns another org's rows, even when handed that org's competition id directly (finding 4, RLS proof)", async () => {
+    const { orgId: orgIdA, ownerId: ownerIdA } = await seedOrg();
+    const ownerA = asOwner(orgIdA, ownerIdA);
+    await rig(ownerA); // org A has its own, unrelated competition + division
+
+    const { orgId: orgIdB, ownerId: ownerIdB } = await seedOrg();
+    const ownerB = asOwner(orgIdB, ownerIdB);
+    const { competition: compB, division: divB } = await rig(ownerB);
+    await putRegistrationSettings(ownerB, divB.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      capacity: null,
+      fee_cents: 0,
+      approval: "auto",
+      allow_free_agents: false,
+      form_fields: [],
+    });
+
+    const rows = await fetchDivisionRows(ownerA, compB.id);
+    expect(rows).toHaveLength(0);
+  });
 });
