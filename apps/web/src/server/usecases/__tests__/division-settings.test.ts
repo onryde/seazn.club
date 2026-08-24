@@ -122,6 +122,55 @@ describe.skipIf(!HAS_DB)("required_court_tags (D5/P8 gap close)", () => {
   });
 });
 
+describe.skipIf(!HAS_DB)("eligibility columns: category/age_min/age_max (V364/RS004)", () => {
+  it("a freshly created division has no category/age band set", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+    expect(division.category).toBeNull();
+    expect(division.age_min).toBeNull();
+    expect(division.age_max).toBeNull();
+  });
+
+  it("patch round-trips category/age_min/age_max and getDivision returns them", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+
+    const patched = await patchDivision(owner, division.id, {
+      category: "womens",
+      age_min: 8,
+      age_max: 12,
+    });
+    expect(patched.category).toBe("womens");
+    expect(patched.age_min).toBe(8);
+    expect(patched.age_max).toBe(12);
+
+    const fetched = await getDivision(owner, division.id);
+    expect(fetched.category).toBe("womens");
+    expect(fetched.age_min).toBe(8);
+    expect(fetched.age_max).toBe(12);
+
+    // Clearing back to "open to everyone" round-trips too.
+    const cleared = await patchDivision(owner, division.id, {
+      category: null,
+      age_min: null,
+      age_max: null,
+    });
+    expect(cleared.category).toBeNull();
+    expect(cleared.age_min).toBeNull();
+    expect(cleared.age_max).toBeNull();
+  });
+
+  it("an age_min-only patch leaves age_max untouched (independent columns)", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+    await patchDivision(owner, division.id, { age_max: 18 });
+
+    const patched = await patchDivision(owner, division.id, { age_min: 6 });
+    expect(patched.age_min).toBe(6);
+    expect(patched.age_max).toBe(18);
+  });
+});
+
 describe.skipIf(!HAS_DB)("format lock (v8)", () => {
   it("variant/config edits work until fixtures exist, then 409 FORMAT_LOCKED", async () => {
     const owner = await seedOwner();
