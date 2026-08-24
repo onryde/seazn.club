@@ -877,6 +877,60 @@ note) and it still went into three briefs in one session. Counts reported by
 task A and task B1 were taken with it and are re-run at the wave boundary by
 the main thread rather than trusted.
 
+### R3 — TWO CORRECTIONS to claims recorded earlier in this file (2026-08-24)
+
+Both were written here by the main thread before the code existed, both are
+FALSE, and both were caught by the wave's first review pass. Corrected in place
+rather than left for a later session to build on.
+
+**CORRECTION 1 — "R3 is the wave that turns `subWindows` on" is FALSE.** The
+`at`-stamp section above says v2 sends no `at`, so the window cap has never
+fired, and that R3 switches it on. The guard R3 built is correct, but it is
+**INERT**: `state.asOf` is written only at `football.ts:2528`, and only from an
+event that ALREADY carried `at`. No v3 football surface sends `at` except the
+swap, which copies an `asOf` that must pre-exist. On a pad-only stream
+`stampOf` always returns `undefined`, the window branch of `subPolicy` never
+runs, and `pad.football.context.sub.blocked.subWindows` is UNREACHABLE COPY.
+The only bootstrap is a More-sheet sinbin/shot form's own `at.*` fields.
+So `subWindows` still does not fire from the pad. Whoever wants it must give
+the pad a way to originate a stamp — engine-side, and not R3's.
+
+**CORRECTION 2 — the ribbon does NOT render "Goal — Rivera, assist Okafor".**
+The ribbon section above describes that as the rendered result of
+`pad.ribbon.withDetail`. It is not: `buildRibbon` is called with four arguments
+and never `detail` (`pad-host.tsx:749`), so `withDetail` never fires on the TOP
+ribbon at all. `footballDetail` reaches only the Activity panel. `ribbon.ts` is
+untouched by this wave, so the gap is PRE-EXISTING and not football's — but the
+description written here was wrong about what a user sees.
+
+**The lesson worth keeping, because it is the third time this shape has cost
+this programme:** a claim written into `_INDEX.md` ahead of the code is a
+PREDICTION, not a record. Both of these were stated with the same confidence as
+the facts around them, and neither was true. Mark predictions as such, or write
+them after the code proves them.
+
+### R3 — the review pass that should have happened five tasks earlier
+
+R3 ran FIVE implementers back to back with ZERO review passes before the first
+reviewer was dispatched. `_RULES.md` §4 mandates Scout -> Implementer ->
+Reviewer -> loop until clean. What that first pass found, in one sweep:
+
+- Three **dead-end taps** (the pad offering what the engine refuses), two of
+  them reachable at BAND 0 — the exact class R2b and R2c each fixed in cricket,
+  reappearing in football because nobody looked between waves.
+- A **cricket pixel change** (`globals.css:1062`, focus ring violet -> lime)
+  violating R3-6's binding byte-identity ruling. It survived a dedicated
+  identity-proof because that proof ran in a NODE environment and the defect
+  lives in the CSS CASCADE.
+- **Two false-green tests** — the totality sweep that unions `dedicated` across
+  phases while production recomputes per phase, and a `sport-theme` assertion
+  comparing two hand-typed constants in the same file with no production symbol
+  on either side.
+
+Every one of those was in code whose own suite was green, written by an agent
+that also wrote the tests for it. **Test count is not review.** The wave was at
+3302 passing tests when the reviewer returned "Needs fixes".
+
 ### R3-6 — owner ruling 2026-08-24: PER-SPORT VISUAL IDENTITY (reverses the theme lock)
 
 **This reverses a standing ruling. Do not "restore" the lock — read this first.**
