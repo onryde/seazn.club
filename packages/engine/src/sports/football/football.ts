@@ -2382,12 +2382,18 @@ export function padSpec(cfg: FootballCfg): PadSpec {
       "football.sinbin.end": 2,
       "football.shot": 3,
     },
-    // Band 2 unchanged. Band 3 REUSES the same entitlement — matches the OLD
-    // ladder's own paid boundary (`fidelityTiers` below still carries
-    // "scoring.match_timeline" on both tier 2 AND tier 3) rather than
-    // inventing a second FeatureKey/billing-plan row this session is not
-    // scoped to create.
-    fidelityEntitlements: { 2: "scoring.match_timeline", 3: "scoring.match_timeline" },
+    // R3-3 — band 2 unchanged; band 3 is its OWN key, "scoring.ball_by_ball".
+    // Bands 2 and 3 differ by exactly ONE event (`football.shot`), so sharing
+    // a key made the two bands indistinguishable to every consumer that reads
+    // entitlements to decide what to show (the recording chip could not tell
+    // them apart). "scoring.ball_by_ball" ALREADY exists as a FeatureKey and
+    // is already granted on the identical plan boundary as
+    // "scoring.match_timeline" — community false / pro true / business true
+    // (V112__entitlements_v2.sql) and pro_plus true (V290__pro_plus_plan.sql)
+    // — so no org's access changes, and no new FeatureKey and no migration
+    // were needed. `fidelityTiers` below carries the SAME two literals; the
+    // pair is hand-kept and must move in lockstep.
+    fidelityEntitlements: { 2: "scoring.match_timeline", 3: "scoring.ball_by_ball" },
   };
 }
 
@@ -2669,7 +2675,9 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
         // S8/#417 W6 — band-3-only, per padSpec's `fidelity` map above.
         "football.shot",
       ],
-      entitlement: "scoring.match_timeline",
+      // R3-3 — tier 3's own key, NOT tier 2's. Must stay in lockstep with
+      // `padSpec`'s `fidelityEntitlements` above; the two are hand-kept.
+      entitlement: "scoring.ball_by_ball",
     },
   ],
   officialLabel: { scorer: "Referee" }, // doc 13 §1

@@ -48,9 +48,10 @@ export function requiredFeatureForEvent(
  * sweeps granted everything and `locked` never occurred in the suite
  * (_INDEX.md, S11/#420) — this is the real-value counterpart.
  *
- * Deduplicates: two bands may legitimately name the SAME key (football's
- * tier 2/3 both declare "scoring.match_timeline", S2/#430's decision log),
- * and that key is resolved once, not once per band.
+ * Deduplicates: two bands may legitimately name the SAME key (hockey and
+ * icehockey both declare "scoring.match_timeline" at tier 2 AND tier 3), and
+ * that key is resolved once, not once per band. Football was this example
+ * until R3-3 gave its band 3 its own key, "scoring.ball_by_ball".
  */
 export async function resolveFidelityEntitlements(
   fidelityEntitlements: PadSpec["fidelityEntitlements"],

@@ -34,6 +34,11 @@ describe("requiredFeatureForEvent (doc 14 §4 derivation)", () => {
     ["cricket", "cricket.player.line", "stats.player"], // the Tier-2 scorecard
     ["football", "football.card", "scoring.match_timeline"],
     ["football", "football.sub", "scoring.match_timeline"],
+    // R3-3 — band 3 is its OWN key. Bands 2 and 3 differ by exactly one
+    // event (`football.shot`), so the two bands must be distinguishable:
+    // `requiredFeatureForEvent` walks the LOWEST tier declaring the type, so
+    // card/sub above keep tier 2's key while shot resolves to tier 3's.
+    ["football", "football.shot", "scoring.ball_by_ball"],
     ["volleyball", "volleyball.rally", "scoring.rally_by_rally"],
   ];
 
@@ -92,8 +97,12 @@ describe("resolveFidelityEntitlements", () => {
   });
 
   it("the SAME feature key named at two bands is resolved once, not twice", async () => {
-    // Real shape: football's tier 2 and tier 3 both name "scoring.match_timeline"
-    // (S2/#430's decision log — the "duplicate 2/3" finding).
+    // Real shape: hockey and icehockey (the shared `period` kernel, both
+    // presets `shotTracking: true`) name their `timelineEntitlement` —
+    // "scoring.match_timeline" — at BOTH band 2 and band 3, so the dedup this
+    // asserts is live, not hypothetical. Football used to be the example here
+    // and no longer is: R3-3 gave its band 3 its own "scoring.ball_by_ball",
+    // which the football.shot case at the top of this file now pins.
     const hasFeatureFn = vi.fn(async () => true);
     const result = await resolveFidelityEntitlements(
       { 2: "scoring.match_timeline", 3: "scoring.match_timeline" },
