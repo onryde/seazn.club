@@ -1177,22 +1177,53 @@ export function buildDock(
       // `ownGoal` and `penalty` are booleans on the SAME payload, so they are
       // dock toggles rather than tiles of their own — six goal tiles for four
       // flag combinations is exactly the fan-out §2.5 caps.
-      { id: "ownGoal", label: "pad.football.dock.ownGoal", mutate: (p) => ({ ...p, ownGoal: true }) },
-      { id: "penalty", label: "pad.football.dock.penalty", mutate: (p) => ({ ...p, penalty: true }) },
+      { id: "ownGoal", label: "pad.football.dock.ownGoal", kind: "flag", mutate: (p) => ({ ...p, ownGoal: true }) },
+      { id: "penalty", label: "pad.football.dock.penalty", kind: "flag", mutate: (p) => ({ ...p, penalty: true }) },
     ];
     // Attribution is the band-2 timeline, and both fields are skippable: the
     // dock closes on its own and the goal is already recorded.
+    //
+    // ONE QUESTION AT A TIME (owner ruling, review round 3). This offered every
+    // scorer chip AND every assist chip together: at 11-a-side that is 24 chips
+    // in a panel with a ~6s soft-commit window, and `mutateHeld` does not extend
+    // `heldUntil` (queue.ts) — so the window is a hard budget for the whole
+    // interaction. Two questions on screen at once made the scorer read all 24
+    // to answer the first one.
+    //
+    // Split on the payload, the same way cricket's dock already distinguishes a
+    // no-ball from a plain single: `resolveDockSpec` forwards `held.payload`
+    // verbatim and re-runs on every mutation, so picking a scorer re-renders
+    // this panel as the assist step. The tap COUNT for full attribution is
+    // unchanged — what changes is that each step asks one thing, and the list
+    // to scan is roughly half as long.
     if (side !== null && view.band >= 2) {
-      // ON PITCH only, for the SCORING side — `applyGoal` refuses a scorer who
-      // is not on the pitch of `by`, own goals included (football.ts:1074).
-      for (const id of squadOf(state, side).onPitch) {
-        chips.push(personChip(`scorer:${id}`, "scorer", id, nameOf(view, id, t)));
-      }
-      for (const id of squadOf(state, side).onPitch) {
-        chips.push(personChip(`assist:${id}`, "assist", id, t("pad.football.dock.assist", { name: nameOf(view, id, t) })));
+      const scorer = typeof payload?.scorer === "string" ? payload.scorer : undefined;
+      const ownGoal = payload?.ownGoal === true;
+      if (scorer === undefined) {
+        // ON PITCH only, for the SCORING side — `applyGoal` refuses a scorer who
+        // is not on the pitch of `by`, own goals included (football.ts:1074).
+        for (const id of squadOf(state, side).onPitch) {
+          chips.push(personChip(`scorer:${id}`, "scorer", id, nameOf(view, id, t)));
+        }
+      } else if (!ownGoal) {
+        // Two rules the ENGINE tolerates but its own domain rejects, both taken
+        // verbatim from the generator's `assistPool` (football.ts:3026-3034):
+        // the assist pool is "the striking side's pitch, MINUS the scorer", and
+        // an own goal has no assist to credit at all — "naming one would put a
+        // second player on a goal the fold credits to the opponent". `applyGoal`
+        // validates only the scorer, so offering either would not be refused;
+        // it would just be wrong, and silently so.
+        for (const id of squadOf(state, side).onPitch) {
+          if (id === scorer) continue;
+          chips.push(personChip(`assist:${id}`, "assist", id, t("pad.football.dock.assist", { name: nameOf(view, id, t) })));
+        }
       }
     }
-    return { title: t("pad.football.dock.goal.title"), chips };
+    const goalTitle =
+      typeof payload?.scorer === "string" && payload.ownGoal !== true
+        ? t("pad.football.dock.goal.assist.title")
+        : t("pad.football.dock.goal.title");
+    return { title: goalTitle, chips };
   }
 
   // R3 review round — THE PENALTY'S OFFENCE, restored to the v3 pad.

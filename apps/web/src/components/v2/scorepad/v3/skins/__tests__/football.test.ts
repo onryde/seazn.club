@@ -984,27 +984,72 @@ describe("buildDock", () => {
     expect(buildDock("football.shot", view(), t, {})).toBeNull();
   });
 
-  it("offers the two payload toggles plus scorer and assist chips for the SCORING side's on-pitch players", () => {
+  // Owner ruling, review round 3: ONE QUESTION AT A TIME. The dock used to
+  // offer every scorer chip and every assist chip together — 24 at 11-a-side,
+  // inside a ~6s window `mutateHeld` never extends.
+  it("asks only WHO SCORED first — no assist chip is on screen before a scorer exists", () => {
     const dock = buildDock("football.goal", view(), t, { by: "home-1" })!;
     const ids = dock.chips.map((chip) => chip.id);
     expect(ids.slice(0, 2)).toEqual(["ownGoal", "penalty"]);
     expect(ids).toContain("scorer:h1");
-    expect(ids).toContain("assist:h2");
+    expect(ids.filter((id) => id.startsWith("assist:")), "two questions were on screen at once").toEqual([]);
     expect(ids).not.toContain("scorer:a1"); // the other side never scored this one
     expect(ids).not.toContain("scorer:h4"); // on the bench: the fold refuses a scorer who is not on the pitch
+    expect(dock.title).toBe("pad.football.dock.goal.title");
+  });
+
+  it("becomes the ASSIST step once a scorer is picked, and drops the scorer chips", () => {
+    const dock = buildDock("football.goal", view(), t, { by: "home-1", scorer: "h2" })!;
+    const ids = dock.chips.map((chip) => chip.id);
+    expect(ids.filter((id) => id.startsWith("scorer:")), "the answered question is still being asked").toEqual([]);
+    expect(ids).toContain("assist:h1");
+    expect(ids).toContain("assist:h3");
+    expect(dock.title, "the panel must say which question it is now asking").toBe(
+      "pad.football.dock.goal.assist.title",
+    );
+  });
+
+  // Both taken verbatim from the engine generator's own `assistPool`
+  // (football.ts:3026-3034). `applyGoal` validates only the scorer, so neither
+  // of these would be REFUSED — they would just be wrong, and silently.
+  it("never offers the scorer as their own assist", () => {
+    const dock = buildDock("football.goal", view(), t, { by: "home-1", scorer: "h2" })!;
+    expect(dock.chips.map((chip) => chip.id)).not.toContain("assist:h2");
+  });
+
+  it("offers NO assist at all on an own goal — the fold credits it to the opponent", () => {
+    const dock = buildDock("football.goal", view(), t, { by: "home-1", scorer: "h2", ownGoal: true })!;
+    expect(dock.chips.filter((chip) => chip.id.startsWith("assist:"))).toEqual([]);
+    expect(dock.title).toBe("pad.football.dock.goal.title");
+  });
+
+  it("halves what is on screen at 11-a-side — the panel the ruling was about", () => {
+    const eleven = Array.from({ length: 11 }, (_, i) => `h${i + 1}`);
+    const v = view({
+      state: state({ squads: { home: footballSquad({ onPitch: eleven, bench: [] }), away: footballSquad({ onPitch: ["a1"] }) } }),
+    });
+    const step1 = buildDock("football.goal", v, t, { by: "home-1" })!.chips.length;
+    const step2 = buildDock("football.goal", v, t, { by: "home-1", scorer: "h2" })!.chips.length;
+    expect(step1, "2 toggles + 11 scorers").toBe(13);
+    expect(step2, "2 toggles + 10 assists (everyone but the scorer)").toBe(12);
+    expect(Math.max(step1, step2), "the old panel put 24 on screen at once").toBeLessThan(24);
   });
 
   it("labels a person chip with the NAME, pre-localised, never through a dictionary key", () => {
     const dock = buildDock("football.goal", view(), t, { by: "home-1" })!;
     expect(dock.chips.find((chip) => chip.id === "scorer:h1")!.labelText).toBe("Home One");
-    expect(dock.chips.find((chip) => chip.id === "assist:h1")!.labelText).toContain("Home One");
+    const assistStep = buildDock("football.goal", view(), t, { by: "home-1", scorer: "h2" })!;
+    expect(assistStep.chips.find((chip) => chip.id === "assist:h1")!.labelText).toContain("Home One");
   });
 
   it("chips mutate only their own field, leaving the rest of the payload alone", () => {
     const dock = buildDock("football.goal", view(), t, { by: "home-1" })!;
     const withScorer = dock.chips.find((chip) => chip.id === "scorer:h2")!.mutate({ by: "home-1" });
     expect(withScorer).toEqual({ by: "home-1", scorer: "h2" });
-    expect(dock.chips.find((chip) => chip.id === "assist:h3")!.mutate(withScorer)).toEqual({
+    // The assist chip now lives on the SECOND step's dock, which is exactly the
+    // panel `resolveDockSpec` rebuilds from this mutated payload.
+    const assistStep = buildDock("football.goal", view(), t, withScorer)!;
+    expect(assistStep.chips.find((chip) => chip.id === "assist:h3")!.mutate(withScorer)).toEqual({
       by: "home-1",
       scorer: "h2",
       assist: "h3",

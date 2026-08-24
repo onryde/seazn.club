@@ -246,6 +246,28 @@ export interface DockChip {
    * chips) renders identically with zero change.
    */
   labelText?: string;
+  /**
+   * R3/football — what KIND of answer this chip gives, which the chassis
+   * renders as a shape rather than a colour.
+   *
+   * A goal dock mixes two genuinely different things: `ownGoal`/`penalty` are
+   * MODIFIERS of the event that was already recorded, and the rest are
+   * ATTRIBUTION — one chip per player. Rendered identically (every chip was a
+   * `rounded-full` pill), the two flags sat inside the name list, and a scorer
+   * hunting a name inside the ~6s hold window had to read past them. The cost
+   * of a mis-tap is not symmetric either: picking the wrong person is a wrong
+   * name on a goal, while `ownGoal` changes which SIDE the fold credits.
+   *
+   * Deliberately a SHAPE and not a tone: shape is legible in peripheral vision
+   * before colour is, which is what a timed scan actually needs, and it adds no
+   * new colour for `contrast.test.ts` to have to license. A person stays the
+   * pill it already was; a flag becomes a tab.
+   *
+   * Optional/additive, exactly as `labelText` above: every pre-R3 dock
+   * (cricket's bat-run and extra-run chips) sets nothing and renders
+   * byte-identically — pinned by `dock.test.ts`.
+   */
+  kind?: "flag";
   mutate: (payload: Record<string, unknown>) => Record<string, unknown>;
 }
 export interface DockSpec { title: string; chips: DockChip[] }

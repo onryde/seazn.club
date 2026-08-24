@@ -16,7 +16,7 @@
 // against memoryQueueStore — dockController's own tests never construct a
 // QueueStore/PendingEvent at all.
 import { describe, expect, it, vi } from "vitest";
-import { renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { DetailDock, dockController, makeDockStore, revealDock, type DockStore } from "../detail-dock";
 import type { DockChip, DockSpec } from "../types";
 import { enqueueHeld, peekInOrder } from "../../queue";
@@ -324,5 +324,44 @@ describe("revealDock (R3/F, F4)", () => {
     // this runs inside a commit, so a throw here would blank the pad.
     expect(revealDock(null)).toBe(false);
     expect(revealDock({} as { scrollIntoView?: (o: unknown) => void })).toBe(false);
+  });
+});
+
+describe("DockChip.kind — a modifier is a tab, a person is a pill (R3/football)", () => {
+  // The functional claim, not a style preference: `ownGoal`/`penalty` sat
+  // inside the name list looking exactly like names, and a mis-tap on
+  // `ownGoal` changes which SIDE the fold credits — a worse outcome than
+  // picking the wrong person. Shape is what separates them, because it reads
+  // in peripheral vision during a timed scan and adds no colour for
+  // `contrast.test.ts` to license.
+  const chip = (id: string, kind?: "flag"): DockChip => ({
+    id,
+    label: `k.${id}`,
+    ...(kind ? { kind } : {}),
+    mutate: (p) => p,
+  });
+  const chipClasses = (chips: DockChip[]): string[] =>
+    walk(renderDock(chips).tree())
+      .filter((el) => el.type === "button" && typeof propsOf(el).onClick !== "undefined")
+      .map((el) => String(propsOf(el).className ?? ""))
+      // Chip buttons only — the dock's own dismiss control is also a
+      // `rounded-full` button with an onClick, and it is not a chip.
+      .filter((cls) => cls.includes("min-w-0") && cls.includes("max-w-full"));
+
+  it("gives a flag chip the tab radius and a person chip the pill radius", () => {
+    const [flag, person] = chipClasses([chip("ownGoal", "flag"), chip("scorer:h1")]);
+    expect(flag, "a modifier must not look like a name").toContain("rounded-lg");
+    expect(flag).not.toContain("rounded-full");
+    expect(person, "a person keeps the pill it already was").toContain("rounded-full");
+    expect(person).not.toContain("rounded-lg");
+  });
+
+  it("leaves a dock that sets no kind on the pill — cricket sets none", () => {
+    // Every pre-R3 dock omits `kind`. If this ever stops being the pill, a
+    // signed-off sport moved without anyone asking for it.
+    for (const cls of chipClasses([chip("bat:4"), chip("wide")])) {
+      expect(cls).toContain("rounded-full");
+      expect(cls).not.toContain("rounded-lg");
+    }
   });
 });

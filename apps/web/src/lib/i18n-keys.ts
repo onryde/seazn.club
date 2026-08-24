@@ -2772,6 +2772,7 @@ export type DictionaryKey =
   | "pad.football.context.sub.blocked.subWindows"
   | "pad.football.dock.assist"
   | "pad.football.dock.card.title"
+  | "pad.football.dock.goal.assist.title"
   | "pad.football.dock.goal.title"
   | "pad.football.dock.ownGoal"
   | "pad.football.dock.penalty"

@@ -343,7 +343,6 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
   useEffect(() => {
     if (controller === null) return;
     revealDock(rootRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [controller]);
 
   if (controller === null) return null;
@@ -423,7 +422,13 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
             aria-disabled={selected || undefined}
             onClick={selected ? undefined : () => handleTap(chip.id)}
             style={{ minHeight: 44 }}
-            className={`inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors ${
+            // `DockChip.kind` (types.ts): a MODIFIER reads as a tab, a person
+            // as the pill they already were. The radius is the only thing that
+            // differs — same size, same border, same fill, so nothing about
+            // this changes a dock whose chips set no `kind` (cricket's).
+            className={`inline-flex min-w-0 max-w-full items-center gap-1.5 border px-4 text-sm font-medium transition-colors ${
+              chip.kind === "flag" ? "rounded-lg" : "rounded-full"
+            } ${
               selected
                 ? "cursor-default border-transparent bg-violet-600 text-white"
                 : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
