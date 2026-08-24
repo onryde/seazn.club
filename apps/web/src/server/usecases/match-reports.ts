@@ -221,6 +221,7 @@ async function notifyReportSubmitted(a: ReportAssignment, report: MatchReport): 
     select u.email, u.locale from org_members m
     join users u on u.id = m.user_id
     where m.org_id = ${a.org_id} and m.role in ('owner', 'admin')`;
+  // Unreachable: assertReportWindow only admits fixture_status decided/finalized/abandoned, all reachable solely via appendEvent, which refuses to fold a null-entrant fixture (WRONG_PHASE) — forfeited (the one bye-bypass status) isn't in REPORTABLE.
   const fixtureLine = `${ctx.home_name ?? "TBD"} vs ${ctx.away_name ?? "TBD"}`;
   const args = {
     orgName: ctx.org_name,
