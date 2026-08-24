@@ -394,7 +394,14 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
                tile-grid.tsx's own fix round guarded against (`min-w-0` on
                the flex item above + `break-words` here, not `truncate`:
                mirrors that precedent's exact remedy rather than a new one). */}
-            <span className="break-words">{t(chip.label)}</span>
+            {/* R3/football (`DockChip.labelText`, types.ts): a pre-localised
+               label WINS over the key. A chip naming a PERSON has no
+               dictionary key to resolve — routing a display name through
+               `t()` warns on every render and renders right only because the
+               runtime hands the key back. Same precedence `TileSpec.
+               labelText` already has in tile-grid.tsx: text wins, the key is
+               not resolved at all, nothing is concatenated. */}
+            <span className="break-words">{chip.labelText ?? t(chip.label)}</span>
           </button>
         ))}
       </div>

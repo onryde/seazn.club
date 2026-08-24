@@ -16,7 +16,8 @@
 // against memoryQueueStore — dockController's own tests never construct a
 // QueueStore/PendingEvent at all.
 import { describe, expect, it, vi } from "vitest";
-import { dockController, makeDockStore, type DockStore } from "../detail-dock";
+import { renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { DetailDock, dockController, makeDockStore, type DockStore } from "../detail-dock";
 import type { DockChip, DockSpec } from "../types";
 import { enqueueHeld, peekInOrder } from "../../queue";
 import { memoryQueueStore } from "../../queue-store";
@@ -208,5 +209,76 @@ describe("makeDockStore", () => {
     expect(onDue).toHaveBeenCalledTimes(1);
     const [entry] = await peekInOrder(store);
     expect(entry.heldUntil).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3/football — `DockChip.labelText`, the pre-localised chip label.
+//
+// Every dock shipped before this one labelled its chips with a static i18n
+// KEY ("4 runs", "Wide"), which the renderer resolves through `t(chip.label)`.
+// Football's goal dock is the first whose chips name PEOPLE, and a person's
+// display name is not a dictionary key: routing one through `t()` fires
+// `[i18n] missing key: A. Mensah` on every render and only renders correctly
+// by accident (the runtime's own missing-key fallback returns the key it was
+// handed). types.ts already calls that exact shape a defect for `sublabel`,
+// and already ships the remedy three times over — `TileSpec.labelText`,
+// `ContextSlot.message`, `WhoLine.servingLabel` — so this is that same pair,
+// not a new convention.
+//
+// Rendered rather than asserted on a pure helper: a helper's own green tick
+// cannot prove the RENDERER calls it, which is the "fix ships inert" shape
+// this wave has already found twice. `DetailDock` runs in the node harness
+// once `requestAnimationFrame` exists (its depletion bar's one effect) —
+// shimmed here, test-locally, exactly as much as that one line needs.
+// ---------------------------------------------------------------------------
+
+const g = globalThis as unknown as {
+  requestAnimationFrame?: (cb: () => void) => number;
+  cancelAnimationFrame?: (id: number) => void;
+};
+g.requestAnimationFrame ??= (cb) => {
+  cb();
+  return 0;
+};
+g.cancelAnimationFrame ??= () => {};
+
+function renderDock(chips: DockChip[]) {
+  return renderIsland(DetailDock, {
+    spec: { title: "Who scored?", chips },
+    heldId: "held-1",
+    store: { mutateHeld: async () => true, releaseHeld: async () => undefined },
+    heldUntil: 6000,
+    t: (key: string) => (key === "pad.dock.clears" ? "clears" : `T:${key}`),
+    now: () => 0,
+  });
+}
+
+function chipButtonLabels(island: ReturnType<typeof renderDock>): string[] {
+  return island
+    .tree()
+    .filter((el) => el.type === "button")
+    .map((el) => textOf(el))
+    .filter((text) => text.length > 0);
+}
+
+describe("DetailDock chip labels — DockChip.labelText (R3/football)", () => {
+  it("renders labelText VERBATIM, never through t() — a person's name is not a dictionary key", () => {
+    const island = renderDock([chip({ id: "scorer:p1", label: "pad.football.dock.scorer", labelText: "A. Mensah" })]);
+    const labels = chipButtonLabels(island);
+    expect(labels).toContain("A. Mensah");
+    expect(labels).not.toContain("T:pad.football.dock.scorer");
+  });
+
+  it("still resolves `label` through t() for every chip that declares no labelText — every pre-R3 dock is unchanged", () => {
+    const island = renderDock([chip({ id: "batRun4", label: "pad.cricket.dock.batRun4", labelText: undefined })]);
+    expect(chipButtonLabels(island)).toContain("T:pad.cricket.dock.batRun4");
+  });
+
+  it("labelText WINS when both are present — never concatenated, never merged", () => {
+    const island = renderDock([chip({ id: "assist:p2", label: "pad.football.dock.assist", labelText: "Assist L. Costa" })]);
+    const labels = chipButtonLabels(island);
+    expect(labels).toContain("Assist L. Costa");
+    expect(labels.join(" ")).not.toContain("pad.football.dock.assist");
   });
 });

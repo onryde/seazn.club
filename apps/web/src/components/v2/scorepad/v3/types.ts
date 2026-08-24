@@ -192,6 +192,31 @@ export interface TileSpec {
 export interface DockChip {
   id: string;
   label: string;                  // i18n key
+  /**
+   * R3/football — a PRE-LOCALISED raw string, rendered VERBATIM by the
+   * chassis (detail-dock.tsx), never resolved through `t()`. The same
+   * key-plus-text pair `TileSpec.labelText`/`sublabelText`,
+   * `ContextSlot.message`, `WhoLine.servingLabel` and `SheetNumberStep.
+   * hintText` already establish in this file: the chassis never resolves a
+   * sport-namespaced key, and some labels are not dictionary keys at all.
+   *
+   * The motivating category is a PERSON'S NAME. Every dock shipped before
+   * football's chose from a fixed vocabulary ("4 runs", "Wide"), but a goal's
+   * scorer/assist chips are one chip per player, and a display name routed
+   * through `t()` fires `[i18n] missing key: A. Mensah` on every render while
+   * only rendering correctly by accident (the runtime returns the key it was
+   * handed). That is the exact defect `sublabelText`'s own doc describes for
+   * a bare number.
+   *
+   * `label` stays REQUIRED — it remains the canonical key, and is what every
+   * chip that does not set this still resolves through. When `labelText` IS
+   * present it WINS and `label` is never resolved at all, never concatenated
+   * or merged: the same "explicit pre-localised value overrides the
+   * key-resolved one" posture `labelText`/`sublabelText` already take above.
+   * Optional/additive, so every pre-R3 dock (cricket's bat-run and extra-run
+   * chips) renders identically with zero change.
+   */
+  labelText?: string;
   mutate: (payload: Record<string, unknown>) => Record<string, unknown>;
 }
 export interface DockSpec { title: string; chips: DockChip[] }
