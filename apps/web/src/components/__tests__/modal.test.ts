@@ -90,9 +90,14 @@ describe("FOCUSABLE_SELECTOR — what this trap treats as a tab stop", () => {
 // wiring, not runtime keyboard behaviour.
 describe("Modal — focus-trap wiring (source-level pins; see file header)", () => {
   it("the dialog element itself (not the overlay) carries the ref the trap queries", () => {
+    const overlayTagEnd = source.indexOf("onClick={onClose}>") + "onClick={onClose}>".length;
     const dialogTagStart = source.indexOf('role="dialog"');
-    const dialogTag = source.slice(Math.max(0, dialogTagStart - 300), dialogTagStart + 20);
-    expect(dialogTag).toMatch(/ref=\{dialogRef\}/);
+    expect(overlayTagEnd).toBeGreaterThan("onClick={onClose}>".length - 1);
+    // Everything strictly AFTER the overlay div's own opening tag closes, up
+    // to the dialog's role attribute — so a match here can only be on a
+    // later element (the dialog), never the overlay's own tag.
+    const afterOverlayTag = source.slice(overlayTagEnd, dialogTagStart + 20);
+    expect(afterOverlayTag).toMatch(/ref=\{dialogRef\}/);
   });
 
   it("captures the pre-open focus target during RENDER, not inside an effect", () => {
