@@ -4202,7 +4202,7 @@
   "reg.hub.config.freeAgentsHint": "Disponible uniquement pour les divisions par équipe.",
   "reg.hub.config.currencyNote": "Les inscrits sont facturés en {currency}.",
   "reg.hub.config.manageCurrency": "Gérer dans les paramètres de l'organisation",
-  "reg.hub.config.feeCut": "Vous conservez {keep}% de chaque inscription payante — Bench prélève {pct}%. Ce taux se fixe pour cette compétition dès que votre premier inscrit paie.",
+  "reg.hub.config.feeCut": "Vous conservez {keep}% de chaque inscription payante — les frais de plateforme sont de {pct}%. Ce taux se fixe pour cette compétition dès que votre premier inscrit paie.",
   "reg.hub.config.cardUnsupported": "Les paiements par carte ne sont pas disponibles — votre compte Stripe connecté règle en {currency}, une devise dans laquelle les frais d'inscription ne peuvent pas être facturés.",
   "reg.hub.config.partialSavePatchOk": "La catégorie et les paramètres d'âge sont enregistrés. Le reste de ce formulaire n'a pas été enregistré — corrigez l'erreur ci-dessous, puis enregistrez à nouveau.",
   "reg.hub.config.partialSavePutOk": "Le reste de ce formulaire est enregistré. La catégorie et les paramètres d'âge n'ont pas été enregistrés — corrigez l'erreur ci-dessous, puis enregistrez à nouveau."
