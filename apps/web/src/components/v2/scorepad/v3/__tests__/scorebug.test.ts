@@ -10,6 +10,7 @@
 // this repo's apps/web vitest environment:"node" (no jsdom); scorebug.tsx
 // itself stays untested by a DOM harness per the original task-5-brief.
 import { describe, it, expect } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
 import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
 import { whoNames, Scorebug } from "../scorebug";
 import { NIGHT_TILE_CLASSES } from "../tokens";
@@ -109,5 +110,104 @@ describe("the strip's LED board (StripItem.tone)", () => {
     const [panel] = stripSpans(specWithStrip([{ id: "added", value: "+3", tone: "led" }]));
     expect(walk(panel!).some((el) => propsOf(el).className === NIGHT_TILE_CLASSES.ledPanelLabel)).toBe(false);
     expect(propsOf(panel!).className).toContain(NIGHT_TILE_CLASSES.ledPanel);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3/F (F3) — THE WHO-LINE MUST BE ABLE TO SHRINK AND BREAK.
+//
+// Measured, not reasoned about. A throwaway harness (renderToStaticMarkup +
+// the real compiled globals.css + Playwright on a `file://` page, the recipe
+// this wave already uses) put a 31-character unbroken name in one half at a
+// 320px viewport and read the rects back:
+//
+//   before   football  who-line   left -70  right 237   (viewport 0..320)
+//            cricket   who-line   left -75  right 242
+//            cricket   serving dot            entirely off-screen at -75..-69
+//   after    every element inside the scorebug within 0..320 at every width
+//
+// The page itself never scrolled horizontally in either state — `Scorebug`'s
+// root is `overflow-hidden`, so the defect CLIPS the name at both ends instead
+// (the who-line is `justify-center`). That is exactly why the seven-width
+// no-horizontal-scroll matrix cannot see this, and why the assertion below is
+// on the two properties that let a real browser wrap rather than on a rendered
+// pixel: a grid item and a flex item both default to `min-width: auto`, which
+// is a floor at the widest word, and an unbroken word has no break opportunity
+// without `overflow-wrap`.
+//
+// CHASSIS-WIDE and CRICKET-VISIBLE: every skin's ScorebugSpec renders through
+// this one component.
+// ---------------------------------------------------------------------------
+
+const LONG_NAME = "Chukwuemekaadebayoromololuwafemi";
+
+function specWithWho(long: string): ScorebugSpec {
+  return {
+    context: "ctx",
+    phase: "live",
+    halves: [
+      // A tappable half (cricket's batting half) and a plain one (football's),
+      // because they are two DIFFERENT elements in the renderer — a <button>
+      // and a <div> — and only one of them was ever looked at before.
+      { who: [{ name: long, serving: true, servingLabel: "on strike" }, { name: "A. Khan" }], big: "84-3", tappable: true, hintKey: "pad.cricket.scorebug.batting" },
+      { who: [{ name: long }], big: "2-31" },
+    ],
+    strip: [],
+  };
+}
+
+/**
+ * The class list of the innermost element that ENCLOSES `needle` in `html`.
+ *
+ * A real parse (a tag stack), not a `lastIndexOf("<span class=")` — the
+ * serving dot is a sibling `<span aria-hidden …>` sitting immediately before
+ * the name, so a naive backward search finds the wrong element and reports the
+ * dot's classes as the name's. `HalfContent` renders through nested function
+ * components, which the shared island harness does not expand, so the markup
+ * is the only place these two facts are observable at all.
+ */
+function enclosingClass(html: string, needle: string): string {
+  // `>` + needle, never a bare `indexOf` — the tappable half's own aria-label
+  // repeats every who-line name, so a bare search lands INSIDE an attribute
+  // and reports the <button> as the enclosing element.
+  const at = html.indexOf(">" + needle) + 1;
+  expect(at, `"${needle}" is not in the rendered markup as a text node`).toBeGreaterThan(0);
+  const stack: string[] = [];
+  const tag = /<(\/?)([a-z0-9]+)([^>]*?)(\/?)>/g;
+  let match: RegExpExecArray | null;
+  while ((match = tag.exec(html)) !== null) {
+    if (match.index >= at) break;
+    if (match[1] === "/") stack.pop();
+    else if (match[4] !== "/") stack.push(/class="([^"]*)"/.exec(match[3] ?? "")?.[1] ?? "");
+  }
+  return stack[stack.length - 1] ?? "";
+}
+
+describe("the scorebug who-line with a long unbroken name (R3/F)", () => {
+  const html = () => renderToStaticMarkup(Scorebug({ spec: specWithWho(LONG_NAME), t }) as never);
+
+  it("lets each HALF shrink below its content — a grid item's default min-width is the widest word", () => {
+    // Selected by `py-3 text-center`, which only the two half cells carry —
+    // NOT by the flex utilities this fix itself edits, or the selector would
+    // move with the code it is meant to pin.
+    const halves = [...html().matchAll(/<(?:button|div)[^>]*\sclass="([^"]*py-3 text-center[^"]*)"/g)];
+    // One tappable (<button>) and one plain (<div>).
+    expect(halves.length).toBe(2);
+    for (const half of halves) {
+      expect(half[1], "a half that cannot shrink pushes its column wider than the grid").toContain("min-w-0");
+    }
+  });
+
+  it("gives the NAME itself a break opportunity, and lets its own box shrink", () => {
+    const cls = enclosingClass(html(), LONG_NAME);
+    expect(cls, "a flex item at min-width:auto cannot shrink below its longest word").toContain("min-w-0");
+    // `wrap-anywhere` (overflow-wrap: ANYWHERE), never `break-words`
+    // (overflow-wrap: break-word). Only `anywhere` reduces the box's
+    // MIN-CONTENT contribution, and the text inside an `inline-flex` span is
+    // an anonymous flex item whose own automatic minimum size is that
+    // contribution — so `break-words` left the browser rects byte-identical
+    // when this was first "fixed" with it, and only the 320px measurement
+    // caught that.
+    expect(cls, "an unbroken word never wraps without an overflow-wrap opportunity").toContain("wrap-anywhere");
   });
 });

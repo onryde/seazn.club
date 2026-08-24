@@ -83,11 +83,20 @@ export function whoNames(who: readonly WhoLine[]): string {
 function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string }) {
   return (
     <>
+      {/* R3/F (F3): `min-w-0` + `break-words` on BOTH boxes, and on the half
+       *  itself below. A grid item and a flex item both default to
+       *  `min-width: auto`, i.e. a floor at their widest word, so a long
+       *  unbroken name widened the half past its column; the scorebug root is
+       *  `overflow-hidden`, so the page never scrolled horizontally and the
+       *  name was silently CLIPPED at both ends instead (the row is
+       *  `justify-center`). Measured at 320 in a real browser before and after
+       *  — see __tests__/scorebug.test.ts's own note for the rects. Chassis-
+       *  wide: every skin's ScorebugSpec renders through this component. */}
       <div
-        className={`flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 app-display text-[13px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
+        className={`flex min-w-0 flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 app-display text-[13px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
       >
         {half.who.map((w, i) => (
-          <span key={i} className="inline-flex items-center gap-1">
+          <span key={i} className="inline-flex min-w-0 items-center gap-1 wrap-anywhere">
             {w.serving && (
               <span
                 aria-hidden="true"
@@ -149,14 +158,14 @@ export function Scorebug({ spec, t, onTap }: ScorebugProps) {
                 onClick={() => half.tapEvent && onTap?.(half.tapEvent)}
                 aria-label={[whoNames(half.who), hintText].filter(Boolean).join(" ")}
                 style={{ minHeight: 44 }}
-                className={`${NIGHT_TILE_CLASSES.half} flex flex-col items-center justify-center gap-1 px-3 py-3 text-center outline-offset-[-3px] transition-colors focus-visible:outline focus-visible:outline-2`}
+                className={`${NIGHT_TILE_CLASSES.half} flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center outline-offset-[-3px] transition-colors focus-visible:outline focus-visible:outline-2`}
               >
                 {content}
               </button>
             );
           }
           return (
-            <div key={i} className="flex flex-col items-center justify-center gap-1 px-3 py-3 text-center">
+            <div key={i} className="flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center">
               {content}
             </div>
           );
