@@ -11,8 +11,18 @@
 // compile time) — safe under apps/web's node-only vitest env for the exact
 // reason recording-chip.tsx/context-strip.tsx already import engine types
 // here the same way.
+//
+// R3/task B4 admits ONE sibling, `./sport-theme`, and states the reason so
+// the invariant above is not quietly eroded: sport-theme.ts is a LEAF — it
+// imports only a React type and nothing else in this directory — so no cycle
+// is possible, and it is the file that owns the token vocabulary. Restating
+// `SportTone` here instead would fork the vocabulary in two, which is the
+// exact failure `SPORT_TONES`'s own doc (a SUBSET of `SPORT_TOKENS`, never a
+// parallel list) exists to prevent. Keep any future sibling import to that
+// same bar: leaf module, vocabulary owner, `import type`.
 import type { EventEnvelope, SquadState } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
+import type { SportTone } from "./sport-theme";
 
 export type TapModel = "S" | "T";
 export type PadPhase = "pre" | "live" | "post";
@@ -33,7 +43,26 @@ export type PadPhase = "pre" | "live" | "post";
  * message` below (a PERSON slot's own explanation), which would be a misfit
  * for a fact that isn't about any one person.
  */
-export interface StripItem { id?: string; label?: string; value: string; accent?: boolean }
+/**
+ * R3/task B4 (owner ruling R3-6, per-sport visual identity): `tone`, an
+ * OPTIONAL/additive request for the LED-PANEL treatment — the chassis renders
+ * the item as an inset well of `--sport-board` inside the band, with
+ * `--sport-led` as its digits, condensed uppercase and tabular figures
+ * (globals.css `.pad-led-panel`, scorebug.tsx's strip branch).
+ *
+ * Football's signature: the strip BECOMES the fourth official's added-time
+ * board. It replaces the permanently-dead `Clock —` field rather than adding
+ * furniture (B3 removed that field; this does not restore it), and it stays
+ * honest when there is nothing to show — a skin OMITS an item it cannot fill,
+ * so a fresh match reads as one quiet period panel, never an empty well.
+ *
+ * A CLOSED one-value vocabulary, not a free class name: the whole point of
+ * the token layer is that a skin names a treatment and the chassis owns what
+ * it looks like. `accent` (above) is unrelated and unchanged — it is the
+ * plain strip's own emphasis, and an item may set either, neither, or both
+ * (`tone` wins, since it replaces the rendering entirely).
+ */
+export interface StripItem { id?: string; label?: string; value: string; accent?: boolean; tone?: "led" }
 // Fix round 2 (Task 5 review, Important — controller ruling): servingLabel
 // is a deliberate, additive contract change. The chassis (v3/scorebug.tsx)
 // must never resolve a sport-namespaced i18n key itself — reusing
@@ -425,7 +454,31 @@ export type StepPredicate = (answers: Readonly<Record<string, string>>) => boole
  * already step 1, while the side being asked is step 3. A reorder would have
  * been strictly worse, since it would ask the side even for the uncapped case.
  */
-export interface SheetChoiceStep { id: string; kind: "choice"; title: string; options: { id: string; label: string }[]; when?: StepPredicate; hintKey?: string; blocked?(answers: Readonly<Record<string, string>>): Blocked }
+/**
+ * R3/task B4 (owner ruling R3-6) — `options[].tone`, OPTIONAL/additive: the
+ * card-code colours, and the one place in this pad where colour is
+ * INFORMATION rather than decoration. A referee does not raise a "destructive
+ * action"; yellow and red are the only colours in football's visual language
+ * that carry meaning, and before B4 a red card rendered in the chassis's
+ * generic `destructive` red (identical to Abandon) while a yellow rendered
+ * neutral. B3 collapsed cards to ONE neutral tile per side, so no tile carries
+ * colour any more — the three options inside `card-<side>`'s first step are
+ * where these belong.
+ *
+ * An ARRAY over a closed vocabulary (`SportTone`, ./sport-theme.ts), not a
+ * single value, because one option legitimately carries two: a second yellow
+ * IS a yellow card and a red one, not a red card with a note (the engine
+ * keeps `second_yellow` as its own colour for the same reason — the
+ * suspension tariff comes off the reason, not the colour). The chassis
+ * renders one swatch per entry, overlapped, and washes the button in the LAST
+ * entry — the outcome.
+ *
+ * A NAME, never a value: `guided-sheet.tsx` maps it to `--sport-*` tokens the
+ * chassis owns, so a skin still supplies no colour of its own and a sport
+ * with no override renders the app's daylight signal pair. Absent means the
+ * plain option button every pre-B4 step already rendered.
+ */
+export interface SheetChoiceStep { id: string; kind: "choice"; title: string; options: { id: string; label: string; tone?: readonly SportTone[] }[]; when?: StepPredicate; hintKey?: string; blocked?(answers: Readonly<Record<string, string>>): Blocked }
 /**
  * R2/task A5 (`_INDEX.md` R1 "owed by later waves", closed here): `side` is
  * REQUIRED, not optional-with-a-default. Cricket's wicket flow needs the

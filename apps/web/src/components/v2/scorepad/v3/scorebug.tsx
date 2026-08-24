@@ -89,7 +89,10 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
         {half.who.map((w, i) => (
           <span key={i} className="inline-flex items-center gap-1">
             {w.serving && (
-              <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-lime-400" />
+              <span
+                aria-hidden="true"
+                className={`h-1.5 w-1.5 shrink-0 rounded-full ${NIGHT_TILE_CLASSES.ledDot}`}
+              />
             )}
             {w.name}
           </span>
@@ -116,7 +119,9 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
  */
 export function Scorebug({ spec, t, onTap }: ScorebugProps) {
   return (
-    <div className={`overflow-hidden rounded-2xl border-t-2 border-lime-400 ${NIGHT_TILE_CLASSES.tileBg} shadow-lg`}>
+    <div
+      className={`overflow-hidden rounded-2xl border-t-2 ${NIGHT_TILE_CLASSES.ledEdge} ${NIGHT_TILE_CLASSES.tileBg} shadow-lg`}
+    >
       <div className={`flex items-center justify-center gap-2 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5`}>
         {spec.phase === "live" && (
           <span
@@ -132,7 +137,7 @@ export function Scorebug({ spec, t, onTap }: ScorebugProps) {
         </span>
       </div>
 
-      <div className="grid grid-cols-2 divide-x divide-cream/10">
+      <div className={`grid grid-cols-2 divide-x ${NIGHT_TILE_CLASSES.rule}`}>
         {spec.halves.map((half, i) => {
           const hintText = half.hintKey ? padLabel(half.hintKey, t, half.hintKey) : "";
           const content = <HalfContent half={half} hintText={hintText} />;
@@ -144,7 +149,7 @@ export function Scorebug({ spec, t, onTap }: ScorebugProps) {
                 onClick={() => half.tapEvent && onTap?.(half.tapEvent)}
                 aria-label={[whoNames(half.who), hintText].filter(Boolean).join(" ")}
                 style={{ minHeight: 44 }}
-                className="flex flex-col items-center justify-center gap-1 px-3 py-3 text-center outline-offset-[-3px] transition-colors hover:bg-cream/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+                className={`${NIGHT_TILE_CLASSES.half} flex flex-col items-center justify-center gap-1 px-3 py-3 text-center outline-offset-[-3px] transition-colors focus-visible:outline focus-visible:outline-2`}
               >
                 {content}
               </button>
@@ -160,26 +165,56 @@ export function Scorebug({ spec, t, onTap }: ScorebugProps) {
 
       {spec.strip.length > 0 && (
         <div className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5`}>
-          {spec.strip.map((item, i) => (
-            <span
-              key={i}
-              // R2b (owner ruling, freeHit chip removal): a stable, i18n-
-              // independent hook for a Playwright spec to target ONE strip
-              // item — StripItem.id is optional/additive (types.ts); only
-              // rendered when a skin actually sets it, so every other strip
-              // item (over dots, names, target) is unchanged.
-              {...(item.id ? { "data-strip-item-id": item.id } : {})}
-              className={
-                item.accent
-                  ? `text-xs font-semibold ${NIGHT_TILE_CLASSES.creamText}`
-                  : `text-xs font-medium ${NIGHT_TILE_CLASSES.creamTextMuted}`
-              }
-              style={{ fontVariantNumeric: "tabular-nums" }}
-            >
-              {item.label ? `${item.label} ` : ""}
-              {item.value}
-            </span>
-          ))}
+          {spec.strip.map((item, i) => {
+            // R3/B4 (owner ruling R3-6, the per-sport signature): a strip item
+            // may ask for the LED-panel treatment — the fourth official's
+            // added-time board, an inset well of `--sport-board` inside the
+            // `--sport-board-2` band with the accent as its digits. OPT-IN and
+            // additive: `tone` is absent on every item shipped before this, so
+            // the two branches below are byte-for-byte what R1/R2 rendered.
+            //
+            // Label and value are separate elements here (rather than the
+            // concatenated string the plain branches use) because the board's
+            // hierarchy IS the treatment: a small tracked-out caption over a
+            // dominant tabular figure, the way a real board reads. Same colour
+            // for both, deliberately — no opacity step means the panel needs
+            // exactly one contrast pair, not a composited second one.
+            if (item.tone === "led") {
+              return (
+                <span
+                  key={i}
+                  {...(item.id ? { "data-strip-item-id": item.id } : {})}
+                  data-strip-tone="led"
+                  className={`${NIGHT_TILE_CLASSES.ledPanel} text-xs font-semibold`}
+                >
+                  {item.label && (
+                    <span className={NIGHT_TILE_CLASSES.ledPanelLabel}>{item.label}</span>
+                  )}
+                  <span>{item.value}</span>
+                </span>
+              );
+            }
+            return (
+              <span
+                key={i}
+                // R2b (owner ruling, freeHit chip removal): a stable, i18n-
+                // independent hook for a Playwright spec to target ONE strip
+                // item — StripItem.id is optional/additive (types.ts); only
+                // rendered when a skin actually sets it, so every other strip
+                // item (over dots, names, target) is unchanged.
+                {...(item.id ? { "data-strip-item-id": item.id } : {})}
+                className={
+                  item.accent
+                    ? `text-xs font-semibold ${NIGHT_TILE_CLASSES.creamText}`
+                    : `text-xs font-medium ${NIGHT_TILE_CLASSES.creamTextMuted}`
+                }
+                style={{ fontVariantNumeric: "tabular-nums" }}
+              >
+                {item.label ? `${item.label} ` : ""}
+                {item.value}
+              </span>
+            );
+          })}
         </div>
       )}
     </div>

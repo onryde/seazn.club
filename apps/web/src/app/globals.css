@@ -49,7 +49,15 @@
      everywhere else the utility falls back to the body face. */
   --font-display: var(--ps-font-display, var(--font-geist-sans));
   /* Stadium-night utilities (floodlit console): bg-night, text-cream, … —
-     lime needs no token, tailwind's lime-400 IS --mk-lime (#a3e635). */
+     lime needs no token of its own; `text-lime-400` & co. compile straight to
+     `var(--color-lime-400)`.
+     CORRECTED 2026-08-24 (R3/B4): this comment used to read "tailwind's
+     lime-400 IS --mk-lime (#a3e635)", which was true under Tailwind v3 and is
+     FALSE under v4 — the v4 palette is oklch, and `--color-lime-400` is
+     `oklch(84.1% 0.238 128.85)` (#9ae600 in sRGB), while `--mk-lime` below is
+     still the v3 hex. The two are close but not equal, so anything claiming to
+     preserve a rendered lime must alias `--color-lime-400`, never `--mk-lime`
+     (see the `--sport-*` block at the end of this file). */
   --color-night: var(--mk-night);
   --color-night-2: var(--mk-night-2);
   --color-cream: var(--mk-cream);
@@ -969,4 +977,169 @@ body {
   .tz-tip {
     transition: none;
   }
+}
+
+/* ── Per-sport ScoringPad identity (v3, owner ruling R3-6 2026-08-24) ───────
+   Reverses the 2026-08-15 theme lock: a skin gains a bounded visual voice.
+   `docs/superpowers/specs/2026-08-15-scoringpad-v3-prompts/_INDEX.md`.
+
+   THE VOCABULARY IS CLOSED — six tokens, mirrored (never re-invented) in
+   src/components/v2/scorepad/v3/sport-theme.ts, which is the ONLY place a
+   per-sport value is written. A skin names a token; it never supplies a hex.
+
+   THE DEFAULTS ARE ALIASES, NOT COPIES. Cricket declares no override, so it
+   resolves this block — and this block resolves to the exact vars its
+   pre-token classes already resolved to (`bg-night` compiled to
+   `var(--mk-night)` verbatim under `@theme inline` above). Aliasing rather
+   than copying is what keeps cricket moving WITH the product theme instead of
+   silently forking off it, and is why R2/R2b/R2c's visual sign-offs still
+   stand after this change.
+
+   `--sport-led` aliases Tailwind's own `--color-lime-400`, NOT `--mk-lime`.
+   `text-lime-400`/`bg-lime-400`/`border-lime-400`/`outline-lime-400` all
+   compile to `var(--color-lime-400)`, and under Tailwind v4 that is
+   `oklch(84.1% 0.238 128.85)` (#9ae600 in sRGB) — the v4 palette is oklch and
+   no longer equals the v3 hex `--mk-lime` still holds. Aliasing `--mk-lime`
+   here would have shifted cricket's score digits by a real, if small, amount.
+   The literal is the belt-and-braces fallback for the case where no lime-400
+   utility survives anywhere to make Tailwind emit the theme var at all.
+
+   `--sport-caution`/`--sport-dismissal` are NEW (nothing painted a card
+   colour before) and are stated as literal hex on purpose: the app's daylight
+   signal pair, pinned so they cannot drift with a palette revision the way
+   `lime-400` just did. ─────────────────────────────────────────────────── */
+:root {
+  --sport-board: var(--mk-night);
+  --sport-board-2: var(--mk-night-2);
+  --sport-ink: var(--mk-cream);
+  --sport-led: var(--color-lime-400, #9ae600);
+  --sport-caution: #d97706;
+  --sport-dismissal: #dc2626;
+}
+
+/* The board surfaces. Each rule reproduces EXACTLY what the Tailwind utility
+   it replaces compiled to (checked against the compiler's own output), with
+   the token swapped in for the literal — including the `in oklab` mix space
+   and the `@media (hover:hover)` wrapper, so a touch device still gets no
+   sticky hover state. */
+.pad-board {
+  background-color: var(--sport-board);
+}
+.pad-board-2 {
+  background-color: var(--sport-board-2);
+}
+.pad-ink {
+  color: var(--sport-ink);
+}
+.pad-ink-80 {
+  color: color-mix(in oklab, var(--sport-ink) 80%, transparent);
+}
+.pad-ink-70 {
+  color: color-mix(in oklab, var(--sport-ink) 70%, transparent);
+}
+/* Replaces `divide-cream/10`, whose own compiled selector this mirrors. */
+.pad-ink-rule > :not(:last-child) {
+  border-color: color-mix(in oklab, var(--sport-ink) 10%, transparent);
+}
+.pad-led {
+  color: var(--sport-led);
+}
+.pad-led-dot {
+  background-color: var(--sport-led);
+}
+.pad-led-edge {
+  border-color: var(--sport-led);
+}
+/* Replaces the tappable half's `hover:bg-cream/[0.04]` +
+   `focus-visible:outline-lime-400`. Both are on one class because both belong
+   to the same element; globals.css's own `:where(a,button,…):focus-visible`
+   rule is zero-specificity, so this wins without `!important`. */
+@media (hover: hover) {
+  .pad-half:hover {
+    background-color: color-mix(in oklab, var(--sport-ink) 4%, transparent);
+  }
+}
+.pad-half:focus-visible {
+  outline-color: var(--sport-led);
+}
+
+/* THE SIGNATURE (R3-6): the strip becomes the fourth official's added-time
+   board — an amber LED panel reading the period and the added minutes, in the
+   space the permanently-dead `Clock —` field used to occupy (B3 removed it;
+   this does not restore it). Rendered for `StripItem.tone === "led"` only, so
+   every sport that does not opt in is untouched.
+
+   HONEST WHEN THERE IS NOTHING TO SHOW, which is the normal case: football's
+   `state.asOf` is only ever set from an event's own `at`, and no v3 tile sends
+   one, so a pad-only stream never has a clock. The skin OMITS an item it
+   cannot fill rather than lighting an empty well, so a fresh match shows one
+   quiet period panel — a board with nothing added yet, not a broken readout.
+
+   Ground is `--sport-board` sitting inside the `--sport-board-2` band: a real
+   recess, and both ends of the contrast pair are named tokens rather than a
+   mixed value, so `contrast.test.ts` can compute it exactly. Condensed
+   uppercase + tabular figures are the matchday-programme/scoreboard
+   vernacular, taken from the display face this app already mounts — a webfont
+   would be a perf change nobody asked for. */
+.pad-led-panel {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4em;
+  border-radius: 3px;
+  padding: 0.1rem 0.4rem;
+  background-color: var(--sport-board);
+  color: var(--sport-led);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--sport-led) 30%, transparent);
+  font-family: var(--font-barlow, var(--font-geist-sans));
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.pad-led-panel-label {
+  font-size: 0.85em;
+  letter-spacing: 0.18em;
+}
+
+/* Card-code colour on the SHEET, never on a tile (B3 collapsed cards to one
+   neutral tile per side, so no tile carries colour any more — the three
+   options inside `card-<side>`'s first step are where these belong).
+
+   `--pad-tone` is set by the tone class and READ by the swatch/wash rules, so
+   one option button can hold two different tones at once: a second yellow
+   renders a yellow swatch and a red one, which is what that card IS.
+
+   The swatch's boundary against the near-white sheet is carried by its
+   `--sport-board` HAIRLINE, never by its fill — a yellow fill on a pale wash
+   is ~1.15:1 and cannot meet WCAG 1.4.11 on its own. This is precisely the
+   pair that passes by eye and fails when computed. */
+.pad-tone-caution {
+  --pad-tone: var(--sport-caution);
+}
+.pad-tone-dismissal {
+  --pad-tone: var(--sport-dismissal);
+}
+.pad-tone-wash {
+  background-color: color-mix(in oklab, var(--pad-tone) 12%, #ffffff);
+}
+@media (hover: hover) {
+  .pad-tone-wash:hover {
+    background-color: color-mix(in oklab, var(--pad-tone) 20%, #ffffff);
+  }
+}
+.pad-card-stack {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-right: 0.4rem;
+  vertical-align: -0.1em;
+}
+.pad-card-stack > * + * {
+  margin-left: -0.28rem;
+}
+.pad-card-swatch {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.8rem;
+  border-radius: 2px;
+  border: 1px solid var(--sport-board);
+  background-color: var(--pad-tone);
 }

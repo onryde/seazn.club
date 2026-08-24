@@ -11,14 +11,21 @@
 // scout-verified 2026-08-16 against globals.css:436-439; no disagreement
 // found between the brief's hexes and globals.css's).
 //
+// R3/task B4 (owner ruling R3-6, per-sport visual identity) re-pointed the
+// class names below at globals.css's `.pad-*` rules, which read
+// `var(--sport-*)` tokens — the DEFAULTS of which alias the very same
+// `--mk-*`/`--color-lime-400` vars the old utilities compiled to, so nothing a
+// skin has not opted into changes colour. The hex pairs here still describe
+// the DEFAULT (cricket) palette; ./sport-theme.ts holds the vocabulary and the
+// per-sport override table, and `__tests__/sport-theme.test.ts` locks the
+// no-change claim.
+//
 // scorebug.tsx does NOT import these hex strings for rendering — Tailwind
 // utility classes can't take a JS value at runtime (see NIGHT_TILE_CLASSES
 // below for why). It DOES import NIGHT_TILE_CLASSES/SCORE_TEXT_SIZE_CLASS,
-// the utility class NAMES themselves (bg-night, text-cream, text-lime-400;
-// see globals.css:51-55's "Stadium-night utilities... lime needs no token,
-// tailwind's lime-400 IS --mk-lime" comment) — this is now the ONLY place
-// those class names are spelled out as literals (Task A3, R2 wave; see
-// NIGHT_TILE_CLASSES's own comment for the fix history). This module also
+// the class NAMES themselves — this is the ONLY place they are spelled out as
+// literals (Task A3, R2 wave; see NIGHT_TILE_CLASSES's own comment for the fix
+// history). This module also
 // exists because contrast.test.ts runs in vitest's node environment (no
 // jsdom, no CSS engine — see task-5-brief.md) and needs a plain-data copy
 // of the same values to compute WCAG ratios against; if the hexes and
@@ -47,8 +54,19 @@ export const NIGHT_TILE_PAIRS = {
    *  AA floor applies (4.5:1). */
   creamOnNight2: { bg: "#1d1145", fg: "#f5f0e8" } as ContrastPair,
   /** The score digits ONLY. Large-text AA floor applies (3.0:1) — see
-   *  SCORE_TEXT_PX below for the rendered size this is licensed by. */
-  limeOnNight: { bg: "#150b36", fg: "#a3e635" } as ContrastPair,
+   *  SCORE_TEXT_PX below for the rendered size this is licensed by.
+   *
+   *  CORRECTED 2026-08-24 (R3/B4): `fg` read `#a3e635` from R1 until this
+   *  task. That is Tailwind v3's `lime-400` (and still `--mk-lime`), but this
+   *  app is on Tailwind v4.3.1, whose palette is oklch: `text-lime-400`
+   *  compiles to `var(--color-lime-400)` = `oklch(84.1% 0.238 128.85)`, which
+   *  is `#9ae600` in sRGB (the CSS Color 4 §13.2 gamut map and a naive clip
+   *  agree to the byte). So the oracle was measuring a colour the build had
+   *  not painted since the v4 upgrade. The VERDICT never moved — 12.29:1
+   *  wrong vs 12.09:1 right, against a 3.0 floor — but a contrast oracle
+   *  holding a hex the browser does not render is exactly the defect class
+   *  this file exists to remove, so it is fixed rather than noted. */
+  limeOnNight: { bg: "#150b36", fg: "#9ae600" } as ContrastPair,
 } as const;
 
 // Task A3 (R2 wave): the Tailwind utility class names that actually render
@@ -71,15 +89,26 @@ export const NIGHT_TILE_PAIRS = {
 // "renders exactly what this file measures" block checks that place
 // against NIGHT_TILE_PAIRS (independently — see that test's own
 // TAILWIND_UTILITY_HEX comment for why it isn't circular).
+// R3/task B4 (per-sport visual identity, owner ruling R3-6): every class below
+// moved from a Tailwind utility naming a FIXED colour ("bg-night",
+// "text-cream", "text-lime-400") to a `.pad-*` rule in globals.css reading a
+// `var(--sport-*)` token. The seam this object exists to close is unchanged —
+// the class-name string still lives in exactly ONE place — and so are the
+// colours it resolves to: globals.css's `:root` defaults ALIAS the same
+// `--mk-*`/`--color-lime-400` vars those utilities compiled to, so a skin that
+// declares no override (cricket, and every sport before its own wave) paints
+// exactly what it painted before. `__tests__/sport-theme.test.ts` locks that
+// claim at the data, resolution AND rendered-markup levels; ./sport-theme.ts
+// holds the token vocabulary and the per-sport override table.
 export const NIGHT_TILE_CLASSES = {
   /** Base tile surface — backs NIGHT_TILE_PAIRS.creamOnNight/.limeOnNight's `bg`. */
-  tileBg: "bg-night",
+  tileBg: "pad-board",
   /** Context line + strip band surface, one shade up — backs
    *  NIGHT_TILE_PAIRS.creamOnNight2's `bg`. */
-  bandBg: "bg-night-2",
+  bandBg: "pad-board-2",
   /** Who-line names + strip's accented text, full opacity — backs
    *  NIGHT_TILE_PAIRS.creamOnNight/.creamOnNight2's `fg`. */
-  creamText: "text-cream",
+  creamText: "pad-ink",
   /** Tappable hint text + strip's non-accented text: same cream, 70%
    *  opacity. The /70 blend IS independently AA-tested against the ground
    *  it actually renders on — see NIGHT_TILE_ALPHA_TEXT below and
@@ -87,12 +116,38 @@ export const NIGHT_TILE_CLASSES = {
    *  (Task A4, R2 wave; R1 left this unchecked, full-opacity cream only).
    *  This constant still keeps the HUE sourced from creamText so it can't
    *  drift to a different colour unnoticed even if the alpha changes. */
-  creamTextMuted: "text-cream/70",
+  creamTextMuted: "pad-ink-70",
   /** Context line label: same cream, 80% opacity. Same AA coverage as
    *  creamTextMuted, via NIGHT_TILE_ALPHA_TEXT.contextLine below. */
-  creamTextSubtle: "text-cream/80",
+  creamTextSubtle: "pad-ink-80",
   /** Score digits — backs NIGHT_TILE_PAIRS.limeOnNight's `fg`. */
-  limeText: "text-lime-400",
+  limeText: "pad-led",
+  /** The serving dot (`WhoLine.serving`) — the accent as a FILL, not text.
+   *  Was a bare `bg-lime-400` literal in scorebug.tsx until B4; it is the
+   *  same token as `limeText` and must follow the sport. */
+  ledDot: "pad-led-dot",
+  /** The tile's top hairline — the accent as a BORDER. Was a bare
+   *  `border-lime-400` literal in scorebug.tsx until B4. A lime hairline on
+   *  football's green board is precisely the "one family identity" leak
+   *  ruling R3-6 retires. */
+  ledEdge: "pad-led-edge",
+  /** The tappable half itself: carries BOTH the hover wash (ink at 4%) and
+   *  the focus ring (the accent). One class because both belong to one
+   *  element — see globals.css's own note on why no `!important` is needed. */
+  half: "pad-half",
+  /** The divider between the two halves — replaces `divide-cream/10`, whose
+   *  compiled `> :not(:last-child)` selector the rule mirrors. Applied
+   *  ALONGSIDE Tailwind's `divide-x`, which still supplies the border WIDTH;
+   *  only the colour is tokenised. */
+  rule: "pad-ink-rule",
+  /** THE SIGNATURE (R3-6) — the fourth official's added-time board. Rendered
+   *  for a `StripItem` with `tone: "led"` and nothing else, so a sport that
+   *  does not opt in keeps the plain strip it already had. */
+  ledPanel: "pad-led-panel",
+  /** The quieter label inside that panel ("ADDED"), beside its value. Same
+   *  colour as the panel — no opacity step, so the panel needs exactly ONE
+   *  contrast pair rather than a composited second one. */
+  ledPanelLabel: "pad-led-panel-label",
 } as const;
 
 /**
@@ -176,4 +231,37 @@ export const NIGHT_TILE_ALPHA_TEXT = {
     bgClass: NIGHT_TILE_CLASSES.bandBg, // bg-night-2
     sizePx: 11, // scorebug.tsx: text-[11px]
   } as AlphaTextSite,
+} as const;
+
+// R3/task B4 — the card-code classes, kept HERE for the same single-source
+// reason NIGHT_TILE_CLASSES exists: guided-sheet.tsx imports these instead of
+// spelling the class names out itself, so a colour edit has exactly one place
+// to happen and contrast.test.ts measures that place.
+//
+// These paint on the DAYLIGHT sheet, not the night board — the split
+// tile-grid.tsx's header sets out ("lime and the display face mark 'this is a
+// readout', never a control") is untouched by this task. What changes is that
+// ONE choice step now carries colour as INFORMATION: `caution` and
+// `dismissal` are the only colours in football's visual language that mean
+// something, and before B4 a red card rendered in the chassis's generic
+// `destructive` red — identical to Abandon — while a yellow rendered neutral.
+export const SPORT_TONE_CLASSES = {
+  /** Sets `--pad-tone` for everything inside. On the BUTTON it selects the
+   *  background wash; on a SWATCH it selects that swatch's fill, which is how
+   *  one option can carry two colours (a second yellow is a yellow card and a
+   *  red one, not a red card with a note). */
+  caution: "pad-tone-caution",
+  dismissal: "pad-tone-dismissal",
+  /** The option button's 12% tint of its own tone. Decorative: the label
+   *  stays slate-700, which contrast.test.ts checks against the composited
+   *  wash rather than against bare white. */
+  wash: "pad-tone-wash",
+  /** Wrapper for the 1-2 swatches, which overlap the way a referee holds a
+   *  second yellow over the red. */
+  stack: "pad-card-stack",
+  /** One card. Its boundary against the pale sheet is carried by the
+   *  `--sport-board` hairline, NEVER by the fill — yellow-on-wash is ~1.15:1
+   *  and cannot meet WCAG 1.4.11 alone. Exactly the pair that passes by eye
+   *  and fails when computed. */
+  swatch: "pad-card-swatch",
 } as const;
