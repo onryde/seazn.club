@@ -27,9 +27,12 @@ Specs of record (all in `../designs/`):
 ## Order
 
 Ratified build order: **P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8 → P9 → P9.5 → P10 → P11.**
-P9.5 was carved out DURING P9 (owner ruling 2026-08-18): P10's prompt
-assumed `usableWindows` already existed, and it does not — see its own
-prompt for what is actually true today.
+P9.5 was carved out DURING P9 (owner ruling 2026-08-18) because P10's prompt
+assumed `usableWindows` already existed and it did not. **That is now history:
+P9.5 merged 2026-08-24 (#638) and `usableWindows` exists.** What this means for
+P10 is the opposite of what this paragraph used to say — most of P10's prompt
+is now BEHIND the tree, not ahead of it. Read P10's row and the status log
+before its prompt file.
 P1–P4 are mutually independent (any subset may run, order above is the
 recommendation); P5→P6→P7 strict; P8→P9→P10 strict; P11 independent but
 S13-gated. New-branch-in-worktree rule applies to every session.
