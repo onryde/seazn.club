@@ -6,7 +6,7 @@
 // what this file is for — real Postgres required, skipped without
 // DATABASE_URL (repo convention, e.g. add-ons-tab.test.ts).
 import { describe, expect, it } from "vitest";
-import { fetchDivisionRows } from "../page";
+import { fetchDivisionRows, fetchOrgCurrency } from "../page";
 import {
   seedOrg,
   asOwner,
@@ -15,6 +15,7 @@ import {
 } from "@/server/usecases/__tests__/_registration-fixtures";
 import { createDivision } from "@/server/usecases/divisions";
 import { putRegistrationSettings } from "@/server/usecases/registrations";
+import { sql } from "@/lib/db";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -144,5 +145,24 @@ describe.skipIf(!HAS_DB)("fetchDivisionRows — real Postgres", () => {
 
     const rows = await fetchDivisionRows(ownerA, compB.id);
     expect(rows).toHaveLength(0);
+  });
+});
+
+// RS004 W3b review finding 6 — page.test.tsx's mocked wiring test proves the
+// PAGE resolves currency independently of rawRows[0]; it cannot prove
+// fetchOrgCurrency's own raw SQL is valid against a real database (same gap
+// this file exists to close for fetchDivisionRows — see header comment).
+// This is that other half: the actual empty-rows landmine scenario, seeded
+// for real.
+describe.skipIf(!HAS_DB)("fetchOrgCurrency — real Postgres (finding 6)", () => {
+  it("resolves the org's real currency even for a competition with zero divisions", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations set currency = 'eur' where id = ${orgId}`;
+    // No divisions created at all — fetchDivisionRows would return zero
+    // rows for any competition here, so this is the actual finding-6
+    // landmine scenario, not just a synthetic empty array.
+    const currency = await fetchOrgCurrency(owner);
+    expect(currency).toBe("eur");
   });
 });
