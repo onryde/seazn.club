@@ -2526,6 +2526,7 @@
   "pad.sheet.cancel": "Cancelar",
   "pad.sheet.decrease": "Reducir {title}",
   "pad.sheet.increase": "Aumentar {title}",
+  "pad.swap.refused": "Ese cambio no está permitido ahora mismo.",
   "pad.recording.band.0": "Solo resultado",
   "pad.recording.band.1": "Tarjetas y momentos clave",
   "pad.recording.band.2": "Cronología completa",

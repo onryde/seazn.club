@@ -281,8 +281,26 @@ export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap, o
         </button>
       </div>
       <div className="px-4 py-3">
-        {candidates.length === 0 && message !== undefined ? (
-          <p className="text-xs text-slate-600">{message}</p>
+        {/* R3 chassis sub-wave, sixth fix (owner ruling 2026-08-24): this
+            branch keys on the VERDICT, not on whether a message happens to
+            exist. It used to read `candidates.length === 0 && message !==
+            undefined`, so a refusal the module worded silently fell through to
+            `renderCandidateRow`'s empty state — "No roster available yet." for
+            what is actually the sport's own law refusing the substitution. The
+            scorer was told the wrong thing, which is worse than being told
+            nothing.
+
+            The fallback is the RENDERER's, never `swapCandidates`'s: that
+            function still refuses to fabricate a message (its own tests pin
+            `message: undefined`), so the chassis never invents sport-worded
+            prose it has no standing to write. Exactly the split
+            `rejectionText`/`scorepad.rejection.fallback` (pad-host.tsx) already
+            uses for a server refusal — one chassis-generic sentence behind the
+            module's own, never instead of it. */}
+        {!policyVerdict.ok ? (
+          <p data-role="swap-refusal" className="text-xs text-slate-600">
+            {message ?? t("pad.swap.refused")}
+          </p>
         ) : (
           // R3 (defect 4): `spec.blocked` reaches the SAME renderer the context
           // strip's picker uses, so a blocked ON candidate is a real disabled

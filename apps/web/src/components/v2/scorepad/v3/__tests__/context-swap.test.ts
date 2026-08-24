@@ -1037,3 +1037,75 @@ describe("SwapSheet — the OFF person disappears from the ON step", () => {
     expect(onStep.filter((btn) => textOf(btn) === "Player A")).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// R3 chassis sub-wave, sixth fix (owner ruling 2026-08-24): `policyOk: false`
+// with no `policyMessage` fell through to `scorepad.attribution.noRoster` —
+// "No roster available yet." A scorer was told the ROSTER was missing when the
+// truth was that the sport's own law refuses the substitution. That is a
+// silent refusal wearing the wrong sentence, and the worst of the three states
+// this branch can be in, because it is actively misleading rather than merely
+// unhelpful.
+//
+// The branch now keys on the VERDICT, not on whether a message happens to
+// exist. `swapCandidates` still refuses to fabricate a message (its own tests
+// above pin `message: undefined`, unchanged) — the fallback is the RENDERER's,
+// exactly as `rejectionText`'s `scorepad.rejection.fallback` already is for a
+// server refusal, so the chassis never invents sport-worded prose.
+// ---------------------------------------------------------------------------
+
+describe("SwapSheet — a refused verdict ALWAYS states a reason", () => {
+  const s = squad([
+    member({ personId: "a", onField: true }),
+    member({ personId: "b", onField: false }),
+  ]);
+  const names = { a: "Player A", b: "Player B" };
+
+  function onStepWith(policyVerdict: SwapSheetProps["policyVerdict"]) {
+    const island = renderIsland(SwapSheet, {
+      spec: swapSpec,
+      view: { squad: s },
+      policyVerdict,
+      personNames: names,
+      t,
+      onSwap: () => {},
+    });
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn) === "Player A")!); // off -> "a"
+    return island;
+  }
+
+  it("refused with NO module message falls back to chassis refusal copy, never the misleading noRoster line", () => {
+    const island = onStepWith({ ok: false });
+    expect(island.text()).toContain("pad.swap.refused");
+    expect(island.text()).not.toContain("scorepad.attribution.noRoster");
+  });
+
+  it("refused WITH a module message still renders that sport-worded prose verbatim, and never the fallback beside it", () => {
+    const message = "this side has used all 3 substitutions this variant allows";
+    const island = onStepWith({ ok: false, message: refusalMessage(message) });
+    expect(island.text()).toContain(message);
+    expect(island.text()).not.toContain("pad.swap.refused");
+  });
+
+  it("an OK verdict with a genuinely empty bench still shows the empty-pool text — that is not a refusal and must not borrow refusal copy", () => {
+    const alone = squad([member({ personId: "a", onField: true })]);
+    const island = renderIsland(SwapSheet, {
+      spec: swapSpec,
+      view: { squad: alone },
+      policyVerdict: { ok: true },
+      personNames: { a: "Player A" },
+      t,
+      onSwap: () => {},
+    });
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn) === "Player A")!);
+    expect(island.text()).toContain("scorepad.attribution.noRoster");
+    expect(island.text()).not.toContain("pad.swap.refused");
+  });
+
+  it("a refusal is never a tappable control — no candidate buttons survive it", () => {
+    const island = onStepWith({ ok: false });
+    const buttons = buttonsOf(island.tree());
+    expect(buttons).toHaveLength(2); // the off-chosen header chip + Cancel
+    for (const btn of buttons) expect(propsOf(btn).disabled).toBeFalsy();
+  });
+});

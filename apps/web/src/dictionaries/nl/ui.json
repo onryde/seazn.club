@@ -2526,6 +2526,7 @@
   "pad.sheet.cancel": "Annuleren",
   "pad.sheet.decrease": "{title} verminderen",
   "pad.sheet.increase": "{title} verhogen",
+  "pad.swap.refused": "Die wissel is nu niet toegestaan.",
   "pad.recording.band.0": "Alleen resultaat",
   "pad.recording.band.1": "Kaarten en belangrijke momenten",
   "pad.recording.band.2": "Volledige tijdlijn",
