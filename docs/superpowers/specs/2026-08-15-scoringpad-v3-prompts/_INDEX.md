@@ -1273,3 +1273,133 @@ Not covered by that approval, and therefore still owed by a later wave:
 Unlike R2b, this wave was NOT merged on "CI green" — see the PR for what CI
 actually reported, since neither smoke (PR-only) nor the seven-width e2e had
 ever run against this branch at the point the instruction was given.
+
+### R3/E — the review round's fixes, and the four rulings taken inside it (2026-08-24)
+
+The reviewer's verdict was "Needs fixes": four dead-end taps (two reachable at
+band 0), a cricket pixel change against R3-6, and two tests that should have
+caught them and were false-green. All fixed in-session, two commits
+(`b0bb1e230`, `74a912ee2`). What a later wave must not re-derive:
+
+**Ruled: a skin declares what its FOLD refuses, and the More sheet honours it.**
+New chassis contract `SkinDefV3.refusedEventTypes?(view)`, and `moreActions`
+takes it as a REQUIRED fourth argument beside `dedicated`. The two sets are
+NOT unioned into one parameter deliberately — `dedicated` means "already
+reachable through a narrowed surface", `refused` means "the fold will not
+accept this at all right now", and a later reader must be able to tell which
+applied. Required rather than defaulted for the same reason `dedicatedEventTypes`
+made `swaps` required: a defaulted argument silently restores the defect.
+
+Why the chassis cannot answer this itself, since it will be asked again: a
+`PadGate` on a `padSpec` panel is the ONLY phase rule `buildPadView` can see,
+and football keeps six of its phase rules inside `apply` (`isPlayPhase`) with
+its panels ungated `phase: "live"`. Its own `PadPhase` mapping then puts
+SHOOTOUT in "live" — correctly, it IS a phase of the match — so More listed
+goal, sub, shot and both sin-bin forms during the kicks, every one WRONG_PHASE
+on tap. A sport whose gates already live in `padSpec` never needs the method;
+it fails open when omitted.
+
+**Ruled: the penalty's `offence` returns as a band-2 DOCK, not a third sheet
+step.** R3/D routed the gap here to be ruled on and priced it as "one
+`when: view.band >= 2` step mirroring the card's". Taken the other way, for two
+reasons. The field's own shape decides it: `outcome` is REQUIRED and `offence`
+is `.optional()`, so a third step holds a required event hostage to an optional
+answer — the D-15 "wasted tap" this chassis exists to remove — while the dock
+is where this pad already puts optional enrichment of an event that has already
+committed (`ownGoal`/`penalty`, the goal's scorer, the card's person). And the
+step form is unshippable from a task barred from `apps/web/e2e/**`:
+`scorepad-skins.spec.ts:490` taps `saved` and then polls the ledger, so any
+third step hangs it. The dock form needs no e2e edit at all. One new key
+(`pad.football.dock.penalty.title`) x4 locales; the eight option labels already
+existed at `ENUM_VOCAB.offence`.
+
+**FALSE PREMISE in the review's own E7 item, corrected here.** It reads
+"`lineupPolicy` grants `exemptions.concussion` on top … the sheet shows
+`policyOk:false` for a substitution the engine would ACCEPT". The exemption
+does not widen `football.sub` at all: `applySub` always builds a
+`core.lineup.substitution`, and `reduceLineupEvent` consumes an exemption only
+for `core.lineup.replacement` — so a `football.sub` at the cap is refused
+whatever `concussionSubs` says. The REAL defect is one step to the left, in
+`liftSide` (`football.ts:2073`): `subsUsed = max(0, offUsed.length - exemptTotal)`,
+because an exempt replacement is permanent and therefore in `offUsed` too. The
+pad counted `offUsed` raw, so a side that had ALREADY taken a concussion
+replacement was refused its last legal ordinary substitution. Fixed as that
+subtraction, proved against a real fold carrying `core.lineup.replacement`.
+
+**ROUTED, NOT FIXED — the pad cannot ORIGINATE a concussion replacement.**
+`core.lineup.replacement` is the only event carrying `exemption`, and no
+football pad surface sends one (`padSpec` declares no such action; `football.sub`
+cannot). So a concussion substitution is unrecordable from v3, exactly as it was
+from v2. Engine/`padSpec` work, and R3's single engine exception is spent.
+**Owner: R6 (period pair) or R8's sweep**, alongside the `kernel.ts:2172-2178`
+stale-comment row already routed there.
+
+**ROUTED, NOT FIXED — the More tile can open an EMPTY sheet at bands 0-1.**
+In normal play at band 0 the only band-0 types are goal (a tile), period (a
+sheet) and the shoot-out kick (refused outside the kicks), so More has nothing
+in it and the tile is still drawn. The host CAN see this (`moreActionsList.length`)
+and dropping the tile is four lines — it was NOT taken because the tile is
+chassis-wide and cricket is signed off under R3-6's byte-identity ruling: if
+cricket's More is ever empty in any cfg/phase/band, that tile silently
+disappears from a signed-off screen and the sheet needs re-signing. It is also
+a wasted tap, not a dead end that errors. **Owner: R7 (universal console)**,
+which owns the chrome and can re-capture cricket in the same wave.
+
+**The cricket pixel, and why the guard against it had to change kind.**
+`globals.css`'s `.pad-half:focus-visible { outline-color: var(--sport-led) }` was
+UNLAYERED at (0,2,0) and beat the platform ring
+`:where(a, button, summary, [role="tab"]):focus-visible` at (0,1,0) — `:where()`
+scores ZERO, which B4's own comment misread as "the platform rule is
+zero-specificity, so this wins without `!important`". It did win, on every skin.
+The Tailwind utility it replaced (`focus-visible:outline-lime-400`) never had:
+`@layer utilities` loses to every unlayered rule, so cricket's ring had ALWAYS
+been the platform violet and nothing but leaving the layer changed it.
+
+Fixed by scoping the rule to `[data-sport-theme]`, a new attribute emitted by
+`PadHostV3` from `sportThemeAttr(skin.key)` — the attribute twin of
+`sportThemeStyle`, `undefined` for a sport with no palette. A CSS rule can READ
+`var(--sport-led)` but cannot ask whether anyone overrode it, and the default
+value is a real colour: that is the whole reason a "paint it in the sport's
+colour" rule had no way to leave an un-overriding sport alone. With the scope,
+`--sport-led` inside that rule can only ever be an overriding sport's OWN value,
+and R4-R7 inherit the behaviour by declaring a palette with no edit to
+globals.css.
+
+**A node test CAN see the cascade, if it computes one.** `v3/__tests__/_globals-css.ts`
+parses globals.css into rules that carry their layer, conditions, specificity
+(with `:where()` zeroed) and source order; `cascadeWinner` returns the rule that
+actually wins a property on a described element.
+`__tests__/focus-ring-cascade.test.ts` uses it. Its stated limits, which a later
+wave must respect rather than quietly widen: it sees NOTHING outside
+globals.css — sound for this question only because every Tailwind-generated
+utility lands in `@layer utilities` and therefore cannot beat any unlayered rule
+it does see, and NOT sound for a question about two utilities — and it throws
+rather than guesses on layer-vs-layer ordering and on `>`/`+`/`~`.
+
+**Three tests were false-green; all three now red on the defect they name.**
+- `football-dispatch-totality.test.ts` unioned `dedicated` across the live and
+  SHOOTOUT states while `pad-host.tsx` recomputes it per state, so its
+  no-duplicate assertions passed in exactly the phase where the duplicate
+  existed. Rewritten per SITUATION (one cfg, one really-folded state, one band),
+  with `football.apply` as the oracle via `__tests__/_football-fold.ts`.
+- `sport-theme.test.ts:226` compared two hand-typed constants declared ~90 lines
+  apart in the SAME new file — no production symbol on either side, so no edit
+  to `sport-theme.ts`, `tokens.ts` or `globals.css` could red it. The chain is
+  now class -> (globals.css's own parsed rule) -> token -> (`DEFAULT_SPORT_PALETTE`)
+  -> hex, compared against the independent pre-B4 table. And `:328` bound `.pad-*`
+  rules BY NAME (`css.toContain(".pad-" + base)`), so `.pad-board { background-color:
+  var(--sport-led) }` passed and `.pad-board` was satisfied by the substring
+  inside `.pad-board-2`; now matched as a whole class token against parsed
+  selectors.
+- `contrast.test.ts:479`'s non-text-tone licence grepped the literal
+  `color: var(--sport-<tone>)` and missed the unspaced form, `color-mix`
+  wrappers, arbitrary Tailwind values, inline styles and — the one that matters
+  — `var(--pad-tone)`, the indirection every tone actually ships through. It now
+  resolves the alias graph out of globals.css to a fixpoint and scans the
+  chassis and skin sources too.
+
+**The lesson, stated once because it is the third shape of it this programme has
+hit:** every one of these was written by an agent that also wrote its own tests,
+and every one of those tests was green. A test that asserts a skin against a
+MIRROR of the engine proves the mirror. Where an oracle exists — the fold, the
+CSS cascade, a production symbol — the test must go through it.

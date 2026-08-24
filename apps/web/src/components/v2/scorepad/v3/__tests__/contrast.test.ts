@@ -379,7 +379,14 @@ describe("scorebug.tsx's SOURCE TEXT carries no bare literal duplicating (or mis
 //        the 3.0 the 36px score digits are separately licensed for above.
 //   3.0  the card swatch's boundary against the sheet (WCAG 1.4.11, non-text).
 // ---------------------------------------------------------------------------
-import { DEFAULT_SPORT_PALETTE, SPORT_PALETTES, SPORT_TONES, resolveSportPalette } from "../sport-theme";
+import {
+  DEFAULT_SPORT_PALETTE,
+  SPORT_PALETTES,
+  SPORT_TONES,
+  resolveSportPalette,
+  sportCustomProperty,
+} from "../sport-theme";
+import { parseCss, readGlobalsCss } from "./_globals-css";
 
 /** Default + one entry per sport that overrides. Named so a failure message
  *  says WHICH sport is unreadable, not merely that something is. */
@@ -543,10 +550,106 @@ describe("the tones are NON-TEXT colours, and this is where that stops being a c
     expect(contrastRatio(football.board, football.dismissal)).toBeGreaterThanOrEqual(3.0);
   });
 
-  it("no chassis class paints a tone as a foreground COLOUR — only as a fill and a var", () => {
-    const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
-    for (const tone of SPORT_TONES) {
-      expect(css).not.toContain(`color: var(--sport-${tone})`);
+  // R3 review round — THIS LICENCE HAD ALMOST NO TEETH. It grepped globals.css
+  // for the literal `color: var(--sport-<tone>)` and therefore missed the
+  // unspaced form, any wrapper (`color-mix(...)`), an arbitrary Tailwind value
+  // (`text-[var(--sport-dismissal)]`), an inline style, and — the one that
+  // matters most — the indirection the chassis actually uses everywhere:
+  // `.pad-tone-dismissal { --pad-tone: var(--sport-dismissal) }`, read back as
+  // `var(--pad-tone)`. A rule painting text from `--pad-tone` would have sailed
+  // straight through the assertion written to forbid exactly that.
+  //
+  // Rewritten to resolve the ALIAS GRAPH out of globals.css itself, and to scan
+  // the chassis source as well as the stylesheet.
+  describe("the licence, enforced through every route a tone can reach text", () => {
+    const rules = parseCss(readGlobalsCss());
+    /** Text-colour properties. `-webkit-text-fill-color` is in the list because
+     *  it WINS over `color` wherever both are set, so forbidding `color` alone
+     *  would leave the exact bypass a determined edit reaches for. */
+    const TEXT_PROPS = ["color", "-webkit-text-fill-color"];
+
+    /** Every custom property that resolves, transitively, to a tone. Computed
+     *  to a fixpoint rather than hand-listed, so a THIRD indirection added
+     *  later is covered the day it lands. */
+    function toneAliases(): Set<string> {
+      const aliases = new Set(SPORT_TONES.map((tone) => sportCustomProperty(tone)));
+      for (let pass = 0; pass < 8; pass++) {
+        const before = aliases.size;
+        for (const rule of rules) {
+          for (const raw of rule.declarations.split(";")) {
+            const colon = raw.indexOf(":");
+            if (colon === -1) continue;
+            const name = raw.slice(0, colon).trim();
+            const value = raw.slice(colon + 1);
+            if (!name.startsWith("--")) continue;
+            if ([...aliases].some((alias) => value.includes(`var(${alias}`))) aliases.add(name);
+          }
+        }
+        if (aliases.size === before) break;
+      }
+      return aliases;
     }
+
+    it("resolves the indirection the chassis actually uses — --pad-tone IS a tone", () => {
+      // Vacuity guard: if this stopped finding `--pad-tone`, every assertion
+      // below would still pass while checking nothing that ships.
+      const aliases = toneAliases();
+      expect([...aliases]).toContain("--pad-tone");
+      expect(aliases.size).toBeGreaterThan(SPORT_TONES.length);
+    });
+
+    it("no rule in globals.css sets a TEXT colour from a tone, by any route", () => {
+      const aliases = [...toneAliases()];
+      const offenders: string[] = [];
+      for (const rule of rules) {
+        for (const raw of rule.declarations.split(";")) {
+          const colon = raw.indexOf(":");
+          if (colon === -1) continue;
+          const name = raw.slice(0, colon).trim();
+          const value = raw.slice(colon + 1);
+          if (!TEXT_PROPS.includes(name)) continue;
+          if (aliases.some((alias) => value.includes(`var(${alias}`))) {
+            offenders.push(`${rule.selector} { ${name}:${value.trim()} }`);
+          }
+        }
+      }
+      expect(offenders, `a tone is painted as text:\n${offenders.join("\n")}`).toEqual([]);
+    });
+
+    it("and no chassis or skin file reaches one through an arbitrary utility or an inline style", () => {
+      // The two routes that never touch globals.css at all: Tailwind's
+      // arbitrary-value syntax, and a React `style={{ color: … }}`. Comments
+      // stripped first so prose naming a token cannot false-positive.
+      const files = [
+        "scorebug.tsx",
+        "tile-grid.tsx",
+        "guided-sheet.tsx",
+        "detail-dock.tsx",
+        "swap-sheet.tsx",
+        "context-strip.tsx",
+        "activity.tsx",
+        "action-form.tsx",
+        "recording-chip.tsx",
+        "pad-host.tsx",
+        "skins/football.tsx",
+        "skins/cricket.tsx",
+      ];
+      const aliases = [...toneAliases()];
+      for (const file of files) {
+        const src = readFileSync(join(process.cwd(), "src/components/v2/scorepad/v3", file), "utf8")
+          .replace(/\/\*[\s\S]*?\*\//g, "")
+          .replace(/\/\/.*$/gm, "");
+        for (const alias of aliases) {
+          expect(
+            src.includes(`text-[var(${alias}`),
+            `${file}: text-[var(${alias})] paints a tone as text`,
+          ).toBe(false);
+          expect(
+            new RegExp(String.raw`color["']?\s*:\s*[^;\n}]*var\(` + alias).test(src),
+            `${file}: an inline text colour reads ${alias}`,
+          ).toBe(false);
+        }
+      }
+    });
   });
 });
