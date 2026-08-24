@@ -141,6 +141,13 @@ import { RegistrationHubNavEntry } from "@/components/registration-hub-nav-entry
 
 const params = Promise.resolve({ orgSlug: "riverside", compSlug: "summer-league" });
 
+/** `propsOf` is deliberately `Record<string, unknown>` for the find/filter
+ *  idiom; this narrows it back to the component's real prop types so the
+ *  assertions below index `details` rather than an `unknown`. */
+type NavProps = Parameters<typeof RegistrationHubNavEntry>[0];
+const navProps = (el: Parameters<typeof propsOf>[0]): NavProps =>
+  propsOf(el) as unknown as NavProps;
+
 beforeEach(() => {
   h.canEdit = true;
   h.stats = h.defaultStats();
@@ -151,25 +158,39 @@ describe("competition overview — the Registration nav entry", () => {
     const tree = walk(await Page({ params }));
     const entry = tree.find((e) => e.type === RegistrationHubNavEntry);
     expect(entry).toBeTruthy();
-    const props = propsOf(entry!);
-    expect(props.openBadge).toContain("2");
+    const props = navProps(entry!);
     // 9 + 7 + 1 = 17 (`registered`) — NOT 14 (the old `entrants` sum,
     // 9 + 5 + 0). A regression back to reading `.entrants` would fail this.
-    expect(props.registeredBadge).toContain("17");
-    expect(props.registeredBadge).not.toContain("14");
+    // It is the ONE number on the button (2026-08-25).
+    expect(props.count).toBe("17");
+    expect(props.details[0]).toContain("2");
+    // 17 - 3 = 14 confirmed, DERIVED rather than counted again: awaiting is a
+    // strict subset of registered, so the two tooltip lines must add back up
+    // to the number on the button.
+    expect(props.details[1]).toContain("14");
     // 0 + 2 + 1 = 3, including d-3's 1 waitlisted entry despite that
     // division being CLOSED and having zero entrants.
-    expect(props.awaitingBadge).toContain("3");
+    expect(props.details[2]).toContain("3");
+    expect(props.awaiting).toBe(true);
+    // The accessible name carries the whole breakdown — the tooltip that
+    // shows it is aria-hidden, so this is the only path to it.
+    for (const line of props.details) expect(props.ariaLabel).toContain(line);
     expect(props.href).toBe("/o/riverside/c/summer-league/registration");
   });
 
-  it("omits the awaiting-confirmation badge entirely (not a literal '0') once nothing needs it", async () => {
+  it("omits the awaiting-confirmation line entirely (not a literal '0') once nothing needs it", async () => {
     h.stats = new Map(
       [...h.defaultStats()].map(([id, s]) => [id, { ...s, awaiting_confirmation: 0 }]),
     );
     const tree = walk(await Page({ params }));
     const entry = tree.find((e) => e.type === RegistrationHubNavEntry);
-    expect(propsOf(entry!).awaitingBadge).toBeUndefined();
+    const props = navProps(entry!);
+    expect(props.awaiting).toBe(false);
+    expect(props.details).toHaveLength(2);
+    expect(props.details.join(" ")).not.toContain("awaiting");
+    // …and with nothing outstanding every registrant is confirmed, so the
+    // tooltip's confirmed line equals the button's number.
+    expect(props.details[1]).toContain(props.count);
   });
 
   it("hides the entry for a role that cannot edit (viewer/scorer)", async () => {

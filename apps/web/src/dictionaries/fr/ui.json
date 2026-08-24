@@ -574,6 +574,8 @@
   "reg.hub.openCount.other": "divisions ouvertes",
   "reg.hub.registeredCount.one": "inscrit",
   "reg.hub.registeredCount.other": "inscrits",
+  "reg.hub.confirmedCount.one": "confirmé",
+  "reg.hub.confirmedCount.other": "confirmés",
   "reg.hub.awaitingConfirmation": "en attente de confirmation",
   "reg.hub.settings.title": "Paramètres d'inscription",
   "reg.hub.settings.body": "Vous pourrez bientôt définir ici la période d'inscription, les frais, la capacité et les critères d'éligibilité de chaque division.",

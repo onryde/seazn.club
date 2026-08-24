@@ -3436,6 +3436,8 @@ export type DictionaryKey =
   | "reg.hub.config.save"
   | "reg.hub.config.saving"
   | "reg.hub.config.title"
+  | "reg.hub.confirmedCount.one"
+  | "reg.hub.confirmedCount.other"
   | "reg.hub.openCount.one"
   | "reg.hub.openCount.other"
   | "reg.hub.registeredCount.one"

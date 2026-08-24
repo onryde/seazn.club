@@ -20,7 +20,8 @@
 //   [data-field-error="<name>"]                         that field's own error
 //   [data-action="save" | "cancel"]                     panel footer buttons
 //   [data-registration-hub-entry]                       the overview nav pill
-//   [data-registration-hub-awaiting]                    its amber sub-badge
+//   [data-registration-hub-awaiting]                    its amber dot
+//   [data-registration-hub-tooltip]                     the hover/focus breakdown
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import {
   TAG,
@@ -503,11 +504,28 @@ test.describe("RS004 registration hub", () => {
     await page.goto(overviewPath(org.slug, competitionSlug), { waitUntil: "load" });
     const entry = page.locator("[data-registration-hub-entry]");
     await expect(entry).toBeVisible({ timeout: 20_000 });
-    // registeredBadge (solid purple pill) counts BOTH: card-stats.ts's
-    // `registered` is pending|paid|confirmed|waitlisted.
+    // The ONE number on the button counts BOTH: card-stats.ts's `registered`
+    // is pending|paid|confirmed|waitlisted.
     await expect(entry.locator(".bg-purple-600")).toHaveText(/^2\b/);
-    // The amber sub-badge is the strict subset still needing the organiser's
-    // attention — only the pending one.
-    await expect(entry.locator("[data-registration-hub-awaiting]")).toHaveText(/^1\b/);
+    // The amber dot says only THAT something needs the organiser — it carries
+    // no number since 2026-08-25, so assert it is there rather than its text.
+    await expect(entry.locator("[data-registration-hub-awaiting]")).toBeVisible();
+    // The breakdown moved into a hover/focus tooltip. Assert the whole round
+    // trip — hidden at rest, revealed on hover — because a panel that renders
+    // its lines but never becomes visible would satisfy a text-only check.
+    const tooltip = page.locator("[data-registration-hub-tooltip]");
+    await expect(tooltip).toBeHidden();
+    await entry.hover();
+    await expect(tooltip).toBeVisible();
+    // 2 registered - 1 awaiting = 1 confirmed, and the strict subset still
+    // needing the organiser is the pending one.
+    await expect(tooltip).toContainText("1 confirmed");
+    await expect(tooltip).toContainText("1 awaiting confirmation");
+    // The tooltip is aria-hidden, so the link's own accessible name is the
+    // only path a screen reader has to the same breakdown.
+    await expect(entry).toHaveAttribute(
+      "aria-label",
+      /1 confirmed.*1 awaiting confirmation/,
+    );
   });
 });

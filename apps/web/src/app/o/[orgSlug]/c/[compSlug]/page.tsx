@@ -84,6 +84,20 @@ export default async function CompetitionPage({
     (sum, d) => sum + (stats.get(d.id)?.awaiting_confirmation ?? 0),
     0,
   );
+  // The nav entry shows ONE number and puts these on hover/focus (owner call,
+  // 2026-08-25 — three filled pills outshouted every other header action).
+  // Confirmed is derived here rather than counted again: `awaiting` is a
+  // strict subset of `registered` (card-stats.ts), so the two lines add up to
+  // the number on the button and an organiser can check the arithmetic.
+  // The awaiting line is OMITTED, not rendered at zero — same rule the amber
+  // badge had.
+  const registrationDetails = [
+    `${openRegistrationDivisions} ${plural(dict, "reg.hub.openCount", openRegistrationDivisions, locale)}`,
+    `${totalRegistered - awaitingConfirmation} ${plural(dict, "reg.hub.confirmedCount", totalRegistered - awaitingConfirmation, locale)}`,
+    ...(awaitingConfirmation > 0
+      ? [`${awaitingConfirmation} ${t(dict, "reg.hub.awaitingConfirmation")}`]
+      : []),
+  ];
 
   return (
     <>
@@ -177,14 +191,13 @@ export default async function CompetitionPage({
               <RegistrationHubNavEntry
                 href={routes.competitionRegistration(orgSlug, compSlug)}
                 label={t(dict, "action.registration")}
-                ariaLabel={t(dict, "aria.registration")}
-                openBadge={`${openRegistrationDivisions} ${plural(dict, "reg.hub.openCount", openRegistrationDivisions, locale)}`}
-                registeredBadge={`${totalRegistered} ${plural(dict, "reg.hub.registeredCount", totalRegistered, locale)}`}
-                awaitingBadge={
-                  awaitingConfirmation > 0
-                    ? `${awaitingConfirmation} ${t(dict, "reg.hub.awaitingConfirmation")}`
-                    : undefined
-                }
+                // The breakdown, not just "Registration": the tooltip that
+                // shows these same lines is aria-hidden, so this is the only
+                // path a screen reader has to them.
+                ariaLabel={`${t(dict, "aria.registration")} — ${registrationDetails.join(", ")}`}
+                count={String(totalRegistered)}
+                details={registrationDetails}
+                awaiting={awaitingConfirmation > 0}
               />
             )}
             <Link

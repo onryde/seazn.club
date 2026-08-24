@@ -574,6 +574,8 @@
   "reg.hub.openCount.other": "divisiones abiertas",
   "reg.hub.registeredCount.one": "inscrito",
   "reg.hub.registeredCount.other": "inscritos",
+  "reg.hub.confirmedCount.one": "confirmado",
+  "reg.hub.confirmedCount.other": "confirmados",
   "reg.hub.awaitingConfirmation": "pendiente de confirmación",
   "reg.hub.settings.title": "Ajustes de inscripción",
   "reg.hub.settings.body": "Muy pronto podrás configurar aquí mismo la ventana de inscripción, la cuota, el aforo y los requisitos de elegibilidad de cada división.",

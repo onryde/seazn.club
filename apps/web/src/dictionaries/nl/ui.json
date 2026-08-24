@@ -574,6 +574,8 @@
   "reg.hub.openCount.other": "divisies open",
   "reg.hub.registeredCount.one": "inschrijving",
   "reg.hub.registeredCount.other": "inschrijvingen",
+  "reg.hub.confirmedCount.one": "bevestigd",
+  "reg.hub.confirmedCount.other": "bevestigd",
   "reg.hub.awaitingConfirmation": "in afwachting van bevestiging",
   "reg.hub.settings.title": "Registratie-instellingen",
   "reg.hub.settings.body": "Binnenkort stel je hier per divisie het inschrijfvenster, de kosten, de capaciteit en de toelatingseisen in.",
