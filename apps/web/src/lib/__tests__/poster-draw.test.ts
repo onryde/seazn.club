@@ -280,3 +280,54 @@ describe("buildDrawModel — double-elim: lane keeps WB/LB/GF from interleaving 
     expect(out[0]!.pools[0]!.rounds[0]!.label).toBe("Winnaarsronde · Ronde 1");
   });
 });
+
+describe("buildDrawModel — a final and its 3rd-place playoff sharing a round split apart", () => {
+  // Review gap (2026-08-24): bracket.ts:220-227 gives the 3rd-place playoff
+  // the SAME round_no as the final itself, and single-elim never sets a
+  // `bracket` tag, so both also share lane=null — without a split, the two
+  // fixtures used to land in one bucket and print as two indistinguishable
+  // rows under a single generic "Round N" heading.
+  it("splits a mixed bucket into a 'Final' group and a 'Third place' group, not one merged 'Round N' heading", () => {
+    const out = buildDrawModel(
+      baseInput({
+        fixtures: [
+          F({ id: "final", round_no: 3, seq_in_round: 1, is_final: true, home_entrant_id: "e1", away_entrant_id: "e2" }),
+          F({ id: "third", round_no: 3, seq_in_round: 2, third_place: true, home_entrant_id: "e3", away_entrant_id: "e4" }),
+        ],
+        entrantNames: { e1: "Lions", e2: "Tigers", e3: "Bears", e4: "Wolves" },
+      }),
+      en,
+    );
+    const rounds = out[0]!.pools[0]!.rounds;
+    expect(rounds.map((r) => r.label)).toEqual(["Final", "Third place"]);
+    expect(rounds[0]!.fixtures).toEqual([{ id: "final", home: "Lions", away: "Tigers" }]);
+    expect(rounds[1]!.fixtures).toEqual([{ id: "third", home: "Bears", away: "Wolves" }]);
+  });
+
+  it("a lone final with no 3rd-place sibling in its round keeps the plain 'Round N' heading (no over-eager relabel)", () => {
+    const out = buildDrawModel(
+      baseInput({
+        fixtures: [F({ id: "final", round_no: 2, is_final: true, home_entrant_id: "e1", away_entrant_id: "e2" })],
+        entrantNames: { e1: "Lions", e2: "Tigers" },
+      }),
+      en,
+    );
+    const rounds = out[0]!.pools[0]!.rounds;
+    expect(rounds.map((r) => r.label)).toEqual(["Round 2"]);
+    expect(rounds[0]!.fixtures).toEqual([{ id: "final", home: "Lions", away: "Tigers" }]);
+  });
+
+  it("the split labels resolve in the org's own locale too (fr)", () => {
+    const out = buildDrawModel(
+      baseInput({
+        fixtures: [
+          F({ id: "final", round_no: 3, is_final: true, home_entrant_id: "e1", away_entrant_id: "e2" }),
+          F({ id: "third", round_no: 3, third_place: true, home_entrant_id: "e3", away_entrant_id: "e4" }),
+        ],
+        entrantNames: { e1: "A", e2: "B", e3: "C", e4: "D" },
+      }),
+      lookupFor("fr"),
+    );
+    expect(out[0]!.pools[0]!.rounds.map((r) => r.label)).toEqual(["Finale", "Troisième place"]);
+  });
+});

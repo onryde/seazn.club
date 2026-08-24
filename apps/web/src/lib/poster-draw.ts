@@ -20,6 +20,22 @@
 // Losers/Grand final prefix reused from the public bracket display
 // (bracket.winners/bracket.losers/bracket.grandFinal, bracket.tsx) so the
 // wording never drifts from what that surface already calls the same lanes.
+//
+// ONE exception to "no round-role naming": a stage's real final and its
+// optional 3rd-place playoff can land in the SAME round bucket — single-elim
+// gives the playoff the identical `round: se.rounds - 1` the final itself
+// gets, and both share lane=null (packages/engine/src/scheduling/bracket.ts
+// :220-227) — so without splitting them apart a bucket would print two
+// indistinguishable "X vs Y" rows under one "Round N" heading, with nothing
+// on the page saying which is the championship and which the consolation
+// game. `is_final`/`third_place` are STORED booleans read straight off the
+// row, not a derived per-k-value position, so this is safe to special-case
+// without reopening the Quarterfinal/Semifinal question above: a MIXED
+// bucket splits into a "Final" group and a "Third place" group (the same
+// bracket.round.final/bracket.round.thirdPlace keys round-role-label.ts
+// already exposes to the other three bracket surfaces); every other bucket
+// — the overwhelming majority, since a 3rd-place playoff is opt-in per
+// stage — is untouched.
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import type { PublicFixture } from "@/server/public-site/data";
 
@@ -79,10 +95,19 @@ function sideText(
     : resolveSlotLabel(label, lookup, "schedule.tbd");
 }
 
+/** A bucket row while it is still mid-build — carries `isFinal`/`thirdPlace`
+ *  so the bucket->group step below can detect and split a same-round
+ *  final/third-place collision (see the file header comment). Never part of
+ *  the public `DrawFixtureRow` shape; stripped by `toRow` before a row
+ *  reaches a `DrawRoundGroup`. */
+type BucketRow = DrawFixtureRow & { isFinal: boolean; thirdPlace: boolean };
+
+const toRow = (r: BucketRow): DrawFixtureRow => ({ id: r.id, home: r.home, away: r.away });
+
 interface RoundBucket {
   roundNo: number;
   lane: Lane | null;
-  rows: DrawFixtureRow[];
+  rows: BucketRow[];
 }
 
 export function buildDrawModel(input: BuildDrawModelInput, lookup: SlotLabelLookup): DrawStageGroup[] {
@@ -123,6 +148,8 @@ export function buildDrawModel(input: BuildDrawModelInput, lookup: SlotLabelLook
       id: f.id,
       home: sideText(f.home_entrant_id, f.home_slot_label, entrantNames, lookup),
       away: sideText(f.away_entrant_id, f.away_slot_label, entrantNames, lookup),
+      isFinal: f.is_final === true,
+      thirdPlace: f.third_place === true,
     });
   }
 
@@ -150,7 +177,7 @@ export function buildDrawModel(input: BuildDrawModelInput, lookup: SlotLabelLook
         (a, b) => laneRank(a.lane) - laneRank(b.lane) || a.roundNo - b.roundNo,
       );
       let gfSeen = false;
-      const rounds: DrawRoundGroup[] = buckets.map((b) => {
+      const rounds: DrawRoundGroup[] = buckets.flatMap((b) => {
         let label: string;
         if (b.lane === "WB") {
           label = `${lookup("bracket.winners")} · ${lookup("schedule.round", { n: b.roundNo })}`;
@@ -165,7 +192,23 @@ export function buildDrawModel(input: BuildDrawModelInput, lookup: SlotLabelLook
         } else {
           label = lookup("schedule.round", { n: b.roundNo });
         }
-        return { label, fixtures: b.rows };
+
+        // See the file header comment: split a final/third-place collision
+        // apart instead of printing both under one heading. No third-place
+        // row in this bucket (the common case) takes the original,
+        // untouched single-group path.
+        const thirdPlaceRows = b.rows.filter((r) => r.thirdPlace);
+        if (thirdPlaceRows.length === 0) return [{ label, fixtures: b.rows.map(toRow) }];
+
+        const finalRows = b.rows.filter((r) => r.isFinal && !r.thirdPlace);
+        const restRows = b.rows.filter((r) => !r.isFinal && !r.thirdPlace);
+        const groups: DrawRoundGroup[] = [];
+        if (restRows.length > 0) groups.push({ label, fixtures: restRows.map(toRow) });
+        if (finalRows.length > 0) {
+          groups.push({ label: lookup("bracket.round.final"), fixtures: finalRows.map(toRow) });
+        }
+        groups.push({ label: lookup("bracket.round.thirdPlace"), fixtures: thirdPlaceRows.map(toRow) });
+        return groups;
       });
       return { poolName: poolKey ? (poolById.get(poolKey)?.name ?? null) : null, rounds };
     });

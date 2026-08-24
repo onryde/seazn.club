@@ -208,5 +208,15 @@ test.describe("public poster.pdf — locale", () => {
     const text = decodePdfText(buf);
     expect(text).toContain("Scannez pour suivre en direct");
     expect(text).not.toContain("Scan to follow live");
+
+    // Review gap: the draw's own "vs" separator between the two fixture
+    // sides also needs to resolve through the org's locale, not just the
+    // page-1 copy above — the two semis ("Un"/"Deux", "Trois"/"Quatre")
+    // this test already created are real, filled fixtures, so their rows
+    // print the separator. `" vs "` (padded) rather than the bare
+    // substring: TAG is a base-36 Date.now() token with no spaces of its
+    // own, so a space-padded match can never collide with it by chance.
+    expect(text).toContain("contre");
+    expect(text).not.toContain(" vs ");
   });
 });

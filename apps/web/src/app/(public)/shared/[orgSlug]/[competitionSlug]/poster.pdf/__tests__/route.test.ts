@@ -367,6 +367,32 @@ describe("GET .../poster.pdf — day-one fixtures add the draw from page 2", () 
     expect(text).toContain("Subcampeón del Grupo B");
     expect(text).not.toContain("Winner of Group");
   });
+
+  it("renders each fixture row's 'vs' separator through the org's own locale too — French 'contre', never the English literal", async () => {
+    // Review gap (2026-08-24): drawDrawPages() used to hardcode the English
+    // word "vs" between the two sides instead of looking it up, so a French
+    // org's poster printed the wrong word on every fixture row. The other
+    // fr-locale test above (NO_FIXTURES_DRAW) can't catch this — it never
+    // renders a fixture row at all.
+    getPublicCompetition.mockResolvedValue({
+      org: ORG("fr"),
+      competition: COMPETITION,
+      divisions: [DIVISION()],
+      liveNow: [],
+    });
+    getPublicDivision.mockResolvedValue({
+      org: ORG("fr"),
+      competition: COMPETITION,
+      division: DIVISION(),
+      ...KNOCKOUT_DRAW,
+    });
+
+    const { status, buf } = await get();
+    expect(status).toBe(200);
+    const text = decodePdfText(buf);
+    expect(text).toContain("contre");
+    expect(text).not.toContain("vs");
+  });
 });
 
 describe("GET .../poster.pdf — ?division= scopes the draw the same way it already scopes the QR", () => {
