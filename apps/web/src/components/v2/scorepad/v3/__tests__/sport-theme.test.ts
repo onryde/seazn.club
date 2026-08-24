@@ -429,3 +429,33 @@ describe("globals.css is the token AUTHORITY — the JS table only mirrors it", 
     }
   });
 });
+
+describe("the palette table has no INHERITED keys (R3 review round 3)", () => {
+  // `SPORT_PALETTES` is indexed by a bare string in three readers. On a plain
+  // object literal every `Object.prototype` member answers truthy, so
+  // `sportThemeAttr("constructor")` would emit `data-sport-theme="constructor"`
+  // while `sportThemeStyle("constructor")` emits nothing — breaking the
+  // together-or-not-at-all invariant that globals.css's
+  // `[data-sport-theme] .pad-half:focus-visible` depends on, and dropping
+  // cricket's ring back onto the shared default this whole layer exists to
+  // avoid. `registry.ts` gives `V3_SKINS` a null prototype for the same reason.
+  const INHERITED = ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__"];
+
+  it("does not resolve a prototype member as a sport", () => {
+    for (const key of INHERITED) {
+      expect(SPORT_PALETTES[key], `"${key}" resolved off the prototype`).toBeUndefined();
+    }
+  });
+
+  it("emits NEITHER half of the pair for one — never the attribute without the tokens", () => {
+    for (const key of INHERITED) {
+      expect(sportThemeAttr(key), `"${key}" produced a theme attribute`).toBeUndefined();
+      expect(sportThemeStyle(key), `"${key}" produced token overrides`).toBeUndefined();
+    }
+  });
+
+  it("still resolves the real sport it was built for", () => {
+    expect(sportThemeAttr("football")).toBe("football");
+    expect(sportThemeStyle("football")).toBeDefined();
+  });
+});

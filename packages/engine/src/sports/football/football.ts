@@ -2390,8 +2390,17 @@ export function padSpec(cfg: FootballCfg): PadSpec {
     // is already granted on the identical plan boundary as
     // "scoring.match_timeline" — community false / pro true / business true
     // (V112__entitlements_v2.sql) and pro_plus true (V290__pro_plus_plan.sql)
-    // — so no org's access changes, and no new FeatureKey and no migration
-    // were needed. `fidelityTiers` below carries the SAME two literals; the
+    // — so no new FeatureKey and no migration were needed.
+    //
+    // That parity is PLAN-level, and the original wording ("no org's access
+    // changes") overclaimed. Entitlements also resolve through
+    // `org_entitlement_overrides` and `competition_passes`, which are keyed per
+    // FEATURE (V306__entitlement_resolver_parity.sql): an org holding a
+    // hand-set override or a pass for "scoring.match_timeline" and NOT
+    // "scoring.ball_by_ball" keeps band 2 and silently loses band 3
+    // (`football.shot`). No such row is known to exist, and none is created by
+    // this wave — but a backfill is owed before anyone relies on the stronger
+    // claim. `fidelityTiers` below carries the SAME two literals; the
     // pair is hand-kept and must move in lockstep.
     fidelityEntitlements: { 2: "scoring.match_timeline", 3: "scoring.ball_by_ball" },
   };

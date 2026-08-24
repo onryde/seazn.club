@@ -118,7 +118,22 @@ export const DEFAULT_SPORT_PALETTE: SportPalette = {
  * pitch-side under floodlights the sport's signal should win. If that reads as
  * fragmentation at sign-off, this table makes it a one-line revert per sport.
  */
-export const SPORT_PALETTES: Readonly<Record<string, Partial<SportPalette>>> = {
+/*
+ * NULL-PROTOTYPE, for the same reason `registry.ts` gives `V3_SKINS` (see its
+ * own header): a plain object literal answers `SPORT_PALETTES["constructor"]`
+ * with an inherited `Object.prototype` member, and all three readers below
+ * index this table by a bare string. That would make `sportThemeAttr` emit
+ * `data-sport-theme="constructor"` while `sportThemeStyle` emits no
+ * `--sport-*` properties at all — breaking the invariant the two are always
+ * written together, which is exactly what `[data-sport-theme]
+ * .pad-half:focus-visible` in globals.css leans on: the ring would resolve
+ * against the shared `:root` default the scoping exists to avoid.
+ *
+ * Not reachable from today's engine sport keys. It is one word to make it
+ * unreachable by construction instead of by inspection, and the sibling table
+ * already made that choice.
+ */
+export const SPORT_PALETTES: Readonly<Record<string, Partial<SportPalette>>> = Object.assign(Object.create(null) as Record<string, Partial<SportPalette>>, {
   football: {
     board: "#0b1f16",
     "board-2": "#122e21",
@@ -127,7 +142,7 @@ export const SPORT_PALETTES: Readonly<Record<string, Partial<SportPalette>>> = {
     caution: "#ffd60a",
     dismissal: "#d00000",
   },
-};
+});
 
 /** The custom-property name a token is emitted under. One place, so the
  *  `--sport-` prefix cannot drift between this module, globals.css and the

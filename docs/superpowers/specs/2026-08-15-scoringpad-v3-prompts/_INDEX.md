@@ -1495,3 +1495,62 @@ answers the question is looking at the pixels.
 Cricket's `04-dock` (and any state showing the chip) needs the owner's eye
 again — one copy change, not a re-review of the sport. Football is new in this
 wave and needs all five states reviewed regardless.
+
+
+---
+
+## R3 — `/code-review` round 3 (2026-08-24): 5 findings, 1 fixed, 2 DISPROVEN
+
+Run against the full branch diff (49 files). Verified each before acting;
+three did not survive verification in the form they were reported.
+
+**1. `pad-host.tsx` — `openSwapId` outlives its slot. REPORTED AS REACHABLE; IT
+IS NOT.** The mechanism is real: `openSwapId` is set on the tile tap (`:793`)
+and cleared only by `onSwap`/`onCancel` (`:1012`/`:1016`), so nothing resets it
+when the slot stops resolving. The stated scenario is wrong. It needs a
+play -> non-play -> play sequence, and football has none:
+`applyPeriod`'s `HT` arm is `pushPeriod(close(), "H2")` (`football.ts:1549`),
+and H1 and H2 are BOTH in the skin's `PLAY_PHASES` (`skins/football.tsx:181`),
+so the sheet never unmounts at half time. `FT` goes to `ET_H1` (also a play
+phase) or to `done`/`SHOOTOUT`, which never return to a play phase. A defensive
+reset was written and then REVERTED: no test can fail without it, and this
+repo's rule is that every change ships a test that does. Revisit if a wave ever
+adds a non-play interval a scorer can leave and re-enter.
+
+**2. `swap-sheet.tsx` — no refusal on the OFF step. ALREADY KNOWN, and pinned.**
+Not a new finding. `scorepad-v3-football.spec.ts` (~`:404`) already documents it
+as "a known limit of the R3 chassis fix, not an accident", and its e2e exists
+specifically so a later change cannot silently "fix" it. A fix was written and
+reverted on that basis. It is also bigger than it looks: `policyVerdict` does
+not change between steps, so refusing at the OFF step makes the ON step's
+refusal branch UNREACHABLE dead code, and breaks four existing tests that reach
+it. `SwapSheet` is chassis shared by eleven skins including signed-off cricket,
+so this is an owner decision, not a review fix.
+
+**3. `sport-theme.ts` — `SPORT_PALETTES` had a prototype. FIXED.** All three
+readers index the table by a bare string, so `SPORT_PALETTES["constructor"]`
+answered truthy: `sportThemeAttr` would emit `data-sport-theme="constructor"`
+while `sportThemeStyle` emitted no tokens, breaking the pair invariant that
+`[data-sport-theme] .pad-half:focus-visible` depends on and dropping the ring
+back onto the shared default. Now `Object.create(null)`, matching the choice
+`registry.ts` already made for `V3_SKINS` and for the same stated reason.
+Unreachable from today's sport keys; now unreachable by construction. Three
+tests added, two of which go red against the plain literal (the third is a
+deliberate control that passes both ways).
+
+**4. `football.ts` — the entitlement comment overclaimed. NARROWED.** Band 3's
+move to `scoring.ball_by_ball` is safe at the PLAN level, and that much was
+verified against V112/V290. But entitlements also resolve through
+`org_entitlement_overrides` and `competition_passes`, keyed per FEATURE
+(V306__entitlement_resolver_parity.sql), so an org holding an override or pass
+for `scoring.match_timeline` and not `scoring.ball_by_ball` silently loses band
+3. No such row is known to exist and none is created here; the comment now says
+plan-level and names the backfill that is owed.
+
+**5. `skins/football.tsx` — 24 dock chips for a goal. OWNER DECISION, not
+fixed.** `buildDock` pushes a scorer chip AND an assist chip per on-pitch
+player: 24 at 11-a-side, inside a ~6s soft-commit window, against a dock F4
+measured at 213px/369px. `block: "nearest"` then reveals only the top edge.
+The observation is sound and the arithmetic is right. The fix is a flow change
+(scorer first, assist after) that alters how every goal is recorded, which is a
+design ruling this review has no standing to make.
