@@ -23,6 +23,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ActivityPanel, latestRowDetail, type ActivityDetailResolver, type ActivityEvent } from "../activity";
 import { buildTopRibbon } from "../pad-host";
 import type { MsgFn } from "../ribbon";
+import type { ActivityDetailContext } from "../types";
 import { footballDetail } from "../skins/football";
 import { cricketBallDetail } from "../skins/cricket";
 
@@ -30,6 +31,16 @@ import { cricketBallDetail } from "../skins/cricket";
  *  its vars visible in the assertion, so "the detail was woven in" is provable
  *  without pulling a dictionary in. */
 const t: MsgFn = (key, vars) => (vars ? `${key}(${JSON.stringify(vars)})` : key);
+
+/** The SAME stub, typed as `ActivityDetailContext["t"]` rather than `MsgFn`.
+ *  These are not interchangeable and the difference is the whole point of the
+ *  seam below: `MsgFn` accepts only a `MessageKey`, a skin's `activityDetail`
+ *  declares a `t` that accepts any `string`, and a narrower-key function is
+ *  NOT assignable to a wider-key parameter. Retyping the bag inline here
+ *  instead of importing `ActivityDetailContext` is what made this file fail
+ *  `tsc` while all of its tests passed — vitest never typechecks a test. */
+const detailT: ActivityDetailContext["t"] = (key, vars) =>
+  vars ? `${key}(${JSON.stringify(vars)})` : key;
 
 const NAMES: Record<string, string> = { p1: "Rivera", p2: "Okafor", b1: "Khan" };
 const nameOf = (id: string) => NAMES[id] ?? id;
@@ -39,10 +50,11 @@ const nameOf = (id: string) => NAMES[id] ?? id;
  *  both pass three positional arguments, and the host is the seam. Written
  *  once here so every case below exercises the production shape. */
 function resolverFor(
-  detail: (ctx: { t: MsgFn; eventType: string; payload: Record<string, unknown>; history?: readonly { type: string; payload: Record<string, unknown> }[]; cfg?: unknown; personNames?: Record<string, string> }) => string | undefined,
+  detail: (ctx: ActivityDetailContext) => string | undefined,
   cfg?: unknown,
 ): ActivityDetailResolver {
-  return (eventType, payload, history) => detail({ t, eventType, payload, history, cfg, personNames: NAMES });
+  return (eventType, payload, history) =>
+    detail({ t: detailT, eventType, payload, history, cfg, personNames: NAMES });
 }
 
 function ev(seq: number, type: string, payload: Record<string, unknown>, voids: string | null = null): ActivityEvent {
