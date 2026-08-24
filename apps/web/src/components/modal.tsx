@@ -82,7 +82,13 @@ export function Modal({
         return;
       }
       if (e.key === "Tab") {
-        const target = nextTrapFocus(focusables(), document.activeElement, e.shiftKey);
+        // `document.activeElement` is `Element | null`, which widens
+        // nextTrapFocus's `T` to `Element` — and `Element` has no `.focus()`.
+        // The list this is compared against is `HTMLElement[]` from
+        // `querySelectorAll<HTMLElement>`, so narrowing here is what keeps the
+        // returned element callable rather than casting at the call.
+        const active = document.activeElement as HTMLElement | null;
+        const target = nextTrapFocus(focusables(), active, e.shiftKey);
         if (target) {
           e.preventDefault();
           target.focus();
