@@ -44,8 +44,8 @@ S13-gated. New-branch-in-worktree rule applies to every session.
 | P6 | D4b proposal UI + confirm flow | `P06-progression-ui.md` | P5 | green-light | **MERGED** `cdcc3bef` (#568), V362 |
 | P7 | D1b multi-stage templates | `P07-templates-multi-stage.md` | P4, P5 (StageSeeding merged) | green-light | **MERGED `98e95c9e` (#582)** — 3 templates + seeding persisted + progression map; stages now named not kinded (owner ruling); `validateStageSeeding` shared with instantiation; 2 defects found and reported unfixed (`uniqueSlug` race, modal 320 fold). Status: `docs/superpowers/plans/2026-08-16-p7-session-status.md` |
 | P8 | D5a venues/courts schema + API + **Directory** UI | `P08-venues-schema-ui.md` | — | green-light + **release-2 C-chain done** (cleared: C7 `298da0af`, C8 `e9a7c54a`) | **DONE 2026-08-17** — V367 (4 tables, RLS forced, composite FKs, `on delete restrict`), 8 routes, archive at court AND venue level, Directory venues tab (NOT org settings — amendment A2), calendar editor, reusable tag-chip input, 84 i18n keys ×4. Gates: unit 8401/8329/4 (the 4 = pre-existing `schedule-build-honours-locks`), e2e 2/2 + an active-tab guard at 320/430/768, smoke 8/8 venues checks, screenshots 1280/320/768. **Six design amendments A1–A6** corrected in place in the D5 spec with a log at its foot. Status: `docs/superpowers/plans/2026-08-17-p8-session-status.md` |
-| P9 | D5b scheduler integration + stored-config migration | `P09-venues-scheduler.md` | P8 | same as P8 | **IN REVIEW** — V374 (renumbered twice: main took V368, then V371), `ScheduleConfig.courts` = court uuids, one shared candidate filter used by build/validate/AI, `NO_MATCHING_COURT` 422, `court_tag_mismatch` (26th conflict kind), court multi-picker, AI pack speaks court NAMES while storage stays ids. 17 defects found, all one mechanism — identity changed under code that read it. Status: `docs/superpowers/plans/2026-08-17-p9-session-status.md` |
-| P9.5 | D5b.5 one court-availability function + the two constraints the placer never learned | `P09-5-window-unification.md` | P9 | same as P8 | TODO — **blocks P10** |
+| P9 | D5b scheduler integration + stored-config migration | `P09-venues-scheduler.md` | P8 | same as P8 | **IN REVIEW** — V374 (renumbered twice: main took V368, then V371), `ScheduleConfig.courts` = court uuids, one shared candidate filter used by build/validate/AI, `NO_MATCHING_COURT` 422, `court_tag_mismatch` (26th conflict kind), court multi-picker, AI pack speaks court NAMES while storage stays ids. 17 defects found, all one mechanism — identity changed under code that read it. Status: `docs/superpowers/plans/2026-08-17-p9-session-status.md` **MERGED** — #621 (main) + #623 (third-review follow-ups) + #633 (round-scoped court tags, spun out as #622). |
+| P9.5 | D5b.5 one court-availability function + the two constraints the placer never learned | `P09-5-window-unification.md` | P9 | same as P8 | **IN PROGRESS 2026-08-24** — `court-windows.ts` `usableWindows` shipped (all 14 edge-matrix rows, mutation-proven); lattice AND `/validate` now honour V367 court hours via `outside_court_hours`, the 27th conflict kind; start-window rule un-forked; solver start-window breaches now rejected at the build gate. **Both of the prompt's premises were FALSE — see the status log.** |
 | P10 | D5c calendars + window compiler | `P10-venues-calendars.md` | **P9.5** | same as P8 | TODO — its "consume `usableWindows`" premise is only true once P9.5 lands; it also still owes the stranded-fixture conflict code (D5 amendment A6) |
 | P11 | D6 batch import | `P11-batch-import.md` | — | green-light + **ScoringPad S13 done** | TODO |
 
@@ -160,6 +160,57 @@ All owner-ratified 2026-08-13 in the design session:
   W2 = P2 ∥ P4, W3 = P5 alone (two migrations must never run
   concurrently — mid-wave `V<n>` collision), W4 = P6 ∥ P7. P8→P9→P10 and
   P11 stay strictly sequential behind their external gates.
+
+- 2026-08-24 — **P9.5 (D5b.5) in progress.** Branch `feat/p95-window-unification`.
+
+### False premises found by P9.5 (rulings, do not re-derive)
+
+The session's prompt named two constraints `admits()` omits that the verifier
+enforces. **Neither survived re-pinning**, and the real defects were elsewhere.
+
+1. **There is no pack-window asymmetry.** `repairUniverse`
+   (`repair-domain.ts:292-294`) hard-returns `config.window` before `existing`
+   can widen the universe, so no out-of-window slot is ever minted; and when no
+   window is declared the verifier skips its own check too. Both directions
+   agree. Pinned by two regression tests in `build-grid.test.ts` rather than
+   "fixed" — the property is real but was undefended, and the moment that hard
+   return grows a branch the asymmetry the prompt described becomes reachable.
+2. **The greedy placer already honours per-target start windows**, via
+   `windowFor` (`calendar.ts:712-725`). The prompt said the placer was blind to
+   them. The REAL defect was that `windowFor` and the exported `startWindowFor`
+   were two copies of one rule, differing only in the shape they read the target
+   out of — the placer/verifier fork itself, sitting unnoticed inside the file
+   that exists to prevent it. Unified; `window-single-source.test.ts` fails if a
+   second copy reappears.
+3. **A solver board breaching a start window was reported and applied.**
+   `constraints.startWindows` is never sent to the placement service (no proto
+   field), greedy honours it natively, and `isBlockingForBuild` (`build.ts`)
+   tested only for `reason === "instruction"` — the DURABLE typed rules — while
+   a startWindows breach reports `reason === "start_window"`. Two vocabularies
+   for one idea; the gate had learned only one, though its own comment argued
+   the startWindows case explicitly. Most reachable after a start-date change:
+   start windows are absolute epoch ms and NOTHING rebases, clears, warns about
+   or validates them when `startAt` moves. Fixed at the build gate only —
+   `isBlockingConflict` is shared with the apply gate, the drag path and the AI
+   pipeline, and that file's own standing ruling forbids widening it.
+4. **`_RULES.md` §3 and this file both asserted a guarantee that did not
+   exist** — that `usableWindows`/`capacity.ts` made the fork impossible.
+   `usableWindows` had zero hits outside documentation, and `capacity.ts` is
+   `assessCapacity`, which consumes a pre-computed `CapacityInput` and never
+   computed a window. `_RULES.md` §3 is corrected in place. **A parity claim in
+   prose is not a parity guarantee; grep for the symbol it names.**
+5. **There were SIX window computations, not three.** The prompt's inventory
+   table listed placer/verifier/capacity. It missed `sessionGaps`/
+   `effectiveBlackouts` (`calendar.ts`), `courtBlocked`, and `venues.ts`'s own
+   A6 stranded-fixture check. `capacity-input.ts`'s private pair is now deleted
+   and routed through the engine function.
+
+Owner rulings made during the session: `outside_court_hours` is REPORTED but
+never BLOCKING (carved out beside `court_tag_mismatch` — narrowing a court's
+hours under placed fixtures must not hard-refuse publish with no way out);
+`/validate` gains the conflict NOW rather than waiting for P10, so the lattice
+and the verifier cannot fork; the missing `board.conflict.start_window` label
+(organisers saw the raw code string) is fixed in this PR.
 
 ### False premises found by wave-1 scouts (rulings, do not re-derive)
 

@@ -46,9 +46,24 @@ AND `sync:sports`.
 - **`ScheduleConfig` is the READ path** — stored rows must parse at
   every step (P9's whole migration design exists for this).
 - **Placer/verifier parity** (P9/P10): any constraint the lattice
-  build honors, the validate path must honor with the SAME function —
-  `usableWindows`/`capacity.ts` exist to make the fork impossible; do
-  not inline a second copy "for speed".
+  build honors, the validate path must honor with the SAME function.
+  **Corrected by P9.5, 2026-08-24** — this line used to claim
+  `usableWindows`/`capacity.ts` already made the fork impossible. Both
+  halves were false: `usableWindows` did not exist at all (zero hits
+  outside documentation), and `capacity.ts` is `assessCapacity`, which
+  consumes a pre-computed `CapacityInput` and has never computed a
+  window. Asserting a guarantee that was not implemented is how the
+  fork survived two waves; P9 shipped `court_tag_mismatch` to close one
+  instance and P9.5 found two more (the start-window rule written out
+  twice in `calendar.ts`, and a third window computation in
+  `capacity-input.ts`).
+  What is true NOW: `court-windows.ts`'s `usableWindows` is the one
+  producer of court availability, `candidate-courts.ts`'s
+  `candidateCourts` the one court filter, and `calendar.ts`'s
+  `startWindowFor` the one start-window rule. This is enforced by
+  `window-single-source.test.ts`, not by convention — do not inline a
+  second copy "for speed", and do not trust a parity claim in prose
+  again without grepping for the symbol it names.
 - **A live placement service masks greedy/apply defects** — schedule-
   touching sessions (P9, P10) run gates both ways.
 - e2e: `localhost` never `127.0.0.1`; port 3100 squatting (assert
