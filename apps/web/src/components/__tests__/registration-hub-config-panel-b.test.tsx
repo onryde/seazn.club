@@ -227,13 +227,34 @@ describe("RegistrationHubConfigPanelB — accordion: which sections default open
     expect(propsOf(accordionSection(tree, "form")!).open).toBe(false);
   });
 
+  // The event this hands the handler carries `target`, like the native
+  // `toggle` event does — NOT `currentTarget`.
+  //
+  // The original version of this test passed `{ currentTarget: { open } }`,
+  // matching a hand-rolled `onToggle` prop type, and stayed green while the
+  // real page crashed on the FIRST open of every division: <details> fires
+  // `toggle` synchronously while React is still committing the sections that
+  // mount open, and `currentTarget` is only bound during dispatch, so the
+  // handler read `.open` off null. An invented event type produced both the
+  // bug and a test that could not see it.
   it("clicking a collapsed section's summary opens it", async () => {
     const island = renderIsland(RegistrationHubConfigPanelB, BASE_PROPS, expandPanel);
     await flush();
     const money = accordionSection(island.tree(), "money")!;
-    (propsOf(money).onToggle as (e: { currentTarget: { open: boolean } }) => void)({
-      currentTarget: { open: true },
+    (propsOf(money).onToggle as (e: { target: { open: boolean } }) => void)({
+      target: { open: true },
     });
+    expect(propsOf(accordionSection(island.tree(), "money")!).open).toBe(true);
+  });
+
+  // Guards the crash itself: a `toggle` whose currentTarget has already been
+  // unbound (null) must still resolve the section's state from `target`.
+  it("survives a toggle event whose currentTarget is already null", async () => {
+    const island = renderIsland(RegistrationHubConfigPanelB, BASE_PROPS, expandPanel);
+    await flush();
+    const money = accordionSection(island.tree(), "money")!;
+    const fire = propsOf(money).onToggle as (e: unknown) => void;
+    expect(() => fire({ target: { open: true }, currentTarget: null })).not.toThrow();
     expect(propsOf(accordionSection(island.tree(), "money")!).open).toBe(true);
   });
 });

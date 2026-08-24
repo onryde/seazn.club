@@ -32,7 +32,7 @@
 // patch/save — only the accordion chrome around them is new.
 import { useEffect, useState } from "react";
 import { ChevronDown } from "lucide-react";
-import type { ReactNode } from "react";
+import type { ReactEventHandler, ReactNode } from "react";
 import { Modal } from "@/components/modal";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { FormBuilder } from "@/components/registration-hub-form-builder";
@@ -94,7 +94,12 @@ export function Disclosure({
   title: string;
   open: boolean;
   hasError: boolean;
-  onToggle: (e: { currentTarget: { open: boolean } }) => void;
+  // The real DOM event type, not a hand-rolled `{ currentTarget: { open } }`
+  // shape. That invented type is what let the crash through tsc: it described
+  // `currentTarget` as always carrying an `open` boolean, so reading it was a
+  // type error nowhere — while the native `toggle` event fired during commit
+  // hands the handler a null `currentTarget`.
+  onToggle: ReactEventHandler<HTMLDetailsElement>;
   children: ReactNode;
 }) {
   return (
@@ -263,8 +268,20 @@ export function RegistrationHubConfigPanelB({
                   title={sectionTitle(id, msg, state.form_fields.length)}
                   open={openSections[id]}
                   hasError={hasError}
+                  // Reads `e.target`, NOT `e.currentTarget`. <details> fires a
+                  // native `toggle` event, and the three sections that mount
+                  // with open={true} fire it synchronously while React is
+                  // still committing — `currentTarget` is only bound for the
+                  // duration of the dispatch, so by the time this handler ran
+                  // it was null and every first Configure click crashed the
+                  // page with "Cannot read properties of null (reading
+                  // 'open')". `target` is the <details> element itself here
+                  // and stays valid.
                   onToggle={(e) =>
-                    setOpenSections((prev) => ({ ...prev, [id]: e.currentTarget.open }))
+                    setOpenSections((prev) => ({
+                      ...prev,
+                      [id]: (e.target as HTMLDetailsElement).open,
+                    }))
                   }
                 >
                   {content}
