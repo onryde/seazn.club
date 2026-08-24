@@ -205,6 +205,63 @@ describe("RegistrationHubDivisionRow — the copy control is never dropped", () 
   });
 });
 
+describe("RegistrationHubDivisionRow — register link only for a non-closed division (finding 3)", () => {
+  it("closed, not private: no link controls at all — the link would only ever refuse the visitor", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, enabled: false },
+        context: { ...BASE_CONTEXT, showRegisterLink: true },
+      }),
+    );
+    expect(tree.some((e) => e.type === CopyLink)).toBe(false);
+    // Not the private notice either — that gate is about competition
+    // visibility, not division status, and this competition isn't private.
+    expect(textOf(tree)).not.toContain(t(uiEn, "div.registrations.privateNotice"));
+  });
+
+  it("scheduled, not private: link controls are still present — an organiser shares it before the window opens", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, enabled: true, opens_at: "2026-07-01T00:00:00Z", closes_at: null },
+        context: { ...BASE_CONTEXT, showRegisterLink: true },
+      }),
+    );
+    expect(tree.some((e) => e.type === CopyLink)).toBe(true);
+  });
+
+  it("open, not private: link controls are present (unchanged)", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, enabled: true, opens_at: null, closes_at: null },
+        context: { ...BASE_CONTEXT, showRegisterLink: true },
+      }),
+    );
+    expect(tree.some((e) => e.type === CopyLink)).toBe(true);
+  });
+
+  it("private competition: shows the notice, never the link, even when the division is open", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, enabled: true },
+        context: { ...BASE_CONTEXT, showRegisterLink: false },
+      }),
+    );
+    expect(tree.some((e) => e.type === CopyLink)).toBe(false);
+    expect(textOf(tree)).toContain(t(uiEn, "div.registrations.privateNotice"));
+  });
+
+  it("private AND closed: the private gate still wins — shows the notice, not a silent blank", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, enabled: false },
+        context: { ...BASE_CONTEXT, showRegisterLink: false },
+      }),
+    );
+    expect(tree.some((e) => e.type === CopyLink)).toBe(false);
+    expect(textOf(tree)).toContain(t(uiEn, "div.registrations.privateNotice"));
+  });
+});
+
 // Every Chip element's own rendered text — a Chip's `children` prop IS its
 // label text directly (`<Chip>{categoryLabel}</Chip>`), so no manual
 // invocation is needed to read it, only a type match. This is the reason a
