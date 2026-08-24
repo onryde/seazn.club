@@ -88,6 +88,22 @@ export async function fetchDivisionRows(
   );
 }
 
+/** Finding 6 fallback: `fetchDivisionRows`'s `org_currency` column rides on
+ *  a DIVISION row, so a competition with zero (non-archived) divisions
+ *  returns zero rows — nothing to read a currency off at all, and
+ *  `asCurrency(rawRows[0]?.org_currency)` silently defaulted to "usd".
+ *  Only called from that empty-rows branch below; the common case (rows
+ *  exist) keeps reading org_currency off rawRows[0] at zero extra queries,
+ *  so this never runs alongside a non-empty result and fetchDivisionRows
+ *  itself still costs exactly one round trip. */
+async function fetchOrgCurrency(auth: Pick<AuthCtx, "orgId">): Promise<string> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [row] = await tx<{ currency: string }[]>`
+      select currency from organizations where id = ${auth.orgId}`;
+    return row?.currency ?? "usd";
+  });
+}
+
 export default async function RegistrationHubPage({
   params,
   searchParams,
@@ -136,11 +152,16 @@ export default async function RegistrationHubPage({
   // deliberately never resolveVenueTz's division-override lane, and never
   // users.timezone/the browser cookie.
   const orgTz = isValidIana(page.org.timezone) ? page.org.timezone : DEFAULT_TZ;
+  // Finding 6: resolved independently of rawRows[0] rather than defaulting
+  // to "usd" whenever there are no rows to read it off (Registrants tab, or
+  // a Settings-tab competition with zero divisions) — see fetchOrgCurrency.
+  const orgCurrency =
+    rawRows[0]?.org_currency ?? (tab === "settings" ? await fetchOrgCurrency(auth) : "usd");
   const registrationContext: RegistrationHubRowContext = {
     dict,
     now: new Date(),
     orgTz,
-    currency: asCurrency(rawRows[0]?.org_currency),
+    currency: asCurrency(orgCurrency),
     registerHref: routes.publicRegister(orgSlug, compSlug),
     registerQrFileName: `register-${competition.slug}.png`,
     showRegisterLink: competition.visibility !== "private",
