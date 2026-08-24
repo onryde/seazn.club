@@ -172,4 +172,49 @@ describe("CapacityCard", () => {
       expect(html).toContain(en["schedule.capacity.apply"]);
     });
   });
+
+  // Review fix (Finding 1): a REAL fetch failure (useCapacityReport's own
+  // `failed`) must read as a DISTINCT, visible "couldn't check" state — never
+  // as fresh data, and never as the same indefinite "Updating…" the `stale`
+  // axis already owns. See use-capacity-report.ts's own `failed` doc comment.
+  describe("failed", () => {
+    it("defaults to not-failed when the prop is omitted — existing callers keep their prior behaviour untouched", () => {
+      const html = render(<CapacityCard report={baseReport()} />);
+      expect(html).not.toContain("data-capacity-failed");
+    });
+
+    it("renders SOMETHING — not nothing — when failed is true even though no report ever arrived", () => {
+      // Before this fix, `report === null` always meant "render nothing".
+      // A genuinely failed check with zero prior data must still be VISIBLE
+      // (the silent-freeze failure mode this whole review round is about),
+      // so this is the one case where a null report now still renders.
+      const html = render(<CapacityCard report={null} failed />);
+      expect(html).not.toBe("");
+      expect(html).toContain(en["schedule.capacity.checkFailed"]);
+    });
+
+    it("marks the card failed via a data attribute", () => {
+      const html = render(<CapacityCard report={baseReport()} failed />);
+      expect(html).toContain('data-capacity-failed="true"');
+    });
+
+    it("shows the failed indicator INSTEAD of the stale 'Updating…' one, never both at once", () => {
+      const html = render(<CapacityCard report={baseReport()} stale failed />);
+      expect(html).toContain(en["schedule.capacity.checkFailed"]);
+      expect(html).not.toContain(en["schedule.capacity.stale"]);
+    });
+
+    it("keeps the last known verdict and numbers visible (dimmed, never blanked) while failed", () => {
+      const html = render(<CapacityCard report={baseReport({ verdict: "impossible" })} failed />);
+      expect(html).toContain('data-capacity-verdict="impossible"');
+      expect(html).toContain("4"); // demand
+      expect(html).toContain("6"); // supply
+    });
+
+    it("shows no failed indicator when failed is false, even while stale", () => {
+      const html = render(<CapacityCard report={baseReport()} stale failed={false} />);
+      expect(html).not.toContain(en["schedule.capacity.checkFailed"]);
+      expect(html).toContain(en["schedule.capacity.stale"]);
+    });
+  });
 });

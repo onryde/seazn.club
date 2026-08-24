@@ -1,5 +1,15 @@
-import { describe, expect, it } from "vitest";
-import { capacityRequestForStage } from "@/components/v2/stages-panel";
+import { describe, expect, it, vi } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import { capacityGateBlocks, capacityRequestForStage, StagesPanel } from "@/components/v2/stages-panel";
+import type { UseCapacityReportResult } from "@/lib/use-capacity-report";
+import type { CapacityReport } from "@seazn/engine/scheduling/capacity";
+
+// StagesPanel calls useRouter()/useConfirm() synchronously during render
+// (not just from effects) — same mocks stages-panel-auto-schedule-seq.test.tsx
+// uses to render this exact component bare, no DictProvider (see that file's
+// own header: useMsg/useLocaleOrDefault degrade gracefully without one here).
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {}, push: () => {} }) }));
+vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => async () => false }));
 
 // D2 capacity pre-check, per-stage (the "Auto-schedule remaining" button's
 // disabled condition). Pure — `scheduleSettings` arrives via a useEffect
@@ -133,5 +143,103 @@ describe("capacityRequestForStage", () => {
     const req = capacityRequestForStage("s1", [], { matchMinutes: 45, gapMinutes: 10 }, ORG_TZ);
     expect(req?.config.matchMinutes).toBe(45);
     expect(req?.config.gapMinutes).toBe(10);
+  });
+});
+
+// Review fix (Finding 2): the Auto-schedule button's `disabled` condition and
+// its "blocked reason" line used to inline
+// `capacityByStage.get(stage.id)?.report?.verdict === "impossible"` TWICE —
+// reading a STALE report the same way whether the check was merely catching
+// up or had genuinely stopped running. Extracted to one shared predicate so
+// the two call sites can never disagree, and so the fail-open rule is
+// unit-testable directly (stages-panel.tsx has no other way to exercise its
+// gate: `scheduleSettings` only ever arrives via a useEffect fetch, which
+// renderToStaticMarkup never runs — see capacityRequestForStage's own header).
+describe("capacityGateBlocks", () => {
+  const withVerdict = (verdict: CapacityReport["verdict"], over: Partial<UseCapacityReportResult> = {}): UseCapacityReportResult => ({
+    report: { verdict, slotSupply: 1, slotDemand: 2, perDay: [], restBound: [], suggestions: [] },
+    stale: false,
+    failed: false,
+    ...over,
+  });
+
+  it("blocks on a genuinely fresh impossible verdict", () => {
+    expect(capacityGateBlocks(withVerdict("impossible"))).toBe(true);
+  });
+
+  it("does not block on ok or tight verdicts", () => {
+    expect(capacityGateBlocks(withVerdict("ok"))).toBe(false);
+    expect(capacityGateBlocks(withVerdict("tight"))).toBe(false);
+  });
+
+  it("does not block when there is no report yet (settings not loaded, or nothing to assess)", () => {
+    expect(capacityGateBlocks(undefined)).toBe(false);
+    expect(capacityGateBlocks({ report: null, stale: false, failed: false })).toBe(false);
+  });
+
+  it("does NOT block a stale-but-still-in-flight impossible verdict — an edit landed but the check hasn't failed", () => {
+    expect(capacityGateBlocks(withVerdict("impossible", { stale: true }))).toBe(true); // unchanged: still gates on the last KNOWN verdict while merely catching up
+  });
+
+  it("FAILS OPEN: a stale impossible verdict must not block once the check has actually FAILED — review finding", () => {
+    expect(capacityGateBlocks(withVerdict("impossible", { stale: true, failed: true }))).toBe(false);
+  });
+});
+
+// Finding 6: this file lacked the "no synchronous client-side fallback
+// computation" regression guard settings-panel-capacity.test.tsx:214-241 has
+// for SettingsPanel. Same technique: renderToStaticMarkup never fires an
+// effect (component-ui-i18n memory), so `scheduleSettings` can never have
+// loaded and `capacityByStage` can never hold anything by the time this
+// render completes — if a future change reintroduces a synchronous
+// capacity computation anywhere in this component (bypassing the fetch
+// entirely), this is what would start failing.
+describe("StagesPanel — no client-side fallback computation", () => {
+  const STAGE = { id: "s1", seq: 0, kind: "league", name: "League", config: {}, progression: null, status: "active" };
+  // Many UNSCHEDULED fixtures — enough demand to have flipped an old-style
+  // local computation to "impossible" — so the pinned unscheduled section
+  // (and its auto-schedule CTA) actually renders; a render with nothing in
+  // it would make this guard vacuously true.
+  const FIXTURES = Array.from({ length: 12 }, (_, i) => ({
+    id: `f${i}`,
+    stage_id: "s1",
+    pool_id: null,
+    round_no: 1,
+    seq_in_round: i + 1,
+    fixture_no: i + 1,
+    home_entrant_id: "e1",
+    away_entrant_id: "e2",
+    scheduled_at: null,
+    venue: null,
+    court_label: null,
+    status: "scheduled",
+    outcome: null,
+  }));
+  const baseProps = {
+    divisionId: "d1",
+    divisionSeq: 1,
+    competitionId: "c1",
+    orgSlug: "org",
+    compSlug: "comp",
+    divSlug: "div",
+    stages: [STAGE],
+    fixtures: FIXTURES,
+    entrantNames: { e1: "Alpha", e2: "Bravo" },
+    canEdit: true,
+    tz: "UTC",
+    orgTz: "UTC",
+    canExport: false,
+  } as unknown as Parameters<typeof StagesPanel>[0];
+
+  it("renders the auto-schedule CTA never disabled, and the blocked-reason line never at all — the verdict can only ever arrive via useCapacityReportsByStage's effect+fetch", () => {
+    const html = renderToStaticMarkup(<StagesPanel {...baseProps} />);
+    expect(html).toContain('data-testid="stage-auto-schedule"'); // sanity: the scenario is meaningful, not vacuous
+    expect(html).not.toContain('data-testid="stage-auto-schedule-blocked"');
+    // The disabled attribute is omitted entirely by React for a `false`
+    // boolean prop — assert its literal absence right after the CTA's own
+    // testid rather than a substring search (a *different* button on the
+    // page being disabled must not make this pass for the wrong reason).
+    const ctaOpenTag = html.slice(html.indexOf('data-testid="stage-auto-schedule"') - 200, html.indexOf('data-testid="stage-auto-schedule"') + 200);
+    expect(ctaOpenTag).not.toContain("disabled");
   });
 });

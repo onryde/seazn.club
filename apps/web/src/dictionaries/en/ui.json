@@ -3911,6 +3911,7 @@
   "scorepad.header.score": "Score",
   "schedule.capacity.title": "Capacity check",
   "schedule.capacity.stale": "Updating…",
+  "schedule.capacity.checkFailed": "Capacity check failed",
   "schedule.capacity.verdict.ok": "Comfortable",
   "schedule.capacity.verdict.tight": "Tight",
   "schedule.capacity.verdict.impossible": "Won't fit",

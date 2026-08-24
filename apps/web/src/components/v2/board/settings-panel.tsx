@@ -312,11 +312,15 @@ export function SettingsPanel({
     orgTz,
     venues,
   );
-  const { report: capacityReport, stale: capacityStale } = useCapacityReport(
-    divisionId,
-    capacityRequest.fixtures,
-    capacityRequest.config,
-  );
+  const {
+    report: capacityReport,
+    stale: capacityStale,
+    // Review fix (Finding 1): threaded through to CapacityCard below so a
+    // real fetch failure (distinct from a superseded abort) actually
+    // surfaces here instead of silently defaulting to `false` — see
+    // useCapacityReport's and CapacityCard's own `failed` doc comments.
+    failed: capacityFailed,
+  } = useCapacityReport(divisionId, capacityRequest.fixtures, capacityRequest.config);
 
   // "Add a court" can only offer a REAL, currently-unselected org court now
   // (no more fabricating "Court N" out of thin air) — the next one in the
@@ -468,7 +472,13 @@ export function SettingsPanel({
         <p className="mt-0.5 text-xs text-slate-400">{msg("schedule.tz.caption", { tz: orgTz })}</p>
       </div>
 
-      <CapacityCard report={capacityReport} stale={capacityStale} onApply={applyCapacitySuggestion} venueLabel={venue} />
+      <CapacityCard
+        report={capacityReport}
+        stale={capacityStale}
+        failed={capacityFailed}
+        onApply={applyCapacitySuggestion}
+        venueLabel={venue}
+      />
 
       {constrained && <UpgradeGate feature="scheduling.constraints" compact />}
 

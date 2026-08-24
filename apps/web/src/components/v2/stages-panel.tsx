@@ -51,7 +51,12 @@ import type { ApplyScheduleRequest, ScheduleMetrics, ScheduleSolverInfo } from "
 // file only builds the WIRE BODY the hook sends, which still needs
 // dayKeyInTz/ymdAddDays/zonedTimeToUtc for the window math.
 import { dayKeyInTz, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling/tz";
-import { useCapacityReportsByStage, type CapacityReportConfig, type CapacityRequest } from "@/lib/use-capacity-report";
+import {
+  useCapacityReportsByStage,
+  type CapacityReportConfig,
+  type CapacityRequest,
+  type UseCapacityReportResult,
+} from "@/lib/use-capacity-report";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -277,6 +282,27 @@ export function boardSlotOptionsFor(
  *  general-purpose `CapacityRequest`, kept under this panel's established
  *  name for its own test file and callers. */
 export type CapacityStageRequest = CapacityRequest;
+
+/**
+ * D2 capacity pre-check gate (review fix, Finding 2): the Auto-schedule
+ * button's `disabled` condition and the "blocked reason" line below it now
+ * SHARE this one predicate — they used to inline the same expression twice,
+ * which is how they could have silently drifted. FAILS OPEN: a check that
+ * could not complete (`.failed` — useCapacityReport's own doc comment) never
+ * blocks, even when the last report it ever received said "impossible".
+ * Before this fix, a real fetch failure (500, network drop, a 4xx schema
+ * rejection) was swallowed identically to a superseded abort, so `.report`
+ * kept returning that OLD verdict forever — an actionable control frozen
+ * with no visible reason. Solve is hard-blocked ONLY on a genuinely FRESH
+ * `impossible` verdict (owner ruling); a stale guess, whether merely
+ * catching up (`.stale`) or actually broken (`.failed`), is not one — a
+ * catching-up check still gates on the last KNOWN verdict (unchanged), but
+ * a broken one must not.
+ */
+export function capacityGateBlocks(cap: UseCapacityReportResult | undefined): boolean {
+  if (cap?.failed) return false;
+  return cap?.report?.verdict === "impossible";
+}
 
 /**
  * D2 capacity pre-check for ONE stage (P10 §4/Task 6): pure, exported so it
@@ -981,7 +1007,7 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                     <button
                       type="button"
                       data-testid="stage-auto-schedule"
-                      disabled={busy !== null || capacityByStage.get(stage.id)?.report?.verdict === "impossible"}
+                      disabled={busy !== null || capacityGateBlocks(capacityByStage.get(stage.id))}
                       onClick={() => void autoScheduleStage(stage.id)}
                       className="btn btn-primary min-h-11 px-3 py-1 text-xs"
                     >
@@ -990,13 +1016,14 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                   )}
                 </div>
                 {/* D2 capacity pre-check (owner ruling: Solve hard-blocked
-                    ONLY on "impossible" — "tight" is advisory and never
-                    blocks). The full card with bars/suggestions lives on the
-                    Settings tab; this is just the reason the button here is
-                    disabled — so it reads `.report`, not `.stale`: the button
-                    stays gated on the last KNOWN verdict while a refetch is
-                    pending rather than flickering enabled mid-edit. */}
-                {capacityByStage.get(stage.id)?.report?.verdict === "impossible" && (
+                    ONLY on a genuinely FRESH "impossible" — "tight" is
+                    advisory and never blocks, and per the review fix above,
+                    neither does a check that FAILED to run at all). The full
+                    card with bars/suggestions lives on the Settings tab;
+                    this is just the reason the button here is disabled —
+                    same shared `capacityGateBlocks` predicate the button's
+                    own `disabled` reads, so the two can never disagree. */}
+                {capacityGateBlocks(capacityByStage.get(stage.id)) && (
                   <p data-testid="stage-auto-schedule-blocked" className="mt-1.5 text-xs text-red-600">
                     {msg("schedule.capacity.blockedReason")}
                   </p>

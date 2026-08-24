@@ -174,19 +174,64 @@ describe("useCapacityReport", () => {
     expect(hook.current.stale).toBe(false);
   });
 
-  it("leaves the held report and stale flag untouched when a request fails — never reads as an error", async () => {
+  // Review fix (Finding 1): a superseded abort and a REAL failure used to be
+  // swallowed identically — `onResolved` simply never fired for either, so
+  // `stale` stayed true forever with no way to tell "catching up" from
+  // "broken since ten minutes ago". These three tests pin the split.
+  it("a superseded abort stays silent — never marked failed, report/stale left exactly as they were (routine, not an error)", async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(report()));
     vi.stubGlobal("fetch", fetchMock);
     const hook = mount({ divisionId: "d1", fixtures: [], config: boundedConfig() });
     await vi.advanceTimersByTimeAsync(300);
     const before = hook.current.report;
 
-    fetchMock.mockRejectedValueOnce(new Error("network down"));
+    const abortErr = new Error("aborted");
+    abortErr.name = "AbortError";
+    fetchMock.mockRejectedValueOnce(abortErr);
+    hook.rerender({ divisionId: "d1", fixtures: [{ id: "f1" }], config: boundedConfig() });
+    await vi.advanceTimersByTimeAsync(300); // debounce -> the (aborted-shaped) attempt
+    await vi.advanceTimersByTimeAsync(600); // long past the one retry's backoff — must never fire
+    expect(fetchMock).toHaveBeenCalledTimes(2); // no retry scheduled for an abort
+    expect(hook.current.report).toBe(before);
+    expect(hook.current.stale).toBe(true); // no fresh data ever arrived for this key
+    expect(hook.current.failed).toBe(false); // an abort is never a failure
+  });
+
+  it("a REAL failure — after its one retry also fails — is marked `failed`, keeps the last known report, and stays stale; never reads as fresh and never as an indefinite in-flight state", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(report()));
+    vi.stubGlobal("fetch", fetchMock);
+    const hook = mount({ divisionId: "d1", fixtures: [], config: boundedConfig() });
+    await vi.advanceTimersByTimeAsync(300);
+    const before = hook.current.report;
+    expect(hook.current.failed).toBe(false);
+
+    fetchMock.mockRejectedValue(new Error("network down")); // the attempt AND its retry both fail
     hook.rerender({ divisionId: "d1", fixtures: [{ id: "f1" }], config: boundedConfig() });
     expect(hook.current.stale).toBe(true);
+    expect(hook.current.failed).toBe(false); // not yet — one retry is still owed
+
+    await vi.advanceTimersByTimeAsync(300); // debounce -> attempt #1 -> fails -> schedules the retry
+    expect(hook.current.failed).toBe(false); // retry still pending, not declared failed yet
+    await vi.advanceTimersByTimeAsync(600); // retry backoff -> attempt #2 -> fails too
+    expect(hook.current.report).toBe(before); // still the last GOOD report, never blanked
+    expect(hook.current.stale).toBe(true);
+    expect(hook.current.failed).toBe(true); // NOW it reads as a real, visible failure
+  });
+
+  it("a failure followed by a successful retry never sets `failed` — the blip stays invisible", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(report()));
+    vi.stubGlobal("fetch", fetchMock);
+    const hook = mount({ divisionId: "d1", fixtures: [], config: boundedConfig() });
     await vi.advanceTimersByTimeAsync(300);
-    expect(hook.current.report).toBe(before); // still the last GOOD report
-    expect(hook.current.stale).toBe(true); // never silently marked fresh on a failure
+
+    fetchMock.mockRejectedValueOnce(new Error("blip"));
+    fetchMock.mockResolvedValueOnce(jsonResponse(report({ slotDemand: 9 })));
+    hook.rerender({ divisionId: "d1", fixtures: [{ id: "f1" }], config: boundedConfig() });
+    await vi.advanceTimersByTimeAsync(300); // debounce -> attempt #1 -> fails -> schedules the retry
+    await vi.advanceTimersByTimeAsync(600); // retry backoff -> attempt #2 -> succeeds
+    expect(hook.current.report).toEqual(report({ slotDemand: 9 }));
+    expect(hook.current.stale).toBe(false);
+    expect(hook.current.failed).toBe(false);
   });
 
   it("re-fetches when only divisionId changes, same fixtures/config", async () => {
@@ -261,7 +306,7 @@ describe("useCapacityReportsByStage", () => {
     const hook = mountStages({ divisionId: "d1", requests });
     await vi.advanceTimersByTimeAsync(300);
     expect(fetchMock).toHaveBeenCalledTimes(1); // only s1
-    expect(hook.current.get("s2")).toEqual({ report: null, stale: false });
+    expect(hook.current.get("s2")).toEqual({ report: null, stale: false, failed: false });
   });
 
   it("re-fetching ONE stage does not disturb a sibling stage's already-resolved report or reschedule its request", async () => {
@@ -309,5 +354,30 @@ describe("useCapacityReportsByStage", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(hook.current.get("s1")).toBeUndefined();
+  });
+
+  // Review fix (Finding 2): stages-panel.tsx's Auto-schedule gate reads THIS
+  // hook per stage — a stuck failure has to be visible per stage, and one
+  // stage's failure must never bleed into a sibling's own state.
+  it("marks a stage `failed` after its request and retry both fail, independent of a sibling that succeeds", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (String(init?.body ?? "").includes("f-s1")) throw new Error("down");
+      return jsonResponse(report());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const requests = new Map([
+      ["s1", req("f-s1")],
+      ["s2", req("f-s2")],
+    ]);
+    const hook = mountStages({ divisionId: "d1", requests });
+    await vi.advanceTimersByTimeAsync(300); // debounce -> attempt #1 for both; s1 fails, schedules its retry
+    expect(hook.current.get("s1")?.failed).toBe(false); // retry still pending
+    expect(hook.current.get("s2")?.report).not.toBeNull(); // unaffected sibling already resolved
+    expect(hook.current.get("s2")?.failed).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(600); // s1's retry backoff -> attempt #2 -> fails too
+    expect(hook.current.get("s1")?.failed).toBe(true);
+    expect(hook.current.get("s1")?.report).toBeNull(); // s1 never got a report
+    expect(hook.current.get("s2")?.failed).toBe(false); // sibling untouched
   });
 });

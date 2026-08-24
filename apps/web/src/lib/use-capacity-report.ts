@@ -53,6 +53,17 @@ export interface UseCapacityReportResult {
    *  flips the instant an edit lands — no need to wait for the debounce
    *  timer to even start. */
   stale: boolean;
+  /** Review fix (Finding 1/2): true when the most recent fetch attempt for
+   *  the CURRENT `fixtures`/`config` failed for a REAL reason — a superseded
+   *  abort is never a failure, see `scheduleCapacityFetch`'s own AbortError
+   *  branch — and its one retry also failed. `report` still holds the last
+   *  known-good numbers (or null if none ever arrived); this is what tells a
+   *  caller the check has actually STOPPED running rather than merely
+   *  catching up. Callers must fail OPEN on this: a check that could not
+   *  complete is not evidence of "impossible" (owner ruling — Solve is
+   *  hard-blocked only on a genuinely fresh `impossible` verdict, never a
+   *  stale guess; see stages-panel.tsx's `capacityGateBlocks`). */
+  failed: boolean;
 }
 
 /** Mirrors capacityInputForFixtures's OWN null contract for `window` — this
@@ -104,14 +115,27 @@ function inputsKey(
  *  times would vary the hook-call count across renders whenever the stage
  *  count changes — a rules-of-hooks violation, not merely a style
  *  preference. Not exported: both callers live in this file. */
+/** One retry, after a short fixed backoff, before a REAL failure is
+ *  declared — enough to ride out a one-off blip without turning into an
+ *  endless retry loop against the endpoint (review Finding 1: a genuine
+ *  failure used to be swallowed identically to a superseded abort, forever,
+ *  with no retry and no way for the caller to ever learn about it). */
+const RETRY_DELAY_MS = 500;
+
 function scheduleCapacityFetch(
   divisionId: string,
   fixtures: readonly CapacityFixtureInput[],
   config: CapacityReportConfig,
   onResolved: (report: CapacityReport | null) => void,
+  /** Fires once, only after a REAL failure's one retry has also failed —
+   *  never for a superseded abort. See `UseCapacityReportResult.failed`'s
+   *  own doc comment for what the caller must do with it (fail OPEN). */
+  onFailed: () => void,
 ): () => void {
   const controller = new AbortController();
-  const timer = setTimeout(() => {
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const attempt = (retriesLeft: number) => {
     apiV1<CapacityReport | null>(`/api/v1/divisions/${divisionId}/schedule/capacity`, {
       method: "POST",
       json: { fixtures, config },
@@ -120,16 +144,31 @@ function scheduleCapacityFetch(
       .then(onResolved)
       .catch((err: unknown) => {
         // A newer edit superseded this request (the caller's own cleanup
-        // aborted it) — routine, not a failure. Anything else: `onResolved`
-        // is simply never called, so the caller's held report/resolvedKey
-        // are left exactly as they were — `stale` stays true and the card
-        // keeps showing the last GOOD numbers rather than an error state or
-        // a silently "fresh" stale one. The card must never read as broken.
+        // aborted it) — routine, not a failure: stay silent exactly as
+        // before, `onResolved`/`onFailed` are both simply never called, so
+        // the caller's held report/resolvedKey are left exactly as they
+        // were. Anything else is a REAL failure (500, network drop, a 4xx
+        // schema rejection) — one retry rides out a blip; if that fails
+        // too, `onFailed` fires so the caller can surface a distinct
+        // "couldn't check" state instead of an indefinite "Updating…".
         if (err instanceof Error && err.name === "AbortError") return;
+        if (retriesLeft > 0) {
+          retryTimer = setTimeout(() => attempt(retriesLeft - 1), RETRY_DELAY_MS);
+          return;
+        }
+        // Client-side fetch-failure logging convention in this repo (e.g.
+        // org-payment-instructions.tsx) — a plain, bracket-tagged
+        // console.error. `src/lib/sentry.ts` is `server-only` and cannot be
+        // imported from this "use client" hook.
+        console.error("[capacity] report fetch failed", err);
+        onFailed();
       });
-  }, DEBOUNCE_MS);
+  };
+
+  const timer = setTimeout(() => attempt(1), DEBOUNCE_MS);
   return () => {
     clearTimeout(timer);
+    clearTimeout(retryTimer);
     controller.abort();
   };
 }
@@ -141,6 +180,14 @@ export function useCapacityReport(
 ): UseCapacityReportResult {
   const [report, setReport] = useState<CapacityReport | null>(null);
   const resolvedKeyRef = useRef<string | null>(null);
+  // Which inputs-key's fetch most recently FAILED for real (retries
+  // exhausted) — a real `useState` slot, not a ref, because (unlike
+  // `resolvedKeyRef`) nothing else re-renders this hook's caller when only
+  // a failure lands and `report` itself does not change. Compared against
+  // the live `key` below exactly like `resolvedKeyRef` is, so a later edit
+  // (a new key) clears the failed read without this ever needing an
+  // explicit reset.
+  const [failedKey, setFailedKey] = useState<string | null>(null);
   const assessable = hasAssessableWindow(config);
   const key = inputsKey(divisionId, fixtures, config);
 
@@ -149,18 +196,24 @@ export function useCapacityReport(
     // fetch, no timer: the masked return below already answers `null`.
     if (!assessable) return;
 
-    return scheduleCapacityFetch(divisionId, fixtures, config, (data) => {
-      resolvedKeyRef.current = key;
-      setReport(data);
-    });
+    return scheduleCapacityFetch(
+      divisionId,
+      fixtures,
+      config,
+      (data) => {
+        resolvedKeyRef.current = key;
+        setReport(data);
+      },
+      () => setFailedKey(key),
+    );
     // fixtures/config are captured by `key` in the dependency array below
     // (see inputsKey's own comment) — depending on them directly would
     // refire this effect every render even with no real edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, assessable, divisionId]);
 
-  if (!assessable) return { report: null, stale: false };
-  return { report, stale: resolvedKeyRef.current !== key };
+  if (!assessable) return { report: null, stale: false, failed: false };
+  return { report, stale: resolvedKeyRef.current !== key, failed: failedKey === key };
 }
 
 /** One request per stage — `null` for a stage with nothing to assess yet
@@ -202,6 +255,11 @@ export function useCapacityReportsByStage(
   const [, forceRerender] = useState(0);
   const reportsRef = useRef<Map<string, CapacityReport | null>>(new Map());
   const resolvedKeyRef = useRef<Map<string, string>>(new Map());
+  // Per-stage sibling of useCapacityReport's own `failedKey` state, kept as
+  // a ref (not useState) for the same reason reportsRef/resolvedKeyRef are:
+  // one map, mutated outside React's diffing, with forceRerender as the
+  // only "please re-render" signal — see this function's own header.
+  const failedKeyRef = useRef<Map<string, string>>(new Map());
   const activeRef = useRef<Map<string, { key: string; cancel: () => void }>>(new Map());
 
   const requestKeys = new Map<string, string>();
@@ -244,11 +302,20 @@ export function useCapacityReportsByStage(
       const active = activeRef.current.get(stageId);
       if (active && active.key === key) continue; // unchanged — already scheduled or resolved
       active?.cancel();
-      const cancel = scheduleCapacityFetch(divisionId, req.fixtures, req.config, (data) => {
-        reportsRef.current.set(stageId, data);
-        resolvedKeyRef.current.set(stageId, key);
-        forceRerender((v) => v + 1);
-      });
+      const cancel = scheduleCapacityFetch(
+        divisionId,
+        req.fixtures,
+        req.config,
+        (data) => {
+          reportsRef.current.set(stageId, data);
+          resolvedKeyRef.current.set(stageId, key);
+          forceRerender((v) => v + 1);
+        },
+        () => {
+          failedKeyRef.current.set(stageId, key);
+          forceRerender((v) => v + 1);
+        },
+      );
       activeRef.current.set(stageId, { key, cancel });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -272,13 +339,15 @@ export function useCapacityReportsByStage(
   const out = new Map<string, UseCapacityReportResult>();
   for (const [stageId, key] of requestKeys) {
     if ((requests.get(stageId) ?? null) === null) {
-      out.set(stageId, { report: null, stale: false });
+      out.set(stageId, { report: null, stale: false, failed: false });
       continue;
     }
     const resolvedKey = resolvedKeyRef.current.get(stageId) ?? null;
+    const failedKey = failedKeyRef.current.get(stageId) ?? null;
     out.set(stageId, {
       report: reportsRef.current.get(stageId) ?? null,
       stale: resolvedKey !== key,
+      failed: failedKey === key,
     });
   }
   return out;
