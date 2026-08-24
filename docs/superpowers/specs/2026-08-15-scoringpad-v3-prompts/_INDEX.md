@@ -877,6 +877,35 @@ note) and it still went into three briefs in one session. Counts reported by
 task A and task B1 were taken with it and are re-run at the wave boundary by
 the main thread rather than trusted.
 
+### R3 — the gallery's per-width captures can RACE the fold (2026-08-24)
+
+Found on R3's first football capture, and it undermines the sign-off gate
+itself, so it is not a football fact.
+
+`02-live` for football came back showing **three different boards at three
+widths from one state**: at 320 the pad rendered `Period pre` with ZERO tiles
+and "Nothing recorded yet"; at 768 and 1280 the same state rendered `Period H1`
+with the full tile set. Same fixture, same capture run, same declared state.
+
+The 320 shot was taken before `core.start` had folded through. Nothing in the
+harness failed, and nothing in `manifest.json` records that the widths disagree.
+
+Why this matters more than one bad PNG:
+
+- **320 is the width the horizontal-overflow measurement runs on**, always, even
+  when `GALLERY_WIDTHS` narrows the PNG set (the runbook is explicit that the
+  measurement must never be excluded). A 320 capture of a pad with NO TILES
+  measures the overflow of an empty board and records `0` — a clean number that
+  means nothing. That is a false green in the merge gate.
+- A reviewer looking only at 768/1280 sees a correct board and signs off; the
+  320 evidence in the same sheet contradicts it and reads as a real defect.
+  R2c's lesson in a new place: right in isolation, wrong in context.
+
+**Do not treat a `pre`-looking 320 capture as a pad defect without checking the
+other two widths first.** The real fix is a settle/assert on the expected phase
+before the first screenshot, not a sleep — routed to the e2e/gallery task (D),
+which is already re-pointing the football path.
+
 ### R3 — debt routed OUT of this wave (found by the entitlement task)
 
 `packages/engine/src/sports/period/kernel.ts:2172-2178` justifies hockey's and
