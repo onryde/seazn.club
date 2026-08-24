@@ -210,7 +210,6 @@ interface FootballStateShape {
   phase?: string;
   entrants?: { home?: string; away?: string };
   goals?: { home?: number; away?: number };
-  periods?: { phase?: string; addedMinutes?: number }[];
   cards?: { side?: string; person?: string; color?: string }[];
   squads?: { home?: FootballSquadShape; away?: FootballSquadShape };
   asOf?: GameTimeShape;
@@ -526,11 +525,12 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   //
   // IT IS HONEST WHEN THERE IS NOTHING TO SHOW, which is the NORMAL case on a
   // pad-only stream: `state.asOf` is set only from an event's own `at`, and no
-  // v3 tile sends one (see `readClock`), so neither the clock nor added time
-  // may ever arrive. Both are OMITTED rather than lit empty, so a fresh match
-  // reads as one quiet period panel — a board with nothing added yet, which is
-  // exactly what a fourth official's board looks like before a stoppage. There
-  // is no placeholder, no em-dash, and no zero.
+  // v3 tile sends one (see `readClock`), so the clock may never arrive. It is
+  // OMITTED rather than lit empty, so a fresh match reads as one quiet period
+  // panel — a board with nothing added yet, which is exactly what a fourth
+  // official's board looks like before a stoppage. There is no placeholder, no
+  // em-dash, and no zero. R3/F removed the third item on the same principle;
+  // its own note sits below.
   //
   // The period is PROSE — `phaseLabel` above, which reads the cfg because the
   // "H1" token means quarter 1 in quarters mode. v2 showed the raw token here
@@ -547,21 +547,31 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   if (clock !== undefined) {
     strip.push({ id: "clock", label: t("scorepad.skin.football.header.clock"), value: clock, tone: "led" });
   }
-  // Law 7 added time, stamped by the fold on the period a marker CLOSES. The
-  // "+3" itself is locale-invariant (the same reasoning `TileSpec.sublabelText`
-  // documents for a bare number); B4 gives it a LABEL because the board is now
-  // a real panel rather than a run-on strip item — an unlabelled amber figure
-  // beside a period is ambiguous to a scorer and silent to a screen reader,
-  // which is the one thing a signature element must not be.
-  const added = state.periods?.[state.periods.length - 1]?.addedMinutes;
-  if (typeof added === "number" && added > 0) {
-    strip.push({
-      id: "added",
-      label: t("scorepad.skin.football.header.added"),
-      value: `+${added}`,
-      tone: "led",
-    });
-  }
+  // NO ADDED-TIME ITEM — R3/F (F2), removed rather than re-attributed. B4 put
+  // one here reading `periods[last].addedMinutes`, and the fixture that proved
+  // it (an OPEN "H1" already carrying `addedMinutes: 3`) is a state the fold
+  // cannot produce. Two engine facts decide it, both pinned by
+  // `__tests__/football.test.ts` against a real fold rather than restated here:
+  //
+  //   - `applyPeriod` stamps the minutes on the period a marker CLOSES and, for
+  //     every marker but the final whistle, pushes the next period in the SAME
+  //     step (`pushPeriod(close(), …)`, football.ts:1536-1550). So the period
+  //     the board is showing never carries added time. The only states where
+  //     `periods[last]` does are the two `resolveFullTime` arms that push
+  //     nothing — `done` and `SHOOTOUT` — where the item printed the SECOND
+  //     HALF's minutes beside a "Shoot-out"/"Match over" label. Mis-attributed,
+  //     not merely rare.
+  //   - No v3 football surface can record added time anyway: `football.period`
+  //     is dedicated (a tile and a sheet), so the generic More form carrying
+  //     `padSpec`'s own `addedMinutes` field is never offered for it, and
+  //     `periodSheet.buildPayload` sends `{ phase }` alone.
+  //
+  // The information is NOT lost, which is why removal beats attribution: the
+  // minutes ride the period event's own ribbon/activity line through
+  // `footballDetail` ("Half time · +3"), where they are attached to the whistle
+  // that set them and cannot go stale. `scorepad.skin.football.header.added`
+  // stays in the four dictionaries for the wave that gives the pad a way to
+  // record added time (R6/R8) — see `_INDEX.md`.
 
   return {
     context: contextParts.join(" · "),

@@ -24,7 +24,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
 import { foldClient } from "../../../module-client";
-import { squadStateOf } from "../../pad-host";
+import { dedicatedEventTypes, squadStateOf } from "../../pad-host";
 import { answerStep, currentStep, initialSheetState } from "../../guided-sheet";
 import type { GuidedSheetSpec, PadHostView, TileSpec } from "../../types";
 import { cricketSkinV3 } from "../cricket";
@@ -324,9 +324,13 @@ describe("buildScorebug", () => {
     expect(periodOf(view({ state: state({ phase: "MYSTERY" }) }))).toBe("MYSTERY");
   });
 
-  it("appends Law 7 added time as a locale-invariant +N item only when the fold carries one", () => {
-    const withAdded = view({ state: state({ periods: [{ phase: "H1", home: 1, away: 0, addedMinutes: 3 }] }) });
-    expect(buildScorebug(withAdded, t).strip.map((i) => i.value)).toContain("+3");
+  it("carries Law 7 added time on the WHISTLE's own line, never on the board — R3/F (F2)", () => {
+    // The board no longer has an added-time item at all (see the fold-driven
+    // pair below for why). This is where the minutes surface instead: attached
+    // to the `football.period` event that set them, so they cannot outlive the
+    // stoppage the way a strip item did.
+    const detail = footballDetail({ t, eventType: "football.period", payload: { phase: "HT", addedMinutes: 3 }, personNames: NAMES });
+    expect(detail).toContain("+3");
     expect(buildScorebug(view(), t).strip.map((i) => i.id)).not.toContain("added");
   });
 
@@ -341,11 +345,11 @@ describe("buildScorebug", () => {
     const full = view({
       state: state({
         asOf: { period: "H1", elapsed: 754 },
-        periods: [{ phase: "H1", home: 1, away: 0, addedMinutes: 3 }],
+        periods: [{ phase: "H1", home: 1, away: 0 }],
       }),
     });
     const strip = buildScorebug(full, t).strip;
-    expect(strip.map((item) => item.id)).toEqual(["period", "clock", "added"]);
+    expect(strip.map((item) => item.id)).toEqual(["period", "clock"]);
     for (const item of strip) expect(item.tone, `strip item "${item.id}" is off the board`).toBe("led");
   });
 
@@ -364,12 +368,92 @@ describe("buildScorebug", () => {
     }
   });
 
-  it("labels the added-time figure — an unlabelled amber number is silent to a screen reader", () => {
-    const withAdded = view({ state: state({ periods: [{ phase: "H1", home: 1, away: 0, addedMinutes: 3 }] }) });
-    const added = buildScorebug(withAdded, t).strip.find((item) => item.id === "added");
-    expect(added?.label).toBe("scorepad.skin.football.header.added");
-    expect(added?.value).toBe("+3");
-    expect(added?.tone).toBe("led");
+  // -------------------------------------------------------------------------
+  // R3/F (F2): the board carries NO added-time item, and the two facts that
+  // decide it are both proved against the ENGINE, never a fixture.
+  //
+  // The hand-written fixture this block used to assert against —
+  // `periods: [{ phase: "H1", addedMinutes: 3 }]` while `state.phase` is still
+  // "H1" — is a state the fold CANNOT produce: `applyPeriod` stamps
+  // `addedMinutes` on the period a marker CLOSES and, for every marker except
+  // the final whistle, pushes the next period in the same step
+  // (`pushPeriod(close(), …)`, football.ts:1536-1550). So the open period never
+  // carries added time, and the mirror agreed with itself.
+  // -------------------------------------------------------------------------
+
+  it("never lights an added-time well — a real fold puts the minutes on a period the board has already left", () => {
+    // Halves, quarters, and the two finals that do NOT push a period after the
+    // whistle (`resolveFullTime`) — the only states where `periods[last]`
+    // carries `addedMinutes` at all, and where the strip therefore used to
+    // print the closed period's minutes beside a DIFFERENT period's label
+    // ("Shoot-out · Added +5" is the second half's added time).
+    const cases: { label: string; events: EventEnvelope[]; cfgOver?: Record<string, unknown> }[] = [
+      {
+        label: "second half, after a half-time whistle carrying +3",
+        events: [
+          envelope(1, "core.start", {}),
+          envelope(2, "football.period", { phase: "HT", addedMinutes: 3 }),
+        ],
+      },
+      {
+        label: "full time, decided",
+        events: [
+          envelope(1, "core.start", {}),
+          envelope(2, "football.goal", { by: "H" }),
+          envelope(3, "football.period", { phase: "HT", addedMinutes: 3 }),
+          envelope(4, "football.period", { phase: "FT", addedMinutes: 5 }),
+        ],
+      },
+      {
+        label: "shoot-out, level after 90",
+        cfgOver: { shootout: true },
+        events: [
+          envelope(1, "core.start", {}),
+          envelope(2, "football.goal", { by: "H" }),
+          envelope(3, "football.goal", { by: "A" }),
+          envelope(4, "football.period", { phase: "HT", addedMinutes: 3 }),
+          envelope(5, "football.period", { phase: "FT", addedMinutes: 5 }),
+        ],
+      },
+      {
+        label: "third quarter, after two quarter whistles",
+        cfgOver: { halves: 4 },
+        events: [
+          envelope(1, "core.start", {}),
+          envelope(2, "football.period", { phase: "QT", addedMinutes: 2 }),
+          envelope(3, "football.period", { phase: "HT", addedMinutes: 4 }),
+        ],
+      },
+    ];
+    for (const { label, events, cfgOver } of cases) {
+      const folded = foldedView(events, 3, cfgOver ?? {});
+      const state = folded.state as { periods?: { addedMinutes?: number }[] };
+      // The fold really did record the minutes — otherwise this whole
+      // assertion would pass for the trivial reason that nothing was stamped.
+      expect(
+        state.periods?.some((period) => typeof period.addedMinutes === "number"),
+        `${label}: the fold recorded no added time, so this case proves nothing`,
+      ).toBe(true);
+      expect(
+        buildScorebug(folded, t).strip.map((item) => item.id),
+        `${label}: the board lit an added-time well`,
+      ).not.toContain("added");
+    }
+  });
+
+  it("could not have recorded added time in the first place — the period sheet sends the marker alone", () => {
+    // The origination half of the same finding, and the reason the item is
+    // removed rather than re-attributed: `football.period` carries an optional
+    // `addedMinutes` (football.ts:2230), but it is a DEDICATED type — a tile
+    // and a sheet — so the generic More form that would render that field is
+    // never offered for it, and the sheet's own payload omits it. No v3
+    // football surface can put a number there.
+    const payload = buildSheets(view(), t).period!.buildPayload({ marker: "HT" });
+    expect(Object.keys(payload)).toEqual(["phase"]);
+    // …and it IS dedicated, resolved by the host's own function rather than
+    // re-asserted from this file's reading of the skin.
+    const v = view();
+    expect([...dedicatedEventTypes(buildTiles(v), buildSheets(v, t), buildSwap(v, t))]).toContain("football.period");
   });
 
   it("the context line states the FORMAT, which is the one thing cfg shrinks for a small-sided variant", () => {
