@@ -1544,6 +1544,9 @@ export async function autoSchedule(
       // would stretch the lattice around a board that pass is about to
       // replace.
       body.mode === "reflow" ? [...placedNow, ...pinnedNow] : [],
+      // The SAME feeds `buildSchedule` is handed below, so the window this
+      // measures can actually fit a dependent after its feeders.
+      feedDependencies(all),
     );
     // BUILD, with an organiser-set end date, only. POLISH and REFLOW are
     // contracts about NOT moving a card that doesn't need moving (R20/#452) —
@@ -2080,6 +2083,13 @@ export function boundSolverWindow<T extends SlotConfig & VerifyConfig>(
    * Empty for BUILD and POLISH, which propose from scratch.
    */
   mustContain: readonly Assignment[] = [],
+  /** Bracket feeds, forwarded to the measuring greedy pass. Without them that
+   *  pass places a dependent at the SAME instant as its feeders, so the span it
+   *  measures is too short and the window handed to the solver cannot fit the
+   *  dependent after them — the second route to the "2 of 3 placed" bug the
+   *  ordering fix in `slotFixtures` closes. Optional: every pre-existing caller
+   *  measures exactly as it did. */
+  dependencies: readonly OrderDependency[] = [],
 ): T {
   const w = config.window;
   if (w !== undefined && Number.isFinite(w.from) && Number.isFinite(w.to)) return config;
@@ -2091,7 +2101,7 @@ export function boundSolverWindow<T extends SlotConfig & VerifyConfig>(
       : Math.min(config.startAt, ...pins, ...mustContain.map((a) => a.startAt));
   // MEASURED, not invented: the greedy pass is the same one `buildSchedule`
   // runs first, so this is the span the fixtures demonstrably occupy.
-  const seed = slotFixtures({ fixtures, config, existing });
+  const seed = slotFixtures({ fixtures, config, existing, dependencies });
   const to =
     w !== undefined && Number.isFinite(w.to)
       ? w.to

@@ -88,7 +88,10 @@ export interface SlotConfig {
 
 export interface SchedulableFixture {
   id: string;
-  roundNo?: number; // scheduled in ascending round order (feed dependencies respected)
+  /** Round-robin placement order. Ascending. Feed dependencies are honoured
+   *  separately, via `SlotInput.dependencies` — this field alone never
+   *  expressed them, though its comment claimed so until P9.5. */
+  roundNo?: number;
   home?: EntrantId; // may be a TBD feed (undefined) — then no rest/overlap checks apply
   away?: EntrantId;
   people?: readonly string[]; // person ids, for cross-division overlap (doc 06 §4.3)
@@ -387,6 +390,20 @@ export interface SlotInput {
   fixtures: readonly SchedulableFixture[];
   config: SlotConfig;
   existing?: readonly Assignment[]; // sibling divisions' assignments (cross-division)
+  /**
+   * Bracket feeds, so a dependent is PLACED after the fixtures that feed it.
+   *
+   * Without this the comparator below had only `roundNo`, and apps/web stamps
+   * that solely for ROUND-ROBIN stages (C1's ruling: a bracket's display
+   * numbering must not masquerade as round-robin order). So every fixture in a
+   * knockout stage sorted as `roundNo ?? 0` and fell through to the id
+   * tiebreak — a uuid. When the final's uuid sorted first, greedy placed it
+   * before its semis existed on the board and the order check then DROPPED it:
+   * an auto-schedule returning 2 of 3 with `order_before_feeder`, about one run
+   * in three. Absent means "no feeds known", which is the pre-existing
+   * behaviour for every caller that does not pass them.
+   */
+  dependencies?: readonly OrderDependency[];
 }
 
 export interface SlotResult {
@@ -826,7 +843,62 @@ export function slotFixtures(input: SlotInput): SlotResult {
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
   const locked = ordered.filter((f) => f.locked !== undefined);
-  const free = ordered.filter((f) => f.locked === undefined);
+  /** `fixtureId -> the movable fixtures it feeds from`, filled while the
+   *  topological order below is built and reused to bound `ready`: ordering
+   *  alone only guarantees the feeders are PLACED first, not that the
+   *  dependent starts after they finish — greedy would otherwise drop it onto
+   *  the next free court at the very same instant. */
+  const feederEndBlockers = new Map<string, string[]>();
+  /** Every placed fixture's end, by id — the other half of that bound. */
+  const placedEndById = new Map<string, number>();
+  /**
+   * `ordered` restricted to the movable fixtures, then re-ordered so nothing is
+   * placed before something it depends on. Kahn's algorithm, seeded in
+   * `ordered`'s own sequence so the result is STABLE — with no dependencies it
+   * returns exactly what it was given, which is what keeps every pre-existing
+   * board byte-identical.
+   *
+   * A cycle cannot arise from a real bracket. If one ever does, the remaining
+   * fixtures are appended in their original order rather than dropped or
+   * looped over: placing them in a questionable order is recoverable, losing
+   * them is not.
+   */
+  const free = ((): SchedulableFixture[] => {
+    const movable = ordered.filter((f) => f.locked === undefined);
+    const deps = input.dependencies ?? [];
+    if (deps.length === 0) return movable;
+    const ids = new Set(movable.map((f) => f.id));
+    const blockers = new Map<string, Set<string>>();
+    const dependents = new Map<string, string[]>();
+    for (const d of deps) {
+      // Only edges BETWEEN movable fixtures matter: a feed from a locked or
+      // absent fixture imposes no ordering on this pass, because that card's
+      // position is not this pass's to choose.
+      if (!ids.has(d.fixtureId) || !ids.has(d.dependsOn) || d.fixtureId === d.dependsOn) continue;
+      const b = blockers.get(d.fixtureId) ?? new Set<string>();
+      b.add(d.dependsOn);
+      blockers.set(d.fixtureId, b);
+      dependents.set(d.dependsOn, [...(dependents.get(d.dependsOn) ?? []), d.fixtureId]);
+    }
+    for (const [k, v] of blockers) feederEndBlockers.set(k, [...v]);
+    if (blockers.size === 0) return movable;
+    const out: SchedulableFixture[] = [];
+    const emitted = new Set<string>();
+    let progress = true;
+    while (progress) {
+      progress = false;
+      for (const f of movable) {
+        if (emitted.has(f.id)) continue;
+        const b = blockers.get(f.id);
+        if (b !== undefined && [...b].some((id) => !emitted.has(id))) continue;
+        out.push(f);
+        emitted.add(f.id);
+        progress = true;
+      }
+    }
+    for (const f of movable) if (!emitted.has(f.id)) out.push(f);
+    return out;
+  })();
 
   const commit = (f: SchedulableFixture, court: string, start: number): Assignment => {
     const ent = entrantsOf(f);
@@ -836,6 +908,7 @@ export function slotFixtures(input: SlotInput): SlotResult {
       courtUse.set(e, m);
       lastCourt.set(e, court);
     }
+    placedEndById.set(f.id, start + durMs);
     const assignment: Assignment = {
       fixtureId: f.id,
       court,
@@ -913,6 +986,14 @@ export function slotFixtures(input: SlotInput): SlotResult {
     const restF = Math.max(restMs, restForMs(f));
     const window = windowFor(f);
     let ready = Math.max(config.startAt, window.notBefore);
+    // A dependent may not START before its feeders have FINISHED — the same
+    // rule `validateAssignments` enforces as `order_before_feeder`. Only
+    // already-placed feeders bound it, which is why the topological order
+    // above matters: it guarantees they have been.
+    for (const b of feederEndBlockers.get(f.id) ?? []) {
+      const end = placedEndById.get(b);
+      if (end !== undefined) ready = Math.max(ready, end);
+    }
     for (const k of restKeysOf(f)) ready = Math.max(ready, (lastEnd.get(k) ?? -Infinity) + restF);
 
     let best: { court: string; start: number } | null = null;

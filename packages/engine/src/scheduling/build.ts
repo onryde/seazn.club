@@ -966,7 +966,11 @@ function greedySeed(input: BuildInput): GreedySeed {
   const dependencies = input.dependencies ?? [];
   const verifyConfig: BuildConfig = { ...config };
 
-  const rawSeed = slotFixtures({ fixtures, config, existing });
+  // `dependencies` forwarded so greedy places a dependent AFTER its feeders.
+  // Without it a bracket stage had no ordering signal at all (apps/web stamps
+  // `roundNo` only for round-robin), so the final could land before its semis
+  // and be dropped — 2 of 3 placed, one run in three.
+  const rawSeed = slotFixtures({ fixtures, config, existing, dependencies });
   const rawSeedConflicts = validateAssignments(
     rawSeed.assignments,
     verifyConfig,
