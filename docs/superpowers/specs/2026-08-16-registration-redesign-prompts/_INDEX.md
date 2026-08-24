@@ -27,7 +27,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS001b | `RS001b-org-currency-allowlist.md` | RS001 | **DONE** — PR #598 merged `a7cca608` (2026-08-17) |
 | RS002 | `RS002-core-usecases.md` | RS001b | **DONE** — PR #607 merged `4ff0bf8f` (2026-08-17) |
 | RS003 | `RS003-public-endpoints.md` | RS002 | **DONE** — PR #615 merged `29690ec8c` (2026-08-18) |
-| RS004 | `RS004-hub-settings-tab.md` | RS003 | **IN FLIGHT** — branch `feat/rs004-registration-hub-settings` |
+| RS004 | `RS004-hub-settings-tab.md` | RS003 | **IN REVIEW** — branch `feat/rs004-registration-hub-settings`, gate green, awaiting owner code review |
 | RS005 | `RS005-hub-registrants-tab.md` | RS004 | TODO |
 | RS006 | `RS006-public-stepper.md` | RS003 | TODO |
 | RS007 | `RS007-status-page-join-payments.md` | RS006 | TODO |
@@ -1161,6 +1161,96 @@ are FALSE. Each was verified with `git grep -a`/`git show`, not assumed.**
 - Public register link was rendered **only when
   `competition.visibility !== "private"`**, with an amber notice otherwise
   (`d/[divSlug]/registrations/page.tsx:36-72`, pre-deletion). Keep that gate.
+
+### RS004 session log — waves, findings, rulings (2026-08-24)
+
+Ran as W1 API surface → W2 hub shell → W3a division rows → W3b config panel →
+W4 e2e → design sign-off → promotion. Every build wave and every gap pass got
+a reviewer; the main thread reran the gate at each boundary.
+
+**Owner rulings taken this session:**
+
+1. **No paywall lock on fees.** `registration.paid` is granted on EVERY plan
+   (`V310__community_branding_and_paid_registration.sql:49`) and has zero
+   `UpgradeGate` call sites, so the prompt's "fee section locked without
+   `registration.paid`" describes a lock that cannot fire. The fee section
+   renders `data-feature="registration.paid"` (the seam survives if pricing
+   ever changes) and gates nothing. What an organiser gets instead is the
+   thing they actually could not see: their own platform cut, and that the
+   rate LOCKS onto the competition at the first paid entry
+   (`competitions.fee_percent ?? feePercentFor(org)`, first-wins).
+2. **Hub is owner/admin only** — viewers get `notFound()`. This DIVERGES from
+   competition settings, which renders a viewer a read-only page. Deliberate:
+   RS005's Registrants tab carries names, emails and consent state.
+   `requireCompetitionPage` 404s a scorer but NOT a viewer, so the page adds
+   its own `canEdit` check — do not assume the helper is sufficient.
+3. **Windows render and edit in the ORG timezone, labelled.** New behaviour,
+   not a port: the deleted form used bare `new Date(iso).getHours()`, i.e.
+   browser-local, and mentioned `tz`/`orgTz` nowhere.
+4. **Division-page re-point deferred to RS005.** Design §5 wants the division
+   page linking into the hub with its division pre-filtered; the filter lands
+   with the real Registrants table. RS001 already removed the old link, so
+   nothing is left dangling meanwhile.
+5. **Row + panel treatment picked from screenshots** (owner, 2026-08-24) —
+   dense "scan line" row, accordion panel with Money and Form collapsed.
+   Two alternatives were built and captured; the losing two were deleted with
+   their tests and the whole `?variant=` scaffold.
+
+**False premises in the RS004 prompt — verified, not assumed:**
+
+- The org preferred-currency select **already existed**: RS001b shipped
+  `components/org-registration-currency.tsx` with the Connect lock and a 409
+  on the API. Scope item 6 was mostly done before the session opened. Its
+  labels are hand-written (`£ GBP`), NOT `Intl.DisplayNames`.
+- **`mobile.spec.ts` has no matrix array.** Every `test()` in that file runs
+  under all seven width projects (`playwright.config.ts:126-201`), so "add the
+  surface to the matrix" means "write a test in that file", and a mutating one
+  must fold `projectTag()` into its identity.
+- The guard convention is `notFound()`, not the prompt's "403/redirect".
+
+**Defects found that no test could see, and what each teaches:**
+
+- `PATCH /divisions/{id}` with ONE side of the age band violated
+  `divisions_age_band_check` and surfaced as a 500 with the raw constraint
+  text. Zod validated only within a single body; nothing refetched to merge.
+- The overview's registrant pill counted `entrants`, which exist only after
+  `materialise()` — so manual-approval and waitlisted registrations read as
+  ZERO, hiding exactly the people an organiser opens the hub to act on.
+- **A client component imported `server-only`.** `registration-hub-division-row`
+  pulled `t` from `@/lib/i18n`; vitest and `tsc` both passed, and `next build`
+  refused the app outright. Client code takes `t` from `@/lib/i18n-runtime` and
+  `Dict` from `@/lib/i18n-constants`.
+- **An invented event type produced a crash AND hid it.** The accordion's
+  `onToggle` prop was hand-typed as `(e: { currentTarget: { open: boolean } })`
+  — a shape the DOM never produces. Reading `e.currentTarget.open` in a native
+  `<details>` toggle (fired during commit, when `currentTarget` is unbound)
+  crashed the page on the FIRST open of every division. `tsc` was satisfied by
+  the invented type, the unit test fed that same invented event, and the
+  seven-width scroll matrix never opens a panel that crashes. Only a
+  screenshot of a real click found it. Type DOM handlers with React's own
+  `ReactEventHandler<T>`.
+- **The fee copy named a product that does not exist** ("Bench takes 2%", all
+  four locales). It lives inside the COLLAPSED Money section, so no earlier
+  capture had rendered it. Screenshot the sections a design hides by default.
+
+**Environment ruling with teeth:** DB-gated suites may no longer run against
+the dev database. `vitest.config.ts` loads `.env.local` so a bare run
+exercises DB suites, and every suite gates on `!!process.env.DATABASE_URL` —
+so a run with nothing exported did not skip, it wrote fixtures into the
+developer's own DB. Census on 2026-08-24: **4,811 fixture organisations
+created in one session**, on top of 22,634 from earlier ones, with nothing
+ever failing. The config now REFUSES to start when `DATABASE_URL` came from
+`.env.local` and points at port 5432. An exported URL, and CI's, are
+untouched.
+
+**Handover to RS005** (Registrants tab): the config panel is
+`registration-hub-config-panel.tsx` mounted from
+`registration-hub-settings-panel.tsx`; the hook is
+`use-registration-hub-config.ts`; row state derives through
+`registration-hub-row-derive.ts` and `-status.ts`. The Registrants tab
+deliberately builds NO context and issues NO queries — build its own rather
+than widening the settings one. `registrations.status` counting lives in
+`card-stats.ts` (`registered` and `awaiting_confirmation`, one aggregate).
 
 ## RS011 — why #412 moved here (2026-08-17)
 
