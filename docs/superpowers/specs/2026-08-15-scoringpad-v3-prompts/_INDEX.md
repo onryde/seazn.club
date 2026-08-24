@@ -1615,3 +1615,59 @@ parity 5010 keys x 4 locales, 320px overflow 0px across all 15 states.
 itself, whose body owes: smoke deferred to **R8 by name**; the engine exception
 `b00c85162` (band 3 -> `scoring.ball_by_ball`) called out as deliberate; and the
 entitlement-override backfill this wave records but does not perform.
+
+
+---
+
+## R3 — rebased onto `origin/main`, and why the sign-off still stands (2026-08-24)
+
+48 commits rebased onto `origin/main` cleanly, no conflicts. Recovery tag
+`r3-prerebase` points at the pre-rebase head.
+
+**THE SIGN-OFF RECORD CITES A COMMIT THAT NO LONGER EXISTS.** The section above
+says the approved captures came from `2f4ac70c4`. Rebasing rewrote every SHA on
+this branch, so that commit is NOT reachable from it any more — a later reader
+looking it up finds nothing and cannot tell whether the sheet was real. The
+mapping, recorded rather than left to be re-derived:
+
+| Pre-rebase | Post-rebase | What it is |
+| --- | --- | --- |
+| `2f4ac70c4` | `7baadc9e4` | the build the approved captures came from |
+| `790626127` | `34e88ea53` | the sign-off record itself |
+| — | `21115f19a` | branch head after the rebase |
+
+**The captures were NOT retaken, and that is a decision with evidence behind
+it, not an omission.** Main's four commits (scheduling, exports, public-site,
+P9.5) overlap this branch in exactly five files: the four locale dictionaries
+and the GENERATED `i18n-keys.ts`. Checked rather than assumed:
+
+- main only ADDED keys — `documents.*`, `board.conflict.*`, `calendar.*`,
+  `poster.*`, `export.*`. The single removed line is `export.description.ticket`
+  re-added with a trailing comma.
+- **Zero `pad.*`, `score.*` or `scorepad.*` keys were touched**, so nothing the
+  pad renders changed.
+- `i18n:check` parity OK at 5025 keys x 4, and `i18n:gen-keys` is a NO-OP after
+  the rebase, so the generated file carries both sides' keys with no drift.
+
+A clean rebase is not evidence of a working tree — it only says the text
+merged. Gate re-run at the rebase boundary:
+
+- engine 4088 total / 4075 passed / **0 failed** across 1013 suites
+- apps/web 9830 total / 9756 passed / **0 real failures** / 74 pending, across
+  3090 suites, 0 files resolving outside the worktree
+- tsc EXIT=0 from the worktree ROOT, i18n parity 5025 x 4
+
+**The apps/web run first reported 4 failures, and they were ENVIRONMENTAL.** All
+four were in `schedule-build-honours-locks.test.ts`, the suite that solves
+through the CP-SAT placement service; without it running those paths fall back
+and the assertions go red for a reason that has nothing to do with the code.
+This mattered more than usual here and was NOT waved through on the known
+signature alone: main's four commits touch `packages/engine/src/scheduling/**`
+(P9.5, court windows), so a genuine regression would look identical. Started the
+service (`seazn-env up --label r3 --placement`) and re-ran that suite alone:
+**12/12**. Environmental, confirmed by re-running rather than by recognising the
+shape.
+
+If any pad-facing key ever DOES change on main under a signed-off wave, the
+captures are stale and the sign-off has to be retaken — that is the test to
+apply, not the fact that a rebase was clean.
