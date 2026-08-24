@@ -1,31 +1,51 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { SlidersHorizontal } from "lucide-react";
 import {
   RegistrationHubDivisionRow,
   type RegistrationHubRowData,
   type RegistrationHubRowContext,
 } from "@/components/registration-hub-division-row";
+import { RegistrationHubConfigPanel } from "@/components/registration-hub-config-panel";
 
 /**
- * Registration hub — Settings tab (RS004 W3, design §5).
+ * Registration hub — Settings tab (RS004 W3/W3c, design §5).
  *
- * W2 shipped this as a data-free designed frame; W3 fills it: one
- * `RegistrationHubDivisionRow` per division, fed by the page's single
- * server-side query (`rows`) plus everything the rows share (`context` —
- * dict, now, org tz, currency, the register link). With zero divisions the
- * original W2 frame still renders unchanged — an empty competition is not a
- * half-built row list either. The row-click config panel is a later wave.
+ * W2 shipped this as a data-free designed frame; W3 filled it with one
+ * `RegistrationHubDivisionRow` per division. W3c makes it stateful: it owns
+ * which division's config panel (if any) is open and mounts
+ * `RegistrationHubConfigPanel` for it — a client component now, since that
+ * state has to live somewhere and the row/page split keeps rows themselves
+ * (and `page.tsx`) exactly as read-only as before. With zero divisions the
+ * original W2 frame still renders unchanged.
  */
 export function RegistrationHubSettingsPanel({
   title,
   body,
   rows,
   context,
+  orgSlug,
+  feePercentPct,
+  cardUnsupportedCurrency,
 }: {
   title: string;
   body: string;
   rows: RegistrationHubRowData[];
-  context: RegistrationHubRowContext;
+  /** Everything the rows share EXCEPT `onOpen` — this component supplies
+   *  that itself, since it is the one that owns "which row is open". */
+  context: Omit<RegistrationHubRowContext, "onOpen">;
+  orgSlug: string;
+  /** registration.fee_percent entitlement, resolved server-side (page.tsx). */
+  feePercentPct: number;
+  /** Non-null when the org's connected Stripe account settles outside the
+   *  registration currency allowlist. */
+  cardUnsupportedCurrency: string | null;
 }) {
+  const router = useRouter();
+  const [openDivisionId, setOpenDivisionId] = useState<string | null>(null);
+
   if (rows.length === 0) {
     return (
       <div
@@ -41,13 +61,43 @@ export function RegistrationHubSettingsPanel({
     );
   }
 
+  const rowContext: RegistrationHubRowContext = { ...context, onOpen: setOpenDivisionId };
+  const openRow = rows.find((r) => r.division_id === openDivisionId) ?? null;
+
   return (
-    <ul data-registration-hub-settings-panel className="flex flex-col gap-3">
-      {rows.map((row) => (
-        <li key={row.division_id}>
-          <RegistrationHubDivisionRow row={row} context={context} />
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul data-registration-hub-settings-panel className="flex flex-col gap-3">
+        {rows.map((row) => (
+          <li key={row.division_id}>
+            <RegistrationHubDivisionRow row={row} context={rowContext} />
+          </li>
+        ))}
+      </ul>
+
+      {openRow && (
+        <RegistrationHubConfigPanel
+          division={{
+            division_id: openRow.division_id,
+            name: openRow.name,
+            category: openRow.category,
+            age_min: openRow.age_min,
+            age_max: openRow.age_max,
+          }}
+          orgTz={context.orgTz}
+          orgSlug={orgSlug}
+          currency={context.currency}
+          feePercentPct={feePercentPct}
+          cardUnsupportedCurrency={cardUnsupportedCurrency}
+          onClose={() => setOpenDivisionId(null)}
+          onSaved={() => {
+            // The row list is server-fetched (page.tsx); refresh re-runs
+            // that fetch so the row reflects what was just saved instead of
+            // this component trying to merge/predict the new server state.
+            setOpenDivisionId(null);
+            router.refresh();
+          }}
+        />
+      )}
+    </>
   );
 }

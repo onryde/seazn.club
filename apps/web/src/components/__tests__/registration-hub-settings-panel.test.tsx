@@ -1,14 +1,12 @@
-// RS004 W3 — the Settings tab panel: an empty-frame (no divisions yet,
-// unchanged from W2) or a list of division rows, one `RegistrationHubRow`
-// per division, fed by the page's single server-side query.
-//
-// `textOf`/`walk` rather than `renderToStaticMarkup`: this workspace has no
-// jsdom, and React's static-markup renderer HTML-escapes text content (an
-// apostrophe becomes `&#x27;`), so a `.toContain()` check against the raw
-// dictionary string is a false red against real copy, not a real failure.
-import { describe, expect, it } from "vitest";
-import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
+// RS004 W3/W3c — the Settings tab panel: an empty-frame (no divisions yet,
+// unchanged from W2) or a list of division rows, plus (W3c) the state for
+// "which row's config panel is open" and mounting RegistrationHubConfigPanel
+// for it. Stateful now (useState), so driven through the repo's hook
+// harness rather than called as a plain function.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { RegistrationHubSettingsPanel } from "@/components/registration-hub-settings-panel";
+import { RegistrationHubConfigPanel } from "@/components/registration-hub-config-panel";
 import {
   RegistrationHubDivisionRow,
   type RegistrationHubRowData,
@@ -17,10 +15,15 @@ import {
 import { t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
 
+const nav = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: nav.refresh }),
+}));
+
 const title = t(uiEn, "reg.hub.settings.title");
 const body = t(uiEn, "reg.hub.settings.body");
 
-const CONTEXT: RegistrationHubRowContext = {
+const CONTEXT: Omit<RegistrationHubRowContext, "onOpen"> = {
   dict: uiEn,
   now: new Date("2026-06-15T12:00:00Z"),
   orgTz: "UTC",
@@ -47,49 +50,140 @@ const ROW: RegistrationHubRowData = {
   taken: 0,
 };
 
+const BASE_PROPS = {
+  title,
+  body,
+  rows: [ROW, { ...ROW, division_id: "div-2", name: "Open Doubles" }],
+  context: CONTEXT,
+  orgSlug: "riverside",
+  feePercentPct: 8,
+  cardUnsupportedCurrency: null,
+};
+
+beforeEach(() => {
+  nav.refresh.mockClear();
+});
+
 describe("RegistrationHubSettingsPanel — empty (no divisions yet)", () => {
   it("renders the title and body it is given", () => {
-    const text = textOf(RegistrationHubSettingsPanel({ title, body, rows: [], context: CONTEXT }));
-    expect(text).toContain(title);
-    expect(text).toContain(body);
+    const island = renderIsland(RegistrationHubSettingsPanel, { ...BASE_PROPS, rows: [] });
+    expect(island.text()).toContain(title);
+    expect(island.text()).toContain(body);
   });
 
   it("is a designed frame, never a literal TODO placeholder", () => {
-    const text = textOf(RegistrationHubSettingsPanel({ title, body, rows: [], context: CONTEXT }));
-    expect(text).not.toContain("TODO");
+    const island = renderIsland(RegistrationHubSettingsPanel, { ...BASE_PROPS, rows: [] });
+    expect(island.text()).not.toContain("TODO");
   });
 
   it("carries its own data hook for e2e/regression targeting", () => {
-    const tree = walk(RegistrationHubSettingsPanel({ title, body, rows: [], context: CONTEXT }));
-    const root = tree[0]!;
+    const island = renderIsland(RegistrationHubSettingsPanel, { ...BASE_PROPS, rows: [] });
+    const root = island.tree()[0]!;
     expect(propsOf(root)).toHaveProperty("data-registration-hub-settings-panel");
   });
 });
 
 describe("RegistrationHubSettingsPanel — populated", () => {
   it("renders one RegistrationHubDivisionRow per division, in the given order", () => {
-    const rows = [ROW, { ...ROW, division_id: "div-2", name: "Open Doubles" }];
-    const tree = walk(RegistrationHubSettingsPanel({ title, body, rows, context: CONTEXT }));
-    const rendered = tree.filter((e) => e.type === RegistrationHubDivisionRow);
+    const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
+    const rendered = island.tree().filter((e) => e.type === RegistrationHubDivisionRow);
     expect(rendered).toHaveLength(2);
     expect(propsOf(rendered[0]!).row).toMatchObject({ division_id: "div-1" });
     expect(propsOf(rendered[1]!).row).toMatchObject({ division_id: "div-2" });
   });
 
-  it("threads the shared context to every row unchanged", () => {
-    const tree = walk(RegistrationHubSettingsPanel({ title, body, rows: [ROW], context: CONTEXT }));
-    const row = tree.find((e) => e.type === RegistrationHubDivisionRow)!;
-    expect(propsOf(row).context).toBe(CONTEXT);
+  it("threads the shared context fields to every row, plus a live onOpen callback", () => {
+    const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
+    const row = island.tree().find((e) => e.type === RegistrationHubDivisionRow)!;
+    expect(propsOf(row).context).toMatchObject(CONTEXT);
+    expect((propsOf(row).context as RegistrationHubRowContext).onOpen).toBeInstanceOf(Function);
   });
 
   it("does not render the empty-frame copy once there is at least one row", () => {
-    const text = textOf(RegistrationHubSettingsPanel({ title, body, rows: [ROW], context: CONTEXT }));
-    expect(text).not.toContain(body);
+    const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
+    expect(island.text()).not.toContain(body);
   });
 
   it("still carries the panel's own data hook when populated", () => {
-    const tree = walk(RegistrationHubSettingsPanel({ title, body, rows: [ROW], context: CONTEXT }));
-    const root = tree[0]!;
-    expect(propsOf(root)).toHaveProperty("data-registration-hub-settings-panel");
+    // The populated root is now a Fragment (a sibling slot is needed for the
+    // config panel), so the marker lives on the <ul> rather than tree()[0].
+    const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
+    const list = island.tree().find((e) => e.type === "ul")!;
+    expect(propsOf(list)).toHaveProperty("data-registration-hub-settings-panel");
+  });
+
+  it("mounts no config panel until a row is opened", () => {
+    const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
+    expect(island.tree().some((e) => e.type === RegistrationHubConfigPanel)).toBe(false);
+  });
+});
+
+describe("RegistrationHubSettingsPanel — opening/closing/saving the config panel (W3c)", () => {
+  it("clicking a row's onOpen mounts the config panel for THAT division", () => {
+    const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
+    const rows = island.tree().filter((e) => e.type === RegistrationHubDivisionRow);
+    (propsOf(rows[1]!).context as RegistrationHubRowContext).onOpen("div-2");
+    const panel = island.tree().find((e) => e.type === RegistrationHubConfigPanel);
+    expect(panel).toBeTruthy();
+    expect(propsOf(panel!).division).toMatchObject({ division_id: "div-2", name: "Open Doubles" });
+  });
+
+  it("passes orgTz/currency/orgSlug/feePercentPct/cardUnsupportedCurrency through to the config panel", () => {
+    const island = renderIsland(RegistrationHubSettingsPanel, {
+      ...BASE_PROPS,
+      context: { ...CONTEXT, orgTz: "Asia/Kolkata", currency: "inr" as const },
+      feePercentPct: 5,
+      cardUnsupportedCurrency: "jpy",
+    });
+    (propsOf(island.tree().find((e) => e.type === RegistrationHubDivisionRow)!).context as RegistrationHubRowContext).onOpen(
+      "div-1",
+    );
+    const panel = island.tree().find((e) => e.type === RegistrationHubConfigPanel)!;
+    expect(propsOf(panel)).toMatchObject({
+      orgTz: "Asia/Kolkata",
+      orgSlug: "riverside",
+      currency: "inr",
+      feePercentPct: 5,
+      cardUnsupportedCurrency: "jpy",
+    });
+  });
+
+  it("opening a different row switches which division's panel is mounted (only one at a time)", () => {
+    const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
+    const context1 = propsOf(island.tree().filter((e) => e.type === RegistrationHubDivisionRow)[0]!)
+      .context as RegistrationHubRowContext;
+    context1.onOpen("div-1");
+    let panels = island.tree().filter((e) => e.type === RegistrationHubConfigPanel);
+    expect(panels).toHaveLength(1);
+    expect(propsOf(panels[0]!).division).toMatchObject({ division_id: "div-1" });
+
+    const context2 = propsOf(island.tree().filter((e) => e.type === RegistrationHubDivisionRow)[1]!)
+      .context as RegistrationHubRowContext;
+    context2.onOpen("div-2");
+    panels = island.tree().filter((e) => e.type === RegistrationHubConfigPanel);
+    expect(panels).toHaveLength(1);
+    expect(propsOf(panels[0]!).division).toMatchObject({ division_id: "div-2" });
+  });
+
+  it("onClose unmounts the panel without refreshing the router", () => {
+    const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
+    (propsOf(island.tree().find((e) => e.type === RegistrationHubDivisionRow)!).context as RegistrationHubRowContext).onOpen(
+      "div-1",
+    );
+    const panel = island.tree().find((e) => e.type === RegistrationHubConfigPanel)!;
+    (propsOf(panel).onClose as () => void)();
+    expect(island.tree().some((e) => e.type === RegistrationHubConfigPanel)).toBe(false);
+    expect(nav.refresh).not.toHaveBeenCalled();
+  });
+
+  it("onSaved unmounts the panel AND refreshes the router so the row reflects what was saved", () => {
+    const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
+    (propsOf(island.tree().find((e) => e.type === RegistrationHubDivisionRow)!).context as RegistrationHubRowContext).onOpen(
+      "div-1",
+    );
+    const panel = island.tree().find((e) => e.type === RegistrationHubConfigPanel)!;
+    (propsOf(panel).onSaved as () => void)();
+    expect(island.tree().some((e) => e.type === RegistrationHubConfigPanel)).toBe(false);
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
   });
 });
