@@ -1109,6 +1109,90 @@ ribbon bases stay var-free; the skin supplies `detail`, and
 `cardColor.second_yellow` was reused rather than re-minted, exactly as task C
 recorded.
 
+### R3/D — the e2e + gallery task's own findings (2026-08-24)
+
+**The fold race is FIXED, and the fix is an assertion, never a sleep.**
+`captureState` now takes a `StateProbe` and runs it before the 320 measurement
+AND before every width's screenshot, so a capture whose board is not the
+declared state FAILS instead of writing a misleading PNG. The shared probe
+compares the pad's own rendered event rows against the ledger count the harness
+just read — one probe honest for both lanes (v3 `[data-role="v3-activity-row"]`
+and the legacy `[data-role="timeline"] [data-event-id]`), because the race was
+always "the client has not folded yet", never anything sport-specific.
+`manifest.json` gained `padRowsByWidth`, so a published sheet can be PROVED to
+be three views of one state rather than three states. Runbook updated.
+
+Football's `04-dock` needed one more thing and it generalises: the v3 Detail
+Dock is a ~6s window, so football is the FIRST sport whose dock can close on
+its own mid-capture. `GallerySport.dockProbe` is the opt-in for that; the eight
+legacy docks are persistent expanded forms with nothing to race. Measured: the
+three widths capture comfortably inside the window.
+
+**Four defects/false premises found, three fixed here:**
+
+1. **FIXED — a real WCAG AA failure on football's board.** `TileSpec.sublabel`
+   renders at `text-[11px] opacity-70` (`tile-grid.tsx`), and football is the
+   first skin ever to put a sublabel on a `primary` tile. White at 70% over
+   violet-600 composites to `#d9bdff`: **3.55:1**, under the 4.5 floor — on the
+   word that says WHICH SIDE a tile belongs to, i.e. the most load-bearing word
+   on a two-lane board. Lifted to 90% (5.02:1). Cricket declares no sublabel at
+   all, so no cricket pixel moves. `contrast.test.ts` had measured the SCOREBUG
+   exhaustively and never the TILE GRID; it now computes both pairs from
+   tile-grid.tsx's own source, mutation-proved.
+2. **FIXED — `playwright.config.ts` cited a pin that did not exist.** Its
+   carve-out comment has said since #597 that
+   `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` pins "rest is a catch-all"
+   and "every file named in PARALLEL_HEAVY is real". **There was no such file
+   anywhere in the repo.** Written now, to those properties plus "no spec runs
+   nowhere" and "heavy + rest partition the unsliced project"; both mutations
+   (a typo'd heavy name, an explicit `rest` testMatch) proved red.
+3. **RECORDED, NOT FIXED — the v3 pad cannot record a penalty's `offence`.**
+   The v2 pad drew `football.penalty` through the generic ActionForm, which
+   rendered every `padSpec` field including the IFAB Law 12 `PenaltyOffence`
+   taxonomy (S4/#428). The v3 skin gives the penalty a dedicated two-step sheet
+   (`by`, `outcome`) and a dedicated sheet REMOVES its event from More
+   (`dedicatedEventTypes`), so there is no second route: `offence` is not
+   askable anywhere on the v3 pad. Asymmetric with the CARD, whose own offence
+   IS asked at band >=2 (R3-1). The converted test asserts `by` + `outcome` and
+   does NOT assert the absence — asserting it would enshrine it. Cost of the
+   fix is small and known (one `when: view.band >= 2` step mirroring the card's,
+   one new sheet-title key x4 locales; the 8 option labels already exist at
+   `ENUM_VOCAB.offence`). Routed to the wave to rule on, not taken unilaterally
+   in a test task.
+4. **RECORDED, NOT FIXED — the LED board's `Added` item can never render.**
+   B4's signature element reads
+   `state.periods[periods.length - 1]?.addedMinutes`, but `stampAddedMinutes`
+   stamps the period a marker CLOSES and `pushPeriod` immediately appends the
+   next one — so the current period never carries added time. The one state
+   where it would (`done`, after FT) is `decided`, and `fixture-console.tsx`
+   unmounts the pad entirely when decided. The PERIOD item does render, in
+   football's amber, and that is what the identity e2e asserts.
+
+**Two traps paid for, so nobody pays again:**
+- `FootballCfg.extraTime` is a plain `z.object` whose two fields are BOTH
+  required, with the default on the whole object. A division config patched to
+  `{ enabled: false }` fails the cfg parse — and because `setDivisionConfigSql`
+  writes the column by SQL, nothing validates on the way in: it surfaces as the
+  console rendering NO PAD, which reads as a pad defect.
+- The `Offence?` step's `view.band >= 2` predicate is **structurally
+  unobservable as false through the pad**: `football.card` is itself a band-2
+  event, so `buildTiles` withholds the card TILE below band 2 and the sheet is
+  unreachable. The e2e proves the honest form — at community band there is no
+  card, sub or penalty tile at all, while goal and period remain.
+
+**Coverage now in place:** the four football tests in `scorepad-skins.spec.ts`
+and the three in `scorepad-v2.spec.ts` drive the v3 DOM (nothing deleted — the
+v2 pad's timeline undo keeps its own coverage through `carrom-pad.spec.ts`),
+plus `scorepad-v3-football.spec.ts`: dock narrowing + every chip in the
+SUBMITTED payload; all three card colours with `second_yellow` gated on a prior
+yellow; the band floor; BOTH substitution caps (`maxSubs` and `subWindows`,
+independently reached — the window cap's first coverage anywhere, since v2 sent
+no `at` and it has never fired in production); the re-entry block rendered
+beside the name; the amber LED board and the caution/dismissal card codes as
+RESOLVED COLOURS; and all nine `football.*` types reachable, four via More with
+`football.shot` submitted for real and `football.shootout.kick` proved at the
+kicks.
+
 ### R2c — SIGN-OFF: approval-on-merge, 2026-08-18
 
 **What actually happened, recorded plainly because the gate cannot be
