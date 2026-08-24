@@ -257,7 +257,16 @@ describe("RegistrationHubConfigPanel — decimal entry fees (finding 3)", () => 
     await flush();
     return island;
   }
-  function fire(island: ReturnType<typeof renderIsland>, handler: "onChange" | "onBlur", value?: string) {
+  // Typed off `openPanel`, not `ReturnType<typeof renderIsland>`: renderIsland
+  // is generic, so ReturnType resolves its props parameter to `unknown` and the
+  // concrete island is then not assignable to it (a function parameter is
+  // contravariant — `(p: unknown) => void` does not accept `(p: Props) => void`).
+  // vitest never typechecks, so this only surfaces in `turbo typecheck`.
+  function fire(
+    island: Awaited<ReturnType<typeof openPanel>>,
+    handler: "onChange" | "onBlur",
+    value?: string,
+  ) {
     const feeInput = findField(island.tree(), "fee_cents")!;
     if (handler === "onChange") {
       (propsOf(feeInput).onChange as (e: { target: { value: string } }) => void)({ target: { value: value! } });
