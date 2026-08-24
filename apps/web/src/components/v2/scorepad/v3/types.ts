@@ -577,6 +577,52 @@ export interface SwapSlot {
    *  its `.reason` machine slug (see this interface's own header). Present
    *  only when `policyOk` is false. */
   policyMessage?: string;
+  /**
+   * R3 chassis sub-wave (owner ruling 2026-08-24, defect 4) — SCOPE for the
+   * ON list (who may come ON). Field-for-field the contract `ContextSlot.
+   * candidates` already ships, honoured by the same `candidates ?? resolvePool
+   * (...)` line, so the two narrowing surfaces cannot fork. See `Blocked`
+   * above for why scope and eligibility are two operations, not one.
+   *
+   * When present it SUPERSEDES the bench pool entirely, and an EMPTY array
+   * means "nobody is eligible" — it must never read as "no narrowing" and fall
+   * back to the pool. Absent keeps R1's behaviour exactly (`pool: "bench"`).
+   *
+   * The ON LIST ONLY, and the asymmetry is deliberate rather than an
+   * oversight. The OFF list stays `resolvePool({pool: "onfield"})` because no
+   * shipped sport has a per-candidate rule about who may be taken OFF —
+   * swap-sheet.tsx's own SCOPE NOTE has priced that deferral in since R1.
+   * Adding `offCandidates`/`offBlocked` later is purely additive; inventing
+   * them now would be two more fields with no caller and no test that could
+   * fail.
+   *
+   * A VALUE, not a method, matching `ContextSlot` rather than
+   * `SheetChoiceStep`: this is rebuilt every render from the live `view`, so a
+   * value is already current. The cost, stated so a skin author does not
+   * discover it the hard way: it therefore CANNOT depend on which OFF player
+   * was picked, since that pick lives in `SwapSheet`'s own local state and
+   * never re-enters `swap(view)`. The one dependency that genuinely matters —
+   * a player cannot replace themselves — is handled by the chassis instead
+   * (`swapCandidates` excludes the picked OFF person, defect 5).
+   */
+  candidates?: readonly string[];
+  /**
+   * R3 chassis sub-wave (owner ruling 2026-08-24, defect 4) — ELIGIBILITY for
+   * the ON list, applied AFTER `candidates`/the pool resolves so scope and
+   * eligibility never fight. Same `Blocked` type, same pre-localised
+   * person-id -> reason shape and the same renderer (`renderCandidateRow`) the
+   * context strip already uses.
+   *
+   * A blocked candidate stays VISIBLE, disabled, WITH ITS REASON beside the
+   * name — R2b's binding "visible, blocked, and REASONED — not removed"
+   * ruling. Without it the swap sheet could only offer everyone and let the
+   * engine refuse afterwards, which is the whole defect: the sheet could not
+   * say WHY someone was ineligible.
+   *
+   * First real use: football's already-substituted-off players, whom
+   * `reentry: "none"` will refuse.
+   */
+  blocked?: Blocked;
   /** Builds the concrete event once both picks are made — `football.sub`
    *  where the module declares one, `core.lineup.substitution` otherwise
    *  (design §2.7). Runs through the SAME dispatch guard as every other v3

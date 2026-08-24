@@ -430,7 +430,11 @@ export function adaptSwapSlot(
   squads: SquadState,
 ): { spec: SwapSheetSpec; view: PoolView; policyVerdict: PolicyVerdict } {
   return {
-    spec: { offLabel: slot.offLabel, onLabel: slot.onLabel },
+    // R3 (defect 4): `candidates`/`blocked` cross verbatim, same field names on
+    // both sides. A rename here is exactly where two narrowing idioms start to
+    // drift, and dropping them here would leave the whole contract dead on the
+    // production path while the sheet's own unit tests still passed.
+    spec: { offLabel: slot.offLabel, onLabel: slot.onLabel, candidates: slot.candidates, blocked: slot.blocked },
     view: sidePool(slot.side, squads),
     policyVerdict: slot.policyOk
       ? { ok: true }

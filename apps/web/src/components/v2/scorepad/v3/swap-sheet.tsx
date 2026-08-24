@@ -68,6 +68,7 @@
 import { useState } from "react";
 import type { LineupRejectionReason } from "@seazn/engine/core";
 import { renderCandidateRow, resolvePool, type PoolView, type TFn } from "./context-strip";
+import type { Blocked } from "./types";
 
 /**
  * `T` collapses to `never` when its STATIC type is (a subtype of)
@@ -118,11 +119,33 @@ export interface SwapCandidatesResult {
   readonly message?: RefusalMessage;
 }
 
-/** The swap-specific pool filter: gated by the module's own policy verdict
- *  first, resolvePool's bench pool second. See the file header. */
-export function swapCandidates(view: PoolView, policyVerdict: PolicyVerdict): SwapCandidatesResult {
+/**
+ * The swap-specific ON-list filter: gated by the module's own policy verdict
+ * first, then the skin's declared SCOPE, then resolvePool's bench pool. See
+ * the file header.
+ *
+ * R3 chassis sub-wave (owner ruling 2026-08-24, defect 4): `candidates` is
+ * `SwapSlot.candidates` (types.ts) — R2c's SCOPE narrowing, extended to the
+ * swap path with the identical `candidates ?? resolvePool(...)` line the
+ * context strip and guided sheet already use, so the three cannot fork.
+ *
+ * Deliberately `??`, never a truthiness check: an EMPTY array means "nobody is
+ * eligible" and must render the empty state, NOT fall back to the whole bench.
+ * That absent-vs-empty divergence is the trap `ContextSlot.message` already
+ * hit once (R2b review item 3).
+ *
+ * ELIGIBILITY (`SwapSlot.blocked`) is deliberately NOT applied here: a blocked
+ * candidate stays in the list and is rendered visible-and-disabled with its
+ * reason, so it must reach the renderer. Filtering it out here would silently
+ * convert R2b's "visible, blocked, and REASONED" ruling back into "removed".
+ */
+export function swapCandidates(
+  view: PoolView,
+  policyVerdict: PolicyVerdict,
+  candidates?: readonly string[],
+): SwapCandidatesResult {
   if (!policyVerdict.ok) return { candidates: [], message: policyVerdict.message };
-  return { candidates: resolvePool({ pool: "bench" }, view) };
+  return { candidates: candidates ?? resolvePool({ pool: "bench" }, view) };
 }
 
 export interface SwapSheetSpec {
@@ -131,6 +154,16 @@ export interface SwapSheetSpec {
    *  as every other v3 spec field carrying a "label"/"title". */
   readonly offLabel: string;
   readonly onLabel: string;
+  /** R3 — SCOPE for the ON list, `SwapSlot.candidates` carried through
+   *  verbatim by `adaptSwapSlot` (pad-host.tsx). Same name on both sides on
+   *  purpose: a rename at the adapter is exactly where two narrowing idioms
+   *  start to drift apart. */
+  readonly candidates?: readonly string[];
+  /** R3 — ELIGIBILITY for the ON list, `SwapSlot.blocked` carried through
+   *  verbatim. Pre-localised person-id -> reason; an absent key means
+   *  selectable. Rendered by `renderCandidateRow`, the same function the
+   *  context strip's own picker uses. */
+  readonly blocked?: Blocked;
 }
 
 export interface SwapSheetProps {
@@ -207,7 +240,7 @@ export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap, o
     );
   }
 
-  const { candidates, message } = swapCandidates(view, policyVerdict);
+  const { candidates, message } = swapCandidates(view, policyVerdict, spec.candidates);
   const offName = personNames[offId] ?? t("eventCopy.unknownPerson");
 
   return (
@@ -228,7 +261,11 @@ export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap, o
         {candidates.length === 0 && message !== undefined ? (
           <p className="text-xs text-slate-600">{message}</p>
         ) : (
-          renderCandidateRow(candidates, personNames, t, (id) => onSwap(offId, id), emptyText)
+          // R3 (defect 4): `spec.blocked` reaches the SAME renderer the context
+          // strip's picker uses, so a blocked ON candidate is a real disabled
+          // button showing its reason beside the name — never removed, and
+          // never a control that merely looks dimmed.
+          renderCandidateRow(candidates, personNames, t, (id) => onSwap(offId, id), emptyText, spec.blocked)
         )}
       </div>
       <div className="flex justify-end px-4 pb-3">

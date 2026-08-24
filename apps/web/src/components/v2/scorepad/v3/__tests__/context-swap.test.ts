@@ -858,3 +858,109 @@ describe("ContextStrip — R2c eligibility blocking (ContextSlot.blocked)", () =
     expect(island.text()).not.toContain("not even offered");
   });
 });
+
+// ---------------------------------------------------------------------------
+// R3 chassis sub-wave (owner ruling 2026-08-24, `_INDEX.md` "R3 — owner
+// ruling: FIX SwapSheet in the chassis, then use it"). Defect 4: the swap path
+// never got R2c's candidate narrowing. The ON list was hardcoded
+// `pool: "bench"` and the OFF list `pool: "onfield"`, so the sheet could not
+// say WHY a player was ineligible — it could only show them as pickable and
+// let the engine refuse afterwards.
+//
+// The two operations are R2c's, unchanged, and deliberately NOT a second
+// idiom: SCOPE (`candidates`) removes, ELIGIBILITY (`blocked`) keeps visible
+// and states the reason. Same field names, same semantics and the same
+// renderer (`renderCandidateRow`) the context strip already uses, so the two
+// surfaces cannot drift.
+// ---------------------------------------------------------------------------
+
+describe("swapCandidates — R3 scope narrowing (SwapSlot.candidates)", () => {
+  const ok: PolicyVerdict = { ok: true };
+  const s = squad([
+    member({ personId: "a", onField: true }),
+    member({ personId: "b", onField: false }),
+    member({ personId: "c", onField: false }),
+  ]);
+
+  it("an explicit candidate list SUPERSEDES the bench pool entirely — same contract ContextSlot.candidates already ships", () => {
+    expect(swapCandidates({ squad: s }, ok, ["c"])).toEqual({ candidates: ["c"] });
+  });
+
+  it("an EMPTY candidate list means 'nobody is eligible' and must NEVER fall back to the bench pool", () => {
+    expect(swapCandidates({ squad: s }, ok, [])).toEqual({ candidates: [] });
+  });
+
+  it("an ABSENT candidate list still resolves the bench pool — every pre-R3 caller is unchanged", () => {
+    expect(swapCandidates({ squad: s }, ok)).toEqual({ candidates: ["b", "c"] });
+  });
+
+  it("a refused verdict still collapses to empty even when the skin narrowed — policy outranks scope", () => {
+    const verdict: PolicyVerdict = { ok: false, message: refusalMessage("no subs left") };
+    expect(swapCandidates({ squad: s }, verdict, ["b", "c"])).toEqual({
+      candidates: [],
+      message: "no subs left",
+    });
+  });
+});
+
+describe("SwapSheet — R3 eligibility narrowing (SwapSlot.blocked) on the ON list", () => {
+  const s = squad([
+    member({ personId: "a", onField: true }),
+    member({ personId: "b", onField: false }),
+    member({ personId: "c", onField: false }),
+  ]);
+  const names = { a: "Player A", b: "Player B", c: "Player C" };
+
+  function openOnStep(over: Partial<SwapSheetProps["spec"]>, onSwap: SwapSheetProps["onSwap"] = () => {}) {
+    const island = renderIsland(SwapSheet, {
+      spec: { ...swapSpec, ...over },
+      view: { squad: s },
+      policyVerdict: { ok: true },
+      personNames: names,
+      t,
+      onSwap,
+    });
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn) === "Player A")!); // off -> "a"
+    return island;
+  }
+
+  it("a blocked ON candidate stays VISIBLE, is a real disabled button, and renders its pre-localised reason", () => {
+    const island = openOnStep({ blocked: { b: "Already substituted off" } });
+    const blockedButton = buttonsOf(island.tree()).find((btn) => textOf(btn).startsWith("Player B"))!;
+    expect(blockedButton).toBeDefined();
+    expect(propsOf(blockedButton).disabled).toBe(true);
+    expect(island.text()).toContain("Already substituted off");
+  });
+
+  it("a blocked ON candidate carries NO click handler at all — the swap cannot be completed through it even if the disabled attribute were styled away", () => {
+    let swapped: [string, string] | null = null;
+    const island = openOnStep({ blocked: { b: "Already substituted off" } }, (off, on) => {
+      swapped = [off, on];
+    });
+    const blockedButton = buttonsOf(island.tree()).find((btn) => textOf(btn).startsWith("Player B"))!;
+    // Two independent barriers, asserted separately on purpose: `disabled`
+    // alone is a DOM attribute a stray CSS/`pointer-events` change can defeat,
+    // and an absent `onClick` alone leaves nothing for a screen reader to
+    // announce. The pre-R3 sheet had neither — a blocked player was an
+    // ordinary live button that fired `onSwap` (this test asserted exactly
+    // that before the fix, and read `['a', 'b']`).
+    expect(propsOf(blockedButton).disabled).toBe(true);
+    expect(propsOf(blockedButton).onClick).toBeUndefined();
+    expect(swapped).toBeNull();
+  });
+
+  it("an unblocked ON candidate beside a blocked one still completes the swap", () => {
+    let swapped: [string, string] | null = null;
+    const island = openOnStep({ blocked: { b: "Already substituted off" } }, (off, on) => {
+      swapped = [off, on];
+    });
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn) === "Player C")!);
+    expect(swapped).toEqual(["a", "c"]);
+  });
+
+  it("SCOPE removes rather than disables — a narrowed-away bench player is simply absent, no greyed row", () => {
+    const island = openOnStep({ candidates: ["c"] });
+    expect(island.text()).not.toContain("Player B");
+    expect(island.text()).toContain("Player C");
+  });
+});

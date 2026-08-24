@@ -256,6 +256,43 @@ describe("adaptSwapSlot", () => {
     expect(adapted.policyVerdict.ok).toBe(false);
     expect(String(adapted.policyVerdict.message)).toBe("this side has used all 3 substitutions this variant allows");
   });
+
+  // R3 chassis sub-wave, defect 4. Without this the narrowing is DEAD on the
+  // production path: `SwapSheet`'s own tests can pass `spec.candidates`
+  // directly, but the host only ever hands it what `adaptSwapSlot` builds, so
+  // a skin's declared scope/eligibility would be silently dropped between the
+  // contract and the renderer.
+  it("carries the skin's ON-list scope and eligibility narrowing through to the sheet spec, verbatim", () => {
+    const slot = {
+      id: "subHome",
+      offLabel: "pad.football.swap.off",
+      onLabel: "pad.football.swap.on",
+      side: "home" as const,
+      eventType: "football.sub",
+      policyOk: true,
+      candidates: ["sub-1", "sub-2"],
+      blocked: { "sub-2": "Already substituted off" },
+      buildEvent: () => ({ type: "football.sub", payload: {} }),
+    };
+    const adapted = adaptSwapSlot(slot, squads());
+    expect(adapted.spec.candidates).toEqual(["sub-1", "sub-2"]);
+    expect(adapted.spec.blocked).toEqual({ "sub-2": "Already substituted off" });
+  });
+
+  it("leaves both narrowing fields undefined when the skin declares neither — an absent list must never become an empty one", () => {
+    const slot = {
+      id: "subHome",
+      offLabel: "pad.football.swap.off",
+      onLabel: "pad.football.swap.on",
+      side: "home" as const,
+      eventType: "football.sub",
+      policyOk: true,
+      buildEvent: () => ({ type: "football.sub", payload: {} }),
+    };
+    const adapted = adaptSwapSlot(slot, squads());
+    expect(adapted.spec.candidates).toBeUndefined();
+    expect(adapted.spec.blocked).toBeUndefined();
+  });
 });
 
 // --- resolveSheet ---------------------------------------------------------
