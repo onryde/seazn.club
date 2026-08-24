@@ -87,6 +87,19 @@ async function openLiveConsole(page: Page, fx: RosteredFixture): Promise<void> {
     .toContain("core.start");
 }
 
+/** The Detail Dock's own dismiss control (`pad.dock.dismiss` — "Send now").
+ *  detail-dock.tsx's `dismiss()` calls `releaseHeld`: an IMMEDIATE FLUSH of
+ *  the soft-commit hold, never a cancel. Every football flow below that only
+ *  needs its event ON THE LEDGER uses this instead of waiting out
+ *  `HOLD_MS` = 6000ms; none of them is testing hold TIMING, which
+ *  scorepad-v3-cricket.spec.ts's own pair of undo tests owns. */
+async function sendHeldNow(page: Page): Promise<void> {
+  await pad(page)
+    .locator('[data-role="v3-dock"]')
+    .getByRole("button", { name: "Send now", exact: true })
+    .click();
+}
+
 test.describe("v2 console — cricket, the headline flow S11 could not drive", () => {
   let fx: RosteredFixture;
 
@@ -301,13 +314,13 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
     });
     await openLiveConsole(page, own);
 
-    await pad(page).getByRole("button", { name: "Home · Goal", exact: true }).click();
-    const scorer = pad(page).getByRole("button", { name: `U Scorer ${TAG}`, exact: true });
-    await expect(scorer).toHaveCount(2);
-    await scorer.nth(0).click();
-    const assist = pad(page).getByRole("button", { name: `U Keeper ${TAG}`, exact: true });
-    await expect(assist).toHaveCount(2);
-    await assist.nth(1).click();
+    // R3/task D — v3: the goal commits on the tap and the dock offers the
+    // attribution afterwards. This test is about UNDO, so it takes the
+    // side-only goal and flushes the hold immediately ("Send now" is an
+    // immediate flush, never a cancel); the scorer+assist path is owned by the
+    // dock test further down this file.
+    await pad(page).locator('[data-tile-id="goal-home"]').click();
+    await sendHeldNow(page);
 
     await expect
       .poll(
@@ -331,14 +344,20 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
     await page.reload();
     await expect(pad(page)).toBeVisible({ timeout: 20_000 });
 
-    const timeline = pad(page).locator('[data-role="timeline"]');
-    await expect(timeline).toBeVisible();
-    // Scope to the GOAL's own row. `.first()` takes the oldest row, which is
-    // `core.start` — a lifecycle event the server will not void — so the click
-    // landed and nothing happened, which reads as a broken undo rather than as
-    // a mis-aimed test. Voiding a NAMED event is the stronger assertion
-    // anyway: it proves the timeline wires each row to its own event id.
-    const goalRow = timeline.locator(`[data-event-id="${goal.id}"]`);
+    // R3/task D — v3: the pad's own event history is the ACTIVITY PANEL
+    // (activity.tsx, restored onto the chassis so every converted skin and the
+    // device-link surface inherit it), not the legacy `[data-role="timeline"]`
+    // the console still renders outside the pad for the nine unconverted
+    // sports. Same subject, same guarantee: a per-row void addressed by the
+    // row's OWN event id.
+    const activity = pad(page).locator('[data-role="v3-activity-slot"]');
+    await expect(activity).toBeVisible();
+    // Scope to the GOAL's own row. The oldest row is `core.start` — a
+    // lifecycle event the server will not void — so a positional click would
+    // land and do nothing, which reads as a broken undo rather than as a
+    // mis-aimed test. Voiding a NAMED event is the stronger assertion anyway:
+    // it proves the panel wires each row to its own event id.
+    const goalRow = activity.locator(`[data-role="v3-activity-row"][data-event-id="${goal.id}"]`);
     await expect(goalRow).toHaveCount(1);
 
     // A click straight after a reload can land PRE-HYDRATION: the button is
@@ -364,7 +383,7 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
 
     await expect(async () => {
       if ((await voidCount()) === 0) {
-        await goalRow.locator('[data-role="void"]').click();
+        await goalRow.locator('[data-role="v3-activity-void"]').click();
         await page.waitForTimeout(1_500);
       }
       expect(await voidCount()).toBeGreaterThanOrEqual(1);
@@ -392,13 +411,13 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
     });
     await openLiveConsole(page, own);
 
-    await pad(page).getByRole("button", { name: "Home · Goal", exact: true }).click();
-    const sc = pad(page).getByRole("button", { name: `L Scorer ${TAG}`, exact: true });
-    await expect(sc).toHaveCount(2);
-    await sc.nth(0).click();
-    const as = pad(page).getByRole("button", { name: `L Keeper ${TAG}`, exact: true });
-    await expect(as).toHaveCount(2);
-    await as.nth(1).click();
+    await pad(page).locator('[data-tile-id="goal-home"]').click();
+    // Flush the hold rather than waiting it out: past this point `held` is
+    // null, so the next undo MUST take `decideUndo`'s "void" branch — which is
+    // the branch this test exists for. Inside the window it would take "drop"
+    // and never reach the server at all (that half is owned by
+    // scorepad-v3-cricket.spec.ts's own pair of undo tests).
+    await sendHeldNow(page);
 
     await expect
       .poll(
@@ -407,15 +426,17 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
       )
       .toBe(1);
 
-    // Straight to Undo on the goal's row. Located by TEXT, because the row's
-    // own `data-event-id` is the client id and deliberately does not match the
-    // ledger's — that mismatch is the whole defect.
+    // Straight to Undo on the goal's row, NO RELOAD anywhere. Located by TEXT,
+    // because on the v2 pad the row's own `data-event-id` was the CLIENT id
+    // and deliberately did not match the ledger's — that mismatch was the
+    // whole defect this test was written for, and locating by text is what
+    // keeps the test honest whichever id the row now carries.
     const goalRow = pad(page)
-      .locator('[data-role="timeline"] [data-event-id]')
+      .locator('[data-role="v3-activity-row"]')
       .filter({ hasText: /Goal/i })
       .first();
     await expect(goalRow).toHaveCount(1);
-    await goalRow.locator('[data-role="void"]').click();
+    await goalRow.locator('[data-role="v3-activity-void"]').click();
 
     await expect
       .poll(
@@ -553,44 +574,51 @@ test.describe("v2 console — football's goal WITH assist", () => {
     const scorer = fx.personIds[`Scorer ${TAG}`]!;
     const assist = fx.personIds[`Assister ${TAG}`]!;
 
-    await pad(page).getByRole("button", { name: "Home · Goal", exact: true }).click();
+    // R3/task D — v3: the goal COMMITS on the tap and the Detail Dock offers
+    // the attribution as enrichment on the already-recorded event (design of
+    // record §2.3). The tap count is unchanged from the v2 flow S11 measured
+    // (Goal, Scorer, Assist), but the goal is durable after the FIRST of them.
+    await pad(page).locator('[data-tile-id="goal-home"]').click();
+    const dock = pad(page).locator('[data-role="v3-dock"]');
+    await expect(dock, "a goal must open the dock that offers its attribution").toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(dock, "the dock names what it is enriching").toContainText("Goal detail");
 
-    // The scorer/assist pickers are BUTTONS labelled with the person's name.
-    // Asserting on the name is also the regression guard for football-skin's
-    // own raw-id defect (`ids.map((id) => ({ value: id, label: id }))`) fixed
-    // this session — a UUID label would fail this line, not merely look bad.
-    // The captions are the regression guard for this session's fix replacing
-    // the unreadable ordinal fallback ("Goal — Person #2" / "#3") with each
-    // item's own humanised path. Asserted directly rather than used as a click
-    // scope — scoping by an ancestor div matched a leaf holding no buttons.
-    await expect(pad(page)).toContainText("Goal — Scorer");
-    await expect(pad(page)).toContainText("Goal — Assist");
+    // The chips are BUTTONS labelled with the person's own name — the same
+    // regression guard the v2 version of this test carried for football-skin's
+    // raw-id defect (`ids.map((id) => ({ value: id, label: id }))`): a UUID
+    // label would fail these lines, not merely look bad. On v3 the guard is
+    // `DockChip.labelText` (types.ts), the key-plus-text pair that exists
+    // precisely because a display name is not a dictionary key.
+    //
+    // ON-PITCH, SCORING SIDE ONLY: `applyGoal` refuses a scorer who is not on
+    // the pitch of `by`, so the dock offers exactly the home lineup, once as a
+    // scorer chip and once as an "Assist {name}" chip. Each name therefore
+    // appears exactly ONCE under an exact-name match — asserting the count
+    // first means a future regression that collapses the two rows fails loudly
+    // here instead of silently clicking the wrong chip.
+    const scorerChip = dock.getByRole("button", { name: `Scorer ${TAG}`, exact: true });
+    await expect(scorerChip).toHaveCount(1);
+    await scorerChip.click();
 
-    // Both pickers offer the whole squad, so each name appears TWICE — once
-    // per slot, in slot order. Asserting the count first means a future
-    // single-picker regression fails loudly here instead of silently clicking
-    // the wrong slot.
-    const scorerBtns = pad(page).getByRole("button", { name: `Scorer ${TAG}`, exact: true });
-    await expect(scorerBtns).toHaveCount(2);
-    await scorerBtns.nth(0).click();
+    const assistChip = dock.getByRole("button", { name: `Assist Assister ${TAG}`, exact: true });
+    await expect(assistChip).toHaveCount(1);
+    await assistChip.click();
 
-    const assistBtns = pad(page).getByRole("button", { name: `Assister ${TAG}`, exact: true });
-    await expect(assistBtns).toHaveCount(2);
-    // Picking the LAST required attribution auto-submits — measured, not
-    // assumed: after this click the form closes and `football.goal` is already
-    // on the ledger. That is deliberate, and it is what S11's recorded tap
-    // count for this flow means ("football goal with assist 3 vs 6": Goal,
-    // Scorer, Assist). Clicking a `Confirm` afterwards waits forever on a
-    // control the pad has correctly removed.
-    await assistBtns.nth(1).click();
+    // Flush the hold: a dock chip MUTATES the still-held payload, so the goal
+    // that reaches the ledger is the enriched one. Waiting the 6s window out
+    // would send the same event — this is faster, not different.
+    await sendHeldNow(page);
 
     await expect
       .poll(async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "football.goal").length, {
-        timeout: 15_000,
+        timeout: 20_000,
       })
       .toBe(1);
 
     const goal = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "football.goal")!;
+    expect(goal.payload.by, "the goal is still attributed to the side that scored").toBe(fx.homeEntrantId);
     expect(goal.payload.scorer, "scorer must be the real person").toBe(scorer);
     expect(goal.payload.assist, "assist is the half S11 could not drive at all").toBe(assist);
   });

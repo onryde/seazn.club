@@ -111,6 +111,49 @@ async function expectPadAxeClean(page: Page): Promise<void> {
   expect(serious, JSON.stringify(serious, null, 2)).toEqual([]);
 }
 
+/**
+ * R3/task D — football moved to the v3 chassis, so the four football flows in
+ * this file drive the v3 pad's own DOM. Three helpers the converted tests
+ * share, all chassis-generic (they name nothing football-specific):
+ *
+ * `v3Tile` addresses a tile by `TileSpec.id` (`data-tile-id`, tile-grid.tsx)
+ * rather than by accessible name: a tile's name is the concatenation of two
+ * LOCALISED strings ("Goal" + "Home"), and every assertion below is about
+ * behaviour, not copy.
+ *
+ * `sendHeldNow` taps the Detail Dock's own dismiss control (`pad.dock.dismiss`
+ * — "Send now": detail-dock.tsx's `dismiss()` is an IMMEDIATE FLUSH, never a
+ * cancel), so a test that only needs its event ON THE LEDGER does not wait out
+ * the full `HOLD_MS` = 6000ms soft-commit window. Same helper, same reasoning
+ * as scorepad-v3-cricket.spec.ts's own. It is only available for an event
+ * whose skin declares a dock — football's goal and card do, its substitution
+ * does not (`buildDock` returns null, so `DetailDock` renders nothing and
+ * there is no control to tap); those flows poll the ledger instead.
+ */
+function v3Tile(page: Page, id: string) {
+  return pad(page).locator(`[data-tile-id="${id}"]`);
+}
+
+function v3Sheet(page: Page) {
+  return pad(page).locator('[data-role="v3-sheet"]');
+}
+
+async function sendHeldNow(page: Page): Promise<void> {
+  await pad(page)
+    .locator('[data-role="v3-dock"]')
+    .getByRole("button", { name: "Send now", exact: true })
+    .click();
+}
+
+/** One half of the v3 scorebug, home first — the visible score, which is what
+ *  the pre-conversion versions of these tests asserted through the v2 skin's
+ *  own "0 - 0"/"1 - 0" string. v3 renders the two sides as separate cells
+ *  (`ScorebugSpec.halves`, scorebug.tsx) with no per-half `data-*` of their
+ *  own, so this indexes the two children of the halves grid. */
+function scorebugHalf(page: Page, index: 0 | 1) {
+  return pad(page).locator('[data-role="v3-scorebug"] .grid > *').nth(index);
+}
+
 test("cricket skin: real roster, a couple of balls scored", async ({ page, request }) => {
   test.setTimeout(120_000);
   const fx = await seedRosteredFixture(request, {
@@ -284,16 +327,23 @@ test("football skin: a side-only goal", async ({ page, request }) => {
   });
   await openLiveConsole(page, fx);
 
-  const footballSkin = pad(page).locator('[data-role="football-skin"]');
-  await expect(footballSkin.getByText("0 - 0", { exact: true })).toBeVisible();
+  await expect(scorebugHalf(page, 0)).toContainText("Home");
+  await expect(scorebugHalf(page, 0), "the home half must open on zero").toContainText("0");
 
-  // Both scorer and assist are OPTIONAL attribution slots (football-skin.tsx's
-  // QuickActionCard), so Confirm is enabled immediately — this flow leaves
-  // both unpicked and asserts the side-only goal alone; scorepad-v2.spec.ts's
-  // own football coverage already proves the scorer+assist path for real, so
-  // this stays the simpler, complementary case rather than a duplicate.
-  await pad(page).getByRole("button", { name: "Home · Goal", exact: true }).click();
-  await pad(page).getByRole("button", { name: "Confirm", exact: true }).click();
+  // R3/task D — v3: a goal COMMITS ON THE TAP. `scorer`/`assist` are both
+  // `.optional()` on `FootballGoal`, so the event the engine receives is
+  // already complete; the Detail Dock then offers the attribution as
+  // enrichment rather than as a modal before every goal. There is NO Confirm
+  // button on this path at all — the v2 control the pre-conversion version of
+  // this test clicked does not exist on the v3 pad.
+  //
+  // This test keeps its original subject: the SIDE-ONLY goal, both attribution
+  // slots left unpicked. The dock is dismissed with "Send now" (an immediate
+  // flush, not a cancel) instead of waiting out the 6s hold — the payload is
+  // identical either way, and the hold's own timing is owned by
+  // scorepad-v3-cricket.spec.ts's two undo tests.
+  await v3Tile(page, "goal-home").click();
+  await sendHeldNow(page);
   await expect
     .poll(
       async () => (await ledger(request, fx.fixtureId)).filter((e) => e.type === "football.goal").length,
@@ -301,7 +351,8 @@ test("football skin: a side-only goal", async ({ page, request }) => {
     )
     .toBe(1);
 
-  await expect(footballSkin.getByText("1 - 0", { exact: true })).toBeVisible();
+  await expect(scorebugHalf(page, 0), "the goal must reach the visible score").toContainText("1");
+  await expect(scorebugHalf(page, 1), "the away half must be untouched").toContainText("0");
   // S13/#422 W11 cutover — football's own scan.
   await expectPadAxeClean(page);
   await expectNoHorizontalScroll(page);
@@ -400,15 +451,25 @@ test("football skin: a substitution, through the SAME reducer core.lineup.substi
   const off = fx.personIds[`Skins FB OnPitch ${TAG}`]!;
   const on = fx.personIds[`Skins FB Bench ${TAG}`]!;
 
-  await pad(page).getByRole("button", { name: "Home · Substitution", exact: true }).click();
-  // "off" reads the on-pitch roster, "on" reads the bench — disjoint pools,
-  // so (unlike goal's scorer/assist, which both draw from the whole squad
-  // and each name appears twice) each seeded name appears exactly once.
-  await pad(page).getByRole("button", { name: `Skins FB OnPitch ${TAG}`, exact: true }).click();
-  // "on" is the LAST slot — tapping it auto-fires, the same rule the goal
-  // scorer+assist flow (scorepad-v2.spec.ts) already exercises.
-  await pad(page).getByRole("button", { name: `Skins FB Bench ${TAG}`, exact: true }).click();
+  // R3/task D — v3: the per-side Sub tile opens that side's OWN `SwapSlot`
+  // (`swap: "sub-home"`, football.tsx's `swapSlotId`), the chassis primitive
+  // R3's own sub-wave fixed for this wave's first real use of it. Off step,
+  // then on step; candidates carry `data-candidate-id` (context-strip.tsx's
+  // shared `renderCandidateRow`, which the swap sheet reuses), so this
+  // addresses PEOPLE BY ID and can never click the wrong one of two similarly
+  // named seeds.
+  await v3Tile(page, "sub-home").click();
+  const swap = pad(page).locator('[data-role="v3-swap"]');
+  await expect(swap, "the Sub tile must open this side's swap sheet").toBeVisible({ timeout: 10_000 });
+  await expect(swap).toHaveAttribute("data-swap-slot-id", "sub-home");
+  await swap.locator(`[data-candidate-id="${off}"]`).click();
+  // Picking the ON player is the last decision — it dispatches immediately,
+  // the same "last required attribution auto-submits" rule the v2 flow had.
+  await swap.locator(`[data-candidate-id="${on}"]`).click();
 
+  // No "Send now" here: `buildDock` returns null for `football.sub`, so the
+  // dock renders nothing and there is no flush control — this waits the hold
+  // window out, which the 20s budget already covers.
   await expect
     .poll(
       async () => (await ledger(request, fx.fixtureId)).filter((e) => e.type === "football.sub").length,
@@ -417,19 +478,34 @@ test("football skin: a substitution, through the SAME reducer core.lineup.substi
     .toBe(1);
 
   const sub = (await ledger(request, fx.fixtureId)).find((e) => e.type === "football.sub")!;
-  // The quick tile sends attribution ONLY, never the padSpec's `...stamp`
-  // fields — same shape as the goal test's `toEqual({ by: fx.homeEntrantId })`.
+  // Attribution ONLY — and NO `at`. R3-2 stamps a substitution from the fold's
+  // own `asOf`, and `stampOf`'s staleness guard omits the stamp when `asOf` is
+  // missing (which it is on a stream recorded entirely through this pad, where
+  // no tile sends an `at`). Omitting is legal — `at` is `.optional()` — and is
+  // the honest failure: a WRONG stamp mis-attributes a stoppage.
   expect(sub.payload).toEqual({ by: fx.homeEntrantId, off, on });
   await expectNoHorizontalScroll(page);
 });
 
-test("football skin: a penalty with an offence selected (PenaltyOffence)", async ({ page, request }) => {
+test("football skin: a penalty awarded and its outcome, through the v3 guided sheet", async ({ page, request }) => {
   test.setTimeout(120_000);
-  // S4/#428 (offence taxonomies) — the football half. `football.penalty`
-  // lives in the "Penalties" drawer and renders through the generic
-  // ActionForm path (unlike goal/card/sub's hand-tuned quick tiles): every
-  // declared field — outcome, offence, and the padSpec's own `...stamp`
-  // (at.period/at.elapsed) — gates the Confirm button.
+  // S4/#428 (offence taxonomies) — the football half, converted to v3.
+  //
+  // WHAT MOVED, stated so it is not lost: on the v2 pad `football.penalty`
+  // rendered through the GENERIC ActionForm, which drew every field `padSpec`
+  // declares — `outcome`, `offence` (the IFAB Law 12 direct-free-kick
+  // taxonomy) and the `...stamp` pair. The v3 skin gives the penalty a
+  // dedicated two-step guided sheet ("Who was awarded it?" / "What
+  // happened?", football.tsx's `penaltySheet`) and, because a dedicated sheet
+  // removes its event from the More sheet (`dedicatedEventTypes`), the
+  // generic form is no longer a second route to it. `offence` is therefore
+  // not askable anywhere on the v3 pad today. That is a PRODUCT gap this
+  // conversion records rather than papers over — it is reported to the wave,
+  // and it is not asserted either way here, because asserting its absence
+  // would enshrine it.
+  //
+  // What this test still owns end to end: the awarded SIDE and the required
+  // `outcome`, both on the real ledger, driven through the real sheet.
   const fx = await seedRosteredFixture(request, {
     label: `Skins FB Penalty ${TAG}`,
     sportKey: "football",
@@ -439,19 +515,22 @@ test("football skin: a penalty with an offence selected (PenaltyOffence)", async
   });
   await openLiveConsole(page, fx);
 
-  await pad(page).getByText("Penalties", { exact: true }).click();
-  await pad(page).getByRole("button", { name: "Penalty", exact: true }).click();
+  await v3Tile(page, "penalty").click();
+  const sheet = v3Sheet(page);
+  await expect(sheet, "the Penalty tile must open the skin's guided sheet").toBeVisible({ timeout: 10_000 });
+  // Step 1 — the awarded side. The options are entrant ids labelled with the
+  // shared `scorepad.attribution.*` copy, so this clicks the ID and the label
+  // is what the assertion below proves reached the payload.
+  await sheet.locator(`[data-choice-option-id="${fx.homeEntrantId}"]`).click();
+  // Step 2 — `outcome`, REQUIRED on `FootballPenalty` (it is what keeps the
+  // branch structurally distinct in the event union) and deliberately WITHOUT
+  // "scored": a converted penalty is a `football.goal {penalty: true}`.
+  await expect(
+    sheet.locator('[data-choice-option-id="scored"]'),
+    "a converted penalty is a goal, never this event — 'scored' must not be offered",
+  ).toHaveCount(0);
+  await sheet.locator('[data-choice-option-id="saved"]').click();
 
-  // NOT `{ exact: true }` on the three <select>s — a select's computed
-  // accessible name concatenates the caption with its current option text
-  // (see the icehockey goal test above); the plain number input stays exact.
-  await pad(page).getByLabel("Outcome").selectOption("saved");
-  await pad(page).getByLabel("Offence").selectOption("handball");
-  await pad(page).getByLabel("At period").selectOption("H1");
-  await pad(page).getByLabel("At elapsed", { exact: true }).fill("300");
-  await pad(page).getByRole("button", { name: "Home", exact: true }).click();
-
-  await pad(page).locator('[data-role="confirm"]').click();
   await expect
     .poll(
       async () => (await ledger(request, fx.fixtureId)).filter((e) => e.type === "football.penalty").length,
@@ -460,7 +539,7 @@ test("football skin: a penalty with an offence selected (PenaltyOffence)", async
     .toBe(1);
 
   const penalty = (await ledger(request, fx.fixtureId)).find((e) => e.type === "football.penalty")!;
-  expect(penalty.payload).toMatchObject({ by: fx.homeEntrantId, outcome: "saved", offence: "handball" });
+  expect(penalty.payload).toMatchObject({ by: fx.homeEntrantId, outcome: "saved" });
   await expectNoHorizontalScroll(page);
 });
 
@@ -545,7 +624,21 @@ test("football skin: mini-soccer quarters — a QT period marker under the non-d
   });
   await openLiveConsole(page, fx);
 
-  await pad(page).getByRole("button", { name: "Quarter-time", exact: true }).click();
+  // R3/task D — v3: ONE "End of period" tile whose sheet asks WHICH break.
+  // `periodMarkersOf(cfg)` mirrors the engine's own private `periodMarkers`,
+  // so a quarters cfg offers QT/HT/3QT/FT and a halves cfg offers only HT/FT
+  // — driving QT through the real sheet is what proves the variant is live on
+  // the pad rather than merely declared in the engine, which is exactly what
+  // the pre-conversion version of this test proved through the v2 tile.
+  await v3Tile(page, "period").click();
+  const sheet = v3Sheet(page);
+  await expect(sheet, "the period tile must open the 'Which break?' sheet").toBeVisible({ timeout: 10_000 });
+  await expect(
+    sheet.locator('[data-choice-option-id="QT"]'),
+    "a quarters cfg must offer the quarter-time marker a halves cfg never can",
+  ).toBeVisible();
+  await sheet.locator('[data-choice-option-id="QT"]').click();
+
   await expect
     .poll(
       async () => (await ledger(request, fx.fixtureId)).filter((e) => e.type === "football.period").length,
