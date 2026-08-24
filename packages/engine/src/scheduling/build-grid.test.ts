@@ -51,6 +51,7 @@ describe("buildGrid — the pack window bounds the lattice (P9.5)", () => {
         startAt: T0 + 30 * DAY,
         endAt: T0 + 30 * DAY + 30 * MIN,
         entrants: ["e1", "e2"],
+        people: [],
       },
     ];
 
@@ -75,6 +76,7 @@ describe("buildGrid — the pack window bounds the lattice (P9.5)", () => {
         startAt: T0 + 2 * DAY,
         endAt: T0 + 2 * DAY + 30 * MIN,
         entrants: ["e1", "e2"],
+        people: [],
       },
     ];
 

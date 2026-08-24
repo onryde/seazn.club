@@ -709,20 +709,18 @@ export function slotFixtures(input: SlotInput): SlotResult {
         )) * MS_PER_MIN;
 
   // startWindows (Jul3/04 §3): hard lower/upper bounds per entrant/pool/division.
-  const windowFor = (f: SchedulableFixture): { notBefore: number; notAfter: number } => {
-    let notBefore = -Infinity;
-    let notAfter = Infinity;
-    for (const w of c?.startWindows ?? []) {
-      const hits =
-        (w.target.kind === "entrant" && entrantsOf(f).includes(w.target.id)) ||
-        (w.target.kind === "pool" && f.poolId === w.target.id) ||
-        (w.target.kind === "division" && f.divisionId === w.target.id);
-      if (!hits) continue;
-      if (w.notBefore !== undefined) notBefore = Math.max(notBefore, w.notBefore);
-      if (w.notAfter !== undefined) notAfter = Math.min(notAfter, w.notAfter);
-    }
-    return { notBefore, notAfter };
-  };
+  //
+  // Delegates to the exported `startWindowFor` the VERIFIER calls, rather than
+  // repeating the rule. Until P9.5 this was a second copy of that function
+  // differing only in the shape it read the target out of, which is precisely
+  // the fork this repo keeps paying for (P9's `court_tag_mismatch` was the same
+  // defect one constraint over). `window-single-source.test.ts` fails if a
+  // second copy reappears.
+  const windowFor = (f: SchedulableFixture): { notBefore: number; notAfter: number } =>
+    startWindowFor(
+      { constraints: c },
+      { entrants: entrantsOf(f), poolId: f.poolId, divisionId: f.divisionId },
+    );
 
   // A person double-booking rejects the placement like a court clash, for every
   // `crossPersonClash` setting.
@@ -1489,17 +1487,33 @@ function pairRestMinutesWith(
  *  startWindows (Jul3/04 §3) are a hard bound the solver refuses to place
  *  outside — so the verifier has to know them too, or the same rule holds for
  *  Auto-schedule and evaporates the moment somebody drags a card. */
+/** What a `startWindows` entry is MATCHED AGAINST — distinct from
+ *  `StartWindowTarget` in constraints.ts, which is the `{kind, id}` selector on
+ *  the rule itself.
+ *
+ *  Deliberately structural rather than `Assignment`: the PLACER holds
+ *  `SchedulableFixture`s and the VERIFIER holds `Assignment`s, and this rule
+ *  used to be written out once for each — the exact placer/verifier fork P9.5
+ *  exists to close. `Assignment` satisfies this shape as-is, so every existing
+ *  `startWindowFor(config, a)` call still reads the same. Guarded by
+ *  `window-single-source.test.ts`. */
+export interface StartWindowSubject {
+  readonly entrants: readonly EntrantId[];
+  readonly poolId?: string;
+  readonly divisionId?: string;
+}
+
 export function startWindowFor(
   config: Pick<VerifyConfig, "constraints">,
-  a: Assignment,
+  target: StartWindowSubject,
 ): { notBefore: number; notAfter: number } {
   let notBefore = -Infinity;
   let notAfter = Infinity;
   for (const w of config.constraints?.startWindows ?? []) {
     const hits =
-      (w.target.kind === "entrant" && a.entrants.includes(w.target.id)) ||
-      (w.target.kind === "pool" && a.poolId === w.target.id) ||
-      (w.target.kind === "division" && a.divisionId === w.target.id);
+      (w.target.kind === "entrant" && target.entrants.includes(w.target.id)) ||
+      (w.target.kind === "pool" && target.poolId === w.target.id) ||
+      (w.target.kind === "division" && target.divisionId === w.target.id);
     if (!hits) continue;
     if (w.notBefore !== undefined) notBefore = Math.max(notBefore, w.notBefore);
     if (w.notAfter !== undefined) notAfter = Math.min(notAfter, w.notAfter);
