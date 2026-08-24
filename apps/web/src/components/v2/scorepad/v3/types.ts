@@ -135,7 +135,28 @@ export interface TileSpec {
   kind: TileKind;
   span?: 1 | 2 | 3 | 4;
   phases: PadPhase[];
-  action: { event: TapEvent } | { sheet: string } | { swap: true };
+  /**
+   * R3 chassis sub-wave (owner ruling 2026-08-24, `_INDEX.md` "R3 — owner
+   * ruling: FIX SwapSheet in the chassis, then use it", defect 2): the swap
+   * variant is `{swap: string}` — the ID of one `SwapSlot` this skin's own
+   * `swap(view)` declared — where it used to be a bare `{swap: true}`.
+   *
+   * A boolean could only ever address THE swap sheet, so every swap tile in a
+   * skin opened the same one and the side came only from `slot.side`. Football
+   * is the first skin to need two (a Sub tile per side) and could not express
+   * it at all. Slot-addressed, per-side Sub tiles are just two tiles naming
+   * two ids.
+   *
+   * A `{swap}` naming an id no slot declares opens NOTHING (`resolveSwapSlot`,
+   * pad-host.tsx, returns null rather than falling back to the first slot —
+   * that fallback would silently reinstate the exact defect). Deliberately not
+   * a typed union of a skin's own slot ids: `SkinDefV3` is generic over `View`
+   * only, and threading a second type parameter through every method to make
+   * one string literal-checked buys less than it costs. A skin owes its own
+   * test that every `{swap}` tile it declares names a slot its own `swap()`
+   * declares — the same posture `{sheet: string}` already takes.
+   */
+  action: { event: TapEvent } | { sheet: string } | { swap: string };
   /**
    * R2b (owner ruling, bowler-eligibility block, 2026-08-17): `true` when
    * this tile's action must NOT fire on a tap right now, while the tile
@@ -506,6 +527,19 @@ export const MORE_SHEET_KEY = "__pad-host/more__";
  * not silently accepted as equivalent.
  */
 export interface SwapSlot {
+  /**
+   * R3 chassis sub-wave (owner ruling 2026-08-24, defect 1). Stable, skin-
+   * authored identity — the string a `TileSpec.action = {swap: id}` names.
+   * Unique within one skin's own `swap(view)` result; `resolveSwapSlot`
+   * (pad-host.tsx) takes the FIRST match, so a duplicate id makes the later
+   * slot unreachable rather than crashing.
+   *
+   * Exists because `swap` returned ONE slot per view: every `{swap:true}` tile
+   * opened that same sheet and the side came only from `slot.side`, so a
+   * per-side Sub tile pair — football's actual requirement, and the first real
+   * use this primitive ever had — was structurally unreachable.
+   */
+  id: string;
   /** i18n key — swap-sheet.tsx's `SwapSheetSpec.offLabel`. */
   offLabel: string;
   /** i18n key — swap-sheet.tsx's `SwapSheetSpec.onLabel`. */
@@ -705,15 +739,26 @@ export interface SkinDefV3<View = unknown> {
    * `ActivityDetailContext`'s own doc for what each field means.
    */
   activityDetail?(ctx: ActivityDetailContext): string | undefined;
-  /** Declares this skin's swap-sheet integration (design §2.7) — `null`
-   *  when a swap is not applicable right now (e.g. no sub currently legal
-   *  to OFFER, as opposed to legal-but-refused, which is `policyOk: false`
-   *  instead) or the sport has no in-play substitutions at all (boardgame,
-   *  carrom singles, generic — design §3's own table). Omit the method
-   *  entirely for those sports rather than returning `null` from every
-   *  call — same "absent means never applicable" convention `context`
-   *  already uses one line up. */
-  swap?(view: View): SwapSlot | null;
+  /**
+   * Declares this skin's swap-sheet integration (design §2.7) — EVERY slot
+   * currently offerable, each addressed by a `TileSpec.action = {swap: id}`.
+   *
+   * R3 chassis sub-wave (owner ruling 2026-08-24, defect 1): PLURAL, where
+   * this returned `SwapSlot | null`. One slot per view meant every swap tile
+   * in a skin opened the same sheet, so football's per-side Sub tiles were
+   * unreachable; cricket never noticed because it declined the primitive
+   * entirely. An EMPTY array is the new "not applicable right now" (no sub
+   * currently legal to OFFER — as opposed to legal-but-refused, which is
+   * `policyOk: false` on a slot that IS returned, so the scorer still gets to
+   * see the sport's own reason).
+   *
+   * Still optional: omit the method entirely for a sport with no in-play
+   * substitutions at all (boardgame, carrom singles, generic — design §3's own
+   * table), the same "absent means never applicable" convention `context`
+   * already uses one line up. Cricket omits it, and stayed untouched by this
+   * change for exactly that reason.
+   */
+  swap?(view: View): SwapSlot[];
 }
 
 /**

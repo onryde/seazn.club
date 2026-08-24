@@ -19,7 +19,7 @@ import type { MsgFn } from "@/lib/scoring-vocab";
 import { createSkinDispatch } from "../../skins/types";
 import { buildPadView, type PadViewCtx } from "../../view-model";
 import type { RejectionInfo } from "../../use-pad-pipeline";
-import type { GuidedSheetSpec, PadHostView, SkinDefV3, TileSpec } from "../types";
+import type { GuidedSheetSpec, PadHostView, SkinDefV3, SwapSlot, TileSpec } from "../types";
 import { MORE_SHEET_KEY } from "../types";
 import {
   adaptSwapSlot,
@@ -35,6 +35,7 @@ import {
   resolveNextPhase,
   resolvePadPhase,
   resolveSheet,
+  resolveSwapSlot,
   sidePool,
   squadStateOf,
 } from "../pad-host";
@@ -164,8 +165,8 @@ describe("dedicatedEventTypes", () => {
     expect([...types]).toEqual(["cricket.wicket"]);
   });
 
-  it("a {swap: true} tile contributes nothing — swap's event is built dynamically from a picked pair, not declared statically", () => {
-    const types = dedicatedEventTypes([tile({ action: { swap: true } })], undefined);
+  it("a {swap: id} tile contributes nothing — this function is never handed the slot table, so a slot id resolves to no event type here", () => {
+    const types = dedicatedEventTypes([tile({ action: { swap: "subHome" } })], undefined);
     expect(types.size).toBe(0);
   });
 });
@@ -231,7 +232,7 @@ describe("moreActions", () => {
 describe("adaptSwapSlot", () => {
   it("resolves the declared side's own pool and passes labels through verbatim", () => {
     const s = squads();
-    const slot = { offLabel: "pad.cricket.swap.off", onLabel: "pad.cricket.swap.on", side: "home" as const, policyOk: true, buildEvent: () => ({ type: "core.lineup.substitution", payload: {} }) };
+    const slot = { id: "subHome", offLabel: "pad.cricket.swap.off", onLabel: "pad.cricket.swap.on", side: "home" as const, policyOk: true, buildEvent: () => ({ type: "core.lineup.substitution", payload: {} }) };
     const adapted = adaptSwapSlot(slot, s);
     expect(adapted.spec).toEqual({ offLabel: "pad.cricket.swap.off", onLabel: "pad.cricket.swap.on" });
     expect(adapted.view).toEqual({ squad: s.home });
@@ -241,6 +242,7 @@ describe("adaptSwapSlot", () => {
   it("carries a refusal's sport-worded message through, never a bare boolean", () => {
     const s = squads();
     const slot = {
+      id: "subAway",
       offLabel: "pad.cricket.swap.off",
       onLabel: "pad.cricket.swap.on",
       side: "away" as const,
@@ -540,5 +542,52 @@ describe("resolveDockSpec — mutation proof (the widened payload wiring is load
     const viaMutant = dropsPayload(skin, held, padHostView());
     expect(real).not.toEqual(viaMutant);
     expect(real).toEqual({ title: "has-payload", chips: [] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3 chassis sub-wave (owner ruling 2026-08-24, `_INDEX.md` "R3 — owner
+// ruling: FIX SwapSheet in the chassis, then use it"). Defects 1 and 2:
+// `SkinDefV3.swap` returned ONE slot per view and `TileSpec.action` carried a
+// bare `{swap:true}`, so EVERY swap tile opened the SAME sheet and the side
+// came only from `slot.side` — per-side Sub tiles were structurally
+// unreachable. Football is the first skin ever to need two.
+// ---------------------------------------------------------------------------
+
+describe("resolveSwapSlot — per-side swap tiles reach DIFFERENT slots", () => {
+  const slots: SwapSlot[] = [
+    {
+      id: "subHome",
+      offLabel: "pad.football.swap.off",
+      onLabel: "pad.football.swap.on",
+      side: "home",
+      policyOk: true,
+      buildEvent: () => ({ type: "football.sub", payload: {} }),
+    },
+    {
+      id: "subAway",
+      offLabel: "pad.football.swap.off",
+      onLabel: "pad.football.swap.on",
+      side: "away",
+      policyOk: true,
+      buildEvent: () => ({ type: "football.sub", payload: {} }),
+    },
+  ];
+
+  it("addresses each declared slot by its OWN id — the defect was one shared sheet for every {swap} tile", () => {
+    expect(resolveSwapSlot("subHome", slots)?.side).toBe("home");
+    expect(resolveSwapSlot("subAway", slots)?.side).toBe("away");
+  });
+
+  it("null slot id (nothing open) resolves to null — `swapOpen` is now an id-or-null, not a boolean", () => {
+    expect(resolveSwapSlot(null, slots)).toBeNull();
+  });
+
+  it("an id no slot declares resolves to null, NEVER a silent fallback to the first slot — that fallback IS the defect", () => {
+    expect(resolveSwapSlot("subNobody", slots)).toBeNull();
+  });
+
+  it("a skin declaring no swap slots at all resolves to null for any id", () => {
+    expect(resolveSwapSlot("subHome", [])).toBeNull();
   });
 });

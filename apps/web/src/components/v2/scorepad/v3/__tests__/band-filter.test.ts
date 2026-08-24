@@ -46,7 +46,7 @@ describe("tileEventType", () => {
   });
 
   it("returns null for a swap tile — its event is built from the picked people at tap time", () => {
-    expect(tileEventType(tile("s", { swap: true }), SHEETS)).toBeNull();
+    expect(tileEventType(tile("s", { swap: "subHome" }), SHEETS)).toBeNull();
   });
 
   it("returns null for a sheet key the skin does not declare", () => {
@@ -85,7 +85,7 @@ describe("filterTilesByBand", () => {
   });
 
   it("fail-open: keeps a swap tile, whose event cannot be known statically", () => {
-    const tiles = [tile("swap", { swap: true })];
+    const tiles = [tile("swap", { swap: "subHome" })];
     expect(filterTilesByBand(tiles, SHEETS, FIDELITY, bands(0))).toHaveLength(1);
   });
 

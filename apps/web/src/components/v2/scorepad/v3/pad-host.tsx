@@ -134,10 +134,20 @@ export function entitledBandsFrom(
 /** Every event type ALREADY reachable through a dedicated tile or a guided
  *  sheet — the "More" sheet's own exclusion set (item 4: a future engine
  *  action must appear WITHOUT a skin edit, which only holds if this set is
- *  derived from the skin's declarations, never hand-listed). A `{swap:
- *  true}` tile contributes nothing: its real event is built dynamically
- *  from a picked (off, on) pair (`SwapSlot.buildEvent`), never declared
- *  statically as one type. */
+ *  derived from the skin's declarations, never hand-listed).
+ *
+ *  A `{swap: id}` tile still contributes NOTHING, but the reason changed with
+ *  R3 and is worth stating precisely, because the ORIGINAL reason is now
+ *  false. It used to be "a swap's event cannot be known statically"; R3's
+ *  defect-3 fix gives `SwapSlot` a declared `eventType` exactly so it CAN be.
+ *  What this function lacks is the slot TABLE — it is handed `tiles` and
+ *  `sheets`, and a `{swap}` action carries only a slot id, so it has nothing
+ *  to resolve that id against. Consequence, recorded rather than silently
+ *  accepted: a sport whose substitution is also declared in `padSpec(cfg)`
+ *  lists it BOTH on its swap tile and again as a generic form inside "More".
+ *  Widening this signature is a MORE-sheet behaviour change with no test
+ *  asked for in R3's chassis brief — routed to the football skin task, which
+ *  is the first wave that can actually observe the duplicate. */
 export function dedicatedEventTypes(
   tiles: readonly TileSpec[],
   sheets: Record<string, GuidedSheetSpec> | undefined,
@@ -367,6 +377,28 @@ export function contextOverridesStale(overridesFor: unknown, currentState: unkno
   return overridesFor !== currentState;
 }
 
+/**
+ * R3 chassis sub-wave (owner ruling 2026-08-24, `_INDEX.md`, defects 1+2): the
+ * slot a `{swap: id}` tile addresses, or `null`.
+ *
+ * FAIL-CLOSED, and that direction is deliberate — the opposite of
+ * `filterTilesByBand`'s fail-open. An id no slot declares opens NOTHING rather
+ * than falling back to the first slot: that fallback is precisely the defect
+ * being fixed (one shared sheet for every swap tile, the side taken from
+ * whichever slot happened to be first), so re-introducing it as an error path
+ * would make the bug survive its own fix. Failing open costs a scorer a tap
+ * that does nothing; failing to a fallback silently substitutes the WRONG
+ * TEAM's player, which is a scoring error nobody would notice until the
+ * timeline is read back.
+ *
+ * `slotId === null` is the ordinary "no sheet open" state — the host's own
+ * `openSwapId`, which replaced R1's `swapOpen` boolean.
+ */
+export function resolveSwapSlot(slotId: string | null, slots: readonly SwapSlot[]): SwapSlot | null {
+  if (slotId === null) return null;
+  return slots.find((slot) => slot.id === slotId) ?? null;
+}
+
 /** Adapts a skin's primitive-only `SwapSlot` (types.ts) into swap-sheet.tsx's
  *  own concrete shapes — see types.ts's `SwapSlot` header for why the
  *  contract stays primitive-only (avoiding a circular type import) and why
@@ -490,7 +522,10 @@ export function PadHostV3(props: PadHostV3Props) {
 
   const [phase, setPhase] = useState<PadPhase>("live");
   const [held, setHeld] = useState<HeldTap | null>(null);
-  const [swapOpen, setSwapOpen] = useState(false);
+  // R3 chassis sub-wave (defect 2): the id of the OPEN swap slot, or null.
+  // Was a bare `swapOpen` boolean, which could only ever mean "the swap sheet
+  // is showing" — with one sheet per skin there was nothing else to say.
+  const [openSwapId, setOpenSwapId] = useState<string | null>(null);
   const [openSheet, setOpenSheet] = useState<SheetResolution | null>(null);
 
   // G5's own precedence rule (contextOverridesStale, above): a pending
@@ -561,7 +596,7 @@ export function PadHostV3(props: PadHostV3Props) {
 
   const scorebugSpec = useMemo(() => props.skin.scorebug(view), [props.skin, view]);
   const contextSpec = useMemo(() => props.skin.context?.(view) ?? null, [props.skin, view]);
-  const swapSlot = useMemo(() => props.skin.swap?.(view) ?? null, [props.skin, view]);
+  const swapSlots = useMemo(() => props.skin.swap?.(view) ?? [], [props.skin, view]);
 
   const padViewCtx: PadViewCtx = useMemo(
     () => ({ state: pipeline.state, summary: pipeline.summary, phase, band: props.band, entitlements }),
@@ -595,7 +630,10 @@ export function PadHostV3(props: PadHostV3Props) {
   const handleTileAction = useCallback(
     (action: TileSpec["action"]) => {
       if ("swap" in action) {
-        setSwapOpen(true);
+        // R3 (defect 2): the tile names WHICH slot. `resolveSwapSlot` at
+        // render time decides whether anything opens — an id no slot declares
+        // is a no-op, never a fallback to the first slot.
+        setOpenSwapId(action.swap);
         return;
       }
       if ("event" in action) void dispatch(action.event.type, action.event.payload);
@@ -649,7 +687,8 @@ export function PadHostV3(props: PadHostV3Props) {
     }
   }
 
-  const adaptedSwap = swapSlot ? adaptSwapSlot(swapSlot, squads) : null;
+  const openSwapSlot = resolveSwapSlot(openSwapId, swapSlots);
+  const adaptedSwap = openSwapSlot ? adaptSwapSlot(openSwapSlot, squads) : null;
 
   return (
     <div data-role="pad-v3" className="space-y-3">
@@ -743,24 +782,31 @@ export function PadHostV3(props: PadHostV3Props) {
        *  onCancel entirely, while the sibling GuidedSheet mount just below
        *  always got one — a scorer opening cricket's Retire flow could
        *  only finish the whole off->on swap or navigate away. `onCancel`
-       *  here closes the sheet the same way `onSwap` does (`setSwapOpen
-       *  (false)`, unmounting `<SwapSheet>` and discarding its own local
+       *  here closes the sheet the same way `onSwap` does (`setOpenSwapId
+       *  (null)`, unmounting `<SwapSheet>` and discarding its own local
        *  state), and `SwapSheet` itself also resets its pending off pick
-       *  before calling back — see swap-sheet.tsx's own handleCancel. */}
-      {swapOpen && swapSlot && adaptedSwap && (
-        <div data-role="v3-swap">
+       *  before calling back — see swap-sheet.tsx's own handleCancel.
+       *
+       *  R3 (defect 2): keyed on the OPEN SLOT's id, so switching from the
+       *  home Sub tile to the away one remounts `SwapSheet` and drops any
+       *  half-made off pick from the previous slot. Without the key React
+       *  would reuse the instance and carry a home player's id into the away
+       *  sheet — a wrong-team swap with no visible tell. */}
+      {openSwapSlot && adaptedSwap && (
+        <div data-role="v3-swap" data-swap-slot-id={openSwapSlot.id}>
           <SwapSheet
+            key={openSwapSlot.id}
             spec={adaptedSwap.spec}
             view={adaptedSwap.view}
             policyVerdict={adaptedSwap.policyVerdict}
             personNames={personNames}
             t={t}
             onSwap={(off, on) => {
-              setSwapOpen(false);
-              const event = swapSlot.buildEvent(off, on);
+              setOpenSwapId(null);
+              const event = openSwapSlot.buildEvent(off, on);
               void dispatch(event.type, event.payload);
             }}
-            onCancel={() => setSwapOpen(false)}
+            onCancel={() => setOpenSwapId(null)}
           />
         </div>
       )}
