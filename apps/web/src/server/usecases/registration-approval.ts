@@ -43,19 +43,20 @@ type Tx = postgres.TransactionSql;
 // ---------------------------------------------------------------------------
 
 /**
- * `RegistrationSettingsRow` plus the one V364 column nothing in
- * `registrations.ts` reads yet outside `registration-submit.ts` (`approval` —
- * `allow_free_agents` is submit/join-only and not needed here). A local
- * superset, same precedent as `registration-submit.ts`'s `SubmitSettingsRow`:
- * this wave's ownership keeps `registrations.ts`'s shared
- * `SETTINGS_COLS`/`RegistrationSettingsRow` to export-only edits, so the
- * extra column is read here instead. Structurally assignable back to
+ * Bare `extends`, no redeclared field — `approval` now lives on the base
+ * `RegistrationSettingsRow` itself (registrations.ts, RS004 wave 1's
+ * SETTINGS_COLS extension), so retyping it here would only add a hazard: a
+ * redeclared literal union does NOT inherit a future widening of the base
+ * (RS004 review finding 3). Still kept as its own name, same precedent as
+ * `registration-submit.ts`'s `SubmitSettingsRow` — this wave's file
+ * ownership still keeps `registrations.ts`'s shared
+ * `SETTINGS_COLS`/`RegistrationSettingsRow` to export-only edits, and
+ * `loadApprovalSettings` below hand-writes its own SELECT instead of
+ * calling the shared `loadSettings`. Structurally assignable back to
  * `RegistrationSettingsRow` wherever `promoteOldestWaitlisted`/
  * `promoteWaitlistedRow` expect the base shape.
  */
-interface ApprovalSettingsRow extends RegistrationSettingsRow {
-  approval: "auto" | "manual";
-}
+interface ApprovalSettingsRow extends RegistrationSettingsRow {}
 
 async function loadApprovalSettings(tx: Tx, divisionId: string): Promise<ApprovalSettingsRow | null> {
   const [row] = await tx<ApprovalSettingsRow[]>`

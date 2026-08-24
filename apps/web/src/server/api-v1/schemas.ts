@@ -159,7 +159,10 @@ export const TiebreakerKeyS = z.enum([
  *  nothing at the individual level — `mixed` is a roster-wide rule. */
 export const DivisionCategory = z.enum(["open", "mens", "womens", "mixed"]);
 
-const AGE_MAX_BEFORE_MIN = "age_max must be greater than or equal to age_min.";
+// Exported so usecases/divisions.ts can raise the SAME message when it
+// catches the single-field case this refine cannot see (RS004 review
+// finding 1 — checkAgeBand only fires when both sides are in ONE patch).
+export const AGE_MAX_BEFORE_MIN = "age_max must be greater than or equal to age_min.";
 
 function checkAgeBand(
   v: { age_min?: number | null; age_max?: number | null },
@@ -245,8 +248,11 @@ export const Division = z.object({
   tiebreakers: z.array(TiebreakerKeyS).nullable(),
   // V364 first-class eligibility columns (RS004); see PatchDivision above.
   category: DivisionCategory.nullable(),
-  age_min: z.number().int().nullable(),
-  age_max: z.number().int().nullable(),
+  // Bounded 0-120, matching PatchDivision's request-side bounds above
+  // (RS004 review finding 4) — the generated OpenAPI spec described this
+  // field two different ways otherwise.
+  age_min: z.number().int().min(0).max(120).nullable(),
+  age_max: z.number().int().min(0).max(120).nullable(),
   status: DivisionStatus,
   officials_hide_names: z.boolean(),
   scheduling_mode: z.enum(["timed", "flexible"]),
