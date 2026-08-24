@@ -27,7 +27,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS001b | `RS001b-org-currency-allowlist.md` | RS001 | **DONE** — PR #598 merged `a7cca608` (2026-08-17) |
 | RS002 | `RS002-core-usecases.md` | RS001b | **DONE** — PR #607 merged `4ff0bf8f` (2026-08-17) |
 | RS003 | `RS003-public-endpoints.md` | RS002 | **DONE** — PR #615 merged `29690ec8c` (2026-08-18) |
-| RS004 | `RS004-hub-settings-tab.md` | RS003 | TODO |
+| RS004 | `RS004-hub-settings-tab.md` | RS003 | **IN FLIGHT** — branch `feat/rs004-registration-hub-settings` |
 | RS005 | `RS005-hub-registrants-tab.md` | RS004 | TODO |
 | RS006 | `RS006-public-stepper.md` | RS003 | TODO |
 | RS007 | `RS007-status-page-join-payments.md` | RS006 | TODO |
@@ -1085,6 +1085,82 @@ e2e **11/11** local against a prod build; live Stripe **6/6** in test mode.
   exists again". It exists again — but `submitPublicRegistration` still posts
   the OLD flat body, so following that instruction yields a 400 that reads
   exactly like a capacity regression. The comment now names both blockers.
+
+### RS004 (2026-08-24) — branch `feat/rs004-registration-hub-settings`
+
+**LIVE SESSION STATE.** Worktree `.claude/worktrees/rs004`, rebased onto `main`
+@ `98c54936f`. DB label `rs004` on `127.0.0.1:54552`, schema **v375**. Scouting
+done, no code yet.
+
+**Five brief premises checked against the tree before writing anything — four
+are FALSE. Each was verified with `git grep -a`/`git show`, not assumed.**
+
+1. **The `registration.paid` gate locks nothing.** The prompt's acceptance
+   criterion "fee section locked without `registration.paid`" describes a lock
+   that cannot fire: `V310__community_branding_and_paid_registration.sql:49`
+   seeds the entitlement **true on every plan, community included**, and there
+   is **not one `UpgradeGate` call site** for it in `apps/web/src` or `e2e/`.
+   The three server-side `requireFeature("registration.paid")` gates
+   (`registrations.ts:1006,1155`, `registration-submit.ts:437`) are live code
+   that can never deny — `stripe-connect.ts:95,110` already calls this "dead
+   code twice over". What RS004 can honestly ship is the `data-feature`
+   attribute on the fee section plus a test that drives the gate through a
+   stubbed entitlement; what it must NOT ship is a test asserting a lock that
+   only passes because it never runs.
+2. **The org preferred-currency select already EXISTS** —
+   `components/org-registration-currency.tsx` (select over
+   `REGISTRATION_CURRENCIES`, disabled + explainer while `lockedTo` is
+   non-null), mounted at `app/o/[orgSlug]/settings/page.tsx:526`, writing
+   `PATCH /api/orgs/[id]` (`route.ts:56` zod `refine(isRegistrationCurrency)`,
+   `:113-127` refuses the write with 409 while locked). RS001b shipped scope
+   item 6 in full. What is left of that item: the **card-unsupported message
+   beside the payment-method choice in the hub config panel**, and e2e
+   coverage. Note the select labels are hand-written (`$ USD`, `£ GBP`…),
+   **not** `Intl.DisplayNames` as the prompt says — changing them is a
+   deliberate choice, not a fix.
+3. **The old settings form did NOT handle timezone.** The prompt's gotcha says
+   "`settings.tz` vs `orgTz` — the old form had this right, keep it". It did
+   not: `registration-settings.tsx:18-27` (pre-deletion, `850cc630^`) converts
+   window datetimes with bare `new Date(iso)` + `.getHours()`, i.e. **browser
+   local time**, and neither that file nor `registrations-panel.tsx` mentions
+   `tz` or `orgTz` at all. Rendering windows in the org timezone is NEW work
+   in RS004, not a port — and it is a behaviour change worth its own test.
+4. **`mobile.spec.ts` has no matrix array to append to.** Every `test()` in
+   that file runs under all seven width projects automatically
+   (`playwright.config.ts:126-201`, each project `testMatch:
+   /mobile\.spec\.ts/`). "Add the hub to the seven-width matrix" therefore
+   means "write a test in that file" — and it must mint its own org/tag
+   (`mobile.spec.ts:35-41,79`, `TAG` is per process) because it mutates
+   settings.
+5. **TRUE, and it is the whole of W1:** none of the five columns RS001/RS002
+   added has an organiser-facing API. `PutRegistrationSettings`
+   (`api-v1/schemas.ts:1972-1998`) has no `approval`/`allow_free_agents`;
+   `PatchDivision` (`:169-206`) has no `category`/`age_min`/`age_max`. All five
+   are READ in usecases already (`registration-eligibility.ts:75-77,244-278`,
+   `registration-approval.ts:121,188`, `registration-submit.ts:367,622`), so
+   the hub is writing to columns the engine already honours.
+
+**Conventions pinned from the tree** (do not re-derive):
+
+- Guard: `requireCompetitionPage(orgSlug, compSlug, {tail})`
+  (`server/page-auth.ts:192-201`); a scorer gets **`notFound()` — 404, not 403
+  and not a redirect** (`:198-200`). The prompt's "403/redirect" is loose
+  wording for this.
+- `?tab=` is read **server-side** — the division page derives `tab` from
+  `searchParams` and renders an inline `<nav>` of `<Link>`s
+  (`d/[divSlug]/page.tsx:77-115,346-358`). There is no shared `TabStrip`
+  component and no client tabs component; matching the repo means a server
+  component, not the prompt's "client tabs".
+- Overview cards: `c/[compSlug]/page.tsx:113,145` (`routes.competitionSchedule`
+  / `routes.competitionSettings`), live counts already fetched server-side into
+  a `Map` at `:207-212` — the Registration card's counts join that query.
+- Form-fields builder to port verbatim: `FormBuilder`
+  (`registration-settings.tsx:373-381`, field rows `:397-487`) over
+  `FormField {key, label, kind: "text"|"select"|"checkbox", options?, required}`
+  (`registrations-panel.tsx:26-32`, both pre-deletion at `850cc630^`).
+- Public register link was rendered **only when
+  `competition.visibility !== "private"`**, with an amber notice otherwise
+  (`d/[divSlug]/registrations/page.tsx:36-72`, pre-deletion). Keep that gate.
 
 ## RS011 — why #412 moved here (2026-08-17)
 
