@@ -150,6 +150,42 @@ capture `03-scored` → open a multi-field panel without confirming it
 (`openDock`) → capture `04-dock` → mint a device link, open it in a **fresh,
 unauthenticated browser context** → capture `05-devicelink`.
 
+### Every capture asserts its own declared state (added by R3, 2026-08-24)
+
+`captureState` takes a `StateProbe` — an ASSERTION that the declared state is
+actually on screen — and runs it **before the 320 measurement and again before
+every width's screenshot**. It is never a sleep.
+
+The defect it closes: `02-live` for football once came back as **three
+different boards at three widths from one declared state** — 320 rendered the
+pre-kickoff pad with zero tiles while 768/1280 rendered the live board, because
+the 320 shot was taken before `core.start` had folded CLIENT-side. Every wait
+in the harness polls the SERVER's ledger (`waitForLedgerGrowth`), which says
+nothing about what the browser has painted. Nothing failed, and nothing in
+`manifest.json` recorded that the widths disagreed.
+
+Why that was worse than one bad PNG: the 320 overflow measurement runs ALWAYS,
+so a 320 capture of an empty board measures an empty board and records a clean
+`0` — a false green in a merge gate — while a reviewer reading 768/1280 signs
+off a board the same sheet contradicts.
+
+- The shared five states use `foldedProbe`: the pad's own rendered event rows
+  (`[data-role="v3-activity-row"]`, or the legacy `[data-role="timeline"]
+  [data-event-id]` for the unconverted sports) must have caught up with the
+  ledger count the harness just read. One probe, honest for all twelve.
+- `GallerySport.dockProbe` is for a sport whose `04-dock` panel can CLOSE ON
+  ITS OWN. Football is the first: the v3 Detail Dock is a ~6s window, so a slow
+  capture could otherwise photograph three different things. Eight of the nine
+  legacy docks are persistent expanded forms with nothing to race, and keep the
+  shared probe.
+- `manifest.json`'s `measurements320[].padRowsByWidth` records the rendered row
+  count at each captured width. The probe already fails a disagreement; the
+  numbers are what let a later reader PROVE the widths agreed for a sheet that
+  has already been published.
+
+A capture whose board is not the declared state now FAILS, naming the sport and
+the state, instead of writing a misleading PNG.
+
 At 320px only, every capture also reads `document.documentElement.scrollWidth`
 vs `clientWidth` (with the SAME clip-lift `expectNoHorizontalScroll` in
 `helpers.ts` uses — `globals.css`'s `overflow-x: clip` on `html, body` pins a
@@ -264,6 +300,7 @@ readable form). That is an honest capture of today's UI, not a harness gap.
 | --- | --- |
 | `net::ERR_CONNECTION_REFUSED` on a `/magic-link?token=…` goto | The server died between runs — a plain background shell command tied to this session can be reaped by an unrelated interruption. Restart it with `nohup … & disown` (§1 step 4), not a bare `&`. |
 | `expect(locator).toBeVisible()` failed on `[data-testid="score-pad"]` for `05-devicelink` only | That testid is minted ONLY by `fixture-console.tsx` (the console route). The device-link route (`app/score/[token]/page.tsx` → `DeviceScorePad`) carries no such testid — the harness instead waits for the constant tail of the `device.courtsideFooter` dictionary string ("… link active today only"), which is sport-agnostic; do not reintroduce a `score-pad` wait on that page. |
+| `the dock closed before this width was captured` | Football's `04-dock` only: the goal tap's 6s hold window elapsed mid-capture. Not a pad defect and not a flake to retry blindly — it means the capture got slower (a loaded machine, a bigger page). Re-run; if it persists, the state needs a cheaper capture, not a longer sleep. |
 | A sport's `scoreOne`/`openDock` times out on a button name | Every sport's recipe in `gallery.capture.ts` passed cleanly as of Task 11's 2026-08-16 run (§5), so a fresh timeout means something in the pad's copy or flow changed since — open the pad for that sport by hand (`loginUi` + `seedRosteredFixture` + navigate) and read the real button/label text before changing the recipe. Boardgame and the badminton/tabletennis pair (§5) are worth checking first; they took the most iterations to get right. |
 | `GALLERY_DIR` party-empty after a red run | Expected — each sport writes its own files as it completes; `index.html`/`manifest.json` are written once in `test.afterAll`, covering whichever sports finished. Read the JSON reporter for the real pass/fail split before treating a short file list as the harness's fault. |
 | Two Playwright workers both writing `manifest.json` | Should not happen — the `gallery` project sets `fullyParallel: false` specifically so this one file's 12 tests never split across workers. If you see it, something changed that setting; put it back. |
