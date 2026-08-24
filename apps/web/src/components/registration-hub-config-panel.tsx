@@ -166,6 +166,17 @@ export function RegistrationHubConfigPanel({
   const { state, readOnly, loadError, busy, errors, formError, saveOutcome, patch, save } =
     useRegistrationConfigPanelState(division, onSaved);
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>(DEFAULT_OPEN);
+  // Finding 3: the fee input's draft text, independent of fee_cents. Owned
+  // HERE (not inside MoneySection) rather than as a useState in the section
+  // itself — MoneySection is invoked directly, outside React, by this
+  // panel's own test harness (registration-hub-config-panel.test.tsx's
+  // deepExpand/OPAQUE_TYPES and the finding-1 enumerating test both call
+  // Section functions as plain JS, with no hook dispatcher installed at
+  // that point — see _hook-harness.tsx's header), so every Section must
+  // stay hookless. Null until the organiser actually types; MoneySection
+  // falls back to a formatted (state.fee_cents / 100) whenever it's null,
+  // so there's no separate "seed on load" step to get out of sync.
+  const [feeText, setFeeText] = useState<string | null>(null);
 
   // Reveal whichever section holds the first error, at the moment the save
   // reports one. Deliberately NOT a `useEffect` on `errors`: writing state
@@ -270,6 +281,8 @@ export function RegistrationHubConfigPanel({
                     cardUnsupportedCurrency={cardUnsupportedCurrency}
                     chargesEnabled={readOnly!.chargesEnabled}
                     orgPaymentInstructions={readOnly!.orgPaymentInstructions}
+                    feeText={feeText}
+                    onFeeText={setFeeText}
                   />
                 ) : (
                   <FormSection state={state} errors={errors} patch={patch} />
@@ -525,6 +538,8 @@ export function MoneySection({
   cardUnsupportedCurrency,
   chargesEnabled,
   orgPaymentInstructions,
+  feeText,
+  onFeeText,
 }: {
   state: RegistrationConfigState;
   errors: Partial<Record<ConfigFieldKey, string>>;
@@ -537,11 +552,19 @@ export function MoneySection({
   cardUnsupportedCurrency: string | null;
   chargesEnabled: boolean;
   orgPaymentInstructions: string | null;
+  /** Finding 3 — the fee input's in-progress draft, owned by the panel
+   *  (see its own comment): null until the organiser types, so this section
+   *  stays hookless. */
+  feeText: string | null;
+  onFeeText: (text: string) => void;
 }) {
   const currencyCode = currency.toUpperCase();
   const cardUnavailable = !chargesEnabled || cardUnsupportedCurrency !== null;
   const paidConfigured = state.fee_cents > 0;
   const zone = fmtZoneAbbrev(orgTz, new Date());
+  // Falls back to the committed value, formatted, whenever there is no
+  // in-progress draft — covers both "never touched yet" and "just blurred".
+  const feeDisplay = feeText ?? (state.fee_cents / 100).toFixed(2);
 
   return (
     <section className="card space-y-3 p-4" data-feature="registration.paid">
@@ -555,16 +578,33 @@ export function MoneySection({
 
       <label className="label">
         {msg("reg.settings.entryFee", { sym: currencyCode })}
+        {/* Finding 3: type="number" sanitises an in-progress value like
+            "12." to value === "" (browser-level, before onChange ever
+            sees it), so the old handler read that as "clear the field" and
+            wrote fee_cents back to 0 mid-keystroke — decimal fees were
+            effectively unenterable. text + inputMode="decimal" reports the
+            EXACT typed string, with feeDisplay/onFeeText (above) as the
+            independent draft — same fix as the pre-deletion component
+            (git show 850cc6308^:apps/web/src/components/v2/
+            registration-settings.tsx, ~204-221). */}
         <input
-          type="number"
-          min={0}
-          step="0.01"
+          type="text"
+          inputMode="decimal"
           data-field="fee_cents"
           className="input mt-1"
-          value={state.fee_cents / 100}
-          onChange={(e) =>
-            patch({ fee_cents: e.target.value === "" ? 0 : Math.round(Number(e.target.value) * 100) })
-          }
+          value={feeDisplay}
+          onChange={(e) => {
+            const next = e.target.value;
+            // Reject anything that isn't a plausible in-progress decimal
+            // (optional digits, optional single ".", up to 2 more digits)
+            // rather than trying to sanitise it — an invalid keystroke is
+            // simply not applied, so fee_cents can never go NaN.
+            if (!/^\d*\.?\d{0,2}$/.test(next)) return;
+            onFeeText(next);
+            const pounds = Number.parseFloat(next);
+            patch({ fee_cents: Number.isFinite(pounds) ? Math.round(pounds * 100) : 0 });
+          }}
+          onBlur={() => onFeeText((state.fee_cents / 100).toFixed(2))}
         />
         {errors.fee_cents && (<p data-field-error="fee_cents" role="alert" className="mt-1 text-xs text-red-600">{errors.fee_cents}</p>)}
       </label>

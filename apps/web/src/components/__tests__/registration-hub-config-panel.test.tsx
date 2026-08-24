@@ -227,7 +227,10 @@ describe("RegistrationHubConfigPanel — loading and data wiring", () => {
     expect(propsOf(findField(tree, "category")!).value).toBe("mixed");
     expect(propsOf(findField(tree, "approval")!).value).toBe("manual");
     expect(propsOf(findField(tree, "capacity")!).value).toBe(32);
-    expect(propsOf(findField(tree, "fee_cents")!).value).toBe(15);
+    // "15.00", not the number 15: finding 3 made this a text/decimal draft
+    // (feeDisplay), formatted from fee_cents whenever there's no in-progress
+    // edit — see the "decimal entry fees (finding 3)" describe block below.
+    expect(propsOf(findField(tree, "fee_cents")!).value).toBe("15.00");
   });
 
   it("threads form_fields to the ported FormBuilder unchanged", async () => {
@@ -420,6 +423,8 @@ describe("RegistrationHubConfigPanel — every routable field has a render site 
           cardUnsupportedCurrency: null,
           chargesEnabled: true,
           orgPaymentInstructions: null,
+          feeText: null,
+          onFeeText: vi.fn(),
         }),
       ),
       ...walk(FormSection(commonProps)),
