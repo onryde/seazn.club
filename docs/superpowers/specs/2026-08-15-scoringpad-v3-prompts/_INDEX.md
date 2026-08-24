@@ -1444,3 +1444,54 @@ hit:** every one of these was written by an agent that also wrote its own tests,
 and every one of those tests was green. A test that asserts a skin against a
 MIRROR of the engine proves the mirror. Where an oracle exists — the fold, the
 CSS cascade, a production symbol — the test must go through it.
+
+
+---
+
+## R3/F — cricket impact, established from a gallery DIFF (2026-08-24)
+
+Task G was dispatched twice to answer "which cricket screens moved from F's
+chassis fixes" and stalled at the watchdog both times. Answered here directly.
+
+**Baseline:** `scratchpad/gallery-r3-final`, captured 15:17 — before E
+(`b0bb1e230` 15:55) and before every F commit (16:33-17:12). A genuine
+pre-wave baseline, not a re-capture of the same code.
+**New:** `scratchpad/gallery-r3-final2`, captured off the rebuilt bundle at
+HEAD. Both runs 2/2 passed, 45 PNGs each (cricket 30, football 15), 320px
+overflow measured on all 15 states and 0px everywhere.
+
+### The byte diff is CONTAMINATED — do not report it as the answer
+
+All 30 cricket PNGs differ by hash, and 44 of 45 overall. That is NOT 44
+changed screens. The harness seeds a fixture per run with a per-process `TAG`,
+so every fixture name changes between runs (`mt7bjrxorkhp` -> `mt7h9q4cwkxs`)
+and the proportional font re-wraps the title, shifting the whole page down.
+Compared visually, cricket `01-pre-768` is IDENTICAL apart from that tag.
+
+A hash diff of this gallery measures tag noise. The only instrument that
+answers the question is looking at the pixels.
+
+### What actually moved
+
+- **`ad55ec356` (ribbon detail) DOES change cricket.** The recording chip read
+  `Ball recorded` before and reads `Ball recorded - Cau...` after — the detail
+  suffix every skin already built, now rendered because `buildRibbon` finally
+  receives `detail`. Visible on `04-dock` at every width; cricket is a
+  SIGNED-OFF sport, so this copy change is owed a re-look.
+- **`7ada026e0` (scorebug who-line wrap)** produced no visible cricket change
+  in these states: the who-line fits at all three widths in both runs. It
+  guards a long unbroken name cricket's fixture does not produce.
+- **`8a66c00f6` (dock on screen when it opens)** produced no visible cricket
+  change: the WHO'S OUT dock renders in the same place in both runs.
+- **`74a912ee2` (E, cricket focus ring) is INVISIBLE to this gallery** and
+  always will be — it only paints on `:focus-visible`, and the harness focuses
+  nothing before screenshotting. It cannot be signed off from these PNGs. It
+  was verified instead by cascade reasoning plus `focus-ring-cascade.test.ts`,
+  whose 3 targeted tests go red when the `[data-sport-theme]` scope is
+  stripped. Do not read "no visual diff" as "no change" for that commit.
+
+### Consequence for the sign-off sheet
+
+Cricket's `04-dock` (and any state showing the chip) needs the owner's eye
+again — one copy change, not a re-review of the sport. Football is new in this
+wave and needs all five states reviewed regardless.
