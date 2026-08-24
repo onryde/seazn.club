@@ -44,14 +44,33 @@ export function weekdayOfYmd(ymd: Ymd): Weekday {
   return WEEKDAYS[new Date(`${ymd}T00:00:00Z`).getUTCDay()]!;
 }
 
+// `Intl.DateTimeFormat` construction dominates the cost of these two, and both
+// are called per court per DAY once court calendars are resolved (P9.5) — a
+// year-long horizon over ten courts constructed tens of thousands of them per
+// pass. The formatter depends only on the zone, so it is built once per zone
+// and reused. Keyed by `tz` alone; both maps are tiny (one entry per zone a
+// process ever sees) and hold no per-call state, so this is a pure cache with
+// no invalidation question.
+const DAY_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+const TIME_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+
+function dayFormatter(tz: string): Intl.DateTimeFormat {
+  let f = DAY_FORMATTERS.get(tz);
+  if (f === undefined) {
+    f = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    DAY_FORMATTERS.set(tz, f);
+  }
+  return f;
+}
+
 /** The calendar day an instant falls on, in `tz`. `en-CA` formats YYYY-MM-DD. */
 export function dayKeyInTz(instantMs: number, tz: string): Ymd {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(instantMs));
+  return dayFormatter(tz).format(new Date(instantMs));
 }
 
 /** The wall-clock time of an instant, in `tz`. The `^24` guard is insurance
@@ -61,14 +80,17 @@ export function dayKeyInTz(instantMs: number, tz: string): Ymd {
  *  418 zones this runtime knows; the guard is here so a locale or ICU change
  *  cannot make that quietly untrue. */
 export function hhmmInTz(instantMs: number, tz: string): Hhmm {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: tz,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  })
-    .format(new Date(instantMs))
-    .replace(/^24/, "00");
+  let f = TIME_FORMATTERS.get(tz);
+  if (f === undefined) {
+    f = new Intl.DateTimeFormat("en-GB", {
+      timeZone: tz,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    TIME_FORMATTERS.set(tz, f);
+  }
+  return f.format(new Date(instantMs)).replace(/^24/, "00");
 }
 
 /**

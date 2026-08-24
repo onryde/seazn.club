@@ -103,6 +103,7 @@ import {
   candidateCourtsByFixture,
   requiredCourtTagsByFixture,
   resolveCandidateCourts,
+  resolveCourtCalendars,
 } from "@/server/usecases/court-candidates";
 import { consumePreview, PREVIEW_STALE, releasePreview } from "@/server/usecases/schedule-ai-preview";
 import {
@@ -114,7 +115,7 @@ import {
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { AiPlanRequest, AiPlanResponse } from "@/server/api-v1/schemas";
 import { AiSchedulePlan, SINGLE_SYSTEM_PROMPT } from "./schedule-ai-prompt";
-import type { ConflictDetail } from "@seazn/engine/scheduling";
+import type { ConflictDetail, CourtCalendar } from "@seazn/engine/scheduling";
 import {
   MOVABLE_STATUS,
   divisionFixtures,
@@ -393,6 +394,24 @@ export const DEFAULT_SESSION_HOURS = { start: "08:00", end: "22:00" } as const;
 
 export interface SchedulePack {
   mode: "generate" | "refine" | "repair";
+  /**
+   * P9.5 — the candidate courts' own opening hours (V367), so the AI draft is
+   * CHECKED against them by `verifyConfig` below and the corrective-retry loop
+   * can react, instead of proposing a board on a closed court that only the
+   * later /validate notices.
+   *
+   * OMITTED when the org has declared no calendars, which keeps every existing
+   * pack byte-identical — the same rule `PackFixture.courts` follows for its
+   * per-stage narrowing.
+   *
+   * The deterministic DRAFT PLACER still does not read these: it builds its
+   * config through `toSlotConfig`, which sets no `tz`, and court hours are
+   * day-shaped. Giving that call a `tz` would also switch on the whole typed
+   * rule block inside `slotFixtures` (`calendar.ts`: day caps, weekday and
+   * wall-clock rules), which this path has never honoured — a much wider
+   * change than court hours and its own decision. Recorded, not taken.
+   */
+  courtCalendars?: readonly CourtCalendar[];
   division: { id: string; name: string; sport: string; tz: string };
   /** The ORGANISATION zone (#397, design §2.1). ONE zone governs every temporal
    *  decision in this pack — day boundaries, weekday targets, session hours and
@@ -812,6 +831,11 @@ export async function buildSchedulePack(
       courts,
       division.required_court_tags,
     );
+
+    // P9.5: the candidate courts' own calendars, so the pack's verifier can
+    // check the model's draft against real opening hours. Same loader the
+    // build and validate paths use — never a second read of court_hours.
+    const packCourtCalendars = await resolveCourtCalendars(tx, candidateCourtIds.ids);
 
     // P9 (stage court tags) -> #622 (round-scoped tags). `candidateCourtIds`
     // above is DIVISION-wide only, so a stage's own `required_court_tags` was
@@ -1654,6 +1678,9 @@ export async function buildSchedulePack(
 
     const pack: SchedulePack = {
       mode: opts.mode,
+      // Omitted when the org declares no calendars, so an existing pack is
+      // byte-identical and the AI golden snapshots do not move.
+      ...(packCourtCalendars.length > 0 ? { courtCalendars: packCourtCalendars } : {}),
       division: {
         id: division.id,
         name: division.name,
@@ -2199,6 +2226,9 @@ export function verifyConfig(pack: SchedulePack): VerifyConfig {
     // here — a single-division run has only one division's rest to be the
     // maximum of.
     tz: pack.tz,
+    ...(pack.courtCalendars !== undefined && pack.courtCalendars.length > 0
+      ? { courtCalendars: pack.courtCalendars }
+      : {}),
     hard: [...pack.parsed.hard, ...(pack.settings.constraints?.hard ?? [])],
     ruleFixtures: packRuleFixtures(pack),
     // Both rest sources, plus the match length noBackToBack needs: the engine's

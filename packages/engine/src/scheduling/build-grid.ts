@@ -13,8 +13,10 @@ import {
   type Blackout,
   type SlotConfig,
 } from "./calendar.ts";
+import { usableWindows, type Window } from "./court-windows.ts";
 import { gridStepMinutes } from "./grid-step.ts";
 import { calendarDaysCovering, repairCourts, repairUniverse } from "./repair-domain.ts";
+import { dayKeyInTz } from "./tz.ts";
 
 const MS_PER_MIN = 60_000;
 
@@ -102,12 +104,45 @@ export function buildGrid(input: BuildGridInput): BuildGrid {
   const sessions = config.sessionWindows ?? [];
   const blackouts: readonly Blackout[] = config.blackouts ?? [];
 
+  // Per-court availability from P8's calendar editor (V367), resolved ONCE for
+  // the whole universe through the shared `usableWindows` — the same function
+  // `validateAssignments` calls, so the lattice and the verifier cannot answer
+  // this question differently. A court with no calendar is absent from this map
+  // and stays unrestricted; calendars strictly SUBTRACT.
+  //
+  // Skipped entirely without `tz`, exactly as the typed rules are: court hours
+  // are day-shaped and there is no local midnight to resolve a weekday against.
+  const courtWindows = new Map<string, readonly Window[]>();
+  if (config.tz !== undefined && (config.courtCalendars ?? []).length > 0) {
+    const range = {
+      from: dayKeyInTz(universe.from, config.tz),
+      to: dayKeyInTz(universe.to, config.tz),
+    };
+    for (const calendar of config.courtCalendars ?? []) {
+      courtWindows.set(
+        calendar.courtId,
+        // No blackouts passed: `admits` below already rejects any slot
+        // overlapping one, so subtracting them here too is duplicated work for
+        // an identical decision — and on the VERIFIER side the same
+        // pass-through produced a second, wrongly-blamed conflict. One cause,
+        // one place, on all three sides.
+        usableWindows(calendar, range, { tz: config.tz }),
+      );
+    }
+  }
+
   const slots: BuildSlot[] = [];
   const seen = new Set<string>();
   let overCap = false;
 
   const admits = (court: string, start: number): boolean => {
     const end = start + durMs;
+    const open = courtWindows.get(court);
+    // A court WITH a calendar must have the whole match fit inside one of its
+    // usable windows — the "fits the window" test, not "starts in it" (edge
+    // matrix row 7). An empty array means the court is closed for every day in
+    // range, which correctly removes it from the lattice (row 2).
+    if (open !== undefined && !open.some((w) => start >= w.from && end <= w.to)) return false;
     if (sessions.length > 0 && !sessions.some((w) => start >= w.from && end <= w.to)) return false;
     for (const b of blackouts) {
       if (b.court !== undefined && b.court !== court) continue;

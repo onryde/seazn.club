@@ -22,6 +22,7 @@
 // calendar.ts itself. `HardConstraint`/`RuleFixture` are TYPE-ONLY imports,
 // erased at build time — they cost the bundle nothing regardless of source.
 import { dayKeyInTz, weekdayOfYmd, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling/tz";
+import { usableWindows } from "@seazn/engine/scheduling/court-windows";
 import { resolveSelector } from "@seazn/engine/scheduling/calendar";
 import type {
   CapacityDay,
@@ -115,44 +116,51 @@ function calendarDays(window: { from: number; to: number }, tz: string): { ymd: 
   return out;
 }
 
-/** Subtract every `cut` that overlaps a window from `base`, splitting a
- *  window into up to two pieces per cut. */
-function subtractIntervals(base: readonly CapacityWindow[], cuts: readonly CapacityWindow[]): CapacityWindow[] {
-  let pieces = [...base];
-  for (const cut of cuts) {
-    const next: CapacityWindow[] = [];
-    for (const p of pieces) {
-      if (cut.to <= p.from || cut.from >= p.to) {
-        next.push(p);
-        continue;
-      }
-      if (cut.from > p.from) next.push({ from: p.from, to: Math.min(cut.from, p.to) });
-      if (cut.to < p.to) next.push({ from: Math.max(cut.to, p.from), to: p.to });
-    }
-    pieces = next;
-  }
-  return pieces.filter((p) => p.to > p.from);
-}
-
-/** A day's usable windows for ONE court: sessionWindows (or, when none are
- *  declared, the whole calendar day — the same "empty = unrestricted" rule
- *  the placer applies, calendar.ts:310) clipped to the day, minus every
- *  blackout that applies to this court (court-specific or global). */
+/** A day's usable windows for ONE court, from the ONE engine function
+ *  (`court-windows.ts`'s `usableWindows`) rather than a private copy.
+ *
+ *  Until P9.5 this module carried its own `subtractIntervals` +
+ *  `usableWindowsFor` pair — a third implementation of "when is this court
+ *  usable", beside the placer's `admits` and the verifier's own block. They did
+ *  not drift, but nothing prevented it, and the whole point of P9.5 is that
+ *  "one function, both sides" is enforced rather than asserted.
+ *
+ *  The day CLIP stays here deliberately: `days` above clips each bucket to the
+ *  pack window (a tournament running 09:00-17:00 on its only day is one real
+ *  day with a shorter span, not zero days), which is this module's own concern,
+ *  not a property of a court's calendar. `usableWindows` answers for a whole
+ *  civil day; intersecting that with the bucket is the clip, not a second
+ *  window computation.
+ *
+ *  NO COURT CALENDARS ARE PASSED, and that is a known limit rather than an
+ *  oversight: this runs client-side off the board payload, and P9 deliberately
+ *  stopped shipping each court's full calendar to the board after it blew the
+ *  payload budget. So the precheck still treats every court as open all day and
+ *  can therefore only OVERSTATE supply — the same direction it already errs in,
+ *  and never the direction that hides an impossible division. Making it
+ *  calendar-aware needs a slim calendar prop on the board first.
+ */
 function usableWindowsFor(
   court: string,
+  ymd: string,
   dayFrom: number,
   dayTo: number,
+  tz: string,
   sessionWindows: readonly { from: number; to: number }[],
   blackouts: readonly { court?: string; from: number; to: number }[],
 ): CapacityWindow[] {
-  const base: CapacityWindow[] =
-    sessionWindows.length > 0
-      ? sessionWindows
-          .map((w) => ({ from: Math.max(w.from, dayFrom), to: Math.min(w.to, dayTo) }))
-          .filter((w) => w.to > w.from)
-      : [{ from: dayFrom, to: dayTo }];
-  const applicable = blackouts.filter((b) => b.court === undefined || b.court === court);
-  return subtractIntervals(base, applicable);
+  const open = usableWindows(
+    { courtId: court, hours: [], exceptions: [] },
+    { from: ymd, to: ymd },
+    { tz, sessionWindows, blackouts },
+  );
+  const clipped: CapacityWindow[] = [];
+  for (const w of open) {
+    const from = Math.max(w.from, dayFrom);
+    const to = Math.min(w.to, dayTo);
+    if (to > from) clipped.push({ from, to });
+  }
+  return clipped;
 }
 
 /** The flat per-day fixture-count ceiling from `max_fixtures_per_day` hard
@@ -292,7 +300,7 @@ function capacityDays(
       date: b.ymd,
       courts: config.courts.map((court) => ({
         court,
-        windows: usableWindowsFor(court, b.from, b.to, sessionWindows, blackouts),
+        windows: usableWindowsFor(court, b.ymd, b.from, b.to, tz, sessionWindows, blackouts),
       })),
       ...(cap !== undefined ? { demandCap: cap } : {}),
       ...(forcedIds !== undefined && forcedIds.size > 0 ? { forcedDemand: forcedIds.size } : {}),

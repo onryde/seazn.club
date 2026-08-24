@@ -197,6 +197,11 @@ export function formatConflictDetail(d: ConflictDetail, ctx: ConflictDetailCtx):
       // court itself, not a clash with another card — so unlike
       // court_double_booking there is no otherFixtureId branch.
       return msg("board.conflict.detail.court_tag_mismatch", { court: courtLabel(d.courtName, msg) });
+    case "outside_court_hours":
+      // P9.5, D5b.5. Same shape as court_tag_mismatch just above: a property
+      // of the court itself (its declared opening hours), not a clash with
+      // another card, so no otherFixtureId branch.
+      return msg("board.conflict.detail.outside_court_hours", { court: courtLabel(d.courtName, msg) });
     case "inside_blackout":
       return msg("board.conflict.detail.inside_blackout");
     case "outside_session_windows":

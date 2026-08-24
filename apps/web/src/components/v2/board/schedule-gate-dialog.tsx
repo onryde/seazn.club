@@ -86,13 +86,13 @@ export function ScheduleGateDialog({
   // Same fallback order as the conflicts panel: the generic code-level help
   // wins when the locale has it, otherwise this conflict's own structured
   // `details` (localized, name-resolved — never the deprecated raw `detail`
-  // string, C3 2026-08-13 design amendment). NOT dead in production (a
-  // prior comment here claimed it was): `conflict.start_window` is a live
-  // `ScheduleConflict.code` (`lib/schedule-board.ts:39`) with neither a
-  // `board.conflictHelp.conflict.start_window` key in any of the four
-  // dictionaries nor a `CONFLICT_HELP` entry (`types.ts`) — this branch is
-  // what an organiser refused on that code actually sees today. Kept for
-  // every other unmapped future code too.
+  // string, C3 2026-08-13 design amendment). NOT dead in production: this
+  // branch is what an organiser sees for any code with neither a
+  // `board.conflictHelp.<code>` key in any of the four dictionaries nor a
+  // `CONFLICT_HELP` entry (`types.ts`). `conflict.start_window`
+  // (`lib/schedule-board.ts:39`) used to be exactly that case; it gained
+  // both (P95 windows pass) and now resolves through the locale key above
+  // instead. Kept for every other unmapped future code.
   const help = (code: string, details?: BoardConflictDetail) => {
     const key = `board.conflictHelp.${code}` as MessageKey;
     const out = msg(key);

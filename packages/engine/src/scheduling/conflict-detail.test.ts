@@ -44,6 +44,10 @@ const FULL_DETAIL: Record<ConflictDetailKind, ConflictDetail> = {
   // court_double_booking above; there is no `otherFixtureId` because the
   // clash is with a declared tag requirement, not with another fixture.
   court_tag_mismatch: { kind: "court_tag_mismatch", court: "C1" },
+  // P9.5's 27th kind. Same shape and same reasoning as court_tag_mismatch: the
+  // breach is against a constraint the COURT declares (its opening hours, V367)
+  // rather than against another fixture, so there is no `otherFixtureId`.
+  outside_court_hours: { kind: "outside_court_hours", court: "C1" },
   inside_blackout: { kind: "inside_blackout" },
   outside_session_windows: { kind: "outside_session_windows" },
   entrant_overlap: { kind: "entrant_overlap", entrantIds: ["e1", "e2"], otherFixtureId: "f-other" },

@@ -149,6 +149,7 @@ export interface BoardConflict {
 
 export const CONFLICT_LABEL: Record<string, string> = {
   "conflict.court": "court clash",
+  "conflict.start_window": "outside a start window",
   "warn.rest": "rest",
   "warn.person_overlap": "person overlap",
   "warn.order": "plays before feeder",
@@ -170,6 +171,8 @@ export const CONFLICT_LABEL: Record<string, string> = {
 // 2026-08-13 design amendment).
 export const CONFLICT_HELP: Record<string, string> = {
   "conflict.court": "Two matches would use the same court at the same time.",
+  "conflict.start_window":
+    "This match starts outside a start window set for one of its entrants, its pool or its division.",
   "warn.rest": "There isn't enough rest between matches for a team or player.",
   "warn.person_overlap": "Someone would be playing in two matches at once.",
   "warn.order": "This match feeds a later one, so it can't start before the earlier match finishes.",

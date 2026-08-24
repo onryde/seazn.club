@@ -15,8 +15,9 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
-import { createVenue, createCourt } from "../venues";
-import { buildSchedulePack, structuralCheck } from "../schedule-ai";
+import { createVenue, createCourt, putCourtCalendar } from "../venues";
+import { validateAssignments } from "@seazn/engine/scheduling";
+import { buildSchedulePack, structuralCheck, verifyConfig } from "../schedule-ai";
 import type { AiSchedulePlan } from "../schedule-ai-prompt";
 import { seedOrg } from "./_seed";
 import { putStageCourtTags } from "../stage-court-tags";
@@ -155,6 +156,68 @@ describe.skipIf(!HAS_DB)("buildSchedulePack routes courts through resolveCandida
     });
     expect(pack.settings.courts).toEqual([]);
     expect(pack.draft.every((d) => d.scheduled_at === null)).toBe(true);
+  });
+});
+
+describe.skipIf(!HAS_DB)("buildSchedulePack carries court opening hours (P9.5)", () => {
+  it("puts the candidate courts' calendars on the pack, and its verifier flags a draft outside them", async () => {
+    // The seam that would otherwise rot silently: the calendars are LOADED and
+    // then have to be threaded onto the pack and back off it by `verifyConfig`.
+    // A field that is loaded and not forwarded typechecks and binds nothing —
+    // the failure this branch has already paid for twice.
+    const { auth, divisionId, venueId } = await seedDivision(4);
+    const court = await createCourt(auth, venueId, { name: "Centre", sort: 0, tags: [] });
+    await setCourts(divisionId, [court.id]);
+    // Saturday 08 Aug 2026, open 15:00-20:00.
+    await putCourtCalendar(auth, court.id, {
+      hours: [{ weekday: 6, open_min: 15 * 60, close_min: 20 * 60 }],
+      exceptions: [],
+    });
+    const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "League", config: {} });
+    await generateStageFixtures(auth, stage!.id);
+
+    const { pack } = await buildSchedulePack(auth, divisionId, {
+      now: NOW,
+      mode: "generate",
+      instruction: "Fill the day.",
+    });
+
+    expect(pack.courtCalendars).toEqual([
+      { courtId: court.id, hours: [{ weekday: 6, openMin: 900, closeMin: 1200 }], exceptions: [] },
+    ]);
+
+    const SAT = Date.UTC(2026, 7, 8, 0, 0);
+    const outOfHours = {
+      fixtureId: "f1",
+      court: court.id,
+      startAt: SAT + 9 * 60 * 60_000,
+      endAt: SAT + 10 * 60 * 60_000,
+      entrants: ["e1", "e2"],
+      people: [],
+    };
+
+    const conflicts = validateAssignments([outOfHours], verifyConfig(pack));
+
+    expect(conflicts.filter((c) => c.details?.kind === "outside_court_hours")).toHaveLength(1);
+  });
+
+  it("omits the field entirely when the org has declared no calendars", async () => {
+    // The byte-identical case — this is what keeps the AI golden packs from
+    // moving for every org that never opened the calendar editor.
+    const { auth, divisionId, venueId } = await seedDivision(4);
+    const court = await createCourt(auth, venueId, { name: "Centre", sort: 0, tags: [] });
+    await setCourts(divisionId, [court.id]);
+    const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "League", config: {} });
+    await generateStageFixtures(auth, stage!.id);
+
+    const { pack } = await buildSchedulePack(auth, divisionId, {
+      now: NOW,
+      mode: "generate",
+      instruction: "Fill the day.",
+    });
+
+    expect(pack.courtCalendars).toBeUndefined();
+    expect(verifyConfig(pack).courtCalendars).toBeUndefined();
   });
 });
 

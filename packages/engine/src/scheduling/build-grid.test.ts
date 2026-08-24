@@ -32,6 +32,187 @@ describe("gridStepMinutes", () => {
   });
 });
 
+describe("buildGrid — the pack window bounds the lattice (P9.5)", () => {
+  // P9.5's prompt asserted that `admits` omits the competition pack window the
+  // verifier enforces (`calendar.ts` `outside_competition_window`), so the
+  // lattice could offer slots `/validate` rejects. That premise is FALSE:
+  // `repairUniverse` (repair-domain.ts:292-294) hard-returns `config.window`
+  // before `existing` can widen it, so no slot outside the pack window is ever
+  // minted and `admits` has nothing left to re-check.
+  //
+  // These pin the property rather than the implementation, because the moment
+  // that hard return grows a branch, the asymmetry the prompt described becomes
+  // real. Neither test passes if the universe is derived from the board.
+  it("mints no slot outside the pack window even when an existing fixture sits far outside it", () => {
+    const outside: Assignment[] = [
+      {
+        fixtureId: "f-far",
+        court: "C1",
+        startAt: T0 + 30 * DAY,
+        endAt: T0 + 30 * DAY + 30 * MIN,
+        entrants: ["e1", "e2"],
+        people: [],
+      },
+    ];
+
+    const g = buildGrid({ config: cfg(), existing: outside });
+
+    const packWindow = cfg().window!;
+    for (const slot of g.slots) {
+      expect(slot.startAt).toBeGreaterThanOrEqual(packWindow.from);
+      expect(slot.startAt + 30 * MIN).toBeLessThanOrEqual(packWindow.to);
+    }
+    expect(g.slots.length).toBeGreaterThan(0);
+  });
+
+  it("agrees with the verifier when no pack window is declared: neither side bounds anything", () => {
+    // Symmetry in the other direction — `validateAssignments` guards its pack
+    // check on `window !== undefined`, so an absent window must not make the
+    // lattice narrower than the verifier either.
+    const board: Assignment[] = [
+      {
+        fixtureId: "f-1",
+        court: "C1",
+        startAt: T0 + 2 * DAY,
+        endAt: T0 + 2 * DAY + 30 * MIN,
+        entrants: ["e1", "e2"],
+        people: [],
+      },
+    ];
+
+    const g = buildGrid({ config: cfg({ window: undefined }), existing: board });
+
+    expect(g.slots.some((s) => s.startAt > T0 + DAY)).toBe(true);
+  });
+});
+
+describe("buildGrid — config.startAt is deliberately NOT the lattice's floor", () => {
+  // Pinned, not fixed. P9.5 first read "the solver places before config.startAt
+  // while greedy does not" as a defect and floored the lattice at `startAt`.
+  // That is WRONG, and `build-day-gate.test.ts`'s `dayOpenConfig` says so in as
+  // many words: "config.startAt IS NOT THE SOLVER'S FLOOR, and that is the
+  // whole fixture." The grid opens at `window.from`; greedy's cursor opens at
+  // max(startAt, notBefore). The two producers legitimately see different first
+  // ticks, and the solver's earlier board WINS on `dayStartOffsetMinutes` — a
+  // rung `isStrictlyBetter` ranks and greedy cannot reach (measured on the real
+  // service: 0 against 540).
+  //
+  // Flooring the lattice reds four engine tests, two of them that gate exactly
+  // this. This guard exists so the next session to notice the asymmetry finds
+  // the ruling instead of re-deriving the same wrong fix.
+  it("opens at window.from even when startAt is nine hours later", () => {
+    const midnight = Date.UTC(2026, 7, 8, 0, 0);
+    const nine = midnight + 9 * 60 * MIN;
+
+    const g = buildGrid({
+      config: cfg({ startAt: nine, window: { from: midnight, to: midnight + DAY } }),
+    });
+
+    expect(g.slots.some((s) => s.startAt < nine)).toBe(true);
+    expect(g.slots[0]!.startAt).toBe(midnight);
+  });
+});
+
+describe("buildGrid — court calendars narrow the lattice (P9.5)", () => {
+  // P8 shipped court_hours/court_exceptions (V367) and a calendar editor whose
+  // data NOTHING in scheduling read: the scheduler would place at 09:00 on a
+  // court that does not open until 15:00. This is the owner-raised edge matrix,
+  // rows 1/2/10 — asserted here on the lattice, and in
+  // court-windows-parity.test.ts through /validate on the same board.
+  const SAT = Date.UTC(2026, 7, 8, 0, 0); // Sat 08 Aug 2026 00:00Z, weekday 6
+  const SATURDAY = 6;
+  const dayCfg = (over: Partial<SlotConfig> = {}): SlotConfig & { courts: string[] } =>
+    cfg({
+      tz: "UTC",
+      startAt: SAT,
+      window: { from: SAT, to: SAT + DAY },
+      matchMinutes: 60,
+      gapMinutes: 0,
+      ...over,
+    });
+
+  it("offers no slot before a court opens, and leaves a court with no calendar alone", () => {
+    const g = buildGrid({
+      config: dayCfg({
+        courtCalendars: [
+          {
+            courtId: "C1",
+            hours: [{ weekday: SATURDAY, openMin: 15 * 60, closeMin: 20 * 60 }],
+            exceptions: [],
+          },
+        ],
+      }),
+    });
+
+    const c1 = g.byCourt.get("C1")!.map((i) => g.slots[i]!.startAt);
+    expect(c1[0]).toBe(SAT + 15 * 60 * MIN);
+    expect(c1[c1.length - 1]).toBe(SAT + 19 * 60 * MIN); // 19:00–20:00 fits; 20:00 does not
+    // C2 declares no calendar, so it stays open all day — calendars SUBTRACT.
+    const c2 = g.byCourt.get("C2")!.map((i) => g.slots[i]!.startAt);
+    expect(c2[0]).toBe(SAT);
+    expect(c2.length).toBe(24);
+  });
+
+  it("drops a court from the day entirely when its hours miss the session window", () => {
+    // Edge matrix row 2: court 15:00–20:00 against a 09:00–13:00 session is an
+    // EMPTY intersection, so that court must leave the day's candidate set
+    // rather than silently accept fixtures.
+    const g = buildGrid({
+      config: dayCfg({
+        sessionWindows: [{ from: SAT + 9 * 60 * MIN, to: SAT + 13 * 60 * MIN }],
+        courtCalendars: [
+          {
+            courtId: "C1",
+            hours: [{ weekday: SATURDAY, openMin: 15 * 60, closeMin: 20 * 60 }],
+            exceptions: [],
+          },
+        ],
+      }),
+    });
+
+    expect(g.byCourt.get("C1") ?? []).toEqual([]);
+    expect((g.byCourt.get("C2") ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("honours a closed exception on that date only", () => {
+    const hours = [{ weekday: SATURDAY, openMin: 9 * 60, closeMin: 17 * 60 }];
+    const open = buildGrid({
+      config: dayCfg({ courtCalendars: [{ courtId: "C1", hours, exceptions: [] }] }),
+    });
+    const closed = buildGrid({
+      config: dayCfg({
+        courtCalendars: [
+          { courtId: "C1", hours, exceptions: [{ date: "2026-08-08", closed: true }] },
+        ],
+      }),
+    });
+
+    expect((open.byCourt.get("C1") ?? []).length).toBeGreaterThan(0);
+    expect(closed.byCourt.get("C1") ?? []).toEqual([]);
+  });
+
+  it("ignores court calendars when no tz is configured, matching the verifier", () => {
+    // Court hours are DAY-shaped, and with no tz there is no local midnight to
+    // resolve a weekday against. The verifier skips day-shaped rules rather
+    // than bucketing them in UTC, so the lattice must skip these too or the two
+    // sides disagree — the fork this session exists to close.
+    const g = buildGrid({
+      config: dayCfg({
+        tz: undefined,
+        courtCalendars: [
+          {
+            courtId: "C1",
+            hours: [{ weekday: SATURDAY, openMin: 15 * 60, closeMin: 20 * 60 }],
+            exceptions: [],
+          },
+        ],
+      }),
+    });
+
+    expect((g.byCourt.get("C1") ?? []).length).toBe(24);
+  });
+});
+
 describe("buildGrid", () => {
   it("covers every court across the window at the step", () => {
     const g = buildGrid({ config: cfg() });

@@ -37,6 +37,7 @@ import {
   type Conflict,
   type ConflictDetail,
   type HardConstraint,
+  type CourtCalendar,
   type OrderDependency,
   type RuleFixture,
   type SchedulableFixture,
@@ -69,6 +70,9 @@ import {
   guardNoMatchingCourtPerFixture,
   requiredCourtTagsByFixture,
   resolveCandidateCourts,
+  resolveCourtCalendars,
+  courtCalendarsForDivision,
+  guardNoUsableCourtWindows,
   tagQualifiedCourtIdsByFixture,
   unionRequiredCourtTags,
 } from "./court-candidates";
@@ -1014,11 +1018,26 @@ export function toVerifyConfig(
    *  `siblingAssignments` returns the two halves together rather than leaving
    *  this to a second call a caller can simply not make. */
   extraRuleFixtures: readonly RuleFixture[] = [],
+  /** P9.5: the candidate courts' own opening hours (`resolveCourtCalendars`).
+   *
+   *  A PARAMETER, not a field read off `settings.config`, for the reason
+   *  `toSlotConfig` above copies every field by hand: this config is assembled
+   *  explicitly, so anything merely added to the wire config is silently
+   *  dropped here — an inert seam that typechecks, renders as enforced and
+   *  binds nothing (the #443 shape, and the `tz` trap two doc paragraphs up).
+   *  Loading it needs a `tx` and an already-resolved candidate set, neither of
+   *  which `settings` carries, so the call site passes it in.
+   *
+   *  Omitted means "this path does not consult court calendars" — NOT "no court
+   *  has any". Both the placer and the verifier read it off ONE object here, so
+   *  the two cannot be handed different court hours. */
+  courtCalendars?: readonly CourtCalendar[],
 ): SlotConfig & VerifyConfig {
   return {
     ...toSlotConfig(settings, now),
     tz: settings.orgTz,
     ruleFixtures: [...fixtures.map(rowToRuleFixture), ...extraRuleFixtures],
+    ...(courtCalendars !== undefined && courtCalendars.length > 0 ? { courtCalendars } : {}),
   };
 }
 
@@ -1435,6 +1454,12 @@ export async function autoSchedule(
       ...settings,
       config: { ...settings.config, courts: [...candidateCourtIds.ids] },
     };
+    // P9.5: the candidate courts' own opening hours (V367). Scoped to the
+    // candidate ids, which is what keeps an ARCHIVED court's existing cards
+    // validating clean — an archived court is not a candidate, so it is absent
+    // from this list, and `usableWindows` reads absent as unrestricted. "The
+    // court is gone" is P10's stranded-fixture case (A6), not this one.
+    const courtCalendars = await resolveCourtCalendars(tx, candidateCourtIds.ids);
 
     // #622: which of this stage's movable fixtures are narrowed BELOW the
     // stage-wide candidate set by a round-scoped tag, as `allowedCourts` for
@@ -1504,7 +1529,13 @@ export async function autoSchedule(
       .filter((f) => pinnedIds.has(f.id))
       .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
 
-    const declaredConfig = toVerifyConfig(settingsForEngine, all, roundToMinute(Date.now()), siblings.ruleFixtures);
+    const declaredConfig = toVerifyConfig(
+      settingsForEngine,
+      all,
+      roundToMinute(Date.now()),
+      siblings.ruleFixtures,
+      courtCalendars,
+    );
     const windowedConfig = boundSolverWindow(
       declaredConfig,
       schedulable,
@@ -1514,6 +1545,9 @@ export async function autoSchedule(
       // would stretch the lattice around a board that pass is about to
       // replace.
       body.mode === "reflow" ? [...placedNow, ...pinnedNow] : [],
+      // The SAME feeds `buildSchedule` is handed below, so the window this
+      // measures can actually fit a dependent after its feeders.
+      feedDependencies(all),
     );
     // BUILD, with an organiser-set end date, only. POLISH and REFLOW are
     // contracts about NOT moving a card that doesn't need moving (R20/#452) —
@@ -1614,6 +1648,45 @@ export async function autoSchedule(
     divisionId: plan.divisionId,
     stageId,
   });
+  // P9.5, edge matrix row 3: the same refusal one constraint over. If every
+  // candidate court is CLOSED for the whole run — hours that miss the session
+  // window, or a closed exception on the only day — the lattice would be empty
+  // and the solver would answer "infeasible", which tells an organiser nothing
+  // about the court calendar they just edited. Placed here, after the tag
+  // guards and before capacity, for the same reason the tag guard sits ahead of
+  // capacity: "no court is open then" is more specific and more actionable than
+  // anything the capacity arithmetic would derive from an empty supply.
+  //
+  // Reads `plan.config`, which already carries the loaded calendars and the org
+  // zone — the same object the placer and the verifier read, so the guard
+  // cannot refuse a run the lattice would have allowed.
+  //
+  // BUILD ONLY. A reflow or polish already HAS a board, and its window is
+  // widened to contain those cards — so an organiser who narrows the sole
+  // court's hours to Mon-Fri under a Saturday board would make every candidate
+  // court closed across that range and get a hard 422 with no
+  // `acknowledge_warnings` route out and no edit that fixes it. That is exactly
+  // the case `outside_court_hours` is carved out of `isBlockingConflict` to
+  // keep advisory (calendar.ts, and conflict-detail.ts's header says so in as
+  // many words), and this guard would have overridden that promise from the
+  // other side. The empty-lattice argument only applies to a FRESH solve,
+  // which is what `mode: "build"` is.
+  if (body.mode === "build") {
+    const cfg = plan.config;
+    const span = cfg.window ?? { from: cfg.startAt, to: cfg.startAt };
+    // `applyWindow` yields -Infinity/Infinity for an unbounded window, and
+    // `dayKeyInTz(Infinity)` THROWS. An unbounded run also has no finite set of
+    // days to prove closed, so there is nothing here to refuse.
+    if (cfg.tz !== undefined && Number.isFinite(span.from) && Number.isFinite(span.to)) {
+      guardNoUsableCourtWindows(
+        cfg.courts,
+        cfg.courtCalendars ?? [],
+        { from: dayKeyInTz(span.from, cfg.tz), to: dayKeyInTz(span.to, cfg.tz) },
+        { tz: cfg.tz, sessionWindows: cfg.sessionWindows, blackouts: cfg.blackouts },
+        { divisionId: plan.divisionId },
+      );
+    }
+  }
   // D2 capacity pre-check: arithmetic-provable impossibility refuses with a
   // typed 422 BEFORE either solver is reached — no db connection is held
   // here (phase 1 already closed), so this costs nothing a real solve
@@ -2011,6 +2084,13 @@ export function boundSolverWindow<T extends SlotConfig & VerifyConfig>(
    * Empty for BUILD and POLISH, which propose from scratch.
    */
   mustContain: readonly Assignment[] = [],
+  /** Bracket feeds, forwarded to the measuring greedy pass. Without them that
+   *  pass places a dependent at the SAME instant as its feeders, so the span it
+   *  measures is too short and the window handed to the solver cannot fit the
+   *  dependent after them — the second route to the "2 of 3 placed" bug the
+   *  ordering fix in `slotFixtures` closes. Optional: every pre-existing caller
+   *  measures exactly as it did. */
+  dependencies: readonly OrderDependency[] = [],
 ): T {
   const w = config.window;
   if (w !== undefined && Number.isFinite(w.from) && Number.isFinite(w.to)) return config;
@@ -2022,7 +2102,7 @@ export function boundSolverWindow<T extends SlotConfig & VerifyConfig>(
       : Math.min(config.startAt, ...pins, ...mustContain.map((a) => a.startAt));
   // MEASURED, not invented: the greedy pass is the same one `buildSchedule`
   // runs first, so this is the span the fixtures demonstrably occupy.
-  const seed = slotFixtures({ fixtures, config, existing });
+  const seed = slotFixtures({ fixtures, config, existing, dependencies });
   const to =
     w !== undefined && Number.isFinite(w.to)
       ? w.to
@@ -2498,7 +2578,15 @@ export async function applySchedule(
 
     // #447: the VERIFY config, so the durable typed rules an organiser stored
     // are the rules this gate judges by. Warn-only — see `assertNoNewBlocking`.
-    const slotConfig = toVerifyConfig(settings, all, 0, siblings.ruleFixtures);
+    // P9.5 review finding 4: the apply gate sees court opening hours too, so a
+    // board applied onto a closed court is reported HERE rather than only by
+    // the next /validate run — two surfaces, one answer.
+    const applyCourtCalendars = await courtCalendarsForDivision(
+      tx,
+      stage.division_id,
+      settings.config.courts,
+    );
+    const slotConfig = toVerifyConfig(settings, all, 0, siblings.ruleFixtures, applyCourtCalendars);
     const deps = feedDependencies(all);
     const board = [...untouched, ...siblings.assignments];
     // The SAME fixtures where they sit right now (#399). Anything the verifier
@@ -2845,7 +2933,21 @@ export async function moveFixture(
         settings.config.matchMinutes,
       );
       // #447: the dragged card is judged against the durable typed rules too.
-      const slotConfig = toVerifyConfig(settings, all, 0, siblings.ruleFixtures);
+        // Same as the apply gate: a card DRAGGED onto a court that is closed at
+      // that time is flagged at the drag, not silently accepted and then
+      // reported by the next /validate.
+      const moveCourtCalendars = await courtCalendarsForDivision(
+        tx,
+        fixture.division_id,
+        settings.config.courts,
+      );
+      const slotConfig = toVerifyConfig(
+        settings,
+        all,
+        0,
+        siblings.ruleFixtures,
+        moveCourtCalendars,
+      );
       const deps = feedDependencies(all);
       const board = [...others, ...siblings.assignments];
       // Where this card sits right now (#399). An unscheduled fixture has no
@@ -3077,6 +3179,12 @@ async function validateScheduleIn(
     ...settings,
     config: { ...settings.config, courts: [...candidateCourtIds.ids] },
   };
+  // P9.5: the SAME loader the build path calls, so the lattice and this
+  // verifier cannot be handed different opening hours — the placer/verifier
+  // fork court-candidates.ts's header opens by warning about, now for the
+  // court's calendar rather than its tags. Scoped to candidate ids for the
+  // archived-court reason spelled out on the build side.
+  const courtCalendars = await resolveCourtCalendars(tx, candidateCourtIds.ids);
   // P9 pass 2c: gives the VERIFIER a real consumer for the same constraint —
   // `candidateCourtIds` above (tag+archived filtered) becomes the new
   // `config.courts`, but `validateAssignments` has never read `.courts`
@@ -3197,7 +3305,7 @@ async function validateScheduleIn(
           // (autoSchedule, the AI planning path, every test in this
           // package) for a question only THIS path asks.
           {
-            ...toVerifyConfig(settingsForEngine, all, 0, siblings.ruleFixtures),
+            ...toVerifyConfig(settingsForEngine, all, 0, siblings.ruleFixtures, courtCalendars),
             courtTagQualifiedIds: [...courtTagQualifiedIds],
             // #622 — the per-fixture override. Both are sent: the map is the
             // exact answer for this division's own fixtures, the flat list is

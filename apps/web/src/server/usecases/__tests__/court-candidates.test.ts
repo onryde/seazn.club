@@ -14,6 +14,7 @@ import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
 import { sql, withTenant } from "@/lib/db";
 import {
+  guardNoUsableCourtWindows,
   guardNoMatchingCourt,
   NO_MATCHING_COURT_CODE,
   resolveCandidateCourts,
@@ -46,6 +47,99 @@ describe("unionRequiredCourtTags — D5/P8 division tags ∪ P9 stage tags", () 
       expect(unionRequiredCourtTags([" Clay "], ["CLAY", "Indoor"])).toEqual(["clay", "indoor"]);
     },
   );
+});
+
+describe("guardNoUsableCourtWindows — P9.5 edge matrix row 3", () => {
+  // Row 3: when every candidate court's usable windows are empty for the run,
+  // the organiser gets a TYPED refusal in the NO_MATCHING_COURT family — never
+  // a silent zero-slot lattice that comes back "infeasible" with no reason.
+  // P9 set this precedent for the tag filter; hours are the same shape of
+  // "nothing can ever be placed here".
+  const SATURDAY = 6;
+  const range = { from: "2026-08-01", to: "2026-08-01" }; // a Saturday
+  const ctx = { divisionId: "d1" };
+  const openSat = (courtId: string, openMin: number, closeMin: number) => ({
+    courtId,
+    hours: [{ weekday: SATURDAY, openMin, closeMin }],
+    exceptions: [],
+  });
+
+  it("refuses when every candidate court is closed for the whole run", () => {
+    const calendars = [
+      { courtId: "c1", hours: [{ weekday: 1, openMin: 540, closeMin: 1020 }], exceptions: [] },
+      { courtId: "c2", hours: [{ weekday: 1, openMin: 540, closeMin: 1020 }], exceptions: [] },
+    ];
+
+    try {
+      guardNoUsableCourtWindows(["c1", "c2"], calendars, range, { tz: "UTC" }, ctx);
+      throw new Error("expected a refusal");
+    } catch (e) {
+      expect(e).toBeInstanceOf(HttpError);
+      expect((e as HttpError).status).toBe(422);
+      expect((e as HttpError).code).toBe("NO_MATCHING_COURT");
+    }
+  });
+
+  it("refuses when court hours and the session window do not intersect (row 2 -> row 3)", () => {
+    // The owner's own worked example: court 15:00-20:00, session 09:00-13:00.
+    const sessionWindows = [
+      { from: Date.parse("2026-08-01T09:00:00Z"), to: Date.parse("2026-08-01T13:00:00Z") },
+    ];
+
+    expect(() =>
+      guardNoUsableCourtWindows(
+        ["c1"],
+        [openSat("c1", 15 * 60, 20 * 60)],
+        range,
+        { tz: "UTC", sessionWindows },
+        ctx,
+      ),
+    ).toThrow(HttpError);
+  });
+
+  it("passes when even ONE candidate court has a usable window", () => {
+    const calendars = [
+      { courtId: "c1", hours: [{ weekday: 1, openMin: 540, closeMin: 1020 }], exceptions: [] },
+      openSat("c2", 15 * 60, 20 * 60),
+    ];
+
+    expect(() =>
+      guardNoUsableCourtWindows(["c1", "c2"], calendars, range, { tz: "UTC" }, ctx),
+    ).not.toThrow();
+  });
+
+  it("passes when a candidate court declares NO calendar — absent means unrestricted", () => {
+    // The regression this guard must never cause: calendars strictly SUBTRACT,
+    // so a court nobody has given hours to is open, and its presence alone is
+    // enough to make the run placeable.
+    expect(() =>
+      guardNoUsableCourtWindows(["c1", "c-no-calendar"], [openSat("c1", 0, 1)], range, { tz: "UTC" }, ctx),
+    ).not.toThrow();
+  });
+
+  it("passes when NO court has a calendar at all — the status quo ante", () => {
+    expect(() => guardNoUsableCourtWindows(["c1", "c2"], [], range, { tz: "UTC" }, ctx)).not.toThrow();
+  });
+
+  it("does nothing without a tz, matching the placer and the verifier", () => {
+    // Court hours are day-shaped; with no zone there is no local midnight to
+    // resolve a weekday against, so both sides SKIP them. A guard that fired
+    // here would refuse a run neither the lattice nor the verifier constrains.
+    const calendars = [{ courtId: "c1", hours: [{ weekday: 1, openMin: 540, closeMin: 1020 }], exceptions: [] }];
+
+    expect(() => guardNoUsableCourtWindows(["c1"], calendars, range, {}, ctx)).not.toThrow();
+  });
+
+  it("passes when only SOME days of a multi-day run are closed", () => {
+    // A single dark day is not a zero-slot lattice — the event still runs on
+    // the others, and refusing the whole schedule over one closed Sunday would
+    // be a lock-out with no fix.
+    const monOnly = [{ courtId: "c1", hours: [{ weekday: 1, openMin: 540, closeMin: 1020 }], exceptions: [] }];
+
+    expect(() =>
+      guardNoUsableCourtWindows(["c1"], monOnly, { from: "2026-08-01", to: "2026-08-05" }, { tz: "UTC" }, ctx),
+    ).not.toThrow();
+  });
 });
 
 describe("guardNoMatchingCourt", () => {

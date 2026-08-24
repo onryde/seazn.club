@@ -246,6 +246,8 @@ describe("formatConflictDetail — exhaustive sweep", () => {
     { kind: "outside_start_window" },
     { kind: "court_double_booking", court: "Court 1", otherFixtureId: "f1" },
     { kind: "court_double_booking", court: "Court 1" },
+    { kind: "court_tag_mismatch", court: "Court 1" },
+    { kind: "outside_court_hours", court: "Court 1" },
     { kind: "inside_blackout" },
     { kind: "outside_session_windows" },
     { kind: "entrant_overlap", entrantIds: ["e1"], otherFixtureId: "f1" },
@@ -260,20 +262,52 @@ describe("formatConflictDetail — exhaustive sweep", () => {
     { kind: "no_slot_budget" },
   ];
 
-  // 27 populated details above (instruction_time and court_double_booking
+  // 29 populated details above (instruction_time and court_double_booking
   // each appear twice, deliberately — see the design doc's key table) cover
-  // all 25 `ConflictDetailKind` members.
+  // all 27 `ConflictDetailKind` members — closed via ALL_KINDS_WITNESS below,
+  // not a hand-maintained count that can quietly fall behind the union again
+  // (this comment previously said "25" after two more kinds, court_tag_mismatch
+  // and outside_court_hours, had already been added to the engine's union).
   it("covers every ConflictDetailKind at least once", () => {
     const seen = new Set(ALL.map((d) => d.kind));
-    const kinds: ConflictDetailKind[] = [
-      "person_double_booking", "locked_slot_clash", "no_slot_start_window", "no_slot_person_bound",
-      "no_slot_horizon", "instruction_feeder_gap", "instruction_day_cap", "instruction_weekday",
-      "instruction_date", "instruction_time", "outside_competition_window", "outside_start_window",
-      "court_double_booking", "inside_blackout", "outside_session_windows", "entrant_overlap",
-      "entrant_below_rest", "person_overlap", "person_below_rest", "order_before_feeder",
-      "order_inside_feeder_rest", "round_order_day", "round_order_same_day", "no_slot_lattice",
-      "no_slot_budget",
-    ];
+    // `Record<ConflictDetailKind, true>` witness — the SAME exhaustiveness
+    // idiom `conflict-detail-legacy.test.ts`'s own `CASES` table uses (and the
+    // engine's `FIELD_ORDER_WITNESS` / schemas.ts's `CONFLICT_DETAIL_KIND_WITNESS`):
+    // a kind added to (or renamed in) the engine's union and forgotten here is a
+    // TYPE ERROR on this object literal — a missing property — not a silently
+    // stale hand-typed array a human forgot to extend. This is what makes the
+    // assertion below genuinely closed: a 28th kind fails to compile, it does
+    // not just fail to be checked.
+    const ALL_KINDS_WITNESS: Record<ConflictDetailKind, true> = {
+      person_double_booking: true,
+      locked_slot_clash: true,
+      no_slot_start_window: true,
+      no_slot_person_bound: true,
+      no_slot_horizon: true,
+      instruction_feeder_gap: true,
+      instruction_day_cap: true,
+      instruction_weekday: true,
+      instruction_date: true,
+      instruction_time: true,
+      outside_competition_window: true,
+      outside_start_window: true,
+      court_double_booking: true,
+      court_tag_mismatch: true,
+      outside_court_hours: true,
+      inside_blackout: true,
+      outside_session_windows: true,
+      entrant_overlap: true,
+      entrant_below_rest: true,
+      person_overlap: true,
+      person_below_rest: true,
+      order_before_feeder: true,
+      order_inside_feeder_rest: true,
+      round_order_day: true,
+      round_order_same_day: true,
+      no_slot_lattice: true,
+      no_slot_budget: true,
+    };
+    const kinds = Object.keys(ALL_KINDS_WITNESS) as ConflictDetailKind[];
     for (const k of kinds) expect(seen.has(k), `${k} missing from the sweep fixture`).toBe(true);
   });
 

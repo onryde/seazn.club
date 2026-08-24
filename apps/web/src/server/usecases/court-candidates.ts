@@ -8,7 +8,13 @@ import "server-only";
 // header (packages/engine/src/scheduling/candidate-courts.ts) for why a
 // second, inlined tag-filter loop at either web call site is this
 // subsystem's recurring bug (the placer/verifier fork), not a style nit.
-import { candidateCourts, type CandidateCourts, type CourtMeta } from "@seazn/engine/scheduling";
+import {
+  candidateCourts,
+  usableWindows,
+  type CandidateCourts,
+  type CourtCalendar,
+  type CourtMeta,
+} from "@seazn/engine/scheduling";
 import type postgres from "postgres";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
@@ -138,6 +144,126 @@ export async function resolveCandidateCourts(
 }
 
 /**
+ * P9.5 (D5b.5): the court calendars `usableWindows` resolves, for the courts a
+ * run actually has in play.
+ *
+ * The loader lives HERE, usecase-side, because the engine stays pure — it never
+ * touches a DB — and because this module is already the one place the build,
+ * validate and AI-pack paths agree about courts. A second loader at any of those
+ * three call sites would be the same fork this file exists to prevent, one field
+ * over: they would diverge on what "this court has no calendar" means.
+ *
+ * ABSENT MEANS UNRESTRICTED, and that distinction is load-bearing. A court with
+ * no `court_hours` rows is simply omitted from the result, which `usableWindows`
+ * reads as "open all day" — calendars strictly SUBTRACT (D5 normative step 1),
+ * so a court nobody has given hours to must not become unschedulable. A court
+ * that HAS hours but none for a given weekday is closed that weekday; that is a
+ * declared calendar saying "not Tuesdays", and it is the engine's job to tell
+ * the two apart, not this loader's.
+ *
+ * Scoped to `courtIds` rather than the whole org: unlike `orgCourtMetas` above,
+ * which needs every court so an empty configured list can fall back to all of
+ * them, this is only ever asked about a candidate set that has already been
+ * resolved. `court_exceptions.date` comes back as `string | Date` depending on
+ * the driver's type parsing, so it is normalised to a bare `YYYY-MM-DD` here —
+ * the engine takes a `Ymd` and does no date parsing of its own.
+ */
+export async function resolveCourtCalendars(
+  tx: Tx,
+  courtIds: readonly string[],
+): Promise<CourtCalendar[]> {
+  if (courtIds.length === 0) return [];
+  const ids = [...courtIds];
+  const hours = await tx<{ court_id: string; weekday: number; open_min: number; close_min: number }[]>`
+    select court_id, weekday, open_min, close_min from court_hours
+    where court_id in ${tx(ids)}
+    order by court_id, weekday, open_min`;
+  const exceptions = await tx<
+    {
+      court_id: string;
+      date: string | Date;
+      closed: boolean;
+      open_min: number | null;
+      close_min: number | null;
+    }[]
+  >`
+    select court_id, date, closed, open_min, close_min from court_exceptions
+    where court_id in ${tx(ids)}
+    order by court_id, date`;
+
+  const byCourt = new Map<string, { hours: CourtCalendar["hours"]; exceptions: CourtCalendar["exceptions"] }>();
+  const slot = (courtId: string) => {
+    const existing = byCourt.get(courtId);
+    if (existing !== undefined) return existing;
+    const fresh = { hours: [] as CourtCalendar["hours"], exceptions: [] as CourtCalendar["exceptions"] };
+    byCourt.set(courtId, fresh);
+    return fresh;
+  };
+  for (const h of hours) {
+    (slot(h.court_id).hours as { weekday: number; openMin: number; closeMin: number }[]).push({
+      weekday: h.weekday,
+      openMin: h.open_min,
+      closeMin: h.close_min,
+    });
+  }
+  for (const e of exceptions) {
+    const date = typeof e.date === "string" ? e.date.slice(0, 10) : e.date.toISOString().slice(0, 10);
+    (
+      slot(e.court_id).exceptions as {
+        date: string;
+        closed: boolean;
+        openMin?: number;
+        closeMin?: number;
+      }[]
+    ).push({
+      date,
+      closed: e.closed,
+      ...(e.open_min !== null ? { openMin: e.open_min } : {}),
+      ...(e.close_min !== null ? { closeMin: e.close_min } : {}),
+    });
+  }
+  // Order follows `courtIds` so the result is deterministic for a caller that
+  // logs or snapshots it; a court with neither hours nor exceptions is omitted.
+  return ids.flatMap((courtId) => {
+    const found = byCourt.get(courtId);
+    return found === undefined ? [] : [{ courtId, hours: found.hours, exceptions: found.exceptions }];
+  });
+}
+
+/**
+ * The court calendars for a DIVISION's own candidate set, in one call.
+ *
+ * The apply gate and the drag gate need exactly this and hold none of the
+ * pieces: unlike `autoSchedule` and `validateScheduleIn` they never resolve
+ * candidate courts for any other purpose. Without it each would have grown its
+ * own copy of "read the division's tags, resolve candidates, load calendars" —
+ * three transcriptions of one rule, which is the fork this module exists to
+ * prevent.
+ *
+ * Scoped to CANDIDATES, never to the courts the board happens to use, and that
+ * is the load-bearing part: an archived court is not a candidate, so it is
+ * absent here, and `usableWindows` reads absent as unrestricted. That keeps a
+ * card sitting on a since-archived court validating CLEAN — P9's A10 split
+ * ("the court is gone" is P10's stranded-fixture case; "the court violates a
+ * declared constraint" is this one).
+ */
+export async function courtCalendarsForDivision(
+  tx: Tx,
+  divisionId: string,
+  configuredCourtIds: readonly string[],
+): Promise<CourtCalendar[]> {
+  const [division] = await tx<{ required_court_tags: string[] }[]>`
+    select required_court_tags from divisions where id = ${divisionId}`;
+  const candidates = await resolveCandidateCourts(
+    tx,
+    divisionId,
+    configuredCourtIds,
+    division?.required_court_tags ?? [],
+  );
+  return resolveCourtCalendars(tx, candidates.ids);
+}
+
+/**
  * P9 pass 2c: TAG-only qualification, ignoring archived status entirely.
  * The verifier's `court_tag_mismatch` conflict (calendar.ts's
  * `validateAssignments`) needs to answer a narrower question than
@@ -193,6 +319,65 @@ export async function resolveTagQualifiedCourtIds(
  * touched, exactly what that ruling exists to prevent. Only a fresh SOLVE has
  * nothing yet placed to protect.
  */
+/**
+ * P9.5, edge matrix row 3: when NO candidate court can host anything for the
+ * whole run, refuse with a typed error rather than hand the solver a zero-slot
+ * lattice and let it come back "infeasible" with no reason an organiser can act
+ * on. P9 set this precedent for the tag filter (`guardNoMatchingCourt` below);
+ * opening hours are the same shape of "nothing can ever be placed here", so
+ * they share its code — the row calls for "the `NO_MATCHING_COURT` family", and
+ * a second code would need its own wire enum entry and four translations to say
+ * a thing this one already says.
+ *
+ * Three deliberate non-firings, each of which would otherwise be a lock-out:
+ *
+ *   * NO TZ — court hours are day-shaped and there is no local midnight to
+ *     resolve a weekday against, so the placer and the verifier both SKIP them.
+ *     A guard that fired here would refuse a run neither side constrains.
+ *   * A CANDIDATE WITH NO CALENDAR — absent means unrestricted (calendars
+ *     strictly SUBTRACT), so one such court makes the run placeable on its own.
+ *     This is the guard's most important negative case: firing here would make
+ *     every org that has never opened the calendar editor unschedulable.
+ *   * SOME DAYS DARK — a multi-day run whose Sunday is closed is not a
+ *     zero-slot lattice; the event still runs on the other days. Only a range
+ *     with no usable window ANYWHERE refuses.
+ */
+export function guardNoUsableCourtWindows(
+  candidateCourtIds: readonly string[],
+  courtCalendars: readonly CourtCalendar[],
+  range: { readonly from: string; readonly to: string },
+  config: {
+    readonly tz?: string;
+    readonly sessionWindows?: readonly { from: number; to: number }[];
+    readonly blackouts?: readonly { court?: string; from: number; to: number }[];
+  },
+  context: { divisionId: string },
+): void {
+  const tz = config.tz;
+  if (tz === undefined || courtCalendars.length === 0 || candidateCourtIds.length === 0) return;
+  const byCourt = new Map(courtCalendars.map((c) => [c.courtId, c] as const));
+  for (const courtId of candidateCourtIds) {
+    const calendar = byCourt.get(courtId);
+    if (calendar === undefined) return; // no calendar declared -> unrestricted
+    const windows = usableWindows(calendar, range, {
+      tz,
+      sessionWindows: config.sessionWindows,
+      blackouts: config.blackouts,
+    });
+    if (windows.length > 0) return;
+  }
+  log.info(
+    { event: "schedule_no_usable_court_window", divisionId: context.divisionId, from: range.from, to: range.to },
+    "schedule_no_usable_court_window",
+  );
+  throw new HttpError(
+    422,
+    "No configured court is open during this schedule's dates",
+    NO_MATCHING_COURT_CODE,
+    { candidateCount: 0, from: range.from, to: range.to },
+  );
+}
+
 export function guardNoMatchingCourt(
   candidateCourtIds: readonly string[],
   context: { requiredTags: readonly string[]; divisionId: string; [key: string]: unknown },

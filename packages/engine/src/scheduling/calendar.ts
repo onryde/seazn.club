@@ -16,6 +16,7 @@ import type {
 import { restFloor } from "./rest-floor.ts";
 import { dayKeyInTz, hhmmInTz, weekdayOfYmd, ymdAddDays, zonedTimeToUtc } from "./tz.ts";
 import { canonConflictDetail, type ConflictDetail } from "./conflict-detail.ts";
+import { usableWindows, type CourtCalendar, type Window } from "./court-windows.ts";
 
 // Re-exported beside `Conflict` itself (below) so the many call sites that
 // already do `import { ..., type Conflict, ... } from "./calendar.ts"` can
@@ -55,6 +56,17 @@ export interface SlotConfig {
    *  the pack edge — never by adding 86_400_000, because a DST day is 23 or 25
    *  hours long. */
   window?: { from: number; to: number };
+  /** Per-court availability from V367's `court_hours`/`court_exceptions` (P8's
+   *  calendar editor), loaded usecase-side and resolved by `usableWindows`
+   *  (court-windows.ts). Absent, or absent FOR A GIVEN COURT, means that court
+   *  is unrestricted — calendars strictly SUBTRACT, so a court nobody has
+   *  given hours to must not become unschedulable.
+   *
+   *  Day-shaped, so it needs `tz` for the same reason the typed rules do: with
+   *  no zone there is no local midnight to resolve a weekday against, and both
+   *  the placer and the verifier SKIP these rather than bucket them in UTC.
+   *  Spelled the same on `VerifyConfig` so one config object drives both. */
+  courtCalendars?: readonly CourtCalendar[];
   horizonMinutes?: number; // how far past startAt to search before reporting no_slot
   /** Constraints v2 (Jul3/04 §3) — extends, never replaces, the base pass. */
   constraints?: SchedulingConstraints;
@@ -76,7 +88,10 @@ export interface SlotConfig {
 
 export interface SchedulableFixture {
   id: string;
-  roundNo?: number; // scheduled in ascending round order (feed dependencies respected)
+  /** Round-robin placement order. Ascending. Feed dependencies are honoured
+   *  separately, via `SlotInput.dependencies` — this field alone never
+   *  expressed them, though its comment claimed so until P9.5. */
+  roundNo?: number;
   home?: EntrantId; // may be a TBD feed (undefined) — then no rest/overlap checks apply
   away?: EntrantId;
   people?: readonly string[]; // person ids, for cross-division overlap (doc 06 §4.3)
@@ -303,7 +318,16 @@ export const conflictKey = (c: Conflict): string =>
  */
 export function isBlockingConflict(c: Conflict): boolean {
   return (
-    (c.reason === "court" && c.details?.kind !== "court_tag_mismatch") ||
+    (c.reason === "court" &&
+      c.details?.kind !== "court_tag_mismatch" &&
+      // `outside_court_hours` (P9.5) is carved out for exactly the reason above
+      // it: an organiser who narrows a court's opening hours under fixtures
+      // already placed there would otherwise be hard-refused at publish with no
+      // `acknowledge_warnings` route out, and no edit that fixes it. Reported,
+      // never blocking. The stranding case is P10's (A6) and is advisory there
+      // too. `court_double_booking` stays unconditionally blocking — that one
+      // is a physical impossibility, not a declared-constraint breach.
+      c.details?.kind !== "outside_court_hours") ||
     c.reason === "person_overlap" ||
     c.reason === "window" ||
     (c.reason === "order" && c.direct === true)
@@ -366,6 +390,20 @@ export interface SlotInput {
   fixtures: readonly SchedulableFixture[];
   config: SlotConfig;
   existing?: readonly Assignment[]; // sibling divisions' assignments (cross-division)
+  /**
+   * Bracket feeds, so a dependent is PLACED after the fixtures that feed it.
+   *
+   * Without this the comparator below had only `roundNo`, and apps/web stamps
+   * that solely for ROUND-ROBIN stages (C1's ruling: a bracket's display
+   * numbering must not masquerade as round-robin order). So every fixture in a
+   * knockout stage sorted as `roundNo ?? 0` and fell through to the id
+   * tiebreak — a uuid. When the final's uuid sorted first, greedy placed it
+   * before its semis existed on the board and the order check then DROPPED it:
+   * an auto-schedule returning 2 of 3 with `order_before_feeder`, about one run
+   * in three. Absent means "no feeds known", which is the pre-existing
+   * behaviour for every caller that does not pass them.
+   */
+  dependencies?: readonly OrderDependency[];
 }
 
 export interface SlotResult {
@@ -456,13 +494,36 @@ function earliestOnCourt(
   horizon: number,
   bookings: readonly Assignment[],
   blackouts: readonly Blackout[],
+  /** The court's usable windows (P9.5, `usableWindows`). `undefined` means the
+   *  court declares no calendar and is unrestricted. The GREEDY placer needs
+   *  this for the same reason `admits` does: without it greedy places at 00:00
+   *  on a court that opens at 15:00 and `validateAssignments` — which DOES
+   *  consult the calendar — immediately flags the board greedy just produced.
+   *  That is the placer/verifier fork this module's own header warns about,
+   *  and an end-to-end test caught it here after the lattice half was done. */
+  open?: readonly Window[],
 ): number | null {
   const candidates = [lowerBound];
   for (const b of bookings) if (b.court === court) candidates.push(b.endAt + gapMs);
   for (const bo of blackouts) if (bo.court === undefined || bo.court === court) candidates.push(bo.to);
+  // Each window's opening instant is a candidate in its own right: with hours
+  // 15:00-20:00 and a lower bound of 00:00, no booking or blackout end would
+  // ever propose 15:00 and the court would read as unusable all day.
+  //
+  // Bounded to [lowerBound, horizon]: with no end date the horizon is a YEAR
+  // (`config.horizonMinutes ?? 365 * 24 * 60`), so an unfiltered push added
+  // ~365 candidates per fixture per court and then sorted them. Everything
+  // outside this range is discarded by the loop below anyway, so the filter
+  // changes no answer — it only stops building the array.
+  for (const w of open ?? []) {
+    if (w.from >= lowerBound && w.from <= horizon) candidates.push(w.from);
+  }
   candidates.sort((a, b) => a - b);
   for (const start of candidates) {
     if (start < lowerBound || start > horizon) continue;
+    // The whole match must FIT inside one window — the same predicate `admits`
+    // and `validateAssignments` apply, never a looser "starts inside" test.
+    if (open !== undefined && !open.some((w) => start >= w.from && start + durMs <= w.to)) continue;
     if (courtBlocked(court, start, durMs, gapMs, bookings, blackouts) === null) return start;
   }
   return null;
@@ -486,6 +547,18 @@ export function slotFixtures(input: SlotInput): SlotResult {
   const lo = Math.min(config.startAt, ...pinned) - durMs;
   const hi = Math.max(horizon, ...pinned.map((t) => t + durMs)) + durMs;
   const blackouts = effectiveBlackouts(config, lo, hi);
+  // P9.5: per-court opening hours, resolved ONCE through the shared
+  // `usableWindows` — the same function the lattice and the verifier call.
+  // Skipped without `tz` on every side alike; a court with no calendar is
+  // absent from the map and stays unrestricted.
+  const courtOpenWindows = new Map<string, readonly Window[]>();
+  if (config.tz !== undefined && (config.courtCalendars ?? []).length > 0) {
+    const tz = config.tz;
+    const range = { from: dayKeyInTz(lo, tz), to: dayKeyInTz(hi, tz) };
+    for (const calendar of config.courtCalendars ?? []) {
+      courtOpenWindows.set(calendar.courtId, usableWindows(calendar, range, { tz }));
+    }
+  }
 
   const bookings: Assignment[] = [...(input.existing ?? [])]; // court occupancy (incl. siblings)
   const siblings = input.existing ?? []; // other divisions' fixed board (parallelism=block)
@@ -709,20 +782,18 @@ export function slotFixtures(input: SlotInput): SlotResult {
         )) * MS_PER_MIN;
 
   // startWindows (Jul3/04 §3): hard lower/upper bounds per entrant/pool/division.
-  const windowFor = (f: SchedulableFixture): { notBefore: number; notAfter: number } => {
-    let notBefore = -Infinity;
-    let notAfter = Infinity;
-    for (const w of c?.startWindows ?? []) {
-      const hits =
-        (w.target.kind === "entrant" && entrantsOf(f).includes(w.target.id)) ||
-        (w.target.kind === "pool" && f.poolId === w.target.id) ||
-        (w.target.kind === "division" && f.divisionId === w.target.id);
-      if (!hits) continue;
-      if (w.notBefore !== undefined) notBefore = Math.max(notBefore, w.notBefore);
-      if (w.notAfter !== undefined) notAfter = Math.min(notAfter, w.notAfter);
-    }
-    return { notBefore, notAfter };
-  };
+  //
+  // Delegates to the exported `startWindowFor` the VERIFIER calls, rather than
+  // repeating the rule. Until P9.5 this was a second copy of that function
+  // differing only in the shape it read the target out of, which is precisely
+  // the fork this repo keeps paying for (P9's `court_tag_mismatch` was the same
+  // defect one constraint over). `window-single-source.test.ts` fails if a
+  // second copy reappears.
+  const windowFor = (f: SchedulableFixture): { notBefore: number; notAfter: number } =>
+    startWindowFor(
+      { constraints: c },
+      { entrants: entrantsOf(f), poolId: f.poolId, divisionId: f.divisionId },
+    );
 
   // A person double-booking rejects the placement like a court clash, for every
   // `crossPersonClash` setting.
@@ -772,7 +843,62 @@ export function slotFixtures(input: SlotInput): SlotResult {
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
   const locked = ordered.filter((f) => f.locked !== undefined);
-  const free = ordered.filter((f) => f.locked === undefined);
+  /** `fixtureId -> the movable fixtures it feeds from`, filled while the
+   *  topological order below is built and reused to bound `ready`: ordering
+   *  alone only guarantees the feeders are PLACED first, not that the
+   *  dependent starts after they finish — greedy would otherwise drop it onto
+   *  the next free court at the very same instant. */
+  const feederEndBlockers = new Map<string, string[]>();
+  /** Every placed fixture's end, by id — the other half of that bound. */
+  const placedEndById = new Map<string, number>();
+  /**
+   * `ordered` restricted to the movable fixtures, then re-ordered so nothing is
+   * placed before something it depends on. Kahn's algorithm, seeded in
+   * `ordered`'s own sequence so the result is STABLE — with no dependencies it
+   * returns exactly what it was given, which is what keeps every pre-existing
+   * board byte-identical.
+   *
+   * A cycle cannot arise from a real bracket. If one ever does, the remaining
+   * fixtures are appended in their original order rather than dropped or
+   * looped over: placing them in a questionable order is recoverable, losing
+   * them is not.
+   */
+  const free = ((): SchedulableFixture[] => {
+    const movable = ordered.filter((f) => f.locked === undefined);
+    const deps = input.dependencies ?? [];
+    if (deps.length === 0) return movable;
+    const ids = new Set(movable.map((f) => f.id));
+    const blockers = new Map<string, Set<string>>();
+    const dependents = new Map<string, string[]>();
+    for (const d of deps) {
+      // Only edges BETWEEN movable fixtures matter: a feed from a locked or
+      // absent fixture imposes no ordering on this pass, because that card's
+      // position is not this pass's to choose.
+      if (!ids.has(d.fixtureId) || !ids.has(d.dependsOn) || d.fixtureId === d.dependsOn) continue;
+      const b = blockers.get(d.fixtureId) ?? new Set<string>();
+      b.add(d.dependsOn);
+      blockers.set(d.fixtureId, b);
+      dependents.set(d.dependsOn, [...(dependents.get(d.dependsOn) ?? []), d.fixtureId]);
+    }
+    for (const [k, v] of blockers) feederEndBlockers.set(k, [...v]);
+    if (blockers.size === 0) return movable;
+    const out: SchedulableFixture[] = [];
+    const emitted = new Set<string>();
+    let progress = true;
+    while (progress) {
+      progress = false;
+      for (const f of movable) {
+        if (emitted.has(f.id)) continue;
+        const b = blockers.get(f.id);
+        if (b !== undefined && [...b].some((id) => !emitted.has(id))) continue;
+        out.push(f);
+        emitted.add(f.id);
+        progress = true;
+      }
+    }
+    for (const f of movable) if (!emitted.has(f.id)) out.push(f);
+    return out;
+  })();
 
   const commit = (f: SchedulableFixture, court: string, start: number): Assignment => {
     const ent = entrantsOf(f);
@@ -782,6 +908,7 @@ export function slotFixtures(input: SlotInput): SlotResult {
       courtUse.set(e, m);
       lastCourt.set(e, court);
     }
+    placedEndById.set(f.id, start + durMs);
     const assignment: Assignment = {
       fixtureId: f.id,
       court,
@@ -859,6 +986,14 @@ export function slotFixtures(input: SlotInput): SlotResult {
     const restF = Math.max(restMs, restForMs(f));
     const window = windowFor(f);
     let ready = Math.max(config.startAt, window.notBefore);
+    // A dependent may not START before its feeders have FINISHED — the same
+    // rule `validateAssignments` enforces as `order_before_feeder`. Only
+    // already-placed feeders bound it, which is why the topological order
+    // above matters: it guarantees they have been.
+    for (const b of feederEndBlockers.get(f.id) ?? []) {
+      const end = placedEndById.get(b);
+      if (end !== undefined) ready = Math.max(ready, end);
+    }
     for (const k of restKeysOf(f)) ready = Math.max(ready, (lastEnd.get(k) ?? -Infinity) + restF);
 
     let best: { court: string; start: number } | null = null;
@@ -887,7 +1022,7 @@ export function slotFixtures(input: SlotInput): SlotResult {
       let lb = ready;
       let start: number | null = null;
       for (let i = 0; i < 64; i++) {
-        start = earliestOnCourt(court, lb, durMs, gapMs, horizon, bookings, blackouts);
+        start = earliestOnCourt(court, lb, durMs, gapMs, horizon, bookings, blackouts, courtOpenWindows.get(court));
         if (start === null) break;
         const person = personBlocked(f, start);
         const clash = person ?? blockModeBlocked(start);
@@ -988,7 +1123,7 @@ export type VerifyConfig = Pick<
   SlotConfig,
   "perEntrantMinRest" | "gapMinutes" | "blackouts" | "sessionWindows"
 > &
-  Partial<Pick<SlotConfig, "matchMinutes" | "constraints" | "window">> & {
+  Partial<Pick<SlotConfig, "matchMinutes" | "constraints" | "window" | "courtCalendars">> & {
     /** The ORG zone (#397). Day buckets, weekday targets and HH:mm bounds are
      *  meaningless without it, so a rule that needs one is SKIPPED when it is
      *  absent rather than silently bucketed in UTC — reporting a violation the
@@ -1489,17 +1624,33 @@ function pairRestMinutesWith(
  *  startWindows (Jul3/04 §3) are a hard bound the solver refuses to place
  *  outside — so the verifier has to know them too, or the same rule holds for
  *  Auto-schedule and evaporates the moment somebody drags a card. */
+/** What a `startWindows` entry is MATCHED AGAINST — distinct from
+ *  `StartWindowTarget` in constraints.ts, which is the `{kind, id}` selector on
+ *  the rule itself.
+ *
+ *  Deliberately structural rather than `Assignment`: the PLACER holds
+ *  `SchedulableFixture`s and the VERIFIER holds `Assignment`s, and this rule
+ *  used to be written out once for each — the exact placer/verifier fork P9.5
+ *  exists to close. `Assignment` satisfies this shape as-is, so every existing
+ *  `startWindowFor(config, a)` call still reads the same. Guarded by
+ *  `window-single-source.test.ts`. */
+export interface StartWindowSubject {
+  readonly entrants: readonly EntrantId[];
+  readonly poolId?: string;
+  readonly divisionId?: string;
+}
+
 export function startWindowFor(
   config: Pick<VerifyConfig, "constraints">,
-  a: Assignment,
+  target: StartWindowSubject,
 ): { notBefore: number; notAfter: number } {
   let notBefore = -Infinity;
   let notAfter = Infinity;
   for (const w of config.constraints?.startWindows ?? []) {
     const hits =
-      (w.target.kind === "entrant" && a.entrants.includes(w.target.id)) ||
-      (w.target.kind === "pool" && a.poolId === w.target.id) ||
-      (w.target.kind === "division" && a.divisionId === w.target.id);
+      (w.target.kind === "entrant" && target.entrants.includes(w.target.id)) ||
+      (w.target.kind === "pool" && target.poolId === w.target.id) ||
+      (w.target.kind === "division" && target.divisionId === w.target.id);
     if (!hits) continue;
     if (w.notBefore !== undefined) notBefore = Math.max(notBefore, w.notBefore);
     if (w.notAfter !== undefined) notAfter = Math.min(notAfter, w.notAfter);
@@ -1573,7 +1724,52 @@ export function validateAssignments(
     return courtTagQualified;
   };
 
+  // Per-court availability (P9.5), resolved through the SAME `usableWindows`
+  // the lattice calls — `build-grid.ts` asking one question and this loop
+  // asking a subtly different one is the placer/verifier fork this session
+  // exists to close, and P9's `court_tag_mismatch` is the worked example of
+  // what it costs. Skipped without `tz` on both sides alike: court hours are
+  // day-shaped and there is no local midnight to resolve a weekday against.
+  //
+  // A court absent from this map has no declared calendar and is unrestricted.
+  // An ARCHIVED or deleted court is likewise absent, which keeps its existing
+  // cards clean — "the court is gone" is the stranded-fixture case P10 owes
+  // (A6), distinct from "the court violates a declared constraint" (A10).
+  const courtHourWindows = new Map<string, readonly Window[]>();
+  if (config.tz !== undefined && (config.courtCalendars ?? []).length > 0 && board.length > 0) {
+    const tz = config.tz;
+    const range = {
+      from: dayKeyInTz(Math.min(...board.map((a) => a.startAt)), tz),
+      to: dayKeyInTz(Math.max(...board.map((a) => a.endAt)), tz),
+    };
+    for (const calendar of config.courtCalendars ?? []) {
+      courtHourWindows.set(
+        calendar.courtId,
+        // NO blackouts passed. `usableWindows` CAN subtract them (the capacity
+        // precheck relies on that, having no separate blackout pass), but this
+        // loop already reports `inside_blackout` on its own a few lines down.
+        // Subtracting them here as well made a fixture inside a blackout on a
+        // CALENDARED court report twice — `inside_blackout` plus
+        // `outside_court_hours` ("this court is closed"), the second blaming
+        // the wrong cause — while the identical fixture on a court with no
+        // calendar reported once. One cause, one conflict.
+        usableWindows(calendar, range, { tz }),
+      );
+    }
+  }
+
   for (const a of assignments) {
+    // The court's own opening hours (V367, P8's calendar editor). The whole
+    // occupancy must fit, not merely start inside — edge matrix row 7, and the
+    // same predicate `admits` uses.
+    const openHours = courtHourWindows.get(a.court);
+    if (openHours !== undefined && !openHours.some((w) => a.startAt >= w.from && a.endAt <= w.to)) {
+      conflicts.push({
+        fixtureId: a.fixtureId,
+        reason: "court",
+        details: { kind: "outside_court_hours", court: a.court },
+      });
+    }
     // The pack window (#397): the whole occupancy must fall inside the days the
     // competition actually runs. Only `assignments` are bound — `existing` is
     // other divisions' board and outside bookings, which this run is not being
