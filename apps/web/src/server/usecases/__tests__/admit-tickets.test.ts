@@ -10,6 +10,11 @@ import { generateRefCode } from "@/lib/ref-code";
 import { asOwner, rig, seedOrg, seedRegistration } from "./_registration-fixtures";
 import { buildAdmitTicketsDoc } from "@/server/usecases/exports";
 
+// DB-backed, so it gates itself the way all 310 sibling suites do: the CI unit
+// shards run without a database, and an ungated suite fails there rather than
+// skipping (this one did, on #639's first run).
+const HAS_DB = !!process.env.DATABASE_URL;
+
 const PRINTED_AT = "2026-08-24T10:00:00.000Z";
 const SETTINGS = { fee_cents: 2000, currency: "gbp", payment_method: "offline" as const };
 
@@ -20,7 +25,7 @@ async function ownerWithCompetition() {
   return { owner, competition, division };
 }
 
-describe("buildAdmitTicketsDoc", () => {
+describe.skipIf(!HAS_DB)("buildAdmitTicketsDoc", () => {
   it("builds one ticket section per confirmed registration", async () => {
     const { owner, competition, division } = await ownerWithCompetition();
     for (const displayName of ["Alex Morgan", "Priya Raghavan", "Tom Okafor"]) {
