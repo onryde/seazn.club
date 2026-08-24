@@ -26,6 +26,11 @@ const h = vi.hoisted(() => ({
   orgTimezone: null as string | null,
   competitionVisibility: "public",
   rows: [] as unknown[],
+  // finding 6's fallback-currency query result — only consulted when a test
+  // needs the query gated behind an empty `rows` list (see fetchOrgCurrency
+  // in page.tsx). Left distinct from any row's own org_currency field so a
+  // test can prove which source actually won.
+  orgCurrency: "usd",
   withTenantCalls: 0,
 }));
 
@@ -52,17 +57,23 @@ vi.mock("@/server/usecases/competitions", () => ({
 
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 
-// A tagged-template call (`.raw` on the strings array) resolves to `h.rows`;
-// a fragment builder call (`tx([...SPOT_HOLDERS])`, a plain array — no
-// `.raw`) resolves to an inert marker, same split as the proven
-// registration-nav-entry-wiring.test.tsx `sql` mock, adapted to withTenant's
-// callback shape.
+// A tagged-template call (`.raw` on the strings array) resolves to `h.rows`
+// — UNLESS its first raw chunk identifies it as finding 6's dedicated
+// currency-only fallback query (fetchOrgCurrency in page.tsx), which
+// resolves to `h.orgCurrency` instead; a fragment builder call
+// (`tx([...SPOT_HOLDERS])`, a plain array — no `.raw`) resolves to an inert
+// marker, same split as the proven registration-nav-entry-wiring.test.tsx
+// `sql` mock, adapted to withTenant's callback shape.
 vi.mock("@/lib/db", () => ({
   withTenant: async (_orgId: string, fn: (tx: unknown) => unknown) => {
     h.withTenantCalls += 1;
     const tx = (strings: unknown) => {
       if (!Array.isArray(strings) || !("raw" in (strings as object))) {
         return { __fragment: strings };
+      }
+      const first = String((strings as string[])[0] ?? "").trim();
+      if (first.startsWith("select currency from organizations")) {
+        return Promise.resolve([{ currency: h.orgCurrency }]);
       }
       return Promise.resolve(h.rows);
     };
@@ -91,6 +102,7 @@ beforeEach(() => {
   h.orgTimezone = null;
   h.competitionVisibility = "public";
   h.rows = [];
+  h.orgCurrency = "usd";
   h.withTenantCalls = 0;
 });
 
@@ -226,5 +238,19 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
     const tree = walk(await Page({ params, searchParams: noTab }));
     const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
     expect((propsOf(panel).context as { showRegisterLink: boolean }).showRegisterLink).toBe(false);
+  });
+
+  // RS004 W3b review finding 6: asCurrency(rawRows[0]?.org_currency) silently
+  // fell back to "usd" whenever rows is empty (a competition with zero
+  // divisions) — harmless only because currency happened to be unused with
+  // no rows, but a landmine for whatever reads it next. h.orgCurrency ("eur"
+  // here) is a DIFFERENT value than the default "usd" fallback specifically
+  // so this test cannot pass by coincidence.
+  it("resolves the org currency independently of rows[0] — an empty rows list must not fall back to usd (finding 6)", async () => {
+    h.rows = [];
+    h.orgCurrency = "eur";
+    const tree = walk(await Page({ params, searchParams: noTab }));
+    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
+    expect((propsOf(panel).context as { currency: string }).currency).toBe("eur");
   });
 });
