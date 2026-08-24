@@ -1,9 +1,8 @@
-// RS004 W3 — the Settings tab's per-division row: status pill, window
+// RS004 W3/W3c — the Settings tab's per-division row: status pill, window
 // (org tz), capacity meter, fee, entrant kind, category/age badges,
-// approval mode, free-agent flag, and the public register link/private
-// notice. The row's click-to-open config panel is a later wave — this only
-// covers the read surface.
-import { describe, expect, it } from "vitest";
+// approval mode, free-agent flag, the public register link/private notice,
+// and (W3c) the Configure affordance that opens the config panel.
+import { describe, expect, it, vi } from "vitest";
 import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
 import {
   RegistrationHubDivisionRow,
@@ -41,6 +40,7 @@ const BASE_CONTEXT: RegistrationHubRowContext = {
   registerHref: "/shared/riverside/summer-league/register",
   registerQrFileName: "register-summer-league.png",
   showRegisterLink: true,
+  onOpen: vi.fn(),
 };
 
 function textFor(row: Partial<RegistrationHubRowData>, context: Partial<RegistrationHubRowContext> = {}) {
@@ -265,5 +265,44 @@ describe("RegistrationHubDivisionRow — public register link vs private notice"
       }),
     );
     expect(text).toContain(t(uiEn, "div.registrations.privateNotice"));
+  });
+});
+
+describe("RegistrationHubDivisionRow — Configure affordance (W3c)", () => {
+  it("renders a button that calls context.onOpen with THIS row's division id", () => {
+    const onOpen = vi.fn();
+    const tree = walk(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, division_id: "div-9" },
+        context: { ...BASE_CONTEXT, onOpen },
+      }),
+    );
+    const configureBtn = tree.find((e) => propsOf(e)["data-registration-hub-row-configure"] !== undefined);
+    expect(configureBtn).toBeTruthy();
+    expect(propsOf(configureBtn!).onClick).toBeInstanceOf(Function);
+    (propsOf(configureBtn!).onClick as () => void)();
+    expect(onOpen).toHaveBeenCalledWith("div-9");
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives the button an accessible name naming the division, not a bare repeated 'Configure'", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, name: "Open Doubles" },
+        context: BASE_CONTEXT,
+      }),
+    );
+    const configureBtn = tree.find((e) => propsOf(e)["data-registration-hub-row-configure"] !== undefined);
+    expect(propsOf(configureBtn!)["aria-label"]).toContain("Open Doubles");
+  });
+
+  it("does not change any previously-rendered content — read surface stays byte-identical", () => {
+    const before = textFor({});
+    // The configure affordance's own label is the only NEW text; everything
+    // else the row already rendered (name, status, window, fee, badges...)
+    // must still be present unchanged.
+    expect(before).toContain("Open Singles");
+    expect(before).toContain(t(uiEn, "reg.hub.row.status.open"));
+    expect(before).toContain(t(uiEn, "reg.hub.row.fee.free"));
   });
 });

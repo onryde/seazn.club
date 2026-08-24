@@ -1,9 +1,12 @@
-// Registration hub — Settings tab, one division's row (RS004 W3, design §5).
-// Read surface only: status pill, window (ORG timezone), capacity meter,
-// fee, entrant kind, category/age badges, approval mode, free-agent flag,
-// and the public register link (or the private-competition notice). The
-// row-click config panel is a later wave — nothing here is clickable yet.
+// Registration hub — Settings tab, one division's row (RS004 W3/W3c, design
+// §5). Status pill, window (ORG timezone), capacity meter, fee, entrant
+// kind, category/age badges, approval mode, free-agent flag, the public
+// register link (or the private-competition notice), and (W3c) the
+// Configure button that opens the row-click config panel — wiring only,
+// `context.onOpen` is owned by the settings-panel that mounts the panel;
+// nothing else here changed shape or style from W3.
 import type { ReactNode } from "react";
+import { SlidersHorizontal } from "lucide-react";
 import { CopyLink } from "@/components/copy-link";
 import { t, type Dict } from "@/lib/i18n";
 import { formatMinor, type Currency } from "@/lib/currency";
@@ -54,6 +57,10 @@ export interface RegistrationHubRowContext {
   registerQrFileName: string;
   /** competition.visibility !== "private". */
   showRegisterLink: boolean;
+  /** W3c: opens the row-click config panel for the given division id. One
+   *  shared callback (identity stable across every row), same reasoning as
+   *  every other field here — the settings-panel owns which row is open. */
+  onOpen: (divisionId: string) => void;
 }
 
 const STATUS_STYLE: Record<RegistrationHubStatus, string> = {
@@ -136,6 +143,15 @@ export function RegistrationHubDivisionRow({
         >
           {t(dict, `reg.hub.row.status.${status}`)}
         </span>
+        <button
+          type="button"
+          data-registration-hub-row-configure
+          onClick={() => context.onOpen(row.division_id)}
+          aria-label={t(dict, "reg.hub.row.configure", { name: row.name })}
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-purple-50 hover:text-purple-700"
+        >
+          <SlidersHorizontal className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+        </button>
       </div>
 
       <p className="text-sm text-slate-500">{windowText}</p>
