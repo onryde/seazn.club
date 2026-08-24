@@ -375,7 +375,15 @@ test("a tag scoped to one round role constrains that round only: the final needs
   // NOTE the division is left UNTAGGED, unlike the spec above. The only tag
   // rule in play is the round one, so nothing else can account for the
   // placement — and a semi landing on the untagged court is legal.
-  await addEntrantsViaApi(request, divisionId, ["Ash", "Brook", "Clay", "Dune"]);
+  // DISTINCT from the tag test's entrant names above, deliberately. Persons are
+  // get-or-created by NAME within an org, so two divisions seeded with the same
+  // four names share the same person rows — and a shared person across two
+  // boards scheduled at the same times is a cross-division `person_overlap`,
+  // which IS blocking. That made the move below 409 instead of 200 whenever
+  // both tests had run, an order-dependent failure with nothing to do with
+  // round-scoped tags. Pre-existing on main; surfaced when P9.5 added tests to
+  // this file and changed the worker timing.
+  await addEntrantsViaApi(request, divisionId, ["Iris", "Juno", "Kite", "Lark"]);
   const { stageId, fixtureIds } = await createStageAndGenerate(request, divisionId, {
     kind: "knockout",
     name: "Cup",
