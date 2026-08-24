@@ -3431,6 +3431,8 @@ export type DictionaryKey =
   | "reg.hub.config.loadError"
   | "reg.hub.config.loading"
   | "reg.hub.config.manageCurrency"
+  | "reg.hub.config.partialSavePatchOk"
+  | "reg.hub.config.partialSavePutOk"
   | "reg.hub.config.save"
   | "reg.hub.config.saving"
   | "reg.hub.config.title"

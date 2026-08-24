@@ -55,6 +55,14 @@ interface Loaded {
   readOnly: ReadOnlyEcho;
 }
 
+/** Outcome of the two save requests, named by what FAILED. RS004 review
+ *  finding 1: the panel used to fold only the rejected side's error into
+ *  view, so a PATCH-commits/PUT-422s split (or the reverse) rendered
+ *  identically to a total failure — nothing told the organiser that half
+ *  the save already landed. Both writes are idempotent (a retry re-sends
+ *  the full state), so this is a reporting gap, not a data-loss one. */
+type SaveOutcome = "success" | "patch-failed" | "put-failed" | "both-failed";
+
 export function RegistrationHubConfigPanel({
   division,
   orgTz,
@@ -86,6 +94,10 @@ export function RegistrationHubConfigPanel({
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState<Partial<Record<ConfigFieldKey, string>>>({});
   const [formError, setFormError] = useState<string | null>(null);
+  // RS004 review finding 1: which of the two save requests committed. Named
+  // by what FAILED (not what succeeded) so the two partial states read
+  // naturally at the call site. Null before any save attempt.
+  const [saveOutcome, setSaveOutcome] = useState<SaveOutcome | null>(null);
 
   // No `setLoaded(null)`/`setLoadError(null)` reset here: the mount site keys
   // this component by division id, so a different row arrives as a REMOUNT
@@ -120,6 +132,7 @@ export function RegistrationHubConfigPanel({
     setBusy(true);
     setErrors({});
     setFormError(null);
+    setSaveOutcome(null);
     const patchBody = toDivisionPatchBody(loaded.state);
     const putBody = toRegistrationSettingsPutBody(loaded.state);
     const [patchResult, putResult] = await Promise.allSettled([
@@ -129,6 +142,14 @@ export function RegistrationHubConfigPanel({
         json: putBody,
       }),
     ]);
+    setBusy(false);
+    const patchOk = patchResult.status === "fulfilled";
+    const putOk = putResult.status === "fulfilled";
+    if (patchOk && putOk) {
+      setSaveOutcome("success");
+      onSaved();
+      return;
+    }
     const nextErrors: Partial<Record<ConfigFieldKey, string>> = {};
     let banner: string | null = null;
     for (const result of [patchResult, putResult]) {
@@ -137,13 +158,12 @@ export function RegistrationHubConfigPanel({
       if (info.field) nextErrors[info.field] = info.message;
       else banner = info.message;
     }
-    setBusy(false);
-    if (Object.keys(nextErrors).length > 0 || banner) {
-      setErrors(nextErrors);
-      setFormError(banner);
-      return;
-    }
-    onSaved();
+    setErrors(nextErrors);
+    setFormError(banner);
+    // Exactly one endpoint committed — the field/banner error above only
+    // describes the half that failed. Without this, nothing tells the
+    // organiser the other half already saved (finding 1).
+    setSaveOutcome(patchOk === putOk ? "both-failed" : patchOk ? "put-failed" : "patch-failed");
   }
 
   const state = loaded?.state ?? null;
@@ -172,7 +192,30 @@ export function RegistrationHubConfigPanel({
         </>
       }
     >
-      <div data-registration-hub-config-panel data-division-id={division.division_id} className="space-y-5">
+      <div
+        data-registration-hub-config-panel
+        data-division-id={division.division_id}
+        data-save-outcome={saveOutcome ?? undefined}
+        className="space-y-5"
+      >
+        {saveOutcome === "put-failed" && (
+          <p
+            role="alert"
+            data-save-outcome="put-failed"
+            className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-sm text-amber-800"
+          >
+            {msg("reg.hub.config.partialSavePatchOk")}
+          </p>
+        )}
+        {saveOutcome === "patch-failed" && (
+          <p
+            role="alert"
+            data-save-outcome="patch-failed"
+            className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-sm text-amber-800"
+          >
+            {msg("reg.hub.config.partialSavePutOk")}
+          </p>
+        )}
         {formError && (
           <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-sm text-red-600">
             {formError}

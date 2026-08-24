@@ -4203,5 +4203,7 @@
   "reg.hub.config.currencyNote": "Deelnemers worden belast in {currency}.",
   "reg.hub.config.manageCurrency": "Beheren in organisatie-instellingen",
   "reg.hub.config.feeCut": "Je houdt {keep}% van elke betaalde inschrijving — Bench neemt {pct}%. Dit tarief wordt vastgezet voor deze competitie zodra je eerste deelnemer betaalt.",
-  "reg.hub.config.cardUnsupported": "Kaartbetalingen zijn niet beschikbaar — je gekoppelde Stripe-account verrekent in {currency}, een valuta waarin inschrijfgeld niet in rekening kan worden gebracht."
+  "reg.hub.config.cardUnsupported": "Kaartbetalingen zijn niet beschikbaar — je gekoppelde Stripe-account verrekent in {currency}, een valuta waarin inschrijfgeld niet in rekening kan worden gebracht.",
+  "reg.hub.config.partialSavePatchOk": "Categorie en leeftijdsinstellingen zijn opgeslagen. De rest van dit formulier is niet opgeslagen — los de fout hieronder op en sla opnieuw op.",
+  "reg.hub.config.partialSavePutOk": "De rest van dit formulier is opgeslagen. Categorie en leeftijdsinstellingen zijn niet opgeslagen — los de fout hieronder op en sla opnieuw op."
 }

@@ -4203,5 +4203,7 @@
   "reg.hub.config.currencyNote": "Entrants are charged in {currency}.",
   "reg.hub.config.manageCurrency": "Manage in organisation settings",
   "reg.hub.config.feeCut": "You keep {keep}% of every paid entry — Bench takes {pct}%. This rate locks in for this competition the moment your first entrant pays.",
-  "reg.hub.config.cardUnsupported": "Card payments aren't available — your connected Stripe account settles in {currency}, which entry fees can't be charged in."
+  "reg.hub.config.cardUnsupported": "Card payments aren't available — your connected Stripe account settles in {currency}, which entry fees can't be charged in.",
+  "reg.hub.config.partialSavePatchOk": "Category and age settings saved. Everything else on this form did not save — fix the error below, then save again.",
+  "reg.hub.config.partialSavePutOk": "Everything else on this form saved. Category and age settings did not save — fix the error below, then save again."
 }
