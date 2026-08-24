@@ -931,6 +931,82 @@ and must be stated as such in the PR body, the way R2b recorded
 Accepted cost, recorded so nobody re-opens it: the `/pricing` matrix now shows
 ONE "ball by ball" bullet covering both cricket deliveries and football shots.
 
+### R3/B2 — the skin task's own rulings (2026-08-24)
+
+The football skin landed (`v3/skins/football.tsx`, registry flipped, football
+and cricket now both v3 and the other nine legacy). Two rulings the chassis
+wave routed here, and three defects the skin was the first surface able to
+observe. All five are fixed IN this wave — the standing "don't raise new
+issues" rule — and each is small, additive and separately committed.
+
+**Ruled: `dedicatedEventTypes` DOES resolve a swap tile (the routed defect).**
+`football.sub` used to appear both on its Sub tile and again as a generic
+More-sheet form. Fixed rather than lived with, because that generic form
+bypasses everything the swap sheet exists to give — the `lineupPolicy`
+verdict, the narrowed on/off lists, the already-substituted reason, and the
+skin's stale-`asOf` guard on `at`. It is the same two-divergent-entry-points
+defect R2c closed for `cricket.retire`. The old justification ("a swap's event
+cannot be known statically") died with defect 3's `SwapSlot.eventType`; only
+the slot table was missing, and it is now a REQUIRED third parameter (a
+default would silently reinstate the duplicate for a forgetful caller).
+Cricket declares no swap and passes `[]`.
+
+**Ruled: the `eventType` ↔ `buildEvent` pin is the SKIN's, and it now exists.**
+`skins/__tests__/football.test.ts` asserts, per slot, that
+`buildEvent(off, on).type === slot.eventType` and that the type is one the
+engine's own `eventSchemas` declares. Mutation-proved (declaring
+`core.lineup.substitution` while building `football.sub` reds it).
+
+**Three defects football was the first sport able to observe:**
+
+1. **`squadStateOf` read `state.squads` blind.** That field name is NOT
+   reserved for the kernel's adopted `SquadState`: football keeps its own
+   `{onPitch,bench,offUsed,sentOff}` projection there, with no `.members`
+   anywhere. Every consumer reads `.members`, so this THREW (not "returned a
+   wrong list") on football's first swap/person tap. Fixed by reusing
+   `isSquadState` — the identical structural guard the LEGACY lane has carried
+   for this exact sport since S10 (attribution-picker.tsx), never a second
+   check that could disagree with it.
+2. **The swap sheet's OFF list had no scope.** With the fix above, football's
+   `view.squads` is `initSquads(lineups)` — the KICKOFF sheet, which never
+   moves. One substitution later the off picker offers the player who came off
+   and hides the one who came on. `SwapSlot.offCandidates` (the additive field
+   the R3 chassis wave already priced in) closes it; `offBlocked` was NOT
+   minted — no caller, no test that could fail.
+3. **A dock chip could not carry a person's name.** `DockChip.label` is an
+   i18n key resolved through `t()`; football's goal dock is the first whose
+   chips name people. `DockChip.labelText` is the same key-plus-text pair
+   `TileSpec.labelText`/`ContextSlot.message`/`WhoLine.servingLabel` already
+   establish. Proved through a real render, not a pure helper.
+
+**Two skin-side decisions worth not re-deriving:**
+
+- **A tile is withheld above the ACTIVE band, not just the entitled one.**
+  `filterTilesByBand` (chassis) filters on ENTITLED bands while `buildPadView`
+  drops any action whose band exceeds the ACTIVE band — so an entitled org
+  scoring at band 0 would see card/sub/pen tiles and every tap would throw
+  through `createSkinDispatch`. The skin mirrors `padSpec(cfg).fidelity` as
+  `EVENT_BAND` (pinned against the engine in its test) and withholds them.
+  This is a CHASSIS-shaped gap that also affects cricket; not fixed here.
+- **Below band 2 the card tile dispatches nothing because it is withheld
+  entirely.** `GuidedSheet` renders `null` when no step is visible, so a tile
+  opening a fully `when`-gated-off sheet is a tap with no visible response at
+  all. Any later skin gating a single-step sheet must gate the TILE too.
+
+**Engine asymmetry found, NOT worked around (R6/R8 or a later engine wave):**
+`applyCard` accepts a card in phase `"pre"` (a pre-kickoff red is explicitly
+legal, football.md §9) but `padSpec(cfg)` declares no pre-phase panel — every
+football panel is `phase: "live"` — and `buildPadView` drops a panel whose
+phase is not current, so `createSkinDispatch` refuses ANY dispatch at pre/post.
+A pre-kickoff card is therefore unreachable from any declared pad surface, v2
+and v3 alike. The skin declares every tile `phases: ["live"]` rather than
+shipping a tile that throws on tap.
+
+**Copy:** 22 new keys × 4 locales, `i18n:gen-keys` regenerated. The nine
+ribbon bases stay var-free; the skin supplies `detail`, and
+`cardColor.second_yellow` was reused rather than re-minted, exactly as task C
+recorded.
+
 ### R2c — SIGN-OFF: approval-on-merge, 2026-08-18
 
 **What actually happened, recorded plainly because the gate cannot be
