@@ -6,7 +6,7 @@
 // what this file is for — real Postgres required, skipped without
 // DATABASE_URL (repo convention, e.g. add-ons-tab.test.ts).
 import { describe, expect, it } from "vitest";
-import { fetchDivisionRows, fetchOrgCurrency } from "../page";
+import { fetchDivisionRows, fetchOrgCurrency, fetchOrgCardUnsupportedCurrency } from "../page";
 import {
   seedOrg,
   asOwner,
@@ -84,6 +84,24 @@ describe.skipIf(!HAS_DB)("fetchDivisionRows — real Postgres", () => {
       taken: 2,
     });
     expect(configuredRow.org_currency).toBeTruthy();
+    // A fresh org's Stripe account is not connected at all — never
+    // "unsupported", which would wrongly disable card payments outright.
+    expect(configuredRow.org_stripe_unsupported_currency).toBeNull();
+  });
+
+  // RS004 W3c: the config panel's card-unsupported-currency message reads
+  // this column off the SAME per-row subquery org_currency already uses —
+  // proves the join actually reaches organizations.stripe_unsupported_currency,
+  // not just that the column exists on the interface.
+  it("carries the org's stripe_unsupported_currency on every row (RS004 W3c)", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await sql`update organizations set stripe_unsupported_currency = 'jpy' where id = ${orgId}`;
+
+    const rows = await fetchDivisionRows(owner, competition.id);
+    const row = rows.find((r) => r.division_id === division.id)!;
+    expect(row.org_stripe_unsupported_currency).toBe("jpy");
   });
 
   // RS004 W3b review finding 3 — `order by d.name` alone has no tiebreaker,
@@ -164,5 +182,24 @@ describe.skipIf(!HAS_DB)("fetchOrgCurrency — real Postgres (finding 6)", () =>
     // landmine scenario, not just a synthetic empty array.
     const currency = await fetchOrgCurrency(owner);
     expect(currency).toBe("eur");
+  });
+});
+
+// RS004 W3c: the same finding-6 shape, for the card-unsupported-currency
+// fallback the config panel needs on a Settings tab with zero divisions.
+describe.skipIf(!HAS_DB)("fetchOrgCardUnsupportedCurrency — real Postgres", () => {
+  it("resolves null (card supported) for an org with no unsupported currency set", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const value = await fetchOrgCardUnsupportedCurrency(owner);
+    expect(value).toBeNull();
+  });
+
+  it("resolves the real value even for a competition with zero divisions", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations set stripe_unsupported_currency = 'jpy' where id = ${orgId}`;
+    const value = await fetchOrgCardUnsupportedCurrency(owner);
+    expect(value).toBe("jpy");
   });
 });

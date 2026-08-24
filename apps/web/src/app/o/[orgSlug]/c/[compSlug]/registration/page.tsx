@@ -1,19 +1,20 @@
 export const dynamic = "force-dynamic";
-// Registration hub (RS004 W2 shell + W3 Settings-tab data): route, two-tab
-// chrome, guard, and the Settings tab's division rows.
+// Registration hub (RS004 W2 shell + W3 Settings-tab data + W3c config
+// panel): route, two-tab chrome, guard, and the Settings tab's division
+// rows plus the context its row-click config panel needs.
 //
 // `?tab=settings|registrants` is read server-side, mirroring the division
 // page's pattern (d/[divSlug]/page.tsx:77-118) — there is no shared TabStrip
 // component and no client tabs component in this repo, so this inlines its
 // own <nav> the same way that page does.
 //
-// Settings' row-click config panel is a later wave; Registrants' real
-// content is RS005. See docs/superpowers/specs/2026-08-16-registration-
-// redesign-prompts/{RS004-hub-settings-tab.md,RS005-hub-registrants-tab.md}.
+// Registrants' real content is RS005. See docs/superpowers/specs/2026-08-16-
+// registration-redesign-prompts/{RS004-hub-settings-tab.md,RS005-hub-registrants-tab.md}.
 import { notFound } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getCompetition } from "@/server/usecases/competitions";
+import { feePercentFor } from "@/server/usecases/registrations";
 import { routes } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
@@ -52,6 +53,14 @@ export interface RawDivisionRow {
   /** Same value on every row (org-level, RS001b) — carried per-row rather
    *  than fetched separately so this stays a SINGLE query for the rows. */
   org_currency: string;
+  /** Same value on every row (org-level) — non-null when the org's
+   *  connected Stripe account settles outside the registration-currency
+   *  allowlist, meaning card collection is not viable (RS004 W3c config
+   *  panel). Read the same way app/o/[orgSlug]/settings/page.tsx derives
+   *  it for its (owner-and-admin) audience — a raw column read, not through
+   *  stripe-connect.ts's connectStatus(), which is owner-session-only and
+   *  would 403 an admin opening this hub. */
+  org_stripe_unsupported_currency: string | null;
 }
 
 /** The Settings tab's one query: every (non-archived) division of this
@@ -80,7 +89,9 @@ export async function fetchDivisionRows(
         coalesce(rs.allow_free_agents, false) as allow_free_agents,
         (select count(*)::int from registrations r
            where r.division_id = d.id and r.status in ${tx([...SPOT_HOLDERS])}) as taken,
-        (select currency from organizations where id = ${auth.orgId}) as org_currency
+        (select currency from organizations where id = ${auth.orgId}) as org_currency,
+        (select stripe_unsupported_currency from organizations where id = ${auth.orgId})
+          as org_stripe_unsupported_currency
       from divisions d
       left join registration_settings rs on rs.division_id = d.id
       where d.competition_id = ${competitionId} and d.archived_at is null
@@ -101,6 +112,22 @@ export async function fetchOrgCurrency(auth: Pick<AuthCtx, "orgId">): Promise<st
     const [row] = await tx<{ currency: string }[]>`
       select currency from organizations where id = ${auth.orgId}`;
     return row?.currency ?? "usd";
+  });
+}
+
+/** The SAME finding-6 shape as `fetchOrgCurrency`, for the config panel's
+ *  card-unsupported-currency message: `fetchDivisionRows`'s own column
+ *  rides on a division row, so a Settings-tab competition with zero
+ *  (non-archived) divisions has none to read it off. Only called from that
+ *  empty-rows branch below — the common case reads it off `rawRows[0]` at
+ *  zero extra queries, same as org_currency. */
+export async function fetchOrgCardUnsupportedCurrency(
+  auth: Pick<AuthCtx, "orgId">,
+): Promise<string | null> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [row] = await tx<{ stripe_unsupported_currency: string | null }[]>`
+      select stripe_unsupported_currency from organizations where id = ${auth.orgId}`;
+    return row?.stripe_unsupported_currency ?? null;
   });
 }
 
@@ -157,7 +184,16 @@ export default async function RegistrationHubPage({
   // a Settings-tab competition with zero divisions) — see fetchOrgCurrency.
   const orgCurrency =
     rawRows[0]?.org_currency ?? (tab === "settings" ? await fetchOrgCurrency(auth) : "usd");
-  const registrationContext: RegistrationHubRowContext = {
+  // Same finding-6 shape for the config panel's card-unsupported message —
+  // see fetchOrgCardUnsupportedCurrency. null (never gated) on the
+  // Registrants tab, which never mounts the config panel that reads this.
+  const cardUnsupportedCurrency =
+    rawRows[0]?.org_stripe_unsupported_currency ??
+    (tab === "settings" ? await fetchOrgCardUnsupportedCurrency(auth) : null);
+  // The config panel's platform-cut copy (owner decision 3) — gated the
+  // same way as the row query, since only the Settings tab ever mounts it.
+  const feePercentPct = tab === "settings" ? await feePercentFor(auth.orgId, id) : 0;
+  const registrationContext: Omit<RegistrationHubRowContext, "onOpen"> = {
     dict,
     now: new Date(),
     orgTz,
@@ -200,6 +236,9 @@ export default async function RegistrationHubPage({
           body={t(dict, "reg.hub.settings.body")}
           rows={rows}
           context={registrationContext}
+          orgSlug={orgSlug}
+          feePercentPct={feePercentPct}
+          cardUnsupportedCurrency={cardUnsupportedCurrency}
         />
       )}
     </main>

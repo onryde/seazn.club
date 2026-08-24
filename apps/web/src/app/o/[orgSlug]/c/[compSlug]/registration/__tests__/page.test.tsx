@@ -31,8 +31,14 @@ const h = vi.hoisted(() => ({
   // in page.tsx). Left distinct from any row's own org_currency field so a
   // test can prove which source actually won.
   orgCurrency: "usd",
+  // RS004 W3c: the SAME zero-rows-fallback shape, for the card-unsupported-
+  // currency column. Distinct default (null = supported) from any row's own
+  // org_stripe_unsupported_currency so a test can prove which source won.
+  orgStripeUnsupportedCurrency: null as string | null,
   withTenantCalls: 0,
 }));
+
+const feePercentForMock = vi.hoisted(() => vi.fn(async () => 8));
 
 vi.mock("@/server/page-auth", () => ({
   requireCompetitionPage: async () => {
@@ -57,6 +63,14 @@ vi.mock("@/server/usecases/competitions", () => ({
 
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 
+// RS004 W3c: page.tsx now imports feePercentFor for the config panel's
+// platform-cut copy. Mocked rather than left to hit the real entitlements/
+// cache/DB stack (registrations.ts is a heavy module this page test does
+// not otherwise pull in) — real behaviour is covered by
+// fetch-division-rows.test.ts's real-Postgres suite, same split as
+// fetchDivisionRows/fetchOrgCurrency below.
+vi.mock("@/server/usecases/registrations", () => ({ feePercentFor: feePercentForMock }));
+
 // A tagged-template call (`.raw` on the strings array) resolves to `h.rows`
 // — UNLESS its first raw chunk identifies it as finding 6's dedicated
 // currency-only fallback query (fetchOrgCurrency in page.tsx), which
@@ -74,6 +88,9 @@ vi.mock("@/lib/db", () => ({
       const first = String((strings as string[])[0] ?? "").trim();
       if (first.startsWith("select currency from organizations")) {
         return Promise.resolve([{ currency: h.orgCurrency }]);
+      }
+      if (first.startsWith("select stripe_unsupported_currency from organizations")) {
+        return Promise.resolve([{ stripe_unsupported_currency: h.orgStripeUnsupportedCurrency }]);
       }
       return Promise.resolve(h.rows);
     };
@@ -103,7 +120,10 @@ beforeEach(() => {
   h.competitionVisibility = "public";
   h.rows = [];
   h.orgCurrency = "usd";
+  h.orgStripeUnsupportedCurrency = null;
   h.withTenantCalls = 0;
+  feePercentForMock.mockClear();
+  feePercentForMock.mockResolvedValue(8);
 });
 
 describe("registration hub — owner/admin guard", () => {
@@ -162,6 +182,11 @@ describe("registration hub — ?tab= switching", () => {
   it("does not run the division-rows query on the Registrants tab — no N+1, no wasted read", async () => {
     await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
     expect(h.withTenantCalls).toBe(0);
+  });
+
+  it("does not resolve fee_percent on the Registrants tab either — same wasted-read guard (W3c)", async () => {
+    await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
+    expect(feePercentForMock).not.toHaveBeenCalled();
   });
 });
 
@@ -252,5 +277,89 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
     const tree = walk(await Page({ params, searchParams: noTab }));
     const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
     expect((propsOf(panel).context as { currency: string }).currency).toBe("eur");
+  });
+});
+
+describe("registration hub — config panel context (RS004 W3c)", () => {
+  it("passes orgSlug through to the settings panel", async () => {
+    const tree = walk(await Page({ params, searchParams: noTab }));
+    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
+    expect(propsOf(panel).orgSlug).toBe("riverside");
+  });
+
+  it("passes feePercentFor's resolved value as feePercentPct", async () => {
+    feePercentForMock.mockResolvedValue(5);
+    const tree = walk(await Page({ params, searchParams: noTab }));
+    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
+    expect(propsOf(panel).feePercentPct).toBe(5);
+  });
+
+  it("resolves fee_percent for THIS org and competition", async () => {
+    await Page({ params, searchParams: noTab });
+    expect(feePercentForMock).toHaveBeenCalledWith("org-1", "comp-1");
+  });
+
+  it("reads cardUnsupportedCurrency off the row's own org_stripe_unsupported_currency when rows exist", async () => {
+    h.rows = [
+      {
+        division_id: "div-1",
+        name: "Open Singles",
+        category: null,
+        age_min: null,
+        age_max: null,
+        enabled: true,
+        entrant_kind: "individual",
+        opens_at: null,
+        closes_at: null,
+        capacity: null,
+        fee_cents: 0,
+        approval: "auto",
+        allow_free_agents: false,
+        taken: 0,
+        org_currency: "usd",
+        org_stripe_unsupported_currency: "jpy",
+      },
+    ];
+    const tree = walk(await Page({ params, searchParams: noTab }));
+    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
+    expect(propsOf(panel).cardUnsupportedCurrency).toBe("jpy");
+  });
+
+  it("is null (card supported) when the row carries no unsupported-currency value", async () => {
+    h.rows = [
+      {
+        division_id: "div-1",
+        name: "Open Singles",
+        category: null,
+        age_min: null,
+        age_max: null,
+        enabled: true,
+        entrant_kind: "individual",
+        opens_at: null,
+        closes_at: null,
+        capacity: null,
+        fee_cents: 0,
+        approval: "auto",
+        allow_free_agents: false,
+        taken: 0,
+        org_currency: "usd",
+        org_stripe_unsupported_currency: null,
+      },
+    ];
+    const tree = walk(await Page({ params, searchParams: noTab }));
+    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
+    expect(propsOf(panel).cardUnsupportedCurrency).toBeNull();
+  });
+
+  // Same "finding 6" shape as org currency: a Settings-tab competition with
+  // ZERO divisions has no row to read org_stripe_unsupported_currency off,
+  // so it must resolve through the dedicated fallback query rather than
+  // silently defaulting to "supported" (null) regardless of the real value.
+  it("resolves cardUnsupportedCurrency independently of rows[0] on a zero-row settings tab", async () => {
+    h.rows = [];
+    h.orgStripeUnsupportedCurrency = "jpy";
+    const tree = walk(await Page({ params, searchParams: noTab }));
+    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
+    expect(propsOf(panel).cardUnsupportedCurrency).toBe("jpy");
   });
 });
