@@ -260,10 +260,24 @@ describe("buildScorebug", () => {
     expect(spec.strip[1]?.value).toBe("12:34");
   });
 
-  it("the clock falls back to the placeholder when asOf is missing or names another phase (v2's own staleness guard)", () => {
-    expect(buildScorebug(view(), t).strip[1]?.value).toBe("—");
+  // B3/fix 4. The clock is real — `state.asOf` is a `GameTime` the fold keeps
+  // (`{...swept, asOf: at}`, football.ts) — but only a STAMPED event sets it,
+  // and no v3 tile sends `at` except the swap, which copies an `asOf` that
+  // already exists. So on a stream recorded entirely through this pad the
+  // clock never has a value, and the strip rendered a labelled em-dash
+  // forever. An empty labelled field is dead weight on the most
+  // space-constrained surface in the product: omit the item instead.
+  it("omits the clock item entirely when nothing stamps a clock, rather than labelling an em-dash", () => {
+    expect(buildScorebug(view(), t).strip.map((item) => item.id)).toEqual(["period"]);
     const stale = view({ state: state({ phase: "H2", asOf: { period: "H1", elapsed: 100 } }) });
-    expect(buildScorebug(stale, t).strip[1]?.value).toBe("—");
+    expect(buildScorebug(stale, t).strip.map((item) => item.id)).toEqual(["period"]);
+  });
+
+  it("shows the clock the moment the fold IS as-of a stamp in the current phase (v2's own staleness guard)", () => {
+    const stamped = view({ state: state({ asOf: { period: "H1", elapsed: 754 } }) });
+    const clock = buildScorebug(stamped, t).strip.find((item) => item.id === "clock");
+    expect(clock?.value).toBe("12:34");
+    expect(clock?.accent).toBe(true);
   });
 
   // B3/fix 3. The strip printed `Period H1` — "H1"/"ET_H2"/"SHOOTOUT" are the
@@ -881,9 +895,9 @@ describe("readClock", () => {
   it("formats MM:SS only for a stamp naming the current phase", () => {
     expect(readClock({ asOf: { period: "H1", elapsed: 0 } }, "H1")).toBe("0:00");
     expect(readClock({ asOf: { period: "H1", elapsed: 65 } }, "H1")).toBe("1:05");
-    expect(readClock({ asOf: { period: "H1", elapsed: 65 } }, "H2")).toBe("—");
-    expect(readClock({}, "H1")).toBe("—");
-    expect(readClock({ asOf: { period: "H1", elapsed: -1 } }, "H1")).toBe("—");
+    expect(readClock({ asOf: { period: "H1", elapsed: 65 } }, "H2")).toBeUndefined();
+    expect(readClock({}, "H1")).toBeUndefined();
+    expect(readClock({ asOf: { period: "H1", elapsed: -1 } }, "H1")).toBeUndefined();
   });
 });
 
@@ -1071,6 +1085,13 @@ describe("against a real engine fold", () => {
       by: "H",
       at: { period: "H1", elapsed: 1200 },
     });
+  });
+
+  // Both branches of fix 4 against a REAL fold: the stream that carries a
+  // stamped `at` has a clock, the one that carries none has no clock ITEM.
+  it("shows a clock only once the fold itself is as-of a stamp", () => {
+    expect(buildScorebug(foldedView(afterSub), t).strip.find((item) => item.id === "clock")?.value).toBe("20:00");
+    expect(buildScorebug(foldedView(kickoff), t).strip.map((item) => item.id)).toEqual(["period"]);
   });
 
   it("every skin method runs clean against the folded state — no builder throws on a real fixture", () => {

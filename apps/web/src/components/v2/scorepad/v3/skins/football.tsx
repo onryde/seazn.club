@@ -222,22 +222,31 @@ const SIDE_LABEL: Record<Side, MessageKey> = {
 
 const SIDES: readonly Side[] = ["home", "away"];
 
-const CLOCK_PLACEHOLDER = "—";
-
 /**
- * MM:SS, only when the fold's own `asOf` names the CURRENT phase.
+ * MM:SS, only when the fold's own `asOf` names the CURRENT phase — and
+ * `undefined` when it does not.
  *
- * Ported from v2 verbatim (`readClock`, skins/football-skin.tsx:115), which
- * mirrors the guard football's own (unexported) `footballPosition` applies:
- * a stamp left over from a phase the match has since left must never read as
- * "now". `buildSwap` below depends on this same decision for the `at` it
- * stamps, so the two can never disagree about whether the clock is current.
+ * The guard is v2's (`readClock`, skins/football-skin.tsx:115), which mirrors
+ * the one football's own (unexported) `footballPosition` applies: a stamp left
+ * over from a phase the match has since left must never read as "now".
+ * `buildSwap` below depends on this same decision for the `at` it stamps, so
+ * the two can never disagree about whether the clock is current.
+ *
+ * B3 changed the MISS from v2's "—" placeholder to `undefined`, so the caller
+ * can drop the strip item rather than render a labelled em-dash forever. The
+ * clock is genuinely reachable — `state.asOf` is a `GameTime` the fold keeps
+ * (`{...swept, asOf: at}`, football.ts:2528) — but ONLY a stamped event sets
+ * it, and no v3 tile sends `at` except the swap, which copies an `asOf` that
+ * already exists. A stream recorded entirely through this pad therefore has
+ * no clock at all, which is exactly the case the placeholder was papering
+ * over. Restoring the value is an engine-side question (nothing here can
+ * bootstrap a stamp), recorded in this wave's report rather than faked.
  */
-export function readClock(state: unknown, phase: string): string {
+export function readClock(state: unknown, phase: string): string | undefined {
   const asOf = asState(state).asOf;
   const elapsed = asOf?.elapsed;
   if (asOf?.period !== phase || typeof elapsed !== "number" || !Number.isFinite(elapsed) || elapsed < 0) {
-    return CLOCK_PLACEHOLDER;
+    return undefined;
   }
   return `${Math.floor(elapsed / 60)}:${String(Math.floor(elapsed % 60)).padStart(2, "0")}`;
 }
@@ -384,8 +393,14 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   // (football-skin.tsx:141) and B2 carried that over; B3 closes it.
   const strip: StripItem[] = [
     { id: "period", label: t("scorepad.skin.football.header.period"), value: phaseLabel(phase, view.cfg, t) },
-    { id: "clock", label: t("scorepad.skin.football.header.clock"), value: readClock(state, phase), accent: true },
   ];
+  // OMITTED, not blanked, when nothing has stamped a clock (see `readClock`):
+  // a labelled em-dash that can never fill in is dead weight on the most
+  // space-constrained surface in the product.
+  const clock = readClock(state, phase);
+  if (clock !== undefined) {
+    strip.push({ id: "clock", label: t("scorepad.skin.football.header.clock"), value: clock, accent: true });
+  }
   // Law 7 added time, stamped by the fold on the period a marker CLOSES. A
   // bare "+3" is locale-invariant (the same reasoning `TileSpec.sublabelText`
   // documents for a bare number), so it needs no key of its own.
