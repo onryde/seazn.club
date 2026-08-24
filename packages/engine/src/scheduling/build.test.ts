@@ -739,6 +739,16 @@ describe("buildSchedule", () => {
     const built = await buildSchedule({ fixtures, config });
     expect(built.status).not.toBe("infeasible");
     expect(built.contradictoryPins).toBeUndefined();
+    // Assert the conflict is REPORTED, not merely non-fatal — the `window`
+    // sibling above does the same. Without this line the test passes when
+    // `strandedCourtIds` never reaches `validateAssignments` at all, and that
+    // is a live risk rather than a hypothetical: the field survives the trip
+    // only as an unnamed runtime passenger on `greedySeed`'s
+    // `{ ...config }` spread, so any future hop that rebuilds the config
+    // field-by-field (a `Pick`, an explicit literal, a `toSlotConfig`-style
+    // hand copy — this repo's recurring bug) drops it with no type error.
+    // This assertion is what turns that silent drop into a red.
+    expect(built.conflicts.some((c) => c.details?.kind === "stranded_fixture")).toBe(true);
   }, 180_000);
 
   // UN-SKIPPED (fix round 1): the injected fork keys off

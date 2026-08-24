@@ -16,7 +16,7 @@
 // module) and `schedule-court-hours.test.ts` (the org/venue/court/division
 // seeding chain), rather than invented fresh.
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { sql, withTenant } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -182,11 +182,57 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 }
 
+/** Every non-test source under `apps/web/src/server` that mentions either
+ *  builder, as `[path, comment-stripped code]`.
+ *
+ *  A hardcoded two-file list is what this guard used to read, and that is the
+ *  same shape whose failure P10 Task 2 had just finished fixing for
+ *  `window-single-source.test.ts`: a SIXTH call site added in any other file
+ *  was invisible to it, which is precisely the regression the guard exists to
+ *  catch (`person-merge.ts` was itself the fifth site, blind for two waves).
+ *  Walk the tree instead, so a new site cannot be born outside the guard's
+ *  field of view. */
+function verifyConfigSources(): [string, string][] {
+  const root = new URL("../../", import.meta.url); // apps/web/src/server/
+  const out: [string, string][] = [];
+  for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
+    const path = `${entry.parentPath}/${entry.name}`;
+    if (path.includes("__tests__") || entry.name.includes(".test.")) continue;
+    const raw = readFileSync(path, "utf8");
+    if (!raw.includes("toVerifyConfig(") && !raw.includes("verifyConfigForDivision(")) continue;
+    out.push([path.slice(path.indexOf("apps/web/")), stripComments(raw)]);
+  }
+  return out;
+}
+
 describe("verify-config call sites carry both court signals", () => {
+  const sources = verifyConfigSources();
   const src = readFileSync(new URL("../schedule.ts", import.meta.url), "utf8");
   const merge = readFileSync(new URL("../person-merge.ts", import.meta.url), "utf8");
   const srcCode = stripComments(src);
   const mergeCode = stripComments(merge);
+
+  it("the walk finds at least the two files known to build verify configs", () => {
+    const paths = sources.map(([p]) => p);
+    expect(paths).toContain("apps/web/src/server/usecases/schedule.ts");
+    expect(paths).toContain("apps/web/src/server/usecases/person-merge.ts");
+  });
+
+  it("EVERY file under server/ that calls toVerifyConfig names both signals at every call", () => {
+    let checked = 0;
+    for (const [path, code] of sources) {
+      for (const call of code.matchAll(/\btoVerifyConfig\(/g)) {
+        const idx = call.index ?? 0;
+        if (code.slice(idx - 9, idx) === "function ") continue; // the definition itself
+        checked++;
+        const tail = code.slice(idx, idx + 400);
+        expect(tail, `${path} @ ${idx}: courtCalendars missing`).toMatch(/courtCalendars/);
+        expect(tail, `${path} @ ${idx}: strandedCourtIds missing`).toMatch(/strandedCourtIds/);
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
 
   // The 9 characters immediately before a matched "name(" are "function "
   // for BOTH `export function toVerifyConfig(` and `export async function
