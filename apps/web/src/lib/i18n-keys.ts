@@ -3417,6 +3417,7 @@ export type DictionaryKey =
   | "reg.form.type.text"
   | "reg.guardian"
   | "reg.heading"
+  | "reg.hub.awaitingConfirmation"
   | "reg.hub.openCount.one"
   | "reg.hub.openCount.other"
   | "reg.hub.registeredCount.one"

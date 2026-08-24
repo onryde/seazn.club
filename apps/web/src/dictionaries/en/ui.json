@@ -574,6 +574,7 @@
   "reg.hub.openCount.other": "divisions open",
   "reg.hub.registeredCount.one": "registrant",
   "reg.hub.registeredCount.other": "registrants",
+  "reg.hub.awaitingConfirmation": "awaiting confirmation",
   "reg.hub.settings.title": "Registration settings",
   "reg.hub.settings.body": "Soon you'll set the registration window, fee, capacity, and eligibility for each division right from this tab.",
   "reg.hub.registrants.title": "No one's registered yet",

@@ -48,6 +48,22 @@ export interface CompetitionCardStats {
 export interface DivisionCardStats {
   division_id: string;
   entrants: number;
+  /** RS004 W2b review finding 1: non-terminal `registrations` count for
+   *  this division — pending, paid, confirmed, waitlisted. Rejected,
+   *  withdrawn and expired are excluded (terminal, can never re-open).
+   *  Deliberately distinct from `entrants` above: an `entrants` row exists
+   *  only once an entry is MATERIALISED (registrations.ts's materialise(),
+   *  which runs at submit for a free/auto/non-waitlisted entry, or at
+   *  organiser approval otherwise) — so `entrants` alone reads zero for a
+   *  paid entry still awaiting manual approval, or any waitlisted entry.
+   *  This is the field the competition overview's Registration pill sums
+   *  for its "total registered" badge. */
+  registered: number;
+  /** Subset of `registered` not yet confirmed: pending, paid, waitlisted.
+   *  The pill's distinct "needs your attention" signal, kept separate from
+   *  `registered` so the headline number never reads as "all done" when
+   *  some of it is still pending review or a free capacity slot. */
+  awaiting_confirmation: number;
   capacity: number | null;
   stage_kinds: string[];
   registration_open: boolean;
@@ -59,6 +75,28 @@ export interface DivisionCardStats {
 // "Played" = a result exists (decided/finalized); denominator excludes
 // cancelled fixtures. Matches how organisers count a matchday.
 const PLAYED = ["decided", "finalized"] as const;
+
+// RS004 W2b review finding 1 — declared locally, NOT imported from
+// registrations.ts (which has its own, slightly different-purposed
+// SPOT_HOLDERS: "holds a capacity spot", pending|paid|confirmed, no
+// waitlisted) or registration-approval.ts: those modules pull in
+// Stripe/email clients this read-only, RLS-scoped file has no business
+// loading — same precedent as registration/page.tsx's own local
+// SPOT_HOLDERS copy, and this file's own PLAYED just above.
+//
+// Every status except the three terminal ones — a registration that is
+// still, in some sense, "in the system".
+const REGISTERED_STATUSES = ["pending", "paid", "confirmed", "waitlisted"] as const;
+// Not yet confirmed — no entrant has been materialised for these. 'paid'
+// belongs here deliberately: RULING B (registrations.ts's
+// confirmPaidRegistration) leaves a Stripe-paid manual-approval entry
+// sitting at exactly 'paid' — money has moved, but a human still has to
+// approve it, the same "needs the organiser's attention" bucket
+// pending/waitlisted already sit in. It is money-real but not yet
+// roster-real, so it counts in `registered` (the entry undeniably exists)
+// AND in `awaiting_confirmation` (nothing has been materialised for it
+// yet) — never treated as "done", never as zero.
+const AWAITING_CONFIRMATION_STATUSES = ["pending", "paid", "waitlisted"] as const;
 
 export async function listCompetitionCardStats(
   auth: AuthCtx,
@@ -127,6 +165,12 @@ export async function listDivisionCardStats(
         (select count(*)::int from entrants e
           where e.division_id = d.id
             and e.status in ('registered','confirmed')) as entrants,
+        (select count(*)::int from registrations r
+          where r.division_id = d.id
+            and r.status in ${tx([...REGISTERED_STATUSES])}) as registered,
+        (select count(*)::int from registrations r
+          where r.division_id = d.id
+            and r.status in ${tx([...AWAITING_CONFIRMATION_STATUSES])}) as awaiting_confirmation,
         rs.capacity,
         coalesce(rs.enabled, false)
           and (rs.opens_at is null or rs.opens_at <= now())

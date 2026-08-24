@@ -59,11 +59,29 @@ export default async function CompetitionPage({
   // RS004 W2 scope item 2: the Registration hub's nav entry carries live
   // counts, computed from the SAME card-stats query this page already runs
   // above — no second query, no client fetch, no N+1 per division.
+  //
+  // W2b review finding 1: `totalRegistered` used to sum `stats.get(d.id)
+  // ?.entrants`, but an `entrants` row only exists once an entry is
+  // MATERIALISED (registrations.ts's materialise(), at submit for a
+  // free/auto/non-waitlisted entry, or at organiser approval otherwise) —
+  // so a paid entry still awaiting manual approval, and every waitlisted
+  // entry, read as zero, undercounting exactly what this pill exists so an
+  // organiser can act on. `registered`/`awaiting_confirmation`
+  // (card-stats.ts) count straight from `registrations.status` instead,
+  // still off the SAME single query above — zero extra round trips.
   const openRegistrationDivisions = divisions.filter(
     (d) => stats.get(d.id)?.registration_open,
   ).length;
   const totalRegistered = divisions.reduce(
-    (sum, d) => sum + (stats.get(d.id)?.entrants ?? 0),
+    (sum, d) => sum + (stats.get(d.id)?.registered ?? 0),
+    0,
+  );
+  // The subset of `totalRegistered` not yet confirmed (pending, paid,
+  // waitlisted) — surfaced as its own badge rather than folded into
+  // `totalRegistered` alone, which would read as "all done" (finding 1:
+  // "surface it honestly").
+  const awaitingConfirmation = divisions.reduce(
+    (sum, d) => sum + (stats.get(d.id)?.awaiting_confirmation ?? 0),
     0,
   );
 
@@ -162,6 +180,11 @@ export default async function CompetitionPage({
                 ariaLabel={t(dict, "aria.registration")}
                 openBadge={`${openRegistrationDivisions} ${plural(dict, "reg.hub.openCount", openRegistrationDivisions, locale)}`}
                 registeredBadge={`${totalRegistered} ${plural(dict, "reg.hub.registeredCount", totalRegistered, locale)}`}
+                awaitingBadge={
+                  awaitingConfirmation > 0
+                    ? `${awaitingConfirmation} ${t(dict, "reg.hub.awaitingConfirmation")}`
+                    : undefined
+                }
               />
             )}
             <Link
