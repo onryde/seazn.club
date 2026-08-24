@@ -169,6 +169,57 @@ describe.skipIf(!HAS_DB)("eligibility columns: category/age_min/age_max (V364/RS
     expect(patched.age_min).toBe(6);
     expect(patched.age_max).toBe(18);
   });
+
+  // RS004 review finding 1 (MAJOR): checkAgeBand (schemas.ts) only compares
+  // age_min/age_max when BOTH are in the SAME patch body, so a single-field
+  // PATCH used to reach the DB untouched and violate divisions_age_band_check
+  // (V364) — surfacing as an unhandled 500 with raw constraint text instead
+  // of the documented 422. patchDivision now merges against the stored row
+  // before deciding.
+  it("an age_min-only patch that would violate the STORED age_max is rejected 422, not a raw DB error", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+    await patchDivision(owner, division.id, { age_max: 18 });
+
+    await expect(patchDivision(owner, division.id, { age_min: 40 })).rejects.toMatchObject({
+      status: 422,
+    });
+
+    // The rejected patch must not have half-applied.
+    const fetched = await getDivision(owner, division.id);
+    expect(fetched.age_min).toBeNull();
+    expect(fetched.age_max).toBe(18);
+  });
+
+  it("an age_max-only patch that would violate the STORED age_min is rejected 422, not a raw DB error", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+    await patchDivision(owner, division.id, { age_min: 40 });
+
+    await expect(patchDivision(owner, division.id, { age_max: 8 })).rejects.toMatchObject({
+      status: 422,
+    });
+
+    const fetched = await getDivision(owner, division.id);
+    expect(fetched.age_min).toBe(40);
+    expect(fetched.age_max).toBeNull();
+  });
+
+  // Not a red/green case for THIS fix — a lone null already satisfied
+  // divisions_age_band_check before this fix (either side null short-
+  // circuits the constraint) — but the new merge-and-validate guard reads
+  // `patch.age_min !== undefined` specifically (not `??`) so an explicit
+  // `null` is never mistaken for "unset, fall back to stored"; pinned here
+  // so a future edit to that guard can't silently regress it.
+  it("clearing age_min to null is still allowed while age_max stays set", async () => {
+    const owner = await seedOwner();
+    const { division } = await rig(owner);
+    await patchDivision(owner, division.id, { age_min: 10, age_max: 20 });
+
+    const cleared = await patchDivision(owner, division.id, { age_min: null });
+    expect(cleared.age_min).toBeNull();
+    expect(cleared.age_max).toBe(20);
+  });
 });
 
 describe.skipIf(!HAS_DB)("format lock (v8)", () => {

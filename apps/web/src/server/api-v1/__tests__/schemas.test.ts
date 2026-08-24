@@ -11,6 +11,7 @@ import {
   CreateEntrant,
   CreateStage,
   CreateTeam,
+  Division,
   LineupSlotInput,
   PatchCompetition,
   PatchDivision,
@@ -564,6 +565,28 @@ describe("PatchDivision (RS004 eligibility columns)", () => {
     if (!r.success) {
       expect(r.error.issues.some((i) => i.path.join(".") === "age_max")).toBe(true);
     }
+  });
+});
+
+// RS004 review finding 4 (minor, contract asymmetry): PatchDivision bounds
+// age_min/age_max to 0-120 (above) but the Division RESPONSE schema left
+// them unbounded ints — the generated OpenAPI spec described the same field
+// two different ways. Field-level safeParse (Division.shape.<field>) rather
+// than building a full Division fixture: isolates the bound from every
+// other required key on the response shape.
+describe("Division response schema (RS004 review finding 4)", () => {
+  it("bounds age_min/age_max to 0-120, matching PatchDivision's request-side bounds", () => {
+    expect(Division.shape.age_min.safeParse(121).success).toBe(false);
+    expect(Division.shape.age_min.safeParse(-1).success).toBe(false);
+    expect(Division.shape.age_max.safeParse(121).success).toBe(false);
+    expect(Division.shape.age_max.safeParse(-1).success).toBe(false);
+  });
+
+  it("still accepts in-bounds values and null", () => {
+    expect(Division.shape.age_min.safeParse(0).success).toBe(true);
+    expect(Division.shape.age_min.safeParse(120).success).toBe(true);
+    expect(Division.shape.age_min.safeParse(null).success).toBe(true);
+    expect(Division.shape.age_max.safeParse(null).success).toBe(true);
   });
 });
 

@@ -104,4 +104,32 @@ describe.skipIf(!HAS_DB)("registration_settings.approval / allow_free_agents (RS
       }),
     ).rejects.toThrow(/allow_free_agents/);
   });
+
+  // RS004 review finding 2 — CHARACTERISATION, not a bug fix. Passes before
+  // and after this review pass; added for coverage of an untested path, not
+  // because it caught a regression. PUT is a full replace: the guard at
+  // putRegistrationSettings (registrations.ts, ~1006) only ever sees THIS
+  // call's own recomputed allowFreeAgents/entrantKind, and allow_free_agents
+  // defaults back to false whenever a PUT omits it — so a later PUT that
+  // switches entrant_kind away from 'team' can never combine with a
+  // leftover allow_free_agents:true from a PRIOR PUT to produce an invalid
+  // stored state.
+  it("a later PUT to entrant_kind:'individual' resets allow_free_agents to false rather than 422ing (characterisation)", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { division } = await rig(owner);
+
+    await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "team",
+      allow_free_agents: true,
+    });
+
+    const switched = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "individual",
+    });
+    expect(switched.entrant_kind).toBe("individual");
+    expect(switched.allow_free_agents).toBe(false);
+  });
 });
