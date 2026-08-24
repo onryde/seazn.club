@@ -16,6 +16,7 @@ import { describe, it, expect } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { V3_SKINS, LEGACY_SPORTS, resolvePad, type PadLaneResolution } from "../registry";
 import { cricketSkinV3 } from "../skins/cricket";
+import { footballSkinV3 } from "../skins/football";
 
 // A dummy, no-op translator. Every test in this file cares only about LANE
 // resolution (v3 vs legacy vs throw) or the TYPE shape of what V3_SKINS/
@@ -66,15 +67,25 @@ describe("registry totality", () => {
   // membership check: it hardcodes the wave's own intended answer, so a
   // regression that leaves cricket in the legacy lane (while V3_SKINS/
   // LEGACY_SPORTS still structurally agree with each other) still reds.
-  it("cricket specifically resolves to the v3 lane, not legacy — the wave's own flip", () => {
+  it("cricket specifically resolves to the v3 lane, not legacy — R2's own flip", () => {
     expect(resolvePad("cricket", T).lane).toBe("v3");
   });
 
-  it("every other builtinModules sport still resolves to legacy — the flip touches cricket alone", () => {
-    const others = builtinModules.map((m) => m.key).filter((key) => key !== "cricket");
+  // R3/task B2 — the wave's deliverable, pinned independently of the
+  // structural sweep above for the reason cricket's own pin states: that sweep
+  // only proves resolvePad AGREES with V3_SKINS/LEGACY_SPORTS' membership,
+  // whatever it happens to say, so a task that shipped without actually
+  // flipping football would keep it green.
+  it("football specifically resolves to the v3 lane, not legacy — this wave's own flip", () => {
+    expect(resolvePad("football", T).lane).toBe("v3");
+  });
+
+  it("every other builtinModules sport still resolves to legacy — the flips touch cricket and football alone", () => {
+    const converted = new Set(["cricket", "football"]);
+    const others = builtinModules.map((m) => m.key).filter((key) => !converted.has(key));
     // Pins today's known-good shape, same convention registry.test.tsx's own
     // "the table names exactly the 11 shipped sports" assertion uses.
-    expect(others.length).toBe(10);
+    expect(others.length).toBe(9);
     for (const key of others) {
       expect(resolvePad(key, T).lane, key).toBe("legacy");
     }
@@ -93,17 +104,18 @@ describe("registry totality", () => {
 // ---------------------------------------------------------------------------
 describe("type-level: an un-called v3 skin factory cannot stand in for a resolved skin (R2/task E)", () => {
   it("V3_SKINS holds FACTORIES — the correct shape compiles clean", () => {
-    const ok: typeof V3_SKINS = { cricket: cricketSkinV3 };
+    const ok: typeof V3_SKINS = { cricket: cricketSkinV3, football: footballSkinV3 };
     expect(typeof ok.cricket).toBe("function");
+    expect(typeof ok.football).toBe("function");
   });
 
   it("an ALREADY-CALLED skin is not a valid V3_SKINS entry", () => {
     // @ts-expect-error — V3_SKINS's value type is `(t: TFn) => SkinDefV3`,
-    // a function; `cricketSkinV3(T)` is the CALLED result, a plain object
+    // a function; `footballSkinV3(T)` is the CALLED result, a plain object
     // with no call signature. If V3_SKINS's type is ever loosened to also
     // accept an already-built skin, this line stops erroring and
     // `npm run typecheck` reports TS2578 here.
-    const bad: typeof V3_SKINS = { cricket: cricketSkinV3(T) };
+    const bad: typeof V3_SKINS = { football: footballSkinV3(T) };
     expect(bad).toBeTruthy();
   });
 
