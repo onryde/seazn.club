@@ -179,12 +179,16 @@ export function useCapacityReport(
   config: CapacityReportConfig,
 ): UseCapacityReportResult {
   const [report, setReport] = useState<CapacityReport | null>(null);
-  const resolvedKeyRef = useRef<string | null>(null);
+  // Which inputs-key's fetch most recently RESOLVED. A real `useState`
+  // slot, not a ref: render reads it below (via `stale`), and reading a
+  // ref's `.current` during render is the exact `react-hooks/refs` defect
+  // this hook must not have — a value read from a ref during render does
+  // not itself trigger a re-render when it changes, so the derived value
+  // can go stale until something else happens to re-render the caller.
+  const [resolvedKey, setResolvedKey] = useState<string | null>(null);
   // Which inputs-key's fetch most recently FAILED for real (retries
-  // exhausted) — a real `useState` slot, not a ref, because (unlike
-  // `resolvedKeyRef`) nothing else re-renders this hook's caller when only
-  // a failure lands and `report` itself does not change. Compared against
-  // the live `key` below exactly like `resolvedKeyRef` is, so a later edit
+  // exhausted) — same rationale as `resolvedKey` above. Compared against
+  // the live `key` below exactly like `resolvedKey` is, so a later edit
   // (a new key) clears the failed read without this ever needing an
   // explicit reset.
   const [failedKey, setFailedKey] = useState<string | null>(null);
@@ -200,9 +204,14 @@ export function useCapacityReport(
       divisionId,
       fixtures,
       config,
+      // `report` before `resolvedKey`: same-tick state updates land in one
+      // React batch so this never actually splits into two renders, but
+      // nothing here should DEPEND on that — if it ever did split, the
+      // transient render must read as still-stale-with-fresh-data, never
+      // fresh-with-stale-data.
       (data) => {
-        resolvedKeyRef.current = key;
         setReport(data);
+        setResolvedKey(key);
       },
       () => setFailedKey(key),
     );
@@ -213,7 +222,7 @@ export function useCapacityReport(
   }, [key, assessable, divisionId]);
 
   if (!assessable) return { report: null, stale: false, failed: false };
-  return { report, stale: resolvedKeyRef.current !== key, failed: failedKey === key };
+  return { report, stale: resolvedKey !== key, failed: failedKey === key };
 }
 
 /** One request per stage — `null` for a stage with nothing to assess yet
@@ -246,20 +255,23 @@ export function useCapacityReportsByStage(
   divisionId: string,
   requests: ReadonlyMap<string, CapacityRequest>,
 ): ReadonlyMap<string, UseCapacityReportResult> {
-  // No state VALUE is read here — this is purely a "please re-render" pulse
-  // fired once a stage's fetch resolves, since the actual report data lives
-  // in refs (mutated outside React's own state-diffing, exactly like
-  // useCapacityReport's own resolvedKeyRef). A ref write alone would never
-  // schedule a re-render, and without one, a landed report would sit in
-  // reportsRef forever unseen.
-  const [, forceRerender] = useState(0);
-  const reportsRef = useRef<Map<string, CapacityReport | null>>(new Map());
-  const resolvedKeyRef = useRef<Map<string, string>>(new Map());
-  // Per-stage sibling of useCapacityReport's own `failedKey` state, kept as
-  // a ref (not useState) for the same reason reportsRef/resolvedKeyRef are:
-  // one map, mutated outside React's diffing, with forceRerender as the
-  // only "please re-render" signal — see this function's own header.
-  const failedKeyRef = useRef<Map<string, string>>(new Map());
+  // Per-stage siblings of useCapacityReport's own report/resolvedKey/
+  // failedKey state: real useState maps, not refs, because render reads
+  // all three below to build the returned per-stage map, and reading a
+  // ref's `.current` during render is the `react-hooks/refs` defect this
+  // hook must not have — a value read from a ref during render does not
+  // itself trigger a re-render when it changes, so a landed report could
+  // sit unseen until something else happens to re-render the caller.
+  // Each stage's fetch resolution replaces exactly ONE entry via a
+  // functional update, leaving every other stage's entry — and this
+  // stage's other two maps — untouched.
+  const [reports, setReports] = useState<ReadonlyMap<string, CapacityReport | null>>(new Map());
+  const [resolvedKeys, setResolvedKeys] = useState<ReadonlyMap<string, string>>(new Map());
+  const [failedKeys, setFailedKeys] = useState<ReadonlyMap<string, string>>(new Map());
+  // The in-flight subscription per stage (the canceller + the key it was
+  // scheduled for), consulted only inside the effect below to diff "which
+  // stages need a new/cancelled subscription". Render never reads this
+  // one — so, unlike the three maps above, it stays a ref.
   const activeRef = useRef<Map<string, { key: string; cancel: () => void }>>(new Map());
 
   const requestKeys = new Map<string, string>();
@@ -279,7 +291,8 @@ export function useCapacityReportsByStage(
   useEffect(() => {
     // Stage ids no longer present: cancel and drop — otherwise a deleted
     // stage's in-flight fetch keeps running (and, on resolution, keeps
-    // calling forceRerender) for no reader that will ever see it.
+    // writing into `reports`/`resolvedKeys`) for no reader that will ever
+    // see it.
     for (const [stageId, active] of activeRef.current) {
       if (!requestKeys.has(stageId)) {
         active.cancel();
@@ -306,14 +319,14 @@ export function useCapacityReportsByStage(
         divisionId,
         req.fixtures,
         req.config,
+        // `reports` before `resolvedKeys` — same ordering rationale as
+        // useCapacityReport's own onResolved handler above.
         (data) => {
-          reportsRef.current.set(stageId, data);
-          resolvedKeyRef.current.set(stageId, key);
-          forceRerender((v) => v + 1);
+          setReports((prev) => new Map(prev).set(stageId, data));
+          setResolvedKeys((prev) => new Map(prev).set(stageId, key));
         },
         () => {
-          failedKeyRef.current.set(stageId, key);
-          forceRerender((v) => v + 1);
+          setFailedKeys((prev) => new Map(prev).set(stageId, key));
         },
       );
       activeRef.current.set(stageId, { key, cancel });
@@ -342,10 +355,10 @@ export function useCapacityReportsByStage(
       out.set(stageId, { report: null, stale: false, failed: false });
       continue;
     }
-    const resolvedKey = resolvedKeyRef.current.get(stageId) ?? null;
-    const failedKey = failedKeyRef.current.get(stageId) ?? null;
+    const resolvedKey = resolvedKeys.get(stageId) ?? null;
+    const failedKey = failedKeys.get(stageId) ?? null;
     out.set(stageId, {
-      report: reportsRef.current.get(stageId) ?? null,
+      report: reports.get(stageId) ?? null,
       stale: resolvedKey !== key,
       failed: failedKey === key,
     });
