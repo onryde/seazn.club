@@ -4051,6 +4051,10 @@
   "bracket.slot.bye": "Bye",
   "calendar.time_tbc": "Hora por confirmar",
   "calendar.unknownEntrant": "Participante desconocido",
+  "calendar.registrationDescription": "Inscripción de {name} ({status})",
+  "poster.drawTitle": "El Cuadro",
+  "poster.scanToFollow": "Escanea para seguir en directo",
+  "poster.liveSubtitle": "Marcadores en directo · partidos · clasificación — sin necesidad de app",
   "progression.pendingProposal.badge": "Hay una propuesta de clasificados esperando tu confirmación",
   "progression.pendingProposal.hint": "Hay una propuesta de clasificados esperando: abre Partidos para revisarla y confirmarla",
   "export.time.tbc": "Por confirmar",
@@ -4086,5 +4090,11 @@
   "export.description.allFixtures": "Todos los partidos de todas las divisiones.",
   "export.description.officialsRota": "Árbitros asignados y sus funciones.",
   "export.description.myRota": "Tus próximas funciones en todas las organizaciones.",
-  "export.description.ticket": "Preséntalo en la entrada: escanea o muestra la referencia de abajo."
+  "export.description.ticket": "Preséntalo en la entrada: escanea o muestra la referencia de abajo.",
+  "export.rota.noDuties": "Sin designaciones asignadas",
+  "export.roster.signatureCaptain": "Capitán del equipo",
+  "export.roster.signatureOfficial": "Oficial",
+  "export.rota.signatureOfficial": "Firma del oficial",
+  "export.rota.signatureTimeOn": "Hora de entrada",
+  "export.rota.signatureTimeOff": "Hora de salida"
 }

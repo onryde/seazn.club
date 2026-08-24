@@ -32,7 +32,8 @@ import { routes } from "@/lib/routes";
 import { toLocale } from "@/lib/i18n-constants";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
-import { icsText } from "@/lib/public-site";
+import { icsText, foldLine } from "@/lib/public-site";
+import { msgFor } from "@/lib/messages-i18n";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
 import type { PutRegistrationSettings, RegistrationFormField } from "@/server/api-v1/schemas";
@@ -3007,30 +3008,75 @@ export async function exportRegistrationsCsv(auth: AuthCtx, divisionId: string):
 // .ics confirmation attachment (doc 16 §1.1 / PROMPT-20a item 3)
 // ---------------------------------------------------------------------------
 
-/** Minimal all-day VEVENT for the competition dates. */
+/** `reg.status` → the (currently unwired elsewhere) `reg.status.*` label
+ *  vocabulary, reused here for the ICS DESCRIPTION (B2). "rejected" has no
+ *  key yet, so it falls through to the raw status word below — the same
+ *  fallback the pre-B2 code effectively had for every status. */
+const REG_ICS_STATUS_KEY: Partial<Record<RegistrationRow["status"], Parameters<typeof msgFor>[1]>> = {
+  pending: "reg.status.pending",
+  paid: "reg.status.paid",
+  confirmed: "reg.status.confirmed",
+  waitlisted: "reg.status.waitlisted",
+  withdrawn: "reg.status.withdrawn",
+  expired: "reg.status.expired",
+};
+
+/**
+ * Confirmation .ics for the competition dates (doc 16 §1.1 / PROMPT-20a item
+ * 3). A LOCAL builder, not buildIcs (public-site.ts) — buildIcs's IcsEvent
+ * shape can't carry this event's multi-day span, its lack of a STATUS line,
+ * or its registration-specific PRODID without either collapsing the span to
+ * one day or double-suffixing the UID (review finding; each PRESERVED
+ * behaviour is pinned by its own test in registrations.test.ts). Reuses
+ * buildIcs's own foldLine + icsText so the two VCALENDAR emitters don't
+ * drift on RFC 5545 mechanics (line folding, TEXT escaping).
+ */
 export async function registrationIcs(regId: string, token: string): Promise<string> {
-  const view = await publicRegistrationStatus(regId, token);
-  const start = (view.starts_on ?? new Date().toISOString().slice(0, 10)).replace(/-/g, "");
+  const reg = await regByToken(regId, token);
+  const ctx = await divisionCtx(sql, reg.division_id);
+  const [div] = await sql<{ name: string }[]>`
+    select name from divisions where id = ${reg.division_id}`;
+  // This attachment is addressed to ONE specific person, unlike
+  // calendar.ics's division-wide feed (which has no single "whose locale"
+  // and resolves org.default_locale instead) — so it resolves the
+  // registrant's OWN locale, the same signal notifyRefund and every other
+  // post-signup email in this file already reads via toLocale(reg.locale).
+  const locale = toLocale(reg.locale);
+  const lookup = (
+    k: Parameters<typeof msgFor>[1],
+    v?: Record<string, string | number>,
+  ) => msgFor(locale, k, v);
+
+  const start = (ctx.starts_on ?? new Date().toISOString().slice(0, 10)).replace(/-/g, "");
   // DTEND is exclusive for all-day events.
-  const endDate = view.ends_on ?? view.starts_on ?? new Date().toISOString().slice(0, 10);
+  const endDate = ctx.ends_on ?? ctx.starts_on ?? new Date().toISOString().slice(0, 10);
   const end = new Date(new Date(`${endDate}T00:00:00Z`).getTime() + 86_400_000)
     .toISOString().slice(0, 10).replace(/-/g, "");
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-  return [
+
+  const statusKey = REG_ICS_STATUS_KEY[reg.status];
+  const description = lookup("calendar.registrationDescription", {
+    name: reg.display_name,
+    status: statusKey ? lookup(statusKey) : reg.status,
+  });
+
+  const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
     "PRODID:-//seazn.club//registration//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
     "BEGIN:VEVENT",
-    `UID:registration-${view.id}@seazn.club`,
+    `UID:registration-${reg.id}@seazn.club`,
     `DTSTAMP:${stamp}`,
     `DTSTART;VALUE=DATE:${start}`,
     `DTEND;VALUE=DATE:${end}`,
-    `SUMMARY:${icsText(`${view.competition_name} — ${view.division_name}`)}`,
-    `DESCRIPTION:${icsText(`Registration for ${view.display_name} (${view.status})`)}`,
+    `SUMMARY:${icsText(`${ctx.comp_name} — ${div?.name ?? ""}`)}`,
+    `DESCRIPTION:${icsText(description)}`,
     "END:VEVENT",
     "END:VCALENDAR",
-    "",
-  ].join("\r\n");
+  ];
+  return lines.map(foldLine).join("\r\n") + "\r\n";
 }
 
 // ---------------------------------------------------------------------------

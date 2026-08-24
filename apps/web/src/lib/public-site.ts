@@ -77,13 +77,46 @@ export function icsText(text: string): string {
   return text.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
 }
 
-function foldLine(line: string): string {
-  if (line.length <= 74) return line;
+const utf8Encoder = new TextEncoder();
+
+function octetLength(s: string): number {
+  return utf8Encoder.encode(s).length;
+}
+
+/** Splits `s` right before the codepoint that would push its UTF-8 encoding
+ *  past `budget` octets. Walks whole codepoints (`Array.from`, which
+ *  correctly groups a UTF-16 surrogate pair into one entry) rather than
+ *  `String#slice`'s UTF-16 indexing, so a multi-octet character (e.g. an
+ *  accented Latin letter, 2 octets) or an astral one (a surrogate pair, up
+ *  to 4 octets) is never cut in half. Any single codepoint's UTF-8 encoding
+ *  is at most 4 octets, so this always advances by at least one codepoint —
+ *  no infinite loop even for a budget as small as 4. */
+function splitAtOctetBudget(s: string, budget: number): { head: string; tail: string } {
+  const codepoints = Array.from(s);
+  let bytes = 0;
+  let i = 0;
+  for (; i < codepoints.length; i++) {
+    const next = bytes + octetLength(codepoints[i]!);
+    if (next > budget) break;
+    bytes = next;
+  }
+  return { head: codepoints.slice(0, i).join(""), tail: codepoints.slice(i).join("") };
+}
+
+/** RFC 5545 §3.1: a content line SHOULD NOT exceed 75 octets (excluding the
+ *  line break); a long line folds into CRLF + a single leading SPACE per
+ *  continuation. Budgeted here at 74 octets per physical line, matching the
+ *  original ASCII-only implementation's threshold. Counts UTF-8 OCTETS, not
+ *  `String#length` (UTF-16 code units) — a non-ASCII competition/entrant
+ *  name (French, Dutch, …) is exactly the case `.length` undercounts. */
+export function foldLine(line: string): string {
+  if (octetLength(line) <= 74) return line;
   const parts: string[] = [];
   let rest = line;
-  while (rest.length > 74) {
-    parts.push(rest.slice(0, 74));
-    rest = " " + rest.slice(74);
+  while (octetLength(rest) > 74) {
+    const { head, tail } = splitAtOctetBudget(rest, 74);
+    parts.push(head);
+    rest = " " + tail;
   }
   parts.push(rest);
   return parts.join("\r\n");

@@ -530,6 +530,7 @@ async function draftResult(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<void
 
   const { title, bodyMd } = resultDraft({
     locale,
+    // Unreachable: this only runs on an fx whose status just became DECIDED via appendEvent, which throws WRONG_PHASE on a null entrant (append-event.ts) — a decided fx never has a TBD side.
     homeName: fx.home_name ?? "TBD",
     awayName: fx.away_name ?? "TBD",
     homeScore: sideLine(state?.summary, fx.home_entrant_id),
@@ -577,6 +578,7 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
     where f.division_id = ${fx.division_id} and f.stage_id = ${fx.stage_id} and f.round_no = ${roundNo}
     order by f.fixture_no nulls last, f.id`;
   const results = resultRows.map((r) => ({
+    // Unreachable: every row here is a DECIDED/FINALIZED/FORFEITED TABLE_KINDS (league/group/swiss) fixture, and those never get a null entrant — round-robin/swiss generation and addFixture always seat both sides, and appendEvent refuses to decide a fixture with one still null.
     homeName: r.home_name ?? "TBD",
     awayName: r.away_name ?? "TBD",
     homeScore: sideLine(r.summary, r.home_id),

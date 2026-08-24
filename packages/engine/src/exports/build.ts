@@ -37,19 +37,20 @@ function base(
   };
 }
 
-/** `timeTbc` is caller-supplied for the same reason `home`/`away` already are:
- *  the engine has no locale of its own, so the ONE user-facing word this row
- *  builder emits arrives pre-resolved. Callers that pass nothing keep the
- *  historic English literal. */
+/** `timeTbc`/`resultVs` are caller-supplied for the same reason `home`/`away`
+ *  already are: the engine has no locale of its own, so the handful of
+ *  user-facing words this row builder emits arrive pre-resolved. Callers
+ *  that pass nothing keep the historic English literals. */
 function fixtureRows(
   fixtures: readonly ExportFixture[],
   timeTbc: string,
+  resultVs: string,
 ): (string | number)[][] {
   return fixtures.map((f) => [
     f.at === null ? timeTbc : f.at,
     f.court ?? "—",
     f.home,
-    f.result ?? "vs",
+    f.result ?? resultVs,
     f.away,
     f.stageName,
   ]);
@@ -59,6 +60,8 @@ function fixtureRows(
 // `opts.i18n` (engine unit tests, any consumer outside apps/web).
 const TIME_TBC = "TBD";
 const TIMETABLE_COLUMNS = ["Time", "Court", "Home", "", "Away", "Stage"];
+const RESULT_VS = "vs";
+const COURT_UNASSIGNED = "Unassigned";
 
 /** Timetable (2 Jul "pretty PDF"): grouped by page-break scope; stages keep
  *  their own headings so prelim vs KO read separately (1 Sep). */
@@ -69,11 +72,13 @@ export function buildTimetable(
 ): DocModel {
   const mode = opts.pageBreaks ?? "auto";
   const timeTbc = opts.i18n?.timeTbc ?? TIME_TBC;
+  const resultVs = opts.i18n?.resultVs ?? RESULT_VS;
+  const courtUnassigned = opts.i18n?.courtUnassigned ?? COURT_UNASSIGNED;
   const columns = [...(opts.i18n?.timetableColumns ?? TIMETABLE_COLUMNS)];
   const sections: DocSection[] = [];
   const keyOf = (f: ExportFixture): string =>
     mode === "per_pitch"
-      ? (f.court ?? "Unassigned")
+      ? (f.court ?? courtUnassigned)
       : mode === "per_division"
         ? (f.divisionName ?? "")
         : "";
@@ -93,7 +98,7 @@ export function buildTimetable(
       sections.push({
         ...(group !== "" && first ? { heading: group } : {}),
         subheading: stageName,
-        table: { columns, rows: fixtureRows(stageFixtures, timeTbc) },
+        table: { columns, rows: fixtureRows(stageFixtures, timeTbc, resultVs) },
         ...(group !== "" && first && sections.length > 0 ? { pageBreakBefore: true } : {}),
       });
       first = false;
@@ -131,6 +136,8 @@ export function buildStandings(
   return base("standings", title, [{ table }], opts);
 }
 
+const ROSTER_SIGNATURES: readonly [string, string] = ["Team captain", "Official"];
+
 /** Roster form (13 May): team + player list with sign-at-start lines. */
 export function buildRoster(
   title: string,
@@ -138,13 +145,14 @@ export function buildRoster(
   opts: BuildOpts,
 ): DocModel {
   const perTeam = (opts.pageBreaks ?? "auto") === "per_team";
+  const signatures = opts.i18n?.rosterSignatures ?? ROSTER_SIGNATURES;
   const sections: DocSection[] = teams.map((t, i) => ({
     heading: t.clubName !== undefined ? `${t.clubName} — ${t.teamName}` : t.teamName,
     table: {
       columns: ["#", "Name", "DOB", "Signature"],
       rows: t.players.map((p) => [p.number ?? "", p.name, p.dob ?? "", ""]),
     },
-    signatures: ["Team captain", "Official"],
+    signatures: [...signatures],
     ...(perTeam && i > 0 ? { pageBreakBefore: true } : {}),
   }));
   return base("roster", title, sections, opts);
@@ -183,6 +191,11 @@ export function buildParticipants(
 }
 
 const ROTA_COLUMNS = ["When", "Court", "Competition · Division", "Role", "Match", "Response"];
+const ROTA_NO_DUTIES = "No duties assigned";
+const ROTA_RESPONSE_ACCEPTED = "Accepted";
+const ROTA_RESPONSE_DECLINED = "Declined";
+const ROTA_RESPONSE_PENDING = "Pending";
+const ROTA_SIGNATURES: readonly [string, string, string] = ["Official signature", "Time on", "Time off"];
 
 /** Officials rota (v12/PROMPT-58): one section per official, duties table +
  *  sign-on/off block; zero-duty officials still get a page (13 May pattern). */
@@ -193,9 +206,14 @@ export function buildOfficialsRota(
 ): DocModel {
   const perOfficial = (opts.pageBreaks ?? "auto") === "per_team";
   const columns = [...(opts.i18n?.rotaColumns ?? ROTA_COLUMNS)];
+  const noDuties = opts.i18n?.rotaNoDuties ?? ROTA_NO_DUTIES;
+  const responseAccepted = opts.i18n?.rotaResponseAccepted ?? ROTA_RESPONSE_ACCEPTED;
+  const responseDeclined = opts.i18n?.rotaResponseDeclined ?? ROTA_RESPONSE_DECLINED;
+  const responsePending = opts.i18n?.rotaResponsePending ?? ROTA_RESPONSE_PENDING;
+  const signatures = opts.i18n?.rotaSignatures ?? ROTA_SIGNATURES;
   const sections: DocSection[] = officials.map((o, i) => ({
     heading: o.officialName,
-    ...(o.duties.length === 0 ? { subheading: "No duties assigned" } : {}),
+    ...(o.duties.length === 0 ? { subheading: noDuties } : {}),
     ...(o.duties.length > 0
       ? {
           table: {
@@ -206,13 +224,13 @@ export function buildOfficialsRota(
               d.compDivision,
               d.role,
               d.opponents,
-              d.response === "accepted" ? "Accepted" : d.response === "declined" ? "Declined" : "Pending",
+              d.response === "accepted" ? responseAccepted : d.response === "declined" ? responseDeclined : responsePending,
             ]),
             landscape: true,
           },
         }
       : {}),
-    signatures: ["Official signature", "Time on", "Time off"],
+    signatures: [...signatures],
     ...(perOfficial && i > 0 ? { pageBreakBefore: true } : {}),
   }));
   return base("officials_rota", title, sections, opts);
@@ -259,12 +277,20 @@ export interface ExportBracketFixture {
 // lastRoundInLane:fromEnd, isFinal:false, thirdPlace:false,
 // conditional:false, extKey:null}), since only the DIFFERENCE between
 // roundInLane and lastRoundInLane matters for this branch.
+// F5 remainder: the shared fallback for an unresolved bracket-family side —
+// `ExportBracketFixture.home`/`away` are `string | null` (a filled side wins,
+// an empty one is the caller's problem to resolve upstream); every "TBD" the
+// four builders below used to hardcode now comes from here, English-default
+// same as every other opts.i18n field in this file.
+const ENTRANT_TBD = "TBD";
+
 export function buildBracket(
   title: string,
   fixtures: readonly ExportBracketFixture[],
   roundLabel: (fromEnd: number) => string,
   opts: BuildOpts,
 ): DocModel {
+  const entrantTbd = opts.i18n?.entrantTbd ?? ENTRANT_TBD;
   const result = twoSidedBracket(fixtures);
   if (!result.ok) {
     throw new EngineError("CONFIG_INVALID", `bracket poster: ${result.reason}`, {});
@@ -285,8 +311,8 @@ export function buildBracket(
           side: n.side,
           col: n.col,
           row: n.row,
-          home: f.home ?? "TBD",
-          away: f.away ?? "TBD",
+          home: f.home ?? entrantTbd,
+          away: f.away ?? entrantTbd,
           headline: f.headline,
           decided: f.decided,
         };
@@ -307,6 +333,7 @@ export function buildBracketDe(
   laneLabels: { winners: string; losers: string; grandFinal: string; reset: string },
   opts: BuildOpts,
 ): DocModel {
+  const entrantTbd = opts.i18n?.entrantTbd ?? ENTRANT_TBD;
   const result = doubleElimBracket(fixtures);
   if (!result.ok) {
     throw new EngineError("CONFIG_INVALID", `double-elim poster: ${result.reason}`, {});
@@ -323,8 +350,8 @@ export function buildBracketDe(
           lane: n.lane,
           col: n.col,
           row: n.row,
-          home: f.home ?? "TBD",
-          away: f.away ?? "TBD",
+          home: f.home ?? entrantTbd,
+          away: f.away ?? entrantTbd,
           headline: f.headline,
           decided: f.decided,
         };
@@ -346,6 +373,7 @@ export function buildLadderPoster(
   rungLabel: (i: number) => string,
   opts: BuildOpts,
 ): DocModel {
+  const entrantTbd = opts.i18n?.entrantTbd ?? ENTRANT_TBD;
   if (fixtures.length === 0) {
     throw new EngineError("CONFIG_INVALID", "stepladder poster: no fixtures", {});
   }
@@ -356,8 +384,8 @@ export function buildLadderPoster(
       rungs: rungs.map((f, i) => ({
         fixtureId: f.id,
         label: rungLabel(i),
-        home: f.home ?? "TBD",
-        away: f.away ?? "TBD",
+        home: f.home ?? entrantTbd,
+        away: f.away ?? entrantTbd,
         headline: f.headline,
         decided: f.decided,
       })),
@@ -371,6 +399,7 @@ export function buildPagePoster(
   slotLabels: { q1: string; eliminator: string; q2: string; final: string },
   opts: BuildOpts,
 ): DocModel {
+  const entrantTbd = opts.i18n?.entrantTbd ?? ENTRANT_TBD;
   const result = pagePlayoffBracket(fixtures);
   if (!result.ok) {
     throw new EngineError("CONFIG_INVALID", `page-playoff poster: ${result.reason}`, {});
@@ -384,8 +413,8 @@ export function buildPagePoster(
         return {
           fixtureId: n.fixtureId,
           slot: n.slot,
-          home: f.home ?? "TBD",
-          away: f.away ?? "TBD",
+          home: f.home ?? entrantTbd,
+          away: f.away ?? entrantTbd,
           headline: f.headline,
           decided: f.decided,
         };

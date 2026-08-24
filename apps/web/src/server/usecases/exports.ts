@@ -335,7 +335,12 @@ function descriptionFor(kind: ExportDocKind, lookup: SlotLabelLookup): string {
  *  `export.time.tbc` is a SEPARATE key from `schedule.tbd` on purpose: that one
  *  names an unknown ENTRANT ("TBD" as an opponent), this one names an unknown
  *  KICK-OFF TIME. They read alike in English and diverge in every other locale. */
-function exportChrome(lookup: SlotLabelLookup): NonNullable<BuildOpts["i18n"]> {
+// Exported for a direct unit test (exports.test.ts) — this function has no
+// DB/tenant dependency of its own, so proving each field resolves for a
+// given locale doesn't need the DB-fixture ceremony every other test in that
+// file pays for. Every OTHER caller still goes through buildDivisionDocModel
+// et al.; nothing outside the test file imports this.
+export function exportChrome(lookup: SlotLabelLookup): NonNullable<BuildOpts["i18n"]> {
   return {
     timeTbc: lookup("export.time.tbc"),
     timetableColumns: [
@@ -362,6 +367,34 @@ function exportChrome(lookup: SlotLabelLookup): NonNullable<BuildOpts["i18n"]> {
       lookup("export.column.player"),
       "#", // squad number — a glyph, not a word; nothing to translate
       lookup("export.column.position"),
+    ],
+    // F5 remainder — the VALUE fallbacks #630 left unwired (build.ts:52,76,
+    // 198,209 and the four bracket-family builders' `?? "TBD"` sites).
+    // `schedule.vs`/`bracket.tbd` are reused verbatim: same word, same
+    // meaning, already resolved for exactly this concept elsewhere on this
+    // very page (stages-panel.tsx/fixture-console.tsx for "vs", this file's
+    // own bracket arm for "TBD" — see toExportFixture/the bracket case's
+    // resolveSlotLabel calls). `board.unassigned` and `officials.resp*` are
+    // the SAME reuse call for the same reason. `export.rota.noDuties` has no
+    // existing counterpart anywhere else in the product, so it is new.
+    resultVs: lookup("schedule.vs"),
+    courtUnassigned: lookup("board.unassigned"),
+    rotaNoDuties: lookup("export.rota.noDuties"),
+    rotaResponseAccepted: lookup("officials.respAccepted"),
+    rotaResponseDeclined: lookup("officials.respDeclined"),
+    rotaResponsePending: lookup("officials.respPending"),
+    entrantTbd: lookup("bracket.tbd"),
+    // Repair pass (review of F5 remainder): build.ts:152/228's roster/rota
+    // `signatures` arrays had no opts.i18n override at all — every sibling
+    // field above them, added in the same original pass, already had one.
+    rotaSignatures: [
+      lookup("export.rota.signatureOfficial"),
+      lookup("export.rota.signatureTimeOn"),
+      lookup("export.rota.signatureTimeOff"),
+    ],
+    rosterSignatures: [
+      lookup("export.roster.signatureCaptain"),
+      lookup("export.roster.signatureOfficial"),
     ],
   };
 }
@@ -531,7 +564,7 @@ export async function buildDivisionDocModel(
           } else {
             // sport without a bespoke sheet: a generic result form
             sections.push({
-              heading: `${homeLabel} vs ${awayLabel}`,
+              heading: `${homeLabel} ${slotLookup("schedule.vs")} ${awayLabel}`,
               subheading: [f.scheduled_at, f.court_name, f.stage_name]
                 .filter((x): x is string => x !== null)
                 .join(" · "),
@@ -810,7 +843,7 @@ export async function buildOfficialsRotaDoc(
         court: r.court_name,
         compDivision: `${r.comp_name} · ${r.div_name}`,
         role: r.role_key,
-        opponents: `${r.home ?? resolveSlotLabel(r.home_slot_label, slotLookup, "schedule.tbd")} vs ${r.away ?? resolveSlotLabel(r.away_slot_label, slotLookup, "schedule.tbd")}`,
+        opponents: `${r.home ?? resolveSlotLabel(r.home_slot_label, slotLookup, "schedule.tbd")} ${slotLookup("schedule.vs")} ${r.away ?? resolveSlotLabel(r.away_slot_label, slotLookup, "schedule.tbd")}`,
         response: r.response,
       });
       byOfficial.set(r.official_id, s);
@@ -958,7 +991,7 @@ export async function buildMyRotaDoc(
       court: a.court_name,
       compDivision: `${a.competition_name} · ${a.division_name}`,
       role: a.role_key,
-      opponents: `${a.home_name ?? resolveSlotLabel(a.home_slot_label, lookup, "schedule.tbd")} vs ${a.away_name ?? resolveSlotLabel(a.away_slot_label, lookup, "schedule.tbd")}`,
+      opponents: `${a.home_name ?? resolveSlotLabel(a.home_slot_label, lookup, "schedule.tbd")} ${lookup("schedule.vs")} ${a.away_name ?? resolveSlotLabel(a.away_slot_label, lookup, "schedule.tbd")}`,
       response: a.response,
     });
     byOfficial.set(key, s);
@@ -993,13 +1026,24 @@ export async function auditLedgerDoc(
     : undefined;
   return withTenant(auth.orgId, async (tx) => {
     const divMeta = await divisionMeta(tx, meta!.division_id);
+    const lookup = exportLookup(divMeta.default_locale);
     const branding = layerDivisionBranding(baseBranding, divMeta);
-    // No slot-label fallback here, deliberately: an audit ledger is the
-    // forensic record of a fixture that has already been scored, so both
-    // sides are always filled entrants. A placeholder cannot reach this doc.
+    // Repair pass (review of F5 remainder, round 2): this used to claim "both
+    // sides are always filled entrants. A placeholder cannot reach this doc"
+    // -- false. home_entrant_id/away_entrant_id are independently nullable
+    // (fixtures.ts's readAuditLedger nulls whichever side has none, and never
+    // selects a slot label to fall back on), and this route applies no
+    // fixture-status gate before calling here (route.ts: "In-play fixtures
+    // export too"). The routine state of a later bracket round whose sibling
+    // parent hasn't finished yet reaches this title with exactly one side
+    // null. No slot-label data is available to resolve through
+    // (resolveSlotLabel), so the missing side falls back to the same
+    // "bracket.tbd" key the bracket poster's own exportFixtures mapping uses
+    // for the identical concept (this file's `case "bracket":` above,
+    // :642/:645).
     const vs =
       ledger.fixture.home !== null || ledger.fixture.away !== null
-        ? ` — ${ledger.fixture.home ?? "TBD"} vs ${ledger.fixture.away ?? "TBD"}`
+        ? ` — ${ledger.fixture.home ?? lookup("bracket.tbd")} ${lookup("schedule.vs")} ${ledger.fixture.away ?? lookup("bracket.tbd")}`
         : "";
     return buildAuditLedger(
       `${divMeta.competition_name} — ${divMeta.name}${vs}`,

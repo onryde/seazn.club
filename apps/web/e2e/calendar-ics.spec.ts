@@ -110,6 +110,82 @@ test("the public .ics carries an unscheduled final as a tentative all-day event"
   expect(body).toContain(`UID:${final!.id}@seazn.club`);
 });
 
+// B1 (owner ruling 2026-08-24): the OLD ?entrant= predicate excluded every
+// unresolved fixture by construction (both entrant ids are null on one,
+// which satisfies neither `=== entrantId` comparison), so a subscribing
+// player never received the final they were heading toward. Reuses the SAME
+// 4-entrant knockout shape as the test above — one semi's own entrant is the
+// subscriber here, and the still-unresolved final is what the fix must add
+// back to THEIR feed specifically, not just the whole-division one already
+// covered above.
+test("the ?entrant= feed still carries an unresolved final that names neither side", async ({
+  request,
+}) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Cal Entrant ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+    visibility: "public",
+  });
+  const compId = comp.data!.id;
+
+  const div = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${compId}/divisions`,
+    "POST",
+    {
+      name: "Cup",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  const divisionId = div.data!.id;
+
+  await addEntrantsViaApi(request, divisionId, ["Seed1", "Seed2", "Seed3", "Seed4"]);
+  const { fixtureIds } = await createStageAndGenerate(request, divisionId, {
+    kind: "knockout",
+    name: "Cup",
+  });
+  expect(fixtureIds.length, "4-entrant knockout: 2 semis + 1 final").toBe(3);
+
+  const fixtures = await Promise.all(
+    fixtureIds.map((id) =>
+      apiJson<{
+        id: string;
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
+      }>(request, `/api/v1/fixtures/${id}`).then((r) => r.data!),
+    ),
+  );
+  const final = fixtures.find((f) => !f.home_entrant_id && !f.away_entrant_id);
+  const semi = fixtures.find((f) => f.home_entrant_id !== null);
+  expect(final, "the final's slots are unresolved before either semi is played").toBeTruthy();
+  expect(semi, "a semi with a real entrant on it").toBeTruthy();
+  const subscriberEntrantId = semi!.home_entrant_id!;
+
+  const compData = await apiJson<{ org_id: string; slug: string }>(
+    request,
+    `/api/v1/competitions/${compId}`,
+  );
+  const divData = await apiJson<{ slug: string }>(request, `/api/v1/divisions/${divisionId}`);
+  const orgs = await apiJson<OrgInfo[]>(request, "/api/orgs");
+  const orgSlug = orgs.data!.find((o) => o.id === compData.data!.org_id)?.slug;
+
+  const res = await request.get(
+    `/shared/${orgSlug}/${compData.data!.slug}/${divData.data!.slug}/calendar.ics?entrant=${subscriberEntrantId}`,
+  );
+  expect(res.status()).toBe(200);
+  const body = await res.text();
+
+  // The subscriber's own semi is still there…
+  expect(body).toContain(`UID:${semi!.id}@seazn.club`);
+  // …and so, now, is the final neither of its slots names this entrant.
+  expect(
+    body,
+    "the ?entrant= feed dropped the final it is meant to route the subscriber toward",
+  ).toContain(`UID:${final!.id}@seazn.club`);
+});
+
 // P9 review wave 2, finding #5 — the widest-reaching defect in either review
 // pass, and the one with NO end-to-end coverage until now.
 //

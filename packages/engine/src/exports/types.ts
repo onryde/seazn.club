@@ -278,5 +278,34 @@ export interface BuildOpts {
     timetableColumns?: readonly string[];
     rotaColumns?: readonly string[];
     participantsColumns?: readonly string[];
+    /** F5 remainder: the "vs" a timetable row shows between two sides while
+     *  the fixture has no `result` yet (fixtureRows/buildTimetable). */
+    resultVs?: string;
+    /** F5 remainder: the per_pitch grouping heading for fixtures with no
+     *  court assigned yet (buildTimetable). */
+    courtUnassigned?: string;
+    /** F5 remainder: officials-rota subheading for an official with zero
+     *  duties in this rota (buildOfficialsRota). */
+    rotaNoDuties?: string;
+    /** F5 remainder: officials-rota per-duty response-state labels
+     *  (buildOfficialsRota). */
+    rotaResponseAccepted?: string;
+    rotaResponseDeclined?: string;
+    rotaResponsePending?: string;
+    /** F5 remainder: fallback for an unresolved bracket-family side — shared
+     *  by buildBracket/buildBracketDe/buildLadderPoster/buildPagePoster, the
+     *  same way ExportBracketFixture's `home`/`away` already arrive
+     *  pre-resolved from the caller for every FILLED side. */
+    entrantTbd?: string;
+    /** F5 remainder repair: officials-rota sign-on/off block — the fixed
+     *  3-line "Official signature" / "Time on" / "Time off" footer every
+     *  rota section prints (buildOfficialsRota), whether or not the
+     *  official has duties this competition. */
+    rotaSignatures?: readonly [string, string, string];
+    /** F5 remainder repair: roster sign-at-start block — one line per team,
+     *  "Team captain" / "Official" (buildRoster). Unrelated to the rota
+     *  block above — a roster is signed by players' captains before play,
+     *  a rota is signed by the official at the end of their duty. */
+    rosterSignatures?: readonly [string, string];
   };
 }

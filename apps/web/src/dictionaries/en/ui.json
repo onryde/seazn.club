@@ -4051,6 +4051,10 @@
   "bracket.slot.bye": "Bye",
   "calendar.time_tbc": "Time to be confirmed",
   "calendar.unknownEntrant": "Unknown entrant",
+  "calendar.registrationDescription": "Registration for {name} ({status})",
+  "poster.drawTitle": "The Draw",
+  "poster.scanToFollow": "Scan to follow live",
+  "poster.liveSubtitle": "Live scores · fixtures · standings — no app needed",
   "progression.pendingProposal.badge": "A seed proposal is waiting for you to confirm",
   "progression.pendingProposal.hint": "A seed proposal is waiting — open Fixtures to review and confirm it",
   "export.time.tbc": "TBD",
@@ -4086,5 +4090,11 @@
   "export.description.allFixtures": "Every fixture across all divisions.",
   "export.description.officialsRota": "Assigned officials and their duties.",
   "export.description.myRota": "Your upcoming duties across every organisation.",
-  "export.description.ticket": "Present at check-in — scan or show the reference below."
+  "export.description.ticket": "Present at check-in — scan or show the reference below.",
+  "export.rota.noDuties": "No duties assigned",
+  "export.roster.signatureCaptain": "Team captain",
+  "export.roster.signatureOfficial": "Official",
+  "export.rota.signatureOfficial": "Official signature",
+  "export.rota.signatureTimeOn": "Time on",
+  "export.rota.signatureTimeOff": "Time off"
 }

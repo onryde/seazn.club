@@ -8,6 +8,7 @@ import { hasFeature, invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { readAuditLedger } from "../fixtures";
+import { msgFor } from "@/lib/messages-i18n";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -144,5 +145,53 @@ describe.skipIf(!HAS_DB)("audit PDF (PROMPT-63 §2)", () => {
     const bytes = await docModelToPdf(model);
     expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
     expect(bytes.length).toBeGreaterThan(1024);
+  });
+
+  // Repair pass (review of F5 remainder): the title's home/away separator was
+  // a hardcoded ` vs ` template-literal (exports.ts's auditLedgerDoc), the
+  // one export-value site the original F5 remainder pass missed entirely —
+  // this doc had no test at all before the line above. Same seam every other
+  // export kind already resolves through (`schedule.vs`, exportChrome()).
+  it("a French-locale org's title separator comes from the org locale, not a hardcoded ' vs '", async () => {
+    const { auth, fixtureId, orgId } = await seedFixture("pro");
+    await sql`update organizations set default_locale = 'fr' where id = ${orgId}`;
+    await appendEvent(auth.orgId, fixtureId, 0, { type: "core.start", payload: {} });
+    await appendEvent(auth.orgId, fixtureId, 1, {
+      type: "generic.result",
+      payload: { p1Score: 1, p2Score: 0 },
+    });
+    const { auditLedgerDoc } = await import("../exports");
+    const ledger = await readAuditLedger(auth, fixtureId);
+    const model = await auditLedgerDoc(auth, fixtureId, ledger, null, {
+      printedAt: "2026-07-18T12:00:00Z",
+    });
+    expect(model.title).toContain(`Home ${msgFor("fr", "schedule.vs")} Away`);
+    expect(model.title).not.toContain("Home vs Away");
+  });
+
+  // Repair pass (review of F5 remainder, round 2): the header comment above
+  // auditLedgerDoc's `vs` block claimed "both sides are always filled
+  // entrants. A placeholder cannot reach this doc" -- false. home_entrant_id/
+  // away_entrant_id are independently nullable, readAuditLedger never selects
+  // a slot-label fallback for the null side (fixtures.ts), and the route
+  // applies no fixture-status gate ("In-play fixtures export too"). The
+  // routine state of a later bracket round whose sibling parent hasn't
+  // finished yet reaches this title with exactly one side null -- and the
+  // other test above only ever seeds a fully two-sided fixture, so it never
+  // exercised this branch.
+  it("a fixture with only one entrant known localizes the missing side, not a hardcoded 'TBD'", async () => {
+    const { auth, fixtureId, orgId } = await seedFixture("pro");
+    await sql`update organizations set default_locale = 'fr' where id = ${orgId}`;
+    await sql`update fixtures set away_entrant_id = null where id = ${fixtureId}`;
+    const { auditLedgerDoc } = await import("../exports");
+    const ledger = await readAuditLedger(auth, fixtureId);
+    expect(ledger.fixture).toMatchObject({ home: "Home", away: null });
+    const model = await auditLedgerDoc(auth, fixtureId, ledger, null, {
+      printedAt: "2026-07-18T12:00:00Z",
+    });
+    expect(model.title).toContain(
+      `Home ${msgFor("fr", "schedule.vs")} ${msgFor("fr", "bracket.tbd")}`,
+    );
+    expect(model.title).not.toContain("TBD");
   });
 });
