@@ -32,6 +32,58 @@ describe("gridStepMinutes", () => {
   });
 });
 
+describe("buildGrid — the pack window bounds the lattice (P9.5)", () => {
+  // P9.5's prompt asserted that `admits` omits the competition pack window the
+  // verifier enforces (`calendar.ts` `outside_competition_window`), so the
+  // lattice could offer slots `/validate` rejects. That premise is FALSE:
+  // `repairUniverse` (repair-domain.ts:292-294) hard-returns `config.window`
+  // before `existing` can widen it, so no slot outside the pack window is ever
+  // minted and `admits` has nothing left to re-check.
+  //
+  // These pin the property rather than the implementation, because the moment
+  // that hard return grows a branch, the asymmetry the prompt described becomes
+  // real. Neither test passes if the universe is derived from the board.
+  it("mints no slot outside the pack window even when an existing fixture sits far outside it", () => {
+    const outside: Assignment[] = [
+      {
+        fixtureId: "f-far",
+        court: "C1",
+        startAt: T0 + 30 * DAY,
+        endAt: T0 + 30 * DAY + 30 * MIN,
+        entrants: ["e1", "e2"],
+      },
+    ];
+
+    const g = buildGrid({ config: cfg(), existing: outside });
+
+    const packWindow = cfg().window!;
+    for (const slot of g.slots) {
+      expect(slot.startAt).toBeGreaterThanOrEqual(packWindow.from);
+      expect(slot.startAt + 30 * MIN).toBeLessThanOrEqual(packWindow.to);
+    }
+    expect(g.slots.length).toBeGreaterThan(0);
+  });
+
+  it("agrees with the verifier when no pack window is declared: neither side bounds anything", () => {
+    // Symmetry in the other direction — `validateAssignments` guards its pack
+    // check on `window !== undefined`, so an absent window must not make the
+    // lattice narrower than the verifier either.
+    const board: Assignment[] = [
+      {
+        fixtureId: "f-1",
+        court: "C1",
+        startAt: T0 + 2 * DAY,
+        endAt: T0 + 2 * DAY + 30 * MIN,
+        entrants: ["e1", "e2"],
+      },
+    ];
+
+    const g = buildGrid({ config: cfg({ window: undefined }), existing: board });
+
+    expect(g.slots.some((s) => s.startAt > T0 + DAY)).toBe(true);
+  });
+});
+
 describe("buildGrid", () => {
   it("covers every court across the window at the step", () => {
     const g = buildGrid({ config: cfg() });
