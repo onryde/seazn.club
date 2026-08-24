@@ -222,7 +222,19 @@ test("a division that requires a court tag is auto-scheduled only onto courts ca
   expect(moved.status).toBe(200);
   const after = await getFixture(request, offender);
   expect(after.court_id).toBe(untagged.id);
-  expect(after.court_name).toBe(untagged.name);
+  // `court_name` is a DERIVED display name, and P9's A12 disambiguates a name
+  // shared by more than one court in the org as `Name (Venue)`. Two tests in
+  // this file seed a court called "Hard Court" into the SAME org from different
+  // venues (`seedTaggedCourts`, called here and by the #622 round-role test),
+  // so whether this reads "Hard Court" or "Hard Court (E2E Tag Venue …)"
+  // depends on which of them has seeded by now — an order dependency that was
+  // latent on main and surfaced when P9.5 added two more tests to the file and
+  // changed the worker timing.
+  //
+  // Asserted on the identity, tolerant of the disambiguation: the point of the
+  // line is that the fixture now reports the UNTAGGED court, not which of two
+  // equally correct renderings of that court's name came back.
+  expect(after.court_name).toMatch(/^Hard Court($| \()/);
 
   const dirty = await apiJson<{ conflicts: ScheduleConflictRow[] }>(
     request,
