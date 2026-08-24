@@ -435,6 +435,7 @@ export function OpenCloseSection({
         />
         {msg("reg.settings.openForPublic")}
       </label>
+      {errors.enabled && (<p data-field-error="enabled" role="alert" className="mt-1 text-xs text-red-600">{errors.enabled}</p>)}
       <label className="label">
         {msg("reg.settings.entrantType")}
         <select
@@ -453,6 +454,7 @@ export function OpenCloseSection({
           <option value="team">{msg("reg.settings.entrant.team")}</option>
           <option value="pair">{msg("reg.settings.entrant.pair")}</option>
         </select>
+        {errors.entrant_kind && (<p data-field-error="entrant_kind" role="alert" className="mt-1 text-xs text-red-600">{errors.entrant_kind}</p>)}
       </label>
       <div className="grid grid-cols-1 gap-3">
         <label className="label">
@@ -464,6 +466,7 @@ export function OpenCloseSection({
             value={instantToOrgTzInputValue(state.opens_at, orgTz)}
             onChange={(e) => patch({ opens_at: orgTzInputValueToInstant(e.target.value, orgTz) })}
           />
+          {errors.opens_at && (<p data-field-error="opens_at" role="alert" className="mt-1 text-xs text-red-600">{errors.opens_at}</p>)}
         </label>
         <label className="label">
           {msg("reg.settings.closes")} ({zone})
@@ -667,5 +670,14 @@ export function FormSection({
   errors: Partial<Record<ConfigFieldKey, string>>;
   patch: (p: Partial<RegistrationConfigState>) => void;
 }) {
-  return <FormBuilder fields={state.form_fields} canEdit onChange={(form_fields) => patch({ form_fields })} />;
+  return (
+    <div className="space-y-2">
+      <FormBuilder fields={state.form_fields} canEdit onChange={(form_fields) => patch({ form_fields })} />
+      {errors.form_fields && (
+        <p data-field-error="form_fields" role="alert" className="mt-1 text-xs text-red-600">
+          {errors.form_fields}
+        </p>
+      )}
+    </div>
+  );
 }
