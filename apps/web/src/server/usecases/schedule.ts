@@ -71,6 +71,7 @@ import {
   requiredCourtTagsByFixture,
   resolveCandidateCourts,
   resolveCourtCalendars,
+  courtCalendarsForDivision,
   guardNoUsableCourtWindows,
   tagQualifiedCourtIdsByFixture,
   unionRequiredCourtTags,
@@ -2577,7 +2578,15 @@ export async function applySchedule(
 
     // #447: the VERIFY config, so the durable typed rules an organiser stored
     // are the rules this gate judges by. Warn-only — see `assertNoNewBlocking`.
-    const slotConfig = toVerifyConfig(settings, all, 0, siblings.ruleFixtures);
+    // P9.5 review finding 4: the apply gate sees court opening hours too, so a
+    // board applied onto a closed court is reported HERE rather than only by
+    // the next /validate run — two surfaces, one answer.
+    const applyCourtCalendars = await courtCalendarsForDivision(
+      tx,
+      stage.division_id,
+      settings.config.courts,
+    );
+    const slotConfig = toVerifyConfig(settings, all, 0, siblings.ruleFixtures, applyCourtCalendars);
     const deps = feedDependencies(all);
     const board = [...untouched, ...siblings.assignments];
     // The SAME fixtures where they sit right now (#399). Anything the verifier
@@ -2924,7 +2933,21 @@ export async function moveFixture(
         settings.config.matchMinutes,
       );
       // #447: the dragged card is judged against the durable typed rules too.
-      const slotConfig = toVerifyConfig(settings, all, 0, siblings.ruleFixtures);
+        // Same as the apply gate: a card DRAGGED onto a court that is closed at
+      // that time is flagged at the drag, not silently accepted and then
+      // reported by the next /validate.
+      const moveCourtCalendars = await courtCalendarsForDivision(
+        tx,
+        fixture.division_id,
+        settings.config.courts,
+      );
+      const slotConfig = toVerifyConfig(
+        settings,
+        all,
+        0,
+        siblings.ruleFixtures,
+        moveCourtCalendars,
+      );
       const deps = feedDependencies(all);
       const board = [...others, ...siblings.assignments];
       // Where this card sits right now (#399). An unscheduled fixture has no

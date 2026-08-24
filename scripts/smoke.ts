@@ -12122,6 +12122,19 @@ async function courtHoursSuite(): Promise<void> {
       moved.status === 200,
     );
 
+    // P9.5 review finding 4: the MOVE GATE itself now sees court calendars, so
+    // the conflict comes back on the drag's own response — not only from the
+    // next /validate. Before this the two surfaces disagreed about the same
+    // card: silent here, flagged there.
+    // `patchFixture` returns the fixture row WITH a `conflicts` array — it is
+    // `moveFixture` that returns the bare array, and this route wraps it.
+    const movedConflicts =
+      v1data<{ conflicts?: { details?: { kind?: string } }[] }>(moved)?.conflicts ?? [];
+    check(
+      "court hours S6: the MOVE's own response reports outside_court_hours — the drag gate and " +
+        `/validate agree about the same card (conflicts=${movedConflicts.length})`,
+      movedConflicts.some((c) => c.details?.kind === "outside_court_hours"),
+    );
     const validated = v1data<{
       conflicts: {
         fixture_id: string;

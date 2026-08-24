@@ -231,6 +231,39 @@ export async function resolveCourtCalendars(
 }
 
 /**
+ * The court calendars for a DIVISION's own candidate set, in one call.
+ *
+ * The apply gate and the drag gate need exactly this and hold none of the
+ * pieces: unlike `autoSchedule` and `validateScheduleIn` they never resolve
+ * candidate courts for any other purpose. Without it each would have grown its
+ * own copy of "read the division's tags, resolve candidates, load calendars" —
+ * three transcriptions of one rule, which is the fork this module exists to
+ * prevent.
+ *
+ * Scoped to CANDIDATES, never to the courts the board happens to use, and that
+ * is the load-bearing part: an archived court is not a candidate, so it is
+ * absent here, and `usableWindows` reads absent as unrestricted. That keeps a
+ * card sitting on a since-archived court validating CLEAN — P9's A10 split
+ * ("the court is gone" is P10's stranded-fixture case; "the court violates a
+ * declared constraint" is this one).
+ */
+export async function courtCalendarsForDivision(
+  tx: Tx,
+  divisionId: string,
+  configuredCourtIds: readonly string[],
+): Promise<CourtCalendar[]> {
+  const [division] = await tx<{ required_court_tags: string[] }[]>`
+    select required_court_tags from divisions where id = ${divisionId}`;
+  const candidates = await resolveCandidateCourts(
+    tx,
+    divisionId,
+    configuredCourtIds,
+    division?.required_court_tags ?? [],
+  );
+  return resolveCourtCalendars(tx, candidates.ids);
+}
+
+/**
  * P9 pass 2c: TAG-only qualification, ignoring archived status entirely.
  * The verifier's `court_tag_mismatch` conflict (calendar.ts's
  * `validateAssignments`) needs to answer a narrower question than
