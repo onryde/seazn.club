@@ -87,6 +87,18 @@ for (const key of [
 // Scoped to `fileOnly` deliberately: CI supplies DATABASE_URL through the job
 // environment, and an operator who exports one has said what they mean. Only a
 // value that arrived from .env.local by accident is refused.
+//
+// This still has to stay escapable for a run that touches no database at
+// all (finding 6, RS004 whole-branch review): the throw below fires at
+// CONFIG LOAD, before vitest even looks at which paths were asked for, so
+// without an escape hatch a single .env.local pointed at the dev DB would
+// block every `npx vitest run <pure-unit-path>` in the workspace. The
+// escape is a DELIBERATELY EMPTY export for that one invocation
+// (`DATABASE_URL= npx vitest run <paths>`) — `fileOnly` treats an
+// already-set key (empty or not) as untouched, so the throw below never
+// fires, and `HAS_DB = !!process.env.DATABASE_URL` reads "" as falsy, so
+// every DB-backed suite skips cleanly instead of erroring. See the thrown
+// message for the exact command.
 if (fileOnly("DATABASE_URL")) {
   const url = process.env.DATABASE_URL ?? "";
   let devDb = false;
@@ -101,6 +113,12 @@ if (fileOnly("DATABASE_URL")) {
         "database (port 5432). DB-backed suites must run against a fresh schema.\n" +
         "  seazn-env up --label <name>            # fresh pg + db:apply + sync:sports\n" +
         '  eval "$(seazn-env env --label <name>)"  # exports DATABASE_URL\n' +
+        "\n" +
+        "Only running non-DB suites and don't need a database at all? Export an\n" +
+        "EMPTY value for just this invocation — every DB-backed suite's own\n" +
+        "`HAS_DB = !!process.env.DATABASE_URL` guard reads \"\" as falsy and skips:\n" +
+        "  DATABASE_URL= npx vitest run <paths>\n" +
+        "\n" +
         "An explicitly exported DATABASE_URL (or CI's) is never touched by this check.",
     );
   }
