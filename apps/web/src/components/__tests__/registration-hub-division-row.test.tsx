@@ -11,6 +11,7 @@ import {
 } from "@/components/registration-hub-division-row";
 import { CopyLink } from "@/components/copy-link";
 import { t } from "@/lib/i18n-runtime";
+import { formatMinor } from "@/lib/currency";
 import uiEn from "@/dictionaries/en/ui.json";
 
 const NOW = new Date("2026-06-15T12:00:00Z");
@@ -296,13 +297,58 @@ describe("RegistrationHubDivisionRow — Configure affordance (W3c)", () => {
     expect(propsOf(configureBtn!)["aria-label"]).toContain("Open Doubles");
   });
 
-  it("does not change any previously-rendered content — read surface stays byte-identical", () => {
-    const before = textFor({});
-    // The configure affordance's own label is the only NEW text; everything
-    // else the row already rendered (name, status, window, fee, badges...)
-    // must still be present unchanged.
-    expect(before).toContain("Open Singles");
-    expect(before).toContain(t(uiEn, "reg.hub.row.status.open"));
-    expect(before).toContain(t(uiEn, "reg.hub.row.fee.free"));
+  // RS004 review finding 3: this used to be called "byte-identical" but only
+  // checked three substrings survived — nowhere near what the name claimed,
+  // and (separately) the premise that the Configure affordance's own label is
+  // the only new text was never actually true: that label lives on the
+  // button's `aria-label` prop, and textOf only walks rendered CHILDREN, so
+  // it was never visible to this measurement regardless. Renamed to what it
+  // now actually proves: the row's FULL rendered text, exactly, against a
+  // hand-built fixture — not a few fragments spot-checked out of it.
+  it("renders the row's full text exactly against a fixture — not spot-checked fragments", () => {
+    const row: RegistrationHubRowData = {
+      division_id: "div-42",
+      name: "Open Doubles",
+      category: "mixed",
+      age_min: 10,
+      age_max: 18,
+      enabled: true,
+      entrant_kind: "team",
+      opens_at: null,
+      closes_at: null,
+      capacity: 20,
+      fee_cents: 1999,
+      approval: "manual",
+      allow_free_agents: true,
+      taken: 5,
+    };
+    // showRegisterLink: false — the true branch renders <CopyLink label={…}
+    // .../> with the label as a PROP, not a JSX child, so textOf (children
+    // only) can never see it; the private-notice branch renders its text as
+    // an actual child and keeps this fixture exhaustive.
+    const context: RegistrationHubRowContext = { ...BASE_CONTEXT, showRegisterLink: false };
+    const text = textOf(RegistrationHubDivisionRow({ row, context }));
+
+    // Every text-bearing node the row renders, in DOM order, built from the
+    // SAME dictionary lookups and formatMinor() the component itself calls —
+    // this test's job is pinning the row's TEXT ASSEMBLY (which fields
+    // appear, in what order, joined how), not re-verifying each derivation's
+    // own formatting, which registration-hub-row-derive.test.ts already
+    // covers in depth.
+    const expected = [
+      row.name,
+      t(uiEn, "reg.hub.row.status.open"),
+      t(uiEn, "reg.hub.row.window.none"),
+      t(uiEn, "reg.hub.row.capacity.limited", { count: 5, capacity: 20 }),
+      formatMinor(1999, "usd"),
+      t(uiEn, "divset.entrants.kind.team"),
+      t(uiEn, "reg.hub.row.approval.manual"),
+      t(uiEn, "reg.hub.row.category.mixed"),
+      t(uiEn, "reg.hub.row.ageBand.range", { min: 10, max: 18 }),
+      t(uiEn, "reg.hub.row.freeAgents"),
+      t(uiEn, "div.registrations.privateNotice"),
+    ].join(" ");
+
+    expect(text).toBe(expected);
   });
 });
