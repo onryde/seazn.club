@@ -33,6 +33,45 @@ test("tabs mount: board + each panel, exports in the Documents menu", async ({ p
   await expect(page.getByRole("heading", { name: "History", exact: true })).toBeVisible();
 });
 
+// Group F remainder (admit-tickets, commit 9a28c4e2c): Admit tickets reads
+// `registrations`, not `entrants`. `seedScoredDivision` builds its division
+// the way every test in this file does — entrants added directly — so this
+// competition has zero confirmed registrations, and the export must refuse
+// (422 TICKETS_NOT_AVAILABLE) rather than render a blank branded page as a
+// 200 PDF. The row itself is deliberately left ungated (documents-menu.tsx's
+// comment on the row) so this is also the only way to prove the refusal is
+// legible to an organiser: the server has no i18n, so the Documents menu
+// must localise the wire code itself (localisedDocError, unit-tested in
+// documents-menu.test.tsx) rather than show the server's raw English or
+// silently hand back nothing.
+test("documents: Admit tickets on a competition with no confirmed registrations explains itself", async ({
+  page,
+  request,
+}) => {
+  const { divisionId } = await seedScoredDivision(request);
+
+  await page.goto(await divisionPath(page.request, divisionId));
+  await page.getByTestId("documents-menu-trigger").click();
+  const documents = page.getByRole("menu", { name: /documents/i });
+  // Scope to the Admit tickets row specifically — every row shares the same
+  // "PDF"/"XLSX" button labels, so only the row itself disambiguates.
+  const ticketsRow = documents.locator("div").filter({ hasText: "Admit tickets" }).first();
+
+  const downloads: string[] = [];
+  page.on("download", (d) => downloads.push(d.suggestedFilename()));
+
+  await ticketsRow.getByRole("menuitem", { name: "PDF" }).click();
+
+  // The localised copy (documents.ticketsUnavailable, en/ui.json) — not the
+  // server's raw "...has no confirmed registrations to ticket" prose, and
+  // not the generic documents.error fallback either.
+  await expect(ticketsRow.getByRole("alert")).toHaveText(
+    "No confirmed registrations yet, so there are no tickets to print.",
+    { timeout: 20_000 },
+  );
+  expect(downloads).toHaveLength(0);
+});
+
 test("officials (PROMPT-22): propose → apply an auto-assignment", async ({ page, request }) => {
   // V290: officials.auto is Pro Plus. Run this flow in a FRESH org flipped to
   // pro_plus by id — a fresh org has no cached entitlements, and flipping the

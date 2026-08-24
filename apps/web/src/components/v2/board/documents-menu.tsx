@@ -159,6 +159,18 @@ export function DocumentsMenu({
       label: msg("documents.tickets"),
       base: `/api/v1/competitions/${competitionId}/exports/tickets`,
       xlsx: false,
+      // Not gated on a confirmed-registrations count, deliberately. The row
+      // right below (Bracket poster) already has the identical shape — 422s
+      // BRACKET_NOT_AVAILABLE until a knockout stage exists — and was never
+      // gated either: this menu's established pattern is "always offer it,
+      // explain inline if it doesn't apply yet", not "pre-compute
+      // applicability and hide the row". Doing that here would cost a new
+      // registrations-count query, fetched at the division page and threaded
+      // through StagesPanel's props into this component, to save one click
+      // that already ends in a clear, localised answer either way
+      // (localisedDocError below). Smaller to leave it, and it keeps the
+      // control always reachable for an organiser who registers entrants
+      // later and comes back to print tickets.
     },
     {
       // PROMPT-62 §4 — landscape results poster (422s until a knockout exists).

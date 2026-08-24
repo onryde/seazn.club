@@ -12922,6 +12922,17 @@ async function schedRegV3Suite(
       rotaPdfBytes.byteLength > 1024,
   );
 
+  // Group F remainder (admit-tickets, commit 9a28c4e2c): this division's
+  // entrants (above) were added directly, exactly like every division this
+  // suite builds — `registrations` has zero rows for it. Admit tickets reads
+  // `registrations`, not `entrants`, so it must refuse rather than render an
+  // empty branded page as a 200 PDF.
+  const ticketsRefused = await v1(admin, `/api/v1/competitions/${comp.id}/exports/tickets?format=pdf`);
+  check(
+    "exports admit tickets 422s TICKETS_NOT_AVAILABLE with no confirmed registrations (pro)",
+    ticketsRefused.status === 422 && ticketsRefused.json.error?.code === "TICKETS_NOT_AVAILABLE",
+  );
+
   // Reschedule with the current division seq — lands; replaying the same
   // (now stale) token 409s with SEQ_CONFLICT (v3/11 gap 10).
   const seq0 = v1data<{ seq: number }>(await v1(admin, `/api/v1/divisions/${div.id}`)).seq;
