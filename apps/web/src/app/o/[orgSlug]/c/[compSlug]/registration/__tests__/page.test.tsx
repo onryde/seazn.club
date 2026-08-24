@@ -410,3 +410,34 @@ describe("registration hub — config panel context (RS004 W3c)", () => {
     expect(propsOf(panel).cardUnsupportedCurrency).toBe("jpy");
   });
 });
+
+// TEMP(RS004 variants) — the sign-off scaffold's `?variant=` read, mirroring
+// `?tab=`'s own pattern above exactly. See registration-hub-variant.ts's
+// header comment for the full explanation; this whole describe block is
+// deleted alongside every other TEMP(RS004 variants) file/edit once the
+// owner picks a direction.
+describe("registration hub — ?variant= switching (TEMP(RS004 variants))", () => {
+  it("defaults variant to 'a' with no ?variant=", async () => {
+    const tree = walk(await Page({ params, searchParams: noTab }));
+    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
+    expect(propsOf(panel).variant).toBe("a");
+  });
+
+  it("passes an explicit ?variant=b through to the settings panel", async () => {
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ variant: "b" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
+    expect(propsOf(panel).variant).toBe("b");
+  });
+
+  it("passes an explicit ?variant=c through to the settings panel", async () => {
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ variant: "c" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
+    expect(propsOf(panel).variant).toBe("c");
+  });
+
+  it("falls back to 'a' on a garbage ?variant=", async () => {
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ variant: "bogus" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
+    expect(propsOf(panel).variant).toBe("a");
+  });
+});
