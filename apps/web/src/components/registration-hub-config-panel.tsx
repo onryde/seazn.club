@@ -16,7 +16,7 @@
 // two save payloads) lives in registration-hub-config-state.ts, error
 // mapping in registration-hub-save-error.ts, and the fetch/patch/save
 // plumbing in the useRegistrationConfigPanelState hook
-// (registration-hub-config-panel-state.ts) — all pure/independently tested;
+// (use-registration-hub-config.ts) — all pure/independently tested;
 // this file is the wiring + presentation layer over them.
 //
 // The five zones below (Eligibility, Open & close, Capacity, Money,
@@ -32,7 +32,7 @@
 // flat form, not better — so a 422 landing on a field inside a collapsed
 // section auto-reveals that section once (see the effect below and
 // registration-hub-config-panel-sections.ts).
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { ReactEventHandler, ReactNode } from "react";
 import { Modal } from "@/components/modal";
@@ -48,7 +48,7 @@ import type { ConfigFieldKey } from "@/components/registration-hub-save-error";
 import {
   useRegistrationConfigPanelState,
   type RegistrationHubConfigDivisionLike,
-} from "@/components/registration-hub-config-panel-state";
+} from "@/components/use-registration-hub-config";
 import {
   SECTION_IDS,
   SECTION_FIELDS,
@@ -167,23 +167,23 @@ export function RegistrationHubConfigPanel({
     useRegistrationConfigPanelState(division, onSaved);
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>(DEFAULT_OPEN);
 
-  // Reveal (once) whichever section holds the first error after a failed
-  // save. A plain state write on a state CHANGE, not a derived
-  // `open={openSections[id] || hasError}` expression: <details> is not a
-  // form control React re-asserts a controlled value against on every
-  // render (unlike <input checked>), so a derived expression would stop
-  // forcing the section open the instant it renders the SAME computed
-  // value twice in a row — which happens the moment the organiser toggles
-  // the section by hand while the error is still live. Folding the reveal
-  // into stored state once, here, sidesteps that: it survives exactly
-  // until the organiser deliberately closes the section again (which they
-  // can, having seen the error), matching how every other disclosure here
-  // behaves.
-  useEffect(() => {
-    const sectionId = firstErrorSection(errors);
+  // Reveal whichever section holds the first error, at the moment the save
+  // reports one. Deliberately NOT a `useEffect` on `errors`: writing state
+  // synchronously inside an effect is a cascading render (lint rejects it),
+  // and the effect also re-fired on every unrelated `errors` identity change.
+  //
+  // Equally deliberately not a derived `open={openSections[id] || hasError}`:
+  // <details> is not a controlled input React re-asserts on every render, so a
+  // derived value stops forcing the section open as soon as it renders the same
+  // computed value twice — which happens the moment the organiser toggles the
+  // section by hand while the error is still live. Writing it once here means
+  // the reveal survives until they deliberately close it again.
+  async function saveAndReveal() {
+    const failed = await save();
+    const sectionId = firstErrorSection(failed);
     if (!sectionId) return;
     setOpenSections((prev) => (prev[sectionId] ? prev : { ...prev, [sectionId]: true }));
-  }, [errors]);
+  }
 
   return (
     <Modal
@@ -201,7 +201,7 @@ export function RegistrationHubConfigPanel({
               data-action="save"
               disabled={busy}
               className="btn btn-primary min-h-11"
-              onClick={save}
+              onClick={saveAndReveal}
             >
               {busy ? msg("reg.hub.config.saving") : msg("reg.hub.config.save")}
             </button>
@@ -312,6 +312,11 @@ export function RegistrationHubConfigPanel({
 // Sections
 // ---------------------------------------------------------------------------
 
+// The sections carry NO heading of their own. Each is rendered inside a
+// disclosure whose summary already states the section name, so a heading here
+// printed the same word twice, one line apart (visible in the sign-off
+// screenshots: "Eligibility" above "Eligibility"). `sectionTitle` above is the
+// single place a section is named.
 export function EligibilitySection({
   state,
   errors,
@@ -326,7 +331,6 @@ export function EligibilitySection({
   const isTeam = state.entrant_kind === "team";
   return (
     <section className="card space-y-3 p-4">
-      <h3 className="text-sm font-semibold text-slate-700">{msg("reg.hub.config.eligibility")}</h3>
       <label className="label">
         {msg("reg.hub.config.category")}
         <select
@@ -422,7 +426,6 @@ export function OpenCloseSection({
   const zone = fmtZoneAbbrev(orgTz, new Date());
   return (
     <section className="card space-y-3 p-4">
-      <h3 className="text-sm font-semibold text-slate-700">{msg("reg.settings.openClose")}</h3>
       <label className="flex items-center gap-2 text-sm text-slate-700">
         <input
           type="checkbox"
@@ -491,7 +494,6 @@ export function CapacitySection({
 }) {
   return (
     <section className="card space-y-3 p-4">
-      <h3 className="text-sm font-semibold text-slate-700">{msg("reg.settings.capacity")}</h3>
       <label className="label">
         {msg("reg.settings.capacityHint")}
         <input
@@ -540,7 +542,6 @@ export function MoneySection({
 
   return (
     <section className="card space-y-3 p-4" data-feature="registration.paid">
-      <h3 className="text-sm font-semibold text-slate-700">{msg("reg.settings.money")}</h3>
 
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-purple-100 bg-purple-50/60 px-3 py-2 text-xs text-purple-800">
         <span>{msg("reg.hub.config.currencyNote", { currency: currencyCode })}</span>

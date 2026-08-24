@@ -80,8 +80,12 @@ export function useRegistrationConfigPanelState(
     setLoaded((prev) => (prev ? { ...prev, state: { ...prev.state, ...p } } : prev));
   }
 
-  async function save() {
-    if (!loaded) return;
+  /** Resolves with the field errors this save produced — empty when it
+   *  succeeded. Returned rather than only stored so a caller can act on the
+   *  failure at the moment it happens; reacting to the `errors` STATE in an
+   *  effect instead is a cascading render, and lint rejects it. */
+  async function save(): Promise<Partial<Record<ConfigFieldKey, string>>> {
+    if (!loaded) return {};
     setBusy(true);
     setErrors({});
     setFormError(null);
@@ -101,7 +105,7 @@ export function useRegistrationConfigPanelState(
     if (patchOk && putOk) {
       setSaveOutcome("success");
       onSaved();
-      return;
+      return {};
     }
     const nextErrors: Partial<Record<ConfigFieldKey, string>> = {};
     let banner: string | null = null;
@@ -114,6 +118,7 @@ export function useRegistrationConfigPanelState(
     setErrors(nextErrors);
     setFormError(banner);
     setSaveOutcome(patchOk === putOk ? "both-failed" : patchOk ? "put-failed" : "patch-failed");
+    return nextErrors;
   }
 
   return {

@@ -2,6 +2,7 @@
 // (Eligibility/Open & close/Capacity default open, Money/sign-up form
 // default collapsed), built on the shared <Modal> primitive and the
 // useRegistrationConfigPanelState hook for fetch/patch/save.
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
@@ -388,5 +389,39 @@ describe("RegistrationHubConfigPanel — cancel", () => {
     (propsOf(cancelBtn).onClick as () => void)();
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(net.calls.some((c) => c.method === "PATCH" || c.method === "PUT")).toBe(false);
+  });
+});
+
+// A section is named by its disclosure summary and nowhere else. Each section
+// component used to repeat that name as its own <h3>, so the panel printed e.g.
+// "Eligibility" twice, one line apart — visible in the RS004 sign-off
+// screenshots and asserted by nothing, which is why it survived to a screenshot.
+//
+// Pinned at SOURCE level, like modal.test.ts does: this workspace has no jsdom,
+// and the rendered-tree route cannot count this — walk() returns nested
+// elements, so an ancestor and its descendant both carry the same text and a
+// naive occurrence count measures nesting depth, not duplication.
+describe("RegistrationHubConfigPanel — a section is named once", () => {
+  const source = readFileSync(
+    new URL("../registration-hub-config-panel.tsx", import.meta.url),
+    "utf8",
+  );
+  const SECTION_KEYS = [
+    "reg.hub.config.eligibility",
+    "reg.settings.openClose",
+    "reg.settings.capacity",
+    "reg.settings.money",
+  ];
+
+  it.each(SECTION_KEYS)("does not re-print %s as a section heading", (key) => {
+    // `sectionTitle` is the one place a section is named; a heading element
+    // rendering the same key is the duplication this guards.
+    expect(source).not.toMatch(new RegExp(`<h[1-6][^>]*>\\{msg\\("${key.replace(/\./g, "\\.")}"\\)\\}</h[1-6]>`));
+  });
+
+  it("names every section through sectionTitle", () => {
+    for (const key of SECTION_KEYS) {
+      expect(source).toContain(`msg("${key}")`);
+    }
   });
 });
