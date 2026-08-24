@@ -138,14 +138,37 @@ export interface SwapCandidatesResult {
  * candidate stays in the list and is rendered visible-and-disabled with its
  * reason, so it must reach the renderer. Filtering it out here would silently
  * convert R2b's "visible, blocked, and REASONED" ruling back into "removed".
+ *
+ * `offId` — R3 defect 5. The already-picked OFF person, or `null` while the
+ * off step is still open. Excluded from the result, because a player may not
+ * be substituted for THEMSELVES.
+ *
+ * REQUIRED, not optional, and that is the point: an omitted argument would
+ * default a forgetful caller straight back to the buggy behaviour, silently.
+ * Saying `null` is a caller stating that nothing is picked yet.
+ *
+ * Why the chassis owns this rule rather than a skin: a skin's `candidates` is
+ * a VALUE rebuilt from `view`, while the OFF pick lives in `SwapSheet`'s own
+ * local state and never re-enters `swap(view)` — so no skin can see the pick
+ * it would need to narrow against.
+ *
+ * Also worth knowing before anyone deletes this as dead code: with the POOLS
+ * alone it is unreachable. `{pool:"onfield"}` and `{pool:"bench"}` are exact
+ * complements of the playing squad, so the OFF person structurally could not
+ * appear in the ON list. It became reachable the moment `candidates`
+ * superseded the pool (defect 4) — a skin-supplied list is under no such
+ * constraint. The guard still runs on the pool path too, so the two sources
+ * cannot diverge.
  */
 export function swapCandidates(
   view: PoolView,
   policyVerdict: PolicyVerdict,
+  offId: string | null,
   candidates?: readonly string[],
 ): SwapCandidatesResult {
   if (!policyVerdict.ok) return { candidates: [], message: policyVerdict.message };
-  return { candidates: candidates ?? resolvePool({ pool: "bench" }, view) };
+  const scoped = candidates ?? resolvePool({ pool: "bench" }, view);
+  return { candidates: offId === null ? scoped : scoped.filter((id) => id !== offId) };
 }
 
 export interface SwapSheetSpec {
@@ -240,7 +263,7 @@ export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap, o
     );
   }
 
-  const { candidates, message } = swapCandidates(view, policyVerdict, spec.candidates);
+  const { candidates, message } = swapCandidates(view, policyVerdict, offId, spec.candidates);
   const offName = personNames[offId] ?? t("eventCopy.unknownPerson");
 
   return (
