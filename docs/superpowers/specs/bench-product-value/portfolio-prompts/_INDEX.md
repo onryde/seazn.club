@@ -49,7 +49,7 @@ S13-gated. New-branch-in-worktree rule applies to every session.
 | P8 | D5a venues/courts schema + API + **Directory** UI | `P08-venues-schema-ui.md` | — | green-light + **release-2 C-chain done** (cleared: C7 `298da0af`, C8 `e9a7c54a`) | **DONE 2026-08-17** — V367 (4 tables, RLS forced, composite FKs, `on delete restrict`), 8 routes, archive at court AND venue level, Directory venues tab (NOT org settings — amendment A2), calendar editor, reusable tag-chip input, 84 i18n keys ×4. Gates: unit 8401/8329/4 (the 4 = pre-existing `schedule-build-honours-locks`), e2e 2/2 + an active-tab guard at 320/430/768, smoke 8/8 venues checks, screenshots 1280/320/768. **Six design amendments A1–A6** corrected in place in the D5 spec with a log at its foot. Status: `docs/superpowers/plans/2026-08-17-p8-session-status.md` |
 | P9 | D5b scheduler integration + stored-config migration | `P09-venues-scheduler.md` | P8 | same as P8 | **IN REVIEW** — V374 (renumbered twice: main took V368, then V371), `ScheduleConfig.courts` = court uuids, one shared candidate filter used by build/validate/AI, `NO_MATCHING_COURT` 422, `court_tag_mismatch` (26th conflict kind), court multi-picker, AI pack speaks court NAMES while storage stays ids. 17 defects found, all one mechanism — identity changed under code that read it. Status: `docs/superpowers/plans/2026-08-17-p9-session-status.md` **MERGED** — #621 (main) + #623 (third-review follow-ups) + #633 (round-scoped court tags, spun out as #622). |
 | P9.5 | D5b.5 one court-availability function + the two constraints the placer never learned | `P09-5-window-unification.md` | P9 | same as P8 | **MERGED 2026-08-24 `203395b6a` (#638, squashed, 20/20 CI green)** — `court-windows.ts` `usableWindows` shipped (all 14 edge-matrix rows, mutation-proven); lattice, GREEDY and `/validate` now honour V367 court hours via `outside_court_hours`, the 27th conflict kind; start-window rule un-forked; solver start-window breaches now rejected at the build gate. **Both of the prompt's premises were FALSE — see the status log.** |
-| P10 | D5c calendars + window compiler | `P10-venues-calendars.md` | **P9.5** (cleared) | same as P8 | **IN FLIGHT 2026-08-24** — branch `feat/p10-venues-calendars`. **Prompt scope items 1–2 are SUPERSEDED by P9.5 and the calendar editor was P8's (A4) — do NOT re-plan P10 from the prompt file.** Corrected scope, owner-ruled 2026-08-24: A6 stranded-fixture conflict (archived/deleted courts only, reported never blocking), de-fork `resolveCourtDay`, one verify-config builder, capacity precheck moved server-side. Design: `docs/superpowers/specs/bench-product-value/designs/2026-08-24-p10-stranded-fixtures-and-capacity-design.md`; plan: `docs/superpowers/plans/2026-08-24-p10-stranded-fixtures-and-capacity.md` |
+| P10 | D5c calendars + window compiler | `P10-venues-calendars.md` | **P9.5** (cleared) | same as P8 | **DONE 2026-08-24** — branch `feat/p10-venues-calendars`, not yet merged (owner opens the PR). **Prompt scope items 1–2 were SUPERSEDED by P9.5 and the calendar editor was P8's (A4) — this session did not re-plan from the prompt file.** Shipped: `stranded_fixture` (28th conflict kind, reported never blocking), `resolveCourtDay` deleted with the single-source guard now scanning apps/web too, one `verifyConfigForDivision` builder across all 5 sites, capacity precheck moved server-side with the board card stale-marked. e2e (`court-tags-scheduling.spec.ts`) proves both halves of the non-blocking ruling in one flow: the conflict is visible on the board and publishing still goes through. **Findings from Tasks 1–6, and one lint regression — see the status log.** Design: `docs/superpowers/specs/bench-product-value/designs/2026-08-24-p10-stranded-fixtures-and-capacity-design.md`; plan: `docs/superpowers/plans/2026-08-24-p10-stranded-fixtures-and-capacity.md` |
 | P11 | D6 batch import | `P11-batch-import.md` | — | green-light + **ScoringPad S13 done** | TODO |
 
 ## Decisions already made (do not re-open)
@@ -846,3 +846,55 @@ moving server-side, NOT by re-inflating the board payload P9 shrank. Accepted
 cost: an instant client recompute becomes a debounced round trip, with the last
 report held and marked stale. No client-side fallback computation — a fallback
 is the placer/verifier fork wearing a different hat.
+
+### P10 Task 7 close — findings from Tasks 1–6, as discovered (2026-08-24)
+
+Recorded at verification/close, per `_RULES.md` §5, surfaced while EXECUTING
+Tasks 1–6 rather than at re-pin above:
+
+1. **`isPairwiseBlockingConflict` (`build.ts`) bypasses `isBlockingConflict`
+   entirely** — it treats every `reason:"court"` conflict on a pinned board as
+   a pairwise contradiction. `court_tag_mismatch` (P9) and
+   `outside_court_hours` (P9.5) were ALREADY reaching this pin precheck and
+   could already force a false `infeasible` before P10 touched anything —
+   a pre-existing gap, not a P10 regression, that this wave's own
+   `stranded_fixture` conflict would otherwise have walked straight into.
+   Fixed at `37644c410`.
+2. **`strandedCourtIds` reaches the build path only as an unnamed runtime
+   passenger** on `greedySeed`'s `{ ...config }` spread — `BuildInput.config`
+   does not name the field. Now pinned by a behavioural assertion (a mutation
+   that drops the spread reds a test), but the type-level hole remains:
+   nothing stops a future refactor of that spread from silently dropping it
+   again with tsc staying green.
+3. **Exhaustive `Record<ConflictDetailKind, …>`-shaped tables live in
+   apps/web** — `schemas.ts`'s `CONFLICT_DETAIL_KIND_WITNESS`,
+   `conflict-detail-legacy.ts`'s `LEGACY_PROSE`, and
+   `conflict-detail-format.ts`'s formatter switch are the three confirmed by
+   re-grep at Task 7 close (Tasks 1–6 counted four sites total). Widening the
+   engine's `ConflictDetailKind` union reds apps/web tsc while engine tsc
+   stays green either way — the same asymmetry already named for the wider
+   union in general terms; this wave adds a fourth concrete instance.
+4. **The capacity precheck's rest-bound loop recomputed each day's open-time
+   union once per entrant.** Fine as a client `useMemo` behind one browser;
+   not fine once Task 5 moved it behind a POST endpoint with no session-level
+   throttle — a division with a large entrant count could burn real server
+   CPU on every debounced keystroke. Fixed at `1e1145a7f` (memoized once per
+   day, not once per entrant).
+5. **Anti-regression guards in this repo have twice been written to match a
+   NAME rather than a RULE, and twice to read a hardcoded file list** — both
+   shapes were caught only by review, not by a first pass. Task 2's
+   `window-single-source.test.ts` is the corrected shape: it scans source
+   TEXT for the rule's absence (`resolveCourtDay`) and the rule's presence
+   (`usableWindows`) across both workspaces, rather than trusting a
+   maintained list of files believed to be exhaustive.
+6. **`use-capacity-report.ts` (Task 6) currently fails `npm run lint` with 7
+   errors**, all `react-hooks`'s "Cannot access refs during render" —
+   `useCapacityReport` and its multi-stage sibling both compute `stale` by
+   reading `resolvedKeyRef.current` directly in the render body instead of
+   through an effect or `useSyncExternalStore`. Root lint exits 1 on this
+   branch because of it. Found by Task 7's own mandated lint pass, NOT by the
+   e2e — **not fixed here**: out of Task 7's scope (the file is Task 6's) and
+   not something the e2e itself exposed, so left for the owner rather than
+   patched inside this task. Likely fix: move `stale` off a ref read during
+   render and onto `useSyncExternalStore`, or derive it from state set
+   inside the same effect that sets `report`.
