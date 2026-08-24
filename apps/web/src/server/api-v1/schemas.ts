@@ -1695,6 +1695,63 @@ export const CapacityReport = z.object({
 });
 export type CapacityReport = z.infer<typeof CapacityReport>;
 
+/** POST /divisions/{id}/schedule/capacity (P10 §4) — the board's live,
+ *  unsaved config/fixtures, so the server can run the SAME precheck the
+ *  client used to run alone, now with real court calendars (P9 stopped
+ *  shipping them to the board payload; that is unchanged — only the NUMBERS
+ *  travel back over this endpoint).
+ *
+ *  A WIRE-side schema, deliberately separate from the usecase-side
+ *  `CapacityPrecheckInput` in `capacity-guard.ts` that the route actually
+ *  parses the request with — registered here only so the generated spec
+ *  documents the shape (the `ReorderSponsors`/`ReorderSponsorsInput` pair
+ *  above this file's sponsors section is this repo's own precedent for the
+ *  two staying independent objects, not a shared source of truth).
+ *
+ *  `fixtures` mirrors `CapacityFixtureInput` (capacity-input.ts) field for
+ *  field, not raw DB column names: both existing client call sites already
+ *  map their fixture rows into this exact shape before running the
+ *  precheck locally, so sending it as-is needs no second mapping step.
+ *  `config` mirrors `CapacityConfigInput` minus `tz` (never client-supplied
+ *  — `settings.orgTz` is the governing clock, #397, resolved server-side)
+ *  and `courtCalendars` (what this endpoint exists to add). */
+export const CapacityPrecheck = z.object({
+  fixtures: z
+    .array(
+      z.object({
+        id: Uuid.optional(),
+        extKey: z.string().nullable().optional(),
+        winnerTo: z.string().nullable().optional(),
+        home: Uuid.optional(),
+        away: Uuid.optional(),
+        poolId: Uuid.optional(),
+      }),
+    )
+    .max(2000),
+  config: z.object({
+    courts: z.array(CourtId).max(50),
+    sessionWindows: z.array(z.object({ from: z.number(), to: z.number() })).max(200).optional(),
+    blackouts: z
+      .array(z.object({ court: CourtId.optional(), from: z.number(), to: z.number() }))
+      .max(200)
+      .optional(),
+    matchMinutes: z.number().int().positive(),
+    gapMinutes: z.number().int().min(0),
+    perEntrantMinRest: z.number().int().min(0),
+    window: z.object({ from: z.number(), to: z.number() }).optional(),
+    constraints: z
+      .object({
+        restMin: z.number().int().min(0).optional(),
+        restByGroup: z.record(z.string(), z.number()).optional(),
+        noBackToBack: z.boolean().optional(),
+        hard: z.array(HardConstraint).max(200).optional(),
+      })
+      .optional(),
+    hard: z.array(HardConstraint).max(200).optional(),
+  }),
+});
+export type CapacityPrecheck = z.infer<typeof CapacityPrecheck>;
+
 // ---------------------------------------------------------------------------
 // Schedule health score (D3, docs/superpowers/specs/bench-product-value/
 // designs/2026-08-13-schedule-health-design.md) — GET /stages/{id}/schedule/

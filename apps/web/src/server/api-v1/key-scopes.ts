@@ -140,6 +140,8 @@ const RULES: RouteRule[] = [
   { method: "POST", path: "/divisions/:id/schedule/ai-preview", scope: "manage", pin: "division" },
   { method: "GET", path: "/divisions/:id/schedule/ai-last", scope: "read", pin: "division" },
   { method: "POST", path: "/divisions/:id/schedule/validate", scope: "read", pin: "division" },
+  // P10 §4 — report-only, same scope as its /schedule/validate sibling above.
+  { method: "POST", path: "/divisions/:id/schedule/capacity", scope: "read", pin: "division" },
   { method: "GET", path: "/divisions/:id/stages", scope: "read", pin: "division" },
   { method: "POST", path: "/divisions/:id/stages", scope: "manage", pin: "division" },
   { method: "PUT", path: "/divisions/:id/stages", scope: "manage", pin: "division" },

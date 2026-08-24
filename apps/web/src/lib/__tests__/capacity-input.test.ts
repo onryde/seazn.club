@@ -149,6 +149,51 @@ describe("capacityInputForFixtures — day/window construction", () => {
   });
 });
 
+// P10 §4: `courtCalendars` is new — only the SERVER caller
+// (capacity-guard.ts's assessCapacityForDivision) ever populates it. These
+// are the pure, DB-free proof that the threading itself is correct; the
+// server-side resolution (auth, tenant scoping, the DB lookup) is proven at
+// its own layer by capacity-endpoint.test.ts (DB-backed).
+describe("capacityInputForFixtures — court calendars (P10 §4)", () => {
+  // NUMERIC weekday (0=Sunday), the CourtHoursRow convention — NOT
+  // weekdayOfYmd's own return, which is the three-letter NAME ("MON") that
+  // court-windows.ts's baseFor() indexes WEEKDAY_NAMES[h.weekday] to compare
+  // against. Plugging weekdayOfYmd's string straight into `weekday` type-
+  // checks as a mismatch (caught only by hand here — vitest does not
+  // typecheck test files) and silently filters every hours row out. DAY1
+  // (2026-10-19T00Z) is a Monday; verified via
+  // `new Date(Date.UTC(2026,9,19)).getUTCDay()`, not assumed.
+  const DAY1_WEEKDAY = 1;
+
+  it("narrows a court's usable window to its own calendar hours when courtCalendars supplies one", () => {
+    const config = {
+      ...baseConfig(),
+      courtCalendars: [
+        { courtId: "Court 1", hours: [{ weekday: DAY1_WEEKDAY, openMin: 9 * 60, closeMin: 11 * 60 }], exceptions: [] },
+      ],
+    };
+    const input = capacityInputForFixtures([], config, "div-1")!;
+    expect(input.days[0]!.courts).toEqual([
+      { court: "Court 1", windows: [{ from: DAY1 + 9 * 60 * MS_PER_MIN, to: DAY1 + 11 * 60 * MS_PER_MIN }] },
+    ]);
+  });
+
+  it("a court absent from courtCalendars keeps the open-all-day default, even while a sibling court IS calendared", () => {
+    const config = {
+      ...baseConfig(),
+      courts: ["Court 1", "Court 2"],
+      courtCalendars: [
+        { courtId: "Court 2", hours: [{ weekday: DAY1_WEEKDAY, openMin: 0, closeMin: 60 }], exceptions: [] },
+      ],
+    };
+    const input = capacityInputForFixtures([], config, "div-1")!;
+    const court1 = input.days[0]!.courts.find((c) => c.court === "Court 1")!;
+    const court2 = input.days[0]!.courts.find((c) => c.court === "Court 2")!;
+    expect(court1.windows).toEqual([{ from: DAY1, to: DAY1 + DAY_MS }]);
+    expect(court2.windows).toEqual([{ from: DAY1, to: DAY1 + 60 * MS_PER_MIN }]);
+  });
+});
+
 describe("capacityInputForFixtures — day cap resolution (max_fixtures_per_day)", () => {
   it("applies a division-scoped cap for THIS division, ignores one scoped to a different division", () => {
     const config = {

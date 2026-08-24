@@ -32,6 +32,11 @@ import type {
 } from "@seazn/engine/scheduling/capacity";
 import type { RuleFixture } from "@seazn/engine/scheduling/calendar";
 import type { HardConstraint } from "@seazn/engine/scheduling";
+// P10 §4: TYPE-ONLY, so — same as HardConstraint/RuleFixture above — it costs
+// the client bundle nothing regardless of source. `court-windows.ts` is
+// already one of this file's approved leaves (`usableWindows` above comes
+// from it); this just names the shape its own `courtCalendars` param takes.
+import type { CourtCalendar } from "@seazn/engine/scheduling/court-windows";
 
 /** Everything `capacityInputForFixtures` reads off a solved config. Plain
  *  epoch-ms/string fields — the same shape `SlotConfig & VerifyConfig`
@@ -63,6 +68,14 @@ export interface CapacityConfigInput {
    *  `constraints.hard` exactly as `effectiveHard` (calendar.ts) does,
    *  reimplemented inline rather than imported (see dayCapFor's comment). */
   hard?: readonly HardConstraint[];
+  /** P10 §4: each candidate court's REAL calendar, keyed by `courtId`. Only
+   *  the SERVER path populates this (`capacity-guard.ts`'s
+   *  `assessCapacityForDivision`, which resolves it from the DB per request
+   *  via `courtCalendarsForDivision`) — see `usableWindowsFor`'s own comment
+   *  below for why the CLIENT call sites never do and what that still costs
+   *  them. A court absent from this array (including every court when the
+   *  array itself is `undefined`) keeps the original "open all day" default. */
+  courtCalendars?: readonly CourtCalendar[];
 }
 
 export interface CapacityFixtureInput {
@@ -132,13 +145,22 @@ function calendarDays(window: { from: number; to: number }, tz: string): { ymd: 
  *  civil day; intersecting that with the bucket is the clip, not a second
  *  window computation.
  *
- *  NO COURT CALENDARS ARE PASSED, and that is a known limit rather than an
- *  oversight: this runs client-side off the board payload, and P9 deliberately
- *  stopped shipping each court's full calendar to the board after it blew the
- *  payload budget. So the precheck still treats every court as open all day and
- *  can therefore only OVERSTATE supply — the same direction it already errs in,
- *  and never the direction that hides an impossible division. Making it
- *  calendar-aware needs a slim calendar prop on the board first.
+ *  COURT CALENDARS are now threaded through (P10 §4) via the optional
+ *  `courtCalendars` param, resolved from `config.courtCalendars` below — but
+ *  only the SERVER caller ever supplies one. `capacity-guard.ts`'s
+ *  `assessCapacityForDivision` resolves each candidate court's real calendar
+ *  from the DB per request (a POST body, never a `useMemo`), because that is
+ *  the one place court calendars can legally be read from at all: P9 stopped
+ *  shipping them to the board payload after they blew its RSC budget, and
+ *  that has NOT changed. The two client call sites
+ *  (`settings-panel.tsx`/`stages-panel.tsx`) still call this module directly
+ *  with no `courtCalendars`, and for them a court absent from the array (here,
+ *  every court) keeps the original "open all day" default — so THEIR live
+ *  recompute still only ever OVERSTATES supply, the same direction it already
+ *  erred in, never the direction that hides an impossible division. That is
+ *  no longer a limit of this function; it is a limit of not having reached
+ *  the server yet, which is exactly why Task 6 replaces those two `useMemo`s
+ *  with a fetch instead of adding a calendar prop to the board payload.
  */
 function usableWindowsFor(
   court: string,
@@ -148,12 +170,11 @@ function usableWindowsFor(
   tz: string,
   sessionWindows: readonly { from: number; to: number }[],
   blackouts: readonly { court?: string; from: number; to: number }[],
+  courtCalendars: readonly CourtCalendar[] | undefined,
 ): CapacityWindow[] {
-  const open = usableWindows(
-    { courtId: court, hours: [], exceptions: [] },
-    { from: ymd, to: ymd },
-    { tz, sessionWindows, blackouts },
-  );
+  const calendar =
+    courtCalendars?.find((c) => c.courtId === court) ?? { courtId: court, hours: [], exceptions: [] };
+  const open = usableWindows(calendar, { from: ymd, to: ymd }, { tz, sessionWindows, blackouts });
   const clipped: CapacityWindow[] = [];
   for (const w of open) {
     const from = Math.max(w.from, dayFrom);
@@ -300,7 +321,7 @@ function capacityDays(
       date: b.ymd,
       courts: config.courts.map((court) => ({
         court,
-        windows: usableWindowsFor(court, b.ymd, b.from, b.to, tz, sessionWindows, blackouts),
+        windows: usableWindowsFor(court, b.ymd, b.from, b.to, tz, sessionWindows, blackouts, config.courtCalendars),
       })),
       ...(cap !== undefined ? { demandCap: cap } : {}),
       ...(forcedIds !== undefined && forcedIds.size > 0 ? { forcedDemand: forcedIds.size } : {}),
