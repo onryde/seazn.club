@@ -2981,14 +2981,34 @@ export async function listRegistrations(
       where d.competition_id = ${competitionId}
         ${divisionId ? tx`and r.division_id = ${divisionId}` : tx``}
         ${status ? tx`and r.status = ${status}` : tx``}
-        ${filters.kind ? tx`and rs.entrant_kind = ${filters.kind}` : tx``}
+        ${
+          // coalesce, matching the SELECT above. A division with no
+          // registration_settings row DISPLAYS as 'individual' (that is what
+          // the LEFT JOIN is for — those rows are real), but a bare
+          // `rs.entrant_kind = 'individual'` is NULL-false for exactly them:
+          // the row an organiser can see in the table vanished the moment they
+          // filtered for the kind it was showing. Filter and column must read
+          // the same expression or the list contradicts itself.
+          filters.kind ? tx`and coalesce(rs.entrant_kind, 'individual') = ${filters.kind}` : tx``
+        }
         ${filters.free_agent !== undefined ? tx`and r.free_agent = ${filters.free_agent}` : tx``}
         ${
-          filters.consent_pending
-            ? tx`and exists (
-                select 1 from registration_players rp
-                where rp.registration_id = r.id and rp.consent_status = 'pending'
-              )`
+          // `!== undefined`, like free_agent above — not truthiness. Both are
+          // documented as 1|0 and the query parser maps "0" to false, so
+          // truthiness made `consent_pending=0` mean "no filter" while
+          // `free_agent=0` filtered: the same documented input behaving two
+          // different ways one line apart. `0` now means what it says —
+          // entries with nothing outstanding.
+          filters.consent_pending !== undefined
+            ? filters.consent_pending
+              ? tx`and exists (
+                  select 1 from registration_players rp
+                  where rp.registration_id = r.id and rp.consent_status = 'pending'
+                )`
+              : tx`and not exists (
+                  select 1 from registration_players rp
+                  where rp.registration_id = r.id and rp.consent_status = 'pending'
+                )`
             : tx``
         }
         ${
@@ -3322,7 +3342,24 @@ export async function exportRegistrationsCsv(
     : (opts.filters ?? {});
   const rows = await listRegistrations(auth, divisionId, opts.status ?? null, filters);
 
-  const divisionIds = [...new Set(rows.map((r) => r.division_id))];
+  // The field-key scope is the DIVISIONS THE EXPORT COVERS, not the divisions
+  // that happen to appear in `rows`. Deriving it from the rows makes the header
+  // depend on the filter: `?status=rejected` with no matches emitted a header
+  // with no question columns at all, and a competition-wide export's column set
+  // shifted as the filter changed — so two exports of the same competition
+  // could not be fed to the same importer. The old division-only exporter read
+  // the division's own form_fields and could not express this bug.
+  const scopeDivisionIds = divisionId
+    ? [divisionId]
+    : await withTenant(auth.orgId, (tx) =>
+        tx<{ id: string }[]>`
+          select d.id from divisions d
+          where d.competition_id = ${filters.competition_id ?? null}
+        `.then((ds) => ds.map((d) => d.id)),
+      );
+  const divisionIds = scopeDivisionIds.length > 0
+    ? scopeDivisionIds
+    : [...new Set(rows.map((r) => r.division_id))];
   const regIds = rows.map((r) => r.id);
   type PlayerCsvRow = {
     registration_id: string;
@@ -3562,7 +3599,16 @@ export async function buildDisputeEvidence(
         { ...cartMail.args, paymentInstructions: null, payDeadline: null },
         emailDict,
       ).text
-    : "";
+    // NEVER silently blank. This document is submitted to Stripe as evidence
+    // that a real person really registered; an empty receipt section reads as
+    // "no receipt was sent", which is a claim about the merchant, not about a
+    // missing row. Before RS005 W4 the receipt was rebuilt from `reg` itself
+    // and could not come out empty, so this failure mode is new — it needs a
+    // marker a human reviewer can act on rather than an absence they will
+    // read as an admission.
+    : `[Receipt could not be reconstructed: the registration group ${reg.group_id} `
+      + `could not be loaded at ${new Date().toISOString()}. The entry itself is `
+      + `evidenced by the registration record and activity log below.]`;
 
   const when = (d: Date | string | null) => (d ? new Date(d).toISOString() : "—");
   const ref = reg.ref_code ?? reg.id;

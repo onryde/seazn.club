@@ -520,3 +520,80 @@ describe.skipIf(!HAS_DB)("RS005 review: the CSV's per-player personal data is ed
     }
   });
 });
+
+describe.skipIf(!HAS_DB)("RS005 code-review: the filters agree with the columns they filter", () => {
+  // A division with NO registration_settings row is a real, ordinary case —
+  // the LEFT JOIN exists for it, and the SELECT coalesces its kind to
+  // 'individual' so the table shows something truthful. The filter did not
+  // coalesce, so `rs.entrant_kind = 'individual'` was NULL-false for exactly
+  // those rows: the entry an organiser could SEE listed as Individual vanished
+  // the moment they filtered for Individual. On a tab whose whole job is
+  // finding one person, a filter that hides matching rows is worse than no
+  // filter — the organiser concludes the entry does not exist.
+  it("kind=individual still finds an entry whose division has no settings row", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner); // rig() writes NO registration_settings
+    const [{ count: settingsRows }] = await sql<{ count: string }[]>`
+      select count(*)::text as count from registration_settings where division_id = ${division.id}`;
+    expect(settingsRows, "fixture must have no settings row for this to test anything").toBe("0");
+
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+      { displayName: "Unconfigured Division Entry" },
+    );
+
+    const unfiltered = await listRegistrations(owner, null, null, { competition_id: competition.id });
+    const shown = unfiltered.find((r) => r.id === registration.id);
+    expect(shown?.entrant_kind, "the table shows it as individual").toBe("individual");
+
+    const filtered = await listRegistrations(owner, null, null, {
+      competition_id: competition.id,
+      kind: "individual",
+    });
+    expect(
+      filtered.map((r) => r.id),
+      "so filtering for individual must still find it",
+    ).toContain(registration.id);
+  });
+
+  // free_agent used `!== undefined` and consent_pending used truthiness, one
+  // line apart, both documented as 1|0. So `consent_pending=0` silently meant
+  // "no filter" — an organiser asking "who is fully consented" got everyone,
+  // including the people still outstanding, which is the exact opposite of
+  // what they asked and is not visibly wrong on screen.
+  it("consent_pending=0 selects entries with nothing outstanding, not everything", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration: clean } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "All Consented",
+      players: [{ name: "Consented Player" }],
+    });
+    // The fixture leaves consent_status to the column DEFAULT, which is
+    // 'pending' (V363) — so a seeded player is outstanding unless said
+    // otherwise, and a test that assumes "seeded = consented" quietly
+    // measures nothing.
+    await sql`update registration_players set consent_status = 'granted'
+              where registration_id = ${clean.id}`;
+    const { registration: outstanding } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Consent Outstanding",
+      players: [{ name: "Pending Player" }],
+    });
+    await sql`update registration_players set consent_status = 'pending'
+              where registration_id = ${outstanding.id}`;
+
+    const pending = await listRegistrations(owner, null, null, {
+      competition_id: competition.id, consent_pending: true,
+    });
+    expect(pending.map((r) => r.id)).toContain(outstanding.id);
+    expect(pending.map((r) => r.id)).not.toContain(clean.id);
+
+    const settled = await listRegistrations(owner, null, null, {
+      competition_id: competition.id, consent_pending: false,
+    });
+    expect(settled.map((r) => r.id)).toContain(clean.id);
+    expect(settled.map((r) => r.id), "0 must mean 'nothing outstanding', not 'no filter'")
+      .not.toContain(outstanding.id);
+  });
+});
