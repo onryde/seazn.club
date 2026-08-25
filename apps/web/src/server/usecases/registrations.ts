@@ -18,6 +18,7 @@ import type Stripe from "stripe";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { EDITOR_ROLES } from "@/lib/types";
+import { isTerminalRegistrationStatus } from "@/lib/registration-status";
 import { getLimit, hasFeature, requireFeature } from "@/lib/entitlements";
 import { platformFeeDefault } from "@/lib/platform-settings";
 import { getStripe } from "@/lib/stripe";
@@ -1073,6 +1074,20 @@ export async function resendRegistrationConfirmation(
   origin: string,
 ): Promise<{ sent: boolean }> {
   const reg = await withTenant(auth.orgId, (tx) => orgReg(tx, regId));
+  // A withdrawn/rejected/expired entry gets no confirmation. Observed live:
+  // the organiser could resend on a WITHDRAWN entry and the send succeeded, so
+  // someone who had pulled out received an email confirming their
+  // registration — and because the mail is cart-shaped, it re-stated their
+  // whole cart to them as though nothing had happened.
+  //
+  // Guarded HERE and not only in the UI: the button gate is a courtesy, this
+  // is the rule. The route is reachable directly with a session or an API key.
+  if (isTerminalRegistrationStatus(reg.status)) {
+    throw new HttpError(
+      422,
+      `This registration is ${reg.status} — a confirmation would tell the registrant they are entered`,
+    );
+  }
   const mail = await buildCartMail(reg.group_id, origin, null, null);
   if (!mail) return { sent: false };
   const sent = await sendRegistrationEmail({ to: mail.to, locale: toLocale(mail.locale), ...mail.args });

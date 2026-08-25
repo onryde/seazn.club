@@ -196,3 +196,60 @@ describe.skipIf(!HAS_DB)("POST /registrations/:id/resend-confirmation", () => {
     expect(audit).toBeDefined();
   });
 });
+
+describe.skipIf(!HAS_DB)("POST /registrations/:id/resend-confirmation — terminal entries get nothing", () => {
+  // Observed live by the owner: a WITHDRAWN entry rendered Resend, the click
+  // succeeded, and the row reported "Confirmation email sent". So someone who
+  // had pulled out received an email confirming their registration — and
+  // because the mail is cart-shaped, it re-stated their whole cart to them as
+  // though nothing had happened.
+  //
+  // The button gate is a courtesy; this is the rule. The route is reachable
+  // directly with a session or an API key, so the refusal lives in the
+  // usecase and is asserted here at the HTTP edge.
+  it.each(["withdrawn", "rejected", "expired"] as const)(
+    "refuses a %s entry with a 422 and sends nothing",
+    async (terminalStatus) => {
+      const { owner } = await signedInOwner();
+      const { competition, division } = await rig(owner);
+      const { registration } = await seedRegistration(competition.id, division.id, SETTINGS, {
+        displayName: `Gone (${terminalStatus})`,
+      });
+      await sql`update registrations set status = ${terminalStatus} where id = ${registration.id}`;
+      emailMock.sendRegistrationEmail.mockClear();
+
+      const { status, body } = await read(
+        await resendRoute(
+          postReq(`/registrations/${registration.id}/resend-confirmation`),
+          ctx(registration.id),
+        ),
+      );
+
+      expect(status).toBe(422);
+      expect(body.error?.message).toContain(terminalStatus);
+      expect(
+        emailMock.sendRegistrationEmail,
+        "nothing may reach the registrant's inbox",
+      ).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still resends for a live entry — this narrows the action, it does not remove it", async () => {
+    const { owner } = await signedInOwner();
+    const { competition, division } = await rig(owner);
+    const { registration } = await seedRegistration(competition.id, division.id, SETTINGS, {
+      displayName: "Still In",
+    });
+    emailMock.sendRegistrationEmail.mockClear();
+
+    const { status, body } = await read(
+      await resendRoute(
+        postReq(`/registrations/${registration.id}/resend-confirmation`),
+        ctx(registration.id),
+      ),
+    );
+    expect(status).toBe(200);
+    expect(body.data).toMatchObject({ sent: true });
+    expect(emailMock.sendRegistrationEmail).toHaveBeenCalledTimes(1);
+  });
+});
