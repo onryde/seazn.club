@@ -142,6 +142,55 @@ export const SPORT_PALETTES: Readonly<Record<string, Partial<SportPalette>>> = O
     caution: "#ffd60a",
     dismissal: "#d00000",
   },
+  /*
+   * TENNIS (R4-4, owner-ruled 2026-08-25 off the published comps sheet).
+   * Deep hardcourt blue, and the ball's optic yellow spent on exactly ONE
+   * thing: the serving PLAYER's pip and the strip digits. The signature is the
+   * umpire's-chair strip — sets, games, next server, ends.
+   *
+   *   board       deep hardcourt blue
+   *   board-2     the band the names and points sit on
+   *   led         the ball's optic yellow — the serve pip, and nothing else
+   *   caution     the code-violation warning
+   *   dismissal   the end of the ladder (default)
+   *   ink         cool near-white
+   *
+   * Chosen over clay (its own second colour IS white, so the pip would have
+   * nothing to be, and cream+terracotta is one of the three clusters generated
+   * design defaults to) and over grass (Wimbledon purple measures 1.37:1 on the
+   * green, so the identity's signature colour could never appear at all, and a
+   * second dark-green board collides with football's floodlit turf in the same
+   * sign-off sheet).
+   *
+   * WHY `dismissal` IS NOT A CARD RED. Football's `#d00000` sits at 3.01:1 on
+   * its own board and is correct there, because it paints a CARD — a swatch,
+   * not a word. Tennis has no cards: its ladder (warning → point penalty →
+   * game penalty → default, `nested/kernel.ts:250-255`) is words, so this tone
+   * lands on TEXT and has to clear 4.5. The comps sheet was first published
+   * with `#c1272d`, which measures 2.63:1 and would have shipped a fail behind
+   * a hand-computed number that said otherwise. `#fa5252` is 4.68:1.
+   *
+   * Do NOT assume the suite catches this by itself. `contrast.test.ts` holds a
+   * tone to the TEXT floor only once it finds that tone actually used as text
+   * in the chassis or skin sources (R3's tone licence, which resolves the
+   * `var(--pad-tone)` alias graph before scanning). Reverting this value to
+   * `#c1272d` today reds NOTHING, because the tennis skin does not exist yet —
+   * established by mutation, not assumed. The floor is therefore pinned
+   * EXPLICITLY in `contrast.test.ts`, so it bites from the moment the palette
+   * lands rather than from the moment some skin happens to reference it.
+   *
+   * Also recorded, because two tokens cannot carry a four-step ladder: the
+   * ENDS take `caution` and `dismissal`; point penalty and game penalty read as
+   * words in the sanction sheet and carry no colour of their own.
+   */
+  tennis: {
+    board: "#0b2545",
+    "board-2": "#13315c",
+    ink: "#f4f7fb",
+    led: "#d9f000",
+    caution: "#f2a900",
+    dismissal: "#fa5252",
+  },
 });
 
 /** The custom-property name a token is emitted under. One place, so the

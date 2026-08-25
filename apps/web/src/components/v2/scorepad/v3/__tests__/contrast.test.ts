@@ -550,6 +550,30 @@ describe("the tones are NON-TEXT colours, and this is where that stops being a c
     expect(contrastRatio(football.board, football.dismissal)).toBeGreaterThanOrEqual(3.0);
   });
 
+  // R4/tennis. The licence above is football's, and it is football-shaped: a
+  // card IS a swatch, so a tone that fails the text floor is correct there.
+  // Tennis has no cards. Its penalty ladder (warning -> point penalty -> game
+  // penalty -> default, nested/kernel.ts:250-255) is WORDS, so both of its
+  // tones land on text and both owe the full 4.5.
+  //
+  // Pinned here rather than left to the licence scan below, because that scan
+  // is usage-driven: it can only see a tone once a skin renders text in it, so
+  // it says nothing at all about a palette that has landed ahead of its skin.
+  // Established by mutation — with the tennis skin absent, reverting
+  // `dismissal` to the originally-specced #c1272d (2.63:1) reds NOTHING
+  // without this block.
+  it("tennis's tones are TEXT, not swatches, so both clear the 4.5 floor on its own board", () => {
+    const tennis = resolveSportPalette("tennis");
+    for (const tone of ["caution", "dismissal"] as const) {
+      const ratio = contrastRatio(tennis.board, tennis[tone]);
+      expect(ratio, `tennis --sport-${tone} is ${ratio.toFixed(2)}:1 on its own board`).toBeGreaterThanOrEqual(4.5);
+    }
+    // The pip is the identity: `led` carries the serving player's mark and the
+    // strip digits, so it is text-adjacent at minimum and holds the same floor.
+    expect(contrastRatio(tennis.board, tennis.led)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(tennis["board-2"], tennis.ink)).toBeGreaterThanOrEqual(4.5);
+  });
+
   // R3 review round — THIS LICENCE HAD ALMOST NO TEETH. It grepped globals.css
   // for the literal `color: var(--sport-<tone>)` and therefore missed the
   // unspaced form, any wrapper (`color-mix(...)`), an arbitrary Tailwind value
