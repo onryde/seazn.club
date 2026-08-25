@@ -1,0 +1,89 @@
+import { describe, expect, it } from "vitest";
+import { sql } from "@/lib/db";
+import { importEvents, IMPORT_CAPS } from "../event-import";
+import { seedOrg, startedDivisionWithFixture, setupDivisionWithFixture } from "./_rig";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+
+describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
+  it("rejects the whole stream when an event mid-stream is invalid, and writes NOTHING", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
+
+    const report = await importEvents(auth, divisionId, {
+      import_id: "imp-invalid",
+      streams: [{
+        fixture: { id: fixtureId },
+        events: [
+          { type: "core.start", payload: {} },
+          { type: "core.not_a_real_event", payload: {} },   // ← index 1
+          { type: "core.finalize", payload: {} },
+        ],
+      }],
+    });
+
+    expect(report.results[0]!.status).toBe("rejected");
+    expect(report.results[0]!.error?.code).toBe("import.fold_rejected");
+    expect(report.results[0]!.error?.eventIndex).toBe(1);
+    // The assertion that matters: the ledger, not the response.
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from score_events where fixture_id = ${fixtureId}`;
+    expect(n).toBe(0);
+  });
+
+  it("rejects a fixture that already has events", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
+    await sql`insert into score_events (fixture_id, org_id, seq, type, payload)
+              values (${fixtureId}, ${auth.orgId}, 1, 'core.start', '{}'::jsonb)`;
+
+    const report = await importEvents(auth, divisionId, {
+      import_id: "imp-started",
+      streams: [{ fixture: { id: fixtureId }, events: [{ type: "core.start", payload: {} }] }],
+    });
+    expect(report.results[0]!.error?.code).toBe("import.fixture_started");
+  });
+
+  it("refuses the whole call when the division has not started", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await setupDivisionWithFixture(auth);
+    await expect(
+      importEvents(auth, divisionId, {
+        import_id: "imp-phase",
+        streams: [{ fixture: { id: fixtureId }, events: [{ type: "core.start", payload: {} }] }],
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "import.division_not_started" });
+  });
+
+  it("rejects a stream that never reaches a decided outcome", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
+    const report = await importEvents(auth, divisionId, {
+      import_id: "imp-open",
+      streams: [{ fixture: { id: fixtureId }, events: [{ type: "core.start", payload: {} }] }],
+    });
+    expect(report.results[0]!.error?.code).toBe("import.not_decided");
+  });
+
+  it("413s a call over the per-call event cap", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
+    const events = Array.from({ length: IMPORT_CAPS.eventsPerCall + 1 }, () => ({
+      type: "core.start", payload: {},
+    }));
+    await expect(
+      importEvents(auth, divisionId, { import_id: "imp-big", streams: [{ fixture: { id: fixtureId }, events }] }),
+    ).rejects.toMatchObject({ status: 413, code: "import.too_large" });
+  });
+
+  it("rejects an ext_key that matches two fixtures in the division", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureIds } = await startedDivisionWithFixture(auth, { fixtures: 2 });
+    await sql`update fixtures set ext_key = 'M1' where id in ${sql(fixtureIds)}`;
+    const report = await importEvents(auth, divisionId, {
+      import_id: "imp-ambig",
+      streams: [{ fixture: { ext_key: "M1" }, events: [{ type: "core.start", payload: {} }] }],
+    });
+    expect(report.results[0]!.error).toMatchObject({ code: "import.fixture_unknown", matches: 2 });
+  });
+});
