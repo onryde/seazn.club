@@ -1433,6 +1433,65 @@ single source with all seven DB-allowed values, so `?status=rejected` and
 `?status=expired` work — proven by a reference-equality test rather than by
 three copies agreeing today.
 
+**W2a CLOSED** (Registrants read surface). Commits `1491c0c50`..`6846905af`
+plus `5457db005`. Gate rerun by the main thread: registration page `__tests__/`
++ `src/components/__tests__` = **699 total / 699 passed / 0 failed / 0 failed
+suites**.
+
+**Architecture ruling: the read surface is server-rendered with ZERO
+JavaScript.** Filters are a plain `<form method="GET">`; the table is a server
+component calling `listRegistrations` directly rather than fetching the HTTP
+endpoint W1b built (`data.ts`'s existing "no client fetch, no N+1" rule).
+Consequences worth keeping: URL state is shareable and back-buttonable for
+free, the seven-width e2e can drive real filtering without waiting on
+hydration, and the tab works on a venue's bad wifi. Client islands arrive only
+in W3, where the actions genuinely need them. Row expand (W2b) is native
+`<details>` with NO toggle handler — which sidesteps RS004's invented-event
+crash by construction rather than by re-typing the handler that caused it.
+
+**RULING: there is NO separate waitlist section.** One table, one row
+renderer; `waitlist_position` renders in its own column and the `waitlisted`
+status filter is how an organiser scopes to the queue. A second renderer is
+what deleting `waitlist-queue.tsx` was FOR — re-introducing a second section in
+the same session would undo it for cosmetics.
+
+**CORRECTION to RS001's handover, which both sides could otherwise drop:**
+RS001 entry condition 3 says `waitlist-queue.tsx`'s lost coverage was "queue
+order, #-in-line and the public waitlist count". The first two land here. **The
+public waitlist count cannot be asserted from an organiser tab at all** — it is
+a public-surface number, so it is owed by **RS006/RS007**, not by RS005. Filed
+here so neither side assumes the other covered it.
+
+**The reversal had a second victim, found by W2a and fixed in `5457db005`.**
+Dropping the page-level `!canEdit` 404 admitted viewers to the SETTINGS tab
+too, where `RegistrationHubDivisionRow`'s Configure button rendered
+unconditionally — nobody had ever needed to gate it, because the page used to
+404 everyone who could not edit. A viewer would open the config panel, change a
+fee or a window, save, and get a 403: not a security hole (the API refuses them
+correctly) but a dead end that reads as a broken product. `canEdit` now rides on
+`RegistrationHubRowContext`; the control is ABSENT, not disabled, per the same
+ruling. Proven by forcing the gate true — reds exactly the viewer case.
+**Lesson for RS009/RS010: reversing a page-level guard does not just change who
+reaches the page, it silently promotes every unconditional control on it into a
+control a read-only role can now press.** Sweep for the whole class, not the
+instance.
+
+**Two product decisions taken inside W2a, both user-visible:**
+
+- **A foreign or nonexistent `division_id` drops that filter and re-renders**
+  rather than erroring. The read model 404s it (correctly — that is W1's
+  security guard), but a PAGE has no error envelope, and an organiser opening a
+  stale bookmark should see their registrants rather than a dead page.
+  Malformed enum values are ignored the same way.
+- **Unlimited roster renders `n/∞`** — compact enough for a table cell, and the
+  symbol needs no per-locale translation; only the surrounding template does.
+
+**Two distinct empty states, deliberately.** "No registrations at all" points at
+Settings and the register link; "your filters matched nothing" offers a clear.
+Shipping one for both tells an organiser their competition is empty when they
+have merely over-filtered — which, on a tab whose whole job is finding people,
+is the worst possible lie to tell.
+
 **Pinned so no wave re-derives them:**
 
 - **Waitlist position must reproduce `promoteOldestWaitlisted`
