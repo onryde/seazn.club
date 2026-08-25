@@ -444,30 +444,126 @@ export function expectedDoublesServer(
 }
 
 /**
- * Total games completed in the match so far, both sides combined —
- * `nestedGamesOf(state, "home") + nestedGamesOf(state, "away")`, PLUS one for
- * each closed match tie-break.
+ * Turns a closed tie-break/match-tie-break of `points` total points has
+ * actually consumed under ITF Rule 5b's rotation (1 point by the server
+ * already due, then 2 points per turn thereafter) — see `serveContext`'s
+ * own doc comment for the R4 worked example this exists to fix.
  *
- * `nestedGamesOf` already treats a banked MTB set as contributing NO games to
- * either side's tally, because `ClosedSet.mtb` carries the MTB's POINTS in
- * `home`/`away` (`NestedSetSummary`'s doc comment) — often 10+ of them, not
- * games. Right for "games WON", but not the question here: an MTB is still
- * exactly one turn in the SERVE ALTERNATION, same as any other tie-break
- * (`applyTbPoint`'s non-mtb branch banks a won ordinary TB as a `+1` to
- * `games` for exactly this reason — the alternation does not care how a
- * "game" was decided, only that one was). There is at most one banked MTB set
- * per match — it can only be the deciding (final) set — so `mtbSets` below is
- * always 0 or 1.
- *
- * Deliberately built on `nestedGamesOf` rather than a second reduction over
- * `state.sets`: this file already carries one *documented, forced* duplicate
- * of that formula (`sideMetrics`'s own `gamesOf`, a closure that cannot call
- * out), and an accidental third copy — a new one, drifting the moment either
- * one's mtb handling changes — is the failure mode this avoids.
+ * A breaker need not end on a turn boundary — most don't; only a score of
+ * `to`–0 or `to`-minus-an-odd-margin lands exactly on one — and the turn
+ * under way when it ends has still had its first point served, so it counts
+ * as a full, consumed turn here (the rotation slot was used regardless of
+ * whether a second point was ever needed).
  */
-function completedGames(state: NestedState): number {
-  const mtbSets = state.sets.filter((set) => set.mtb === true).length;
-  return nestedGamesOf(state, "home") + nestedGamesOf(state, "away") + mtbSets;
+function tbTurnsConsumed(points: number): number {
+  return Math.floor(points / 2) + 1;
+}
+
+/**
+ * `turns` turns split between whoever served the breaker's first point and
+ * their opponent, alternating strictly from that first server (turns 1, 3,
+ * 5, … are theirs) — so the two counts are equal when `turns` is even, and
+ * the first server leads by exactly one when it is odd. This asymmetry is
+ * the crux of R4 defect 1: a single shared "how many turns so far" number
+ * cannot carry it, because which side needs the higher of the two keeps
+ * changing (it's whichever side serves next), so `serviceTurnsPerSide`
+ * below tracks both counts throughout, not one.
+ */
+function splitTbTurns(turns: number, firstServer: Side): Record<Side, number> {
+  const forFirstServer = Math.ceil(turns / 2);
+  return { [firstServer]: forFirstServer, [opponent(firstServer)]: turns - forFirstServer } as Record<
+    Side,
+    number
+  >;
+}
+
+/**
+ * How many service turns each side has completed so far — PER SIDE, the
+ * fix decided on over patching the old shared count, because a closed
+ * breaker with an odd turn count (`splitTbTurns`) hands the two sides
+ * DIFFERENT counts, and once that happens no single number can answer
+ * "whose Nth turn is this" for whichever side turns out to be due next.
+ *
+ * THE BUG THIS REPLACES. The old `completedGames`-based formula counted a
+ * closed tie-break as exactly one game, because that is what it banks as
+ * in `state.games`/`ClosedSet` (`nestedGamesOf`'s own doc comment) — right
+ * for games WON, wrong for turns SERVED: a breaker consumes at least two
+ * full service turns per side, not half a turn each. Worked example (R4
+ * dispatch, doubles): set 1 reaches 6–6 (12 standard games, 6 turns each)
+ * and home wins a 7-point breaker — 4 real turns (1, then 2-2-2), 2 per
+ * side, so each side has had 8 turns once it closes. The old formula
+ * credited the breaker as `+1` shared game, giving `floor(13/2) = 6` —
+ * off by 2, but EVEN like the real 8, so the very next turn (set 2 game 1)
+ * still names the right partner by coincidence (`serve-context.test.ts`'s
+ * "flips side and continues..." case). One more game crosses a
+ * `floor(_/2)` boundary the shared formula cannot see: home's real next
+ * turn is index 8 (even, "H-first" again), the old formula answers
+ * `floor(14/2) = 7` (odd, "H-second") — the wrong partner, confidently,
+ * for the rest of the match (`serve-context.test.ts`'s "does not desync…"
+ * case pins exactly this).
+ *
+ * HOW THIS COMPUTES IT. Walks `state.sets` forward from `init`'s fixed
+ * "home serves first" convention, applying the same two transitions the
+ * fold itself applies: a plain set's N standard games alternate one turn
+ * each, split `ceil`/`floor` between whoever opened the set and their
+ * partner; a set that closed via a breaker splits its own standard games
+ * evenly first (entry to a breaker is always at a tied score, i.e. an even
+ * number of games, so this split never depends on who opened), then
+ * `splitTbTurns`s the breaker between the SAME opener and their opponent —
+ * the breaker's first server is provably that set's own opener, since a
+ * breaker only ever opens after an even number of standard games — before
+ * ITF Rule 5b hands the NEXT set to the breaker's first server's OPPONENT,
+ * regardless of the breaker's own turn count (`applyTbPoint`'s own
+ * unconditional `serving: opponent(tbFirstServer)` does the same thing on
+ * the fold side; this is that rule applied backward over history instead
+ * of forward over one live transition). The live, not-yet-closed portion
+ * of the current set extends the same running split using `state.games`.
+ *
+ * A live breaker adds nothing of its own here — `state.games` holds the
+ * entry score throughout one (`bankSet` only updates it on close) — which
+ * is what freezes `serviceTurn` for the live breaker's whole duration,
+ * matching `personId`'s own documented, tested scope: pinned to the game
+ * the breaker opened, never following the point-by-point ITF handoff
+ * inside it (see `expectedDoublesServer`'s doc comment).
+ *
+ * SCOPED like `state.serving` itself: "rally fidelity only; summary sets
+ * leave it untouched" (this struct's own field comment) — a
+ * `*.set_summary` never advances `serving` either, so a fixture that banks
+ * any set that way already carries this same staleness upstream of this
+ * function, not a new one it introduces.
+ */
+function serviceTurnsPerSide(state: NestedState): Record<Side, number> {
+  let opener: Side = "home"; // init's fixed convention: home serves first
+  const turns: Record<Side, number> = { home: 0, away: 0 };
+  const credit = (side: Side, n: number): void => {
+    turns[side] += n;
+  };
+  for (const set of state.sets) {
+    if (set.mtb === true) {
+      const split = splitTbTurns(tbTurnsConsumed(set.home + set.away), opener);
+      credit("home", split.home);
+      credit("away", split.away);
+      continue; // the deciding set — there is no next set to hand off to
+    }
+    // `set.home`/`set.away` already carry the breaker's own "+1" credited
+    // game (`nestedGamesOf`'s doc comment), so the standard games actually
+    // played before it are one fewer.
+    const stdGames = set.tb === undefined ? set.home + set.away : set.home + set.away - 1;
+    credit(opener, Math.ceil(stdGames / 2));
+    credit(opponent(opener), Math.floor(stdGames / 2));
+    if (set.tb !== undefined) {
+      const split = splitTbTurns(tbTurnsConsumed(set.tb.home + set.tb.away), opener);
+      credit("home", split.home);
+      credit("away", split.away);
+      opener = opponent(opener); // ITF Rule 5b — unconditional on the breaker's own turn count
+    } else if (stdGames % 2 === 1) {
+      opener = opponent(opener);
+    }
+  }
+  const liveStdGames = state.games.home + state.games.away;
+  credit(opener, Math.ceil(liveStdGames / 2));
+  credit(opponent(opener), Math.floor(liveStdGames / 2));
+  return turns;
 }
 
 /**
@@ -479,10 +575,11 @@ function completedGames(state: NestedState): number {
  * `side` is never recomputed from the score — `state.serving` is the fold's
  * own answer, tracked point by point (`applyTbPoint` updates it inside a
  * live tie-break too), and a second derivation is exactly the fork this
- * exists to avoid. `serviceTurn` is that side's 0-based service-GAME index:
- * with `G` = `completedGames(state)`, strict game-by-game alternation makes
- * it `floor(G / 2)` for whichever side is currently due — true regardless of
- * which side that is, since each side serves exactly every other game.
+ * exists to avoid. `serviceTurn` is that side's own 0-based service-turn
+ * index — `serviceTurnsPerSide(state)[side]` — PER SIDE rather than one
+ * shared number precisely because a tie-break can hand the two sides
+ * different counts (see that function's doc comment for why, and the R4
+ * worked example this fixes).
  *
  * `personId` is `expectedDoublesServer`'s answer for that side/turn: a real
  * id in a declared doubles fixture, `null` for singles or an undeclared
@@ -514,7 +611,7 @@ export function serveContext(state: NestedState): {
   serviceTurn: number;
 } {
   const side = state.serving;
-  const serviceTurn = Math.floor(completedGames(state) / 2);
+  const serviceTurn = serviceTurnsPerSide(state)[side];
   return { side, serviceTurn, personId: expectedDoublesServer(state, side, serviceTurn) };
 }
 

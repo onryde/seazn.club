@@ -137,7 +137,37 @@ describe("serveContext", () => {
       const done = fold(doubles, cfg, [...to66Events, ...straight(H, 7)]); // H takes the TB 7-0
       expect(done.sets).toEqual([{ home: 7, away: 6, tb: { home: 7, away: 0 } }]); // sanity
       expect(done.serving).toBe("away"); // sanity — ITF: TB's first server receives next
-      expect(serveContext(done)).toEqual({ side: "away", serviceTurn: 6, personId: "A-first" });
+      // R4 defect 1 fix: 6 standard-game turns each in the set, then the
+      // 7-point (4-turn, 2-per-side) breaker — 8 turns each once it closes.
+      // Still "A-first": 6 (the pre-fix value) and 8 share a parity, the
+      // coincidence the next test's OWN following game does not get.
+      expect(serveContext(done)).toEqual({ side: "away", serviceTurn: 8, personId: "A-first" });
+    });
+
+    // R4 defect 1 (HIGH) — a 7-point breaker is really 4 ITF turns (1, then
+    // 2-2-2), 2 per side, not the one "game" `nestedGamesOf` credits it. The
+    // set 2 game 1 case above still names the right partner because 6 and
+    // the real 8 share a parity by coincidence; ONE more game crosses a
+    // floor(_/2) boundary the old formula cannot see, and the rotation
+    // desyncs for the rest of the match. Real turns per side once the
+    // breaker closes: 6 standard games + 2 breaker turns = 8 each — home's
+    // NEXT turn (index 8, home's 9th) is even, so H-first is due again,
+    // same as their pre-breaker turn 6; the old formula's index 7 is odd,
+    // naming H-second instead.
+    it("does not desync the doubles rotation for the game after a closed tie-break", () => {
+      const cfg = cfgFor("doubles-noad-mtb10");
+      const to66Events = [start, ...gamesFor(H, 5), ...gamesFor(A, 5), ...game(H), ...game(A)];
+      const afterTb = [...to66Events, ...straight(H, 7)]; // H takes the TB 7-0
+
+      const setTwoGameTwo = fold(doubles, cfg, [...afterTb, ...game(A)]); // away opens set 2
+      expect(setTwoGameTwo.serving).toBe("home"); // sanity — alternation continues normally
+      // Today's code answers floor(14/2) = 7 (odd), naming H-second — the
+      // wrong partner, and the defect this test pins.
+      expect(serveContext(setTwoGameTwo)).toEqual({
+        side: "home",
+        serviceTurn: 8,
+        personId: "H-first",
+      });
     });
 
     it("scopes personId to the service game, not the point, inside a live tie-break", () => {
@@ -161,11 +191,14 @@ describe("serveContext", () => {
   });
 
   describe("the match-tie-break trap", () => {
-    // 6-4 then 3-6: 10 + 9 = 19 games into the decider — an ODD total,
-    // deliberately. If the MTB's "+1" were ever dropped, an EVEN total (e.g.
-    // 10 + 10) would floor to the exact same serviceTurn either way and the
-    // regression would pass unnoticed; 19 vs 20 crosses a floor(_/2)
-    // boundary, so the two are only ever equal if the fix is present.
+    // 6-4 then 3-6, both banked via a `*.set_summary` — `serving` is never
+    // touched by a summary fold (this struct's own field comment: "rally
+    // fidelity only"), so it stays at `init`'s "home serves first" through
+    // both closures. `serviceTurnsPerSide` inherits that same staleness by
+    // design (its own doc comment) rather than independently reconstructing
+    // an alternation the fold itself never tracked for these two sets —
+    // so the values below follow ideal ITF alternation from the fixed
+    // match-opening side, same as this fixture's own `serving` field does.
     const oneSetAll = [start, summary(6, 4), summary(3, 6)];
 
     it("adds nothing for an MTB still in progress, same as any other current game", () => {
@@ -174,19 +207,24 @@ describe("serveContext", () => {
       expect(atDecider.points.kind).toBe("matchTiebreak"); // sanity: reached the decider
 
       const midMtb = fold(doubles, cfg, [...oneSetAll, ...straight(H, 3)]);
-      expect(serveContext(midMtb)).toEqual({ side: "home", serviceTurn: 9, personId: "H-second" });
+      // 10 (6-4, even, no flip) + 9 (3-6, odd, home stays ahead) standard-
+      // game turns credit home 10, away 9 before the live (still open, so
+      // not yet counted) MTB — unaffected by the 3 MTB points already
+      // played, same as any other live breaker (see the live-tie-break
+      // test above).
+      expect(serveContext(midMtb)).toEqual({ side: "home", serviceTurn: 10, personId: "H-first" });
     });
 
     it("does not inflate completed games by a banked MTB's raw point score", () => {
       const cfg = cfgFor("doubles-noad-mtb10");
-      // MTB closes 10-0: banked as ONE game (the 20th), not its 10 raw
-      // points and not zero. Either wrong count changes `serviceTurn` here
-      // (19 games → turn 9 → "H-second" is due, not away at all; 29 raw
-      // points → turn 14 → "A-first" but for the wrong reason) — proven by
-      // mutation testing on the production line, not re-derived in this file.
+      // MTB closes 10-0: 6 real turns (1, then 2-2-2-2), split 3-3 since 6
+      // is even — not its 10 raw points and not zero. Either wrong count
+      // changes `serviceTurn` here (10 raw turns/side inflates it further;
+      // 0 turns leaves it at 10/9) — proven by mutation testing on the
+      // production line, not re-derived in this file.
       const done = fold(doubles, cfg, [...oneSetAll, ...straight(H, 10)]);
       expect(done.sets[2]).toEqual({ home: 10, away: 0, mtb: true }); // sanity
-      expect(serveContext(done)).toEqual({ side: "away", serviceTurn: 10, personId: "A-first" });
+      expect(serveContext(done)).toEqual({ side: "away", serviceTurn: 12, personId: "A-first" });
     });
   });
 });
