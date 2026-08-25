@@ -129,7 +129,7 @@ function pad(page: Page) {
  * `tennisHalf` already use for the identical reason.
  */
 function tennisHalf(page: Page, side: "home" | "away") {
-  return pad(page).locator('[data-role="v3-scorebug"] .grid > *').nth(side === "home" ? 0 : 1);
+  return pad(page).locator('[data-role="v3-scorebug"] .grid > button').nth(side === "home" ? 0 : 1);
 }
 
 /**

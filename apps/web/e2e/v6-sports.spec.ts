@@ -47,13 +47,24 @@ function pad(page: Page) {
  * R4/tennis cutover — v3 tapModel S: the scoreboard halves ARE the point
  * buttons (v3/skins/tennis.tsx); there is no separate "Home"/"Away" action
  * button the way v2's plain `tennis.point` action rendered one. Indexes the
- * halves grid positionally, home first (scorebug.tsx's own render order) —
- * the same locator shape as scorepad-skins.spec.ts's own `scorebugHalf`,
+ * halves grid positionally, home first (scorebug.tsx's own render order),
  * duplicated locally rather than imported since this file keeps every
  * locator helper self-contained (its own `pad()` above is the same choice).
+ *
+ * Scoped to `<button>` specifically, not a wildcard — load-bearing (found by
+ * running this file): a half renders a `<button>` only once LIVE at band>=3;
+ * before that it is a plain, click-inert `<div>` at the same grid position.
+ * `sendEvent(..., "core.start", {})` above confirms the SERVER folded it;
+ * the CLIENT's own re-render is a separate, later event a wildcard locator
+ * cannot see coming — it would happily click the still-present `<div>` and
+ * dispatch nothing. Scoping to `button` makes this locator match NOTHING
+ * until the client's re-render actually swaps the `<div>` for a `<button>`,
+ * so Playwright's ordinary actionability wait closes the race — the same
+ * "does not exist until ready" property a tile gets for free and a
+ * wildcard half-locator does not.
  */
 function tennisHalf(page: Page, side: "home" | "away") {
-  return pad(page).locator('[data-role="v3-scorebug"] .grid > *').nth(side === "home" ? 0 : 1);
+  return pad(page).locator('[data-role="v3-scorebug"] .grid > button').nth(side === "home" ? 0 : 1);
 }
 
 async function makeDivision(

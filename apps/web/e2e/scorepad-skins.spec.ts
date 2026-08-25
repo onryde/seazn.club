@@ -230,6 +230,20 @@ test("tennis skin: play points to deuce", async ({ page, request }) => {
   // for `usePadPipeline`'s own double-submit guard (identical payloads
   // within its window are correctly swallowed; alternating ones never
   // collide with it).
+  //
+  // `openLiveConsole` only waits for the SERVER's ledger to carry
+  // `core.start` — the CLIENT's own re-render from "pre" (a plain, click-
+  // inert <div> at this same grid position) to "live" (a real <button>) is
+  // a separate, later event that generic wait says nothing about (found by
+  // running this file: the first tap intermittently landed on the
+  // still-present <div> and dispatched nothing). `scorebugHalf`'s `.grid >
+  // *` is shared with football's own div-only usage above, so rather than
+  // narrow that helper this waits, once, for both halves to have actually
+  // become buttons before the tap loop starts.
+  await expect(pad(page).locator('[data-role="v3-scorebug"] button'), "both halves must be live (tappable) before the first tap").toHaveCount(
+    2,
+    { timeout: 20_000 },
+  );
   const homeHalf = scorebugHalf(page, 0);
   const awayHalf = scorebugHalf(page, 1);
   await expect(homeHalf).toBeVisible();

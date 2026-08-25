@@ -53,10 +53,25 @@ function pad(page: Page) {
  * file could match on. Indexes the halves grid positionally, home first
  * (scorebug.tsx's own render order) — the same locator shape
  * scorepad-skins.spec.ts's `scorebugHalf` and gallery.capture.ts's
- * `tennisHalf` already use for the identical reason.
+ * `tennisHalf` use, narrowed here to the `<button>` tag specifically.
+ *
+ * That narrowing is load-bearing, not cosmetic (found by running this file):
+ * `openLiveConsole` only waits for the SERVER's ledger to carry `core.start`
+ * (`waitForLedgerGrowth`-style poll) — it says nothing about whether the
+ * CLIENT has re-rendered from that fold yet. A half renders EITHER a
+ * `<button>` (tappable — live, band>=3) OR a plain `<div>` (everything
+ * else) at the exact same grid position, so unlike a tile — which does not
+ * exist in the DOM at all until its phase/band gate opens, and so makes
+ * Playwright's own actionability wait "self-heal" the race — a wildcard
+ * locator here happily resolves to and clicks the STILL-PRESENT pre-fold
+ * `<div>`, which has no click handler and dispatches nothing. Scoping to
+ * `button` restores the self-healing property: this locator matches
+ * NOTHING until the client's own re-render swaps the `<div>` for a
+ * `<button>`, so `.click()`'s normal auto-wait is what closes the race,
+ * exactly the way a tile's own absence-until-ready already does elsewhere.
  */
 function tennisHalf(page: Page, side: "home" | "away") {
-  return pad(page).locator('[data-role="v3-scorebug"] .grid > *').nth(side === "home" ? 0 : 1);
+  return pad(page).locator('[data-role="v3-scorebug"] .grid > button').nth(side === "home" ? 0 : 1);
 }
 
 function v3Tile(page: Page, id: string) {
