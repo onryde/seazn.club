@@ -901,6 +901,20 @@ export function buildDock(
   // the dock shows ONLY that chip — a second tap re-affirms the same value
   // (the chassis's own no-inverse rule), never offers the other three
   // alongside a payload that already holds the last one.
+  //
+  // THIS BRANCH IS UNIT-TESTABLE AND UNIT-PROVABLE, AND THAT IS NOT ENOUGH —
+  // see this file's own unit tests, which call `buildDock` directly with a
+  // hand-built `payload.meta.kind` already set, the same way every test
+  // before R3's "shipped inert" incident did. What that incident proved is
+  // that a pure builder whose output depends on live state can be fully
+  // testable and fully inert AT THE SAME TIME: whether tapping "Ace" ACTUALLY
+  // re-renders this dock down to one chip depends entirely on `DetailDock`'s
+  // `setSpec`/`dockStore` mirror (pad-host.tsx, `0b709fadd`) re-invoking this
+  // function with the ADVANCED payload — a real React re-render this file's
+  // node-environment unit tests cannot exercise at all. The e2e task (out of
+  // this task's grant) MUST tap a chip on a live point and assert the
+  // resulting event's DRAINED `meta.kind`, not merely that this function
+  // returns the right thing when handed the answer already.
   if (kind !== undefined) return { title, chips: [pointKindChip(kind)] };
 
   // Legality by SIDE, read from the PAYLOAD — by the time the dock renders,
