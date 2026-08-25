@@ -101,11 +101,35 @@ const EXTRA_STATES = [
   "08-bowlerpicker",
   "09-retiresheet",
   "10-reviewblocked",
+  // R4 (2026-08-25) — tennis's tap model S. Same reasoning as R2c's three
+  // above, restated because it keeps recurring: none of the five shared
+  // STATES opens a sheet or a dock, and tennis's own headline feature (the
+  // per-player point dock, R4-1/R4-5) and its named sign-off pain (the
+  // doubles serve pip, `_INDEX.md`'s "the doubles serve pip is UNTESTABLE
+  // until…") are BOTH invisible without a dedicated capture.
+  "11-doublesserve",
+  "12-pointdock",
+  "13-sanctionsheet",
 ] as const;
 type ExtraGalleryState = (typeof EXTRA_STATES)[number];
 
 function pad(page: Page) {
   return page.locator('[data-testid="score-pad"]');
+}
+
+/**
+ * R4 — v3 tapModel S: tennis's scoreboard halves ARE the point buttons
+ * (v3/skins/tennis.tsx), so unlike every other sport in `SPORTS` below,
+ * `scoreOne` cannot address a `data-tile-id` or an accessible "Home"/"Away"
+ * button — a tappable half's accessible name is the PLAYER'S NAME plus the
+ * hint text (`scorebug.tsx`'s own `whoNames`), which this harness has no
+ * fixed string for. Indexes the halves grid positionally, home first
+ * (scorebug.tsx's own render order) — the same locator shape
+ * scorepad-skins.spec.ts's `scorebugHalf` and v6-sports.spec.ts's
+ * `tennisHalf` already use for the identical reason.
+ */
+function tennisHalf(page: Page, side: "home" | "away") {
+  return pad(page).locator('[data-role="v3-scorebug"] .grid > *').nth(side === "home" ? 0 : 1);
 }
 
 /**
@@ -789,12 +813,71 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Tennis Home ${tag}` }],
       away: [{ fullName: `Gallery Tennis Away ${tag}` }],
     }),
-    // Verified live: scorepad-skins.spec.ts "tennis skin: play points to
-    // deuce" — one tap of the same Home/Away pair is enough for "scored".
+    // R4 cutover — v3 tapModel S: the scoreboard half itself is the point
+    // button (`tennisHalf` above), never a "Home"/"Away" tile.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Home", exact: true }).click();
+      await tennisHalf(page, "home").click();
     },
-    openDock: async () => false,
+    // Reached by a SECOND, away point rather than by reopening the first —
+    // same reasoning as football's own `openDock` above: the Detail Dock is
+    // a property of a held tap, and there is no way to reopen one that has
+    // already flushed.
+    openDock: async (page) => {
+      await tennisHalf(page, "away").click();
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(tennis): a point tap must open the detail dock",
+      ).toBeVisible({ timeout: 10_000 });
+      return true;
+    },
+    // v3's Detail Dock is a TIMED surface (closes itself HOLD_MS=6s after
+    // the tap that opened it) — same risk football's own dock carries, and
+    // the same fix: fail the capture rather than silently keep a `04-dock`
+    // photograph of a dock that already closed under a slow run.
+    dockProbe: async (page) => {
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(tennis): the dock closed before this width was captured — the 6s hold " +
+          "window elapsed mid-capture, so this PNG would have shown a different state to its siblings",
+      ).toBeVisible({ timeout: 5_000 });
+    },
+    // R4 — 13-sanctionsheet. A fresh fixture (this entry's primary one is
+    // already two points into a live match by now): the Code violation
+    // sheet's own ladder — R4-4's tone treatment, `warning`/`default` toned,
+    // the two middle steps plain — is what the owner rules on here, stopped
+    // on its OPENING step (before picking a level), the same "stop before
+    // commit" posture every other sport's `openDock` above takes.
+    captureExtra: async (page, dir, tag, measurements) => {
+      const shTag = `${tag}sh`;
+      const fx = await seedRosteredFixture(page.request, {
+        label: `Gallery Tennis Sanction ${shTag}`,
+        sportKey: "tennis",
+        variantKey: "tour",
+        entrantKind: "individual",
+        home: [{ fullName: `Gallery Tennis Sanction Home ${shTag}` }],
+        away: [{ fullName: `Gallery Tennis Sanction Away ${shTag}` }],
+        emitCoreStart: true,
+      });
+      await page.goto(await fixturePath(page.request, fx.fixtureId));
+      await pad(page).locator('[data-tile-id="sanction-home"]').click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      await expect(sheet, "gallery(tennis): the sanction tile must open the skin's own sheet").toBeVisible({
+        timeout: 10_000,
+      });
+      await expect(
+        sheet.locator('[data-choice-option-id="warning"]'),
+        "gallery(tennis): the four-rung ladder must be on screen, not just the sheet shell",
+      ).toBeVisible();
+      await captureState(
+        page,
+        dir,
+        "13-sanctionsheet",
+        "tennis",
+        measurements,
+        visibleProbe(sheet, "gallery(tennis): 13-sanctionsheet must still show the code-violation sheet"),
+      );
+      return ["13-sanctionsheet"];
+    },
   },
   {
     slug: "tennis-doubles",
@@ -820,9 +903,96 @@ const SPORTS: GallerySport[] = [
     // paired entrants are what make this its own gallery entry (two names
     // per WhoLine instead of one), not a different action.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Home", exact: true }).click();
+      await tennisHalf(page, "home").click();
     },
-    openDock: async () => false,
+    openDock: async (page) => {
+      await tennisHalf(page, "away").click();
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(tennis-doubles): a point tap must open the detail dock",
+      ).toBeVisible({ timeout: 10_000 });
+      return true;
+    },
+    dockProbe: async (page) => {
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(tennis-doubles): the dock closed before this width was captured — the 6s hold " +
+          "window elapsed mid-capture, so this PNG would have shown a different state to its siblings",
+      ).toBeVisible({ timeout: 5_000 });
+    },
+    // R4 — the wave's two named sign-off screens for the sport's own headline
+    // pain (`_INDEX.md`, "the owner must verdict the DOUBLES screen
+    // specifically"): the serve pip on a KNOWN, declared player, and the
+    // dock's own SECOND question — which pair member won the point — which
+    // exists only in doubles (R4-5; singles auto-stamps `scorer` at tap
+    // time and never reaches this step, `buildDock`'s own doc). A fresh
+    // fixture, not the primary one: by this point the primary has already
+    // committed and dismissed its own dock via `openDock`/`dockProbe`
+    // above, and a held tap's dock cannot be reopened.
+    captureExtra: async (page, dir, tag, measurements) => {
+      const dsTag = `${tag}ds`;
+      const fx = await seedRosteredFixture(page.request, {
+        label: `Gallery Tennis Doubles Serve ${dsTag}`,
+        sportKey: "tennis",
+        variantKey: "doubles-noad-mtb10",
+        entrantKind: "pair",
+        home: [
+          { fullName: `Gallery Tennis DS Home1 ${dsTag}`, pairOrder: 1 },
+          { fullName: `Gallery Tennis DS Home2 ${dsTag}`, pairOrder: 2 },
+        ],
+        away: [
+          { fullName: `Gallery Tennis DS Away1 ${dsTag}`, pairOrder: 1 },
+          { fullName: `Gallery Tennis DS Away2 ${dsTag}`, pairOrder: 2 },
+        ],
+        emitCoreStart: true,
+      });
+      await page.goto(await fixturePath(page.request, fx.fixtureId));
+      // Home serves first by default (`kernel.ts`'s own init convention),
+      // and at serviceTurn 0 the due server is the pairOrder:1 partner
+      // (`expectedPairServer`, squad-state.ts) — a KNOWN person, never
+      // "whichever name got marked" (R4, `_INDEX.md`).
+      const server = pad(page).locator('[data-strip-item-id="server"]');
+      await expect(server, "gallery(tennis-doubles): the strip must name the due server").toBeVisible({
+        timeout: 20_000,
+      });
+      await expect(server).toContainText(`Gallery Tennis DS Home1 ${dsTag}`);
+      await captureState(
+        page,
+        dir,
+        "11-doublesserve",
+        "tennis-doubles",
+        measurements,
+        visibleProbe(server, "gallery(tennis-doubles): 11-doublesserve must still name the due server"),
+      );
+
+      // 12-pointdock — the dock's SECOND question. `by` names the WINNING
+      // side, so tapping home's half (home is on serve, but tapModel S
+      // scores for whichever half is tapped) then "Winner" advances past
+      // legality-by-side straight to "which partner won it", offering BOTH
+      // home players by name.
+      await tennisHalf(page, "home").click();
+      const dock = pad(page).locator('[data-role="v3-dock"]');
+      await expect(dock, "gallery(tennis-doubles): a point tap must open the detail dock").toBeVisible({
+        timeout: 10_000,
+      });
+      await dock.getByRole("button", { name: "Winner", exact: true }).click();
+      await expect(
+        dock.getByRole("button", { name: `Gallery Tennis DS Home2 ${dsTag}`, exact: true }),
+        "gallery(tennis-doubles): the dock's second question must name the winning pair",
+      ).toBeVisible({ timeout: 10_000 });
+      await captureState(page, dir, "12-pointdock", "tennis-doubles", measurements, async () => {
+        await expect(
+          dock,
+          "gallery(tennis-doubles): the dock closed before this width was captured",
+        ).toBeVisible({ timeout: 5_000 });
+        await expect(
+          dock.getByRole("button", { name: `Gallery Tennis DS Home2 ${dsTag}`, exact: true }),
+          "gallery(tennis-doubles): 12-pointdock must still show the scorer step",
+        ).toBeVisible();
+      });
+
+      return ["11-doublesserve", "12-pointdock"];
+    },
   },
   {
     slug: "volleyball",
