@@ -21,6 +21,7 @@
 - **Structured logging:** pino `log` from `apps/web/src/server/logger.ts` in new server code, never in tests.
 - **`withTenant` MUST NOT nest**, and nothing inside its callback may await a query on the pooled `sql` proxy (`apps/web/src/lib/db.ts:179-181`) — that is a pool self-deadlock. All entitlement and feature lookups happen **before** the write transaction opens.
 - **Caps (owner ruling R4):** 50 streams / 1 000 events per fixture / 10 000 events per call.
+- **Run vitest from `apps/web`, not the repo root.** A root-cwd run fails to COLLECT with `Cannot find package '@/lib/db'` and reports zero tests — which reads as green. Every verify command below should be `cd <worktree>/apps/web && DATABASE_URL=… npx vitest run …` (confirmed by Task 1, 2026-08-25).
 - **Verification traps:** an rtk vitest summary reading `PASS(0) FAIL(0)` means the suite failed to **collect**; judge green only from `--reporter=json --outputFile` + jq. Lint via `rtk proxy npm run lint`, reading `✖ N problems`. Positional args to `npm test` are filename **filters**. DB suites need a fresh test schema — `db:apply` **and** `sync:sports`.
 
 ## File Structure
