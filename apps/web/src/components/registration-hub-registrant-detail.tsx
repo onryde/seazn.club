@@ -23,6 +23,7 @@ import { t } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n-constants";
 import { formatMinor, asCurrency } from "@/lib/currency";
 import { fmtDateTime } from "@/lib/format";
+import { isTerminalRegistrationStatus } from "@/lib/registration-status";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 import type { RegistrantRosterPlayer, RegistrantCartSibling } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
@@ -98,7 +99,16 @@ export function RegistrationHubRegistrantDetail({
   // join_code is always null (RS001 — only a team entry ever mints one), so
   // checking the code itself already implies "and it's a team", with no
   // separate entrant_kind check that could drift out of sync with the DB.
-  const showJoinCode = canEdit && row.join_code !== null;
+  //
+  // RS005 R1 second-wave finding: also excludes a TERMINAL entry
+  // (withdrawn/rejected/expired) — `joinTeamEntry` (registration-submit.ts)
+  // refuses all three with "This entry is no longer accepting players", so
+  // a withdrawn entry's code was inert and its "Anyone with this code can
+  // add players to this entry" warning described a capability nobody had.
+  // `isTerminalRegistrationStatus` (@/lib/registration-status) is the SAME
+  // source `deriveRegistrantActionFlags`'s canWithdraw/canResend use — a
+  // plain server component importing it drags in nothing (dependency-free).
+  const showJoinCode = canEdit && row.join_code !== null && !isTerminalRegistrationStatus(row.status);
 
   return (
     <div data-registration-hub-registrant-detail className="grid gap-5 sm:grid-cols-2">

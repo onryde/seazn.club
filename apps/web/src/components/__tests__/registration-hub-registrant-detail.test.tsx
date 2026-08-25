@@ -183,6 +183,30 @@ describe("RegistrationHubRegistrantDetail — join code (viewer/editor gating)",
     const tree = walk(RegistrationHubRegistrantDetail(baseProps({ row: row({ join_code: null }), canEdit: true })));
     expect(tree.some((e) => e.type === RegistrationHubRegistrantJoinCode)).toBe(false);
   });
+
+  // RS005 R1 second-wave finding: observed live, a WITHDRAWN entry still
+  // displayed its join code under "Anyone with this code can add players to
+  // this entry" — but joinTeamEntry (registration-submit.ts) refuses a
+  // withdrawn/rejected/expired entry outright ("This entry is no longer
+  // accepting players"), so the code was inert and the warning described a
+  // capability nobody had.
+  it("is absent for an editor on a TERMINAL entry (withdrawn/rejected/expired), even with a join_code", () => {
+    for (const status of ["withdrawn", "rejected", "expired"] as const) {
+      const tree = walk(
+        RegistrationHubRegistrantDetail(baseProps({ row: row({ join_code: "TEAM-XYZ", status }), canEdit: true })),
+      );
+      expect(tree.some((e) => e.type === RegistrationHubRegistrantJoinCode)).toBe(false);
+    }
+  });
+
+  it("stays PRESENT for an editor on every non-terminal status with a join_code — this wave must not over-gate", () => {
+    for (const status of ["pending", "paid", "confirmed", "waitlisted"] as const) {
+      const tree = walk(
+        RegistrationHubRegistrantDetail(baseProps({ row: row({ join_code: "TEAM-XYZ", status }), canEdit: true })),
+      );
+      expect(tree.some((e) => e.type === RegistrationHubRegistrantJoinCode)).toBe(true);
+    }
+  });
 });
 
 describe("RegistrationHubRegistrantDetail — answers (task 2: labelled, not raw keys)", () => {

@@ -245,6 +245,29 @@ describe("deriveRegistrantActionFlags", () => {
     }
   });
 
+  // RS005 R1 second-wave finding: observed live, a WITHDRAWN entry rendered
+  // Resend and the send succeeded — the mail is cart-shaped, so someone who
+  // had pulled out was told they were still registered, siblings included.
+  // Same rule and same source set as withdraw (isTerminalRegistrationStatus,
+  // @/lib/registration-status) — resendRegistrationConfirmation
+  // (registrations.ts:1071) now refuses the same three statuses
+  // server-side; this is the button-level courtesy.
+  it("resend is legal on every non-terminal status", () => {
+    for (const status of ["pending", "paid", "confirmed", "waitlisted"] as const) {
+      expect(
+        deriveRegistrantActionFlags({ status, approval: "auto", amount_cents: 0, payment_intent_id: null }).canResend,
+      ).toBe(true);
+    }
+  });
+
+  it("resend is ABSENT on every terminal status (withdrawn, rejected, expired)", () => {
+    for (const status of ["withdrawn", "rejected", "expired"] as const) {
+      expect(
+        deriveRegistrantActionFlags({ status, approval: "auto", amount_cents: 0, payment_intent_id: null }).canResend,
+      ).toBe(false);
+    }
+  });
+
   it("promote is legal ONLY for a waitlisted entry", () => {
     expect(
       deriveRegistrantActionFlags({ status: "waitlisted", approval: "auto", amount_cents: 0, payment_intent_id: null })
@@ -409,6 +432,12 @@ describe("deriveRegistrantActionFlags", () => {
             expect(typeof flags.canWithdraw).toBe("boolean");
             expect(typeof flags.canPromote).toBe("boolean");
             expect(typeof flags.canMarkPaid).toBe("boolean");
+            expect(typeof flags.canResend).toBe("boolean");
+            // canResend and canWithdraw share the identical rule (both key
+            // off isTerminalRegistrationStatus alone) — pinned here so a
+            // FUTURE divergence between the two is a deliberate code change,
+            // not a silent drift the sweep never notices.
+            expect(flags.canResend).toBe(flags.canWithdraw);
           }
         }
       }

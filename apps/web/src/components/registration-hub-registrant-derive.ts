@@ -10,6 +10,7 @@
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
 import type { RegistrantsFilters, ConsentStatus } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
+import { isTerminalRegistrationStatus } from "@/lib/registration-status";
 
 /** Keyed by `Record<..., string>` against the REAL status union (not a
  *  hand-copied string literal list) so a missing entry is a compile error,
@@ -163,17 +164,9 @@ export interface RegistrantActionFlags {
   canPromote: boolean;
   /** RS005 R1 finding 1's recovery path — see the block comment below. */
   canMarkPaid: boolean;
+  /** RS005 R1 second wave finding — see the block comment below. */
+  canResend: boolean;
 }
-
-/** withdrawn/rejected/expired — a registration in any of these never moves
- *  again (RS005 W3 dispatch's own definition). Read as a Set, not a switch,
- *  so `canWithdraw` below is one membership check rather than a branch per
- *  status that could omit one. */
-const TERMINAL_REGISTRANT_STATUSES: ReadonlySet<RegistrationListRow["status"]> = new Set([
-  "withdrawn",
-  "rejected",
-  "expired",
-]);
 
 /**
  * Which of the Registrants tab's row-level mutating controls are legal for
@@ -237,6 +230,19 @@ const TERMINAL_REGISTRANT_STATUSES: ReadonlySet<RegistrationListRow["status"]> =
  * withdraw: legal for any NON-terminal status — an organiser can withdraw a
  * still-live entry regardless of its approval mode or review state.
  *
+ * canResend: legal for any NON-terminal status — the SAME rule as withdraw,
+ * sharing the SAME source (`isTerminalRegistrationStatus`,
+ * @/lib/registration-status — dependency-free, so this client island can
+ * import it without dragging registrations.ts's Stripe/email clients into
+ * the bundle) rather than a second hand-kept list. RS005 R1 second-wave
+ * finding: observed live, a WITHDRAWN entry rendered Resend and the send
+ * succeeded — the mail is cart-shaped, so it told someone who had pulled
+ * out that they were still registered and re-stated their cart's siblings
+ * alongside it. `resendRegistrationConfirmation` (registrations.ts:1071)
+ * now refuses the same three statuses server-side
+ * (`isTerminalRegistrationStatus`) — this is the button-level courtesy, not
+ * the enforcement boundary.
+ *
  * promote: legal ONLY for a `waitlisted` entry — every other status has
  * nothing to promote FROM.
  */
@@ -246,11 +252,13 @@ export function deriveRegistrantActionFlags(
   const awaitingManualDecision =
     row.approval === "manual" && (row.status === "pending" || row.status === "paid");
   const awaitingOfflineFee = row.status === "pending" && row.amount_cents > 0 && row.payment_intent_id === null;
+  const nonTerminal = !isTerminalRegistrationStatus(row.status);
   return {
     canApprove: awaitingManualDecision && !awaitingOfflineFee,
     canReject: awaitingManualDecision,
-    canWithdraw: !TERMINAL_REGISTRANT_STATUSES.has(row.status),
+    canWithdraw: nonTerminal,
     canPromote: row.status === "waitlisted",
     canMarkPaid: awaitingOfflineFee,
+    canResend: nonTerminal,
   };
 }

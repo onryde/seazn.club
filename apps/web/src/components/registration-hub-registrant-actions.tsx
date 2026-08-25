@@ -339,17 +339,19 @@ export function RegistrationHubRegistrantActions({
               : msg("reg.hub.registrants.detail.actions.withdraw")}
           </button>
         )}
-        <button
-          type="button"
-          data-registration-hub-registrant-action="resend"
-          disabled={busy !== null}
-          onClick={resend}
-          className="btn btn-ghost text-xs"
-        >
-          {busy === "resend"
-            ? msg("reg.hub.registrants.detail.actions.resending")
-            : msg("reg.hub.registrants.detail.actions.resend")}
-        </button>
+        {flags.canResend && (
+          <button
+            type="button"
+            data-registration-hub-registrant-action="resend"
+            disabled={busy !== null}
+            onClick={resend}
+            className="btn btn-ghost text-xs"
+          >
+            {busy === "resend"
+              ? msg("reg.hub.registrants.detail.actions.resending")
+              : msg("reg.hub.registrants.detail.actions.resend")}
+          </button>
+        )}
       </div>
       {feedback && (
         <p

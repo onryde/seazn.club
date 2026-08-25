@@ -153,9 +153,23 @@ describe("RegistrationHubRegistrantActions — legality (which buttons render)",
     expect(findAction(mount({ status: "pending" }), "promote")).toBeUndefined();
   });
 
-  it("always shows resend, for every status/approval — the caller already gates the whole island on canEdit", () => {
-    expect(findAction(mount({ status: "withdrawn", approval: "auto" }), "resend")).toBeTruthy();
-    expect(findAction(mount({ status: "rejected", approval: "manual" }), "resend")).toBeTruthy();
+  // RS005 R1 second-wave finding — corrects the ORIGINAL "always shows
+  // resend" rule this test used to assert: observed live, a WITHDRAWN entry
+  // rendered Resend and the send succeeded, mailing someone who had pulled
+  // out a cart-shaped "you're registered" confirmation, siblings included.
+  it("shows resend on every non-terminal status, for every approval mode", () => {
+    for (const status of ["pending", "paid", "confirmed", "waitlisted"] as const) {
+      for (const approval of ["auto", "manual"] as const) {
+        expect(findAction(mount({ status, approval }), "resend")).toBeTruthy();
+      }
+    }
+  });
+
+  it("hides resend on every terminal status (withdrawn, rejected, expired) — a withdrawn/rejected/expired entry must not receive a 'you're registered' email", () => {
+    for (const status of ["withdrawn", "rejected", "expired"] as const) {
+      expect(findAction(mount({ status, approval: "auto" }), "resend")).toBeUndefined();
+      expect(findAction(mount({ status, approval: "manual" }), "resend")).toBeUndefined();
+    }
   });
 });
 
