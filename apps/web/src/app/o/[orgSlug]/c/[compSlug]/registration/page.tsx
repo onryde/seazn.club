@@ -11,7 +11,6 @@ export const dynamic = "force-dynamic";
 //
 // RS005 W2b (row-click detail/actions on the Registrants tab) is next.
 import type { ReactNode } from "react";
-import { notFound } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getCompetition } from "@/server/usecases/competitions";

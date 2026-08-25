@@ -42,7 +42,7 @@
 // TERMINAL (no path returns a rejected entry to any other status) and
 // withdraw frees the spot and can trigger a refund. Approve, promote and
 // resend do not confirm (owner ruling).
-import { useEffect, useState } from "react";
+import {  useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1 } from "@/lib/client-v1";
 import { useConfirm } from "@/components/ui/confirm-provider";
@@ -81,10 +81,19 @@ export function RegistrationHubRegistrantActions({
   // this is a no-op for them; promote's un-guessed case is the one this is
   // load-bearing for — it's also what clears promotedOptimistically once the
   // real post-promotion status has actually arrived.
-  useEffect(() => {
+  //
+  // Adjusted DURING RENDER rather than in an effect (React's own
+  // "adjusting state when a prop changes" pattern). The effect form
+  // rendered the stale optimistic status once, then re-rendered with the
+  // server's — a visible flash of the guessed state after the truth had
+  // already arrived, and a cascading-render lint error besides. Comparing
+  // against the last-seen prop lets the corrected value render first time.
+  const [lastStatus, setLastStatus] = useState<Status>(status);
+  if (lastStatus !== status) {
+    setLastStatus(status);
     setOptimisticStatus(status);
     setPromotedOptimistically(false);
-  }, [status]);
+  }
 
   const flags = deriveRegistrantActionFlags({ status: optimisticStatus, approval });
 
