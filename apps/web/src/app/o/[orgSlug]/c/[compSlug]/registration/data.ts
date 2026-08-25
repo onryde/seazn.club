@@ -18,7 +18,12 @@ import {
 // (server/api-v1/registration-list-query.ts, on this wave's do-not-touch
 // list) uses for the identical validation job — never a call into anything
 // ELSE under server/api-v1, which stays closed this wave.
-import { RegistrationStatus, RegistrationSort, EntrantKind } from "@/server/api-v1/schemas";
+import {
+  RegistrationStatus,
+  RegistrationSort,
+  EntrantKind,
+  type RegistrationFormField,
+} from "@/server/api-v1/schemas";
 
 export interface RawDivisionRow {
   division_id: string;
@@ -284,4 +289,151 @@ export async function fetchDivisionOptions(
       where competition_id = ${competitionId} and archived_at is null
       order by name, id`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// The Registrants tab's row-expand detail (RS005 W2b).
+// ---------------------------------------------------------------------------
+
+/** `registration_players.consent_status` (V363 CHECK constraint) — declared
+ *  locally rather than imported off `RegistrationPlayerRow` (registrations.ts),
+ *  same convention `RegistrantEntrantKind` above already uses: this tab's own
+ *  types stay self-contained rather than pulling in that row's full shape for
+ *  one field. */
+export type ConsentStatus = "pending" | "granted" | "guardian";
+
+export interface RegistrantRosterPlayer {
+  id: string;
+  full_name: string;
+  squad_number: number | null;
+  is_captain: boolean;
+  consent_status: ConsentStatus;
+}
+
+export interface RegistrantCartSibling {
+  id: string;
+  display_name: string;
+  division_name: string;
+  status: RegistrationListRow["status"];
+}
+
+export interface RegistrantDetails {
+  rosterByRegistration: Map<string, RegistrantRosterPlayer[]>;
+  /** SELF-INCLUSIVE — every entry is trivially a member of its own cart (a
+   *  single-entry cart's own row appears here too, as a list of length 1).
+   *  Callers building the "cart siblings" section filter their own row's id
+   *  back out; this same map is also how `formFieldsByRegistration` below
+   *  gets its data, without a third query — see fetchRegistrantDetails'
+   *  own comment. */
+  siblingsByGroup: Map<string, RegistrantCartSibling[]>;
+  /** Keyed by REGISTRATION id (not division id) — read off the same joined
+   *  query as siblingsByGroup, a LEFT JOIN to registration_settings on each
+   *  returned entry's own division. */
+  formFieldsByRegistration: Map<string, RegistrationFormField[]>;
+}
+
+interface RawPlayerRow {
+  registration_id: string;
+  id: string;
+  full_name: string;
+  squad_number: number | null;
+  is_captain: boolean;
+  consent_status: ConsentStatus;
+}
+
+interface RawSiblingRow {
+  id: string;
+  group_id: string;
+  display_name: string;
+  status: RegistrationListRow["status"];
+  division_name: string;
+  /** LEFT JOIN — null for a division with no registration_settings row at
+   *  all (same "predates configuration" case listRegistrations' own doc
+   *  comment describes; see also RawDivisionRow above). */
+  form_fields: RegistrationFormField[] | null;
+}
+
+/**
+ * The row-expand detail's data (task 3): the roster and cart siblings behind
+ * every row on the CURRENT page, batched into exactly TWO queries regardless
+ * of row count — never one query per row, which a 200-row competition-wide
+ * hub view would turn into 200+ round trips:
+ *
+ *  1. registration_players WHERE registration_id IN (this page's row ids).
+ *  2. registrations (JOIN divisions, LEFT JOIN registration_settings) WHERE
+ *     group_id IN (this page's DISTINCT group ids).
+ *
+ * Query 2 is also where `form_fields` (the answers label lookup, task 2)
+ * comes from, rather than a third query keyed by division: every page row's
+ * OWN registration is necessarily a member of its OWN group (a cart always
+ * contains itself), so query 2's result set already carries one row per
+ * page-row with that row's own division's form_fields attached — reading it
+ * back off the SAME rows used for the siblings section costs nothing extra.
+ *
+ * Both results are grouped into Maps in JS afterwards — one `.push` per
+ * result row, never a query inside a loop. Skips both queries entirely when
+ * `rows` is empty, so this stays correct standalone rather than relying on
+ * the caller never passing one (the panel does not reach the table in that
+ * case, but page.tsx calls this unconditionally rather than special-casing
+ * "no rows" itself).
+ */
+export async function fetchRegistrantDetails(
+  auth: Pick<AuthCtx, "orgId">,
+  rows: Pick<RegistrationListRow, "id" | "group_id">[],
+): Promise<RegistrantDetails> {
+  const registrationIds = rows.map((r) => r.id);
+  const groupIds = [...new Set(rows.map((r) => r.group_id))];
+  if (registrationIds.length === 0) {
+    return {
+      rosterByRegistration: new Map(),
+      siblingsByGroup: new Map(),
+      formFieldsByRegistration: new Map(),
+    };
+  }
+
+  return withTenant(auth.orgId, async (tx) => {
+    const players = await tx<RawPlayerRow[]>`
+      select registration_id, id, full_name, squad_number, is_captain, consent_status
+      from registration_players
+      where registration_id in ${tx(registrationIds)}
+      order by is_captain desc, squad_number nulls last, full_name, id`;
+
+    const rosterByRegistration = new Map<string, RegistrantRosterPlayer[]>();
+    for (const p of players) {
+      const list = rosterByRegistration.get(p.registration_id) ?? [];
+      list.push({
+        id: p.id,
+        full_name: p.full_name,
+        squad_number: p.squad_number,
+        is_captain: p.is_captain,
+        consent_status: p.consent_status,
+      });
+      rosterByRegistration.set(p.registration_id, list);
+    }
+
+    const siblingRows = await tx<RawSiblingRow[]>`
+      select r.id, r.group_id, r.display_name, r.status, d.name as division_name,
+        rs.form_fields
+      from registrations r
+      join divisions d on d.id = r.division_id
+      left join registration_settings rs on rs.division_id = r.division_id
+      where r.group_id in ${tx(groupIds)}
+      order by r.created_at, r.id`;
+
+    const siblingsByGroup = new Map<string, RegistrantCartSibling[]>();
+    const formFieldsByRegistration = new Map<string, RegistrationFormField[]>();
+    for (const s of siblingRows) {
+      const list = siblingsByGroup.get(s.group_id) ?? [];
+      list.push({
+        id: s.id,
+        display_name: s.display_name,
+        division_name: s.division_name,
+        status: s.status,
+      });
+      siblingsByGroup.set(s.group_id, list);
+      formFieldsByRegistration.set(s.id, s.form_fields ?? []);
+    }
+
+    return { rosterByRegistration, siblingsByGroup, formFieldsByRegistration };
+  });
 }

@@ -5,10 +5,14 @@ import { describe, expect, it } from "vitest";
 import { RegistrationStatus } from "@/server/api-v1/schemas";
 import {
   REGISTRANT_STATUS_STYLE,
+  CONSENT_STATUS_STYLE,
   hasActiveFilters,
   registrantsExportHref,
+  deriveRegistrantPaymentState,
+  answerLabel,
 } from "@/components/registration-hub-registrant-derive";
 import type { RegistrantsFilters } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
+import type { RegistrationFormField } from "@/server/api-v1/schemas";
 
 const BASE: RegistrantsFilters = {
   status: null,
@@ -86,5 +90,83 @@ describe("registrantsExportHref", () => {
 
   it("always includes sort, even at the default, so the export matches exactly what's on screen", () => {
     expect(registrantsExportHref("comp-1", BASE)).toContain("sort=newest");
+  });
+});
+
+// RS005 W2b — the row-expand detail's own pure derivations: the consent
+// chip style map, the payment-state word, and the answers label lookup.
+describe("CONSENT_STATUS_STYLE", () => {
+  // No shared zod enum exists for this column (unlike RegistrationStatus) —
+  // registration_players.consent_status (V363) is only ever a 2-value zod
+  // subset elsewhere (schemas.ts's ClaimPlayer, deliberately excluding
+  // 'pending' for that different use). So this pins the literal 3-value set
+  // the DB CHECK constraint declares, by hand, rather than iterating a
+  // schema this column has none of.
+  it("has exactly the 3 real consent_status values, no more, no fewer", () => {
+    expect(Object.keys(CONSENT_STATUS_STYLE).sort()).toEqual(["granted", "guardian", "pending"]);
+  });
+});
+
+const PAYMENT_BASE = {
+  amount_cents: 1500,
+  refunded_cents: 0,
+  disputed_at: null,
+  offline_marked_paid_at: null,
+  status: "confirmed" as const,
+};
+
+describe("deriveRegistrantPaymentState", () => {
+  it("a disputed entry is 'disputed' regardless of anything else", () => {
+    expect(
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, disputed_at: new Date(), refunded_cents: 1500 }),
+    ).toBe("disputed");
+  });
+
+  it("refunded in full is 'refunded'", () => {
+    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, refunded_cents: 1500 })).toBe("refunded");
+  });
+
+  it("refunded less than the amount is 'partiallyRefunded'", () => {
+    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, refunded_cents: 500 })).toBe("partiallyRefunded");
+  });
+
+  it("a zero-fee entry is 'free', even with a non-null offline_marked_paid_at", () => {
+    expect(
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, amount_cents: 0, offline_marked_paid_at: new Date() }),
+    ).toBe("free");
+  });
+
+  it("marked paid offline, no refund, is 'paidOffline'", () => {
+    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, offline_marked_paid_at: new Date() })).toBe(
+      "paidOffline",
+    );
+  });
+
+  it("status paid or confirmed, no offline mark, is 'paid' (card payment captured)", () => {
+    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "paid" })).toBe("paid");
+    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "confirmed" })).toBe("paid");
+  });
+
+  it("a pending fee-bearing entry with no payment yet is 'awaitingPayment'", () => {
+    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "pending" })).toBe("awaitingPayment");
+  });
+});
+
+const FIELDS: RegistrationFormField[] = [
+  { key: "dietary_reqs", label: "Dietary requirements", kind: "text", required: false },
+  { key: "shirt_size", label: "Shirt size", kind: "select", options: ["S", "M", "L"], required: true },
+];
+
+describe("answerLabel", () => {
+  it("resolves a declared key to its form-field label", () => {
+    expect(answerLabel("dietary_reqs", FIELDS)).toBe("Dietary requirements");
+  });
+
+  it("falls back to the raw key when it is not declared on the division's form", () => {
+    expect(answerLabel("mystery_key", FIELDS)).toBe("mystery_key");
+  });
+
+  it("falls back to the raw key when there are no fields at all", () => {
+    expect(answerLabel("dietary_reqs", [])).toBe("dietary_reqs");
   });
 });

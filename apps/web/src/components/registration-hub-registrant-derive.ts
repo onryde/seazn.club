@@ -1,12 +1,15 @@
-// Registration hub — Registrants tab pure derivations (RS005 W2a): the
+// Registration hub — Registrants tab pure derivations (RS005 W2a/W2b): the
 // status-pill style map, "is any filter active" (which of the two empty
-// states to show), and the CSV export href builder. Pure and
+// states to show), the CSV export href builder, and (W2b) the row-expand
+// detail's own pure derivations — the consent chip style map, the
+// payment-state word, and the answers label lookup. Pure and
 // dependency-light (no React, no i18n, no DB) so every boundary is
 // unit-testable without a component render or a database — same convention
 // as registration-hub-row-derive.ts/registration-hub-status.ts for the
 // Settings tab.
 import type { RegistrationListRow } from "@/server/usecases/registrations";
-import type { RegistrantsFilters } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
+import type { RegistrationFormField } from "@/server/api-v1/schemas";
+import type { RegistrantsFilters, ConsentStatus } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 
 /** Keyed by `Record<..., string>` against the REAL status union (not a
  *  hand-copied string literal list) so a missing entry is a compile error,
@@ -75,4 +78,68 @@ function registrantsQueryString(filters: RegistrantsFilters): string {
  *  PDF link is the single-button case this mirrors most closely). */
 export function registrantsExportHref(competitionId: string, filters: RegistrantsFilters): string {
   return `/api/v1/competitions/${competitionId}/registrations/export?${registrantsQueryString(filters)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Row-expand detail (RS005 W2b).
+// ---------------------------------------------------------------------------
+
+/** `registration_players.consent_status` (V363 CHECK constraint) — no
+ *  shared zod enum exists for the full 3-value set to iterate against (see
+ *  the test file's own comment), so this is a hand-kept map like
+ *  REGISTRANT_STATUS_STYLE was before RS005 W1b, just for a column that has
+ *  no schema of its own to drift out of sync with. */
+export const CONSENT_STATUS_STYLE: Record<ConsentStatus, string> = {
+  pending: "bg-amber-100 text-amber-700",
+  granted: "bg-green-100 text-green-700",
+  guardian: "bg-blue-100 text-blue-700",
+};
+
+export type RegistrantPaymentState =
+  | "disputed"
+  | "refunded"
+  | "partiallyRefunded"
+  | "paidOffline"
+  | "paid"
+  | "awaitingPayment"
+  | "free";
+
+/**
+ * The detail panel's "payment state" field (task 2) — distinct from
+ * `row.status` (shown alongside it): status is the REGISTRATION's lifecycle,
+ * this is the MONEY's. A rejected entry that was already paid and refunded
+ * reads "Rejected · Refunded"; one that was never charged reads "Rejected ·
+ * Awaiting payment" — the pairing is what tells an organiser whether money
+ * actually moved, which `status` alone cannot say.
+ *
+ * Precedence, checked in order: a dispute wins over everything (Stripe has
+ * already pulled the money back pending resolution); then refunded/partially
+ * refunded; then a zero-fee entry is simply "free" (never "awaiting
+ * payment" — there is nothing to await); then an offline mark; then a
+ * paid/confirmed status with no offline mark reads as a captured card
+ * payment; anything left (an unpaid fee-bearing entry) is "awaitingPayment".
+ */
+export function deriveRegistrantPaymentState(
+  row: Pick<
+    RegistrationListRow,
+    "amount_cents" | "refunded_cents" | "disputed_at" | "offline_marked_paid_at" | "status"
+  >,
+): RegistrantPaymentState {
+  if (row.disputed_at !== null) return "disputed";
+  if (row.refunded_cents > 0) {
+    return row.refunded_cents >= row.amount_cents ? "refunded" : "partiallyRefunded";
+  }
+  if (row.amount_cents === 0) return "free";
+  if (row.offline_marked_paid_at !== null) return "paidOffline";
+  if (row.status === "paid" || row.status === "confirmed") return "paid";
+  return "awaitingPayment";
+}
+
+/** Answers label lookup (task 2): the division's declared form-field LABEL
+ *  for a raw answers key, falling back to the key itself when it is not (or
+ *  no longer) declared — an organiser reading a bare key like "dietary_reqs"
+ *  learns nothing; a division's own form_fields (registration_settings,
+ *  V211/RS004) is the only place that mapping lives. */
+export function answerLabel(key: string, fields: RegistrationFormField[]): string {
+  return fields.find((f) => f.key === key)?.label ?? key;
 }
