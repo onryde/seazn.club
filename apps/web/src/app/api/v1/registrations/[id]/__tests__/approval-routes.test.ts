@@ -126,8 +126,25 @@ describe.skipIf(!HAS_DB)("POST /registrations/:id/approve", () => {
     );
     expect(httpStatus).toBe(200);
     expect(body.data!.status).toBe("confirmed");
-    expect(body.data!.entrant_id).toEqual(expect.any(String));
     expect(body.data).not.toHaveProperty("access_token_hash");
+
+    // RS005 coverage audit: this asserted `expect.any(String)` on entrant_id
+    // and nothing else. That is a claim about a STRING, not about a row — it
+    // passes against an id pointing at nothing, which is the same shape of
+    // false green RS002 recorded when `materialise`'s idempotency guard had
+    // zero real coverage.
+    //
+    // The acceptance criterion is that the approved registration shows up as
+    // a real ENTRANT in its division: that is what an organiser opens the
+    // entrants tab to see after approving someone, and an entrant_id that
+    // resolves to nothing means they approved a person who never made it into
+    // the competition.
+    const entrantId = body.data!.entrant_id as string;
+    const [entrant] = await sql<{ id: string; division_id: string; display_name: string; status: string }[]>`
+      select id, division_id, display_name, status from entrants where id = ${entrantId}`;
+    expect(entrant, "entrant_id must resolve to a real entrant row").toBeTruthy();
+    expect(entrant!.division_id).toBe(registration.division_id);
+    expect(entrant!.display_name).toBe(registration.display_name);
   });
 
   it("authz: owner and admin allowed; viewer and scorer denied", async () => {
