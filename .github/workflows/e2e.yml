@@ -93,7 +93,7 @@ jobs:
   # ---------------------------------------------------------------------
   e2e-parallel:
     name: Playwright e2e — ${{ matrix.group }} (Postgres container)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: avrea-ubuntu-latest-4-vcpu
     # No job here had a timeout, so GitHub's 360-minute default applied. Over
     # the 100 runs to 2026-08-19, 15 e2e jobs ran past 30 minutes and burned
     # 46% of this workflow's entire runner time (2,499 of 5,403 minutes); five
@@ -459,7 +459,7 @@ jobs:
   # ---------------------------------------------------------------------
   e2e-serial:
     name: Playwright e2e — serial (Postgres container)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: avrea-ubuntu-latest-4-vcpu
     # See e2e-parallel's timeout note: no job here had one, so a hung
     # Playwright run burned GitHub's 360-minute default. p95 is ~7 minutes.
     timeout-minutes: 20
@@ -693,7 +693,7 @@ jobs:
   # ---------------------------------------------------------------------
   e2e-mobile:
     name: Playwright e2e — ${{ matrix.group }} (Postgres container)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: avrea-ubuntu-latest-4-vcpu
     # See e2e-parallel's timeout note: no job here had one, so a hung
     # Playwright run burned GitHub's 360-minute default. p95 is ~7 minutes.
     timeout-minutes: 20
