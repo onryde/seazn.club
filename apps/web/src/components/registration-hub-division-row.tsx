@@ -76,6 +76,16 @@ export interface RegistrationHubRowContext {
    *  shared callback (identity stable across every row), same reasoning as
    *  every other field here — the settings-panel owns which row is open. */
   onOpen: (divisionId: string) => void;
+  /** RS005 W2a follow-up. The hub used to 404 anyone who could not edit
+   *  (RS004 ruling 2), so every reader of this row was an owner or admin and
+   *  Configure could render unconditionally. The owner reversed that on
+   *  2026-08-25 — viewers now get the hub read-only — which left a viewer
+   *  looking at a Configure button that opens a panel whose every save 403s.
+   *
+   *  The control is ABSENT rather than disabled, per the same ruling: the API
+   *  refuses a viewer regardless, so a greyed button would only advertise a
+   *  capability they do not have. */
+  canEdit: boolean;
 }
 
 const STATUS_STYLE: Record<RegistrationHubStatus, string> = {
@@ -200,15 +210,17 @@ export function RegistrationHubDivisionRow({
         <span data-feature="registration.paid" className="shrink-0 text-xs font-semibold tabular-nums text-slate-700">
           {feeText}
         </span>
-        <button
-          type="button"
-          data-registration-hub-row-configure
-          onClick={() => context.onOpen(row.division_id)}
-          aria-label={t(dict, "reg.hub.row.configure", { name: row.name })}
-          className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-purple-50 hover:text-purple-700"
-        >
-          <SlidersHorizontal className="h-4 w-4" strokeWidth={1.75} aria-hidden />
-        </button>
+        {context.canEdit && (
+          <button
+            type="button"
+            data-registration-hub-row-configure
+            onClick={() => context.onOpen(row.division_id)}
+            aria-label={t(dict, "reg.hub.row.configure", { name: row.name })}
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-purple-50 hover:text-purple-700"
+          >
+            <SlidersHorizontal className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+          </button>
+        )}
       </div>
 
       {/* Secondary line: everything else, small and muted — present, never

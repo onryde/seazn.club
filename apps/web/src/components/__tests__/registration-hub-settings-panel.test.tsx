@@ -31,6 +31,7 @@ const CONTEXT: Omit<RegistrationHubRowContext, "onOpen"> = {
   registerHref: "/shared/riverside/summer-league/register",
   registerQrFileName: "register-summer-league.png",
   showRegisterLink: true,
+  canEdit: true,
 };
 
 const ROW: RegistrationHubRowData = {

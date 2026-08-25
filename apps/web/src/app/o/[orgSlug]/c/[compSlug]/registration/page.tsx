@@ -132,6 +132,10 @@ export default async function RegistrationHubPage({
       registerHref: routes.publicRegister(orgSlug, compSlug),
       registerQrFileName: `register-${competition.slug}.png`,
       showRegisterLink: competition.visibility !== "private",
+      // Same reversal as the Registrants tab: the page no longer 404s a
+      // viewer, so the Settings tab has a read-only audience for the first
+      // time and its Configure control has to know that.
+      canEdit,
     };
 
     panel = (

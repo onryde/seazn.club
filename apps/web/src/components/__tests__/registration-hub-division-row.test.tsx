@@ -47,6 +47,7 @@ const BASE_CONTEXT: RegistrationHubRowContext = {
   registerQrFileName: "register-summer-league.png",
   showRegisterLink: true,
   onOpen: vi.fn(),
+  canEdit: true,
 };
 
 describe("RegistrationHubDivisionRow — identity", () => {
@@ -186,6 +187,30 @@ describe("RegistrationHubDivisionRow — Configure affordance, same contract as 
     const tree = walk(RegistrationHubDivisionRow({ row: { ...BASE_ROW, name: "Open Doubles" }, context: BASE_CONTEXT }));
     const btn = tree.find((e) => propsOf(e)["data-registration-hub-row-configure"] !== undefined);
     expect(propsOf(btn!)["aria-label"]).toBe(t(uiEn, "reg.hub.row.configure", { name: "Open Doubles" }));
+  });
+
+  // RS005 W2a follow-up. Until 2026-08-25 the hub 404'd anyone who could not
+  // edit, so every reader of this row was an owner or admin. The owner
+  // reversed that (viewers get the hub read-only), which stranded a viewer in
+  // front of a Configure button opening a panel whose every save 403s — the
+  // organiser-facing cost being that a viewer believes they can administer
+  // registration until the moment they try. Absent, not disabled: the API
+  // refuses them either way, so a greyed control would only advertise it.
+  it("renders NO Configure button for a viewer", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, canEdit: false } }),
+    );
+    expect(tree.some((e) => propsOf(e)["data-registration-hub-row-configure"] !== undefined)).toBe(false);
+  });
+
+  it("still renders the rest of the row for a viewer — read-only, not empty", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, canEdit: false } }),
+    );
+    // The scan line an organiser reads is the whole point of the read-only
+    // view; a viewer losing the fee/capacity cells would be a different bug.
+    expect(tree.some((e) => propsOf(e)["data-feature"] === "registration.paid")).toBe(true);
+    expect(tree.some((e) => propsOf(e)["data-registration-hub-row"] !== undefined)).toBe(true);
   });
 });
 
