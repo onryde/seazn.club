@@ -3891,6 +3891,8 @@
   "pad.tennis.scorebug.strip.server": "Al servicio",
   "pad.tennis.scorebug.strip.endsChanged": "Cambio de lado",
   "pad.tennis.dock.point.title": "¿Cómo se ganó el punto?",
+  "pad.tennis.dock.point.scorer.title": "¿Quién ganó el punto?",
+  "pad.tennis.dock.person": "Jugador",
   "pad.tennis.sheet.setScore.home.title": "Juegos — Local",
   "pad.tennis.sheet.setScore.away.title": "Juegos — Visitante",
   "pad.tennis.sheet.setScore.tbHome.title": "Puntos de tie-break — Local",

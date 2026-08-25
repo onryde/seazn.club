@@ -472,6 +472,20 @@ function buildHalf(
   // `EVENT_BAND` doc states.
   const tappable = resolvePhase(view) === "live" && view.band >= 3;
   const server = serving?.personId ?? undefined;
+  // R4-5 (owner ruling, 2026-08-25): SINGLES auto-set. `players` above is
+  // this side's WHOLE on-field roster — one person for an individual
+  // entrant, two for a pair (this file's own header, D-3's false-premises
+  // note: a "unit" is not a person count) — so a length-1 side has nothing
+  // to choose: its sole member IS whoever scores off this half's tap, and
+  // that is stamped INTO THE TAP ITSELF rather than left for the dock's
+  // second question. This is "the only member", NOT a second copy of
+  // `servingInfo`'s pair-rotation rule (`serveContext`) — it never asks who
+  // is SERVING, only who is on this side at all, so it holds even while
+  // `hasStaleServeInfo` would refuse to name a server. A doubles side
+  // (`players.length > 1`) is left OFF the payload here on purpose — R4-5
+  // makes that the dock's own second step, once the shot type is chosen
+  // (see `buildDock` below).
+  const soleScorer = players.length === 1 ? players[0]?.personId : undefined;
   return {
     who,
     big: pointBig(state.points, side),
@@ -481,7 +495,11 @@ function buildHalf(
           hintKey: "pad.tennis.scorebug.point.hint",
           tapEvent: {
             type: POINT_TYPE,
-            payload: { by: entrantOf(state, side), ...(server !== undefined ? { server } : {}) },
+            payload: {
+              by: entrantOf(state, side),
+              ...(server !== undefined ? { server } : {}),
+              ...(soleScorer !== undefined ? { scorer: soleScorer } : {}),
+            },
           },
         }
       : {}),
@@ -921,6 +939,24 @@ function pointKindChip(kind: string): DockChip {
   };
 }
 
+function nameOf(view: PadHostView, personId: string, t: TFn): string {
+  return view.personNames[personId] ?? t("eventCopy.unknownPerson");
+}
+
+/** R4-5's second question: one chip per pair member, `labelText`-ed with
+ *  their own name — football's goal-dock `personChip` takes the identical
+ *  posture (`DockChip.labelText`, types.ts): a display name is not a
+ *  dictionary key, and routing one through `t()` fires a missing-key
+ *  warning on every render while only rendering right by accident. */
+function scorerChip(personId: string, labelText: string): DockChip {
+  return {
+    id: `scorer:${personId}`,
+    label: "pad.tennis.dock.person",
+    labelText,
+    mutate: (payload) => ({ ...payload, scorer: personId }),
+  };
+}
+
 export function buildDock(
   eventType: string,
   view: PadHostView,
@@ -953,7 +989,42 @@ export function buildDock(
   // this task's grant) MUST tap a chip on a live point and assert the
   // resulting event's DRAINED `meta.kind`, not merely that this function
   // returns the right thing when handed the answer already.
-  if (kind !== undefined) return { title, chips: [pointKindChip(kind)] };
+  if (kind !== undefined) {
+    // R4-5 (owner ruling, 2026-08-25) — DOUBLES' own second question: which
+    // pair member won the point. `by` names the side that WON this point
+    // (tapModel S — the half tapped IS the winning side), so the winning
+    // pair is `onFieldPlayers` for that SAME side; `side` is read from the
+    // PAYLOAD (bound above), for the identical staleness reason `serverSide`
+    // below already documents — by the time this renders, the optimistic
+    // fold has moved past this point, so `view.state` cannot be trusted for
+    // it either.
+    //
+    // SINGLES never reaches the chip branch in real use: `buildHalf` (R4-5,
+    // above) already stamped `scorer` onto the tapEvent itself, so `scorer`
+    // is already defined the instant `kind` lands. The guard below is still
+    // `pair.length > 1` — NOT merely "`scorer` is undefined" — so "nothing
+    // to choose" holds even for a hand-built payload that skips the
+    // tap-time step (this file's own unit tests do exactly that), rather
+    // than leaning on `buildHalf` having run first.
+    //
+    // THE SAME INERT RISK AS ABOVE, ONE STEP DEEPER. This branch is exactly
+    // as unit-testable, and exactly as unproven by that testability: whether
+    // tapping a scorer chip ACTUALLY re-renders the dock down to the single
+    // kind chip depends on the identical `DetailDock` re-render this file
+    // cannot exercise. Confirming a doubles point's `scorer` survives to the
+    // DRAINED event is the e2e task's proof to carry, not this suite's.
+    const scorer = typeof payload?.scorer === "string" ? payload.scorer : undefined;
+    if (side !== null && scorer === undefined) {
+      const pair = onFieldPlayers(view.squads, side);
+      if (pair.length > 1) {
+        return {
+          title: t("pad.tennis.dock.point.scorer.title"),
+          chips: pair.map((member) => scorerChip(member.personId, nameOf(view, member.personId, t))),
+        };
+      }
+    }
+    return { title, chips: [pointKindChip(kind)] };
+  }
 
   // Legality by SIDE, read from the PAYLOAD — by the time the dock renders,
   // the optimistic fold has already advanced past this point, so `view.state`

@@ -2925,6 +2925,8 @@ export type DictionaryKey =
   | "pad.tennis.action.setScoreTiebreak"
   | "pad.tennis.context.line"
   | "pad.tennis.context.tiebreak"
+  | "pad.tennis.dock.person"
+  | "pad.tennis.dock.point.scorer.title"
   | "pad.tennis.dock.point.title"
   | "pad.tennis.panel.gameAward"
   | "pad.tennis.panel.interruptions"

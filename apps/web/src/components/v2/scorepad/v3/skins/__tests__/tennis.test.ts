@@ -473,6 +473,24 @@ describe("buildScorebug", () => {
     expect(spec.halves[1]!.tapEvent?.payload.server).toBe("H");
   });
 
+  it("R4-5: SINGLES stamps `scorer` on the tapEvent automatically — the side's sole on-field member", () => {
+    const spec = buildScorebug(view(), t); // default view() = singlesSquads()
+    expect(spec.halves[0]!.tapEvent?.payload.scorer).toBe("H");
+    expect(spec.halves[1]!.tapEvent?.payload.scorer).toBe("A");
+  });
+
+  it("R4-5 MUTATION PROOF: singles' auto-scorer is the TAPPED side's own member, never the other side's", () => {
+    const spec = buildScorebug(view(), t);
+    expect(spec.halves[0]!.tapEvent?.payload.scorer).not.toBe("A");
+    expect(spec.halves[1]!.tapEvent?.payload.scorer).not.toBe("H");
+  });
+
+  it("R4-5: DOUBLES leaves `scorer` OFF the tapEvent — nobody is auto-picked from a pair", () => {
+    const spec = buildScorebug(view({ squads: doublesSquads(true) }), t);
+    expect(spec.halves[0]!.tapEvent?.payload).not.toHaveProperty("scorer");
+    expect(spec.halves[1]!.tapEvent?.payload).not.toHaveProperty("scorer");
+  });
+
   it("halves are NOT tappable below band 3 — band 0 would be a dead-end tap (tennis.point is band 3)", () => {
     const spec = buildScorebug(view({ band: 0 }), t);
     for (const half of spec.halves) {
@@ -929,6 +947,73 @@ describe("buildDock — legality by side, read from the PAYLOAD not the live vie
     // A-first served (person-level), H won the point (side-level) -> receiver's point.
     const spec = buildDock("tennis.point", doubles, t, { by: "H", server: "A-first" })!;
     expect(spec.chips.map((c) => c.id)).toEqual(["double_fault", "winner", "ue"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildDock — R4-5's doubles scorer step (the dock's SECOND question).
+// ---------------------------------------------------------------------------
+
+describe("buildDock — R4-5 doubles scorer step", () => {
+  it("does not appear before a shot type is chosen — step 1 stays kind-only, even in doubles", () => {
+    const doubles = view({ squads: doublesSquads(true) });
+    const spec = buildDock("tennis.point", doubles, t, { by: "H", server: "H-first" })!; // no meta.kind yet
+    expect(spec.chips.map((c) => c.id)).toEqual(["ace", "winner", "ue"]);
+    expect(spec.chips.some((c) => c.id.startsWith("scorer:"))).toBe(false);
+  });
+
+  it("offers exactly the WINNING pair's two players once a kind lands, doubles only", () => {
+    const doubles = view({ squads: doublesSquads(true) });
+    const spec = buildDock("tennis.point", doubles, t, { by: "H", server: "H-first", meta: { kind: "ace" } })!;
+    expect(spec.chips.map((c) => c.id)).toEqual(["scorer:H-first", "scorer:H-second"]);
+  });
+
+  it("MUTATION PROOF: never offers the LOSING side's pair — only the side that won the point (`by`)", () => {
+    const doubles = view({ squads: doublesSquads(true) });
+    const spec = buildDock("tennis.point", doubles, t, {
+      by: "A",
+      server: "H-first",
+      meta: { kind: "double_fault" },
+    })!;
+    const ids = spec.chips.map((c) => c.id);
+    expect(ids).toEqual(["scorer:A-first", "scorer:A-second"]);
+    expect(ids).not.toContain("scorer:H-first");
+    expect(ids).not.toContain("scorer:H-second");
+  });
+
+  it("labels each chip with the player's own NAME via labelText, never a dictionary lookup", () => {
+    const doubles = view({ squads: doublesSquads(true) });
+    const spec = buildDock("tennis.point", doubles, t, { by: "H", server: "H-first", meta: { kind: "ace" } })!;
+    expect(spec.chips.map((c) => c.labelText)).toEqual([NAMES["H-first"], NAMES["H-second"]]);
+    expect(spec.chips.every((c) => c.label === "pad.tennis.dock.person")).toBe(true);
+  });
+
+  it("SINGLES never reaches this step, even with no `scorer` in the payload — nothing to choose", () => {
+    const spec = buildDock("tennis.point", view(), t, { by: "H", server: "H", meta: { kind: "ace" } })!;
+    expect(spec.chips.map((c) => c.id)).toEqual(["ace"]);
+  });
+
+  it("collapses back to the kind chip once `scorer` is answered — the answered question stops being asked", () => {
+    const doubles = view({ squads: doublesSquads(true) });
+    const spec = buildDock("tennis.point", doubles, t, {
+      by: "H",
+      server: "H-first",
+      scorer: "H-first",
+      meta: { kind: "ace" },
+    })!;
+    expect(spec.chips.map((c) => c.id)).toEqual(["ace"]);
+  });
+
+  it("a chosen scorer chip's mutate sets `scorer` and preserves the rest of the payload", () => {
+    const doubles = view({ squads: doublesSquads(true) });
+    const spec = buildDock("tennis.point", doubles, t, { by: "H", server: "H-first", meta: { kind: "ace" } })!;
+    const chip = spec.chips.find((c) => c.id === "scorer:H-second")!;
+    expect(chip.mutate({ by: "H", server: "H-first", meta: { kind: "ace" } })).toEqual({
+      by: "H",
+      server: "H-first",
+      meta: { kind: "ace" },
+      scorer: "H-second",
+    });
   });
 });
 

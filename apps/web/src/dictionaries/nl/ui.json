@@ -3891,6 +3891,8 @@
   "pad.tennis.scorebug.strip.server": "Aan opslag",
   "pad.tennis.scorebug.strip.endsChanged": "Van kant gewisseld",
   "pad.tennis.dock.point.title": "Hoe werd het punt gewonnen?",
+  "pad.tennis.dock.point.scorer.title": "Wie won het punt?",
+  "pad.tennis.dock.person": "Speler",
   "pad.tennis.sheet.setScore.home.title": "Games — Thuis",
   "pad.tennis.sheet.setScore.away.title": "Games — Uit",
   "pad.tennis.sheet.setScore.tbHome.title": "Tiebreakpunten — Thuis",

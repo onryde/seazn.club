@@ -3891,6 +3891,8 @@
   "pad.tennis.scorebug.strip.server": "Serving",
   "pad.tennis.scorebug.strip.endsChanged": "Ends changed",
   "pad.tennis.dock.point.title": "How was the point won?",
+  "pad.tennis.dock.point.scorer.title": "Who won the point?",
+  "pad.tennis.dock.person": "Player",
   "pad.tennis.sheet.setScore.home.title": "Games — Home",
   "pad.tennis.sheet.setScore.away.title": "Games — Away",
   "pad.tennis.sheet.setScore.tbHome.title": "Tie-break points — Home",

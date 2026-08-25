@@ -3891,6 +3891,8 @@
   "pad.tennis.scorebug.strip.server": "Au service",
   "pad.tennis.scorebug.strip.endsChanged": "Changement de côté",
   "pad.tennis.dock.point.title": "Comment le point a-t-il été gagné ?",
+  "pad.tennis.dock.point.scorer.title": "Qui a gagné le point ?",
+  "pad.tennis.dock.person": "Joueur",
   "pad.tennis.sheet.setScore.home.title": "Jeux — Domicile",
   "pad.tennis.sheet.setScore.away.title": "Jeux — Extérieur",
   "pad.tennis.sheet.setScore.tbHome.title": "Points de tie-break — Domicile",
