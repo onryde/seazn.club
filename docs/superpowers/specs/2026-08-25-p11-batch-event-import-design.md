@@ -34,12 +34,22 @@ Recorded as discovered, per `_RULES.md` §5.
    about stats is inherited. The careers-day-one claim is still provable —
    through the read path, which is where regression (b) now asserts it. A
    test that waited for a fire would have passed vacuously forever.
-2. **The hash chain is not application code.** `appendEvent` never computes
-   a hash. `prev_hash` and the row hash are written by a database trigger,
+2. **The hash chain is not application code, and it cannot be compared
+   across twins.** `appendEvent` never computes a hash. `prev_hash` and
+   `row_hash` are written by a `before insert` trigger,
    `db/migration/v2-engine/functions/V226__hash_chain_functions.sql:10,14-31`.
-   Chain integrity therefore comes free to anything that inserts through
-   the real writer, and byte-equality with a sequential twin is a *proof of
-   reuse*, not a thing to implement.
+   Two consequences, both of which invalidate what the prompt and the D6
+   spec ask for:
+   - The chain fires for **any** insert into `score_events`, including one
+     from a hypothetical second writer. Chain integrity therefore proves
+     nothing about code reuse.
+   - The canonical string hashed is
+     `id | fixture_id | seq | type | payload | voids | recorded_by | recorded_at`
+     (V226:21-25). An imported fixture has different event ids, a different
+     `fixture_id` and a different `recorded_at` from any twin, so
+     **"a hash chain byte-identical to a sequentially-scored twin" is
+     impossible by construction** — not merely hard. §9 replaces that
+     assertion with one that can actually hold and actually bites.
 3. **`scoring.ts:81` (the prompt's pin) is stale.** The current entry point
    is `scoreEvent` at `apps/web/src/server/usecases/scoring.ts:82`, and the
    transactional writer under it is
@@ -50,7 +60,11 @@ Recorded as discovered, per `_RULES.md` §5.
    is SQL-seeded rows in `plan_entitlements`
    (`db/migration/deltas/V112__entitlements_v2.sql:21`), and per-org grants
    already exist in `org_entitlement_overrides`, resolved ahead of the plan
-   row. Adding a key is a seed row, not a type edit.
+   row. Adding a key is a seed row, not a type edit — and during rollout
+   (R5/R6) `import.events` gets **no `plan_entitlements` row at all**: a plan
+   row would grant it to every org on that plan, which is the opposite of
+   staff-only. The key exists only as a per-org override until the owner
+   decides which plan carries it. That absence IS the gate.
 5. **`fixtures.ext_key` is unique per STAGE, not per division**
    (`fixtures_stage_ext_key_idx`, `V214__fixtures.sql:32`). The D6 format's
    `{ext_key}` reference is therefore ambiguous within a division by
@@ -282,11 +296,20 @@ three caps → 413 naming its ceiling; `core.void` rejected at schema;
 
 **Regression** — the session's core:
 
-- **(a) Twin.** Score fixture A event-by-event through the live route;
-  import the identical stream into fixture B. Assert B's `score_events`
-  hash chain is byte-identical to A's per seq, and `match_states.state` /
-  `summary` match. This is the proof that the import inherited the writer
-  rather than imitating it: a second append path fails it immediately.
+- **(a) Twin — derived state, not hashes.** Build a division whose league
+  meets the same two entrants twice, so fixtures A and B share entrant
+  identity. Score A event-by-event through `scoreEvent`; import the
+  identical stream into B. Assert equality of everything the *writer*
+  derives: `match_states.summary`, `match_states.last_seq`,
+  `fixtures.outcome`, `fixtures.status`, `fixtures.config_snapshot`, and a
+  gapless `seq` 0..n. A second append path that forgot the snapshot freeze,
+  the status write, or the `match_states` upsert fails this immediately.
+  Hash **equality** is deliberately not asserted (§2.2 — impossible);
+  chain **integrity** is asserted separately, by recomputing
+  `v2_row_hash(prev, canonical)` over the imported rows in SQL and checking
+  each row links to its predecessor. That catches a future bulk insert that
+  bypasses the trigger, which is a different failure from the one the twin
+  catches.
 - **(b) Careers day one.** Import a finished fixture, then read
   `divisionPlayerStats` and `personStats` and assert the imported history
   appears. A **read-path** test by design (§2.1).
