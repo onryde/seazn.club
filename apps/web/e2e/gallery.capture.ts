@@ -802,14 +802,18 @@ const SPORTS: GallerySport[] = [
     sportKey: "tennis",
     variantKey: "doubles-noad-mtb10",
     entrantKind: "pair",
+    // `pairOrder` is what makes the serve pip renderable at all: without a
+    // DECLARED order `expectedDoublesServer` answers null for the side and the
+    // pad has no player to mark, so these screens would picture the wave's
+    // headline feature as absent (R4, `_INDEX.md`).
     roster: (tag) => ({
       home: [
-        { fullName: `Gallery Tennis Doubles Home1 ${tag}` },
-        { fullName: `Gallery Tennis Doubles Home2 ${tag}` },
+        { fullName: `Gallery Tennis Doubles Home1 ${tag}`, pairOrder: 1 },
+        { fullName: `Gallery Tennis Doubles Home2 ${tag}`, pairOrder: 2 },
       ],
       away: [
-        { fullName: `Gallery Tennis Doubles Away1 ${tag}` },
-        { fullName: `Gallery Tennis Doubles Away2 ${tag}` },
+        { fullName: `Gallery Tennis Doubles Away1 ${tag}`, pairOrder: 1 },
+        { fullName: `Gallery Tennis Doubles Away2 ${tag}`, pairOrder: 2 },
       ],
     }),
     // Same tap-only chassis as singles tennis; the ITF doubles variant +

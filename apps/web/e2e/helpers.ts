@@ -1043,6 +1043,18 @@ export interface RosterSlotSpec {
    *  existing caller omits this and keeps seeding an all-starting XI,
    *  byte-identical to before this field existed. */
   slot?: "starting" | "bench";
+  /** R4/#tennis — the doubles serve order, `LineupSlot.pairOrder`. Which
+   *  partner of THIS pair was named first, which is a DECLARATION and cannot
+   *  be derived from `order_no` (a five-pair table-tennis tie has five
+   *  first-named players — `sports/squad-state.ts:95-104`).
+   *
+   *  Omit it for a singles or team fixture. Without it `expectedDoublesServer`
+   *  correctly answers `null` for the side, and any assertion about WHICH
+   *  PLAYER is serving is then vacuous — which is exactly what every doubles
+   *  fixture in this file and in `gallery.capture.ts` was before R4. Spread-
+   *  omitted below rather than sent as an explicit `null`, so every existing
+   *  caller keeps declaring nothing and stays byte-identical. */
+  pairOrder?: number;
 }
 
 export interface RosteredFixture {
@@ -1172,6 +1184,7 @@ export async function seedRosteredFixture(
         order_no: i + 1,
         roles: [],
         ...(s.positionKey ? { position_key: s.positionKey } : {}),
+        ...(s.pairOrder === undefined ? {} : { pair_order: s.pairOrder }),
       })),
     });
     if (res.status >= 300) {
