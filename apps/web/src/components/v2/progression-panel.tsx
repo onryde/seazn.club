@@ -181,6 +181,11 @@ export interface ProgressionPanelProps {
    *  docstring; a panel that POSTs on mount to discover its own state would
    *  reintroduce the exact side effect getSeedProposal exists to avoid. */
   proposal: SeedProposal | null;
+  /** Whether every stage this proposal's stage draws standings from has
+   *  status "complete". Only consulted when `proposal` is null — gates the
+   *  "empty, click Recompute" card, which otherwise offers a button whose
+   *  only possible outcome is a SEEDING_SOURCE_INCOMPLETE 409. */
+  sourceReady: boolean;
   fixtures: FixtureLabelRow[];
   entrantNames: Record<string, string>;
   stageNames: Record<string, string>;
@@ -192,6 +197,7 @@ export function ProgressionPanel({
   stageId,
   stageName,
   proposal,
+  sourceReady,
   fixtures,
   entrantNames,
   stageNames,
@@ -295,6 +301,7 @@ export function ProgressionPanel({
   if (!canEdit) return null;
 
   if (!proposal) {
+    if (!sourceReady) return null;
     return (
       <section className="card mb-6 p-4" data-progression-state="empty">
         <h3 className="text-sm font-semibold text-slate-800">{stageName}</h3>
