@@ -1,5 +1,6 @@
 import { v1 } from "@/server/api-v1/http";
 import { requireResourceAuth } from "@/server/api-v1/auth";
+import { organiserRegistration } from "@/server/api-v1/registration-response";
 import { rejectRegistration } from "@/server/usecases/registration-approval";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -13,9 +14,6 @@ export async function POST(req: Request, { params }: Ctx) {
     const { id } = await params;
     const auth = await requireResourceAuth(req, "registration", id, "write");
     const row = await rejectRegistration(auth, id);
-    // Strip the cart's access-token hash before it reaches an organiser
-    // session — same reasoning as the approve route's identical strip.
-    const { access_token_hash: _accessTokenHash, ...rest } = row;
-    return rest;
+    return organiserRegistration(row);
   });
 }

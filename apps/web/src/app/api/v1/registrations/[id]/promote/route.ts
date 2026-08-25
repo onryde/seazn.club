@@ -2,6 +2,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { v1, parseBody } from "@/server/api-v1/http";
 import { requireResourceAuth } from "@/server/api-v1/auth";
+import { organiserRegistration } from "@/server/api-v1/registration-response";
 import { PromoteRegistration } from "@/server/api-v1/schemas";
 import { promoteFromWaitlist } from "@/server/usecases/registration-approval";
 
@@ -33,9 +34,6 @@ export async function POST(req: Request, { params }: Ctx) {
       registrationId: input.registration_id,
     });
     if (!promoted) return null;
-    // Strip the cart's access-token hash before it reaches an organiser
-    // session — same reasoning as the approve/reject routes' identical strip.
-    const { access_token_hash: _accessTokenHash, ...rest } = promoted;
-    return rest;
+    return organiserRegistration(promoted);
   });
 }
