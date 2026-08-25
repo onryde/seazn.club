@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { Modal } from "@/components/modal";
+import { DateTimeField } from "@/components/v2/shared/datetime-field";
+import { instantToOrgTzInputValue } from "@/components/registration-hub-tz-input";
 import { FormBuilder, type FormField } from "@/components/registration-hub-form-builder";
 import type { RegistrationConfigState, RegistrationSettingsResponse } from "@/components/registration-hub-config-state";
 import { ROUTABLE_FIELDS, type ConfigFieldKey } from "@/components/registration-hub-save-error";
@@ -606,5 +608,78 @@ describe("RegistrationHubConfigPanel — the solo sign-ups toggle", () => {
     expect(toggle.toLowerCase()).toContain(chip.toLowerCase());
     // …and the jargon is gone from both.
     expect(`${toggle} ${chip}`.toLowerCase()).not.toContain("free agent");
+  });
+});
+
+// Review finding, 2026-08-25: `refund_lock_at`'s field had NO automated
+// verification of any kind — the e2e opens the Money section (so the element
+// mounts) but never fills or asserts it, and no unit test touched those lines,
+// unlike its opens_at/closes_at siblings. A silent wiring slip there — the
+// wrong `value`, a missing `dataField`, the cutoff option dropped — would have
+// shipped.
+//
+// Asserted at the PROPS the panel hands DateTimeField, not at rendered markup:
+// the harness never invokes function components (it has no jsdom), so the
+// element is exactly what this file can see, and it is also the whole contract
+// the panel owns. What DateTimeField then does with those props is that
+// component's own suite.
+describe("RegistrationHubConfigPanel — the three clock fields", () => {
+  async function clockFields() {
+    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    // Deduped by hook: `expandPanel` re-scans its own growing output, so a
+    // section reached through the Disclosure wrapper is expanded more than
+    // once and the same element surfaces repeatedly. What matters here is
+    // WHICH fields exist and what they were handed, not how many times the
+    // harness walked past them.
+    const byField = new Map<string, Record<string, unknown>>();
+    for (const el of island.tree()) {
+      if (el.type !== DateTimeField) continue;
+      const props = propsOf(el);
+      byField.set(String(props.dataField), props);
+    }
+    return [...byField.values()];
+  }
+
+  it("routes all three through the shared field, each with its own hook", async () => {
+    const fields = await clockFields();
+    expect(fields.map((f) => f.dataField)).toEqual([
+      "opens_at",
+      "closes_at",
+      "refund_lock_at",
+    ]);
+    // Every one is the composite, never a bare date or time half.
+    expect(fields.every((f) => f.kind === "datetime-local")).toBe(true);
+  });
+
+  it("gives the two CUTOFFS the 23:59 option and the opening none", async () => {
+    const fields = await clockFields();
+    const byField = Object.fromEntries(fields.map((f) => [f.dataField as string, f]));
+    // The quarter-hour grid stops at 23:45. A deadline there shuts the door
+    // fifteen minutes early; an OPENING at 23:45 is just an opening.
+    expect(byField.closes_at!.extraOptions).toEqual(["23:59"]);
+    expect(byField.refund_lock_at!.extraOptions).toEqual(["23:59"]);
+    expect(byField.opens_at!.extraOptions).toBeUndefined();
+  });
+
+  it("hands each one the value from state, converted into the ORG timezone", async () => {
+    const fields = await clockFields();
+    const byField = Object.fromEntries(fields.map((f) => [f.dataField as string, f]));
+    // RESPONSE holds 2026-01-01T00:00:00Z / 2026-02-01T00:00:00Z and a null
+    // refund lock. BASE_PROPS' org timezone is what decides the wall clock —
+    // a regression to browser-local would move these by the runner's offset.
+    expect(byField.opens_at!.value).toBe(
+      instantToOrgTzInputValue(RESPONSE.opens_at, BASE_PROPS.orgTz),
+    );
+    expect(byField.closes_at!.value).toBe(
+      instantToOrgTzInputValue(RESPONSE.closes_at, BASE_PROPS.orgTz),
+    );
+    // A null instant is an EMPTY field, never the epoch.
+    expect(byField.refund_lock_at!.value).toBe("");
+  });
+
+  it("labels each one with the zone, so a time is never bare wall-clock", async () => {
+    const fields = await clockFields();
+    for (const f of fields) expect(String(f.label)).toMatch(/\(.+\)$/);
   });
 });

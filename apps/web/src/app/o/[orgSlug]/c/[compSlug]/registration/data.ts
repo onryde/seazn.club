@@ -77,7 +77,7 @@ export async function fetchDivisionRows(
  *  a DIVISION row, so a competition with zero (non-archived) divisions
  *  returns zero rows — nothing to read a currency off at all, and
  *  `asCurrency(rawRows[0]?.org_currency)` silently defaulted to "usd".
- *  Only called from that empty-rows branch below; the common case (rows
+ *  Only called from page.tsx's empty-rows branch; the common case (rows
  *  exist) keeps reading org_currency off rawRows[0] at zero extra queries,
  *  so this never runs alongside a non-empty result and fetchDivisionRows
  *  itself still costs exactly one round trip. */
@@ -92,9 +92,9 @@ export async function fetchOrgCurrency(auth: Pick<AuthCtx, "orgId">): Promise<st
 /** The SAME finding-6 shape as `fetchOrgCurrency`, for the config panel's
  *  card-unsupported-currency message: `fetchDivisionRows`'s own column
  *  rides on a division row, so a Settings-tab competition with zero
- *  (non-archived) divisions has none to read it off. Only called from that
- *  empty-rows branch below — the common case reads it off `rawRows[0]` at
- *  zero extra queries, same as org_currency. */
+ *  (non-archived) divisions has none to read it off. Only called from
+ *  page.tsx's empty-rows branch — the common case reads it off `rawRows[0]`
+ *  at zero extra queries, same as org_currency. */
 export async function fetchOrgCardUnsupportedCurrency(
   auth: Pick<AuthCtx, "orgId">,
 ): Promise<string | null> {

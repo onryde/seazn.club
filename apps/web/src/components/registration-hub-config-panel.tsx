@@ -57,12 +57,12 @@ import {
 } from "@/components/registration-hub-config-panel-sections";
 import { instantToOrgTzInputValue, orgTzInputValueToInstant } from "@/components/registration-hub-tz-input";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
+import { fmtZoneAbbrev } from "@/lib/format";
 
 /** Appended to the time list on the two CUTOFF fields. The quarter-hour grid
  *  ends at 23:45, and a deadline that lands there closes the door 15 minutes
  *  early — the same reason the division wizard's deadlines pass this. */
 const CUTOFF_TIME_OPTIONS = ["23:59"];
-import { fmtZoneAbbrev } from "@/lib/format";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 

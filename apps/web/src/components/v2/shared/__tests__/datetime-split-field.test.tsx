@@ -155,4 +155,24 @@ describe("DateTimeSplitField", () => {
     // A viewport media query here is the bug, not an alternative spelling.
     expect(html).not.toContain("@media(min-width:");
   });
+  // A form that routes save errors and e2e locators by field name loses its
+  // handle the moment a raw <input> becomes this pair — RS004's registration
+  // hub was addressing `[data-field="opens_at"]` before the time-step sweep
+  // sent it through here. `dataField` restores it, SUFFIXED: a bare
+  // `opens_at` on either half would be a locator addressing half a value.
+  it("suffixes `dataField` across the two halves, and puts it on neither bare", () => {
+    const html = renderToStaticMarkup(
+      <DateTimeSplitField {...baseProps} dataField="opens_at" />,
+    );
+    expect(html).toMatch(/<input[^>]*data-field="opens_at_date"/);
+    expect(html).toMatch(/<select[^>]*data-field="opens_at_time"/);
+    expect(html).not.toContain('data-field="opens_at"');
+  });
+
+  it("emits no data-field attribute at all when the caller passes none", () => {
+    // The 14 call sites that predate `dataField` must not start carrying an
+    // empty or "undefined" hook — a locator would then match all of them.
+    const html = renderToStaticMarkup(<DateTimeSplitField {...baseProps} />);
+    expect(html).not.toContain("data-field");
+  });
 });
