@@ -771,7 +771,7 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     const listed = await listRegistrations(owner, division.id, "waitlisted");
     expect(listed.map((r) => r.id)).toContain(reg.registration.id);
 
-    const csv = await exportRegistrationsCsv(owner, division.id);
+    const csv = await exportRegistrationsCsv(owner, { divisionId: division.id });
     expect(csv.split("\n")[0]).toContain("display_name");
     expect(csv).toContain("Alex Test");
 

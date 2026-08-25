@@ -2661,7 +2661,57 @@ export interface ListRegistrationsFilters {
   consent_pending?: boolean;
   /** Matches the entry's display name or the cart's contact name/email. */
   text?: string;
+  /** RS005 W1a. Default `"oldest"` is `order by r.created_at, r.id` —
+   *  UNCHANGED from pre-W1a, so the live `/api/v1/divisions/[id]/registrations`
+   *  route (which never sets this) keeps its existing response order.
+   *  `"newest"` reverses both keys. */
+  sort?: "newest" | "oldest";
 }
+
+/** The sport's roster-cap expression: `sports.position_catalog.lineup.size +
+ *  .benchMax`, NULL when the sport declares no `lineup` key at all
+ *  (unlimited) — the same rule `registration-submit.ts`'s `joinTeamEntry`
+ *  (registration-submit.ts:742-748) already enforces at join time. Assumes
+ *  the surrounding query joins the sports row as `sp` (a hardcoded alias,
+ *  same convention as `regGroupCols`'s `r`/`g`).
+ *
+ *  NOT YET the only copy (RS005 W1a): `joinTeamEntry` hand-copies this exact
+ *  expression and was not repointed at this export — `registration-submit.ts`
+ *  is outside this wave's file set (do-not-touch list). Whoever next touches
+ *  that file should import this instead of re-deriving it. */
+export function rosterCapExpr(db: AnySql) {
+  return db`(
+    (sp.position_catalog -> 'lineup' ->> 'size')::int +
+    coalesce((sp.position_catalog -> 'lineup' ->> 'benchMax')::int, 0)
+  )`;
+}
+
+/** `listRegistrations`' row (RS005 W1a), widened for the Registrants tab:
+ *  the division's own name/slug, its resolved `entrant_kind`, and three
+ *  values no consumer should recompute itself — `roster_count`/`roster_cap`/
+ *  `consent_pending_count` (per-entry correlated subqueries in the one query
+ *  below, same no-N+1 convention `card-stats.ts`'s `listDivisionCardStats`
+ *  already uses) and `waitlist_position` (tuple-comparison note on the query
+ *  below). Deliberately DROPS `access_token_hash` — the list/export surface
+ *  must never ship the cart's access-token hash to an organiser session; see
+ *  the strip at the bottom of `listRegistrations`. */
+export interface RegistrationListRow extends Omit<RegistrationWithGroupRow, "access_token_hash"> {
+  division_name: string;
+  division_slug: string;
+  entrant_kind: RegistrationSettingsRow["entrant_kind"];
+  roster_count: number;
+  /** null = unlimited (the sport declares no lineup config). */
+  roster_cap: number | null;
+  consent_pending_count: number;
+  /** 1-based rank within this row's DIVISION, `waitlisted` rows only; null
+   *  for every other status. */
+  waitlist_position: number | null;
+}
+
+/** Raw wire shape — `RegistrationListRow` plus the hash the query still
+ *  selects (via the shared `regGroupCols`) but the function strips before
+ *  returning. */
+type RawListRow = RegistrationListRow & { access_token_hash: string };
 
 /**
  * Organiser registration list. `divisionId` scopes to ONE division exactly as
@@ -2680,13 +2730,22 @@ export interface ListRegistrationsFilters {
  * `seedRegistration` in the test file), and an INNER JOIN would silently
  * drop those rows for the EXISTING single-division callers — a regression
  * this extension must not cause.
+ *
+ * RS005 W1a: widened the row (`RegistrationListRow`) and added `filters.sort`.
+ * `sports` is joined INNER, not LEFT, unlike `registration_settings` above —
+ * `divisions.sport_key` is `not null references sports(key)` (V209), so
+ * every division has exactly one sport row and this join can never drop one.
+ * `waitlist_position`'s subquery counts waitlisted SIBLINGS (same division)
+ * whose `(created_at, id)` tuple sorts strictly before this row's own, +1 —
+ * exactly `promoteOldestWaitlisted`'s (this file) own `order by created_at,
+ * id limit 1`, so position 1 is always that function's pick.
  */
 export async function listRegistrations(
   auth: AuthCtx,
   divisionId: string | null,
   status: string | null,
   filters: ListRegistrationsFilters = {},
-): Promise<RegistrationWithGroupRow[]> {
+): Promise<RegistrationListRow[]> {
   return withTenant(auth.orgId, async (tx) => {
     let competitionId: string;
     if (divisionId) {
@@ -2703,11 +2762,25 @@ export async function listRegistrations(
       competitionId = filters.competition_id;
     }
     const text = filters.text?.trim();
-    return tx<RegistrationWithGroupRow[]>`
-      select ${regGroupCols(tx)}
+    const rows = await tx<RawListRow[]>`
+      select ${regGroupCols(tx)},
+        d.name as division_name,
+        d.slug as division_slug,
+        coalesce(rs.entrant_kind, 'individual') as entrant_kind,
+        (select count(*)::int from registration_players rp
+          where rp.registration_id = r.id) as roster_count,
+        ${rosterCapExpr(tx)} as roster_cap,
+        (select count(*)::int from registration_players rp
+          where rp.registration_id = r.id and rp.consent_status = 'pending') as consent_pending_count,
+        case when r.status = 'waitlisted' then (
+          (select count(*)::int from registrations w
+            where w.division_id = r.division_id and w.status = 'waitlisted'
+              and (w.created_at, w.id) < (r.created_at, r.id)) + 1
+        ) else null end as waitlist_position
       from registrations r
       join registration_groups g on g.id = r.group_id
       join divisions d on d.id = r.division_id
+      join sports sp on sp.key = d.sport_key
       left join registration_settings rs on rs.division_id = r.division_id
       where d.competition_id = ${competitionId}
         ${divisionId ? tx`and r.division_id = ${divisionId}` : tx``}
@@ -2729,7 +2802,13 @@ export async function listRegistrations(
                   or g.contact_email ilike ${"%" + text + "%"})`
             : tx``
         }
-      order by r.created_at, r.id`;
+      ${filters.sort === "newest" ? tx`order by r.created_at desc, r.id desc` : tx`order by r.created_at, r.id`}`;
+    // Never ship the cart's access-token hash to the organiser list/export
+    // surface (RS005 W1a). regGroupCols stays the ONE shared column list —
+    // other callers legitimately need the hash for token verification — so
+    // it is stripped here in JS rather than forked into a second hand-copied
+    // SELECT list.
+    return rows.map(({ access_token_hash: _accessTokenHash, ...rest }) => rest);
   });
 }
 
@@ -2993,42 +3072,111 @@ export async function refundRegistration(
   return row;
 }
 
-/** CSV export (organiser console; `exports` is the Pro gate, doc 10 §1). */
-export async function exportRegistrationsCsv(auth: AuthCtx, divisionId: string): Promise<string> {
+/** CSV export (organiser console; gated on the `exports` entitlement, doc 10
+ *  §1 — granted on every plan since V310, only `exports.branded` is Pro).
+ *
+ * RS005 W1a replaces the old division-only, entry-flat exporter. Rows come
+ * from `listRegistrations` — the SAME read model the Registrants tab uses,
+ * no second query builds the entry set — scoped by `opts.divisionId` (one
+ * division) or `opts.competitionId`/`opts.filters.competition_id`
+ * (competition-wide; `listRegistrations` itself 400s if neither is given).
+ *
+ * RULING (RS005 W1a): one CSV row per PLAYER. An entry with N players emits
+ * N rows with its entry columns repeated; an entry with ZERO players (a free
+ * agent, or a team registered with an empty roster) emits ONE row with the
+ * player columns blank — dropping it would silently hide that entry from
+ * the export entirely.
+ */
+export async function exportRegistrationsCsv(
+  auth: AuthCtx,
+  opts: {
+    divisionId?: string | null;
+    competitionId?: string | null;
+    status?: string | null;
+    filters?: ListRegistrationsFilters;
+  },
+): Promise<string> {
   await requireFeature(auth.orgId, "exports");
-  return withTenant(auth.orgId, async (tx) => {
-    const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
-    if (!division) throw new HttpError(404, "division not found");
-    const settings = await loadSettings(tx, divisionId);
-    const fieldKeys = (settings?.form_fields ?? []).map((f) => f.key);
-    const rows = await tx<RegistrationWithGroupRow[]>`
-      select ${regGroupCols(tx)}
-      from registrations r join registration_groups g on g.id = r.group_id
-      where r.division_id = ${divisionId}
-      order by r.created_at, r.id`;
-    const esc = (v: unknown): string => {
-      const s = v === null || v === undefined ? "" : String(v);
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    // dob/gender/guardian_name/guardian_consent dropped from this export
-    // (RS001 registration demolition): they moved off the entry onto
-    // `registration_players` — one-to-many per entry, so there is no single
-    // flat value left to print here without inventing a flattening rule.
-    // RS005's Registrants tab CSV export owns the per-player-aware version.
-    const header = [
-      "id", "status", "display_name", "contact_email", "amount_cents",
-      "currency", "refunded_cents", "created_at", ...fieldKeys,
-    ];
-    const lines = rows.map((r) =>
-      [
-        r.id, r.status, r.display_name, r.contact_email,
-        r.amount_cents, r.currency, r.refunded_cents,
-        new Date(r.created_at).toISOString(),
-        ...fieldKeys.map((k) => (r.answers as Record<string, unknown>)[k] ?? ""),
-      ].map(esc).join(","),
-    );
-    return [header.join(","), ...lines].join("\n") + "\n";
+  const divisionId = opts.divisionId ?? null;
+  const filters: ListRegistrationsFilters = opts.competitionId
+    ? { ...(opts.filters ?? {}), competition_id: opts.competitionId }
+    : (opts.filters ?? {});
+  const rows = await listRegistrations(auth, divisionId, opts.status ?? null, filters);
+
+  const divisionIds = [...new Set(rows.map((r) => r.division_id))];
+  const regIds = rows.map((r) => r.id);
+  type PlayerCsvRow = {
+    registration_id: string;
+    full_name: string;
+    dob: string | null;
+    gender: string | null;
+    consent_status: string;
+    squad_number: number | null;
+    is_captain: boolean;
+  };
+  const { fieldKeys, playersByReg } = await withTenant(auth.orgId, async (tx) => {
+    // Form field keys: the union of every IN-SCOPE division's settings, so a
+    // competition-wide export is not shaped like any single division's form.
+    const fieldKeySet = new Set<string>();
+    if (divisionIds.length > 0) {
+      const settingsRows = await tx<{ form_fields: RegistrationFormField[] }[]>`
+        select form_fields from registration_settings where division_id in ${tx(divisionIds)}`;
+      for (const s of settingsRows) for (const f of s.form_fields ?? []) fieldKeySet.add(f.key);
+    }
+    const players =
+      regIds.length > 0
+        ? await tx<PlayerCsvRow[]>`
+            select registration_id, full_name, dob, gender, consent_status, squad_number, is_captain
+            from registration_players
+            where registration_id in ${tx(regIds)}
+            order by is_captain desc, created_at`
+        : [];
+    const playersByReg = new Map<string, PlayerCsvRow[]>();
+    for (const p of players) {
+      const list = playersByReg.get(p.registration_id) ?? [];
+      list.push(p);
+      playersByReg.set(p.registration_id, list);
+    }
+    return { fieldKeys: [...fieldKeySet].sort(), playersByReg };
   });
+
+  const esc = (v: unknown): string => {
+    const s = v === null || v === undefined ? "" : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  const header = [
+    "registration_id", "ref_code", "division", "status", "kind", "display_name",
+    "contact_name", "contact_email", "amount_cents", "currency", "refunded_cents",
+    "payment_method", "waitlist_position", "created_at",
+    "player_name", "player_dob", "player_gender", "player_consent_status",
+    "squad_number", "is_captain",
+    ...fieldKeys,
+  ];
+  const lines: string[] = [];
+  for (const r of rows) {
+    const entryCols = [
+      r.id, r.ref_code, r.division_name, r.status, r.entrant_kind, r.display_name,
+      r.contact_name, r.contact_email, r.amount_cents, r.currency, r.refunded_cents,
+      r.payment_method, r.waitlist_position, new Date(r.created_at).toISOString(),
+    ];
+    const answerCols = fieldKeys.map((k) => (r.answers as Record<string, unknown>)[k] ?? "");
+    const players = playersByReg.get(r.id) ?? [];
+    if (players.length === 0) {
+      lines.push([...entryCols, "", "", "", "", "", "", ...answerCols].map(esc).join(","));
+    } else {
+      for (const p of players) {
+        lines.push(
+          [
+            ...entryCols,
+            p.full_name, p.dob, p.gender, p.consent_status, p.squad_number, p.is_captain,
+            ...answerCols,
+          ].map(esc).join(","),
+        );
+      }
+    }
+  }
+  return [header.join(","), ...lines].join("\n") + "\n";
 }
 
 // ---------------------------------------------------------------------------
