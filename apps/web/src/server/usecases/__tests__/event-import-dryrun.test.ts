@@ -86,4 +86,20 @@ describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
     });
     expect(report.results[0]!.error).toMatchObject({ code: "import.fixture_unknown", matches: 2 });
   });
+
+  // Added beyond the brief's verbatim list (standing rule: every change ships
+  // a test that fails without it) — the brief's own step 4 names
+  // import.slots_unfilled as one of the six guards runStream must implement,
+  // but neither task's test file exercises it.
+  it("rejects a fixture with an unassigned entrant (bye/TBD)", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
+    await sql`update fixtures set away_entrant_id = null where id = ${fixtureId}`;
+
+    const report = await importEvents(auth, divisionId, {
+      import_id: "imp-unfilled",
+      streams: [{ fixture: { id: fixtureId }, events: [{ type: "core.start", payload: {} }] }],
+    });
+    expect(report.results[0]!.error?.code).toBe("import.slots_unfilled");
+  });
 });
