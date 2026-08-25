@@ -1492,6 +1492,30 @@ Shipping one for both tells an organiser their competition is empty when they
 have merely over-filtered — which, on a tab whose whole job is finding people,
 is the worst possible lie to tell.
 
+**OWNER RULING (2026-08-25) — the confirmation email is CART-SHAPED.** One
+email per cart, listing every entry with its own status, one total, one pay
+link. Rejected: one-email-per-entry (a rep entering five teams gets five mails,
+none of which shows what the single payment covered — and that one artefact is
+what gets forwarded to a treasurer), and one-email-per-cart on the existing
+single-entry template (silently misdescribes every multi-entry cart; a
+waitlisted sibling would read as confirmed). Costs a change to
+`lib/email-templates/registration.ts` and its four `emails.json` dictionaries,
+which is outside RS005's stated file set — asked and approved before starting,
+per `_RULES.md` §1.
+
+Consequence that is easy to miss: **the dispute-evidence pack must reconstruct
+the CART too.** `registrations.ts:3165` builds single-entry args today under a
+comment claiming the result "matches the original mail". Leaving it
+single-entry while the sent mail becomes cart-shaped would recreate the same
+class of lie this wave exists to remove.
+
+**Parallelism note for future sessions: `emails.json` and `ui.json` are
+SEPARATE files per locale, so a mail wave and a UI wave are genuinely
+file-disjoint — but `i18n-keys.ts` is GENERATED from all of them and is a
+shared artefact.** Two agents running `i18n:gen-keys` concurrently race on one
+file and both commit it. The rule adopted here: concurrent waves do not run
+`gen-keys` at all; the orchestrator regenerates once at the wave boundary.
+
 **Pinned so no wave re-derives them:**
 
 - **Waitlist position must reproduce `promoteOldestWaitlisted`
