@@ -1322,6 +1322,25 @@ route; asked and approved before starting, per `_RULES.md` §1.
    `/api/v1/divisions/[id]/registrations` response. A `sort` filter was added
    instead, defaulting to the existing order; the hub passes `"newest"`.
 
+**FINDING (2026-08-25, W1b prep): `rejected` does not exist anywhere in the
+API contract, four RS001-dropped columns still do.** RS002 shipped `rejected`
+as a terminal status and `V364:90` allows it, but:
+
+- `apps/web/src/app/api/v1/divisions/[id]/registrations/route.ts:8`'s `STATUSES`
+  allowlist is `pending|paid|confirmed|waitlisted|withdrawn`, so
+  `?status=rejected` — and `?status=expired` — return **400 today**. The
+  organiser cannot list the entries they refused.
+- `api-v1/schemas.ts:2082` `RegistrationStatus` omits `rejected` for the same
+  reason, and `openapi.ts:189` repeats the short list a third time. Three
+  hand-maintained copies of one enum; the DB CHECK is the only complete one.
+- `api-v1/schemas.ts:2169` `Registration` still declares `dob`, `gender`,
+  `guardian_name` and `guardian_consent` — all four DROPPED from `registrations`
+  by RS001 (they moved to `registration_players`). The published OpenAPI
+  contract advertises four fields the table no longer has, and omits
+  `free_agent`, `join_code`, `group_id` and `contact_name`, which it does.
+
+Fixed in W1b, with the status enum reduced to ONE source rather than three.
+
 **Pinned so no wave re-derives them:**
 
 - **Waitlist position must reproduce `promoteOldestWaitlisted`
