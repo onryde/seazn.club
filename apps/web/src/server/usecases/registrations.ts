@@ -2738,7 +2738,18 @@ type RawListRow = RegistrationListRow & { access_token_hash: string };
  * `waitlist_position`'s subquery counts waitlisted SIBLINGS (same division)
  * whose `(created_at, id)` tuple sorts strictly before this row's own, +1 —
  * exactly `promoteOldestWaitlisted`'s (this file) own `order by created_at,
- * id limit 1`, so position 1 is always that function's pick.
+ * id limit 1`, so position 1 is that function's pick on a quiescent table.
+ *
+ * It is a SNAPSHOT of that order, not a lock on it, and the difference is
+ * reachable: `promoteOldestWaitlisted` picks `for update skip locked`, so
+ * while another transaction holds the rank-1 row (a concurrent promotion, a
+ * withdraw's auto-promote, a refund) it promotes rank 2 instead, while this
+ * plain count still reports the locked row as #1. The organiser sees a
+ * position that was true when the page was rendered. Do NOT "fix" this by
+ * adding `skip locked` to the read — a display query that silently omits
+ * locked rows renumbers the whole queue under load, which is worse than a
+ * stale number. The ordering rule is what must not fork; the instant it is
+ * sampled may differ.
  */
 export async function listRegistrations(
   auth: AuthCtx,
@@ -3073,7 +3084,11 @@ export async function refundRegistration(
 }
 
 /** CSV export (organiser console; gated on the `exports` entitlement, doc 10
- *  §1 — granted on every plan since V310, only `exports.branded` is Pro).
+ *  §1). Plain `exports` reaches community in **V285** ("Free plain exports",
+ *  v12); pro/business have held it since V101/V112 and event_pass since V270.
+ *  The Pro-only half is `exports.branded` — and not Pro-ONLY either: V306
+ *  grants it to event_pass as well (`lib/pass-features.ts:34`). So a denial
+ *  here means an explicit org override, never a plan tier.
  *
  * RS005 W1a replaces the old division-only, entry-flat exporter. Rows come
  * from `listRegistrations` — the SAME read model the Registrants tab uses,

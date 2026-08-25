@@ -272,7 +272,7 @@ describe.skipIf(!HAS_DB)("RS005 W1a: exportRegistrationsCsv (per-player)", () =>
     expect(header.indexOf("dietary")).toBeLessThan(header.indexOf("shirt_size"));
   });
 
-  it("still refuses without the exports entitlement (explicit deny — exports is granted on every plan since V310, so this must be an override, not a plan choice)", async () => {
+  it("still refuses without the exports entitlement (explicit deny — plain `exports` reaches every plan by V285, so a denial can only be an org override, never a plan tier)", async () => {
     const { owner, orgId, division } = await baseRig();
     await sql`
       insert into org_entitlement_overrides (org_id, feature_key, bool_value)
