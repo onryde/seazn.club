@@ -1010,7 +1010,7 @@ export type DictionaryKey =
   | "breadcrumb.match"
   | "breadcrumb.newCompetition"
   | "breadcrumb.newDivision"
-  | "breadcrumb.registrations"
+  | "breadcrumb.registration"
   | "breadcrumb.schedule"
   | "breadcrumb.settings"
   | "calendar.registrationDescription"

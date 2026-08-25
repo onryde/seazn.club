@@ -2837,7 +2837,7 @@
   "breadcrumb.newCompetition": "Nouvelle compétition",
   "breadcrumb.schedule": "Calendrier",
   "breadcrumb.newDivision": "Nouvelle division",
-  "breadcrumb.registrations": "Inscriptions",
+  "breadcrumb.registration": "Inscriptions",
   "breadcrumb.match": "Match {no}",
   "div.registrations.title": "Inscriptions — {name}",
   "div.registrations.publicLink.title": "Lien d'inscription public",

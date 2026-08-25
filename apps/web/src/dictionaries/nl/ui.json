@@ -2792,7 +2792,7 @@
   "breadcrumb.newCompetition": "Nieuwe competitie",
   "breadcrumb.schedule": "Schema",
   "breadcrumb.newDivision": "Nieuwe divisie",
-  "breadcrumb.registrations": "Inschrijvingen",
+  "breadcrumb.registration": "Inschrijvingen",
   "breadcrumb.match": "Wedstrijd {no}",
   "div.registrations.title": "Inschrijvingen — {name}",
   "div.registrations.publicLink.title": "Openbare inschrijflink",
