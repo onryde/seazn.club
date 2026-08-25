@@ -1,6 +1,37 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
+/** Elements this trap treats as tab stops. Includes `select`/`textarea` —
+ *  the registration hub config panel (RS004, the surface that motivated
+ *  this fix) has both, and a selector that omits them would mis-detect the
+ *  dialog's true first/last tab stop, letting Tab escape at that boundary.
+ *  `:not(:disabled)` for the same reason: a disabled control matches the
+ *  selector but can never actually hold keyboard focus, so treating it as a
+ *  boundary computes a wrap target native Tab never lands on. `iframe`:
+ *  billing-actions.tsx/buy-credits.tsx/pass-upgrade.tsx render a Modal
+ *  whose only content is a Stripe EmbeddedCheckout iframe with no footer —
+ *  without this, the only detected tab stop is the header close button and
+ *  forward-Tab would re-trap on itself, blocking keyboard entry into the
+ *  payment form entirely. */
+export const FOCUSABLE_SELECTOR =
+  'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], iframe, [tabindex]:not([tabindex="-1"])';
+
+/** Given the dialog's focusable elements (in tab order) and which one is
+ *  currently active, decide whether a Tab/Shift+Tab press at a boundary
+ *  should wrap to the opposite end. Returns the element to move focus to,
+ *  or null when this press is not at a boundary the trap needs to
+ *  intervene on — native Tab order handles every other case unassisted.
+ *
+ *  Deliberately pure (no DOM reads or writes) so it is unit-testable
+ *  without jsdom, which this workspace does not have — see modal.test.ts. */
+export function nextTrapFocus<T>(focusable: readonly T[], active: T | null, shiftKey: boolean): T | null {
+  if (focusable.length === 0) return null;
+  const first = focusable[0]!;
+  const last = focusable[focusable.length - 1]!;
+  if (shiftKey) return active === first ? last : null;
+  return active === last ? first : null;
+}
 
 /** Lightweight centered modal with an overlay. */
 export function Modal({
@@ -16,11 +47,69 @@ export function Modal({
   footer?: React.ReactNode;
   size?: "md" | "lg";
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // Read the LATEST onClose via a ref so the mount effect below can stay
+  // deps:[] — a caller passing a fresh inline `onClose` every render must
+  // not re-run this effect, or it would restore-then-refocus mid-edit,
+  // yanking focus out of whatever field the organiser is actively typing
+  // into (RS004 review finding 4).
+  const onCloseRef = useRef(onClose);
+  // Refreshed in an effect, not during render: writing a ref during render is
+  // an eslint error here ("Cannot access refs during render") because the
+  // React Compiler may run a render twice or discard it. An effect with no
+  // dependency array runs after EVERY committed render, so the ref still
+  // holds the latest onClose by the time any handler can fire.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    onCloseRef.current = onClose;
+  });
+  // Captured during RENDER (useState's lazy initialiser runs before commit),
+  // not inside an effect: ConfirmModal's typeToConfirm input carries
+  // `autoFocus`, which React applies during commit — before any passive
+  // effect below runs. Capturing "what was focused before this opened"
+  // inside an effect would sometimes read the autoFocus target back instead
+  // of the real trigger.
+  const [restoreTarget] = useState<Element | null>(() =>
+    typeof document === "undefined" ? null : document.activeElement,
+  );
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const focusables = () =>
+      Array.from(dialog?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? []);
+    // Move focus into the dialog on open — unless something inside it has
+    // already claimed focus itself (ConfirmModal's autoFocus input); don't
+    // steal that.
+    if (!dialog?.contains(document.activeElement)) {
+      focusables()[0]?.focus();
+    }
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onCloseRef.current();
+        return;
+      }
+      if (e.key === "Tab") {
+        // `document.activeElement` is `Element | null`, which widens
+        // nextTrapFocus's `T` to `Element` — and `Element` has no `.focus()`.
+        // The list this is compared against is `HTMLElement[]` from
+        // `querySelectorAll<HTMLElement>`, so narrowing here is what keeps the
+        // returned element callable rather than casting at the call.
+        const active = document.activeElement as HTMLElement | null;
+        const target = nextTrapFocus(focusables(), active, e.shiftKey);
+        if (target) {
+          e.preventDefault();
+          target.focus();
+        }
+      }
+    };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      // Restore focus to the trigger on close.
+      (restoreTarget as HTMLElement | null)?.focus?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const maxW = size === "lg" ? "sm:max-w-2xl" : "sm:max-w-md";
 
@@ -28,6 +117,7 @@ export function Modal({
     <div className="modal-overlay" onClick={onClose}>
       {/* Bottom sheet under `sm`, centered modal above (v3/02 pattern 3). */}
       <div
+        ref={dialogRef}
         // 85dvh, not 85vh: `vh` is the LARGE viewport and ignores retractable
         // mobile browser chrome, so the panel was measured against a box taller
         // than the visible one and the footer sat under the chrome at 320×568.

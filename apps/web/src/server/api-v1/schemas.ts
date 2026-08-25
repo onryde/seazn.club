@@ -154,6 +154,25 @@ export const TiebreakerKeyS = z.enum([
   "buchholz_cut1", "sberger", "direct", "fair_play", "seed", "lots",
 ]);
 
+/** V364 first-class eligibility: gender category badge/gate (evaluated in
+ *  registration-eligibility.ts). `open`, null, and `mixed` all constrain
+ *  nothing at the individual level — `mixed` is a roster-wide rule. */
+export const DivisionCategory = z.enum(["open", "mens", "womens", "mixed"]);
+
+// Exported so usecases/divisions.ts can raise the SAME message when it
+// catches the single-field case this refine cannot see (RS004 review
+// finding 1 — checkAgeBand only fires when both sides are in ONE patch).
+export const AGE_MAX_BEFORE_MIN = "age_max must be greater than or equal to age_min.";
+
+function checkAgeBand(
+  v: { age_min?: number | null; age_max?: number | null },
+  ctx: z.RefinementCtx,
+): void {
+  if (v.age_min != null && v.age_max != null && v.age_max < v.age_min) {
+    ctx.addIssue({ code: "custom", path: ["age_max"], message: AGE_MAX_BEFORE_MIN });
+  }
+}
+
 export const CreateDivision = z.object({
   name: z.string().min(1).max(200),
   slug: Slug.optional(),
@@ -173,6 +192,15 @@ export const PatchDivision = z
     description: z.string().max(20_000).nullable(),
     eligibility: z.array(z.record(z.string(), z.unknown())),
     tiebreakers: z.array(TiebreakerKeyS).nullable(),
+    /** V364 first-class eligibility columns (RS004): read alongside the
+     *  jsonb `eligibility` rules above, never instead of them. */
+    category: DivisionCategory.nullable(),
+    /** Years, evaluated at 1 Jan of the season-start year. Nullable
+     *  independently of age_max; combined they must satisfy age_max >=
+     *  age_min (checkAgeBand below) — the DB CHECK backstops any caller
+     *  that bypasses this schema (e.g. a direct usecase call in a test). */
+    age_min: z.number().int().min(0).max(120).nullable(),
+    age_max: z.number().int().min(0).max(120).nullable(),
     status: DivisionStatus,
     /** Hide official names on all public reads (Jul3/02, 25 Jun). */
     officials_hide_names: z.boolean(),
@@ -202,7 +230,8 @@ export const PatchDivision = z
     required_court_tags: RequiredCourtTags,
   })
   .partial()
-  .refine((p) => Object.keys(p).length > 0, "empty patch");
+  .refine((p) => Object.keys(p).length > 0, "empty patch")
+  .superRefine(checkAgeBand);
 export type PatchDivision = z.infer<typeof PatchDivision>;
 
 export const Division = z.object({
@@ -217,6 +246,13 @@ export const Division = z.object({
   module_version: z.string(),
   eligibility: z.array(z.unknown()),
   tiebreakers: z.array(TiebreakerKeyS).nullable(),
+  // V364 first-class eligibility columns (RS004); see PatchDivision above.
+  category: DivisionCategory.nullable(),
+  // Bounded 0-120, matching PatchDivision's request-side bounds above
+  // (RS004 review finding 4) — the generated OpenAPI spec described this
+  // field two different ways otherwise.
+  age_min: z.number().int().min(0).max(120).nullable(),
+  age_max: z.number().int().min(0).max(120).nullable(),
   status: DivisionStatus,
   officials_hide_names: z.boolean(),
   scheduling_mode: z.enum(["timed", "flexible"]),
@@ -2050,6 +2086,11 @@ export const RegistrationStatus = z.enum([
 /** How a division collects its entry fee (spec 2026-07-12 §3). */
 export const RegistrationPaymentMethod = z.enum(["offline", "stripe"]);
 
+/** V364/RS004: 'auto' reproduces pre-RS004 behaviour untouched — every
+ *  entry auto-confirms. 'manual' routes entries through approve/reject
+ *  (registration-approval.ts) before they materialise. */
+export const RegistrationApproval = z.enum(["auto", "manual"]);
+
 /** Bounded form-field builder (doc 16 §1.1): text/select/checkbox only. */
 export const RegistrationFormField = z
   .object({
@@ -2082,6 +2123,11 @@ export const PutRegistrationSettings = z
     payment_method: RegistrationPaymentMethod.default("offline"),
     /** Per-division override of the org's offline payment instructions. */
     payment_instructions: z.string().max(5000).nullish(),
+    /** V364/RS004. Default reproduces pre-RS004 behaviour untouched. */
+    approval: RegistrationApproval.default("auto"),
+    /** V364/RS004: meaningful only when entrant_kind is 'team' — the usecase
+     *  rejects `true` on a non-team division (putRegistrationSettings). */
+    allow_free_agents: z.boolean().default(false),
   })
   .superRefine((s, ctx) => {
     const keys = s.form_fields.map((f) => f.key);
@@ -2109,6 +2155,8 @@ export const RegistrationSettings = z.object({
   form_fields: z.array(RegistrationFormField),
   payment_method: RegistrationPaymentMethod,
   payment_instructions: z.string().nullable(),
+  approval: RegistrationApproval,
+  allow_free_agents: z.boolean(),
   /** Org fallbacks for the settings UI (spec §3). */
   org_payment_instructions: z.string().nullable(),
   org_default_payment_method: z.string(),

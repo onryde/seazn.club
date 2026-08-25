@@ -25,6 +25,24 @@ export interface BreadcrumbNameMap {
  *  this catalog. */
 export type BreadcrumbT = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
+/** Competition-level pages that get their own crumb, by path segment. A tail
+ *  NOT listed here stops the trail at the competition — which is what the
+ *  registration hub did until 2026-08-25: `/registration` fell through, so the
+ *  page showed no crumb of its own AND the back affordance (the structural
+ *  parent, never history.back()) pointed at the ORG rather than the
+ *  competition the hub belongs to. A new competition-level route must be added
+ *  here in the same change that creates it. */
+const COMP_TAIL_CRUMBS = {
+  settings: { key: "breadcrumb.settings", href: routes.competitionSettings },
+  schedule: { key: "breadcrumb.schedule", href: routes.competitionSchedule },
+  registration: {
+    key: "breadcrumb.registration",
+    // No tab argument: the crumb points at the hub's default tab, so it is
+    // stable whichever tab the reader is on.
+    href: (org: string, comp: string) => routes.competitionRegistration(org, comp),
+  },
+} as const satisfies Record<string, { key: MessageKey; href: (org: string, comp: string) => string }>;
+
 /** Pages under /o/[org]/settings, by path segment. Anything not listed still
  *  gets a crumb via humanize() — a new settings page must never silently cost
  *  its own trail entry (and with it the back chevron's target). */
@@ -93,14 +111,9 @@ export function buildCrumbs(args: {
   });
 
   const compTail = rest[2];
-  if (compTail === "settings" || compTail === "schedule") {
-    crumbs.push({
-      label: compTail === "settings" ? t("breadcrumb.settings") : t("breadcrumb.schedule"),
-      href:
-        compTail === "settings"
-          ? routes.competitionSettings(org, comp)
-          : routes.competitionSchedule(org, comp),
-    });
+  const compTailCrumb = COMP_TAIL_CRUMBS[compTail as keyof typeof COMP_TAIL_CRUMBS];
+  if (compTailCrumb) {
+    crumbs.push({ label: t(compTailCrumb.key), href: compTailCrumb.href(org, comp) });
     return crumbs;
   }
 

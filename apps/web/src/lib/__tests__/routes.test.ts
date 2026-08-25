@@ -18,6 +18,12 @@ describe("routes", () => {
     expect(routes.competitionSchedule("acme", "summer-smash")).toBe(
       "/o/acme/c/summer-smash/schedule",
     );
+    expect(routes.competitionRegistration("acme", "summer-smash")).toBe(
+      "/o/acme/c/summer-smash/registration",
+    );
+    expect(routes.competitionRegistration("acme", "summer-smash", "registrants")).toBe(
+      "/o/acme/c/summer-smash/registration?tab=registrants",
+    );
     expect(routes.divisionNew("acme", "summer-smash")).toBe("/o/acme/c/summer-smash/d/new");
     expect(routes.division("acme", "summer-smash", "u16-boys")).toBe(
       "/o/acme/c/summer-smash/d/u16-boys",
@@ -39,6 +45,12 @@ describe("routes", () => {
     expect(routes.shared("acme")).toBe("/shared/acme");
     expect(routes.shared("acme", "summer-smash", "u16-boys")).toBe(
       "/shared/acme/summer-smash/u16-boys",
+    );
+  });
+
+  it("builds the public register page — the registration hub's per-row copy link target", () => {
+    expect(routes.publicRegister("acme", "summer-smash")).toBe(
+      "/shared/acme/summer-smash/register",
     );
   });
 });

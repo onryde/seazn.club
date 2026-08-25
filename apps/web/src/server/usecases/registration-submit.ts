@@ -154,16 +154,19 @@ function mintRegistrationToken(): string {
   return REGISTRATION_TOKEN_PREFIX + randomBytes(24).toString("base64url");
 }
 
-/** `RegistrationSettingsRow` plus the two V364 columns nothing in
- *  `registrations.ts` reads yet (`approval`, `allow_free_agents` — RS002 is
- *  their first consumer). A local superset rather than editing the shared
- *  type/SETTINGS_COLS in `registrations.ts`, which this wave's file
- *  ownership keeps to export-only. Extends `RegistrationSettingsRow`
- *  structurally so it satisfies `windowOpen`'s parameter type unchanged. */
-interface SubmitSettingsRow extends RegistrationSettingsRow {
-  approval: "auto" | "manual";
-  allow_free_agents: boolean;
-}
+/** Bare `extends`, no redeclared fields — `approval`/`allow_free_agents`
+ *  now live on the base `RegistrationSettingsRow` itself (registrations.ts,
+ *  RS004 wave 1's SETTINGS_COLS extension), so retyping them here would
+ *  only add a hazard: a redeclared literal union does NOT inherit a future
+ *  widening of the base, so this file could silently drift out of sync
+ *  with a base type change (RS004 review finding 3). Still kept as its own
+ *  name, rather than using `RegistrationSettingsRow` directly, because
+ *  `loadSubmitSettings` below hand-writes its own SELECT instead of
+ *  calling the shared `loadSettings` — this wave's file ownership still
+ *  keeps `registrations.ts` to export-only edits. An alias of
+ *  `RegistrationSettingsRow`, so it satisfies `windowOpen`'s
+ *  parameter type unchanged. */
+type SubmitSettingsRow = RegistrationSettingsRow;
 
 async function loadSubmitSettings(divisionId: string): Promise<SubmitSettingsRow | null> {
   const [row] = await sql<SubmitSettingsRow[]>`
@@ -365,7 +368,9 @@ export async function submitRegistrationGroup(
       throw new HttpError(422, `This division only accepts ${settings.entrant_kind} entries`);
     }
     if (entry.free_agent && (entry.entrant_kind !== "team" || !settings.allow_free_agents)) {
-      throw new HttpError(422, "Free agents are not accepted for this division");
+      // "Solo sign-ups" is the organiser-facing name for this since
+      // 2026-08-25; `allow_free_agents` stays the column and the API field.
+      throw new HttpError(422, "Solo sign-ups are not accepted for this division");
     }
 
     const rawPlayers = entry.players ?? [];

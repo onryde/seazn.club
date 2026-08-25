@@ -90,7 +90,7 @@ describe("buildCrumbs", () => {
         "breadcrumb.settings": "Paramètres",
         "breadcrumb.billing": "Forfait et facturation",
         "breadcrumb.schedule": "Calendrier",
-        "breadcrumb.registrations": "Inscriptions",
+        "breadcrumb.registration": "Inscriptions",
         "breadcrumb.match": "Match {no}",
       })[key as string] ?? String(key);
 
@@ -107,6 +107,44 @@ describe("buildCrumbs", () => {
         t: fr,
       }).map((c) => c.label),
     ).toEqual(["Acme Sports", "Summer Smash 2026", "U16 Boys"]);
+
+    // …and its COMPETITION-level replacement (RS004) does.
+    expect(
+      buildCrumbs({
+        ...base,
+        pathname: "/o/acme/c/summer-smash/registration",
+        t: fr,
+      }).map((c) => c.label),
+    ).toEqual(["Acme Sports", "Summer Smash 2026", "Inscriptions"]);
+  });
+
+  // The registration hub is a competition-level page, so it owes a crumb of
+  // its own. Without one the trail ends at the competition and the back
+  // affordance — which targets the structural PARENT, not history — sends the
+  // reader to the org home instead of back to the competition they came from.
+  describe("the registration hub (RS004)", () => {
+    const hub = { ...base, pathname: "/o/acme/c/summer-smash/registration" };
+
+    it("gets its own crumb, so the trail is org > competition > registration", () => {
+      expect(buildCrumbs(hub).map((c) => c.label)).toEqual([
+        "Acme Sports",
+        "Summer Smash 2026",
+        "Registration",
+      ]);
+    });
+
+    it("makes the competition the structural parent, which is what back targets", () => {
+      const crumbs = buildCrumbs(hub);
+      expect(crumbs.at(-2)!.href).toBe("/o/acme/c/summer-smash");
+      expect(crumbs.at(-1)!.href).toBe("/o/acme/c/summer-smash/registration");
+    });
+
+    it("points the crumb at the hub root, carrying no tab of its own", () => {
+      // The tab is a QUERY parameter and `usePathname()` never includes one,
+      // so the crumb cannot vary by tab — it must not pin one either, or it
+      // would send the reader back to a tab they may not have been on.
+      expect(buildCrumbs(hub).at(-1)!.href).not.toContain("?");
+    });
   });
 
   it("without a `t` translator falls back to the plain English catalog lookup — same values the untranslated tests above assert, so buildCrumbs stays pure/testable outside a DictProvider", () => {

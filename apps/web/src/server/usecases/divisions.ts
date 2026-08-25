@@ -10,7 +10,7 @@ import { EngineError } from "@seazn/engine/core";
 import { effectiveEntrantModel, type EntrantKind } from "@seazn/engine/sport";
 import { resolveModule } from "@/server/engine-db";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { CreateDivision, PatchDivision } from "@/server/api-v1/schemas";
+import { AGE_MAX_BEFORE_MIN, type CreateDivision, type PatchDivision } from "@/server/api-v1/schemas";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
@@ -40,6 +40,12 @@ export interface DivisionRow {
   module_version: string;
   eligibility: unknown[];
   tiebreakers: string[] | null;
+  /** V364 first-class eligibility columns (RS004): read alongside
+   *  `eligibility` above, never instead of it — see
+   *  registration-eligibility.ts's EligibilityDivision. */
+  category: string | null;
+  age_min: number | null;
+  age_max: number | null;
   status: string;
   officials_hide_names: boolean;
   scheduling_mode: string;
@@ -68,9 +74,10 @@ export interface DivisionRow {
 
 const COLS = [
   "id", "competition_id", "name", "slug", "description", "sport_key", "variant_key", "config",
-  "module_version", "eligibility", "tiebreakers", "status", "officials_hide_names",
-  "scheduling_mode", "auto_progress", "auto_posts", "schedule_locked", "archived_at", "created_at",
-  "seq", "youth", "player_name_display", "logo_url", "logo_storage_path", "required_court_tags",
+  "module_version", "eligibility", "tiebreakers", "category", "age_min", "age_max", "status",
+  "officials_hide_names", "scheduling_mode", "auto_progress", "auto_posts", "schedule_locked",
+  "archived_at", "created_at", "seq", "youth", "player_name_display", "logo_url",
+  "logo_storage_path", "required_court_tags",
 ] as const;
 
 /** Variant choices for the Settings tab's format editor (v8) — system
@@ -531,6 +538,21 @@ function withoutEntrants(config: Record<string, unknown>): Record<string, unknow
   return rest;
 }
 
+// Keys on the constraint NAME, not just the Postgres 23514 code — divisions
+// also carries divisions_category_check, which shares the code but means a
+// different failure. Backstop for the age-band merge-and-validate guard in
+// patchDivision below (RS004 review finding 1); same precedent as
+// apps/web/src/lib/credits.ts's isCheckViolation.
+const AGE_BAND_CHECK_CONSTRAINT = "divisions_age_band_check";
+function isAgeBandCheckViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { code?: string }).code === "23514" &&
+    (err as { constraint_name?: string }).constraint_name === AGE_BAND_CHECK_CONSTRAINT
+  );
+}
+
 export async function patchDivision(
   auth: AuthCtx,
   id: string,
@@ -552,6 +574,26 @@ export async function patchDivision(
   let previousCompetitionId: string | null = null;
   const row = await withTenant(auth.orgId, async (tx) => {
     const effective: Record<string, unknown> = { ...patch };
+    // RS004 review finding 1: checkAgeBand (schemas.ts) only compares
+    // age_min/age_max when BOTH are present in the SAME patch body — a
+    // single-field PATCH (e.g. only age_min) used to reach here untouched
+    // even when it would violate the STORED value of the side it left
+    // alone, and divisions_age_band_check (V364) then rejected the write
+    // with a raw postgres 23514 that fell through to the generic 500
+    // handler, leaking constraint text instead of the documented 422.
+    // Merge against the current row before deciding — the `.catch` around
+    // this transaction below is a race-condition backstop, not the primary
+    // fix; this is what makes 422 the common path.
+    if (patch.age_min !== undefined || patch.age_max !== undefined) {
+      const [currentBand] = await tx<{ age_min: number | null; age_max: number | null }[]>`
+        select age_min, age_max from divisions where id = ${id}`;
+      if (!currentBand) throw new HttpError(404, "division not found");
+      const mergedMin = patch.age_min !== undefined ? patch.age_min : currentBand.age_min;
+      const mergedMax = patch.age_max !== undefined ? patch.age_max : currentBand.age_max;
+      if (mergedMin != null && mergedMax != null && mergedMax < mergedMin) {
+        throw new HttpError(422, AGE_MAX_BEFORE_MIN);
+      }
+    }
     // Format edits (v8 spec §2): allowed only while no stage owns fixtures,
     // then re-validated exactly like create — variant preset merged with the
     // override and parsed by the PINNED module's schema.
@@ -703,6 +745,13 @@ export async function patchDivision(
         return update(slug === before!.slug ? effective : { ...effective, slug }, sp);
       },
     );
+  }).catch((err: unknown) => {
+    // Race backstop only — READ COMMITTED means two concurrent PATCHes can
+    // each pass the merge-and-validate guard above against a stale read,
+    // then both write; whichever commits second still hits this CHECK. Must
+    // not leak the raw constraint text either way.
+    if (isAgeBandCheckViolation(err)) throw new HttpError(422, AGE_MAX_BEFORE_MIN);
+    throw err;
   });
   // A rename busts the cached slug resolution (old + new key) — outside the
   // tx, matching the pattern in patchCompetition.

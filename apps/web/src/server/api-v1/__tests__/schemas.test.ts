@@ -11,10 +11,13 @@ import {
   CreateEntrant,
   CreateStage,
   CreateTeam,
+  Division,
   LineupSlotInput,
   PatchCompetition,
+  PatchDivision,
   PatchEntrant,
   PatchFixture,
+  PutRegistrationSettings,
   SetTeamSquad,
 } from "../schemas";
 
@@ -515,5 +518,107 @@ describe("CapacityPrecheck.config.window (review finding 3 — resource exhausti
 
   it("accepts a request with no window at all — the bound applies only when a window is sent", () => {
     expect(CapacityPrecheck.safeParse(baseConfig()).success).toBe(true);
+  });
+});
+
+// RS004: organiser-facing API for the five V364 eligibility/approval
+// columns RS001/RS002 added to the schema but never wired to a request/
+// response shape. Validation-only (no DB round trip — see
+// division-settings.test.ts for the persisted-value assertions).
+describe("PatchDivision (RS004 eligibility columns)", () => {
+  it("accepts a valid category", () => {
+    expect(PatchDivision.safeParse({ category: "mens" }).success).toBe(true);
+    expect(PatchDivision.safeParse({ category: "womens" }).success).toBe(true);
+    expect(PatchDivision.safeParse({ category: "mixed" }).success).toBe(true);
+    expect(PatchDivision.safeParse({ category: "open" }).success).toBe(true);
+  });
+
+  it("accepts a null category (clears back to open)", () => {
+    expect(PatchDivision.safeParse({ category: null }).success).toBe(true);
+  });
+
+  it("rejects an unknown category value", () => {
+    // A companion valid field keeps the patch non-empty regardless of how
+    // `category` itself is handled — isolates THIS assertion from the
+    // "empty patch" refine (a schema that doesn't know `category` yet would
+    // silently strip it, leaving `{name: "Open"}`, a non-empty and
+    // otherwise-valid patch that would wrongly parse as success).
+    const r = PatchDivision.safeParse({ name: "Open", category: "u12" });
+    expect(r.success).toBe(false);
+  });
+
+  it("accepts nullable age_min/age_max independently", () => {
+    expect(PatchDivision.safeParse({ age_min: 8 }).success).toBe(true);
+    expect(PatchDivision.safeParse({ age_max: 12 }).success).toBe(true);
+    expect(PatchDivision.safeParse({ age_min: null, age_max: null }).success).toBe(true);
+  });
+
+  it("accepts age_min equal to age_max (a single-age band)", () => {
+    expect(PatchDivision.safeParse({ age_min: 12, age_max: 12 }).success).toBe(true);
+  });
+
+  it("rejects age_min greater than age_max", () => {
+    // Same non-empty-patch guard as above — `name` isolates this from the
+    // "empty patch" refine.
+    const r = PatchDivision.safeParse({ name: "Open", age_min: 12, age_max: 8 });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some((i) => i.path.join(".") === "age_max")).toBe(true);
+    }
+  });
+});
+
+// RS004 review finding 4 (minor, contract asymmetry): PatchDivision bounds
+// age_min/age_max to 0-120 (above) but the Division RESPONSE schema left
+// them unbounded ints — the generated OpenAPI spec described the same field
+// two different ways. Field-level safeParse (Division.shape.<field>) rather
+// than building a full Division fixture: isolates the bound from every
+// other required key on the response shape.
+describe("Division response schema (RS004 review finding 4)", () => {
+  it("bounds age_min/age_max to 0-120, matching PatchDivision's request-side bounds", () => {
+    expect(Division.shape.age_min.safeParse(121).success).toBe(false);
+    expect(Division.shape.age_min.safeParse(-1).success).toBe(false);
+    expect(Division.shape.age_max.safeParse(121).success).toBe(false);
+    expect(Division.shape.age_max.safeParse(-1).success).toBe(false);
+  });
+
+  it("still accepts in-bounds values and null", () => {
+    expect(Division.shape.age_min.safeParse(0).success).toBe(true);
+    expect(Division.shape.age_min.safeParse(120).success).toBe(true);
+    expect(Division.shape.age_min.safeParse(null).success).toBe(true);
+    expect(Division.shape.age_max.safeParse(null).success).toBe(true);
+  });
+});
+
+describe("PutRegistrationSettings (RS004 approval / free agents)", () => {
+  const BASE = { enabled: true, entrant_kind: "team" as const };
+
+  it("defaults approval to 'auto' and allow_free_agents to false", () => {
+    const r = PutRegistrationSettings.safeParse(BASE);
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.approval).toBe("auto");
+      expect(r.data.allow_free_agents).toBe(false);
+    }
+  });
+
+  it("accepts approval: 'manual'", () => {
+    // Checks the PARSED value, not just .success — a schema that doesn't
+    // recognise `approval` yet would silently strip it and still report
+    // success on the rest of the (valid) payload, which would make a bare
+    // .success assertion pass whether or not the field is wired up.
+    const r = PutRegistrationSettings.safeParse({ ...BASE, approval: "manual" });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.approval).toBe("manual");
+  });
+
+  it("rejects an unknown approval value", () => {
+    expect(PutRegistrationSettings.safeParse({ ...BASE, approval: "sometimes" }).success).toBe(false);
+  });
+
+  it("accepts allow_free_agents: true (the entrant_kind='team' business rule is a usecase concern, not zod's)", () => {
+    const r = PutRegistrationSettings.safeParse({ ...BASE, allow_free_agents: true });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.allow_free_agents).toBe(true);
   });
 });

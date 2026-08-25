@@ -548,6 +548,47 @@ export async function fixtureConfigSnapshotSql(fixtureId: string): Promise<unkno
 }
 
 /**
+ * organizations.timezone, read directly — no API surface returns it (the org
+ * settings page reads it off its own server-component props). RS004's org-tz
+ * window spec mutates this SHARED, org-wide column via `PATCH /api/orgs/{id}`
+ * and must restore the ORIGINAL value in a `finally`, the same convention
+ * setOwnerStaffSql documents above: this is not scoped to the competition/
+ * division the spec otherwise isolates by creating its own.
+ */
+export async function orgTimezoneSql(orgId: string): Promise<string | null> {
+  return withDb(async (sql) => {
+    const rows = await sql<{ timezone: string | null }[]>`
+      select timezone from organizations where id = ${orgId}`;
+    if (rows.length === 0) throw new Error(`no organization ${orgId}`);
+    return rows[0]!.timezone;
+  });
+}
+
+/**
+ * Force a division's registration_settings into (entrant_kind, allow_free_
+ * agents) combo the app itself refuses to write — registrations.ts's
+ * putRegistrationSettings 422s "allow_free_agents requires entrant_kind
+ * 'team'" (RS004 decision 1), and the config panel's own entrant_kind
+ * <select> onChange clears allow_free_agents the instant it leaves "team",
+ * so nothing reachable through the UI can ever PRODUCE this state. This is
+ * the only way to get a division INTO it, so a spec can prove the panel's
+ * own re-save surfaces that SAME 422 against the field. Requires an existing
+ * registration_settings row — PUT one via the real API first with a VALID
+ * combo (e.g. entrant_kind:"team", allow_free_agents:true), then call this
+ * to desync it; fails loudly on zero rows, matching setDivisionConfigSql's
+ * convention above.
+ */
+export async function forceFreeAgentsTeamMismatchSql(divisionId: string): Promise<void> {
+  await withDb(async (sql) => {
+    const res = await sql`
+      update registration_settings
+      set entrant_kind = 'individual', allow_free_agents = true
+      where division_id = ${divisionId}`;
+    if (res.count === 0) throw new Error(`no registration_settings row for division ${divisionId}`);
+  });
+}
+
+/**
  * Drop an org's server-side entitlement cache (`ent:{org}:*`). SQL-flip
  * helpers mutate entitlement state behind the app's back; on a Redis-backed
  * target (staging) a limit resolved BEFORE the flip stays cached for up to

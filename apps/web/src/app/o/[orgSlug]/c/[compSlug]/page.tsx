@@ -13,6 +13,7 @@ import { ViewToggleContainer } from "@/components/ui/view-toggle";
 import { StatusChip, divisionChipState, CHIP_SORT } from "@/components/ui/status-chip";
 import { divisionAccent, monogram } from "@/lib/division-hue";
 import { resolveLogoUrl } from "@/server/public-site/data";
+import { RegistrationHubNavEntry } from "@/components/registration-hub-nav-entry";
 import { CompetitionPassEntry } from "@/components/competition-pass-entry";
 import { CompetitionWrapUpPrompt } from "@/components/competition-wrap-up-prompt";
 import { needsWrapUp } from "@/lib/competition-wrapup";
@@ -55,6 +56,53 @@ export default async function CompetitionPage({
   const trialAvailable = checkoutTrialDays(subRow) > 0;
   const publicPath =
     competition.visibility !== "private" ? routes.shared(orgSlug, competition.slug) : null;
+  // RS004 W2 scope item 2: the Registration hub's nav entry carries live
+  // counts, computed from the SAME card-stats query this page already runs
+  // above — no second query, no client fetch, no N+1 per division.
+  //
+  // W2b review finding 1: `totalRegistered` used to sum `stats.get(d.id)
+  // ?.entrants`, but an `entrants` row only exists once an entry is
+  // MATERIALISED (registrations.ts's materialise(), at submit for a
+  // free/auto/non-waitlisted entry, or at organiser approval otherwise) —
+  // so a paid entry still awaiting manual approval, and every waitlisted
+  // entry, read as zero, undercounting exactly what this pill exists so an
+  // organiser can act on. `registered`/`awaiting_confirmation`
+  // (card-stats.ts) count straight from `registrations.status` instead,
+  // still off the SAME single query above — zero extra round trips.
+  const openRegistrationDivisions = divisions.filter(
+    (d) => stats.get(d.id)?.registration_open,
+  ).length;
+  const totalRegistered = divisions.reduce(
+    (sum, d) => sum + (stats.get(d.id)?.registered ?? 0),
+    0,
+  );
+  // The subset of `totalRegistered` not yet confirmed (pending, paid,
+  // waitlisted) — surfaced as its own badge rather than folded into
+  // `totalRegistered` alone, which would read as "all done" (finding 1:
+  // "surface it honestly").
+  const awaitingConfirmation = divisions.reduce(
+    (sum, d) => sum + (stats.get(d.id)?.awaiting_confirmation ?? 0),
+    0,
+  );
+  // The nav entry shows ONE number and puts these on hover/focus (owner call,
+  // 2026-08-25 — three filled pills outshouted every other header action).
+  // Confirmed is derived here rather than counted again: `awaiting` is a
+  // strict subset of `registered` (card-stats.ts), so the two lines add up to
+  // the number on the button and an organiser can check the arithmetic.
+  // The awaiting line is OMITTED, not rendered at zero — same rule the amber
+  // badge had.
+  // Leads the accessible name (see the prop below) — and is NOT a tooltip
+  // line: "56 registrants" then "34 confirmed, 22 awaiting confirmation"
+  // would print the same population twice for a sighted reader who already
+  // has the 56 on the button.
+  const registeredLine = `${totalRegistered} ${plural(dict, "reg.hub.registeredCount", totalRegistered, locale)}`;
+  const registrationDetails = [
+    `${openRegistrationDivisions} ${plural(dict, "reg.hub.openCount", openRegistrationDivisions, locale)}`,
+    `${totalRegistered - awaitingConfirmation} ${plural(dict, "reg.hub.confirmedCount", totalRegistered - awaitingConfirmation, locale)}`,
+    ...(awaitingConfirmation > 0
+      ? [`${awaitingConfirmation} ${t(dict, "reg.hub.awaitingConfirmation")}`]
+      : []),
+  ];
 
   return (
     <>
@@ -140,6 +188,31 @@ export default async function CompetitionPage({
                 <Printer className="h-4 w-4" strokeWidth={1.75} />
                 <span className="hidden sm:inline">{t(dict, "action.qr")}</span>
               </a>
+            )}
+            {canEdit && (
+              // Owner/admin only (RS004 prompt scope item 1) — a viewer or
+              // scorer never sees this entry, matching the hub page's own
+              // canEdit guard (registration/page.tsx).
+              <RegistrationHubNavEntry
+                href={routes.competitionRegistration(orgSlug, compSlug)}
+                label={t(dict, "action.registration")}
+                // The breakdown, not just "Registration": the tooltip that
+                // shows these same lines is aria-hidden, so this is the only
+                // path a screen reader has to them.
+                //
+                // It LEADS with the registrant total because that is the
+                // number printed on the button, and WCAG 2.5.3 (Label in
+                // Name) wants the visible label inside the accessible name.
+                // The breakdown alone failed that the moment anything was
+                // awaiting: the visible "56" appeared nowhere in a name whose
+                // own figures were 34 and 22 — the exact state the amber dot
+                // exists for, and a speech-input user asking for "fifty-six"
+                // would have matched nothing.
+                ariaLabel={`${t(dict, "aria.registration")} — ${registeredLine}: ${registrationDetails.join(", ")}`}
+                count={String(totalRegistered)}
+                details={registrationDetails}
+                awaiting={awaitingConfirmation > 0}
+              />
             )}
             <Link
               href={routes.competitionSettings(orgSlug, compSlug)}
