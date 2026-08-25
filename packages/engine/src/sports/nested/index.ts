@@ -12,7 +12,7 @@
 // against that gap and mirrored the rotation instead (nine functions, each
 // citing the kernel.ts range it restated); this file is the fix, and it is
 // what let that skin delete five of the nine in one step — `serveContext`'s
-// own composition already covers `nestedGamesOf`/`completedGames`/
+// own composition already covers `nestedGamesOf`/`serviceTurnsPerSide`/
 // `pairOrderOf`/`expectedPairServer`, so importing the composed answer needs
 // no separate re-export of the pieces (`apps/web/.../skins/tennis.tsx`'s own
 // header has the full account).
@@ -25,7 +25,7 @@
 //   has no business calling a fold function directly;
 // - `expectedDoublesServer`, `NestedCfg`, `Side`, and every other kernel-
 //   private helper `serveContext` itself composes over (`isDecidingSet`,
-//   `rulesFor`, `setInProgress`, `nestedGamesOf`, `completedGames`,
+//   `rulesFor`, `setInProgress`, `nestedGamesOf`, `serviceTurnsPerSide`,
 //   `gamesFieldBound`, `tbFieldBound` — none of the seven carries an
 //   `export` keyword in kernel.ts, so none of them could be re-exported here
 //   without editing kernel.ts itself, which this fix does not do).
