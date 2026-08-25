@@ -22,6 +22,13 @@
 -- feature to every org on that plan, which is the opposite of the
 -- staff-only rollout gate. The key exists only as a per-org
 -- `org_entitlement_overrides` row until the owner picks a plan.
+--
+-- Fix round 1 (review): every FK gets its own index (`imported_by` was
+-- missing one — the "every FK indexed" constraint and V367's own precedent),
+-- and `event_imports_division_idx` is dropped as a strict-prefix duplicate
+-- of `event_imports_key_idx` (which already leads with `division_id`) —
+-- V367__venues_and_courts.sql:90-96 drops the same class of redundancy for
+-- `courts_active_idx`.
 -- =============================================================================
 create table event_imports (
   id              uuid primary key default gen_random_uuid(),
@@ -36,9 +43,9 @@ create table event_imports (
 
 create unique index event_imports_key_idx
   on event_imports (division_id, import_id, fixture_id);
-create index event_imports_org_idx      on event_imports (org_id);
-create index event_imports_division_idx on event_imports (division_id);
-create index event_imports_fixture_idx  on event_imports (fixture_id);
+create index event_imports_org_idx         on event_imports (org_id);
+create index event_imports_fixture_idx     on event_imports (fixture_id);
+create index event_imports_imported_by_idx on event_imports (imported_by);
 
 alter table event_imports enable row level security;
 alter table event_imports force  row level security;

@@ -10,7 +10,7 @@
 // the second insert actually reaches, and violates, `event_imports_key_idx`.
 import { describe, expect, it, afterAll } from "vitest";
 import { sql } from "@/lib/db";
-import { seedOrg, setupDivisionWithFixture } from "./_rig";
+import { seedOrg, setupDivisionWithFixture, startedDivisionWithFixture } from "./_rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -42,5 +42,24 @@ describe.skipIf(!HAS_DB)("event_imports (V376)", () => {
       select relrowsecurity, relforcerowsecurity from pg_class where relname = 'event_imports'`;
     expect(row?.relrowsecurity).toBe(true);
     expect(row?.relforcerowsecurity).toBe(true);
+  });
+});
+
+// Fix round 1, review finding 1: startedDivisionWithFixture({fixtures: 2})
+// used to map to 3 entrants in ONE league stage — n(n-1)/2 gives 3 fixtures
+// for n=3, not 2 (no n gives exactly 2 in a single stage). Task 3's ext_key
+// ambiguity test additionally needs the two fixtures in DIFFERENT stages,
+// because fixtures_stage_ext_key_idx is unique per (stage_id, ext_key)
+// (V214__fixtures.sql:32-33) — same-stage would make its own setup throw a
+// duplicate-key violation before import is ever called. This is the direct
+// regression check for the rig fix itself, separate from event_imports.
+describe.skipIf(!HAS_DB)("_rig.ts — startedDivisionWithFixture({ fixtures: 2 })", () => {
+  it("returns exactly two fixtures, in two different stages", async () => {
+    const { auth } = await seedOrg();
+    const { fixtureIds, stages } = await startedDivisionWithFixture(auth, { fixtures: 2 });
+
+    expect(fixtureIds).toHaveLength(2);
+    const distinctStages = new Set(stages.map((s) => s.stageId));
+    expect(distinctStages.size).toBe(2);
   });
 });

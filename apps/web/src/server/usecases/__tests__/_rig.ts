@@ -32,12 +32,35 @@ export async function seedOrg(): Promise<{ auth: AuthCtx }> {
   return { auth: { orgId, via: "session", userId: null, role: "owner", keyId: null } };
 }
 
-/** A division with `entrants` entrants and one league stage. `start: false`
- *  leaves it in setup, which is what the phase-gate test needs. */
+/** A division with `entrants` entrants (shared across every stage — there is
+ *  one entrant pool per division, not per stage) and `stages` league stages
+ *  (default 1), fixtures generated per stage. `start: false` leaves it in
+ *  setup, which is what the phase-gate test needs.
+ *
+ *  Fix round 1 (review finding 1): a single league stage can never yield
+ *  exactly 2 fixtures — `roundRobinFixtureCount(n, 1) = n(n-1)/2` skips 2
+ *  entirely (n=2 -> 1, n=3 -> 3) — and the original draft's
+ *  `startedDivisionWithFixture({fixtures: 2})` mapped to `entrants: 3` in
+ *  ONE stage, which is 3 fixtures, not 2. Multiple stages fixes both that
+ *  and Task 3's real requirement: `fixtures_stage_ext_key_idx` is unique per
+ *  `(stage_id, ext_key)` (V214__fixtures.sql:32-33), so an ext_key-ambiguity
+ *  test needs its two same-valued-ext_key fixtures in DIFFERENT stages or
+ *  the setup itself throws a duplicate-key violation before import ever
+ *  runs. `generateStageFixtures` draws every ACTIVE DIVISION entrant
+ *  (stages.ts:1121-1124, `select id, seed from entrants where division_id =
+ *  ... and status in ('registered', 'confirmed')`), not a stage-scoped
+ *  subset, so N stages sharing the SAME 2
+ *  entrants each independently round-robin those 2 into exactly 1 fixture —
+ *  N stages -> N fixtures, one per stage, no per-stage entrant partitioning
+ *  needed. */
 export async function divisionRig(
   auth: AuthCtx,
-  opts: { start?: boolean; entrants?: number; doubleRound?: boolean } = {},
-): Promise<{ divisionId: string; fixtureIds: string[] }> {
+  opts: { start?: boolean; entrants?: number; doubleRound?: boolean; stages?: number } = {},
+): Promise<{
+  divisionId: string;
+  fixtureIds: string[];
+  stages: Array<{ stageId: string; fixtureIds: string[] }>;
+}> {
   const competition = await createCompetition(auth, {
     ends_on: "2030-12-31", name: "Import Cup " + randomUUID().slice(0, 6),
     visibility: "public", branding: {},
@@ -51,16 +74,49 @@ export async function divisionRig(
   await createEntrants(auth, division.id, names.map((n, i) => ({
     kind: "individual" as const, display_name: n, seed: i + 1, members: [],
   })));
-  const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
-  const { fixtures } = await generateStageFixtures(auth, stage.id);
+  const stageCount = opts.stages ?? 1;
+  const stages: Array<{ stageId: string; fixtureIds: string[] }> = [];
+  for (let seq = 1; seq <= stageCount; seq++) {
+    const [stage] = await createStages(auth, division.id, {
+      seq, kind: "league", name: `L${seq}`, config: {},
+    });
+    const { fixtures } = await generateStageFixtures(auth, stage.id);
+    stages.push({ stageId: stage.id, fixtureIds: fixtures.map((f) => f.id) });
+  }
   if (opts.start !== false) await startDivision(auth, division.id);
-  return { divisionId: division.id, fixtureIds: fixtures.map((f) => f.id) };
+  return { divisionId: division.id, fixtureIds: stages.flatMap((s) => s.fixtureIds), stages };
 }
 
 export async function startedDivisionWithFixture(
   auth: AuthCtx, opts: { fixtures?: number } = {},
-): Promise<{ divisionId: string; fixtureId: string; fixtureIds: string[] }> {
-  const rig = await divisionRig(auth, { entrants: opts.fixtures === 2 ? 3 : 2 });
+): Promise<{
+  divisionId: string;
+  fixtureId: string;
+  fixtureIds: string[];
+  stages: Array<{ stageId: string; fixtureIds: string[] }>;
+}> {
+  const wantTwo = opts.fixtures === 2;
+  // 2 entrants total, split across 2 league stages: each stage's round robin
+  // over the same 2 division entrants yields exactly 1 fixture
+  // (roundRobinFixtureCount(2, 1) === 1), so 2 stages -> 2 fixtures, each in
+  // its OWN stage — see divisionRig's doc comment for why one stage cannot
+  // do this and why the two fixtures must be in different stages.
+  const rig = await divisionRig(auth, wantTwo ? { entrants: 2, stages: 2 } : { entrants: 2 });
+  if (wantTwo) {
+    const distinctStages = new Set(rig.stages.map((s) => s.stageId));
+    if (rig.fixtureIds.length !== 2 || distinctStages.size !== 2) {
+      // Throws rather than silently handing Task 3 the wrong shape — this is
+      // exactly the failure mode review finding 1 caught: a change to
+      // fixture-generation behaviour (or to this rig) that quietly stops
+      // producing 2 fixtures in 2 stages must be loud, not a passing test
+      // over the wrong fixture count.
+      throw new Error(
+        `startedDivisionWithFixture({ fixtures: 2 }) rig invariant broken: expected exactly 2 ` +
+          `fixtures across 2 distinct stages, got ${rig.fixtureIds.length} fixture(s) across ` +
+          `${distinctStages.size} stage(s).`,
+      );
+    }
+  }
   return { ...rig, fixtureId: rig.fixtureIds[0]! };
 }
 
