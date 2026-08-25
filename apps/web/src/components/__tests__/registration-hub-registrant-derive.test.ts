@@ -184,23 +184,35 @@ describe("deriveRegistrantActionFlags", () => {
   // need BOTH approval === "manual" AND an awaiting-decision status
   // (pending or paid) — never re-derived by hand at a button call site, so
   // the pure rule and the completeness sweep below can't drift apart.
+  // amount_cents: 0 / payment_intent_id: null throughout this first block
+  // keeps every case OUTSIDE RS005 R1's awaiting-payment carve-out (a free
+  // entry never awaits payment), so these assert the approval-mode rule in
+  // isolation — the carve-out itself gets its own describe block below.
   it("approve/reject are legal on a manual division's pending or paid entry", () => {
-    expect(deriveRegistrantActionFlags({ status: "pending", approval: "manual" })).toMatchObject({
+    expect(
+      deriveRegistrantActionFlags({ status: "pending", approval: "manual", amount_cents: 0, payment_intent_id: null }),
+    ).toMatchObject({
       canApprove: true,
       canReject: true,
     });
-    expect(deriveRegistrantActionFlags({ status: "paid", approval: "manual" })).toMatchObject({
+    expect(
+      deriveRegistrantActionFlags({ status: "paid", approval: "manual", amount_cents: 0, payment_intent_id: null }),
+    ).toMatchObject({
       canApprove: true,
       canReject: true,
     });
   });
 
   it("approve/reject are ABSENT on an auto-approval division, even pending/paid — offering them would hand an organiser a button approveRegistration 422s on", () => {
-    expect(deriveRegistrantActionFlags({ status: "pending", approval: "auto" })).toMatchObject({
+    expect(
+      deriveRegistrantActionFlags({ status: "pending", approval: "auto", amount_cents: 0, payment_intent_id: null }),
+    ).toMatchObject({
       canApprove: false,
       canReject: false,
     });
-    expect(deriveRegistrantActionFlags({ status: "paid", approval: "auto" })).toMatchObject({
+    expect(
+      deriveRegistrantActionFlags({ status: "paid", approval: "auto", amount_cents: 0, payment_intent_id: null }),
+    ).toMatchObject({
       canApprove: false,
       canReject: false,
     });
@@ -208,7 +220,9 @@ describe("deriveRegistrantActionFlags", () => {
 
   it("approve/reject are ABSENT on a manual division once the entry is no longer awaiting a decision (includes the terminal statuses)", () => {
     for (const status of ["confirmed", "waitlisted", "withdrawn", "expired", "rejected"] as const) {
-      expect(deriveRegistrantActionFlags({ status, approval: "manual" })).toMatchObject({
+      expect(
+        deriveRegistrantActionFlags({ status, approval: "manual", amount_cents: 0, payment_intent_id: null }),
+      ).toMatchObject({
         canApprove: false,
         canReject: false,
       });
@@ -217,35 +231,186 @@ describe("deriveRegistrantActionFlags", () => {
 
   it("withdraw is legal on every non-terminal status", () => {
     for (const status of ["pending", "paid", "confirmed", "waitlisted"] as const) {
-      expect(deriveRegistrantActionFlags({ status, approval: "auto" }).canWithdraw).toBe(true);
+      expect(
+        deriveRegistrantActionFlags({ status, approval: "auto", amount_cents: 0, payment_intent_id: null }).canWithdraw,
+      ).toBe(true);
     }
   });
 
   it("withdraw is ABSENT on every terminal status (withdrawn, rejected, expired)", () => {
     for (const status of ["withdrawn", "rejected", "expired"] as const) {
-      expect(deriveRegistrantActionFlags({ status, approval: "auto" }).canWithdraw).toBe(false);
+      expect(
+        deriveRegistrantActionFlags({ status, approval: "auto", amount_cents: 0, payment_intent_id: null }).canWithdraw,
+      ).toBe(false);
     }
   });
 
   it("promote is legal ONLY for a waitlisted entry", () => {
-    expect(deriveRegistrantActionFlags({ status: "waitlisted", approval: "auto" }).canPromote).toBe(true);
+    expect(
+      deriveRegistrantActionFlags({ status: "waitlisted", approval: "auto", amount_cents: 0, payment_intent_id: null })
+        .canPromote,
+    ).toBe(true);
     for (const status of ["pending", "paid", "confirmed", "withdrawn", "expired", "rejected"] as const) {
-      expect(deriveRegistrantActionFlags({ status, approval: "auto" }).canPromote).toBe(false);
+      expect(
+        deriveRegistrantActionFlags({ status, approval: "auto", amount_cents: 0, payment_intent_id: null }).canPromote,
+      ).toBe(false);
     }
   });
 
+  // RS005 R1 finding 1 (whole-branch review MAJOR): registration-approval.ts
+  // approveRegistration (line 128) 422s "Awaiting payment — mark it paid
+  // first, or approve once payment arrives" for a manual division's
+  // fee-bearing, still-`pending` entry with no payment on file — the
+  // ORDINARY state of every entry on a paid manual division between submit
+  // and payment. Approve must not render there. Uses amount_cents (this
+  // row's OWN quoted fee) as the fee signal in place of the division's live
+  // registration_settings.fee_cents — see the function's own doc comment
+  // for why (this pure function never sees the division's settings).
+  describe("approve's awaiting-payment carve-out (RS005 R1 finding 1)", () => {
+    it("approve is ABSENT on a manual, fee-bearing, unpaid, pending entry", () => {
+      expect(
+        deriveRegistrantActionFlags({
+          status: "pending",
+          approval: "manual",
+          amount_cents: 1500,
+          payment_intent_id: null,
+        }).canApprove,
+      ).toBe(false);
+    });
+
+    it("approve is PRESENT once that same entry is paid (payment_intent_id set)", () => {
+      expect(
+        deriveRegistrantActionFlags({
+          status: "pending",
+          approval: "manual",
+          amount_cents: 1500,
+          payment_intent_id: "pi_123",
+        }).canApprove,
+      ).toBe(true);
+    });
+
+    it("approve is PRESENT once the entry's OWN status has already moved to paid, even with no payment_intent_id — approveRegistration's own check (registration-approval.ts:128) only bites while status is still pending", () => {
+      expect(
+        deriveRegistrantActionFlags({
+          status: "paid",
+          approval: "manual",
+          amount_cents: 1500,
+          payment_intent_id: null,
+        }).canApprove,
+      ).toBe(true);
+    });
+
+    it("approve is still PRESENT on a manual FREE entry (fee 0) that is pending — a free entry never awaits payment, so this must not be over-gated", () => {
+      expect(
+        deriveRegistrantActionFlags({
+          status: "pending",
+          approval: "manual",
+          amount_cents: 0,
+          payment_intent_id: null,
+        }).canApprove,
+      ).toBe(true);
+    });
+
+    it("reject stays PRESENT in the exact case approve is hidden — rejectRegistration carries no awaiting-payment check, so an organiser can always decline outright before ever collecting money", () => {
+      expect(
+        deriveRegistrantActionFlags({
+          status: "pending",
+          approval: "manual",
+          amount_cents: 1500,
+          payment_intent_id: null,
+        }).canReject,
+      ).toBe(true);
+    });
+  });
+
+  // RS005 R1 finding 1's recovery path: markRegistrationPaidOffline's own
+  // rule (registrations.ts ~3102-3114) — status must still be 'pending', no
+  // payment_intent_id on file (a card payment refunds on the payments
+  // trail instead), and a real fee owed. Deliberately no approval-mode
+  // check: the usecase confirms identically on a manual or an auto
+  // division (registrations.test.ts's own "...still confirm on a MANUAL
+  // division — an organiser's explicit action IS the approval").
+  describe("canMarkPaid (RS005 R1 finding 1's recovery path)", () => {
+    it("is legal on a pending, fee-bearing, unpaid entry — on EITHER approval mode", () => {
+      for (const approval of ["manual", "auto"] as const) {
+        expect(
+          deriveRegistrantActionFlags({
+            status: "pending",
+            approval,
+            amount_cents: 1500,
+            payment_intent_id: null,
+          }).canMarkPaid,
+        ).toBe(true);
+      }
+    });
+
+    it("is ABSENT once a payment_intent_id already exists — a card payment refunds on the payments trail instead", () => {
+      expect(
+        deriveRegistrantActionFlags({
+          status: "pending",
+          approval: "manual",
+          amount_cents: 1500,
+          payment_intent_id: "pi_123",
+        }).canMarkPaid,
+      ).toBe(false);
+    });
+
+    it("is ABSENT on a free entry (amount_cents 0) — 'This division has no entry fee'", () => {
+      expect(
+        deriveRegistrantActionFlags({
+          status: "pending",
+          approval: "manual",
+          amount_cents: 0,
+          payment_intent_id: null,
+        }).canMarkPaid,
+      ).toBe(false);
+    });
+
+    it("is ABSENT on any non-pending status — 'Only pending registrations can be marked paid'", () => {
+      for (const status of ["paid", "confirmed", "waitlisted", "withdrawn", "expired", "rejected"] as const) {
+        expect(
+          deriveRegistrantActionFlags({
+            status,
+            approval: "manual",
+            amount_cents: 1500,
+            payment_intent_id: null,
+          }).canMarkPaid,
+        ).toBe(false);
+      }
+    });
+
+    it("is mutually exclusive with canApprove by construction — never both true for the same row", () => {
+      for (const status of RegistrationStatus.options) {
+        for (const approval of ["auto", "manual"] as const) {
+          for (const amount_cents of [0, 1500]) {
+            for (const payment_intent_id of [null, "pi_123"] as const) {
+              const flags = deriveRegistrantActionFlags({ status, approval, amount_cents, payment_intent_id });
+              expect(flags.canApprove && flags.canMarkPaid).toBe(false);
+            }
+          }
+        }
+      }
+    });
+  });
+
   // Completeness sweep, RS005 W1a-style: iterates the REAL zod enum rather
-  // than a hand-copied list, for both approval modes, so a status added to
-  // the union in future is exercised here automatically rather than
-  // silently falling through to whatever a switch's default case does.
-  it("returns a defined boolean for every real status × approval combination", () => {
+  // than a hand-copied list, for both approval modes and (RS005 R1) both
+  // fee/payment-intent combinations, so a status added to the union in
+  // future is exercised here automatically rather than silently falling
+  // through to whatever a branch's default does.
+  it("returns a defined boolean for every real status × approval × fee × payment_intent combination", () => {
     for (const status of RegistrationStatus.options) {
       for (const approval of ["auto", "manual"] as const) {
-        const flags = deriveRegistrantActionFlags({ status, approval });
-        expect(typeof flags.canApprove).toBe("boolean");
-        expect(typeof flags.canReject).toBe("boolean");
-        expect(typeof flags.canWithdraw).toBe("boolean");
-        expect(typeof flags.canPromote).toBe("boolean");
+        for (const amount_cents of [0, 1500]) {
+          for (const payment_intent_id of [null, "pi_123"] as const) {
+            const flags = deriveRegistrantActionFlags({ status, approval, amount_cents, payment_intent_id });
+            expect(typeof flags.canApprove).toBe("boolean");
+            expect(typeof flags.canReject).toBe("boolean");
+            expect(typeof flags.canWithdraw).toBe("boolean");
+            expect(typeof flags.canPromote).toBe("boolean");
+            expect(typeof flags.canMarkPaid).toBe("boolean");
+          }
+        }
       }
     }
   });

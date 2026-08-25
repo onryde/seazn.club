@@ -231,7 +231,13 @@ export function RegistrationHubRegistrantDetail({
       {canEdit && (
         <section className="sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.actions")}>
           <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.actions")}</h4>
-          <RegistrationHubRegistrantActions registrationId={row.id} status={row.status} approval={row.approval} />
+          <RegistrationHubRegistrantActions
+            registrationId={row.id}
+            status={row.status}
+            approval={row.approval}
+            amountCents={row.amount_cents}
+            paymentIntentId={row.payment_intent_id}
+          />
         </section>
       )}
     </div>

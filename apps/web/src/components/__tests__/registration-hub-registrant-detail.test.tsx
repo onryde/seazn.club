@@ -302,10 +302,19 @@ describe("RegistrationHubRegistrantDetail — cart siblings (task 2 + acceptance
 });
 
 describe("RegistrationHubRegistrantDetail — action controls (RS005 W3, viewer/editor gating)", () => {
-  it("mounts RegistrationHubRegistrantActions for an editor, threading the row's id/status/approval straight through", () => {
+  it("mounts RegistrationHubRegistrantActions for an editor, threading the row's id/status/approval/amount_cents/payment_intent_id straight through", () => {
     const tree = walk(
       RegistrationHubRegistrantDetail(
-        baseProps({ row: row({ id: "reg-9", status: "pending", approval: "manual" }), canEdit: true }),
+        baseProps({
+          row: row({
+            id: "reg-9",
+            status: "pending",
+            approval: "manual",
+            amount_cents: 2500,
+            payment_intent_id: "pi_456",
+          }),
+          canEdit: true,
+        }),
       ),
     );
     const actions = tree.find((e) => e.type === RegistrationHubRegistrantActions);
@@ -314,6 +323,8 @@ describe("RegistrationHubRegistrantDetail — action controls (RS005 W3, viewer/
       registrationId: "reg-9",
       status: "pending",
       approval: "manual",
+      amountCents: 2500,
+      paymentIntentId: "pi_456",
     });
   });
 

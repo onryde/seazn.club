@@ -15,34 +15,63 @@
 // reaches this file's code, not merely a disabled button (owner ruling,
 // 2026-08-25: mutating controls are ABSENT for a viewer).
 //
-// Legality (which of the five buttons render) is a pure function of the
-// row's OWN status/approval (deriveRegistrantActionFlags,
-// registration-hub-registrant-derive.ts) — never re-derived here by hand,
-// so this component and its completeness-tested pure sibling can't drift
-// the way REGISTRANT_STATUS_STYLE's hand-kept list once did (RS005 W1a).
+// Legality (which of the SIX buttons render) is a pure function of the
+// row's OWN status/approval/amount_cents/payment_intent_id
+// (deriveRegistrantActionFlags, registration-hub-registrant-derive.ts) —
+// never re-derived here by hand, so this component and its
+// completeness-tested pure sibling can't drift the way
+// REGISTRANT_STATUS_STYLE's hand-kept list once did (RS005 W1a).
 //
 // "Optimistic where safe, with rollback on 4xx" (owner ruling): approve,
-// reject and withdraw each have exactly ONE possible resulting status
-// (registration-approval.ts / registrations.ts — confirmed, rejected,
-// withdrawn respectively), so `runStatusAction` flips `optimisticStatus` to
-// that value the instant the click is confirmed — the row's OWN visible
-// controls (derived off that same optimisticStatus, not off the original
-// prop) update immediately, before the network round trip even starts —
-// and REVERTS it on a 4xx, surfacing the server's own English error text
-// (this repo never translates thrown messages; the surrounding button/
-// confirm copy is translated). Promote's resulting status depends on the
-// division's settings (fee/approval mode) and is NOT safe to guess, so it
-// gets a narrower optimistic treatment: `promotedOptimistically` hides the
-// button the instant it's clicked, without asserting a specific next
-// status; `router.refresh()` brings the real one, and the prop-sync effect
-// below reconciles `optimisticStatus` (and clears the promote guard) once
-// it lands.
+// reject, withdraw and (RS005 R1) markPaid each have exactly ONE possible
+// resulting status (registration-approval.ts / registrations.ts —
+// confirmed, rejected, withdrawn, confirmed respectively — markPaid
+// confirms/materialises in the SAME server call rather than stopping at an
+// intermediate 'paid', see markPaid() below), so `runStatusAction` flips
+// `optimisticStatus` to that value the instant the click is confirmed — the
+// row's OWN visible controls (derived off that same optimisticStatus, not
+// off the original prop) update immediately, before the network round trip
+// even starts — and REVERTS it on a 4xx, surfacing the server's own English
+// error text (this repo never translates thrown messages; the surrounding
+// button/confirm copy is translated). Promote's resulting status depends on
+// the division's settings (fee/approval mode) and is NOT safe to guess, so
+// it gets a narrower optimistic treatment: `promotedOptimistically` hides
+// the button the instant it's clicked, without asserting a specific next
+// status; `router.refresh()` brings the real one, and the prop-sync
+// render-time adjustment below reconciles `optimisticStatus` (and clears
+// the promote guard) once it lands.
+//
+// RS005 R1 whole-branch review MAJOR (finding 2): a 4xx's revert used to
+// restore whatever `optimisticStatus` held at CLICK time
+// (`const previous = optimisticStatus`) — a plain closure capture, frozen
+// for the life of that async call. If a `router.refresh()` fired by ANY
+// other row's action on the same page, or a second organiser editing this
+// exact row, lands a fresher `status` prop while the request is still in
+// flight, the render-time adjustment below already moves `optimisticStatus`
+// to that fresh value — and the OLD revert then clobbered it straight back
+// to the stale click-time snapshot the instant the request failed, showing
+// an organiser a status the server had already moved past. `latestStatusRef`
+// fixes this the way a "latest ref" fixes any stale-closure read in React:
+// it is reassigned unconditionally every render (a plain mutation, not a
+// state update — triggers no re-render, so this is NOT the reintroduced-
+// effect trap W2c/W3 already removed), and because a ref is the SAME object
+// across renders, a stale closure's `.current` read always sees whatever
+// the MOST RECENT render wrote, not what was there when the closure was
+// created. The revert path reads `latestStatusRef.current` instead of a
+// click-time snapshot, so a failure always restores the server's latest
+// known truth for this row.
 //
 // Reject and withdraw confirm first — both are destructive: reject is
 // TERMINAL (no path returns a rejected entry to any other status) and
-// withdraw frees the spot and can trigger a refund. Approve, promote and
-// resend do not confirm (owner ruling).
-import {  useState } from "react";
+// withdraw frees the spot and can trigger a refund. markPaid (RS005 R1)
+// also confirms first, despite not being destructive in that sense: it is
+// an explicit, logged payment attestation that immediately materialises the
+// entrant with no undo path afterward other than withdraw (rejecting a
+// 'confirmed' row 422s) — reusing the pre-existing, purpose-built
+// confirm.markPaidRegistration copy (scaffolded for this exact action,
+// never previously wired to any component). Approve, promote and resend do
+// not confirm (owner ruling).
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1 } from "@/lib/client-v1";
 import { useConfirm } from "@/components/ui/confirm-provider";
@@ -51,12 +80,25 @@ import { deriveRegistrantActionFlags } from "@/components/registration-hub-regis
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 
 type Status = RegistrationListRow["status"];
-type ActionKey = "approve" | "reject" | "withdraw" | "promote" | "resend";
+type ActionKey = "approve" | "reject" | "withdraw" | "promote" | "resend" | "mark-paid";
 
 export interface RegistrationHubRegistrantActionsProps {
   registrationId: string;
   status: Status;
   approval: RegistrationListRow["approval"];
+  /** This entry's OWN quoted fee (RegistrationRow.amount_cents, frozen at
+   *  submission) — the fee signal deriveRegistrantActionFlags uses as a
+   *  stand-in for the division's live registration_settings.fee_cents
+   *  (registration-approval.ts:128, registrations.ts:3111-3114's real
+   *  gates): this component only ever receives ONE row, never the
+   *  division's settings. See that function's own doc comment for exactly
+   *  when the two can diverge. */
+  amountCents: number;
+  /** The CART's payment_intent_id (RegistrationWithGroupRow) — set once a
+   *  card payment lands, shared by every entry in the cart, null for an
+   *  offline/unpaid one. Both the approve-awaiting-payment exclusion and
+   *  the markPaid gate key off this being null. */
+  paymentIntentId: string | null;
 }
 
 function errorText(err: unknown): string {
@@ -67,6 +109,8 @@ export function RegistrationHubRegistrantActions({
   registrationId,
   status,
   approval,
+  amountCents,
+  paymentIntentId,
 }: RegistrationHubRegistrantActionsProps) {
   const msg = useMsg();
   const router = useRouter();
@@ -77,7 +121,7 @@ export function RegistrationHubRegistrantActions({
   const [feedback, setFeedback] = useState<{ tone: "success" | "error"; text: string } | null>(null);
 
   // Re-syncs to the server's own truth once router.refresh() lands a fresh
-  // `status` prop. The three deterministic actions already guessed right, so
+  // `status` prop. The four deterministic actions already guessed right, so
   // this is a no-op for them; promote's un-guessed case is the one this is
   // load-bearing for — it's also what clears promotedOptimistically once the
   // real post-promotion status has actually arrived.
@@ -95,24 +139,37 @@ export function RegistrationHubRegistrantActions({
     setPromotedOptimistically(false);
   }
 
-  const flags = deriveRegistrantActionFlags({ status: optimisticStatus, approval });
+  // RS005 R1 finding 2 — see the file header. Mirrors the latest `status`
+  // PROP by mutation (not a new closure) every render, so runStatusAction's
+  // `catch` — created by whichever render was live at CLICK time — can
+  // still read what the server most recently said, rather than resurrecting
+  // a value frozen at click time. Read only from that catch, below.
+  const latestStatusRef = useRef(status);
+  latestStatusRef.current = status;
+
+  const flags = deriveRegistrantActionFlags({
+    status: optimisticStatus,
+    approval,
+    amount_cents: amountCents,
+    payment_intent_id: paymentIntentId,
+  });
 
   async function runStatusAction(
-    action: "approve" | "reject" | "withdraw",
+    action: "approve" | "reject" | "withdraw" | "mark-paid",
     path: string,
     nextStatus: Status,
     successText: string,
   ) {
     setBusy(action);
     setFeedback(null);
-    const previous = optimisticStatus;
     setOptimisticStatus(nextStatus);
     try {
       await apiV1(`/api/v1/registrations/${registrationId}/${path}`, { method: "POST" });
       setFeedback({ tone: "success", text: successText });
       router.refresh();
     } catch (err) {
-      setOptimisticStatus(previous);
+      // Latest known server truth, never the click-time snapshot — finding 2.
+      setOptimisticStatus(latestStatusRef.current);
       setFeedback({ tone: "error", text: errorText(err) });
     } finally {
       setBusy(null);
@@ -143,6 +200,28 @@ export function RegistrationHubRegistrantActions({
     });
     if (!ok) return;
     await runStatusAction("withdraw", "withdraw", "withdrawn", msg("reg.hub.registrants.status.withdrawn"));
+  }
+
+  // RS005 R1 — reuses confirm.markPaidRegistration's pre-existing copy
+  // (scaffolded for this exact action, never previously wired to any
+  // component — see the file header) rather than minting new strings: the
+  // real-world consequence it describes ("Records that you received the
+  // fee outside the app... and confirms the entry. This is logged.") is
+  // identical regardless of which surface triggers markRegistrationPaidOffline.
+  async function markPaid() {
+    const ok = await confirmDialog({
+      title: msg("confirm.markPaidRegistration.title"),
+      body: msg("confirm.markPaidRegistration.body"),
+      confirmLabel: msg("confirm.markPaidRegistration.label"),
+      tone: "default",
+    });
+    if (!ok) return;
+    await runStatusAction(
+      "mark-paid",
+      "mark-paid",
+      "confirmed",
+      msg("reg.hub.registrants.detail.actions.markedPaid"),
+    );
   }
 
   async function promote() {
@@ -195,6 +274,19 @@ export function RegistrationHubRegistrantActions({
   return (
     <div data-registration-hub-registrant-actions className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
+        {flags.canMarkPaid && (
+          <button
+            type="button"
+            data-registration-hub-registrant-action="mark-paid"
+            disabled={busy !== null}
+            onClick={markPaid}
+            className="btn btn-primary text-xs"
+          >
+            {busy === "mark-paid"
+              ? msg("reg.hub.registrants.detail.actions.markingPaid")
+              : msg("reg.hub.registrants.detail.actions.markPaid")}
+          </button>
+        )}
         {flags.canApprove && (
           <button
             type="button"

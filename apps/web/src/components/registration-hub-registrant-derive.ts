@@ -161,6 +161,8 @@ export interface RegistrantActionFlags {
   canReject: boolean;
   canWithdraw: boolean;
   canPromote: boolean;
+  /** RS005 R1 finding 1's recovery path — see the block comment below. */
+  canMarkPaid: boolean;
 }
 
 /** withdrawn/rejected/expired — a registration in any of these never moves
@@ -180,18 +182,57 @@ const TERMINAL_REGISTRANT_STATUSES: ReadonlySet<RegistrationListRow["status"]> =
  * completeness sweep in its test file can't drift apart the way
  * REGISTRANT_STATUS_STYLE's hand-kept status list once did (RS005 W1a).
  *
- * approve/reject: legal ONLY on a `manual`-approval division, and ONLY while
- * the entry is still awaiting a decision (`pending`, or `paid` — a division
- * can charge a fee before an organiser has reviewed it). `approveRegistration`/
- * `rejectRegistration` (registration-approval.ts) 422 outside this rule
- * (auto-approval division, or a status past "awaiting decision") — showing
- * the button anyway would hand an organiser a control that cannot work.
- * Deliberately does NOT also exclude an already-refunded 'paid' row the way
- * `approveRegistration` itself additionally does: the dispatch's own
- * legality rule stops at "pending, or paid on a manual division", and that
- * narrower server-side refusal is exactly what this wave's 4xx-revert path
- * (RegistrationHubRegistrantActions) exists to surface instead of silently
- * pre-empting here.
+ * approve: legal ONLY on a `manual`-approval division, ONLY while the entry
+ * is still awaiting a decision (`pending`, or `paid` — a division can charge
+ * a fee before an organiser has reviewed it) — AND (RS005 R1 finding 1,
+ * whole-branch review MAJOR) NOT while `awaitingOfflineFee` below holds.
+ * `approveRegistration` (registration-approval.ts:128-133) 422s
+ * "Awaiting payment — mark it paid first, or approve once payment arrives"
+ * for exactly that case — a manual division's fee-bearing entry, still
+ * `pending`, with no payment on file — which is the ORDINARY state of every
+ * entry on a paid manual division between submit and payment, not an edge
+ * case. That server check reads `settings.fee_cents` (the DIVISION's live
+ * fee) and `reg.payment_intent_id`; this pure function only ever sees ONE
+ * row, never the division's settings, so it substitutes `row.amount_cents`
+ * — THIS entry's OWN quoted fee, frozen at submission (RegistrationRow's own
+ * doc comment) — as the fee signal (RS005 R1 dispatch's own instruction:
+ * "the row already carries what you need"). The two can only diverge if an
+ * organiser edits the division's fee AFTER this entry already exists, which
+ * `approveRegistration`'s own check does not special-case either.
+ * `row.payment_intent_id` is exact, not a proxy: it is the SAME cart-level
+ * column `reg.payment_intent_id` resolves to server-side. Deliberately does
+ * NOT also exclude an already-refunded 'paid' row the way `approveRegistration`
+ * itself additionally does: the dispatch's own legality rule stops at
+ * "pending, or paid on a manual division" (plus this wave's awaiting-payment
+ * carve-out), and that narrower server-side refusal is exactly what the
+ * 4xx-revert path (RegistrationHubRegistrantActions) exists to surface
+ * instead of silently pre-empting here.
+ *
+ * reject: legal on the SAME awaiting-decision window as approve, but
+ * deliberately WITHOUT the awaiting-payment exclusion —
+ * `rejectRegistration` (registration-approval.ts:174-218) carries no such
+ * check. An organiser can always decline a still-undecided entry outright,
+ * whether or not a fee has arrived: declining before ever collecting money
+ * is exactly the point, and gating reject the same way approve is gated
+ * would remove a capability the server still grants.
+ *
+ * canMarkPaid: `markRegistrationPaidOffline`'s own rule (registrations.ts,
+ * the checks at ~3102-3114) — status must still be `pending` ("Only pending
+ * registrations can be marked paid" refuses every other status, including
+ * `paid`), no `payment_intent_id` on file (a card payment refunds on the
+ * payments trail instead), and a real fee owed (same `amount_cents` proxy
+ * as approve's gate, same reasoning above). Identical to
+ * `awaitingOfflineFee` below BY CONSTRUCTION, not coincidence: whenever an
+ * offline fee is still owed on a still-pending row, approve is illegal and
+ * markPaid is the only forward move — the two can never both be true for
+ * the same row (see the "mutually exclusive" test). Deliberately carries NO
+ * approval-mode check — the usecase itself has none: an organiser's
+ * explicit mark-paid confirms the entry on a MANUAL division exactly as it
+ * does on an AUTO one (registrations.test.ts: "...still confirm on a MANUAL
+ * division — an organiser's explicit action IS the approval"), so gating
+ * this control on `approval === "manual"` would leave the identical dead
+ * end this wave fixes standing on every AUTO-approval, offline-fee division
+ * instead.
  *
  * withdraw: legal for any NON-terminal status — an organiser can withdraw a
  * still-live entry regardless of its approval mode or review state.
@@ -200,14 +241,16 @@ const TERMINAL_REGISTRANT_STATUSES: ReadonlySet<RegistrationListRow["status"]> =
  * nothing to promote FROM.
  */
 export function deriveRegistrantActionFlags(
-  row: Pick<RegistrationListRow, "status" | "approval">,
+  row: Pick<RegistrationListRow, "status" | "approval" | "amount_cents" | "payment_intent_id">,
 ): RegistrantActionFlags {
   const awaitingManualDecision =
     row.approval === "manual" && (row.status === "pending" || row.status === "paid");
+  const awaitingOfflineFee = row.status === "pending" && row.amount_cents > 0 && row.payment_intent_id === null;
   return {
-    canApprove: awaitingManualDecision,
+    canApprove: awaitingManualDecision && !awaitingOfflineFee,
     canReject: awaitingManualDecision,
     canWithdraw: !TERMINAL_REGISTRANT_STATUSES.has(row.status),
     canPromote: row.status === "waitlisted",
+    canMarkPaid: awaitingOfflineFee,
   };
 }
