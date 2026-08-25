@@ -1,0 +1,311 @@
+// RS005 W3 — the row-expand detail's mutating action controls: approve/
+// reject/withdraw/promote/resend, gated entirely by
+// deriveRegistrantActionFlags (registration-hub-registrant-derive.ts) —
+// never re-derived by hand here. The row/table/detail stay server
+// components (task 1's zero-client-JS posture, unchanged); this is the
+// SECOND client island in the row family, after the join-code copy
+// control (W2b).
+//
+// Both `useRouter` and `useConfirm` need replacing under this harness —
+// see registration-hub-settings-panel.test.tsx (useRouter) and
+// billing-group-at-cap.test.tsx (useConfirm) for the same treatment:
+// useRouter's real implementation throws outside a real Next tree, and
+// useConfirm throws BY DESIGN outside its provider — the harness's
+// useContext only ever returns each context's default, and no provider is
+// ever actually mounted here.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { t } from "@/lib/i18n-runtime";
+import uiEn from "@/dictionaries/en/ui.json";
+
+const nav = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: nav.refresh }),
+}));
+
+const confirmMock = vi.hoisted(() => ({
+  fn: vi.fn(async (_opts: { title: string; body: unknown; confirmLabel: string; tone?: string }) => true),
+}));
+vi.mock("@/components/ui/confirm-provider", () => ({
+  useConfirm: () => confirmMock.fn,
+}));
+
+// Mirrors registration-hub-config-panel.test.tsx's own `net` harness, keyed
+// by the LAST path segment (every action route is /registrations/{id}/<verb>)
+// rather than by full URL/method, since every call this file makes is a POST.
+const net = vi.hoisted(() => ({
+  calls: [] as { url: string; method: string; json?: unknown }[],
+  next: new Map<string, Promise<unknown>>(),
+}));
+vi.mock("@/lib/client-v1", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/client-v1")>();
+  return {
+    ...actual,
+    apiV1: (url: string, options?: { method?: string; json?: unknown }) => {
+      net.calls.push({ url, method: options?.method ?? "GET", json: options?.json });
+      const key = url.split("/").pop()!;
+      const queued = net.next.get(key);
+      if (queued) {
+        net.next.delete(key);
+        return queued;
+      }
+      return Promise.resolve({});
+    },
+  };
+});
+
+import { ApiV1Error } from "@/lib/client-v1";
+import { RegistrationHubRegistrantActions } from "@/components/registration-hub-registrant-actions";
+
+/** An externally-settleable promise — lets a test observe the OPTIMISTIC
+ *  state (after the flip, before the network settles) before deciding
+ *  whether the request succeeds or 4xxs. */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+const PROPS = {
+  registrationId: "reg-1",
+  status: "pending" as const,
+  approval: "manual" as const,
+};
+
+function mount(overrides: Partial<typeof PROPS> = {}) {
+  return renderIsland(RegistrationHubRegistrantActions, { ...PROPS, ...overrides });
+}
+
+function findAction(island: ReturnType<typeof mount>, action: string) {
+  return island.tree().find((e) => propsOf(e)["data-registration-hub-registrant-action"] === action);
+}
+
+beforeEach(() => {
+  nav.refresh.mockClear();
+  confirmMock.fn.mockReset();
+  confirmMock.fn.mockImplementation(async () => true);
+  net.calls.length = 0;
+  net.next.clear();
+});
+
+describe("RegistrationHubRegistrantActions — legality (which buttons render)", () => {
+  it("shows approve and reject on a manual division's pending entry", () => {
+    const island = mount({ status: "pending", approval: "manual" });
+    expect(findAction(island, "approve")).toBeTruthy();
+    expect(findAction(island, "reject")).toBeTruthy();
+  });
+
+  it("shows approve and reject on a manual division's paid entry", () => {
+    const island = mount({ status: "paid", approval: "manual" });
+    expect(findAction(island, "approve")).toBeTruthy();
+    expect(findAction(island, "reject")).toBeTruthy();
+  });
+
+  it("hides approve and reject on an auto-approval division, even pending/paid", () => {
+    const island = mount({ status: "pending", approval: "auto" });
+    expect(findAction(island, "approve")).toBeUndefined();
+    expect(findAction(island, "reject")).toBeUndefined();
+  });
+
+  it("hides approve and reject on a terminal row, even a manual division", () => {
+    const island = mount({ status: "rejected", approval: "manual" });
+    expect(findAction(island, "approve")).toBeUndefined();
+    expect(findAction(island, "reject")).toBeUndefined();
+  });
+
+  it("shows withdraw on every non-terminal status", () => {
+    for (const status of ["pending", "paid", "confirmed", "waitlisted"] as const) {
+      expect(findAction(mount({ status, approval: "auto" }), "withdraw")).toBeTruthy();
+    }
+  });
+
+  it("hides withdraw on every terminal status", () => {
+    for (const status of ["withdrawn", "rejected", "expired"] as const) {
+      expect(findAction(mount({ status, approval: "auto" }), "withdraw")).toBeUndefined();
+    }
+  });
+
+  it("shows promote ONLY for a waitlisted entry", () => {
+    expect(findAction(mount({ status: "waitlisted" }), "promote")).toBeTruthy();
+    expect(findAction(mount({ status: "confirmed" }), "promote")).toBeUndefined();
+    expect(findAction(mount({ status: "pending" }), "promote")).toBeUndefined();
+  });
+
+  it("always shows resend, for every status/approval — the caller already gates the whole island on canEdit", () => {
+    expect(findAction(mount({ status: "withdrawn", approval: "auto" }), "resend")).toBeTruthy();
+    expect(findAction(mount({ status: "rejected", approval: "manual" }), "resend")).toBeTruthy();
+  });
+});
+
+describe("RegistrationHubRegistrantActions — confirm gating", () => {
+  it("does NOT confirm before approving (a safe action)", async () => {
+    const island = mount({ status: "pending", approval: "manual" });
+    await (propsOf(findAction(island, "approve")!).onClick as () => Promise<void>)();
+    expect(confirmMock.fn).not.toHaveBeenCalled();
+    expect(net.calls.some((c) => c.url === "/api/v1/registrations/reg-1/approve" && c.method === "POST")).toBe(
+      true,
+    );
+  });
+
+  it("confirms before rejecting, with a danger tone", async () => {
+    const island = mount({ status: "pending", approval: "manual" });
+    await (propsOf(findAction(island, "reject")!).onClick as () => Promise<void>)();
+    expect(confirmMock.fn).toHaveBeenCalledTimes(1);
+    expect(confirmMock.fn.mock.calls[0]![0]).toMatchObject({ tone: "danger" });
+    expect(net.calls.some((c) => c.url === "/api/v1/registrations/reg-1/reject")).toBe(true);
+  });
+
+  it("sends no request, and changes nothing, when the reject confirm is cancelled", async () => {
+    confirmMock.fn.mockImplementationOnce(async () => false);
+    const island = mount({ status: "pending", approval: "manual" });
+    await (propsOf(findAction(island, "reject")!).onClick as () => Promise<void>)();
+    expect(net.calls.some((c) => c.url.endsWith("/reject"))).toBe(false);
+    expect(findAction(island, "reject")).toBeTruthy();
+    expect(findAction(island, "approve")).toBeTruthy();
+  });
+
+  it("confirms before withdrawing too", async () => {
+    const island = mount({ status: "confirmed", approval: "auto" });
+    await (propsOf(findAction(island, "withdraw")!).onClick as () => Promise<void>)();
+    expect(confirmMock.fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not confirm before promoting or resending", async () => {
+    const promoteIsland = mount({ status: "waitlisted" });
+    await (propsOf(findAction(promoteIsland, "promote")!).onClick as () => Promise<void>)();
+    expect(confirmMock.fn).not.toHaveBeenCalled();
+
+    const resendIsland = mount({ status: "confirmed" });
+    await (propsOf(findAction(resendIsland, "resend")!).onClick as () => Promise<void>)();
+    expect(confirmMock.fn).not.toHaveBeenCalled();
+  });
+});
+
+describe("RegistrationHubRegistrantActions — optimistic flip + 4xx revert", () => {
+  it("hides approve/reject the instant reject is confirmed, then REVERTS on a 4xx and shows the server's own message", async () => {
+    const d = deferred<unknown>();
+    net.next.set("reject", d.promise);
+    const island = mount({ status: "paid", approval: "manual" });
+
+    const click = (propsOf(findAction(island, "reject")!).onClick as () => Promise<void>)();
+    await vi.waitFor(() => expect(findAction(island, "reject")).toBeUndefined());
+    // Optimistically flipped to "rejected" (terminal) — approve is gone too,
+    // and the row's OWN controls, not just a spinner, reflect the flip.
+    expect(findAction(island, "approve")).toBeUndefined();
+
+    d.reject(new ApiV1Error("This registration was already refunded and cannot be approved", 422, "ERROR"));
+    await click;
+
+    // Reverted: an organiser must never be shown a state the server refused.
+    expect(findAction(island, "reject")).toBeTruthy();
+    expect(findAction(island, "approve")).toBeTruthy();
+    expect(island.text()).toContain("This registration was already refunded and cannot be approved");
+    expect(nav.refresh).not.toHaveBeenCalled();
+  });
+
+  it("keeps the optimistic flip and refreshes on a successful reject", async () => {
+    const island = mount({ status: "paid", approval: "manual" });
+    await (propsOf(findAction(island, "reject")!).onClick as () => Promise<void>)();
+    expect(findAction(island, "reject")).toBeUndefined();
+    expect(findAction(island, "withdraw")).toBeUndefined(); // rejected is terminal
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
+    expect(island.text()).toContain(t(uiEn, "reg.hub.registrants.status.rejected"));
+  });
+
+  it("reverts a failed approve back to its pending controls, with the server's message shown", async () => {
+    const d = deferred<unknown>();
+    net.next.set("approve", d.promise);
+    const island = mount({ status: "pending", approval: "manual" });
+
+    const click = (propsOf(findAction(island, "approve")!).onClick as () => Promise<void>)();
+    await vi.waitFor(() => expect(findAction(island, "approve")).toBeUndefined());
+
+    d.reject(new ApiV1Error("Awaiting payment — mark it paid first, or approve once payment arrives", 422, "ERROR"));
+    await click;
+
+    expect(findAction(island, "approve")).toBeTruthy();
+    expect(island.text()).toContain("Awaiting payment — mark it paid first, or approve once payment arrives");
+  });
+
+  it("reverts a failed withdraw back to its controls too", async () => {
+    const d = deferred<unknown>();
+    net.next.set("withdraw", d.promise);
+    const island = mount({ status: "confirmed", approval: "auto" });
+
+    const click = (propsOf(findAction(island, "withdraw")!).onClick as () => Promise<void>)();
+    await vi.waitFor(() => expect(findAction(island, "withdraw")).toBeUndefined());
+
+    d.reject(new ApiV1Error("Something went wrong", 500, "INTERNAL"));
+    await click;
+
+    expect(findAction(island, "withdraw")).toBeTruthy();
+    expect(island.text()).toContain("Something went wrong");
+  });
+
+  it("promote: hides itself once clicked, and a success shows a generic 'promoted' message rather than guessing a specific resulting status", async () => {
+    const island = mount({ status: "waitlisted", approval: "manual" });
+    await (propsOf(findAction(island, "promote")!).onClick as () => Promise<void>)();
+    expect(findAction(island, "promote")).toBeUndefined();
+    expect(island.text()).toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoted"));
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("promote: a 4xx brings the button back with the server's message", async () => {
+    const d = deferred<unknown>();
+    net.next.set("promote", d.promise);
+    const island = mount({ status: "waitlisted", approval: "manual" });
+
+    const click = (propsOf(findAction(island, "promote")!).onClick as () => Promise<void>)();
+    await vi.waitFor(() => expect(findAction(island, "promote")).toBeUndefined());
+
+    d.reject(new ApiV1Error("Division is at capacity", 422, "ERROR"));
+    await click;
+
+    expect(findAction(island, "promote")).toBeTruthy();
+    expect(island.text()).toContain("Division is at capacity");
+  });
+
+  it("promote sends registration_id, so it promotes THIS row rather than the division's default oldest-waitlisted pick", async () => {
+    const island = mount({ status: "waitlisted", registrationId: "reg-77" });
+    await (propsOf(findAction(island, "promote")!).onClick as () => Promise<void>)();
+    const call = net.calls.find((c) => c.url === "/api/v1/registrations/reg-77/promote");
+    expect(call).toBeTruthy();
+    expect(call!.json).toEqual({ registration_id: "reg-77" });
+  });
+});
+
+describe("RegistrationHubRegistrantActions — resend, distinguishable feedback", () => {
+  it("shows a distinct, visible success message when the email is actually sent", async () => {
+    net.next.set("resend-confirmation", Promise.resolve({ sent: true }));
+    const island = mount({ status: "confirmed" });
+    await (propsOf(findAction(island, "resend")!).onClick as () => Promise<void>)();
+    expect(island.text()).toContain(t(uiEn, "reg.hub.registrants.detail.actions.resent"));
+  });
+
+  it("distinguishes a false `sent` result from a real send — never reads the same as success or as nothing happened", async () => {
+    net.next.set("resend-confirmation", Promise.resolve({ sent: false }));
+    const island = mount({ status: "confirmed" });
+    await (propsOf(findAction(island, "resend")!).onClick as () => Promise<void>)();
+    expect(island.text()).toContain(t(uiEn, "reg.hub.registrants.detail.actions.resendNotSent"));
+    expect(island.text()).not.toContain(t(uiEn, "reg.hub.registrants.detail.actions.resent"));
+  });
+
+  it("surfaces the server's error message on a failed resend", async () => {
+    net.next.set("resend-confirmation", Promise.reject(new ApiV1Error("Rate limited", 429, "RATE_LIMITED")));
+    const island = mount({ status: "confirmed" });
+    await (propsOf(findAction(island, "resend")!).onClick as () => Promise<void>)();
+    expect(island.text()).toContain("Rate limited");
+  });
+});
+
+describe("RegistrationHubRegistrantActions — data hook", () => {
+  it("carries a root data hook for e2e/regression targeting", () => {
+    const island = mount();
+    const root = island.tree()[0]!;
+    expect(propsOf(root)).toHaveProperty("data-registration-hub-registrant-actions");
+  });
+});
