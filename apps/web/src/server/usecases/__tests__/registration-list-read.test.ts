@@ -424,3 +424,39 @@ describe.skipIf(!HAS_DB)("RS005 W3 prep: the row carries its DIVISION's approval
     expect(rows.find((r) => r.id === autoReg.id)?.approval).toBe("auto");
   });
 });
+
+describe.skipIf(!HAS_DB)("RS005 whole-branch review BLOCKER: join_code is not a display field", () => {
+  // The owner ruled the join code hidden from viewers, and the UI honoured it
+  // (the detail body gates the copy control on canEdit and never puts the code
+  // in the RSC payload). The JSON API did not — and `read` scope is
+  // READ_ROLES, which INCLUDES viewer, so the same viewer session could simply
+  // request the list route and be handed the code.
+  //
+  // It is a bearer credential, not a field: POST /public/.../register/join
+  // accepts it from anyone and mints a roster row, and RS001 made it globally
+  // unique so it resolves with no other context. A read-only role holding one
+  // can write to a roster.
+  it("hands the code to an editor and withholds it from a viewer", async () => {
+    const { owner, orgId, competition, division, settings } = await baseRig();
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Team With A Code",
+    });
+    await sql`update registrations set join_code = ${"JOINTEST1"} where id = ${registration.id}`;
+
+    const asOwnerRows = await listRegistrations(owner, null, null, { competition_id: competition.id });
+    expect(asOwnerRows.find((r) => r.id === registration.id)?.join_code).toBe("JOINTEST1");
+
+    const viewer = { ...owner, role: "viewer" as const };
+    const asViewerRows = await listRegistrations(viewer, null, null, { competition_id: competition.id });
+    const seen = asViewerRows.find((r) => r.id === registration.id);
+    expect(seen, "the viewer still SEES the entry — this is a read-only tab").toBeTruthy();
+    expect(seen?.join_code, "but never the code that would let them write to its roster").toBeNull();
+
+    // An API key resolves role: null whatever its scopes, so it cannot be
+    // shown to be write-capable and does not receive a write-capable secret.
+    const key = { ...owner, via: "api_key" as const, userId: null, role: null, keyId: "key-1" };
+    const asKeyRows = await listRegistrations(key, null, null, { competition_id: competition.id });
+    expect(asKeyRows.find((r) => r.id === registration.id)?.join_code).toBeNull();
+    expect(orgId).toBeTruthy();
+  });
+});

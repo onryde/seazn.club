@@ -17,6 +17,7 @@ import type postgres from "postgres";
 import type Stripe from "stripe";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { EDITOR_ROLES } from "@/lib/types";
 import { getLimit, hasFeature, requireFeature } from "@/lib/entitlements";
 import { platformFeeDefault } from "@/lib/platform-settings";
 import { getStripe } from "@/lib/stripe";
@@ -3003,7 +3004,26 @@ export async function listRegistrations(
     // other callers legitimately need the hash for token verification — so
     // it is stripped here in JS rather than forked into a second hand-copied
     // SELECT list.
-    return rows.map(({ access_token_hash: _accessTokenHash, ...rest }) => rest);
+    //
+    // `join_code` is stripped for anyone who cannot already write (RS005
+    // whole-branch review, BLOCKER). It is a BEARER CREDENTIAL, not a display
+    // field: `POST /public/.../register/join` accepts it from anyone and mints
+    // a roster row, and RS001 made it globally unique so it needs no other
+    // context to resolve. `read` scope is `READ_ROLES` — owner, admin AND
+    // viewer — so both list routes were handing a write-capable secret to a
+    // read-only role in one GET. The UI had it right (the detail body gates the
+    // copy control on canEdit and never puts the code in the RSC payload); the
+    // JSON API, which the same viewer session can simply request, did not.
+    //
+    // Gated on EDITOR_ROLES rather than "not viewer": an API key resolves
+    // `role: null` regardless of its scopes, and a key that cannot be shown to
+    // be write-capable should not receive a write-capable credential either.
+    // If an integration ever needs join codes, that is a deliberate decision
+    // with its own scope check — not a default.
+    const mayHoldJoinCode = auth.role !== null && (EDITOR_ROLES as readonly string[]).includes(auth.role);
+    return rows.map(({ access_token_hash: _accessTokenHash, ...rest }) =>
+      mayHoldJoinCode ? rest : { ...rest, join_code: null },
+    );
   });
 }
 
