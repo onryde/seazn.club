@@ -110,6 +110,14 @@ const EXTRA_STATES = [
   "11-doublesserve",
   "12-pointdock",
   "13-sanctionsheet",
+  // R4 review follow-up (2026-08-26) — `11-doublesserve` photographs service
+  // turn 0 only, and turn 0 names the right partner under every derivation
+  // anyone has shipped, correct or not. The rotation's real failure point is
+  // the game AFTER a closed tie-break, where a derivation that has lost the
+  // breaker's own ITF turn count crosses a floor(_/2) boundary and names the
+  // OTHER partner for the rest of the match. That is a wrong human name on
+  // the scorer's screen, so it is a screen the owner has to be able to see.
+  "14-serveafterbreaker",
 ] as const;
 type ExtraGalleryState = (typeof EXTRA_STATES)[number];
 
@@ -128,6 +136,33 @@ function pad(page: Page) {
  * scorepad-skins.spec.ts's `scorebugHalf` and v6-sports.spec.ts's
  * `tennisHalf` already use for the identical reason.
  */
+/**
+ * Dispatch a real ledger event, reading `last_seq` fresh each call — the
+ * same shape `scorepad-v3-cricket.spec.ts`'s own `postEvent` uses, and for
+ * the same reason: driving a whole tie-break through the pad's own taps
+ * would be ~60 UI round trips of SETUP for one screenshot, and none of that
+ * setup is what the capture is proving.
+ */
+async function postEvent(
+  request: APIRequestContext,
+  fixtureId: string,
+  type: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
+  if (state.status !== 200 || !state.data) {
+    throw new Error(`gallery postEvent(${type}): GET state -> ${state.status}`);
+  }
+  const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+    expected_seq: state.data.last_seq,
+    type,
+    payload,
+  });
+  if (res.status >= 300) {
+    throw new Error(`gallery postEvent(${type}) -> ${res.status} ${JSON.stringify(res.error)}`);
+  }
+}
+
 function tennisHalf(page: Page, side: "home" | "away") {
   return pad(page).locator('[data-role="v3-scorebug"] .grid > button').nth(side === "home" ? 0 : 1);
 }
@@ -991,7 +1026,65 @@ const SPORTS: GallerySport[] = [
         ).toBeVisible();
       });
 
-      return ["11-doublesserve", "12-pointdock"];
+      // 14-serveafterbreaker — the rotation's real failure point. A fresh
+      // fixture again: the one above has an open dock and a scored point.
+      const brTag = `${tag}br`;
+      const br = await seedRosteredFixture(page.request, {
+        label: `Gallery Tennis Breaker Serve ${brTag}`,
+        sportKey: "tennis",
+        variantKey: "doubles-noad-mtb10",
+        entrantKind: "pair",
+        home: [
+          { fullName: `Gallery Tennis BR Home1 ${brTag}`, pairOrder: 1 },
+          { fullName: `Gallery Tennis BR Home2 ${brTag}`, pairOrder: 2 },
+        ],
+        away: [
+          { fullName: `Gallery Tennis BR Away1 ${brTag}`, pairOrder: 1 },
+          { fullName: `Gallery Tennis BR Away2 ${brTag}`, pairOrder: 2 },
+        ],
+        emitCoreStart: true,
+      });
+      const rally = async (entrantId: string, points: number): Promise<void> => {
+        for (let i = 0; i < points; i += 1) {
+          await postEvent(page.request, br.fixtureId, "tennis.point", { by: entrantId });
+        }
+      };
+      // 12 games to 6-6 (4 straight points never reaches a contested deuce,
+      // so each block of 4 closes exactly one game), a 7-0 breaker to close
+      // the set 7-6, then ONE game of set 2 — the game the old derivation
+      // got wrong. Serve is home's again here, at that side's 9th turn
+      // (index 8): even, so the pairOrder-1 partner is due, exactly as at
+      // turn 0. The lost-breaker-turns derivation answers index 7 and names
+      // the pairOrder-2 partner instead.
+      await rally(br.homeEntrantId, 5 * 4);
+      await rally(br.awayEntrantId, 5 * 4);
+      await rally(br.homeEntrantId, 4);
+      await rally(br.awayEntrantId, 4);
+      await rally(br.homeEntrantId, 7); // the breaker
+      await rally(br.awayEntrantId, 4); // set 2, game 1 — away opens
+      await page.goto(await fixturePath(page.request, br.fixtureId));
+      const brServer = pad(page).locator('[data-strip-item-id="server"]');
+      await expect(brServer, "gallery(tennis-doubles): the strip must name the due server").toBeVisible({
+        timeout: 20_000,
+      });
+      await expect(
+        brServer,
+        "gallery(tennis-doubles): after a closed tie-break the due server is the pairOrder-1 partner",
+      ).toContainText(`Gallery Tennis BR Home1 ${brTag}`);
+      await expect(
+        brServer,
+        "gallery(tennis-doubles): naming the pairOrder-2 partner here is the desync defect itself",
+      ).not.toContainText(`Gallery Tennis BR Home2 ${brTag}`);
+      await captureState(
+        page,
+        dir,
+        "14-serveafterbreaker",
+        "tennis-doubles",
+        measurements,
+        visibleProbe(brServer, "gallery(tennis-doubles): 14-serveafterbreaker must still name the due server"),
+      );
+
+      return ["11-doublesserve", "12-pointdock", "14-serveafterbreaker"];
     },
   },
   {
