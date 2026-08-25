@@ -20,7 +20,13 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers(),
 }));
 
-const emailMock = vi.hoisted(() => ({ sendRegistrationEmail: vi.fn(async () => true) }));
+const emailMock = vi.hoisted(() => ({ sendRegistrationEmail: vi.fn(
+    // Typed to the REAL signature. `vi.fn(async () => true)` declares a
+    // zero-parameter spy, so `mock.calls[0][0]` indexes an empty tuple and
+    // tsc rejects every assertion about what was actually sent — errors
+    // vitest never surfaces, because it does not typecheck test files.
+    async (_opts: Parameters<typeof import("@/lib/email").sendRegistrationEmail>[0]) => true,
+  ) }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
   return { ...actual, sendRegistrationEmail: emailMock.sendRegistrationEmail };

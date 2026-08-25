@@ -13,6 +13,7 @@
 // useConfirm throws BY DESIGN outside its provider — the harness's
 // useContext only ever returns each context's default, and no provider is
 // ever actually mounted here.
+import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { t } from "@/lib/i18n-runtime";
@@ -70,13 +71,23 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const PROPS = {
+// Typed against the COMPONENT's own props, not `as const` inference. With
+// `as const` the base literals are `"pending"`/`"manual"`, so
+// `Partial<typeof PROPS>` rejects every override this suite makes
+// (`"waitlisted"`, `"confirmed"`, `"paid"`, `"auto"`) — 26 tsc errors that
+// vitest never sees, because vitest does not typecheck test files. Binding to
+// the real prop type also makes the fixture track the contract: narrowing the
+// component's accepted statuses would red here instead of silently letting a
+// test assert a state the component can no longer be given.
+type ActionProps = ComponentProps<typeof RegistrationHubRegistrantActions>;
+
+const PROPS: ActionProps = {
   registrationId: "reg-1",
-  status: "pending" as const,
-  approval: "manual" as const,
+  status: "pending",
+  approval: "manual",
 };
 
-function mount(overrides: Partial<typeof PROPS> = {}) {
+function mount(overrides: Partial<ActionProps> = {}) {
   return renderIsland(RegistrationHubRegistrantActions, { ...PROPS, ...overrides });
 }
 
