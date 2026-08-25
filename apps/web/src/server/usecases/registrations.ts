@@ -24,11 +24,13 @@ import { isRegistrationCurrency } from "@/lib/currency";
 import { SPOT_HOLDERS } from "@/lib/registration-status";
 import {
   sendPaymentReminderEmail,
+  sendRegistrationEmail,
   sendRegistrationPromotedEmail,
   sendRefundIssuedEmail,
   sendDisputeAlertEmail,
   sendDisputeLostEmail,
 } from "@/lib/email";
+import type { RegistrationEmailArgs } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
 import { toLocale } from "@/lib/i18n-constants";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
@@ -934,6 +936,156 @@ export async function notifyPromoted(
   } catch {
     /* fire-and-forget */
   }
+}
+
+/**
+ * Assembles the CART-shaped confirmation mail for one group — every
+ * CURRENT entry with its own display name/status/fee, the cart's total/
+ * currency/deadline/ref code, and (for an offline cart with money owed)
+ * the resolved payment instructions. Shared by the submit-time send
+ * (`notifySubmitted`), the organiser resend action
+ * (`resendRegistrationConfirmation`) and the dispute-evidence
+ * reconstruction (`buildDisputeEvidence`) — one query decides what "this
+ * cart's confirmation email" contains, the same re-select-fresh-state
+ * convention `mintGroupCheckout` uses rather than trusting a caller's
+ * snapshot. Returns null (never throws) for a nonexistent group or one
+ * with no entries — should not happen in practice; kept as a defensive
+ * no-op for the fire-and-forget submit-time caller.
+ *
+ * `token`: the plaintext access token, only ever available at the SUBMIT
+ * moment (only its sha256 is stored afterwards). When given, `statusUrl`
+ * carries it — the same full-access status-page URL shape
+ * `createRegistrationCheckout`'s own `returnBase` builds. When null
+ * (every other caller), it falls back to the token-less `/r/[ref]` page,
+ * mirroring that same function's fallback.
+ *
+ * `payUrl`: never minted here — a caller with a fresh checkout link
+ * resolves it itself and passes it straight through, exactly as
+ * `notifyPromoted` (above) does inline.
+ */
+async function buildCartMail(
+  groupId: string,
+  origin: string,
+  token: string | null,
+  payUrl: string | null,
+): Promise<{ to: string; locale: string | null; competitionId: string; args: RegistrationEmailArgs } | null> {
+  const [group] = await sql<
+    Pick<
+      RegistrationGroupRow,
+      | "contact_email" | "locale" | "ref_code" | "amount_cents" | "currency"
+      | "expires_at" | "payment_method" | "competition_id"
+    >[]
+  >`
+    select contact_email, locale, ref_code, amount_cents, currency, expires_at,
+           payment_method, competition_id
+    from registration_groups where id = ${groupId}`;
+  if (!group) return null;
+
+  const entries = await sql<
+    { id: string; division_id: string; display_name: string; status: RegistrationRow["status"]; amount_cents: number }[]
+  >`
+    select id, division_id, display_name, status, amount_cents
+    from registrations where group_id = ${groupId}
+    order by created_at, id`;
+  if (entries.length === 0) return null;
+
+  const ctx = await divisionCtx(sql, entries[0]!.division_id);
+
+  // Same gate `notifyPromoted` uses for its single entry: offline AND money
+  // actually owed. A cart's paid divisions share one payment_method
+  // (assertUniformPaymentMethod at submit), so the first entry that still
+  // carries a fee is representative of the whole cart, not a guess across
+  // divisions that disagree.
+  let paymentInstructions: string | null = null;
+  if (group.payment_method === "offline" && group.amount_cents > 0) {
+    const firstPaid = entries.find((e) => e.amount_cents > 0) ?? entries[0]!;
+    const settings = await loadSettings(sql, firstPaid.division_id);
+    paymentInstructions = settings?.payment_instructions ?? ctx.payment_instructions;
+  }
+
+  const statusUrl = token
+    ? `${origin}/shared/${ctx.org_slug}/${ctx.comp_slug}/register/status?rid=${groupId}&token=${encodeURIComponent(token)}`
+    : `${origin}/r/${group.ref_code}`;
+
+  return {
+    to: group.contact_email,
+    locale: group.locale,
+    competitionId: group.competition_id,
+    args: {
+      orgName: ctx.org_name,
+      competitionName: ctx.comp_name,
+      entries: entries.map((e) => ({ displayName: e.display_name, status: e.status, feeCents: e.amount_cents })),
+      totalCents: group.amount_cents,
+      currency: group.currency,
+      paymentInstructions,
+      payUrl,
+      payDeadline: group.expires_at,
+      statusUrl,
+      refCode: group.ref_code,
+      refStatusUrl: group.ref_code ? `${origin}/r/${group.ref_code}` : null,
+    },
+  };
+}
+
+/**
+ * Post-submit confirmation (RS005 W4) — fire-and-forget, cart-shaped: every
+ * entry in the group with its own status/fee, the group's payable total,
+ * and `payUrl` exactly as resolved by the caller (the public register
+ * route, after its own `mintGroupCheckout` attempt succeeds, fails, or is
+ * skipped for a zero-subtotal cart) — this function never mints anything
+ * itself. `sendRegistrationEmail` had ZERO callers before this wave; this
+ * is the first one. A registrant who gets no mail because the provider
+ * rejected it, or because this function itself threw, still keeps a
+ * committed, capacity-holding cart — that is the entire reason this wraps
+ * everything in one try/catch, matching `notifyPromoted`'s contract
+ * exactly: a mail failure must never fail the submit that already
+ * committed.
+ */
+export async function notifySubmitted(
+  groupId: string,
+  origin: string,
+  token: string,
+  payUrl: string | null,
+): Promise<void> {
+  try {
+    const mail = await buildCartMail(groupId, origin, token, payUrl);
+    if (!mail) return;
+    await sendRegistrationEmail({ to: mail.to, locale: toLocale(mail.locale), ...mail.args });
+  } catch {
+    /* fire-and-forget */
+  }
+}
+
+/**
+ * Organiser: resend the cart's confirmation email (RS005 W4) — the WHOLE
+ * cart `regId` belongs to, not just that one entry, since the mail itself
+ * is cart-shaped. No fresh checkout is minted here (unlike the submit-time
+ * send): the plaintext access token no longer exists once the cart is
+ * committed (only its hash is stored), and re-minting a live Stripe session
+ * on every resend click would leave a fresh abandoned session behind each
+ * time for no ask in this wave — the registrant reaches payment through the
+ * emailed status link, which already knows how to resume checkout.
+ */
+export async function resendRegistrationConfirmation(
+  auth: AuthCtx,
+  regId: string,
+  origin: string,
+): Promise<{ sent: boolean }> {
+  const reg = await withTenant(auth.orgId, (tx) => orgReg(tx, regId));
+  const mail = await buildCartMail(reg.group_id, origin, null, null);
+  if (!mail) return { sent: false };
+  const sent = await sendRegistrationEmail({ to: mail.to, locale: toLocale(mail.locale), ...mail.args });
+  await withTenant(auth.orgId, (tx) =>
+    audit(
+      tx,
+      mail.competitionId,
+      auth.orgId,
+      "registration.confirmation_resent",
+      { registration_id: regId },
+      auth.userId,
+    ),
+  );
+  return { sent };
 }
 
 // ---------------------------------------------------------------------------
@@ -3342,32 +3494,31 @@ export async function buildDisputeEvidence(
       order by f.round_no nulls last, f.scheduled_at nulls last`
     : [];
 
-  // The transactional receipt, reconstructed with the exact sender inputs. The
-  // division's settings are no longer among them: currency was the last thing
-  // read off them here, and it is the CART's snapshot now (RS001b) — which is
-  // also the more honest source for dispute evidence, since it is what the
-  // registrant was actually charged in rather than what the division is
-  // configured for today.
+  // The transactional receipt, reconstructed with the exact sender inputs.
+  // RS005 W4: the sent mail is now CART-shaped (owner ruling 2026-08-25), so
+  // this reconstructs the WHOLE cart via the same `buildCartMail` the
+  // submit-time send and the resend action use — not just `reg`'s own
+  // entry, which would again attest to a message shape that was never
+  // actually sent whenever this entry has cart-mates. `paymentInstructions`/
+  // `payDeadline` are forced null exactly as before this wave: instructions
+  // can change after the original send, and a reconstruction is not the
+  // place to guess whether they did (division settings are otherwise no
+  // longer among the inputs here — currency is the CART's snapshot,
+  // RS001b — which is also the more honest source for dispute evidence,
+  // since it is what the registrant was actually charged in rather than
+  // what the division is configured for today).
   const { registrationTemplate } = await import("@/lib/email-templates");
   const { getDictionary } = await import("@/lib/i18n");
+  const cartMail = await buildCartMail(reg.group_id, origin, null, null);
   // Reconstruct the receipt exactly as sent — in the registrant's captured
   // locale (cycle 47), so replayed dispute evidence matches the original mail.
-  const emailDict = await getDictionary(toLocale(reg.locale), "emails");
-  const emailText = registrationTemplate(
-    {
-      orgName: ctx.org_name,
-      competitionName: ctx.comp_name,
-      displayName: reg.display_name,
-      status: reg.status,
-      feeCents: reg.amount_cents,
-      currency: reg.currency,
-      paymentInstructions: null,
-      statusUrl: `${origin}/shared/${ctx.org_slug}/${ctx.comp_slug}/register/status`,
-      refCode: reg.ref_code,
-      refStatusUrl: reg.ref_code ? `${origin}/r/${reg.ref_code}` : null,
-    },
-    emailDict,
-  ).text;
+  const emailDict = await getDictionary(toLocale(cartMail?.locale ?? reg.locale), "emails");
+  const emailText = cartMail
+    ? registrationTemplate(
+        { ...cartMail.args, paymentInstructions: null, payDeadline: null },
+        emailDict,
+      ).text
+    : "";
 
   const when = (d: Date | string | null) => (d ? new Date(d).toISOString() : "—");
   const ref = reg.ref_code ?? reg.id;

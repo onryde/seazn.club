@@ -23,6 +23,16 @@ vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({ checkout: { sessions: { create: stripeMock.checkoutCreate } } }),
 }));
 
+// RS005 W4 — the route now sends the cart confirmation post-submit
+// (notifySubmitted, registrations.ts). Mocked as a bare spy (not wrapping
+// the real sender): this file proves WIRING — was it called, with what
+// args — not template rendering, which email-builders.test.ts owns.
+const emailMock = vi.hoisted(() => ({ sendRegistrationEmail: vi.fn(async () => true) }));
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return { ...actual, sendRegistrationEmail: emailMock.sendRegistrationEmail };
+});
+
 vi.mock("@/server/usecases/registration-submit", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/usecases/registration-submit")>();
   return { ...actual, submitRegistrationGroup: vi.fn(actual.submitRegistrationGroup) };
@@ -119,6 +129,7 @@ beforeEach(() => {
     id: "cs_test_" + randomUUID().slice(0, 8),
     url: "https://checkout.stripe.test/session",
   }));
+  emailMock.sendRegistrationEmail.mockReset().mockResolvedValue(true);
 });
 
 afterAll(async () => {
@@ -404,6 +415,11 @@ describe.skipIf(!HAS_DB)("POST .../register — DB-backed", () => {
     expect(status).toBe(201);
     expect(body.data?.checkout_url).toBe("https://checkout.stripe.test/session");
     expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
+    // RS005 W4: the pay link appears in the confirmation mail exactly when
+    // a checkout was actually minted.
+    expect(emailMock.sendRegistrationEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ payUrl: "https://checkout.stripe.test/session" }),
+    );
   });
 
   // submitRegistrationGroup COMMITS before the route mints. If a mint failure
@@ -453,5 +469,88 @@ describe.skipIf(!HAS_DB)("POST .../register — DB-backed", () => {
     const rows = await sql<{ id: string }[]>`
       select id from registrations where group_id = ${String(body.data!.group_id)}`;
     expect(rows).toHaveLength(1);
+    // RS005 W4: a mint failure must not skip the send — the registrant
+    // still needs the confirmation, just without a pay link this time.
+    expect(emailMock.sendRegistrationEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ payUrl: null }),
+    );
+  });
+
+  // RS005 W4 finding: sendRegistrationEmail had ZERO callers before this
+  // wave, so nobody who registered ever received a ref code, a status link
+  // or a receipt. This is the assertion whose absence let the whole gap
+  // exist — it proves the mailer is actually invoked, with the cart's own
+  // contact and every entry, not just that the route returns 201.
+  it("a real submit sends the cart confirmation — mailer called with the contact and every entry", async () => {
+    const { orgSlug, orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    // capacity 1 + two entries in one cart: the first takes the spot, the
+    // second waitlists — one submit call, one commit, one email, both
+    // entries' OWN status/fee.
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, capacity, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'individual', 1500, 1, 'stripe', 'auto', false)`;
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    const contactEmail = `rep-${randomUUID().slice(0, 8)}@test.local`;
+
+    const res = await registerRoute(
+      req(
+        URL_(orgSlug, competition.slug),
+        groupBody({
+          contact: { name: "Rep", email: contactEmail },
+          entries: [
+            { division_id: division.id, entrant_kind: "individual", players: [{ full_name: "First In" }], answers: {} },
+            { division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Second In" }], answers: {} },
+          ],
+        }),
+        { "x-forwarded-for": "9.9.9.30" },
+      ),
+      ctx(orgSlug, competition.slug),
+    );
+    expect((await read(res)).status).toBe(201);
+
+    expect(emailMock.sendRegistrationEmail).toHaveBeenCalledTimes(1);
+    const sent = emailMock.sendRegistrationEmail.mock.calls[0]![0];
+    expect(sent.to).toBe(contactEmail);
+    expect(sent.entries).toHaveLength(2);
+    expect(sent.entries).toContainEqual({ displayName: "First In", status: "pending", feeCents: 1500 });
+    // Waitlisted entries carry no charge, by construction upstream.
+    expect(sent.entries).toContainEqual({ displayName: "Second In", status: "waitlisted", feeCents: 0 });
+    expect(sent.totalCents).toBe(1500);
+  });
+
+  // The other half of "never fail the submit": submitRegistrationGroup has
+  // already COMMITTED by the time notifySubmitted runs, so a mail-provider
+  // throw must not turn a real, capacity-holding registration into an error
+  // response the registrant would (wrongly) read as "it didn't work".
+  it("a mail failure does not fail the submit — the registration still exists and the response is still 201", async () => {
+    const { orgSlug, orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id);
+    emailMock.sendRegistrationEmail.mockRejectedValueOnce(new Error("resend is down"));
+
+    const res = await registerRoute(
+      req(
+        URL_(orgSlug, competition.slug),
+        groupBody({
+          entries: [
+            { division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Resilient" }], answers: {} },
+          ],
+        }),
+        { "x-forwarded-for": "9.9.9.31" },
+      ),
+      ctx(orgSlug, competition.slug),
+    );
+    const { status, body } = await read(res);
+    expect(status).toBe(201);
+    const entries = body.data!.entries as { registration_id: string }[];
+    const [row] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${entries[0]!.registration_id}`;
+    expect(row!.status).toBe("confirmed");
   });
 });

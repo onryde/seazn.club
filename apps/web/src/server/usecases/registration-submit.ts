@@ -302,9 +302,14 @@ interface PreparedEntry {
  *
  * Free agents (design §5) never auto-materialise here regardless of approval
  * mode or fee — there is no team yet to attach an entrant to; RS009 owns
- * assignment. Checkout-session minting, confirmation email and analytics are
- * OUT of scope for this wave (no acceptance criterion needs them; design §4
- * step 5 frames session-minting as the ENDPOINT's job, which RS003 builds).
+ * assignment. Checkout-session minting, the confirmation email and analytics
+ * stay OUT of this function (design §4 step 5 frames session-minting as the
+ * ENDPOINT's job) — this usecase stays payment- and notification-agnostic,
+ * returning a plain `SubmitGroupResult` for the caller to act on. RS003
+ * built the checkout minting on top (`mintGroupCheckout`, called by the
+ * public register route); RS005 W4 wires the confirmation email the same
+ * way, from that same route, via `registrations.ts`'s `notifySubmitted` —
+ * it is no longer unimplemented, just still not this function's concern.
  */
 export async function submitRegistrationGroup(
   ctx: SubmitGroupCtx,

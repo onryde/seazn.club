@@ -3,7 +3,7 @@ import { rateLimit } from "@/lib/rate-limit";
 import { HttpError } from "@/lib/errors";
 import { PublicRegisterGroupRequest } from "@/server/api-v1/schemas";
 import { submitRegistrationGroup } from "@/server/usecases/registration-submit";
-import { mintGroupCheckout } from "@/server/usecases/registrations";
+import { mintGroupCheckout, notifySubmitted } from "@/server/usecases/registrations";
 import { getCurrentUser } from "@/lib/auth";
 import { baseUrl } from "@/lib/oauth";
 import { log } from "@/server/logger";
@@ -110,6 +110,14 @@ export async function POST(req: Request, { params }: Ctx) {
         );
       }
     }
+    // Cart-shaped confirmation (RS005 W4 finding: sendRegistrationEmail had
+    // ZERO callers before this wave — see notifySubmitted's own doc
+    // comment). Sent HERE, after the mint attempt resolves either way, so
+    // the mail can carry whatever payUrl actually exists rather than a
+    // guess made before it was known. notifySubmitted never throws — a
+    // mail-provider failure must never turn this already-committed cart
+    // into an error response.
+    await notifySubmitted(result.group_id, baseUrl(req), result.access_token, checkout_url);
     return reply(201, { ...result, checkout_url });
   });
 }
