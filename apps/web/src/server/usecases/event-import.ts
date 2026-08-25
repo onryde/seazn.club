@@ -342,10 +342,22 @@ async function runStream(
     last = commit.last;
   } catch (err) {
     if (isUniqueViolation(err, "event_imports_key_idx")) {
-      // The pooled pre-check above (step 2) makes this the rare path — a
-      // genuinely concurrent replay that raced past it. The UNIQUE index is
-      // the real idempotency guarantee (design doc §5); this branch only
-      // keeps a race from surfacing as an unhandled 500.
+      // Review finding #4: unreachable through any call this codebase can
+      // make, now that `importEvents` (above) holds a session lock over the
+      // whole call, per (division, import_id) — the ONLY writer of this
+      // table is `runStream`, so two writes to the same key can no longer
+      // even be IN FLIGHT together, let alone race each other's insert. The
+      // pooled pre-check (step 2) was the sole guard before the lock existed
+      // and left exactly this gap open; the lock closes it structurally, not
+      // by making the race rarer. Kept as defence-in-depth rather than
+      // deleted: the UNIQUE index is the actual idempotency guarantee (design
+      // doc §5) and this branch is the difference between an unhandled 500
+      // and a calm `skipped_duplicate` for the one case that could still
+      // reach it — a future caller of `runStream` that forgets the lock, or
+      // an operator inserting a row by hand. See the Task 5 report for why no
+      // test forces this branch: reaching it needs a writer other than
+      // `importEvents` itself, which does not exist in this codebase, so a
+      // test that reached it would have to fabricate one.
       return { fixture: fixtureId, status: "skipped_duplicate", eventsAppended: 0 };
     }
     if (err instanceof EngineError) {
@@ -389,7 +401,53 @@ async function runStream(
   };
 }
 
+/**
+ * Concurrency lock (Task 5, review finding #7): one `importEvents` call at a
+ * time per `(division, import_id)`. A losing caller gets 409
+ * `import.concurrent` rather than interleaving with the call already running.
+ *
+ * SESSION-scoped (`pg_try_advisory_lock`/`pg_advisory_unlock`), not the
+ * `_xact_` variant a first read of this suggests: the call spans MULTIPLE
+ * independent transactions (a read-only dry-run tx and a write tx, once per
+ * stream) plus pooled reads with nothing wrapping them — a lock tied to any
+ * ONE of those transactions releases the moment that transaction commits,
+ * long before the call is done, which does not serialise anything. A session
+ * lock held on a single RESERVED connection for the call's whole lifetime
+ * (`sql.reserve()`, released in `finally` whether the call succeeds, rejects
+ * a stream, or throws) is what actually holds it "for the whole call" the
+ * brief asks for. Acquired here, in the usecase — not the route — because a
+ * route can be reached more than one way (the D6 HTTP surface is the only
+ * one today, but the lock's job is protecting the receipt table, which is
+ * the usecase's, not the route's, invariant to hold).
+ */
 export async function importEvents(
+  auth: AuthCtx,
+  divisionId: string,
+  input: EventImportRequest,
+): Promise<ImportReport> {
+  const lockKey = `import:${divisionId}:${input.import_id}`;
+  const reserved = await sql.reserve();
+  try {
+    const [{ locked }] = await reserved<{ locked: boolean }[]>`
+      select pg_try_advisory_lock(hashtext(${lockKey})) as locked`;
+    if (!locked) {
+      throw new HttpError(
+        409,
+        "another import with this import_id is already running for this division",
+        "import.concurrent",
+      );
+    }
+    return await runImport(auth, divisionId, input);
+  } finally {
+    try {
+      await reserved`select pg_advisory_unlock(hashtext(${lockKey}))`;
+    } finally {
+      reserved.release();
+    }
+  }
+}
+
+async function runImport(
   auth: AuthCtx,
   divisionId: string,
   input: EventImportRequest,

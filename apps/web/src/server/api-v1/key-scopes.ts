@@ -359,6 +359,17 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "GET /persons/duplicates",
   "GET /persons/merges",
   "POST /persons/merges/:id/reverse",
+  // Batch score-event import (P11/D6): staff-only during rollout — the
+  // route's own gate is a per-org org_entitlement_overrides row for
+  // import.events, which no plan grants (design doc §2.4/§3 R6) — and R5
+  // scopes the ACTOR to "org admin", the console's /import/ JSON-paste page
+  // (§7), not an ongoing integration. Unlike /fixtures/:id/events (`score`
+  // scope, "integration scoreboards" per this file's own header), this is a
+  // one-off retroactive bulk load, closer in shape to the merge/refund
+  // surfaces above than to live score-pushing. Revisit if the owner wants
+  // scripted/CI imports later — this is a conservative default, not a
+  // structural ban like the money/PII routes elsewhere in this list.
+  "POST /divisions/:id/events/import",
 ];
 
 // /api/v1/public/** and openapi.json take no auth at all — out of key scope.
