@@ -252,6 +252,7 @@ const RULES: RouteRule[] = [
   { method: "POST", path: "/registrations/:id/mark-paid", scope: "manage", pin: "registration" },
   { method: "POST", path: "/registrations/:id/waive", scope: "manage", pin: "registration" },
   { method: "POST", path: "/registrations/:id/remind", scope: "manage", pin: "registration" },
+  { method: "POST", path: "/registrations/:id/resend-confirmation", scope: "manage", pin: "registration" },
   { method: "POST", path: "/registrations/:id/waitlist", scope: "manage", pin: "registration" },
   { method: "POST", path: "/registrations/:id/withdraw", scope: "manage", pin: "registration" },
   // RS005 W1b — manual-approval review + waitlist promotion. Same family as
