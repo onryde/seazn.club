@@ -523,9 +523,11 @@ test.describe("RS004 registration hub", () => {
     await expect(tooltip).toContainText("1 awaiting confirmation");
     // The tooltip is aria-hidden, so the link's own accessible name is the
     // only path a screen reader has to the same breakdown.
+    // Leads with the VISIBLE number (WCAG 2.5.3, Label in Name) and then the
+    // breakdown — 2 on the button, 1 confirmed + 1 awaiting behind it.
     await expect(entry).toHaveAttribute(
       "aria-label",
-      /1 confirmed.*1 awaiting confirmation/,
+      /2 registrants.*1 confirmed.*1 awaiting confirmation/,
     );
   });
 });

@@ -334,4 +334,16 @@ describe("the depth recorded at the solver entry point", () => {
     await foreign;
     expect(tx.depth).toBe(0);
   });
+
+  it("is NONZERO inside a frame of its own, so [0] is a real observation", () => {
+    // Review gap, 2026-08-25: every other assertion in this file expects
+    // `[0]`, which a store that returned `undefined` for any reason — a
+    // broken `als.run`, a recorder that stopped reading it — would satisfy
+    // too. Nothing proved the recorder can produce anything BUT zero. This
+    // does: same recorder, called from inside a run() scope.
+    tx.solveDepths = [];
+    tx.als.run(1, () => tx.recordSolveDepth());
+    tx.als.run(2, () => tx.recordSolveDepth());
+    expect(tx.solveDepths).toEqual([1, 2]);
+  });
 });

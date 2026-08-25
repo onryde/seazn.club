@@ -91,6 +91,11 @@ export default async function CompetitionPage({
   // the number on the button and an organiser can check the arithmetic.
   // The awaiting line is OMITTED, not rendered at zero — same rule the amber
   // badge had.
+  // Leads the accessible name (see the prop below) — and is NOT a tooltip
+  // line: "56 registrants" then "34 confirmed, 22 awaiting confirmation"
+  // would print the same population twice for a sighted reader who already
+  // has the 56 on the button.
+  const registeredLine = `${totalRegistered} ${plural(dict, "reg.hub.registeredCount", totalRegistered, locale)}`;
   const registrationDetails = [
     `${openRegistrationDivisions} ${plural(dict, "reg.hub.openCount", openRegistrationDivisions, locale)}`,
     `${totalRegistered - awaitingConfirmation} ${plural(dict, "reg.hub.confirmedCount", totalRegistered - awaitingConfirmation, locale)}`,
@@ -194,7 +199,16 @@ export default async function CompetitionPage({
                 // The breakdown, not just "Registration": the tooltip that
                 // shows these same lines is aria-hidden, so this is the only
                 // path a screen reader has to them.
-                ariaLabel={`${t(dict, "aria.registration")} — ${registrationDetails.join(", ")}`}
+                //
+                // It LEADS with the registrant total because that is the
+                // number printed on the button, and WCAG 2.5.3 (Label in
+                // Name) wants the visible label inside the accessible name.
+                // The breakdown alone failed that the moment anything was
+                // awaiting: the visible "56" appeared nowhere in a name whose
+                // own figures were 34 and 22 — the exact state the amber dot
+                // exists for, and a speech-input user asking for "fifty-six"
+                // would have matched nothing.
+                ariaLabel={`${t(dict, "aria.registration")} — ${registeredLine}: ${registrationDetails.join(", ")}`}
                 count={String(totalRegistered)}
                 details={registrationDetails}
                 awaiting={awaitingConfirmation > 0}

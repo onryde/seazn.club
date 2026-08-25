@@ -175,6 +175,16 @@ describe("competition overview — the Registration nav entry", () => {
     // The accessible name carries the whole breakdown — the tooltip that
     // shows it is aria-hidden, so this is the only path to it.
     for (const line of props.details) expect(props.ariaLabel).toContain(line);
+    // …and it CONTAINS THE VISIBLE NUMBER (WCAG 2.5.3, Label in Name). The
+    // breakdown alone does not: with 3 awaiting, its figures are 14 and 3
+    // while the button prints 17, so a speech-input user asking for the
+    // number they can see would match nothing. Asserted as a leading segment
+    // rather than a bare `toContain`, which "14 confirmed" would satisfy by
+    // accident once the total happens to appear inside another line.
+    expect(props.ariaLabel).toContain(`${props.count} `);
+    expect(props.ariaLabel.indexOf(props.count)).toBeLessThan(
+      props.ariaLabel.indexOf(props.details[0]!),
+    );
     expect(props.href).toBe("/o/riverside/c/summer-league/registration");
   });
 
