@@ -6,7 +6,7 @@
 // what this file is for — real Postgres required, skipped without
 // DATABASE_URL (repo convention, e.g. add-ons-tab.test.ts).
 import { describe, expect, it } from "vitest";
-import { fetchDivisionRows, fetchOrgCurrency, fetchOrgCardUnsupportedCurrency } from "../page";
+import { fetchDivisionRows, fetchOrgCurrency, fetchOrgCardUnsupportedCurrency } from "../data";
 import {
   seedOrg,
   asOwner,

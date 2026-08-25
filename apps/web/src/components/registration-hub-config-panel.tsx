@@ -56,6 +56,12 @@ import {
   type SectionId,
 } from "@/components/registration-hub-config-panel-sections";
 import { instantToOrgTzInputValue, orgTzInputValueToInstant } from "@/components/registration-hub-tz-input";
+import { DateTimeField } from "@/components/v2/shared/datetime-field";
+
+/** Appended to the time list on the two CUTOFF fields. The quarter-hour grid
+ *  ends at 23:45, and a deadline that lands there closes the door 15 minutes
+ *  early — the same reason the division wizard's deadlines pass this. */
+const CUTOFF_TIME_OPTIONS = ["23:59"];
 import { fmtZoneAbbrev } from "@/lib/format";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -470,28 +476,37 @@ export function OpenCloseSection({
         {errors.entrant_kind && (<p data-field-error="entrant_kind" role="alert" className="mt-1 text-xs text-red-600">{errors.entrant_kind}</p>)}
       </label>
       <div className="grid grid-cols-1 gap-3">
-        <label className="label">
-          {msg("reg.settings.opens")} ({zone})
-          <input
-            type="datetime-local"
-            data-field="opens_at"
-            className="input mt-1"
+        {/* DateTimeField, not a hand-rolled <input type="datetime-local">.
+            `step` alone never bounded what a mouse could pick (Chrome's picker
+            popup renders a full 0-59 minute column regardless of it), so the
+            shared field owns the option list instead — and
+            v2/shared/__tests__/time-step-coverage.test.ts sweeps the tree for
+            raw clock inputs. It caught these three on RS004's first full CI
+            run; no local suite covers that sweep. */}
+        <div>
+          <DateTimeField
+            kind="datetime-local"
+            label={`${msg("reg.settings.opens")} (${zone})`}
+            dataField="opens_at"
             value={instantToOrgTzInputValue(state.opens_at, orgTz)}
-            onChange={(e) => patch({ opens_at: orgTzInputValueToInstant(e.target.value, orgTz) })}
+            onChange={(v) => patch({ opens_at: orgTzInputValueToInstant(v, orgTz) })}
           />
           {errors.opens_at && (<p data-field-error="opens_at" role="alert" className="mt-1 text-xs text-red-600">{errors.opens_at}</p>)}
-        </label>
-        <label className="label">
-          {msg("reg.settings.closes")} ({zone})
-          <input
-            type="datetime-local"
-            data-field="closes_at"
-            className="input mt-1"
+        </div>
+        <div>
+          <DateTimeField
+            kind="datetime-local"
+            label={`${msg("reg.settings.closes")} (${zone})`}
+            dataField="closes_at"
+            // A close is a DEADLINE, so it needs the one time the quarter-hour
+            // grid cannot express: the grid tops out at 23:45, and "closes at
+            // 23:45" is not what an organiser means by "closes that day".
+            extraOptions={CUTOFF_TIME_OPTIONS}
             value={instantToOrgTzInputValue(state.closes_at, orgTz)}
-            onChange={(e) => patch({ closes_at: orgTzInputValueToInstant(e.target.value, orgTz) })}
+            onChange={(v) => patch({ closes_at: orgTzInputValueToInstant(v, orgTz) })}
           />
           {errors.closes_at && (<p data-field-error="closes_at" role="alert" className="mt-1 text-xs text-red-600">{errors.closes_at}</p>)}
-        </label>
+        </div>
       </div>
     </section>
   );
@@ -682,17 +697,18 @@ export function MoneySection({
       )}
 
       {paidConfigured && (
-        <label className="label">
-          {msg("reg.settings.refundLock")} ({zone})
-          <input
-            type="datetime-local"
-            data-field="refund_lock_at"
-            className="input mt-1"
+        <div>
+          <DateTimeField
+            kind="datetime-local"
+            label={`${msg("reg.settings.refundLock")} (${zone})`}
+            dataField="refund_lock_at"
+            // A cutoff, same as `closes_at` above.
+            extraOptions={CUTOFF_TIME_OPTIONS}
             value={instantToOrgTzInputValue(state.refund_lock_at, orgTz)}
-            onChange={(e) => patch({ refund_lock_at: orgTzInputValueToInstant(e.target.value, orgTz) })}
+            onChange={(v) => patch({ refund_lock_at: orgTzInputValueToInstant(v, orgTz) })}
           />
           {errors.refund_lock_at && (<p data-field-error="refund_lock_at" role="alert" className="mt-1 text-xs text-red-600">{errors.refund_lock_at}</p>)}
-        </label>
+        </div>
       )}
     </section>
   );

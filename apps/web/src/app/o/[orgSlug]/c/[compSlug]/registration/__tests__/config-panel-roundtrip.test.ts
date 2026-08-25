@@ -20,7 +20,7 @@ import { describe, expect, it } from "vitest";
 import { seedOrg, asOwner, rig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { patchDivision } from "@/server/usecases/divisions";
 import { getRegistrationSettings, putRegistrationSettings } from "@/server/usecases/registrations";
-import { fetchDivisionRows } from "../page";
+import { fetchDivisionRows } from "../data";
 import {
   initialConfigState,
   toDivisionPatchBody,

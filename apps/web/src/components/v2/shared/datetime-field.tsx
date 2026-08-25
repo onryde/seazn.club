@@ -112,6 +112,20 @@ export interface DateTimeFieldProps {
    * `kind="time"` field already gets a real, distinct label via `label`.
    */
   selectAriaLabel?: string;
+  /**
+   * `data-field` for the rendered control, so a caller whose form routes save
+   * errors and e2e locators by field name keeps a handle on it after moving
+   * off a hand-rolled `<input>`. RS004's registration hub is the first: the
+   * time-step sweep (`v2/shared/__tests__/time-step-coverage.test.ts`) told it
+   * to come through here, and without this the three fields it was addressing
+   * as `[data-field="opens_at"]` would have had no stable hook at all.
+   *
+   * On `kind="datetime-local"` the composite renders TWO controls, so they are
+   * suffixed — `opens_at` becomes `opens_at_date` and `opens_at_time`. There
+   * is deliberately no bare `opens_at` on either half: a locator that matched
+   * one of them would silently be addressing half a value.
+   */
+  dataField?: string;
 }
 
 /**
@@ -138,6 +152,7 @@ export function DateTimeField({
   options,
   extraOptions,
   selectAriaLabel,
+  dataField,
 }: DateTimeFieldProps) {
   if (kind === "datetime-local") {
     return (
@@ -153,6 +168,7 @@ export function DateTimeField({
         step={step}
         options={options}
         extraOptions={extraOptions}
+        dataField={dataField}
       />
     );
   }
@@ -171,6 +187,7 @@ export function DateTimeField({
         <span className={labelHidden ? "label sr-only" : "label"}>{label}</span>
         <select
           className="input w-full text-base"
+          data-field={dataField}
           value={value}
           disabled={disabled}
           aria-required={required ? "true" : undefined}
@@ -204,6 +221,7 @@ export function DateTimeField({
         // identically to the division wizard" criterion this component exists
         // to satisfy. Dropped; `text-base` matches `.input` and is a no-op.
         className="input w-full text-base"
+        data-field={dataField}
         value={value}
         min={min}
         // `kind` is always "date" here, so this is a day bound — never a

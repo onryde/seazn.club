@@ -315,8 +315,14 @@ test.describe("RS004 registration hub", () => {
       let panel = await openConfigPanel(page, divisionId);
 
       await expect(panel).toContainText(expectZone);
-      await panel.locator('[data-field="opens_at"]').fill("2026-09-01T14:00");
-      await panel.locator('[data-field="closes_at"]').fill("2026-09-10T09:30");
+      // Two controls per window since the fields moved onto the shared
+      // DateTimeField (the time-step sweep): a date <input> and a time
+      // <select> off the quarter-hour grid. Addressed by the suffixed hooks,
+      // never by a bare `opens_at` — that would be half a value.
+      await panel.locator('[data-field="opens_at_date"]').fill("2026-09-01");
+      await panel.locator('[data-field="opens_at_time"]').selectOption("14:00");
+      await panel.locator('[data-field="closes_at_date"]').fill("2026-09-10");
+      await panel.locator('[data-field="closes_at_time"]').selectOption("09:30");
       await save(panel);
       await expect(panel).toBeHidden({ timeout: 20_000 });
 
@@ -325,8 +331,10 @@ test.describe("RS004 registration hub", () => {
       // Same wall-clock string back out — a regression that swapped either
       // conversion direction to browser-local would shift this by the
       // London/Auckland offset instead of round-tripping exactly.
-      await expect(panel.locator('[data-field="opens_at"]')).toHaveValue("2026-09-01T14:00");
-      await expect(panel.locator('[data-field="closes_at"]')).toHaveValue("2026-09-10T09:30");
+      await expect(panel.locator('[data-field="opens_at_date"]')).toHaveValue("2026-09-01");
+      await expect(panel.locator('[data-field="opens_at_time"]')).toHaveValue("14:00");
+      await expect(panel.locator('[data-field="closes_at_date"]')).toHaveValue("2026-09-10");
+      await expect(panel.locator('[data-field="closes_at_time"]')).toHaveValue("09:30");
       await expect(panel).toContainText(expectZone);
     } finally {
       await apiJson(page.request, `/api/orgs/${org.id}`, "PATCH", { timezone: originalTz });

@@ -55,6 +55,9 @@ export interface DateTimeSplitFieldProps {
   step?: number;
   options?: string[];
   extraOptions?: string[];
+  /** See `DateTimeFieldProps.dataField`. Suffixed `_date` / `_time` across
+   *  the two halves, never applied bare to either. */
+  dataField?: string;
 }
 
 export function DateTimeSplitField({
@@ -69,6 +72,7 @@ export function DateTimeSplitField({
   step,
   options,
   extraOptions,
+  dataField,
 }: DateTimeSplitFieldProps) {
   // Seeded ONCE from the incoming value — see the file doc for why this is
   // never re-derived from `value` on a later render.
@@ -115,6 +119,7 @@ export function DateTimeSplitField({
     disabled,
     required,
     labelHidden,
+    dataField: dataField === undefined ? undefined : `${dataField}_date`,
   };
 
   const timeProps: DateTimeFieldProps = {
@@ -134,6 +139,7 @@ export function DateTimeSplitField({
     step,
     options,
     extraOptions,
+    dataField: dataField === undefined ? undefined : `${dataField}_time`,
   };
 
   return (
