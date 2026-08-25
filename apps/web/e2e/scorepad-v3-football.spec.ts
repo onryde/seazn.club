@@ -467,6 +467,189 @@ test("football v3: the substitution WINDOW cap (subWindows) is a SECOND, indepen
   ).toHaveText("Home has used all 1 substitution windows");
 });
 
+// R3 task-D follow-up (owner-approved matrix): the two refusal tests above
+// prove each cap FIRES. Nothing yet proves either cap gets out of the way
+// when the fixture is genuinely still under it, and `applySub`'s window
+// arithmetic (football.ts:1200-1220) has a THIRD behaviour neither refusal
+// test touches — a substitution sharing the CURRENT `asOf` joins the open
+// window rather than opening a new one, so it must never be refused even at
+// `subWindows: 1`. The four tests below are the "allowed" side of the same
+// matrix, plus the rolling-subs carve-out: `lineupPolicy(cfg)` (football.ts
+// ~1762) omits `maxSubs` entirely when `rollingSubs` is set, so the PLAYER
+// cap is uncapped under rolling — but nothing in `applySub`'s window check
+// (football.ts:1211) is gated on `rolling`, so the WINDOW cap still applies
+// there. Do not fold that into a "rolling ignores both caps" test — it does not.
+
+test("football v3: a substitution under BOTH caps succeeds — no refusal, event lands with its stamp", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 FB Allowed ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [
+      { fullName: `V3 AL Start1 ${TAG}`, positionKey: "FW" },
+      { fullName: `V3 AL Bench1 ${TAG}`, slot: "bench" },
+    ],
+    away: [{ fullName: `V3 AL Away ${TAG}`, positionKey: "GK" }],
+  });
+  await mergeDivisionConfig(page.request, fx.divisionId, { maxSubs: 3, subWindows: 3 });
+  await postEvent(page.request, fx.fixtureId, "core.start", {});
+  // Stamps `asOf` so the UI sub below actually carries an `at` (`stampOf`,
+  // football.tsx:319, omits `at` while `asOf` is unset) — otherwise this
+  // would pass without the window cap ever engaging at all.
+  await postEvent(page.request, fx.fixtureId, "football.card", {
+    by: fx.homeEntrantId,
+    color: "yellow",
+    at: { period: "H1", elapsed: 300 },
+  });
+  await openConsoleAlreadyLive(page, fx);
+
+  await v3Tile(page, "sub-home").click();
+  const swap = pad(page).locator('[data-role="v3-swap"]');
+  await expect(swap).toBeVisible({ timeout: 10_000 });
+  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 AL Start1 ${TAG}`]!}"]`).click();
+  await expect(swap.locator('[data-role="swap-refusal"]'), "well under both caps — never refused").toHaveCount(0);
+  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 AL Bench1 ${TAG}`]!}"]`).click();
+
+  await expect.poll(async () => countOf(page.request, fx.fixtureId, "football.sub"), { timeout: 20_000 }).toBe(1);
+  const sub = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "football.sub")!;
+  expect(sub.payload).toMatchObject({ at: { period: "H1", elapsed: 300 } });
+});
+
+test("football v3: a second substitution in a NEW window, still under both caps, is not refused", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 FB Combined ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [
+      { fullName: `V3 CC Start1 ${TAG}`, positionKey: "FW" },
+      { fullName: `V3 CC Start2 ${TAG}`, positionKey: "MF" },
+      { fullName: `V3 CC Bench1 ${TAG}`, slot: "bench" },
+      { fullName: `V3 CC Bench2 ${TAG}`, slot: "bench" },
+    ],
+    away: [{ fullName: `V3 CC Away ${TAG}`, positionKey: "GK" }],
+  });
+  await mergeDivisionConfig(page.request, fx.divisionId, { maxSubs: 2, subWindows: 2 });
+  await postEvent(page.request, fx.fixtureId, "core.start", {});
+  // First sub (API, unstamped-window-opening): 1 of 2 players, 1 of 2 windows.
+  await postEvent(page.request, fx.fixtureId, "football.sub", {
+    by: fx.homeEntrantId,
+    off: fx.personIds[`V3 CC Start1 ${TAG}`]!,
+    on: fx.personIds[`V3 CC Bench1 ${TAG}`]!,
+    at: { period: "H1", elapsed: 600 },
+  });
+  // A later stamp moves `asOf` on, so the UI sub below opens a SECOND,
+  // distinct window rather than joining the first.
+  await postEvent(page.request, fx.fixtureId, "football.card", {
+    by: fx.homeEntrantId,
+    color: "yellow",
+    at: { period: "H1", elapsed: 1200 },
+  });
+  await openConsoleAlreadyLive(page, fx);
+
+  await v3Tile(page, "sub-home").click();
+  const swap = pad(page).locator('[data-role="v3-swap"]');
+  await expect(swap).toBeVisible({ timeout: 10_000 });
+  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 CC Start2 ${TAG}`]!}"]`).click();
+  // 2 of 2 players, 2 of 2 windows — exactly AT both caps, still not over.
+  await expect(swap.locator('[data-role="swap-refusal"]'), "the second window is still within the cap of 2").toHaveCount(0);
+  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 CC Bench2 ${TAG}`]!}"]`).click();
+
+  await expect.poll(async () => countOf(page.request, fx.fixtureId, "football.sub"), { timeout: 20_000 }).toBe(2);
+  const subs = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "football.sub");
+  expect(subs[1]!.payload).toMatchObject({ at: { period: "H1", elapsed: 1200 } });
+});
+
+test("football v3: a rolling-subs variant ignores the PLAYER cap — maxSubs never refuses it", async ({ page }) => {
+  test.setTimeout(120_000);
+  // `youth` sets `rollingSubs: true` (football.ts variants) and nothing else,
+  // so this is the same fixture shape as the other sub tests minus the
+  // no-re-entry rule. `subWindows` is deliberately left UNSET here — this
+  // test is about the player cap only; football.ts:1211's window check has no
+  // `rolling` exemption and is not what this test is proving.
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 FB Rolling ${TAG}`,
+    sportKey: "football",
+    variantKey: "youth",
+    home: [
+      { fullName: `V3 RS Start1 ${TAG}`, positionKey: "FW" },
+      { fullName: `V3 RS Start2 ${TAG}`, positionKey: "MF" },
+      { fullName: `V3 RS Bench1 ${TAG}`, slot: "bench" },
+      { fullName: `V3 RS Bench2 ${TAG}`, slot: "bench" },
+    ],
+    away: [{ fullName: `V3 RS Away ${TAG}`, positionKey: "GK" }],
+  });
+  await mergeDivisionConfig(page.request, fx.divisionId, { maxSubs: 1 });
+  await postEvent(page.request, fx.fixtureId, "core.start", {});
+  await openConsoleAlreadyLive(page, fx);
+
+  const swap = pad(page).locator('[data-role="v3-swap"]');
+
+  await v3Tile(page, "sub-home").click();
+  await expect(swap).toBeVisible({ timeout: 10_000 });
+  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 RS Start1 ${TAG}`]!}"]`).click();
+  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 RS Bench1 ${TAG}`]!}"]`).click();
+  await expect.poll(async () => countOf(page.request, fx.fixtureId, "football.sub"), { timeout: 20_000 }).toBe(1);
+
+  // Second sub: `maxSubs: 1` is already spent by a non-rolling variant's own
+  // rules. Under rolling it must not even be checked.
+  await v3Tile(page, "sub-home").click();
+  await expect(swap).toBeVisible({ timeout: 10_000 });
+  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 RS Start2 ${TAG}`]!}"]`).click();
+  await expect(swap.locator('[data-role="swap-refusal"]'), "rollingSubs makes maxSubs a no-op").toHaveCount(0);
+  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 RS Bench2 ${TAG}`]!}"]`).click();
+  await expect.poll(async () => countOf(page.request, fx.fixtureId, "football.sub"), { timeout: 20_000 }).toBe(2);
+});
+
+test("football v3: a second substitution sharing the CURRENT window is not refused, even at subWindows: 1", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 FB WindowReuse ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [
+      { fullName: `V3 WR Start1 ${TAG}`, positionKey: "FW" },
+      { fullName: `V3 WR Start2 ${TAG}`, positionKey: "MF" },
+      { fullName: `V3 WR Bench1 ${TAG}`, slot: "bench" },
+      { fullName: `V3 WR Bench2 ${TAG}`, slot: "bench" },
+    ],
+    away: [{ fullName: `V3 WR Away ${TAG}`, positionKey: "GK" }],
+  });
+  await mergeDivisionConfig(page.request, fx.divisionId, { maxSubs: 5, subWindows: 1 });
+  await postEvent(page.request, fx.fixtureId, "core.start", {});
+  // Opens the ONLY window this division allows. No stamped event follows, so
+  // `asOf` stays at this exact stamp — the UI sub below has nowhere else to
+  // land but the SAME window.
+  await postEvent(page.request, fx.fixtureId, "football.sub", {
+    by: fx.homeEntrantId,
+    off: fx.personIds[`V3 WR Start1 ${TAG}`]!,
+    on: fx.personIds[`V3 WR Bench1 ${TAG}`]!,
+    at: { period: "H1", elapsed: 600 },
+  });
+  await openConsoleAlreadyLive(page, fx);
+
+  await v3Tile(page, "sub-home").click();
+  const swap = pad(page).locator('[data-role="v3-swap"]');
+  await expect(swap).toBeVisible({ timeout: 10_000 });
+  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 WR Start2 ${TAG}`]!}"]`).click();
+  await expect(
+    swap.locator('[data-role="swap-refusal"]'),
+    "same window as the one already open — subWindows: 1 must not fire twice",
+  ).toHaveCount(0);
+  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 WR Bench2 ${TAG}`]!}"]`).click();
+
+  await expect.poll(async () => countOf(page.request, fx.fixtureId, "football.sub"), { timeout: 20_000 }).toBe(2);
+  const subs = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "football.sub");
+  expect(subs[1]!.payload).toMatchObject({ at: { period: "H1", elapsed: 600 } });
+});
+
 test("football v3: an already-substituted player stays VISIBLE on the on-list, with the reason beside the name", async ({
   page,
 }) => {
