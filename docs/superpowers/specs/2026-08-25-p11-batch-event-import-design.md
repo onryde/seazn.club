@@ -116,19 +116,27 @@ store, and re-running the call idempotently is how the report is seen again:
 
 ### Per-stream execution order
 
+0. **Replay check first.** Read the receipt for `(division, import_id,
+   fixture)` before anything else and return `skipped_duplicate` on a hit.
+   Discovered at implementation, 2026-08-25: an already-imported fixture has
+   events, so any later placement makes every replay report
+   `import.fixture_started` instead.
 1. **Resolve the fixture.** `{id}` directly. `{ext_key}` is searched across
    the division's fixtures: exactly one match proceeds; zero or more than
    one rejects with `import.fixture_unknown` carrying the match count (§2.5).
 2. **Guard unstarted.** Any existing `score_events` row, or a live/decided
    status → `import.fixture_started`.
-3. **Dry-run fold. No transaction, no writes.** Fold the whole stream
-   through the division's pinned module with the resolved cfg. Engine
-   refusal → `import.fold_rejected` with `{eventIndex, engineCode}`. A
-   stream that does not end decided → `import.not_decided`.
-4. **Entitlement per event type**, still before any write:
+3. **Entitlement per event type**, before the fold (corrected 2026-08-25:
+   this step and the next were originally listed the other way round; an
+   unentitled org should not pay for a fold it can never write, and both
+   steps precede any write either way):
    `requiredFeatureForEvent` (`fidelity.ts:22`, pure — module + type in, key
    or null out) then `requireFeature`. A free org importing tier-3 events
    gets `import.entitlement` naming the missing key.
+4. **Dry-run fold. No writes.** Fold the whole stream through the division's
+   pinned module with the resolved cfg. Engine refusal →
+   `import.fold_rejected` with `{eventIndex, engineCode}`. A stream that does
+   not end decided → `import.not_decided`.
 5. **One transaction per fixture.** `appendEventInTx` in a loop for seq
    0..n; the receipt row is inserted in the **same** transaction. Any throw
    rolls the fixture back to zero rows.
