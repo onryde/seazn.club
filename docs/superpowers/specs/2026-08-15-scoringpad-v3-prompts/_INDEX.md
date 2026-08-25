@@ -21,8 +21,8 @@ one PR per wave, visual sign-off gate on each).
 | R2 | `R2-cricket.md` + plan `docs/superpowers/plans/2026-08-16-scorepad-v3-r2-cricket.md` | R1 | **MERGED #599 `5885952f`** (2026-08-17) — visual sign-off given (see the sign-off section below, incl. the caveat that the reviewed captures predate `072656b4`'s three restored capabilities). Pre-merge state, kept for the record: worktree `.claude/worktrees/r2-cricket`, branch `feat/scorepad-v3-r2-cricket`, HEAD `b45f77a0`, rebased onto main `252a073d`. Gate: unit 8155/8227 (the 4 failures are `schedule-build-honours-locks`, REPRODUCED IDENTICALLY on `origin/main 252a073d` in a throwaway worktree with its own `pnpm install` — pre-existing, not this wave), `turbo run typecheck --force` 2/2 tasks 0 errors, `turbo run lint --force` 0 errors / 77 warnings (was 78; no v3 path warns), v3 suites 300/300 across 15 files, cricket e2e + converted specs green, seven-width matrix 9/9, gallery 12/12 sports with 0px overflow at 320. Sign-off sheet published (15 cricket captures, 5 states × 3 widths). **NOT MERGEABLE until the owner rules the three decisions below and the verdicts are recorded here.** |
 | R2b | `R2b-cricket-over-by-over.md` + plan `docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-cricket-over.md` | R2 (MERGED, so unblocked) | **MERGED #610 `78191611a`** (tip `896c8e608`, 2026-08-18) — approval-on-merge, see the sign-off section below. Pre-merge state, kept for the record: **IN FLIGHT** 2026-08-17 — worktree `.claude/worktrees/r2b-cricket-over`, branch `feat/scorepad-v3-r2b-cricket-over` off `5885952f`. Both of the brief's open questions are RULED (see the R2b section below); the first turned out to be answered by the engine rather than by preference. Original row text, still accurate on the premise: cricket needs THREE granularities: innings totals, **over-by-over (runs + wickets)**, ball-by-ball. **Over-by-over ALREADY EXISTS in the engine** and v1 exposed it: it is `cricket.innings.summary` with **`partial: true`** (`cricket.ts:225,230-237`) posted once per over, NOT a separate event type. An earlier draft of this row claimed it never existed, off one negative grep for a `cricket.over` event that never needed to exist — wrong, and corrected. So: **no new event, no schema change, no golden re-baseline, no band decision** (already band 0/free; the ladder stays closed 0–3). The real gap is a PAD one — the v3 skin declares no tile for it, so a scorer must open "More" and scroll a generic form once per over. A pad wave, not an engine wave |
 | R2c | `R2c-candidate-narrowing.md` + design `R2c-task1-design.md` | R2b (MERGED, so unblocked) | **MERGED #614 `ca3a4357a`** (tip `3eda8a0ff`, 2026-08-18) — approval-on-merge, see the R2c sign-off section below; three screens (`08-bowlerpicker`, `09-retiresheet`, `10-reviewblocked`) carry NO individual verdict and are owed to R8's closing walkthrough. Pre-merge state, kept for the record: worktree `.claude/worktrees/r2c-candidates`, branch `feat/scorepad-v3-r2c-candidate-narrowing` off `main` `7023502a3`. Task 1 (the chassis capability) is DESIGNED and owner-approved before code — see the R2c section below. Closes C1/C2/C3 from `R2b-remaining.md` §C, the three surviving instances of "the pad offers what the engine will refuse" |
-| R3 | `R3-football.md` | R1 | **SIGNED OFF + PR RAISED** 2026-08-25 — worktree `.claude/worktrees/r3-football`, branch `feat/scorepad-v3-r3-football`, 51 commits rebased onto `origin/main`. All tasks A-F committed; five review rounds run and closed (round 5 CLEAN). Owner visual sign-off **15/15 APPROVE**, recorded below — that record is the merge gate, not the sheet. Do not treat any count in this row as a gate: the main thread re-runs the boundary gate itself. One thing NOT to re-derive: the two-step goal dock shipped INERT past unit tests and the gallery; see the inert-dock section at the end of this file before touching `DetailDock`/`pad-host` docks. |
-| R4 | `R4-tennis.md` | R1 | TODO |
+| R3 | `R3-football.md` | R1 | **MERGED #643 `bcc726300`** (2026-08-25). Pre-merge state, kept for the record: **SIGNED OFF + PR RAISED** 2026-08-25 — worktree `.claude/worktrees/r3-football`, branch `feat/scorepad-v3-r3-football`, 51 commits rebased onto `origin/main`. All tasks A-F committed; five review rounds run and closed (round 5 CLEAN). Owner visual sign-off **15/15 APPROVE**, recorded below — that record is the merge gate, not the sheet. Do not treat any count in this row as a gate: the main thread re-runs the boundary gate itself. One thing NOT to re-derive: the two-step goal dock shipped INERT past unit tests and the gallery; see the inert-dock section at the end of this file before touching `DetailDock`/`pad-host` docks. |
+| R4 | `R4-tennis.md` | R1 | **IN FLIGHT** 2026-08-25 — worktree `.claude/worktrees/r4-tennis`, branch `feat/scorepad-v3-r4-tennis` off `origin/main` `9080cb959`. Four owner rulings taken before any code (R4-1..R4-4 below); six false premises found in the brief and the register, one of which (D-2) removes the programme's only engine item as written. |
 | R5 | `R5-racquet-split.md` | R1 | TODO |
 | R6 | `R6-period-pair.md` | R1 | TODO |
 | R7 | `R7-universal-console.md` | R1 (chrome parts benefit from R2–R6 but do not block) | TODO |
@@ -1807,3 +1807,94 @@ override-only to plan-granted so `GET .../entitlements` would carry it).
 Whoever makes that change owns adding the smoke check in the same PR —
 recorded here so the gap is not silently rediscovered, or silently skipped,
 once that surface exists.
+
+---
+
+## R4 (2026-08-25) — owner rulings, taken before any code
+
+Scoping session, all four taken against RE-PINNED facts on `origin/main`
+`9080cb959`, not the brief's pre-R1 line numbers. Two of the four were put to
+the owner as A/B choices and came back as "what do you recommend" — the
+recommendation and the reason it was taken are recorded here in full, because
+a ruling whose reasoning is not written down gets re-litigated by the next
+session.
+
+| # | Decision | Ruling |
+|---|---|---|
+| R4-1 | The brief's `Fault/Let/Code/Retire` minor row — but the engine has no fault and no let event, and §9 bars new event types | **No new events. Drop Fault and Let as tiles; ship `ace / double_fault / winner / ue` as DOCK CHIPS on the point.** `NestedPointMeta.kind` (`nested/kernel.ts:200-205`) already carries exactly those four and is already optional on every `tennis.point`. See the false premise below — this is not a workaround, it is the surface the payload was built for |
+| R4-2 | Retire: `core.forfeit` folds (`kernel.ts:1899`) but tennis's `padSpec` declares no such action, and D-12 routes Forfeit/Abandon to console chrome | **No Retire tile.** `fixture-console.tsx:700-728` already ships a Forfeit control with a reason prompt, on the same page as the pad, so the tile would be a SECOND entry point to a capability that already exists one level up — the two-divergent-entry-points defect R2c closed for `cricket.retire`, rebuilt deliberately. R4 adds the **Interruption tile** (medical/heat/toilet) instead, which is what actually precedes a retirement and is today reachable only by scrolling a generic drawer form |
+| R4-3 | §9.1's engine item: the reader exists but needs a `serviceTurn`, derivable from `games`/`serving`/`tbFirstServer` | **Additive engine export**, not a skin-side derivation. One source of truth for the ITF rotation; a pad copy would be the placer/verifier fork this repo keeps paying for, and R5 (badminton/tabletennis doubles) inherits whichever answer this wave gives. Engine touched ⇒ conformance + golden replay + engine lint owed |
+| R4-4 | Tennis's `--sport-*` palette (R3-6 obligation) | **A — Hardcourt.** board `#0b2545`, board-2 `#13315c`, ink `#f4f7fb`, led `#d9f000`, caution `#f2a900`, dismissal `#c1272d`. `led` is spent on the serving player's pip and the strip digits and nothing else. Chosen over clay (its second colour IS white, so the pip has nothing to be, and cream+terracotta is one of the three generated-design default clusters) and over grass (Wimbledon purple measures **1.4:1** on the green, so the signature colour could never appear, and the board collides with football's floodlit turf in the same sign-off sheet). Comps: <https://claude.ai/code/artifact/7ee55396-2efd-42eb-8d66-e12c44f36db8> |
+
+**Recorded with R4-4, so it is not discovered at sign-off:** tennis's code
+violation ladder has FOUR steps (`warning → point_penalty → game_penalty →
+default`, `kernel.ts:250-255`) against TWO colour tokens. The ends take
+`caution` and `dismissal`; the two middle steps read as words in the sanction
+sheet and carry no colour.
+
+## R4 — false premises found (verified on `origin/main` `9080cb959`, before any code)
+
+Six. Two of them change what the wave IS, rather than how it is built.
+
+- **D-2's "`pairOrder` unread by the nested kernel (S3 seam left inert)" is
+  FALSE, and it is the programme's only engine item.** `expectedDoublesServer`
+  exists IN the nested kernel (`nested/kernel.ts:438-444`) and reads `pairOrder`
+  through `expectedPairServerOf` (`sports/squad-state.ts:130-137`). Both dossier
+  rows already describe it as shipped (`tennis/DOMAIN.md:65`,
+  `setbased/DOMAIN.tabletennis.md:41`). What is actually missing is a CALLER: the
+  function has zero production call sites, and its `serviceTurn` argument — which
+  service turn the side is on — has no reader anywhere. So §9.1 as written ("the
+  nested kernel consumes `pairOrder`") is already done, and the real work is the
+  `serviceTurn` derivation plus the pad that asks. R4-3 rules where that lives.
+  The seam was inert in the "no consumer" sense, never in the "not implemented"
+  sense, and the distinction decides how much engine work this wave carries.
+- **The brief's minor row is half unrepresentable.** Tennis declares exactly five
+  event types (`kernel.ts:1766-1772`): `point`, `set_summary`, `sanction`,
+  `interruption`, `game.award`. There is no fault event and no let event, and
+  §9.4 bars new ones. A Fault tile and a Let tile would dispatch nothing.
+- **…and the fix was already in the payload.** `NestedPointMeta.kind` is
+  `ace | double_fault | winner | ue` (`kernel.ts:200-205`), optional on every
+  point, and `NestedPersonTally` already folds ace and double-fault counts
+  crediting the SERVER (`kernel.ts:447-449`). The v2 pad cannot send any of it —
+  its one-tap Home/Away posts `{by}` alone (`skins/tennis-skin.tsx:291-323`) — so
+  tennis has a DECLARED stat model that is INERT from the pad. R4-1 makes it
+  live, and that is more product value than the two tiles it replaces. A
+  first-serve fault and a let genuinely have no representation and no stat: they
+  are "the point has not happened yet" states, and a per-serve model (first-serve
+  %) is out of scope by §9.
+- **D-16 is a DEAD-END TAP, not a layout complaint.** The register calls it
+  "set-score entry offered mid-game (tennis at 30–30)". `applySetSummary` already
+  refuses it — `if (setInProgress(state)) invalid("this set is being scored
+  point-by-point — a set summary is not allowed for it")` (`kernel.ts:1053-1055`)
+  — so today's tile 422s. It is the same coarse/fine mutual exclusion cricket has,
+  scoped PER SET rather than per innings, so a match may legally mix summary sets
+  and point-scored sets. Closing D-16 is therefore `refusedEventTypes` +
+  tile gating, and the copy must name the real cause (R2b's binding "never show a
+  generic error where the exact reason is known").
+- **D-3's root cause is a UNIT MISMATCH, and it is not in the engine.**
+  `positions.lineup.size = 1` for tennis (`sports/tennis/tennis.ts:10-13`) is one
+  nominated UNIT per side — correct, and the comment says so. The editor then
+  compares it against a count of PEOPLE: `startingCount` counts slots
+  (`lineup-editor.tsx:224`) and renders `lineup.starting {n}/{total}` against the
+  raw `lineupSize` (`:267`). A doubles pair is 2 people in 1 unit → "2/1". The
+  file already computes `pairShaped = isPairShaped(side.kind)` (`:217`) for a
+  different purpose, so the fix is one expression and one counter, exactly as the
+  brief predicted. Not the lineup editor's data model, not the engine.
+- **Tennis already declares real `fidelityEntitlements`.** `{3:
+  "scoring.rally_by_rally"}` (`kernel.ts:1478-1485`), so the recording chip has a
+  real band to gate and the R2 standing item does not bite here. Band 2 is
+  deliberately unoccupied for this kernel; bands are `set_summary` 0,
+  `sanction`/`interruption` 1, `point`/`game.award` 3. **Consequence worth stating
+  before it is discovered on a screenshot:** below band 3 the halves are not
+  tappable at all, because the point event is band 3 — a band-0 org's tennis pad
+  offers set summaries and nothing else. That is coherent (it is the coarse lane),
+  but it means tap model S is invisible to most orgs and the gallery must capture
+  a band-3 fixture or it pictures a board nobody can tap.
+- **The chassis already has tap model S and nobody has used it.**
+  `ScorebugHalf.tappable` + `tapEvent` exist (`v3/types.ts:91-92`), are enforced
+  by `assertScorebugSpec` (`:1050-1058`, tappable REQUIRES `hintKey` + `tapEvent`),
+  and `scorebug.tsx:150-155` already renders a tappable half as a real `<button>`.
+  Neither cricket nor football sets it. R4 is the first consumer, so no chassis
+  work is owed for the tap model itself — but R4 is also the first wave that can
+  observe defects in that path, and it inherits the R3 lesson about being the
+  first real user of a chassis primitive (`SwapSheet` surfaced five).
