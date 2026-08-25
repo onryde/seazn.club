@@ -386,3 +386,41 @@ describe.skipIf(!HAS_DB)("RS005: archiving a division does not hide its registra
     );
   });
 });
+
+describe.skipIf(!HAS_DB)("RS005 W3 prep: the row carries its DIVISION's approval mode", () => {
+  // approve/reject may only be OFFERED on a manual-approval division —
+  // `approveRegistration` refuses an auto division with a 422, so rendering
+  // the control there hands an organiser a button that cannot work and an
+  // error that reads as a bug. The mode lives on the division, not the entry,
+  // and `registration_settings` is already LEFT JOINed here, so this costs no
+  // extra query and no second source of truth for the UI to drift from.
+  it("reports 'manual' for a manual division and 'auto' when a division has no settings row at all", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration: autoReg } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Auto Division Entry",
+    });
+
+    const manualDiv = await createDivision(owner, competition.id, {
+      name: "Manual " + Math.random().toString(36).slice(2, 7),
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      eligibility: [],
+    });
+    const manualSettings = await putRegistrationSettings(owner, manualDiv.id, {
+      ...SETTINGS_BASE,
+      fee_cents: 0,
+      approval: "manual",
+    });
+    const { registration: manualReg } = await seedRegistration(
+      competition.id,
+      manualDiv.id,
+      manualSettings,
+      { displayName: "Manual Division Entry" },
+    );
+
+    const rows = await listRegistrations(owner, null, null, { competition_id: competition.id });
+    expect(rows.find((r) => r.id === manualReg.id)?.approval).toBe("manual");
+    expect(rows.find((r) => r.id === autoReg.id)?.approval).toBe("auto");
+  });
+});

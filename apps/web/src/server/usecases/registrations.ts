@@ -2860,6 +2860,14 @@ export interface RegistrationListRow extends Omit<RegistrationWithGroupRow, "acc
   /** 1-based rank within this row's DIVISION, `waitlisted` rows only; null
    *  for every other status. */
   waitlist_position: number | null;
+  /** The DIVISION's approval mode (`registration_settings.approval`), not the
+   *  entry's. RS005 W3 renders approve/reject only for a `manual` division —
+   *  on an `auto` division `approveRegistration` refuses with a 422, so
+   *  showing the control would offer an organiser a button that cannot work.
+   *  `coalesce`d to 'auto' because a division with no settings row at all
+   *  behaves exactly as auto (registration-approval.ts's own
+   *  `loadApprovalSettings` reads it the same way). */
+  approval: RegistrationSettingsRow["approval"];
 }
 
 /** Raw wire shape — `RegistrationListRow` plus the hash the query still
@@ -2953,6 +2961,7 @@ export async function listRegistrations(
         d.name as division_name,
         d.slug as division_slug,
         coalesce(rs.entrant_kind, 'individual') as entrant_kind,
+        coalesce(rs.approval, 'auto') as approval,
         (select count(*)::int from registration_players rp
           where rp.registration_id = r.id) as roster_count,
         ${rosterCapExpr(tx)} as roster_cap,
