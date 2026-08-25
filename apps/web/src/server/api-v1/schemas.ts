@@ -2223,8 +2223,16 @@ export const RegistrationSettings = z.object({
   updated_at: z.string().nullable(),
 });
 
-/** Organiser view of one registration (`RegistrationWithGroupRow`, minus the
- *  cart's `access_token_hash` — see `RegistrationListEntry`'s doc comment).
+/** Organiser view of one registration — a DOCUMENTED SUBSET of
+ *  `RegistrationWithGroupRow`, not a stripped mirror of it. `v1()` neither
+ *  validates nor strips against this schema (`api-v1/http.ts:124-149`
+ *  serialises whatever the handler returns), so every row field the handler
+ *  does not delete still rides the wire: `org_id`, `user_id`,
+ *  `checkout_session_id`, `dispute_id`, `fee_percent`, `privacy_consent_at`,
+ *  `group_refunded_cents`, `updated_at` and more. Only `access_token_hash` is
+ *  removed by construction, because it is credential-derived. Adding a field
+ *  here documents it; it does not start shipping it, and omitting a field does
+ *  not stop it.
  *  RS005 W1b: `dob`/`gender`/`guardian_name`/`guardian_consent` dropped —
  *  RS001 moved them off `registrations` onto `registration_players`
  *  (per-player, not per-entry) before this route surface ever shipped, so

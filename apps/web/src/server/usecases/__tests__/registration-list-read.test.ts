@@ -282,3 +282,62 @@ describe.skipIf(!HAS_DB)("RS005 W1a: exportRegistrationsCsv (per-player)", () =>
     await expect(exportRegistrationsCsv(owner, { divisionId: division.id })).rejects.toThrow(PaymentRequiredError);
   });
 });
+
+describe.skipIf(!HAS_DB)("RS005 W1b review BLOCKER: division_id must belong to the named competition", () => {
+  // The guard exists for the API-key competition pin, which is the boundary
+  // that actually breaks: `apiKeyAuth` resolves the pin from the URL PATH
+  // resource only (api-v1/auth.ts, `resolvePinCompetition`) and never reads
+  // query parameters. A key pinned to competition A therefore satisfied its
+  // pin on A's path and then read B's rows, because `listRegistrations`
+  // derived the competition from `division_id` and discarded the caller's
+  // `competition_id` entirely. Same org both times — `withTenant` was never
+  // the thing being bypassed.
+  it("404s a division from another competition instead of returning its rows", async () => {
+    const { owner, competition: compA } = await baseRig();
+    const { competition: compB, division: divB } = await rig(owner);
+    const settingsB = await putRegistrationSettings(owner, divB.id, { ...SETTINGS_BASE, fee_cents: 0 });
+    const { registration: leaked } = await seedRegistration(compB.id, divB.id, settingsB, {
+      displayName: "Should Not Appear",
+      contactEmail: "b@example.test",
+    });
+
+    // Sanity: the row IS readable through its OWN competition, so a 404 below
+    // is the guard firing and not an empty fixture.
+    const ownScope = await listRegistrations(owner, divB.id, null, { competition_id: compB.id });
+    expect(ownScope.map((r) => r.id)).toContain(leaked.id);
+
+    await expect(
+      listRegistrations(owner, divB.id, null, { competition_id: compA.id }),
+    ).rejects.toThrow(/division not found/);
+  });
+
+  it("404s the CSV export the same way — the bulk path is the one that moves bytes", async () => {
+    const { owner, competition: compA } = await baseRig();
+    const { competition: compB, division: divB } = await rig(owner);
+    const settingsB = await putRegistrationSettings(owner, divB.id, { ...SETTINGS_BASE, fee_cents: 0 });
+    await seedRegistration(compB.id, divB.id, settingsB, {
+      displayName: "Should Not Appear",
+      contactEmail: "b@example.test",
+    });
+
+    await expect(
+      exportRegistrationsCsv(owner, { competitionId: compA.id, divisionId: divB.id }),
+    ).rejects.toThrow(/division not found/);
+  });
+
+  it("still allows the two when they agree, and when only one is given", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration: own } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "In Scope",
+      contactEmail: "a@example.test",
+    });
+
+    const agreeing = await listRegistrations(owner, division.id, null, { competition_id: competition.id });
+    expect(agreeing.map((r) => r.id)).toContain(own.id);
+
+    // The live /api/v1/divisions/[id]/registrations route passes no filters at
+    // all — the guard must not turn that into a 404.
+    const divisionOnly = await listRegistrations(owner, division.id, null, {});
+    expect(divisionOnly.map((r) => r.id)).toContain(own.id);
+  });
+});

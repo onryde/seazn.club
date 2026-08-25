@@ -2652,8 +2652,11 @@ export async function sweepRegistrations(
 // ---------------------------------------------------------------------------
 
 export interface ListRegistrationsFilters {
-  /** Required when `divisionId` is null (cross-division hub mode); ignored
-   *  otherwise — a single division already pins its own competition. */
+  /** Required when `divisionId` is null (cross-division hub mode). When BOTH
+   *  are given they must AGREE — a division belonging to another competition
+   *  is a 404, not a silently-honoured override. This used to read "ignored
+   *  otherwise", and the code matched: it was the cross-competition read that
+   *  the RS005 W1b review caught (see the guard in `listRegistrations`). */
   competition_id?: string;
   kind?: RegistrationSettingsRow["entrant_kind"];
   free_agent?: boolean;
@@ -2675,10 +2678,9 @@ export interface ListRegistrationsFilters {
  *  the surrounding query joins the sports row as `sp` (a hardcoded alias,
  *  same convention as `regGroupCols`'s `r`/`g`).
  *
- *  NOT YET the only copy (RS005 W1a): `joinTeamEntry` hand-copies this exact
- *  expression and was not repointed at this export — `registration-submit.ts`
- *  is outside this wave's file set (do-not-touch list). Whoever next touches
- *  that file should import this instead of re-deriving it. */
+ *  This is the ONLY copy: RS005 W1b repointed `joinTeamEntry` at this export
+ *  (`008b3da27`), so the join-time cap and the displayed roster fill can no
+ *  longer drift. Do not re-inline it. */
 export function rosterCapExpr(db: AnySql) {
   return db`(
     (sp.position_catalog -> 'lineup' ->> 'size')::int +
@@ -2763,6 +2765,27 @@ export async function listRegistrations(
       const [division] = await tx<{ competition_id: string }[]>`
         select competition_id from divisions where id = ${divisionId}`;
       if (!division) throw new HttpError(404, "division not found");
+      // SECURITY (RS005 W1b review, BLOCKER): when the caller named BOTH, the
+      // two must agree. This branch used to derive the competition from the
+      // division and silently DISCARD `filters.competition_id`, so a request
+      // addressed to competition A carrying a `division_id` from competition B
+      // returned B's rows under a 200 from A's URL.
+      //
+      // Same-org only (`withTenant` still scopes the read), so for a session
+      // user it leaks nothing they could not reach through B's own URL. The
+      // real breach is the API-key competition pin: `apiKeyAuth` resolves the
+      // pin from the URL PATH resource (`api-v1/auth.ts:162-172`,
+      // `resolvePinCompetition`) and never looks at query parameters, so a key
+      // pinned to A satisfied the pin on A's path and then read — and CSV
+      // exported — B's contact names, emails, answers and payment state. The
+      // pin is the entire boundary that endpoint sells.
+      //
+      // 404, not 403: the repo's existing convention for a pin miss is that it
+      // adds no existence oracle (same comment at `resolvePinCompetition`), and
+      // a caller who may not scope to this division must not learn it exists.
+      if (filters.competition_id && division.competition_id !== filters.competition_id) {
+        throw new HttpError(404, "division not found");
+      }
       competitionId = division.competition_id;
     } else {
       if (!filters.competition_id) {
