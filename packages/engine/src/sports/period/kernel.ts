@@ -2169,13 +2169,26 @@ export function makePeriodModule(
       },
       fidelityEntitlements: {
         2: preset.timelineEntitlement,
-        // Reuses the SAME entitlement as band 2, never a new FeatureKey:
-        // football's own (pre-existing) `fidelityTiers` already carries
-        // "scoring.match_timeline" on both tier 2 AND tier 3, so a shared
-        // key across the paid boundary is this repo's established shape,
-        // not a new one invented for this session — and inventing a second
-        // key would be a billing-plan decision this session is not scoped
-        // to make.
+        // Reuses the SAME entitlement as band 2, never a new FeatureKey — but
+        // NOT because this kernel has no real band-3 event: `shotType` is
+        // genuinely band-3-only when `shotTracking` is on, same shape as
+        // football's own `football.shot`. The reuse is THIS kernel's own
+        // S2/#430 ruling (hockey/DOMAIN.md's "Shots on goal" row): a
+        // deliberate choice not to mint a new billing-plan row for shot
+        // detail, made on hockey/icehockey's own product terms, not borrowed
+        // from anywhere else.
+        //
+        // Do NOT cite football as precedent for this (a stale claim this
+        // comment used to make — see `_INDEX.md`'s "R3 — debt routed OUT of
+        // this wave" entry, 2026-08-15-scoringpad-v3-prompts): R3-3 gave
+        // football's own band-3 shot event its OWN key,
+        // "scoring.ball_by_ball", precisely because a shared key there left
+        // bands 2 and 3 indistinguishable to anything reading entitlements
+        // to decide what to show (football/DOMAIN.md's shots-on-goal row).
+        // If hockey/icehockey shot detail is ever priced as its own tier,
+        // this reuse is what would need to split the same way — a product
+        // decision, not something
+        // this file can make for itself.
         ...(shotTracking ? { 3: preset.timelineEntitlement } : {}),
       },
     };

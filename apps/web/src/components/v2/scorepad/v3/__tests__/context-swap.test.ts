@@ -47,6 +47,7 @@ import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hoo
 import { resolvePool, ContextStrip, type ContextStripProps } from "../context-strip";
 import {
   refusalMessage,
+  shouldRefuseOffStep,
   swapCandidates,
   SwapSheet,
   type PolicyVerdict,
@@ -1196,5 +1197,110 @@ describe("SwapSheet — a refused verdict ALWAYS states a reason", () => {
     const buttons = buttonsOf(island.tree());
     expect(buttons).toHaveLength(2); // the off-chosen header chip + Cancel
     for (const btn of buttons) expect(propsOf(btn).disabled).toBeFalsy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Opt-in per-org "swap-sheet OFF-step enforcement" (owner ruling 2026-08-25).
+// The OFF step (offId === null) has always shown the picker regardless of
+// `policyVerdict` — pinned by scorepad-v3-football.spec.ts as "a known limit
+// of the R3 chassis fix, not an accident", because moving refusal there
+// unconditionally would make the ON step's own refusal branch (above) dead
+// code and break the four describe blocks preceding this one. That stays the
+// DEFAULT: `enforceOffStep` undefined or false must be byte-identical to
+// every test above this block. Only an org that has BOTH opted in (the
+// `scoring.swap_off_step_enforcement` entitlement, resolved server-side by
+// fidelity.ts's `resolveScorePadBootstrap` and threaded through as this
+// prop by pad-host.tsx) AND holds a genuinely refused verdict sees the OFF
+// step itself refuse — reusing the ON step's exact `data-role="swap-refusal"`
+// markup and copy, never a second string.
+// ---------------------------------------------------------------------------
+
+describe("shouldRefuseOffStep", () => {
+  const ok: PolicyVerdict = { ok: true };
+  const refused: PolicyVerdict = { ok: false, message: refusalMessage("no subs left") };
+
+  it("enforceOffStep=true + a refused verdict -> true (the OFF step must refuse)", () => {
+    expect(shouldRefuseOffStep(refused, true)).toBe(true);
+  });
+
+  it("enforceOffStep=true + an ok verdict -> false (nothing to refuse)", () => {
+    expect(shouldRefuseOffStep(ok, true)).toBe(false);
+  });
+
+  it("enforceOffStep=false + a refused verdict -> false (opted out, today's permissive behaviour)", () => {
+    expect(shouldRefuseOffStep(refused, false)).toBe(false);
+  });
+
+  it("enforceOffStep=undefined + a refused verdict -> false (the org never opted in — the default this whole feature must preserve)", () => {
+    expect(shouldRefuseOffStep(refused, undefined)).toBe(false);
+  });
+});
+
+describe("SwapSheet — OFF-step enforcement (opt-in, owner ruling 2026-08-25)", () => {
+  const s = squad([member({ personId: "a", onField: true }), member({ personId: "b", onField: false })]);
+  const names = { a: "Player A", b: "Player B" };
+  const message = "Rolling subs aren't allowed in 11-a-side — 3 of 3 used";
+
+  it("enforceOffStep=true + a refused verdict: the OFF step shows the SAME swap-refusal markup the ON step uses, message verbatim — no candidate picker", () => {
+    const island = renderIsland(SwapSheet, {
+      spec: swapSpec,
+      view: { squad: s },
+      policyVerdict: { ok: false, message: refusalMessage(message) },
+      enforceOffStep: true,
+      personNames: names,
+      t,
+      onSwap: () => {},
+    });
+    const tree = island.tree();
+    const refusal = tree.find((el) => propsOf(el)["data-role"] === "swap-refusal");
+    expect(refusal).toBeDefined();
+    expect(textOf(refusal!)).toBe(message);
+    // No off-candidate button anywhere — the picker never rendered at all.
+    expect(tree.some((el) => propsOf(el)["data-candidate-id"] !== undefined)).toBe(false);
+  });
+
+  it("enforceOffStep=true + an OK verdict: the OFF step is unaffected — the normal picker still renders", () => {
+    const island = renderIsland(SwapSheet, {
+      spec: swapSpec,
+      view: { squad: s },
+      policyVerdict: { ok: true },
+      enforceOffStep: true,
+      personNames: names,
+      t,
+      onSwap: () => {},
+    });
+    const tree = island.tree();
+    expect(tree.find((el) => propsOf(el)["data-role"] === "swap-refusal")).toBeUndefined();
+    expect(buttonsOf(tree).find((b) => textOf(b) === "Player A")).toBeDefined();
+  });
+
+  it("enforceOffStep=false + a refused verdict: the OFF step is UNAFFECTED — today's permissive behaviour", () => {
+    const island = renderIsland(SwapSheet, {
+      spec: swapSpec,
+      view: { squad: s },
+      policyVerdict: { ok: false, message: refusalMessage(message) },
+      enforceOffStep: false,
+      personNames: names,
+      t,
+      onSwap: () => {},
+    });
+    const tree = island.tree();
+    expect(tree.find((el) => propsOf(el)["data-role"] === "swap-refusal")).toBeUndefined();
+    expect(buttonsOf(tree).find((b) => textOf(b) === "Player A")).toBeDefined();
+  });
+
+  it("enforceOffStep omitted entirely (undefined) + a refused verdict: the OFF step is UNAFFECTED — the default every pre-existing caller relies on. Without shouldRefuseOffStep's default-preserving gate, this is the test that fails.", () => {
+    const island = renderIsland(SwapSheet, {
+      spec: swapSpec,
+      view: { squad: s },
+      policyVerdict: { ok: false, message: refusalMessage(message) },
+      personNames: names,
+      t,
+      onSwap: () => {},
+    });
+    const tree = island.tree();
+    expect(tree.find((el) => propsOf(el)["data-role"] === "swap-refusal")).toBeUndefined();
+    expect(buttonsOf(tree).find((b) => textOf(b) === "Player A")).toBeDefined();
   });
 });

@@ -229,4 +229,60 @@ describe("resolveScorePadBootstrap", () => {
     expect(result!.entitlements["scoring.ball_by_ball"]).toBe(false);
     expect(result!.band).toBeLessThan(3);
   });
+
+  // Opt-in per-org "swap-sheet OFF-step enforcement" (owner ruling
+  // 2026-08-25). `scoring.swap_off_step_enforcement` is a CHASSIS-level key —
+  // it gates swap-sheet.tsx's OFF-step UI behaviour, not a fidelity band — so
+  // it must be resolved into `entitlements` unconditionally, regardless of
+  // what this module's OWN `padSpec.fidelityEntitlements` declares. No
+  // shipped module names this key today, so both tests below prove the two
+  // real code paths without needing one to.
+  it("resolves scoring.swap_off_step_enforcement into entitlements via hasFeatureFn, even when no fidelity band names it — not hardcoded true", async () => {
+    const hasFeatureFn = vi.fn(async (key: string) => key !== "scoring.swap_off_step_enforcement");
+    const result = await resolveScorePadBootstrap({
+      sportModule: generic,
+      rawConfig: GENERIC_CFG,
+      hasFeatureFn,
+      initialEvents: [],
+      identity: IDENTITY,
+    });
+    expect(result).not.toBeNull();
+    // generic's own fidelityEntitlements never names this key, so its
+    // presence here can only come from the unconditional chassis-key
+    // resolution — and reading `false` back (hasFeatureFn denies it) is what
+    // rules out a hardcoded `true`.
+    expect(result!.entitlements["scoring.swap_off_step_enforcement"]).toBe(false);
+    expect(hasFeatureFn).toHaveBeenCalledWith("scoring.swap_off_step_enforcement");
+  });
+
+  it("does not double-resolve when a fidelity band happens to name the SAME key — dedup mirrors resolveFidelityEntitlements' own idiom", async () => {
+    // A fake module, not a real one: no shipped padSpec names this key today
+    // (it is brand new), so this is the only way to drive the dedup branch.
+    // Cast through `unknown`, the same shortcut the cricket test above takes
+    // — `resolveScorePadBootstrap` only ever reads `.configSchema`,
+    // `.padSpec` and `.version` off this parameter.
+    const fakeModule = {
+      version: "1.0.0",
+      configSchema: { parse: (x: unknown) => x },
+      padSpec: () => ({
+        panels: [],
+        fidelity: {},
+        fidelityEntitlements: { 2: "scoring.swap_off_step_enforcement" },
+      }),
+    } as unknown as AnySportModule;
+    const hasFeatureFn = vi.fn(async () => true);
+    const result = await resolveScorePadBootstrap({
+      sportModule: fakeModule,
+      rawConfig: {},
+      hasFeatureFn,
+      initialEvents: [],
+      identity: IDENTITY,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.entitlements["scoring.swap_off_step_enforcement"]).toBe(true);
+    // Band 2's own resolution and the chassis key are the SAME string here —
+    // one call, not two, exactly as resolveFidelityEntitlements itself never
+    // double-fetches a key two bands share (the hockey/icehockey case above).
+    expect(hasFeatureFn).toHaveBeenCalledTimes(1);
+  });
 });

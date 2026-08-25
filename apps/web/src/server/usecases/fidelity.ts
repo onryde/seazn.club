@@ -92,6 +92,18 @@ export function resolveFidelityBand(
 const EMPTY_SPEC: PadSpec = { panels: [], fidelity: {}, fidelityEntitlements: {} };
 
 /**
+ * Opt-in per-org "swap-sheet OFF-step enforcement" (owner ruling 2026-08-25;
+ * swap-sheet.tsx's own `enforceOffStep`/`shouldRefuseOffStep` doc has the UI
+ * side). A CHASSIS-level key, not a fidelity-band one — no `PadSpec` names
+ * it, and none should ever need to, unlike `scoring.match_timeline`/
+ * `scoring.ball_by_ball` which gate DEPTH of scoring detail. This one gates a
+ * swap-sheet UI behaviour that exists identically at every fidelity band, so
+ * it is resolved unconditionally in `resolveScorePadBootstrap` below rather
+ * than threaded through any module's `fidelityEntitlements`.
+ */
+const SWAP_OFF_STEP_ENFORCEMENT_KEY = "scoring.swap_off_step_enforcement";
+
+/**
  * Both v2 entry-point loaders' shared "resolve everything `<ScorePad/>`
  * needs for one fixture" call, wrapping `configSchema.parse` +
  * `resolveFidelityEntitlements` + `resolveFidelityBand` into one bootstrap —
@@ -117,7 +129,19 @@ export async function resolveScorePadBootstrap(params: {
   try {
     const resolvedConfig: unknown = params.sportModule.configSchema.parse(params.rawConfig);
     const spec = params.sportModule.padSpec?.(resolvedConfig) ?? EMPTY_SPEC;
-    const entitlements = await resolveFidelityEntitlements(spec.fidelityEntitlements, params.hasFeatureFn);
+    const bandEntitlements = await resolveFidelityEntitlements(spec.fidelityEntitlements, params.hasFeatureFn);
+    // Chassis-level keys, resolved unconditionally and merged into the SAME
+    // map — regardless of whether this module's own `fidelityEntitlements`
+    // names them. Set-based dedup, same idiom `resolveFidelityEntitlements`
+    // itself uses for two bands naming one key (hockey/icehockey's
+    // `scoring.match_timeline`): if a fidelity band ever happens to declare
+    // the identical string, its already-resolved value is reused rather than
+    // asking `hasFeatureFn` a second time for the same org+key.
+    const alreadyResolved = new Set(Object.keys(bandEntitlements));
+    const swapOffStepEnforcement = alreadyResolved.has(SWAP_OFF_STEP_ENFORCEMENT_KEY)
+      ? bandEntitlements[SWAP_OFF_STEP_ENFORCEMENT_KEY]!
+      : await params.hasFeatureFn(SWAP_OFF_STEP_ENFORCEMENT_KEY);
+    const entitlements = { ...bandEntitlements, [SWAP_OFF_STEP_ENFORCEMENT_KEY]: swapOffStepEnforcement };
     const band = resolveFidelityBand(spec.fidelityEntitlements, entitlements);
     return {
       moduleVersion: params.sportModule.version,

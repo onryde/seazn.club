@@ -1034,6 +1034,15 @@ export function PadHostV3(props: PadHostV3Props) {
             spec={adaptedSwap.spec}
             view={adaptedSwap.view}
             policyVerdict={adaptedSwap.policyVerdict}
+            // Owner ruling 2026-08-25: opt-in per-org "swap-sheet OFF-step
+            // enforcement" — `scoring.swap_off_step_enforcement`, resolved by
+            // fidelity.ts's resolveScorePadBootstrap into this SAME
+            // `view.entitlements` map every other gated affordance already
+            // reads. `=== true`, not a bare truthy check, so an absent key
+            // (every org that hasn't been granted the override) reads as
+            // `false` — BYTE-IDENTICAL to the sheet's default. See
+            // swap-sheet.tsx's own `enforceOffStep`/`shouldRefuseOffStep`.
+            enforceOffStep={view.entitlements["scoring.swap_off_step_enforcement"] === true}
             personNames={personNames}
             t={t}
             onSwap={(off, on) => {
