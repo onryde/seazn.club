@@ -362,9 +362,17 @@ describe("scoring-vocab covers every PadSpec label key the engine declares (#427
     // widening `declared` to synthesize entries the engine never actually
     // declares, which would make the OTHER two exhaustiveness tests in this
     // block lie about what "declared" means.
+    //
+    // R4/tennis — `pad.<sport>.scorebug.<...>.hint` is a THIRD such category,
+    // for the identical reason: `ScorebugHalf.hintKey` (tap model S) is
+    // resolved through this SAME `padLabel()` gate (scorebug.tsx), but it is
+    // a v3-chassis-only concept no `padSpec(cfg)` panel/action/field ever
+    // declares — cricket and football are both tap model T and never needed
+    // one. Tennis is the first skin tap model S actually ships on.
     const isRibbonKey = /^pad\.[a-z]+\.ribbon\./;
+    const isScorebugHintKey = /^pad\.[a-z]+\.scorebug\..*\.hint$/;
     for (const key of PAD_LABEL_KEYS) {
-      if (isRibbonKey.test(key)) continue;
+      if (isRibbonKey.test(key) || isScorebugHintKey.test(key)) continue;
       expect([...declared.keys()], `PAD_LABEL_KEYS has "${key}", which no module emits`).toContain(key);
     }
   });
