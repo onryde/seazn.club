@@ -2210,3 +2210,148 @@ test("registration hub: the config panel has no horizontal scroll, open", async 
   await expect(panel.locator('[data-field="category"]')).toBeVisible({ timeout: 20_000 });
   await expectNoHorizontalScroll(page);
 });
+
+// ---------------------------------------------------------------------------
+// RS005 — Registrants tab, the whole width matrix (v3/02 §4 viewport gate).
+// One test covers everything the dispatch called out for this file
+// (no-scroll+rows, the grid/card switch, an expanded row's worst-case
+// content, the filter bar) off ONE seeded fixture — the same economy the
+// "registration hub" test just above uses; a login+seed per check would
+// multiply setup cost across all seven width projects for no extra
+// coverage. `projectTag()` is folded into this test's own account for the
+// SAME reason that test's own comment gives: it MUTATES (via the public
+// register API) and TAG is per-PROCESS, not per-project.
+// ---------------------------------------------------------------------------
+const REGISTRANTS_MOBILE_EMAIL = () => `regtab-${TAG}-${projectTag()}@example.com`;
+
+test("registrants tab: no-scroll, grid/card switch, expanded-row and filter-bar overflow, at this width", async ({
+  page,
+}) => {
+  await loginUi(page, REGISTRANTS_MOBILE_EMAIL());
+  const comp = await apiJson<{ id: string; slug: string }>(page.request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Registrants Mobile ${TAG}-${projectTag()}`,
+    visibility: "public",
+  });
+  expect(comp.status).toBeLessThan(300);
+
+  const teamDiv = await apiJson<{ id: string }>(
+    page.request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Mobile Team",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  expect(teamDiv.status).toBeLessThan(300);
+  const soloDiv = await apiJson<{ id: string }>(
+    page.request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Mobile Solo",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  expect(soloDiv.status).toBeLessThan(300);
+  for (const [divId, kind] of [
+    [teamDiv.data!.id, "team"],
+    [soloDiv.data!.id, "individual"],
+  ] as const) {
+    const settings = await apiJson(page.request, `/api/v1/divisions/${divId}/registration-settings`, "PUT", {
+      enabled: true,
+      entrant_kind: kind,
+      fee_cents: 0,
+      approval: "auto",
+    });
+    expect(settings.status).toBeLessThan(300);
+  }
+
+  const org = await activeOrg(page);
+  // ONE cart, two entries sharing a group — gives the team entry a cart
+  // SIBLING to render on top of its own join code + roster: the detail
+  // body's worst case for width (join code, warning copy, roster, cart
+  // siblings, per the dispatch) all at once. A deliberately long captain
+  // name stress-tests the narrowest project (320px).
+  const captainName = `Captain With An Unusually Long Name For Overflow Testing ${TAG}`;
+  const submitted = await apiJson<{ entries: { registration_id: string; division_id: string }[] }>(
+    page.request,
+    `/api/v1/public/orgs/${org.slug}/competitions/${comp.data!.slug}/register`,
+    "POST",
+    {
+      contact: { name: captainName, email: `mobile-captain-${TAG}-${projectTag()}@example.com` },
+      privacy_consent: true,
+      entries: [
+        {
+          division_id: teamDiv.data!.id,
+          entrant_kind: "team",
+          // A deliberately long team name too — the same 320px stress case
+          // as the captain's name; a non-free-agent team entry requires one
+          // (entryDisplayName, registration-submit.ts).
+          team_name: `Team With An Equally Long Name For Overflow ${TAG}`,
+          players: [{ full_name: captainName, is_captain: true }],
+          answers: {},
+        },
+        {
+          division_id: soloDiv.data!.id,
+          entrant_kind: "individual",
+          players: [{ full_name: `Solo Sibling ${TAG}` }],
+          answers: {},
+        },
+      ],
+    },
+  );
+  expect(submitted.status, JSON.stringify(submitted)).toBe(201);
+  const teamRegId = submitted.data!.entries.find((e) => e.division_id === teamDiv.data!.id)!.registration_id;
+
+  // 1) The tab itself: no horizontal scroll, rows present.
+  await page.goto(`/o/${org.slug}/c/${comp.data!.slug}/registration?tab=registrants`, { waitUntil: "load" });
+  const row = page.locator(`[data-registration-hub-registrant-row][data-registration-id="${teamRegId}"]`);
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  await expectNoHorizontalScroll(page);
+
+  // 2) The grid/card switch: below the `sm` (640px) breakpoint the phone
+  //    CARD block is what's visible; at/above it, the aligned-columns GRID
+  //    block is — both always exist in the DOM (CSS picks which shows), so
+  //    this is a real visibility assertion, not a class-name probe.
+  const isPhoneWidth = (projectViewport()?.width ?? 0) < 640;
+  const card = row.locator("[data-registration-hub-registrant-card]");
+  const grid = row.locator("[data-registration-hub-registrant-grid]");
+  if (isPhoneWidth) {
+    await expect(card).toBeVisible();
+    await expect(grid).not.toBeVisible();
+  } else {
+    await expect(grid).toBeVisible();
+    await expect(card).not.toBeVisible();
+  }
+
+  // 3) Expanded row: join code (+ its warning copy), roster, AND a cart
+  //    sibling link all render at once — the detail body's densest case.
+  await row.locator("summary").click();
+  await expect(row.locator("[data-registration-hub-registrant-detail]")).toBeVisible();
+  await expect(row.locator("[data-registration-hub-registrant-join-code]")).toBeVisible();
+  await expect(row.locator("[data-registration-hub-registrant-roster-player]").first()).toBeVisible();
+  await expect(row.locator("[data-registration-hub-registrant-sibling-link]")).toBeVisible();
+  await expectNoHorizontalScroll(page);
+
+  // 4) The filter bar: present, no overflow, and its controls stay
+  //    touch-sized (min-h-11 = 44px, the same bar every other v3 control in
+  //    this file is held to). R4 (task 1, auto-submit) removed the filter
+  //    bar's own submit button entirely — every control now submits itself
+  //    on change (registration-hub-registrant-filters.tsx's own header
+  //    comment) — so the status <select> (still present, still min-h-11) is
+  //    the stand-in; it is not interacted with here (a change would
+  //    navigate away via requestSubmit()), only measured.
+  const filters = page.locator("[data-registration-hub-registrant-filters]");
+  await expect(filters).toBeVisible();
+  const statusSelect = filters.locator('select[name="status"]');
+  const box = await statusSelect.boundingBox();
+  expect(box, "filter status select must have a measurable box").not.toBeNull();
+  expect(box!.height, "filter controls must stay >=44px tall (touch target)").toBeGreaterThanOrEqual(44);
+  await expectNoHorizontalScroll(page);
+});
