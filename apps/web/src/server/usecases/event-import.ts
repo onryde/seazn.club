@@ -11,6 +11,7 @@ import "server-only";
 // (engine-db/append-event.ts). This file calls it in a loop, once per event,
 // inside its own withTenant per fixture — it does not re-implement any part
 // of what that function does.
+import { randomUUID } from "node:crypto";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
@@ -401,184 +402,187 @@ async function runStream(
   };
 }
 
-/**
- * How long `importEvents` will wait to reserve a dedicated connection for
- * the concurrency lock before giving up (fix round 1, review finding #2).
- * Deliberately short: `reserve()` on a healthy pool resolves in single-digit
- * milliseconds, so a multi-second wait means the pool's `max` connections
- * (`DB_POOL_MAX`, default 5 — `lib/db.ts`'s `connectionOptions`) are
- * genuinely all busy. And since each reservation below is held for the
- * WHOLE call — including the O(n²) re-fold `IMPORT_CAPS.eventsPerFixture`
- * allows up to 1,000 events of — "genuinely busy" can mean "busy for a
- * while yet". Waiting longer would not turn a caller stuck behind that into
- * a success; it would only make the eventual 409 slower. Ruling: fail fast,
- * don't queue.
- */
-const RESERVE_TIMEOUT_MS = 2_000;
+// TTL: 30 minutes (design doc §5.1). A crashed process leaves its row
+// behind; this is what lets the NEXT caller proceed instead of a division
+// being wedged forever — long enough that a legitimate import (up to 1,000
+// events per fixture, refolded O(n²) on every append) refreshes well before
+// it would matter (see runImport's between-streams refresh).
 
 /**
- * Race `reserve` against a timeout so pool exhaustion is a prompt 409
- * `import.concurrent` instead of an indefinite hang — see
- * `RESERVE_TIMEOUT_MS`'s own doc comment for why. Generic over any
- * reserve-shaped function (real production use passes `() => sql.reserve()`)
- * so a test can prove the timeout itself fires with a `reserve` that simply
- * never resolves, with no need to actually exhaust a real connection pool.
+ * Acquire the row lock for `(divisionId, importId)`, or take over one whose
+ * TTL has already elapsed, in the single statement design doc §5.1
+ * specifies. `ON CONFLICT ... DO UPDATE ... WHERE` is what makes this ONE
+ * round trip atomic: a conflicting row that does NOT satisfy the WHERE
+ * (i.e. a live holder) is left alone and produces no returned row — it is
+ * not an error, just nothing to return — so two concurrent callers racing
+ * for the same key can never both come back with a row. Returns the fresh
+ * `holder` (a random uuid minted per call, never reused) on success; `null`
+ * when someone else holds a live lock.
  *
- * If `reserve()` eventually settles AFTER the timeout has already won the
- * race, the connection it hands back is released immediately — the caller
- * gave up on it the moment the 409 was thrown, so nothing else is left
- * holding a reference, and not releasing it would pin that connection
- * forever instead of just for `ms`.
+ * Runs on the POOLED `sql` proxy, never inside `withTenant` — this is
+ * exactly why the lock moved into a row in the first place: no reserved
+ * connection, no session, so no dependency on how the app is connected to
+ * Postgres. RLS on `import_locks` does not scope this query (the pooled
+ * connection is not `app_user` with `current_org_id()` set — same reason
+ * every other pooled read in this file filters by org itself), so `org_id`
+ * is an explicit predicate, not RLS's job.
  */
-export async function withReserveTimeout<T extends { release(): void }>(
-  reserve: () => Promise<T>,
-  ms: number,
-): Promise<T> {
-  let timedOut = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const pending = reserve();
-  pending
-    .then((conn) => {
-      if (timedOut) conn.release();
-    })
-    .catch(() => {
-      // The timeout branch below is what the caller actually sees; a late
-      // rejection here (the pool itself erroring after we stopped waiting)
-      // has nowhere useful left to go.
-    });
-  try {
-    return await Promise.race([
-      pending,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => {
-          timedOut = true;
-          reject(
-            new HttpError(
-              409,
-              "no database connection was available to acquire the import lock",
-              "import.concurrent",
-            ),
-          );
-        }, ms);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
+async function acquireImportLock(divisionId: string, importId: string, orgId: string): Promise<string | null> {
+  const holder = randomUUID();
+  const [row] = await sql<{ holder: string }[]>`
+    insert into import_locks (division_id, import_id, org_id, holder, expires_at)
+    values (${divisionId}, ${importId}, ${orgId}, ${holder}, now() + interval '30 minutes')
+    on conflict (division_id, import_id) do update
+      set holder = excluded.holder, acquired_at = now(), expires_at = excluded.expires_at
+      where import_locks.expires_at < now()
+    returning holder`;
+  return row ? row.holder : null;
 }
 
 /**
- * Acquire a session advisory lock via `acquire`, run `fn`, then ALWAYS
- * attempt `release` — but never let a `release` failure replace `fn`'s real
- * outcome (fix round 1, review finding #1). A successful import, or a
- * legitimate rejection `fn` threw on purpose (402/409/413/a per-stream
- * result), must be reported as exactly that even if the unlock afterwards
- * failed; a release failure is a leaked session lock, not a failed import,
- * and is logged rather than raised. `release` is skipped entirely when the
- * lock was never acquired (finding #3) — nothing to release, and every
- * `import.concurrent` 409 would otherwise cost a wasted round trip and log
- * noise for no reason.
+ * Push the lock's `expires_at` out again — called BETWEEN streams (never
+ * inside a stream's own write transaction: a refresh inside a transaction
+ * is invisible to every other caller until that transaction commits, which
+ * defeats the entire purpose of refreshing at all). Best-effort: if the
+ * lock was somehow already lost (a prior refresh missed the window and a
+ * successor took over), this predicate simply matches zero rows and the
+ * next `runStream` call proceeds regardless — the actual correctness
+ * backstop is `event_imports`'s unique index, not this row.
  */
-export async function withAdvisoryLock<T>(
-  acquire: () => Promise<boolean>,
-  release: () => Promise<void>,
+async function refreshImportLock(
+  divisionId: string,
+  importId: string,
+  orgId: string,
+  holder: string,
+): Promise<void> {
+  await sql`
+    update import_locks set expires_at = now() + interval '30 minutes'
+    where division_id = ${divisionId} and import_id = ${importId}
+      and org_id = ${orgId} and holder = ${holder}`;
+}
+
+/**
+ * Release the lock — but ONLY the caller's own row. The `holder` predicate
+ * is load-bearing, not decoration (review, fix round 2, requirement #3): it
+ * is what stops an already-timed-out call's late release from deleting a
+ * SUCCESSOR's lock on the same `(divisionId, importId)` key — without it, a
+ * slow caller finishing after its TTL expired and a new caller already took
+ * over would delete the new caller's row out from under it.
+ *
+ * Exported so a test can prove that predicate directly: seed a row with a
+ * foreign `holder`, call this with a different one, assert the row survives
+ * unchanged. A genuine end-to-end race (this call's own successful acquire,
+ * followed by a real takeover arriving mid-flight, followed by this call's
+ * own late release) is real but not deterministically constructible without
+ * either fabricating one with mocks or accepting flaky timing — the WHERE
+ * clause's correctness does not need a live race to prove; it needs exactly
+ * this.
+ */
+export async function releaseImportLock(
+  divisionId: string,
+  importId: string,
+  orgId: string,
+  holder: string,
+): Promise<void> {
+  await sql`
+    delete from import_locks
+    where division_id = ${divisionId} and import_id = ${importId}
+      and org_id = ${orgId} and holder = ${holder}`;
+}
+
+/**
+ * Acquire `acquire`, run `fn` with whatever it returned, then ALWAYS attempt
+ * `release` — but never let a `release` failure replace `fn`'s real outcome
+ * (review, fix round 1, finding #1, carried over unchanged into the row
+ * lock). A successful import, or a legitimate rejection `fn` threw on
+ * purpose (402/409/413/a per-stream result), must be reported as exactly
+ * that even if letting go of the lock afterwards failed; a release failure
+ * is a leaked lock row (harmless — it expires on its own via the TTL above),
+ * not a failed import, and is logged rather than raised.
+ *
+ * `acquire` returning `null` means someone else holds a live lock;
+ * `onNotAcquired` decides what that means to the caller (here: 409
+ * `import.concurrent`) and is typed `() => never` — the ONLY way execution
+ * reaches the `try`/`finally` below is with a real, non-null `lock`, so
+ * there is no separate "was it acquired" guard to write inside `finally`
+ * (an earlier draft of this file, over the now-deleted advisory-lock
+ * mechanism, added one anyway; a mutation check proved it dead code, and
+ * removing it — not keeping a redundant check — was the fix).
+ */
+export async function withLock<L, T>(
+  acquire: () => Promise<L | null>,
+  release: (lock: L) => Promise<void>,
   onNotAcquired: () => never,
-  fn: () => Promise<T>,
+  fn: (lock: L) => Promise<T>,
 ): Promise<T> {
-  const locked = await acquire();
-  // `onNotAcquired` is typed `() => never` and this line is reached at all
-  // only when it did NOT throw — i.e. only when `locked` was true. Nothing
-  // past this point can still be running with `locked === false`, which is
-  // finding #3's "skip release when the lock was never taken": there is no
-  // separate guard to write, because the not-acquired path never reaches
-  // the `try`/`finally` below in the first place. (An earlier draft added a
-  // redundant `if (locked)` here anyway; a mutation check on it proved the
-  // branch dead — removing it is the fix, not adding a second guard.)
-  if (!locked) onNotAcquired();
+  const lock = await acquire();
+  if (lock === null) onNotAcquired();
   try {
-    return await fn();
+    return await fn(lock);
   } finally {
     try {
-      await release();
+      await release(lock);
     } catch (err) {
-      log.error({ err }, "event-import: releasing the import advisory lock failed (import result unaffected)");
+      log.error({ err }, "event-import: releasing the import lock failed (import result unaffected)");
     }
   }
 }
 
 /**
- * Concurrency lock (Task 5, review finding #7): one `importEvents` call at a
- * time per `(division, import_id)`. A losing caller gets 409
- * `import.concurrent` rather than interleaving with the call already running.
+ * Concurrency lock (Task 5, review finding #7; row-based since fix round 2,
+ * owner ruling 2026-08-25 — design doc §5.1). One `importEvents` call at a
+ * time per `(division, import_id)`: a losing caller gets 409
+ * `import.concurrent` rather than interleaving with the call already
+ * running.
  *
- * SESSION-scoped (`pg_try_advisory_lock`/`pg_advisory_unlock`), not the
- * `_xact_` variant a first read of this suggests: the call spans MULTIPLE
- * independent transactions (a read-only dry-run tx and a write tx, once per
- * stream) plus pooled reads with nothing wrapping them — a lock tied to any
- * ONE of those transactions releases the moment that transaction commits,
- * long before the call is done, which does not serialise anything. A session
- * lock held on a single RESERVED connection for the call's whole lifetime
- * (`sql.reserve()`, released unconditionally below whether the call
- * succeeds, rejects a stream, or throws) is what actually holds it "for the
- * whole call" the brief asks for. Acquired here, in the usecase — not the
- * route — because a route can be reached more than one way (the D6 HTTP
- * surface is the only one today, but the lock's job is protecting the
- * receipt table, which is the usecase's, not the route's, invariant to
- * hold).
+ * A ROW, not a Postgres advisory lock (fix round 1 shipped the latter; the
+ * owner retired it). An advisory lock is held by a SESSION — under a
+ * transaction-mode pooler (e.g. Supabase's `:6543`) the physical backend can
+ * be reassigned between the lock and unlock statements, silently breaking
+ * the cross-process guarantee — and keeping a session alive for the whole
+ * call is exactly what forced reserving a dedicated pool connection
+ * (`sql.reserve()`, fix round 1's `withReserveTimeout`), which pinned a pool
+ * slot for the call's full O(n²) duration and could starve the pool under
+ * concurrent imports on different keys. A row is data: it survives pooler
+ * reassignment because there is no session to lose, and it reserves
+ * nothing, so `withReserveTimeout` and its pool-starvation bound are DELETED
+ * outright rather than kept — there is no reserve left to time out.
  *
- * SESSION-MODE POOLING ONLY (fix round 1 — flagged by review, owner
- * notified separately). A TRANSACTION-mode pooler in front of Postgres
- * (e.g. Supabase's `:6543`) can reassign the physical backend between this
- * function's lock and unlock statements — each one is its own checkout from
- * the pooler's point of view — which would silently break the mutual
- * exclusion this entire mechanism depends on. `DATABASE_URL` for any
- * deployment that imports must point at a session-mode endpoint (the
- * session pooler / `:5432`, per `lib/db.ts`'s own connection doc), never a
- * transaction-mode one.
+ * Acquired here, in the usecase — not the route — because a route can be
+ * reached more than one way (the D6 HTTP surface is the only one today, but
+ * the lock's job is protecting the receipt table, which is the usecase's,
+ * not the route's, invariant to hold).
  *
- * DB_POOL_MAX floor: each call below pins one pool connection for its whole
- * duration (`RESERVE_TIMEOUT_MS`'s doc comment). A deployment that expects N
- * concurrent imports needs `DB_POOL_MAX` above N plus its normal request
- * load, or unrelated requests start losing the race for a connection while
- * an import runs. (Owed a line on the help page too — Task 10 had not
- * written `content/help/**` for this feature as of this fix round; see the
- * Task 5 report.)
+ * Correctness does not rest on this lock. It rests on `event_imports`'s
+ * unique index (Tasks 1/3/4), which no pooling mode can weaken and which a
+ * premature takeover (a stale row whose TTL elapsed) cannot bypass — this
+ * lock only turns what would otherwise be a race on that index into a clean
+ * 409 up front.
  */
 export async function importEvents(
   auth: AuthCtx,
   divisionId: string,
   input: EventImportRequest,
 ): Promise<ImportReport> {
-  const lockKey = `import:${divisionId}:${input.import_id}`;
-  const reserved = await withReserveTimeout(() => sql.reserve(), RESERVE_TIMEOUT_MS);
-  try {
-    return await withAdvisoryLock(
-      async () => {
-        const [row] = await reserved<{ locked: boolean }[]>`
-          select pg_try_advisory_lock(hashtext(${lockKey})) as locked`;
-        return row!.locked;
-      },
-      async () => {
-        await reserved`select pg_advisory_unlock(hashtext(${lockKey}))`;
-      },
-      () => {
-        throw new HttpError(
-          409,
-          "another import with this import_id is already running for this division",
-          "import.concurrent",
-        );
-      },
-      () => runImport(auth, divisionId, input),
-    );
-  } finally {
-    reserved.release();
-  }
+  return withLock(
+    () => acquireImportLock(divisionId, input.import_id, auth.orgId),
+    (holder) => releaseImportLock(divisionId, input.import_id, auth.orgId, holder),
+    () => {
+      throw new HttpError(
+        409,
+        "another import with this import_id is already running for this division",
+        "import.concurrent",
+      );
+    },
+    (holder) => runImport(auth, divisionId, input, holder),
+  );
 }
 
 async function runImport(
   auth: AuthCtx,
   divisionId: string,
   input: EventImportRequest,
+  lockHolder: string,
 ): Promise<ImportReport> {
   const startedAt = performance.now();
   assertWithinCaps(input);
@@ -597,6 +601,11 @@ async function runImport(
   for (const stream of input.streams) {
     // Sequential, by design (design doc §4) — bounded, predictable load.
     results.push(await runStream(auth, division, input.import_id, stream));
+    // Between streams, never inside one — design doc §5.1. A refresh run
+    // from inside runStream's own write transaction would be invisible to
+    // every other caller until that transaction commits, which is the
+    // opposite of what keeping the lock alive is for.
+    await refreshImportLock(divisionId, input.import_id, auth.orgId, lockHolder);
   }
   const report = buildReport(input.import_id, results);
   const appended = results.reduce((n, r) => n + r.eventsAppended, 0);
