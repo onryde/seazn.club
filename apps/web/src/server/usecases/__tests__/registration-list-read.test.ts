@@ -341,3 +341,48 @@ describe.skipIf(!HAS_DB)("RS005 W1b review BLOCKER: division_id must belong to t
     expect(divisionOnly.map((r) => r.id)).toContain(own.id);
   });
 });
+
+describe.skipIf(!HAS_DB)("RS005: archiving a division does not hide its registrants", () => {
+  // CHARACTERISATION, and a deliberate one — this pins a behaviour that is
+  // correct today and that nothing else would notice losing.
+  //
+  // `listRegistrations` joins `divisions` with NO `archived_at` guard, unlike
+  // the Settings tab's own query (`registration/data.ts`, `where ... and
+  // d.archived_at is null`) and unlike the filter-dropdown query beside it.
+  // Those two SHOULD exclude archived divisions: one configures them, the
+  // other offers them as a filter. This one must not.
+  //
+  // The cost of getting it wrong is silent and lands on the worst day:
+  // archiving a division is exactly what an organiser does when a competition
+  // wraps, and the registrants are the people they still have to refund,
+  // export for their federation, or answer questions about. Copying that
+  // one-line predicate up here — an obvious-looking consistency fix, and the
+  // two queries sit ~200 lines apart in sibling files — would vanish every
+  // one of them, with no error, no empty-state distinction, and nothing red.
+  it("still lists (and exports) entries whose division has been archived", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Archived Division Entry",
+      contactEmail: "archived@example.test",
+    });
+
+    const before = await listRegistrations(owner, null, null, { competition_id: competition.id });
+    expect(before.map((r) => r.id)).toContain(registration.id);
+
+    await sql`update divisions set archived_at = now() where id = ${division.id}`;
+
+    const after = await listRegistrations(owner, null, null, { competition_id: competition.id });
+    expect(
+      after.map((r) => r.id),
+      "archiving a division must not hide the people who registered for it",
+    ).toContain(registration.id);
+    // The row still carries its division's identity — an organiser looking at
+    // a wrapped competition needs to know WHICH division each person is in.
+    expect(after.find((r) => r.id === registration.id)?.division_name).toBe(division.name);
+
+    const csv = await exportRegistrationsCsv(owner, { competitionId: competition.id });
+    expect(csv, "the CSV is how a federation report gets produced after wrap-up").toContain(
+      "Archived Division Entry",
+    );
+  });
+});
