@@ -569,6 +569,71 @@ describe("buildTiles — Code violation and Award game are per-side tiles", () =
   });
 });
 
+// R3/B2's own incident (`reference_v3_board_two_lanes_and_dock_after_
+// sheet.md`): three football card tiles per side put Home's second yellow
+// bodily inside the away lane, with every unit assertion still green,
+// because nothing in tile-grid.tsx's bare `grid-cols-4` enforces the
+// home-left/away-right convention — array order alone decides it. Pinned
+// here two ways per side-owned tile: span === 2, and the COLUMN it lands in,
+// modelling the same CSS auto-placement the real grid performs — across
+// every combination that changes how many SIDE-LESS tiles (setScore,
+// interruption) precede a pair, which is exactly the lever that broke it
+// for football.
+describe("buildTiles — the two-lane board: side pairs never cross lanes (R3/B2's own incident)", () => {
+  function columnOf(tiles: readonly TileSpec[], id: string): number {
+    let col = 0;
+    for (const tile of tiles) {
+      const span = tile.span ?? 1;
+      if (col + span > 4) col = 0;
+      if (tile.id === id) return col;
+      col = (col + span) % 4;
+    }
+    throw new Error(`tile "${id}" not found`);
+  }
+
+  // Band 3 throughout — high enough that BOTH side pairs (sanction at band 1,
+  // gameAward at band 3) can be checked in the same run. Three state shapes
+  // that each change which side-less singles (setScore, interruption) are
+  // present, hence how many tiles precede a pair — the exact axis football's
+  // own incident varied along.
+  const SCENARIOS: { name: string; over: Record<string, unknown> }[] = [
+    { name: "fresh set (setScore + interruption both offered)", over: state() },
+    { name: "mid-set (setScore withheld, interruption offered)", over: state({ games: { home: 1, away: 0 } }) },
+    {
+      name: "fresh set, tiebreak in progress (gameAward withheld)",
+      over: state({ points: { kind: "tiebreak", home: 2, away: 1 } }),
+    },
+  ];
+
+  it.each(SCENARIOS)("$name: every side-owned tile spans 2 and lands in its OWN side's column", ({ over }) => {
+    const tiles = buildTiles(view({ state: over, band: 3 }));
+    for (const tile of tiles) {
+      if (tile.sublabel === "scorepad.attribution.home" || tile.sublabel === "scorepad.attribution.away") {
+        expect(tile.span, tile.id).toBe(2);
+      }
+    }
+    if (tileById(tiles, sanctionSheetKey("home"))) {
+      expect(columnOf(tiles, sanctionSheetKey("home"))).toBe(0);
+      expect(columnOf(tiles, sanctionSheetKey("away"))).toBe(2);
+    }
+    if (tileById(tiles, gameAwardTileId("home"))) {
+      expect(columnOf(tiles, gameAwardTileId("home"))).toBe(0);
+      expect(columnOf(tiles, gameAwardTileId("away"))).toBe(2);
+    }
+  });
+
+  it("MUTATION-SHAPED CHECK: a side-less single ahead of a pair, alone, would misalign it — confirms the test can actually see the defect class", () => {
+    // Reproduces football's own R3/B2 shape directly against THIS skin's
+    // tiles, independent of buildTiles' current (correct) ordering: one
+    // single span-2 tile, then a side pair, is exactly the misalignment.
+    const decoy: TileSpec = { id: "decoy", label: "x", kind: "minor", span: 2, phases: ["live"], action: { sheet: "x" } };
+    const home: TileSpec = { id: "h", label: "x", sublabel: "scorepad.attribution.home", kind: "standard", span: 2, phases: ["live"], action: { sheet: "h" } };
+    const away: TileSpec = { id: "a", label: "x", sublabel: "scorepad.attribution.away", kind: "standard", span: 2, phases: ["live"], action: { sheet: "a" } };
+    expect(columnOf([decoy, home, away], "a")).toBe(0); // away lands in the HOME lane
+    expect(columnOf([home, away], "a")).toBe(2); // without the decoy, it is correct
+  });
+});
+
 it("buildTiles always offers More, spanning the full row", () => {
   const tile = tileById(buildTiles(view()), "more")!;
   expect(tile.span).toBe(4);

@@ -541,19 +541,18 @@ export function buildTiles(view: PadHostView): TileSpec[] {
   const offerable = (eventType: string): boolean => live && withinBand(eventType, band);
   const tiles: TileSpec[] = [];
 
-  // Set score — D-16. Withheld while the CURRENT set is in progress; the
-  // paired `refusedEventTypes` entry is what keeps the generic More sheet
-  // from offering the same refused action a second time.
-  if (offerable(SET_SUMMARY_TYPE) && !setInProgressOf(state)) {
-    tiles.push({
-      id: "setScore",
-      label: "pad.tennis.action.setScore",
-      kind: "standard",
-      span: 2,
-      phases: ["live"],
-      action: { sheet: "setScore" },
-    });
-  }
+  // ORDER IS LOAD-BEARING (`reference_v3_board_two_lanes_and_dock_after_
+  // sheet.md`; the exact defect this note warns about is football's own
+  // R3/B2 incident: three card tiles per side put Home's second yellow
+  // bodily inside the away lane, 65 green unit assertions notwithstanding).
+  // `tile-grid.tsx` is a bare `grid-cols-4`; nothing checks that a side pair
+  // lands home-left/away-right — array order IS row/column order. Both
+  // side-paired actions below (Code violation, Award game) are each pushed
+  // as an ATOMIC 0-or-2 block sharing one condition, so putting them BOTH
+  // before any single, side-less tile keeps their combined preceding count
+  // a multiple of 2 in every band/state combination — home always col 0,
+  // away always col 2. `setScore`/`interruption` carry no side identity, so
+  // where THEY land is cosmetic; do not reorder them ahead of the pairs.
 
   // Code violation — per side, mirroring football's per-side Card tile:
   // `NestedSanction.by` is REQUIRED, so the side is fixed by WHICH tile was
@@ -570,20 +569,6 @@ export function buildTiles(view: PadHostView): TileSpec[] {
         action: { sheet: sanctionSheetKey(side) },
       });
     }
-  }
-
-  // Interruption — R4-2: replaces the brief's Retire tile. `by` is OPTIONAL
-  // on `NestedInterruption` (a rain delay is charged to nobody), so this is
-  // ONE generic tile, not per-side — the sheet itself asks which side, if any.
-  if (offerable(INTERRUPTION_TYPE)) {
-    tiles.push({
-      id: "interruption",
-      label: "pad.tennis.action.interruption",
-      kind: "minor",
-      span: 2,
-      phases: ["live"],
-      action: { sheet: "interruption" },
-    });
   }
 
   // Award game — per side, direct commit (no sheet): `NestedGameAward.winner`
@@ -605,6 +590,34 @@ export function buildTiles(view: PadHostView): TileSpec[] {
         action: { event: { type: GAME_AWARD_TYPE, payload: { winner: entrantOf(state, side) } } },
       });
     }
+  }
+
+  // Set score — D-16. Withheld while the CURRENT set is in progress; the
+  // paired `refusedEventTypes` entry is what keeps the generic More sheet
+  // from offering the same refused action a second time.
+  if (offerable(SET_SUMMARY_TYPE) && !setInProgressOf(state)) {
+    tiles.push({
+      id: "setScore",
+      label: "pad.tennis.action.setScore",
+      kind: "standard",
+      span: 2,
+      phases: ["live"],
+      action: { sheet: "setScore" },
+    });
+  }
+
+  // Interruption — R4-2: replaces the brief's Retire tile. `by` is OPTIONAL
+  // on `NestedInterruption` (a rain delay is charged to nobody), so this is
+  // ONE generic tile, not per-side — the sheet itself asks which side, if any.
+  if (offerable(INTERRUPTION_TYPE)) {
+    tiles.push({
+      id: "interruption",
+      label: "pad.tennis.action.interruption",
+      kind: "minor",
+      span: 2,
+      phases: ["live"],
+      action: { sheet: "interruption" },
+    });
   }
 
   tiles.push({
