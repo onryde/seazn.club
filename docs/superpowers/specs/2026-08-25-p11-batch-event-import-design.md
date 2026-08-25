@@ -151,7 +151,12 @@ Callers parallelise across calls; the help page says so.
 ### Call-level behaviour
 
 - Concurrent calls with the same `import_id` → **409 `import.concurrent`**,
-  via an advisory lock on `(division, import_id)`.
+  via a **lock row**, not a Postgres advisory lock (owner ruling, 2026-08-25 —
+  see §5.1). An advisory lock is held by a *session*, so its cross-process
+  guarantee silently evaporates under a transaction-mode pooler, which may
+  reassign the physical backend between the lock and the unlock. The lock is
+  therefore data: it survives pooler reassignment, needs no reserved
+  connection, and cannot leak a pool slot for the length of a call.
 - Replay of a completed import reads the receipt rows and returns
   `skipped_duplicate` per stream: zero appends, **side effects not re-fired**.
 - Caps (R4) → **413 `import.too_large`**, naming which ceiling was hit and
@@ -206,6 +211,56 @@ event_imports
   the placer/verifier fork survived two waves. Fall back to a plain FK plus
   the RLS policy.
 - `supabase-postgres-best-practices` loads before the DDL is written.
+
+### 5.1 The lock row
+
+Concurrency control lives in the same migration, and deliberately does not
+depend on how the app connects to Postgres:
+
+```
+import_locks
+  division_id  uuid not null → divisions(id)      on delete cascade
+  import_id    text not null
+  org_id       uuid not null → organizations(id)  on delete cascade
+  holder       uuid not null          -- random per call
+  acquired_at  timestamptz not null default now()
+  expires_at   timestamptz not null
+
+  primary key (division_id, import_id)
+  row level security enabled + forced; policy org_id = current_org_id()
+```
+
+**Acquire** is one atomic statement — take the lock, or take over one that has
+expired, or come back empty:
+
+```sql
+insert into import_locks (division_id, import_id, org_id, holder, expires_at)
+values ($1, $2, $3, $4, now() + interval '30 minutes')
+on conflict (division_id, import_id) do update
+  set holder = excluded.holder, acquired_at = now(), expires_at = excluded.expires_at
+  where import_locks.expires_at < now()
+returning holder
+```
+
+Zero rows returned means a live holder → **409 `import.concurrent`**.
+
+**Refresh** between streams (`update … set expires_at = now() + interval '30
+minutes' where … and holder = $4`) keeps a long call's lock alive. A refresh
+inside the write transaction would be invisible to other callers until commit,
+so it happens between streams, never inside one.
+
+**Release** in a `finally`: `delete … where … and holder = $4`. The `holder`
+predicate means a call can only ever release its own lock, so a stale takeover
+followed by the original's late release cannot free someone else's lock. A
+release that throws is logged and swallowed — an import that committed must
+report success even if letting go of its lock failed.
+
+**Why a TTL and not a heartbeat:** a crashed process leaves a row behind, and
+the TTL is what lets the next caller proceed. Takeover is safe even if it is
+premature: the `event_imports` unique index still refuses a double import, and
+the unstarted-fixture guard still refuses a fixture that already has events.
+The lock is an ergonomics feature — it turns a race into a clean 409 — while
+**correctness rests on the unique index**, which no pooling mode can weaken.
 
 ## 6. The writer extraction
 
