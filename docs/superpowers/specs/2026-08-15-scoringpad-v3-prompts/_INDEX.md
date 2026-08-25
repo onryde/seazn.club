@@ -2007,3 +2007,69 @@ the work; it just never said it. Woken with an explicit "report what you have,
 mark the rest UNANSWERED", it returned eight findings. A review that reports
 nothing is indistinguishable from a review that found nothing, and only one of
 those is safe to act on.
+
+---
+
+## R4 final review (2026-08-26) — two defects the green gate could not see
+
+The branch was already gated green (apps/web 10363/0, engine 4092/0, e2e 39/39,
+seven widths, gallery 12/12) and pushed as PR #649 when a final reviewer was
+scoped at the eight fix commits, `df23e0319`, and the rebase. It came back
+NEEDS FIXES, and following its lead surfaced a second defect it had not seen.
+Both are the same shape, and it is this programme's signature shape: **a test
+and the code it guards, wrong together, agreeing.**
+
+**D-20 — `serveContext` could name a partner off a rotation the fold never
+agreed to.** `bankSet` never advances `state.serving`, so a tier-0
+`*.set_summary` freezes it; the turn walk has no such gap and advances across
+the banked set's game parity. An odd-game summary (6-3, 6-1 — ordinary
+scorelines, not corner cases) desyncs the two permanently, and the composed
+answer pairs a stale side with an advanced turn index.
+
+Ruling **R4-7**: neither derivation is patched to match the other. The walk is
+right about the rotation; `serving` is right about what the fold committed to.
+`serveContext` compares them and reports `serveOrderKnown`, returning
+`personId: null` on disagreement. It is a **drift detector, not a summary-set
+sniffer** — it compares the two derivations rather than scanning history for an
+event type, so a future fold/walk fork trips it too.
+
+The guard is deliberately precise. An EVEN-game summary (6-4, 2-6) leaves both
+derivations in step and still names the partner — that is the common real case
+(a scorer backfilling the sets already played), and a blanket "any summary set
+kills the rotation" would have cost the feature exactly there.
+
+Correcting `state.serving` itself on the summary path is the real underlying
+fix. It moves the public scoreboard's serve indicator, which **ten golden
+streams pin**, so it belongs to its own wave — logged, not silently inherited.
+
+**D-21 — the pad's shim dropped two fields `serveContext` actually reads, and
+the covering test agreed by parity coincidence.** `deriveServeContext` builds a
+`Pick<NestedState, …>` shim; it omitted each closed set's `tb` block, which the
+walk reads to subtract the breaker's banked "+1" game and credit its real ITF
+turns. A 7-6 set therefore looked like 13 standard games, and the pad **named
+the wrong partner from the game after any tie-break** — live on this branch.
+
+The existing tie-break test passed the whole time: the shim's turn 6 and the
+true turn 8 share a parity and select the same player. One more game crosses
+the floor(_/2) boundary. `tbFirstServer` was the second missing field, newly
+read by R4-7's guard; without it the pad reads its own match as desynced for
+half of every tie-break.
+
+**The shim's own doc comment had predicted this precisely** — "a FUTURE kernel
+edit that makes the call graph read a FIFTH field this shim never populates …
+would still type-check and would still throw at render time." It did not throw;
+it silently answered wrong. A hand-copied field list at a module boundary is a
+standing liability, and the comment naming the liability is not a control.
+
+**What actually caught them, in order:** a reviewer told to try to BREAK the
+new code rather than confirm it; then five mutants, each required to be killed
+by a named test. Two of the five survived first time — the `tbFirstServer`
+fallback and the shim field — and each survivor was a genuine coverage hole,
+not a scoring artefact. **A mutant that survives is the finding.**
+
+Owner instruction recorded the same day: **verify every working feature
+VISUALLY, not on green counts.** `11-doublesserve` photographs service turn 0,
+and turn 0 names the right partner under every derivation anyone has shipped,
+correct or not — so the gallery was structurally blind to D-21. Added
+`14-serveafterbreaker`, the game after a closed tie-break, which is the screen
+where a wrong human name appears.
