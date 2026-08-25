@@ -1,8 +1,10 @@
 // RS004 W2 — the registration hub's `?tab=` derivation, tested as a pure
 // function (dispatch requirement: exported and proven directly, not only
 // through the page). Mirrors the division page's server-side tab pattern
-// (d/[divSlug]/page.tsx) but has no role-gated tab: the hub itself is
-// owner/admin-only (the page's own guard), so both tabs are always offered.
+// (d/[divSlug]/page.tsx). RS005 (2026-08-25) reversed the page's own
+// owner/admin guard — a viewer reaches the hub too, read-only — but that was
+// never modelled here: both tabs were always offered to whoever reached the
+// page, unconditionally, and still are.
 import { describe, expect, it } from "vitest";
 import {
   REGISTRATION_HUB_TABS,
