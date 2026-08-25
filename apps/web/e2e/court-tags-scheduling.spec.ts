@@ -7,6 +7,7 @@ import {
   divisionPath,
   activeOrgIdFromRequest,
   seedVenueWithCourts,
+  archiveCourtBySql,
 } from "./helpers";
 
 // P9's own acceptance criteria (portfolio pass 5), beyond converting the
@@ -804,4 +805,158 @@ test("a start-window breach shows a real localized label on the board, not the r
   await expect(row).toContainText("outside a start window");
   const rowText = (await row.textContent()) ?? "";
   expect(rowText).not.toContain("conflict.start_window");
+});
+
+// P10 (stranded fixtures, `docs/superpowers/plans/2026-08-24-p10-stranded-
+// fixtures-and-capacity.md` Task 7). A stranded fixture is one whose court
+// was archived (or deleted) out from under it. Ruling: REPORTED, never
+// BLOCKING — the same precedent `outside_court_hours` and `court_tag_mismatch`
+// set, so narrowing availability under an already-placed fixture never
+// hard-refuses publish with no way out.
+//
+// `archiveCourt` (venues.ts) itself 409s COURT_IN_USE while an unplayed
+// fixture references the court, so the normal app can never write this state
+// — verified below rather than assumed. `archiveCourtBySql` (helpers.ts)
+// bypasses it directly, the same trick `stranded-courts.test.ts`'s own
+// server-side unit test uses for the identical reason.
+//
+// Both halves the design's Testing section asks for, in one flow: the
+// conflict has to be VISIBLE (the passive conflicts panel, then the publish
+// gate an organiser actually acts on) and publishing has to still be
+// PERMITTED (the gate offers a confirm, and confirming actually publishes —
+// contrast schedule-board.spec.ts's blocking half, which has no confirm at
+// all).
+test("a court archived under a scheduled fixture is reported stranded, and publishing is still permitted (#P10)", async ({
+  page,
+  request,
+}) => {
+  const { courts } = await seedVenueWithCourts(request, ["Stranded Court"], {
+    venueName: `E2E Stranded Venue ${TAG}`,
+  });
+  const court = courts[0]!;
+
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Stranded Fixture ${TAG}`,
+    visibility: "private",
+  });
+  const div = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Stranded Fixture",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  const divisionId = div.data!.id;
+  await addEntrantsViaApi(request, divisionId, ["Moss", "Nyx"]);
+  const { stageId, fixtureIds } = await createStageAndGenerate(request, divisionId);
+  expect(fixtureIds.length).toBe(1);
+
+  const settings = await apiJson(
+    request,
+    `/api/v1/divisions/${divisionId}/schedule-settings`,
+    "PUT",
+    {
+      tz: "UTC",
+      config: {
+        startAt: new Date(Date.UTC(2026, 10, 5, 9, 0)).toISOString(),
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts: [court.id],
+        perEntrantMinRest: 0,
+        blackouts: [],
+        sessionWindows: [],
+      },
+    },
+  );
+  expect(settings.status).toBe(200);
+
+  const auto = await apiJson<{
+    assignments: { fixture_id: string; scheduled_at: string; court_id: string }[];
+  }>(request, `/api/v1/stages/${stageId}/schedule/auto`, "POST", {});
+  expect(auto.status).toBe(200);
+  expect(auto.data!.assignments.length).toBe(1);
+  const applied = await apiJson<{ applied: number }>(
+    request,
+    `/api/v1/stages/${stageId}/schedule/apply`,
+    "POST",
+    {
+      assignments: auto.data!.assignments.map((a) => ({
+        fixture_id: a.fixture_id,
+        scheduled_at: a.scheduled_at,
+        court_id: a.court_id,
+      })),
+      source: "auto",
+    },
+  );
+  expect(applied.status).toBe(200);
+  expect(applied.data!.applied).toBe(1);
+
+  // The court now holds an UNPLAYED fixture — exactly the state archiveCourt's
+  // own guard exists to refuse. Proven, not assumed: if this ever stops
+  // 409ing, the SQL bypass below is no longer the only path to a stranded
+  // fixture and this test should switch to the real one.
+  const orgId = await activeOrgIdFromRequest(request);
+  const guarded = await apiJson(request, `/api/v1/orgs/${orgId}/courts/${court.id}/archive`, "POST");
+  expect(guarded.status, "archiveCourt should still refuse a court holding an unplayed fixture").toBe(409);
+  expect(guarded.error?.code).toBe("COURT_IN_USE");
+
+  await archiveCourtBySql(court.id);
+
+  // /validate reports it: REPORTED —
+  const validated = await apiJson<{ conflicts: ScheduleConflictRow[] }>(
+    request,
+    `/api/v1/divisions/${divisionId}/schedule/validate`,
+    "POST",
+  );
+  expect(validated.status).toBe(200);
+  const stranded = validated.data!.conflicts.find(
+    (c) => c.fixture_id === fixtureIds[0] && c.details?.kind === "stranded_fixture",
+  );
+  expect(stranded, "archiving a court under a scheduled fixture did not report it stranded").toBeTruthy();
+  // Same reason:"court" family as tag-mismatch/double-booking/hours — REASON_CODE
+  // has one entry for "court", not one per detail kind.
+  expect(stranded!.code).toBe("conflict.court");
+  // — never BLOCKING.
+  expect(stranded!.blocking).toBe(false);
+  expect(stranded!.details!.court).toBe(court.id);
+  // The court row still exists (archived, not deleted), so it still resolves a
+  // name through courtNamesById — no `archived_at is null` filter there.
+  expect(stranded!.details!.court_name).toContain("Stranded Court");
+
+  // VISIBLE ON THE BOARD, surface 1: the passive conflicts panel, the same
+  // idiom the two P9.5 tests above use.
+  await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
+  await expect(page.getByText("Moss").first()).toBeVisible({ timeout: 20_000 });
+
+  await conflictsBadge(page).click();
+  const panel = conflictsPanel(page);
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole("listitem")).toHaveCount(1);
+  await expect(panel.getByRole("listitem").first()).toContainText("court clash");
+  await conflictsBadge(page).click(); // close it before reaching for Publish below
+
+  // VISIBLE ON THE BOARD, surface 2 — and PERMITTED: the publish gate an
+  // organiser actually acts on. `data-kind="warnings"` (never "blocking") is
+  // the whole point: there IS a confirm button, unlike the blocking half of
+  // schedule-board.spec.ts's "the publish gate offers a way through" test.
+  await page.getByTestId("board-publish-schedule").click();
+  const dialog = page.getByTestId("board-gate");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('p[data-kind="warnings"][data-action="publish"]')).toBeVisible();
+  await expect(
+    dialog.locator('[data-testid="board-gate-conflict"][data-code="conflict.court"]').first(),
+  ).toBeVisible();
+
+  await page.getByTestId("board-gate-confirm").click();
+  await expect(dialog).toBeHidden();
+
+  // PERMITTED, proven: the division actually published, conflict and all.
+  const afterPublish = await apiJson<{ status: string }>(request, `/api/v1/divisions/${divisionId}`);
+  expect(afterPublish.status).toBe(200);
+  expect(afterPublish.data!.status).toBe("scheduled");
 });

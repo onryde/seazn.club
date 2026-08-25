@@ -16,13 +16,59 @@
 // Read via `import.meta.url`, never a cwd-relative path — the shell's working
 // directory resets between tool calls in this repo, and a test that resolves
 // its own source relative to cwd silently reads the wrong tree.
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const source = (file: string): string => readFileSync(new URL(file, import.meta.url), "utf8");
 
 const calendar = source("./calendar.ts");
 const buildGrid = source("./build-grid.ts");
+
+// P10 §2: this guard used to read only files inside packages/engine, so a
+// fourth window-rule copy in apps/web (`venues.ts`'s `resolveCourtDay`)
+// survived P9.5's de-forking invisibly. Scan the other workspace too.
+const webSource = (file: string): string =>
+  readFileSync(new URL(`../../../../apps/web/src/${file}`, import.meta.url), "utf8");
+
+describe("apps/web has no second window rule", () => {
+  it("venues.ts resolves court days through the engine, not its own copy", () => {
+    const src = webSource("server/usecases/venues.ts");
+    expect(src).not.toMatch(/function resolveCourtDay/);
+    expect(src).toMatch(/usableWindows/);
+  });
+
+  // The check above guards the NAME `resolveCourtDay`, which a rename or an
+  // arrow-function rewrite walks straight past (P10 review finding 1 — the
+  // commit that added it claimed "the next copy cannot hide", and that was an
+  // overclaim). This one guards the RULE, structurally, the way `countInCode`
+  // does for start windows below.
+  //
+  // The marker is weekday-equality over court hours: resolving which of a
+  // court's weekly ranges apply to a given day is the first step of the window
+  // rule and has no other reason to exist server-side. Scoped to `server/` and
+  // `lib/` deliberately — `components/v2/venues-panel.tsx` filters by weekday
+  // too, and legitimately: P8's editor EDITS a court's hours, it never resolves
+  // them against a fixture. Editing is not the rule.
+  it("no server or lib file resolves a court's weekday hours itself", () => {
+    const roots = ["server", "lib"];
+    const offenders: string[] = [];
+    for (const root of roots) {
+      const dir = new URL(`../../../../apps/web/src/${root}/`, import.meta.url);
+      for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        const name = entry.name;
+        if (!name.endsWith(".ts") && !name.endsWith(".tsx")) continue;
+        if (name.includes(".test.")) continue;
+        const path = `${entry.parentPath}/${name}`;
+        if (path.includes("__tests__")) continue;
+        if (countInCode(readFileSync(path, "utf8"), /weekday\s*===?/g) > 0) {
+          offenders.push(path.slice(path.indexOf("apps/web/")));
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});
 
 /** Occurrences of a regex, ignoring the file's comment lines — a rule quoted
  *  in prose is documentation, not a second implementation.

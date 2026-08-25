@@ -202,6 +202,16 @@ export function formatConflictDetail(d: ConflictDetail, ctx: ConflictDetailCtx):
       // of the court itself (its declared opening hours), not a clash with
       // another card, so no otherFixtureId branch.
       return msg("board.conflict.detail.outside_court_hours", { court: courtLabel(d.courtName, msg) });
+    case "stranded_fixture":
+      // P10. Same shape again: a property of the court itself (it was
+      // archived or deleted out from under an already-placed fixture), not a
+      // clash with another card, so no otherFixtureId branch. `courtLabel`
+      // resolves through the same server-enriched `courtName` every other
+      // court-carrying kind uses (`withCourtNames`, schedule.ts — keyed on
+      // `details.court` presence, not a kind list, so it already covers this
+      // kind with no changes there) and degrades to the shared "Unknown
+      // court" string on a miss, same as its siblings — never the raw uuid.
+      return msg("board.conflict.detail.stranded_fixture", { court: courtLabel(d.courtName, msg) });
     case "inside_blackout":
       return msg("board.conflict.detail.inside_blackout");
     case "outside_session_windows":

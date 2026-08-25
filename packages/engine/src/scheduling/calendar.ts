@@ -324,10 +324,17 @@ export function isBlockingConflict(c: Conflict): boolean {
       // it: an organiser who narrows a court's opening hours under fixtures
       // already placed there would otherwise be hard-refused at publish with no
       // `acknowledge_warnings` route out, and no edit that fixes it. Reported,
-      // never blocking. The stranding case is P10's (A6) and is advisory there
-      // too. `court_double_booking` stays unconditionally blocking — that one
-      // is a physical impossibility, not a declared-constraint breach.
-      c.details?.kind !== "outside_court_hours") ||
+      // never blocking. `court_double_booking` stays unconditionally blocking
+      // — that one is a physical impossibility, not a declared-constraint
+      // breach.
+      c.details?.kind !== "outside_court_hours" &&
+      // `stranded_fixture` (P10, A6, ruling 1) is carved out the same way: the
+      // court itself is gone (archived or deleted), not merely constrained,
+      // and ruling 3 (candidate-courts.ts) already forbids retroactively
+      // REFUSING an assignment on a since-archived court. Hard-blocking here
+      // would do exactly that with no `acknowledge_warnings` route out —
+      // surfacing the conflict, not refusing the assignment, is the point.
+      c.details?.kind !== "stranded_fixture") ||
     c.reason === "person_overlap" ||
     c.reason === "window" ||
     (c.reason === "order" && c.direct === true)
@@ -1182,6 +1189,25 @@ export type VerifyConfig = Pick<
      * out of the blocking `"court"` reason.
      */
     courtTagQualifiedIdsByFixture?: ReadonlyMap<string, readonly string[]>;
+    /** P10 (A6, ruling 1): court ids the SERVER resolved as archived
+     *  (`courts.archived_at is not null`) or absent from `courts` entirely.
+     *  The engine holds no database handle, so court STATUS arrives the way
+     *  court CALENDARS do — `strandedCourtIdsForDivision`, the sibling of
+     *  `courtCalendarsForDivision` (apps/web `court-candidates.ts`).
+     *
+     *  Deliberately NOT derived from `courtCalendars` absence: a court that
+     *  simply has no declared calendar is unrestricted (module header,
+     *  `court-windows.ts` note 1) and must stay silent here too — this field
+     *  answers "does the court still exist and is it live", a question
+     *  orthogonal to whether it has calendar rows at all. Also deliberately
+     *  NOT `SlotConfig.courts` (the placer's own, archived-EXCLUSIVE field) —
+     *  see `courtTagQualifiedIds`'s own note just above for why reusing the
+     *  candidate set here would retroactively red an assignment already
+     *  sitting on a since-archived court, which ruling 3 forbids.
+     *
+     *  Absent means no court is known-stranded — the same reading every
+     *  pre-P10 caller gets for free by omitting this field. */
+    strandedCourtIds?: readonly string[];
   };
 
 /** Exactly the fields `scopeCoversFixture` reads. Named (#447) so the PLACER can
@@ -1733,8 +1759,9 @@ export function validateAssignments(
   //
   // A court absent from this map has no declared calendar and is unrestricted.
   // An ARCHIVED or deleted court is likewise absent, which keeps its existing
-  // cards clean — "the court is gone" is the stranded-fixture case P10 owes
-  // (A6), distinct from "the court violates a declared constraint" (A10).
+  // cards clean here — "the court is gone" is the stranded-fixture case (A6,
+  // `strandedCourtIds` below), reported as its own kind, distinct from "the
+  // court violates a declared constraint" (A10).
   const courtHourWindows = new Map<string, readonly Window[]>();
   if (config.tz !== undefined && (config.courtCalendars ?? []).length > 0 && board.length > 0) {
     const tz = config.tz;
@@ -1758,7 +1785,26 @@ export function validateAssignments(
     }
   }
 
+  // P10 (A6, ruling 1): court ids the server resolved as archived or absent
+  // from `courts` entirely. Independent of `courtHourWindows` above — an
+  // archived court reports `stranded_fixture` whether or not it also carries
+  // calendar rows, and reads it unconditionally (not gated behind `tz`/
+  // `board.length`), since court STATUS needs neither a clock nor a board to
+  // resolve.
+  const strandedCourtIds = new Set(config.strandedCourtIds ?? []);
+
   for (const a of assignments) {
+    // "The court is gone" (P10, A6) — reported independently of whether it
+    // has calendar rows (see the comment above `courtHourWindows`), so this
+    // check is a separate branch rather than folded into the `openHours`
+    // lookup just below.
+    if (strandedCourtIds.has(a.court)) {
+      conflicts.push({
+        fixtureId: a.fixtureId,
+        reason: "court",
+        details: { kind: "stranded_fixture", court: a.court },
+      });
+    }
     // The court's own opening hours (V367, P8's calendar editor). The whole
     // occupancy must fit, not merely start inside — edge matrix row 7, and the
     // same predicate `admits` uses.

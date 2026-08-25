@@ -496,6 +496,30 @@ export async function setFixtureStatusSql(fixtureId: string, status: string): Pr
 }
 
 /**
+ * Archive a court directly, bypassing `archiveCourt`'s own guard (P10
+ * stranded-fixture e2e).
+ *
+ * `POST /api/v1/orgs/{id}/courts/{courtId}/archive` throws 409 COURT_IN_USE
+ * whenever `anyCourtHasUnplayedFixture` sees a `scheduled`/`in_play` fixture
+ * still on the court (`venues.ts`) — confirmed read-only before writing this
+ * helper. That guard exists precisely to stop an organiser from creating the
+ * state P10's `stranded_fixture` conflict has to prove is non-blocking, so
+ * the normal write API can never reach it. Same bypass the server-side unit
+ * test uses for the identical reason
+ * (`server/usecases/stranded-courts.test.ts`: `tx\`update courts set
+ * archived_at = now()...\``) — a direct SQL flip standing in for whatever
+ * real-world path (an ops fix, a completed-then-undone fixture) leaves a
+ * court archived out from under a fixture the app itself would never place
+ * there today.
+ */
+export async function archiveCourtBySql(courtId: string): Promise<void> {
+  await withDb(async (sql) => {
+    const res = await sql`update courts set archived_at = now() where id = ${courtId}`;
+    if (res.count === 0) throw new Error(`archiveCourtBySql: no court ${courtId}`);
+  });
+}
+
+/**
  * Rewrite a division's sport config behind the app's back (V347 config-snapshot
  * e2e).
  *

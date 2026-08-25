@@ -26,7 +26,7 @@ import {
   roundRobinStageIds,
   siblingAssignments,
   toAssignment,
-  toVerifyConfig,
+  verifyConfigForDivision,
 } from "./schedule";
 import type { PersonRow } from "./persons";
 
@@ -377,9 +377,28 @@ async function reverifyBoards(auth: AuthCtx, survivorId: string): Promise<Reveal
         board.competition_id,
         settings.config.matchMinutes,
       );
+      // P10 (§3): this call used to be `toVerifyConfig` with only FOUR
+      // positional arguments — settings, all, 0, ruleFixtures — resolving no
+      // court calendars and no stranded courts at all, so a fixture
+      // reassigned during a person merge was validated with no court-hours
+      // signal while every schedule.ts site had one. Hoisted so both signals
+      // are resolved before the call, the same shape
+      // `applySchedule`/`moveFixture` use.
+      const assignedCourtIds = [
+        ...new Set(all.map((f) => f.court_id).filter((c): c is string => c !== null)),
+      ];
+      const verifyConfig = await verifyConfigForDivision(
+        tx,
+        settings,
+        all,
+        0,
+        ruleFixtures,
+        board.id,
+        assignedCourtIds,
+      );
       const conflicts = validateAssignments(
         assignments,
-        toVerifyConfig(settings, all, 0, ruleFixtures),
+        verifyConfig,
         siblings,
         feedDependencies(all),
       );

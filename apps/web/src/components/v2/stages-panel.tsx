@@ -35,7 +35,7 @@ import { courtDisplayName, type BoardConfig } from "@/components/v2/board/types"
 // `courtGroups`/`resolveCourtNames` are the SAME shared pieces the board's
 // own `courtNamesById` and the settings tab's `CourtMultiPicker` already use
 // — reused here rather than a third court-name/court-picker implementation.
-import { courtGroups, resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
+import { courtGroups, flattenCourts, resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
 // P9: the BOARD-side Venue (no `hours`/`exceptions`) — this panel shows and
 // picks courts, it never reads a calendar. See court-multi-picker.tsx.
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
@@ -43,12 +43,20 @@ import type { PatchFixture } from "@/server/api-v1/schemas";
 import { zonedTimeInput } from "@/lib/zoned-datetime";
 import type { z } from "zod";
 import type { ApplyScheduleRequest, ScheduleMetrics, ScheduleSolverInfo } from "@/server/api-v1/schemas";
-// D2 capacity pre-check — client-safe leaves only, see capacity-input.ts's
+// D2 capacity pre-check — client-safe leaf only, see capacity-input.ts's
 // header for why this file must never reach @seazn/engine/scheduling (the
-// solver barrel) or capacity-guard.ts (server-only).
+// solver barrel) or capacity-guard.ts (server-only). P10 §4/Task 6: the
+// verdict itself no longer comes from a local capacityInputForFixtures +
+// assessCapacity call — see useCapacityReport's own header for why — this
+// file only builds the WIRE BODY the hook sends, which still needs
+// dayKeyInTz/ymdAddDays/zonedTimeToUtc for the window math.
 import { dayKeyInTz, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling/tz";
-import { assessCapacity } from "@seazn/engine/scheduling/capacity";
-import { capacityInputForFixtures } from "@/lib/capacity-input";
+import {
+  useCapacityReportsByStage,
+  type CapacityReportConfig,
+  type CapacityRequest,
+  type UseCapacityReportResult,
+} from "@/lib/use-capacity-report";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -268,44 +276,95 @@ export function boardSlotOptionsFor(
   }
 }
 
+/** What `capacityRequestForStage` hands to `useCapacityReportsByStage` for
+ *  one stage — `null` when there is nothing to even ask the server yet
+ *  (settings not loaded, or incomplete). A thin alias of the hook's own
+ *  general-purpose `CapacityRequest`, kept under this panel's established
+ *  name for its own test file and callers. */
+export type CapacityStageRequest = CapacityRequest;
+
 /**
- * D2 capacity pre-check for ONE stage — pure, exported so it can be tested
- * with hand-built inputs directly. `scheduleSettings.config` arrives via a
- * `useEffect` fetch (`renderToStaticMarkup` never fires effects — see
- * component-ui-i18n memory), so a render-level test cannot exercise this;
- * this split is what makes the arithmetic itself checkable without one.
- * `null` covers both "nothing to assess" (no bounded window) and "settings
- * haven't loaded yet" — the button stays enabled either way, matching the
- * design's "client hint, server authority": an unloaded precheck must never
- * read as a false "impossible".
+ * D2 capacity pre-check gate (review fix, Finding 2): the Auto-schedule
+ * button's `disabled` condition and the "blocked reason" line below it now
+ * SHARE this one predicate — they used to inline the same expression twice,
+ * which is how they could have silently drifted. FAILS OPEN: a check that
+ * could not complete (`.failed` — useCapacityReport's own doc comment) never
+ * blocks, even when the last report it ever received said "impossible".
+ * Before this fix, a real fetch failure (500, network drop, a 4xx schema
+ * rejection) was swallowed identically to a superseded abort, so `.report`
+ * kept returning that OLD verdict forever — an actionable control frozen
+ * with no visible reason. Solve is hard-blocked ONLY on a genuinely FRESH
+ * `impossible` verdict (owner ruling); a stale guess, whether merely
+ * catching up (`.stale`) or actually broken (`.failed`), is not one — a
+ * catching-up check still gates on the last KNOWN verdict (unchanged), but
+ * a broken one must not.
  */
-export function capacityForStage(
+export function capacityGateBlocks(cap: UseCapacityReportResult | undefined): boolean {
+  if (cap?.failed) return false;
+  return cap?.report?.verdict === "impossible";
+}
+
+/**
+ * D2 capacity pre-check for ONE stage (P10 §4/Task 6): pure, exported so it
+ * is unit-testable with hand-built inputs directly, matching the ORIGINAL
+ * capacityForStage's own reasoning — `scheduleSettings.config` arrives via
+ * a `useEffect` fetch (`renderToStaticMarkup` never fires effects — see
+ * component-ui-i18n memory), so a render-level test cannot exercise this.
+ *
+ * No longer computes a verdict itself — see useCapacityReport's own header
+ * for why the report can only come from the server now. This function's
+ * whole job is the MAPPING: which fixtures belong to this stage, and the
+ * wire-shaped config to send alongside them. `null` covers both "nothing
+ * to assess" (no bounded window — the actual skip is useCapacityReport's
+ * own job, see `hasAssessableWindow`) and "settings haven't loaded yet" —
+ * the button must stay enabled either way, matching "client hint, server
+ * authority": an unloaded precheck must never read as a false
+ * "impossible".
+ *
+ * `venues` (review fix, finding 5): defaulted to `[]` so every pre-existing
+ * caller/test keeps compiling unchanged. Real callers should always pass the
+ * panel's own `venues` prop — see the courts fallback below.
+ */
+export function capacityRequestForStage(
   stageId: string,
   fixtures: readonly Pick<FixtureRow, "id" | "stage_id" | "status" | "home_entrant_id" | "away_entrant_id" | "pool_id">[],
   config: DivisionScheduleSettings["config"] | undefined,
   orgTz: string,
-  divisionId: string,
-): ReturnType<typeof assessCapacity> | null {
+  venues: readonly Venue[] = [],
+): CapacityStageRequest {
   if (config === undefined || config.matchMinutes === undefined || config.gapMinutes === undefined) return null;
   const movable = fixtures.filter((f) => f.stage_id === stageId && f.status === "scheduled");
   // `id` is free (FixtureRow above already carries it) and lets an `id`-kind
   // fixture_on_date/fixture_on_weekday selector resolve into a forcedDemand
-  // floor client-side too. `extKey`/`winnerTo` (CapacityFixtureInput's other
+  // floor server-side too. `extKey`/`winnerTo` (CapacityFixtureInput's other
   // two RuleFixture-identity fields, capacity-input.ts) are NOT available
   // here — `FixtureRow` never fetches `ext_key`/`winner_to_fixture`, and
   // neither is even in the public API schema — so a `terminal`/`ext_key`
-  // selector cannot resolve client-side and stays undercounted on this card.
-  // Same "client hint, server authority" split as demandCap; the server
-  // guard (competition-schedule-ai.ts) supplies all three from the DB row.
-  const input = capacityInputForFixtures(
-    movable.map((f) => ({
+  // selector cannot resolve and stays undercounted on this card. Same
+  // "client hint, server authority" split as demandCap.
+  return {
+    fixtures: movable.map((f) => ({
       home: f.home_entrant_id ?? undefined,
       away: f.away_entrant_id ?? undefined,
       poolId: f.pool_id ?? undefined,
       id: f.id,
     })),
-    {
-      courts: config.courts ?? ["Court 1"],
+    config: {
+      // Review fix (finding 5): `ScheduleConfig.courts` defaults to `[]` and
+      // is never nullish, so `?? ["Court 1"]` never actually fired in the
+      // real app — a division that never configured courts sent `courts:
+      // []` -> supply 0 -> verdict "impossible" -> Auto-schedule wrongly
+      // disabled, even though the server build falls back to every
+      // non-archived org court. Same effectiveCourts fallback
+      // settings-panel.tsx's capacityRequestFromDraft already uses, reused
+      // rather than a second implementation of "which courts count as
+      // unconstrained" — and the `["Court 1"]` literal is gone: it was also
+      // a guaranteed 400 against CapacityPrecheckInput's `z.uuid()` schema
+      // had it ever reached the wire.
+      courts:
+        config.courts && config.courts.length > 0
+          ? config.courts
+          : flattenCourts(venues).map((c) => c.id),
       sessionWindows: (config.sessionWindows ?? []).map((w) => ({ from: Date.parse(w.from), to: Date.parse(w.to) })),
       blackouts: (config.blackouts ?? []).map((b) => ({
         ...(b.court !== undefined ? { court: b.court } : {}),
@@ -326,12 +385,10 @@ export function capacityForStage(
                 : Infinity,
             }
           : undefined,
-      tz: orgTz,
     },
-    divisionId,
-  );
-  return input === null ? null : assessCapacity(input);
+  };
 }
+
 
 export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport }: Props) {
   const msg = useMsg();
@@ -419,13 +476,22 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
   // D2 capacity pre-check: per STAGE (matching the scope of the button below
   // and of the server guard on /stages/{id}/schedule/auto), from whatever
   // `scheduleSettings` the effect above already fetched — no second fetch.
-  const capacityByStage = useMemo(() => {
-    const byStage = new Map<string, ReturnType<typeof assessCapacity> | null>();
+  const capacityRequestByStage = useMemo(() => {
+    const byStage = new Map<string, CapacityStageRequest>();
     for (const stage of stages) {
-      byStage.set(stage.id, capacityForStage(stage.id, fixtures, scheduleSettings?.config, orgTz, divisionId));
+      byStage.set(
+        stage.id,
+        capacityRequestForStage(stage.id, fixtures, scheduleSettings?.config, orgTz, venues),
+      );
     }
     return byStage;
-  }, [scheduleSettings, stages, fixtures, orgTz, divisionId]);
+  }, [scheduleSettings, stages, fixtures, orgTz, venues]);
+  // The verdict itself is read live off ONE useCapacityReportsByStage
+  // subscription (not one useCapacityReport call per stage — the button
+  // below has to stay a DIRECT part of this component's own render output;
+  // see the hook's own header for why a per-stage child component broke
+  // pre-existing tests that locate it by testid).
+  const capacityByStage = useCapacityReportsByStage(divisionId, capacityRequestByStage);
 
   async function undoLast() {
     setError(null);
@@ -963,7 +1029,7 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                     <button
                       type="button"
                       data-testid="stage-auto-schedule"
-                      disabled={busy !== null || capacityByStage.get(stage.id)?.verdict === "impossible"}
+                      disabled={busy !== null || capacityGateBlocks(capacityByStage.get(stage.id))}
                       onClick={() => void autoScheduleStage(stage.id)}
                       className="btn btn-primary min-h-11 px-3 py-1 text-xs"
                     >
@@ -972,11 +1038,14 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                   )}
                 </div>
                 {/* D2 capacity pre-check (owner ruling: Solve hard-blocked
-                    ONLY on "impossible" — "tight" is advisory and never
-                    blocks). The full card with bars/suggestions lives on the
-                    Settings tab; this is just the reason the button here is
-                    disabled. */}
-                {capacityByStage.get(stage.id)?.verdict === "impossible" && (
+                    ONLY on a genuinely FRESH "impossible" — "tight" is
+                    advisory and never blocks, and per the review fix above,
+                    neither does a check that FAILED to run at all). The full
+                    card with bars/suggestions lives on the Settings tab;
+                    this is just the reason the button here is disabled —
+                    same shared `capacityGateBlocks` predicate the button's
+                    own `disabled` reads, so the two can never disagree. */}
+                {capacityGateBlocks(capacityByStage.get(stage.id)) && (
                   <p data-testid="stage-auto-schedule-blocked" className="mt-1.5 text-xs text-red-600">
                     {msg("schedule.capacity.blockedReason")}
                   </p>

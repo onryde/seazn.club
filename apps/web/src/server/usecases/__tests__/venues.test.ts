@@ -12,7 +12,6 @@ import { createDivision } from "@/server/usecases/divisions";
 import {
   assertNoHoursOverlap,
   normalizeTags,
-  resolveCourtDay,
   createVenue,
   patchVenue,
   deleteVenue,
@@ -99,50 +98,24 @@ describe("venues usecase — pure validation", () => {
     });
   });
 
-  describe("resolveCourtDay — exception override precedence", () => {
-    const hours = [{ weekday: 2, open_min: 540, close_min: 1200 }]; // Tue 09:00-20:00
-
-    it("falls back to the weekday's hours when no exception exists", () => {
-      expect(resolveCourtDay(hours, [], 2, "2026-08-18")).toEqual([
-        { open_min: 540, close_min: 1200 },
-      ]);
+  // resolveCourtDay's own unit coverage (exception-vs-weekday precedence)
+  // was deleted with the function itself (P10 §2) — it was a fourth private
+  // copy of the window rule, and the wire-normalisation case ("omitted
+  // open/close minutes parse to null, not undefined") that used to close
+  // this describe block is preserved below, now asserted directly against
+  // the zod schema instead of through the deleted helper.
+  it("PutCourtCalendarInput: omitted open/close minutes parse to null, not undefined", () => {
+    // `.nullish()` alone parses an omitted field to `undefined`, which is not
+    // a `CourtException`. Only tsc could see that — vitest never typechecks —
+    // so this asserts the normalisation as behaviour rather than as a type.
+    const parsed = PutCourtCalendarInput.parse({
+      hours: [],
+      exceptions: [{ date: "2026-08-18", closed: true }],
     });
-
-    it("a closed exception wins over the weekday's hours (no windows)", () => {
-      const exceptions = [{ date: "2026-08-18", closed: true, open_min: null, close_min: null }];
-      expect(resolveCourtDay(hours, exceptions, 2, "2026-08-18")).toEqual([]);
-    });
-
-    it("an open exception's own window wins over the weekday's hours", () => {
-      const exceptions = [{ date: "2026-08-18", closed: false, open_min: 600, close_min: 720 }];
-      expect(resolveCourtDay(hours, exceptions, 2, "2026-08-18")).toEqual([
-        { open_min: 600, close_min: 720 },
-      ]);
-    });
-
-    it("an exception on a different date does not affect this date", () => {
-      const exceptions = [{ date: "2026-08-19", closed: true, open_min: null, close_min: null }];
-      expect(resolveCourtDay(hours, exceptions, 2, "2026-08-18")).toEqual([
-        { open_min: 540, close_min: 1200 },
-      ]);
-    });
-
-    // Every case above hands the helper an EXPLICIT `open_min: null`. The wire
-    // form of a closed exception omits the field entirely, and that path had no
-    // coverage: `.nullish()` alone parsed it to `undefined`, which is not a
-    // `CourtException`. Only tsc could see it — vitest never typechecks — so
-    // this asserts the normalisation as behaviour rather than as a type.
-    it("omitted open/close minutes parse to null, not undefined", () => {
-      const parsed = PutCourtCalendarInput.parse({
-        hours: [],
-        exceptions: [{ date: "2026-08-18", closed: true }],
-      });
-      const exception = parsed.exceptions[0]!;
-      expect(exception.open_min).toBeNull();
-      expect(exception.close_min).toBeNull();
-      expect(Object.hasOwn(exception, "open_min")).toBe(true);
-      expect(resolveCourtDay(hours, parsed.exceptions, 2, "2026-08-18")).toEqual([]);
-    });
+    const exception = parsed.exceptions[0]!;
+    expect(exception.open_min).toBeNull();
+    expect(exception.close_min).toBeNull();
+    expect(Object.hasOwn(exception, "open_min")).toBe(true);
   });
 });
 
@@ -166,13 +139,16 @@ async function seedOrg(): Promise<{ auth: AuthCtx; orgId: string }> {
 
 /** A fixture referencing `courtId`, standing up the full competition ->
  *  division -> stage chain a fixture needs. `status` drives the archive
- *  gate (unplayed = scheduled/in_play, everything else = history). */
+ *  gate (unplayed = scheduled/in_play, everything else = history).
+ *  `divisionId` is returned alongside for callers that also need to seed
+ *  that division's `schedule_settings` (match duration, blackouts, session
+ *  windows — see `setDivisionScheduleConfig`). */
 async function seedFixtureOnCourt(
   auth: AuthCtx,
   courtId: string,
   status: string,
   scheduledAt?: string,
-): Promise<{ fixtureId: string }> {
+): Promise<{ fixtureId: string; divisionId: string }> {
   const comp = await createCompetition(auth, {
     name: `Comp ${randomUUID().slice(0, 6)}`,
     visibility: "private",
@@ -195,7 +171,25 @@ async function seedFixtureOnCourt(
     insert into fixtures (stage_id, division_id, round_no, seq_in_round, court_id, status, scheduled_at)
     values (${stageId}, ${division.id}, 1, 1, ${courtId}, ${status}, ${scheduledAt ?? null})
     returning id`;
-  return { fixtureId };
+  return { fixtureId, divisionId: division.id };
+}
+
+/** Writes one division's `schedule_settings.config` directly — standing in
+ *  for `putScheduleSettings` (a different usecase, out of scope here) the
+ *  same way every other `schedule_settings`-seeding test in this repo
+ *  writes the row directly. `org_id` is deliberately omitted: unlike
+ *  venues/courts/court_hours/court_exceptions (see this file's own header
+ *  comment on `venues.ts`), `schedule_settings` DOES carry a
+ *  `trg_set_org` BEFORE INSERT trigger (V114) that fills it in from
+ *  `division_id`'s parent. */
+async function setDivisionScheduleConfig(
+  divisionId: string,
+  config: Record<string, unknown>,
+): Promise<void> {
+  await sql`
+    insert into schedule_settings (division_id, config, updated_at)
+    values (${divisionId}, ${sql.json(config as never)}, now())
+    on conflict (division_id) do update set config = excluded.config, updated_at = now()`;
 }
 
 /** Owner review finding 3, mutation-proving the race fix: `Promise.all` of
@@ -457,6 +451,82 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
       exceptions: [],
     });
     expect(wide.strandedFixtureCount).toBe(0);
+  });
+
+  // -------------------------------------------------------------------
+  // P10 §2: countStrandedFixtures moved onto the engine's usableWindows.
+  // Three defects the old resolveCourtDay-based predicate carried, each
+  // pinned here because each is a behavior a naive rewrite could still get
+  // wrong: it tested only the fixture's START minute, it never looked at
+  // blackouts/session windows at all, and it read organizations.timezone
+  // raw instead of through the same resolveVenueTz resolver settings.orgTz
+  // uses. 2026-08-18 is a Tuesday (weekday 2, 0 = Sunday), matching the
+  // existing advisory-count test above.
+  // -------------------------------------------------------------------
+
+  it("counts a fixture that STARTS inside hours but ENDS after close as stranded", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Duration Park", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    // Court open Tue 09:00-10:00. A 60-minute fixture starting 09:30 fits the
+    // START (inside 09:00-10:00) but ends 10:30, thirty minutes past close.
+    // The old predicate tested only the start minute and called this a fit.
+    const { divisionId } = await seedFixtureOnCourt(
+      auth,
+      court.id,
+      "scheduled",
+      "2026-08-18T09:30:00.000Z",
+    );
+    await setDivisionScheduleConfig(divisionId, { matchMinutes: 60 });
+
+    const res = await putCourtCalendar(auth, court.id, {
+      hours: [{ weekday: 2, open_min: 540, close_min: 600 }], // Tue 09:00-10:00
+      exceptions: [],
+    });
+    expect(res.strandedFixtureCount).toBe(1);
+  });
+
+  it("counts a fixture sitting inside a blackout as stranded, even though the court is open all day", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Blackout Park", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    // Court open all day, so ONLY the blackout can strand this fixture — the
+    // old predicate never looked at schedule_settings.config.blackouts at all.
+    const { divisionId } = await seedFixtureOnCourt(
+      auth,
+      court.id,
+      "scheduled",
+      "2026-08-18T09:00:00.000Z",
+    );
+    await setDivisionScheduleConfig(divisionId, {
+      matchMinutes: 30,
+      blackouts: [{ from: "2026-08-18T08:00:00.000Z", to: "2026-08-18T10:00:00.000Z" }],
+    });
+
+    const res = await putCourtCalendar(auth, court.id, {
+      hours: [{ weekday: 2, open_min: 0, close_min: 1440 }], // open all day
+      exceptions: [],
+    });
+    expect(res.strandedFixtureCount).toBe(1);
+  });
+
+  it("resolves the org timezone through the same resolveVenueTz resolver settings.orgTz uses, not organizations.timezone read raw", async () => {
+    const { auth, orgId } = await org();
+    const venue = await createVenue(auth, { name: "TZ Guard Park", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    // A non-IANA value in organizations.timezone. resolveVenueTz treats
+    // anything isValidIana rejects as absent and falls back to UTC; reading
+    // the column raw (the old `org?.timezone ?? "UTC"`, which substitutes
+    // only on null/undefined) fed this straight to the Intl-backed day/weekday
+    // helpers instead, which throw on an unrecognised zone.
+    await sql`update organizations set timezone = 'not-a-real-zone' where id = ${orgId}`;
+    await seedFixtureOnCourt(auth, court.id, "scheduled", "2026-08-18T09:30:00.000Z"); // Tue 09:30 UTC
+
+    const res = await putCourtCalendar(auth, court.id, {
+      hours: [{ weekday: 2, open_min: 540, close_min: 600 }], // Tue 09:00-10:00, post-UTC-fallback
+      exceptions: [],
+    });
+    expect(res.strandedFixtureCount).toBe(0);
   });
 
   it("PUT calendar replaces hours + exceptions atomically and round-trips", async () => {

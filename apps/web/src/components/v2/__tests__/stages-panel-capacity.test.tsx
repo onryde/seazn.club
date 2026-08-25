@@ -1,13 +1,72 @@
-import { describe, expect, it } from "vitest";
-import { capacityForStage } from "@/components/v2/stages-panel";
+import { describe, expect, it, vi } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import { capacityGateBlocks, capacityRequestForStage, StagesPanel } from "@/components/v2/stages-panel";
+import type { UseCapacityReportResult } from "@/lib/use-capacity-report";
+import type { CapacityReport } from "@seazn/engine/scheduling/capacity";
+import type { Venue } from "@/components/v2/shared/court-multi-picker";
+
+// Two real org courts under one venue — same minimal shape
+// settings-panel-capacity.test.tsx's own orgVenues() fixture uses, for the
+// SAME fallback rule (review finding 5 reuses settings-panel.tsx's
+// effectiveCourts approach rather than inventing a second one).
+function orgVenues(): Venue[] {
+  return [
+    {
+      id: "venue-1",
+      name: "Riverside Centre",
+      address: null,
+      sort: 0,
+      archived_at: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      courts: [
+        {
+          id: "court-1",
+          venue_id: "venue-1",
+          name: "Court 1",
+          sort: 0,
+          tags: [],
+          archived_at: null,
+          created_at: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "court-2",
+          venue_id: "venue-1",
+          name: "Court 2",
+          sort: 1,
+          tags: [],
+          archived_at: null,
+          created_at: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    },
+  ];
+}
+
+// StagesPanel calls useRouter()/useConfirm() synchronously during render
+// (not just from effects) — same mocks stages-panel-auto-schedule-seq.test.tsx
+// uses to render this exact component bare, no DictProvider (see that file's
+// own header: useMsg/useLocaleOrDefault degrade gracefully without one here).
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {}, push: () => {} }) }));
+vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => async () => false }));
 
 // D2 capacity pre-check, per-stage (the "Auto-schedule remaining" button's
 // disabled condition). Pure — `scheduleSettings` arrives via a useEffect
 // fetch in the real component, which renderToStaticMarkup never fires (see
 // component-ui-i18n memory), so this is tested directly with hand-built
 // inputs rather than through a render.
+//
+// P10 §4/Task 6 rewrite: capacityForStage used to call
+// capacityInputForFixtures + assessCapacity itself and return a
+// CapacityReport (verdict/slotDemand/etc). It is now capacityRequestForStage
+// — a pure MAPPING to the wire body useCapacityReport sends — because the
+// verdict itself only ever comes from the server now (see
+// useCapacityReport's own header). Coverage intent is unchanged (which
+// fixtures are in scope, the window-bounds edge cases, the never-throw
+// unbounded-start case); what changed is the shape asserted against: the
+// built REQUEST, not a computed report. Verdict arithmetic itself is
+// covered server-side (capacity-endpoint.test.ts) and by the hook
+// (use-capacity-report.test.ts).
 const ORG_TZ = "UTC";
-const DIV = "div-1";
 
 interface FxRow {
   id: string;
@@ -19,9 +78,9 @@ interface FxRow {
 }
 
 // Auto-incrementing rather than a parameter: `id` is a new field on every
-// existing call site here (capacityForStage now reads it, stages-panel.tsx —
-// forcedDemand wiring), and none of these tests care WHICH id a fixture
-// gets, only that each is distinct.
+// existing call site here (capacityRequestForStage now reads it,
+// stages-panel.tsx — forcedDemand wiring), and none of these tests care
+// WHICH id a fixture gets, only that each is distinct.
 let fxCounter = 0;
 const fx = (stageId: string, status: string, home: string | null, away: string | null): FxRow => ({
   id: `fx-${++fxCounter}`,
@@ -32,102 +91,223 @@ const fx = (stageId: string, status: string, home: string | null, away: string |
   pool_id: null,
 });
 
-describe("capacityForStage", () => {
+describe("capacityRequestForStage", () => {
   it("returns null when schedule settings haven't loaded yet (never a false impossible)", () => {
-    expect(capacityForStage("s1", [], undefined, ORG_TZ, DIV)).toBeNull();
+    expect(capacityRequestForStage("s1", [], undefined, ORG_TZ)).toBeNull();
   });
 
-  it("returns null when there is no bounded window (no endAt) — nothing to assess", () => {
-    const report = capacityForStage(
-      "s1",
-      [fx("s1", "scheduled", "A", "B")],
-      { startAt: "2026-08-01T09:00:00.000Z", matchMinutes: 30, gapMinutes: 0 },
-      ORG_TZ,
-      DIV,
-    );
-    expect(report).toBeNull();
+  it("returns null when matchMinutes/gapMinutes are missing (settings loaded but incomplete)", () => {
+    expect(capacityRequestForStage("s1", [fx("s1", "scheduled", "A", "B")], { courts: ["Court 1"] }, ORG_TZ)).toBeNull();
+    expect(
+      capacityRequestForStage("s1", [fx("s1", "scheduled", "A", "B")], { matchMinutes: 30 }, ORG_TZ),
+    ).toBeNull();
+  });
+
+  it("builds an undefined window when neither startAt nor endAt is set", () => {
+    const req = capacityRequestForStage("s1", [fx("s1", "scheduled", "A", "B")], { matchMinutes: 30, gapMinutes: 0 }, ORG_TZ);
+    expect(req?.config.window).toBeUndefined();
   });
 
   // The shipped crash: a division with an END date and no START date. The
-  // window built here is `{ from: -Infinity, to: <finite> }`, which used to
-  // pass the skip guard and throw `RangeError: Invalid time value` out of the
-  // `capacityByStage` useMemo — with no error.tsx under
-  // app/o/[orgSlug]/**, that is the global "Something went wrong" boundary
-  // on the whole division page, every tab.
-  it("returns null when endAt is set but startAt is not (unbounded start — must not throw)", () => {
+  // window built here is `{ from: -Infinity, to: <finite> }` — construction
+  // itself must never throw (useCapacityReport's own guard is what now
+  // skips sending it, see hasAssessableWindow).
+  it("builds an unbounded-start window (-Infinity) when endAt is set but startAt is not — must not throw", () => {
     const call = () =>
-      capacityForStage(
+      capacityRequestForStage(
         "s1",
         [fx("s1", "scheduled", "A", "B")],
         { endAt: "2026-08-13T22:59:00.000Z", matchMinutes: 30, gapMinutes: 0 },
         ORG_TZ,
-        DIV,
       );
     expect(call).not.toThrow();
-    expect(call()).toBeNull();
+    expect(call()?.config.window).toEqual({ from: -Infinity, to: expect.any(Number) });
   });
 
-  it("is impossible for a stage with 6 round-robin fixtures and a 1-hour window on one court", () => {
+  it("scopes to ONE stage — a sibling stage's fixtures never appear in this stage's request", () => {
     const fixtures: FxRow[] = [
       fx("s1", "scheduled", "A", "B"),
-      fx("s1", "scheduled", "A", "C"),
-      fx("s1", "scheduled", "A", "D"),
-      fx("s1", "scheduled", "B", "C"),
-      fx("s1", "scheduled", "B", "D"),
-      fx("s1", "scheduled", "C", "D"),
-    ];
-    const report = capacityForStage(
-      "s1",
-      fixtures,
-      {
-        startAt: "2026-08-01T09:00:00.000Z",
-        endAt: "2026-08-01T23:59:00.000Z",
-        matchMinutes: 60,
-        gapMinutes: 0,
-        courts: ["Court 1"],
-        sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
-      },
-      ORG_TZ,
-      DIV,
-    );
-    expect(report?.verdict).toBe("impossible");
-  });
-
-  it("scopes to ONE stage — a sibling stage's fixtures never count toward this stage's demand", () => {
-    const fixtures: FxRow[] = [
-      fx("s1", "scheduled", "A", "B"), // this stage: 1 fixture, fits easily
       fx("s2", "scheduled", "A", "C"),
       fx("s2", "scheduled", "A", "D"),
-      fx("s2", "scheduled", "B", "C"),
-      fx("s2", "scheduled", "B", "D"),
-      fx("s2", "scheduled", "C", "D"), // sibling stage: 5 fixtures — would blow the same tiny window
     ];
-    const config = {
-      startAt: "2026-08-01T09:00:00.000Z",
-      endAt: "2026-08-01T23:59:00.000Z",
-      matchMinutes: 60,
-      gapMinutes: 0,
-      courts: ["Court 1"],
-      sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }], // 1 slot
-    };
-    // s1 has 1 fixture against 1 available slot: ratio 1.0 is "tight", not
-    // "impossible" — the point of this test is scoping, so assert that,
-    // not a specific non-impossible verdict.
-    expect(capacityForStage("s1", fixtures, config, ORG_TZ, DIV)?.verdict).not.toBe("impossible");
-    expect(capacityForStage("s2", fixtures, config, ORG_TZ, DIV)?.verdict).toBe("impossible");
+    const config = { matchMinutes: 60, gapMinutes: 0, courts: ["Court 1"] };
+    const req1 = capacityRequestForStage("s1", fixtures, config, ORG_TZ);
+    const req2 = capacityRequestForStage("s2", fixtures, config, ORG_TZ);
+    expect(req1?.fixtures).toEqual([{ home: "A", away: "B", poolId: undefined, id: fixtures[0]!.id }]);
+    expect(req2?.fixtures).toHaveLength(2);
   });
 
-  it("excludes a non-movable (already-decided) fixture from demand", () => {
-    const fixtures: FxRow[] = [fx("s1", "decided", "A", "B")];
-    const config = {
-      startAt: "2026-08-01T09:00:00.000Z",
-      endAt: "2026-08-01T09:05:00.000Z", // absurdly tight — would be impossible if counted
-      matchMinutes: 60,
-      gapMinutes: 0,
-      courts: ["Court 1"],
-    };
-    const report = capacityForStage("s1", fixtures, config, ORG_TZ, DIV);
-    expect(report?.slotDemand).toBe(0);
-    expect(report?.verdict).toBe("ok");
+  it("excludes a non-movable (already-decided) fixture from the request", () => {
+    const req = capacityRequestForStage(
+      "s1",
+      [fx("s1", "decided", "A", "B")],
+      { matchMinutes: 60, gapMinutes: 0, courts: ["Court 1"] },
+      ORG_TZ,
+    );
+    expect(req?.fixtures).toEqual([]);
+  });
+
+  it("converts sessionWindows/blackouts from ISO strings to epoch-ms pairs", () => {
+    const req = capacityRequestForStage(
+      "s1",
+      [],
+      {
+        matchMinutes: 30,
+        gapMinutes: 0,
+        sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
+        blackouts: [{ from: "2026-08-01T12:00:00.000Z", to: "2026-08-01T13:00:00.000Z" }],
+      },
+      ORG_TZ,
+    );
+    expect(req?.config.sessionWindows).toEqual([
+      { from: Date.parse("2026-08-01T09:00:00.000Z"), to: Date.parse("2026-08-01T10:00:00.000Z") },
+    ]);
+    expect(req?.config.blackouts).toEqual([
+      { from: Date.parse("2026-08-01T12:00:00.000Z"), to: Date.parse("2026-08-01T13:00:00.000Z") },
+    ]);
+  });
+
+  // Review finding 5: this test used to pin the BUG — `config.courts ?? ["Court
+  // 1"]` sent a fake, non-uuid court label whenever a division had none
+  // configured, which is also a guaranteed 400 against CapacityPrecheckInput's
+  // `z.uuid()` schema if it ever reached the wire. `ScheduleConfig.courts`
+  // defaults to `[]`, never nullish, so the REAL failure mode was an EMPTY
+  // array (0 supply -> "impossible" -> Auto-schedule wrongly disabled), not
+  // just the `undefined` this test's own fixture happens to construct — see
+  // the two tests below for both shapes.
+  it("falls back to every non-archived org court (via venues) when the division has none configured — mirrors settings-panel.tsx's effectiveCourts", () => {
+    const req = capacityRequestForStage(
+      "s1",
+      [],
+      { matchMinutes: 30, gapMinutes: 0 },
+      ORG_TZ,
+      orgVenues(),
+    );
+    expect(req?.config.courts).toEqual(["court-1", "court-2"]);
+  });
+
+  it("falls back the same way when config.courts is an EMPTY array (the real shape a saved division sends), not just when the key is absent", () => {
+    const req = capacityRequestForStage(
+      "s1",
+      [],
+      { matchMinutes: 30, gapMinutes: 0, courts: [] },
+      ORG_TZ,
+      orgVenues(),
+    );
+    expect(req?.config.courts).toEqual(["court-1", "court-2"]);
+  });
+
+  it("returns an empty court list (never the retired ['Court 1'] literal) when no venues have loaded yet either", () => {
+    const req = capacityRequestForStage("s1", [], { matchMinutes: 30, gapMinutes: 0 }, ORG_TZ);
+    expect(req?.config.courts).toEqual([]);
+  });
+
+  it("defaults perEntrantMinRest to 0 when absent", () => {
+    const req = capacityRequestForStage("s1", [], { matchMinutes: 30, gapMinutes: 0 }, ORG_TZ);
+    expect(req?.config.perEntrantMinRest).toBe(0);
+  });
+
+  it("carries matchMinutes/gapMinutes straight through", () => {
+    const req = capacityRequestForStage("s1", [], { matchMinutes: 45, gapMinutes: 10 }, ORG_TZ);
+    expect(req?.config.matchMinutes).toBe(45);
+    expect(req?.config.gapMinutes).toBe(10);
+  });
+});
+
+// Review fix (Finding 2): the Auto-schedule button's `disabled` condition and
+// its "blocked reason" line used to inline
+// `capacityByStage.get(stage.id)?.report?.verdict === "impossible"` TWICE —
+// reading a STALE report the same way whether the check was merely catching
+// up or had genuinely stopped running. Extracted to one shared predicate so
+// the two call sites can never disagree, and so the fail-open rule is
+// unit-testable directly (stages-panel.tsx has no other way to exercise its
+// gate: `scheduleSettings` only ever arrives via a useEffect fetch, which
+// renderToStaticMarkup never runs — see capacityRequestForStage's own header).
+describe("capacityGateBlocks", () => {
+  const withVerdict = (verdict: CapacityReport["verdict"], over: Partial<UseCapacityReportResult> = {}): UseCapacityReportResult => ({
+    report: { verdict, slotSupply: 1, slotDemand: 2, perDay: [], restBound: [], suggestions: [] },
+    stale: false,
+    failed: false,
+    ...over,
+  });
+
+  it("blocks on a genuinely fresh impossible verdict", () => {
+    expect(capacityGateBlocks(withVerdict("impossible"))).toBe(true);
+  });
+
+  it("does not block on ok or tight verdicts", () => {
+    expect(capacityGateBlocks(withVerdict("ok"))).toBe(false);
+    expect(capacityGateBlocks(withVerdict("tight"))).toBe(false);
+  });
+
+  it("does not block when there is no report yet (settings not loaded, or nothing to assess)", () => {
+    expect(capacityGateBlocks(undefined)).toBe(false);
+    expect(capacityGateBlocks({ report: null, stale: false, failed: false })).toBe(false);
+  });
+
+  it("does NOT block a stale-but-still-in-flight impossible verdict — an edit landed but the check hasn't failed", () => {
+    expect(capacityGateBlocks(withVerdict("impossible", { stale: true }))).toBe(true); // unchanged: still gates on the last KNOWN verdict while merely catching up
+  });
+
+  it("FAILS OPEN: a stale impossible verdict must not block once the check has actually FAILED — review finding", () => {
+    expect(capacityGateBlocks(withVerdict("impossible", { stale: true, failed: true }))).toBe(false);
+  });
+});
+
+// Finding 6: this file lacked the "no synchronous client-side fallback
+// computation" regression guard settings-panel-capacity.test.tsx:214-241 has
+// for SettingsPanel. Same technique: renderToStaticMarkup never fires an
+// effect (component-ui-i18n memory), so `scheduleSettings` can never have
+// loaded and `capacityByStage` can never hold anything by the time this
+// render completes — if a future change reintroduces a synchronous
+// capacity computation anywhere in this component (bypassing the fetch
+// entirely), this is what would start failing.
+describe("StagesPanel — no client-side fallback computation", () => {
+  const STAGE = { id: "s1", seq: 0, kind: "league", name: "League", config: {}, progression: null, status: "active" };
+  // Many UNSCHEDULED fixtures — enough demand to have flipped an old-style
+  // local computation to "impossible" — so the pinned unscheduled section
+  // (and its auto-schedule CTA) actually renders; a render with nothing in
+  // it would make this guard vacuously true.
+  const FIXTURES = Array.from({ length: 12 }, (_, i) => ({
+    id: `f${i}`,
+    stage_id: "s1",
+    pool_id: null,
+    round_no: 1,
+    seq_in_round: i + 1,
+    fixture_no: i + 1,
+    home_entrant_id: "e1",
+    away_entrant_id: "e2",
+    scheduled_at: null,
+    venue: null,
+    court_label: null,
+    status: "scheduled",
+    outcome: null,
+  }));
+  const baseProps = {
+    divisionId: "d1",
+    divisionSeq: 1,
+    competitionId: "c1",
+    orgSlug: "org",
+    compSlug: "comp",
+    divSlug: "div",
+    stages: [STAGE],
+    fixtures: FIXTURES,
+    entrantNames: { e1: "Alpha", e2: "Bravo" },
+    canEdit: true,
+    tz: "UTC",
+    orgTz: "UTC",
+    canExport: false,
+  } as unknown as Parameters<typeof StagesPanel>[0];
+
+  it("renders the auto-schedule CTA never disabled, and the blocked-reason line never at all — the verdict can only ever arrive via useCapacityReportsByStage's effect+fetch", () => {
+    const html = renderToStaticMarkup(<StagesPanel {...baseProps} />);
+    expect(html).toContain('data-testid="stage-auto-schedule"'); // sanity: the scenario is meaningful, not vacuous
+    expect(html).not.toContain('data-testid="stage-auto-schedule-blocked"');
+    // The disabled attribute is omitted entirely by React for a `false`
+    // boolean prop — assert its literal absence right after the CTA's own
+    // testid rather than a substring search (a *different* button on the
+    // page being disabled must not make this pass for the wrong reason).
+    const ctaOpenTag = html.slice(html.indexOf('data-testid="stage-auto-schedule"') - 200, html.indexOf('data-testid="stage-auto-schedule"') + 200);
+    expect(ctaOpenTag).not.toContain("disabled");
   });
 });

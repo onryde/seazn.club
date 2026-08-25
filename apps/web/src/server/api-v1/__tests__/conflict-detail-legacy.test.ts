@@ -100,6 +100,10 @@ const CASES: Record<ConflictDetailKind, { detail: ConflictDetail; expected: stri
     detail: { kind: "outside_court_hours", court: "Court 1" },
     expected: "court Court 1 is closed at this time",
   },
+  stranded_fixture: {
+    detail: { kind: "stranded_fixture", court: "Court 1" },
+    expected: "court Court 1 is no longer available",
+  },
   inside_blackout: {
     detail: { kind: "inside_blackout" },
     expected: "inside a blackout window",

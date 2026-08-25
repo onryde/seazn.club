@@ -1264,6 +1264,7 @@ const CONFLICT_DETAIL_KIND_WITNESS: Record<ConflictDetailKind, true> = {
   round_order_same_day: true,
   no_slot_lattice: true,
   no_slot_budget: true,
+  stranded_fixture: true,
 };
 const CONFLICT_DETAIL_KINDS = Object.keys(CONFLICT_DETAIL_KIND_WITNESS) as [
   ConflictDetailKind,
@@ -1693,6 +1694,100 @@ export const CapacityReport = z.object({
   ),
 });
 export type CapacityReport = z.infer<typeof CapacityReport>;
+
+/** POST /divisions/{id}/schedule/capacity (P10 §4) — the board's live,
+ *  unsaved config/fixtures, so the server can run the SAME precheck the
+ *  client used to run alone, now with real court calendars (P9 stopped
+ *  shipping them to the board payload; that is unchanged — only the NUMBERS
+ *  travel back over this endpoint).
+ *
+ *  A WIRE-side schema, deliberately separate from the usecase-side
+ *  `CapacityPrecheckInput` in `capacity-guard.ts` that the route actually
+ *  parses the request with — registered here only so the generated spec
+ *  documents the shape (the `ReorderSponsors`/`ReorderSponsorsInput` pair
+ *  above this file's sponsors section is this repo's own precedent for the
+ *  two staying independent objects, not a shared source of truth).
+ *
+ *  `fixtures` mirrors `CapacityFixtureInput` (capacity-input.ts) field for
+ *  field, not raw DB column names: both existing client call sites already
+ *  map their fixture rows into this exact shape before running the
+ *  precheck locally, so sending it as-is needs no second mapping step.
+ *  `config` mirrors `CapacityConfigInput` minus `tz` (never client-supplied
+ *  — `settings.orgTz` is the governing clock, #397, resolved server-side)
+ *  and `courtCalendars` (what this endpoint exists to add). */
+export const CapacityPrecheck = z.object({
+  fixtures: z
+    .array(
+      z.object({
+        id: Uuid.optional(),
+        extKey: z.string().nullable().optional(),
+        winnerTo: z.string().nullable().optional(),
+        home: Uuid.optional(),
+        away: Uuid.optional(),
+        poolId: Uuid.optional(),
+      }),
+    )
+    .max(2000),
+  config: z.object({
+    // These two bounds are LITERALS here on purpose, and they must equal
+    // `CAPACITY_PRECHECK_MAX_FIXTURES`/`_COURTS` (lib/capacity-bounds.ts),
+    // which the route's own parser (capacity-guard.ts) and the client hooks
+    // both import.
+    //
+    // Importing them here does not work: this file is consumed by
+    // `scripts/openapi-gen.ts` under plain `node --experimental-strip-types`
+    // (see this file's header — "shared with the OpenAPI generator script"),
+    // which does NOT resolve the `@/` tsconfig path alias. Adding that
+    // import made `npm run openapi:gen` die with `ERR_MODULE_NOT_FOUND:
+    // Cannot find package '@/lib'` — and, worse, the drift check that runs
+    // straight afterwards still reported "no drift", because a generator
+    // that never ran rewrites nothing. That is why the parity is enforced by
+    // an actual test instead: `capacity-precheck-bounds.test.ts` parses
+    // over-bound payloads against BOTH schemas and pins them to the shared
+    // constants, so a change to one that is not mirrored in the other fails
+    // loudly rather than silently widening the published contract.
+    courts: z.array(CourtId).max(50),
+    sessionWindows: z.array(z.object({ from: z.number(), to: z.number() })).max(200).optional(),
+    blackouts: z
+      .array(z.object({ court: CourtId.optional(), from: z.number(), to: z.number() }))
+      .max(200)
+      .optional(),
+    matchMinutes: z.number().int().positive(),
+    gapMinutes: z.number().int().min(0),
+    perEntrantMinRest: z.number().int().min(0),
+    // Review fix (finding 3, resource exhaustion): mirrors the same 365-day
+    // span cap capacity-guard.ts's CapacityPrecheckInput now carries (that
+    // schema — deliberately independent, see its own header — is what the
+    // route actually parses the live request with; this one governs the
+    // generated spec). Unbounded from/to let one authenticated POST force
+    // ~200k usableWindows calls (courts.max(50) x calendarDays' own 4000-day
+    // internal ceiling in capacity-input.ts). 365 days matches this repo's
+    // own precedent for a schedule's default span (calendar.ts's
+    // `horizonMinutes ?? 365 * 24 * 60`).
+    window: z
+      .object({ from: z.number(), to: z.number() })
+      .refine((w) => w.to - w.from <= 365 * 24 * 60 * 60 * 1000, {
+        message: "window must not span more than 365 days",
+      })
+      .optional(),
+    constraints: z
+      .object({
+        restMin: z.number().int().min(0).optional(),
+        // Bounded like every sibling in this schema: an unbounded record was the
+        // one uncapped field on a client-supplied body (P10 Task 5 review). Value
+        // range matches the other two restByGroup declarations in this file.
+        restByGroup: z
+          .record(z.string(), z.number().int().min(0).max(24 * 60))
+          .refine((r) => Object.keys(r).length <= 200, { message: "at most 200 groups" })
+          .optional(),
+        noBackToBack: z.boolean().optional(),
+        hard: z.array(HardConstraint).max(200).optional(),
+      })
+      .optional(),
+    hard: z.array(HardConstraint).max(200).optional(),
+  }),
+});
+export type CapacityPrecheck = z.infer<typeof CapacityPrecheck>;
 
 // ---------------------------------------------------------------------------
 // Schedule health score (D3, docs/superpowers/specs/bench-product-value/

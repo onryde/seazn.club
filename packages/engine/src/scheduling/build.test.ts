@@ -709,6 +709,48 @@ describe("buildSchedule", () => {
     }
   }, 180_000);
 
+  // P10 review fix (A6, stranded-fixtures-and-capacity). Same pairwise/unary
+  // split as the `window` case just above, applied to the newest `"court"`
+  // sub-kind: `stranded_fixture` (the pin's court was archived, or removed
+  // from `courts` entirely — calendar.ts's `strandedCourtIds` block) is a
+  // UNARY fact about one row's own court, not a contradiction between two
+  // pins. Before this fix, `isPairwiseBlockingConflict` (build.ts, just
+  // above the pin-check at `:1726`) treated EVERY `reason: "court"` conflict
+  // as pairwise regardless of `details.kind`, so a single locked card sitting
+  // on a since-archived court short-circuited to `infeasible` with a
+  // nonsensical one-element `contradictoryPins` before placement was ever
+  // asked — reproducing Critical B's shape one `"court"` sub-kind later.
+  //
+  // The TRUE pairwise case (`court_double_booking`, two pins fighting over
+  // one slot) still has to return `infeasible` — already covered by "proves
+  // infeasible only when the pins really do contradict" above; not
+  // duplicated here.
+  it("does not cry infeasible over a pin sitting on a court the server flagged stranded", async () => {
+    // `strandedCourtIds` is `VerifyConfig`-only (not yet threaded onto
+    // `BuildInput.config`'s own type — see that field's comment), so it is
+    // spliced onto the built config object rather than passed through `cfg()`;
+    // `greedySeed`'s `verifyConfig: BuildConfig = { ...config }` copies it
+    // structurally at runtime regardless.
+    const config = {
+      ...cfg({ courts: ["C1"], sessionWindows: [{ from: T0, to: T0 + 90 * MIN }] }),
+      strandedCourtIds: ["C1"],
+    };
+    const fixtures = [fx("a", "E1", "E2", { locked: { court: "C1", startAt: T0 } }), fx("b", "E3", "E4")];
+    const built = await buildSchedule({ fixtures, config });
+    expect(built.status).not.toBe("infeasible");
+    expect(built.contradictoryPins).toBeUndefined();
+    // Assert the conflict is REPORTED, not merely non-fatal — the `window`
+    // sibling above does the same. Without this line the test passes when
+    // `strandedCourtIds` never reaches `validateAssignments` at all, and that
+    // is a live risk rather than a hypothetical: the field survives the trip
+    // only as an unnamed runtime passenger on `greedySeed`'s
+    // `{ ...config }` spread, so any future hop that rebuilds the config
+    // field-by-field (a `Pick`, an explicit literal, a `toSlotConfig`-style
+    // hand copy — this repo's recurring bug) drops it with no type error.
+    // This assertion is what turns that silent drop into a red.
+    expect(built.conflicts.some((c) => c.details?.kind === "stranded_fixture")).toBe(true);
+  }, 180_000);
+
   // UN-SKIPPED (fix round 1): the injected fork keys off
   // `assignments.length === 2`, which needs placement's own board to actually
   // have 2 cards — `placement-client.ts` is now ALSO `vi.doMock`'d (matching the

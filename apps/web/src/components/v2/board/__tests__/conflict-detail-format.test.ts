@@ -166,6 +166,27 @@ describe("formatConflictDetail — locked_slot_clash and court_tag_mismatch reso
   });
 });
 
+describe("formatConflictDetail — stranded_fixture (P10) resolves courtName like its siblings", () => {
+  // Same shape as court_tag_mismatch/outside_court_hours just above: a
+  // property of the court itself (archived or deleted out from under an
+  // already-placed fixture), not a clash with another card.
+  const COURT_UUID = "3f4a5b6c-7d8e-4f90-8a1b-2c3d4e5f6072";
+
+  it("names the resolved court, never the raw id", () => {
+    const d: ConflictDetail = { kind: "stranded_fixture", court: COURT_UUID, courtName: "Court 1" };
+    const text = formatConflictDetail(d, baseCtx);
+    expect(text).toBe("Court Court 1 is no longer available");
+    expect(text).not.toContain(COURT_UUID);
+  });
+
+  it("degrades to the shared unknown-court string on a courtName miss — a stranded court is often DELETED, so there is frequently no name left to resolve", () => {
+    const d: ConflictDetail = { kind: "stranded_fixture", court: COURT_UUID };
+    const text = formatConflictDetail(d, baseCtx);
+    expect(text).toBe("Court Unknown court is no longer available");
+    expect(text).not.toContain(COURT_UUID);
+  });
+});
+
 describe("formatConflictDetail — person_below_rest is the ONE multi-person join", () => {
   it("joins every personId, not just the first", () => {
     const d: ConflictDetail = { kind: "person_below_rest", personIds: ["p1", "p2"] };
@@ -248,6 +269,7 @@ describe("formatConflictDetail — exhaustive sweep", () => {
     { kind: "court_double_booking", court: "Court 1" },
     { kind: "court_tag_mismatch", court: "Court 1" },
     { kind: "outside_court_hours", court: "Court 1" },
+    { kind: "stranded_fixture", court: "Court 1" },
     { kind: "inside_blackout" },
     { kind: "outside_session_windows" },
     { kind: "entrant_overlap", entrantIds: ["e1"], otherFixtureId: "f1" },
@@ -262,12 +284,13 @@ describe("formatConflictDetail — exhaustive sweep", () => {
     { kind: "no_slot_budget" },
   ];
 
-  // 29 populated details above (instruction_time and court_double_booking
+  // 30 populated details above (instruction_time and court_double_booking
   // each appear twice, deliberately — see the design doc's key table) cover
-  // all 27 `ConflictDetailKind` members — closed via ALL_KINDS_WITNESS below,
+  // all 28 `ConflictDetailKind` members — closed via ALL_KINDS_WITNESS below,
   // not a hand-maintained count that can quietly fall behind the union again
-  // (this comment previously said "25" after two more kinds, court_tag_mismatch
-  // and outside_court_hours, had already been added to the engine's union).
+  // (this comment previously said "27" before stranded_fixture, P10's 28th
+  // kind, landed; and "25" before that, after court_tag_mismatch and
+  // outside_court_hours had already been added to the engine's union).
   it("covers every ConflictDetailKind at least once", () => {
     const seen = new Set(ALL.map((d) => d.kind));
     // `Record<ConflictDetailKind, true>` witness — the SAME exhaustiveness
@@ -279,6 +302,7 @@ describe("formatConflictDetail — exhaustive sweep", () => {
     // assertion below genuinely closed: a 28th kind fails to compile, it does
     // not just fail to be checked.
     const ALL_KINDS_WITNESS: Record<ConflictDetailKind, true> = {
+      stranded_fixture: true,
       person_double_booking: true,
       locked_slot_clash: true,
       no_slot_start_window: true,
