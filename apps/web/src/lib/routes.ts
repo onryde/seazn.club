@@ -32,9 +32,24 @@ export const routes = {
   /** Competition-level Registration hub (design §5) — replaces the
    *  division-level `divisionRegistrations` route RS001 deleted. Settings is
    *  the landing tab; `?tab=registrants` switches panels
-   *  (registration/page.tsx's `resolveRegistrationHubTab`). */
-  competitionRegistration: (org: Slug, comp: Slug, tab?: string) =>
-    tab ? `/o/${org}/c/${comp}/registration?tab=${tab}` : `/o/${org}/c/${comp}/registration`,
+   *  (registration/page.tsx's `resolveRegistrationHubTab`).
+   *
+   *  `divisionId` (RS005 R2) appends `&division_id=<uuid>` — the param
+   *  `registration-list-query.ts`'s `parseRegistrationListQuery` and the
+   *  hub's own `data.ts` (`parseRegistrantsQuery`) both read to pre-filter
+   *  the Registrants table. It composes independently of `tab` (either can
+   *  be given without the other) so every existing no-division-id call site
+   *  keeps its exact prior output. This is the division page's own link
+   *  into the hub, filtered to itself — design §5's obligation RS004
+   *  deliberately deferred ("the filter lands with the real Registrants
+   *  table"). */
+  competitionRegistration: (org: Slug, comp: Slug, tab?: string, divisionId?: string) => {
+    const params: string[] = [];
+    if (tab) params.push(`tab=${tab}`);
+    if (divisionId) params.push(`division_id=${divisionId}`);
+    const base = `/o/${org}/c/${comp}/registration`;
+    return params.length ? `${base}?${params.join("&")}` : base;
+  },
   divisionNew: (org: Slug, comp: Slug) => `/o/${org}/c/${comp}/d/new`,
   division: (org: Slug, comp: Slug, div: Slug, tab?: string) =>
     tab ? `/o/${org}/c/${comp}/d/${div}?tab=${tab}` : `/o/${org}/c/${comp}/d/${div}`,
