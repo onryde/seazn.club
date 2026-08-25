@@ -198,6 +198,36 @@ export function swapCandidates(
   return { candidates: offId === null ? scoped : scoped.filter((id) => id !== offId) };
 }
 
+/**
+ * OFF-step gate for the opt-in "swap-sheet OFF-step enforcement" entitlement
+ * (owner ruling 2026-08-25, `scoring.swap_off_step_enforcement` — resolved
+ * server-side by fidelity.ts's `resolveScorePadBootstrap`, threaded through
+ * as `SwapSheetProps.enforceOffStep` by pad-host.tsx, the sheet's one
+ * caller). Today's OFF step (offId === null) always shows the picker
+ * regardless of `policyVerdict` — pinned by scorepad-v3-football.spec.ts as
+ * "a known limit of the R3 chassis fix, not an accident" — and that stays
+ * the default: this returns `false` unless a caller BOTH opts the org in
+ * AND the verdict is genuinely refused.
+ *
+ * `enforceOffStep` is `boolean | undefined` on purpose, mirroring every
+ * other org-gated prop this chassis threads: `undefined` reads as `false`,
+ * so a caller that never threads the new prop at all — every pre-existing
+ * test above, and any future skin that mounts this sheet directly — gets
+ * BYTE-IDENTICAL behaviour to before this function existed. Checked with
+ * `=== true`, never a bare truthy test, the same defend-the-boundary
+ * posture `PolicyVerdict.ok` itself gets elsewhere in this file: a stray
+ * non-boolean must never accidentally arm enforcement.
+ *
+ * Deliberately a bare boolean, not a result shape like
+ * `SwapCandidatesResult`: the OFF step needs no candidate list when
+ * refused (it renders nothing but the message), and `policyVerdict.message`
+ * is already the SAME branded `RefusalMessage` both steps share — nothing
+ * here needs to re-carry it.
+ */
+export function shouldRefuseOffStep(policyVerdict: PolicyVerdict, enforceOffStep: boolean | undefined): boolean {
+  return enforceOffStep === true && !policyVerdict.ok;
+}
+
 export interface SwapSheetSpec {
   /** i18n key, caller-authored (e.g. a skin's own
    *  "scorepad.skin.football.swap.off") — same pre-resolved-key convention
@@ -229,6 +259,14 @@ export interface SwapSheetProps {
   spec: SwapSheetSpec;
   view: PoolView;
   policyVerdict: PolicyVerdict;
+  /** Opt-in per-org "swap-sheet OFF-step enforcement" (owner ruling
+   *  2026-08-25). `undefined`/`false` — the default — is BYTE-IDENTICAL to
+   *  this sheet's original behaviour: only the ON step (offId !== null)
+   *  ever refuses. `true` additionally refuses the OFF step itself when
+   *  `policyVerdict` is refused, reusing the ON step's exact
+   *  `data-role="swap-refusal"` markup and copy. See `shouldRefuseOffStep`
+   *  above for the gate this prop feeds. */
+  enforceOffStep?: boolean;
   personNames: Readonly<Record<string, string>>;
   t: TFn;
   /** Fires once both picks are made. Nothing here decides which engine
@@ -267,7 +305,16 @@ const cancelButtonClass =
  * the verdict refused, else the reused `noRoster` empty state — never a
  * disabled button either way.
  */
-export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap, onCancel }: SwapSheetProps) {
+export function SwapSheet({
+  spec,
+  view,
+  policyVerdict,
+  enforceOffStep,
+  personNames,
+  t,
+  onSwap,
+  onCancel,
+}: SwapSheetProps) {
   const [offId, setOffId] = useState<string | null>(null);
   const emptyText = t("scorepad.attribution.noRoster");
   // Defect fix (walkthrough 2026-08-17): reset local state back to the
@@ -288,7 +335,22 @@ export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap, o
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <p className="mk-eyebrow px-4 pt-3 text-slate-600">{t(spec.offLabel)}</p>
         <div className="px-4 py-3">
-          {renderCandidateRow(spec.offCandidates ?? resolvePool({ pool: "onfield" }, view), personNames, t, setOffId, emptyText)}
+          {/* Opt-in "swap-sheet OFF-step enforcement" (owner ruling
+              2026-08-25): default false/undefined takes this branch's `else`
+              every time, which is exactly today's picker — see
+              `shouldRefuseOffStep`'s own doc for why that is guaranteed, not
+              merely likely. When an org has opted in AND the verdict is
+              refused, this reuses the ON step's identical
+              `data-role="swap-refusal"` markup and copy (`policyVerdict.
+              message`, the SAME branded value both steps read) rather than
+              inventing a second refusal string. */}
+          {shouldRefuseOffStep(policyVerdict, enforceOffStep) ? (
+            <p data-role="swap-refusal" className="text-xs text-slate-600">
+              {policyVerdict.message ?? t("pad.swap.refused")}
+            </p>
+          ) : (
+            renderCandidateRow(spec.offCandidates ?? resolvePool({ pool: "onfield" }, view), personNames, t, setOffId, emptyText)
+          )}
         </div>
         <div className="flex justify-end px-4 pb-3">
           <button type="button" onClick={handleCancel} style={{ minHeight: 44 }} className={cancelButtonClass}>
