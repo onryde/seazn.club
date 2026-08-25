@@ -331,6 +331,27 @@ export async function setEntitlementOverrideSql(
   });
 }
 
+/** Lift an org-level BOOLEAN entitlement via override — the `bool_value`
+ *  sibling of {@link setEntitlementOverrideSql} above (which only ever
+ *  writes `int_value`; `org_entitlement_overrides` carries both columns, and
+ *  a boolean feature key reads `bool_value` — see `hasFeature`,
+ *  src/lib/entitlements.ts). Same direct-SQL upsert idiom, same caller
+ *  obligation: call {@link invalidateOrgEntitlements} afterward when the org
+ *  has already resolved entitlements this run (that function's own doc —
+ *  required against staging's cache; a cheap no-op locally/CI). */
+export async function setBoolEntitlementOverrideSql(
+  orgId: string,
+  featureKey: string,
+  value: boolean,
+): Promise<void> {
+  await withDb(async (sql) => {
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+      values (${orgId}, ${featureKey}, ${value}, 'e2e')
+      on conflict (org_id, feature_key) do update set bool_value = ${value}`;
+  });
+}
+
 /** Flip Stripe Connect readiness (spec 2026-07-12) — Express onboarding can't
  *  run in e2e, same SQL-flip convention as plans. A fake acct id satisfies
  *  the account-exists checks; checkout itself is never driven here. */
