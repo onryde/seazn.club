@@ -493,14 +493,21 @@ describe("tile-grid.tsx's sublabel clears WCAG AA on every tile ground it can la
    *  because Tailwind's palette is not importable — the CLASS NAMES are read
    *  from the source below, so a change of class reds this rather than
    *  silently measuring the old one. */
+  /** Tailwind's own values for every literal `KIND_CLASS` uses as a tile's
+   *  ground or its text, read out of the BUILT stylesheet rather than from
+   *  memory: v3's palette moved several of these (slate-700 is #314158, not
+   *  the #334155 older references quote; red-600 is #e40014, not #dc2626),
+   *  and the difference is enough to flip a 4.35 into a 4.5. The CLASS NAMES
+   *  are parsed from the source below, so a change of class reds this rather
+   *  than silently measuring the old one. */
   const TAILWIND: Readonly<Record<string, string>> = {
     "violet-600": "#7f22fe",
     white: "#ffffff",
-    // Read out of the BUILT stylesheet's own `--color-slate-700`, not from
-    // memory: v3's palette moved these (slate-700 is #314158, not the #334155
-    // several older references still quote), and the difference is enough to
-    // flip a 4.35 into a 4.5.
+    transparent: "#ffffff", // a transparent tile composites over the pad's white ground
+    "slate-500": "#62748e",
+    "slate-600": "#45556c",
     "slate-700": "#314158",
+    "red-600": "#e40014",
   };
 
   function sublabelAlpha(): number {
@@ -510,10 +517,58 @@ describe("tile-grid.tsx's sublabel clears WCAG AA on every tile ground it can la
     return spans[0]! / 100;
   }
 
+  /** The sublabel's own tone override, per tile kind, parsed from the same
+   *  source. R4 gives `minor` one step darker; every other kind inherits the
+   *  tile's text colour. Parsed rather than hand-listed so adding a second
+   *  override cannot silently escape the sweep below. */
+  function sublabelToneFor(kind: string): string | undefined {
+    const m = codeOnly.match(/text-\[11px\]\s+opacity-\d{2,3}\s+\$\{tile\.kind === "(\w+)" \? "text-([\w-]+)" : ""\}/);
+    return m && m[1] === kind ? m[2] : undefined;
+  }
+
+  /** Every tile kind, PARSED out of KIND_CLASS — never hand-listed.
+   *
+   *  R3 checked `primary` and `standard` only, while this describe's own name
+   *  claimed every ground, and its comment justified the omission: "`primary`
+   *  is the only KIND_CLASS ground that is a saturated colour rather than
+   *  white/transparent, so it is the binding case: pass here and every other
+   *  kind passes with room."
+   *
+   *  That is FALSE, and R4 paid for it. The binding case is not the saturated
+   *  GROUND, it is the lightest TEXT — `minor`'s slate-500, which at 90% on
+   *  white is 3.91:1. It went unmeasured for a wave and shipped a real axe
+   *  failure the moment tennis put the first sublabel on a `minor` tile.
+   *  Deriving the list from the source is the actual fix: a kind that exists
+   *  is a kind that is measured, and a fifth one cannot be forgotten. */
+  function kindsFromSource(): { kind: string; text: string; ground: string }[] {
+    const block = codeOnly.slice(codeOnly.indexOf("KIND_CLASS"));
+    const rows = [...block.matchAll(/(\w+):\s*"([^"]+)"/g)].slice(0, 4);
+    expect(rows.length, "KIND_CLASS must still declare four tile kinds as string literals").toBe(4);
+    return rows.map(([, kind, classes]) => {
+      const text = /text-([\w-]+)/.exec(classes)?.[1];
+      const ground = /bg-([\w-]+)/.exec(classes)?.[1];
+      expect(text, `KIND_CLASS.${kind} must declare a text colour`).toBeTruthy();
+      expect(ground, `KIND_CLASS.${kind} must declare a ground`).toBeTruthy();
+      return { kind: kind!, text: text!, ground: ground! };
+    });
+  }
+
+  it("clears 4.5:1 on EVERY tile kind's own ground — parsed from KIND_CLASS, not hand-listed", () => {
+    const alpha = sublabelAlpha();
+    const failures: string[] = [];
+    for (const { kind, text, ground } of kindsFromSource()) {
+      const toneOverride = sublabelToneFor(kind);
+      const fg = TAILWIND[toneOverride ?? text];
+      const bg = TAILWIND[ground];
+      expect(fg, `no measured value for text colour ${toneOverride ?? text} (kind ${kind})`).toBeTruthy();
+      expect(bg, `no measured value for ground ${ground} (kind ${kind})`).toBeTruthy();
+      const ratio = contrastRatio(compositeOver(fg!, alpha, bg!), bg!);
+      if (ratio < 4.5) failures.push(`${kind}: ${ratio.toFixed(2)}:1 (${toneOverride ?? text} on ${ground})`);
+    }
+    expect(failures, `sublabel fails WCAG AA on: ${failures.join(", ")}`).toEqual([]);
+  });
+
   it("the PRIMARY tile — white on violet-600, the ground football's Goal tiles use", () => {
-    // The pair that actually failed. `primary` is the only KIND_CLASS ground
-    // that is a saturated colour rather than white/transparent, so it is the
-    // binding case: pass here and every other kind passes with room.
     expect(codeOnly, "KIND_CLASS.primary must still be white text on violet-600").toContain(
       "bg-violet-600 font-semibold text-white",
     );
@@ -521,9 +576,28 @@ describe("tile-grid.tsx's sublabel clears WCAG AA on every tile ground it can la
     expect(contrastRatio(composited, TAILWIND["violet-600"]!)).toBeGreaterThanOrEqual(4.5);
   });
 
+  it("the MINOR tile — the LIGHTEST text in the set, which is the real binding case", () => {
+    // Tennis's Award-game tiles are the first `minor` tile anywhere to carry a
+    // sublabel. Inheriting slate-500 at 90% is 3.91:1; the kind takes
+    // slate-600 instead, which is 5.83:1.
+    expect(codeOnly).toContain("bg-transparent font-medium text-slate-500");
+    expect(sublabelToneFor("minor"), "the minor sublabel must keep its own darker tone").toBe("slate-600");
+    const composited = compositeOver(TAILWIND["slate-600"]!, sublabelAlpha(), TAILWIND.white!);
+    expect(contrastRatio(composited, TAILWIND.white!)).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("the STANDARD tile — slate-700 on white", () => {
     expect(codeOnly).toContain("bg-white font-medium text-slate-700");
     const composited = compositeOver(TAILWIND["slate-700"]!, sublabelAlpha(), TAILWIND.white!);
+    expect(contrastRatio(composited, TAILWIND.white!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("the DESTRUCTIVE tile — red-600 on white, which passes by only 0.09", () => {
+    // 4.59:1. Recorded with its margin BECAUSE it is thin: a palette nudge of
+    // one step, or any future dimming of this element, drops it under the
+    // floor. It was never measured before R4.
+    expect(codeOnly).toContain("bg-white font-medium text-red-600");
+    const composited = compositeOver(TAILWIND["red-600"]!, sublabelAlpha(), TAILWIND.white!);
     expect(contrastRatio(composited, TAILWIND.white!)).toBeGreaterThanOrEqual(4.5);
   });
 
