@@ -1516,6 +1516,35 @@ shared artefact.** Two agents running `i18n:gen-keys` concurrently race on one
 file and both commit it. The rule adopted here: concurrent waves do not run
 `gen-keys` at all; the orchestrator regenerates once at the wave boundary.
 
+**FINDING (2026-08-25) — the help tree documents a console RS001 DELETED.**
+`apps/web/content/help/registration/open-registration.md:31` describes "The
+**Registrations** console opens on a **pulse strip** — confirmed / holding /
+waitlisted counts against capacity, money collected and due, and the next
+payment deadline — with the list below split into **Confirmed / Pending /
+Waitlist / All** tabs", plus row actions grouped Spot vs Money and a
+duplicate-contact hint. None of it exists: `registration-pulse.tsx` and
+`registrations-panel.tsx` went out with RS001 on 2026-08-17, and RS005 ships a
+differently shaped surface (one table, server-driven filters, approve/reject).
+
+Cost: an organiser following help hunts for a UI that is not there. It has been
+wrong for eight days and **no gate can see it** — the help tree is prose, has no
+tests, and `content/help/**` is deliberately English-only so even the i18n
+parity check never reads it. Nothing in CI will ever go red for this.
+
+Related, and self-correcting as of this session: `card-payments.md:21` promises
+"the confirmation email goes out". That was FALSE from RS001 until W4 wired the
+sender — the docs described the product we intended while the code had silently
+stopped delivering it. Worth noting as a pattern: **help prose is where an
+unimplemented promise survives longest**, because it is the one artefact no
+test, type or gate reads.
+
+**Owner ruling (2026-08-25): fix the help pages AFTER W3**, so the docs describe
+what actually shipped rather than what is half-built. Owed: rewrite
+`open-registration.md`'s console section for the hub's two tabs and the real
+action set; confirm `waitlist.md`'s "place in line" copy still matches the
+`#`-position column; and RS005's CSV column list, which RS005's own prompt
+defers to RS010's help pass.
+
 **Pinned so no wave re-derives them:**
 
 - **Waitlist position must reproduce `promoteOldestWaitlisted`
