@@ -2127,9 +2127,19 @@ export const StartDivisionResult = z.object({
 // Registration & entry fees (doc 16 §1.1, PROMPT-20a)
 // ---------------------------------------------------------------------------
 
+/** RS005 W1b: the ONE exported source for this status set — the DB CHECK
+ *  (`db/migration/deltas/V364__registrations_regroup.sql`) allows all seven;
+ *  the route allowlists and the OpenAPI query enum both derive from
+ *  `RegistrationStatus.options` rather than hand-copying the list, so a
+ *  fourth copy can't silently drift out of sync (RS005 W1a's `rejected`
+ *  status was previously missing here and from the division list route). */
 export const RegistrationStatus = z.enum([
-  "pending", "paid", "confirmed", "waitlisted", "withdrawn", "expired",
+  "pending", "paid", "confirmed", "waitlisted", "withdrawn", "expired", "rejected",
 ]);
+
+/** RS005 W1a `ListRegistrationsFilters.sort` — single source for the same
+ *  reason as `RegistrationStatus` above. */
+export const RegistrationSort = z.enum(["oldest", "newest"]);
 
 /** How a division collects its entry fee (spec 2026-07-12 §3). */
 export const RegistrationPaymentMethod = z.enum(["offline", "stripe"]);
@@ -2213,18 +2223,21 @@ export const RegistrationSettings = z.object({
   updated_at: z.string().nullable(),
 });
 
-/** Organiser view of one registration. dob/contact stay org-side only. */
+/** Organiser view of one registration (`RegistrationWithGroupRow`, minus the
+ *  cart's `access_token_hash` — see `RegistrationListEntry`'s doc comment).
+ *  RS005 W1b: `dob`/`gender`/`guardian_name`/`guardian_consent` dropped —
+ *  RS001 moved them off `registrations` onto `registration_players`
+ *  (per-player, not per-entry) before this route surface ever shipped, so
+ *  they were never real columns here. `contact_name`/`group_id`/`join_code`/
+ *  `free_agent` added — the row has always carried them. */
 export const Registration = z.object({
   id: Uuid,
   division_id: Uuid,
   status: RegistrationStatus,
   ref_code: z.string().nullable(),
   display_name: z.string(),
+  contact_name: z.string(),
   contact_email: z.string(),
-  dob: z.string().nullable(),
-  gender: z.string().nullable(),
-  guardian_name: z.string().nullable(),
-  guardian_consent: z.boolean(),
   answers: z.record(z.string(), z.unknown()),
   amount_cents: z.number().int(),
   currency: z.string().nullable(),
@@ -2238,6 +2251,11 @@ export const Registration = z.object({
   entrant_id: Uuid.nullable(),
   promoted_at: z.string().nullable(),
   withdrawn_at: z.string().nullable(),
+  /** The cart this entry belongs to (V364) — every entry has exactly one. */
+  group_id: Uuid,
+  /** Set when this (team) entry can hand out a self-join link. */
+  join_code: z.string().nullable(),
+  free_agent: z.boolean(),
   created_at: z.string(),
 });
 
@@ -2246,6 +2264,39 @@ export const RefundRegistration = z.object({
   amount_cents: z.number().int().min(1).optional(),
 });
 export type RefundRegistration = z.infer<typeof RefundRegistration>;
+
+/** `listRegistrations`' wire shape (RS005 W1a/W1b) — `Registration` widened
+ *  with the seven columns the Registrants-tab list/export routes add:
+ *  the division's own name/slug, its resolved `entrant_kind`, roster
+ *  fill/cap, pending-consent count and (waitlisted rows only) queue
+ *  position. Kept SEPARATE from `Registration` rather than folding these
+ *  fields into it — the single-registration action routes (approve/reject/
+ *  promote/confirm/…) return the narrow shape and never carry
+ *  `waitlist_position` or the rest; collapsing the two would advertise those
+ *  fields on a response that can never carry them. */
+export const RegistrationListEntry = Registration.extend({
+  division_name: z.string(),
+  division_slug: z.string(),
+  entrant_kind: EntrantKind,
+  roster_count: z.number().int(),
+  /** null = unlimited (the sport declares no lineup config). */
+  roster_cap: z.number().int().nullable(),
+  consent_pending_count: z.number().int(),
+  /** 1-based rank within the division's waitlist; null for every other
+   *  status. */
+  waitlist_position: z.number().int().nullable(),
+});
+
+/** `POST /registrations/{id}/promote` body. `id` in the URL resolves which
+ *  division to promote within (every registration belongs to exactly one);
+ *  `registration_id`, when given, overrides which waitlisted entry gets
+ *  promoted instead of the oldest (`PromoteFromWaitlistOpts.registrationId`,
+ *  registration-approval.ts) — it need not equal the URL `id`. Omitted →
+ *  oldest-first, `promoteFromWaitlist`'s default. */
+export const PromoteRegistration = z.object({
+  registration_id: Uuid.optional(),
+});
+export type PromoteRegistration = z.infer<typeof PromoteRegistration>;
 
 // Public register flow -------------------------------------------------------
 

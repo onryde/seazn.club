@@ -11,7 +11,7 @@ export async function GET(req: Request, { params }: Ctx) {
   try {
     const { id } = await params;
     const auth = await requireResourceAuth(req, "division", id, "read");
-    const csv = await exportRegistrationsCsv(auth, id);
+    const csv = await exportRegistrationsCsv(auth, { divisionId: id });
     return new NextResponse(csv, {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
