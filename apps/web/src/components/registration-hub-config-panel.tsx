@@ -408,7 +408,14 @@ export function EligibilitySection({
         </select>
         {errors.approval && (<p data-field-error="approval" role="alert" className="mt-1 text-xs text-red-600">{errors.approval}</p>)}
       </label>
-      {isTeam ? (
+      {/* Nothing at all for a non-team division, rather than a line explaining
+          why a control they cannot use is missing. The hint ("Only available
+          for team divisions.") answered a question an organiser configuring a
+          Pair division never asked — the setting is not theirs to make, so its
+          absence needs no apology. Switching entrant_kind re-renders this, and
+          the select below already forces allow_free_agents false on the way
+          out of 'team', so no state is stranded. */}
+      {isTeam && (
         <label className="flex items-center gap-2 text-sm text-slate-700">
           <input
             type="checkbox"
@@ -418,8 +425,6 @@ export function EligibilitySection({
           />
           {msg("reg.hub.config.allowSolo")}
         </label>
-      ) : (
-        <p className="text-xs text-slate-400">{msg("reg.hub.config.freeAgentsHint")}</p>
       )}
       {errors.allow_free_agents && (<p data-field-error="allow_free_agents" role="alert" className="mt-1 text-xs text-red-600">{errors.allow_free_agents}</p>)}
     </section>
@@ -623,9 +628,17 @@ export function MoneySection({
         />
         {errors.fee_cents && (<p data-field-error="fee_cents" role="alert" className="mt-1 text-xs text-red-600">{errors.fee_cents}</p>)}
       </label>
-      <p className="text-xs text-slate-500">
-        {msg("reg.hub.config.feeCut", { keep: 100 - feePercentPct, pct: feePercentPct })}
-      </p>
+      {/* The platform cut applies to CARD entries only — it is Stripe's
+          application fee, taken as the money passes through. On "pay the
+          organiser" the money never touches the platform and we take nothing,
+          so rendering this line unconditionally told an organiser collecting
+          cash at the door that we were taking 8% of it. That is a false claim
+          about their money, which is a worse defect than a missing sentence. */}
+      {state.payment_method === "stripe" && (
+        <p className="text-xs text-slate-500">
+          {msg("reg.hub.config.feeCut", { keep: 100 - feePercentPct, pct: feePercentPct })}
+        </p>
+      )}
 
       <fieldset className="space-y-2">
         <legend className="text-xs text-slate-500">{msg("reg.settings.howCollected")}</legend>

@@ -182,6 +182,22 @@ function expandPanel(node: ReactNode) {
   return out;
 }
 
+/** Text of the DEEPLY expanded panel. `island.text()` only sees what the
+ *  shallow render produced, and both the fee copy and the solo-signups toggle
+ *  live inside sections the design collapses by default — the same place
+ *  RS004's "Bench takes 2%" copy for a nonexistent product hid until someone
+ *  screenshotted an opened section. */
+function expandedText(tree: ReturnType<typeof expandPanel>): string {
+  const parts: string[] = [];
+  for (const el of tree) {
+    const kids = propsOf(el).children;
+    for (const k of Array.isArray(kids) ? kids : [kids]) {
+      if (typeof k === "string" || typeof k === "number") parts.push(String(k));
+    }
+  }
+  return parts.join(" ");
+}
+
 function findField(tree: ReturnType<typeof expandPanel>, field: string) {
   return tree.find((e) => propsOf(e)["data-field"] === field);
 }
@@ -681,5 +697,47 @@ describe("RegistrationHubConfigPanel — the three clock fields", () => {
   it("labels each one with the zone, so a time is never bare wall-clock", async () => {
     const fields = await clockFields();
     for (const f of fields) expect(String(f.label)).toMatch(/\(.+\)$/);
+  });
+});
+
+describe("RegistrationHubConfigPanel — the panel does not make claims that are false for this division", () => {
+  // The platform cut is Stripe's application fee, taken as money passes
+  // through. On "pay the organiser" nothing passes through us and we take
+  // NOTHING — so rendering the cut unconditionally told an organiser
+  // collecting cash at the door that we were taking 8% of it. A false claim
+  // about someone's money is a worse defect than a missing sentence.
+  it("shows the platform cut for card entries and NOT for pay-the-organiser", async () => {
+    net.getResponse = { ...RESPONSE, payment_method: "stripe" };
+    const onCard = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    expect(expandedText(onCard.tree())).toContain(t(uiEn, "reg.hub.config.feeCut", { keep: 92, pct: 8 }));
+
+    net.getResponse = { ...RESPONSE, payment_method: "offline" };
+    const onOffline = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    expect(
+      expandedText(onOffline.tree()),
+      "we take nothing when the organiser collects the money themselves",
+    ).not.toContain(t(uiEn, "reg.hub.config.feeCut", { keep: 92, pct: 8 }));
+  });
+
+  // The solo-signups setting belongs to team divisions. It used to render an
+  // explanation of its own absence to everyone else; a setting that is not
+  // yours to make needs no apology, and the sentence answered a question a
+  // Pair-division organiser never asked.
+  it("offers solo sign-ups on a team division and says nothing at all on a pair one", async () => {
+    net.getResponse = { ...RESPONSE, entrant_kind: "team" };
+    const team = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    expect(findField(team.tree(), "allow_free_agents")).toBeTruthy();
+    expect(expandedText(team.tree())).toContain(t(uiEn, "reg.hub.config.allowSolo"));
+
+    net.getResponse = { ...RESPONSE, entrant_kind: "pair", allow_free_agents: false };
+    const pair = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    expect(findField(pair.tree(), "allow_free_agents")).toBeFalsy();
+    const pairText = expandedText(pair.tree());
+    expect(pairText).not.toContain(t(uiEn, "reg.hub.config.freeAgentsHint"));
+    expect(pairText).not.toContain(t(uiEn, "reg.hub.config.allowSolo"));
   });
 });
