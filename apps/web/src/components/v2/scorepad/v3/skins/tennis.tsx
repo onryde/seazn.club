@@ -654,35 +654,33 @@ export function buildTiles(view: PadHostView): TileSpec[] {
 }
 
 /**
- * `SkinDefV3.refusedEventTypes` — the More sheet's second exclusion set.
- * Two ENTIRELY different reasons live in this one array, kept apart by
- * comment because they would otherwise look like the same claim:
+ * `SkinDefV3.refusedEventTypes` — the More sheet's second exclusion set:
+ * "the fold will not accept this at all right now".
  *
- * `tennis.point` is listed UNCONDITIONALLY, and it is NOT a phase refusal —
- * the fold accepts it whenever live. It closes a gap this wave's own tap
- * model exposes: `dedicatedEventTypes` (pad-host.tsx) computes "already
- * reachable" from tiles/sheets/swap slots only, because every skin before
- * this one was tapModel T (the scorebug a pure readout) — nothing there
- * inspects a tappable scorebug half's own `tapEvent`. Left unlisted, the
- * generic More sheet would ALSO offer `padSpec`'s bare `tennis.point`/
- * `tennis.pointAttributed` actions beside the scorebug+dock — the identical
- * two-divergent-entry-points defect R2c closed for `cricket.retire` and R3
- * closed for `SwapSheet`. This is the only lever this contract exposes for
- * "reachable elsewhere", so it is reused for that purpose here; the correct
- * long-term fix is `dedicatedEventTypes` learning about a tapModel-S
- * scorebug directly, which is chassis work this wave does not carry (flagged
- * in the task report, not fixed here).
+ * ONE entry, and it is a real refusal. `applySetSummary` throws for a set
+ * already being scored point-by-point (`nested/kernel.ts`), so offering the
+ * generic form mid-set is the D-16 dead-end tap this wave closes. Listed only
+ * in that state, mirroring `buildTiles`'s own withholding condition exactly —
+ * the two must never disagree, or the pad either hides a legal action or
+ * offers a refused one.
  *
- * `tennis.set_summary` is the real, literal D-16 refusal: `applySetSummary`
- * throws for a set already in progress (`kernel.ts:1128-1130`), so it is
- * listed ONLY then, mirroring `buildTiles`'s own withholding condition
- * exactly (the two must never disagree, same as football's `phaseAllows`).
+ * `tennis.point` USED TO BE LISTED HERE and no longer is. It was never a
+ * refusal — the fold accepts a point whenever the match is live — it was this
+ * contract being borrowed as a "reachable elsewhere" lever, because
+ * `dedicatedEventTypes` computed that only from tiles/sheets/swaps and could
+ * not see that a tapModel-S scorebug half IS an entry point. R3 kept the two
+ * sets apart deliberately (`_INDEX.md`: "a later reader must be able to tell
+ * which reason applied"), and collapsing them here would have made this skin
+ * the first to defeat that distinction.
+ *
+ * The chassis learned about tap model S instead (`pad-host.tsx`'s
+ * `dedicatedEventTypes`, owner-authorised), so the half's own `tapEvent` now
+ * de-duplicates the point the same way a tile's `event` always did. This
+ * function went back to meaning what it says.
  */
 export function refusedEventTypes(view: PadHostView): string[] {
   const state = asState(view.state);
-  const refused = [POINT_TYPE];
-  if (setInProgressOf(state)) refused.push(SET_SUMMARY_TYPE);
-  return refused;
+  return setInProgressOf(state) ? [SET_SUMMARY_TYPE] : [];
 }
 
 // ---------------------------------------------------------------------------

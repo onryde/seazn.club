@@ -42,6 +42,7 @@ import {
   tennisSkinV3,
 } from "../tennis";
 import type { TFn } from "../tennis";
+import { dedicatedEventTypes } from "../../pad-host";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -555,9 +556,29 @@ describe("buildTiles — D-16 (set score withheld while the set is in progress)"
     expect(refusedEventTypes(view())).not.toContain("tennis.set_summary");
   });
 
-  it("MUTATION PROOF: refusedEventTypes always lists tennis.point (the scorebug's own dedicated surface, not a phase refusal)", () => {
-    expect(refusedEventTypes(view())).toContain("tennis.point");
-    expect(refusedEventTypes(view({ state: state({ games: { home: 1, away: 0 } }) }))).toContain("tennis.point");
+  // tennis.point USED to be listed by refusedEventTypes, as a stand-in for
+  // "already reachable elsewhere" — the chassis could not see that a
+  // tapModel-S half is an entry point, and this array was the only lever the
+  // contract exposed. It was never a refusal: the fold accepts a point
+  // whenever the match is live. The chassis learned about tap model S
+  // instead (`dedicatedEventTypes`, commit 8ea826d46), so this function went
+  // back to meaning what it says, and the two exclusion sets R3 deliberately
+  // kept apart stay apart.
+  it("refusedEventTypes does NOT list tennis.point — the fold accepts a point whenever live, so it is not a refusal", () => {
+    expect(refusedEventTypes(view())).not.toContain("tennis.point");
+    expect(refusedEventTypes(view({ state: state({ games: { home: 1, away: 0 } }) }))).not.toContain("tennis.point");
+  });
+
+  // The replacement guarantee, asserted where it actually lives now. This is
+  // the test that matters: if the chassis ever stops resolving a tappable
+  // half, the point silently gains a second entry point through the generic
+  // More form — and that path bypasses the dock, so a chair using it loses
+  // the ace / double-fault / winner / unforced-error enrichment with nothing
+  // on screen to say so.
+  it("the scorebug's own tapEvent is what de-duplicates the point out of the More sheet", () => {
+    const v = view();
+    const dedicated = dedicatedEventTypes(buildTiles(v), buildSheets(v), [], buildScorebug(v, t));
+    expect([...dedicated]).toContain("tennis.point");
   });
 });
 
