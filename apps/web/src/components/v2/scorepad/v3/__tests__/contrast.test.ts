@@ -526,14 +526,54 @@ describe("tile-grid.tsx's sublabel clears WCAG AA on every tile ground it can la
     return spans[0]! / 100;
   }
 
-  /** The sublabel's own tone override, per tile kind, parsed from the same
-   *  source. R4 gives `minor` one step darker; every other kind inherits the
-   *  tile's text colour. Parsed rather than hand-listed so adding a second
-   *  override cannot silently escape the sweep below. */
-  function sublabelToneFor(kind: string): string | undefined {
-    const m = codeOnly.match(/text-\[11px\]\s+opacity-\d{2,3}\s+\$\{tile\.kind === "(\w+)" \? "text-([\w-]+)" : ""\}/);
-    return m && m[1] === kind ? m[2] : undefined;
+  /** Every per-kind tone override on the sublabel, as a kind -> tone map.
+   *
+   *  This used to be a single `.match()` that returned a tone only when the
+   *  FIRST override in the file happened to be the kind being asked about.
+   *  Its own comment claimed the opposite — "parsed rather than hand-listed so
+   *  adding a second override cannot silently escape the sweep" — and a second
+   *  override would have done exactly that: `sublabelToneFor("destructive")`
+   *  would answer undefined, the sweep would measure the INHERITED text-red-600
+   *  instead of the override, and the new tone would go unverified. Third
+   *  instance of the same shape in this one file (the kinds sweep sliced to
+   *  four before counting; the red-600 row read the sRGB fallback rather than
+   *  the lab() value browsers composite), which is why this one is a map. */
+  function sublabelTones(): ReadonlyMap<string, string> {
+    // Take the sublabel span's WHOLE class template first, then find every
+    // per-kind ternary inside it. Anchoring the ternary to the
+    // `text-[11px] opacity-NN` prefix — which the first two attempts at this
+    // did — can only ever see the FIRST override, because the second one is
+    // preceded by the first, not by the prefix. Proven by mutation: adding a
+    // second override (`destructive` -> a failing light red) left the suite
+    // green under the anchored form.
+    const templates = [...codeOnly.matchAll(/className=\{`([^`]*text-\[11px\][^`]*)`\}/g)].map((m) => m[1]!);
+    expect(templates.length, "tile-grid.tsx must still build the sublabel class as a template literal").toBeGreaterThan(0);
+    const out = new Map<string, string>();
+    for (const tpl of templates) {
+      for (const m of tpl.matchAll(/tile\.kind === "(\w+)"\s*\?\s*"text-([\w-]+)"/g)) {
+        const [, kind, tone] = m;
+        const seen = out.get(kind!);
+        // Both sublabel branches render the same overrides, so a repeat is
+        // expected — a CONFLICT between the two branches is not.
+        expect(seen === undefined || seen === tone, `tile-grid.tsx gives kind "${kind}" two different sublabel tones`).toBe(true);
+        out.set(kind!, tone!);
+      }
+    }
+    return out;
   }
+
+  function sublabelToneFor(kind: string): string | undefined {
+    return sublabelTones().get(kind);
+  }
+
+  it("every per-kind sublabel tone override in the source is one the sweep below measures", () => {
+    // The guard that makes the map honest: a tone declared for a kind that
+    // KIND_CLASS does not know about would be parsed and then never measured.
+    const kinds = new Set(kindsFromSource().map((k) => k.kind));
+    for (const kind of sublabelTones().keys()) {
+      expect(kinds.has(kind), `sublabel declares a tone for unknown tile kind "${kind}"`).toBe(true);
+    }
+  });
 
   /** Every tile kind, PARSED out of KIND_CLASS — never hand-listed.
    *
