@@ -22,6 +22,7 @@ import { resolveVenueTz } from "@/lib/tz";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CAPACITY_REPORT_KEY } from "@/server/api-v1/schemas";
 import { capacityInputForFixtures, type CapacityConfigInput, type CapacityFixtureInput } from "@/lib/capacity-input";
+import { CAPACITY_PRECHECK_MAX_COURTS, CAPACITY_PRECHECK_MAX_FIXTURES } from "@/lib/capacity-bounds";
 // P10 §4: the ONE resolver for a division's candidate courts' real
 // calendars — already used by schedule.ts's verifyConfigForDivision. Reused
 // here rather than a second DB query shape, same reasoning as resolveVenueTz
@@ -142,9 +143,14 @@ export const CapacityPrecheckInput = z.object({
         poolId: z.uuid().optional(),
       }),
     )
-    .max(2000),
+    .max(CAPACITY_PRECHECK_MAX_FIXTURES),
   config: z.object({
-    courts: z.array(z.uuid()).max(50),
+    // Shared constants, not literals: the CLIENT now refuses to send a body
+    // over these bounds (use-capacity-report.ts's `isSendableRequest`), and
+    // a bound that drifts from the one its caller is trying to respect is
+    // worse than no client-side bound at all — see the constants' own doc
+    // comment in capacity-input.ts.
+    courts: z.array(z.uuid()).max(CAPACITY_PRECHECK_MAX_COURTS),
     sessionWindows: z.array(z.object({ from: z.number(), to: z.number() })).max(200).optional(),
     blackouts: z
       .array(z.object({ court: z.uuid().optional(), from: z.number(), to: z.number() }))

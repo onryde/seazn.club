@@ -1729,6 +1729,23 @@ export const CapacityPrecheck = z.object({
     )
     .max(2000),
   config: z.object({
+    // These two bounds are LITERALS here on purpose, and they must equal
+    // `CAPACITY_PRECHECK_MAX_FIXTURES`/`_COURTS` (lib/capacity-bounds.ts),
+    // which the route's own parser (capacity-guard.ts) and the client hooks
+    // both import.
+    //
+    // Importing them here does not work: this file is consumed by
+    // `scripts/openapi-gen.ts` under plain `node --experimental-strip-types`
+    // (see this file's header — "shared with the OpenAPI generator script"),
+    // which does NOT resolve the `@/` tsconfig path alias. Adding that
+    // import made `npm run openapi:gen` die with `ERR_MODULE_NOT_FOUND:
+    // Cannot find package '@/lib'` — and, worse, the drift check that runs
+    // straight afterwards still reported "no drift", because a generator
+    // that never ran rewrites nothing. That is why the parity is enforced by
+    // an actual test instead: `capacity-precheck-bounds.test.ts` parses
+    // over-bound payloads against BOTH schemas and pins them to the shared
+    // constants, so a change to one that is not mirrored in the other fails
+    // loudly rather than silently widening the published contract.
     courts: z.array(CourtId).max(50),
     sessionWindows: z.array(z.object({ from: z.number(), to: z.number() })).max(200).optional(),
     blackouts: z

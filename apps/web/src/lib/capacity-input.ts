@@ -38,6 +38,17 @@ import type { HardConstraint } from "@seazn/engine/scheduling";
 // from it); this just names the shape its own `courtCalendars` param takes.
 import type { CourtCalendar } from "@seazn/engine/scheduling/court-windows";
 
+// Re-exported for continuity — this module is the one both sides of the
+// capacity wire already reach for, so the bounds stay findable from here.
+// They are DEFINED in `capacity-bounds.ts` (a leaf with no imports) rather
+// than in this file: `schemas.ts` needs them too and is imported by fourteen
+// `"use client"` components, and this file carries real engine runtime code
+// that must not become reachable from those bundles. See that file's header.
+export {
+  CAPACITY_PRECHECK_MAX_COURTS,
+  CAPACITY_PRECHECK_MAX_FIXTURES,
+} from "./capacity-bounds";
+
 /** Everything `capacityInputForFixtures` reads off a solved config. Plain
  *  epoch-ms/string fields — the same shape `SlotConfig & VerifyConfig`
  *  satisfies server-side (schedule.ts's plan), and the shape a client
@@ -152,15 +163,20 @@ function calendarDays(window: { from: number; to: number }, tz: string): { ymd: 
  *  from the DB per request (a POST body, never a `useMemo`), because that is
  *  the one place court calendars can legally be read from at all: P9 stopped
  *  shipping them to the board payload after they blew its RSC budget, and
- *  that has NOT changed. The two client call sites
- *  (`settings-panel.tsx`/`stages-panel.tsx`) still call this module directly
- *  with no `courtCalendars`, and for them a court absent from the array (here,
- *  every court) keeps the original "open all day" default — so THEIR live
- *  recompute still only ever OVERSTATES supply, the same direction it already
- *  erred in, never the direction that hides an impossible division. That is
- *  no longer a limit of this function; it is a limit of not having reached
- *  the server yet, which is exactly why Task 6 replaces those two `useMemo`s
- *  with a fetch instead of adding a calendar prop to the board payload.
+ *  that has NOT changed.
+ *
+ *  Corrected (second-review finding 6): an earlier version of this comment
+ *  said the two client call sites (`settings-panel.tsx`/`stages-panel.tsx`)
+ *  "still call this module directly with no `courtCalendars`". They do not —
+ *  the same change that added the param removed both of those calls, and
+ *  every remaining caller is server-side (`capacity-guard.ts`,
+ *  `competition-schedule-ai.ts`, `schedule.ts`), so `courtCalendars` is in
+ *  practice always supplied now. The panels obtain their numbers over the
+ *  precheck endpoint instead. Left as a correction rather than a deletion
+ *  because the "absent court defaults to open all day" behaviour below is
+ *  still real and still reachable — the difference is that reaching it no
+ *  longer means a client is quietly overstating supply, which is precisely
+ *  the conclusion the stale sentence would lead the next reader to.
  */
 function usableWindowsFor(
   court: string,

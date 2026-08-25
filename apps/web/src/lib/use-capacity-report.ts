@@ -25,6 +25,7 @@
 import { useEffect, useRef, useState } from "react";
 import { apiV1 } from "@/lib/client-v1";
 import type { CapacityFixtureInput, CapacityConfigInput } from "@/lib/capacity-input";
+import { CAPACITY_PRECHECK_MAX_COURTS, CAPACITY_PRECHECK_MAX_FIXTURES } from "@/lib/capacity-bounds";
 import type { CapacityReport } from "@seazn/engine/scheduling/capacity";
 
 const DEBOUNCE_MS = 300;
@@ -86,6 +87,47 @@ function hasAssessableWindow(config: CapacityReportConfig): boolean {
     config.window !== undefined &&
     Number.isFinite(config.window.from) &&
     Number.isFinite(config.window.to)
+  );
+}
+
+/**
+ * The ONE predicate both hooks ask before scheduling anything: is this
+ * request worth putting on the wire at all?
+ *
+ * Two reasons it may not be, and they are different in kind:
+ *
+ *  - No bounded window (`hasAssessableWindow` above) — the SERVER's answer
+ *    would be `null` anyway, by `capacityInputForFixtures`' own null
+ *    contract. Nothing is lost by not asking.
+ *  - Over a size bound the server schema enforces
+ *    (`CAPACITY_PRECHECK_MAX_COURTS`/`_FIXTURES`, capacity-input.ts) — the
+ *    server would answer 400. Here something IS lost: the organiser gets no
+ *    capacity numbers for a division that large. That is the deliberate
+ *    trade. The alternative shipped behaviour was two guaranteed-400 POSTs
+ *    per stage per debounced edit and a card frozen on "check failed", which
+ *    gives the organiser no numbers EITHER, plus an error they cannot clear.
+ *    Reading as "not assessable" (the `null` contract) at least renders as
+ *    the honest absence of a check rather than a broken one, and — because
+ *    `capacityGateBlocks` (stages-panel.tsx) blocks only on a genuinely
+ *    fresh `impossible` verdict — it cannot wrongly disable Auto-schedule.
+ *
+ * Second-review finding 1 was this predicate existing in only ONE of the two
+ * hooks: `useCapacityReport` skipped an unassessable window,
+ * `useCapacityReportsByStage` skipped only a literally `null` request. Since
+ * `capacityRequestForStage` emits `-Infinity`/`Infinity` whenever just one of
+ * startAt/endAt is set — an entirely ordinary division — the by-stage path
+ * shipped the exact 400/retry/400 loop described above. Two hooks answering
+ * the same question two ways is the fork this repo keeps paying for; hence
+ * one function, both callers.
+ */
+function isSendableRequest(
+  fixtures: readonly CapacityFixtureInput[],
+  config: CapacityReportConfig,
+): boolean {
+  return (
+    hasAssessableWindow(config) &&
+    config.courts.length <= CAPACITY_PRECHECK_MAX_COURTS &&
+    fixtures.length <= CAPACITY_PRECHECK_MAX_FIXTURES
   );
 }
 
@@ -192,7 +234,7 @@ export function useCapacityReport(
   // (a new key) clears the failed read without this ever needing an
   // explicit reset.
   const [failedKey, setFailedKey] = useState<string | null>(null);
-  const assessable = hasAssessableWindow(config);
+  const assessable = isSendableRequest(fixtures, config);
   const key = inputsKey(divisionId, fixtures, config);
 
   useEffect(() => {
@@ -274,8 +316,20 @@ export function useCapacityReportsByStage(
   // one — so, unlike the three maps above, it stays a ref.
   const activeRef = useRef<Map<string, { key: string; cancel: () => void }>>(new Map());
 
-  const requestKeys = new Map<string, string>();
+  // Normalised ONCE, at the top, and used by all three consumers below (the
+  // key loop, the effect, and the render-time short-circuit): a request that
+  // is not sendable is folded to `null` here, so it is indistinguishable
+  // from "settings haven't loaded yet" everywhere downstream. Doing this in
+  // one place rather than adding a second condition to each of the three is
+  // deliberate — the defect being fixed (finding 1) was exactly one of
+  // several parallel checks not being updated alongside its siblings.
+  const sendable = new Map<string, CapacityRequest>();
   for (const [stageId, req] of requests) {
+    sendable.set(stageId, req !== null && isSendableRequest(req.fixtures, req.config) ? req : null);
+  }
+
+  const requestKeys = new Map<string, string>();
+  for (const [stageId, req] of sendable) {
     // A `null` request never reaches scheduleCapacityFetch at all (see the
     // effect below) — this placeholder key only has to be STABLE for "this
     // stage's request is still the same shape of nothing", so the effect's
@@ -300,7 +354,7 @@ export function useCapacityReportsByStage(
       }
     }
     for (const [stageId, key] of requestKeys) {
-      const req = requests.get(stageId) ?? null;
+      const req = sendable.get(stageId) ?? null;
       if (req === null) {
         // Nothing to schedule — the render-time short-circuit below already
         // answers `{ report: null, stale: false }` for this stage without
@@ -351,7 +405,7 @@ export function useCapacityReportsByStage(
 
   const out = new Map<string, UseCapacityReportResult>();
   for (const [stageId, key] of requestKeys) {
-    if ((requests.get(stageId) ?? null) === null) {
+    if ((sendable.get(stageId) ?? null) === null) {
       out.set(stageId, { report: null, stale: false, failed: false });
       continue;
     }

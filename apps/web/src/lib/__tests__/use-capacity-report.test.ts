@@ -19,7 +19,11 @@ import {
   type CapacityReportConfig,
   type CapacityRequest,
 } from "../use-capacity-report";
-import type { CapacityFixtureInput } from "../capacity-input";
+import {
+  CAPACITY_PRECHECK_MAX_COURTS,
+  CAPACITY_PRECHECK_MAX_FIXTURES,
+  type CapacityFixtureInput,
+} from "../capacity-input";
 import type { CapacityReport } from "@seazn/engine/scheduling/capacity";
 
 function report(overrides: Partial<CapacityReport> = {}): CapacityReport {
@@ -174,6 +178,47 @@ describe("useCapacityReport", () => {
     expect(hook.current.stale).toBe(false);
   });
 
+  // Second-review finding 5: the "unconstrained courts" fallback in BOTH
+  // panels (`flattenCourts(venues).map(c => c.id)`) is unbounded, while the
+  // server schema this body is posted to caps `courts` at 50 and `fixtures`
+  // at 2000. An org over either cap therefore produced a guaranteed 400 ->
+  // one retry -> another 400, permanently, on every edit — the card stuck on
+  // "check failed" with no way for the organiser to clear it. A request the
+  // client can already prove the server will reject must never be sent.
+  it("skips the network call when `courts` exceeds the server's own bound — never sends a body it can prove will 400", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const courts = Array.from({ length: CAPACITY_PRECHECK_MAX_COURTS + 1 }, (_, i) => `c${i}`);
+    const hook = mount({ divisionId: "d1", fixtures: [], config: boundedConfig({ courts }) });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(hook.current.report).toBeNull();
+    expect(hook.current.stale).toBe(false);
+    expect(hook.current.failed).toBe(false);
+  });
+
+  it("skips the network call when `fixtures` exceeds the server's own bound", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const fixtures = Array.from({ length: CAPACITY_PRECHECK_MAX_FIXTURES + 1 }, (_, i) => ({ id: `f${i}` }));
+    const hook = mount({ divisionId: "d1", fixtures, config: boundedConfig() });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(hook.current.report).toBeNull();
+    expect(hook.current.stale).toBe(false);
+    expect(hook.current.failed).toBe(false);
+  });
+
+  it("sends normally at EXACTLY the bound — the guard is a ceiling, not an off-by-one that silences legitimate checks", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(report()));
+    vi.stubGlobal("fetch", fetchMock);
+    const courts = Array.from({ length: CAPACITY_PRECHECK_MAX_COURTS }, (_, i) => `c${i}`);
+    const hook = mount({ divisionId: "d1", fixtures: [], config: boundedConfig({ courts }) });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(hook.current.report).not.toBeNull();
+  });
+
   // Review fix (Finding 1): a superseded abort and a REAL failure used to be
   // swallowed identically — `onResolved` simply never fired for either, so
   // `stale` stayed true forever with no way to tell "catching up" from
@@ -307,6 +352,43 @@ describe("useCapacityReportsByStage", () => {
     await vi.advanceTimersByTimeAsync(300);
     expect(fetchMock).toHaveBeenCalledTimes(1); // only s1
     expect(hook.current.get("s2")).toEqual({ report: null, stale: false, failed: false });
+  });
+
+  // Second-review finding 1: `useCapacityReport` skipped an unassessable
+  // window (the two tests above in its own describe); this hook did NOT —
+  // it only ever skipped a literally `null` request. `capacityRequestForStage`
+  // (stages-panel.tsx) emits `from: -Infinity` / `to: Infinity` whenever only
+  // ONE of startAt/endAt is set, which is a very ordinary division shape, and
+  // `JSON.stringify(Infinity)` is `null` — so the body carried `to: null`
+  // against a `z.number()`, i.e. a guaranteed 400 -> retry -> 400 per stage
+  // per debounced edit. The two hooks must answer this identically; that they
+  // did not is exactly the drift a shared predicate has to prevent.
+  it("skips a stage whose window has only ONE finite bound — the same skip useCapacityReport already made", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(report()));
+    vi.stubGlobal("fetch", fetchMock);
+    const requests = new Map<string, CapacityRequest>([
+      ["s1", req("f-s1")],
+      ["s2", { fixtures: [{ id: "f-s2" }], config: boundedConfig({ window: { from: 0, to: Infinity } }) }],
+    ]);
+    const hook = mountStages({ divisionId: "d1", requests });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // only s1
+    expect(hook.current.get("s2")).toEqual({ report: null, stale: false, failed: false });
+  });
+
+  it("skips a stage whose courts exceed the server's own bound, leaving its siblings unaffected", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(report()));
+    vi.stubGlobal("fetch", fetchMock);
+    const courts = Array.from({ length: CAPACITY_PRECHECK_MAX_COURTS + 1 }, (_, i) => `c${i}`);
+    const requests = new Map<string, CapacityRequest>([
+      ["s1", req("f-s1")],
+      ["s2", { fixtures: [{ id: "f-s2" }], config: boundedConfig({ courts }) }],
+    ]);
+    const hook = mountStages({ divisionId: "d1", requests });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // only s1
+    expect(hook.current.get("s2")).toEqual({ report: null, stale: false, failed: false });
+    expect(hook.current.get("s1")?.report).not.toBeNull();
   });
 
   it("re-fetching ONE stage does not disturb a sibling stage's already-resolved report or reschedule its request", async () => {
