@@ -1341,6 +1341,44 @@ as a terminal status and `V364:90` allows it, but:
 
 Fixed in W1b, with the status enum reduced to ONE source rather than three.
 
+**OWNER RULING (2026-08-25) — RS004 ruling 2 is REVERSED. Viewers get the
+Registration hub, read-only.** RS004 made the whole hub owner/admin and 404'd
+viewers *because* the Registrants tab carries names, emails and consent state.
+W1b then established that the API never agreed: `requireResourceAuth(..., "read")`
+resolves to `READ_ROLES = owner, admin, viewer` (`lib/types.ts:28`), so the
+list and the CSV export have been viewer-readable all along on the division
+routes, and RS005 widens that to competition scope. Asked which way to resolve
+it; owner chose to widen the UI rather than narrow the API. Consequences:
+
+- The hub page drops its own `canEdit`-or-404 check and admits `READ_ROLES`.
+  This also re-converges the hub with competition settings, which already
+  renders a viewer a read-only page — RS004 called that divergence deliberate;
+  it is no longer.
+- Both tabs render read-only for a viewer. Every mutating control is **absent**,
+  not disabled: the API 403s a viewer on all of them anyway (`write` scope is
+  `EDITOR_ROLES`), so a disabled button would only advertise a capability the
+  server refuses.
+- CSV export IS available to a viewer. That is the deliberate part of this
+  ruling — it is the path that moves registrant data off-platform, and it rides
+  on `read`.
+- **Judgment call taken inside the ruling, flagged for override: the join code
+  is hidden from viewers.** It is not a display field, it is a bearer secret —
+  `join_code` is globally unique (RS001) and anyone holding it can add players
+  to that team entry, which is a WRITE a viewer does not otherwise have. Read
+  access to the roster does not imply the right to grant roster writes. Same
+  reasoning leaves `ref_code`/`access_token` visible: those authenticate the
+  REGISTRANT to their own entry and are already on the organiser's screen.
+
+**Fixed inline (no-new-issues rule), found by W1b in its own new routes and
+then confirmed in six pre-existing siblings:** `v1()` does not validate or
+strip against the OpenAPI response schema — it serializes whatever the handler
+returns (`api-v1/http.ts:124-149`). So the documented response type is
+documentation only, and `confirm`, `mark-paid`, `waive`, `waitlist`, `withdraw`
+and `refund` have all been returning `access_token_hash` to the client. Low
+severity (a hash, to a caller who already holds the row) but it is a
+credential-derived value that should never leave the server, and the fix is
+mechanical.
+
 **Pinned so no wave re-derives them:**
 
 - **Waitlist position must reproduce `promoteOldestWaitlisted`
