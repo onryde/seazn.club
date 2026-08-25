@@ -4,8 +4,6 @@ description: Let players sign themselves up from your public page — fees, ques
 order: 1
 ---
 
-**Registration is temporarily switched off** while the sign-up flow is rebuilt. Your division settings are kept and nothing you have configured is lost — the public page tells visitors that registration is not open, and this page describes how it works once it is back on.
-
 Instead of typing entrants yourself, open a division for **self-registration**: a *Register now* button appears on the competition's public page.
 
 The console's **Public registration link** card gives you the URL to share — **Copy** it, **Open** it, or press **QR** for a printable code (with a PNG download) that opens the register form from a club noticeboard.
@@ -28,7 +26,13 @@ Every registrant ticks a consent box before submitting: they agree that your org
 
 They get a **reference number** like `SZ-7F3K-Q2ND` and a tear-off ticket — their key to checking status, paying and withdrawing without an account ([how references work](/help/registration/reference-numbers)).
 
-The **Registrations** console opens on a **pulse strip** — confirmed / holding / waitlisted counts against capacity, money collected and due, and the next payment deadline — with the list below split into **Confirmed / Pending / Waitlist / All** tabs. Row actions are grouped so the split is unmistakable: **Spot** actions change who's in (Approve, Waitlist, **Withdraw** — frees the place and auto-refunds before your *refund lock* date), while **Money** actions only move money (**Mark paid** for cash/bank fees, **Waive fee** for comped entries — both logged — and **Refund**, which returns the fee while the entry keeps its spot). Entries sharing a contact email with another active entry carry a small *duplicate contact* hint — often legitimate, like a parent entering two kids.
+Every entry lands on the competition's **Registration** page, in its **Registrants** tab — one table across every division, not a separate list per division. Filter by division, status, entrant kind, free agents only, or consent still pending, or search by name; sort newest or oldest first. Every filter lives in the URL, so a filtered view is a link you can share or bookmark, and **Export CSV** downloads exactly the rows the current filters show.
+
+Click a row to expand it: contact details, the roster with each player's own consent status, the sign-up form's answers, and the entry's reference code. If it shares a cart with other entries — a parent signing up two kids, a team's mixed-division sign-up — those show too, each linking straight to its own row. A team entry also reveals its **join code** to owners and admins, so one of them can hand it to a captain still adding players; nobody else sees it.
+
+From an expanded row you can approve or reject the entry (divisions set to manual approval only), withdraw it — frees the spot, promotes the next waitlisted entry, and auto-refunds before your *refund lock* date — or resend the confirmation email.
+
+Viewers can open the **Registrants** tab too, read-only: every entry and the CSV export, but no join code and none of the action buttons.
 
 ## Linking an entry to an account
 
