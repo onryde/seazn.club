@@ -39,6 +39,7 @@ import {
   fetchOrgCurrency,
   fetchRegistrantRows,
   fetchDivisionOptions,
+  fetchRegistrantDetails,
   type RegistrantsRawQuery,
 } from "./data";
 
@@ -152,6 +153,14 @@ export default async function RegistrationHubPage({
   } else {
     const registrants = await fetchRegistrantRows(auth, id, registrantsRawQuery);
     const divisions = await fetchDivisionOptions(auth, id);
+    // RS005 W2b: the row-expand detail's roster/siblings/form_fields for
+    // EVERY row on the page, batched into 2 queries total (task 3) —
+    // fetched here, eagerly, rather than on click: the row is a plain
+    // <details> with no onToggle/client fetch (task 1), so the content has
+    // to already be in the initial HTML. fetchRegistrantDetails itself
+    // short-circuits to empty maps at zero rows, so this is safe to call
+    // unconditionally rather than special-casing the empty-panel branch.
+    const details = await fetchRegistrantDetails(auth, registrants.rows);
 
     panel = (
       <RegistrationHubRegistrantsPanel
@@ -168,6 +177,7 @@ export default async function RegistrationHubPage({
         emptyBody={t(dict, "reg.hub.registrants.body")}
         emptyCtaLabel={t(dict, "reg.hub.registrants.cta")}
         emptyCtaHref={routes.competitionRegistration(orgSlug, compSlug, "settings")}
+        details={details}
       />
     );
   }

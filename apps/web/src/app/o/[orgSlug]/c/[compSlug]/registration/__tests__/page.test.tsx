@@ -50,6 +50,15 @@ const h = vi.hoisted(() => ({
   divisionRowsQueries: 0,
   divisionOptionsQueries: 0,
   divisionOptions: [] as unknown[],
+  // RS005 W2b: fetchRegistrantDetails' own 2 queries (registration_players,
+  // then registrations/registration_settings for siblings+form_fields) —
+  // tracked separately from divisionRowsQueries/divisionOptionsQueries for
+  // the same reason those two are split: "the OTHER tab's query never ran"
+  // has to be provable in both directions, not just as one blunt total.
+  rosterQueries: 0,
+  siblingsQueries: 0,
+  rosterRows: [] as unknown[],
+  siblingRows: [] as unknown[],
 }));
 
 const feePercentForMock = vi.hoisted(() => vi.fn(async () => 8));
@@ -127,6 +136,18 @@ vi.mock("@/lib/db", () => ({
         h.divisionOptionsQueries += 1;
         return Promise.resolve(h.divisionOptions);
       }
+      // fetchRegistrantDetails (RS005 W2b, data.ts) — the row-expand
+      // detail's 2 queries. Distinguished by their own distinct leading
+      // column lists (see data.ts's own SQL) so neither can be mistaken
+      // for fetchDivisionRows' shape and pollute divisionRowsQueries.
+      if (first.startsWith("select registration_id")) {
+        h.rosterQueries += 1;
+        return Promise.resolve(h.rosterRows);
+      }
+      if (first.startsWith("select r.id")) {
+        h.siblingsQueries += 1;
+        return Promise.resolve(h.siblingRows);
+      }
       h.divisionRowsQueries += 1;
       return Promise.resolve(h.rows);
     };
@@ -163,6 +184,10 @@ beforeEach(() => {
   h.divisionRowsQueries = 0;
   h.divisionOptionsQueries = 0;
   h.divisionOptions = [];
+  h.rosterQueries = 0;
+  h.siblingsQueries = 0;
+  h.rosterRows = [];
+  h.siblingRows = [];
   feePercentForMock.mockClear();
   feePercentForMock.mockResolvedValue(8);
   listRegistrationsMock.mockClear();
@@ -260,6 +285,51 @@ describe("registration hub — ?tab= switching", () => {
   it("DOES run listRegistrations exactly once on the Registrants tab", async () => {
     await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
     expect(listRegistrationsMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("registration hub — row-expand detail query wiring (RS005 W2b, task 3)", () => {
+  it("issues exactly ONE roster query and ONE siblings query for a multi-row Registrants page — never one per row", async () => {
+    listRegistrationsMock.mockResolvedValueOnce([
+      { id: "r1", group_id: "g1" },
+      { id: "r2", group_id: "g1" },
+      { id: "r3", group_id: "g2" },
+    ]);
+    await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
+    expect(h.rosterQueries).toBe(1);
+    expect(h.siblingsQueries).toBe(1);
+  });
+
+  it("issues ZERO detail queries when the Registrants tab has no rows — no wasted round trip", async () => {
+    await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
+    expect(h.rosterQueries).toBe(0);
+    expect(h.siblingsQueries).toBe(0);
+  });
+
+  it("never runs the detail queries on the Settings tab", async () => {
+    await Page({ params, searchParams: noTab });
+    expect(h.rosterQueries).toBe(0);
+    expect(h.siblingsQueries).toBe(0);
+  });
+
+  it("never pollutes divisionRowsQueries — the detail queries have their own distinct branches", async () => {
+    listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
+    await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
+    expect(h.divisionRowsQueries).toBe(0);
+  });
+
+  it("passes the resolved details straight through to the panel's details prop", async () => {
+    listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    const details = propsOf(panel).details as {
+      rosterByRegistration: Map<string, unknown>;
+      siblingsByGroup: Map<string, unknown>;
+      formFieldsByRegistration: Map<string, unknown>;
+    };
+    expect(details.rosterByRegistration).toBeInstanceOf(Map);
+    expect(details.siblingsByGroup).toBeInstanceOf(Map);
+    expect(details.formFieldsByRegistration).toBeInstanceOf(Map);
   });
 });
 
