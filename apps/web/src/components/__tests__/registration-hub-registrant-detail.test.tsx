@@ -12,6 +12,7 @@ import {
   type RegistrationHubRegistrantDetailProps,
 } from "@/components/registration-hub-registrant-detail";
 import { RegistrationHubRegistrantJoinCode } from "@/components/registration-hub-registrant-join-code";
+import { RegistrationHubRegistrantActions } from "@/components/registration-hub-registrant-actions";
 import { getDictionary, t } from "@/lib/i18n";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 import type { RegistrantRosterPlayer, RegistrantCartSibling } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
@@ -297,5 +298,34 @@ describe("RegistrationHubRegistrantDetail — cart siblings (task 2 + acceptance
     const tree = walk(RegistrationHubRegistrantDetail(baseProps({ siblings: [SIBLING, second] })));
     const links = tree.filter((e) => propsOf(e)["data-registration-hub-registrant-sibling-link"] !== undefined);
     expect(links).toHaveLength(2);
+  });
+});
+
+describe("RegistrationHubRegistrantDetail — action controls (RS005 W3, viewer/editor gating)", () => {
+  it("mounts RegistrationHubRegistrantActions for an editor, threading the row's id/status/approval straight through", () => {
+    const tree = walk(
+      RegistrationHubRegistrantDetail(
+        baseProps({ row: row({ id: "reg-9", status: "pending", approval: "manual" }), canEdit: true }),
+      ),
+    );
+    const actions = tree.find((e) => e.type === RegistrationHubRegistrantActions);
+    expect(actions).toBeTruthy();
+    expect(propsOf(actions!)).toMatchObject({
+      registrationId: "reg-9",
+      status: "pending",
+      approval: "manual",
+    });
+  });
+
+  it("is ABSENT for a viewer — not merely disabled (owner ruling, 2026-08-25: mutating controls are absent, not disabled)", () => {
+    const tree = walk(RegistrationHubRegistrantDetail(baseProps({ canEdit: false })));
+    expect(tree.some((e) => e.type === RegistrationHubRegistrantActions)).toBe(false);
+  });
+
+  it("renders the Actions section heading only for an editor, never for a viewer", () => {
+    const editorText = textOf(RegistrationHubRegistrantDetail(baseProps({ canEdit: true })));
+    const viewerText = textOf(RegistrationHubRegistrantDetail(baseProps({ canEdit: false })));
+    expect(editorText).toContain(t(dict, "reg.hub.registrants.detail.section.actions"));
+    expect(viewerText).not.toContain(t(dict, "reg.hub.registrants.detail.section.actions"));
   });
 });

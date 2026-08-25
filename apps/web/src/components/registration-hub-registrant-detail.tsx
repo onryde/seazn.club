@@ -34,6 +34,7 @@ import {
   registrantRowAnchor,
 } from "@/components/registration-hub-registrant-derive";
 import { RegistrationHubRegistrantJoinCode } from "@/components/registration-hub-registrant-join-code";
+import { RegistrationHubRegistrantActions } from "@/components/registration-hub-registrant-actions";
 
 export interface RegistrationHubRegistrantDetailProps {
   row: RegistrationListRow;
@@ -218,6 +219,19 @@ export function RegistrationHubRegistrantDetail({
               </li>
             ))}
           </ul>
+        </section>
+      )}
+
+      {/* RS005 W3: the row's mutating action controls (approve/reject/
+          withdraw/promote/resend) — the SAME canEdit gate as the join-code
+          control above, and for the same owner ruling (2026-08-25):
+          mutating controls are ABSENT for a viewer, never merely disabled.
+          The write APIs all 403 a viewer regardless, so a disabled button
+          here would only advertise a capability they don't have. */}
+      {canEdit && (
+        <section className="sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.actions")}>
+          <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.actions")}</h4>
+          <RegistrationHubRegistrantActions registrationId={row.id} status={row.status} approval={row.approval} />
         </section>
       )}
     </div>
