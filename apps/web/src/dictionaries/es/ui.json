@@ -1200,6 +1200,8 @@
   "venues.calendar.saved": "Horario guardado.",
   "venues.calendar.stranded.one": "Aviso: {count} partido ya programado en esta pista queda ahora fuera de este horario. No se ha bloqueado nada — reasígnalo cuando puedas.",
   "venues.calendar.stranded.other": "Aviso: {count} partidos ya programados en esta pista quedan ahora fuera de este horario. No se ha bloqueado nada — reasígnalos cuando puedas.",
+  "venues.calendar.strandedTotal.one": "{count} partido programado en esta pista sigue fuera de su horario utilizable: es anterior a este cambio o proviene de los horarios de sesión de una división.",
+  "venues.calendar.strandedTotal.other": "{count} partidos programados en esta pista siguen fuera de su horario utilizable: son anteriores a este cambio o provienen de los horarios de sesión de una división.",
   "venues.weekday.sun": "Dom",
   "venues.weekday.mon": "Lun",
   "venues.weekday.tue": "Mar",
