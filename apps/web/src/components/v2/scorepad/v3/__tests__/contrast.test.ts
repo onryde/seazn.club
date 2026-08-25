@@ -507,7 +507,16 @@ describe("tile-grid.tsx's sublabel clears WCAG AA on every tile ground it can la
     "slate-500": "#62748e",
     "slate-600": "#45556c",
     "slate-700": "#314158",
-    "red-600": "#e40014",
+    // BOTH declarations ship for this one, and they are not the same colour:
+    // the stylesheet emits `--color-red-600:#e40014` as an sRGB fallback AND
+    // `lab(48.4493% 77.4328 61.5452)`, which every browser this app supports
+    // actually composites — that converts to #e7000b. Measuring the fallback
+    // overstates the margin (4.59 vs the real 4.54). The rule for this table
+    // is therefore: where a token ships two declarations, record the one the
+    // BROWSER uses, not the one that is easier to read out of the file. The
+    // R4 commit that added this row claimed to "read the built stylesheet"
+    // and read the wrong half of it.
+    "red-600": "#e7000b",
   };
 
   function sublabelAlpha(): number {
@@ -541,9 +550,29 @@ describe("tile-grid.tsx's sublabel clears WCAG AA on every tile ground it can la
    *  Deriving the list from the source is the actual fix: a kind that exists
    *  is a kind that is measured, and a fifth one cannot be forgotten. */
   function kindsFromSource(): { kind: string; text: string; ground: string }[] {
-    const block = codeOnly.slice(codeOnly.indexOf("KIND_CLASS"));
-    const rows = [...block.matchAll(/(\w+):\s*"([^"]+)"/g)].slice(0, 4);
-    expect(rows.length, "KIND_CLASS must still declare four tile kinds as string literals").toBe(4);
+    // Bounded to KIND_CLASS's OWN object literal, and NOT `.slice(0, 4)`.
+    //
+    // The first version of this sweep sliced to four before asserting there
+    // were four, so the assertion could only ever catch FEWER kinds — a fifth
+    // was silently dropped and never measured. That is the precise bug this
+    // rewrite exists to prevent, reintroduced inside the fix for it; caught by
+    // review, which added a fifth failing kind and watched the suite stay
+    // green. Take the whole literal and let the cross-check below decide.
+    const open = codeOnly.indexOf("const KIND_CLASS");
+    expect(open, "tile-grid.tsx must still declare KIND_CLASS").toBeGreaterThan(-1);
+    const block = codeOnly.slice(open, codeOnly.indexOf("};", open));
+    const rows = [...block.matchAll(/(\w+):\s*"([^"]+)"/g)];
+
+    // Cross-checked against the TYPE, in the other file, so neither side can
+    // drift alone: a kind added to the union but not to KIND_CLASS, or to
+    // KIND_CLASS but not measured here, reds.
+    const typesSrc = readFileSync(join(process.cwd(), "src/components/v2/scorepad/v3/types.ts"), "utf8");
+    const union = /export type TileKind\s*=\s*([^;]+);/.exec(typesSrc)?.[1] ?? "";
+    const declared = [...union.matchAll(/"(\w+)"/g)].map((m) => m[1]!);
+    expect(declared.length, "types.ts must still declare the TileKind union as string literals").toBeGreaterThan(0);
+    expect([...rows.map(([, k]) => k)].sort(), "every TileKind must have a KIND_CLASS row, and vice versa").toEqual(
+      [...declared].sort(),
+    );
     return rows.map(([, kind, classes]) => {
       const text = /text-([\w-]+)/.exec(classes)?.[1];
       const ground = /bg-([\w-]+)/.exec(classes)?.[1];
@@ -592,10 +621,11 @@ describe("tile-grid.tsx's sublabel clears WCAG AA on every tile ground it can la
     expect(contrastRatio(composited, TAILWIND.white!)).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("the DESTRUCTIVE tile — red-600 on white, which passes by only 0.09", () => {
-    // 4.59:1. Recorded with its margin BECAUSE it is thin: a palette nudge of
-    // one step, or any future dimming of this element, drops it under the
-    // floor. It was never measured before R4.
+  it("the DESTRUCTIVE tile — red-600 on white, which passes by only 0.04", () => {
+    // 4.54:1 against the lab() colour browsers actually composite (see the
+    // TAILWIND note). Recorded with its margin BECAUSE it is thin: a palette
+    // nudge of one step, or any future dimming of this element, drops it
+    // under the floor. It was never measured at all before R4.
     expect(codeOnly).toContain("bg-white font-medium text-red-600");
     const composited = compositeOver(TAILWIND["red-600"]!, sublabelAlpha(), TAILWIND.white!);
     expect(contrastRatio(composited, TAILWIND.white!)).toBeGreaterThanOrEqual(4.5);
