@@ -27,13 +27,19 @@ describe("SPOT_HOLDERS — single source of truth", () => {
     expect(fromRegistrations).toBe(SPOT_HOLDERS);
   });
 
-  it("the registration hub page has no local re-declaration — it imports from this module", () => {
-    const pagePath = join(
+  it("the registration hub's data layer has no local re-declaration — it imports from this module", () => {
+    // `data.ts`, not `page.tsx`: the hub's query moved out of the page module
+    // when app-module-exports.test.ts caught the page exporting helpers Next
+    // does not tolerate. The constant went with the query it belongs to.
+    const hubDir = join(
       dirname(fileURLToPath(import.meta.url)),
-      "..", "..", "app", "o", "[orgSlug]", "c", "[compSlug]", "registration", "page.tsx",
+      "..", "..", "app", "o", "[orgSlug]", "c", "[compSlug]", "registration",
     );
-    const src = readFileSync(pagePath, "utf8");
-    expect(src).toContain('from "@/lib/registration-status"');
-    expect(src).not.toMatch(/const SPOT_HOLDERS\s*=/);
+    const data = readFileSync(join(hubDir, "data.ts"), "utf8");
+    expect(data).toContain('from "@/lib/registration-status"');
+    expect(data).not.toMatch(/const SPOT_HOLDERS\s*=/);
+    // …and the page it moved out of did not keep a copy on the way past.
+    const page = readFileSync(join(hubDir, "page.tsx"), "utf8");
+    expect(page).not.toMatch(/const SPOT_HOLDERS\s*=/);
   });
 });
