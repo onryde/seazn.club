@@ -1934,3 +1934,76 @@ lineup editor already sends it, so the fix is three lines in the seeder and it
 lands BEFORE the e2e and gallery work rather than inside it. Spread-omit the
 field rather than sending an explicit `null`, so individual-entrant fixtures
 keep declaring nothing.
+
+### R4 — two more owner rulings, taken mid-wave off a review finding (2026-08-25)
+
+| # | Decision | Ruling |
+|---|---|---|
+| R4-5 | The v3 point dock records the shot type but not WHO won the point | **Scorer chips in doubles; auto-set in singles.** One chip per player of the winning pair, as the SECOND dock question after the shot type — football's goal-scorer dock, which is where `DockChip.labelText` came from. Singles sets `scorer` at tap time with no chip, because with one player there is nothing to choose |
+| R4-6 | `meta.receiverSide` (deuce/ad) is lost with it | **Stays out, knowingly.** It only applies at a no-ad deciding point, the fold never reads it, and the ~6s dock window is tightest on exactly that point. Dropped deliberately and recorded here, not discovered later |
+
+**The regression these answer, and why it is not what the review first called
+it.** The review reported that v2's tennis TILE posted `meta.receiverSide`.
+It did not — `git grep -a receiverSide` over `skins/tennis-skin.tsx` returns
+nothing. The real mechanism is one level up and costs more: `padSpec` declares
+TWO point actions sharing ONE wire type (`nested/kernel.ts:1422-1440`) — a bare
+`pointAction` and a `pointAttributedAction` carrying `meta.kind`,
+`meta.receiverSide` and person attribution for `server` AND `scorer`. Both were
+reachable as generic More-sheet forms in v2. Dedicating `tennis.point` in v3
+removes BOTH, and the v3 dock replaced only `meta.kind`.
+
+So the loss is not a niche enum. It is `scorer`: **in doubles, which partner
+won the point became unrecordable**, and `NestedPersonTally.points` folds
+exactly that field — leaving a doubles league's per-player point counts empty
+on the wave whose headline is that per-player tennis stats finally work from
+the pad. Singles was never affected (one player, never ambiguous).
+
+Worth generalising for R5, which converts three more sports onto the same
+chassis: **a v2 sport's capability inventory is not its skin's tile list.**
+Anything `padSpec` declared was reachable through the generic form, so
+dedicating a wire type silently retires every OTHER declared action sharing
+that type. Diff the padSpec actions by TYPE before flipping a registry entry,
+not the v2 skin's buttons.
+
+### R4 — what the two review passes found, and what they did not (2026-08-25)
+
+Two reviewers, disjoint lenses (correctness/contracts; product value/coverage).
+Both returned NEEDS FIXES. Recorded because the SHAPE of the result matters as
+much as the list.
+
+**Everything they blocked on is e2e and gallery — the one task not yet started
+— and nothing in the engine or the pad's contracts.** Verified clean by hand-
+derivation plus JSON-confirmed runs: `serveContext`/`completedGames` across
+game, tie-break and match-tie-break boundaries; the stale-serve omission
+(`hasStaleServeInfo`) proven against real folds rather than a fixture; the
+`nested` barrel exporting readers and no mutators; and `dedicatedEventTypes`'s
+tapModel-S widening proven for cricket and football through their OWN
+`buildScorebug`, not a stand-in.
+
+The blockers, in the order they hurt:
+
+1. **The sign-off gate cannot run at all.** Both `gallery.capture.ts` tennis
+   entries `scoreOne` by clicking `getByRole("button", {name: "Home"})`; a v3
+   half's accessible name is the PLAYER'S NAME plus hint text
+   (`scorebug.tsx:159`), so the script errors before capturing a single
+   screenshot. The owner would be asked to verdict a wave with zero pictures.
+2. **No `EXTRA_STATES` for tennis anywhere**, so even a fixed `scoreOne` never
+   opens the doubles serve pip or the sanction sheet — the wave's headline
+   feature would have no screen to sign off, which is R2c's standing
+   instruction ignored one wave later.
+3. **Three pre-existing e2e specs go red** (`scorepad-skins.spec.ts`,
+   `v6-sports.spec.ts` ×2) on selectors the build spec itself predicted would
+   break and which were then left unfixed. `registry.ts` routes tennis to v3
+   unconditionally — no flag — so whoever opens the PR gets them red in CI.
+4. **Zero tennis e2e exists**, so the dock's advance-on-tap has no
+   browser-level proof. The skin says so in its own source rather than
+   claiming coverage it lacks. This is R3's inert-dock incident with the
+   warning label already attached.
+
+**A process note worth keeping.** One reviewer ended its turn on the line
+"Waiting on the last fork to complete" and reported no findings at all — the
+stall shape where an agent returns `completed` carrying nothing. It had done
+the work; it just never said it. Woken with an explicit "report what you have,
+mark the rest UNANSWERED", it returned eight findings. A review that reports
+nothing is indistinguishable from a review that found nothing, and only one of
+those is safe to act on.
