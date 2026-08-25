@@ -332,11 +332,38 @@ interface ServeContext {
  * deleted mirrors defaulted it, so a `{}`/pre-fold state behaves identically
  * to before this change; every OTHER `NestedState` field (`cfg`, `entrants`,
  * `phase`, `points`, `setsWon`, `outcome`, ...) is provably unread by that
- * call graph (checked against kernel.ts), so the cast below never asserts
+ * call graph (checked against kernel.ts), so the shim below never asserts
  * something the call actually depends on.
+ *
+ * Defect 3 fix (code review, 2026-08-25): `shim` is typed as exactly the
+ * `Pick<NestedState, ...>` of the four fields above, WIDENED DELIBERATELY to
+ * `NestedState` in a single `as` — not `as unknown as NestedState`. The two
+ * read identically to `serveContext`'s own parameter type, but they are not
+ * equally safe to WRITE: routing the literal through `unknown` first (the
+ * old code) skipped checking the literal against ANY shape at all, so a typo
+ * or a kernel-side shape drift in `serving`/`sets`/`games`/`squads`
+ * themselves — the four fields this function actually constructs — would
+ * have shown up as a runtime crash on render, not a red build. The
+ * `Pick<...>`-typed local restores that check for exactly those four fields,
+ * verified against `NestedState`'s real shape (`kernel.ts:390-427`) — drop
+ * `away` from the `games` literal below by hand and `tsc --noEmit` reds on
+ * this exact line; do the same with the old `as unknown as NestedState` and
+ * it stays silent, a runtime crash away from being noticed. `NestedState`
+ * being assignable to `Pick<NestedState, K>` (a full object trivially
+ * satisfies a named subset of its own fields) is what makes the single,
+ * narrower `as` legal without an `unknown` escape hatch.
+ *
+ * What this does NOT catch, and cannot without touching `serveContext`'s own
+ * signature (kernel.ts, out of this fix's grant): a FUTURE kernel edit that
+ * makes `serveContext`'s call graph start reading a FIFTH `NestedState`
+ * field this shim never populates. That call would still type-check (the
+ * expression's static type is `NestedState` either way) and would still
+ * throw `TypeError: Cannot read properties of undefined` at render time
+ * exactly as before — an architectural boundary a local cast cannot close,
+ * not something this fix claims to fix.
  */
 function deriveServeContext(state: TennisStateShape, squads: SquadState): ServeContext {
-  const shim = {
+  const shim: Pick<NestedState, "serving" | "sets" | "games" | "squads"> = {
     serving: state.serving === "away" ? "away" : "home",
     sets: (state.sets ?? []).map((set) => ({
       home: set.home ?? 0,
@@ -345,8 +372,8 @@ function deriveServeContext(state: TennisStateShape, squads: SquadState): ServeC
     })),
     games: { home: state.games?.home ?? 0, away: state.games?.away ?? 0 },
     squads,
-  } as unknown as NestedState;
-  return serveContext(shim);
+  };
+  return serveContext(shim as NestedState);
 }
 
 /**
