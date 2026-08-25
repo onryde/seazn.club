@@ -441,10 +441,15 @@ describe.skipIf(!HAS_DB)("RS005 whole-branch review BLOCKER: join_code is not a 
     const { registration } = await seedRegistration(competition.id, division.id, settings, {
       displayName: "Team With A Code",
     });
-    await sql`update registrations set join_code = ${"JOINTEST1"} where id = ${registration.id}`;
+    // Randomised, not a literal: join_code is GLOBALLY unique (RS001's partial
+    // unique index) and this DB persists between runs, so a hardcoded code
+    // passes once and then 23505s forever — the same trap RS003 hit with
+    // hardcoded ref_code literals.
+    const code = "JOIN" + Math.random().toString(36).slice(2, 10).toUpperCase();
+    await sql`update registrations set join_code = ${code} where id = ${registration.id}`;
 
     const asOwnerRows = await listRegistrations(owner, null, null, { competition_id: competition.id });
-    expect(asOwnerRows.find((r) => r.id === registration.id)?.join_code).toBe("JOINTEST1");
+    expect(asOwnerRows.find((r) => r.id === registration.id)?.join_code).toBe(code);
 
     const viewer = { ...owner, role: "viewer" as const };
     const asViewerRows = await listRegistrations(viewer, null, null, { competition_id: competition.id });
@@ -458,5 +463,60 @@ describe.skipIf(!HAS_DB)("RS005 whole-branch review BLOCKER: join_code is not a 
     const asKeyRows = await listRegistrations(key, null, null, { competition_id: competition.id });
     expect(asKeyRows.find((r) => r.id === registration.id)?.join_code).toBeNull();
     expect(orgId).toBeTruthy();
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS005 review: the CSV's per-player personal data is editor-only", () => {
+  // The owner's ruling deliberately lets a VIEWER export — a read-only seat can
+  // still do the federation paperwork. It weighed the JOIN CODE, not this:
+  // player dob/gender appear on no UI surface for any role, so the export is
+  // the only path to them, and much of it is minor-attendee personal data
+  // leaving the platform as a file someone then emails around.
+  async function csvFor(role, ctx, competitionId) {
+    return exportRegistrationsCsv({ ...ctx, role }, { competitionId });
+  }
+
+  it("gives an editor dob and gender, and gives a viewer neither the columns nor the values", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Junior Entry",
+      players: [{ name: "Kid Player", dob: "2014-05-06", gender: "f" }],
+    });
+    expect(registration.id).toBeTruthy();
+
+    const editorCsv = await csvFor("owner", owner, competition.id);
+    expect(editorCsv).toContain("player_dob");
+    expect(editorCsv).toContain("2014-05-06");
+
+    const viewerCsv = await csvFor("viewer", owner, competition.id);
+    // The header must not merely blank the column — a blank cell under
+    // `player_dob` asserts "we hold no date of birth", which is false.
+    expect(viewerCsv).not.toContain("player_dob");
+    expect(viewerCsv).not.toContain("player_gender");
+    expect(viewerCsv).not.toContain("2014-05-06");
+    // The viewer still gets a usable export — this is a narrowing, not a block.
+    expect(viewerCsv).toContain("Junior Entry");
+    expect(viewerCsv).toContain("Kid Player");
+    expect(viewerCsv).toContain("player_consent_status");
+  });
+
+  it("keeps every row's column count equal to its header, for both roles", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    // A rostered entry AND a zero-player entry: the blank-row path builds its
+    // cells from the same header, so a drift between them shows up here.
+    await seedRegistration(competition.id, division.id, settings, {
+      displayName: "With Roster",
+      players: [{ name: "A Player", dob: "2001-01-01", gender: "m" }],
+    });
+    await seedRegistration(competition.id, division.id, settings, { displayName: "No Roster" });
+
+    for (const role of ["owner", "viewer"]) {
+      const csv = await csvFor(role, owner, competition.id);
+      const [head, ...rest] = csv.trim().split("\n");
+      const width = head.split(",").length;
+      for (const line of rest) {
+        expect(line.split(",").length, `${role}: row width must match header`).toBe(width);
+      }
+    }
   });
 });

@@ -3364,12 +3364,28 @@ export async function exportRegistrationsCsv(
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
 
+  // Per-player DOB and GENDER are editor-only (RS005 whole-branch review).
+  // The owner's ruling deliberately allows a VIEWER to export — that is the
+  // point of a read-only seat that can still do the federation paperwork — but
+  // it weighed the join code, not this: dob/gender appear on NO UI surface for
+  // ANY role, so the export is the only path to them, and much of it is
+  // minor-attendee personal data leaving the platform as a file.
+  //
+  // The columns are OMITTED, not blanked. A blank column in a file headed
+  // `player_dob` reads as "we hold no date of birth", which is a different and
+  // false statement — and a spreadsheet built against that header would
+  // silently gain two empty columns depending on who exported it.
+  const maySeePlayerPersonalData =
+    auth.role !== null && (EDITOR_ROLES as readonly string[]).includes(auth.role);
+  const playerHeader = maySeePlayerPersonalData
+    ? ["player_name", "player_dob", "player_gender", "player_consent_status", "squad_number", "is_captain"]
+    : ["player_name", "player_consent_status", "squad_number", "is_captain"];
+
   const header = [
     "registration_id", "ref_code", "division", "status", "kind", "display_name",
     "contact_name", "contact_email", "amount_cents", "currency", "refunded_cents",
     "payment_method", "waitlist_position", "created_at",
-    "player_name", "player_dob", "player_gender", "player_consent_status",
-    "squad_number", "is_captain",
+    ...playerHeader,
     ...fieldKeys,
   ];
   const lines: string[] = [];
@@ -3382,16 +3398,15 @@ export async function exportRegistrationsCsv(
     const answerCols = fieldKeys.map((k) => (r.answers as Record<string, unknown>)[k] ?? "");
     const players = playersByReg.get(r.id) ?? [];
     if (players.length === 0) {
-      lines.push([...entryCols, "", "", "", "", "", "", ...answerCols].map(esc).join(","));
+      // One blank cell per player column, whichever set is in force — derived
+      // from playerHeader so the two can never fall out of step.
+      lines.push([...entryCols, ...playerHeader.map(() => ""), ...answerCols].map(esc).join(","));
     } else {
       for (const p of players) {
-        lines.push(
-          [
-            ...entryCols,
-            p.full_name, p.dob, p.gender, p.consent_status, p.squad_number, p.is_captain,
-            ...answerCols,
-          ].map(esc).join(","),
-        );
+        const playerCols = maySeePlayerPersonalData
+          ? [p.full_name, p.dob, p.gender, p.consent_status, p.squad_number, p.is_captain]
+          : [p.full_name, p.consent_status, p.squad_number, p.is_captain];
+        lines.push([...entryCols, ...playerCols, ...answerCols].map(esc).join(","));
       }
     }
   }
