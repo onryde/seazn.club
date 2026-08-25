@@ -30,6 +30,7 @@ import {
   validateAnswers,
   windowOpen,
   materialise,
+  rosterCapExpr,
   type RegistrationRow,
   type RegistrationSettingsRow,
 } from "./registrations";
@@ -739,11 +740,11 @@ export async function joinTeamEntry(
   // where defined, else unlimited") — `sports.position_catalog.lineup.size +
   // .benchMax`. A sport with no lineup config declared leaves `max` null,
   // read as unlimited.
+  // RS005 W1b: re-pointed at the shared rosterCapExpr (registrations.ts) —
+  // same expression, one source now instead of two hand-copies (that file's
+  // own doc comment on rosterCapExpr named this call site as the copy owed).
   const [cap] = await sql<{ max: number | null }[]>`
-    select (
-      (sp.position_catalog -> 'lineup' ->> 'size')::int +
-      coalesce((sp.position_catalog -> 'lineup' ->> 'benchMax')::int, 0)
-    ) as max
+    select ${rosterCapExpr(sql)} as max
     from divisions d join sports sp on sp.key = d.sport_key
     where d.id = ${reg.division_id}`;
   if (cap?.max != null) {
