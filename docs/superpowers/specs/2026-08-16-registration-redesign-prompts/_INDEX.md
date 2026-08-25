@@ -28,7 +28,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS002 | `RS002-core-usecases.md` | RS001b | **DONE** — PR #607 merged `4ff0bf8f` (2026-08-17) |
 | RS003 | `RS003-public-endpoints.md` | RS002 | **DONE** — PR #615 merged `29690ec8c` (2026-08-18) |
 | RS004 | `RS004-hub-settings-tab.md` | RS003 | **DONE** — merged `171df1376` (PR #641, 2026-08-25). Smoke still owed by RS010, as the PR states |
-| RS005 | `RS005-hub-registrants-tab.md` | RS004 | TODO |
+| RS005 | `RS005-hub-registrants-tab.md` | RS004 | **IN FLIGHT** (2026-08-25) — branch `feat/rs005-registrants-tab` |
 | RS006 | `RS006-public-stepper.md` | RS003 | TODO |
 | RS007 | `RS007-status-page-join-payments.md` | RS006 | TODO |
 | RS008 | `RS008-consent-claim-optout.md` | RS007 | TODO |
@@ -1251,6 +1251,97 @@ untouched.
 deliberately builds NO context and issues NO queries — build its own rather
 than widening the settings one. `registrations.status` counting lives in
 `card-stats.ts` (`registered` and `awaiting_confirmation`, one aggregate).
+
+### RS005 (2026-08-25) — branch `feat/rs005-registrants-tab`
+
+**LIVE SESSION.** Worktree `.claude/worktrees/rs005` off `origin/main` @ `9080cb959`.
+DB label `rs005` on `127.0.0.1:54429`, schema **v375**; placement on `50311`.
+Baseline before any edit, main thread, JSON reporter: `registrations.test.ts` +
+`registration-approval.test.ts` + `card-stats-registration-counts.test.ts` +
+the hub's own `__tests__/` = **168 total / 168 passed / 0 failed / 0 failed
+suites**. Flyway high-water is **V375**, so any RS005 delta starts at V376 —
+none is expected: this session is read-model, endpoints and UI only.
+
+**Brief premises checked against the tree before writing anything. Most of
+scope item 4 ("API: org-side endpoints for list + transitions") ALREADY
+EXISTS.** What is actually missing is narrower than the prompt implies:
+
+- Live already: `GET /api/v1/divisions/[id]/registrations` (status filter),
+  `.../registrations/export` (CSV, `exports` entitlement),
+  `POST /registrations/[id]/{withdraw,remind,confirm,waive,mark-paid,refund,
+  waitlist}`.
+- `/registrations/[id]/waitlist` is move-**to**-waitlist, NOT promote. Nothing
+  in `app/` reaches `promoteFromWaitlist`, `approveRegistration` or
+  `rejectRegistration` — RS002 shipped all three usecases with no HTTP surface.
+- Genuinely new in RS005: competition-scoped list, `approve`, `reject`,
+  `promote`, and the filter-aware CSV.
+- `listRegistrations` (`registrations.ts:2684`) already implements EVERY filter
+  the prompt asks for — competition-wide, kind, free_agent, consent_pending,
+  text. What it lacks is the COLUMNS the table renders.
+
+**FINDING (2026-08-25): the registration confirmation email is never sent by
+any path.** `sendRegistrationEmail` (`lib/email.ts:427`) has ZERO callers —
+RS001 preserved the mailer, and neither RS002's submit nor RS003's route ever
+wired it. The dispute-evidence pack (`registrations.ts:3165`) rebuilds the
+receipt with `registrationTemplate` under a comment saying it is
+"reconstructed with the exact sender inputs" and "matches the original mail" —
+there is no original mail. So a registrant today receives nothing at submit,
+and the evidence pack attests to a message that was never delivered.
+Owner ruling (2026-08-25): **fix inline in RS005** — wire the first send into
+the submit path AND ship the resend action, per the no-new-issues rule. This
+widens the session's file set to `registration-submit.ts` / the public register
+route; asked and approved before starting, per `_RULES.md` §1.
+
+**Owner rulings taken this session:**
+
+1. **Confirmation email: send + resend, both in RS005** (above).
+2. **`waitlist-queue.tsx` is ABSORBED, not wired.** Its Promote calls
+   confirm/waive — pre-RS002 semantics — and its `positions` prop is
+   caller-computed, so wiring it verbatim forks promotion in exactly the
+   placer-vs-verifier way the prompt warns about. The waitlist becomes a
+   section of the one registrants table: same positions, same `#`-in-line, same
+   promote affordance, but server-computed order and `promoteFromWaitlist` as
+   the only writer. The component is deleted. Its lost assertions (queue order,
+   `#`-in-line, public waitlist count — they died with `reg-console.spec.ts`)
+   are restored against the new section, which is the obligation RS001 handed
+   over regardless of which component renders it.
+3. **Widen `listRegistrations`, do not add a second hub read model.** The extra
+   columns are additive, existing callers are unaffected, and it keeps the
+   prompt's ONE-source rule literally true rather than approximately true.
+4. **One CSV exporter, not two.** `exportRegistrationsCsv` becomes
+   competition-or-division scoped, filter-aware and per-player; the existing
+   division route delegates to it. A second exporter is two column contracts to
+   keep in sync — the repo's recurring fork class.
+5. **CSV shape: one row per PLAYER.** An N-player entry emits N rows with the
+   entry columns repeated; a zero-player entry (free agent, or a team
+   registered with an empty roster) emits one row with blank player columns.
+   Recorded because "one row per entry with a players column" is the other
+   defensible choice and RS010's help page has to document whichever shipped.
+6. **Default sort stays oldest-first.** The prompt asks for newest-first, but
+   flipping `listRegistrations`' default silently reorders the live
+   `/api/v1/divisions/[id]/registrations` response. A `sort` filter was added
+   instead, defaulting to the existing order; the hub passes `"newest"`.
+
+**Pinned so no wave re-derives them:**
+
+- **Waitlist position must reproduce `promoteOldestWaitlisted`
+  (`registrations.ts:799`) exactly**: `order by created_at, id` over
+  `status = 'waitlisted'` within ONE division. A tuple comparison
+  `(w.created_at, w.id) < (r.created_at, r.id)` reproduces it; a `row_number()`
+  over an unfiltered set does not. This is the session's regression test — the
+  displayed `#1` and the row the promote button actually moves are the same row
+  or this feature is lying.
+- **Roster fill (`5/7`) has a source already**: `registration-submit.ts:742-748`,
+  `(sports.position_catalog->'lineup'->>'size')::int + coalesce(benchMax, 0)`,
+  NULL = unlimited. Hand-copying that expression into the list query is the
+  fork; it is extracted to one place.
+- **`access_token_hash` ships to the client today.** `regGroupCols`
+  (`registrations.ts:404`) includes it and the organiser list route returns the
+  row verbatim. Dropped from the list path this session.
+- RS004 handover honoured: the Registrants tab builds its OWN context and
+  queries rather than widening `use-registration-hub-config.ts`.
+- RS004 ruling 4's deferred item lands here: the division page re-points into
+  the hub with its division pre-filtered.
 
 ## RS011 — why #412 moved here (2026-08-17)
 
