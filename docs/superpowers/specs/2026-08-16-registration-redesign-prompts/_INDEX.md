@@ -1379,6 +1379,60 @@ severity (a hash, to a caller who already holds the row) but it is a
 credential-derived value that should never leave the server, and the fix is
 mechanical.
 
+**W1 CLOSED** (read model + HTTP surface). Commits `085f10ab7`, `30e2da35a`,
+`621c1b71b` (W1a) · `de0551b4e`, `3f8377ffe`, `46006b73d`, `008b3da27`,
+`ea687abc3` (W1b) · `72d365796`, `900afb29d` (review fixes). Boundary gate rerun
+by the main thread: `src/app/api/v1` + `src/server/api-v1` +
+`registration-list-read.test.ts` = **558 total / 558 passed / 0 failed / 0
+failed suites**; `turbo typecheck lint` **4/4 successful, 0 errors** (119
+warnings, 2 of them ours — the `{ x: _x, ...rest }` discard idiom, which is
+established repo precedent at `d/[divSlug]/page.tsx:145` and two siblings that
+carry the identical warning on `main`); `openapi:gen` + `i18n:gen-keys` leave
+`git status --porcelain` free of artifact drift.
+
+**W1b review BLOCKER — a cross-competition read, and an API-key pin bypass.**
+`listRegistrations` derived the competition from `division_id` whenever one was
+given and DISCARDED the caller's `competition_id`. A request addressed to
+competition A carrying a division from competition B returned B's rows under a
+200 from A's URL — and the filter's own doc comment said `competition_id` was
+"ignored otherwise", so the vulnerable behaviour was documented as intended.
+
+Same org either way (`withTenant` was never bypassed), so a session user learned
+nothing they could not reach through B's own URL. The teeth are on the API-key
+competition pin: `apiKeyAuth` resolves the pin from the URL PATH resource
+(`resolvePinCompetition`) and never reads query parameters, so a key pinned to A
+satisfied its pin on A's path and then read — and CSV EXPORTED — B's contact
+names, emails, answers and payment state. The pin is the entire boundary that
+endpoint sells. Guarded inside `listRegistrations` rather than in the two
+routes, so the export path and every future caller inherit it; **404, not 403**,
+matching the existing convention that a pin miss adds no existence oracle.
+Proven: removing the guard reds exactly the two new tests and nothing else.
+
+**Nine routes were returning the registrant's access-token hash.** `v1()`
+neither validates nor strips against the OpenAPI response schema — it
+serialises whatever the handler returns (`api-v1/http.ts:124-149`) — so
+`S.Registration` never declaring `access_token_hash` was documentation, not
+enforcement, and `tsc` sees an object with one extra string property as
+assignable. The six pre-existing action routes (confirm, mark-paid, waive,
+waitlist, withdraw, refund) all shipped it; W1b's three new ones each
+hand-stripped it, which was already three copies of a security-relevant line.
+All nine now call one `organiserRegistration()` helper
+(`api-v1/registration-response.ts`), so the next secret column is removed once
+rather than nine times. Proven: neutering the helper reds all five new cases
+plus the three existing assertions, nothing else.
+**Trap for later waves: a "no secret in the response" assertion is vacuous on a
+4xx.** The mark-paid case first passed against a 422 — that route gates on the
+DIVISION's `registration_settings.fee_cents`, which `rig()` never creates, not
+on the entry's own `amount_cents`. Every case now asserts the 200 first.
+
+**Also closed in W1b, from the same review:** the two competition routes parsed
+an identical seven-parameter filter set through two hand-written copies; folded
+onto one `parseRegistrationListQuery` (the export is the copy where a missed
+validation leaks bytes rather than JSON). And `RegistrationStatus` is now a
+single source with all seven DB-allowed values, so `?status=rejected` and
+`?status=expired` work — proven by a reference-equality test rather than by
+three copies agreeing today.
+
 **Pinned so no wave re-derives them:**
 
 - **Waitlist position must reproduce `promoteOldestWaitlisted`
