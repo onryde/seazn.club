@@ -1404,6 +1404,32 @@ test("P7/D1b: the t20-super8 template creates 3 stages, and Super 8 fixtures res
       expect(text, `Super 8 row leaked a real entrant name: ${text}`).not.toContain(name);
     }
   }
+
+  // The board toolbar on a THREE-stage division, at whatever width this
+  // project runs. Every other board assertion in this file drives a
+  // single-stage division, so the stage selector — the control that replaced
+  // one solver triplet PER STAGE — is rendered nowhere else in the seven-width
+  // matrix. Two claims, and the second is the one that needs a real browser:
+  // the selector offers every runnable stage at a real touch size, and the row
+  // it sits in WRAPS rather than pushing the page sideways at 320px, which is
+  // the failure mode a segmented control with three long stage names has.
+  await page.goto(await divisionPath(request, t20DivisionId, "/schedule?tab=board"), {
+    waitUntil: "load",
+  });
+  const stageOptions = page.getByTestId("schedule-stage");
+  await expect(stageOptions).toHaveCount(3);
+  for (let i = 0; i < 3; i += 1) {
+    const box = await stageOptions.nth(i).boundingBox();
+    expect(box, `stage option ${i} has no box`).not.toBeNull();
+    expect(
+      box!.height,
+      `stage option ${i} touch target is ${box!.height}px`,
+    ).toBeGreaterThanOrEqual(44);
+  }
+  // One action set, three stages — the duplication regression, asserted at
+  // every width rather than only at desktop.
+  await expect(page.getByTestId("schedule-auto")).toHaveCount(1);
+  await expectNoHorizontalScroll(page);
 });
 
 // ---------------------------------------------------------------------------

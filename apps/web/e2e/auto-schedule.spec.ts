@@ -28,10 +28,13 @@ import {
 //      did. `lastRun` is client state set between the auto POST and the apply
 //      POST; nothing server-side has an opinion about it.
 //
-// SELECTORS ARE IDS, NEVER COPY (#465). `board.autoSchedule` renders
-// "Auto-schedule {name}" — it interpolates the division name — and
-// `board.polish` renders "Improve times", not "Polish". Text is asserted in
-// exactly one place below, deliberately, where the assertion IS about the copy.
+// SELECTORS ARE IDS, NEVER COPY (#465). `board.polish` renders "Improve
+// times", not "Polish", and every label here is translated, so a text selector
+// stops meaning the same thing in any locale but English. (`board.autoSchedule`
+// interpolated the division name until the toolbar redesign moved the stage out
+// of the label and into its own selector; ids were already the contract.) Text
+// is asserted in exactly one place below, deliberately, where the assertion IS
+// about the copy.
 //
 // Each test seeds its own competition/division/stage, so the file needs no
 // serial mode and no shared fixture: the result strip is per-page client state,
@@ -478,4 +481,74 @@ test.describe("Auto-schedule confirm gate (#pins-ui)", () => {
     expect(slotKey(lockedAfter)).toBe(slotKey(lockedBefore));
     expect(lockedAfter.schedule_locked).toBe(true);
   });
+});
+
+/**
+ * The toolbar's shape on a MULTI-STAGE division (toolbar redesign, direction A).
+ *
+ * Every test above seeds one stage, so all of them would keep passing if the
+ * toolbar went back to rendering a solver triplet per stage — and that is
+ * precisely the regression this describes. Two things can only fail here:
+ *
+ *   1. the row growing with the format again. A second `schedule-auto` in the
+ *      DOM is not merely untidy: `runSolver` above and every `getByTestId`
+ *      elsewhere resolve under Playwright's strict mode, so the duplicate turns
+ *      those clicks into strict-mode violations rather than clicks.
+ *   2. the selector rendering correctly while the actions stay aimed at stage
+ *      one. That is invisible to any render assertion — the wrong stage
+ *      rebuilds, reports `ok`, and looks like a successful run.
+ *
+ * The aim is proved by CONSEQUENCE, not by a request body: the league's
+ * fixtures are read back after a build that was aimed at the playoff stage, and
+ * they have to still be unscheduled.
+ */
+test("the toolbar renders one action set, aimed at the picked stage", async ({ page, request }) => {
+  const { divisionId, fixtureIds } = await seedBoard(request, "two-stage");
+
+  // A second stage over the same entrants. `createStageAndGenerate` hard-codes
+  // seq 1, so this one is posted directly.
+  const second = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/divisions/${divisionId}/stages`,
+    "POST",
+    { seq: 2, kind: "league", name: "Playoffs" },
+  );
+  expect(second.status, "second stage created").toBeLessThan(300);
+  const secondGen = await apiJson<{ fixtures: { id: string }[] }>(
+    request,
+    `/api/v1/stages/${second.data!.id}/generate`,
+    "POST",
+  );
+  expect(secondGen.status, "second stage generated").toBeLessThan(300);
+
+  await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
+
+  // ONE of each action, whatever the stage count.
+  for (const id of ["schedule-auto", "schedule-reflow", "schedule-polish"]) {
+    await expect(page.getByTestId(id), `${id} is rendered once`).toHaveCount(1);
+  }
+  // …and one caption for the group, not one per button per stage.
+  await expect(page.getByTestId("schedule-ladder-caption")).toHaveCount(1);
+
+  const options = page.getByTestId("schedule-stage");
+  await expect(options).toHaveCount(2);
+  await expect(options.nth(0)).toHaveAttribute("aria-pressed", "true");
+
+  await options.nth(1).click();
+  await expect(options.nth(1)).toHaveAttribute("aria-pressed", "true");
+  await expect(options.nth(0)).toHaveAttribute("aria-pressed", "false");
+
+  const autoButton = page.getByTestId("schedule-auto");
+  await autoButton.click();
+  const strip = page.getByTestId("schedule-result-strip");
+  await expect(strip).toBeVisible({ timeout: 45_000 });
+  await expect(autoButton).toBeEnabled({ timeout: 45_000 });
+
+  // The league stage was never asked to run, so its six fixtures are exactly
+  // where the seed left them: unscheduled. A toolbar that ignored the selector
+  // would have placed all six.
+  for (const id of fixtureIds) {
+    const f = await getFixture(request, id);
+    expect(f.scheduled_at, `league fixture ${id} must be untouched`).toBeNull();
+  }
 });
