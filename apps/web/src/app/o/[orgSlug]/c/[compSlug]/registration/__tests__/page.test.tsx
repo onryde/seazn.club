@@ -42,9 +42,25 @@ const h = vi.hoisted(() => ({
   // bothered to ask (RS004 gap-pass review).
   currencyQueries: 0,
   unsupportedQueries: 0,
+  // RS005 W2a: fetchDivisionRows' own query (the Settings tab's heavier
+  // shape) vs fetchDivisionOptions' (the Registrants tab's small id+name
+  // dropdown query) — tracked SEPARATELY so "Settings issues no registrant
+  // query / Registrants issues no division-ROWS query" can be pinned
+  // precisely in both directions, not just as one blunt total.
+  divisionRowsQueries: 0,
+  divisionOptionsQueries: 0,
+  divisionOptions: [] as unknown[],
 }));
 
 const feePercentForMock = vi.hoisted(() => vi.fn(async () => 8));
+// listRegistrations is a HEAVY usecase (Stripe/entitlements/DB) — mocked the
+// same way feePercentFor already is, rather than exercised for real through
+// the @/lib/db fake below (that fake's tx() only ever answers the Settings
+// tab's own query shapes; listRegistrations' joined SELECT is a different
+// shape it was never built to recognise). Real SQL correctness for
+// fetchRegistrantRows/fetchDivisionOptions lives in
+// fetch-registrant-rows-db.test.ts instead.
+const listRegistrationsMock = vi.hoisted(() => vi.fn(async () => [] as unknown[]));
 
 vi.mock("@/server/page-auth", () => ({
   requireCompetitionPage: async () => {
@@ -75,7 +91,10 @@ vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 // not otherwise pull in) — real behaviour is covered by
 // fetch-division-rows.test.ts's real-Postgres suite, same split as
 // fetchDivisionRows/fetchOrgCurrency below.
-vi.mock("@/server/usecases/registrations", () => ({ feePercentFor: feePercentForMock }));
+vi.mock("@/server/usecases/registrations", () => ({
+  feePercentFor: feePercentForMock,
+  listRegistrations: listRegistrationsMock,
+}));
 
 // A tagged-template call (`.raw` on the strings array) resolves to `h.rows`
 // — UNLESS its first raw chunk identifies it as finding 6's dedicated
@@ -100,6 +119,15 @@ vi.mock("@/lib/db", () => ({
         h.unsupportedQueries += 1;
         return Promise.resolve([{ stripe_unsupported_currency: h.orgStripeUnsupportedCurrency }]);
       }
+      // fetchDivisionOptions (RS005 W2a, data.ts) — the Registrants tab's
+      // own small id+name dropdown query. Distinguishable from
+      // fetchDivisionRows' shape (falls through to the default branch
+      // below) by its distinct leading text.
+      if (first.startsWith("select id, name")) {
+        h.divisionOptionsQueries += 1;
+        return Promise.resolve(h.divisionOptions);
+      }
+      h.divisionRowsQueries += 1;
       return Promise.resolve(h.rows);
     };
     return fn(tx);
@@ -132,21 +160,36 @@ beforeEach(() => {
   h.withTenantCalls = 0;
   h.currencyQueries = 0;
   h.unsupportedQueries = 0;
+  h.divisionRowsQueries = 0;
+  h.divisionOptionsQueries = 0;
+  h.divisionOptions = [];
   feePercentForMock.mockClear();
   feePercentForMock.mockResolvedValue(8);
+  listRegistrationsMock.mockClear();
+  listRegistrationsMock.mockResolvedValue([]);
 });
 
-describe("registration hub — owner/admin guard", () => {
+describe("registration hub — RS005 owner/admin/viewer access (reverses RS004 ruling 2)", () => {
   it("renders for an editor (owner/admin)", async () => {
     await expect(Page({ params, searchParams: noTab })).resolves.toBeTruthy();
   });
 
-  it("404s a member who cannot edit (viewer)", async () => {
+  it("renders for a viewer too — read-only, NOT a 404 (RS005 owner ruling, 2026-08-25)", async () => {
     h.canEdit = false;
-    await expect(Page({ params, searchParams: noTab })).rejects.toThrow("NOT_FOUND");
+    await expect(Page({ params, searchParams: noTab })).resolves.toBeTruthy();
   });
 
-  it("propagates the guard's own refusal (e.g. a scorer) without swallowing it", async () => {
+  it("threads canEdit:false through to the Settings panel for a viewer", async () => {
+    h.canEdit = false;
+    const tree = walk(await Page({ params, searchParams: noTab }));
+    // The Settings panel itself has no canEdit prop (out of this wave's file
+    // set — see the final report) — this pins that the PAGE still resolves
+    // for a viewer at all, which the removed `notFound()` used to prevent
+    // outright.
+    expect(tree.find((e) => e.type === RegistrationHubSettingsPanel)).toBeTruthy();
+  });
+
+  it("still 404s the guard's own refusal (e.g. a scorer) without swallowing it — unrelated to this wave's change", async () => {
     h.refuseInGuard = true;
     await expect(Page({ params, searchParams: noTab })).rejects.toThrow("NOT_FOUND");
   });
@@ -189,14 +232,111 @@ describe("registration hub — ?tab= switching", () => {
     expect(tree.some((e) => e.type === RegistrationHubSettingsPanel)).toBe(false);
   });
 
-  it("does not run the division-rows query on the Registrants tab — no N+1, no wasted read", async () => {
+  it("does not run fetchDivisionRows' query on the Registrants tab — no N+1, no wasted read (RS005 W2a mirror, direction 1)", async () => {
     await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
-    expect(h.withTenantCalls).toBe(0);
+    expect(h.divisionRowsQueries).toBe(0);
+  });
+
+  it("DOES run its own small division-OPTIONS query (the filter dropdown) on the Registrants tab", async () => {
+    await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
+    expect(h.divisionOptionsQueries).toBe(1);
   });
 
   it("does not resolve fee_percent on the Registrants tab either — same wasted-read guard (W3c)", async () => {
     await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
     expect(feePercentForMock).not.toHaveBeenCalled();
+  });
+
+  it("does not run listRegistrations on the Settings tab (RS005 W2a mirror, direction 2 — task acceptance's own wording)", async () => {
+    await Page({ params, searchParams: noTab });
+    expect(listRegistrationsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not run fetchDivisionOptions' query on the Settings tab either", async () => {
+    await Page({ params, searchParams: noTab });
+    expect(h.divisionOptionsQueries).toBe(0);
+  });
+
+  it("DOES run listRegistrations exactly once on the Registrants tab", async () => {
+    await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
+    expect(listRegistrationsMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
+  it("threads a filter from the raw query string through to listRegistrations", async () => {
+    await Page({
+      params,
+      searchParams: Promise.resolve({ tab: "registrants", status: "paid" }),
+    });
+    expect(listRegistrationsMock).toHaveBeenCalledWith(
+      { orgId: "org-1" },
+      null,
+      "paid",
+      { competition_id: "comp-1", sort: "newest" },
+    );
+  });
+
+  it("maps listRegistrations' resolved rows onto the panel's rows prop", async () => {
+    const fakeRows = [{ id: "reg-1", display_name: "Alex Smith" }];
+    listRegistrationsMock.mockResolvedValueOnce(fakeRows);
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).rows).toBe(fakeRows);
+  });
+
+  it("maps fetchDivisionOptions' resolved rows onto the panel's divisions prop", async () => {
+    h.divisionOptions = [{ id: "div-1", name: "Open Singles" }];
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).divisions).toEqual([{ id: "div-1", name: "Open Singles" }]);
+  });
+
+  it("threads canEdit through — true for an editor, false for a viewer", async () => {
+    h.canEdit = true;
+    let tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    expect(propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!).canEdit).toBe(true);
+
+    h.canEdit = false;
+    tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    expect(propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!).canEdit).toBe(false);
+  });
+
+  it("passes the REAL empty-state strings from the dictionary — never a hardcoded literal or a mis-keyed lookup", async () => {
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    const props = propsOf(panel);
+    const dict = await getDictionary("en", "ui");
+    expect(props.emptyTitle).toBe(t(dict, "reg.hub.registrants.title"));
+    expect(props.emptyBody).toBe(t(dict, "reg.hub.registrants.body"));
+    expect(props.emptyCtaLabel).toBe(t(dict, "reg.hub.registrants.cta"));
+  });
+
+  it("builds the empty-state cta href pointing at the Settings tab", async () => {
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).emptyCtaHref).toBe("/o/riverside/c/summer-league/registration?tab=settings");
+  });
+
+  it("builds the CSV export href off THIS competition's id", async () => {
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).exportHref).toBe(
+      "/api/v1/competitions/comp-1/registrations/export?sort=newest",
+    );
+  });
+
+  it("builds filtersAction as the tab's BARE path (no query string — a GET form submit would otherwise discard it)", async () => {
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).filtersAction).toBe("/o/riverside/c/summer-league/registration");
+  });
+
+  it("resolves orgTz the SAME way the Settings tab does — org timezone, never UTC-by-coincidence", async () => {
+    h.orgTimezone = "Asia/Kolkata";
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).orgTz).toBe("Asia/Kolkata");
   });
 });
 

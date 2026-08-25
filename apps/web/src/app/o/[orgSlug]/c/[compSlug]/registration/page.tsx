@@ -1,15 +1,16 @@
 export const dynamic = "force-dynamic";
 // Registration hub (RS004 W2 shell + W3 Settings-tab data + W3c config
-// panel): route, two-tab chrome, guard, and the Settings tab's division
-// rows plus the context its row-click config panel needs.
+// panel + RS005 W2a Registrants-tab data): route, two-tab chrome, guard,
+// the Settings tab's division rows plus its row-click config panel context,
+// and the Registrants tab's filtered row list.
 //
 // `?tab=settings|registrants` is read server-side, mirroring the division
 // page's pattern (d/[divSlug]/page.tsx:77-118) — there is no shared TabStrip
 // component and no client tabs component in this repo, so this inlines its
 // own <nav> the same way that page does.
 //
-// Registrants' real content is RS005. See docs/superpowers/specs/2026-08-16-
-// registration-redesign-prompts/{RS004-hub-settings-tab.md,RS005-hub-registrants-tab.md}.
+// RS005 W2b (row-click detail/actions on the Registrants tab) is next.
+import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { requireCompetitionPage } from "@/server/page-auth";
@@ -27,6 +28,7 @@ import {
 } from "@/components/registration-hub-tab";
 import { RegistrationHubSettingsPanel } from "@/components/registration-hub-settings-panel";
 import { RegistrationHubRegistrantsPanel } from "@/components/registration-hub-registrants-panel";
+import { registrantsExportHref } from "@/components/registration-hub-registrant-derive";
 import type {
   RegistrationHubRowData,
   RegistrationHubRowContext,
@@ -35,6 +37,9 @@ import {
   fetchDivisionRows,
   fetchOrgCardUnsupportedCurrency,
   fetchOrgCurrency,
+  fetchRegistrantRows,
+  fetchDivisionOptions,
+  type RegistrantsRawQuery,
 } from "./data";
 
 export default async function RegistrationHubPage({
@@ -42,97 +47,126 @@ export default async function RegistrationHubPage({
   searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string }>;
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<RegistrantsRawQuery & { tab?: string }>;
 }) {
-  const [{ orgSlug, compSlug }, { tab: rawTab }] = await Promise.all([params, searchParams]);
+  const [{ orgSlug, compSlug }, rawSearchParams] = await Promise.all([params, searchParams]);
+  const { tab: rawTab, ...registrantsRawQuery } = rawSearchParams;
   const page = await requireCompetitionPage(orgSlug, compSlug, { tail: "/registration" });
   const { auth, canEdit } = page;
-  // requireCompetitionPage (page-auth.ts:192-201) only 404s a SCORER — a
-  // viewer reaches it fine with canEdit:false. Registration data (contacts,
-  // payment state) is more sensitive than the read-only competition-settings
-  // page a viewer may already open, so this hub is owner/admin only, matching
-  // the RS004 prompt's scope item 1 ("Owner/admin only … scorer/viewer never
-  // see the nav entry") — the extra role check is this page's own.
-  if (!canEdit) notFound();
+  // requireCompetitionPage (page-auth.ts:192-201) only 404s a SCORER — that
+  // is pre-existing, trusted behaviour, unrelated to this page. Everyone
+  // else it admits (owner/admin/viewer) reaches this hub.
+  //
+  // RS005 owner ruling (2026-08-25) REVERSES RS004 ruling 2 ("owner/admin
+  // only … scorer/viewer never see the nav entry"): a viewer now gets the
+  // hub too, read-only. There used to be a `if (!canEdit) notFound();` line
+  // right here — it is gone. `canEdit` no longer gates the PAGE; it is
+  // threaded down as a prop so each panel can decide which of ITS OWN
+  // controls are mutating, and keep those ABSENT for a viewer rather than
+  // merely disabled — the write APIs 403 a viewer anyway (same as before
+  // this reversal), so a disabled button would only advertise a refusal it
+  // can never carry out.
   const id = page.competition.id;
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
   const competition = await getCompetition(auth, id);
   const tab: RegistrationHubTab = resolveRegistrationHubTab(rawTab);
 
-  // Gated to the Settings tab: Registrants has nothing to do with these rows,
-  // and fetching them there would be a wasted read on every tab switch.
-  const rawRows = tab === "settings" ? await fetchDivisionRows(auth, id) : [];
-  const rows: RegistrationHubRowData[] = rawRows.map((r) => ({
-    division_id: r.division_id,
-    name: r.name,
-    category: r.category,
-    age_min: r.age_min,
-    age_max: r.age_max,
-    enabled: r.enabled,
-    entrant_kind: r.entrant_kind,
-    opens_at: r.opens_at,
-    closes_at: r.closes_at,
-    capacity: r.capacity,
-    fee_cents: r.fee_cents,
-    approval: r.approval,
-    allow_free_agents: r.allow_free_agents,
-    taken: r.taken,
-  }));
-
   // Registration windows are ORG-level (a registration window is not a
   // per-division venue setting) — organizations.timezone or DEFAULT_TZ,
   // deliberately never resolveVenueTz's division-override lane, and never
-  // users.timezone/the browser cookie.
+  // users.timezone/the browser cookie. Shared by BOTH tabs (the Settings
+  // row's window column, the Registrants table's submitted-at column) —
+  // pure and free to compute unconditionally, no query either way.
   const orgTz = isValidIana(page.org.timezone) ? page.org.timezone : DEFAULT_TZ;
-  // Finding 6: resolved independently of rawRows[0] rather than defaulting
-  // to "usd" whenever there are no rows to read it off (Registrants tab, or
-  // a Settings-tab competition with zero divisions) — see fetchOrgCurrency.
-  //
-  // Both org-level fallbacks below, and the context that carries them, are
-  // built ONLY for the Settings tab.
-  //
-  // The gap-pass review flagged the previous shape — `tab === "settings" ? …
-  // : "usd"` — because the Registrants tab's rows list is ALWAYS empty, so it
-  // took the hardcoded default every time. Resolving the real values there
-  // instead would have been worse in a different way: it costs two queries to
-  // compute what that tab renders nothing from, and the suite already pins
-  // "the Registrants tab runs no division query — no wasted read".
-  //
-  // So neither fabricate nor fetch: on the Registrants tab there is no context
-  // at all, and `undefined` cannot be mistaken for "usd" or for "this org's
-  // card payments are fine". RS005 builds its own context when it has
-  // something that actually reads one.
-  const settingsContext: Omit<RegistrationHubRowContext, "onOpen"> | null =
-    tab === "settings"
-      ? {
-          dict,
-          now: new Date(),
-          orgTz,
-          currency: asCurrency(rawRows[0]?.org_currency ?? (await fetchOrgCurrency(auth))),
-          registerHref: routes.publicRegister(orgSlug, compSlug),
-          registerQrFileName: `register-${competition.slug}.png`,
-          showRegisterLink: competition.visibility !== "private",
-        }
-      : null;
-  // Finding 4 (whole-branch review): org_stripe_unsupported_currency is
-  // legitimately NULL for every org whose connected Stripe account is fine —
-  // `rawRows[0]?.col ?? fallback()` treated that null exactly like "rows is
-  // empty" and ran the fallback query on nearly every Settings-tab load, the
-  // opposite of "only when there are no rows". Gated on rawRows.length
-  // instead: a real (possibly-null) column value from an existing row is
-  // used as-is, and the fallback query runs only when there is no row to
-  // read it off at all. The sibling `org_currency` read above does NOT share
-  // this bug — that column is NOT NULL (RawDivisionRow types it `string`),
-  // so `rawRows[0]?.org_currency` is only ever undefined when rawRows itself
-  // is empty, which is exactly the case the fallback is for.
-  const cardUnsupportedCurrency =
-    tab === "settings"
-      ? rawRows.length === 0
+
+  // Each branch below fetches ONLY what its own tab needs, lexically inside
+  // the branch that needs it — not a top-level `tab === "x" ? await … : …`
+  // ternary. That keeps the "no wasted read on the other tab" guarantee
+  // structurally obvious (the fetch is simply not reachable code on the
+  // other tab) and lets each panel's props be built non-nullable, without
+  // the `settingsContext === null` correlation trick this page used to
+  // lean on — that trick stopped working the moment a SECOND tab needed
+  // its own context to branch on too.
+  let panel: ReactNode;
+  if (tab === "settings") {
+    const rawRows = await fetchDivisionRows(auth, id);
+    const rows: RegistrationHubRowData[] = rawRows.map((r) => ({
+      division_id: r.division_id,
+      name: r.name,
+      category: r.category,
+      age_min: r.age_min,
+      age_max: r.age_max,
+      enabled: r.enabled,
+      entrant_kind: r.entrant_kind,
+      opens_at: r.opens_at,
+      closes_at: r.closes_at,
+      capacity: r.capacity,
+      fee_cents: r.fee_cents,
+      approval: r.approval,
+      allow_free_agents: r.allow_free_agents,
+      taken: r.taken,
+    }));
+
+    // Finding 4 (whole-branch review, RS004): org_stripe_unsupported_currency
+    // is legitimately NULL for every org whose connected Stripe account is
+    // fine — `rawRows[0]?.col ?? fallback()` treated that null exactly like
+    // "rows is empty" and ran the fallback query on nearly every load. Gated
+    // on rawRows.length instead: a real (possibly-null) column value from an
+    // existing row is used as-is, and the fallback query runs only when
+    // there is no row to read it off at all.
+    const cardUnsupportedCurrency =
+      rawRows.length === 0
         ? await fetchOrgCardUnsupportedCurrency(auth)
-        : rawRows[0]!.org_stripe_unsupported_currency
-      : null;
-  const feePercentPct = tab === "settings" ? await feePercentFor(auth.orgId, id) : 0;
+        : rawRows[0]!.org_stripe_unsupported_currency;
+    const feePercentPct = await feePercentFor(auth.orgId, id);
+
+    const settingsContext: Omit<RegistrationHubRowContext, "onOpen"> = {
+      dict,
+      now: new Date(),
+      orgTz,
+      // Finding 6: resolved independently of rawRows[0] rather than
+      // defaulting to "usd" whenever there are no rows to read it off (a
+      // competition with zero divisions) — see fetchOrgCurrency.
+      currency: asCurrency(rawRows[0]?.org_currency ?? (await fetchOrgCurrency(auth))),
+      registerHref: routes.publicRegister(orgSlug, compSlug),
+      registerQrFileName: `register-${competition.slug}.png`,
+      showRegisterLink: competition.visibility !== "private",
+    };
+
+    panel = (
+      <RegistrationHubSettingsPanel
+        title={t(dict, "reg.hub.settings.title")}
+        body={t(dict, "reg.hub.settings.body")}
+        rows={rows}
+        context={settingsContext}
+        orgSlug={orgSlug}
+        feePercentPct={feePercentPct}
+        cardUnsupportedCurrency={cardUnsupportedCurrency}
+      />
+    );
+  } else {
+    const registrants = await fetchRegistrantRows(auth, id, registrantsRawQuery);
+    const divisions = await fetchDivisionOptions(auth, id);
+
+    panel = (
+      <RegistrationHubRegistrantsPanel
+        rows={registrants.rows}
+        filters={registrants.filters}
+        divisions={divisions}
+        canEdit={canEdit}
+        dict={dict}
+        orgTz={orgTz}
+        filtersAction={routes.competitionRegistration(orgSlug, compSlug)}
+        clearHref={routes.competitionRegistration(orgSlug, compSlug, "registrants")}
+        exportHref={registrantsExportHref(id, registrants.filters)}
+        emptyTitle={t(dict, "reg.hub.registrants.title")}
+        emptyBody={t(dict, "reg.hub.registrants.body")}
+        emptyCtaLabel={t(dict, "reg.hub.registrants.cta")}
+        emptyCtaHref={routes.competitionRegistration(orgSlug, compSlug, "settings")}
+      />
+    );
+  }
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8">
@@ -154,27 +188,7 @@ export default async function RegistrationHubPage({
         ))}
       </nav>
 
-      {/* Branch on the CONTEXT, not on `tab`: the context is null exactly
-          when the tab is "registrants", and narrowing on it is what lets the
-          settings panel take a non-nullable prop without an assertion. */}
-      {settingsContext === null ? (
-        <RegistrationHubRegistrantsPanel
-          title={t(dict, "reg.hub.registrants.title")}
-          body={t(dict, "reg.hub.registrants.body")}
-          ctaLabel={t(dict, "reg.hub.registrants.cta")}
-          ctaHref={routes.competitionRegistration(orgSlug, compSlug, "settings")}
-        />
-      ) : (
-        <RegistrationHubSettingsPanel
-          title={t(dict, "reg.hub.settings.title")}
-          body={t(dict, "reg.hub.settings.body")}
-          rows={rows}
-          context={settingsContext}
-          orgSlug={orgSlug}
-          feePercentPct={feePercentPct}
-          cardUnsupportedCurrency={cardUnsupportedCurrency}
-        />
-      )}
+      {panel}
     </main>
   );
 }
