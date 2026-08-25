@@ -599,7 +599,7 @@
   "reg.hub.registrants.filters.divisionAll": "All divisions",
   "reg.hub.registrants.filters.kind": "Entrant kind",
   "reg.hub.registrants.filters.kindAll": "All kinds",
-  "reg.hub.registrants.filters.freeAgent": "Free agents only",
+  "reg.hub.registrants.filters.freeAgent": "Solo sign-ups only",
   "reg.hub.registrants.filters.consentPending": "Consent pending only",
   "reg.hub.registrants.filters.search": "Search",
   "reg.hub.registrants.filters.searchPlaceholder": "Name or email",

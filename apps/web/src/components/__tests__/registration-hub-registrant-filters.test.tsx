@@ -1,12 +1,13 @@
-// RS005 W2a — the Registrants tab's filter bar (task 3): a plain
-// `<form method="GET">` so the surface needs no JavaScript, stays
-// shareable/back-buttonable, and the seven-width e2e matrix can drive it.
-// Server-rendered (no "use client"), so this pulls `t`/`getDictionary`
-// straight from @/lib/i18n — same as page.tsx and unlike the Settings tab's
-// row/panel (which are client components and must use i18n-runtime instead,
-// gotcha 6 in the dispatch).
-import { describe, expect, it } from "vitest";
-import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
+// RS005 W2a task 3 / R4 task 1 — the Registrants tab's filter bar: a
+// `<form method="GET">` that now auto-submits itself (R4) rather than
+// waiting on a button click. Still shareable/back-buttonable — the FORM is
+// still the entire submission mechanism, JS just triggers it — but the
+// component is now a CLIENT one (auto-submit needs `onChange` handlers, and
+// the search box needs a debounce timer), so it renders through
+// `renderIsland` rather than a bare function call (`useRef`/`useEffect`
+// throw "Invalid hook call" outside React — see `_hook-harness.tsx`).
+import { describe, expect, it, vi } from "vitest";
+import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { RegistrationHubRegistrantFilters } from "@/components/registration-hub-registrant-filters";
 import { getDictionary, t } from "@/lib/i18n";
 import type { RegistrantsFilters, DivisionOption } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
@@ -31,30 +32,41 @@ const DIVISIONS: DivisionOption[] = [
 const ACTION = "/o/riverside/c/summer-league/registration";
 const CLEAR_HREF = "/o/riverside/c/summer-league/registration?tab=registrants";
 
+// Mirrors the component's own SEARCH_DEBOUNCE_MS (not exported — the
+// component's public contract is behaviour, not a tunable constant other
+// modules should reach into). 300ms per the R4 dispatch ("~300ms").
+const SEARCH_DEBOUNCE_MS = 300;
+
 function render(filters: RegistrantsFilters = DEFAULT_FILTERS) {
-  return RegistrationHubRegistrantFilters({
+  return renderIsland(RegistrationHubRegistrantFilters, {
     dict,
     action: ACTION,
     filters,
     divisions: DIVISIONS,
     clearHref: CLEAR_HREF,
-  });
+  }).tree();
 }
 
-function form() {
-  return walk(render()).find((e) => e.type === "form")!;
+function form(tree: ReturnType<typeof render>) {
+  return tree.find((e) => e.type === "form")!;
+}
+
+/** A fake changed-control event, shaped exactly like the one every onChange
+ *  handler in this component reads: `e.target.form`. Plain data, no DOM. */
+function changeEvent(fakeForm: { requestSubmit: () => void }) {
+  return { target: { form: fakeForm as unknown as HTMLFormElement } };
 }
 
 describe("RegistrationHubRegistrantFilters — the form itself", () => {
-  it("is a plain GET form posting to the given action — no client JS", () => {
-    const f = form();
+  it("is a plain GET form posting to the given action — no client JS needed to render it", () => {
+    const f = form(render());
     expect(propsOf(f).method).toBe("GET");
     expect(propsOf(f).action).toBe(ACTION);
     expect(propsOf(f).onSubmit).toBeUndefined();
   });
 
   it("carries a hidden tab=registrants input, so the action's bare path plus the form fields reconstructs ?tab=registrants on submit", () => {
-    const hidden = walk(render()).find(
+    const hidden = render().find(
       (e) => e.type === "input" && propsOf(e).type === "hidden" && propsOf(e).name === "tab",
     );
     expect(hidden).toBeTruthy();
@@ -64,8 +76,11 @@ describe("RegistrationHubRegistrantFilters — the form itself", () => {
 
 describe("status filter", () => {
   it("offers every real status value plus an 'all' option, translated", () => {
-    const select = walk(render()).find((e) => e.type === "select" && propsOf(e).name === "status")!;
-    const optionValues = walk(select).filter((e) => e.type === "option").map((e) => propsOf(e).value);
+    const tree = render();
+    const select = tree.find((e) => e.type === "select" && propsOf(e).name === "status")!;
+    const optionValues = walk(select)
+      .filter((e) => e.type === "option")
+      .map((e) => propsOf(e).value);
     expect(optionValues).toEqual([
       "",
       "pending",
@@ -76,28 +91,36 @@ describe("status filter", () => {
       "expired",
       "rejected",
     ]);
-    const allOption = walk(select).find((e) => e.type === "option" && propsOf(e).value === "")!;
-    expect(textOf(allOption)).toBe(t(dict, "reg.hub.registrants.filters.statusAll"));
-    const paidOption = walk(select).find((e) => e.type === "option" && propsOf(e).value === "paid")!;
-    expect(textOf(paidOption)).toBe(t(dict, "reg.hub.registrants.status.paid"));
   });
 
-  it("pre-selects the current filter value via defaultValue (uncontrolled — server-rendered)", () => {
-    const select = walk(render({ ...DEFAULT_FILTERS, status: "confirmed" })).find(
+  it("pre-selects the current filter value via defaultValue (uncontrolled)", () => {
+    const select = render({ ...DEFAULT_FILTERS, status: "confirmed" }).find(
       (e) => e.type === "select" && propsOf(e).name === "status",
     )!;
     expect(propsOf(select).defaultValue).toBe("confirmed");
+    // Uncontrolled on purpose (see the file's own header comment) — a
+    // `value` prop here would make React fight the DOM for the field on
+    // every re-render.
+    expect(propsOf(select).value).toBeUndefined();
   });
 
   it("defaults to the empty (all) option when no status filter is active", () => {
-    const select = walk(render()).find((e) => e.type === "select" && propsOf(e).name === "status")!;
+    const select = render().find((e) => e.type === "select" && propsOf(e).name === "status")!;
     expect(propsOf(select).defaultValue).toBe("");
+  });
+
+  it("submits the form the instant it changes — no separate Filter click", () => {
+    const select = render().find((e) => e.type === "select" && propsOf(e).name === "status")!;
+    const requestSubmit = vi.fn();
+    (propsOf(select).onChange as (e: unknown) => void)(changeEvent({ requestSubmit }));
+    expect(requestSubmit).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("division filter", () => {
   it("offers one option per division it is given, plus an 'all' option", () => {
-    const select = walk(render()).find((e) => e.type === "select" && propsOf(e).name === "division_id")!;
+    const tree = render();
+    const select = tree.find((e) => e.type === "select" && propsOf(e).name === "division_id")!;
     const options = walk(select).filter((e) => e.type === "option");
     expect(options.map((o) => propsOf(o).value)).toEqual(["", "div-1", "div-2"]);
     expect(textOf(options[1]!)).toBe("Open Singles");
@@ -105,30 +128,63 @@ describe("division filter", () => {
   });
 
   it("pre-selects the current division filter", () => {
-    const select = walk(render({ ...DEFAULT_FILTERS, divisionId: "div-2" })).find(
+    const select = render({ ...DEFAULT_FILTERS, divisionId: "div-2" }).find(
       (e) => e.type === "select" && propsOf(e).name === "division_id",
     )!;
     expect(propsOf(select).defaultValue).toBe("div-2");
+  });
+
+  it("submits on change", () => {
+    const select = render().find((e) => e.type === "select" && propsOf(e).name === "division_id")!;
+    const requestSubmit = vi.fn();
+    (propsOf(select).onChange as (e: unknown) => void)(changeEvent({ requestSubmit }));
+    expect(requestSubmit).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("kind filter", () => {
   it("offers team/individual/pair plus an 'all' option, using the SAME divset.entrants.kind.* labels the Settings tab already uses", () => {
-    const select = walk(render()).find((e) => e.type === "select" && propsOf(e).name === "kind")!;
+    const tree = render();
+    const select = tree.find((e) => e.type === "select" && propsOf(e).name === "kind")!;
     const options = walk(select).filter((e) => e.type === "option");
     expect(options.map((o) => propsOf(o).value)).toEqual(["", "team", "individual", "pair"]);
     const teamOption = options.find((o) => propsOf(o).value === "team")!;
     expect(textOf(teamOption)).toBe(t(dict, "divset.entrants.kind.team"));
   });
+
+  it("submits on change", () => {
+    const select = render().find((e) => e.type === "select" && propsOf(e).name === "kind")!;
+    const requestSubmit = vi.fn();
+    (propsOf(select).onChange as (e: unknown) => void)(changeEvent({ requestSubmit }));
+    expect(requestSubmit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("sort", () => {
+  it("offers newest/oldest and pre-selects the current value", () => {
+    const tree = render({ ...DEFAULT_FILTERS, sort: "oldest" });
+    const select = tree.find((e) => e.type === "select" && propsOf(e).name === "sort")!;
+    const options = walk(select).filter((e) => e.type === "option");
+    expect(options.map((o) => propsOf(o).value)).toEqual(["newest", "oldest"]);
+    expect(propsOf(select).defaultValue).toBe("oldest");
+  });
+
+  it("submits on change", () => {
+    const select = render().find((e) => e.type === "select" && propsOf(e).name === "sort")!;
+    const requestSubmit = vi.fn();
+    (propsOf(select).onChange as (e: unknown) => void)(changeEvent({ requestSubmit }));
+    expect(requestSubmit).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("free_agent / consent_pending checkboxes", () => {
   it("are unchecked and off by default, name/value matching the API's own 1/0 convention", () => {
-    const tree = walk(render());
+    const tree = render();
     const freeAgent = tree.find((e) => e.type === "input" && propsOf(e).name === "free_agent")!;
     expect(propsOf(freeAgent).type).toBe("checkbox");
     expect(propsOf(freeAgent).value).toBe("1");
     expect(propsOf(freeAgent).defaultChecked).toBeFalsy();
+    expect(propsOf(freeAgent).checked).toBeUndefined();
 
     const consentPending = tree.find((e) => e.type === "input" && propsOf(e).name === "consent_pending")!;
     expect(propsOf(consentPending).type).toBe("checkbox");
@@ -137,48 +193,150 @@ describe("free_agent / consent_pending checkboxes", () => {
   });
 
   it("reflect an active filter via defaultChecked", () => {
-    const tree = walk(render({ ...DEFAULT_FILTERS, freeAgent: true, consentPending: true }));
+    const tree = render({ ...DEFAULT_FILTERS, freeAgent: true, consentPending: true });
     const freeAgent = tree.find((e) => e.type === "input" && propsOf(e).name === "free_agent")!;
     const consentPending = tree.find((e) => e.type === "input" && propsOf(e).name === "consent_pending")!;
     expect(propsOf(freeAgent).defaultChecked).toBe(true);
     expect(propsOf(consentPending).defaultChecked).toBe(true);
   });
+
+  it("each submits on change", () => {
+    const tree = render();
+    const freeAgent = tree.find((e) => e.type === "input" && propsOf(e).name === "free_agent")!;
+    const consentPending = tree.find((e) => e.type === "input" && propsOf(e).name === "consent_pending")!;
+    const submit1 = vi.fn();
+    const submit2 = vi.fn();
+    (propsOf(freeAgent).onChange as (e: unknown) => void)(changeEvent({ requestSubmit: submit1 }));
+    (propsOf(consentPending).onChange as (e: unknown) => void)(changeEvent({ requestSubmit: submit2 }));
+    expect(submit1).toHaveBeenCalledTimes(1);
+    expect(submit2).toHaveBeenCalledTimes(1);
+  });
+
+  // The renamed wording (owner call, 2026-08-26): the filter used to say
+  // "Free agents only" while the row badge/config toggle already said
+  // "Solo sign-ups" — three keys of drift in the same dictionary. ES/FR/NL
+  // already said "solo" for this exact key (checked via `git blame` on
+  // a9d6007896 — the commit that added it originally used inconsistent
+  // wording ACROSS locales, not just against English), so only English
+  // needed the fix here.
+  it("labels the free_agent checkbox with the 'solo sign-ups' wording, not 'free agent'", () => {
+    const label = t(dict, "reg.hub.registrants.filters.freeAgent");
+    expect(label.toLowerCase()).not.toContain("free agent");
+    expect(label.toLowerCase()).toContain("solo sign-ups");
+  });
 });
 
-describe("search (q) and sort", () => {
-  it("pre-fills the search text via defaultValue", () => {
-    const input = walk(render({ ...DEFAULT_FILTERS, text: "Alex" })).find(
+describe("search (q)", () => {
+  it("pre-fills the search text via defaultValue, uncontrolled (never a `value` prop)", () => {
+    const input = render({ ...DEFAULT_FILTERS, text: "Alex" }).find(
       (e) => e.type === "input" && propsOf(e).name === "q",
     )!;
     expect(propsOf(input).defaultValue).toBe("Alex");
     expect(propsOf(input).type).toBe("text");
+    // Uncontrolled by design (file header comment): this is what keeps the
+    // caret/typed value safe from React while a debounce is pending — an
+    // uncontrolled input is never resynced to a stale `value` on re-render
+    // because it never HAS a `value` prop to resync to.
+    expect(propsOf(input).value).toBeUndefined();
   });
 
-  it("sort offers newest/oldest and pre-selects the current value", () => {
-    const select = walk(render({ ...DEFAULT_FILTERS, sort: "oldest" })).find(
-      (e) => e.type === "select" && propsOf(e).name === "sort",
-    )!;
-    const options = walk(select).filter((e) => e.type === "option");
-    expect(options.map((o) => propsOf(o).value)).toEqual(["newest", "oldest"]);
-    expect(propsOf(select).defaultValue).toBe("oldest");
+  it("does NOT submit immediately on a keystroke", () => {
+    vi.useFakeTimers();
+    try {
+      const input = render().find((e) => e.type === "input" && propsOf(e).name === "q")!;
+      const requestSubmit = vi.fn();
+      (propsOf(input).onChange as (e: unknown) => void)(changeEvent({ requestSubmit }));
+      expect(requestSubmit).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("submits ~300ms after the last keystroke", () => {
+    vi.useFakeTimers();
+    try {
+      const input = render().find((e) => e.type === "input" && propsOf(e).name === "q")!;
+      const requestSubmit = vi.fn();
+      const onChange = propsOf(input).onChange as (e: unknown) => void;
+      onChange(changeEvent({ requestSubmit }));
+      vi.advanceTimersByTime(299);
+      expect(requestSubmit).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(requestSubmit).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a burst of keystrokes only submits ONCE, from the LAST one, not once per keystroke", () => {
+    vi.useFakeTimers();
+    try {
+      const input = render().find((e) => e.type === "input" && propsOf(e).name === "q")!;
+      const onChange = propsOf(input).onChange as (e: unknown) => void;
+      const submits: string[] = [];
+      const fake = (tag: string) => ({ requestSubmit: () => submits.push(tag) });
+      onChange(changeEvent(fake("A")));
+      vi.advanceTimersByTime(100);
+      onChange(changeEvent(fake("Al")));
+      vi.advanceTimersByTime(100);
+      onChange(changeEvent(fake("Ale")));
+      vi.advanceTimersByTime(100);
+      onChange(changeEvent(fake("Alex")));
+      // Only the LAST keystroke's timer should still be pending — the
+      // earlier three were each cancelled by the next change.
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+      expect(submits).toEqual(["Alex"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
-describe("submit + clear", () => {
-  it("has a submit button", () => {
-    const button = walk(render()).find((e) => e.type === "button" && propsOf(e).type === "submit");
-    expect(button).toBeTruthy();
-  });
-
+describe("clear", () => {
   it("shows NO clear-filters link when nothing is active — there is nothing to clear", () => {
-    const tree = walk(render(DEFAULT_FILTERS));
+    const tree = render(DEFAULT_FILTERS);
     const clearLink = tree.find((e) => propsOf(e).href === CLEAR_HREF);
     expect(clearLink).toBeUndefined();
   });
 
   it("shows a clear-filters link at clearHref once a filter is active", () => {
-    const tree = walk(render({ ...DEFAULT_FILTERS, status: "paid" }));
+    const tree = render({ ...DEFAULT_FILTERS, status: "paid" });
     const clearLink = tree.find((e) => propsOf(e).href === CLEAR_HREF);
     expect(clearLink).toBeTruthy();
+  });
+});
+
+// R4 task 1: the button is gone — every control submits itself now.
+describe("no submit button", () => {
+  it("renders no <button> at all", () => {
+    const tree = render();
+    expect(tree.find((e) => e.type === "button")).toBeUndefined();
+  });
+});
+
+// R4 task 1: "the bar should read as one row of controls at desktop and
+// stack cleanly on a phone" — pinned at the class-list level (this suite
+// has no viewport to actually lay anything out in), same technique the
+// container-query regression in datetime-split-field.test.tsx uses.
+describe("responsive layout", () => {
+  it("stacks in one column below `sm` and becomes a wrapping row at `sm` and up", () => {
+    const f = form(render());
+    const cls = String(propsOf(f).className);
+    expect(cls).toContain("flex-col");
+    expect(cls).toContain("sm:flex-row");
+    expect(cls).toContain("sm:flex-wrap");
+  });
+
+  it("groups the two checkboxes in their own wrapping container, matching the dropdowns' height in row mode", () => {
+    const tree = render();
+    const groupDiv = tree.find(
+      (e) => e.type === "div" && String(propsOf(e).className ?? "").includes("sm:min-h-11"),
+    )!;
+    expect(groupDiv).toBeTruthy();
+    expect(String(propsOf(groupDiv).className)).toContain("flex-wrap");
+    // Both checkboxes are inside it — not just some other unrelated div.
+    const kids = walk(groupDiv);
+    expect(kids.some((e) => e.type === "input" && propsOf(e).name === "free_agent")).toBe(true);
+    expect(kids.some((e) => e.type === "input" && propsOf(e).name === "consent_pending")).toBe(true);
   });
 });
