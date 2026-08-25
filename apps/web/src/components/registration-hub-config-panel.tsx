@@ -410,7 +410,7 @@ export function EligibilitySection({
             checked={state.allow_free_agents}
             onChange={(e) => patch({ allow_free_agents: e.target.checked })}
           />
-          {msg("reg.hub.row.freeAgents")}
+          {msg("reg.hub.config.allowSolo")}
         </label>
       ) : (
         <p className="text-xs text-slate-400">{msg("reg.hub.config.freeAgentsHint")}</p>

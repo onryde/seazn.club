@@ -577,3 +577,34 @@ describe("RegistrationHubConfigPanel — a section is named once", () => {
     }
   });
 });
+
+// "Free agents" is club-sport jargon — a padel club's Tuesday-night organiser
+// is not obliged to know that it means an unsigned player. Renamed to "solo
+// sign-ups" (owner call, 2026-08-25); `allow_free_agents` stays the column,
+// the API field and the data-field hook, so only the words move.
+//
+// The toggle and the row chip now read differently ("Allow solo sign-ups" vs
+// "Solo sign-ups"), which is why the panel stopped borrowing the row's key.
+// Pinned at SOURCE level for the same reason as the block above.
+describe("RegistrationHubConfigPanel — the solo sign-ups toggle", () => {
+  const source = readFileSync(
+    new URL("../registration-hub-config-panel.tsx", import.meta.url),
+    "utf8",
+  );
+
+  it("labels the toggle with its own key, not the row chip's", () => {
+    expect(source).toContain('msg("reg.hub.config.allowSolo")');
+    expect(source).not.toContain('msg("reg.hub.row.freeAgents")');
+  });
+
+  it("reads as an instruction on the toggle and as a state on the chip", () => {
+    const toggle = t(uiEn, "reg.hub.config.allowSolo");
+    const chip = t(uiEn, "reg.hub.row.freeAgents");
+    expect(toggle).not.toBe(chip);
+    // Both carry the same phrase, so the chip is recognisable as the thing the
+    // toggle switched on.
+    expect(toggle.toLowerCase()).toContain(chip.toLowerCase());
+    // …and the jargon is gone from both.
+    expect(`${toggle} ${chip}`.toLowerCase()).not.toContain("free agent");
+  });
+});

@@ -3420,6 +3420,7 @@ export type DictionaryKey =
   | "reg.hub.awaitingConfirmation"
   | "reg.hub.config.ageMax"
   | "reg.hub.config.ageMin"
+  | "reg.hub.config.allowSolo"
   | "reg.hub.config.approval"
   | "reg.hub.config.cancel"
   | "reg.hub.config.cardUnsupported"

@@ -368,7 +368,9 @@ export async function submitRegistrationGroup(
       throw new HttpError(422, `This division only accepts ${settings.entrant_kind} entries`);
     }
     if (entry.free_agent && (entry.entrant_kind !== "team" || !settings.allow_free_agents)) {
-      throw new HttpError(422, "Free agents are not accepted for this division");
+      // "Solo sign-ups" is the organiser-facing name for this since
+      // 2026-08-25; `allow_free_agents` stays the column and the API field.
+      throw new HttpError(422, "Solo sign-ups are not accepted for this division");
     }
 
     const rawPlayers = entry.players ?? [];
