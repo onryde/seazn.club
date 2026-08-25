@@ -192,19 +192,34 @@ export function LineupEditor({
   availability = {},
 }: Props) {
   const msg = useMsg();
+  // Pair-shaped once, from the entrant's own declared kind (see
+  // isPairShaped's own doc comment) — not per-slot, since it describes the
+  // ENTRANT, not a row. Computed before the draft's lazy initializer below
+  // so the roster auto-populate seeding can use it too.
+  const pairShaped = isPairShaped(side.kind);
+  // `lineupSize` counts UNITS — one nominated player OR PAIR per side
+  // (packages/engine/src/sports/tennis/tennis.ts's positions.lineup.size,
+  // "one nominated unit (player or pair) per side"; that value is correct
+  // and this expression does not change it). A pair-shaped entrant fills
+  // each unit with 2 PEOPLE, so anything that counts or labels PEOPLE
+  // (the roster auto-populate seeding below, the starting-count badge, and
+  // its emerald/slate colour switch) must compare against the PEOPLE-shaped
+  // target, not the raw unit count — otherwise a doubles pair reads "2/1
+  // starting" and the badge never turns emerald (defect register D-3).
+  const expectedStarting = pairShaped ? lineupSize * 2 : lineupSize;
   const [slots, setSlots] = useState<SlotDraft[]>(() => {
     if (side.lineup.length > 0) {
       return draftFromSavedLineup(side.lineup);
     }
     // Nothing saved yet → auto-populate a DRAFT from the roster (first
-    // `lineupSize` start, rest bench) so matchday is one Save, not N taps.
-    // Draft only: nothing persists (and the engine reads nothing) until
-    // Save. Read-only viewers keep the honest empty state instead.
+    // `expectedStarting` start, rest bench) so matchday is one Save, not N
+    // taps. Draft only: nothing persists (and the engine reads nothing)
+    // until Save. Read-only viewers keep the honest empty state instead.
     if (!canEdit) return [];
     return side.members.map((m, i) => ({
       person_id: m.person_id,
       full_name: m.full_name,
-      slot: i < lineupSize ? ("starting" as const) : ("bench" as const),
+      slot: i < expectedStarting ? ("starting" as const) : ("bench" as const),
       position_key: m.default_position_key,
       order_no: i + 1,
       roles: m.roles ?? [],
@@ -212,10 +227,6 @@ export function LineupEditor({
       pair_order: null,
     }));
   });
-  // Pair-shaped once, from the entrant's own declared kind (see
-  // isPairShaped's own doc comment) — not per-slot, since it describes the
-  // ENTRANT, not a row.
-  const pairShaped = isPairShaped(side.kind);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -262,9 +273,9 @@ export function LineupEditor({
       <header className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-slate-700">{msg("lineup.title", { name: side.name })}</h3>
         <span
-          className={`text-xs ${startingCount === lineupSize ? "text-emerald-600" : "text-slate-400"}`}
+          className={`text-xs ${startingCount === expectedStarting ? "text-emerald-600" : "text-slate-400"}`}
         >
-          {msg("lineup.starting", { n: startingCount, total: lineupSize })}
+          {msg("lineup.starting", { n: startingCount, total: expectedStarting })}
         </span>
       </header>
 
