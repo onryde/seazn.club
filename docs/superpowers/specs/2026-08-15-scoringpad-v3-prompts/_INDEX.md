@@ -1898,3 +1898,39 @@ Six. Two of them change what the wave IS, rather than how it is built.
   work is owed for the tap model itself — but R4 is also the first wave that can
   observe defects in that path, and it inherits the R3 lesson about being the
   first real user of a chassis primitive (`SwapSheet` surfaced five).
+
+### R4 — the doubles serve pip is UNTESTABLE until the e2e seeder can declare a pair order (2026-08-25)
+
+Found while scoping the e2e/gallery task, before that task was dispatched.
+Generalises past tennis: **R5 inherits it**, since badminton and table-tennis
+doubles reuse this exact pattern.
+
+`expectedDoublesServer` returns `null` unless the team sheet declared a
+`pairOrder`, and that is correct — `LineupSlot.pairOrder` is
+`.positive().optional()` (`core/types.ts:222`) and `lineup.ts:354` omits the key
+when absent, so an undeclared partner is filtered OUT of `pairOrderOf` rather
+than silently defaulting to 0. The documented "empty rather than guessing"
+posture holds end to end; this was checked rather than assumed, because a
+nullable column plus a `!== undefined` filter is exactly the shape that usually
+does NOT hold.
+
+The gap is on the test side: `RosterSlotSpec` (`e2e/helpers.ts:1015-1025`) has
+no pair-order field and `seedRosteredFixture`'s lineup PUT (`:1147-1153`) never
+sends one. So **every doubles fixture in e2e and in the gallery seeds a pair
+with no declared order**, and with it:
+
+- the `tennis-doubles` gallery screens — the ones the brief requires the owner
+  to verdict BY NAME as their stated pain — would render no serve pip at all.
+  The wave's headline feature would be absent from its own sign-off sheet and
+  would read as a defect rather than as missing fixture data.
+- the doubles serve-dot e2e would be vacuous.
+
+This is the R2c lesson in a new place: there, the gallery could not SEE the
+wave's change because no state opened the picker; here, the fixture cannot
+PRODUCE the change at all. A recapture fixes neither.
+
+The API already accepts it (`schemas.ts:941`, `pair_order` nullish) and the
+lineup editor already sends it, so the fix is three lines in the seeder and it
+lands BEFORE the e2e and gallery work rather than inside it. Spread-omit the
+field rather than sending an explicit `null`, so individual-entrant fixtures
+keep declaring nothing.

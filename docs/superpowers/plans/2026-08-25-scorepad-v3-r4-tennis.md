@@ -170,3 +170,45 @@ either half must red a test.
   — at band 0 the halves are not tappable and the sheet would picture a board
   nobody can tap.
 - Smoke: deferred to R8 by name, in the PR body.
+
+## 9. The doubles fixture cannot declare a serve order yet — fix the SEEDER first
+
+Found while scoping the e2e task, and it invalidates the wave's headline
+assertion if it is not fixed first.
+
+`expectedDoublesServer` answers `null` unless the team sheet declared a
+`pairOrder`. That posture is correct and deliberate (`squad-state.ts:103-104`,
+"a side that declared no order at all returns empty rather than guessing") and
+it holds all the way down: `LineupSlot.pairOrder` is
+`z.number().int().positive().optional()` (`core/types.ts:222`) and
+`lineup.ts:354` omits the key entirely when it is absent, so an undeclared
+partner is filtered out of `pairOrderOf` rather than defaulting to 0.
+
+**But no e2e or gallery fixture can declare one.** `RosterSlotSpec`
+(`e2e/helpers.ts:1015-1025`) carries `fullName`, `positionKey` and `slot` — no
+pair order — and `seedRosteredFixture`'s lineup PUT (`:1147-1153`) sends
+`person_id`/`slot`/`order_no`/`roles`/`position_key` and nothing else. So every
+doubles fixture this wave captures or drives would seed a pair with no declared
+order, `expectedDoublesServer` would return `null` for both sides, and:
+
+- the gallery's `tennis-doubles` screens — **the ones the owner has to verdict
+  specifically, by name, per the brief** — would show NO serve pip at all,
+  which is the wave's entire headline feature missing from its own sign-off
+  sheet, indistinguishable from a defect;
+- the doubles e2e's serve-dot assertion would be vacuous, or would have to
+  assert the pip's ABSENCE and pass for the wrong reason.
+
+The API side already supports it: `schemas.ts:941` declares
+`pair_order: z.number().int().positive().nullish()`, and the lineup editor
+already sends it through `toPutSlot(s, i, pairShaped)`. So the fix is small and
+belongs BEFORE the e2e and gallery work, not inside it:
+
+1. add `pairOrder?: number` to `RosterSlotSpec`, doc-commented the way `slot`
+   already is (every existing caller omits it and stays byte-identical);
+2. pass `...(s.pairOrder === undefined ? {} : { pair_order: s.pairOrder })`
+   in the lineup PUT — spread-omit, never send an explicit `null`, so an
+   individual-entrant fixture keeps declaring nothing;
+3. give both gallery doubles rosters an explicit 1 and 2.
+
+Then assert the pip against a KNOWN person rather than "whichever name the pad
+happened to mark".
