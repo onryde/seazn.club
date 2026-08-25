@@ -21,6 +21,7 @@ import { initSquads } from "@seazn/engine/core";
 import type { ModuleEvent } from "@seazn/engine/sport";
 import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 import { tennis } from "@seazn/engine/sports/tennis";
+import { serveContext } from "@seazn/engine/sports/nested";
 import { foldClient } from "../../../module-client";
 import { answerStep, currentStep, initialSheetState } from "../../guided-sheet";
 import type { GuidedSheetSpec, PadHostView, TileSpec } from "../../types";
@@ -369,6 +370,28 @@ describe("servingInfo (via buildScorebug's strip + WhoLine dot) — real folds",
     const folded = foldClient(tennis, cfgFor(), SINGLES_LINEUPS, events, STRICT_ALL);
     const v = view({ state: folded, squads: singlesSquads(), events });
     expect(stripValue(v, "server")).toBe(NAMES.H);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The `@seazn/engine/sports/nested` barrel (R4-3) — this skin's own proof
+// that IT stays consuming the real function rather than re-forking is the
+// suite above (every `servingInfo`/`buildScorebug` assertion there resolves
+// through `deriveServeContext` -> the imported `serveContext`). This test's
+// job is narrower and different: pin that the BARREL ITSELF still resolves
+// and still answers correctly, independent of this skin, so a later edit to
+// `packages/engine/src/sports/nested/index.ts` that silently drops the
+// export reds HERE — at the import — rather than only showing up as a subtly
+// wrong serve dot three call frames away inside the skin.
+// ---------------------------------------------------------------------------
+
+describe("@seazn/engine/sports/nested barrel", () => {
+  it("serveContext imports through the barrel and answers a real fold (oracle: nested/serve-context.test.ts's own 'alternates every game')", () => {
+    // One completed game for H: serve passes to A, turn floor(1/2) = 0, no
+    // declared pair order in these lineups so personId stays null — the
+    // exact g=1 case `nested/serve-context.test.ts`'s own loop pins.
+    const folded = foldReal(SINGLES_LINEUPS, cfgFor(), [start, ...game("H")]);
+    expect(serveContext(folded)).toEqual({ side: "away", serviceTurn: 0, personId: null });
   });
 });
 

@@ -20,24 +20,44 @@
 // `SwapSheet`): see the `dedicatedEventTypes` gap noted on `refusedEventTypes`
 // below, discovered while building this.
 //
-// THE ENGINE FACTS THIS FILE MIRRORS RATHER THAN IMPORTS, and WHY THAT IS NOT
-// A CHOICE. `nested/kernel.ts`'s `NestedState`/`NestedCfg`/`Side` types,
-// `setInProgress`, `rulesFor`, `nestedGamesOf`/`completedGames` and
-// `serveContext` itself are NOT exported from any subpath this package's
-// `package.json` "exports" map allows — `@seazn/engine/sports/tennis`
-// re-exports only the `tennis` VALUE (confirmed: `sports/tennis/index.ts` is
-// `export { tennis } from "./tennis.ts"` and nothing else), the same fact
-// `../../__tests__/tennis-skin.test.ts`'s own header already documents for
-// the v2 skin. `packages/engine/**` is frozen for this wave (the dispatch's
-// own boundary), so the fix — widening that barrel — is out of this file's
-// reach; recorded as a finding in the task report rather than worked around
-// by touching the engine. The mirror precedent is football's own (this
-// file's football.tsx sibling, its own header): every mirror below is
-// commented with the exact kernel.ts lines it restates, and the ONE mirror
-// that actually matters for correctness (`serveContext`) is proven against
-// REAL folds of the public `tennis` module in this file's test suite, reusing
-// the engine's own `serve-context.test.ts` scenarios as the oracle — a
-// stronger pin than a hand-derived expectation would be.
+// THE ENGINE FACTS THIS FILE ONCE MIRRORED, AND WHAT CHANGED (R4-3 restored).
+// R4 shipped against a real gap: `nested/kernel.ts`'s `serveContext` (and the
+// private helpers it composes — `setInProgress`, `rulesFor`,
+// `nestedGamesOf`/`completedGames`) were not exported from any subpath this
+// package's `package.json` "exports" map allowed — `@seazn/engine/sports/
+// tennis` re-exported only the `tennis` VALUE (`sports/tennis/index.ts` was
+// `export { tennis } from "./tennis.ts"` and nothing else), and there was no
+// `sports/nested/index.ts` at all. `packages/engine/**` was frozen for that
+// wave, so this file mirrored nine kernel facts instead of importing them,
+// each commented with the exact kernel.ts range it restated — the same
+// precedent football.tsx set.
+//
+// THE FIX: `packages/engine/src/sports/nested/index.ts` now exists and
+// exports `serveContext`/`NestedState` — the one mirror that actually
+// mattered for correctness, per the original ruling. Consuming the real
+// function collapses FIVE of the nine mirrors in one step:
+// `nestedGamesOf`/`completedGames`/`pairOrderOf`/`expectedPairServer` existed
+// here only to recompose `serveContext`'s own answer by hand, so importing
+// the composed answer removes them along with `serveContext`'s own mirror —
+// see `deriveServeContext` below. Proven against REAL folds of the public
+// `tennis` module in this file's test suite, reusing the engine's own
+// `serve-context.test.ts` scenarios as the oracle — a stronger pin than a
+// hand-derived expectation would be — plus a barrel-import smoke test
+// against the same oracle so a future barrel edit can't silently re-fork
+// this.
+//
+// WHAT STAYS LOCAL, AND WHY THAT IS A DIFFERENT GAP. `isDecidingSet`,
+// `rulesFor`, `setInProgress`, `gamesFieldBound` and `tbFieldBound`
+// (`sheets()` section below) restate kernel.ts functions that stay
+// MODULE-PRIVATE there BY THE KERNEL'S OWN DESIGN — none of the five carries
+// an `export` keyword, and this fix's grant was to export what the barrel's
+// own readers already make public, not to widen kernel.ts's visibility
+// (kernel.ts itself is otherwise untouched — see the barrel file's header).
+// So these five stay as local re-derivations, each still commented with the
+// kernel.ts range it restates for provenance, but "restates" is now the
+// honest word: there is no barrel gap left to close here, only an
+// architectural boundary. Widening kernel.ts's exports to close it is a call
+// for whoever owns that file next, not something this fix reaches for.
 //
 // WHAT THIS SKIN DELIBERATELY DOES NOT DECLARE:
 //   - `swap()`. `lineupPolicy: () => ({reentry: "none", ...})` (tennis.ts) —
@@ -57,6 +77,7 @@
 import type { EventEnvelope, SquadState } from "@seazn/engine/core";
 import { resolveVoids } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
+import { serveContext, type NestedState } from "@seazn/engine/sports/nested";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
@@ -234,13 +255,16 @@ export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
 }
 
 // ---------------------------------------------------------------------------
-// Engine mirrors — see this file's header for why these are mirrors and not
-// imports. Every function here restates a SPECIFIC, cited kernel.ts range;
-// none of these invent tennis domain logic of their own.
+// Engine-private re-derivations. `isDecidingSet`/`rulesFor`/`setInProgress`
+// restate kernel.ts functions the kernel itself keeps MODULE-PRIVATE (see
+// this file's header) — there is no barrel gap left to close for these
+// three, only a boundary this fix does not cross. Every function here still
+// restates a SPECIFIC, cited kernel.ts range; none invents tennis domain
+// logic of its own.
 // ---------------------------------------------------------------------------
 
 /** `isDecidingSet` (`kernel.ts:692-695`). */
-function isDecidingSetMirror(state: TennisStateShape, cfg: TennisCfgShape): boolean {
+function isDecidingSet(state: TennisStateShape, cfg: TennisCfgShape): boolean {
   const bestOf = cfg.bestOf ?? 3;
   const need = Math.ceil(bestOf / 2) - 1;
   return (state.setsWon?.home ?? 0) === need && (state.setsWon?.away ?? 0) === need;
@@ -257,12 +281,12 @@ interface TennisSetRules {
  *  Defaults mirror tennis's own shipped "tour" variant (`tennis.ts:17-24`)
  *  only as a degrade-safe fallback for a `{}` fixture — a real `view.cfg` is
  *  always the module's own fully-parsed, defaulted config. */
-function rulesForMirror(state: TennisStateShape, cfg: TennisCfgShape): TennisSetRules {
+function rulesFor(state: TennisStateShape, cfg: TennisCfgShape): TennisSetRules {
   const set = cfg.set ?? {};
   const tiebreakAt = set.tiebreakAt === undefined ? 6 : set.tiebreakAt;
   const base: TennisSetRules = { tiebreakAt, tiebreakTo: set.tiebreakTo ?? 7, mtbTo: null };
   const finalSet = cfg.finalSet ?? "same";
-  if (!isDecidingSetMirror(state, cfg) || finalSet === "same") return base;
+  if (!isDecidingSet(state, cfg) || finalSet === "same") return base;
   if ("matchTiebreakTo" in finalSet) return { ...base, mtbTo: finalSet.matchTiebreakTo };
   return { ...base, tiebreakTo: finalSet.tiebreakTo }; // the slam rule: same tiebreakAt, richer target
 }
@@ -276,41 +300,18 @@ function setInProgressOf(state: TennisStateShape): boolean {
   return (state.points?.home ?? 0) > 0 || (state.points?.away ?? 0) > 0;
 }
 
-/** `nestedGamesOf` (`kernel.ts:1641-1645`). */
-function nestedGamesOfMirror(state: TennisStateShape, side: Side): number {
-  const closed = (state.sets ?? []).reduce(
-    (sum, set) => sum + (set.mtb === true ? 0 : (set[side] ?? 0)),
-    0,
-  );
-  return closed + (state.games?.[side] ?? 0);
-}
-
-/** `completedGames` (`kernel.ts:468-471`). */
-function completedGamesMirror(state: TennisStateShape): number {
-  const mtbSets = (state.sets ?? []).filter((set) => set.mtb === true).length;
-  return nestedGamesOfMirror(state, "home") + nestedGamesOfMirror(state, "away") + mtbSets;
-}
-
-/** `pairOrderOf` (`squad-state.ts:87-93`), off the PUBLIC `SquadState` shape
- *  (`@seazn/engine/core`) rather than the engine-internal `SideSquad` alias —
- *  same fields, same filter, same sort, same "undeclared partner is filtered
- *  OUT, never defaulted to 0" posture. */
-function pairOrderOfMirror(side: SquadState["home"]): readonly string[] {
-  return side.members
-    .filter((member) => member.role === "player" && member.pairOrder !== undefined)
-    .map((member) => ({ id: member.personId, pair: member.pairOrder ?? 0, order: member.orderNo }))
-    .sort((a, b) => (a.pair === b.pair ? a.order - b.order : a.pair - b.pair))
-    .map((member) => member.id);
-}
-
-/** `expectedPairServer` (`squad-state.ts:105-109`). `null`, never a guess,
- *  for a side with no declared order — the doubles-serve-pip gap `_INDEX.md`
- *  records as owed to the e2e seeder, not to this reader. */
-function expectedPairServerMirror(side: SquadState["home"], turn: number): string | null {
-  const order = pairOrderOfMirror(side);
-  if (order.length === 0 || !Number.isInteger(turn) || turn < 0) return null;
-  return order[turn % order.length] ?? null;
-}
+// ---------------------------------------------------------------------------
+// serveContext — genuinely consumed from the engine (R4-3, restored). The
+// barrel this fix adds (`packages/engine/src/sports/nested/index.ts`) makes
+// this section one delegating function instead of five mirrored ones: what
+// used to be `nestedGamesOfMirror`/`completedGamesMirror`/`pairOrderOfMirror`
+// /`expectedPairServerMirror`/`serveContextMirror` existed only to recompose
+// `serveContext`'s own answer by hand — importing the composed answer is
+// strictly closer to R4-3's intent than re-importing the pieces and
+// recomposing them here would have been, since that recomposition (`side =
+// state.serving`, `serviceTurn = floor(completedGames/2)`, ...) was exactly
+// the fork risk the ruling names.
+// ---------------------------------------------------------------------------
 
 interface ServeContext {
   side: Side;
@@ -318,15 +319,34 @@ interface ServeContext {
   personId: string | null;
 }
 
-/** `serveContext` (`kernel.ts:511-519`) — composes `state.serving` (never
- *  recomputed here; read straight off the fold) with the service-GAME turn
- *  and the declared-doubles-order reader above. Scoped to the service game,
- *  not the point, exactly as the real function documents: mid-tie-break this
- *  names whoever opened the side's spell, not the point-level ITF partner. */
-function serveContextMirror(state: TennisStateShape, squads: SquadState): ServeContext {
-  const side: Side = state.serving === "away" ? "away" : "home";
-  const serviceTurn = Math.floor(completedGamesMirror(state) / 2);
-  return { side, serviceTurn, personId: expectedPairServerMirror(squads[side], serviceTurn) };
+/**
+ * Adapts `PadHostView`'s split shape into `serveContext`'s real input, then
+ * delegates outright — no recomputation. `.state` and `.squads` are separate
+ * fields on `PadHostView`, where `NestedState.squads` is one of `.state`'s
+ * own properties (`kernel.ts:426`), so this builds the one object the real
+ * function expects rather than casting `view.state` wholesale.
+ *
+ * Every field `serveContext`'s call graph actually reads — `serving`,
+ * `sets`, `games` (transitively, via `completedGames`/`nestedGamesOf`), and
+ * `squads` (via `expectedDoublesServer`) — is defaulted exactly as the
+ * deleted mirrors defaulted it, so a `{}`/pre-fold state behaves identically
+ * to before this change; every OTHER `NestedState` field (`cfg`, `entrants`,
+ * `phase`, `points`, `setsWon`, `outcome`, ...) is provably unread by that
+ * call graph (checked against kernel.ts), so the cast below never asserts
+ * something the call actually depends on.
+ */
+function deriveServeContext(state: TennisStateShape, squads: SquadState): ServeContext {
+  const shim = {
+    serving: state.serving === "away" ? "away" : "home",
+    sets: (state.sets ?? []).map((set) => ({
+      home: set.home ?? 0,
+      away: set.away ?? 0,
+      ...(set.mtb === undefined ? {} : { mtb: set.mtb }),
+    })),
+    games: { home: state.games?.home ?? 0, away: state.games?.away ?? 0 },
+    squads,
+  } as unknown as NestedState;
+  return serveContext(shim);
 }
 
 /**
@@ -373,14 +393,15 @@ interface ServingInfo {
  *
  * R4 ruling: a SINGLES side (one on-field player) names its own sole member
  * directly whenever it is that side's turn to serve — "the only member", not
- * a second copy of the ITF pair-rotation rule `expectedPairServerMirror`
- * already implements. Doubles defers to the real rotation, which answers
- * `null` for an undeclared pair order rather than guessing.
+ * a second copy of the ITF pair-rotation rule `serveContext` (via
+ * `expectedDoublesServer`) already implements. Doubles defers to the real
+ * rotation, which answers `null` for an undeclared pair order rather than
+ * guessing.
  */
 function servingInfo(view: PadHostView): ServingInfo | null {
   if (hasStaleServeInfo(view)) return null;
   const state = asState(view.state);
-  const ctx = serveContextMirror(state, view.squads);
+  const ctx = deriveServeContext(state, view.squads);
   const players = onFieldPlayers(view.squads, ctx.side);
   if (players.length <= 1) return { side: ctx.side, personId: players[0]?.personId ?? null };
   return { side: ctx.side, personId: ctx.personId };
@@ -669,16 +690,22 @@ export function refusedEventTypes(view: PadHostView): string[] {
 // convention every v3 skin's `sheets` takes.
 // ---------------------------------------------------------------------------
 
-/** `gamesFieldBound` (`kernel.ts:1382-1391`). */
-function gamesFieldBoundMirror(cfg: TennisCfgShape): number {
+/** `gamesFieldBound` (`kernel.ts:1382-1391`) — no counterpart to import (not
+ *  exported; see this file's header), and the real kernel function computes
+ *  it straight off `cfg` too rather than via `rulesFor`, so there is no
+ *  already-imported reader to derive this from either. A re-derivation, kept
+ *  and renamed rather than left claiming to mirror something reachable. */
+function gamesFieldBound(cfg: TennisCfgShape): number {
   const set = cfg.set ?? {};
   const base = set.tiebreakAt === null ? 200 : (set.gamesTo ?? 6) + (set.winBy ?? 2) + 2;
   const finalSet = cfg.finalSet;
   const mtb = finalSet && typeof finalSet === "object" && "matchTiebreakTo" in finalSet ? finalSet.matchTiebreakTo + 2 : 0;
   return Math.max(base, mtb);
 }
-/** `tbFieldBound` (`kernel.ts:1396-1403`). */
-function tbFieldBoundMirror(cfg: TennisCfgShape): number {
+/** `tbFieldBound` (`kernel.ts:1396-1403`) — same posture as `gamesFieldBound`
+ *  above: no export to consume, and the kernel's own version reads `cfg`
+ *  directly rather than through `rulesFor`. */
+function tbFieldBound(cfg: TennisCfgShape): number {
   const ordinary = (cfg.set?.tiebreakTo ?? 7) + (cfg.tiebreak?.winBy ?? 2) + 2;
   const finalSet = cfg.finalSet;
   const decider =
@@ -704,9 +731,9 @@ function isTbShape(home: number, away: number, rules: TennisSetRules): boolean {
 function setScoreSheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
   const cfg = asCfg(view.cfg);
-  const rules = rulesForMirror(state, cfg);
-  const gamesBound = gamesFieldBoundMirror(cfg);
-  const tbBound = tbFieldBoundMirror(cfg);
+  const rules = rulesFor(state, cfg);
+  const gamesBound = gamesFieldBound(cfg);
+  const tbBound = tbFieldBound(cfg);
   const tbShape: StepPredicate = (answers) => {
     const home = Number(answers.home);
     const away = Number(answers.away);
