@@ -273,8 +273,6 @@
   "confirm.deleteClub.title": "Supprimer ce club ?",
   "confirm.deleteClub.body": "{name} est supprimé. Ses équipes sont conservées — leurs écussons reviennent à aucun écusson de club.",
   "confirm.deleteClub.label": "Supprimer le club",
-  "confirm.withdrawRegistration.title": "Retirer cette inscription ?",
-  "confirm.withdrawRegistration.label": "Retirer",
   "confirm.refundRegistration.title": "Rembourser cette inscription ?",
   "confirm.refundRegistration.body": "Le montant restant est remboursé au payeur.",
   "confirm.refundRegistration.label": "Rembourser",

@@ -273,8 +273,6 @@
   "confirm.deleteClub.title": "Deze club verwijderen?",
   "confirm.deleteClub.body": "{name} wordt verwijderd. De teams blijven behouden — hun logo's vallen terug op geen clublogo.",
   "confirm.deleteClub.label": "Club verwijderen",
-  "confirm.withdrawRegistration.title": "Deze inschrijving intrekken?",
-  "confirm.withdrawRegistration.label": "Intrekken",
   "confirm.refundRegistration.title": "Deze inschrijving terugbetalen?",
   "confirm.refundRegistration.body": "Het resterende bedrag wordt terugbetaald aan de betaler.",
   "confirm.refundRegistration.label": "Terugbetalen",

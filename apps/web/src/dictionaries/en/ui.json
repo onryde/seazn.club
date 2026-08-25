@@ -273,8 +273,6 @@
   "confirm.deleteClub.title": "Delete this club?",
   "confirm.deleteClub.body": "{name} is removed. Its teams stay — their badges fall back to no club badge.",
   "confirm.deleteClub.label": "Delete club",
-  "confirm.withdrawRegistration.title": "Withdraw this registration?",
-  "confirm.withdrawRegistration.label": "Withdraw",
   "confirm.refundRegistration.title": "Refund this registration?",
   "confirm.refundRegistration.body": "The remaining amount is refunded to the payer.",
   "confirm.refundRegistration.label": "Refund",

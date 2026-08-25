@@ -273,8 +273,6 @@
   "confirm.deleteClub.title": "¿Eliminar este club?",
   "confirm.deleteClub.body": "Se elimina {name}. Sus equipos se mantienen: sus escudos vuelven a quedar sin escudo de club.",
   "confirm.deleteClub.label": "Eliminar club",
-  "confirm.withdrawRegistration.title": "¿Retirar esta inscripción?",
-  "confirm.withdrawRegistration.label": "Retirar",
   "confirm.refundRegistration.title": "¿Reembolsar esta inscripción?",
   "confirm.refundRegistration.body": "El importe restante se reembolsa al pagador.",
   "confirm.refundRegistration.label": "Reembolsar",
