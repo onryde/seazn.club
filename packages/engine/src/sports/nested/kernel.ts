@@ -526,13 +526,22 @@ function splitTbTurns(turns: number, firstServer: Side): Record<Side, number> {
  * the breaker opened, never following the point-by-point ITF handoff
  * inside it (see `expectedDoublesServer`'s doc comment).
  *
- * SCOPED like `state.serving` itself: "rally fidelity only; summary sets
- * leave it untouched" (this struct's own field comment) — a
- * `*.set_summary` never advances `serving` either, so a fixture that banks
- * any set that way already carries this same staleness upstream of this
- * function, not a new one it introduces.
+ * NOT scoped like `state.serving`, and that asymmetry is the whole reason
+ * `serveContext` reports `serveOrderKnown`. `serving` is "rally fidelity
+ * only; summary sets leave it untouched" (this struct's own field comment):
+ * `bankSet` never assigns it, so a tier-0 `*.set_summary` freezes it. This
+ * walk has no such gap — a closed set records its games either way, so the
+ * transitions above fire for a summary-banked set exactly as for a
+ * rally-scored one. An odd-game summary (6-3, 6-1 — ordinary scorelines)
+ * therefore advances `opener` here while `serving` stands still, and the two
+ * disagree from that point on. Neither is patched to match the other: the
+ * walk is right about the rotation, `serving` is right about what the fold
+ * actually committed to, and `serveContext` compares them and declines to
+ * name a person rather than picking a winner. Correcting `serving` on the
+ * summary path is the real fix and belongs to its own wave — it moves the
+ * public scoreboard's serve indicator, which ten golden streams pin.
  */
-function serviceTurnsPerSide(state: NestedState): Record<Side, number> {
+function walkServe(state: NestedState): { turns: Record<Side, number>; opener: Side } {
   let opener: Side = "home"; // init's fixed convention: home serves first
   const turns: Record<Side, number> = { home: 0, away: 0 };
   const credit = (side: Side, n: number): void => {
@@ -543,7 +552,12 @@ function serviceTurnsPerSide(state: NestedState): Record<Side, number> {
       const split = splitTbTurns(tbTurnsConsumed(set.home + set.away), opener);
       credit("home", split.home);
       credit("away", split.away);
-      continue; // the deciding set — there is no next set to hand off to
+      // No next set to hand off to — but `applyTbPoint` still applies ITF 5b
+      // to `serving` on the closing point, so flip here too or the two
+      // derivations disagree for the whole of a finished match and
+      // `serveContext` reports a drift that is really just this omission.
+      opener = opponent(opener);
+      continue;
     }
     // `set.home`/`set.away` already carry the breaker's own "+1" credited
     // game (`nestedGamesOf`'s doc comment), so the standard games actually
@@ -563,7 +577,9 @@ function serviceTurnsPerSide(state: NestedState): Record<Side, number> {
   const liveStdGames = state.games.home + state.games.away;
   credit(opener, Math.ceil(liveStdGames / 2));
   credit(opponent(opener), Math.floor(liveStdGames / 2));
-  return turns;
+  // `opener` is the CURRENT set's opener — every closed set's transition has
+  // been applied, the live set's own games have not moved it (they never do).
+  return { turns, opener };
 }
 
 /**
@@ -598,21 +614,49 @@ function serviceTurnsPerSide(state: NestedState): Record<Side, number> {
  * tested alternative (`serve-context.test.ts`) — a scoped-but-honest answer
  * over a second, riskier derivation.
  *
- * Inherits `state.serving`'s own documented limit ("rally fidelity only;
- * summary sets leave it untouched"): a tier-0 `*.set_summary` never moves
- * `serving`, so `side`/`serviceTurn` carry whatever staleness that leaves
- * behind. A pure reader of what the fold already committed to, not a second
- * source of truth for it — and no fold effect: it never mutates state, and
+ * `serveOrderKnown` is false exactly when the fold's serve tracking and the
+ * turn walk have diverged, which today means one thing: a tier-0
+ * `*.set_summary` banked a set without advancing `state.serving`, while the
+ * walk advanced across it (see `walkServe`). `personId` is `null` whenever
+ * it is false — an omitted fact over an authoritative-looking wrong one, the
+ * same posture as an undeclared pair order. `side` and `serviceTurn` are
+ * still returned: `side` is `state.serving`, which is what the rest of the
+ * product renders for that match, and a caller that wants to suppress the
+ * whole indicator has `serveOrderKnown` to do it with.
+ *
+ * The check is a real drift detector, not a summary-set sniffer — it compares
+ * the two derivations rather than scanning history for an event type, so any
+ * future fold/walk fork trips it too.
+ *
+ * A pure reader of what the fold already committed to, not a second source of
+ * truth for it — and no fold effect: it never mutates state, and
  * initSquads/init never call it.
  */
 export function serveContext(state: NestedState): {
   side: Side;
   personId: string | null;
   serviceTurn: number;
+  serveOrderKnown: boolean;
 } {
+  const { turns, opener } = walkServe(state);
   const side = state.serving;
-  const serviceTurn = serviceTurnsPerSide(state)[side];
-  return { side, serviceTurn, personId: expectedDoublesServer(state, side, serviceTurn) };
+  const serviceTurn = turns[side];
+  // Does the fold's own serve tracking still agree with the walk? Entry to a
+  // breaker is always at an even game count, so the expected server of the
+  // current game — and of a live breaker's first point — is the set's opener
+  // flipped by the live games played so far. `tbFirstServer` is what a live
+  // breaker's opening server actually was; outside one (`bankSet` nulls it)
+  // `serving` is the fold's answer directly. Rally-scored history keeps these
+  // identical by construction; a summary-banked set is what breaks them.
+  const liveStdGames = state.games.home + state.games.away;
+  const expectedFirst: Side = liveStdGames % 2 === 0 ? opener : opponent(opener);
+  const serveOrderKnown = (state.tbFirstServer ?? state.serving) === expectedFirst;
+  return {
+    side,
+    serviceTurn,
+    serveOrderKnown,
+    personId: serveOrderKnown ? expectedDoublesServer(state, side, serviceTurn) : null,
+  };
 }
 
 /** Per-person tallies folded out of attributed points (W4). Aces and double

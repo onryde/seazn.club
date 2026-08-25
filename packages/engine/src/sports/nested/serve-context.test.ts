@@ -70,7 +70,7 @@ describe("serveContext", () => {
   describe("side and service-game turn (singles, no declared pair order)", () => {
     it("starts the match with the initial server, turn 0, no personId", () => {
       const state = fold(singles, cfgFor(), [start]);
-      expect(serveContext(state)).toEqual({ side: "home", serviceTurn: 0, personId: null });
+      expect(serveContext(state)).toEqual({ side: "home", serviceTurn: 0, personId: null, serveOrderKnown: true });
     });
 
     it("floor(completed games / 2) matches the fold's own alternation, game by game", () => {
@@ -83,6 +83,7 @@ describe("serveContext", () => {
           side: g % 2 === 0 ? "home" : "away",
           serviceTurn: Math.floor(g / 2),
           personId: null,
+          serveOrderKnown: true,
         });
         events.push(...game(g % 2 === 0 ? H : A));
       }
@@ -97,7 +98,7 @@ describe("serveContext", () => {
       expect(state.games).toEqual({ home: 0, away: 0 }); // sanity: new set fresh
       // 10 games completed (an even count) → serve is back with the side that
       // opened the match.
-      expect(serveContext(state)).toEqual({ side: "home", serviceTurn: 5, personId: null });
+      expect(serveContext(state)).toEqual({ side: "home", serviceTurn: 5, personId: null, serveOrderKnown: true });
     });
   });
 
@@ -108,20 +109,23 @@ describe("serveContext", () => {
         side: "home",
         serviceTurn: 0,
         personId: "H-first",
+        serveOrderKnown: true,
       });
       expect(serveContext(fold(doubles, cfg, [start, ...game(H)]))).toEqual({
         side: "away",
         serviceTurn: 0,
         personId: "A-first",
+        serveOrderKnown: true,
       });
       expect(serveContext(fold(doubles, cfg, [start, ...game(H), ...game(A)]))).toEqual({
         side: "home",
         serviceTurn: 1,
         personId: "H-second",
+        serveOrderKnown: true,
       });
       expect(
         serveContext(fold(doubles, cfg, [start, ...game(H), ...game(A), ...game(H), ...game(A)])),
-      ).toEqual({ side: "home", serviceTurn: 2, personId: "H-first" }); // rotation cycles back
+      ).toEqual({ side: "home", serviceTurn: 2, personId: "H-first", serveOrderKnown: true }); // rotation cycles back
     });
   });
 
@@ -132,7 +136,7 @@ describe("serveContext", () => {
       const atTB = fold(doubles, cfg, to66Events);
       expect(atTB.points.kind).toBe("tiebreak"); // sanity
       expect(atTB.serving).toBe("home"); // sanity — matches nested.test.ts's own fixture
-      expect(serveContext(atTB)).toEqual({ side: "home", serviceTurn: 6, personId: "H-first" });
+      expect(serveContext(atTB)).toEqual({ side: "home", serviceTurn: 6, personId: "H-first", serveOrderKnown: true });
 
       const done = fold(doubles, cfg, [...to66Events, ...straight(H, 7)]); // H takes the TB 7-0
       expect(done.sets).toEqual([{ home: 7, away: 6, tb: { home: 7, away: 0 } }]); // sanity
@@ -141,7 +145,7 @@ describe("serveContext", () => {
       // 7-point (4-turn, 2-per-side) breaker — 8 turns each once it closes.
       // Still "A-first": 6 (the pre-fix value) and 8 share a parity, the
       // coincidence the next test's OWN following game does not get.
-      expect(serveContext(done)).toEqual({ side: "away", serviceTurn: 8, personId: "A-first" });
+      expect(serveContext(done)).toEqual({ side: "away", serviceTurn: 8, personId: "A-first", serveOrderKnown: true });
     });
 
     // R4 defect 1 (HIGH) — a 7-point breaker is really 4 ITF turns (1, then
@@ -167,6 +171,7 @@ describe("serveContext", () => {
         side: "home",
         serviceTurn: 8,
         personId: "H-first",
+        serveOrderKnown: true,
       });
     });
 
@@ -174,7 +179,7 @@ describe("serveContext", () => {
       const cfg = cfgFor();
       const to66Events = [start, ...gamesFor(H, 5), ...gamesFor(A, 5), ...game(H), ...game(A)];
       const opening = fold(doubles, cfg, to66Events);
-      expect(serveContext(opening)).toEqual({ side: "home", serviceTurn: 6, personId: "H-first" });
+      expect(serveContext(opening)).toEqual({ side: "home", serviceTurn: 6, personId: "H-first", serveOrderKnown: true });
 
       // 3 TB points in: real service has already passed to home's SECOND
       // partner for this (4th) point (ITF: 1 point then 2-each rotating
@@ -186,19 +191,41 @@ describe("serveContext", () => {
       // `personId` still names whoever opened home's spell in this
       // tie-break, not the individual actually due this rally. Documented
       // scope, not a silent miss — see serveContext's doc comment.
-      expect(serveContext(afterP3)).toEqual({ side: "home", serviceTurn: 6, personId: "H-first" });
+      expect(serveContext(afterP3)).toEqual({ side: "home", serviceTurn: 6, personId: "H-first", serveOrderKnown: true });
+    });
+
+    it("stays known one point into a tie-break, where `serving` has rotated", () => {
+      // ITF hands the breaker's second point to the other side, so after
+      // exactly one point `state.serving` is NOT the side the walk expects
+      // to be serving this set — the breaker's FIRST server is. Comparing
+      // `serving` alone here would report a drift in a match that has never
+      // been anything but rally-scored, and would kill the serve pip for
+      // half of every tie-break. `tbFirstServer` is what makes that right.
+      // Mutation-proved: dropping the `tbFirstServer ?? …` fallback fails
+      // this test alone.
+      const cfg = cfgFor();
+      const to66Events = [start, ...gamesFor(H, 5), ...gamesFor(A, 5), ...game(H), ...game(A)];
+      const afterP1 = fold(doubles, cfg, [...to66Events, point(H)]);
+      expect(afterP1.serving).toBe("away"); // sanity — point 2 is away's
+      expect(serveContext(afterP1)).toEqual({
+        side: "away",
+        serviceTurn: 6,
+        personId: "A-first",
+        serveOrderKnown: true,
+      });
     });
   });
 
   describe("the match-tie-break trap", () => {
-    // 6-4 then 3-6, both banked via a `*.set_summary` — `serving` is never
+    // 6-4 then 3-6, both banked via a `*.set_summary`. `serving` is never
     // touched by a summary fold (this struct's own field comment: "rally
     // fidelity only"), so it stays at `init`'s "home serves first" through
-    // both closures. `serviceTurnsPerSide` inherits that same staleness by
-    // design (its own doc comment) rather than independently reconstructing
-    // an alternation the fold itself never tracked for these two sets —
-    // so the values below follow ideal ITF alternation from the fixed
-    // match-opening side, same as this fixture's own `serving` field does.
+    // both closures — but the turn walk DOES cross them, and 3-6 is nine
+    // games, so it flips its opener where the fold did not. This fixture is
+    // therefore a desynced one, deliberately: it pins the MTB turn
+    // arithmetic (what these two tests are for) AND the refusal that
+    // desync must produce. The even-game fixture below is the paired case
+    // where the rotation survives a summary backfill intact.
     const oneSetAll = [start, summary(6, 4), summary(3, 6)];
 
     it("adds nothing for an MTB still in progress, same as any other current game", () => {
@@ -212,7 +239,14 @@ describe("serveContext", () => {
       // not yet counted) MTB — unaffected by the 3 MTB points already
       // played, same as any other live breaker (see the live-tie-break
       // test above).
-      expect(serveContext(midMtb)).toEqual({ side: "home", serviceTurn: 10, personId: "H-first" });
+      // The turn count stands on its own; the person does not, because the
+      // 3-6 summary desynced the rotation (see the fixture comment).
+      expect(serveContext(midMtb)).toEqual({
+        side: "home",
+        serviceTurn: 10,
+        personId: null,
+        serveOrderKnown: false,
+      });
     });
 
     it("does not inflate completed games by a banked MTB's raw point score", () => {
@@ -224,7 +258,84 @@ describe("serveContext", () => {
       // production line, not re-derived in this file.
       const done = fold(doubles, cfg, [...oneSetAll, ...straight(H, 10)]);
       expect(done.sets[2]).toEqual({ home: 10, away: 0, mtb: true }); // sanity
-      expect(serveContext(done)).toEqual({ side: "away", serviceTurn: 12, personId: "A-first" });
+      expect(serveContext(done)).toEqual({
+        side: "away",
+        serviceTurn: 12,
+        personId: null,
+        serveOrderKnown: false,
+      });
+    });
+
+    it("still names the partner into an MTB when both summary sets are even", () => {
+      // The paired case: 6-4 (10 games) and 2-6 (8) both leave the opener
+      // where it was, so the walk and the fold never diverge and a scorer
+      // who backfilled two sets still gets a serve pip in the decider.
+      // Guards against the refusal above being a blanket "any summary set
+      // kills the rotation" — that would cost the feature its most common
+      // real use, a late-arriving scorer entering the sets already played.
+      const cfg = cfgFor("doubles-noad-mtb10");
+      const atDecider = fold(doubles, cfg, [start, summary(6, 4), summary(2, 6)]);
+      expect(atDecider.points.kind).toBe("matchTiebreak"); // sanity
+      expect(serveContext(atDecider)).toEqual({
+        side: "home",
+        serviceTurn: 9,
+        personId: "H-second",
+        serveOrderKnown: true,
+      });
+    });
+
+    it("keeps the walk in step with ITF 5b across a CLOSED match tie-break", () => {
+      // `applyTbPoint` flips `serving` on the MTB's closing point like any
+      // other breaker. The walk has no next set to hand off to and could
+      // plausibly skip that flip — if it does, every finished MTB match
+      // reads as desynced and reports a drift that is really the walk's own
+      // omission. Mutation-proved: dropping the flip fails this test alone.
+      const cfg = cfgFor("doubles-noad-mtb10");
+      const done = fold(doubles, cfg, [start, summary(6, 4), summary(2, 6), ...straight(H, 10)]);
+      expect(done.sets[2]).toEqual({ home: 10, away: 0, mtb: true }); // sanity
+      expect(serveContext(done)).toEqual({
+        side: "away",
+        serviceTurn: 12,
+        personId: "A-first",
+        serveOrderKnown: true,
+      });
+    });
+  });
+
+  // A tier-0 `*.set_summary` banks a set without advancing `state.serving`
+  // (`bankSet` never touches it) — but the turn walk DOES advance its own
+  // opener across that set's game parity. Where those two disagree the pair
+  // rotation has no honest answer, and `serveContext` must not invent one.
+  describe("a summary-banked set can desync the fold from the walk", () => {
+    it("refuses to name a partner after an ODD-game summary set", () => {
+      const state = fold(doubles, cfgFor(), [start, summary(6, 3), ...game(H)]);
+      // 9 games: the walk flips its opener, `serving` did not. Naming anyone
+      // here picks a partner off a rotation the fold never agreed to.
+      expect(serveContext(state).serveOrderKnown).toBe(false);
+      expect(serveContext(state).personId).toBeNull();
+    });
+
+    it("still names the partner after an EVEN-game summary set", () => {
+      // 8 games: the walk does not flip either, so the two agree and the
+      // rotation is genuinely derivable — the guard must not over-refuse.
+      const state = fold(doubles, cfgFor(), [start, summary(6, 2)]);
+      expect(serveContext(state)).toMatchObject({
+        side: "home",
+        serviceTurn: 4,
+        serveOrderKnown: true,
+        personId: "H-first",
+      });
+    });
+
+    it("refuses after a tie-break summary set (ITF 5b flips, the fold did not)", () => {
+      const state = fold(doubles, cfgFor(), [start, summary(7, 6, { home: 7, away: 5 })]);
+      expect(serveContext(state).serveOrderKnown).toBe(false);
+      expect(serveContext(state).personId).toBeNull();
+    });
+
+    it("reports a rally-scored match as known throughout, live tie-break included", () => {
+      const state = fold(doubles, cfgFor(), [start, ...gamesFor(H, 6), ...gamesFor(A, 6)]);
+      expect(serveContext(state).serveOrderKnown).toBe(true);
     });
   });
 });

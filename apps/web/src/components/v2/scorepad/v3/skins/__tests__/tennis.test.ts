@@ -342,6 +342,39 @@ describe("servingInfo (via buildScorebug's strip + WhoLine dot) — real folds",
     expect(stripValue(view({ state: done, squads }), "server")).toBe(NAMES["A-first"]);
   });
 
+  it("names the right partner the GAME AFTER a closed tie-break, where parity stops covering", () => {
+    // The test above agrees with the oracle by coincidence — 6 and the real
+    // 8 share a parity. One more game crosses a floor(_/2) boundary, which
+    // is precisely where a serve derivation that has lost the breaker's own
+    // turn count starts naming the wrong player, and keeps doing it for the
+    // rest of the match. Oracle: `nested/serve-context.test.ts`'s "does not
+    // desync the doubles rotation for the game after a closed tie-break".
+    const cfgDoubles = cfgFor("doubles-noad-mtb10");
+    const squads = doublesSquads(true);
+    const to66 = [start, ...gamesFor("H", 5), ...gamesFor("A", 5), ...game("H"), ...game("A")];
+    const setTwoGameTwo = foldReal(doublesLineups(), cfgDoubles, [...to66, ...straight("H", 7), ...game("A")]);
+    expect(setTwoGameTwo.serving).toBe("home"); // sanity
+    // Asserted against the engine directly as well, so this stays an oracle
+    // proof: if the two ever disagree, the pad is the one that is wrong.
+    expect(serveContext(setTwoGameTwo as never).personId).toBe("H-first");
+    expect(stripValue(view({ state: setTwoGameTwo, squads }), "server")).toBe(NAMES["H-first"]);
+  });
+
+  it("keeps naming the server ONE point into a tie-break, where the fold's `serving` has rotated", () => {
+    // ITF gives the breaker's second point to the other side, so one point
+    // in, `state.serving` is no longer the side that OPENED the breaker.
+    // The engine reconciles that against `tbFirstServer`; a pad that never
+    // passes it along reads its own match as desynced and drops the server
+    // name for half of every tie-break — the shape of loss a scorer notices
+    // exactly when the match is tightest.
+    const cfgDoubles = cfgFor("doubles-noad-mtb10");
+    const squads = doublesSquads(true);
+    const to66 = [start, ...gamesFor("H", 5), ...gamesFor("A", 5), ...game("H"), ...game("A")];
+    const afterP1 = foldReal(doublesLineups(), cfgDoubles, [...to66, point("H")]);
+    expect(afterP1.serving).toBe("away"); // sanity — point 2 is away's
+    expect(stripValue(view({ state: afterP1, squads }), "server")).toBe(NAMES["A-first"]);
+  });
+
   it("does not inflate completed games by a banked match-tie-break's raw point score", () => {
     // Same fixture `serve-context.test.ts` pins: MTB closes 10-0, banked as
     // ONE game (the 20th) — 19 games completed, not 29 raw points. Either
@@ -349,12 +382,18 @@ describe("servingInfo (via buildScorebug's strip + WhoLine dot) — real folds",
     // NOT wired into `view()` in this one test (contrast the poisoning tests
     // below, which wire it on purpose) — this test's own job is the games
     // arithmetic, not the set_summary staleness rule.
+    //
+    // Both summary sets are EVEN-game on purpose (6-4, 2-6). An odd one
+    // desyncs the fold's `serving` from the turn walk and the engine then
+    // declines to name anyone at all (`serveOrderKnown: false`), which would
+    // make this test pass or fail on the staleness rule instead of on the
+    // arithmetic it exists to pin.
     const cfgDoubles = cfgFor("doubles-noad-mtb10");
     const squads = doublesSquads(true);
     const oneSetAll: ModuleEvent[] = [
       start,
       { type: "tennis.set_summary", payload: { home: 6, away: 4 } },
-      { type: "tennis.set_summary", payload: { home: 3, away: 6 } },
+      { type: "tennis.set_summary", payload: { home: 2, away: 6 } },
     ];
     const done = foldReal(doublesLineups(), cfgDoubles, [...oneSetAll, ...straight("H", 10)]);
     expect(stripValue(view({ state: done, squads }), "server")).toBe(NAMES["A-first"]);
@@ -406,7 +445,12 @@ describe("@seazn/engine/sports/nested barrel", () => {
     // declared pair order in these lineups so personId stays null — the
     // exact g=1 case `nested/serve-context.test.ts`'s own loop pins.
     const folded = foldReal(SINGLES_LINEUPS, cfgFor(), [start, ...game("H")]);
-    expect(serveContext(folded)).toEqual({ side: "away", serviceTurn: 0, personId: null });
+    expect(serveContext(folded)).toEqual({
+      side: "away",
+      serviceTurn: 0,
+      personId: null,
+      serveOrderKnown: true,
+    });
   });
 });
 

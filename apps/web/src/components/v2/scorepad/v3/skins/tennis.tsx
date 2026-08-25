@@ -183,6 +183,7 @@ interface TennisStateShape {
   points?: TennisPoints;
   setsWon?: { home?: number; away?: number };
   serving?: string;
+  tbFirstServer?: string | null;
 }
 
 type TennisFinalSet = "same" | { matchTiebreakTo: number } | { tiebreakTo: number };
@@ -327,13 +328,20 @@ interface ServeContext {
  * function expects rather than casting `view.state` wholesale.
  *
  * Every field `serveContext`'s call graph actually reads — `serving`,
- * `sets`, `games` (transitively, via `completedGames`/`nestedGamesOf`), and
- * `squads` (via `expectedDoublesServer`) — is defaulted exactly as the
- * deleted mirrors defaulted it, so a `{}`/pre-fold state behaves identically
- * to before this change; every OTHER `NestedState` field (`cfg`, `entrants`,
- * `phase`, `points`, `setsWon`, `outcome`, ...) is provably unread by that
- * call graph (checked against kernel.ts), so the shim below never asserts
- * something the call actually depends on.
+ * `sets` (INCLUDING each closed set's `tb` block), `games`, `tbFirstServer`,
+ * and `squads` (via `expectedDoublesServer`) — is defaulted so that a
+ * `{}`/pre-fold state still behaves like a fresh match; every OTHER
+ * `NestedState` field (`cfg`, `entrants`, `phase`, `points`, `setsWon`,
+ * `outcome`, ...) is provably unread by that call graph (checked against
+ * kernel.ts), so the shim below never asserts something the call actually
+ * depends on.
+ *
+ * This list is load-bearing and has been WRONG once: the first version
+ * omitted `tb` and `tbFirstServer`, both genuinely read, and the omission
+ * type-checked and passed 116 tests because the one case that covered it
+ * agreed by parity coincidence. Adding a field to `serveContext`'s call
+ * graph means adding it here, and the tests named beside each field below
+ * are what prove it arrived.
  *
  * Defect 3 fix (code review, 2026-08-25): `shim` is typed as exactly the
  * `Pick<NestedState, ...>` of the four fields above, WIDENED DELIBERATELY to
@@ -363,14 +371,24 @@ interface ServeContext {
  * not something this fix claims to fix.
  */
 function deriveServeContext(state: TennisStateShape, squads: SquadState): ServeContext {
-  const shim: Pick<NestedState, "serving" | "sets" | "games" | "squads"> = {
+  const shim: Pick<NestedState, "serving" | "sets" | "games" | "squads" | "tbFirstServer"> = {
     serving: state.serving === "away" ? "away" : "home",
     sets: (state.sets ?? []).map((set) => ({
       home: set.home ?? 0,
       away: set.away ?? 0,
+      // `tb` is READ, not decoration: `walkServe` subtracts the breaker's
+      // banked "+1" game and credits its real ITF turns off this block.
+      // Dropping it made a 7-6 set look like 13 standard games, which named
+      // the wrong partner from the next game on (see this skin's test
+      // "names the right partner the GAME AFTER a closed tie-break").
+      ...(set.tb === undefined ? {} : { tb: { home: set.tb.home ?? 0, away: set.tb.away ?? 0 } }),
       ...(set.mtb === undefined ? {} : { mtb: set.mtb }),
     })),
     games: { home: state.games?.home ?? 0, away: state.games?.away ?? 0 },
+    // Read by `serveOrderKnown`: inside a live breaker `serving` has already
+    // rotated off the breaker's first server, and comparing it directly
+    // would read as drift for half of every tie-break.
+    tbFirstServer: state.tbFirstServer === "home" ? "home" : state.tbFirstServer === "away" ? "away" : null,
     squads,
   };
   return serveContext(shim as NestedState);
