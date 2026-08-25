@@ -32498,7 +32498,7 @@
         "tags": [
           "scoring"
         ],
-        "x-required-scope": "none",
+        "x-required-scope": "score",
         "parameters": [
           {
             "name": "id",

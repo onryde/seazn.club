@@ -402,6 +402,111 @@ async function runStream(
 }
 
 /**
+ * How long `importEvents` will wait to reserve a dedicated connection for
+ * the concurrency lock before giving up (fix round 1, review finding #2).
+ * Deliberately short: `reserve()` on a healthy pool resolves in single-digit
+ * milliseconds, so a multi-second wait means the pool's `max` connections
+ * (`DB_POOL_MAX`, default 5 — `lib/db.ts`'s `connectionOptions`) are
+ * genuinely all busy. And since each reservation below is held for the
+ * WHOLE call — including the O(n²) re-fold `IMPORT_CAPS.eventsPerFixture`
+ * allows up to 1,000 events of — "genuinely busy" can mean "busy for a
+ * while yet". Waiting longer would not turn a caller stuck behind that into
+ * a success; it would only make the eventual 409 slower. Ruling: fail fast,
+ * don't queue.
+ */
+const RESERVE_TIMEOUT_MS = 2_000;
+
+/**
+ * Race `reserve` against a timeout so pool exhaustion is a prompt 409
+ * `import.concurrent` instead of an indefinite hang — see
+ * `RESERVE_TIMEOUT_MS`'s own doc comment for why. Generic over any
+ * reserve-shaped function (real production use passes `() => sql.reserve()`)
+ * so a test can prove the timeout itself fires with a `reserve` that simply
+ * never resolves, with no need to actually exhaust a real connection pool.
+ *
+ * If `reserve()` eventually settles AFTER the timeout has already won the
+ * race, the connection it hands back is released immediately — the caller
+ * gave up on it the moment the 409 was thrown, so nothing else is left
+ * holding a reference, and not releasing it would pin that connection
+ * forever instead of just for `ms`.
+ */
+export async function withReserveTimeout<T extends { release(): void }>(
+  reserve: () => Promise<T>,
+  ms: number,
+): Promise<T> {
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const pending = reserve();
+  pending
+    .then((conn) => {
+      if (timedOut) conn.release();
+    })
+    .catch(() => {
+      // The timeout branch below is what the caller actually sees; a late
+      // rejection here (the pool itself erroring after we stopped waiting)
+      // has nowhere useful left to go.
+    });
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          reject(
+            new HttpError(
+              409,
+              "no database connection was available to acquire the import lock",
+              "import.concurrent",
+            ),
+          );
+        }, ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Acquire a session advisory lock via `acquire`, run `fn`, then ALWAYS
+ * attempt `release` — but never let a `release` failure replace `fn`'s real
+ * outcome (fix round 1, review finding #1). A successful import, or a
+ * legitimate rejection `fn` threw on purpose (402/409/413/a per-stream
+ * result), must be reported as exactly that even if the unlock afterwards
+ * failed; a release failure is a leaked session lock, not a failed import,
+ * and is logged rather than raised. `release` is skipped entirely when the
+ * lock was never acquired (finding #3) — nothing to release, and every
+ * `import.concurrent` 409 would otherwise cost a wasted round trip and log
+ * noise for no reason.
+ */
+export async function withAdvisoryLock<T>(
+  acquire: () => Promise<boolean>,
+  release: () => Promise<void>,
+  onNotAcquired: () => never,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const locked = await acquire();
+  // `onNotAcquired` is typed `() => never` and this line is reached at all
+  // only when it did NOT throw — i.e. only when `locked` was true. Nothing
+  // past this point can still be running with `locked === false`, which is
+  // finding #3's "skip release when the lock was never taken": there is no
+  // separate guard to write, because the not-acquired path never reaches
+  // the `try`/`finally` below in the first place. (An earlier draft added a
+  // redundant `if (locked)` here anyway; a mutation check on it proved the
+  // branch dead — removing it is the fix, not adding a second guard.)
+  if (!locked) onNotAcquired();
+  try {
+    return await fn();
+  } finally {
+    try {
+      await release();
+    } catch (err) {
+      log.error({ err }, "event-import: releasing the import advisory lock failed (import result unaffected)");
+    }
+  }
+}
+
+/**
  * Concurrency lock (Task 5, review finding #7): one `importEvents` call at a
  * time per `(division, import_id)`. A losing caller gets 409
  * `import.concurrent` rather than interleaving with the call already running.
@@ -413,12 +518,31 @@ async function runStream(
  * ONE of those transactions releases the moment that transaction commits,
  * long before the call is done, which does not serialise anything. A session
  * lock held on a single RESERVED connection for the call's whole lifetime
- * (`sql.reserve()`, released in `finally` whether the call succeeds, rejects
- * a stream, or throws) is what actually holds it "for the whole call" the
- * brief asks for. Acquired here, in the usecase — not the route — because a
- * route can be reached more than one way (the D6 HTTP surface is the only
- * one today, but the lock's job is protecting the receipt table, which is
- * the usecase's, not the route's, invariant to hold).
+ * (`sql.reserve()`, released unconditionally below whether the call
+ * succeeds, rejects a stream, or throws) is what actually holds it "for the
+ * whole call" the brief asks for. Acquired here, in the usecase — not the
+ * route — because a route can be reached more than one way (the D6 HTTP
+ * surface is the only one today, but the lock's job is protecting the
+ * receipt table, which is the usecase's, not the route's, invariant to
+ * hold).
+ *
+ * SESSION-MODE POOLING ONLY (fix round 1 — flagged by review, owner
+ * notified separately). A TRANSACTION-mode pooler in front of Postgres
+ * (e.g. Supabase's `:6543`) can reassign the physical backend between this
+ * function's lock and unlock statements — each one is its own checkout from
+ * the pooler's point of view — which would silently break the mutual
+ * exclusion this entire mechanism depends on. `DATABASE_URL` for any
+ * deployment that imports must point at a session-mode endpoint (the
+ * session pooler / `:5432`, per `lib/db.ts`'s own connection doc), never a
+ * transaction-mode one.
+ *
+ * DB_POOL_MAX floor: each call below pins one pool connection for its whole
+ * duration (`RESERVE_TIMEOUT_MS`'s doc comment). A deployment that expects N
+ * concurrent imports needs `DB_POOL_MAX` above N plus its normal request
+ * load, or unrelated requests start losing the race for a connection while
+ * an import runs. (Owed a line on the help page too — Task 10 had not
+ * written `content/help/**` for this feature as of this fix round; see the
+ * Task 5 report.)
  */
 export async function importEvents(
   auth: AuthCtx,
@@ -426,24 +550,28 @@ export async function importEvents(
   input: EventImportRequest,
 ): Promise<ImportReport> {
   const lockKey = `import:${divisionId}:${input.import_id}`;
-  const reserved = await sql.reserve();
+  const reserved = await withReserveTimeout(() => sql.reserve(), RESERVE_TIMEOUT_MS);
   try {
-    const [{ locked }] = await reserved<{ locked: boolean }[]>`
-      select pg_try_advisory_lock(hashtext(${lockKey})) as locked`;
-    if (!locked) {
-      throw new HttpError(
-        409,
-        "another import with this import_id is already running for this division",
-        "import.concurrent",
-      );
-    }
-    return await runImport(auth, divisionId, input);
+    return await withAdvisoryLock(
+      async () => {
+        const [row] = await reserved<{ locked: boolean }[]>`
+          select pg_try_advisory_lock(hashtext(${lockKey})) as locked`;
+        return row!.locked;
+      },
+      async () => {
+        await reserved`select pg_advisory_unlock(hashtext(${lockKey}))`;
+      },
+      () => {
+        throw new HttpError(
+          409,
+          "another import with this import_id is already running for this division",
+          "import.concurrent",
+        );
+      },
+      () => runImport(auth, divisionId, input),
+    );
   } finally {
-    try {
-      await reserved`select pg_advisory_unlock(hashtext(${lockKey}))`;
-    } finally {
-      reserved.release();
-    }
+    reserved.release();
   }
 }
 

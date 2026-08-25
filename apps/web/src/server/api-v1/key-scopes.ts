@@ -146,6 +146,16 @@ const RULES: RouteRule[] = [
   { method: "POST", path: "/divisions/:id/stages", scope: "manage", pin: "division" },
   { method: "PUT", path: "/divisions/:id/stages", scope: "manage", pin: "division" },
   { method: "POST", path: "/divisions/:id/start", scope: "score", pin: "division" },
+  // Fix round 1 (Task 5 review): moved off NEVER_KEY_ROUTES. This file's own
+  // never-list is scoped to STRUCTURAL bans (key management, Stripe,
+  // refunds, device-links, /me) — "rollout caution" isn't that, and
+  // import.events (no plan grants it, per-org override only) is the actual
+  // gate. `score`, not `manage`: same scope as /fixtures/:id/events, which
+  // this route is a bulk-write sibling of — a club migrating its own history
+  // is exactly the automation case an org-scoped key exists for, and it
+  // writes the same ledger a score-scoped key can already write one event
+  // at a time.
+  { method: "POST", path: "/divisions/:id/events/import", scope: "score", pin: "division" },
   { method: "GET", path: "/divisions/:id/stats/players", scope: "read", pin: "division" },
   { method: "POST", path: "/divisions/:id/undo", scope: "manage", pin: "division" },
 
@@ -359,17 +369,6 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "GET /persons/duplicates",
   "GET /persons/merges",
   "POST /persons/merges/:id/reverse",
-  // Batch score-event import (P11/D6): staff-only during rollout — the
-  // route's own gate is a per-org org_entitlement_overrides row for
-  // import.events, which no plan grants (design doc §2.4/§3 R6) — and R5
-  // scopes the ACTOR to "org admin", the console's /import/ JSON-paste page
-  // (§7), not an ongoing integration. Unlike /fixtures/:id/events (`score`
-  // scope, "integration scoreboards" per this file's own header), this is a
-  // one-off retroactive bulk load, closer in shape to the merge/refund
-  // surfaces above than to live score-pushing. Revisit if the owner wants
-  // scripted/CI imports later — this is a conservative default, not a
-  // structural ban like the money/PII routes elsewhere in this list.
-  "POST /divisions/:id/events/import",
 ];
 
 // /api/v1/public/** and openapi.json take no auth at all — out of key scope.
