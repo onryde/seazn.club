@@ -641,6 +641,13 @@ describe("RegistrationHubConfigPanel — the solo sign-ups toggle", () => {
 // component's own suite.
 describe("RegistrationHubConfigPanel — the three clock fields", () => {
   async function clockFields() {
+    // A CARD division: the refund lock is card-only now (the auto-refund it
+    // governs gates on payment_intent_id, which an offline entry never has),
+    // so the default offline fixture renders two clock fields, not three.
+    // Switching the fixture keeps this suite asserting what it was written to
+    // assert — that all three route through ONE shared field with their own
+    // hooks — rather than quietly dropping the third from its expectations.
+    net.getResponse = { ...RESPONSE, fee_cents: 1500, payment_method: "stripe" };
     const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
     await flush();
     // Deduped by hook: `expandPanel` re-scans its own growing output, so a
@@ -725,6 +732,36 @@ describe("RegistrationHubConfigPanel — the panel does not make claims that are
   // explanation of its own absence to everyone else; a setting that is not
   // yours to make needs no apology, and the sentence answered a question a
   // Pair-division organiser never asked.
+  // The auto-refund the lock governs only fires on a card entry — withdrawCore
+  // gates on `locked.payment_intent_id`, which an offline entry never has. So
+  // for pay-the-organiser the field asks an organiser to configure a policy
+  // that cannot run.
+  it("offers the refund lock for card entries and not for pay-the-organiser", async () => {
+    // DateTimeField is an opaque component carrying `dataField` as a PROP —
+    // it has no data-field attribute of its own until it renders, so
+    // findField() (which reads data-field) never sees it. Same accessor the
+    // clock-field suite above uses.
+    const hasRefundLock = (tree: ReturnType<typeof expandPanel>) =>
+      tree.some((el) => el.type === DateTimeField && propsOf(el).dataField === "refund_lock_at");
+
+    net.getResponse = { ...RESPONSE, fee_cents: 1500, payment_method: "stripe" };
+    const onCard = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    expect(hasRefundLock(onCard.tree())).toBe(true);
+
+    net.getResponse = { ...RESPONSE, fee_cents: 1500, payment_method: "offline" };
+    const onOffline = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    expect(hasRefundLock(onOffline.tree())).toBe(false);
+
+    // And still absent on a FREE card division — the pre-existing fee gate is
+    // untouched by this change.
+    net.getResponse = { ...RESPONSE, fee_cents: 0, payment_method: "stripe" };
+    const free = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    expect(hasRefundLock(free.tree())).toBe(false);
+  });
+
   it("offers solo sign-ups on a team division and says nothing at all on a pair one", async () => {
     net.getResponse = { ...RESPONSE, entrant_kind: "team" };
     const team = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);

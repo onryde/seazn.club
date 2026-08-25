@@ -581,6 +581,25 @@ export function MoneySection({
   const currencyCode = currency.toUpperCase();
   const cardUnavailable = !chargesEnabled || cardUnsupportedCurrency !== null;
   const paidConfigured = state.fee_cents > 0;
+  // The auto-refund the lock governs can ONLY happen on a card entry:
+  // withdrawCore's own predicate is `locked.payment_intent_id && …`
+  // (registrations.ts), and an offline entry has no payment intent, so
+  // nothing auto-refunds and the cutoff governs nothing. Shown for
+  // pay-the-organiser it asks the organiser to configure a policy that will
+  // never run — the same false-claim class as the platform-cut line above.
+  //
+  // A stored value SURVIVES a switch to offline and still applies to entries
+  // already paid by card; hiding the field does not clear it. That is the
+  // right trade: the field is a division setting, and the division is no
+  // longer taking cards.
+  // Rendered when it applies OR when a save error names it. The panel has an
+  // invariant test — "every routable field has a render site, never routed
+  // into a void" — and it is right: `errors.refund_lock_at` can arrive from
+  // the server for a value still stored from before the division switched to
+  // offline, and an error with nowhere to render is an error the organiser
+  // never sees while the save keeps failing.
+  const refundLockApplies =
+    (paidConfigured && state.payment_method === "stripe") || Boolean(errors.refund_lock_at);
   const zone = fmtZoneAbbrev(orgTz, new Date());
   // Falls back to the committed value, formatted, whenever there is no
   // in-progress draft — covers both "never touched yet" and "just blurred".
@@ -709,7 +728,7 @@ export function MoneySection({
         </label>
       )}
 
-      {paidConfigured && (
+      {refundLockApplies && (
         <div>
           <DateTimeField
             kind="datetime-local"
