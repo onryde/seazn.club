@@ -17,7 +17,12 @@ import { requireFeature } from "@/lib/entitlements";
 import { EngineError, foldMatch, type EventEnvelope } from "@seazn/engine/core";
 import { resolveModule, resolveFixtureCfg } from "@/server/engine-db";
 import { loadLineupPair } from "@/server/engine-db/lineups";
+import { appendEventInTx, type AppendResult, type FirstResult } from "@/server/engine-db/append-event";
 import { requiredFeatureForEvent } from "./fidelity";
+import { onDecided, refreshDiscipline, refreshNews } from "./scoring";
+import { captureServer } from "@/lib/posthog-server";
+import { EVENTS } from "@/lib/analytics-events";
+import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { EventImportRequest } from "@/server/api-v1/schemas";
 
@@ -58,6 +63,18 @@ interface FixtureRow {
 }
 
 type StreamInput = EventImportRequest["streams"][number];
+
+/** postgres.js names the tripped index on `constraint_name`; other drivers use
+ *  `constraint`. Matched on the NAME, never on a bare 23505 (person-claims.ts
+ *  carries the same eight-line helper, private to that file for a different
+ *  constraint — not worth sharing across files for this). */
+function isUniqueViolation(e: unknown, constraint: string): boolean {
+  if (typeof e !== "object" || e === null) return false;
+  if ((e as { code?: string }).code !== "23505") return false;
+  const named =
+    (e as { constraint_name?: string }).constraint_name ?? (e as { constraint?: string }).constraint ?? "";
+  return String(named) === constraint;
+}
 
 /** R4's three ceilings, checked in order streams → per-fixture → per-call —
  *  each 413 names the first one the call actually trips. */
@@ -166,7 +183,23 @@ async function runStream(
   }
   const fixtureId = fixture.id;
 
-  // 2. Guard unstarted: any existing score_events row, or a live/decided
+  // 2. Replay guard, on the pooled proxy: a replay of an already-imported
+  // (division, import_id, fixture) must not even open a transaction. This
+  // read makes the common case cheap and the message honest — the UNIQUE
+  // index inserted in the write transaction below (event_imports_key_idx,
+  // V376) is the actual idempotency guarantee, for the genuinely concurrent
+  // case this pre-check can race. Deliberately BEFORE the unstarted guard:
+  // by the time a replay reaches here the fixture already has the first
+  // call's events, so if this ran after that guard every replay would read
+  // as import.fixture_started instead of skipped_duplicate.
+  const [existing] = await sql<{ events_appended: number }[]>`
+    select events_appended from event_imports
+    where division_id = ${division.id} and import_id = ${importId} and fixture_id = ${fixtureId}`;
+  if (existing) {
+    return { fixture: fixtureId, status: "skipped_duplicate", eventsAppended: 0 };
+  }
+
+  // 3. Guard unstarted: any existing score_events row, or a live/decided
   // status, refuses the whole stream.
   const [{ n: eventCount }] = await sql<{ n: number }[]>`
     select count(*)::int as n from score_events where fixture_id = ${fixtureId}`;
@@ -179,7 +212,7 @@ async function runStream(
     };
   }
 
-  // 3. Unassigned entrant (bye/TBD) — nothing to fold against.
+  // 4. Unassigned entrant (bye/TBD) — nothing to fold against.
   if (!fixture.home_entrant_id || !fixture.away_entrant_id) {
     return {
       fixture: fixtureId,
@@ -189,7 +222,7 @@ async function runStream(
     };
   }
 
-  // 4. Entitlement per distinct event type, still on the pooled proxy.
+  // 5. Entitlement per distinct event type, still on the pooled proxy.
   const sportModule = resolveModule(division.sportKey, division.moduleVersion);
   const requiredFeatures = new Set<string>();
   for (const ev of stream.events) {
@@ -212,7 +245,7 @@ async function runStream(
     }
   }
 
-  // 5. Dry-run fold: its own read-only transaction (loadLineupPair needs a
+  // 6. Dry-run fold: its own read-only transaction (loadLineupPair needs a
   // Tx). No writes happen here — a throw just rolls back reads.
   const [stage] = await sql<{ kind: string; config: Record<string, unknown> | null }[]>`
     select kind, config from stages where id = ${fixture.stage_id}`;
@@ -268,12 +301,91 @@ async function runStream(
     };
   }
 
-  // 6. Not implemented yet — Task 4 replaces this with the real write.
+  // 7. One transaction per fixture. `appendEventInTx` in a loop for seq
+  // 0..n-1 — it assigns `expectedSeq + 1` as the stored seq, so this is what
+  // yields the gapless 1..n the dry run already validated. The receipt row is
+  // inserted in the SAME transaction: a crash between the two can never leave
+  // an imported fixture with no receipt, or a receipt with no events. This is
+  // the ONLY call site in this file that writes a score_events row — every
+  // event goes through the one append path the whole codebase shares.
+  let firstResult: FirstResult | null;
+  let last: AppendResult;
+  try {
+    // Return the loop's results THROUGH the transaction's promise rather than
+    // mutating an outer `let` from inside the closure — TS's control-flow
+    // narrowing does not follow a mutation made inside a nested function back
+    // out to the call site, so `firstResult`/`last` read from the awaited
+    // result below narrow normally; read from a closure-mutated outer
+    // variable, `if (firstResult)` narrowed to `never`.
+    const commit = await withTenant(auth.orgId, async (tx) => {
+      let first: FirstResult | null = null;
+      let lastAppended: AppendResult | undefined;
+      for (const [i, ev] of stream.events.entries()) {
+        const r = await appendEventInTx(tx, auth.orgId, fixtureId, i, {
+          type: ev.type,
+          payload: ev.payload,
+          recordedBy: auth.userId,
+          ...(ev.at ? { recordedAt: ev.at } : {}),
+        });
+        first ??= r.firstResult;
+        lastAppended = r.appended;
+      }
+      await tx`
+        insert into event_imports (org_id, division_id, import_id, fixture_id, events_appended, imported_by)
+        values (${auth.orgId}, ${division.id}, ${importId}, ${fixtureId},
+                ${stream.events.length}, ${auth.userId})`;
+      // stream.events has at least one entry (schema `.min(1)`), so the loop
+      // above always ran at least once and lastAppended is always set.
+      return { first, last: lastAppended! };
+    });
+    firstResult = commit.first;
+    last = commit.last;
+  } catch (err) {
+    if (isUniqueViolation(err, "event_imports_key_idx")) {
+      // The pooled pre-check above (step 2) makes this the rare path — a
+      // genuinely concurrent replay that raced past it. The UNIQUE index is
+      // the real idempotency guarantee (design doc §5); this branch only
+      // keeps a race from surfacing as an unhandled 500.
+      return { fixture: fixtureId, status: "skipped_duplicate", eventsAppended: 0 };
+    }
+    if (err instanceof EngineError) {
+      // The dry run already validated this exact stream, so reaching here
+      // means something changed under us between the dry run and the write
+      // (e.g. a concurrent SEQ_CONFLICT) — a genuine race, not the common
+      // case the dry run exists to catch. Any throw here rolls the whole
+      // fixture back to zero rows (spec 03 §2 guarantee 2).
+      return {
+        fixture: fixtureId,
+        status: "rejected",
+        eventsAppended: 0,
+        error: { code: "import.fold_rejected", engineCode: err.code },
+      };
+    }
+    throw err;
+  }
+
+  // 8. After commit — never inside it — the same decided side effects
+  // scoreEvent fires, in the same order (scoring.ts:129-133). Unconditional
+  // here: the dry run already proved this stream decides, and import never
+  // carries a core.void, so there is no "outcome erased by an undo" case to
+  // special-case the way scoreEvent's own condition does.
+  await onDecided(auth, fixtureId, last.outcome);
+  await refreshDiscipline(auth, fixtureId);
+  await refreshNews(auth, fixtureId);
+  if (firstResult) {
+    await captureServer({
+      event: EVENTS.RESULT_ENTERED,
+      distinctId: firstResult.distinctId,
+      orgId: auth.orgId,
+      properties: { sport_key: firstResult.sportKey, status: firstResult.status, fixture_id: fixtureId },
+    });
+  }
+
   return {
     fixture: fixtureId,
-    status: "rejected",
-    eventsAppended: 0,
-    error: { code: "import.not_implemented" },
+    status: "imported",
+    eventsAppended: stream.events.length,
+    outcome: last.outcome,
   };
 }
 
@@ -282,6 +394,7 @@ export async function importEvents(
   divisionId: string,
   input: EventImportRequest,
 ): Promise<ImportReport> {
+  const startedAt = performance.now();
   assertWithinCaps(input);
   const division = await loadDivision(auth, divisionId);
   // Doc 12 §1 / R1: import inherits live scoring's phase gate — a published
@@ -299,5 +412,18 @@ export async function importEvents(
     // Sequential, by design (design doc §4) — bounded, predictable load.
     results.push(await runStream(auth, division, input.import_id, stream));
   }
-  return buildReport(input.import_id, results);
+  const report = buildReport(input.import_id, results);
+  const appended = results.reduce((n, r) => n + r.eventsAppended, 0);
+  log.info(
+    {
+      division: divisionId,
+      import_id: input.import_id,
+      streams: input.streams.length,
+      appended,
+      rejected: report.totals.rejected,
+      ms: Math.round(performance.now() - startedAt),
+    },
+    "events_imported",
+  );
+  return report;
 }

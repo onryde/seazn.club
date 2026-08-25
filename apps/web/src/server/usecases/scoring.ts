@@ -279,7 +279,11 @@ async function assertEntitledToScore(
 // into suspensions (recompute-on-read's write-side twin) and advances the
 // serving counter — but only when the division has enabled rules. A one-query
 // probe keeps the hot scoring path free for every division without discipline.
-async function refreshDiscipline(auth: AuthCtx, fixtureId: string): Promise<void> {
+//
+// Exported (P11): the batch importer fires the exact same decided side
+// effects scoreEvent does, in the same order — reusing these three rather
+// than copying their bodies is what keeps the two paths from drifting apart.
+export async function refreshDiscipline(auth: AuthCtx, fixtureId: string): Promise<void> {
   await withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<{ division_id: string }[]>`
       select division_id from fixtures where id = ${fixtureId}`;
@@ -296,7 +300,7 @@ async function refreshDiscipline(auth: AuthCtx, fixtureId: string): Promise<void
 // (auto_posts) keeps the hot path free for divisions without news; the whole
 // hook is swallowed — a draft/template hiccup must NEVER fail the score write
 // (same isolation principle as the discipline/email fire-and-forget sends).
-async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<void> {
+export async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<void> {
   try {
     // The entitlement answer BEFORE the transaction: `hasFeature` is a pooled
     // read, and asking for it inside `withTenant` is the pool self-deadlock
@@ -317,7 +321,7 @@ async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<void> {
 
 // A decided fixture feeds brackets (winner_to/loser_to slots) and refreshes
 // the table-stage standings snapshot.
-async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unknown): Promise<void> {
+export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unknown): Promise<void> {
   // outcome may be null here (a void erased the decision) — recompute only.
   const o = (outcome ?? {}) as { kind?: string; winner?: string; loser?: string };
   const context = await withTenant(auth.orgId, async (tx) => {
