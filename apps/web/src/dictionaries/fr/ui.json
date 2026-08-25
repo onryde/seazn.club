@@ -4371,5 +4371,11 @@
   "eventImport.error.division_not_started": "Cette division n'a pas encore commencé (statut : {divisionStatus}). Démarrez-la avant d'importer.",
   "eventImport.error.stream_failed": "Ce match n'a pas pu être importé en raison d'une erreur inattendue, donc rien n'a été écrit pour lui. Vérifiez ses événements et réessayez — les autres matchs de cet envoi ne sont pas affectés.",
   "eventImport.error.competition_frozen": "Cette compétition est en lecture seule car votre organisation dépasse la limite de compétitions actives de son offre. Archivez une compétition ou changez d'offre, puis relancez l'import.",
-  "eventImport.error.generic": "Échec de l'importation ({code})."
+  "eventImport.error.generic": "Échec de l'importation ({code}).",
+  "reg.hub.config.incompleteDateTime": "Il manque la date ou l'heure — une valeur incomplète ne sera pas enregistrée.",
+  "reg.hub.config.capacityRangeError": "La capacité doit être un nombre entier compris entre 1 et 10 000, ou vide pour illimité.",
+  "reg.hub.config.feeCentsRangeError": "Les frais d'inscription sont hors limites — vérifiez le montant et réessayez.",
+  "reg.hub.config.cardFeeMinimumError": "Les frais payés par carte doivent être d'au moins 1,00, ou 0 pour une inscription gratuite.",
+  "reg.hub.config.duplicateFormFieldKeysError": "Deux questions d'inscription se retrouvent avec la même clé — modifiez l'un des libellés.",
+  "reg.hub.config.selectNeedsOptionsError": "Cette question à choix multiple nécessite au moins une option."
 }

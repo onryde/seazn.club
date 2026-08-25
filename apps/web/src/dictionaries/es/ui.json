@@ -4371,5 +4371,11 @@
   "eventImport.error.division_not_started": "Esta división todavía no ha comenzado (estado: {divisionStatus}). Iníciala antes de importar.",
   "eventImport.error.stream_failed": "Este partido no se pudo importar por un error inesperado, así que no se escribió nada para él. Revisa sus eventos e inténtalo de nuevo; los demás partidos de esta llamada no se ven afectados.",
   "eventImport.error.competition_frozen": "Esta competición es de solo lectura porque tu organización supera el límite de competiciones activas de su plan. Archiva una competición o mejora tu plan y vuelve a importar.",
-  "eventImport.error.generic": "La importación falló ({code})."
+  "eventImport.error.generic": "La importación falló ({code}).",
+  "reg.hub.config.incompleteDateTime": "Faltan la fecha o la hora — un valor a medias no se guardará.",
+  "reg.hub.config.capacityRangeError": "El aforo debe ser un número entero de 1 a 10.000, o en blanco para ilimitado.",
+  "reg.hub.config.feeCentsRangeError": "La cuota de inscripción está fuera de rango — revisa el importe e inténtalo de nuevo.",
+  "reg.hub.config.cardFeeMinimumError": "Las cuotas pagadas con tarjeta deben ser de al menos 1,00, o 0 para que la inscripción sea gratuita.",
+  "reg.hub.config.duplicateFormFieldKeysError": "Dos preguntas de inscripción han acabado con la misma clave — cambia una de las etiquetas.",
+  "reg.hub.config.selectNeedsOptionsError": "Esta pregunta de opción múltiple necesita al menos una opción."
 }

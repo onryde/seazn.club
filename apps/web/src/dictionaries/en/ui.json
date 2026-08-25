@@ -4371,5 +4371,11 @@
   "eventImport.error.division_not_started": "This division hasn't started yet (status: {divisionStatus}). Start it before importing.",
   "eventImport.error.stream_failed": "This fixture couldn't be imported because of an unexpected error, so nothing was written for it. Check its events and try again — the other fixtures in this call are unaffected.",
   "eventImport.error.competition_frozen": "This competition is read-only because your organization is over its plan's limit on active competitions. Archive a competition or upgrade your plan, then import again.",
-  "eventImport.error.generic": "Import failed ({code})."
+  "eventImport.error.generic": "Import failed ({code}).",
+  "reg.hub.config.incompleteDateTime": "This needs both a date and a time — a half-filled value won't be saved.",
+  "reg.hub.config.capacityRangeError": "Capacity must be a whole number from 1 to 10,000, or blank for uncapped.",
+  "reg.hub.config.feeCentsRangeError": "Entry fee is out of range — check the amount and try again.",
+  "reg.hub.config.cardFeeMinimumError": "Card entry fees must be at least 1.00, or 0 to make entry free.",
+  "reg.hub.config.duplicateFormFieldKeysError": "Two sign-up questions ended up with the same key — change one of the labels.",
+  "reg.hub.config.selectNeedsOptionsError": "This multiple-choice question needs at least one option."
 }

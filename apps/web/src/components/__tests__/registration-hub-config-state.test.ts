@@ -8,6 +8,7 @@ import {
   initialConfigState,
   toDivisionPatchBody,
   toRegistrationSettingsPutBody,
+  validateConfigState,
   type RegistrationConfigState,
   type RegistrationSettingsResponse,
 } from "@/components/registration-hub-config-state";
@@ -133,5 +134,162 @@ describe("toRegistrationSettingsPutBody — full replace hazard", () => {
     expect(body.allow_free_agents).toBe(true);
     expect(body.payment_method).toBe("stripe");
     expect(body.entrant_kind).toBe("team");
+  });
+});
+
+// RS005 R4 task 2 — client-side prevention of every server-enforced rule the
+// dispatch names (except the ones a `maxLength` attribute or a hidden
+// "add" control already prevents client-side — see the function's own
+// header comment). Every rule gets an ACCEPT case and a REJECT case, so a
+// future change to the bound shows up here rather than only at the server.
+describe("validateConfigState", () => {
+  const VALID_STATE: RegistrationConfigState = {
+    category: "open",
+    age_min: null,
+    age_max: null,
+    enabled: true,
+    entrant_kind: "team",
+    opens_at: "2026-01-01T00:00:00.000Z",
+    closes_at: "2026-02-01T00:00:00.000Z",
+    capacity: 32,
+    fee_cents: 1500,
+    refund_lock_at: null,
+    form_fields: [{ key: "shirt_size", label: "Shirt size", kind: "text", required: true }],
+    payment_method: "offline",
+    payment_instructions: null,
+    approval: "manual",
+    allow_free_agents: true,
+  };
+
+  it("a well-formed state has no issues at all", () => {
+    expect(validateConfigState(VALID_STATE)).toEqual({});
+  });
+
+  describe("capacity (server bound: 1..10000)", () => {
+    it("accepts null — a deliberate 'uncapped' division, not a violation", () => {
+      expect(validateConfigState({ ...VALID_STATE, capacity: null })).toEqual({});
+    });
+    it("accepts the boundary values 1 and 10000", () => {
+      expect(validateConfigState({ ...VALID_STATE, capacity: 1 })).toEqual({});
+      expect(validateConfigState({ ...VALID_STATE, capacity: 10_000 })).toEqual({});
+    });
+    it("rejects 0 and 10001", () => {
+      expect(validateConfigState({ ...VALID_STATE, capacity: 0 }).capacity).toBe("capacityRange");
+      expect(validateConfigState({ ...VALID_STATE, capacity: 10_001 }).capacity).toBe("capacityRange");
+    });
+    it("rejects a non-integer", () => {
+      expect(validateConfigState({ ...VALID_STATE, capacity: 32.5 }).capacity).toBe("capacityRange");
+    });
+  });
+
+  describe("fee_cents (server bound: 0..10000000)", () => {
+    it("accepts the boundary values 0 and 10000000", () => {
+      expect(validateConfigState({ ...VALID_STATE, fee_cents: 0 })).toEqual({});
+      expect(validateConfigState({ ...VALID_STATE, fee_cents: 10_000_000 })).toEqual({});
+    });
+    it("rejects a negative fee and one over the cap", () => {
+      expect(validateConfigState({ ...VALID_STATE, fee_cents: -1 }).fee_cents).toBe("feeCentsRange");
+      expect(validateConfigState({ ...VALID_STATE, fee_cents: 10_000_001 }).fee_cents).toBe("feeCentsRange");
+    });
+  });
+
+  describe("card fee minimum (server: 'Card entry fees must be at least 1.00 (or 0 for free)')", () => {
+    it("free (0) is fine on a card division", () => {
+      expect(validateConfigState({ ...VALID_STATE, payment_method: "stripe", fee_cents: 0 })).toEqual({});
+    });
+    it("the minimum charge (100 = 1.00) is fine on a card division", () => {
+      expect(validateConfigState({ ...VALID_STATE, payment_method: "stripe", fee_cents: 100 })).toEqual({});
+    });
+    it("1-99 cents on a card division is rejected", () => {
+      expect(
+        validateConfigState({ ...VALID_STATE, payment_method: "stripe", fee_cents: 50 }).fee_cents,
+      ).toBe("cardFeeMinimum");
+    });
+    it("the SAME 50 cents is fine when paying the organiser offline — the rule is card-only", () => {
+      expect(validateConfigState({ ...VALID_STATE, payment_method: "offline", fee_cents: 50 })).toEqual({});
+    });
+  });
+
+  describe("dates order (server: 'closes_at must be after opens_at')", () => {
+    it("closes strictly after opens is fine", () => {
+      expect(validateConfigState(VALID_STATE)).toEqual({});
+    });
+    it("neither side set yet is fine — not every division has a window configured", () => {
+      expect(validateConfigState({ ...VALID_STATE, opens_at: null, closes_at: null })).toEqual({});
+    });
+    it("closes BEFORE opens is rejected", () => {
+      expect(
+        validateConfigState({ ...VALID_STATE, opens_at: "2026-02-01T00:00:00.000Z", closes_at: "2026-01-01T00:00:00.000Z" })
+          .closes_at,
+      ).toBe("datesOrder");
+    });
+    it("closes at the SAME instant as opens is rejected too — 'after' is strict", () => {
+      const same = "2026-01-01T00:00:00.000Z";
+      expect(validateConfigState({ ...VALID_STATE, opens_at: same, closes_at: same }).closes_at).toBe(
+        "datesOrder",
+      );
+    });
+  });
+
+  describe("duplicate form field keys (server: 'duplicate form field keys')", () => {
+    it("unique keys are fine", () => {
+      expect(
+        validateConfigState({
+          ...VALID_STATE,
+          form_fields: [
+            { key: "a", label: "A", kind: "text", required: false },
+            { key: "b", label: "B", kind: "text", required: false },
+          ],
+        }),
+      ).toEqual({});
+    });
+    it("two fields sharing a key is rejected on form_fields", () => {
+      expect(
+        validateConfigState({
+          ...VALID_STATE,
+          form_fields: [
+            { key: "shirt_size", label: "Shirt size", kind: "text", required: false },
+            { key: "shirt_size", label: "T-shirt size", kind: "text", required: false },
+          ],
+        }).form_fields,
+      ).toBe("duplicateFormFieldKeys");
+    });
+  });
+
+  describe("select fields need options (server: 'select fields need options')", () => {
+    it("a select field with a real option is fine", () => {
+      expect(
+        validateConfigState({
+          ...VALID_STATE,
+          form_fields: [{ key: "size", label: "Size", kind: "select", options: ["S", "M"], required: false }],
+        }),
+      ).toEqual({});
+    });
+    it("a select field with NO options at all is rejected", () => {
+      expect(
+        validateConfigState({
+          ...VALID_STATE,
+          form_fields: [{ key: "size", label: "Size", kind: "select", options: [], required: false }],
+        }).form_fields,
+      ).toBe("selectNeedsOptions");
+    });
+    it("a select field with only a blank/whitespace option is ALSO rejected — the FormBuilder kind-switch seed", () => {
+      // FormBuilder seeds `options: [""]` the instant a field is switched to
+      // "select" and never touched again — length 1, but not a real option.
+      expect(
+        validateConfigState({
+          ...VALID_STATE,
+          form_fields: [{ key: "size", label: "Size", kind: "select", options: ["   "], required: false }],
+        }).form_fields,
+      ).toBe("selectNeedsOptions");
+    });
+    it("a text field with no options is fine — the rule is select-only", () => {
+      expect(
+        validateConfigState({
+          ...VALID_STATE,
+          form_fields: [{ key: "notes", label: "Notes", kind: "text", required: false }],
+        }),
+      ).toEqual({});
+    });
   });
 });

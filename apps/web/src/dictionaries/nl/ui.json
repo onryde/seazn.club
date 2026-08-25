@@ -4371,5 +4371,11 @@
   "eventImport.error.division_not_started": "Deze divisie is nog niet begonnen (status: {divisionStatus}). Start de divisie voordat je importeert.",
   "eventImport.error.stream_failed": "Deze wedstrijd kon niet worden geïmporteerd door een onverwachte fout, dus er is niets voor weggeschreven. Controleer de gebeurtenissen en probeer het opnieuw — de andere wedstrijden in deze aanroep zijn niet beïnvloed.",
   "eventImport.error.competition_frozen": "Deze competitie is alleen-lezen omdat je organisatie over de limiet voor actieve competities van het abonnement zit. Archiveer een competitie of upgrade het abonnement en importeer opnieuw.",
-  "eventImport.error.generic": "Importeren mislukt ({code})."
+  "eventImport.error.generic": "Importeren mislukt ({code}).",
+  "reg.hub.config.incompleteDateTime": "De datum of de tijd ontbreekt nog — een half ingevulde waarde wordt niet opgeslagen.",
+  "reg.hub.config.capacityRangeError": "Capaciteit moet een geheel getal zijn van 1 tot 10.000, of leeg voor onbeperkt.",
+  "reg.hub.config.feeCentsRangeError": "Het inschrijfgeld valt buiten het toegestane bereik — controleer het bedrag en probeer het opnieuw.",
+  "reg.hub.config.cardFeeMinimumError": "Met kaart betaald inschrijfgeld moet minstens 1,00 zijn, of 0 om de inschrijving gratis te maken.",
+  "reg.hub.config.duplicateFormFieldKeysError": "Twee inschrijfvragen hebben dezelfde sleutel gekregen — pas een van de labels aan.",
+  "reg.hub.config.selectNeedsOptionsError": "Deze meerkeuzevraag heeft minstens één keuzeoptie nodig."
 }
