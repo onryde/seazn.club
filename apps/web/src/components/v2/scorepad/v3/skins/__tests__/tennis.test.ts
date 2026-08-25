@@ -866,6 +866,36 @@ describe("sanction sheets — per side, level tones, person narrowed to that sid
   });
 });
 
+// ---------------------------------------------------------------------------
+// Defect 2 fix (code review, 2026-08-25): `NestedSanction.person` is OPTIONAL
+// by the engine's own schema ("absent = the pair/team, not a named player"),
+// but the person step above was MANDATORY — `candidatesForStep`
+// (guided-sheet.tsx:103) is `step.candidates ?? resolvePool(...)`, and an
+// EMPTY array is not nullish, so it superseded the pool with nothing to show.
+// On a lineup-less fixture the sheet dead-ended on "Who?" with no way to
+// finish recording the violation at all. Fixed with a `when` predicate — the
+// shipped chassis idiom for skipping a step without a tap (guided-sheet.tsx's
+// own G2 doc; `interruptionSheet` already uses it for its own person steps)
+// — over passing `undefined` for `candidates`, so the skip is driven by the
+// SAME `candidates` list the step already renders from, rather than a second,
+// separately-computed condition that could drift from it.
+// ---------------------------------------------------------------------------
+
+describe("sanction sheet — defect 2 fix: person step skips cleanly with no on-field roster", () => {
+  it("MUTATION PROOF (throws — sheet never completes — without the fix): completes after `level` alone, person omitted", () => {
+    const spec = buildSheets(view({ squads: emptySquads() }))[sanctionSheetKey("home")]!;
+    const event = driveSheet(spec, ["warning"]);
+    expect(event).toEqual({ type: "tennis.sanction", payload: { by: "H", level: "warning", person: undefined } });
+  });
+
+  it("still asks person when the side DOES have an on-field roster — unchanged", () => {
+    const spec = buildSheets(view({ squads: singlesSquads() }))[sanctionSheetKey("home")]!;
+    let s = initialSheetState();
+    s = (answerStep(spec, s, "warning") as { state: typeof s }).state;
+    expect(currentStep(spec, s)!.id).toBe("person");
+  });
+});
+
 describe("interruption sheet — R4-2, one generic tile, side is genuinely optional", () => {
   it("kind, then side, then duration when side is none — person is skipped entirely", () => {
     const spec = buildSheets(view()).interruption!;
@@ -903,6 +933,32 @@ describe("interruption sheet — R4-2, one generic tile, side is genuinely optio
 
   it("INTERRUPTION_KINDS are the engine's own closed vocabulary", () => {
     expect(INTERRUPTION_KINDS).toEqual(["medical", "toilet", "heat", "other"]);
+  });
+});
+
+describe("interruption sheet — defect 2 fix: person step skips cleanly when the chosen side has no on-field roster", () => {
+  it("MUTATION PROOF (throws — sheet never completes — without the fix): side=home with an EMPTY home roster skips personHome, straight to duration", () => {
+    const spec = buildSheets(view({ squads: emptySquads() })).interruption!;
+    let s = initialSheetState();
+    s = (answerStep(spec, s, "medical") as { state: typeof s }).state;
+    s = (answerStep(spec, s, "home") as { state: typeof s }).state;
+    expect(currentStep(spec, s)!.id).toBe("duration");
+    const event = driveSheet(spec, ["medical", "home", "45"]);
+    expect(event).toEqual({ type: "tennis.interruption", payload: { kind: "medical", by: "H", duration: 45 } });
+  });
+
+  it("still asks personAway when away's roster IS populated — unchanged", () => {
+    const spec = buildSheets(view({ squads: doublesSquads(true) })).interruption!;
+    let s = initialSheetState();
+    s = (answerStep(spec, s, "heat") as { state: typeof s }).state;
+    s = (answerStep(spec, s, "away") as { state: typeof s }).state;
+    expect(currentStep(spec, s)!.id).toBe("personAway");
+  });
+
+  it("side=none is unaffected — still skips straight to duration regardless of roster", () => {
+    const spec = buildSheets(view({ squads: emptySquads() })).interruption!;
+    const event = driveSheet(spec, ["other", "none", "10"]);
+    expect(event).toEqual({ type: "tennis.interruption", payload: { kind: "other", duration: 10 } });
   });
 });
 

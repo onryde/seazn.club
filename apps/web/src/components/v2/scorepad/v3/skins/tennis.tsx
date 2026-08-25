@@ -798,11 +798,26 @@ function setScoreSheet(view: PadHostView): GuidedSheetSpec {
  *  `NestedSanction.reason` is free text and there is no text step, so it is
  *  not collected from the pad; `by` names the OFFENDER (the engine's own
  *  convention — `game.award.winner` is the opposite party, `kernel.ts:
- *  336-343`). */
+ *  336-343`).
+ *
+ *  Defect 2 fix (code review, 2026-08-25): `NestedSanction.person` is
+ *  OPTIONAL by the engine's own schema ("absent = the pair/team, not a named
+ *  player"), but this step used to be unconditionally shown — on a
+ *  lineup-less fixture `candidates` is `[]`, and `candidatesForStep`
+ *  (guided-sheet.tsx:103) is `step.candidates ?? resolvePool(...)`: an EMPTY
+ *  array is not nullish, so it superseded the pool with nothing to show, and
+ *  the sheet dead-ended on "Who?" with no way to finish recording the
+ *  violation at all. Gated with `when` — the shipped chassis idiom for
+ *  skipping a step without a tap (guided-sheet.tsx's own G2 doc;
+ *  `interruptionSheet` below already uses it for its own person steps) —
+ *  rather than passing `undefined` for `candidates`, so the skip is driven
+ *  by the SAME list the step would otherwise render from, not a second,
+ *  separately-computed condition that could drift from it. */
 function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
   const state = asState(view.state);
   const by = entrantOf(state, side);
   const candidates = onFieldPlayers(view.squads, side).map((member) => member.personId);
+  const hasCandidates: StepPredicate = () => candidates.length > 0;
   const steps: GuidedSheetStep[] = [
     {
       id: "level",
@@ -821,6 +836,7 @@ function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
       pool: "onfield",
       side,
       candidates,
+      when: hasCandidates,
     },
   ];
   return {
@@ -842,11 +858,23 @@ function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
  * step: `SheetPersonStep.candidates`/`.side` are fixed at `sheets(view)`
  * build time, not a function of an earlier answer in the SAME sheet — the
  * `when` gate is what is dynamic, not the candidate list.
+ *
+ * Defect 2 fix (code review, 2026-08-25): the same dead-end `sanctionSheet`
+ * had. Choosing a side with an EMPTY on-field roster used to still show its
+ * person step (`sideIsHome`/`sideIsAway` alone don't know about the
+ * roster) — no candidates, no way to finish. `person` is optional here too
+ * (same engine schema fact), so each `when` now ALSO requires that side's own
+ * `candidates` list be non-empty, gating on the SAME list each step renders
+ * from, not a second, separately-computed condition.
  */
 function interruptionSheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
-  const sideIsHome: StepPredicate = (answers) => answers.side === "home";
-  const sideIsAway: StepPredicate = (answers) => answers.side === "away";
+  const personHomeCandidates = onFieldPlayers(view.squads, "home").map((member) => member.personId);
+  const personAwayCandidates = onFieldPlayers(view.squads, "away").map((member) => member.personId);
+  const sideIsHomeWithRoster: StepPredicate = (answers) =>
+    answers.side === "home" && personHomeCandidates.length > 0;
+  const sideIsAwayWithRoster: StepPredicate = (answers) =>
+    answers.side === "away" && personAwayCandidates.length > 0;
   const steps: GuidedSheetStep[] = [
     {
       id: "kind",
@@ -870,8 +898,8 @@ function interruptionSheet(view: PadHostView): GuidedSheetSpec {
       title: "pad.tennis.sheet.interruption.person.title",
       pool: "onfield",
       side: "home",
-      candidates: onFieldPlayers(view.squads, "home").map((member) => member.personId),
-      when: sideIsHome,
+      candidates: personHomeCandidates,
+      when: sideIsHomeWithRoster,
     },
     {
       id: "personAway",
@@ -879,8 +907,8 @@ function interruptionSheet(view: PadHostView): GuidedSheetSpec {
       title: "pad.tennis.sheet.interruption.person.title",
       pool: "onfield",
       side: "away",
-      candidates: onFieldPlayers(view.squads, "away").map((member) => member.personId),
-      when: sideIsAway,
+      candidates: personAwayCandidates,
+      when: sideIsAwayWithRoster,
     },
     {
       id: "duration",
