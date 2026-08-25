@@ -10,6 +10,7 @@ import {
   registrantsExportHref,
   deriveRegistrantPaymentState,
   answerLabel,
+  registrantRowAnchor,
 } from "@/components/registration-hub-registrant-derive";
 import type { RegistrantsFilters } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
@@ -168,5 +169,11 @@ describe("answerLabel", () => {
 
   it("falls back to the raw key when there are no fields at all", () => {
     expect(answerLabel("dietary_reqs", [])).toBe("dietary_reqs");
+  });
+});
+
+describe("registrantRowAnchor", () => {
+  it("builds the SAME anchor id a row sets on itself and a sibling link points at — one function, not two hand-typed copies", () => {
+    expect(registrantRowAnchor("reg-42")).toBe("registrant-reg-42");
   });
 });

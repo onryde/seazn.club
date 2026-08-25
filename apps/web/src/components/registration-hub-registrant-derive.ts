@@ -143,3 +143,11 @@ export function deriveRegistrantPaymentState(
 export function answerLabel(key: string, fields: RegistrationFormField[]): string {
   return fields.find((f) => f.key === key)?.label ?? key;
 }
+
+/** The DOM anchor id a row's own `<details>` carries (registration-hub-
+ *  registrant-table.tsx) and a cart-sibling link points at (registration-
+ *  hub-registrant-detail.tsx) — ONE function shared by both sides, so they
+ *  can never drift into two hand-typed `"registrant-" + id` copies. */
+export function registrantRowAnchor(registrationId: string): string {
+  return `registrant-${registrationId}`;
+}
