@@ -136,10 +136,22 @@ describe("status cell — waitlist position (task 4)", () => {
     expect(text).toContain("#3");
   });
 
-  it("a non-waitlisted row shows NO position, even if the field were somehow non-null", () => {
+  it("a non-waitlisted row shows NO position in the ordinary case (waitlist_position genuinely null)", () => {
     const col = columnsOf().find((c) => c.key === "status")!;
     const text = textOf(col.render(row({ status: "confirmed", waitlist_position: null })));
     expect(text).not.toContain("#");
+  });
+
+  it("a non-waitlisted row shows NO position even if waitlist_position were somehow non-null (status gates it, not just the field)", () => {
+    // listRegistrations' own query only ever sets waitlist_position when
+    // status='waitlisted' — this is a defence-in-depth case, not a reachable
+    // one, and it is the ONE that actually exercises the `row.status ===
+    // "waitlisted" &&` half of the guard: the test above (waitlist_position
+    // null) passes identically whether or not that half of the condition
+    // exists at all.
+    const col = columnsOf().find((c) => c.key === "status")!;
+    const text = textOf(col.render(row({ status: "confirmed", waitlist_position: 3 })));
+    expect(text).not.toContain("#3");
   });
 
   it("carries a data hook naming the real status, for e2e/regression", () => {
