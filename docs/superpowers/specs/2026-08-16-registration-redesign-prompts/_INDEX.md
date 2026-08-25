@@ -27,7 +27,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS001b | `RS001b-org-currency-allowlist.md` | RS001 | **DONE** — PR #598 merged `a7cca608` (2026-08-17) |
 | RS002 | `RS002-core-usecases.md` | RS001b | **DONE** — PR #607 merged `4ff0bf8f` (2026-08-17) |
 | RS003 | `RS003-public-endpoints.md` | RS002 | **DONE** — PR #615 merged `29690ec8c` (2026-08-18) |
-| RS004 | `RS004-hub-settings-tab.md` | RS003 | **IN REVIEW** — branch `feat/rs004-registration-hub-settings`, gate green, awaiting owner code review |
+| RS004 | `RS004-hub-settings-tab.md` | RS003 | **DONE** — merged `171df1376` (PR #641, 2026-08-25). Smoke still owed by RS010, as the PR states |
 | RS005 | `RS005-hub-registrants-tab.md` | RS004 | TODO |
 | RS006 | `RS006-public-stepper.md` | RS003 | TODO |
 | RS007 | `RS007-status-page-join-payments.md` | RS006 | TODO |
