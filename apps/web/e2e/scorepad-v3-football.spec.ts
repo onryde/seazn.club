@@ -480,6 +480,25 @@ test("football v3: the substitution WINDOW cap (subWindows) is a SECOND, indepen
 // (football.ts:1211) is gated on `rolling`, so the WINDOW cap still applies
 // there. Do not fold that into a "rolling ignores both caps" test — it does not.
 
+/** Opens `tileId`'s swap sheet, picks `offId` then `onId`, and asserts the
+ *  sheet never shows a refusal in between — the shared tail of every
+ *  "allowed" sub test below (each proves a different reason the caps do not
+ *  fire, so the assertion on absence of a refusal is what they all share). */
+async function pickAllowedSwap(
+  page: Page,
+  tileId: string,
+  offId: string,
+  onId: string,
+  refusalContext: string,
+): Promise<void> {
+  await v3Tile(page, tileId).click();
+  const swap = pad(page).locator('[data-role="v3-swap"]');
+  await expect(swap).toBeVisible({ timeout: 10_000 });
+  await swap.locator(`[data-candidate-id="${offId}"]`).click();
+  await expect(swap.locator('[data-role="swap-refusal"]'), refusalContext).toHaveCount(0);
+  await swap.locator(`[data-candidate-id="${onId}"]`).click();
+}
+
 test("football v3: a substitution under BOTH caps succeeds — no refusal, event lands with its stamp", async ({
   page,
 }) => {
@@ -506,12 +525,13 @@ test("football v3: a substitution under BOTH caps succeeds — no refusal, event
   });
   await openConsoleAlreadyLive(page, fx);
 
-  await v3Tile(page, "sub-home").click();
-  const swap = pad(page).locator('[data-role="v3-swap"]');
-  await expect(swap).toBeVisible({ timeout: 10_000 });
-  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 AL Start1 ${TAG}`]!}"]`).click();
-  await expect(swap.locator('[data-role="swap-refusal"]'), "well under both caps — never refused").toHaveCount(0);
-  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 AL Bench1 ${TAG}`]!}"]`).click();
+  await pickAllowedSwap(
+    page,
+    "sub-home",
+    fx.personIds[`V3 AL Start1 ${TAG}`]!,
+    fx.personIds[`V3 AL Bench1 ${TAG}`]!,
+    "well under both caps — never refused",
+  );
 
   await expect.poll(async () => countOf(page.request, fx.fixtureId, "football.sub"), { timeout: 20_000 }).toBe(1);
   const sub = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "football.sub")!;
@@ -552,13 +572,14 @@ test("football v3: a second substitution in a NEW window, still under both caps,
   });
   await openConsoleAlreadyLive(page, fx);
 
-  await v3Tile(page, "sub-home").click();
-  const swap = pad(page).locator('[data-role="v3-swap"]');
-  await expect(swap).toBeVisible({ timeout: 10_000 });
-  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 CC Start2 ${TAG}`]!}"]`).click();
   // 2 of 2 players, 2 of 2 windows — exactly AT both caps, still not over.
-  await expect(swap.locator('[data-role="swap-refusal"]'), "the second window is still within the cap of 2").toHaveCount(0);
-  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 CC Bench2 ${TAG}`]!}"]`).click();
+  await pickAllowedSwap(
+    page,
+    "sub-home",
+    fx.personIds[`V3 CC Start2 ${TAG}`]!,
+    fx.personIds[`V3 CC Bench2 ${TAG}`]!,
+    "the second window is still within the cap of 2",
+  );
 
   await expect.poll(async () => countOf(page.request, fx.fixtureId, "football.sub"), { timeout: 20_000 }).toBe(2);
   const subs = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "football.sub");
@@ -588,21 +609,24 @@ test("football v3: a rolling-subs variant ignores the PLAYER cap — maxSubs nev
   await postEvent(page.request, fx.fixtureId, "core.start", {});
   await openConsoleAlreadyLive(page, fx);
 
-  const swap = pad(page).locator('[data-role="v3-swap"]');
-
-  await v3Tile(page, "sub-home").click();
-  await expect(swap).toBeVisible({ timeout: 10_000 });
-  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 RS Start1 ${TAG}`]!}"]`).click();
-  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 RS Bench1 ${TAG}`]!}"]`).click();
+  await pickAllowedSwap(
+    page,
+    "sub-home",
+    fx.personIds[`V3 RS Start1 ${TAG}`]!,
+    fx.personIds[`V3 RS Bench1 ${TAG}`]!,
+    "the first sub, well under any cap",
+  );
   await expect.poll(async () => countOf(page.request, fx.fixtureId, "football.sub"), { timeout: 20_000 }).toBe(1);
 
   // Second sub: `maxSubs: 1` is already spent by a non-rolling variant's own
   // rules. Under rolling it must not even be checked.
-  await v3Tile(page, "sub-home").click();
-  await expect(swap).toBeVisible({ timeout: 10_000 });
-  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 RS Start2 ${TAG}`]!}"]`).click();
-  await expect(swap.locator('[data-role="swap-refusal"]'), "rollingSubs makes maxSubs a no-op").toHaveCount(0);
-  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 RS Bench2 ${TAG}`]!}"]`).click();
+  await pickAllowedSwap(
+    page,
+    "sub-home",
+    fx.personIds[`V3 RS Start2 ${TAG}`]!,
+    fx.personIds[`V3 RS Bench2 ${TAG}`]!,
+    "rollingSubs makes maxSubs a no-op",
+  );
   await expect.poll(async () => countOf(page.request, fx.fixtureId, "football.sub"), { timeout: 20_000 }).toBe(2);
 });
 
@@ -635,15 +659,13 @@ test("football v3: a second substitution sharing the CURRENT window is not refus
   });
   await openConsoleAlreadyLive(page, fx);
 
-  await v3Tile(page, "sub-home").click();
-  const swap = pad(page).locator('[data-role="v3-swap"]');
-  await expect(swap).toBeVisible({ timeout: 10_000 });
-  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 WR Start2 ${TAG}`]!}"]`).click();
-  await expect(
-    swap.locator('[data-role="swap-refusal"]'),
+  await pickAllowedSwap(
+    page,
+    "sub-home",
+    fx.personIds[`V3 WR Start2 ${TAG}`]!,
+    fx.personIds[`V3 WR Bench2 ${TAG}`]!,
     "same window as the one already open — subWindows: 1 must not fire twice",
-  ).toHaveCount(0);
-  await swap.locator(`[data-candidate-id="${fx.personIds[`V3 WR Bench2 ${TAG}`]!}"]`).click();
+  );
 
   await expect.poll(async () => countOf(page.request, fx.fixtureId, "football.sub"), { timeout: 20_000 }).toBe(2);
   const subs = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "football.sub");

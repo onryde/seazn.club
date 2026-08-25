@@ -118,3 +118,16 @@ describe("buildRuleOverride — sports the picker did not cover at all before", 
     });
   });
 });
+
+describe("buildRuleOverride — football's two independent substitution caps", () => {
+  it("maxSubs and subWindows each build their own top-level key", () => {
+    expect(buildRuleOverride("football", { maxSubs: "3", subWindows: "2" })).toEqual({
+      maxSubs: 3,
+      subWindows: 2,
+    });
+  });
+
+  it("leaving both blank overrides neither — an unstamped/uncapped division stays uncapped", () => {
+    expect(buildRuleOverride("football", {})).toEqual({});
+  });
+});
