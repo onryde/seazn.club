@@ -21,7 +21,7 @@ one PR per wave, visual sign-off gate on each).
 | R2 | `R2-cricket.md` + plan `docs/superpowers/plans/2026-08-16-scorepad-v3-r2-cricket.md` | R1 | **MERGED #599 `5885952f`** (2026-08-17) — visual sign-off given (see the sign-off section below, incl. the caveat that the reviewed captures predate `072656b4`'s three restored capabilities). Pre-merge state, kept for the record: worktree `.claude/worktrees/r2-cricket`, branch `feat/scorepad-v3-r2-cricket`, HEAD `b45f77a0`, rebased onto main `252a073d`. Gate: unit 8155/8227 (the 4 failures are `schedule-build-honours-locks`, REPRODUCED IDENTICALLY on `origin/main 252a073d` in a throwaway worktree with its own `pnpm install` — pre-existing, not this wave), `turbo run typecheck --force` 2/2 tasks 0 errors, `turbo run lint --force` 0 errors / 77 warnings (was 78; no v3 path warns), v3 suites 300/300 across 15 files, cricket e2e + converted specs green, seven-width matrix 9/9, gallery 12/12 sports with 0px overflow at 320. Sign-off sheet published (15 cricket captures, 5 states × 3 widths). **NOT MERGEABLE until the owner rules the three decisions below and the verdicts are recorded here.** |
 | R2b | `R2b-cricket-over-by-over.md` + plan `docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-cricket-over.md` | R2 (MERGED, so unblocked) | **MERGED #610 `78191611a`** (tip `896c8e608`, 2026-08-18) — approval-on-merge, see the sign-off section below. Pre-merge state, kept for the record: **IN FLIGHT** 2026-08-17 — worktree `.claude/worktrees/r2b-cricket-over`, branch `feat/scorepad-v3-r2b-cricket-over` off `5885952f`. Both of the brief's open questions are RULED (see the R2b section below); the first turned out to be answered by the engine rather than by preference. Original row text, still accurate on the premise: cricket needs THREE granularities: innings totals, **over-by-over (runs + wickets)**, ball-by-ball. **Over-by-over ALREADY EXISTS in the engine** and v1 exposed it: it is `cricket.innings.summary` with **`partial: true`** (`cricket.ts:225,230-237`) posted once per over, NOT a separate event type. An earlier draft of this row claimed it never existed, off one negative grep for a `cricket.over` event that never needed to exist — wrong, and corrected. So: **no new event, no schema change, no golden re-baseline, no band decision** (already band 0/free; the ladder stays closed 0–3). The real gap is a PAD one — the v3 skin declares no tile for it, so a scorer must open "More" and scroll a generic form once per over. A pad wave, not an engine wave |
 | R2c | `R2c-candidate-narrowing.md` + design `R2c-task1-design.md` | R2b (MERGED, so unblocked) | **MERGED #614 `ca3a4357a`** (tip `3eda8a0ff`, 2026-08-18) — approval-on-merge, see the R2c sign-off section below; three screens (`08-bowlerpicker`, `09-retiresheet`, `10-reviewblocked`) carry NO individual verdict and are owed to R8's closing walkthrough. Pre-merge state, kept for the record: worktree `.claude/worktrees/r2c-candidates`, branch `feat/scorepad-v3-r2c-candidate-narrowing` off `main` `7023502a3`. Task 1 (the chassis capability) is DESIGNED and owner-approved before code — see the R2c section below. Closes C1/C2/C3 from `R2b-remaining.md` §C, the three surviving instances of "the pad offers what the engine will refuse" |
-| R3 | `R3-football.md` | R1 | **IN FLIGHT** 2026-08-24 — worktree `.claude/worktrees/r3-football`, branch `feat/scorepad-v3-r3-football` off `main` `94922743f`. Tasks A (entitlement), C (ribbon i18n), B1 (SwapSheet chassis fix), B2 (skin + registry flip), B3 (design corrections), B4 (per-sport identity) and D (e2e + gallery) are COMMITTED. **Review pass 1 returned NEEDS FIXES at 3302 passing tests** — see the review section below; task E is fixing it, task F owns the four chassis items after it. NOT pushed, no PR, NO sign-off sheet published yet. Do not treat any count in this row as a gate: the main thread re-runs the boundary gate itself. |
+| R3 | `R3-football.md` | R1 | **SIGNED OFF + PR RAISED** 2026-08-25 — worktree `.claude/worktrees/r3-football`, branch `feat/scorepad-v3-r3-football`, 51 commits rebased onto `origin/main`. All tasks A-F committed; five review rounds run and closed (round 5 CLEAN). Owner visual sign-off **15/15 APPROVE**, recorded below — that record is the merge gate, not the sheet. Do not treat any count in this row as a gate: the main thread re-runs the boundary gate itself. One thing NOT to re-derive: the two-step goal dock shipped INERT past unit tests and the gallery; see the inert-dock section at the end of this file before touching `DetailDock`/`pad-host` docks. |
 | R4 | `R4-tennis.md` | R1 | TODO |
 | R5 | `R5-racquet-split.md` | R1 | TODO |
 | R6 | `R6-period-pair.md` | R1 | TODO |
@@ -1671,3 +1671,82 @@ shape.
 If any pad-facing key ever DOES change on main under a signed-off wave, the
 captures are stale and the sign-off has to be retaken — that is the test to
 apply, not the fact that a rebase was clean.
+
+
+---
+
+## R3 — the two-step goal dock SHIPPED INERT, and unit tests could not see it (2026-08-25)
+
+The wave's one near-miss, and the reason `0b709fadd` exists AFTER the sign-off.
+
+The owner ruled 24 chips in a ~6s window undecidable, so `buildDock` was split
+to ask one question at a time: scorer chips, then assist chips, keyed on
+`held.payload.scorer`. Five unit tests, every one red without the change. **It
+never worked in the browser.** Two independent breaks, either alone sufficient:
+
+- `pad-host.tsx`'s `heldSubmit` captured `payload` at TAP time. A chip mutates
+  the QUEUE entry through `store.mutateHeld` and never that React state, so
+  `buildDock` was re-invoked forever with the ORIGINAL payload.
+- `dockController` closed over the `spec` it was constructed with, and
+  `DetailDock` rebuilds the controller only when `heldId` changes — so even a
+  fresh spec prop was ignored.
+
+**"It uses the same mechanism cricket already uses" was the false premise**, and
+it is what stopped the bug being reasoned out. Cricket's no-ball/plain-single
+dock genuinely works — its variants are chosen at TILE-TAP time, so each is a
+new `heldId` and gets a new controller. Football needed the spec to change
+WITHIN one held entry, which nothing supported.
+
+Three things generalise, and none is "add more unit tests":
+
+1. **A pure builder whose output depends on live state is fully testable AND
+   fully inert at once.** Unit tests call it directly with whatever state they
+   like; they prove the mapping and say NOTHING about re-invocation.
+2. **The test that catches it already existed, unrun.**
+   `scorepad-v3-football.spec.ts` already taps Penalty -> scorer -> assist in
+   sequence and would have failed the moment the split landed. The failure was
+   not missing coverage — it was not re-running the e2e that covers the thing
+   changed, because units were green and a screenshot looked right.
+3. **The gallery cannot see this class of defect.** The capture fixture rosters
+   two or three players a side, where a one-step and a two-step dock render
+   identically. The sign-off's limit 1 above already said the dock's LENGTH was
+   unpictured; this is what that limit costs when it is forgotten.
+
+Fix: `DockController.setSpec(next)` plus a live `current` spec read through
+getters, and a `dockStore` wrapper in `pad-host.tsx` that mirrors the mutation
+into local `held.payload` so the builder is re-invoked with the advanced value.
+
+### Review round 5 (2026-08-25) — CLEAN, plus three latent MINORs
+
+Reviewed `0b709fadd` in place, confirmed at HEAD (v3 870/870, paths resolved
+under the worktree). Verdict CLEAN: 0 blockers, 0 majors. What it confirmed is
+worth as much as what it found — **the new `DetailDock` rerender test drives the
+real component through the real React-dispatcher harness and fails pre-fix**,
+and the pre-existing e2e asserts the DRAINED payload, closing the "mutated a
+copy" loophole that made the original bug invisible.
+
+Three MINORs, none reachable today, all of the form "the NEXT skin pays":
+
+- **`setSpec(next: DockSpec)` takes no `null`.** A skin whose `dock()` goes
+  spec -> null for the SAME `heldId` would freeze the dock on stale chips
+  instead of dismissing it. Neither `buildDock` does this. Widen to
+  `DockSpec | null` when a skin needs it.
+- **`chip.mutate` is applied TWICE independently** — once through `queue.ts`'s
+  `mutateHeld`, once through the local mirror. Correct only because every
+  shipped chip is a pure last-write spread (checked all: football's
+  person/ownGoal/penalty/offence, cricket's batRun/extraRun) and because
+  football's step-gating means step-2 chips do not exist in the DOM until
+  step 1 lands. **Nothing in the `DockChip` contract enforces purity.** A
+  counter-style mutate would diverge between mirror and store.
+- **`controller.setSpec(spec)` is a render-BODY side effect.** Safe today
+  because `DetailDock` is unmemoized and this repo has no React Compiler; it
+  would silently stop working under a future `memo()` with nothing to catch it.
+
+Selection semantics checked and correct: football's ids are namespaced
+(`scorer:`/`assist:`) so no cross-step collision, and `ownGoal`/`penalty` are
+meant to stay selected across the step boundary.
+
+**Non-football impact, confirmed rather than assumed:** the `dockStore` wrapper
+calls `setHeld` on every landed chip mutation for EVERY skin. Cricket's
+`buildDock` output never depends on the mirrored payload (`extraKind` is fixed
+at hold time), so no behaviour change — only more render work.
