@@ -220,17 +220,22 @@ test("tennis skin: play points to deuce", async ({ page, request }) => {
   });
   await openLiveConsole(page, fx);
 
-  // The plain `tennis.point` action is a one-tap Home/Away pair (no
-  // expand/confirm step), so reaching deuce is 6 taps: 3 each, alternating —
-  // never two of the same side in a row, which matters for
-  // `usePadPipeline`'s own double-submit guard (identical payloads within its
-  // window are correctly swallowed; alternating ones never collide with it).
-  const homeBtn = pad(page).getByRole("button", { name: "Home", exact: true });
-  const awayBtn = pad(page).getByRole("button", { name: "Away", exact: true });
-  await expect(homeBtn).toBeVisible();
+  // R4/tennis cutover — v3 tapModel S: the scoreboard halves ARE the point
+  // buttons (v3/skins/tennis.tsx), so the v2-era one-tap "Home"/"Away" pair
+  // this test used to click no longer exists. `scorebugHalf` (this file's
+  // own football-era helper, above) already indexes the halves grid
+  // positionally, home first — a band-3 org's tappable halves render as
+  // real <button>s regardless of sport. Reaching deuce is still 6 taps: 3
+  // each, alternating — never two of the same side in a row, which matters
+  // for `usePadPipeline`'s own double-submit guard (identical payloads
+  // within its window are correctly swallowed; alternating ones never
+  // collide with it).
+  const homeHalf = scorebugHalf(page, 0);
+  const awayHalf = scorebugHalf(page, 1);
+  await expect(homeHalf).toBeVisible();
   for (let i = 0; i < 3; i++) {
-    await homeBtn.click();
-    await awayBtn.click();
+    await homeHalf.click();
+    await awayHalf.click();
   }
   await expect
     .poll(
@@ -239,12 +244,11 @@ test("tennis skin: play points to deuce", async ({ page, request }) => {
     )
     .toBe(6);
 
-  // "Points" never appears as the chassis headline's own caption (that one
-  // is hardcoded "Score") so it is unambiguous even scoped only to the pad —
-  // tennis has no `data-role` container of its own to scope into further
-  // (unlike football/racquet/period below).
-  const pointsField = pad(page).getByText("Points", { exact: true }).locator("..");
-  await expect(pointsField).toContainText("40–40");
+  // v3 renders each half's OWN points via `ScorebugHalf.big` (scorebug.tsx),
+  // not the v2 header's combined "Points" field this test used to read —
+  // 40–40 is deuce, one call per half.
+  await expect(homeHalf).toContainText("40");
+  await expect(awayHalf).toContainText("40");
   // S13/#422 W11 cutover — tennis's own scan.
   await expectPadAxeClean(page);
   await expectNoHorizontalScroll(page);
