@@ -33,6 +33,7 @@ import { listEntrantLogoUrls } from "@/server/usecases/teams";
 import { resolveModule } from "@/server/engine-db";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
 import type { ProgressionSpec } from "@seazn/engine/competition";
+import { seedingSourceReady } from "@/lib/seeding-source-ready";
 import { withTenant } from "@/lib/db";
 import { DivisionDangerZone } from "@/components/v2/division-danger-zone";
 import { EmbedSnippet } from "@/components/v2/embed-snippet";
@@ -172,26 +173,17 @@ export default async function DivisionPage({
   // Hide the panel entirely (not just show it "empty") until every source
   // stage it draws standings from has actually completed — otherwise the
   // organiser sees a Recompute button whose only possible outcome is a
-  // SEEDING_SOURCE_INCOMPLETE 409 (stage-seeding.ts's own gate). Resolved
-  // from the already-loaded `stages` array, mirroring resolveProgressionSource
-  // (stage-seeding.ts:73-91) FIELD-FOR-FIELD — its "previous" branch is
-  // `where division_id = target.division_id and seq < target.seq order by
-  // seq desc limit 1`, reproduced below with `.filter`/`.sort` instead of SQL.
-  // If that query's ordering or eligibility ever changes, this must change
-  // with it or the panel's visibility gate will disagree with the server's
-  // real 409 gate.
-  const seedingSourcesReady = seedingStages.map((s) => {
-    const progression = s.progression as unknown as ProgressionSpec & { timing: "setup" | "on_complete" };
-    return progression.sources.every((src) => {
-      const sourceId =
-        src.stage === "previous"
-          ? stages
-              .filter((st) => st.division_id === s.division_id && st.seq < s.seq)
-              .sort((a, b) => b.seq - a.seq)[0]?.id
-          : src.stage.stageId;
-      return stages.find((st) => st.id === sourceId)?.status === "complete";
-    });
-  });
+  // SEEDING_SOURCE_INCOMPLETE 409 (stage-seeding.ts's own gate). The rule
+  // itself lives in lib/seeding-source-ready.ts (one definition, pure, no
+  // DB) — see its docstring for exactly how it mirrors
+  // resolveProgressionSource.
+  const seedingSourcesReady = seedingStages.map((s) =>
+    seedingSourceReady(
+      stages,
+      s,
+      s.progression as unknown as Pick<ProgressionSpec, "sources">,
+    ),
+  );
   // F3 Task 5c (ruling 14 — seeding stays propose-and-confirm, no
   // auto-confirm). Fetched on EVERY tab, not just fixtures: ruling 14's whole
   // consequence is that a stage now fills only when the organiser confirms, so
