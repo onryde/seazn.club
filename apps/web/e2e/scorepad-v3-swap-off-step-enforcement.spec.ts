@@ -44,6 +44,25 @@ function v3Tile(page: Page, id: string) {
   return pad(page).locator(`[data-tile-id="${id}"]`);
 }
 
+/** Same shape as scorepad-v3-football.spec.ts's own `ledger`/`countOf` pair —
+ *  used below to prove a completed swap actually reached the server, which
+ *  neither test in this file needed before it. */
+async function ledger(
+  request: APIRequestContext,
+  fixtureId: string,
+): Promise<{ id: string; seq: number; type: string; payload: Record<string, unknown> }[]> {
+  const res = await apiJson<{ id: string; seq: number; type: string; payload: Record<string, unknown> }[]>(
+    request,
+    `/api/v1/fixtures/${fixtureId}/events?since_seq=0`,
+  );
+  expect(res.status, `ledger read failed: ${JSON.stringify(res.error)}`).toBe(200);
+  return res.data ?? [];
+}
+
+async function countOf(request: APIRequestContext, fixtureId: string, type: string): Promise<number> {
+  return (await ledger(request, fixtureId)).filter((e) => e.type === type).length;
+}
+
 /** Dispatch a real ledger event directly, reading `last_seq` fresh each call.
  *  SETUP only — the one action this test is actually about always goes
  *  through the real pad. Same helper, same posture as
@@ -157,4 +176,79 @@ test("football v3: opting in to scoring.swap_off_step_enforcement makes the OFF 
   // the OFF step refusing, not e.g. an accidental double-tap landing on the
   // ON step.
   await expect(swap.locator("[data-candidate-id]")).toHaveCount(0);
+});
+
+test("football v3: opting in to scoring.swap_off_step_enforcement does not block a still-legal substitution — the OFF and ON steps both complete normally", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+
+  // Same org setup as the test above — a FRESH org, Pro plan, the override
+  // granted — but this fixture never exhausts (or even configures) a cap, so
+  // `policyVerdict.ok` stays true throughout. `shouldRefuseOffStep` returns
+  // false whenever the verdict is ok regardless of `enforceOffStep`
+  // (context-swap.test.ts's own "enforceOffStep=true + an OK verdict" case,
+  // lines ~1263-1277) — this proves the SAME thing against the real server,
+  // which that render-level test structurally cannot: a fabricated ok
+  // verdict there is not proof the server ever produces one.
+  const email = `e2e-swapoff-ok-${TAG}-${Math.random().toString(36).slice(2, 7)}@example.com`;
+  await loginUi(page, email);
+  await page.goto("/dashboard", { waitUntil: "load" });
+  const org = await activeOrg(page);
+  await setOrgPlanBySql({ orgId: org.id }, "pro");
+  await setBoolEntitlementOverrideSql(org.id, "scoring.swap_off_step_enforcement", true);
+  await invalidateOrgEntitlements(page.request, org.id);
+
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 SwapOff OK ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [
+      { fullName: `V3 SOK Start1 ${TAG}`, positionKey: "FW" },
+      { fullName: `V3 SOK Start2 ${TAG}`, positionKey: "MF" },
+      { fullName: `V3 SOK Bench1 ${TAG}`, slot: "bench" },
+    ],
+    away: [{ fullName: `V3 SOK Away ${TAG}`, positionKey: "GK" }],
+  });
+  // NO maxSubs/subWindows config and NO pre-consumed substitution this time —
+  // the smaller diff against the test above, and it is what keeps the verdict
+  // genuinely ok: `11-a-side` declares neither cap by default
+  // (scorepad-v3-football.spec.ts's own maxSubs test makes the same point),
+  // so with zero subs used this substitution is legal outright.
+  await postEvent(page.request, fx.fixtureId, "core.start", {});
+  await openConsoleAlreadyLive(page, fx);
+
+  await v3Tile(page, "sub-home").click();
+  const swap = pad(page).locator('[data-role="v3-swap"]');
+  await expect(swap).toBeVisible({ timeout: 10_000 });
+
+  // OFF step: unrefused, even though this org opted in — the verdict is ok,
+  // so shouldRefuseOffStep must be false. Contrast the test above, whose OFF
+  // step shows exactly this markup because ITS verdict is refused.
+  await expect(
+    swap.locator('[data-role="swap-refusal"]'),
+    "a still-legal substitution must show the normal OFF picker even for an org that opted into enforcement",
+  ).toHaveCount(0);
+  const offId = fx.personIds[`V3 SOK Start1 ${TAG}`]!;
+  const onId = fx.personIds[`V3 SOK Bench1 ${TAG}`]!;
+  await swap.locator(`[data-candidate-id="${offId}"]`).click();
+
+  // ON step: also unrefused — the same ok verdict backs both steps, and the
+  // bench candidate is offered normally.
+  await expect(swap.locator('[data-role="swap-refusal"]')).toHaveCount(0);
+  await expect(swap.locator(`[data-candidate-id="${onId}"]`)).toBeVisible();
+  await swap.locator(`[data-candidate-id="${onId}"]`).click();
+
+  // The sheet closes immediately once both picks are made — pad-host.tsx's
+  // onSwap calls setOpenSwapId(null) before dispatching the built event.
+  await expect(swap).toHaveCount(0);
+
+  // ...and the real server round-trip lands the swap. `football.sub` has no
+  // dock content (buildDock returns null for it, football.tsx), so nothing
+  // flushes the hold early here — this waits out the ~6s soft-commit window
+  // (queue.ts's HOLD_MS) rather than clicking a "Send now" that does not
+  // exist for this event type.
+  await expect.poll(async () => countOf(page.request, fx.fixtureId, "football.sub"), { timeout: 20_000 }).toBe(1);
+  const sub = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "football.sub")!;
+  expect(sub.payload).toMatchObject({ by: fx.homeEntrantId, off: offId, on: onId });
 });

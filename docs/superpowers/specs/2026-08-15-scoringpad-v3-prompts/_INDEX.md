@@ -1750,3 +1750,60 @@ meant to stay selected across the step boundary.
 calls `setHeld` on every landed chip mutation for EVERY skin. Cricket's
 `buildDock` output never depends on the mirrored payload (`extraKind` is fixed
 at hold time), so no behaviour change — only more render work.
+
+## Swap-sheet OFF-step enforcement — standalone chassis addition (2026-08-25), smoke deferred
+
+Not a numbered wave — no R-prompt file owns this, it is a small opt-in
+primitive layered directly on top of the R3 chassis sub-wave above, and it
+reuses that wave's `data-role="swap-refusal"` markup verbatim rather than
+inventing a second one. Recorded here per `_RULES.md` §5/§6 ("a wave that
+defers one [test type] names the wave that owes it") since there is no wave
+prompt file for standalone work to record it in instead.
+
+**What shipped** (`c57c7d384`, `d143a01b4`): `scoring.swap_off_step_
+enforcement`, a CHASSIS-level entitlement key — not a fidelity-band one, no
+`PadSpec` names it. `fidelity.ts`'s `resolveScorePadBootstrap` resolves it
+unconditionally via `hasFeatureFn`, merged into the same `entitlements` map
+every fidelity-band key already lands in. `pad-host.tsx` threads
+`view.entitlements["scoring.swap_off_step_enforcement"] === true` into
+`SwapSheet`'s new `enforceOffStep` prop. `swap-sheet.tsx`'s
+`shouldRefuseOffStep(policyVerdict, enforceOffStep)` decides: only when an
+org has opted in AND the module's own policy verdict is genuinely refused
+does the OFF step itself show the ON step's `swap-refusal` markup and copy,
+before any candidate is picked. Default (`undefined`/`false`) stays
+byte-identical to the R3 chassis behaviour — pinned by
+`scorepad-v3-football.spec.ts`'s own maxSubs test as "a known limit of the R3
+chassis fix, not an accident": today's OFF step always shows the picker
+regardless of verdict, and a refusal only ever surfaces on the ON step.
+
+**Coverage shipped**: unit (`context-swap.test.ts` — `shouldRefuseOffStep`'s
+full truth table, plus a `SwapSheet` render matrix crossing refused/ok ×
+enforceOffStep true/false/undefined) and e2e
+(`scorepad-v3-swap-off-step-enforcement.spec.ts`, two tests against a fresh
+org: a refused verdict refuses the OFF step immediately, and — added in a
+follow-up review pass — a still-legal substitution completes normally end to
+end, both steps unrefused, `football.sub` actually reaching the ledger with
+the picked pair). Regression: `scorepad-v3-football.spec.ts` reruns
+unmodified, confirming the shared Pro org's pinned default-off behaviour
+never moved.
+
+**Smoke — DEFERRED, and why** (reviewer finding on the follow-up review pass,
+verified rather than assumed): the key is structurally unreachable from any
+HTTP-observable surface. `requiredFeatureForEvent`
+(`apps/web/src/server/usecases/fidelity.ts:22-34`) is untouched — it only
+ever returns a key named in some `fidelityTiers` entry, and
+`scoring.swap_off_step_enforcement` is not one. No route reads this key
+directly. `GET /api/orgs/[id]/entitlements` structurally excludes any key
+absent from `plan_entitlements`, which this key is BY DESIGN — it is
+override-only, no plan grants it. So smoke's HTTP-probe idiom (hit a route,
+read a JSON field) has nothing real to assert here: there is no response
+body this key would ever appear in, gated or not.
+
+**Who owes it**: nobody today, by construction — this is not a wave deferring
+work forward to R4-R8, because no amount of waiting makes the key
+HTTP-observable. It becomes assertable only if a future change gives it one
+(e.g. an admin entitlements-listing endpoint, or the key moving from
+override-only to plan-granted so `GET .../entitlements` would carry it).
+Whoever makes that change owns adding the smoke check in the same PR —
+recorded here so the gap is not silently rediscovered, or silently skipped,
+once that surface exists.
