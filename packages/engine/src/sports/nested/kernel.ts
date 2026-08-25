@@ -443,6 +443,81 @@ export function expectedDoublesServer(
   return expectedPairServerOf(state.squads, side, serviceTurn);
 }
 
+/**
+ * Total games completed in the match so far, both sides combined —
+ * `nestedGamesOf(state, "home") + nestedGamesOf(state, "away")`, PLUS one for
+ * each closed match tie-break.
+ *
+ * `nestedGamesOf` already treats a banked MTB set as contributing NO games to
+ * either side's tally, because `ClosedSet.mtb` carries the MTB's POINTS in
+ * `home`/`away` (`NestedSetSummary`'s doc comment) — often 10+ of them, not
+ * games. Right for "games WON", but not the question here: an MTB is still
+ * exactly one turn in the SERVE ALTERNATION, same as any other tie-break
+ * (`applyTbPoint`'s non-mtb branch banks a won ordinary TB as a `+1` to
+ * `games` for exactly this reason — the alternation does not care how a
+ * "game" was decided, only that one was). There is at most one banked MTB set
+ * per match — it can only be the deciding (final) set — so `mtbSets` below is
+ * always 0 or 1.
+ *
+ * Deliberately built on `nestedGamesOf` rather than a second reduction over
+ * `state.sets`: this file already carries one *documented, forced* duplicate
+ * of that formula (`sideMetrics`'s own `gamesOf`, a closure that cannot call
+ * out), and an accidental third copy — a new one, drifting the moment either
+ * one's mtb handling changes — is the failure mode this avoids.
+ */
+function completedGames(state: NestedState): number {
+  const mtbSets = state.sets.filter((set) => set.mtb === true).length;
+  return nestedGamesOf(state, "home") + nestedGamesOf(state, "away") + mtbSets;
+}
+
+/**
+ * Who is due to serve — by side, and (in a declared doubles fixture) by
+ * person — for the CURRENT service game. R4-3 (owner ruling, R4 dispatch):
+ * this lives in the engine, not the pad, because a pad-side copy of the ITF
+ * rotation would fork from the fold the moment either one drifts.
+ *
+ * `side` is never recomputed from the score — `state.serving` is the fold's
+ * own answer, tracked point by point (`applyTbPoint` updates it inside a
+ * live tie-break too), and a second derivation is exactly the fork this
+ * exists to avoid. `serviceTurn` is that side's 0-based service-GAME index:
+ * with `G` = `completedGames(state)`, strict game-by-game alternation makes
+ * it `floor(G / 2)` for whichever side is currently due — true regardless of
+ * which side that is, since each side serves exactly every other game.
+ *
+ * `personId` is `expectedDoublesServer`'s answer for that side/turn: a real
+ * id in a declared doubles fixture, `null` for singles or an undeclared
+ * order — same posture as that function, never a fabricated id.
+ *
+ * SCOPED TO THE GAME, deliberately, matching `expectedDoublesServer`'s own
+ * contract (a side's service-GAME index, not a point index — see its doc
+ * comment). `side` is exact at every point, including mid-tie-break, for the
+ * reason above. `personId` is not: ITF doubles hands the tie-break serve to
+ * a different partner every two points, cycling all four players, and
+ * `expectedPairServerOf`'s `turn` only ever advances one whole service game
+ * at a time — it has no notion of a point-level handoff. So mid-tie-break,
+ * `personId` stays pinned to whichever partner opened the side's turn at the
+ * tie-break's first point, rather than following the point-by-point ITF
+ * rotation. Silently wrong there was rejected; this is the documented,
+ * tested alternative (`serve-context.test.ts`) — a scoped-but-honest answer
+ * over a second, riskier derivation.
+ *
+ * Inherits `state.serving`'s own documented limit ("rally fidelity only;
+ * summary sets leave it untouched"): a tier-0 `*.set_summary` never moves
+ * `serving`, so `side`/`serviceTurn` carry whatever staleness that leaves
+ * behind. A pure reader of what the fold already committed to, not a second
+ * source of truth for it — and no fold effect: it never mutates state, and
+ * initSquads/init never call it.
+ */
+export function serveContext(state: NestedState): {
+  side: Side;
+  personId: string | null;
+  serviceTurn: number;
+} {
+  const side = state.serving;
+  const serviceTurn = Math.floor(completedGames(state) / 2);
+  return { side, serviceTurn, personId: expectedDoublesServer(state, side, serviceTurn) };
+}
+
 /** Per-person tallies folded out of attributed points (W4). Aces and double
  *  faults credit the SERVER — a double fault is a point for the receiver but a
  *  serving statistic for the server, which is how the card records it. */
