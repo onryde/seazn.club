@@ -37,6 +37,19 @@ const CLEAR_HREF = "/o/riverside/c/summer-league/registration?tab=registrants";
 // modules should reach into). 300ms per the R4 dispatch ("~300ms").
 const SEARCH_DEBOUNCE_MS = 300;
 
+// Read from the SAME zod enums the server parent
+// (registration-hub-registrants-panel.tsx) reads at render time — NOT
+// re-imported from @/server/api-v1/schemas here. That module transitively
+// reaches the engine's gRPC scheduling client (Node built-ins), which is
+// exactly why this became a prop instead of a direct import the moment
+// this component turned client-side (R4's auto-submit); a vitest suite
+// (environment: "node", no bundler) would never have caught that — only
+// `next build` does. Hand-typed literals here, matching the real enum
+// values, are enough to prove the render/wiring this file is actually
+// responsible for.
+const STATUS_OPTIONS = ["pending", "paid", "confirmed", "waitlisted", "withdrawn", "expired", "rejected"];
+const KIND_OPTIONS = ["team", "individual", "pair"];
+
 function render(filters: RegistrantsFilters = DEFAULT_FILTERS) {
   return renderIsland(RegistrationHubRegistrantFilters, {
     dict,
@@ -44,6 +57,8 @@ function render(filters: RegistrantsFilters = DEFAULT_FILTERS) {
     filters,
     divisions: DIVISIONS,
     clearHref: CLEAR_HREF,
+    statusOptions: STATUS_OPTIONS,
+    kindOptions: KIND_OPTIONS,
   }).tree();
 }
 

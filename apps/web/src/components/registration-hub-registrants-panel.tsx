@@ -5,6 +5,16 @@ import { RegistrationHubRegistrantEmpty } from "@/components/registration-hub-re
 import { RegistrationHubRegistrantFilters } from "@/components/registration-hub-registrant-filters";
 import { RegistrationHubRegistrantTable } from "@/components/registration-hub-registrant-table";
 import { hasActiveFilters } from "@/components/registration-hub-registrant-derive";
+// A real (non-type-only) VALUE import — safe here because this file has no
+// "use client": it is a server component, never bundled for the browser, so
+// schemas.ts's own transitive reach into the engine's gRPC scheduling
+// client (Node built-ins: dns/net/http2) never becomes the browser's
+// problem. RegistrationHubRegistrantFilters (below) is the opposite case —
+// it BECAME a client component (R4's auto-submit needs onChange handlers)
+// and broke `next build` importing this same module directly, which is why
+// its two option lists are read HERE, server-side, and handed down as
+// plain string props instead.
+import { RegistrationStatus, EntrantKind } from "@/server/api-v1/schemas";
 import type {
   RegistrantsFilters,
   DivisionOption,
@@ -110,6 +120,8 @@ export function RegistrationHubRegistrantsPanel({
         filters={filters}
         divisions={divisions}
         clearHref={clearHref}
+        statusOptions={RegistrationStatus.options}
+        kindOptions={EntrantKind.options}
       />
 
       {rows.length === 0 ? (

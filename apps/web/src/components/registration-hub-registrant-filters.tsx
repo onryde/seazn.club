@@ -4,7 +4,6 @@ import { useEffect, useRef } from "react";
 import Link from "@/components/ui/console-link";
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
-import { RegistrationStatus, EntrantKind } from "@/server/api-v1/schemas";
 import { hasActiveFilters } from "@/components/registration-hub-registrant-derive";
 import type {
   RegistrantsFilters,
@@ -53,6 +52,8 @@ export function RegistrationHubRegistrantFilters({
   filters,
   divisions,
   clearHref,
+  statusOptions,
+  kindOptions,
 }: {
   dict: Dict;
   /** The tab's bare path — no query string (see header comment). */
@@ -60,6 +61,19 @@ export function RegistrationHubRegistrantFilters({
   filters: RegistrantsFilters;
   divisions: DivisionOption[];
   clearHref: string;
+  /** RegistrationStatus.options, read by the SERVER parent
+   *  (registration-hub-registrants-panel.tsx) and passed down as plain
+   *  strings — never imported here directly. `@/server/api-v1/schemas`
+   *  transitively reaches the engine's gRPC scheduling client
+   *  (placement-client.ts), which dials real Node built-ins (dns/net/
+   *  http2); a SERVER component importing it is fine (never bundled for
+   *  the browser), but this component became a CLIENT one the moment it
+   *  needed onChange handlers, and a client bundle pulling that import in
+   *  fails `next build` outright — vitest and tsc both stay green, since
+   *  neither one bundles for a browser. One source (the zod enum), read
+   *  server-side once, never duplicated here. */
+  statusOptions: readonly string[];
+  kindOptions: readonly string[];
 }) {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -120,7 +134,7 @@ export function RegistrationHubRegistrantFilters({
           className="input min-h-11 mt-1"
         >
           <option value="">{t(dict, "reg.hub.registrants.filters.statusAll")}</option>
-          {RegistrationStatus.options.map((s) => (
+          {statusOptions.map((s) => (
             <option key={s} value={s}>
               {t(dict, `reg.hub.registrants.status.${s}`)}
             </option>
@@ -154,7 +168,7 @@ export function RegistrationHubRegistrantFilters({
           className="input min-h-11 mt-1"
         >
           <option value="">{t(dict, "reg.hub.registrants.filters.kindAll")}</option>
-          {EntrantKind.options.map((k) => (
+          {kindOptions.map((k) => (
             <option key={k} value={k}>
               {t(dict, `divset.entrants.kind.${k}`)}
             </option>
