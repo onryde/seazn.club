@@ -180,6 +180,15 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
       build: (v) => ({ maxSubs: Number(v) }),
     },
     {
+      key: "subWindows",
+      label: "Substitution windows allowed",
+      help: "Stoppages a side may use subs in — independent cap from Substitutes allowed. Blank = unlimited.",
+      kind: "number",
+      min: 0,
+      max: 10,
+      build: (v) => ({ subWindows: Number(v) }),
+    },
+    {
       key: "sinBinMinutes",
       label: "Sin-bin length (minutes)",
       kind: "number",
