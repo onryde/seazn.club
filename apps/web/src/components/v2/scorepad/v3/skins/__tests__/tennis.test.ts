@@ -139,36 +139,74 @@ const stripValue = (v: PadHostView, id: string): string | undefined =>
 // v3 skin test performs before trusting `t()` output shapes below.
 // ---------------------------------------------------------------------------
 
-describe("dictionary has every new tennis key this skin references", () => {
-  const keys = [
-    "pad.tennis.ribbon.point",
-    "pad.tennis.ribbon.set_summary",
-    "pad.tennis.ribbon.sanction",
-    "pad.tennis.ribbon.interruption",
-    "pad.tennis.ribbon.game.award",
-    "pad.tennis.scorebug.point.hint",
-    "pad.tennis.scorebug.serving",
-    "pad.tennis.scorebug.strip.sets",
-    "pad.tennis.scorebug.strip.games",
-    "pad.tennis.scorebug.strip.server",
-    "pad.tennis.scorebug.strip.endsChanged",
-    "pad.tennis.context.line",
-    "pad.tennis.context.tiebreak",
-    "pad.tennis.dock.point.title",
-    "pad.tennis.sheet.setScore.home.title",
-    "pad.tennis.sheet.setScore.away.title",
-    "pad.tennis.sheet.setScore.tbHome.title",
-    "pad.tennis.sheet.setScore.tbAway.title",
-    "pad.tennis.sheet.sanction.level.title",
-    "pad.tennis.sheet.sanction.person.title",
-    "pad.tennis.sheet.interruption.kind.title",
-    "pad.tennis.sheet.interruption.side.title",
-    "pad.tennis.sheet.interruption.side.none",
-    "pad.tennis.sheet.interruption.person.title",
-    "pad.tennis.sheet.interruption.duration.title",
+// A key used only inside a skin's own returned SPEC (a TileSpec.label, a
+// GuidedSheetStep.title, an options[].label, a strip item's label, a
+// hintKey, a WhoLine.servingLabel) has NO gate at all: vitest's local `t`
+// returns the key verbatim, `TileSpec.label`/`step.title` are plain
+// `string` (not `MessageKey`) so tsc never checks them, and `i18n:check`
+// only verifies parity BETWEEN locales — a key missing from all four is
+// perfect parity. This is exactly how football's R3/B2 shipped a card
+// sheet's colour-step title with no copy at all. The guard that actually
+// works (`skins/__tests__/football.test.ts`'s own "copy truth" test):
+// collect every such key FROM THE BUILT SPECS across a representative band/
+// state sweep, then assert each exists in en/ui.json — a later wave's new
+// tile/step is covered the day it lands, unlike a hand-maintained list.
+function collectLabelKeys(): Set<string> {
+  const keys = new Set<string>();
+  // The context line's two pieces are consumed by `t()` INSIDE `buildContext`
+  // to compose one already-joined string, never stored as a field this walk
+  // could collect — added explicitly rather than reverse-engineered out of
+  // the composed text.
+  keys.add("pad.tennis.context.line");
+  keys.add("pad.tennis.context.tiebreak");
+  const bandsAndStates: { band: 0 | 1 | 2 | 3; over: Record<string, unknown> }[] = [
+    { band: 0, over: state() },
+    { band: 1, over: state({ games: { home: 1, away: 0 } }) },
+    { band: 3, over: state({ points: { kind: "tiebreak", home: 3, away: 2 } }) },
+    { band: 3, over: state({ sets: [{ home: 6, away: 4 }] }) },
   ];
-  it.each(keys)("%s exists in en/ui.json", (key) => {
-    expect((uiEn as Record<string, string>)[key]).toBeTruthy();
+  for (const { band, over } of bandsAndStates) {
+    const v = view({ band, state: over, squads: doublesSquads(true) });
+    for (const tile of buildTiles(v)) {
+      keys.add(tile.label);
+      if (tile.sublabel !== undefined) keys.add(tile.sublabel);
+    }
+    for (const spec of Object.values(buildSheets(v))) {
+      for (const step of spec.steps) {
+        keys.add(step.title);
+        if (step.kind === "choice") for (const option of step.options) keys.add(option.label);
+      }
+    }
+    const scorebug = buildScorebug(v, t);
+    for (const item of scorebug.strip) if (item.label !== undefined) keys.add(item.label);
+    for (const half of scorebug.halves) {
+      if (half.hintKey !== undefined) keys.add(half.hintKey);
+      for (const who of half.who) if (who.servingLabel !== undefined) keys.add(who.servingLabel);
+    }
+    for (const payload of [{ by: "H", server: "H" }, { by: "H" }, { by: "H", server: "H", meta: { kind: "ace" } }]) {
+      const dock = buildDock("tennis.point", v, t, payload);
+      if (dock) keys.add(dock.title);
+    }
+  }
+  return keys;
+}
+
+describe("copy truth — every key this skin's built specs reference exists in en/ui.json", () => {
+  it("no missing keys, across a representative band/state sweep", () => {
+    const dict = uiEn as Record<string, string>;
+    const missing = [...collectLabelKeys()].filter(
+      (key) => key !== "__pad-host/more__" && !Object.prototype.hasOwnProperty.call(dict, key),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it("vacuity guard: the sweep actually collects a realistic number of keys", () => {
+    // A broken sweep (e.g. every band gated to the same tiles) would still
+    // pass the test above vacuously — pin a floor so a regression there reds
+    // too. 25 is this wave's own new-key count; the sweep also re-collects
+    // several already-existing keys (action labels, side labels), so the
+    // real floor is comfortably above that.
+    expect(collectLabelKeys().size).toBeGreaterThanOrEqual(25);
   });
 });
 
