@@ -32,6 +32,8 @@ import { hasFeature } from "@/lib/entitlements";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
 import { resolveModule } from "@/server/engine-db";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
+import type { ProgressionSpec } from "@seazn/engine/competition";
+import { seedingSourceReady } from "@/lib/seeding-source-ready";
 import { withTenant } from "@/lib/db";
 import { DivisionDangerZone } from "@/components/v2/division-danger-zone";
 import { EmbedSnippet } from "@/components/v2/embed-snippet";
@@ -167,6 +169,20 @@ export default async function DivisionPage({
   // as entrantLogos/headlines just above/below.
   const seedingStages = stages.filter(
     (s) => (s.progression as { timing?: string } | null)?.timing === "setup",
+  );
+  // Hide the panel entirely (not just show it "empty") until every source
+  // stage it draws standings from has actually completed — otherwise the
+  // organiser sees a Recompute button whose only possible outcome is a
+  // SEEDING_SOURCE_INCOMPLETE 409 (stage-seeding.ts's own gate). The rule
+  // itself lives in lib/seeding-source-ready.ts (one definition, pure, no
+  // DB) — see its docstring for exactly how it mirrors
+  // resolveProgressionSource.
+  const seedingSourcesReady = seedingStages.map((s) =>
+    seedingSourceReady(
+      stages,
+      s,
+      s.progression as unknown as Pick<ProgressionSpec, "sources">,
+    ),
   );
   // F3 Task 5c (ruling 14 — seeding stays propose-and-confirm, no
   // auto-confirm). Fetched on EVERY tab, not just fixtures: ruling 14's whole
@@ -442,6 +458,7 @@ export default async function DivisionPage({
                 stageId={st.id}
                 stageName={st.name}
                 proposal={seedProposals[i] ?? null}
+                sourceReady={seedingSourcesReady[i] ?? false}
                 fixtures={fixtures}
                 entrantNames={entrantNames}
                 stageNames={stageNames}

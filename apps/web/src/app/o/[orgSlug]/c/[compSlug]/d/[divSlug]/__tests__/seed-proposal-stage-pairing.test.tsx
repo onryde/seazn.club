@@ -250,3 +250,56 @@ describe("division fixtures tab pairs each .seeding stage with its OWN proposal"
     expect(calledWith).toEqual(["stage-x"]);
   });
 });
+
+// Code review finding (this session): the `seedingSourcesReady` derivation
+// itself — the "previous"-stage resolution + status check that decides the
+// `sourceReady` prop — had no test exercising it with realistic `seq`/
+// `status` data; every other case above leaves `proposal` non-null, so
+// `sourceReady` is computed but never asserted. This mirrors
+// resolveProgressionSource's own SQL (stage-seeding.ts:73-91) FIELD-FOR-
+// FIELD: "previous" = the same-division stage with the largest `seq` less
+// than the target's.
+describe("division fixtures tab: sourceReady mirrors resolveProgressionSource's own gate", () => {
+  const ROOT_INCOMPLETE = {
+    id: "stage-root",
+    name: "Root",
+    kind: "group",
+    config: {},
+    progression: null,
+    division_id: "div-1",
+    seq: 1,
+    status: "in_progress",
+  };
+  const ROOT_COMPLETE = { ...ROOT_INCOMPLETE, status: "complete" };
+  const SETUP_STAGE = {
+    id: "stage-ko",
+    name: "KO",
+    kind: "knockout",
+    config: {},
+    progression: SETUP_PROGRESSION,
+    division_id: "div-1",
+    seq: 2,
+    status: "setup",
+  };
+
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.getSeedProposal.mockReset().mockResolvedValue(null);
+  });
+
+  it("sourceReady=false while the 'previous' (nearest lower-seq) stage hasn't completed", async () => {
+    stagesSpies.listStages.mockResolvedValue([ROOT_INCOMPLETE, SETUP_STAGE]);
+    const tree = await renderFixturesTab();
+    const panels = findAll(tree, ProgressionPanel);
+    expect(panels).toHaveLength(1);
+    expect((panels[0]!.props as { sourceReady: boolean }).sourceReady).toBe(false);
+  });
+
+  it("sourceReady=true once that same 'previous' stage is complete", async () => {
+    stagesSpies.listStages.mockResolvedValue([ROOT_COMPLETE, SETUP_STAGE]);
+    const tree = await renderFixturesTab();
+    const panels = findAll(tree, ProgressionPanel);
+    expect(panels).toHaveLength(1);
+    expect((panels[0]!.props as { sourceReady: boolean }).sourceReady).toBe(true);
+  });
+});

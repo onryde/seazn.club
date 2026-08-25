@@ -66,6 +66,15 @@ keyed on the fixture id so they update IN PLACE.
   to this; #618 hit it the same day (`315ef26c0`).
 
 **Left for F5** (found by F4's final review, none blocking at merge):
+
+> **STOP — this block is HISTORY, not open work.** F5 shipped as PR **#630**
+> (`feat/f5-test-debt`, merge `45a5b835c`) and covered most of what follows,
+> together with the §5 test debt. A session on 2026-08-24 re-planned this list
+> as though it were open, because it read this block and the code but not the
+> merged PRs. The verified remainder — and the prescriptions that CANNOT be
+> implemented as written — are in
+> `docs/superpowers/specs/2026-08-24-format-progression-f5-design.md`. Read that
+> before treating any line below as a task.
 - `packages/engine/src/exports/build.ts:40` — `timeOf()` returns the literal
   `"TBD"` for every fixture with no `at`, i.e. **every day-one fixture**, so a
   French poster row reads `TBD | … | Vainqueur du Groupe A`. Column headers

@@ -31,6 +31,7 @@ function baseProps(overrides: Partial<ProgressionPanelProps> = {}): ProgressionP
     stageId: "ko1",
     stageName: "Knockout",
     proposal: null,
+    sourceReady: true,
     fixtures: FIXTURES,
     entrantNames: ENTRANT_NAMES,
     stageNames: STAGE_NAMES,
@@ -68,6 +69,11 @@ describe("ProgressionPanel — no proposal yet", () => {
     expect(html).toContain("No proposal yet for this stage.");
     expect(html).toContain("Compute proposal");
     expect(html).not.toContain("<table");
+  });
+
+  it("renders nothing while the source stage hasn't completed (sourceReady=false)", () => {
+    const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ proposal: null, sourceReady: false })} />);
+    expect(html).toBe("");
   });
 });
 

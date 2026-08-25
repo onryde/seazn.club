@@ -48,6 +48,7 @@ function baseProps(overrides: Partial<ProgressionPanelProps> = {}): ProgressionP
     stageId: "ko1",
     stageName: "Knockout",
     proposal: null,
+    sourceReady: true,
     fixtures: FIXTURES,
     entrantNames: ENTRANT_NAMES,
     stageNames: STAGE_NAMES,
