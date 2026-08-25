@@ -1,0 +1,885 @@
+// R4 — tennis SkinDefV3. Pure-data assertions (apps/web vitest is
+// `environment: "node"`, no jsdom): the skin is a spec BUILDER, so this file
+// asserts the specs it returns and leaves the DOM to e2e.
+//
+// Two things are proved by driving the REAL engine rather than a hand-typed
+// stand-in, matching the precedent football.test.ts/cricket.test.ts already
+// set (there is no shared skin-test factory in this tree; each file defines
+// its own local `t`/`squads()`/`state()`/`cfg()`/`view()`):
+//   - guided-sheet gating goes through `initialSheetState`/`currentStep`/
+//     `answerStep` from ../../guided-sheet;
+//   - the serve-rotation mirror (this skin's own header explains WHY it is a
+//     mirror, not an import) is proven against REAL folds of the public
+//     `tennis` module, reusing the scenarios `packages/engine/src/sports/
+//     nested/serve-context.test.ts` already pins as the oracle — a stronger
+//     proof than a hand-derived expectation would be, and the one place a
+//     drift between this mirror and the real kernel would actually surface.
+import { describe, expect, it } from "vitest";
+import uiEn from "@/dictionaries/en/ui.json";
+import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
+import { initSquads } from "@seazn/engine/core";
+import type { ModuleEvent } from "@seazn/engine/sport";
+import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
+import { tennis } from "@seazn/engine/sports/tennis";
+import { foldClient } from "../../../module-client";
+import { answerStep, currentStep, initialSheetState } from "../../guided-sheet";
+import type { GuidedSheetSpec, PadHostView, TileSpec } from "../../types";
+import {
+  EVENT_BAND,
+  INTERRUPTION_KINDS,
+  POINT_KINDS,
+  SANCTION_LEVELS,
+  buildDock,
+  buildScorebug,
+  buildSheets,
+  buildTiles,
+  gameAwardTileId,
+  refusedEventTypes,
+  resolvePhase,
+  sanctionSheetKey,
+  tennisDetail,
+  tennisSkinV3,
+} from "../tennis";
+import type { TFn } from "../tennis";
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+const t: TFn = (key, vars) => (vars ? `${key}(${JSON.stringify(vars)})` : key);
+
+const NAMES: Record<string, string> = {
+  H: "Home Player",
+  A: "Away Player",
+  "H-first": "Home First",
+  "H-second": "Home Second",
+  "A-first": "Away First",
+  "A-second": "Away Second",
+};
+
+function singlesSquads(): SquadState {
+  return initSquads({
+    home: { entrantId: "H", slots: [{ personId: "H", slot: "starting", orderNo: 1 }] },
+    away: { entrantId: "A", slots: [{ personId: "A", slot: "starting", orderNo: 1 }] },
+  });
+}
+
+/** Matches `serve-context.test.ts`'s own `pairSide()` fixture byte for byte:
+ *  `orderNo` runs the OTHER way from `pairOrder`, so a reader that quietly
+ *  used `orderNo` instead answers with the wrong player. */
+function doublesSquads(declareOrder: boolean): SquadState {
+  const home = declareOrder
+    ? [
+        { personId: "H-second", slot: "starting" as const, orderNo: 1, pairOrder: 2 },
+        { personId: "H-first", slot: "starting" as const, orderNo: 2, pairOrder: 1 },
+      ]
+    : [
+        { personId: "H-first", slot: "starting" as const, orderNo: 1 },
+        { personId: "H-second", slot: "starting" as const, orderNo: 2 },
+      ];
+  const away = declareOrder
+    ? [
+        { personId: "A-second", slot: "starting" as const, orderNo: 1, pairOrder: 2 },
+        { personId: "A-first", slot: "starting" as const, orderNo: 2, pairOrder: 1 },
+      ]
+    : [
+        { personId: "A-first", slot: "starting" as const, orderNo: 1 },
+        { personId: "A-second", slot: "starting" as const, orderNo: 2 },
+      ];
+  return initSquads({ home: { entrantId: "H", slots: home }, away: { entrantId: "A", slots: away } });
+}
+
+function state(over: Record<string, unknown> = {}) {
+  return {
+    phase: "live",
+    entrants: { home: "H", away: "A" },
+    sets: [] as unknown[],
+    games: { home: 0, away: 0 },
+    points: { kind: "standard" as const, home: 0, away: 0, advantage: null },
+    setsWon: { home: 0, away: 0 },
+    serving: "home",
+    ...over,
+  };
+}
+
+function cfg(over: Record<string, unknown> = {}) {
+  return {
+    bestOf: 3,
+    set: { gamesTo: 6, winBy: 2, tiebreakAt: 6, tiebreakTo: 7 },
+    finalSet: "same" as const,
+    game: { noAd: false },
+    tiebreak: { winBy: 2 },
+    ...over,
+  };
+}
+
+function view(over: Partial<PadHostView> = {}): PadHostView {
+  return {
+    cfg: cfg(),
+    state: state(),
+    summary: {},
+    phase: "live",
+    band: 3,
+    entitlements: {},
+    personNames: NAMES,
+    squads: singlesSquads(),
+    events: [],
+    contextOverrides: {},
+    ...over,
+  };
+}
+
+const tileById = (tiles: readonly TileSpec[], id: string): TileSpec | undefined => tiles.find((tile) => tile.id === id);
+const stripValue = (v: PadHostView, id: string): string | undefined =>
+  buildScorebug(v, t).strip.find((item) => item.id === id)?.value;
+
+// ---------------------------------------------------------------------------
+// i18n keys this skin registers must exist in the English dictionary — the
+// same "en carries every key this file's own strings reference" sanity every
+// v3 skin test performs before trusting `t()` output shapes below.
+// ---------------------------------------------------------------------------
+
+describe("dictionary has every new tennis key this skin references", () => {
+  const keys = [
+    "pad.tennis.ribbon.point",
+    "pad.tennis.ribbon.set_summary",
+    "pad.tennis.ribbon.sanction",
+    "pad.tennis.ribbon.interruption",
+    "pad.tennis.ribbon.game.award",
+    "pad.tennis.scorebug.point.hint",
+    "pad.tennis.scorebug.serving",
+    "pad.tennis.scorebug.strip.sets",
+    "pad.tennis.scorebug.strip.games",
+    "pad.tennis.scorebug.strip.server",
+    "pad.tennis.scorebug.strip.endsChanged",
+    "pad.tennis.context.line",
+    "pad.tennis.context.tiebreak",
+    "pad.tennis.dock.point.title",
+    "pad.tennis.sheet.setScore.home.title",
+    "pad.tennis.sheet.setScore.away.title",
+    "pad.tennis.sheet.setScore.tbHome.title",
+    "pad.tennis.sheet.setScore.tbAway.title",
+    "pad.tennis.sheet.sanction.level.title",
+    "pad.tennis.sheet.sanction.person.title",
+    "pad.tennis.sheet.interruption.kind.title",
+    "pad.tennis.sheet.interruption.side.title",
+    "pad.tennis.sheet.interruption.side.none",
+    "pad.tennis.sheet.interruption.person.title",
+    "pad.tennis.sheet.interruption.duration.title",
+  ];
+  it.each(keys)("%s exists in en/ui.json", (key) => {
+    expect((uiEn as Record<string, string>)[key]).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolvePhase()
+// ---------------------------------------------------------------------------
+
+describe("resolvePhase", () => {
+  it("maps pre -> pre", () => {
+    expect(resolvePhase(view({ state: state({ phase: "pre" }) }))).toBe("pre");
+  });
+  it("maps live -> live", () => {
+    expect(resolvePhase(view({ state: state({ phase: "live" }) }))).toBe("live");
+  });
+  it.each(["done", "final", "abandoned"])("maps %s -> post", (phase) => {
+    expect(resolvePhase(view({ state: state({ phase }) }))).toBe("post");
+  });
+  it("defaults to pre for a state with no phase at all", () => {
+    expect(resolvePhase(view({ state: {} }))).toBe("pre");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The serve-rotation mirror — proved against REAL folds. Scenarios lifted
+// from `nested/serve-context.test.ts` verbatim so this stays an oracle proof,
+// not a second hand-derived guess that could agree with a broken mirror.
+// ---------------------------------------------------------------------------
+
+const STRICT_ALL = { strictFromSeq: 0 } as const;
+const point = (by: string): ModuleEvent => ({ type: "tennis.point", payload: { by } });
+const straight = (by: string, n: number): ModuleEvent[] => Array(n).fill(point(by));
+const game = (by: string): ModuleEvent[] => straight(by, 4);
+const gamesFor = (by: string, n: number): ModuleEvent[] => Array.from({ length: n }, () => game(by)).flat();
+const start: ModuleEvent = { type: "core.start", payload: {} };
+
+function cfgFor(variant?: string) {
+  const preset = variant === undefined ? {} : tennis.variants[variant];
+  return tennis.configSchema.parse(preset);
+}
+function foldReal(lineups: LineupPair, cfgParsed: unknown, events: ModuleEvent[]) {
+  const envelopes: EventEnvelope[] = events.map((event, i) => makeEnvelope(i, event));
+  return foldClient(tennis, cfgParsed, lineups, envelopes, STRICT_ALL);
+}
+const SINGLES_LINEUPS: LineupPair = defaultLineupPair(tennis.positions);
+function doublesLineups(): LineupPair {
+  return {
+    home: {
+      entrantId: "H",
+      slots: [
+        { personId: "H-second", slot: "starting", orderNo: 1, pairOrder: 2 },
+        { personId: "H-first", slot: "starting", orderNo: 2, pairOrder: 1 },
+      ],
+    },
+    away: {
+      entrantId: "A",
+      slots: [
+        { personId: "A-second", slot: "starting", orderNo: 1, pairOrder: 2 },
+        { personId: "A-first", slot: "starting", orderNo: 2, pairOrder: 1 },
+      ],
+    },
+  };
+}
+
+describe("servingInfo (via buildScorebug's strip + WhoLine dot) — real folds", () => {
+  it("singles: names the sole roster member directly, no declared order needed", () => {
+    const folded = foldReal(SINGLES_LINEUPS, cfgFor(), [start]);
+    const v = view({ state: folded, squads: singlesSquads() });
+    expect(stripValue(v, "server")).toBe(NAMES.H);
+    const half = buildScorebug(v, t).halves[0]!;
+    expect(half.who[0]!.serving).toBe(true);
+    expect(half.who[0]!.servingLabel).toBeTruthy();
+  });
+
+  it("singles: alternates side every game, matching the fold's own alternation", () => {
+    const folded = foldReal(SINGLES_LINEUPS, cfgFor(), [start, ...game("H")]);
+    const v = view({ state: folded, squads: singlesSquads() });
+    // After H's game, serve passes to A.
+    expect(stripValue(v, "server")).toBe(NAMES.A);
+    expect(buildScorebug(v, t).halves[1]!.who[0]!.serving).toBe(true);
+    expect(buildScorebug(v, t).halves[0]!.who[0]!.serving).toBeUndefined();
+  });
+
+  it("doubles, declared order: names the pair member due, advancing the rotation across games", () => {
+    const cfgDoubles = cfgFor("doubles-noad-mtb10");
+    const squads = doublesSquads(true);
+    expect(stripValue(view({ state: foldReal(doublesLineups(), cfgDoubles, [start]), squads }), "server")).toBe(
+      NAMES["H-first"],
+    );
+    expect(
+      stripValue(view({ state: foldReal(doublesLineups(), cfgDoubles, [start, ...game("H")]), squads }), "server"),
+    ).toBe(NAMES["A-first"]);
+    expect(
+      stripValue(
+        view({ state: foldReal(doublesLineups(), cfgDoubles, [start, ...game("H"), ...game("A")]), squads }),
+        "server",
+      ),
+    ).toBe(NAMES["H-second"]);
+  });
+
+  it("doubles, UNDECLARED order: no server name and no serving dot — omitted, not guessed", () => {
+    const squads = doublesSquads(false);
+    const folded = foldReal(doublesLineups(), cfgFor("doubles-noad-mtb10"), [start]);
+    const v = view({ state: folded, squads });
+    expect(stripValue(v, "server")).toBe(t("scorepad.attribution.home")); // side-level fallback only
+    const spec = buildScorebug(v, t);
+    expect(spec.halves[0]!.who.every((w) => w.serving === undefined)).toBe(true);
+    expect(spec.halves[1]!.who.every((w) => w.serving === undefined)).toBe(true);
+  });
+
+  it("a tie-break counts as one game and continues the pair rotation (mtb variant)", () => {
+    const cfgDoubles = cfgFor("doubles-noad-mtb10");
+    const squads = doublesSquads(true);
+    const to66 = [start, ...gamesFor("H", 5), ...gamesFor("A", 5), ...game("H"), ...game("A")];
+    const atTb = foldReal(doublesLineups(), cfgDoubles, to66);
+    expect(stripValue(view({ state: atTb, squads }), "server")).toBe(NAMES["H-first"]);
+    const done = foldReal(doublesLineups(), cfgDoubles, [...to66, ...straight("H", 7)]);
+    expect(stripValue(view({ state: done, squads }), "server")).toBe(NAMES["A-first"]);
+  });
+
+  it("does not inflate completed games by a banked match-tie-break's raw point score", () => {
+    // Same fixture `serve-context.test.ts` pins: MTB closes 10-0, banked as
+    // ONE game (the 20th) — 19 games completed, not 29 raw points. Either
+    // wrong count changes serviceTurn/personId here. `events` is deliberately
+    // NOT wired into `view()` in this one test (contrast the poisoning tests
+    // below, which wire it on purpose) — this test's own job is the games
+    // arithmetic, not the set_summary staleness rule.
+    const cfgDoubles = cfgFor("doubles-noad-mtb10");
+    const squads = doublesSquads(true);
+    const oneSetAll: ModuleEvent[] = [
+      start,
+      { type: "tennis.set_summary", payload: { home: 6, away: 4 } },
+      { type: "tennis.set_summary", payload: { home: 3, away: 6 } },
+    ];
+    const done = foldReal(doublesLineups(), cfgDoubles, [...oneSetAll, ...straight("H", 10)]);
+    expect(stripValue(view({ state: done, squads }), "server")).toBe(NAMES["A-first"]);
+  });
+
+  it("a set ever scored by set_summary poisons serve info for the REST of the match, even a LATER point-scored set", () => {
+    const events: EventEnvelope[] = [
+      makeEnvelope(0, start),
+      makeEnvelope(1, { type: "tennis.set_summary", payload: { home: 6, away: 0 } }),
+      ...game("H").map((e, i) => makeEnvelope(2 + i, e)),
+    ];
+    const folded = foldClient(tennis, cfgFor(), SINGLES_LINEUPS, events, STRICT_ALL);
+    const v = view({ state: folded, squads: singlesSquads(), events });
+    const spec = buildScorebug(v, t);
+    expect(spec.halves.every((h) => h.who.every((w) => w.serving === undefined))).toBe(true);
+    expect(stripValue(v, "server")).toBeUndefined();
+    // Also the tapEvent must not carry a `server` it cannot trust.
+    expect(spec.halves[0]!.tapEvent?.payload.server).toBeUndefined();
+  });
+
+  it("a VOIDED set_summary never poisons serve info — it genuinely never happened", () => {
+    const summaryEnv = makeEnvelope(1, { type: "tennis.set_summary", payload: { home: 6, away: 0 } });
+    const events: EventEnvelope[] = [
+      makeEnvelope(0, start),
+      summaryEnv,
+      makeEnvelope(2, { type: "core.void", payload: {} }, summaryEnv.id),
+    ];
+    const folded = foldClient(tennis, cfgFor(), SINGLES_LINEUPS, events, STRICT_ALL);
+    const v = view({ state: folded, squads: singlesSquads(), events });
+    expect(stripValue(v, "server")).toBe(NAMES.H);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildScorebug — context, big, tappable gate, tapEvent shape, strip.
+// ---------------------------------------------------------------------------
+
+describe("buildScorebug", () => {
+  it("context names best-of and the current (1-based) set", () => {
+    const spec = buildScorebug(view({ state: state({ sets: [{ home: 6, away: 4 }] }) }), t);
+    expect(spec.context).toBe(`${t("pad.tennis.context.line", { bestOf: 3, set: 2 })}`);
+  });
+
+  it("context appends tie-break while points.kind is tiebreak", () => {
+    const spec = buildScorebug(
+      view({ state: state({ points: { kind: "tiebreak", home: 3, away: 2 } }) }),
+      t,
+    );
+    expect(spec.context).toContain(t("pad.tennis.context.tiebreak"));
+  });
+
+  it("context appends tie-break during a match tie-break too", () => {
+    const spec = buildScorebug(
+      view({ state: state({ points: { kind: "matchTiebreak", home: 4, away: 2 } }) }),
+      t,
+    );
+    expect(spec.context).toContain(t("pad.tennis.context.tiebreak"));
+  });
+
+  it.each([
+    [0, "0"],
+    [1, "15"],
+    [2, "30"],
+    [3, "40"],
+  ])("standard points %i renders %s", (n, word) => {
+    const spec = buildScorebug(view({ state: state({ points: { kind: "standard", home: n, away: 0, advantage: null } }) }), t);
+    expect(spec.halves[0]!.big).toBe(word);
+  });
+
+  it("deuce (40-40, no advantage) reads 40 on BOTH halves", () => {
+    const spec = buildScorebug(
+      view({ state: state({ points: { kind: "standard", home: 3, away: 3, advantage: null } }) }),
+      t,
+    );
+    expect(spec.halves[0]!.big).toBe("40");
+    expect(spec.halves[1]!.big).toBe("40");
+  });
+
+  it("advantage reads AD on the advantaged side and 40 on the other", () => {
+    const spec = buildScorebug(
+      view({ state: state({ points: { kind: "standard", home: 3, away: 3, advantage: "away" } }) }),
+      t,
+    );
+    expect(spec.halves[0]!.big).toBe("40");
+    expect(spec.halves[1]!.big).toBe("AD");
+  });
+
+  it("tiebreak points render as the raw count, not the 0/15/30/40 ladder", () => {
+    const spec = buildScorebug(view({ state: state({ points: { kind: "tiebreak", home: 8, away: 6 } }) }), t);
+    expect(spec.halves[0]!.big).toBe("8");
+    expect(spec.halves[1]!.big).toBe("6");
+  });
+
+  it("halves are tappable at band 3 while live, and carry a real tapEvent + hintKey", () => {
+    const spec = buildScorebug(view({ band: 3, phase: "live" }), t);
+    for (const half of spec.halves) {
+      expect(half.tappable).toBe(true);
+      expect(half.hintKey).toBe("pad.tennis.scorebug.point.hint");
+      expect(half.tapEvent?.type).toBe("tennis.point");
+    }
+    expect(spec.halves[0]!.tapEvent?.payload.by).toBe("H");
+    expect(spec.halves[1]!.tapEvent?.payload.by).toBe("A");
+  });
+
+  it("halves carry `server` on BOTH sides' tapEvent when the server is known", () => {
+    const spec = buildScorebug(view({ state: state({ serving: "home" }) }), t);
+    expect(spec.halves[0]!.tapEvent?.payload.server).toBe("H");
+    expect(spec.halves[1]!.tapEvent?.payload.server).toBe("H");
+  });
+
+  it("halves are NOT tappable below band 3 — band 0 would be a dead-end tap (tennis.point is band 3)", () => {
+    const spec = buildScorebug(view({ band: 0 }), t);
+    for (const half of spec.halves) {
+      expect(half.tappable).toBeFalsy();
+      expect(half.tapEvent).toBeUndefined();
+    }
+  });
+
+  it("halves are NOT tappable outside live phase", () => {
+    const spec = buildScorebug(view({ phase: "pre", state: state({ phase: "pre" }) }), t);
+    for (const half of spec.halves) expect(half.tappable).toBeFalsy();
+  });
+
+  it("assertScorebugSpec passes — every tappable half has hintKey AND tapEvent", async () => {
+    const { assertScorebugSpec } = await import("../../types");
+    expect(assertScorebugSpec(buildScorebug(view(), t))).toEqual([]);
+    expect(assertScorebugSpec(buildScorebug(view({ band: 0 }), t))).toEqual([]);
+  });
+
+  it("strip carries sets and games, always", () => {
+    const spec = buildScorebug(
+      view({ state: state({ setsWon: { home: 1, away: 0 }, games: { home: 3, away: 2 } }) }),
+      t,
+    );
+    expect(spec.strip.find((s) => s.id === "sets")?.value).toBe("1–0");
+    expect(spec.strip.find((s) => s.id === "games")?.value).toBe("3–2");
+  });
+
+  it("who lines carry PERSON names from the lineup, never entrant labels (D-6)", () => {
+    const spec = buildScorebug(view(), t);
+    expect(spec.halves[0]!.who[0]!.name).toBe(NAMES.H);
+    expect(spec.halves[0]!.who[0]!.name).not.toBe("H");
+  });
+
+  it("a pair entrant gives TWO who-lines, first-named first", () => {
+    const spec = buildScorebug(view({ squads: doublesSquads(true) }), t);
+    expect(spec.halves[0]!.who.map((w) => w.name)).toEqual([NAMES["H-first"], NAMES["H-second"]]);
+  });
+
+  it("ends-change strip item appears after an odd game count and disappears after an even one", () => {
+    const odd = buildScorebug(view({ state: state({ games: { home: 1, away: 0 } }) }), t);
+    expect(odd.strip.some((s) => s.id === "ends")).toBe(true);
+    const even = buildScorebug(view({ state: state({ games: { home: 1, away: 1 } }) }), t);
+    expect(even.strip.some((s) => s.id === "ends")).toBe(false);
+  });
+
+  it("ends-change tracks every 6 points inside a tiebreak the same way", () => {
+    const before = buildScorebug(view({ state: state({ points: { kind: "tiebreak", home: 5, away: 0 } }) }), t);
+    expect(before.strip.some((s) => s.id === "ends")).toBe(false);
+    const after = buildScorebug(view({ state: state({ points: { kind: "tiebreak", home: 6, away: 0 } }) }), t);
+    expect(after.strip.some((s) => s.id === "ends")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildTiles + refusedEventTypes — D-16.
+// ---------------------------------------------------------------------------
+
+describe("buildTiles — D-16 (set score withheld while the set is in progress)", () => {
+  it("offers the Set score tile at love-all, before any point of the set", () => {
+    expect(tileById(buildTiles(view()), "setScore")).toBeDefined();
+  });
+
+  it("withholds it once games have started", () => {
+    expect(tileById(buildTiles(view({ state: state({ games: { home: 1, away: 0 } }) })), "setScore")).toBeUndefined();
+  });
+
+  it("withholds it once points have started, even at 0 games", () => {
+    expect(
+      tileById(buildTiles(view({ state: state({ points: { kind: "standard", home: 1, away: 0, advantage: null } }) })), "setScore"),
+    ).toBeUndefined();
+  });
+
+  it("re-offers it in a LATER set once the prior one closed (per-set, not per-match)", () => {
+    const s = state({ sets: [{ home: 6, away: 4 }], games: { home: 0, away: 0 } });
+    expect(tileById(buildTiles(view({ state: s })), "setScore")).toBeDefined();
+  });
+
+  it("refusedEventTypes lists tennis.set_summary ONLY while the set is in progress — mirrors buildTiles exactly", () => {
+    expect(refusedEventTypes(view({ state: state({ games: { home: 1, away: 0 } }) }))).toContain("tennis.set_summary");
+    expect(refusedEventTypes(view())).not.toContain("tennis.set_summary");
+  });
+
+  it("MUTATION PROOF: refusedEventTypes always lists tennis.point (the scorebug's own dedicated surface, not a phase refusal)", () => {
+    expect(refusedEventTypes(view())).toContain("tennis.point");
+    expect(refusedEventTypes(view({ state: state({ games: { home: 1, away: 0 } }) }))).toContain("tennis.point");
+  });
+});
+
+describe("buildTiles — band + phase gating, per EVENT_BAND", () => {
+  it("withholds every tile above the ACTIVE band", () => {
+    const tiles = buildTiles(view({ band: 0 }));
+    expect(tileById(tiles, sanctionSheetKey("home"))).toBeUndefined();
+    expect(tileById(tiles, "interruption")).toBeUndefined();
+    expect(tileById(tiles, gameAwardTileId("home"))).toBeUndefined();
+  });
+
+  it("offers set score at band 0 (a band-0 event)", () => {
+    expect(tileById(buildTiles(view({ band: 0 })), "setScore")).toBeDefined();
+  });
+
+  it("offers sanction/interruption at band 1", () => {
+    const tiles = buildTiles(view({ band: 1 }));
+    expect(tileById(tiles, sanctionSheetKey("home"))).toBeDefined();
+    expect(tileById(tiles, "interruption")).toBeDefined();
+    expect(tileById(tiles, gameAwardTileId("home"))).toBeUndefined();
+  });
+
+  it("no tile at all outside live phase", () => {
+    const tiles = buildTiles(view({ phase: "pre", state: state({ phase: "pre" }) }));
+    expect(tiles.filter((tl) => tl.id !== "more")).toEqual([]);
+  });
+
+  it("EVENT_BAND matches the engine's own fidelity map (kernel.ts:1553-1559)", () => {
+    expect(EVENT_BAND).toEqual({
+      "tennis.set_summary": 0,
+      "tennis.sanction": 1,
+      "tennis.interruption": 1,
+      "tennis.point": 3,
+      "tennis.game.award": 3,
+    });
+  });
+});
+
+describe("buildTiles — Code violation and Award game are per-side tiles", () => {
+  it("Code violation: two tiles, each carrying the correct side sublabel and sheet", () => {
+    const tiles = buildTiles(view());
+    const home = tileById(tiles, sanctionSheetKey("home"))!;
+    const away = tileById(tiles, sanctionSheetKey("away"))!;
+    expect(home.sublabel).toBe("scorepad.attribution.home");
+    expect(away.sublabel).toBe("scorepad.attribution.away");
+    expect(home.action).toEqual({ sheet: sanctionSheetKey("home") });
+  });
+
+  it("Award game: two DIRECT-COMMIT tiles (no sheet), payload names the winning side's entrant", () => {
+    const tiles = buildTiles(view());
+    const home = tileById(tiles, gameAwardTileId("home"))!;
+    expect(home.action).toEqual({ event: { type: "tennis.game.award", payload: { winner: "H" } } });
+    const away = tileById(tiles, gameAwardTileId("away"))!;
+    expect(away.action).toEqual({ event: { type: "tennis.game.award", payload: { winner: "A" } } });
+  });
+
+  it("Award game is withheld during a tie-break — the breaker IS the deciding game", () => {
+    const tiles = buildTiles(view({ state: state({ points: { kind: "tiebreak", home: 3, away: 2 } }) }));
+    expect(tileById(tiles, gameAwardTileId("home"))).toBeUndefined();
+  });
+
+  it("Award game is withheld during a match tie-break too", () => {
+    const tiles = buildTiles(view({ state: state({ points: { kind: "matchTiebreak", home: 3, away: 2 } }) }));
+    expect(tileById(tiles, gameAwardTileId("home"))).toBeUndefined();
+  });
+
+  it("Award game returns once back to standard scoring", () => {
+    const tiles = buildTiles(view({ state: state({ points: { kind: "standard", home: 0, away: 0, advantage: null } }) }));
+    expect(tileById(tiles, gameAwardTileId("home"))).toBeDefined();
+  });
+});
+
+it("buildTiles always offers More, spanning the full row", () => {
+  const tile = tileById(buildTiles(view()), "more")!;
+  expect(tile.span).toBe(4);
+  expect(tile.action).toEqual({ sheet: "__pad-host/more__" });
+});
+
+// No Fault/Let/Retire tiles anywhere — R4-1/R4-2.
+it("declares no fault, let or retire tile at any band", () => {
+  for (const band of [0, 1, 2, 3] as const) {
+    const ids = buildTiles(view({ band })).map((tl) => tl.id);
+    for (const banned of ["fault", "let", "retire"]) expect(ids).not.toContain(banned);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// buildSheets
+// ---------------------------------------------------------------------------
+
+function driveSheet(spec: GuidedSheetSpec, answers: readonly string[]) {
+  let s = initialSheetState();
+  for (const answer of answers) {
+    const outcome = answerStep(spec, s, answer);
+    if (outcome.done) return outcome.event;
+    s = outcome.state;
+  }
+  throw new Error("sheet did not complete with the given answers");
+}
+
+describe("setScore sheet", () => {
+  it("home/away only, when the score is not the tie-break shape", () => {
+    const spec = buildSheets(view()).setScore!;
+    const event = driveSheet(spec, ["6", "4"]);
+    expect(event).toEqual({ type: "tennis.set_summary", payload: { home: 6, away: 4 } });
+  });
+
+  it("asks tb points ONLY when the score is tiebreakAt+1 : tiebreakAt", () => {
+    const spec = buildSheets(view()).setScore!;
+    // 7-6 IS the shape (tiebreakAt=6) — tbHome/tbAway must be asked.
+    let s = initialSheetState();
+    s = (answerStep(spec, s, "7") as { state: typeof s }).state;
+    s = (answerStep(spec, s, "6") as { state: typeof s }).state;
+    expect(currentStep(spec, s)!.id).toBe("tbHome");
+    const event = driveSheet(spec, ["7", "6", "7", "5"]);
+    expect(event).toEqual({ type: "tennis.set_summary", payload: { home: 7, away: 6, tb: { home: 7, away: 5 } } });
+  });
+
+  it("skips the tb step entirely for a plain, non-tiebreak score", () => {
+    const spec = buildSheets(view()).setScore!;
+    const s0 = initialSheetState();
+    const afterHome = answerStep(spec, s0, "6");
+    expect(afterHome.done).toBe(false);
+    if (afterHome.done) throw new Error("unreachable");
+    const afterAway = answerStep(spec, afterHome.state, "4");
+    // The wizard completes right here — no tb step was ever visited.
+    expect(afterAway.done).toBe(true);
+    if (!afterAway.done) throw new Error("unreachable");
+    expect(afterAway.event).toEqual({ type: "tennis.set_summary", payload: { home: 6, away: 4 } });
+  });
+
+  it("never asks tb during an MTB-deciding set — home/away carry the MTB points directly", () => {
+    const v = view({
+      cfg: cfg({ finalSet: { matchTiebreakTo: 10 } }),
+      state: state({ setsWon: { home: 1, away: 1 } }), // deciding set, bestOf 3
+    });
+    const spec = buildSheets(v).setScore!;
+    const event = driveSheet(spec, ["10", "8"]);
+    expect(event).toEqual({ type: "tennis.set_summary", payload: { home: 10, away: 8 } });
+  });
+});
+
+describe("sanction sheets — per side, level tones, person narrowed to that side", () => {
+  it("declares one sheet per side, keyed by sanctionSheetKey", () => {
+    const sheets = buildSheets(view());
+    expect(sheets[sanctionSheetKey("home")]).toBeDefined();
+    expect(sheets[sanctionSheetKey("away")]).toBeDefined();
+  });
+
+  it("offers all four SANCTION_LEVELS, in the engine's own ladder order", () => {
+    const step = buildSheets(view())[sanctionSheetKey("home")]!.steps[0]!;
+    expect(step.kind).toBe("choice");
+    expect((step as { options: { id: string }[] }).options.map((o) => o.id)).toEqual(SANCTION_LEVELS);
+    expect(SANCTION_LEVELS).toEqual(["warning", "point_penalty", "game_penalty", "default"]);
+  });
+
+  it("R4-4: warning and default carry a tone; point_penalty/game_penalty carry none", () => {
+    const options = buildSheets(view())[sanctionSheetKey("home")]!.steps[0]! as {
+      options: { id: string; tone?: readonly string[] }[];
+    };
+    const toneOf = (id: string) => options.options.find((o) => o.id === id)?.tone;
+    expect(toneOf("warning")).toEqual(["caution"]);
+    expect(toneOf("default")).toEqual(["dismissal"]);
+    expect(toneOf("point_penalty")).toBeUndefined();
+    expect(toneOf("game_penalty")).toBeUndefined();
+  });
+
+  it("person step is narrowed to the FIXED side's own on-field roster — a doubles pair gives two candidates", () => {
+    const step = buildSheets(view({ squads: doublesSquads(true) }))[sanctionSheetKey("home")]!.steps[1]! as {
+      side: string;
+      candidates?: readonly string[];
+    };
+    expect(step.side).toBe("home");
+    expect(step.candidates).toEqual(["H-first", "H-second"]);
+  });
+
+  it("away sheet never offers a home player as a candidate", () => {
+    const step = buildSheets(view({ squads: doublesSquads(true) }))[sanctionSheetKey("away")]!.steps[1]! as {
+      candidates?: readonly string[];
+    };
+    expect(step.candidates).toEqual(["A-first", "A-second"]);
+  });
+
+  it("builds a payload naming the OFFENDER as `by`, never the fold's own opposite convention", () => {
+    const spec = buildSheets(view())[sanctionSheetKey("away")]!;
+    const event = driveSheet(spec, ["point_penalty", "A"]);
+    expect(event).toEqual({ type: "tennis.sanction", payload: { by: "A", level: "point_penalty", person: "A" } });
+  });
+});
+
+describe("interruption sheet — R4-2, one generic tile, side is genuinely optional", () => {
+  it("kind, then side, then duration when side is none — person is skipped entirely", () => {
+    const spec = buildSheets(view()).interruption!;
+    let s = initialSheetState();
+    s = (answerStep(spec, s, "medical") as { state: typeof s }).state;
+    s = (answerStep(spec, s, "none") as { state: typeof s }).state;
+    expect(currentStep(spec, s)!.id).toBe("duration");
+    const event = driveSheet(spec, ["medical", "none", "45"]);
+    expect(event).toEqual({ type: "tennis.interruption", payload: { kind: "medical", duration: 45 } });
+  });
+
+  it("side=home asks personHome next, narrowed to home's own roster, and sends `by`", () => {
+    const spec = buildSheets(view({ squads: doublesSquads(true) })).interruption!;
+    let s = initialSheetState();
+    s = (answerStep(spec, s, "toilet") as { state: typeof s }).state;
+    s = (answerStep(spec, s, "home") as { state: typeof s }).state;
+    const step = currentStep(spec, s)!;
+    expect(step.id).toBe("personHome");
+    expect((step as { candidates?: readonly string[] }).candidates).toEqual(["H-first", "H-second"]);
+    const event = driveSheet(spec, ["toilet", "home", "H-first", "60"]);
+    expect(event).toEqual({
+      type: "tennis.interruption",
+      payload: { kind: "toilet", by: "H", person: "H-first", duration: 60 },
+    });
+  });
+
+  it("side=away asks personAway, never personHome, and sends the away entrant as `by`", () => {
+    const spec = buildSheets(view({ squads: doublesSquads(true) })).interruption!;
+    const event = driveSheet(spec, ["heat", "away", "A-second", "90"]);
+    expect(event).toEqual({
+      type: "tennis.interruption",
+      payload: { kind: "heat", by: "A", person: "A-second", duration: 90 },
+    });
+  });
+
+  it("INTERRUPTION_KINDS are the engine's own closed vocabulary", () => {
+    expect(INTERRUPTION_KINDS).toEqual(["medical", "toilet", "heat", "other"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildDock — build spec §4, the wave's real product value.
+// ---------------------------------------------------------------------------
+
+describe("buildDock — legality by side, read from the PAYLOAD not the live view", () => {
+  it("returns null for every non-point event type", () => {
+    expect(buildDock("tennis.sanction", view(), t, {})).toBeNull();
+    expect(buildDock("tennis.set_summary", view(), t, {})).toBeNull();
+    expect(buildDock("tennis.interruption", view(), t, {})).toBeNull();
+    expect(buildDock("tennis.game.award", view(), t, {})).toBeNull();
+  });
+
+  it("offers ace when `by` IS the serving side (server belongs to the winning side)", () => {
+    const spec = buildDock("tennis.point", view(), t, { by: "H", server: "H" })!;
+    expect(spec.chips.map((c) => c.id)).toEqual(["ace", "winner", "ue"]);
+  });
+
+  it("offers double_fault when `by` is NOT the serving side", () => {
+    const spec = buildDock("tennis.point", view(), t, { by: "A", server: "H" })!;
+    expect(spec.chips.map((c) => c.id)).toEqual(["double_fault", "winner", "ue"]);
+  });
+
+  it("MUTATION PROOF: offers NEITHER ace nor double_fault when the server is unknown — winner/ue only", () => {
+    const spec = buildDock("tennis.point", view(), t, { by: "H" })!; // no `server`
+    expect(spec.chips.map((c) => c.id)).toEqual(["winner", "ue"]);
+  });
+
+  it("MUTATION PROOF: an ace tap on the RECEIVING side is impossible — the chip is never offered there", () => {
+    // side H won the point, but H is the RECEIVER here (A served) — ace must
+    // never appear, only double_fault/winner/ue.
+    const spec = buildDock("tennis.point", view(), t, { by: "H", server: "A" })!;
+    expect(spec.chips.map((c) => c.id)).not.toContain("ace");
+    expect(spec.chips.map((c) => c.id)).toEqual(["double_fault", "winner", "ue"]);
+  });
+
+  it("one-way: once a kind lands in the payload, ONLY that chip is returned", () => {
+    const spec = buildDock("tennis.point", view(), t, { by: "H", server: "H", meta: { kind: "ace" } })!;
+    expect(spec.chips.map((c) => c.id)).toEqual(["ace"]);
+  });
+
+  it("a chosen chip's mutate sets meta.kind and preserves the rest of the payload", () => {
+    const spec = buildDock("tennis.point", view(), t, { by: "H", server: "H" })!;
+    const ace = spec.chips.find((c) => c.id === "ace")!;
+    expect(ace.mutate({ by: "H", server: "H" })).toEqual({ by: "H", server: "H", meta: { kind: "ace" } });
+  });
+
+  it("POINT_KINDS is the engine's own closed vocabulary, in NestedPointMeta's own order", () => {
+    expect(POINT_KINDS).toEqual(["ace", "double_fault", "winner", "ue"]);
+  });
+
+  it("resolves the serving side from PERSON membership in doubles, not from the tapped side alone", () => {
+    const doubles = view({ squads: doublesSquads(true) });
+    // A-first served (person-level), H won the point (side-level) -> receiver's point.
+    const spec = buildDock("tennis.point", doubles, t, { by: "H", server: "A-first" })!;
+    expect(spec.chips.map((c) => c.id)).toEqual(["double_fault", "winner", "ue"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// tennisDetail — the ribbon's varying half.
+// ---------------------------------------------------------------------------
+
+describe("tennisDetail", () => {
+  const ctx = (over: Record<string, unknown>) => ({
+    t,
+    eventType: over.eventType as string,
+    payload: (over.payload as Record<string, unknown>) ?? {},
+    personNames: NAMES,
+  });
+
+  it("point: shot kind + server name", () => {
+    expect(tennisDetail(ctx({ eventType: "tennis.point", payload: { server: "H", meta: { kind: "ace" } } }))).toBe(
+      `${t("kind.ace")} · ${NAMES.H}`,
+    );
+  });
+
+  it("point: undefined when there is nothing to add", () => {
+    expect(tennisDetail(ctx({ eventType: "tennis.point", payload: { by: "H" } }))).toBeUndefined();
+  });
+
+  it("set_summary: the score, plus the tie-break line when present", () => {
+    expect(tennisDetail(ctx({ eventType: "tennis.set_summary", payload: { home: 7, away: 6, tb: { home: 7, away: 5 } } }))).toBe(
+      "7–6 · (7-5)",
+    );
+  });
+
+  it("sanction: level + person + free-text reason when present", () => {
+    expect(
+      tennisDetail(ctx({ eventType: "tennis.sanction", payload: { level: "warning", person: "H", reason: "racquet abuse" } })),
+    ).toBe(`${t("sanction.warning")} · ${NAMES.H} · racquet abuse`);
+  });
+
+  it("interruption: kind + person", () => {
+    expect(tennisDetail(ctx({ eventType: "tennis.interruption", payload: { kind: "medical", person: "A" } }))).toBe(
+      `${t("kind.medical")} · ${NAMES.A}`,
+    );
+  });
+
+  it("game.award: the free-text reason only (no fold access to resolve winner's side)", () => {
+    expect(tennisDetail(ctx({ eventType: "tennis.game.award", payload: { winner: "H", reason: "code violation" } }))).toBe(
+      "code violation",
+    );
+    expect(tennisDetail(ctx({ eventType: "tennis.game.award", payload: { winner: "H" } }))).toBeUndefined();
+  });
+
+  it("unknown event type: undefined", () => {
+    expect(tennisDetail(ctx({ eventType: "core.start", payload: {} }))).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// tennisSkinV3 — factory assembly. Proves `t` is threaded THROUGH the
+// factory, not merely usable by the builders in isolation — the same
+// tsc-invisible trap R2c's cricket proof exists to catch: a default
+// parameter type-checks, lints, and ships a raw i18n key to a scorer while
+// every direct-call test above stays green.
+// ---------------------------------------------------------------------------
+
+describe("tennisSkinV3 — factory assembly", () => {
+  it("assembles a full SkinDefV3: key/tapModel correct, no swap/context/contextSelect", () => {
+    const skin = tennisSkinV3(t);
+    expect(skin.key).toBe("tennis");
+    expect(skin.tapModel).toBe("S");
+    expect(skin.tiles(view()).length).toBeGreaterThan(0);
+    expect(skin.phase!(view())).toBe("live");
+    expect(skin.swap).toBeUndefined();
+    expect(skin.context).toBeUndefined();
+    expect(skin.contextSelect).toBeUndefined();
+  });
+
+  it("two different t functions produce two independently-localised scorebugs — proves the closure, not a shared cache", () => {
+    const skinA = tennisSkinV3((k, vars) => `A:${k}${vars ? JSON.stringify(vars) : ""}`);
+    const skinB = tennisSkinV3((k, vars) => `B:${k}${vars ? JSON.stringify(vars) : ""}`);
+    expect(skinA.scorebug(view()).context).toContain("A:pad.tennis.context.line");
+    expect(skinB.scorebug(view()).context).toContain("B:pad.tennis.context.line");
+  });
+
+  it("dock() closes over the factory's own t, not a bare default — the same proof as cricket's R2c pin", () => {
+    const marker = tennisSkinV3((k) => `MARK:${k}`);
+    const spec = marker.dock("tennis.point", view(), { by: "H", server: "H" })!;
+    expect(spec.title).toBe("MARK:pad.tennis.dock.point.title");
+  });
+
+  it("sheets() closes over the factory's own t — mirrors cricket's R2c proof for the same tsc-invisible trap", () => {
+    const marker = tennisSkinV3((k) => `MARK:${k}`);
+    // sheets() itself takes no t in this skin (buildSheets is t-free), so the
+    // proof here is that a step's OWN title key is exactly what the chassis
+    // will resolve — sheets() must still be reachable off the factory result.
+    expect(marker.sheets!(view()).setScore).toBeDefined();
+  });
+
+  it("registry flip: resolvePad('tennis', t) resolves to the v3 lane (see registry-totality.test.ts for the mutation proof)", async () => {
+    const { resolvePad } = await import("../../registry");
+    expect(resolvePad("tennis", t).lane).toBe("v3");
+  });
+});

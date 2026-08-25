@@ -17,6 +17,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { V3_SKINS, LEGACY_SPORTS, resolvePad, type PadLaneResolution } from "../registry";
 import { cricketSkinV3 } from "../skins/cricket";
 import { footballSkinV3 } from "../skins/football";
+import { tennisSkinV3 } from "../skins/tennis";
 
 // A dummy, no-op translator. Every test in this file cares only about LANE
 // resolution (v3 vs legacy vs throw) or the TYPE shape of what V3_SKINS/
@@ -80,12 +81,21 @@ describe("registry totality", () => {
     expect(resolvePad("football", T).lane).toBe("v3");
   });
 
-  it("every other builtinModules sport still resolves to legacy — the flips touch cricket and football alone", () => {
-    const converted = new Set(["cricket", "football"]);
+  // R4/tennis — this wave's own deliverable, pinned independently of the
+  // structural sweep above for the same reason cricket's and football's own
+  // pins state: that sweep only proves resolvePad AGREES with V3_SKINS/
+  // LEGACY_SPORTS' membership, whatever it happens to say, so a task that
+  // shipped without actually flipping tennis would keep it green.
+  it("tennis specifically resolves to the v3 lane, not legacy — this wave's own flip", () => {
+    expect(resolvePad("tennis", T).lane).toBe("v3");
+  });
+
+  it("every other builtinModules sport still resolves to legacy — the flips touch cricket, football and tennis alone", () => {
+    const converted = new Set(["cricket", "football", "tennis"]);
     const others = builtinModules.map((m) => m.key).filter((key) => !converted.has(key));
     // Pins today's known-good shape, same convention registry.test.tsx's own
     // "the table names exactly the 11 shipped sports" assertion uses.
-    expect(others.length).toBe(9);
+    expect(others.length).toBe(8);
     for (const key of others) {
       expect(resolvePad(key, T).lane, key).toBe("legacy");
     }
@@ -104,9 +114,10 @@ describe("registry totality", () => {
 // ---------------------------------------------------------------------------
 describe("type-level: an un-called v3 skin factory cannot stand in for a resolved skin (R2/task E)", () => {
   it("V3_SKINS holds FACTORIES — the correct shape compiles clean", () => {
-    const ok: typeof V3_SKINS = { cricket: cricketSkinV3, football: footballSkinV3 };
+    const ok: typeof V3_SKINS = { cricket: cricketSkinV3, football: footballSkinV3, tennis: tennisSkinV3 };
     expect(typeof ok.cricket).toBe("function");
     expect(typeof ok.football).toBe("function");
+    expect(typeof ok.tennis).toBe("function");
   });
 
   it("an ALREADY-CALLED skin is not a valid V3_SKINS entry", () => {
