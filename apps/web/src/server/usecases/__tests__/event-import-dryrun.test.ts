@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { importEvents, IMPORT_CAPS } from "../event-import";
-import { seedOrg, startedDivisionWithFixture, setupDivisionWithFixture } from "./_rig";
+import {
+  seedOrg,
+  startedDivisionWithFixture,
+  setupDivisionWithFixture,
+  startedCricketDivisionWithFixture,
+} from "./_rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -101,5 +106,24 @@ describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
       streams: [{ fixture: { id: fixtureId }, events: [{ type: "core.start", payload: {} }] }],
     });
     expect(report.results[0]!.error?.code).toBe("import.slots_unfilled");
+  });
+
+  // Task 5 addition (review finding #5(d), carried over from Tasks 3+4's
+  // report): `generic` tops out at fidelity tier 1 and can never require an
+  // entitlement, so this needs the cricket rig — see
+  // startedCricketDivisionWithFixture's own doc comment in _rig.ts for why
+  // `cricket.ball` / `scoring.ball_by_ball` is the pairing that reaches it.
+  it("rejects a tier-3 event when the org lacks the entitlement (import.entitlement)", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedCricketDivisionWithFixture(auth);
+
+    const report = await importEvents(auth, divisionId, {
+      import_id: "imp-entitlement",
+      streams: [{ fixture: { id: fixtureId }, events: [{ type: "cricket.ball", payload: {} }] }],
+    });
+    expect(report.results[0]!.error).toMatchObject({
+      code: "import.entitlement",
+      feature: "scoring.ball_by_ball",
+    });
   });
 });

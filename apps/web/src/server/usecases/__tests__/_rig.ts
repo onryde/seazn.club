@@ -3,6 +3,7 @@
 // to build the tournament) so every P11 task's tests share one builder
 // instead of re-deriving it.
 import { randomUUID } from "node:crypto";
+import { cricket } from "@seazn/engine/sports/cricket";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -158,4 +159,62 @@ export function decidingStream(): Array<{ type: string; payload: Record<string, 
     { type: "generic.result", payload: { p1Score: 3, p2Score: 1 } },
     { type: "core.finalize", payload: {} },
   ];
+}
+
+/**
+ * Task 5 addition (review finding #5(d)) — additive to everything above, not
+ * a replacement: every existing export here keeps its exact prior
+ * behaviour, since six other test files depend on this rig staying put.
+ *
+ * The `generic` module (`decidingStream`, `startedDivisionWithFixture`, …)
+ * tops out at fidelity tier 1, and `requiredFeatureForEvent` treats tier ≤ 1
+ * as always-free (fidelity.ts:32) — so nothing built from `generic` can ever
+ * require an entitlement, and `import.entitlement` has no rig to test
+ * against without one. Cricket declares a real tier 3
+ * (`packages/engine/src/sports/cricket/cricket.ts:3348+`): `cricket.ball` /
+ * `cricket.superover.ball` / `cricket.retire` require `scoring.ball_by_ball`,
+ * which `community` (the plan every P11 rig org resolves to, having no
+ * subscription row) denies by default (V112__entitlements_v2.sql:48).
+ *
+ * Seeded the same way `entitlements-v2.test.ts` already does (real
+ * precedent, not a new pattern): `cricket.version`/`cricket.positions` for
+ * the sports-catalog row, `cricket.variants.t20` for the variant. `team`
+ * entrants — cricket rejects individual entrants at the write path.
+ */
+async function seedCricketCatalog(): Promise<void> {
+  await sql`
+    insert into sports (key, name, module_version, position_catalog)
+    values ('cricket', 'Cricket', ${cricket.version}, ${sql.json(cricket.positions as never)})
+    on conflict (key) do nothing`;
+  await sql`
+    insert into sport_variants (sport_key, key, name, config, is_system)
+    values ('cricket', 't20', 'T20', ${sql.json(cricket.variants.t20 as never)}, true)
+    on conflict do nothing`;
+}
+
+/** A started cricket division with one fixture and two team entrants — the
+ *  minimal shape `import.entitlement` needs (a fixture past the unassigned-
+ *  entrant guard, so `runStream` actually reaches the entitlement check). No
+ *  lineups are seeded: the entitlement check (design doc §4 step 3) runs
+ *  BEFORE the dry-run fold that would need them, so a stream that never
+ *  reaches the fold does not need one either. */
+export async function startedCricketDivisionWithFixture(
+  auth: AuthCtx,
+): Promise<{ divisionId: string; fixtureId: string }> {
+  await seedCricketCatalog();
+  const competition = await createCompetition(auth, {
+    ends_on: "2030-12-31", name: "Import Cricket Cup " + randomUUID().slice(0, 6),
+    visibility: "public", branding: {},
+  });
+  const division = await createDivision(auth, competition.id, {
+    name: "Open", sport_key: "cricket", variant_key: "t20", config: {}, eligibility: [],
+  });
+  await createEntrants(auth, division.id, [
+    { kind: "team" as const, display_name: "A", seed: 1, members: [] },
+    { kind: "team" as const, display_name: "B", seed: 2, members: [] },
+  ]);
+  const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L1", config: {} });
+  const { fixtures } = await generateStageFixtures(auth, stage.id);
+  await startDivision(auth, division.id);
+  return { divisionId: division.id, fixtureId: fixtures[0]!.id };
 }
