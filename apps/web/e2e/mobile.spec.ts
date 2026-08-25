@@ -829,6 +829,226 @@ test("cricket v3 pad: tiles + over-summary sheet + context strip hold the 44px f
 });
 
 /**
+ * T17 — the ScoringPad v3 tennis pad (R4/tennis) at all SEVEN width
+ * projects (320/360/375/390/430/768/834), same "add it above the z3 test"
+ * placement T16's own comment describes, and the same reason: a new v3
+ * render surface gets no width coverage anywhere else — this file's seven
+ * projects are the only place anything narrower than 375/768 ever runs.
+ *
+ * Tennis is the first tapModel-S sport (v3/skins/tennis.tsx): the
+ * scoreboard HALF itself is the point button (`ScorebugHalf.tappable`/
+ * `tapEvent`), not a tile — so the control this file must prove fits and
+ * is safe to tap is the scorebug half, not a `data-tile-id`.
+ * `scorepad-v3-tennis.spec.ts` already proves the pad's full functional
+ * surface (deuce/advantage, dock legality by serve side, the doubles
+ * serve pip, D-16) at desktop; this file's job is narrower and different —
+ * does that SAME control still render, fit, and clear the 44px
+ * tap-target floor once the viewport drops to 320px, which nothing
+ * anywhere else checks.
+ *
+ * A half renders EITHER a real `<button>` (tappable — live, band>=3) or a
+ * plain, click-inert `<div>` at the identical grid position (`buildHalf`,
+ * v3/skins/tennis.tsx). The fixture below is seeded already-started
+ * (`emitCoreStart: true`), so the only fold race left is the server's
+ * response against the client's first render — and the locator is scoped
+ * to `button` specifically (the fix in commit 8a50b48d7, the same
+ * `tennisHalf` shape `scorepad-v3-tennis.spec.ts` uses), so Playwright's
+ * ordinary actionability wait closes that race instead of resolving to the
+ * still-present pre-fold `<div>` and reading a stale, empty box.
+ *
+ * The floor is measured from `boundingBox()`, never inferred from the
+ * `minHeight: 44` inline style scorebug.tsx declares on the button — the
+ * Scorebug's own root card is `overflow-hidden`, the exact shape that has
+ * silently clipped a declared floor back down elsewhere in this chassis
+ * (tile-grid's 2px `::before` bleed). Checked BEFORE either half is
+ * tapped, since the tap itself is what the floor is proving is safe.
+ *
+ * "Live and populated" is asserted on the SEEDED players' own names, not
+ * merely "a button exists" — a board that rendered but is still showing
+ * stale or placeholder content would pass a presence-only check for the
+ * wrong reason. The card's own `overflow-hidden` also means a name could
+ * be silently clipped without ever producing page-level horizontal
+ * scroll, so this checks the card's own content width too, not just the
+ * page's.
+ *
+ * Doubles (second test below) is layout-only, deliberately: TWO names per
+ * half (`buildHalf`'s `who` — one WhoLine per on-field player) is the
+ * shape most likely to overflow or clip at 320px, so it gets its own
+ * floor/populated/no-scroll pass, but not a repeat of the full score/dock
+ * flow — `scorepad-v3-tennis.spec.ts` already proves that functionally,
+ * and repeating it here would roughly double this test's per-width
+ * runtime for no additional WIDTH signal. Left uncovered by that scope
+ * choice: a doubles-specific dock render defect (the pair-narrowing
+ * second question) at a narrow viewport — real, but a different and
+ * larger test than a coverage-gap fix belongs doing in one pass.
+ */
+test("tennis v3 pad (singles): the scoreboard half holds the 44px floor, live and populated, no horizontal scroll", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(90_000);
+  const homeName = `Mobile V3 Tennis Home ${TAG}-${projectTag()}`;
+  const awayName = `Mobile V3 Tennis Away ${TAG}-${projectTag()}`;
+  const fx = await seedRosteredFixture(request, {
+    label: `Mobile Tennis V3 ${TAG}-${projectTag()}`,
+    sportKey: "tennis",
+    variantKey: "tour",
+    entrantKind: "individual",
+    home: [{ fullName: homeName }],
+    away: [{ fullName: awayName }],
+    emitCoreStart: true,
+  });
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  const pad = page.getByTestId("score-pad");
+  await expect(pad).toBeVisible({ timeout: 20_000 });
+
+  // Positional, home first (scorebug.tsx's render order) — a tappable
+  // half's accessible name is the PLAYER'S OWN name plus hint text, not a
+  // fixed string this file could match on (same reasoning
+  // scorepad-v3-tennis.spec.ts's own `tennisHalf` gives).
+  const halves = pad.locator('[data-role="v3-scorebug"] .grid > button');
+  const homeHalf = halves.nth(0);
+  const awayHalf = halves.nth(1);
+
+  const assertFloor = async (locator: Locator, label: string) => {
+    await expect(locator, `${label} not visible — board never reached live/band-3`).toBeVisible({
+      timeout: 20_000,
+    });
+    const box = await locator.boundingBox();
+    expect(box, `${label} has no box`).not.toBeNull();
+    expect(box!.height, `${label} touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
+  };
+
+  // The floor, BEFORE tapping either half — the tap itself is what this
+  // assertion is proving is safe (same ordering T16's cricket test uses).
+  await assertFloor(homeHalf, "home scoreboard half");
+  await assertFloor(awayHalf, "away scoreboard half");
+
+  // LIVE AND POPULATED: the real seeded names, not a pre-phase board with
+  // nothing on it.
+  await expect(homeHalf, "home half must show the real seeded player").toContainText(homeName);
+  await expect(awayHalf, "away half must show the real seeded player").toContainText(awayName);
+
+  // The scorebug card is `overflow-hidden`, so a clipped name would not
+  // necessarily show up as page-level horizontal scroll — checked here as
+  // its own signal, not folded into `expectNoHorizontalScroll` below.
+  const clippedBeforeTap = await page.evaluate(() => {
+    const root = document.querySelector<HTMLElement>('[data-role="v3-scorebug"]');
+    if (!root) return ["the scorebug was not in the DOM"];
+    const suspects: HTMLElement[] = [root, ...Array.from(root.querySelectorAll<HTMLElement>("button,div,span"))];
+    return suspects
+      .filter((el) => el.scrollWidth - el.clientWidth > 1)
+      .map((el) => `${el.tagName.toLowerCase()} ${el.scrollWidth}px content in ${el.clientWidth}px`);
+  });
+  expect(clippedBeforeTap, "scorebug content is clipped at this width").toEqual([]);
+  await expectNoHorizontalScroll(page);
+
+  // Prove the target is not just big enough but a REAL, wired control:
+  // tap it, resolve the point dock (singles still asks "how was the point
+  // won" — R4-5's auto-stamp only skips the SECOND, scorer question), and
+  // confirm the point actually reaches the ledger. "Winner" is legal
+  // regardless of which side is serving (scorepad-v3-tennis.spec.ts's own
+  // dock test), so it holds whichever half a thumb lands on first.
+  await homeHalf.click();
+  const dock = pad.locator('[data-role="v3-dock"]');
+  await expect(dock, "tapping the half must open the point dock").toBeVisible({ timeout: 10_000 });
+  await expect(dock).toContainText("How was the point won?");
+  await dock.getByRole("button", { name: "Winner", exact: true }).click();
+  // One-way collapse (build spec §4): the alternatives must leave once a
+  // kind lands — same proof T16 and the sibling functional spec both give
+  // that this dock re-render is real, not merely unit-tested.
+  await expect(
+    dock.getByRole("button", { name: "Ace", exact: true }),
+    "once a kind lands, the dock must show ONLY that chip",
+  ).toHaveCount(0);
+  await dock.getByRole("button", { name: "Send now", exact: true }).click();
+  await expect
+    .poll(
+      async () => {
+        const res = await apiJson<{ type: string }[]>(
+          page.request,
+          `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`,
+        );
+        return (res.data ?? []).filter((e) => e.type === "tennis.point").length;
+      },
+      { timeout: 20_000, message: "a tap on the scoreboard half must reach the ledger as a tennis.point" },
+    )
+    .toBe(1);
+
+  await expectNoHorizontalScroll(page);
+});
+
+/**
+ * T17b — tennis doubles: TWO names per half, the layout most likely to
+ * overflow or clip at 320px. See T17's own header above for the shared
+ * reasoning (fold race, `boundingBox()` over the inline style, why this is
+ * layout-only rather than a repeat of the full dock flow).
+ */
+test("tennis v3 pad (doubles): both partners' names hold the 44px floor and fit inside the half, no horizontal scroll", async ({
+  page,
+  request,
+}) => {
+  const home1 = `Mobile V3 Tennis D Home1 ${TAG}-${projectTag()}`;
+  const home2 = `Mobile V3 Tennis D Home2 ${TAG}-${projectTag()}`;
+  const away1 = `Mobile V3 Tennis D Away1 ${TAG}-${projectTag()}`;
+  const away2 = `Mobile V3 Tennis D Away2 ${TAG}-${projectTag()}`;
+  const fx = await seedRosteredFixture(request, {
+    label: `Mobile Tennis V3 Doubles ${TAG}-${projectTag()}`,
+    sportKey: "tennis",
+    variantKey: "doubles-noad-mtb10",
+    entrantKind: "pair",
+    home: [
+      { fullName: home1, pairOrder: 1 },
+      { fullName: home2, pairOrder: 2 },
+    ],
+    away: [
+      { fullName: away1, pairOrder: 1 },
+      { fullName: away2, pairOrder: 2 },
+    ],
+    emitCoreStart: true,
+  });
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  const pad = page.getByTestId("score-pad");
+  await expect(pad).toBeVisible({ timeout: 20_000 });
+
+  const halves = pad.locator('[data-role="v3-scorebug"] .grid > button');
+  const homeHalf = halves.nth(0);
+  const awayHalf = halves.nth(1);
+
+  const assertFloor = async (locator: Locator, label: string) => {
+    await expect(locator, `${label} not visible — board never reached live/band-3`).toBeVisible({
+      timeout: 20_000,
+    });
+    const box = await locator.boundingBox();
+    expect(box, `${label} has no box`).not.toBeNull();
+    expect(box!.height, `${label} touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
+  };
+  await assertFloor(homeHalf, "home scoreboard half (doubles)");
+  await assertFloor(awayHalf, "away scoreboard half (doubles)");
+
+  // Both partners, not just the first — a half that silently dropped or
+  // clipped its second name would still pass a single-name check.
+  await expect(homeHalf, "home half must show BOTH partners").toContainText(home1);
+  await expect(homeHalf, "home half must show BOTH partners").toContainText(home2);
+  await expect(awayHalf, "away half must show BOTH partners").toContainText(away1);
+  await expect(awayHalf, "away half must show BOTH partners").toContainText(away2);
+
+  const clipped = await page.evaluate(() => {
+    const root = document.querySelector<HTMLElement>('[data-role="v3-scorebug"]');
+    if (!root) return ["the scorebug was not in the DOM"];
+    const suspects: HTMLElement[] = [root, ...Array.from(root.querySelectorAll<HTMLElement>("button,div,span"))];
+    return suspects
+      .filter((el) => el.scrollWidth - el.clientWidth > 1)
+      .map((el) => `${el.tagName.toLowerCase()} ${el.scrollWidth}px content in ${el.clientWidth}px`);
+  });
+  expect(clipped, "doubles scoreboard content is clipped at this width").toEqual([]);
+
+  await expectNoHorizontalScroll(page);
+});
+
+/**
  * T15 — the z3 solver action bar and its result strip at phone width.
  *
  * THIS TEST CANNOT LIVE IN `auto-schedule.spec.ts`. The `mobile-se`
