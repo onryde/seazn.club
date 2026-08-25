@@ -931,6 +931,48 @@ function sideOfPerson(squads: SquadState, personId: string): Side | null {
   return null;
 }
 
+/**
+ * Defect 1 fix (code review, 2026-08-25). A lineup-less fixture (`buildHalf`'s
+ * own `players.length > 0` fallback and `v6-sports.spec.ts`'s comment both
+ * acknowledge this is a common, legitimate state) can never name a SERVER
+ * PERSON, so `payload.server` below is always absent there — but the serving
+ * SIDE is not similarly unknowable: `serveContext.side` (`kernel.ts:511-518`)
+ * is `state.serving` directly, entirely independent of roster, and side is
+ * all the ace-vs-double-fault legality rule needs (an ace is won BY the
+ * serving side, a double fault by the receiving one). `buildHalf` has no
+ * wire-safe way to carry that side fact forward for `buildDock` to read back
+ * — `NestedPoint` is a `z.strictObject` (`by`/`server`/`scorer`/`meta` only,
+ * kernel.ts:223-228) parsed the instant the optimistic fold applies the tap,
+ * so a new field would throw right there, before this dock ever renders —
+ * so this fix lives entirely on the READ side, re-deriving the SIDE ONLY
+ * (never a person) fresh off `view.state`.
+ *
+ * Gated to the TRUE no-roster case only: `onFieldPlayers` empty for the
+ * (re-derived) serving side. An undeclared DOUBLES rotation — a real roster,
+ * just no fixed order — is a different, pre-existing "unknown server" case
+ * this deliberately leaves withheld, exactly as before (`buildDock`'s own
+ * doc above).
+ *
+ * Safe only when this exact point did not just END a game/tiebreak/set:
+ * `winGame`/`bankSet` (kernel.ts:791-825/752-789) rotate `state.serving` AND
+ * reset `state.points` to a fresh (0, 0) TOGETHER on every exit path of both
+ * functions (checked exhaustively) — so a (0, 0) readout immediately after a
+ * point was just applied can only mean THIS point closed the game, and
+ * `state.serving` has therefore already rotated past what was true when the
+ * point was actually contested. Recomputing there would not merely be
+ * imprecise, it would be WRONG both ways (a held-serve winner reads back as
+ * the new receiver, a broken-serve winner reads back as the new server), so
+ * that one boundary point stays a safe omission — the same omission an
+ * unresolved doubles order already gets — while every other point on a
+ * lineup-less fixture is now correctly gated.
+ */
+function rosterlessServerSide(view: PadHostView, state: TennisStateShape): Side | null {
+  if (hasStaleServeInfo(view)) return null;
+  if ((state.points?.home ?? 0) === 0 && (state.points?.away ?? 0) === 0) return null;
+  const ctx = deriveServeContext(state, view.squads);
+  return onFieldPlayers(view.squads, ctx.side).length === 0 ? ctx.side : null;
+}
+
 function pointKindChip(kind: string): DockChip {
   return {
     id: kind,
@@ -1028,11 +1070,17 @@ export function buildDock(
 
   // Legality by SIDE, read from the PAYLOAD — by the time the dock renders,
   // the optimistic fold has already advanced past this point, so `view.state`
-  // cannot answer "who served THIS point" any more. An ace is the SERVER's
-  // point; a double fault is the RECEIVER's. Neither is offered when the
-  // server is unknown (an undeclared doubles order, or a match with any
-  // history of coarse set-scoring) — winner/ue stay available regardless.
-  const serverSide = server !== undefined ? sideOfPerson(view.squads, server) : null;
+  // cannot answer "who served THIS point" any more, in general. An ace is the
+  // SERVER's point; a double fault is the RECEIVER's. Neither is offered when
+  // the server is unknown from an undeclared doubles order, or a match with
+  // any history of coarse set-scoring — winner/ue stay available regardless.
+  //
+  // `rosterlessServerSide` (defect 1 fix, own doc above) is the ONE exception:
+  // a lineup-less fixture can still be gated by SIDE, safely re-derived from
+  // `view.state`, because there is no PERSON-level rotation for it to ever
+  // desynchronise from in the first place.
+  const serverSide =
+    server !== undefined ? sideOfPerson(view.squads, server) : rosterlessServerSide(view, state);
   const chips: DockChip[] = [];
   if (side !== null && serverSide !== null) {
     if (side === serverSide) chips.push(pointKindChip("ace"));

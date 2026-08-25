@@ -66,6 +66,20 @@ function singlesSquads(): SquadState {
   });
 }
 
+/** Defect 1/2 fixture (code review, 2026-08-25): a fixture created from
+ *  display-name-only entrants — no team sheet at all, either side. This is a
+ *  common, legitimate state (`buildHalf`'s own `players.length > 0` fallback
+ *  and `v6-sports.spec.ts`'s comment both acknowledge it), NOT the doubles
+ *  "populated roster, undeclared order" shape `doublesSquads(false)` already
+ *  covers — the two must stay distinguishable in tests, since only THIS one
+ *  is in scope for the fix. */
+function emptySquads(): SquadState {
+  return initSquads({
+    home: { entrantId: "H", slots: [] },
+    away: { entrantId: "A", slots: [] },
+  });
+}
+
 /** Matches `serve-context.test.ts`'s own `pairSide()` fixture byte for byte:
  *  `orderNo` runs the OTHER way from `pairOrder`, so a reader that quietly
  *  used `orderNo` instead answers with the wrong player. */
@@ -947,6 +961,83 @@ describe("buildDock — legality by side, read from the PAYLOAD not the live vie
     // A-first served (person-level), H won the point (side-level) -> receiver's point.
     const spec = buildDock("tennis.point", doubles, t, { by: "H", server: "A-first" })!;
     expect(spec.chips.map((c) => c.id)).toEqual(["double_fault", "winner", "ue"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildDock — defect 1 fix (code review, 2026-08-25): a lineup-less fixture
+// can never name a SERVER PERSON, but `serveContext.side` (`kernel.ts:511-
+// 518`) is `state.serving` directly, entirely roster-independent — and side
+// is all the ace-vs-double-fault legality rule needs. `buildHalf` never gets
+// a wire-safe way to carry that side fact forward (`NestedPoint` is a
+// `z.strictObject` — `by`/`server`/`scorer`/`meta` only, checked against
+// kernel.ts, so a new field would fail validation the instant the optimistic
+// fold applies it), so the fix lives entirely on the READ side, in
+// `buildDock` itself, re-deriving the SIDE ONLY (never a person) from
+// `view.state` — safe except at the exact point that ends a game/tiebreak/
+// set, where `state.serving` has already rotated (see the MUTATION PROOF
+// below).
+// ---------------------------------------------------------------------------
+
+describe("buildDock — defect 1 fix: lineup-less fixture still gates ace/double_fault by SIDE", () => {
+  it("buildHalf never stamps a `server` PERSON for a roster-less fixture — there is nobody to name", () => {
+    const spec = buildScorebug(view({ squads: emptySquads() }), t);
+    expect(spec.halves[0]!.tapEvent?.payload).not.toHaveProperty("server");
+    expect(spec.halves[1]!.tapEvent?.payload).not.toHaveProperty("server");
+  });
+
+  it("offers ace/double_fault BY SIDE with no on-field roster at all, mid-game", () => {
+    const v = view({
+      squads: emptySquads(),
+      state: state({ serving: "home", points: { kind: "standard", home: 1, away: 0, advantage: null } }),
+    });
+    const ace = buildDock("tennis.point", v, t, { by: "H" })!; // home serves, home wins -> ace
+    expect(ace.chips.map((c) => c.id)).toEqual(["ace", "winner", "ue"]);
+    const df = buildDock("tennis.point", v, t, { by: "A" })!; // home serves, away wins -> double_fault
+    expect(df.chips.map((c) => c.id)).toEqual(["double_fault", "winner", "ue"]);
+  });
+
+  it("a real `server` name still takes precedence over the roster-less fallback", () => {
+    // Populated roster: `server` resolves for real, so the SIDE-only fallback
+    // must never override it — unchanged path, pinned here for precedence.
+    const spec = buildDock("tennis.point", view(), t, { by: "H", server: "H" })!;
+    expect(spec.chips.map((c) => c.id)).toEqual(["ace", "winner", "ue"]);
+  });
+
+  it("stays a safe omission for an undeclared DOUBLES rotation — a real roster, just no fixed order (unchanged)", () => {
+    const v = view({
+      squads: doublesSquads(false),
+      state: state({ points: { kind: "standard", home: 1, away: 0, advantage: null } }),
+    });
+    const spec = buildDock("tennis.point", v, t, { by: "H" })!;
+    expect(spec.chips.map((c) => c.id)).toEqual(["winner", "ue"]);
+  });
+
+  it("stays a safe omission with ANY set_summary history, even though the roster-less fallback would otherwise fire", () => {
+    const events: EventEnvelope[] = [makeEnvelope(0, { type: "tennis.set_summary", payload: { home: 6, away: 0 } })];
+    const v = view({
+      squads: emptySquads(),
+      events,
+      state: state({ serving: "home", points: { kind: "standard", home: 1, away: 0, advantage: null } }),
+    });
+    const spec = buildDock("tennis.point", v, t, { by: "H" })!;
+    expect(spec.chips.map((c) => c.id)).toEqual(["winner", "ue"]);
+  });
+
+  it("MUTATION PROOF: a game-ending point stays a safe omission — a naive post-fold recompute would MISCLASSIFY it, not merely omit it", () => {
+    // Home was serving and WON this exact point, ending the game: by the time
+    // this dock renders, `winGame`/`serveAfterGame` (kernel.ts:791-825) have
+    // already rotated `state.serving` to "away" and reset `state.points` to a
+    // fresh (0, 0) — checked exhaustively, every exit path of `winGame`/
+    // `bankSet` does both together. A recompute that ignored this would read
+    // the CURRENT `state.serving` ("away") and misclassify home's ace as
+    // away's double_fault — the opposite of "just omit it".
+    const v = view({
+      squads: emptySquads(),
+      state: state({ serving: "away", points: { kind: "standard", home: 0, away: 0, advantage: null } }),
+    });
+    const spec = buildDock("tennis.point", v, t, { by: "H" })!;
+    expect(spec.chips.map((c) => c.id)).toEqual(["winner", "ue"]);
   });
 });
 
