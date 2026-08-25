@@ -529,6 +529,98 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
     expect(res.strandedFixtureCount).toBe(0);
   });
 
+  // -------------------------------------------------------------------
+  // Attribution: `strandedFixtureCount` is the TOTAL currently stranded on
+  // the court; `newlyStrandedFixtureCount` is what THIS write caused.
+  //
+  // The panel shows the organiser "{count} scheduled fixture on this court
+  // now falls outside THESE HOURS" — copy that names the edit as the cause.
+  // The total cannot honour that sentence: `usableWindows` intersects the
+  // court's hours with the division's session windows and subtracts its
+  // blackouts, so a fixture already unplaceable for a reason nobody is
+  // touching was counted against whatever edit happened to run next. An
+  // advisory number that is rarely zero stops being read, and then the one
+  // time it means something it reads as wallpaper.
+  // -------------------------------------------------------------------
+
+  it("does not blame an edit for a fixture a BLACKOUT had already stranded — the total still reports it", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Attribution Park", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    // Tue 09:00, 30 minutes, inside a blackout. The court is open all day
+    // both before and after every write below, so ONLY the blackout can
+    // strand it — and no edit here touches blackouts.
+    const { divisionId } = await seedFixtureOnCourt(
+      auth,
+      court.id,
+      "scheduled",
+      "2026-08-18T09:00:00.000Z",
+    );
+    await setDivisionScheduleConfig(divisionId, {
+      matchMinutes: 30,
+      blackouts: [{ from: "2026-08-18T08:00:00.000Z", to: "2026-08-18T10:00:00.000Z" }],
+    });
+
+    // Establish the calendar: Tuesday open all day. The fixture is stranded
+    // by the blackout, and was stranded before this write too (no hours rows
+    // at all yields no windows), so this write caused nothing.
+    const first = await putCourtCalendar(auth, court.id, {
+      hours: [{ weekday: 2, open_min: 0, close_min: 1440 }],
+      exceptions: [],
+    });
+    expect(first.strandedFixtureCount).toBe(1);
+    expect(first.newlyStrandedFixtureCount).toBe(0);
+
+    // Now edit a DIFFERENT weekday entirely, leaving Tuesday untouched.
+    // Nothing about this write can reach the Tuesday fixture.
+    const other = await putCourtCalendar(auth, court.id, {
+      hours: [
+        { weekday: 2, open_min: 0, close_min: 1440 },
+        { weekday: 3, open_min: 540, close_min: 1020 }, // Wednesday 09:00-17:00
+      ],
+      exceptions: [],
+    });
+    expect(other.strandedFixtureCount).toBe(1); // still true of the court
+    expect(other.newlyStrandedFixtureCount).toBe(0); // but not this edit's doing
+  });
+
+  it("still blames an edit that really does strand a fixture — the delta is not just always zero", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Real Blame Park", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    const { divisionId } = await seedFixtureOnCourt(
+      auth,
+      court.id,
+      "scheduled",
+      "2026-08-18T21:00:00.000Z", // Tue 21:00
+    );
+    await setDivisionScheduleConfig(divisionId, { matchMinutes: 30 });
+
+    // Open late: the fixture fits. Nothing stranded either way.
+    const wide = await putCourtCalendar(auth, court.id, {
+      hours: [{ weekday: 2, open_min: 540, close_min: 1380 }], // 09:00-23:00
+      exceptions: [],
+    });
+    expect(wide.strandedFixtureCount).toBe(0);
+    expect(wide.newlyStrandedFixtureCount).toBe(0);
+
+    // Now close at 17:00 — THIS write is what strands it.
+    const narrow = await putCourtCalendar(auth, court.id, {
+      hours: [{ weekday: 2, open_min: 540, close_min: 1020 }], // 09:00-17:00
+      exceptions: [],
+    });
+    expect(narrow.strandedFixtureCount).toBe(1);
+    expect(narrow.newlyStrandedFixtureCount).toBe(1);
+
+    // Re-opening un-strands it, and un-stranding is never "newly stranded".
+    const reopened = await putCourtCalendar(auth, court.id, {
+      hours: [{ weekday: 2, open_min: 540, close_min: 1380 }],
+      exceptions: [],
+    });
+    expect(reopened.strandedFixtureCount).toBe(0);
+    expect(reopened.newlyStrandedFixtureCount).toBe(0);
+  });
+
   it("PUT calendar replaces hours + exceptions atomically and round-trips", async () => {
     const { auth } = await org();
     const venue = await createVenue(auth, { name: "Calendar Park", address: null, sort: 0 });

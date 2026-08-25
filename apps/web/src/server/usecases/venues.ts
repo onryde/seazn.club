@@ -650,9 +650,16 @@ async function windowInputsForDivision(divisionId: string): Promise<{
   };
 }
 
-/** Advisory-only (owner ruling): how many of this court's still-UNPLAYED
- *  fixtures now fall outside the just-written calendar. Non-blocking — the
- *  write already happened by the time this runs.
+/** Advisory-only (owner ruling): WHICH of this court's still-UNPLAYED
+ *  fixtures fall outside a given calendar. Non-blocking — the write already
+ *  happened by the time this runs.
+ *
+ *  Returns a Set of fixture IDS per calendar, not a count, and takes several
+ *  calendars rather than one. `putCourtCalendar` needs the before-state and
+ *  the after-state of the same write so it can report what that write
+ *  actually CAUSED, and the difference has to be taken over identities: a
+ *  single edit can strand one fixture while freeing another, and two counts
+ *  subtracted would silently cancel those out and report zero.
  *
  *  Computed on the engine's OWN `usableWindows` (P10 §2) rather than a
  *  fourth private copy of the window rule (the deleted `resolveCourtDay`),
@@ -670,22 +677,13 @@ async function windowInputsForDivision(divisionId: string): Promise<{
  *  division still supplies its own match duration/session windows/blackouts
  *  via `windowInputsForDivision`, cached per division: one court can carry
  *  fixtures from several divisions, and those ARE stored per-division. */
-async function countStrandedFixtures(
-  orgId: string,
+/** One stored calendar, in the shape `usableWindows` wants. */
+function toCourtCalendar(
   courtId: string,
   hours: readonly CourtHoursRange[],
   exceptions: readonly CourtException[],
-): Promise<number> {
-  const [org] = await sql<{ timezone: string | null }[]>`
-    select timezone from organizations where id = ${orgId}`;
-  const tz = resolveVenueTz(null, org?.timezone);
-  const fixtures = await sql<{ scheduled_at: Date; division_id: string }[]>`
-    select scheduled_at, division_id from fixtures
-    where court_id = ${courtId} and scheduled_at is not null
-      and status in ${sql(UNPLAYED_FIXTURE_STATUSES)}`;
-  if (fixtures.length === 0) return 0;
-
-  const calendar: CourtCalendar = {
+): CourtCalendar {
+  return {
     courtId,
     hours: hours.map((h) => ({ weekday: h.weekday, openMin: h.open_min, closeMin: h.close_min })),
     exceptions: exceptions.map((e) => ({
@@ -695,9 +693,29 @@ async function countStrandedFixtures(
       ...(e.close_min !== null ? { closeMin: e.close_min } : {}),
     })),
   };
+}
 
+async function strandedFixtureIdsFor(
+  orgId: string,
+  courtId: string,
+  calendars: readonly { hours: readonly CourtHoursRange[]; exceptions: readonly CourtException[] }[],
+): Promise<Set<string>[]> {
+  const out = calendars.map(() => new Set<string>());
+  const [org] = await sql<{ timezone: string | null }[]>`
+    select timezone from organizations where id = ${orgId}`;
+  const tz = resolveVenueTz(null, org?.timezone);
+  const fixtures = await sql<{ id: string; scheduled_at: Date; division_id: string }[]>`
+    select id, scheduled_at, division_id from fixtures
+    where court_id = ${courtId} and scheduled_at is not null
+      and status in ${sql(UNPLAYED_FIXTURE_STATUSES)}`;
+  if (fixtures.length === 0) return out;
+
+  const built = calendars.map((c) => toCourtCalendar(courtId, c.hours, c.exceptions));
+  // Fixtures and per-division settings are fetched ONCE and every calendar
+  // evaluated against them in the same pass: the caller asks about the
+  // before-state and the after-state of the same write, and running this
+  // twice would double the query count for an advisory number.
   const settingsByDivision = new Map<string, Awaited<ReturnType<typeof windowInputsForDivision>>>();
-  let stranded = 0;
   for (const f of fixtures) {
     let settings = settingsByDivision.get(f.division_id);
     if (!settings) {
@@ -706,21 +724,38 @@ async function countStrandedFixtures(
     }
     const startAt = f.scheduled_at.getTime();
     const endAt = startAt + settings.matchMinutes * 60_000;
-    const windows = usableWindows(
-      calendar,
-      { from: dayKeyInTz(startAt, tz), to: dayKeyInTz(endAt, tz) },
-      { tz, sessionWindows: settings.sessionWindows, blackouts: settings.blackouts },
-    );
-    if (!windows.some((w) => startAt >= w.from && endAt <= w.to)) stranded++;
+    for (const [i, calendar] of built.entries()) {
+      const windows = usableWindows(
+        calendar,
+        { from: dayKeyInTz(startAt, tz), to: dayKeyInTz(endAt, tz) },
+        { tz, sessionWindows: settings.sessionWindows, blackouts: settings.blackouts },
+      );
+      if (!windows.some((w) => startAt >= w.from && endAt <= w.to)) out[i]!.add(f.id);
+    }
   }
-  return stranded;
+  return out;
 }
 
 /** Full replace of a court's weekly hours + exceptions in ONE transaction —
  *  no per-row PATCH surface (design doc). Validated BEFORE the transaction
- *  opens, so a rejected write leaves the stored calendar untouched. Returns
- *  an ADVISORY count of unplayed fixtures the new calendar now strands
- *  (owner ruling — non-blocking; the real conflict code is P10's). */
+ *  opens, so a rejected write leaves the stored calendar untouched.
+ *
+ *  Returns TWO advisory, non-blocking numbers (owner ruling — the real
+ *  conflict code is P10's `stranded_fixture`):
+ *
+ *   - `newlyStrandedFixtureCount` — fixtures THIS write stranded. What the
+ *     panel shows, because its copy names the edit as the cause ("now falls
+ *     outside these hours").
+ *   - `strandedFixtureCount` — every unplayed fixture on the court currently
+ *     outside a usable window, whatever stranded it. Unchanged meaning.
+ *
+ *  They differ because `usableWindows` intersects the court's hours with the
+ *  division's session windows and subtracts its blackouts. A fixture already
+ *  unplaceable for one of those reasons is still stranded, but is not this
+ *  edit's doing — reporting the total against the edit blamed a court-hours
+ *  change for fixtures it could not reach (an organiser editing TUESDAY was
+ *  told about a Saturday fixture a session window had always excluded). An
+ *  advisory number that is rarely zero stops being read at all. */
 export async function putCourtCalendar(
   auth: AuthCtx,
   courtId: string,
@@ -730,12 +765,35 @@ export async function putCourtCalendar(
   hours: CourtHoursRange[];
   exceptions: CourtException[];
   strandedFixtureCount: number;
+  newlyStrandedFixtureCount: number;
 }> {
   assertNoHoursOverlap(input.hours);
   assertNoDuplicateExceptionDates(input.exceptions);
+  // The calendar as it stood BEFORE this write, read inside the same
+  // transaction that replaces it — the only point at which it still exists.
+  // Without it the "what did this edit cause" question is unanswerable after
+  // the fact, which is why the count used to answer a different one.
+  let previous: { hours: CourtHoursRange[]; exceptions: CourtException[] } = { hours: [], exceptions: [] };
   await withTenant(auth.orgId, async (tx) => {
     const [court] = await tx<{ id: string }[]>`select id from courts where id = ${courtId}`;
     if (!court) throw new HttpError(404, "court not found", COURT_NOT_FOUND_CODE);
+    const priorHours = await tx<CourtHoursRange[]>`
+      select weekday, open_min, close_min from court_hours
+      where court_id = ${courtId} order by weekday, open_min`;
+    const priorExceptions = await tx<
+      { date: string | Date; closed: boolean; open_min: number | null; close_min: number | null }[]
+    >`
+      select date, closed, open_min, close_min from court_exceptions
+      where court_id = ${courtId} order by date`;
+    previous = {
+      hours: priorHours.map((h) => ({ weekday: h.weekday, open_min: h.open_min, close_min: h.close_min })),
+      exceptions: priorExceptions.map((e) => ({
+        date: toDateStr(e.date),
+        closed: e.closed,
+        open_min: e.open_min,
+        close_min: e.close_min,
+      })),
+    };
     await tx`delete from court_hours where court_id = ${courtId}`;
     await tx`delete from court_exceptions where court_id = ${courtId}`;
     for (const h of input.hours) {
@@ -750,12 +808,15 @@ export async function putCourtCalendar(
                 ${e.open_min ?? null}, ${e.close_min ?? null})`;
     }
   });
-  const strandedFixtureCount = await countStrandedFixtures(
-    auth.orgId,
-    courtId,
-    input.hours,
-    input.exceptions,
-  );
+  const [strandedBefore, strandedAfter] = await strandedFixtureIdsFor(auth.orgId, courtId, [
+    previous,
+    { hours: input.hours, exceptions: input.exceptions },
+  ]);
+  const strandedFixtureCount = strandedAfter!.size;
+  // Set difference, never `after - before`: an edit can strand one fixture
+  // and free another in the same write, and the two counts would cancel to
+  // zero while a fixture really had been stranded.
+  const newlyStrandedFixtureCount = [...strandedAfter!].filter((id) => !strandedBefore!.has(id)).length;
   log.info(
     {
       orgId: auth.orgId,
@@ -763,8 +824,15 @@ export async function putCourtCalendar(
       hoursCount: input.hours.length,
       exceptionsCount: input.exceptions.length,
       strandedFixtureCount,
+      newlyStrandedFixtureCount,
     },
     "court_calendar_replaced",
   );
-  return { court_id: courtId, hours: input.hours, exceptions: input.exceptions, strandedFixtureCount };
+  return {
+    court_id: courtId,
+    hours: input.hours,
+    exceptions: input.exceptions,
+    strandedFixtureCount,
+    newlyStrandedFixtureCount,
+  };
 }

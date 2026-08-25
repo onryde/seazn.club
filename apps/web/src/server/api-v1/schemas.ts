@@ -4082,9 +4082,16 @@ export const CourtCalendar = z.object({
   court_id: Uuid,
   hours: z.array(CourtHoursRangeS),
   exceptions: z.array(CourtExceptionS),
-  /** Advisory only (owner ruling): unplayed fixtures on this court that the
-   *  new calendar no longer covers. Non-blocking — the write already
-   *  happened; the real conflict code is P10's. */
+  /** Advisory only (owner ruling): EVERY unplayed fixture on this court
+   *  currently outside a usable window — whatever stranded it, including a
+   *  division session window or blackout this write never touched.
+   *  Non-blocking; the real conflict code is P10's. */
   strandedFixtureCount: z.number().int(),
+  /** Advisory only: the subset of the above that THIS write caused, by
+   *  fixture identity (a write can strand one fixture and free another, so
+   *  this is a set difference, not a subtraction). Clients that attribute
+   *  the number to the edit — the venues panel's copy says "now falls
+   *  outside these hours" — must read this one, not the total. */
+  newlyStrandedFixtureCount: z.number().int(),
 });
 export type MergeLog = z.infer<typeof MergeLog>;

@@ -33492,7 +33492,7 @@
     },
     "/api/v1/orgs/{id}/courts/{courtId}/calendar": {
       "put": {
-        "summary": "Replace a court's weekly hours + exceptions in one write — full replace, no per-row PATCH surface. An exception date always wins over that weekday's hours (closed = no windows). 422 COURT_HOURS_OVERLAP when two ranges on the same weekday overlap. Response carries an ADVISORY, non-blocking `strandedFixtureCount` — unplayed fixtures on this court the new hours no longer cover (the real conflict code is P10's)",
+        "summary": "Replace a court's weekly hours + exceptions in one write — full replace, no per-row PATCH surface. An exception date always wins over that weekday's hours (closed = no windows). 422 COURT_HOURS_OVERLAP when two ranges on the same weekday overlap. Response carries two ADVISORY, non-blocking numbers: `newlyStrandedFixtureCount` — unplayed fixtures THIS write stranded, which is what a client should attribute to the edit — and `strandedFixtureCount`, every unplayed fixture on the court currently outside a usable window, including ones a division session window or blackout stranded independently of this write (the real conflict code is P10's)",
         "tags": [
           "venues"
         ],
@@ -33731,13 +33731,19 @@
                           "type": "integer",
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
+                        },
+                        "newlyStrandedFixtureCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
                         "court_id",
                         "hours",
                         "exceptions",
-                        "strandedFixtureCount"
+                        "strandedFixtureCount",
+                        "newlyStrandedFixtureCount"
                       ],
                       "additionalProperties": false
                     },
@@ -33766,7 +33772,8 @@
                         "close_min": -9007199254740991
                       }
                     ],
-                    "strandedFixtureCount": -9007199254740991
+                    "strandedFixtureCount": -9007199254740991,
+                    "newlyStrandedFixtureCount": -9007199254740991
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

@@ -934,11 +934,18 @@ function CourtCalendarEditor({
   const saveCalendar = () => {
     setStranded(null);
     run(async () => {
-      const result = await apiV1<{ strandedFixtureCount: number }>(
+      const result = await apiV1<{ strandedFixtureCount: number; newlyStrandedFixtureCount: number }>(
         `/api/v1/orgs/${orgId}/courts/${court.id}/calendar`,
         { method: "PUT", json: { hours, exceptions } },
       );
-      setStranded(result.strandedFixtureCount);
+      // The NEWLY stranded count, not the total: this warning's copy reads
+      // "now falls outside these hours", which names this save as the cause.
+      // The total also counts fixtures a division session window or blackout
+      // had already excluded — attributing those to whatever hours edit ran
+      // next made the warning fire on saves that changed nothing for them
+      // (a Tuesday edit reporting a Saturday fixture), and a heads-up that is
+      // almost never zero stops being read.
+      setStranded(result.newlyStrandedFixtureCount);
     }, msg("venues.calendar.saved"));
   };
 
