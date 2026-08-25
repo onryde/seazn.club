@@ -38,7 +38,7 @@ import { describe, expect, it } from "vitest";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import type { SquadState } from "@seazn/engine/core";
-import { buildSheets, buildTiles } from "../skins/cricket";
+import { buildScorebug, buildSheets, buildTiles } from "../skins/cricket";
 import { dedicatedEventTypes, moreActions } from "../pad-host";
 import type { GuidedSheetSpec, PadHostView, TileSpec } from "../types";
 import { grantAllEntitlements } from "../../__tests__/_cfg-space";
@@ -195,13 +195,18 @@ function sweep(): SweepResult {
     // section), so the honest argument here is the empty one — which is also
     // what keeps this sweep's own answer identical to what it was before that
     // widening landed.
-    let dedicated = dedicatedEventTypes(tiles, sheets, []);
+    // R4/tennis widened this with the SCOREBUG (tap model S makes a half a
+    // real entry point). Cricket's own is passed rather than a fixture — it
+    // is a tapModel-T readout with no `tappable` half, so it contributes
+    // nothing, and this sweep's answer is identical to what it was before the
+    // widening. Same argument the empty slot table makes one line up.
+    let dedicated = dedicatedEventTypes(tiles, sheets, [], buildScorebug(live, (k: string) => k));
 
     if (probeSuperOver) {
       const so = baseView(cfg, superOverState());
       const soTiles = buildTiles(so);
       for (const t of tileEventTypes(soTiles)) viaTiles.add(t);
-      dedicated = new Set([...dedicated, ...dedicatedEventTypes(soTiles, buildSheets(so, (k: string) => k), [])]);
+      dedicated = new Set([...dedicated, ...dedicatedEventTypes(soTiles, buildSheets(so, (k: string) => k), [], buildScorebug(so, (k: string) => k))]);
     }
 
     const spec = padSpecFor(cfg);

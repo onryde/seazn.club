@@ -67,7 +67,7 @@ import { GuidedSheet } from "./guided-sheet";
 import { RecordingChip } from "./recording-chip";
 import { buildRibbon, type Ribbon } from "./ribbon";
 import { ActivityPanel, latestRowDetail, type ActivityDetailResolver, type ActivityEvent } from "./activity";
-import { MORE_SHEET_KEY, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
+import { MORE_SHEET_KEY, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type ScorebugSpec, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
 import { sportThemeAttr, sportThemeStyle } from "./sport-theme";
 
 // ---------------------------------------------------------------------------
@@ -225,11 +225,37 @@ export function buildTopRibbon(
  *  would default a forgetful caller straight back to the duplicate, silently
  *  — the same reasoning `swapCandidates`'s own `offId` parameter states. A
  *  skin with no swap passes `[]`, which reads as the deliberate statement it
- *  is. */
+ *  is.
+ *
+ *  R4/tennis closed a third instance of it. (Not "the last" — this comment
+ *  said that in draft, and a claim about holes nobody has found yet is a
+ *  prediction, which is the shape this programme keeps having to correct.)
+ *  Every
+ *  skin before tennis was tapModel T, where the scorebug is a pure READOUT —
+ *  football's own scorebug comment says declaring `tappable` there "would give
+ *  one event two entry points", and it dodged the problem by not being
+ *  tapModel S. Tennis IS tapModel S: its scoreboard halves ARE the point
+ *  buttons, carrying a real `tapEvent`. That event was reachable from the
+ *  board and STILL listed in the More sheet as a bare generic form, which is
+ *  `cricket.retire` (R2c) and `football.sub` (R3) for the third time.
+ *
+ *  The cost of leaving it is not cosmetic, and it is worse here than for a
+ *  swap: the generic form bypasses the dock, so a chair who records a point
+ *  through More silently loses the shot-type enrichment (ace / double fault /
+ *  winner / unforced error) that is the whole reason tennis's per-person ace
+ *  and double-fault tallies can finally be fed from the pad at all.
+ *
+ *  `scorebug` is REQUIRED for the same reason `swaps` is. A tapModel-T skin
+ *  passes its own spec and contributes nothing new, because a half with no
+ *  `tappable` has no `tapEvent` to contribute — so cricket and football are
+ *  provably unaffected (neither sets `tappable` on any half), and that is a
+ *  property, not a promise: it falls out of the loop below rather than out of
+ *  a special case. */
 export function dedicatedEventTypes(
   tiles: readonly TileSpec[],
   sheets: Record<string, GuidedSheetSpec> | undefined,
   swaps: readonly SwapSlot[],
+  scorebug: ScorebugSpec,
 ): Set<string> {
   const out = new Set<string>();
   for (const tile of tiles) {
@@ -240,6 +266,13 @@ export function dedicatedEventTypes(
     }
   }
   if (sheets) for (const spec of Object.values(sheets)) out.add(spec.event);
+  // A tapModel-S half. `tappable` and `tapEvent` travel together by contract
+  // (`assertScorebugSpec` refuses one without the other), so the `tapEvent`
+  // guard is belt-and-braces against a spec that never reached the assert —
+  // not a second opinion about what tappable means.
+  for (const half of scorebug.halves) {
+    if (half.tappable === true && half.tapEvent) out.add(half.tapEvent.type);
+  }
   return out;
 }
 
@@ -752,7 +785,7 @@ export function PadHostV3(props: PadHostV3Props) {
   // R3/football: `swapSlots` is the third argument — without it a swap's own
   // event stays listed in the More sheet as an un-narrowed generic form
   // beside its Sub tile (see dedicatedEventTypes' own doc).
-  const dedicated = useMemo(() => dedicatedEventTypes(tiles, sheets, swapSlots), [tiles, sheets, swapSlots]);
+  const dedicated = useMemo(() => dedicatedEventTypes(tiles, sheets, swapSlots, scorebugSpec), [tiles, sheets, swapSlots, scorebugSpec]);
   // R3 review round: the skin's own "the fold refuses this right now" set —
   // `moreActions`' second exclusion set, see its doc for why the two are not
   // one. Built from `view` (not `padViewCtx`), because it is a SKIN call and

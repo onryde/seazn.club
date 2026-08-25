@@ -453,7 +453,7 @@ describe("buildScorebug", () => {
     // …and it IS dedicated, resolved by the host's own function rather than
     // re-asserted from this file's reading of the skin.
     const v = view();
-    expect([...dedicatedEventTypes(buildTiles(v), buildSheets(v, t), buildSwap(v, t))]).toContain("football.period");
+    expect([...dedicatedEventTypes(buildTiles(v), buildSheets(v, t), buildSwap(v, t), buildScorebug(v, t))]).toContain("football.period");
   });
 
   it("the context line states the FORMAT, which is the one thing cfg shrinks for a small-sided variant", () => {
