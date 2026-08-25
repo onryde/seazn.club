@@ -4926,6 +4926,8 @@ export type DictionaryKey =
   | "venues.calendar.saved"
   | "venues.calendar.stranded.one"
   | "venues.calendar.stranded.other"
+  | "venues.calendar.strandedTotal.one"
+  | "venues.calendar.strandedTotal.other"
   | "venues.calendar.weeklyHours"
   | "venues.court.add.name"
   | "venues.court.add.namePlaceholder"

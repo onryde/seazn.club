@@ -1200,6 +1200,8 @@
   "venues.calendar.saved": "Rooster opgeslagen.",
   "venues.calendar.stranded.one": "Let op: {count} al geplande wedstrijd op dit veld valt nu buiten deze openingstijden. Er is niets geblokkeerd — wijs deze opnieuw toe wanneer je kunt.",
   "venues.calendar.stranded.other": "Let op: {count} al geplande wedstrijden op dit veld vallen nu buiten deze openingstijden. Er is niets geblokkeerd — wijs deze opnieuw toe wanneer je kunt.",
+  "venues.calendar.strandedTotal.one": "{count} geplande wedstrijd op dit veld valt nog steeds buiten de bruikbare tijden — deze dateert van vóór deze wijziging of komt uit de sessietijden van een divisie.",
+  "venues.calendar.strandedTotal.other": "{count} geplande wedstrijden op dit veld vallen nog steeds buiten de bruikbare tijden — deze dateren van vóór deze wijziging of komen uit de sessietijden van een divisie.",
   "venues.weekday.sun": "Zo",
   "venues.weekday.mon": "Ma",
   "venues.weekday.tue": "Di",

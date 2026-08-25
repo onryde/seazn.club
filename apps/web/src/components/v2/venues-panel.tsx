@@ -916,6 +916,12 @@ function CourtCalendarEditor({
   const [hours, setHours] = useState<CourtHours[]>(court.hours);
   const [exceptions, setExceptions] = useState<CourtException[]>(court.exceptions);
   const [stranded, setStranded] = useState<number | null>(null);
+  // The court-level total, kept alongside the per-write delta. Without it a
+  // fixture stranded by an EARLIER save (or by a division session
+  // window/blackout) goes invisible the moment any later save reports zero
+  // newly-stranded — the amber line would clear itself while the fixture was
+  // still outside a usable window. Review finding 5.
+  const [strandedTotal, setStrandedTotal] = useState<number | null>(null);
   const disabled = !canEdit;
 
   const overlap = hasHoursOverlap(hours);
@@ -946,6 +952,7 @@ function CourtCalendarEditor({
       // (a Tuesday edit reporting a Saturday fixture), and a heads-up that is
       // almost never zero stops being read.
       setStranded(result.newlyStrandedFixtureCount);
+      setStrandedTotal(result.strandedFixtureCount);
     }, msg("venues.calendar.saved"));
   };
 
@@ -1000,6 +1007,17 @@ function CourtCalendarEditor({
       {stranded !== null && stranded > 0 && (
         <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
           {plural("venues.calendar.stranded", stranded)}
+        </p>
+      )}
+
+      {/* Only when the court holds MORE stranded fixtures than this save
+          caused — otherwise the amber line above already accounts for all of
+          them and this would just restate it. Deliberately quieter: these are
+          not this edit's doing, and may be a division session window or
+          blackout rather than anything editable on this screen. */}
+      {strandedTotal !== null && strandedTotal > (stranded ?? 0) && (
+        <p className="rounded-md bg-slate-100 px-3 py-2 text-xs text-slate-600">
+          {plural("venues.calendar.strandedTotal", strandedTotal)}
         </p>
       )}
 

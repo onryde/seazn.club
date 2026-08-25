@@ -562,8 +562,14 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
     });
 
     // Establish the calendar: Tuesday open all day. The fixture is stranded
-    // by the blackout, and was stranded before this write too (no hours rows
-    // at all yields no windows), so this write caused nothing.
+    // by the blackout, and was stranded before this write too — a court with
+    // NO hours rows reads as open the whole civil day, not as closed
+    // (`baseFor`, court-windows.ts), so the blackout is the only thing
+    // excluding it in either state and this write caused nothing.
+    //
+    // Note what that engine rule does NOT mean: a court's first-ever calendar
+    // write can absolutely report newly-stranded fixtures, because it narrows
+    // an all-day baseline. The strand-one-free-one test below relies on it.
     const first = await putCourtCalendar(auth, court.id, {
       hours: [{ weekday: 2, open_min: 0, close_min: 1440 }],
       exceptions: [],
@@ -619,6 +625,36 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
     });
     expect(reopened.strandedFixtureCount).toBe(0);
     expect(reopened.newlyStrandedFixtureCount).toBe(0);
+  });
+
+  it("counts a fixture stranded by an edit that frees another in the same write — the delta is a SET difference, not a subtraction", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Swap Park", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    // Two fixtures on the SAME court, on opposite sides of a shift in hours.
+    const midday = await seedFixtureOnCourt(auth, court.id, "scheduled", "2026-08-18T12:00:00.000Z");
+    const evening = await seedFixtureOnCourt(auth, court.id, "scheduled", "2026-08-18T21:00:00.000Z");
+    await setDivisionScheduleConfig(midday.divisionId, { matchMinutes: 30 });
+    await setDivisionScheduleConfig(evening.divisionId, { matchMinutes: 30 });
+
+    // Daytime hours: the midday fixture fits, the evening one does not.
+    const daytime = await putCourtCalendar(auth, court.id, {
+      hours: [{ weekday: 2, open_min: 540, close_min: 1020 }], // Tue 09:00-17:00
+      exceptions: [],
+    });
+    expect(daytime.strandedFixtureCount).toBe(1); // the evening fixture
+
+    // Now MOVE the hours to the evening. This frees the evening fixture and
+    // strands the midday one in a single write: before = {evening},
+    // after = {midday}. Both sets are size 1, so `after.size - before.size`
+    // is 0 — the subtraction this code deliberately does not do would report
+    // "nothing newly stranded" while a fixture had just been stranded.
+    const evenings = await putCourtCalendar(auth, court.id, {
+      hours: [{ weekday: 2, open_min: 1020, close_min: 1380 }], // Tue 17:00-23:00
+      exceptions: [],
+    });
+    expect(evenings.strandedFixtureCount).toBe(1); // still one, but a DIFFERENT one
+    expect(evenings.newlyStrandedFixtureCount).toBe(1);
   });
 
   it("PUT calendar replaces hours + exceptions atomically and round-trips", async () => {

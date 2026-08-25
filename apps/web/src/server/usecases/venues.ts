@@ -630,7 +630,7 @@ export async function unarchiveCourt(auth: AuthCtx, id: string): Promise<CourtRo
  *  `ScheduleConfig` zod schema `loadSettings`, schedule.ts, uses for the
  *  board itself) — read directly here rather than through `loadSettings`,
  *  which takes a `Tx`: this advisory count runs on the pooled `sql` proxy
- *  outside any `withTenant` block (see `countStrandedFixtures` below), and
+ *  outside any `withTenant` block (see `strandedFixtureIdsFor` below), and
  *  wrapping it in a transaction to call a `Tx`-shaped helper would change
  *  that concurrency model, which is out of this task's scope. Session
  *  windows/blackouts are stored as ISO strings; `usableWindows` wants
@@ -650,6 +650,26 @@ async function windowInputsForDivision(divisionId: string): Promise<{
   };
 }
 
+/** One stored calendar, in the shape `usableWindows` wants. Extracted so the
+ *  before-state and after-state of a write are built the SAME way — this used
+ *  to be inline in the single-calendar version. */
+function toCourtCalendarShape(
+  courtId: string,
+  hours: readonly CourtHoursRange[],
+  exceptions: readonly CourtException[],
+): CourtCalendar {
+  return {
+    courtId,
+    hours: hours.map((h) => ({ weekday: h.weekday, openMin: h.open_min, closeMin: h.close_min })),
+    exceptions: exceptions.map((e) => ({
+      date: e.date,
+      closed: e.closed,
+      ...(e.open_min !== null ? { openMin: e.open_min } : {}),
+      ...(e.close_min !== null ? { closeMin: e.close_min } : {}),
+    })),
+  };
+}
+
 /** Advisory-only (owner ruling): WHICH of this court's still-UNPLAYED
  *  fixtures fall outside a given calendar. Non-blocking — the write already
  *  happened by the time this runs.
@@ -659,7 +679,10 @@ async function windowInputsForDivision(divisionId: string): Promise<{
  *  the after-state of the same write so it can report what that write
  *  actually CAUSED, and the difference has to be taken over identities: a
  *  single edit can strand one fixture while freeing another, and two counts
- *  subtracted would silently cancel those out and report zero.
+ *  subtracted would silently cancel those out and report zero. Pinned by
+ *  "counts a fixture stranded by an edit that frees another in the same
+ *  write" (venues.test.ts) — before this diff that reasoning was argued in
+ *  prose here with nothing failing if the code did the subtraction instead.
  *
  *  Computed on the engine's OWN `usableWindows` (P10 §2) rather than a
  *  fourth private copy of the window rule (the deleted `resolveCourtDay`),
@@ -677,24 +700,6 @@ async function windowInputsForDivision(divisionId: string): Promise<{
  *  division still supplies its own match duration/session windows/blackouts
  *  via `windowInputsForDivision`, cached per division: one court can carry
  *  fixtures from several divisions, and those ARE stored per-division. */
-/** One stored calendar, in the shape `usableWindows` wants. */
-function toCourtCalendar(
-  courtId: string,
-  hours: readonly CourtHoursRange[],
-  exceptions: readonly CourtException[],
-): CourtCalendar {
-  return {
-    courtId,
-    hours: hours.map((h) => ({ weekday: h.weekday, openMin: h.open_min, closeMin: h.close_min })),
-    exceptions: exceptions.map((e) => ({
-      date: e.date,
-      closed: e.closed,
-      ...(e.open_min !== null ? { openMin: e.open_min } : {}),
-      ...(e.close_min !== null ? { closeMin: e.close_min } : {}),
-    })),
-  };
-}
-
 async function strandedFixtureIdsFor(
   orgId: string,
   courtId: string,
@@ -710,7 +715,7 @@ async function strandedFixtureIdsFor(
       and status in ${sql(UNPLAYED_FIXTURE_STATUSES)}`;
   if (fixtures.length === 0) return out;
 
-  const built = calendars.map((c) => toCourtCalendar(courtId, c.hours, c.exceptions));
+  const built = calendars.map((c) => toCourtCalendarShape(courtId, c.hours, c.exceptions));
   // Fixtures and per-division settings are fetched ONCE and every calendar
   // evaluated against them in the same pass: the caller asks about the
   // before-state and the after-state of the same write, and running this

@@ -1200,6 +1200,8 @@
   "venues.calendar.saved": "Horaires enregistrés.",
   "venues.calendar.stranded.one": "Attention : {count} match déjà programmé sur ce terrain tombe désormais hors de ces horaires. Rien n'a été bloqué — réaffectez-le quand vous pourrez.",
   "venues.calendar.stranded.other": "Attention : {count} matchs déjà programmés sur ce terrain tombent désormais hors de ces horaires. Rien n'a été bloqué — réaffectez-les quand vous pourrez.",
+  "venues.calendar.strandedTotal.one": "{count} match programmé sur ce terrain reste hors de ses horaires utilisables : il est antérieur à ce changement ou provient des horaires de session d'une division.",
+  "venues.calendar.strandedTotal.other": "{count} matchs programmés sur ce terrain restent hors de leurs horaires utilisables : ils sont antérieurs à ce changement ou proviennent des horaires de session d'une division.",
   "venues.weekday.sun": "Dim",
   "venues.weekday.mon": "Lun",
   "venues.weekday.tue": "Mar",

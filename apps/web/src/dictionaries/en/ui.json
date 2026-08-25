@@ -1200,6 +1200,8 @@
   "venues.calendar.saved": "Calendar saved.",
   "venues.calendar.stranded.one": "Heads up: {count} scheduled fixture on this court now falls outside these hours. Nothing was blocked — reassign it when you can.",
   "venues.calendar.stranded.other": "Heads up: {count} scheduled fixtures on this court now fall outside these hours. Nothing was blocked — reassign them when you can.",
+  "venues.calendar.strandedTotal.one": "{count} scheduled fixture on this court is still outside its usable hours — this one predates this change, or comes from a division's own session times.",
+  "venues.calendar.strandedTotal.other": "{count} scheduled fixtures on this court are still outside their usable hours — these predate this change, or come from a division's own session times.",
   "venues.weekday.sun": "Sun",
   "venues.weekday.mon": "Mon",
   "venues.weekday.tue": "Tue",
