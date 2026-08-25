@@ -23,11 +23,12 @@ import {
   renderRegistrantKindCell,
   renderRegistrantStatusCell,
   renderRegistrantPaymentCell,
+  REGISTRANT_GRID_COLS,
   type RegistrationHubRegistrantTableContext,
 } from "@/components/registration-hub-registrant-table";
 import { RegistrationHubRegistrantDetail } from "@/components/registration-hub-registrant-detail";
 import { registrantRowAnchor } from "@/components/registration-hub-registrant-derive";
-import { getDictionary } from "@/lib/i18n";
+import { getDictionary, t } from "@/lib/i18n";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 import type { RegistrantDetails } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 
@@ -175,6 +176,68 @@ describe("RegistrationHubRegistrantRow — the expand mechanism (task 1)", () =>
     const summary = tree.find((e) => e.type === "summary")!;
     expect(textOf(summary)).not.toContain("SECRET_HASH_VALUE");
   });
+
+  // W2c task 4 (hardening finding carried over from the W2a review):
+  // join_code is a REAL field on RegistrationListRow (unlike
+  // access_token_hash above, which the type deliberately omits — see
+  // RegistrationListRow's own Omit<...> in server/usecases/registrations.ts
+  // — so this needs no "widened type" cast to set it). The owner ruled it
+  // hidden from viewers because it's a bearer secret that grants roster
+  // WRITES; today it's safe only because the summary's columns are a
+  // hardcoded list rather than a row spread, and nothing stops a future
+  // column addition from leaking it. This locks that invariant in.
+  it("join_code never appears in the summary line — a bearer secret, and the summary's columns are a hardcoded list, never a row spread", () => {
+    const tree = walk(
+      RegistrationHubRegistrantRow({
+        row: row({ join_code: "SECRET_JOIN_CODE_VALUE" }),
+        context: CONTEXT,
+        roster: [],
+        siblings: [],
+        formFields: [],
+      }),
+    );
+    const summary = tree.find((e) => e.type === "summary")!;
+    expect(textOf(summary)).not.toContain("SECRET_JOIN_CODE_VALUE");
+  });
+});
+
+describe("RegistrationHubRegistrantRow — ≥sm aligned columns (W2c task 1)", () => {
+  it("the name cell truncates instead of reflowing, and can shrink below its own content width", () => {
+    const tree = walk(
+      RegistrationHubRegistrantRow({ row: row({}), context: CONTEXT, roster: [], siblings: [], formFields: [] }),
+    );
+    const nameCell = tree.find((e) => propsOf(e)["data-registration-hub-registrant-name-cell"] !== undefined)!;
+    const className = propsOf(nameCell).className as string;
+    // min-w-0: a grid item's default min-width is `auto` (= its content's
+    // own intrinsic width), which refuses to shrink below that and blows
+    // the row out horizontally — the trap the brief calls out by name.
+    // truncate: single-line ellipsis, chosen over letting the name reflow.
+    expect(className).toContain("truncate");
+    expect(className).toContain("min-w-0");
+  });
+
+  it("renders both a phone card block and a ≥sm grid block, complementary via CSS visibility (display:none removes a block from the a11y tree too, so there is no double-announcement)", () => {
+    const tree = walk(
+      RegistrationHubRegistrantRow({ row: row({}), context: CONTEXT, roster: [], siblings: [], formFields: [] }),
+    );
+    const card = tree.find((e) => propsOf(e)["data-registration-hub-registrant-card"] !== undefined)!;
+    const grid = tree.find((e) => propsOf(e)["data-registration-hub-registrant-grid"] !== undefined)!;
+    expect(card).toBeTruthy();
+    expect(grid).toBeTruthy();
+    // Card: visible (flex) below sm, display:none at sm and up.
+    expect(propsOf(card).className as string).toContain("sm:hidden");
+    // Grid: display:none below sm, grid at sm and up — the inverse.
+    expect(propsOf(grid).className as string).toContain("hidden");
+    expect(propsOf(grid).className as string).toContain("sm:grid");
+  });
+
+  it("the ≥sm grid block uses the SAME column template constant the table header uses, so the two can't drift apart", () => {
+    const tree = walk(
+      RegistrationHubRegistrantRow({ row: row({}), context: CONTEXT, roster: [], siblings: [], formFields: [] }),
+    );
+    const grid = tree.find((e) => propsOf(e)["data-registration-hub-registrant-grid"] !== undefined)!;
+    expect(propsOf(grid).className as string).toContain(REGISTRANT_GRID_COLS);
+  });
 });
 
 describe("RegistrationHubRegistrantRow — summary line content", () => {
@@ -307,5 +370,43 @@ describe("RegistrationHubRegistrantTable — row list wiring (task 3: per-row ma
   it("carries a root data hook for e2e/regression targeting", () => {
     const tree = walk(RegistrationHubRegistrantTable({ rows: [], context: CONTEXT, details: EMPTY_DETAILS }));
     expect(propsOf(tree[0]!)).toHaveProperty("data-registration-hub-registrant-table");
+  });
+});
+
+describe("RegistrationHubRegistrantTable — ≥sm header row (W2c task 2)", () => {
+  it("renders a header label for each of the six columns, reusing the SAME table.* keys the detail body's own field labels already use", () => {
+    const tree = walk(RegistrationHubRegistrantTable({ rows: [], context: CONTEXT, details: EMPTY_DETAILS }));
+    const header = tree.find((e) => propsOf(e)["data-registration-hub-registrant-table-header"] !== undefined)!;
+    const text = textOf(header);
+    expect(text).toContain(t(dict, "reg.hub.registrants.table.name"));
+    expect(text).toContain(t(dict, "reg.hub.registrants.table.division"));
+    expect(text).toContain(t(dict, "reg.hub.registrants.table.kind"));
+    expect(text).toContain(t(dict, "reg.hub.registrants.table.status"));
+    expect(text).toContain(t(dict, "reg.hub.registrants.table.payment"));
+    expect(text).toContain(t(dict, "reg.hub.registrants.table.submittedAt"));
+  });
+
+  it("is hidden below sm and shown as a row at sm and up", () => {
+    const tree = walk(RegistrationHubRegistrantTable({ rows: [], context: CONTEXT, details: EMPTY_DETAILS }));
+    const header = tree.find((e) => propsOf(e)["data-registration-hub-registrant-table-header"] !== undefined)!;
+    const className = propsOf(header).className as string;
+    expect(className).toContain("hidden");
+    expect(className).toContain("sm:flex");
+  });
+
+  it("is removed from the accessibility tree — never announced as a data row", () => {
+    const tree = walk(RegistrationHubRegistrantTable({ rows: [], context: CONTEXT, details: EMPTY_DETAILS }));
+    const header = tree.find((e) => propsOf(e)["data-registration-hub-registrant-table-header"] !== undefined)!;
+    expect(propsOf(header)["aria-hidden"]).toBe(true);
+  });
+
+  it("uses the SAME column template constant every row's ≥sm grid block uses, so header and rows can't drift apart", () => {
+    const tree = walk(RegistrationHubRegistrantTable({ rows: [], context: CONTEXT, details: EMPTY_DETAILS }));
+    const header = tree.find((e) => propsOf(e)["data-registration-hub-registrant-table-header"] !== undefined)!;
+    const gridSpan = tree.find(
+      (e) => e !== header && (propsOf(e).className as string | undefined)?.includes("sm:grid-cols-["),
+    )!;
+    expect(gridSpan).toBeTruthy();
+    expect(propsOf(gridSpan).className as string).toContain(REGISTRANT_GRID_COLS);
   });
 });

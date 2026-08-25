@@ -127,6 +127,43 @@ export interface RegistrationHubRegistrantTableContext {
 }
 
 /**
+ * RS005 W2c: the column template shared by the ≥sm header row
+ * (RegistrationHubRegistrantTable, below) and every row's own aligned-
+ * columns block (RegistrationHubRegistrantRow, below) — ONE exported
+ * constant, so the two can never drift out of alignment with each other:
+ * a header whose tracks don't EXACTLY match a row's own tracks looks
+ * broken even a few px off. 6 tracks: name, division, kind, status,
+ * payment, submitted-at. The expand chevron is deliberately NOT a 7th
+ * track here — it's a fixed-width flex sibling of this grid in both the
+ * header and every row, so this template only ever has to describe the
+ * six real data columns.
+ *
+ * `sm` (640px — Tailwind's unchanged default; globals.css's `@theme
+ * inline` adds `--breakpoint-xs` but never redefines `sm`) is the SAME
+ * breakpoint `ui/responsive-table.tsx` already split desktop/mobile on
+ * before this row format existed (its `hidden sm:block` / `sm:hidden`
+ * pair), so reusing it keeps this table's transition unsurprising. It
+ * also lands strictly between the widest "phone" e2e project (430) and
+ * the narrowest "tablet" one (768), so the seven-width matrix never lands
+ * ON the transition itself.
+ *
+ * `minmax(0, Nfr)` on every track, never a bare `Nfr`: a bare fr track's
+ * implicit minimum is `auto` (its content's own intrinsic width), which
+ * is the classic CSS grid trap — a long team name would refuse to shrink
+ * below its own width and blow the row (and the page) out horizontally.
+ * `minmax(0, …)` removes that floor; pairing it with `min-w-0` on every
+ * cell (both below) is the other half of the same trap — the track can
+ * shrink, but the cell's own box also has to be told it's allowed to.
+ */
+export const REGISTRANT_GRID_COLS =
+  "sm:grid sm:grid-cols-[minmax(0,1.6fr)_minmax(0,1.3fr)_minmax(0,0.8fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,1.3fr)] sm:items-center sm:gap-x-4";
+
+/** Muted caps label shared by every ≥sm header cell — same register as
+ *  registration-hub-registrant-detail.tsx's own SECTION_HEADING, minus
+ *  the bottom margin that only made sense stacked above its own section. */
+const REGISTRANT_HEADER_CELL = "truncate text-xs font-semibold uppercase tracking-wide text-slate-400";
+
+/**
  * Registration hub — Registrants tab, ONE row (RS005 W2a task 4 + W2b task
  * 1/2). A native `<details>/<summary>` disclosure — no `onToggle` handler,
  * matching W2a's zero-client-JS surface: RS004's own `Disclosure`
@@ -146,6 +183,19 @@ export interface RegistrationHubRegistrantTableContext {
  * design forces this row OUT of real `<table>` markup, the same way the
  * Settings tab's own per-division row already is — registration-hub-
  * division-row.tsx is a `<div>` card, not a `<tr>`, for the same reason).
+ *
+ * RS005 W2c: the `<summary>` now renders BOTH a phone-card block (`sm:hidden`
+ * — the original treatment, untouched, just newly scoped below `sm`) and an
+ * aligned-columns block (`hidden sm:grid`, REGISTRANT_GRID_COLS) that only
+ * exists at `sm` and up, toggled by plain CSS visibility rather than by
+ * conditional rendering — the same "duplicate content, let `hidden`/
+ * `sm:hidden` pick one" technique `ui/responsive-table.tsx` already used for
+ * its desktop `<table>` vs. phone `<ul>` split, just folded into one
+ * `<summary>` instead of two top-level siblings (the `<details>` constraint
+ * this file's own header explains). `display:none` removes a block from the
+ * accessibility tree entirely, so this never double-announces a row to a
+ * screen reader — exactly one of the two blocks exists in the a11y tree at
+ * any given viewport.
  */
 export function RegistrationHubRegistrantRow({
   row,
@@ -172,8 +222,11 @@ export function RegistrationHubRegistrantRow({
       {/* list-none + both marker rules: same treatment as config-panel.tsx's
           Disclosure — a native disclosure triangle otherwise shows via TWO
           different mechanisms depending on engine, alongside the chevron. */}
-      <summary className="marker:content-none flex cursor-pointer list-none items-start justify-between gap-3 p-4 [&::-webkit-details-marker]:hidden">
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
+      <summary className="marker:content-none flex cursor-pointer list-none items-start justify-between gap-3 p-4 sm:items-center [&::-webkit-details-marker]:hidden">
+        {/* Below sm: the original stacked card, untouched but for the new
+            sm:hidden — every phone-width behaviour this earned stays
+            exactly as proven. */}
+        <span data-registration-hub-registrant-card className="flex min-w-0 flex-1 flex-col gap-1 sm:hidden">
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="font-medium text-slate-900">{row.display_name}</span>
             {renderRegistrantStatusCell(row, dict)}
@@ -185,8 +238,30 @@ export function RegistrationHubRegistrantRow({
             <span className="whitespace-nowrap">{fmtDateTime(orgTz, row.created_at)}</span>
           </span>
         </span>
+
+        {/* ≥sm: the SAME six facts as aligned columns under the table's
+            header row (RegistrationHubRegistrantTable, below), sharing
+            REGISTRANT_GRID_COLS so the two can't drift apart. min-w-0 on
+            every cell — see REGISTRANT_GRID_COLS's own comment for the
+            trap this guards against. Only the name cell truncates (single
+            line, ellipsis); the rest wrap within their own column rather
+            than force the row wider. */}
+        <span data-registration-hub-registrant-grid className={`hidden min-w-0 flex-1 ${REGISTRANT_GRID_COLS}`}>
+          <span
+            data-registration-hub-registrant-name-cell
+            className="min-w-0 truncate text-sm font-medium text-slate-900"
+          >
+            {row.display_name}
+          </span>
+          <span className="min-w-0 text-sm text-slate-700">{row.division_name}</span>
+          <span className="min-w-0 text-sm text-slate-700">{renderRegistrantKindCell(row, dict)}</span>
+          <span className="min-w-0 text-sm text-slate-700">{renderRegistrantStatusCell(row, dict)}</span>
+          <span className="min-w-0 text-sm text-slate-700">{renderRegistrantPaymentCell(row, dict)}</span>
+          <span className="min-w-0 text-sm text-slate-700">{fmtDateTime(orgTz, row.created_at)}</span>
+        </span>
+
         <ChevronDown
-          className="mt-1 h-4 w-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180"
+          className="mt-1 h-4 w-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180 sm:mt-0"
           strokeWidth={1.75}
           aria-hidden
         />
@@ -228,6 +303,37 @@ export function RegistrationHubRegistrantTable({
 }) {
   return (
     <div data-registration-hub-registrant-table aria-label={t(context.dict, "reg.hub.tab.registrants")} className="space-y-2">
+      {/* ≥sm only (W2c task 2): column labels for the grid every row lays
+          out below. `aria-hidden` — not merely visual-only via CSS —
+          because this is a plain <div>, not a real ARIA table (the rows
+          are <details> disclosures, never role="row"s inside a
+          role="table"; giving only the header real table roles without
+          the rows to match would be half an ARIA table, arguably more
+          confusing than none), and every fact it labels already lives in
+          each row's own rendered text either way. Hiding it outright is
+          what stops a screen reader from announcing an unlabelled run of
+          column names that corresponds to nothing else in the a11y tree —
+          never announced as a data row, per the brief, because it is
+          never announced at all. */}
+      <div
+        aria-hidden
+        data-registration-hub-registrant-table-header
+        className="hidden items-center gap-3 border-b border-purple-100 px-4 py-2 sm:flex"
+      >
+        <span className={`min-w-0 flex-1 ${REGISTRANT_GRID_COLS}`}>
+          <span className={REGISTRANT_HEADER_CELL}>{t(context.dict, "reg.hub.registrants.table.name")}</span>
+          <span className={REGISTRANT_HEADER_CELL}>{t(context.dict, "reg.hub.registrants.table.division")}</span>
+          <span className={REGISTRANT_HEADER_CELL}>{t(context.dict, "reg.hub.registrants.table.kind")}</span>
+          <span className={REGISTRANT_HEADER_CELL}>{t(context.dict, "reg.hub.registrants.table.status")}</span>
+          <span className={REGISTRANT_HEADER_CELL}>{t(context.dict, "reg.hub.registrants.table.payment")}</span>
+          <span className={REGISTRANT_HEADER_CELL}>{t(context.dict, "reg.hub.registrants.table.submittedAt")}</span>
+        </span>
+        {/* Fixed-width spacer matching the chevron's own h-4 w-4 footprint
+            (every row's own trailing flex sibling, outside the grid) — so
+            the header's six columns end at the SAME right edge every
+            row's six columns do. */}
+        <span className="h-4 w-4 shrink-0" />
+      </div>
       {rows.map((row) => (
         <RegistrationHubRegistrantRow
           key={row.id}

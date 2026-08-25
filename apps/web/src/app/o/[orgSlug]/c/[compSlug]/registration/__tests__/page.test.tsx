@@ -204,14 +204,25 @@ describe("registration hub — RS005 owner/admin/viewer access (reverses RS004 r
     await expect(Page({ params, searchParams: noTab })).resolves.toBeTruthy();
   });
 
-  it("threads canEdit:false through to the Settings panel for a viewer", async () => {
+  it("threads canEdit through to the Settings panel — true for an editor, false for a viewer", async () => {
+    // Was `expect(panel).toBeTruthy()` only, with a comment saying the panel
+    // had no canEdit prop. It has one now (the row context carries it, so the
+    // Configure control can be absent for a viewer), and asserting only that
+    // the panel rendered would ship green against a hardcoded `canEdit: true`
+    // — which is precisely the regression that would put a 403-only control
+    // back in front of a read-only role.
     h.canEdit = false;
-    const tree = walk(await Page({ params, searchParams: noTab }));
-    // The Settings panel itself has no canEdit prop (out of this wave's file
-    // set — see the final report) — this pins that the PAGE still resolves
-    // for a viewer at all, which the removed `notFound()` used to prevent
-    // outright.
-    expect(tree.find((e) => e.type === RegistrationHubSettingsPanel)).toBeTruthy();
+    let panel = walk(await Page({ params, searchParams: noTab })).find(
+      (e) => e.type === RegistrationHubSettingsPanel,
+    );
+    expect(panel).toBeTruthy();
+    expect((propsOf(panel!).context as { canEdit: boolean }).canEdit).toBe(false);
+
+    h.canEdit = true;
+    panel = walk(await Page({ params, searchParams: noTab })).find(
+      (e) => e.type === RegistrationHubSettingsPanel,
+    );
+    expect((propsOf(panel!).context as { canEdit: boolean }).canEdit).toBe(true);
   });
 
   it("still 404s the guard's own refusal (e.g. a scorer) without swallowing it — unrelated to this wave's change", async () => {
