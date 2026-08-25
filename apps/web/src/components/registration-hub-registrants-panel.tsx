@@ -8,6 +8,7 @@ import { hasActiveFilters } from "@/components/registration-hub-registrant-deriv
 import type {
   RegistrantsFilters,
   DivisionOption,
+  RegistrantDetails,
 } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 
@@ -20,16 +21,21 @@ import type { RegistrationListRow } from "@/server/usecases/registrations";
  * over-filtered it", which would misinform an organiser about the former
  * when it's actually the latter.
  *
- * `canEdit` has no visible effect THIS wave — W2a ships no mutating
- * controls at all, so there is nothing yet for it to hide. It is still
- * threaded all the way to a `data-can-edit` attribute on the root (owner
- * ruling: mutating controls must be ABSENT for a viewer, not disabled, so
- * whatever W2b adds needs this decided at the point it renders, not
- * bolted on after).
+ * `canEdit` gated no visible control through W2a — that wave shipped no
+ * mutating controls at all. RS005 W2b's row-expand detail is the first
+ * consumer: the join-code copy control is ABSENT for a viewer (owner
+ * ruling: mutating controls must be ABSENT, not disabled). `canEdit` is
+ * still threaded to the root's `data-can-edit` attribute too, unchanged
+ * from W2a.
  *
  * Every href (`filtersAction`/`clearHref`/`exportHref`/`emptyCtaHref`) is
  * pre-built by page.tsx via `routes.*`, exactly like the Settings panel's
- * `registerHref` — this component never imports `routes` itself.
+ * `registerHref` — this component never imports `routes` itself. W2b reuses
+ * `clearHref` a second time, as the table context's `baseHref`: a cart
+ * sibling's link (registration-hub-registrant-detail.tsx) needs the SAME
+ * filters-cleared URL, for the same reason the "filters matched nothing"
+ * empty state's CTA does — a sibling excluded by the active filter would
+ * otherwise link nowhere.
  */
 export function RegistrationHubRegistrantsPanel({
   rows,
@@ -45,6 +51,7 @@ export function RegistrationHubRegistrantsPanel({
   emptyBody,
   emptyCtaLabel,
   emptyCtaHref,
+  details,
 }: {
   rows: RegistrationListRow[];
   filters: RegistrantsFilters;
@@ -59,6 +66,10 @@ export function RegistrationHubRegistrantsPanel({
   emptyBody: string;
   emptyCtaLabel: string;
   emptyCtaHref: string;
+  /** RS005 W2b — the row-expand detail's batched roster/siblings/form_fields
+   *  (fetchRegistrantDetails, task 3). Threaded straight through to the
+   *  table; this panel does no lookups of its own. */
+  details: RegistrantDetails;
 }) {
   const filtered = hasActiveFilters(filters);
 
@@ -115,7 +126,11 @@ export function RegistrationHubRegistrantsPanel({
           variant="filtered"
         />
       ) : (
-        <RegistrationHubRegistrantTable rows={rows} context={{ dict, orgTz }} />
+        <RegistrationHubRegistrantTable
+          rows={rows}
+          context={{ dict, orgTz, canEdit, baseHref: clearHref }}
+          details={details}
+        />
       )}
     </div>
   );

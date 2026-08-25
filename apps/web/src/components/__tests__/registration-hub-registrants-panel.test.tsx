@@ -14,7 +14,7 @@ import { RegistrationHubRegistrantEmpty } from "@/components/registration-hub-re
 import { RegistrationHubRegistrantFilters } from "@/components/registration-hub-registrant-filters";
 import { RegistrationHubRegistrantTable } from "@/components/registration-hub-registrant-table";
 import { getDictionary, t } from "@/lib/i18n";
-import type { RegistrantsFilters, DivisionOption } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
+import type { RegistrantsFilters, DivisionOption, RegistrantDetails } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 
 const dict = await getDictionary("en", "ui");
@@ -35,6 +35,12 @@ const DIVISIONS: DivisionOption[] = [{ id: "div-1", name: "Open Singles" }];
 
 const ROW = { id: "reg-1", display_name: "Alex Smith" } as unknown as RegistrationListRow;
 
+const EMPTY_DETAILS: RegistrantDetails = {
+  rosterByRegistration: new Map(),
+  siblingsByGroup: new Map(),
+  formFieldsByRegistration: new Map(),
+};
+
 const BASE_PROPS = {
   divisions: DIVISIONS,
   canEdit: false,
@@ -47,6 +53,7 @@ const BASE_PROPS = {
   emptyBody: t(dict, "reg.hub.registrants.body"),
   emptyCtaLabel: t(dict, "reg.hub.registrants.cta"),
   emptyCtaHref: "/o/riverside/c/summer-league/registration?tab=settings",
+  details: EMPTY_DETAILS,
 };
 
 function render(rows: RegistrationListRow[], filters: RegistrantsFilters) {
@@ -107,8 +114,39 @@ describe("rows present", () => {
     const table = tree.find((e) => e.type === RegistrationHubRegistrantTable)!;
     expect(table).toBeTruthy();
     expect(propsOf(table).rows).toEqual([ROW]);
-    expect(propsOf(table).context).toEqual({ dict, orgTz: "UTC" });
+    // RS005 W2b: context grew canEdit + baseHref (the row-expand detail's
+    // join-code gate and cart-sibling links) — baseHref reuses clearHref,
+    // the SAME filters-cleared URL the "filters matched nothing" empty
+    // state's own CTA already points at.
+    expect(propsOf(table).context).toEqual({
+      dict,
+      orgTz: "UTC",
+      canEdit: BASE_PROPS.canEdit,
+      baseHref: BASE_PROPS.clearHref,
+    });
+    expect(propsOf(table).details).toBe(EMPTY_DETAILS);
     expect(tree.find((e) => e.type === RegistrationHubRegistrantEmpty)).toBeUndefined();
+  });
+
+  it("threads canEdit into the table's context — true for an editor, false for a viewer", () => {
+    let tree = walk(RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows: [ROW], filters: DEFAULT_FILTERS, canEdit: true }));
+    let table = tree.find((e) => e.type === RegistrationHubRegistrantTable)!;
+    expect((propsOf(table).context as { canEdit: boolean }).canEdit).toBe(true);
+
+    tree = walk(RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows: [ROW], filters: DEFAULT_FILTERS, canEdit: false }));
+    table = tree.find((e) => e.type === RegistrationHubRegistrantTable)!;
+    expect((propsOf(table).context as { canEdit: boolean }).canEdit).toBe(false);
+  });
+
+  it("passes details straight through to the table, unmodified", () => {
+    const details: RegistrantDetails = {
+      rosterByRegistration: new Map([["reg-1", []]]),
+      siblingsByGroup: new Map(),
+      formFieldsByRegistration: new Map(),
+    };
+    const tree = walk(RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows: [ROW], filters: DEFAULT_FILTERS, details }));
+    const table = tree.find((e) => e.type === RegistrationHubRegistrantTable)!;
+    expect(propsOf(table).details).toBe(details);
   });
 
   it("passes filters straight through to the filter bar, unmodified", () => {

@@ -1,37 +1,51 @@
-// RS005 W2a — the Registrants tab's table (task 4). ONE table, ONE row
-// renderer for every status including waitlisted (ruling: no separate
-// waitlist section — this session deleted waitlist-queue.tsx to avoid
-// exactly that second renderer; waitlist_position rides its own column/spot
-// on this same row instead, and the "waitlist" status filter is how an
-// organiser scopes to the queue).
+// RS005 W2a (task 4) + W2b (task 1/3) — the Registrants tab's row list.
 //
-// Built on the shared ui/responsive-table.tsx (desktop <table>, phone
-// stacked cards, already proven elsewhere — persons-panel.tsx) rather than
-// a hand-rolled table, so this wave inherits its no-horizontal-scroll
-// behaviour instead of re-deriving it. `walk()` never invokes a nested
-// custom component (_hook-harness.tsx's own documented limitation), so
-// rather than trying to render INSIDE <ResponsiveTable>, these tests pull
-// the `columns[i].render`/`renderCard` FUNCTIONS straight off its props and
-// call them directly with a fixture row — the cell-rendering logic is what
-// task 4/6/7's acceptance criteria are actually about.
+// W2b rewrite: this used to be built on ui/responsive-table.tsx (desktop
+// <table>, phone stacked cards). Adding the row-expand detail (W2b) forced
+// it OUT of real <table> markup — a <tr>'s content model only accepts
+// <td>/<th> children, so a <details> cannot wrap one; see
+// RegistrationHubRegistrantRow's own doc comment. Each row is now a
+// <details> (unified markup, no separate desktop/mobile split), reusing the
+// SAME cell-content functions below for its <summary> line.
+//
+// `walk()` never invokes a nested CUSTOM component (_hook-harness.tsx's own
+// documented limitation) — RegistrationHubRegistrantDetail is one, so tests
+// that need to see INSIDE it (none here; registration-hub-registrant-
+// detail.test.tsx owns that) would need a manual invoke. This file only
+// proves it receives the RIGHT PROPS (`e.type === RegistrationHubRegistrantDetail`),
+// same split registration-hub-registrants-panel.test.tsx already uses for
+// this table one level up.
 import { describe, expect, it } from "vitest";
 import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
-import { RegistrationHubRegistrantTable } from "@/components/registration-hub-registrant-table";
-import { ResponsiveTable, type ResponsiveColumn } from "@/components/ui/responsive-table";
+import {
+  RegistrationHubRegistrantTable,
+  RegistrationHubRegistrantRow,
+  renderRegistrantKindCell,
+  renderRegistrantStatusCell,
+  renderRegistrantPaymentCell,
+  type RegistrationHubRegistrantTableContext,
+} from "@/components/registration-hub-registrant-table";
+import { RegistrationHubRegistrantDetail } from "@/components/registration-hub-registrant-detail";
+import { registrantRowAnchor } from "@/components/registration-hub-registrant-derive";
 import { getDictionary } from "@/lib/i18n";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
+import type { RegistrantDetails } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 
 const dict = await getDictionary("en", "ui");
 const ORG_TZ = "UTC";
 
-function tableElement(rows: RegistrationListRow[]) {
-  const tree = walk(RegistrationHubRegistrantTable({ rows, context: { dict, orgTz: ORG_TZ } }));
-  return tree.find((e) => e.type === ResponsiveTable)!;
-}
+const CONTEXT: RegistrationHubRegistrantTableContext = {
+  dict,
+  orgTz: ORG_TZ,
+  canEdit: true,
+  baseHref: "/o/riverside/c/summer-league/registration?tab=registrants",
+};
 
-function columnsOf(rows: RegistrationListRow[] = []): ResponsiveColumn<RegistrationListRow>[] {
-  return propsOf(tableElement(rows)).columns as ResponsiveColumn<RegistrationListRow>[];
-}
+const EMPTY_DETAILS: RegistrantDetails = {
+  rosterByRegistration: new Map(),
+  siblingsByGroup: new Map(),
+  formFieldsByRegistration: new Map(),
+};
 
 // A cast, not a typed literal: only the fields each individual test reads
 // need real values, and a hand-typed 40+-field RegistrationListRow literal
@@ -40,6 +54,7 @@ function columnsOf(rows: RegistrationListRow[] = []): ResponsiveColumn<Registrat
 function row(over: Partial<RegistrationListRow>): RegistrationListRow {
   return {
     id: "reg-1",
+    group_id: "group-1",
     display_name: "Alex Smith",
     division_name: "Open Singles",
     entrant_kind: "individual",
@@ -55,158 +70,242 @@ function row(over: Partial<RegistrationListRow>): RegistrationListRow {
   } as unknown as RegistrationListRow;
 }
 
-describe("RegistrationHubRegistrantTable — wiring", () => {
-  it("passes rows straight through, unmodified", () => {
-    const rows = [row({ id: "r1" }), row({ id: "r2" })];
-    expect(propsOf(tableElement(rows)).rows).toBe(rows);
-  });
-
-  it("keys by the registration id", () => {
-    const keyOf = propsOf(tableElement([])).keyOf as (r: RegistrationListRow) => string;
-    expect(keyOf(row({ id: "reg-42" }))).toBe("reg-42");
-  });
-
-  it("declares exactly the 6 required columns, in order", () => {
-    expect(columnsOf().map((c) => c.key)).toEqual([
-      "name",
-      "division",
-      "kind",
-      "status",
-      "payment",
-      "submittedAt",
-    ]);
-  });
-});
-
-describe("name / division / submittedAt cells", () => {
-  it("name renders display_name", () => {
-    const col = columnsOf().find((c) => c.key === "name")!;
-    expect(textOf(col.render(row({ display_name: "Jordan Lee" })))).toContain("Jordan Lee");
-  });
-
-  it("division renders division_name", () => {
-    const col = columnsOf().find((c) => c.key === "division")!;
-    expect(textOf(col.render(row({ division_name: "Mixed Doubles" })))).toContain("Mixed Doubles");
-  });
-
-  it("submittedAt formats created_at in the ORG timezone, not UTC/browser-local", () => {
-    const col = columnsOf().find((c) => c.key === "submittedAt")!;
-    const utcText = textOf(col.render(row({ created_at: new Date("2026-01-15T10:00:00Z") })));
-    // Same instant, threaded through a DIFFERENT orgTz, must render differently.
-    const kolkataTree = walk(
-      RegistrationHubRegistrantTable({
-        rows: [],
-        context: { dict, orgTz: "Asia/Kolkata" },
-      }),
-    );
-    const kolkataCol = (propsOf(kolkataTree.find((e) => e.type === ResponsiveTable)!).columns as ResponsiveColumn<RegistrationListRow>[]).find(
-      (c) => c.key === "submittedAt",
-    )!;
-    const kolkataText = textOf(kolkataCol.render(row({ created_at: new Date("2026-01-15T10:00:00Z") })));
-    expect(kolkataText).not.toBe(utcText);
-  });
-});
-
-describe("kind cell — roster fill (task 4)", () => {
+describe("renderRegistrantKindCell — roster fill (task 4)", () => {
   it("a team shows roster fill n/cap", () => {
-    const col = columnsOf().find((c) => c.key === "kind")!;
-    const text = textOf(col.render(row({ entrant_kind: "team", roster_count: 5, roster_cap: 7 })));
+    const text = textOf(renderRegistrantKindCell(row({ entrant_kind: "team", roster_count: 5, roster_cap: 7 }), dict));
     expect(text).toContain("5/7");
   });
 
   it("a team with NO roster cap (unlimited sport) shows n/∞", () => {
-    const col = columnsOf().find((c) => c.key === "kind")!;
-    const text = textOf(col.render(row({ entrant_kind: "team", roster_count: 5, roster_cap: null })));
+    const text = textOf(
+      renderRegistrantKindCell(row({ entrant_kind: "team", roster_count: 5, roster_cap: null }), dict),
+    );
     expect(text).toContain("5/∞");
   });
 
   it("individual/pair entries show the kind label but NO roster fill", () => {
-    const col = columnsOf().find((c) => c.key === "kind")!;
-    const individual = textOf(col.render(row({ entrant_kind: "individual", roster_count: 1, roster_cap: 1 })));
-    const pair = textOf(col.render(row({ entrant_kind: "pair", roster_count: 2, roster_cap: 2 })));
+    const individual = textOf(renderRegistrantKindCell(row({ entrant_kind: "individual", roster_count: 1, roster_cap: 1 }), dict));
+    const pair = textOf(renderRegistrantKindCell(row({ entrant_kind: "pair", roster_count: 2, roster_cap: 2 }), dict));
     expect(individual).not.toMatch(/\d+\/(\d+|∞)/);
     expect(pair).not.toMatch(/\d+\/(\d+|∞)/);
   });
 });
 
-describe("status cell — waitlist position (task 4)", () => {
+describe("renderRegistrantStatusCell — waitlist position (task 4)", () => {
   it("a waitlisted row shows its position", () => {
-    const col = columnsOf().find((c) => c.key === "status")!;
-    const text = textOf(col.render(row({ status: "waitlisted", waitlist_position: 3 })));
+    const text = textOf(renderRegistrantStatusCell(row({ status: "waitlisted", waitlist_position: 3 }), dict));
     expect(text).toContain("#3");
   });
 
   it("a non-waitlisted row shows NO position in the ordinary case (waitlist_position genuinely null)", () => {
-    const col = columnsOf().find((c) => c.key === "status")!;
-    const text = textOf(col.render(row({ status: "confirmed", waitlist_position: null })));
+    const text = textOf(renderRegistrantStatusCell(row({ status: "confirmed", waitlist_position: null }), dict));
     expect(text).not.toContain("#");
   });
 
   it("a non-waitlisted row shows NO position even if waitlist_position were somehow non-null (status gates it, not just the field)", () => {
-    // listRegistrations' own query only ever sets waitlist_position when
-    // status='waitlisted' — this is a defence-in-depth case, not a reachable
-    // one, and it is the ONE that actually exercises the `row.status ===
-    // "waitlisted" &&` half of the guard: the test above (waitlist_position
-    // null) passes identically whether or not that half of the condition
-    // exists at all.
-    const col = columnsOf().find((c) => c.key === "status")!;
-    const text = textOf(col.render(row({ status: "confirmed", waitlist_position: 3 })));
+    const text = textOf(renderRegistrantStatusCell(row({ status: "confirmed", waitlist_position: 3 }), dict));
     expect(text).not.toContain("#3");
   });
 
   it("carries a data hook naming the real status, for e2e/regression", () => {
-    const col = columnsOf().find((c) => c.key === "status")!;
-    const tree = walk(col.render(row({ status: "rejected" })));
+    const tree = walk(renderRegistrantStatusCell(row({ status: "rejected" }), dict));
     const pill = tree.find((e) => propsOf(e)["data-registration-hub-registrant-status"] !== undefined)!;
     expect(propsOf(pill)["data-registration-hub-registrant-status"]).toBe("rejected");
   });
 });
 
-describe("payment cell", () => {
+describe("renderRegistrantPaymentCell", () => {
   it("shows the formatted amount", () => {
-    const col = columnsOf().find((c) => c.key === "payment")!;
-    const text = textOf(col.render(row({ amount_cents: 2500, currency: "usd", refunded_cents: 0 })));
+    const text = textOf(renderRegistrantPaymentCell(row({ amount_cents: 2500, currency: "usd", refunded_cents: 0 }), dict));
     expect(text).toContain("$25");
   });
 
   it("shows Free for a zero-fee entry", () => {
-    const col = columnsOf().find((c) => c.key === "payment")!;
-    const text = textOf(col.render(row({ amount_cents: 0, refunded_cents: 0 })));
+    const text = textOf(renderRegistrantPaymentCell(row({ amount_cents: 0, refunded_cents: 0 }), dict));
     expect(text.toLowerCase()).toContain("free");
   });
 
   it("notes a refund when refunded_cents is positive", () => {
-    const col = columnsOf().find((c) => c.key === "payment")!;
-    const text = textOf(col.render(row({ amount_cents: 2500, currency: "usd", refunded_cents: 1000 })));
+    const text = textOf(renderRegistrantPaymentCell(row({ amount_cents: 2500, currency: "usd", refunded_cents: 1000 }), dict));
     expect(text).toContain("$10");
   });
 
   it("says nothing about a refund when refunded_cents is zero", () => {
-    const col = columnsOf().find((c) => c.key === "payment")!;
-    const text = textOf(col.render(row({ amount_cents: 2500, refunded_cents: 0 })));
+    const text = textOf(renderRegistrantPaymentCell(row({ amount_cents: 2500, refunded_cents: 0 }), dict));
     expect(text.toLowerCase()).not.toContain("refund");
   });
 });
 
-describe("access_token_hash never appears", () => {
-  it("is absent from every cell's rendered text, even if a caller accidentally widened the row type", () => {
+describe("RegistrationHubRegistrantRow — the expand mechanism (task 1)", () => {
+  it("is a native <details>, with NO onToggle handler at all", () => {
+    const tree = walk(
+      RegistrationHubRegistrantRow({ row: row({}), context: CONTEXT, roster: [], siblings: [], formFields: [] }),
+    );
+    const root = tree[0]!;
+    expect(root.type).toBe("details");
+    expect(propsOf(root)).not.toHaveProperty("onToggle");
+    expect(propsOf(root).open).toBeUndefined();
+  });
+
+  it("carries the row data hooks and an id anchor a sibling link can point at", () => {
+    const tree = walk(
+      RegistrationHubRegistrantRow({ row: row({ id: "reg-77" }), context: CONTEXT, roster: [], siblings: [], formFields: [] }),
+    );
+    const root = tree[0]!;
+    expect(propsOf(root)).toHaveProperty("data-registration-hub-registrant-row");
+    expect(propsOf(root)["data-registration-id"]).toBe("reg-77");
+    expect(propsOf(root).id).toBe(registrantRowAnchor("reg-77"));
+  });
+
+  it("access_token_hash never appears in the summary line, even if a caller accidentally widened the row type", () => {
     const poisoned = row({}) as unknown as Record<string, unknown>;
     poisoned.access_token_hash = "SECRET_HASH_VALUE";
-    const cols = columnsOf();
-    for (const col of cols) {
-      const text = textOf(col.render(poisoned as unknown as RegistrationListRow));
-      expect(text).not.toContain("SECRET_HASH_VALUE");
-    }
+    const tree = walk(
+      RegistrationHubRegistrantRow({
+        row: poisoned as unknown as RegistrationListRow,
+        context: CONTEXT,
+        roster: [],
+        siblings: [],
+        formFields: [],
+      }),
+    );
+    // Only the <summary> line's own text is checked here — the detail body
+    // is an opaque nested component from this row's own tree (see file
+    // header); registration-hub-registrant-detail.test.tsx proves it there.
+    const summary = tree.find((e) => e.type === "summary")!;
+    expect(textOf(summary)).not.toContain("SECRET_HASH_VALUE");
   });
 });
 
-describe("mobile card (renderCard) carries its own row data hook", () => {
-  it("tags the card root with the registration id — ResponsiveTable's <tr> has no such hook, this is the addressable one", () => {
-    const renderCard = propsOf(tableElement([])).renderCard as (
-      r: RegistrationListRow,
-    ) => Parameters<typeof walk>[0];
-    const root = walk(renderCard(row({ id: "reg-77" })))[0]!;
-    expect(propsOf(root)["data-registration-hub-registrant-row"]).not.toBeUndefined();
-    expect(propsOf(root)["data-registration-id"]).toBe("reg-77");
+describe("RegistrationHubRegistrantRow — summary line content", () => {
+  it("renders name, division, kind, status, payment, submitted-at", () => {
+    const tree = walk(
+      RegistrationHubRegistrantRow({
+        row: row({ display_name: "Jordan Lee", division_name: "Mixed Doubles", created_at: new Date("2026-01-15T10:00:00Z") }),
+        context: CONTEXT,
+        roster: [],
+        siblings: [],
+        formFields: [],
+      }),
+    );
+    const summary = tree.find((e) => e.type === "summary")!;
+    const text = textOf(summary);
+    expect(text).toContain("Jordan Lee");
+    expect(text).toContain("Mixed Doubles");
+  });
+
+  it("formats submittedAt in the ORG timezone, not UTC/browser-local", () => {
+    const utcTree = walk(
+      RegistrationHubRegistrantRow({ row: row({}), context: { ...CONTEXT, orgTz: "UTC" }, roster: [], siblings: [], formFields: [] }),
+    );
+    const kolkataTree = walk(
+      RegistrationHubRegistrantRow({ row: row({}), context: { ...CONTEXT, orgTz: "Asia/Kolkata" }, roster: [], siblings: [], formFields: [] }),
+    );
+    const utcText = textOf(utcTree.find((e) => e.type === "summary")!);
+    const kolkataText = textOf(kolkataTree.find((e) => e.type === "summary")!);
+    expect(kolkataText).not.toBe(utcText);
+  });
+});
+
+describe("RegistrationHubRegistrantRow — the detail body", () => {
+  it("renders RegistrationHubRegistrantDetail with the row and every context/data prop threaded through", () => {
+    const roster = [{ id: "p1", full_name: "Alex", squad_number: 1, is_captain: true, consent_status: "granted" as const }];
+    const siblings = [{ id: "reg-2", display_name: "Sibling", division_name: "Open", status: "pending" as const }];
+    const formFields = [{ key: "k", label: "K", kind: "text" as const, required: false }];
+    const theRow = row({ id: "reg-1" });
+
+    const tree = walk(
+      RegistrationHubRegistrantRow({ row: theRow, context: CONTEXT, roster, siblings, formFields }),
+    );
+    const detail = tree.find((e) => e.type === RegistrationHubRegistrantDetail)!;
+    expect(detail).toBeTruthy();
+    const props = propsOf(detail);
+    expect(props.row).toBe(theRow);
+    expect(props.dict).toBe(CONTEXT.dict);
+    expect(props.orgTz).toBe(CONTEXT.orgTz);
+    expect(props.canEdit).toBe(CONTEXT.canEdit);
+    expect(props.baseHref).toBe(CONTEXT.baseHref);
+    expect(props.roster).toBe(roster);
+    expect(props.siblings).toBe(siblings);
+    expect(props.formFields).toBe(formFields);
+  });
+});
+
+describe("RegistrationHubRegistrantTable — row list wiring (task 3: per-row map lookups)", () => {
+  it("renders one RegistrationHubRegistrantRow per row, keyed by registration id", () => {
+    const rows = [row({ id: "r1" }), row({ id: "r2" })];
+    const tree = walk(RegistrationHubRegistrantTable({ rows, context: CONTEXT, details: EMPTY_DETAILS }));
+    const rowEls = tree.filter((e) => e.type === RegistrationHubRegistrantRow);
+    expect(rowEls.map((e) => propsOf(e).row)).toEqual(rows);
+  });
+
+  it("resolves each row's roster off rosterByRegistration, defaulting to [] when absent", () => {
+    const rows = [row({ id: "r1" }), row({ id: "r2" })];
+    const details: RegistrantDetails = {
+      rosterByRegistration: new Map([["r1", [{ id: "p1", full_name: "A", squad_number: null, is_captain: false, consent_status: "granted" as const }]]]),
+      siblingsByGroup: new Map(),
+      formFieldsByRegistration: new Map(),
+    };
+    const tree = walk(RegistrationHubRegistrantTable({ rows, context: CONTEXT, details }));
+    const rowEls = tree.filter((e) => e.type === RegistrationHubRegistrantRow);
+    expect(propsOf(rowEls[0]!).roster).toHaveLength(1);
+    expect(propsOf(rowEls[1]!).roster).toEqual([]);
+  });
+
+  it("resolves each row's cart siblings off siblingsByGroup keyed by GROUP id, with the row's OWN id excluded", () => {
+    const rows = [row({ id: "r1", group_id: "g1" }), row({ id: "r2", group_id: "g1" })];
+    const details: RegistrantDetails = {
+      rosterByRegistration: new Map(),
+      siblingsByGroup: new Map([
+        [
+          "g1",
+          [
+            { id: "r1", display_name: "First", division_name: "Open", status: "confirmed" as const },
+            { id: "r2", display_name: "Second", division_name: "Open", status: "pending" as const },
+          ],
+        ],
+      ]),
+      formFieldsByRegistration: new Map(),
+    };
+    const tree = walk(RegistrationHubRegistrantTable({ rows, context: CONTEXT, details }));
+    const rowEls = tree.filter((e) => e.type === RegistrationHubRegistrantRow);
+    expect((propsOf(rowEls[0]!).siblings as { id: string }[]).map((s) => s.id)).toEqual(["r2"]);
+    expect((propsOf(rowEls[1]!).siblings as { id: string }[]).map((s) => s.id)).toEqual(["r1"]);
+  });
+
+  it("a single-entry cart's siblings prop is an empty array, not the self-inclusive list", () => {
+    const rows = [row({ id: "r1", group_id: "g1" })];
+    const details: RegistrantDetails = {
+      rosterByRegistration: new Map(),
+      siblingsByGroup: new Map([["g1", [{ id: "r1", display_name: "Only", division_name: "Open", status: "confirmed" as const }]]]),
+      formFieldsByRegistration: new Map(),
+    };
+    const tree = walk(RegistrationHubRegistrantTable({ rows, context: CONTEXT, details }));
+    const rowEl = tree.find((e) => e.type === RegistrationHubRegistrantRow)!;
+    expect(propsOf(rowEl).siblings).toEqual([]);
+  });
+
+  it("resolves each row's answer form_fields off formFieldsByRegistration, defaulting to [] when absent", () => {
+    const rows = [row({ id: "r1" })];
+    const details: RegistrantDetails = {
+      rosterByRegistration: new Map(),
+      siblingsByGroup: new Map(),
+      formFieldsByRegistration: new Map([["r1", [{ key: "k", label: "K", kind: "text" as const, required: false }]]]),
+    };
+    const tree = walk(RegistrationHubRegistrantTable({ rows, context: CONTEXT, details }));
+    const rowEl = tree.find((e) => e.type === RegistrationHubRegistrantRow)!;
+    expect(propsOf(rowEl).formFields).toEqual([{ key: "k", label: "K", kind: "text", required: false }]);
+  });
+
+  it("passes context straight through to every row, unmodified", () => {
+    const rows = [row({ id: "r1" })];
+    const tree = walk(RegistrationHubRegistrantTable({ rows, context: CONTEXT, details: EMPTY_DETAILS }));
+    const rowEl = tree.find((e) => e.type === RegistrationHubRegistrantRow)!;
+    expect(propsOf(rowEl).context).toBe(CONTEXT);
+  });
+
+  it("carries a root data hook for e2e/regression targeting", () => {
+    const tree = walk(RegistrationHubRegistrantTable({ rows: [], context: CONTEXT, details: EMPTY_DETAILS }));
+    expect(propsOf(tree[0]!)).toHaveProperty("data-registration-hub-registrant-table");
   });
 });

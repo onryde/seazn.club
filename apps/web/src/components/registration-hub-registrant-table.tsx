@@ -1,12 +1,19 @@
 import type { ReactNode } from "react";
-import { ResponsiveTable, type ResponsiveColumn } from "@/components/ui/responsive-table";
+import { ChevronDown } from "lucide-react";
 import { t } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n-constants";
 import { formatMinor, asCurrency } from "@/lib/currency";
 import { fmtDateTime } from "@/lib/format";
 import { deriveCapacityMeter } from "@/components/registration-hub-row-derive";
-import { REGISTRANT_STATUS_STYLE } from "@/components/registration-hub-registrant-derive";
+import { REGISTRANT_STATUS_STYLE, registrantRowAnchor } from "@/components/registration-hub-registrant-derive";
+import type { RegistrationFormField } from "@/server/api-v1/schemas";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
+import type {
+  RegistrantDetails,
+  RegistrantRosterPlayer,
+  RegistrantCartSibling,
+} from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
+import { RegistrationHubRegistrantDetail } from "@/components/registration-hub-registrant-detail";
 
 /**
  * The kind cell (task 4): the entrant-kind label, reusing the SAME
@@ -108,71 +115,129 @@ export interface RegistrationHubRegistrantTableContext {
   /** organizations.timezone (or DEFAULT_TZ) — the SAME org-level tz the
    *  Settings tab's window column renders in, never browser/server-local. */
   orgTz: string;
+  /** RS005 W2b: gates the row-expand detail's mutating controls (today,
+   *  only the join-code copy) — ABSENT for a viewer, never disabled (owner
+   *  ruling, 2026-08-25). */
+  canEdit: boolean;
+  /** The Registrants tab's own URL with NO filters — a cart-sibling link
+   *  (registration-hub-registrant-detail.tsx) needs this rather than the
+   *  current (possibly filtered) URL, or a sibling excluded by the active
+   *  filter would link nowhere. Same value as the panel's own `clearHref`. */
+  baseHref: string;
 }
 
 /**
- * Registration hub — Registrants tab table (RS005 W2a task 4). Columns:
- * name, division, kind (+ roster fill for a team), status (+ waitlist
- * position), payment, submitted-at. Built on the shared
- * ui/responsive-table.tsx (desktop `<table>`, phone stacked cards) rather
- * than a hand-rolled table, so the seven-width no-horizontal-scroll bar is
- * inherited rather than re-derived.
+ * Registration hub — Registrants tab, ONE row (RS005 W2a task 4 + W2b task
+ * 1/2). A native `<details>/<summary>` disclosure — no `onToggle` handler,
+ * matching W2a's zero-client-JS surface: RS004's own `Disclosure`
+ * (registration-hub-config-panel.tsx) once hand-typed that handler's event
+ * shape wrong in a way `tsc` could not catch, and the fix there was a real
+ * DOM event type, not removing the handler — but THIS row has no need for
+ * one at all (nothing forces it open/closed programmatically), so the
+ * simplest fix that cannot reproduce that bug is to have no handler.
+ *
+ * The `<summary>` is the SAME scan line W2a's table cell/mobile-card
+ * rendered (name + status pill, then division/kind/payment/submitted-at) —
+ * reusing the exact cell-content functions below keeps that identical
+ * regardless of which breakpoint is looking at it, now unified into ONE
+ * markup path rather than a separate desktop-`<table>`/mobile-card split
+ * (ui/responsive-table.tsx cannot host a `<details>` per row: a `<tr>`'s
+ * content model only accepts `<td>/<th>` children, so an expand-in-place
+ * design forces this row OUT of real `<table>` markup, the same way the
+ * Settings tab's own per-division row already is — registration-hub-
+ * division-row.tsx is a `<div>` card, not a `<tr>`, for the same reason).
+ */
+export function RegistrationHubRegistrantRow({
+  row,
+  context,
+  roster,
+  siblings,
+  formFields,
+}: {
+  row: RegistrationListRow;
+  context: RegistrationHubRegistrantTableContext;
+  roster: RegistrantRosterPlayer[];
+  siblings: RegistrantCartSibling[];
+  formFields: RegistrationFormField[];
+}) {
+  const { dict, orgTz, canEdit, baseHref } = context;
+
+  return (
+    <details
+      id={registrantRowAnchor(row.id)}
+      data-registration-hub-registrant-row
+      data-registration-id={row.id}
+      className="card group overflow-hidden p-0"
+    >
+      {/* list-none + both marker rules: same treatment as config-panel.tsx's
+          Disclosure — a native disclosure triangle otherwise shows via TWO
+          different mechanisms depending on engine, alongside the chevron. */}
+      <summary className="marker:content-none flex cursor-pointer list-none items-start justify-between gap-3 p-4 [&::-webkit-details-marker]:hidden">
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="font-medium text-slate-900">{row.display_name}</span>
+            {renderRegistrantStatusCell(row, dict)}
+          </span>
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+            <span>{row.division_name}</span>
+            <span>{renderRegistrantKindCell(row, dict)}</span>
+            <span>{renderRegistrantPaymentCell(row, dict)}</span>
+            <span className="whitespace-nowrap">{fmtDateTime(orgTz, row.created_at)}</span>
+          </span>
+        </span>
+        <ChevronDown
+          className="mt-1 h-4 w-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180"
+          strokeWidth={1.75}
+          aria-hidden
+        />
+      </summary>
+      <div className="border-t border-purple-100 p-4">
+        <RegistrationHubRegistrantDetail
+          row={row}
+          dict={dict}
+          orgTz={orgTz}
+          canEdit={canEdit}
+          roster={roster}
+          siblings={siblings}
+          formFields={formFields}
+          baseHref={baseHref}
+        />
+      </div>
+    </details>
+  );
+}
+
+/**
+ * Registration hub — Registrants tab, the row list (RS005 W2a task 4, W2b
+ * task 1). One `RegistrationHubRegistrantRow` per registration — the per-row
+ * roster/siblings/formFields slices are resolved HERE, once, off the
+ * batched maps `fetchRegistrantDetails` built (task 3: 2 queries for the
+ * whole page, never one per row) — `RegistrationHubRegistrantRow` itself
+ * never touches a Map. Cart siblings are SELF-EXCLUDED here (the map is
+ * self-inclusive by construction — see fetchRegistrantDetails) so the row
+ * never has to filter its own id back out of its own props.
  */
 export function RegistrationHubRegistrantTable({
   rows,
   context,
+  details,
 }: {
   rows: RegistrationListRow[];
   context: RegistrationHubRegistrantTableContext;
+  details: RegistrantDetails;
 }) {
-  const { dict, orgTz } = context;
-
-  const columns: ResponsiveColumn<RegistrationListRow>[] = [
-    { key: "name", header: t(dict, "reg.hub.registrants.table.name"), render: (r) => r.display_name },
-    { key: "division", header: t(dict, "reg.hub.registrants.table.division"), render: (r) => r.division_name },
-    { key: "kind", header: t(dict, "reg.hub.registrants.table.kind"), render: (r) => renderRegistrantKindCell(r, dict) },
-    {
-      key: "status",
-      header: t(dict, "reg.hub.registrants.table.status"),
-      render: (r) => renderRegistrantStatusCell(r, dict),
-    },
-    {
-      key: "payment",
-      header: t(dict, "reg.hub.registrants.table.payment"),
-      render: (r) => renderRegistrantPaymentCell(r, dict),
-    },
-    {
-      key: "submittedAt",
-      header: t(dict, "reg.hub.registrants.table.submittedAt"),
-      className: "whitespace-nowrap",
-      render: (r) => fmtDateTime(orgTz, r.created_at),
-    },
-  ];
-
   return (
-    <ResponsiveTable
-      aria-label={t(dict, "reg.hub.tab.registrants")}
-      columns={columns}
-      rows={rows}
-      keyOf={(r) => r.id}
-      renderCard={(r) => (
-        <div
-          data-registration-hub-registrant-row
-          data-registration-id={r.id}
-          className="space-y-1.5"
-        >
-          <div className="flex items-start justify-between gap-2">
-            <span className="font-medium text-slate-900">{r.display_name}</span>
-            {renderRegistrantStatusCell(r, dict)}
-          </div>
-          <div className="text-sm text-slate-600">{r.division_name}</div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-            <span>{renderRegistrantKindCell(r, dict)}</span>
-            <span>{renderRegistrantPaymentCell(r, dict)}</span>
-            <span>{fmtDateTime(orgTz, r.created_at)}</span>
-          </div>
-        </div>
-      )}
-    />
+    <div data-registration-hub-registrant-table aria-label={t(context.dict, "reg.hub.tab.registrants")} className="space-y-2">
+      {rows.map((row) => (
+        <RegistrationHubRegistrantRow
+          key={row.id}
+          row={row}
+          context={context}
+          roster={details.rosterByRegistration.get(row.id) ?? []}
+          siblings={(details.siblingsByGroup.get(row.group_id) ?? []).filter((s) => s.id !== row.id)}
+          formFields={details.formFieldsByRegistration.get(row.id) ?? []}
+        />
+      ))}
+    </div>
   );
 }
