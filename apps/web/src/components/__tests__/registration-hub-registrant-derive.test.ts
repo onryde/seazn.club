@@ -11,6 +11,7 @@ import {
   deriveRegistrantPaymentState,
   answerLabel,
   registrantRowAnchor,
+  deriveRegistrantActionFlags,
 } from "@/components/registration-hub-registrant-derive";
 import type { RegistrantsFilters } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
@@ -175,5 +176,77 @@ describe("answerLabel", () => {
 describe("registrantRowAnchor", () => {
   it("builds the SAME anchor id a row sets on itself and a sibling link points at — one function, not two hand-typed copies", () => {
     expect(registrantRowAnchor("reg-42")).toBe("registrant-reg-42");
+  });
+});
+
+describe("deriveRegistrantActionFlags", () => {
+  // RS005 W3 task 3's own legality rule, taken literally: approve/reject
+  // need BOTH approval === "manual" AND an awaiting-decision status
+  // (pending or paid) — never re-derived by hand at a button call site, so
+  // the pure rule and the completeness sweep below can't drift apart.
+  it("approve/reject are legal on a manual division's pending or paid entry", () => {
+    expect(deriveRegistrantActionFlags({ status: "pending", approval: "manual" })).toMatchObject({
+      canApprove: true,
+      canReject: true,
+    });
+    expect(deriveRegistrantActionFlags({ status: "paid", approval: "manual" })).toMatchObject({
+      canApprove: true,
+      canReject: true,
+    });
+  });
+
+  it("approve/reject are ABSENT on an auto-approval division, even pending/paid — offering them would hand an organiser a button approveRegistration 422s on", () => {
+    expect(deriveRegistrantActionFlags({ status: "pending", approval: "auto" })).toMatchObject({
+      canApprove: false,
+      canReject: false,
+    });
+    expect(deriveRegistrantActionFlags({ status: "paid", approval: "auto" })).toMatchObject({
+      canApprove: false,
+      canReject: false,
+    });
+  });
+
+  it("approve/reject are ABSENT on a manual division once the entry is no longer awaiting a decision (includes the terminal statuses)", () => {
+    for (const status of ["confirmed", "waitlisted", "withdrawn", "expired", "rejected"] as const) {
+      expect(deriveRegistrantActionFlags({ status, approval: "manual" })).toMatchObject({
+        canApprove: false,
+        canReject: false,
+      });
+    }
+  });
+
+  it("withdraw is legal on every non-terminal status", () => {
+    for (const status of ["pending", "paid", "confirmed", "waitlisted"] as const) {
+      expect(deriveRegistrantActionFlags({ status, approval: "auto" }).canWithdraw).toBe(true);
+    }
+  });
+
+  it("withdraw is ABSENT on every terminal status (withdrawn, rejected, expired)", () => {
+    for (const status of ["withdrawn", "rejected", "expired"] as const) {
+      expect(deriveRegistrantActionFlags({ status, approval: "auto" }).canWithdraw).toBe(false);
+    }
+  });
+
+  it("promote is legal ONLY for a waitlisted entry", () => {
+    expect(deriveRegistrantActionFlags({ status: "waitlisted", approval: "auto" }).canPromote).toBe(true);
+    for (const status of ["pending", "paid", "confirmed", "withdrawn", "expired", "rejected"] as const) {
+      expect(deriveRegistrantActionFlags({ status, approval: "auto" }).canPromote).toBe(false);
+    }
+  });
+
+  // Completeness sweep, RS005 W1a-style: iterates the REAL zod enum rather
+  // than a hand-copied list, for both approval modes, so a status added to
+  // the union in future is exercised here automatically rather than
+  // silently falling through to whatever a switch's default case does.
+  it("returns a defined boolean for every real status × approval combination", () => {
+    for (const status of RegistrationStatus.options) {
+      for (const approval of ["auto", "manual"] as const) {
+        const flags = deriveRegistrantActionFlags({ status, approval });
+        expect(typeof flags.canApprove).toBe("boolean");
+        expect(typeof flags.canReject).toBe("boolean");
+        expect(typeof flags.canWithdraw).toBe("boolean");
+        expect(typeof flags.canPromote).toBe("boolean");
+      }
+    }
   });
 });

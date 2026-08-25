@@ -151,3 +151,63 @@ export function answerLabel(key: string, fields: RegistrationFormField[]): strin
 export function registrantRowAnchor(registrationId: string): string {
   return `registrant-${registrationId}`;
 }
+
+// ---------------------------------------------------------------------------
+// Row-expand detail actions (RS005 W3).
+// ---------------------------------------------------------------------------
+
+export interface RegistrantActionFlags {
+  canApprove: boolean;
+  canReject: boolean;
+  canWithdraw: boolean;
+  canPromote: boolean;
+}
+
+/** withdrawn/rejected/expired — a registration in any of these never moves
+ *  again (RS005 W3 dispatch's own definition). Read as a Set, not a switch,
+ *  so `canWithdraw` below is one membership check rather than a branch per
+ *  status that could omit one. */
+const TERMINAL_REGISTRANT_STATUSES: ReadonlySet<RegistrationListRow["status"]> = new Set([
+  "withdrawn",
+  "rejected",
+  "expired",
+]);
+
+/**
+ * Which of the Registrants tab's row-level mutating controls are legal for
+ * ONE row, taken literally from the RS005 W3 dispatch's own task-3 rule —
+ * never re-derived by hand at a button call site, so this function and the
+ * completeness sweep in its test file can't drift apart the way
+ * REGISTRANT_STATUS_STYLE's hand-kept status list once did (RS005 W1a).
+ *
+ * approve/reject: legal ONLY on a `manual`-approval division, and ONLY while
+ * the entry is still awaiting a decision (`pending`, or `paid` — a division
+ * can charge a fee before an organiser has reviewed it). `approveRegistration`/
+ * `rejectRegistration` (registration-approval.ts) 422 outside this rule
+ * (auto-approval division, or a status past "awaiting decision") — showing
+ * the button anyway would hand an organiser a control that cannot work.
+ * Deliberately does NOT also exclude an already-refunded 'paid' row the way
+ * `approveRegistration` itself additionally does: the dispatch's own
+ * legality rule stops at "pending, or paid on a manual division", and that
+ * narrower server-side refusal is exactly what this wave's 4xx-revert path
+ * (RegistrationHubRegistrantActions) exists to surface instead of silently
+ * pre-empting here.
+ *
+ * withdraw: legal for any NON-terminal status — an organiser can withdraw a
+ * still-live entry regardless of its approval mode or review state.
+ *
+ * promote: legal ONLY for a `waitlisted` entry — every other status has
+ * nothing to promote FROM.
+ */
+export function deriveRegistrantActionFlags(
+  row: Pick<RegistrationListRow, "status" | "approval">,
+): RegistrantActionFlags {
+  const awaitingManualDecision =
+    row.approval === "manual" && (row.status === "pending" || row.status === "paid");
+  return {
+    canApprove: awaitingManualDecision,
+    canReject: awaitingManualDecision,
+    canWithdraw: !TERMINAL_REGISTRANT_STATUSES.has(row.status),
+    canPromote: row.status === "waitlisted",
+  };
+}
