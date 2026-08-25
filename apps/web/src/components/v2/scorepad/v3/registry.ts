@@ -49,6 +49,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import type { TFn } from "./context-strip";
 import type { SkinDefV3 } from "./types";
 import { cricketSkinV3 } from "./skins/cricket";
+import { footballSkinV3 } from "./skins/football";
 
 /**
  * Sport key -> v3 skin FACTORY. Empty through R1; populated sport-by-sport
@@ -69,6 +70,12 @@ import { cricketSkinV3 } from "./skins/cricket";
  */
 export const V3_SKINS: Partial<Record<string, (t: TFn) => SkinDefV3>> = Object.create(null);
 V3_SKINS.cricket = cricketSkinV3;
+// R3/task B2 — football, the second conversion. The FACTORY, never
+// `footballSkinV3(t)`: an already-called skin is a plain object with no call
+// signature, which this map's own value type rejects at compile time (see this
+// file's header, and `__tests__/registry-totality.test.ts`'s
+// `@ts-expect-error` pin).
+V3_SKINS.football = footballSkinV3;
 
 /**
  * Every engine sport key NOT already owned by `V3_SKINS`, computed from
@@ -82,10 +89,17 @@ V3_SKINS.cricket = cricketSkinV3;
  * first place; deriving one from the other would make that mistake
  * structurally impossible instead of merely caught. One sport moves per
  * wave: add it to `V3_SKINS` above AND exclude it here, in the SAME
- * change — R2/task E does exactly that for cricket.
+ * change — R2/task E did exactly that for cricket, R3/task B2 for football.
+ *
+ * `CONVERTED_SPORTS` below is a LITERAL list, deliberately not
+ * `Object.keys(V3_SKINS)`: deriving one from the other would make the totality
+ * gate's "double-owned" check structurally impossible to fail rather than
+ * merely caught, which is the whole reason the two sets are maintained apart.
  */
+const CONVERTED_SPORTS: ReadonlySet<string> = new Set(["cricket", "football"]);
+
 export const LEGACY_SPORTS: ReadonlySet<string> = new Set(
-  builtinModules.map((m) => m.key).filter((key) => key !== "cricket"),
+  builtinModules.map((m) => m.key).filter((key) => !CONVERTED_SPORTS.has(key)),
 );
 
 export type PadLaneResolution = { lane: "v3"; skin: SkinDefV3 } | { lane: "legacy" };

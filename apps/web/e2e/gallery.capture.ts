@@ -1,4 +1,4 @@
-import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
+import { test, expect, type Locator, type Page, type APIRequestContext } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -171,11 +171,92 @@ async function measureScroll(page: Page): Promise<{ scrollWidth: number; clientW
   });
 }
 
+/**
+ * A PROOF that the declared state is actually on screen — R3's fix for the
+ * per-width fold race (`_INDEX.md`, "the gallery's per-width captures can
+ * RACE the fold", 2026-08-24).
+ *
+ * The defect it closes: `02-live` for football came back showing THREE
+ * DIFFERENT BOARDS at three widths from one declared state — 320 rendered the
+ * pre-kickoff pad with zero tiles while 768/1280 rendered the live board,
+ * because the 320 shot was taken before `core.start` had folded CLIENT-side.
+ * Every wait in this harness up to that point polled the SERVER's ledger
+ * (`waitForLedgerGrowth`), which says nothing about what the browser has
+ * rendered. Nothing failed and nothing in `manifest.json` recorded the
+ * disagreement.
+ *
+ * Why that is worse than one bad PNG: the 320 overflow measurement below runs
+ * ALWAYS, even when `GALLERY_WIDTHS` narrows the PNG set, so a 320 capture of
+ * an empty board measures an empty board and records a clean `0` — a false
+ * green in a merge gate. And a reviewer reading only 768/1280 signs off a
+ * board the same sheet contradicts.
+ *
+ * NEVER A SLEEP: a probe is an assertion, so a capture whose board does not
+ * match the declared state FAILS the test — loudly, naming sport and state —
+ * rather than writing a misleading PNG. It runs before the 320 measurement AND
+ * again before every width's screenshot, which is what makes a cross-width
+ * disagreement structurally impossible to write silently.
+ */
+type StateProbe = () => Promise<void>;
+
+/**
+ * Every event row the PAD itself has rendered — the client-side fold, which is
+ * the thing that lags. Deliberately spans both lanes: `[data-role=
+ * "v3-activity-row"]` (v3 ActivityPanel) and `[data-role="timeline"]
+ * [data-event-id]` (the legacy `Timeline` pad-renderer.tsx mounts for the nine
+ * unconverted sports), so ONE probe is honest for all twelve captures.
+ *
+ * Scoped to the pad root, never the page: the fixture console mounts its OWN
+ * `<Timeline>` outside the pad as well, and a page-wide count would double
+ * every row. `[data-role="pad-v3"]` is the second anchor because the
+ * device-link route carries no `data-testid="score-pad"` (that testid is
+ * minted only by fixture-console.tsx — this file's own 05-devicelink note).
+ * `.first()` takes the console's outer `score-pad` when both match, since a
+ * locator resolves in DOM order and that element wraps the v3 root.
+ */
+function padEventRows(page: Page) {
+  return page
+    .locator('[data-testid="score-pad"], [data-role="pad-v3"]')
+    .first()
+    .locator('[data-role="v3-activity-row"], [data-role="timeline"] [data-event-id]');
+}
+
+/** The pad has caught up with the server: it renders at least `minEvents`
+ *  rows. `minEvents` is the ledger count the harness itself read after the
+ *  transition, so this is a real client-vs-server comparison rather than a
+ *  "some rows exist" check that `02-live` would already satisfy at `01-pre`.
+ *  `>=`, not `===`: a soft-committed tap is rendered optimistically before it
+ *  is sent, so the pad legitimately runs AHEAD of the ledger inside a hold
+ *  window (football's `04-dock` is exactly that case). */
+function foldedProbe(page: Page, minEvents: number, what: string): StateProbe {
+  return async () => {
+    await expect
+      .poll(async () => padEventRows(page).count(), { timeout: 20_000, message: what })
+      .toBeGreaterThanOrEqual(minEvents);
+  };
+}
+
+/** A declared state whose proof is "this element is on screen" — the shape
+ *  every `captureExtra` state and the device-link capture take. */
+function visibleProbe(locator: Locator, what: string): StateProbe {
+  return async () => {
+    await expect(locator, what).toBeVisible({ timeout: 20_000 });
+  };
+}
+
 interface Measurement320 {
   state: GalleryState | ExtraGalleryState;
   scrollWidth: number;
   clientWidth: number;
   overflowPx: number;
+  /**
+   * Rendered pad-event rows per captured width — the machine-readable record
+   * the fold-race finding says was missing. The probe above already fails a
+   * disagreement, so these numbers should always agree; recording them is what
+   * lets a later reader PROVE the widths agreed for a sheet already published,
+   * instead of taking the run's word for it.
+   */
+  padRowsByWidth: Record<string, number>;
 }
 
 /**
@@ -201,11 +282,17 @@ async function captureState(
   state: GalleryState | ExtraGalleryState,
   slug: string,
   measurements: Measurement320[],
+  probe: StateProbe,
 ): Promise<void> {
   await page.setViewportSize({ width: 320, height: HEIGHTS[320] });
+  // BEFORE the measurement, not after: 320 is the width the overflow gate
+  // always runs on, so measuring a board that has not folded yet records a
+  // meaningless `0` and calls it clean (see `StateProbe`).
+  await probe();
   const { scrollWidth, clientWidth } = await measureScroll(page);
   const overflowPx = Math.max(0, scrollWidth - clientWidth);
-  measurements.push({ state, scrollWidth, clientWidth, overflowPx });
+  const padRowsByWidth: Record<string, number> = {};
+  measurements.push({ state, scrollWidth, clientWidth, overflowPx, padRowsByWidth });
   // Deliberate console.log: the raw numbers are the whole point of this
   // measurement, and the wave gate reads them straight from the run's own
   // stdout as well as manifest.json.
@@ -216,6 +303,11 @@ async function captureState(
 
   for (const width of ACTIVE_WIDTHS) {
     await page.setViewportSize({ width, height: HEIGHTS[width] });
+    // A resize re-renders; the probe runs again so no width can write a PNG
+    // of a board that is not the declared state. This is the whole fix for
+    // the three-boards-from-one-state defect — assert per width, never sleep.
+    await probe();
+    padRowsByWidth[String(width)] = await padEventRows(page).count();
     await page.screenshot({
       path: join(dir, `${state}-${width}.png`),
       fullPage: true,
@@ -246,6 +338,20 @@ interface GallerySport {
    * the harness.
    */
   openDock: (page: Page, fx: RosteredFixture, tag: string) => Promise<boolean>;
+  /**
+   * R3 — proof that `openDock`'s panel is STILL on screen, re-asserted before
+   * every width of the `04-dock` capture (see `StateProbe`).
+   *
+   * Optional because eight of the nine legacy docks are a persistent expanded
+   * form: once opened they cannot close on their own, so their `04-dock`
+   * capture has nothing to race and the shared fold probe is the honest
+   * assertion for them. FOOTBALL is the first sport whose dock is a TIMED
+   * surface — the v3 Detail Dock closes itself `HOLD_MS` (6s) after the tap
+   * that opened it — so a slow capture could otherwise photograph three
+   * different things and record none of the difference. A sport declaring this
+   * is saying "my dock can vanish; fail the capture rather than keep it".
+   */
+  dockProbe?: (page: Page) => Promise<void>;
   /**
    * R2b+ — optional wave-specific captures beyond the fixed five states
    * above, run on the SAME page immediately after 04-dock. Absent for
@@ -458,7 +564,14 @@ const SPORTS: GallerySport[] = [
         pad(page).locator('[data-tile-id="run0"]'),
         "gallery(cricket): ball tiles must be gone on a coarse innings",
       ).not.toBeVisible();
-      await captureState(page, dir, "06-overtile", "cricket", measurements);
+      await captureState(
+        page,
+        dir,
+        "06-overtile",
+        "cricket",
+        measurements,
+        visibleProbe(overTile, "gallery(cricket): 06-overtile must still show the over tile"),
+      );
 
       await overTile.click();
       const sheet = pad(page).locator('[data-role="v3-sheet"]');
@@ -481,7 +594,14 @@ const SPORTS: GallerySport[] = [
       await expect(sheet, "gallery(cricket): the before-anchor must render, or the delta has no context").toContainText(
         "7/1",
       );
-      await captureState(page, dir, "07-oversheet", "cricket", measurements);
+      await captureState(
+        page,
+        dir,
+        "07-oversheet",
+        "cricket",
+        measurements,
+        visibleProbe(sheet, "gallery(cricket): 07-oversheet must still show the guided sheet"),
+      );
 
       // --- R2c: a FINE innings with one complete over bowled, so the pad
       // sits at an over boundary with a genuinely ineligible bowler present.
@@ -522,7 +642,12 @@ const SPORTS: GallerySport[] = [
         strip.locator(`[data-candidate-id="${fx3.personIds[`G R2c BowlerA ${TAG}`]!}"]`),
         "gallery(cricket): the previous over's bowler must render blocked, not vanish",
       ).toHaveAttribute("data-blocked", "true");
-      await captureState(page, dir, "08-bowlerpicker", "cricket", measurements);
+      await captureState(page, dir, "08-bowlerpicker", "cricket", measurements, async () => {
+        await expect(
+          strip.locator(`[data-candidate-id="${fx3.personIds[`G R2c BowlerA ${TAG}`]!}"]`),
+          "gallery(cricket): 08-bowlerpicker must still show the blocked bowler",
+        ).toHaveAttribute("data-blocked", "true");
+      });
 
       // 09 — the Retire sheet, a tile again (R2c amendment to defect 4).
       await page.goto(await fixturePath(page.request, fx3.fixtureId));
@@ -531,7 +656,17 @@ const SPORTS: GallerySport[] = [
         pad(page).locator('[data-role="v3-sheet"]'),
         "gallery(cricket): the retire tile must open the skin's own sheet",
       ).toBeVisible({ timeout: 10_000 });
-      await captureState(page, dir, "09-retiresheet", "cricket", measurements);
+      await captureState(
+        page,
+        dir,
+        "09-retiresheet",
+        "cricket",
+        measurements,
+        visibleProbe(
+          pad(page).locator('[data-role="v3-sheet"]'),
+          "gallery(cricket): 09-retiresheet must still show the retire sheet",
+        ),
+      );
 
       // 10 — a review the engine would refuse, refused in the pad instead.
       const fx4 = await seedRosteredFixture(page.request, {
@@ -585,7 +720,12 @@ const SPORTS: GallerySport[] = [
         rvSheet.locator(`[data-choice-option-id="${fx4.homeEntrantId}"]`),
         "gallery(cricket): the exhausted side must render blocked with its reason",
       ).toHaveAttribute("data-blocked", "true");
-      await captureState(page, dir, "10-reviewblocked", "cricket", measurements);
+      await captureState(page, dir, "10-reviewblocked", "cricket", measurements, async () => {
+        await expect(
+          rvSheet.locator(`[data-choice-option-id="${fx4.homeEntrantId}"]`),
+          "gallery(cricket): 10-reviewblocked must still show the exhausted side blocked",
+        ).toHaveAttribute("data-blocked", "true");
+      });
 
       return [...EXTRA_STATES];
     },
@@ -602,26 +742,41 @@ const SPORTS: GallerySport[] = [
       ],
       away: [{ fullName: `Gallery Football Away Keeper ${tag}`, positionKey: "GK" }],
     }),
-    // Verified live: scorepad-skins.spec.ts "football skin: a side-only goal".
+    // R3/task D — the v3 board. The tile ids are the skin's own
+    // (`buildTiles`, v3/skins/football.tsx): `goal-<side>` / `card-<side>` /
+    // `sub-<side>` / `period` / `penalty` / `more`. Addressed by
+    // `data-tile-id` rather than by accessible name deliberately — a tile's
+    // name is the concatenation of two LOCALISED strings ("Goal" + "Home"),
+    // and this harness is a visual gate, not a copy gate.
+    //
+    // ONE TAP IS THE WHOLE ACTION: a v3 goal commits side-level on the tap
+    // (`scorer`/`assist` are both optional on `FootballGoal`) and the dock
+    // offers the attribution afterwards. There is no Confirm — the v2 control
+    // this recipe used to click does not exist on the v3 pad, which is what
+    // made every football capture past `02-live` time out.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Home · Goal", exact: true }).click();
-      await pad(page).getByRole("button", { name: "Confirm", exact: true }).click();
+      await pad(page).locator('[data-tile-id="goal-home"]').click();
     },
-    // Verified live: scorepad-skins.spec.ts "football skin: a penalty with
-    // an offence selected" — a genuinely separate, richer panel to the
-    // plain goal tile above. Filled but deliberately NOT confirmed.
+    // The Detail Dock IS football's `04-dock` state (design of record §2.3):
+    // the ~6s enrichment window a scorer sees after a goal, with the own-goal/
+    // penalty toggles and the scoring side's own scorer/assist chips. It is
+    // reached by a second, AWAY goal rather than by reopening the first — the
+    // dock is a property of a held tap and there is no way to reopen one that
+    // has already flushed, which is exactly why `dockProbe` below exists.
     openDock: async (page) => {
-      const penalties = pad(page).getByText("Penalties", { exact: true });
-      if (!(await penalties.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await penalties.click();
-      await pad(page).getByRole("button", { name: "Penalty", exact: true }).click();
-      const outcome = pad(page).getByLabel("Outcome");
-      if (!(await outcome.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await outcome.selectOption("saved");
-      await pad(page).getByLabel("Offence").selectOption("handball");
-      await pad(page).getByLabel("At period").selectOption("H1");
-      await pad(page).getByLabel("At elapsed", { exact: true }).fill("300");
+      await pad(page).locator('[data-tile-id="goal-away"]').click();
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(football): a goal tap must open the detail dock",
+      ).toBeVisible({ timeout: 10_000 });
       return true;
+    },
+    dockProbe: async (page) => {
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(football): the dock closed before this width was captured — the 6s hold " +
+          "window elapsed mid-capture, so this PNG would have shown a different state to its siblings",
+      ).toBeVisible({ timeout: 5_000 });
     },
   },
   {
@@ -1008,18 +1163,21 @@ function buildIndexHtml(sports: SportManifestEntry[]): string {
 </style>
 </head>
 <body>
-<h1>ScoringPad v3 R1 — capture gallery</h1>
-<p class="note">R1 converts no sport — every screen here should look like today's legacy pad
-(the v3 chassis primitives exist but render nowhere yet, <code>V3_SKINS = {}</code>). A
-full-page screenshot can paint the sticky nav a second time mid-image — that is a capture
-artifact of <code>fullPage</code> screenshots against a <code>position:sticky</code> header,
-not a product defect. States marked "no distinct panel today" reuse the 03-scored image
-because that sport's legacy pad has no separate detail-entry surface to show today — not a
-missing capture. See <code>docs/runbooks/pad-gallery.md</code> for the sign-off gate this
-gallery feeds and <code>manifest.json</code> beside this file for the 320px scrollWidth/
-clientWidth measurements per state (recorded for every state regardless of which widths
-below actually have a screenshot file — see <code>GALLERY_WIDTHS</code> in
-<code>gallery.capture.ts</code>).</p>
+<h1>ScoringPad v3 — capture gallery</h1>
+<p class="note">Which pad a sport renders is <code>v3/registry.ts</code>'s
+<code>V3_SKINS</code>, one sport per wave — cricket (R2) and football (R3) are on the v3
+chassis; every other sport here is still the legacy pad, and that sameness is the evidence a
+wave changed only what it converted. A full-page screenshot can paint the sticky nav a second
+time mid-image — that is a capture artifact of <code>fullPage</code> screenshots against a
+<code>position:sticky</code> header, not a product defect. States marked "no distinct panel
+today" reuse the 03-scored image because that sport's legacy pad has no separate detail-entry
+surface to show today — not a missing capture. See <code>docs/runbooks/pad-gallery.md</code>
+for the sign-off gate this gallery feeds and <code>manifest.json</code> beside this file for
+the 320px scrollWidth/clientWidth measurements per state (recorded for every state regardless
+of which widths below actually have a screenshot file — see <code>GALLERY_WIDTHS</code> in
+<code>gallery.capture.ts</code>), plus <code>padRowsByWidth</code>: the rendered pad-event
+count at each captured width, which is what proves the widths below are three views of ONE
+state rather than three states.</p>
 <p class="note">This run captured widths: ${ACTIVE_WIDTHS.join(", ")}px.</p>
 ${sections}
 </body>
@@ -1063,20 +1221,60 @@ for (const sport of SPORTS) {
 
     await page.goto(await fixturePath(page.request, fx.fixtureId));
     await expect(pad(page)).toBeVisible({ timeout: 20_000 });
-    await captureState(page, dir, "01-pre", sport.slug, measurements);
+    // 01-pre has no pending fold to lose (nothing has been dispatched yet), so
+    // its proof is the pre-match console itself: the pad rendered, and the
+    // "Start match" control this flow is about to press still present.
+    await captureState(page, dir, "01-pre", sport.slug, measurements, async () => {
+      await expect(pad(page), `gallery(${sport.slug}): 01-pre must render the pad`).toBeVisible({
+        timeout: 20_000,
+      });
+      await expect(
+        page.getByRole("button", { name: "Start match", exact: true }),
+        `gallery(${sport.slug}): 01-pre must be a pre-match console`,
+      ).toBeVisible({ timeout: 20_000 });
+    });
 
     const beforeStart = await ledgerCount(page.request, fx.fixtureId);
     await page.getByRole("button", { name: "Start match", exact: true }).click();
     await waitForLedgerGrowth(page.request, fx.fixtureId, beforeStart);
-    await captureState(page, dir, "02-live", sport.slug, measurements);
+    // THE RACE THIS PROBE EXISTS FOR: `waitForLedgerGrowth` proves the SERVER
+    // took `core.start`; the pad renders from its own client fold, which
+    // arrives later. Capturing here without the probe photographed a
+    // pre-kickoff board at 320 and a live one at 768/1280 — one declared
+    // state, three boards, nothing red.
+    const afterStart = await ledgerCount(page.request, fx.fixtureId);
+    await captureState(
+      page,
+      dir,
+      "02-live",
+      sport.slug,
+      measurements,
+      foldedProbe(page, afterStart, `gallery(${sport.slug}): 02-live must render the STARTED board`),
+    );
 
     const beforeScore = await ledgerCount(page.request, fx.fixtureId);
     await sport.scoreOne(page, fx, tag);
     await waitForLedgerGrowth(page.request, fx.fixtureId, beforeScore);
-    await captureState(page, dir, "03-scored", sport.slug, measurements);
+    const afterScore = await ledgerCount(page.request, fx.fixtureId);
+    const scoredProbe = foldedProbe(
+      page,
+      afterScore,
+      `gallery(${sport.slug}): the scored event must have folded into the pad`,
+    );
+    await captureState(page, dir, "03-scored", sport.slug, measurements, scoredProbe);
 
     const dockOpened = await sport.openDock(page, fx, tag);
-    await captureState(page, dir, "04-dock", sport.slug, measurements);
+    // A sport whose dock can close on its own declares `dockProbe` and is held
+    // to it; the rest keep the scored-state proof, which is what they were
+    // (implicitly) capturing before this parameter existed.
+    await captureState(
+      page,
+      dir,
+      "04-dock",
+      sport.slug,
+      measurements,
+      dockOpened && sport.dockProbe ? () => sport.dockProbe!(page) : scoredProbe,
+    );
 
     // Wave-specific extras (R2b: cricket only) — absent for every other
     // sport, which makes this a no-op that leaves their run byte-identical
@@ -1112,7 +1310,17 @@ for (const sport of SPORTS) {
       // (officialLabel.scorer: "Umpire", "Referee", …) but whose tail does
       // not, so this matches on the constant half only.
       await expect(dlPage.getByText(/link active today only/)).toBeVisible({ timeout: 20_000 });
-      await captureState(dlPage, dir, "05-devicelink", sport.slug, measurements);
+      await captureState(
+        dlPage,
+        dir,
+        "05-devicelink",
+        sport.slug,
+        measurements,
+        visibleProbe(
+          dlPage.getByText(/link active today only/),
+          `gallery(${sport.slug}): 05-devicelink must render the courtside pad, not the console`,
+        ),
+      );
     } finally {
       await dlContext.close();
     }

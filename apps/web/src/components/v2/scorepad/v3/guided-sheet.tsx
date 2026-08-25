@@ -70,6 +70,8 @@
 import { useState } from "react";
 import { renderCandidateRow, resolvePool, type PoolView, type TFn } from "./context-strip";
 import type { Blocked, GuidedSheetSpec, GuidedSheetStep, SheetNumberStep, SheetPersonStep, TapEvent } from "./types";
+import { SPORT_TONE_CLASSES } from "./tokens";
+import type { SportTone } from "./sport-theme";
 
 export interface GuidedSheetState {
   readonly stepIndex: number;
@@ -298,8 +300,27 @@ const choiceButtonClass =
  *  renders nothing extra, so every pre-existing choice step is unchanged.
  *  Renamed from `hint` (R2b-cricket-over follow-up, hint-field naming pass,
  *  2026-08-17) — see `SheetChoiceStep.hintKey`'s doc (types.ts). */
+/** R3/task B4 (owner ruling R3-6): the card-code swatches for an option that
+ *  declares `tone` (types.ts's `SheetChoiceStep`). ONE per tone, overlapped —
+ *  a second yellow renders a yellow card and a red one, which is what that
+ *  card IS. `aria-hidden`, always: the option's own label already SAYS which
+ *  card it is (`cardColor.*`, four locales), so the swatch is the sighted
+ *  channel for a fact a screen reader already has — never the only carrier.
+ *  Class names come from ../tokens, never spelled out here, for the same
+ *  single-source reason NIGHT_TILE_CLASSES exists. */
+function renderToneSwatches(tones: readonly SportTone[]) {
+  if (tones.length === 0) return null;
+  return (
+    <span aria-hidden="true" className={SPORT_TONE_CLASSES.stack}>
+      {tones.map((tone) => (
+        <span key={tone} className={`${SPORT_TONE_CLASSES.swatch} ${SPORT_TONE_CLASSES[tone]}`} />
+      ))}
+    </span>
+  );
+}
+
 function renderChoiceRow(
-  options: readonly { id: string; label: string }[],
+  options: readonly { id: string; label: string; tone?: readonly SportTone[] }[],
   hintKey: string | undefined,
   t: TFn,
   onPick: (id: string) => void,
@@ -314,19 +335,32 @@ function renderChoiceRow(
           // visible, natively disabled, reason as real text, stable data-*.
           // See types.ts's `Blocked` for why blocking beats removing here.
           const reason = blocked?.[opt.id];
+          // B4: `tone` washes the button in its LAST entry — the OUTCOME, so a
+          // second yellow reads as the sending-off it is — and stamps a stable
+          // `data-*` hook a Playwright spec can target without matching a
+          // translated label. Untoned options (every option shipped before
+          // B4) take neither, so their markup is unchanged.
+          const tones = opt.tone ?? [];
+          const outcome = tones.length > 0 ? tones[tones.length - 1]! : null;
+          const toneClass =
+            outcome === null ? "" : ` ${SPORT_TONE_CLASSES.wash} ${SPORT_TONE_CLASSES[outcome]}`;
           return (
             <button
               key={opt.id}
               type="button"
               data-choice-option-id={opt.id}
+              {...(outcome ? { "data-choice-option-tone": tones.join(" ") } : {})}
               {...(reason ? { "data-blocked": "true" } : {})}
               disabled={reason !== undefined}
               onClick={reason !== undefined ? undefined : () => onPick(opt.id)}
               style={{ minHeight: 44 }}
               className={
-                reason !== undefined ? `${choiceButtonClass} cursor-not-allowed opacity-60` : choiceButtonClass
+                reason !== undefined
+                  ? `${choiceButtonClass}${toneClass} cursor-not-allowed opacity-60`
+                  : `${choiceButtonClass}${toneClass}`
               }
             >
+              {renderToneSwatches(tones)}
               <span className="break-words">{t(opt.label)}</span>
               {reason !== undefined && (
                 <span className="ml-2 break-words text-xs font-normal text-red-600">{reason}</span>

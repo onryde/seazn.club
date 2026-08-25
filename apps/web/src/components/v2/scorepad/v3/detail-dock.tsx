@@ -102,7 +102,13 @@ export interface DockController {
    *  is the DEFAULT a skin may point this at, not a second line — it earns
    *  a place in `DetailDock`'s render only as the surrounding group's
    *  accessible name. */
-  title: string;
+  readonly title: string;
+  /** Replace the spec this controller reads WITHOUT disturbing the selection
+   *  set, for a skin whose dock depends on the held payload (football's goal
+   *  dock: scorer, then assist). `DetailDock` rebuilds the controller only when
+   *  `heldId` changes, so without this a new `spec` prop for the SAME held
+   *  entry was silently ignored and the dock froze on its first step. */
+  setSpec(next: DockSpec): void;
   /** Live view of every chip + its selection state — a GETTER, not a
    *  snapshot, so a caller re-reading this after `tapChip` resolves sees
    *  the update without a fresh `dockController(...)` call, which would
@@ -150,15 +156,34 @@ export interface DockController {
  */
 export function dockController(spec: DockSpec | null, heldId: string, store: DockStore): DockController | null {
   if (spec === null) return null;
+  // R3 review round 4 — the spec is LIVE, not a snapshot.
+  //
+  // This closed over the `spec` it was built with, and `DetailDock` rebuilds
+  // the controller only when `heldId` changes. A skin whose dock depends on the
+  // held PAYLOAD — football's goal dock asks for the scorer, then the assist —
+  // therefore kept rendering its first step forever: the payload advanced, a
+  // new spec arrived as a prop, and both were ignored. The two-step split was
+  // inert in the running app while its unit tests passed, because those call
+  // `buildDock` directly and never mount anything.
+  //
+  // `setSpec` swaps the spec WITHOUT resetting `selectedIds`: the selection is
+  // per held entry, and the entry has not changed — only the question being
+  // asked about it has.
+  let current: DockSpec = spec;
   const selectedIds = new Set<string>();
   return {
-    title: spec.title,
+    get title(): string {
+      return current.title;
+    },
     get chips(): DockChipView[] {
-      return spec.chips.map((chip) => ({ chip, selected: selectedIds.has(chip.id) }));
+      return current.chips.map((chip) => ({ chip, selected: selectedIds.has(chip.id) }));
+    },
+    setSpec(next: DockSpec): void {
+      current = next;
     },
     async tapChip(chipId: string): Promise<void> {
       if (selectedIds.has(chipId)) return; // second tap (or a still in-flight one) on this chip: no-op, see this interface's own doc
-      const chip = spec.chips.find((c) => c.id === chipId);
+      const chip = current.chips.find((c) => c.id === chipId);
       if (chip === undefined) return; // unknown chip id: nothing to apply
       // FIX ROUND 1 finding 2: claim the id SYNCHRONOUSLY, before the
       // `await` below — not only once the store confirms it. Two taps
@@ -235,6 +260,47 @@ export interface DetailDockProps {
  * fresh on every render would silently wipe out in-progress chip
  * selections on every countdown tick.
  */
+/**
+ * Bring the just-opened dock ON SCREEN — R3/F (F4).
+ *
+ * The dock renders after the tile grid (pad-host.tsx), and the grid is tall
+ * enough at EVERY width that the dock lands below the fold. Measured against
+ * the real prod server on football's nine-tile board, tapping Goal · Home:
+ * 88px of a 213px dock visible at 1280x720, MINUS 16 at 768x1024 (entirely
+ * below the fold, without the scorer even having to scroll to reach the tile),
+ * 12px of a 369px dock at 320x568. A soft-commit window the scorer cannot see
+ * always expires, which silently defeats the "tap commits, dock enriches"
+ * model the whole v3 design rests on.
+ *
+ * `block: "nearest"` and nothing else — the smallest fix that achieves it:
+ *
+ *  - it is a NO-OP when the element is already fully visible, so a width where
+ *    the dock already fits never moves;
+ *  - it scrolls the MINIMUM otherwise, so the top of the board stays on screen
+ *    above the dock rather than the whole grid being pushed away;
+ *  - the layout itself is untouched. A sticky/fixed bottom sheet was the other
+ *    candidate and was rejected: at 320 a 369px dock pinned to the bottom
+ *    COVERS the entire board, and an overlaying dock can intercept a tap meant
+ *    for a tile — which would also break `apps/web/e2e/**` specs this task is
+ *    barred from editing.
+ *
+ * No `behavior: "smooth"`: a scroll in flight makes every element the specs
+ * click "unstable" for Playwright's actionability check, and an instant reveal
+ * is also the right answer for `prefers-reduced-motion`, which removes the
+ * branch entirely.
+ *
+ * Takes its node as a parameter and returns whether it scrolled so the
+ * contract is assertable in a node environment (`__tests__/dock.test.ts`);
+ * the WIRING below is proved in a browser, because it cannot be proved here.
+ * Total on a missing node and a node without the method — this runs inside a
+ * commit, where a throw would blank the pad.
+ */
+export function revealDock(node: { scrollIntoView?: (options: ScrollIntoViewOptions) => void } | null): boolean {
+  if (node === null || typeof node.scrollIntoView !== "function") return false;
+  node.scrollIntoView({ block: "nearest", inline: "nearest" });
+  return true;
+}
+
 export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }: DetailDockProps) {
   // Render-phase state reset (React's own sanctioned "adjust state during
   // render" recipe — https://react.dev/reference/react/useState#storing-
@@ -260,8 +326,16 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
     setDepleted(false);
   }
 
+  // The spec is a PROP and changes for the same held entry whenever the skin's
+  // dock depends on the payload. Push it into the controller before render
+  // reads `chips`/`title`; assigning to a plain object (not React state) takes
+  // effect on THIS frame, where an effect would leave one stale frame on screen
+  // inside a ~6s window.
+  if (controller !== null && spec !== null) controller.setSpec(spec);
+
   const [, bump] = useReducer((n: number) => n + 1, 0);
   const mountedRef = useRef(true);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   useEffect(
     () => () => {
       mountedRef.current = false;
@@ -292,6 +366,17 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [controller]);
 
+  // R3/F (F4) — reveal on OPEN. Keyed on `controller`, the same identity the
+  // tick effect above re-arms on: a genuinely new held entry, never a
+  // countdown tick or an ordinary parent re-render, so the page is never
+  // pulled around while a scorer is reading the dock they already have. See
+  // `revealDock` above for the measurements and for why this is a scroll
+  // rather than a sticky layout.
+  useEffect(() => {
+    if (controller === null) return;
+    revealDock(rootRef.current);
+  }, [controller]);
+
   if (controller === null) return null;
 
   const handleTap = (chipId: string) => {
@@ -310,6 +395,7 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
 
   return (
     <div
+      ref={rootRef}
       role="group"
       aria-label={t("pad.dock.title")}
       className="overflow-hidden rounded-2xl border-t-2 border-lime-400 bg-cream shadow-lg"
@@ -368,7 +454,13 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
             aria-disabled={selected || undefined}
             onClick={selected ? undefined : () => handleTap(chip.id)}
             style={{ minHeight: 44 }}
-            className={`inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors ${
+            // `DockChip.kind` (types.ts): a MODIFIER reads as a tab, a person
+            // as the pill they already were. The radius is the only thing that
+            // differs — same size, same border, same fill, so nothing about
+            // this changes a dock whose chips set no `kind` (cricket's).
+            className={`inline-flex min-w-0 max-w-full items-center gap-1.5 border px-4 text-sm font-medium transition-colors ${
+              chip.kind === "flag" ? "rounded-lg" : "rounded-full"
+            } ${
               selected
                 ? "cursor-default border-transparent bg-violet-600 text-white"
                 : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
@@ -394,7 +486,14 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
                tile-grid.tsx's own fix round guarded against (`min-w-0` on
                the flex item above + `break-words` here, not `truncate`:
                mirrors that precedent's exact remedy rather than a new one). */}
-            <span className="break-words">{t(chip.label)}</span>
+            {/* R3/football (`DockChip.labelText`, types.ts): a pre-localised
+               label WINS over the key. A chip naming a PERSON has no
+               dictionary key to resolve — routing a display name through
+               `t()` warns on every render and renders right only because the
+               runtime hands the key back. Same precedence `TileSpec.
+               labelText` already has in tile-grid.tsx: text wins, the key is
+               not resolved at all, nothing is concatenated. */}
+            <span className="break-words">{chip.labelText ?? t(chip.label)}</span>
           </button>
         ))}
       </div>

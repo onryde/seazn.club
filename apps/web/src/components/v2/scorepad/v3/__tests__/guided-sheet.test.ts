@@ -29,6 +29,7 @@
 import { describe, it, expect } from "vitest";
 import type { SideSquad, SquadMember } from "@seazn/engine/core";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
+import { SPORT_TONE_CLASSES } from "../tokens";
 import type { Dict } from "@/lib/i18n-constants";
 import { t as realT } from "@/lib/i18n-runtime";
 import { resolvePool } from "../context-strip";
@@ -347,6 +348,103 @@ describe("GuidedSheet rendering", () => {
     for (const b of buttons) expect(propsOf(b).style).toMatchObject({ minHeight: 44 });
     expect(buttons.some((b) => textOf(b) === "pad.sheet.back")).toBe(false);
     expect(buttons.some((b) => textOf(b) === "pad.sheet.cancel")).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // B4 (owner ruling R3-6): the chassis's side of the card code. The SKIN only
+  // names tones (skins/__tests__/football.test.ts pins that); this is what
+  // those names actually render as, and the thing football's own suite cannot
+  // see. Class names come from ../tokens, never retyped here, so a class edit
+  // there reds in exactly one place instead of desyncing silently.
+  // -------------------------------------------------------------------------
+
+  const tonedSpec: GuidedSheetSpec = {
+    event: "football.card",
+    steps: [
+      {
+        id: "color",
+        kind: "choice",
+        title: "card.title",
+        options: [
+          { id: "yellow", label: "cardColor.yellow", tone: ["caution"] },
+          { id: "red", label: "cardColor.red", tone: ["dismissal"] },
+          { id: "second_yellow", label: "cardColor.second_yellow", tone: ["caution", "dismissal"] },
+          { id: "plain", label: "cardColor.plain" },
+        ],
+      },
+    ],
+    buildPayload: (answers) => ({ color: answers.color }),
+  };
+
+  // Takes the TREE, not the island: `renderIsland`'s return type is generic in
+  // its props, so a `ReturnType<typeof renderIsland>` parameter is invariant
+  // in `rerender` and rejects every real call site.
+  const optionButton = (tree: ReturnType<typeof walk>, id: string) =>
+    tree.find((el) => propsOf(el)["data-choice-option-id"] === id)!;
+
+  it("washes a toned option in its OUTCOME tone and stamps a locale-independent data hook", () => {
+    const island = renderIsland(GuidedSheet, { spec: tonedSpec, views, personNames: names, t, onComplete: () => {} });
+    const yellow = propsOf(optionButton(island.tree(), "yellow"));
+    expect(yellow.className).toContain(SPORT_TONE_CLASSES.wash);
+    expect(yellow.className).toContain(SPORT_TONE_CLASSES.caution);
+    expect(yellow["data-choice-option-tone"]).toBe("caution");
+
+    // A second yellow's WASH is the sending-off, not the caution — the last
+    // tone is the outcome. This is the assertion that fails if someone
+    // "simplifies" the outcome pick to `tone[0]`.
+    const second = propsOf(optionButton(island.tree(), "second_yellow"));
+    expect(second.className).toContain(SPORT_TONE_CLASSES.dismissal);
+    expect(second.className).not.toContain(SPORT_TONE_CLASSES.caution);
+    expect(second["data-choice-option-tone"]).toBe("caution dismissal");
+  });
+
+  it("draws ONE swatch per tone — so a second yellow shows two cards, not one", () => {
+    const island = renderIsland(GuidedSheet, { spec: tonedSpec, views, personNames: names, t, onComplete: () => {} });
+    const swatchesUnder = (id: string) => {
+      const button = optionButton(island.tree(), id);
+      return walk(button).filter((el) => {
+        const cls = propsOf(el).className;
+        return typeof cls === "string" && cls.includes(SPORT_TONE_CLASSES.swatch);
+      });
+    };
+    expect(swatchesUnder("yellow")).toHaveLength(1);
+    expect(swatchesUnder("red")).toHaveLength(1);
+    expect(swatchesUnder("second_yellow")).toHaveLength(2);
+    expect(swatchesUnder("plain")).toHaveLength(0);
+
+    // Decorative only: the option's own label already SAYS which card it is,
+    // in four locales. A swatch that were the sole carrier would put the one
+    // piece of information colour is doing here out of a screen reader's
+    // reach.
+    const stack = walk(optionButton(island.tree(), "second_yellow")).find(
+      (el) => propsOf(el).className === SPORT_TONE_CLASSES.stack,
+    );
+    expect(propsOf(stack!)["aria-hidden"]).toBe("true");
+  });
+
+  it("leaves an UNTONED option exactly as it rendered before B4 — no wash, no hook, no swatch", () => {
+    const island = renderIsland(GuidedSheet, { spec: tonedSpec, views, personNames: names, t, onComplete: () => {} });
+    const plain = propsOf(optionButton(island.tree(), "plain"));
+    expect(plain.className).not.toContain("pad-tone");
+    expect(plain["data-choice-option-tone"]).toBeUndefined();
+    // Same 44px floor, toned or not.
+    expect(plain.style).toMatchObject({ minHeight: 44 });
+    expect(propsOf(optionButton(island.tree(), "red")).style).toMatchObject({ minHeight: 44 });
+  });
+
+  it("a toned option still ANSWERS the step — the colour is decoration on a real control", () => {
+    let built: unknown = null;
+    const island = renderIsland(GuidedSheet, {
+      spec: tonedSpec,
+      views,
+      personNames: names,
+      t,
+      onComplete: (event: unknown) => {
+        built = event;
+      },
+    });
+    click(optionButton(island.tree(), "second_yellow"));
+    expect(built).toEqual({ type: "football.card", payload: { color: "second_yellow" } });
   });
 
   it("answering the choice step advances to the person step and shows a Back control", () => {

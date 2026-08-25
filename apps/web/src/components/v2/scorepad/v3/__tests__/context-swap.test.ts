@@ -108,12 +108,12 @@ describe("swapCandidates", () => {
 
   it("returns the bench pool (via resolvePool) when the policy verdict is ok", () => {
     const s = squad([member({ personId: "a", onField: true }), member({ personId: "b", onField: false })]);
-    expect(swapCandidates({ squad: s }, ok)).toEqual({ candidates: ["b"] });
+    expect(swapCandidates({ squad: s }, ok, null)).toEqual({ candidates: ["b"] });
   });
 
   it("ok verdict + genuinely empty bench: empty candidates, undefined message (not a policy refusal)", () => {
     const s = squad([member({ personId: "a", onField: true })]);
-    expect(swapCandidates({ squad: s }, ok)).toEqual({ candidates: [], message: undefined });
+    expect(swapCandidates({ squad: s }, ok, null)).toEqual({ candidates: [], message: undefined });
   });
 
   it("refused verdict: candidates collapse to empty and message is surfaced VERBATIM, byte-identical to the module's own string", () => {
@@ -122,7 +122,7 @@ describe("swapCandidates", () => {
       ok: false,
       message: refusalMessage("Rolling subs aren't allowed in 11-a-side — 3 of 3 used"),
     };
-    expect(swapCandidates({ squad: s }, verdict)).toEqual({
+    expect(swapCandidates({ squad: s }, verdict, null)).toEqual({
       candidates: [],
       message: "Rolling subs aren't allowed in 11-a-side — 3 of 3 used",
     });
@@ -130,7 +130,7 @@ describe("swapCandidates", () => {
 
   it("refused verdict never fabricates a message when the module gave none — stays undefined, never throws", () => {
     const s = squad([member({ personId: "a", onField: true }), member({ personId: "b", onField: false })]);
-    expect(swapCandidates({ squad: s }, { ok: false })).toEqual({ candidates: [], message: undefined });
+    expect(swapCandidates({ squad: s }, { ok: false }, null)).toEqual({ candidates: [], message: undefined });
   });
 
   // --- Fix round 1, finding 1 (Important) -----------------------------
@@ -173,7 +173,7 @@ describe("swapCandidates", () => {
     expect(result.message).toBe("this side has used all 0 substitutions this variant allows"); // the prose
 
     const verdict: PolicyVerdict = { ok: false, message: refusalMessage(result.message) };
-    const { message } = swapCandidates({ squad: home }, verdict);
+    const { message } = swapCandidates({ squad: home }, verdict, null);
     expect(message).toBe(result.message);
     expect(message).not.toBe(result.reason);
   });
@@ -856,5 +856,345 @@ describe("ContextStrip — R2c eligibility blocking (ContextSlot.blocked)", () =
     const picker = buttonsOf(island.tree()).slice(1);
     expect(picker.map((b) => propsOf(b)["data-candidate-id"])).toEqual(["arjun"]);
     expect(island.text()).not.toContain("not even offered");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3 chassis sub-wave (owner ruling 2026-08-24, `_INDEX.md` "R3 — owner
+// ruling: FIX SwapSheet in the chassis, then use it"). Defect 4: the swap path
+// never got R2c's candidate narrowing. The ON list was hardcoded
+// `pool: "bench"` and the OFF list `pool: "onfield"`, so the sheet could not
+// say WHY a player was ineligible — it could only show them as pickable and
+// let the engine refuse afterwards.
+//
+// The two operations are R2c's, unchanged, and deliberately NOT a second
+// idiom: SCOPE (`candidates`) removes, ELIGIBILITY (`blocked`) keeps visible
+// and states the reason. Same field names, same semantics and the same
+// renderer (`renderCandidateRow`) the context strip already uses, so the two
+// surfaces cannot drift.
+// ---------------------------------------------------------------------------
+
+describe("swapCandidates — R3 scope narrowing (SwapSlot.candidates)", () => {
+  const ok: PolicyVerdict = { ok: true };
+  const s = squad([
+    member({ personId: "a", onField: true }),
+    member({ personId: "b", onField: false }),
+    member({ personId: "c", onField: false }),
+  ]);
+
+  it("an explicit candidate list SUPERSEDES the bench pool entirely — same contract ContextSlot.candidates already ships", () => {
+    expect(swapCandidates({ squad: s }, ok, null, ["c"])).toEqual({ candidates: ["c"] });
+  });
+
+  it("an EMPTY candidate list means 'nobody is eligible' and must NEVER fall back to the bench pool", () => {
+    expect(swapCandidates({ squad: s }, ok, null, [])).toEqual({ candidates: [] });
+  });
+
+  it("an ABSENT candidate list still resolves the bench pool — every pre-R3 caller is unchanged", () => {
+    expect(swapCandidates({ squad: s }, ok, null)).toEqual({ candidates: ["b", "c"] });
+  });
+
+  it("a refused verdict still collapses to empty even when the skin narrowed — policy outranks scope", () => {
+    const verdict: PolicyVerdict = { ok: false, message: refusalMessage("no subs left") };
+    expect(swapCandidates({ squad: s }, verdict, null, ["b", "c"])).toEqual({
+      candidates: [],
+      message: "no subs left",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3/football — SCOPE for the OFF list (`SwapSlot.offCandidates`).
+//
+// The R3 chassis sub-wave narrowed the ON list only, and priced the OFF list's
+// own deferral in explicitly ("no shipped sport has a per-candidate rule about
+// who may be taken OFF ... `offCandidates`/`offBlocked` stay purely additive
+// for whichever wave first has one"). Football is that wave, and the reason is
+// not a per-candidate RULE at all — it is that the POOL itself is stale for
+// this sport. `squadStateOf` degrades football's private squad projection to
+// `initSquads(lineups)` (it is not a kernel `SquadState`), which is the
+// KICKOFF team sheet and never moves again: after one substitution the
+// on-field pool still lists the player who came off and still omits the one
+// who came on, so the off picker offers a swap the engine refuses
+// (`reduceLineupEvent`: "not on the field") and withholds one it would accept.
+// A dead-end tap either way.
+//
+// Field-for-field the contract `candidates` already ships — same `?? pool`
+// resolution, same "empty means nobody, never fall back", same name on both
+// sides of `adaptSwapSlot` — so the two lists cannot narrow by two idioms.
+// `offBlocked` is deliberately NOT minted alongside it: no sport has a reason
+// to show someone on the pitch as visibly-ineligible-to-leave, and a field
+// with no caller is a field with no test that could fail.
+// ---------------------------------------------------------------------------
+
+describe("SwapSheet — R3/football scope narrowing (SwapSlot.offCandidates) on the OFF list", () => {
+  const names = { a: "Player A", b: "Player B", c: "Player C", d: "Player D" };
+  // The kickoff sheet: a+b started, c+d benched. A live football fold that has
+  // already substituted b -> c has c on the pitch and b off it, which is
+  // exactly what this stale pool cannot say.
+  const kickoff = squad([
+    member({ personId: "a", onField: true }),
+    member({ personId: "b", onField: true }),
+    member({ personId: "c", onField: false }),
+    member({ personId: "d", onField: false }),
+  ]);
+
+  function openOff(over: Partial<SwapSheetProps["spec"]>) {
+    return renderIsland(SwapSheet, {
+      spec: { ...swapSpec, ...over },
+      view: { squad: kickoff },
+      policyVerdict: { ok: true },
+      personNames: names,
+      t,
+      onSwap: () => {},
+    });
+  }
+
+  it("an explicit offCandidates list SUPERSEDES the on-field pool entirely", () => {
+    const island = openOff({ offCandidates: ["a", "c"] });
+    const labels = buttonsOf(island.tree()).map((btn) => textOf(btn));
+    expect(labels).toContain("Player A");
+    expect(labels).toContain("Player C"); // came on: benched at kickoff, on the pitch now
+    expect(labels).not.toContain("Player B"); // came off: on the kickoff sheet, not on the pitch now
+  });
+
+  it("an EMPTY offCandidates list means 'nobody may come off' — it must not fall back to the pool", () => {
+    const island = openOff({ offCandidates: [] });
+    const labels = buttonsOf(island.tree()).map((btn) => textOf(btn));
+    expect(labels).not.toContain("Player A");
+    expect(labels).not.toContain("Player B");
+    expect(island.text()).toContain("scorepad.attribution.noRoster");
+  });
+
+  it("an ABSENT offCandidates list still resolves the on-field pool — every pre-R3/football caller is unchanged", () => {
+    const island = openOff({});
+    const labels = buttonsOf(island.tree()).map((btn) => textOf(btn));
+    expect(labels).toContain("Player A");
+    expect(labels).toContain("Player B");
+    expect(labels).not.toContain("Player C");
+  });
+
+  it("picking from offCandidates still drives the on step and completes the swap", () => {
+    let swapped: [string, string] | null = null;
+    const island = renderIsland(SwapSheet, {
+      spec: { ...swapSpec, offCandidates: ["c"], candidates: ["b"] },
+      view: { squad: kickoff },
+      policyVerdict: { ok: true },
+      personNames: names,
+      t,
+      onSwap: (off, on) => {
+        swapped = [off, on];
+      },
+    });
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn) === "Player C")!);
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn) === "Player B")!);
+    expect(swapped).toEqual(["c", "b"]);
+  });
+});
+
+describe("SwapSheet — R3 eligibility narrowing (SwapSlot.blocked) on the ON list", () => {
+  const s = squad([
+    member({ personId: "a", onField: true }),
+    member({ personId: "b", onField: false }),
+    member({ personId: "c", onField: false }),
+  ]);
+  const names = { a: "Player A", b: "Player B", c: "Player C" };
+
+  function openOnStep(over: Partial<SwapSheetProps["spec"]>, onSwap: SwapSheetProps["onSwap"] = () => {}) {
+    const island = renderIsland(SwapSheet, {
+      spec: { ...swapSpec, ...over },
+      view: { squad: s },
+      policyVerdict: { ok: true },
+      personNames: names,
+      t,
+      onSwap,
+    });
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn) === "Player A")!); // off -> "a"
+    return island;
+  }
+
+  it("a blocked ON candidate stays VISIBLE, is a real disabled button, and renders its pre-localised reason", () => {
+    const island = openOnStep({ blocked: { b: "Already substituted off" } });
+    const blockedButton = buttonsOf(island.tree()).find((btn) => textOf(btn).startsWith("Player B"))!;
+    expect(blockedButton).toBeDefined();
+    expect(propsOf(blockedButton).disabled).toBe(true);
+    expect(island.text()).toContain("Already substituted off");
+  });
+
+  it("a blocked ON candidate carries NO click handler at all — the swap cannot be completed through it even if the disabled attribute were styled away", () => {
+    let swapped: [string, string] | null = null;
+    const island = openOnStep({ blocked: { b: "Already substituted off" } }, (off, on) => {
+      swapped = [off, on];
+    });
+    const blockedButton = buttonsOf(island.tree()).find((btn) => textOf(btn).startsWith("Player B"))!;
+    // Two independent barriers, asserted separately on purpose: `disabled`
+    // alone is a DOM attribute a stray CSS/`pointer-events` change can defeat,
+    // and an absent `onClick` alone leaves nothing for a screen reader to
+    // announce. The pre-R3 sheet had neither — a blocked player was an
+    // ordinary live button that fired `onSwap` (this test asserted exactly
+    // that before the fix, and read `['a', 'b']`).
+    expect(propsOf(blockedButton).disabled).toBe(true);
+    expect(propsOf(blockedButton).onClick).toBeUndefined();
+    expect(swapped).toBeNull();
+  });
+
+  it("an unblocked ON candidate beside a blocked one still completes the swap", () => {
+    let swapped: [string, string] | null = null;
+    const island = openOnStep({ blocked: { b: "Already substituted off" } }, (off, on) => {
+      swapped = [off, on];
+    });
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn) === "Player C")!);
+    expect(swapped).toEqual(["a", "c"]);
+  });
+
+  it("SCOPE removes rather than disables — a narrowed-away bench player is simply absent, no greyed row", () => {
+    const island = openOnStep({ candidates: ["c"] });
+    expect(island.text()).not.toContain("Player B");
+    expect(island.text()).toContain("Player C");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3 chassis sub-wave, defect 5: the picked OFF person was never excluded from
+// the ON list, so a player could be substituted for THEMSELVES.
+//
+// WHY THIS WAS UNREACHABLE BEFORE DEFECT 4 WAS FIXED, recorded so nobody
+// "simplifies" the guard away as dead code: with the pools alone the OFF list
+// is `resolvePool({pool:"onfield"})` and the ON list `{pool:"bench"}`, and
+// those two are exact complements of the playing squad (context-strip.tsx),
+// so the picked player structurally could not appear in the ON list. The
+// moment `SwapSlot.candidates` SUPERSEDES the pool — R3's own defect-4 fix —
+// a skin-supplied list is under no such constraint and can contain anyone. So
+// the guard has to live in the chassis: a skin's `candidates` is a value
+// rebuilt from `view`, and the OFF pick lives in `SwapSheet`'s local state and
+// never re-enters `swap(view)`, which means no skin can express this rule
+// itself.
+// ---------------------------------------------------------------------------
+
+describe("swapCandidates — the picked OFF person is never offered as their own replacement", () => {
+  const ok: PolicyVerdict = { ok: true };
+  const s = squad([
+    member({ personId: "a", onField: true }),
+    member({ personId: "b", onField: false }),
+  ]);
+
+  it("removes the picked OFF person from a skin-supplied candidate list that includes them", () => {
+    expect(swapCandidates({ squad: s }, ok, "a", ["a", "b"])).toEqual({ candidates: ["b"] });
+  });
+
+  it("leaves every other candidate in place, in declaration order", () => {
+    expect(swapCandidates({ squad: s }, ok, "a", ["b", "a", "c"])).toEqual({ candidates: ["b", "c"] });
+  });
+
+  it("a null OFF pick (the off step is still open) removes nobody", () => {
+    expect(swapCandidates({ squad: s }, ok, null, ["a", "b"])).toEqual({ candidates: ["a", "b"] });
+  });
+
+  it("narrowing to ONLY the off person yields an empty list, not a list containing them", () => {
+    expect(swapCandidates({ squad: s }, ok, "a", ["a"])).toEqual({ candidates: [] });
+  });
+
+  it("still excludes the off person when falling back to the bench pool — the guard does not depend on which source resolved", () => {
+    const overlapping = squad([member({ personId: "a", onField: true }), member({ personId: "b", onField: false })]);
+    expect(swapCandidates({ squad: overlapping }, ok, "b", undefined)).toEqual({ candidates: [] });
+  });
+});
+
+describe("SwapSheet — the OFF person disappears from the ON step", () => {
+  const s = squad([
+    member({ personId: "a", onField: true }),
+    member({ personId: "b", onField: true }),
+  ]);
+  const names = { a: "Player A", b: "Player B" };
+
+  it("picking A off, from a candidate list naming both, leaves only B on the ON step", () => {
+    const island = renderIsland(SwapSheet, {
+      spec: { ...swapSpec, candidates: ["a", "b"] },
+      view: { squad: s },
+      policyVerdict: { ok: true },
+      personNames: names,
+      t,
+      onSwap: () => {},
+    });
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn) === "Player A")!); // off -> "a"
+
+    const onStep = buttonsOf(island.tree());
+    // The off-chosen header chip legitimately shows "Player A", so counting
+    // buttons is the honest tell: header chip + "Player B" + Cancel = 3. A
+    // fourth would be A offered as their own replacement.
+    expect(onStep).toHaveLength(3);
+    expect(onStep.filter((btn) => textOf(btn) === "Player A")).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3 chassis sub-wave, sixth fix (owner ruling 2026-08-24): `policyOk: false`
+// with no `policyMessage` fell through to `scorepad.attribution.noRoster` —
+// "No roster available yet." A scorer was told the ROSTER was missing when the
+// truth was that the sport's own law refuses the substitution. That is a
+// silent refusal wearing the wrong sentence, and the worst of the three states
+// this branch can be in, because it is actively misleading rather than merely
+// unhelpful.
+//
+// The branch now keys on the VERDICT, not on whether a message happens to
+// exist. `swapCandidates` still refuses to fabricate a message (its own tests
+// above pin `message: undefined`, unchanged) — the fallback is the RENDERER's,
+// exactly as `rejectionText`'s `scorepad.rejection.fallback` already is for a
+// server refusal, so the chassis never invents sport-worded prose.
+// ---------------------------------------------------------------------------
+
+describe("SwapSheet — a refused verdict ALWAYS states a reason", () => {
+  const s = squad([
+    member({ personId: "a", onField: true }),
+    member({ personId: "b", onField: false }),
+  ]);
+  const names = { a: "Player A", b: "Player B" };
+
+  function onStepWith(policyVerdict: SwapSheetProps["policyVerdict"]) {
+    const island = renderIsland(SwapSheet, {
+      spec: swapSpec,
+      view: { squad: s },
+      policyVerdict,
+      personNames: names,
+      t,
+      onSwap: () => {},
+    });
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn) === "Player A")!); // off -> "a"
+    return island;
+  }
+
+  it("refused with NO module message falls back to chassis refusal copy, never the misleading noRoster line", () => {
+    const island = onStepWith({ ok: false });
+    expect(island.text()).toContain("pad.swap.refused");
+    expect(island.text()).not.toContain("scorepad.attribution.noRoster");
+  });
+
+  it("refused WITH a module message still renders that sport-worded prose verbatim, and never the fallback beside it", () => {
+    const message = "this side has used all 3 substitutions this variant allows";
+    const island = onStepWith({ ok: false, message: refusalMessage(message) });
+    expect(island.text()).toContain(message);
+    expect(island.text()).not.toContain("pad.swap.refused");
+  });
+
+  it("an OK verdict with a genuinely empty bench still shows the empty-pool text — that is not a refusal and must not borrow refusal copy", () => {
+    const alone = squad([member({ personId: "a", onField: true })]);
+    const island = renderIsland(SwapSheet, {
+      spec: swapSpec,
+      view: { squad: alone },
+      policyVerdict: { ok: true },
+      personNames: { a: "Player A" },
+      t,
+      onSwap: () => {},
+    });
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn) === "Player A")!);
+    expect(island.text()).toContain("scorepad.attribution.noRoster");
+    expect(island.text()).not.toContain("pad.swap.refused");
+  });
+
+  it("a refusal is never a tappable control — no candidate buttons survive it", () => {
+    const island = onStepWith({ ok: false });
+    const buttons = buttonsOf(island.tree());
+    expect(buttons).toHaveLength(2); // the off-chosen header chip + Cancel
+    for (const btn of buttons) expect(propsOf(btn).disabled).toBeFalsy();
   });
 });

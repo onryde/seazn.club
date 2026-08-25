@@ -438,7 +438,7 @@ describe("Tile action routing (task A1) — {sheet} takes a distinct path, {even
   it("a {swap:true} tile still calls onAction(action, tile) untouched, and never calls onOpenSheet", () => {
     const actioned: unknown[] = [];
     const opened: string[] = [];
-    const spec = tile({ id: "sub", action: { swap: true } });
+    const spec = tile({ id: "sub", action: { swap: "subHome" } });
     clickTile(spec, {
       onAction: (a, tapped) => actioned.push([a, tapped.id]),
       onOpenSheet: (key) => opened.push(key),

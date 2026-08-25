@@ -8,13 +8,13 @@
 // VALUE, never a throw (reduceLineupEvent, core/lineup.ts). v2 never
 // surfaced this from the pad; this file is the first chassis primitive
 // that does: an off-player picker (current on-field, via resolvePool) then
-// an on-player picker (bench, via swapCandidates) — a policy refusal
-// renders as inline sport-worded copy, never a dead or silently-disabled
-// control.
+// an on-player picker (the skin's declared candidates, else the bench, via
+// swapCandidates) — a policy refusal renders as inline sport-worded copy,
+// never a dead or silently-disabled control.
 //
-// swapCandidates(view, policyVerdict): `policyVerdict` is the module's own
-// already-resolved verdict for whether a substitution is currently legal
-// for this side at all — the shape a real caller builds from
+// swapCandidates(view, policyVerdict, offId, candidates?): `policyVerdict` is
+// the module's own already-resolved verdict for whether a substitution is
+// currently legal for this side at all — the shape a real caller builds from
 // reduceLineupEvent's refusal branch. This pure function takes it as an
 // opaque value rather than calling the reducer itself, since that needs a
 // concrete off/on pair this function does not have (it is building the
@@ -46,13 +46,40 @@
 // noRoster` empty state attribution-picker.tsx already uses, rather than a
 // fabricated second string.
 //
-// SCOPE NOTE: the OFF list (who can come off) is `resolvePool({pool:
-// "onfield"}, view)` directly, no policy gate — spec §2.7 says "both
+// SCOPE NOTE: the OFF list (who can come off) is `spec.offCandidates ??
+// resolvePool({pool: "onfield"}, view)` (R3/football added the first half —
+// see `SwapSlot.offCandidates`, types.ts), no policy gate — spec §2.7 says "both
 // filtered by lineupPolicy(cfg)", but a per-sport rule about WHO may be
 // taken off (e.g. a keeper mid-passage-of-play) needs a concrete engine
 // call this sport-agnostic primitive is not positioned to make; deferred
 // to the skin wiring this sheet in R2+, the same deferral Ruling F already
-// prices in for resolvePool's own side-selection.
+// prices in for resolvePool's own side-selection. R3 did NOT close this:
+// its narrowing is the ON list only, because no shipped sport has an
+// OFF-side per-candidate rule. `offCandidates`/`offBlocked` stay purely
+// additive for whichever wave first has one.
+//
+// R3 CHASSIS SUB-WAVE (owner ruling 2026-08-24, `_INDEX.md` "R3 — owner
+// ruling: FIX SwapSheet in the chassis, then use it"). Cricket declined this
+// primitive, so football was the first skin ever to reach it, and first use
+// surfaced five defects. The owner ruled to fix the chassis rather than route
+// around it, because R4-R7 all inherit whatever stands here. What changed, so
+// this header is not read as pre-R3 truth:
+//
+//   1. `SkinDefV3.swap` returns `SwapSlot[]`, each with an `id`; a tile's
+//      `{swap: id}` addresses one. One slot per skin made per-side Sub tiles
+//      unreachable.
+//   3. `SwapSlot.eventType` is declared statically so the band filter can see
+//      a swap tile — `buildEvent(off, on)` cannot answer at tile-build time.
+//   4. `SwapSlot.candidates`/`blocked` bring R2c's SCOPE/ELIGIBILITY narrowing
+//      to the ON list, same field names and same renderer as the context strip.
+//   5. `swapCandidates` excludes the picked OFF person — nobody replaces
+//      themselves. Unreachable before 4, since the two pools were complements.
+//   6. A refused verdict ALWAYS states a reason; it used to fall through to
+//      "No roster available yet." when the module worded none.
+//
+// (Defect 2 is the tile-side half of 1 and lives in types.ts.) The paragraph
+// below about `noRoster` describes the OK-with-empty-bench case ONLY — that
+// path is unchanged and still correct; the REFUSED path no longer shares it.
 //
 // RENDERER DESIGN: see context-strip.tsx's own header for the shared token
 // reasoning (violet-600 = "engaged right now", slate neutral = resting,
@@ -68,6 +95,7 @@
 import { useState } from "react";
 import type { LineupRejectionReason } from "@seazn/engine/core";
 import { renderCandidateRow, resolvePool, type PoolView, type TFn } from "./context-strip";
+import type { Blocked } from "./types";
 
 /**
  * `T` collapses to `never` when its STATIC type is (a subtype of)
@@ -118,11 +146,56 @@ export interface SwapCandidatesResult {
   readonly message?: RefusalMessage;
 }
 
-/** The swap-specific pool filter: gated by the module's own policy verdict
- *  first, resolvePool's bench pool second. See the file header. */
-export function swapCandidates(view: PoolView, policyVerdict: PolicyVerdict): SwapCandidatesResult {
+/**
+ * The swap-specific ON-list filter: gated by the module's own policy verdict
+ * first, then the skin's declared SCOPE, then resolvePool's bench pool. See
+ * the file header.
+ *
+ * R3 chassis sub-wave (owner ruling 2026-08-24, defect 4): `candidates` is
+ * `SwapSlot.candidates` (types.ts) — R2c's SCOPE narrowing, extended to the
+ * swap path with the identical `candidates ?? resolvePool(...)` line the
+ * context strip and guided sheet already use, so the three cannot fork.
+ *
+ * Deliberately `??`, never a truthiness check: an EMPTY array means "nobody is
+ * eligible" and must render the empty state, NOT fall back to the whole bench.
+ * That absent-vs-empty divergence is the trap `ContextSlot.message` already
+ * hit once (R2b review item 3).
+ *
+ * ELIGIBILITY (`SwapSlot.blocked`) is deliberately NOT applied here: a blocked
+ * candidate stays in the list and is rendered visible-and-disabled with its
+ * reason, so it must reach the renderer. Filtering it out here would silently
+ * convert R2b's "visible, blocked, and REASONED" ruling back into "removed".
+ *
+ * `offId` — R3 defect 5. The already-picked OFF person, or `null` while the
+ * off step is still open. Excluded from the result, because a player may not
+ * be substituted for THEMSELVES.
+ *
+ * REQUIRED, not optional, and that is the point: an omitted argument would
+ * default a forgetful caller straight back to the buggy behaviour, silently.
+ * Saying `null` is a caller stating that nothing is picked yet.
+ *
+ * Why the chassis owns this rule rather than a skin: a skin's `candidates` is
+ * a VALUE rebuilt from `view`, while the OFF pick lives in `SwapSheet`'s own
+ * local state and never re-enters `swap(view)` — so no skin can see the pick
+ * it would need to narrow against.
+ *
+ * Also worth knowing before anyone deletes this as dead code: with the POOLS
+ * alone it is unreachable. `{pool:"onfield"}` and `{pool:"bench"}` are exact
+ * complements of the playing squad, so the OFF person structurally could not
+ * appear in the ON list. It became reachable the moment `candidates`
+ * superseded the pool (defect 4) — a skin-supplied list is under no such
+ * constraint. The guard still runs on the pool path too, so the two sources
+ * cannot diverge.
+ */
+export function swapCandidates(
+  view: PoolView,
+  policyVerdict: PolicyVerdict,
+  offId: string | null,
+  candidates?: readonly string[],
+): SwapCandidatesResult {
   if (!policyVerdict.ok) return { candidates: [], message: policyVerdict.message };
-  return { candidates: resolvePool({ pool: "bench" }, view) };
+  const scoped = candidates ?? resolvePool({ pool: "bench" }, view);
+  return { candidates: offId === null ? scoped : scoped.filter((id) => id !== offId) };
 }
 
 export interface SwapSheetSpec {
@@ -131,6 +204,25 @@ export interface SwapSheetSpec {
    *  as every other v3 spec field carrying a "label"/"title". */
   readonly offLabel: string;
   readonly onLabel: string;
+  /** R3 — SCOPE for the ON list, `SwapSlot.candidates` carried through
+   *  verbatim by `adaptSwapSlot` (pad-host.tsx). Same name on both sides on
+   *  purpose: a rename at the adapter is exactly where two narrowing idioms
+   *  start to drift apart. */
+  readonly candidates?: readonly string[];
+  /** R3/football — SCOPE for the OFF list, `SwapSlot.offCandidates` carried
+   *  through verbatim by `adaptSwapSlot` (pad-host.tsx). Resolved by the same
+   *  `?? resolvePool(...)` line the ON list uses, so the two narrow by ONE
+   *  idiom; an EMPTY array means "nobody may come off" and renders the empty
+   *  state rather than falling back to the on-field pool. Absent keeps R1's
+   *  behaviour exactly (`pool: "onfield"`). See `SwapSlot.offCandidates`
+   *  (types.ts) for why a stale pool, not a per-candidate rule, is what
+   *  needed this. */
+  readonly offCandidates?: readonly string[];
+  /** R3 — ELIGIBILITY for the ON list, `SwapSlot.blocked` carried through
+   *  verbatim. Pre-localised person-id -> reason; an absent key means
+   *  selectable. Rendered by `renderCandidateRow`, the same function the
+   *  context strip's own picker uses. */
+  readonly blocked?: Blocked;
 }
 
 export interface SwapSheetProps {
@@ -196,7 +288,7 @@ export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap, o
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <p className="mk-eyebrow px-4 pt-3 text-slate-600">{t(spec.offLabel)}</p>
         <div className="px-4 py-3">
-          {renderCandidateRow(resolvePool({ pool: "onfield" }, view), personNames, t, setOffId, emptyText)}
+          {renderCandidateRow(spec.offCandidates ?? resolvePool({ pool: "onfield" }, view), personNames, t, setOffId, emptyText)}
         </div>
         <div className="flex justify-end px-4 pb-3">
           <button type="button" onClick={handleCancel} style={{ minHeight: 44 }} className={cancelButtonClass}>
@@ -207,7 +299,7 @@ export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap, o
     );
   }
 
-  const { candidates, message } = swapCandidates(view, policyVerdict);
+  const { candidates, message } = swapCandidates(view, policyVerdict, offId, spec.candidates);
   const offName = personNames[offId] ?? t("eventCopy.unknownPerson");
 
   return (
@@ -225,10 +317,32 @@ export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap, o
         </button>
       </div>
       <div className="px-4 py-3">
-        {candidates.length === 0 && message !== undefined ? (
-          <p className="text-xs text-slate-600">{message}</p>
+        {/* R3 chassis sub-wave, sixth fix (owner ruling 2026-08-24): this
+            branch keys on the VERDICT, not on whether a message happens to
+            exist. It used to read `candidates.length === 0 && message !==
+            undefined`, so a refusal the module worded silently fell through to
+            `renderCandidateRow`'s empty state — "No roster available yet." for
+            what is actually the sport's own law refusing the substitution. The
+            scorer was told the wrong thing, which is worse than being told
+            nothing.
+
+            The fallback is the RENDERER's, never `swapCandidates`'s: that
+            function still refuses to fabricate a message (its own tests pin
+            `message: undefined`), so the chassis never invents sport-worded
+            prose it has no standing to write. Exactly the split
+            `rejectionText`/`scorepad.rejection.fallback` (pad-host.tsx) already
+            uses for a server refusal — one chassis-generic sentence behind the
+            module's own, never instead of it. */}
+        {!policyVerdict.ok ? (
+          <p data-role="swap-refusal" className="text-xs text-slate-600">
+            {message ?? t("pad.swap.refused")}
+          </p>
         ) : (
-          renderCandidateRow(candidates, personNames, t, (id) => onSwap(offId, id), emptyText)
+          // R3 (defect 4): `spec.blocked` reaches the SAME renderer the context
+          // strip's picker uses, so a blocked ON candidate is a real disabled
+          // button showing its reason beside the name — never removed, and
+          // never a control that merely looks dimmed.
+          renderCandidateRow(candidates, personNames, t, (id) => onSwap(offId, id), emptyText, spec.blocked)
         )}
       </div>
       <div className="flex justify-end px-4 pb-3">

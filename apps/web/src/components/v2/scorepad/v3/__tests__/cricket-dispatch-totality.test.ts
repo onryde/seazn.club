@@ -189,13 +189,19 @@ function sweep(): SweepResult {
     for (const t of tileEventTypes(tiles)) viaTiles.add(t);
     for (const t of sheetEventTypes(sheets)) viaSheets.add(t);
 
-    let dedicated = dedicatedEventTypes(tiles, sheets);
+    // R3/football widened `dedicatedEventTypes` with the swap slot table, so a
+    // Sub tile's own event stops being duplicated into the More sheet. Cricket
+    // declares NO swap at all (skins/cricket.tsx's own "swap() — DROPPED"
+    // section), so the honest argument here is the empty one — which is also
+    // what keeps this sweep's own answer identical to what it was before that
+    // widening landed.
+    let dedicated = dedicatedEventTypes(tiles, sheets, []);
 
     if (probeSuperOver) {
       const so = baseView(cfg, superOverState());
       const soTiles = buildTiles(so);
       for (const t of tileEventTypes(soTiles)) viaTiles.add(t);
-      dedicated = new Set([...dedicated, ...dedicatedEventTypes(soTiles, buildSheets(so, (k: string) => k))]);
+      dedicated = new Set([...dedicated, ...dedicatedEventTypes(soTiles, buildSheets(so, (k: string) => k), [])]);
     }
 
     const spec = padSpecFor(cfg);
@@ -205,7 +211,7 @@ function sweep(): SweepResult {
     // phase-scoped via buildPadView, pad-host.test.ts's own "never lists
     // the same type twice" test proves this scoping directly).
     for (const phase of ["live", "post"] as const) {
-      const actions = moreActions(spec, { state: liveState(), summary: {}, phase, band: 3, entitlements }, dedicated);
+      const actions = moreActions(spec, { state: liveState(), summary: {}, phase, band: 3, entitlements }, dedicated, new Set());
       for (const a of actions) viaMore.add(a.type);
     }
   }

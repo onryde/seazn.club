@@ -370,7 +370,24 @@ export function FixtureConsole({
 
   const summary = live.summary as { headline?: string } | null;
   const scoring = canEdit && live.status !== "finalized" && live.status !== "cancelled";
-  const decided = live.outcome !== null;
+  // An ABANDONED fixture is over, and the server records that in `status` while
+  // leaving `outcome` NULL — the engine's own outcome for it is
+  // `{kind:"no_result"}` (core/events.test.ts), which has no winner to persist
+  // into the outcome column. Reading `outcome` alone therefore called an
+  // abandoned fixture undecided, and the console went on offering Abandon and
+  // Forfeit on a match that had already ended.
+  //
+  // Both are refused by the fold, not merely redundant: `core.abandon` requires
+  // `phase === "live"` and abandon has already moved it to "done", and
+  // `core.forfeit` throws WRONG_PHASE ("already over") in that phase. So this
+  // was the pad offering exactly what the engine will refuse — the defect class
+  // the v3 programme exists to remove, on the shared console rather than in a
+  // skin.
+  //
+  // `decidedLock` is deliberately NOT reused here: it gates whether an event
+  // row may still be voided, and undoing a mistaken abandon must stay possible.
+  // Over, but reversible.
+  const decided = live.outcome !== null || live.status === "abandoned";
   const started = live.status !== "scheduled";
 
   const sides = { home, away };

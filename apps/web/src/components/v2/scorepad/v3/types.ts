@@ -11,8 +11,18 @@
 // compile time) — safe under apps/web's node-only vitest env for the exact
 // reason recording-chip.tsx/context-strip.tsx already import engine types
 // here the same way.
+//
+// R3/task B4 admits ONE sibling, `./sport-theme`, and states the reason so
+// the invariant above is not quietly eroded: sport-theme.ts is a LEAF — it
+// imports only a React type and nothing else in this directory — so no cycle
+// is possible, and it is the file that owns the token vocabulary. Restating
+// `SportTone` here instead would fork the vocabulary in two, which is the
+// exact failure `SPORT_TONES`'s own doc (a SUBSET of `SPORT_TOKENS`, never a
+// parallel list) exists to prevent. Keep any future sibling import to that
+// same bar: leaf module, vocabulary owner, `import type`.
 import type { EventEnvelope, SquadState } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
+import type { SportTone } from "./sport-theme";
 
 export type TapModel = "S" | "T";
 export type PadPhase = "pre" | "live" | "post";
@@ -33,7 +43,26 @@ export type PadPhase = "pre" | "live" | "post";
  * message` below (a PERSON slot's own explanation), which would be a misfit
  * for a fact that isn't about any one person.
  */
-export interface StripItem { id?: string; label?: string; value: string; accent?: boolean }
+/**
+ * R3/task B4 (owner ruling R3-6, per-sport visual identity): `tone`, an
+ * OPTIONAL/additive request for the LED-PANEL treatment — the chassis renders
+ * the item as an inset well of `--sport-board` inside the band, with
+ * `--sport-led` as its digits, condensed uppercase and tabular figures
+ * (globals.css `.pad-led-panel`, scorebug.tsx's strip branch).
+ *
+ * Football's signature: the strip BECOMES the fourth official's added-time
+ * board. It replaces the permanently-dead `Clock —` field rather than adding
+ * furniture (B3 removed that field; this does not restore it), and it stays
+ * honest when there is nothing to show — a skin OMITS an item it cannot fill,
+ * so a fresh match reads as one quiet period panel, never an empty well.
+ *
+ * A CLOSED one-value vocabulary, not a free class name: the whole point of
+ * the token layer is that a skin names a treatment and the chassis owns what
+ * it looks like. `accent` (above) is unrelated and unchanged — it is the
+ * plain strip's own emphasis, and an item may set either, neither, or both
+ * (`tone` wins, since it replaces the rendering entirely).
+ */
+export interface StripItem { id?: string; label?: string; value: string; accent?: boolean; tone?: "led" }
 // Fix round 2 (Task 5 review, Important — controller ruling): servingLabel
 // is a deliberate, additive contract change. The chassis (v3/scorebug.tsx)
 // must never resolve a sport-namespaced i18n key itself — reusing
@@ -135,7 +164,28 @@ export interface TileSpec {
   kind: TileKind;
   span?: 1 | 2 | 3 | 4;
   phases: PadPhase[];
-  action: { event: TapEvent } | { sheet: string } | { swap: true };
+  /**
+   * R3 chassis sub-wave (owner ruling 2026-08-24, `_INDEX.md` "R3 — owner
+   * ruling: FIX SwapSheet in the chassis, then use it", defect 2): the swap
+   * variant is `{swap: string}` — the ID of one `SwapSlot` this skin's own
+   * `swap(view)` declared — where it used to be a bare `{swap: true}`.
+   *
+   * A boolean could only ever address THE swap sheet, so every swap tile in a
+   * skin opened the same one and the side came only from `slot.side`. Football
+   * is the first skin to need two (a Sub tile per side) and could not express
+   * it at all. Slot-addressed, per-side Sub tiles are just two tiles naming
+   * two ids.
+   *
+   * A `{swap}` naming an id no slot declares opens NOTHING (`resolveSwapSlot`,
+   * pad-host.tsx, returns null rather than falling back to the first slot —
+   * that fallback would silently reinstate the exact defect). Deliberately not
+   * a typed union of a skin's own slot ids: `SkinDefV3` is generic over `View`
+   * only, and threading a second type parameter through every method to make
+   * one string literal-checked buys less than it costs. A skin owes its own
+   * test that every `{swap}` tile it declares names a slot its own `swap()`
+   * declares — the same posture `{sheet: string}` already takes.
+   */
+  action: { event: TapEvent } | { sheet: string } | { swap: string };
   /**
    * R2b (owner ruling, bowler-eligibility block, 2026-08-17): `true` when
    * this tile's action must NOT fire on a tap right now, while the tile
@@ -171,6 +221,53 @@ export interface TileSpec {
 export interface DockChip {
   id: string;
   label: string;                  // i18n key
+  /**
+   * R3/football — a PRE-LOCALISED raw string, rendered VERBATIM by the
+   * chassis (detail-dock.tsx), never resolved through `t()`. The same
+   * key-plus-text pair `TileSpec.labelText`/`sublabelText`,
+   * `ContextSlot.message`, `WhoLine.servingLabel` and `SheetNumberStep.
+   * hintText` already establish in this file: the chassis never resolves a
+   * sport-namespaced key, and some labels are not dictionary keys at all.
+   *
+   * The motivating category is a PERSON'S NAME. Every dock shipped before
+   * football's chose from a fixed vocabulary ("4 runs", "Wide"), but a goal's
+   * scorer/assist chips are one chip per player, and a display name routed
+   * through `t()` fires `[i18n] missing key: A. Mensah` on every render while
+   * only rendering correctly by accident (the runtime returns the key it was
+   * handed). That is the exact defect `sublabelText`'s own doc describes for
+   * a bare number.
+   *
+   * `label` stays REQUIRED — it remains the canonical key, and is what every
+   * chip that does not set this still resolves through. When `labelText` IS
+   * present it WINS and `label` is never resolved at all, never concatenated
+   * or merged: the same "explicit pre-localised value overrides the
+   * key-resolved one" posture `labelText`/`sublabelText` already take above.
+   * Optional/additive, so every pre-R3 dock (cricket's bat-run and extra-run
+   * chips) renders identically with zero change.
+   */
+  labelText?: string;
+  /**
+   * R3/football — what KIND of answer this chip gives, which the chassis
+   * renders as a shape rather than a colour.
+   *
+   * A goal dock mixes two genuinely different things: `ownGoal`/`penalty` are
+   * MODIFIERS of the event that was already recorded, and the rest are
+   * ATTRIBUTION — one chip per player. Rendered identically (every chip was a
+   * `rounded-full` pill), the two flags sat inside the name list, and a scorer
+   * hunting a name inside the ~6s hold window had to read past them. The cost
+   * of a mis-tap is not symmetric either: picking the wrong person is a wrong
+   * name on a goal, while `ownGoal` changes which SIDE the fold credits.
+   *
+   * Deliberately a SHAPE and not a tone: shape is legible in peripheral vision
+   * before colour is, which is what a timed scan actually needs, and it adds no
+   * new colour for `contrast.test.ts` to have to license. A person stays the
+   * pill it already was; a flag becomes a tab.
+   *
+   * Optional/additive, exactly as `labelText` above: every pre-R3 dock
+   * (cricket's bat-run and extra-run chips) sets nothing and renders
+   * byte-identically — pinned by `dock.test.ts`.
+   */
+  kind?: "flag";
   mutate: (payload: Record<string, unknown>) => Record<string, unknown>;
 }
 export interface DockSpec { title: string; chips: DockChip[] }
@@ -379,7 +476,31 @@ export type StepPredicate = (answers: Readonly<Record<string, string>>) => boole
  * already step 1, while the side being asked is step 3. A reorder would have
  * been strictly worse, since it would ask the side even for the uncapped case.
  */
-export interface SheetChoiceStep { id: string; kind: "choice"; title: string; options: { id: string; label: string }[]; when?: StepPredicate; hintKey?: string; blocked?(answers: Readonly<Record<string, string>>): Blocked }
+/**
+ * R3/task B4 (owner ruling R3-6) — `options[].tone`, OPTIONAL/additive: the
+ * card-code colours, and the one place in this pad where colour is
+ * INFORMATION rather than decoration. A referee does not raise a "destructive
+ * action"; yellow and red are the only colours in football's visual language
+ * that carry meaning, and before B4 a red card rendered in the chassis's
+ * generic `destructive` red (identical to Abandon) while a yellow rendered
+ * neutral. B3 collapsed cards to ONE neutral tile per side, so no tile carries
+ * colour any more — the three options inside `card-<side>`'s first step are
+ * where these belong.
+ *
+ * An ARRAY over a closed vocabulary (`SportTone`, ./sport-theme.ts), not a
+ * single value, because one option legitimately carries two: a second yellow
+ * IS a yellow card and a red one, not a red card with a note (the engine
+ * keeps `second_yellow` as its own colour for the same reason — the
+ * suspension tariff comes off the reason, not the colour). The chassis
+ * renders one swatch per entry, overlapped, and washes the button in the LAST
+ * entry — the outcome.
+ *
+ * A NAME, never a value: `guided-sheet.tsx` maps it to `--sport-*` tokens the
+ * chassis owns, so a skin still supplies no colour of its own and a sport
+ * with no override renders the app's daylight signal pair. Absent means the
+ * plain option button every pre-B4 step already rendered.
+ */
+export interface SheetChoiceStep { id: string; kind: "choice"; title: string; options: { id: string; label: string; tone?: readonly SportTone[] }[]; when?: StepPredicate; hintKey?: string; blocked?(answers: Readonly<Record<string, string>>): Blocked }
 /**
  * R2/task A5 (`_INDEX.md` R1 "owed by later waves", closed here): `side` is
  * REQUIRED, not optional-with-a-default. Cricket's wicket flow needs the
@@ -506,6 +627,19 @@ export const MORE_SHEET_KEY = "__pad-host/more__";
  * not silently accepted as equivalent.
  */
 export interface SwapSlot {
+  /**
+   * R3 chassis sub-wave (owner ruling 2026-08-24, defect 1). Stable, skin-
+   * authored identity — the string a `TileSpec.action = {swap: id}` names.
+   * Unique within one skin's own `swap(view)` result; `resolveSwapSlot`
+   * (pad-host.tsx) takes the FIRST match, so a duplicate id makes the later
+   * slot unreachable rather than crashing.
+   *
+   * Exists because `swap` returned ONE slot per view: every `{swap:true}` tile
+   * opened that same sheet and the side came only from `slot.side`, so a
+   * per-side Sub tile pair — football's actual requirement, and the first real
+   * use this primitive ever had — was structurally unreachable.
+   */
+  id: string;
   /** i18n key — swap-sheet.tsx's `SwapSheetSpec.offLabel`. */
   offLabel: string;
   /** i18n key — swap-sheet.tsx's `SwapSheetSpec.onLabel`. */
@@ -513,6 +647,27 @@ export interface SwapSlot {
   /** Which side's squad the off/on pickers both draw from — a substitution
    *  is always within ONE team, unlike a guided sheet's person steps. */
   side: "home" | "away";
+  /**
+   * R3 chassis sub-wave (owner ruling 2026-08-24, defect 3): the event type
+   * `buildEvent` will produce — `"football.sub"` where the module declares
+   * one, `"core.lineup.substitution"` otherwise (design §2.7).
+   *
+   * Declared STATICALLY, and separately from `buildEvent`, for one reason: the
+   * band filter runs at TILE-BUILD time, long before any pick exists, and
+   * `buildEvent(off, on)` needs a concrete pair it cannot have yet. Without
+   * this, `tileEventType` (pad-host.tsx) returned null for every swap tile and
+   * the fail-open filter kept it unconditionally — so a band-0 org saw the Sub
+   * tile, picked two people, and only THEN earned a refusal at the scoring
+   * door (`assertEntitledToScore`, server/usecases/scoring.ts). A dead-end
+   * tap, the defect class this programme keeps closing.
+   *
+   * MUST equal the `.type` `buildEvent` actually returns. Nothing can check
+   * that here — the two are separated by a pick that only exists at tap time —
+   * so a skin owes its own test that the pair agree. `createSkinDispatch`'s "a
+   * skin cannot invent an event" guard still catches an invented type at
+   * dispatch, but only after the taps have already been spent.
+   */
+  eventType: string;
   /** The module's own `lineupPolicy(cfg)` verdict for whether a
    *  substitution is currently legal for this side at all (design §2.7) —
    *  `reduceLineupEvent`'s `{ok}`, computed by the skin from its own folded
@@ -522,6 +677,75 @@ export interface SwapSlot {
    *  its `.reason` machine slug (see this interface's own header). Present
    *  only when `policyOk` is false. */
   policyMessage?: string;
+  /**
+   * R3 chassis sub-wave (owner ruling 2026-08-24, defect 4) — SCOPE for the
+   * ON list (who may come ON). Field-for-field the contract `ContextSlot.
+   * candidates` already ships, honoured by the same `candidates ?? resolvePool
+   * (...)` line, so the two narrowing surfaces cannot fork. See `Blocked`
+   * above for why scope and eligibility are two operations, not one.
+   *
+   * When present it SUPERSEDES the bench pool entirely, and an EMPTY array
+   * means "nobody is eligible" — it must never read as "no narrowing" and fall
+   * back to the pool. Absent keeps R1's behaviour exactly (`pool: "bench"`).
+   *
+   * The ON LIST ONLY, and the asymmetry is deliberate rather than an
+   * oversight. The OFF list stays `resolvePool({pool: "onfield"})` because no
+   * shipped sport has a per-candidate rule about who may be taken OFF —
+   * swap-sheet.tsx's own SCOPE NOTE has priced that deferral in since R1.
+   * Adding `offCandidates`/`offBlocked` later is purely additive; inventing
+   * them now would be two more fields with no caller and no test that could
+   * fail.
+   *
+   * A VALUE, not a method, matching `ContextSlot` rather than
+   * `SheetChoiceStep`: this is rebuilt every render from the live `view`, so a
+   * value is already current. The cost, stated so a skin author does not
+   * discover it the hard way: it therefore CANNOT depend on which OFF player
+   * was picked, since that pick lives in `SwapSheet`'s own local state and
+   * never re-enters `swap(view)`. The one dependency that genuinely matters —
+   * a player cannot replace themselves — is handled by the chassis instead
+   * (`swapCandidates` excludes the picked OFF person, defect 5).
+   */
+  candidates?: readonly string[];
+  /**
+   * R3/football — SCOPE for the OFF list (who may come off), the additive
+   * counterpart `candidates` above priced in for "whichever wave first has
+   * one". Same `?? resolvePool(...)` resolution, same absent-vs-EMPTY
+   * distinction (an empty array means "nobody may come off" and must never
+   * read as "no narrowing"), same field name across `adaptSwapSlot`.
+   *
+   * The reason is NOT a per-candidate rule about who may be taken off — it is
+   * that the on-field POOL is stale for a sport whose fold does not adopt the
+   * kernel's `SquadState`. `squadStateOf` (pad-host.tsx) degrades football's
+   * own private squad projection to `initSquads(lineups)`, i.e. the KICKOFF
+   * team sheet, which never moves again: one substitution later the pool still
+   * offers the player who came off and still omits the one who came on. Both
+   * halves are dead-end taps — `reduceLineupEvent` refuses "off" for someone
+   * not on the field, and a substitute who came on could never be withdrawn.
+   * A skin whose engine state DOES track the live pitch states it here.
+   *
+   * No `offBlocked` alongside it, deliberately: no shipped sport has a reason
+   * to render someone on the pitch as visibly-ineligible-to-leave, and a field
+   * with no caller is a field with no test that could fail. Adding one later
+   * stays purely additive, exactly as this one was.
+   */
+  offCandidates?: readonly string[];
+  /**
+   * R3 chassis sub-wave (owner ruling 2026-08-24, defect 4) — ELIGIBILITY for
+   * the ON list, applied AFTER `candidates`/the pool resolves so scope and
+   * eligibility never fight. Same `Blocked` type, same pre-localised
+   * person-id -> reason shape and the same renderer (`renderCandidateRow`) the
+   * context strip already uses.
+   *
+   * A blocked candidate stays VISIBLE, disabled, WITH ITS REASON beside the
+   * name — R2b's binding "visible, blocked, and REASONED — not removed"
+   * ruling. Without it the swap sheet could only offer everyone and let the
+   * engine refuse afterwards, which is the whole defect: the sheet could not
+   * say WHY someone was ineligible.
+   *
+   * First real use: football's already-substituted-off players, whom
+   * `reentry: "none"` will refuse.
+   */
+  blocked?: Blocked;
   /** Builds the concrete event once both picks are made — `football.sub`
    *  where the module declares one, `core.lineup.substitution` otherwise
    *  (design §2.7). Runs through the SAME dispatch guard as every other v3
@@ -705,15 +929,61 @@ export interface SkinDefV3<View = unknown> {
    * `ActivityDetailContext`'s own doc for what each field means.
    */
   activityDetail?(ctx: ActivityDetailContext): string | undefined;
-  /** Declares this skin's swap-sheet integration (design §2.7) — `null`
-   *  when a swap is not applicable right now (e.g. no sub currently legal
-   *  to OFFER, as opposed to legal-but-refused, which is `policyOk: false`
-   *  instead) or the sport has no in-play substitutions at all (boardgame,
-   *  carrom singles, generic — design §3's own table). Omit the method
-   *  entirely for those sports rather than returning `null` from every
-   *  call — same "absent means never applicable" convention `context`
-   *  already uses one line up. */
-  swap?(view: View): SwapSlot | null;
+  /**
+   * Declares this skin's swap-sheet integration (design §2.7) — EVERY slot
+   * currently offerable, each addressed by a `TileSpec.action = {swap: id}`.
+   *
+   * R3 chassis sub-wave (owner ruling 2026-08-24, defect 1): PLURAL, where
+   * this returned `SwapSlot | null`. One slot per view meant every swap tile
+   * in a skin opened the same sheet, so football's per-side Sub tiles were
+   * unreachable; cricket never noticed because it declined the primitive
+   * entirely. An EMPTY array is the new "not applicable right now" (no sub
+   * currently legal to OFFER — as opposed to legal-but-refused, which is
+   * `policyOk: false` on a slot that IS returned, so the scorer still gets to
+   * see the sport's own reason).
+   *
+   * Still optional: omit the method entirely for a sport with no in-play
+   * substitutions at all (boardgame, carrom singles, generic — design §3's own
+   * table), the same "absent means never applicable" convention `context`
+   * already uses one line up. Cricket omits it, and stayed untouched by this
+   * change for exactly that reason.
+   */
+  swap?(view: View): SwapSlot[];
+  /**
+   * R3 review round — the event types this sport's own fold will REFUSE in the
+   * current view, whatever the pad might otherwise draw. The generic More
+   * sheet's SECOND exclusion set, alongside `dedicatedEventTypes`.
+   *
+   * The two sets exclude for opposite reasons and are deliberately kept apart
+   * rather than unioned into one variable: `dedicated` means "already reachable
+   * through a better, narrowed surface", and this means "not reachable at all
+   * right now". Merging them would leave a later reader unable to tell a
+   * de-duplication from a phase refusal.
+   *
+   * WHY THE CHASSIS CANNOT COMPUTE THIS ITSELF. `padSpec(cfg)` carries a
+   * `PadGate` per panel, and a sport that expresses every phase rule as a gate
+   * needs nothing here. Football does not: `applyGoal`/`applySub`/`applyShot`/
+   * `applySinBin*`/`applyPenalty` each guard on `isPlayPhase(state.phase)`
+   * INSIDE the fold, while their panels are ungated `phase: "live"` — and
+   * football's own `PadPhase` mapping puts SHOOTOUT in "live" (it IS a phase of
+   * the match). So the More sheet listed goal, sub, shot and both sin-bin
+   * forms during a shoot-out, every one of them WRONG_PHASE on tap and two of
+   * them reachable at band 0. That was found by the R3 review pass, and it is
+   * the same "never offer what the engine will refuse" rule R2b and R2c each
+   * applied to cricket's tiles and candidate lists.
+   *
+   * A SKIN THAT DECLARES THIS IS MIRRORING ITS OWN ENGINE, which is the thing
+   * this programme keeps getting wrong — so the obligation comes with it: the
+   * skin owes a test that drives the real fold and proves nothing it leaves
+   * unrefused is refused (football's is the `phaseVerdict` sweep in
+   * `__tests__/football-dispatch-totality.test.ts`). A mirror agrees with
+   * itself; only the fold can referee.
+   *
+   * FAILS OPEN. Omit the method and nothing is excluded — every skin written
+   * before this renders exactly as it did, and a sport whose gates already
+   * live in `padSpec` never needs it.
+   */
+  refusedEventTypes?(view: View): readonly string[];
 }
 
 /**

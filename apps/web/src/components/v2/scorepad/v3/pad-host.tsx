@@ -50,18 +50,25 @@ import { usePadPipeline } from "../use-pad-pipeline";
 import type { RejectionInfo } from "../use-pad-pipeline";
 import { HOLD_MS } from "../queue";
 import { buildPadView, summaryHeadline, type PadActionView, type PadViewCtx } from "../view-model";
+// R3/football: the STRUCTURAL `SquadState` check the legacy lane already
+// carries — see `squadStateOf` below for why a field-name check is not
+// enough. Imported, never re-stated: two structural checks for one shape is
+// exactly where the legacy and v3 lanes would start to disagree about which
+// squad a football pad is reading.
+import { isSquadState } from "../attribution-picker";
 import { createSkinDispatch } from "../skins/types";
 import { ActionFormList } from "./action-form";
 import { Scorebug } from "./scorebug";
 import { TileGrid } from "./tile-grid";
-import { DetailDock, makeDockStore } from "./detail-dock";
+import { DetailDock, makeDockStore, type DockStore } from "./detail-dock";
 import { ContextStrip, type PoolView, type TFn } from "./context-strip";
 import { SwapSheet, refusalMessage, type PolicyVerdict, type SwapSheetSpec } from "./swap-sheet";
 import { GuidedSheet } from "./guided-sheet";
 import { RecordingChip } from "./recording-chip";
-import { buildRibbon } from "./ribbon";
-import { ActivityPanel, type ActivityEvent } from "./activity";
+import { buildRibbon, type Ribbon } from "./ribbon";
+import { ActivityPanel, latestRowDetail, type ActivityDetailResolver, type ActivityEvent } from "./activity";
 import { MORE_SHEET_KEY, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
+import { sportThemeAttr, sportThemeStyle } from "./sport-theme";
 
 // ---------------------------------------------------------------------------
 // Pure builders — every decision this file makes, tested directly
@@ -76,10 +83,34 @@ import { MORE_SHEET_KEY, type DockSpec, type GuidedSheetSpec, type PadHostView, 
  * `initSquads(lineups)` — the SAME engine primitive every module's own
  * squad adopter falls back to internally — otherwise. A skin never
  * branches on which case it is.
+ *
+ * R3/football — `state.squads` IS NOT A RESERVED NAME, and this function used
+ * to read it blind. `sports/squad-state.ts`'s `SquadCarrier` is the ADOPTED
+ * shape (cricket and the period/setbased/nested kernels write it), but
+ * football manages its OWN private projection at the identical field name —
+ * `{home,away}` of `{onPitch, bench, offUsed, sentOff}`, with no `.members`
+ * array anywhere (`FootballSquad`, football.ts). Every consumer of this
+ * result reads `.members`: `combinedPool` spreads it, `sidePool` feeds
+ * `resolvePool` -> `playingSquad`/`onFieldPersons` (core/lineup.ts), and
+ * `ActionFormList` hands it to the shared attribution picker. So the blind
+ * read did not return a slightly-wrong pool for football — it THREW
+ * (`.members.filter is not a function`) the first time a swap sheet, a
+ * guided-sheet person step, or a More-sheet person picker resolved a pool,
+ * i.e. on football's very first substitution tap.
+ *
+ * The check is STRUCTURAL and REUSED, never a second copy: `isSquadState`
+ * (../attribution-picker.tsx) is the identical guard the legacy lane has
+ * carried since S10, written for this exact sport — its own header says
+ * "reading `state.squads` blind would silently misinterpret football's squad
+ * as empty/malformed". A non-adopting shape degrades to `initSquads(lineups)`,
+ * the same third tier the legacy picker degrades to, so both lanes read one
+ * squad for one fixture. Cricket and every other adopting module are
+ * unaffected — their `state.squads` passes the shape check and is returned
+ * verbatim, by reference, exactly as before.
  */
 export function squadStateOf(state: unknown, lineups: LineupPair): SquadState {
-  const squads = (state as { squads?: SquadState } | null | undefined)?.squads;
-  return squads ?? initSquads(lineups);
+  const squads = (state as { squads?: unknown } | null | undefined)?.squads;
+  return isSquadState(squads) ? squads : initSquads(lineups);
 }
 
 /**
@@ -131,40 +162,127 @@ export function entitledBandsFrom(
   return out;
 }
 
-/** Every event type ALREADY reachable through a dedicated tile or a guided
- *  sheet — the "More" sheet's own exclusion set (item 4: a future engine
- *  action must appear WITHOUT a skin edit, which only holds if this set is
- *  derived from the skin's declarations, never hand-listed). A `{swap:
- *  true}` tile contributes nothing: its real event is built dynamically
- *  from a picked (off, on) pair (`SwapSlot.buildEvent`), never declared
- *  statically as one type. */
+/**
+ * The TOP RIBBON's line for the most recent event, or null with nothing
+ * recorded.
+ *
+ * R3/F (F1) — extracted from `PadHostV3`'s render body so the composition it
+ * performs is assertable at all. `buildRibbon` has accepted a `detail` since
+ * the 2026-08-17 sign-off review, and every converted skin builds one, but the
+ * host called it with FOUR arguments here and threaded `activityDetail` into
+ * `<ActivityPanel>` ONLY: `pad.ribbon.withDetail` never fired on the ribbon,
+ * so a 320 capture showed "Goal recorded" on the ribbon while the dock
+ * directly beneath it held the scorer's name.
+ *
+ * The detail comes from `latestRowDetail` (activity.tsx), NOT from a second
+ * ordering rule written here — the ribbon and the panel's newest row describe
+ * the same event and must read identically, which
+ * `__tests__/top-ribbon.test.ts` pins against the panel's own rendered markup.
+ */
+export function buildTopRibbon(
+  events: readonly ActivityEvent[],
+  nameOf: (personId: string) => string,
+  t: MsgFn,
+  resolveDetail: ActivityDetailResolver | undefined,
+): Ribbon | null {
+  const latest = events.length > 0 ? events[events.length - 1] : undefined;
+  if (latest === undefined) return null;
+  return buildRibbon(
+    latest.type,
+    (latest.payload ?? {}) as Record<string, unknown>,
+    nameOf,
+    t,
+    latestRowDetail(events, resolveDetail),
+  );
+}
+
+/** Every event type ALREADY reachable through a dedicated tile, a guided
+ *  sheet, or a swap slot — the "More" sheet's own exclusion set (item 4: a
+ *  future engine action must appear WITHOUT a skin edit, which only holds if
+ *  this set is derived from the skin's declarations, never hand-listed).
+ *
+ *  R3/football closed the one hole left here. A `{swap: id}` tile used to
+ *  contribute NOTHING, so a sport whose substitution is also declared in
+ *  `padSpec(cfg)` listed it BOTH on its Sub tile and again as a generic form
+ *  inside "More". The original justification ("a swap's event cannot be known
+ *  statically") stopped being true with R3's defect-3 fix, which gives
+ *  `SwapSlot` a declared `eventType` precisely so it CAN be; all that was
+ *  missing was the slot TABLE, since a `{swap}` action carries only an id.
+ *  It is now a parameter, resolved through the SAME `resolveSwapSlot` the
+ *  band filter uses — one resolution, so a tile cannot be band-filtered as
+ *  one event and de-duplicated as another.
+ *
+ *  Why fixing it beat living with it (football's own ruling, `_INDEX.md`):
+ *  the duplicate is not cosmetic. The generic More form for a substitution
+ *  bypasses everything the swap sheet exists to provide — the module's own
+ *  `lineupPolicy` verdict, the narrowed on/off lists, the reason an
+ *  already-substituted player is ineligible, and the skin's stale-stamp guard
+ *  on `at` — so the un-narrowed path sat one tap from the narrowed one. That
+ *  is the same two-divergent-entry-points defect R2c closed for
+ *  `cricket.retire`, which the sheet's own `event` already de-duplicates.
+ *
+ *  `swaps` is REQUIRED, not optional-with-a-default: an omitted argument
+ *  would default a forgetful caller straight back to the duplicate, silently
+ *  — the same reasoning `swapCandidates`'s own `offId` parameter states. A
+ *  skin with no swap passes `[]`, which reads as the deliberate statement it
+ *  is. */
 export function dedicatedEventTypes(
   tiles: readonly TileSpec[],
   sheets: Record<string, GuidedSheetSpec> | undefined,
+  swaps: readonly SwapSlot[],
 ): Set<string> {
   const out = new Set<string>();
   for (const tile of tiles) {
     if ("event" in tile.action) out.add(tile.action.event.type);
+    else if ("swap" in tile.action) {
+      const slot = resolveSwapSlot(tile.action.swap, swaps);
+      if (slot) out.add(slot.eventType);
+    }
   }
   if (sheets) for (const spec of Object.values(sheets)) out.add(spec.event);
   return out;
 }
 
 /** The "More" sheet's own content: every `padSpec(cfg)` action NOT in
- *  `dedicated`, phase/gate/band/entitlement-filtered exactly like the
- *  panel walk `buildPadView` already does for the legacy renderer — reused
- *  verbatim, never re-derived, so a locked/wrong-phase action can never
- *  leak in here either. De-duplicated by type: a module may legitimately
- *  declare the same wire type more than once across panels
- *  (skins/types.ts's own `actionByType` doc); the FIRST resolved view
- *  wins, same "first match" convention that file already documents. */
-export function moreActions(spec: PadSpec, ctx: PadViewCtx, dedicated: ReadonlySet<string>): PadActionView[] {
+ *  `dedicated` and NOT in `refused`, phase/gate/band/entitlement-filtered
+ *  exactly like the panel walk `buildPadView` already does for the legacy
+ *  renderer — reused verbatim, never re-derived. De-duplicated by type: a
+ *  module may legitimately declare the same wire type more than once across
+ *  panels (skins/types.ts's own `actionByType` doc); the FIRST resolved view
+ *  wins, same "first match" convention that file already documents.
+ *
+ *  TWO EXCLUSION SETS, ON PURPOSE (R3 review round). `dedicated` is "already
+ *  reachable through a narrowed surface" — see `dedicatedEventTypes` above.
+ *  `refused` is `SkinDefV3.refusedEventTypes(view)`: "the fold will not accept
+ *  this at all right now". They are not unioned into one parameter because a
+ *  later reader must be able to tell which reason applied, and because they
+ *  are computed from different things — the skin's own tile/sheet/swap
+ *  declarations versus its engine's phase gates.
+ *
+ *  The comment `buildPadView` earns above ("a locked/wrong-phase action can
+ *  never leak in here either") was TRUE OF THE PANEL GATE and false of the
+ *  fold: `padSpec`'s gates are the only phase rules the view model can see,
+ *  and football keeps most of its own inside `apply`. That gap is exactly what
+ *  `refused` closes — it shipped as four dead-end taps during the shoot-out,
+ *  two of them at band 0.
+ *
+ *  `refused` is REQUIRED, not optional-with-a-default, for the same reason
+ *  `swaps` is on `dedicatedEventTypes`: a defaulted argument would silently
+ *  restore the dead end for a forgetful caller. A skin that declares no
+ *  refusals passes an empty set, which reads as the deliberate statement it
+ *  is. */
+export function moreActions(
+  spec: PadSpec,
+  ctx: PadViewCtx,
+  dedicated: ReadonlySet<string>,
+  refused: ReadonlySet<string>,
+): PadActionView[] {
   const view = buildPadView(spec, ctx);
   const seen = new Set<string>();
   const out: PadActionView[] = [];
   for (const panel of view.panels) {
     for (const action of panel.actions) {
-      if (dedicated.has(action.type) || seen.has(action.type)) continue;
+      if (dedicated.has(action.type) || refused.has(action.type) || seen.has(action.type)) continue;
       seen.add(action.type);
       out.push(action);
     }
@@ -223,20 +341,40 @@ export function decideUndo(eventId: string, heldId: string | null): UndoDecision
  * The event type a tile will dispatch, or `null` when it cannot be known
  * statically.
  *
- * `{swap:true}` builds its event from the picked people at tap time, and the
- * MORE sheet hosts the whole `padSpec(cfg)` action list rather than one event,
- * so neither can be classified here — both return `null` and are therefore
- * never filtered. That is deliberate: the MORE sheet is exactly where a
- * LOW-band org reaches `cricket.innings.summary`, so hiding it by band would
- * remove the only recording action such an org has.
+ * THE MORE SHEET'S `null` IS LOAD-BEARING AND MUST NOT CHANGE. It hosts the
+ * whole `padSpec(cfg)` action list rather than one event, and it is exactly
+ * where a LOW-band org reaches its only recording action
+ * (`cricket.innings.summary`) — band-filtering it would remove that. It
+ * returns null because there is genuinely no single event to classify, and
+ * every future edit to this function must keep it that way.
+ *
+ * R3 chassis sub-wave (owner ruling 2026-08-24, defect 3): a `{swap: id}` tile
+ * NOW resolves, through the skin's own declared slots. It used to return null
+ * for the same surface reason as the MORE sheet — "the event is built from the
+ * picked people at tap time" — but the two nulls were never the same thing.
+ * MORE has no single event by construction; a swap has exactly one, just not
+ * yet built. `SwapSlot.eventType` (types.ts) declares it statically so the
+ * band filter can see it, because `football.sub` sits above tiers 0/1 and a
+ * band-0 scorer was otherwise shown a Sub tile that could only ever end in a
+ * refusal after two picks.
+ *
+ * An id no slot declares still returns null and is therefore kept — see
+ * `filterTilesByBand`'s fail-open reasoning below. (`resolveSwapSlot` fails
+ * CLOSED for the same input, which is not a contradiction: showing a tile
+ * nobody could classify is safe, whereas OPENING a sheet resolved to the wrong
+ * slot would swap the wrong team's player.)
  */
-export function tileEventType(tile: TileSpec, sheets: Record<string, GuidedSheetSpec>): string | null {
+export function tileEventType(
+  tile: TileSpec,
+  sheets: Record<string, GuidedSheetSpec>,
+  swaps: readonly SwapSlot[],
+): string | null {
   if ("event" in tile.action) return tile.action.event.type;
   if ("sheet" in tile.action) {
     if (tile.action.sheet === MORE_SHEET_KEY) return null;
     return sheets[tile.action.sheet]?.event ?? null;
   }
-  return null;
+  return resolveSwapSlot(tile.action.swap, swaps)?.eventType ?? null;
 }
 
 /**
@@ -259,11 +397,12 @@ export function tileEventType(tile: TileSpec, sheets: Record<string, GuidedSheet
 export function filterTilesByBand(
   tiles: readonly TileSpec[],
   sheets: Record<string, GuidedSheetSpec>,
+  swaps: readonly SwapSlot[],
   fidelity: PadSpec["fidelity"],
   entitledBands: ReadonlySet<FidelityBand>,
 ): TileSpec[] {
   return tiles.filter((tile) => {
-    const type = tileEventType(tile, sheets);
+    const type = tileEventType(tile, sheets, swaps);
     if (type === null) return true;
     const band = fidelity[type];
     if (band === undefined) return true;
@@ -367,6 +506,28 @@ export function contextOverridesStale(overridesFor: unknown, currentState: unkno
   return overridesFor !== currentState;
 }
 
+/**
+ * R3 chassis sub-wave (owner ruling 2026-08-24, `_INDEX.md`, defects 1+2): the
+ * slot a `{swap: id}` tile addresses, or `null`.
+ *
+ * FAIL-CLOSED, and that direction is deliberate — the opposite of
+ * `filterTilesByBand`'s fail-open. An id no slot declares opens NOTHING rather
+ * than falling back to the first slot: that fallback is precisely the defect
+ * being fixed (one shared sheet for every swap tile, the side taken from
+ * whichever slot happened to be first), so re-introducing it as an error path
+ * would make the bug survive its own fix. Failing open costs a scorer a tap
+ * that does nothing; failing to a fallback silently substitutes the WRONG
+ * TEAM's player, which is a scoring error nobody would notice until the
+ * timeline is read back.
+ *
+ * `slotId === null` is the ordinary "no sheet open" state — the host's own
+ * `openSwapId`, which replaced R1's `swapOpen` boolean.
+ */
+export function resolveSwapSlot(slotId: string | null, slots: readonly SwapSlot[]): SwapSlot | null {
+  if (slotId === null) return null;
+  return slots.find((slot) => slot.id === slotId) ?? null;
+}
+
 /** Adapts a skin's primitive-only `SwapSlot` (types.ts) into swap-sheet.tsx's
  *  own concrete shapes — see types.ts's `SwapSlot` header for why the
  *  contract stays primitive-only (avoiding a circular type import) and why
@@ -377,7 +538,17 @@ export function adaptSwapSlot(
   squads: SquadState,
 ): { spec: SwapSheetSpec; view: PoolView; policyVerdict: PolicyVerdict } {
   return {
-    spec: { offLabel: slot.offLabel, onLabel: slot.onLabel },
+    // R3 (defect 4): `candidates`/`blocked` cross verbatim, same field names on
+    // both sides. A rename here is exactly where two narrowing idioms start to
+    // drift, and dropping them here would leave the whole contract dead on the
+    // production path while the sheet's own unit tests still passed.
+    spec: {
+      offLabel: slot.offLabel,
+      onLabel: slot.onLabel,
+      candidates: slot.candidates,
+      offCandidates: slot.offCandidates,
+      blocked: slot.blocked,
+    },
     view: sidePool(slot.side, squads),
     policyVerdict: slot.policyOk
       ? { ok: true }
@@ -490,7 +661,10 @@ export function PadHostV3(props: PadHostV3Props) {
 
   const [phase, setPhase] = useState<PadPhase>("live");
   const [held, setHeld] = useState<HeldTap | null>(null);
-  const [swapOpen, setSwapOpen] = useState(false);
+  // R3 chassis sub-wave (defect 2): the id of the OPEN swap slot, or null.
+  // Was a bare `swapOpen` boolean, which could only ever mean "the swap sheet
+  // is showing" — with one sheet per skin there was nothing else to say.
+  const [openSwapId, setOpenSwapId] = useState<string | null>(null);
   const [openSheet, setOpenSheet] = useState<SheetResolution | null>(null);
 
   // G5's own precedence rule (contextOverridesStale, above): a pending
@@ -541,6 +715,11 @@ export function PadHostV3(props: PadHostV3Props) {
   // a skin's sheet closes over live view state and a memo would let it go
   // stale the moment the match moves.
   const sheets = props.skin.sheets?.(view);
+  // R3 (defect 3): resolved BEFORE the tiles for the same reason `sheets` is —
+  // the band filter must resolve a `{swap: id}` tile's declared event type,
+  // and it can only do that against the slot table. Moving this line back
+  // below the tile build silently reinstates the unfiltered swap tile.
+  const swapSlots = useMemo(() => props.skin.swap?.(view) ?? [], [props.skin, view]);
   const entitledBands = useMemo(() => entitledBandsFrom(spec.fidelityEntitlements, entitlements), [spec, entitlements]);
 
   // Band filter applied BEFORE `phasesWithTiles`, not at render: the phase
@@ -549,8 +728,8 @@ export function PadHostV3(props: PadHostV3Props) {
   // empty grid.
   const allTiles = useMemo(() => props.skin.tiles(view), [props.skin, view]);
   const tiles = useMemo(
-    () => filterTilesByBand(allTiles, sheets ?? {}, spec.fidelity, entitledBands),
-    [allTiles, sheets, spec.fidelity, entitledBands],
+    () => filterTilesByBand(allTiles, sheets ?? {}, swapSlots, spec.fidelity, entitledBands),
+    [allTiles, sheets, swapSlots, spec.fidelity, entitledBands],
   );
   const availablePhases = useMemo(() => phasesWithTiles(tiles), [tiles]);
   // G3: a skin's own phase(view), when declared, overrides the self-correcting
@@ -561,7 +740,6 @@ export function PadHostV3(props: PadHostV3Props) {
 
   const scorebugSpec = useMemo(() => props.skin.scorebug(view), [props.skin, view]);
   const contextSpec = useMemo(() => props.skin.context?.(view) ?? null, [props.skin, view]);
-  const swapSlot = useMemo(() => props.skin.swap?.(view) ?? null, [props.skin, view]);
 
   const padViewCtx: PadViewCtx = useMemo(
     () => ({ state: pipeline.state, summary: pipeline.summary, phase, band: props.band, entitlements }),
@@ -571,8 +749,22 @@ export function PadHostV3(props: PadHostV3Props) {
   // `sheets` is declared once, further up — it had to move above the tile
   // build so the band filter can resolve a sheet-opening tile's event type.
   // G4's reasoning for not memoizing it lives with that declaration.
-  const dedicated = useMemo(() => dedicatedEventTypes(tiles, sheets), [tiles, sheets]);
-  const moreActionsList = useMemo(() => moreActions(spec, padViewCtx, dedicated), [spec, padViewCtx, dedicated]);
+  // R3/football: `swapSlots` is the third argument — without it a swap's own
+  // event stays listed in the More sheet as an un-narrowed generic form
+  // beside its Sub tile (see dedicatedEventTypes' own doc).
+  const dedicated = useMemo(() => dedicatedEventTypes(tiles, sheets, swapSlots), [tiles, sheets, swapSlots]);
+  // R3 review round: the skin's own "the fold refuses this right now" set —
+  // `moreActions`' second exclusion set, see its doc for why the two are not
+  // one. Built from `view` (not `padViewCtx`), because it is a SKIN call and
+  // every skin method takes the same view bag.
+  const refusedTypes = useMemo(
+    () => new Set(props.skin.refusedEventTypes?.(view) ?? []),
+    [props.skin, view],
+  );
+  const moreActionsList = useMemo(
+    () => moreActions(spec, padViewCtx, dedicated, refusedTypes),
+    [spec, padViewCtx, dedicated, refusedTypes],
+  );
 
   // The ONE dispatch gateway (task brief item 5): every event this host
   // sends — tile taps, guided-sheet completions, action-form confirms,
@@ -595,7 +787,10 @@ export function PadHostV3(props: PadHostV3Props) {
   const handleTileAction = useCallback(
     (action: TileSpec["action"]) => {
       if ("swap" in action) {
-        setSwapOpen(true);
+        // R3 (defect 2): the tile names WHICH slot. `resolveSwapSlot` at
+        // render time decides whether anything opens — an id no slot declares
+        // is a no-op, never a fallback to the first slot.
+        setOpenSwapId(action.swap);
         return;
       }
       if ("event" in action) void dispatch(action.event.type, action.event.payload);
@@ -610,7 +805,35 @@ export function PadHostV3(props: PadHostV3Props) {
     [sheets],
   );
 
-  const dockStore = useMemo(() => makeDockStore(pipeline.queueStore), [pipeline.queueStore]);
+  // R3 review round 4 — the held PAYLOAD has to advance with the dock.
+  //
+  // `heldSubmit` records the payload as it was at tap time, and a dock chip
+  // mutates the QUEUE entry, never this state. So `resolveDockSpec` below kept
+  // being handed the original payload and every payload-dependent dock froze on
+  // its first step — football's goal dock asked for the scorer and never became
+  // the assist step. The unit tests could not see it: they call `buildDock`
+  // directly with whatever payload they like.
+  //
+  // `fn` is applied a second time here rather than read back from the store: a
+  // chip's `mutate` is a pure `(payload) => payload` (types.ts), the store has
+  // no read-one API, and re-reading would race the very drain that sends it.
+  const dockStore = useMemo<DockStore>(() => {
+    const base = makeDockStore(pipeline.queueStore);
+    return {
+      releaseHeld: (id) => base.releaseHeld(id),
+      mutateHeld: async (id, fn) => {
+        const applied = await base.mutateHeld(id, fn);
+        if (applied) {
+          setHeld((prev) =>
+            prev && prev.id === id
+              ? { ...prev, payload: fn((prev.payload ?? {}) as Record<string, unknown>) }
+              : prev,
+          );
+        }
+        return applied;
+      },
+    };
+  }, [pipeline.queueStore]);
   const dockSpec = resolveDockSpec(props.skin, held, view);
 
   // Blocker 1 — see rejectionText's own doc above.
@@ -621,17 +844,44 @@ export function PadHostV3(props: PadHostV3Props) {
 
   const events = pipeline.events;
   const latestEvent = events.length > 0 ? events[events.length - 1]! : null;
-  const ribbon = latestEvent
-    ? buildRibbon(latestEvent.type, latestEvent.payload as Record<string, unknown>, (id) => personNames[id] ?? id, t)
-    : null;
 
   // The activity panel reads four fields; `voids` is what makes a row show
   // as cancelled (activity.tsx derives it by looking for some OTHER event
   // pointing back at this id, never a flag on the target itself).
+  //
+  // Declared ABOVE the ribbon (R3/F, F1): the ribbon needs the same rows the
+  // panel does, because it now resolves the same per-event detail for the
+  // newest of them.
   const activityEvents = useMemo<ActivityEvent[]>(
     () => events.map((e) => ({ id: e.id, seq: e.seq, type: e.type, payload: e.payload, voids: e.voids ?? null })),
     [events],
   );
+
+  // ONE resolver, built once and handed to BOTH readers — the ribbon and the
+  // panel. It used to be an inline closure at the `<ActivityPanel>` call site
+  // only, which is precisely how the ribbon went four waves without a detail.
+  //
+  // R2b-cricket-over review fix (item 1): builds the single
+  // `ActivityDetailContext` object (types.ts) the skin's `activityDetail`
+  // takes, instead of seven positional arguments. `history` is forwarded
+  // verbatim from the caller (the panel resolves per-row history itself —
+  // `priorActivityEvents`, activity.tsx; `latestRowDetail` uses the same pair
+  // for the newest row). `view.cfg` and `personNames` are CAPTURED from this
+  // closure's own scope rather than crossing `ActivityPanel`'s prop contract:
+  // both are static per render, not per-row facts. `personNames` is the SAME
+  // map this component already resolves above for the ribbon and for
+  // `<ActivityPanel personNames={personNames}>` (R2b owner ruling, live-tile
+  // audit wave — "name the bowler").
+  const resolveDetail = useMemo<ActivityDetailResolver | undefined>(
+    () =>
+      props.skin.activityDetail
+        ? (eventType, payload, history) =>
+            props.skin.activityDetail!({ t, eventType, payload, history, cfg: view.cfg, personNames })
+        : undefined,
+    [props.skin, t, view.cfg, personNames],
+  );
+
+  const ribbon = buildTopRibbon(activityEvents, (id) => personNames[id] ?? id, t, resolveDetail);
 
   const [voidingId, setVoidingId] = useState<string | null>(null);
 
@@ -649,10 +899,34 @@ export function PadHostV3(props: PadHostV3Props) {
     }
   }
 
-  const adaptedSwap = swapSlot ? adaptSwapSlot(swapSlot, squads) : null;
+  const openSwapSlot = resolveSwapSlot(openSwapId, swapSlots);
+  const adaptedSwap = openSwapSlot ? adaptSwapSlot(openSwapSlot, squads) : null;
 
   return (
-    <div data-role="pad-v3" className="space-y-3">
+    /* R3/task B4 (owner ruling R3-6, per-sport visual identity): the ONE place
+     * a sport's `--sport-*` overrides enter the DOM. Custom properties
+     * inherit, so every descendant — scorebug, tiles, sheets, dock, swap —
+     * resolves the sport's palette without any of them knowing which sport is
+     * mounted. `sportThemeStyle` returns `undefined` for a sport that declares
+     * no override (cricket, and every sport before its own wave), and React
+     * renders no `style` attribute at all for `undefined` — an empty object
+     * would emit a real `style=""` and change that pad's own markup. The
+     * defaults live in globals.css's `:root` as ALIASES of the product's
+     * `--mk-*` vars, so an un-overridden pad paints exactly what it painted
+     * before the token layer existed. */
+    <div
+      data-role="pad-v3"
+      className="space-y-3"
+      style={sportThemeStyle(props.skin.key)}
+      /* R3 review round — the ATTRIBUTE twin of the style above, emitted from
+       * the same key on the same element. A CSS rule can read a `--sport-*`
+       * property but cannot ask whether anyone overrode it, so a rule painting
+       * "the sport's colour" had no way to leave an un-overriding sport alone:
+       * B4's `.pad-half:focus-visible` turned cricket's focus ring lime. This
+       * is what globals.css scopes such a rule to. `undefined` for a sport
+       * with no palette, so its markup is unchanged. */
+      data-sport-theme={sportThemeAttr(props.skin.key)}
+    >
       {/* Sign-off review 2026-08-17: the legacy renderer showed the fold's own
        *  headline (pad-renderer.tsx:192,296, added by S10/#419 as a fix) and
        *  v3 dropped it — `ScorebugSpec` carries no result field, so a finished
@@ -743,24 +1017,31 @@ export function PadHostV3(props: PadHostV3Props) {
        *  onCancel entirely, while the sibling GuidedSheet mount just below
        *  always got one — a scorer opening cricket's Retire flow could
        *  only finish the whole off->on swap or navigate away. `onCancel`
-       *  here closes the sheet the same way `onSwap` does (`setSwapOpen
-       *  (false)`, unmounting `<SwapSheet>` and discarding its own local
+       *  here closes the sheet the same way `onSwap` does (`setOpenSwapId
+       *  (null)`, unmounting `<SwapSheet>` and discarding its own local
        *  state), and `SwapSheet` itself also resets its pending off pick
-       *  before calling back — see swap-sheet.tsx's own handleCancel. */}
-      {swapOpen && swapSlot && adaptedSwap && (
-        <div data-role="v3-swap">
+       *  before calling back — see swap-sheet.tsx's own handleCancel.
+       *
+       *  R3 (defect 2): keyed on the OPEN SLOT's id, so switching from the
+       *  home Sub tile to the away one remounts `SwapSheet` and drops any
+       *  half-made off pick from the previous slot. Without the key React
+       *  would reuse the instance and carry a home player's id into the away
+       *  sheet — a wrong-team swap with no visible tell. */}
+      {openSwapSlot && adaptedSwap && (
+        <div data-role="v3-swap" data-swap-slot-id={openSwapSlot.id}>
           <SwapSheet
+            key={openSwapSlot.id}
             spec={adaptedSwap.spec}
             view={adaptedSwap.view}
             policyVerdict={adaptedSwap.policyVerdict}
             personNames={personNames}
             t={t}
             onSwap={(off, on) => {
-              setSwapOpen(false);
-              const event = swapSlot.buildEvent(off, on);
+              setOpenSwapId(null);
+              const event = openSwapSlot.buildEvent(off, on);
               void dispatch(event.type, event.payload);
             }}
-            onCancel={() => setSwapOpen(false)}
+            onCancel={() => setOpenSwapId(null)}
           />
         </div>
       )}
@@ -828,33 +1109,11 @@ export function PadHostV3(props: PadHostV3Props) {
           // helper and its tests landed without this line, which made the fix
           // INERT in the product while green in CI — the exact shape of defect
           // this wave already fixed three times.
-          resolveDetail={
-            props.skin.activityDetail
-              ? // R2b-cricket-over review fix (item 1): builds the single
-                // `ActivityDetailContext` object (types.ts) the skin's
-                // `activityDetail` now takes, instead of seven positional
-                // arguments. `history` is forwarded verbatim from
-                // ActivityPanel's own call (it already resolves per-row
-                // history — `priorActivityEvents`, activity.tsx; item 2
-                // removed the separate `prev` argument this used to also
-                // forward — a skin derives that single fact itself from
-                // `history`'s own last element, see ActivityDetailContext's
-                // doc). `view.cfg` and `personNames` are CAPTURED from this
-                // closure's own enclosing scope, not passed through
-                // ActivityPanel's own prop contract at all — both are static
-                // per render (not a per-row fact), and this keeps
-                // ActivityPanel itself from ever having to learn either
-                // exists. `personNames` (R2b, owner ruling, live-tile audit
-                // wave — "name the bowler"): the SAME map this component
-                // already resolves above (`const personNames =
-                // props.personNames ?? NO_NAMES`) for the ribbon and for
-                // `<ActivityPanel personNames={personNames}>` itself — no
-                // new plumbing, just one more forward at a boundary `cfg`
-                // already crosses.
-                (eventType, payload, history) =>
-                  props.skin.activityDetail!({ t, eventType, payload, history, cfg: view.cfg, personNames })
-              : undefined
-          }
+          //
+          // R3/F (F1): the SAME `resolveDetail` the top ribbon uses, built
+          // once above rather than inlined here. It was inlined, this was its
+          // only reader, and the ribbon spent four waves with no detail at all.
+          resolveDetail={resolveDetail}
         />
       </div>
     </div>

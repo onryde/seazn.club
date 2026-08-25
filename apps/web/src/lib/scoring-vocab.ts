@@ -763,6 +763,24 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.football.panel.shots",
   "pad.football.panel.sinbin",
   "pad.football.panel.subs",
+  // R3/task C (v3 ribbon). Football is the first sport whose ribbon coverage
+  // is COMPLETE: these nine are every `football.*` type the engine's fidelity
+  // tiers declare, so no football event falls to the generic
+  // `pad.ribbon.fallback` ("{event} recorded"). Registered HERE, not only in
+  // the dictionaries — buildRibbon (v3/ribbon.ts) gates its per-sport lookup
+  // on PAD_LABEL_KEYS membership, so dictionary copy with no entry here stays
+  // on the fallback forever with nothing failing. Suffixes are
+  // `ribbonKeyFor`'s split-on-FIRST-dot output, hence the two-segment
+  // `sinbin.*`/`shootout.*` tails.
+  "pad.football.ribbon.card",
+  "pad.football.ribbon.goal",
+  "pad.football.ribbon.penalty",
+  "pad.football.ribbon.period",
+  "pad.football.ribbon.shootout.kick",
+  "pad.football.ribbon.shot",
+  "pad.football.ribbon.sinbin.end",
+  "pad.football.ribbon.sinbin.start",
+  "pad.football.ribbon.sub",
 
   "pad.generic.action.addPoints",
   "pad.generic.action.correctPoints",

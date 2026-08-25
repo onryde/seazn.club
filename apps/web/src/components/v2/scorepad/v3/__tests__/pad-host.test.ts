@@ -19,7 +19,7 @@ import type { MsgFn } from "@/lib/scoring-vocab";
 import { createSkinDispatch } from "../../skins/types";
 import { buildPadView, type PadViewCtx } from "../../view-model";
 import type { RejectionInfo } from "../../use-pad-pipeline";
-import type { GuidedSheetSpec, PadHostView, SkinDefV3, TileSpec } from "../types";
+import type { GuidedSheetSpec, PadHostView, SkinDefV3, SwapSlot, TileSpec } from "../types";
 import { MORE_SHEET_KEY } from "../types";
 import {
   adaptSwapSlot,
@@ -35,6 +35,7 @@ import {
   resolveNextPhase,
   resolvePadPhase,
   resolveSheet,
+  resolveSwapSlot,
   sidePool,
   squadStateOf,
 } from "../pad-host";
@@ -63,6 +64,50 @@ describe("squadStateOf", () => {
       away: { entrantId: "away-1", members: [], subsUsed: 0, exemptUsed: {} },
     };
     expect(squadStateOf({ squads: recorded }, lineups)).toBe(recorded);
+  });
+
+  // R3/football (first sport to reach this): `state.squads` is NOT a reserved
+  // name for the kernel's adopted `SquadState`. Football manages its OWN
+  // private projection at the identical field name — `{home,away}` of
+  // `{onPitch, bench, offUsed, sentOff}`, no `.members` anywhere
+  // (football.ts's `FootballSquad`) — and every consumer of this function's
+  // result (`combinedPool`, `sidePool` -> `resolvePool` -> `playingSquad`/
+  // `onFieldPersons`, `ActionFormList`'s own attribution picker) reads
+  // `.members`. Trusting the field name blind therefore does not merely
+  // return a slightly-wrong pool for football, it THROWS
+  // (`side.members.filter is not a function`) the first time a swap sheet,
+  // a person step, or a More-sheet person picker resolves a pool.
+  //
+  // The legacy lane already carries exactly this guard, named for exactly
+  // this sport (`isSquadState`/`resolveSquads`, ../../attribution-picker.tsx,
+  // whose own header says "reading `state.squads` blind would silently
+  // misinterpret football's squad as empty/malformed"). This is that guard,
+  // reused — never a second structural check that could disagree with it.
+  it("IGNORES a `squads` field that is not structurally a SquadState — football's private FootballSquad projection", () => {
+    const lineups = lineupPair();
+    const football = {
+      squads: {
+        home: { onPitch: ["h1"], bench: ["h2"], offUsed: [], sentOff: [] },
+        away: { onPitch: ["a1"], bench: ["a2"], offUsed: [], sentOff: [] },
+      },
+    };
+    const resolved = squadStateOf(football, lineups);
+    expect(resolved).toEqual(initSquads(lineups));
+    // The consequence the shape check exists to prevent, asserted directly
+    // rather than trusted: every real consumer reads `.members`.
+    expect(Array.isArray(resolved.home.members)).toBe(true);
+    expect(() => sidePool("home", resolved)).not.toThrow();
+  });
+
+  it("a half-shaped `squads` (one side only) is rejected too — both sides must be SquadState-shaped", () => {
+    const lineups = lineupPair();
+    const half = {
+      squads: {
+        home: { entrantId: "home-1", members: [], subsUsed: 0, exemptUsed: {} },
+        away: { onPitch: [], bench: [], offUsed: [], sentOff: [] },
+      },
+    };
+    expect(squadStateOf(half, lineups)).toEqual(initSquads(lineups));
   });
 });
 
@@ -152,6 +197,7 @@ describe("dedicatedEventTypes", () => {
         tile({ id: "t2", action: { event: { type: "cricket.declare", payload: {} } } }),
       ],
       undefined,
+      [],
     );
     expect([...types].sort()).toEqual(["cricket.declare", "cricket.toss"]);
   });
@@ -160,13 +206,38 @@ describe("dedicatedEventTypes", () => {
     const sheets: Record<string, GuidedSheetSpec> = {
       wicket: { event: "cricket.wicket", steps: [], buildPayload: () => ({}) },
     };
-    const types = dedicatedEventTypes([tile({ action: { sheet: "wicket" } })], sheets);
+    const types = dedicatedEventTypes([tile({ action: { sheet: "wicket" } })], sheets, []);
     expect([...types]).toEqual(["cricket.wicket"]);
   });
 
-  it("a {swap: true} tile contributes nothing — swap's event is built dynamically from a picked pair, not declared statically", () => {
-    const types = dedicatedEventTypes([tile({ action: { swap: true } })], undefined);
-    expect(types.size).toBe(0);
+  // R3/football — the ruling the chassis wave routed here (`_INDEX.md`: "a
+  // sport whose substitution is also declared in `padSpec(cfg)` lists it BOTH
+  // on its swap tile and again as a generic form inside More ... football is
+  // the first wave that can actually observe the duplicate, so it rules on
+  // it"). RULED: FIX IT. The duplicate is not cosmetic — the generic More
+  // form for `football.sub` bypasses every guarantee the swap sheet exists to
+  // give: no `lineupPolicy` verdict, no candidate narrowing, no
+  // already-substituted-off reason, no stale-`asOf` guard on the stamp. Two
+  // entry points, one of which is the un-narrowed one, is exactly the defect
+  // R2c closed for `cricket.retire`; the ONLY reason it survived here is that
+  // this function was never handed the slot table.
+  it("resolves a {swap: id} tile through the slot table — a swap's event is DEDICATED, never duplicated into the More sheet", () => {
+    const swaps: SwapSlot[] = [
+      { id: "subHome", offLabel: "off", onLabel: "on", side: "home", eventType: "football.sub", policyOk: true, buildEvent: () => ({ type: "football.sub", payload: {} }) },
+    ];
+    const types = dedicatedEventTypes([tile({ action: { swap: "subHome" } })], undefined, swaps);
+    expect([...types]).toEqual(["football.sub"]);
+  });
+
+  it("a {swap: id} naming no declared slot still contributes nothing — same fail-open resolution tileEventType uses", () => {
+    const swaps: SwapSlot[] = [
+      { id: "subHome", offLabel: "off", onLabel: "on", side: "home", eventType: "football.sub", policyOk: true, buildEvent: () => ({ type: "football.sub", payload: {} }) },
+    ];
+    expect(dedicatedEventTypes([tile({ action: { swap: "typo" } })], undefined, swaps).size).toBe(0);
+  });
+
+  it("an EMPTY slot table leaves a swap tile contributing nothing — the pre-R3/football behaviour, for a skin with no swap at all", () => {
+    expect(dedicatedEventTypes([tile({ action: { swap: "subHome" } })], undefined, []).size).toBe(0);
   });
 });
 
@@ -197,7 +268,7 @@ const baseCtx: Omit<PadViewCtx, "state" | "summary"> = { phase: "live", band: 3,
 describe("moreActions", () => {
   it("returns every padSpec(cfg) action NOT in the dedicated set — a future engine action needs no skin edit to appear here", () => {
     const dedicated = new Set(["cricket.ball"]); // the skin's own dedicated run-keypad tile
-    const actions = moreActions(spec(), { ...baseCtx, state: {}, summary: {} }, dedicated);
+    const actions = moreActions(spec(), { ...baseCtx, state: {}, summary: {} }, dedicated, new Set());
     expect(actions.map((a) => a.type).sort()).toEqual(["cricket.declare", "cricket.toss"]);
   });
 
@@ -207,7 +278,7 @@ describe("moreActions", () => {
       fidelity: { "cricket.superover": 3 },
       fidelityEntitlements: { 3: "scoring.ball_by_ball" },
     };
-    const actions = moreActions(gated, { ...baseCtx, band: 3, entitlements: {}, state: {}, summary: {} }, new Set());
+    const actions = moreActions(gated, { ...baseCtx, band: 3, entitlements: {}, state: {}, summary: {} }, new Set(), new Set());
     expect(actions).toHaveLength(1);
     expect(actions[0]!.availability).toEqual({ kind: "locked", reason: expect.objectContaining({ key: "scorepad.locked.reason" }) });
   });
@@ -218,7 +289,7 @@ describe("moreActions", () => {
       fidelity: { "cricket.toss": 0, "cricket.declare": 0, "cricket.ball": 0 },
       fidelityEntitlements: {},
     };
-    const actions = moreActions(twoPanel, { ...baseCtx, state: {}, summary: {} }, new Set(["cricket.ball"]));
+    const actions = moreActions(twoPanel, { ...baseCtx, state: {}, summary: {} }, new Set(["cricket.ball"]), new Set());
     // buildPadView is phase-scoped (ctx.phase: "live"), so the "post" panel's
     // own copy of the same three types is invisible here regardless — this
     // proves the de-dup guard AND the phase scoping in one assertion.
@@ -231,7 +302,7 @@ describe("moreActions", () => {
 describe("adaptSwapSlot", () => {
   it("resolves the declared side's own pool and passes labels through verbatim", () => {
     const s = squads();
-    const slot = { offLabel: "pad.cricket.swap.off", onLabel: "pad.cricket.swap.on", side: "home" as const, policyOk: true, buildEvent: () => ({ type: "core.lineup.substitution", payload: {} }) };
+    const slot = { id: "subHome", offLabel: "pad.cricket.swap.off", onLabel: "pad.cricket.swap.on", side: "home" as const, eventType: "core.lineup.substitution", policyOk: true, buildEvent: () => ({ type: "core.lineup.substitution", payload: {} }) };
     const adapted = adaptSwapSlot(slot, s);
     expect(adapted.spec).toEqual({ offLabel: "pad.cricket.swap.off", onLabel: "pad.cricket.swap.on" });
     expect(adapted.view).toEqual({ squad: s.home });
@@ -241,9 +312,11 @@ describe("adaptSwapSlot", () => {
   it("carries a refusal's sport-worded message through, never a bare boolean", () => {
     const s = squads();
     const slot = {
+      id: "subAway",
       offLabel: "pad.cricket.swap.off",
       onLabel: "pad.cricket.swap.on",
       side: "away" as const,
+      eventType: "core.lineup.substitution",
       policyOk: false,
       policyMessage: "this side has used all 3 substitutions this variant allows",
       buildEvent: () => ({ type: "core.lineup.substitution", payload: {} }),
@@ -252,6 +325,62 @@ describe("adaptSwapSlot", () => {
     expect(adapted.view).toEqual({ squad: s.away });
     expect(adapted.policyVerdict.ok).toBe(false);
     expect(String(adapted.policyVerdict.message)).toBe("this side has used all 3 substitutions this variant allows");
+  });
+
+  // R3 chassis sub-wave, defect 4. Without this the narrowing is DEAD on the
+  // production path: `SwapSheet`'s own tests can pass `spec.candidates`
+  // directly, but the host only ever hands it what `adaptSwapSlot` builds, so
+  // a skin's declared scope/eligibility would be silently dropped between the
+  // contract and the renderer.
+  it("carries the skin's ON-list scope and eligibility narrowing through to the sheet spec, verbatim", () => {
+    const slot = {
+      id: "subHome",
+      offLabel: "pad.football.swap.off",
+      onLabel: "pad.football.swap.on",
+      side: "home" as const,
+      eventType: "football.sub",
+      policyOk: true,
+      candidates: ["sub-1", "sub-2"],
+      blocked: { "sub-2": "Already substituted off" },
+      buildEvent: () => ({ type: "football.sub", payload: {} }),
+    };
+    const adapted = adaptSwapSlot(slot, squads());
+    expect(adapted.spec.candidates).toEqual(["sub-1", "sub-2"]);
+    expect(adapted.spec.blocked).toEqual({ "sub-2": "Already substituted off" });
+  });
+
+  // R3/football, the OFF half of the same argument: `SwapSheet`'s own tests
+  // can pass `spec.offCandidates` directly, so only this assertion proves the
+  // field survives the one adapter the production path actually goes through.
+  it("carries the skin's OFF-list scope through to the sheet spec, verbatim, under the SAME field name", () => {
+    const slot = {
+      id: "subHome",
+      offLabel: "pad.football.swap.off",
+      onLabel: "pad.football.swap.on",
+      side: "home" as const,
+      eventType: "football.sub",
+      policyOk: true,
+      offCandidates: ["on-pitch-1", "came-on-2"],
+      buildEvent: () => ({ type: "football.sub", payload: {} }),
+    };
+    const adapted = adaptSwapSlot(slot, squads());
+    expect(adapted.spec.offCandidates).toEqual(["on-pitch-1", "came-on-2"]);
+  });
+
+  it("leaves both narrowing fields undefined when the skin declares neither — an absent list must never become an empty one", () => {
+    const slot = {
+      id: "subHome",
+      offLabel: "pad.football.swap.off",
+      onLabel: "pad.football.swap.on",
+      side: "home" as const,
+      eventType: "football.sub",
+      policyOk: true,
+      buildEvent: () => ({ type: "football.sub", payload: {} }),
+    };
+    const adapted = adaptSwapSlot(slot, squads());
+    expect(adapted.spec.candidates).toBeUndefined();
+    expect(adapted.spec.offCandidates).toBeUndefined();
+    expect(adapted.spec.blocked).toBeUndefined();
   });
 });
 
@@ -540,5 +669,54 @@ describe("resolveDockSpec — mutation proof (the widened payload wiring is load
     const viaMutant = dropsPayload(skin, held, padHostView());
     expect(real).not.toEqual(viaMutant);
     expect(real).toEqual({ title: "has-payload", chips: [] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3 chassis sub-wave (owner ruling 2026-08-24, `_INDEX.md` "R3 — owner
+// ruling: FIX SwapSheet in the chassis, then use it"). Defects 1 and 2:
+// `SkinDefV3.swap` returned ONE slot per view and `TileSpec.action` carried a
+// bare `{swap:true}`, so EVERY swap tile opened the SAME sheet and the side
+// came only from `slot.side` — per-side Sub tiles were structurally
+// unreachable. Football is the first skin ever to need two.
+// ---------------------------------------------------------------------------
+
+describe("resolveSwapSlot — per-side swap tiles reach DIFFERENT slots", () => {
+  const slots: SwapSlot[] = [
+    {
+      id: "subHome",
+      offLabel: "pad.football.swap.off",
+      onLabel: "pad.football.swap.on",
+      side: "home",
+      eventType: "football.sub",
+      policyOk: true,
+      buildEvent: () => ({ type: "football.sub", payload: {} }),
+    },
+    {
+      id: "subAway",
+      offLabel: "pad.football.swap.off",
+      onLabel: "pad.football.swap.on",
+      side: "away",
+      eventType: "football.sub",
+      policyOk: true,
+      buildEvent: () => ({ type: "football.sub", payload: {} }),
+    },
+  ];
+
+  it("addresses each declared slot by its OWN id — the defect was one shared sheet for every {swap} tile", () => {
+    expect(resolveSwapSlot("subHome", slots)?.side).toBe("home");
+    expect(resolveSwapSlot("subAway", slots)?.side).toBe("away");
+  });
+
+  it("null slot id (nothing open) resolves to null — `swapOpen` is now an id-or-null, not a boolean", () => {
+    expect(resolveSwapSlot(null, slots)).toBeNull();
+  });
+
+  it("an id no slot declares resolves to null, NEVER a silent fallback to the first slot — that fallback IS the defect", () => {
+    expect(resolveSwapSlot("subNobody", slots)).toBeNull();
+  });
+
+  it("a skin declaring no swap slots at all resolves to null for any id", () => {
+    expect(resolveSwapSlot("subHome", [])).toBeNull();
   });
 });

@@ -114,19 +114,39 @@ describe("night-tile token pairs meet WCAG AA", () => {
 // those verbatim, so the class name lives in exactly ONE place. This block
 // proves that place agrees with what NIGHT_TILE_PAIRS was proven against.
 //
-// TAILWIND_UTILITY_HEX is deliberately NOT derived from NIGHT_TILE_PAIRS —
-// it's independently sourced from globals.css's `@theme inline` block
-// (bg-night/-night-2/text-cream <- --mk-night/-night-2/-cream,
-// globals.css:51-55 + :436-439) and Tailwind's own built-in palette
-// (lime-400 = #a3e635 upstream default; globals.css:52 notes it
-// coincidentally equals --mk-lime). A table derived FROM NIGHT_TILE_PAIRS
-// would make this whole block circular — it would agree with itself no
-// matter what NIGHT_TILE_CLASSES said.
-const TAILWIND_UTILITY_HEX: Record<string, string> = {
-  "bg-night": "#150b36",
-  "bg-night-2": "#1d1145",
-  "text-cream": "#f5f0e8",
-  "text-lime-400": "#a3e635",
+// PAD_CLASS_HEX is deliberately NOT derived from NIGHT_TILE_PAIRS — it is
+// independently sourced from globals.css itself. A table derived FROM
+// NIGHT_TILE_PAIRS would make this whole block circular: it would agree with
+// itself no matter what NIGHT_TILE_CLASSES said.
+//
+// R3/task B4 (owner ruling R3-6, per-sport visual identity) moved the render
+// path off Tailwind utilities naming a FIXED colour and onto globals.css's
+// `.pad-*` rules, which read `var(--sport-*)`. The table below therefore now
+// resolves those classes with NO override in scope — i.e. cricket, and every
+// sport before its own wave. It is still independently sourced, and the chain
+// is one step longer, not different in kind:
+//
+//   .pad-board { background-color: var(--sport-board) }   [globals.css]
+//   :root { --sport-board: var(--mk-night) }              [globals.css]
+//   --mk-night: #150b36                                   [globals.css:487]
+//
+// `pad-led` is the one entry that needed real work. It defaults to
+// `var(--color-lime-400)` — the exact var `text-lime-400` compiled to — and
+// under Tailwind v4 (4.3.1 here) that theme entry is
+// `oklch(84.1% 0.238 128.85)`, NOT the `#a3e635` this table asserted from R1
+// until B4. #9ae600 is that oklch taken to sRGB (the CSS Color 4 §13.2 gamut
+// map and a naive clip agree to the byte). The verdict never moved — 12.09:1
+// against a 3.0 floor — but the oracle had been measuring a colour the build
+// stopped painting at the v4 upgrade, so it is corrected rather than noted.
+// See ../tokens.ts's NIGHT_TILE_PAIRS.limeOnNight for the same note at the
+// token, and __tests__/sport-theme.test.ts for the cricket-is-unchanged locks.
+const PAD_CLASS_HEX: Record<string, string> = {
+  "pad-board": "#150b36",
+  "pad-board-2": "#1d1145",
+  "pad-ink": "#f5f0e8",
+  "pad-led": "#9ae600",
+  "pad-led-dot": "#9ae600",
+  "pad-led-edge": "#9ae600",
 };
 
 const TAILWIND_TEXT_SIZE_PX: Record<string, number> = {
@@ -135,12 +155,12 @@ const TAILWIND_TEXT_SIZE_PX: Record<string, number> = {
 
 describe("scorebug.tsx renders exactly what this file measures (the wiring, not just the token)", () => {
   it("NIGHT_TILE_CLASSES resolve to the same hex NIGHT_TILE_PAIRS was proven against", () => {
-    expect(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.tileBg]).toBe(NIGHT_TILE_PAIRS.creamOnNight.bg);
-    expect(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.tileBg]).toBe(NIGHT_TILE_PAIRS.limeOnNight.bg);
-    expect(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.bandBg]).toBe(NIGHT_TILE_PAIRS.creamOnNight2.bg);
-    expect(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.creamText]).toBe(NIGHT_TILE_PAIRS.creamOnNight.fg);
-    expect(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.creamText]).toBe(NIGHT_TILE_PAIRS.creamOnNight2.fg);
-    expect(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.limeText]).toBe(NIGHT_TILE_PAIRS.limeOnNight.fg);
+    expect(PAD_CLASS_HEX[NIGHT_TILE_CLASSES.tileBg]).toBe(NIGHT_TILE_PAIRS.creamOnNight.bg);
+    expect(PAD_CLASS_HEX[NIGHT_TILE_CLASSES.tileBg]).toBe(NIGHT_TILE_PAIRS.limeOnNight.bg);
+    expect(PAD_CLASS_HEX[NIGHT_TILE_CLASSES.bandBg]).toBe(NIGHT_TILE_PAIRS.creamOnNight2.bg);
+    expect(PAD_CLASS_HEX[NIGHT_TILE_CLASSES.creamText]).toBe(NIGHT_TILE_PAIRS.creamOnNight.fg);
+    expect(PAD_CLASS_HEX[NIGHT_TILE_CLASSES.creamText]).toBe(NIGHT_TILE_PAIRS.creamOnNight2.fg);
+    expect(PAD_CLASS_HEX[NIGHT_TILE_CLASSES.limeText]).toBe(NIGHT_TILE_PAIRS.limeOnNight.fg);
   });
 
   it("the muted/subtle cream variants (hint + context/strip text) are still the SAME cream name, not an independent colour", () => {
@@ -151,24 +171,24 @@ describe("scorebug.tsx renders exactly what this file measures (the wiring, not 
     // stays anyway: it guards something that block doesn't — that the HUE
     // can't drift to a different colour unnoticed. A class edit from
     // "text-cream/70" to some other family's "/70" would either throw in
-    // resolveAlphaClass (no TAILWIND_UTILITY_HEX entry) or, if that other
+    // resolveAlphaClass (no PAD_CLASS_HEX entry) or, if that other
     // family happened to be registered too, get judged on ITS OWN
     // contrast rather than being caught as "wrong colour" per se; this
     // string check anchors specifically to creamText, already proven
     // equal to NIGHT_TILE_PAIRS.creamOnNight.fg above.
-    expect(NIGHT_TILE_CLASSES.creamTextMuted).toBe(`${NIGHT_TILE_CLASSES.creamText}/70`);
-    expect(NIGHT_TILE_CLASSES.creamTextSubtle).toBe(`${NIGHT_TILE_CLASSES.creamText}/80`);
+    expect(NIGHT_TILE_CLASSES.creamTextMuted).toBe(`${NIGHT_TILE_CLASSES.creamText}-70`);
+    expect(NIGHT_TILE_CLASSES.creamTextSubtle).toBe(`${NIGHT_TILE_CLASSES.creamText}-80`);
   });
 
   it("re-derives AA from the class-resolved hex directly, not by trusting the agreement check above", () => {
     expect(
-      contrastRatio(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.tileBg], TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.creamText]),
+      contrastRatio(PAD_CLASS_HEX[NIGHT_TILE_CLASSES.tileBg], PAD_CLASS_HEX[NIGHT_TILE_CLASSES.creamText]),
     ).toBeGreaterThanOrEqual(4.5);
     expect(
-      contrastRatio(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.bandBg], TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.creamText]),
+      contrastRatio(PAD_CLASS_HEX[NIGHT_TILE_CLASSES.bandBg], PAD_CLASS_HEX[NIGHT_TILE_CLASSES.creamText]),
     ).toBeGreaterThanOrEqual(4.5);
     expect(
-      contrastRatio(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.tileBg], TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.limeText]),
+      contrastRatio(PAD_CLASS_HEX[NIGHT_TILE_CLASSES.tileBg], PAD_CLASS_HEX[NIGHT_TILE_CLASSES.limeText]),
     ).toBeGreaterThanOrEqual(3.0);
   });
 
@@ -227,12 +247,17 @@ function compositeOver(fgHex: string, alpha: number, bgHex: string): string {
 }
 
 function resolveAlphaClass(cls: string): { hex: string; alpha: number } {
-  const m = /^(.+)\/(\d+(?:\.\d+)?)$/.exec(cls);
+  // B4: the alpha now rides a globals.css class SUFFIX (`pad-ink-70`) rather
+  // than a Tailwind opacity modifier (`text-cream/70`) — the guarantee is
+  // unchanged, because it is still parsed out of the CLASS STRING itself and
+  // never hand-copied. Two digits minimum on purpose: `pad-board-2` is a
+  // SURFACE, not an alpha variant, and must stay opaque here.
+  const m = /^(pad-[a-z]+)-(\d{2,3})$/.exec(cls);
   const base = m ? m[1] : cls;
   const alpha = m ? Number(m[2]) / 100 : 1;
-  const hex = TAILWIND_UTILITY_HEX[base];
+  const hex = PAD_CLASS_HEX[base];
   if (!hex) {
-    throw new Error(`resolveAlphaClass: no TAILWIND_UTILITY_HEX entry for base class "${base}" (from "${cls}")`);
+    throw new Error(`resolveAlphaClass: no PAD_CLASS_HEX entry for base class "${base}" (from "${cls}")`);
   }
   return { hex, alpha };
 }
@@ -252,7 +277,7 @@ describe("alpha (translucent) text meets WCAG AA at its EFFECTIVE composited col
   it("hint text (text-cream/70 on the tile's base ground) clears the normal-text floor (4.5:1) at its composited colour", () => {
     const site = NIGHT_TILE_ALPHA_TEXT.hint;
     const { hex, alpha } = resolveAlphaClass(site.textClass);
-    const bgHex = TAILWIND_UTILITY_HEX[site.bgClass];
+    const bgHex = PAD_CLASS_HEX[site.bgClass];
     const composited = compositeOver(hex, alpha, bgHex);
     expect(contrastRatio(bgHex, composited)).toBeGreaterThanOrEqual(4.5);
   });
@@ -260,7 +285,7 @@ describe("alpha (translucent) text meets WCAG AA at its EFFECTIVE composited col
   it("strip non-accent text (text-cream/70 on the band) clears the normal-text floor (4.5:1) at its composited colour", () => {
     const site = NIGHT_TILE_ALPHA_TEXT.stripMuted;
     const { hex, alpha } = resolveAlphaClass(site.textClass);
-    const bgHex = TAILWIND_UTILITY_HEX[site.bgClass];
+    const bgHex = PAD_CLASS_HEX[site.bgClass];
     const composited = compositeOver(hex, alpha, bgHex);
     expect(contrastRatio(bgHex, composited)).toBeGreaterThanOrEqual(4.5);
   });
@@ -268,7 +293,7 @@ describe("alpha (translucent) text meets WCAG AA at its EFFECTIVE composited col
   it("context line (text-cream/80 on the band) clears the normal-text floor (4.5:1) at its composited colour", () => {
     const site = NIGHT_TILE_ALPHA_TEXT.contextLine;
     const { hex, alpha } = resolveAlphaClass(site.textClass);
-    const bgHex = TAILWIND_UTILITY_HEX[site.bgClass];
+    const bgHex = PAD_CLASS_HEX[site.bgClass];
     const composited = compositeOver(hex, alpha, bgHex);
     expect(contrastRatio(bgHex, composited)).toBeGreaterThanOrEqual(4.5);
   });
@@ -311,9 +336,320 @@ describe("scorebug.tsx's SOURCE TEXT carries no bare literal duplicating (or mis
     // unconditionally rather than as a "duplicates a token" check. This is
     // the literal the reviewer actually used; see the mutation proof above.
     "text-night",
+    // B4: the four literals ABOVE are now also "the pre-token colour" — a
+    // reintroduction would paint a fixed hue that no longer follows the
+    // sport, which is a strictly worse bug than the desync they were banned
+    // for. The three below are the post-B4 equivalents: every `.pad-*` class
+    // must arrive through NIGHT_TILE_CLASSES, never be retyped here.
+    // Substring matching does the rest ("pad-board" also flags
+    // "pad-board-2"; "pad-ink" flags "-70"/"-80"/"-rule"; "pad-led" flags
+    // "-dot"/"-edge"/"-panel"), so this stays three entries as the class set
+    // grows.
+    "pad-board",
+    "pad-ink",
+    "pad-led",
   ];
 
   it.each(bannedLiterals)("never appears as a bare literal outside a token reference: %s", (literal) => {
     expect(codeOnly.includes(literal)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3/task B4 — EVERY SPORT'S PALETTE, not just the default one.
+//
+// Owner ruling R3-6 turned one fixed palette into a per-sport one, so a
+// contrast suite that only measures the defaults now measures whatever the
+// LAST un-themed sport happens to render and calls the whole set proven. The
+// blocks below iterate `SPORT_PALETTES` + the defaults, so a sport added in R4
+// -R7 is covered the day its entry lands, never the day someone remembers to
+// add a test — the same "collect from the source, don't hand-list" stance the
+// skins' own copy-truth suites take.
+//
+// Why this is the wave that has to be strict about it: football's accent is
+// AMBER and its cards are YELLOW and RED. Amber-on-dark and yellow-on-dark are
+// exactly the pairs a reviewer's eye passes and the formula fails (or the
+// reverse) — bright hues read as high-contrast while their relative luminance
+// says otherwise. Every ratio here is computed; none is eyeballed.
+//
+// The floors, and what licenses each:
+//   4.5  ink and LED text on the board/band. The LED panel renders at 12px
+//        (`text-xs`, scorebug.tsx) with a 0.85em label, nowhere near WCAG's
+//        large-text carve-out, so the accent gets the STRICT floor here — not
+//        the 3.0 the 36px score digits are separately licensed for above.
+//   3.0  the card swatch's boundary against the sheet (WCAG 1.4.11, non-text).
+// ---------------------------------------------------------------------------
+import {
+  DEFAULT_SPORT_PALETTE,
+  SPORT_PALETTES,
+  SPORT_TONES,
+  resolveSportPalette,
+  sportCustomProperty,
+} from "../sport-theme";
+import { parseCss, readGlobalsCss } from "./_globals-css";
+
+/** Default + one entry per sport that overrides. Named so a failure message
+ *  says WHICH sport is unreadable, not merely that something is. */
+const PALETTES: readonly (readonly [string, ReturnType<typeof resolveSportPalette>])[] = [
+  ["default (cricket, and every sport before its own wave)", DEFAULT_SPORT_PALETTE],
+  ...Object.keys(SPORT_PALETTES).map(
+    (key) => [key, resolveSportPalette(key)] as readonly [string, ReturnType<typeof resolveSportPalette>],
+  ),
+];
+
+describe.each(PALETTES)("board palette meets WCAG AA — %s", (_name, palette) => {
+  it("ink on the board clears the normal-text floor (4.5:1)", () => {
+    expect(contrastRatio(palette.board, palette.ink)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("ink on the band clears the normal-text floor (4.5:1)", () => {
+    expect(contrastRatio(palette["board-2"], palette.ink)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("the LED accent on its panel ground clears the STRICT floor (4.5:1), not the score's large-text 3.0", () => {
+    // The panel's ground is `--sport-board` inside the `--sport-board-2` band
+    // (globals.css `.pad-led-panel`) — a real recess, and both ends are named
+    // tokens rather than a mixed value, which is what lets this be computed
+    // exactly instead of approximated.
+    expect(contrastRatio(palette.board, palette.led)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("the LED accent also clears 4.5:1 on the BAND, where the serving dot and top hairline sit", () => {
+    expect(contrastRatio(palette["board-2"], palette.led)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("the two alpha ink variants clear 4.5:1 at their COMPOSITED colour on both grounds", () => {
+    for (const alpha of [0.7, 0.8]) {
+      for (const ground of [palette.board, palette["board-2"]]) {
+        expect(contrastRatio(ground, compositeOver(palette.ink, alpha, ground))).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+});
+
+// The card code renders on the DAYLIGHT sheet (guided-sheet.tsx's choice row),
+// not the night board — a different ground with a different obligation, and
+// the place the naive answer goes wrong. A yellow FILL on the pale wash it
+// sits in is about 1.15:1: nowhere near WCAG 1.4.11's 3:1 for a graphical
+// object. So the swatch's boundary is carried by its `--sport-board` hairline
+// (globals.css `.pad-card-swatch`), and the fill is deliberately NOT
+// load-bearing. Both facts are asserted, so a later "simplify" that drops the
+// border reds here instead of shipping an invisible yellow card.
+const SHEET_GROUND = "#ffffff"; // guided-sheet.tsx choiceButtonClass: bg-white
+const SHEET_LABEL = "#314158"; // text-slate-700, Tailwind v4 oklch(37.2% .044 257.287) -> sRGB
+const WASH_ALPHA = 0.12; // globals.css .pad-tone-wash
+const WASH_HOVER_ALPHA = 0.2; // globals.css .pad-tone-wash:hover
+
+describe.each(PALETTES)("card-code tones meet WCAG on the sheet — %s", (_name, palette) => {
+  it.each([...SPORT_TONES])("%s: the option label stays readable on its tinted wash (4.5:1)", (tone) => {
+    for (const alpha of [WASH_ALPHA, WASH_HOVER_ALPHA]) {
+      const wash = compositeOver(palette[tone], alpha, SHEET_GROUND);
+      expect(contrastRatio(wash, SHEET_LABEL)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it.each([...SPORT_TONES])("%s: the swatch's dark hairline carries the 1.4.11 boundary (3:1), not the fill", (tone) => {
+    const wash = compositeOver(palette[tone], WASH_ALPHA, SHEET_GROUND);
+    expect(contrastRatio(wash, palette.board)).toBeGreaterThanOrEqual(3.0);
+  });
+
+  it.each([...SPORT_TONES])("%s: and the FILL alone would NOT have — the reason the hairline exists", (tone) => {
+    // A live assertion, not a comment: if a future palette picked a tone dark
+    // enough to carry its own boundary this would red, and the right response
+    // is to re-derive the rule, not to delete the border.
+    const wash = compositeOver(palette[tone], WASH_ALPHA, SHEET_GROUND);
+    const fillOnWash = contrastRatio(wash, palette[tone]);
+    const hairlineOnWash = contrastRatio(wash, palette.board);
+    expect(hairlineOnWash).toBeGreaterThan(fillOnWash);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3/task D — THE TILE GRID's own translucent text, which this file had never
+// measured.
+//
+// Everything above measures the SCOREBUG. tile-grid.tsx renders a second
+// piece of alpha text — `TileSpec.sublabel`, the word that says WHICH SIDE a
+// tile belongs to — and nothing checked it, because until football no skin
+// declared one on a `primary` tile. On violet-600 that is the one tile ground
+// in this chassis that is neither white nor the night board, and white at 70%
+// composites there to #d9bdff: 3.55:1 at 11px, a real WCAG AA failure on the
+// most load-bearing word of a two-lane board. An axe scan in
+// scorepad-skins.spec.ts is what found it; this is the cheap gate that keeps
+// it found.
+//
+// BOTH halves are parsed out of tile-grid.tsx's own SOURCE — the opacity from
+// the sublabel span and the ground from `KIND_CLASS.primary` — so neither can
+// desync from what ships, the same stance `resolveAlphaClass` above takes for
+// the scorebug's classes.
+// ---------------------------------------------------------------------------
+
+describe("tile-grid.tsx's sublabel clears WCAG AA on every tile ground it can land on", () => {
+  const tileGridSrc = readFileSync(join(process.cwd(), "src/components/v2/scorepad/v3/tile-grid.tsx"), "utf8");
+  const codeOnly = tileGridSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+
+  /** Tailwind's own values for the two literals `KIND_CLASS` uses as a tile's
+   *  ground, and the text colour each pairs with. Hand-copied ONCE, here,
+   *  because Tailwind's palette is not importable — the CLASS NAMES are read
+   *  from the source below, so a change of class reds this rather than
+   *  silently measuring the old one. */
+  const TAILWIND: Readonly<Record<string, string>> = {
+    "violet-600": "#7f22fe",
+    white: "#ffffff",
+    // Read out of the BUILT stylesheet's own `--color-slate-700`, not from
+    // memory: v3's palette moved these (slate-700 is #314158, not the #334155
+    // several older references still quote), and the difference is enough to
+    // flip a 4.35 into a 4.5.
+    "slate-700": "#314158",
+  };
+
+  function sublabelAlpha(): number {
+    const spans = [...codeOnly.matchAll(/text-\[11px\]\s+opacity-(\d{2,3})/g)].map((m) => Number(m[1]));
+    expect(spans.length, "tile-grid.tsx must still render the sublabel as 11px alpha text").toBeGreaterThan(0);
+    expect(new Set(spans).size, "both sublabel branches must carry the SAME opacity").toBe(1);
+    return spans[0]! / 100;
+  }
+
+  it("the PRIMARY tile — white on violet-600, the ground football's Goal tiles use", () => {
+    // The pair that actually failed. `primary` is the only KIND_CLASS ground
+    // that is a saturated colour rather than white/transparent, so it is the
+    // binding case: pass here and every other kind passes with room.
+    expect(codeOnly, "KIND_CLASS.primary must still be white text on violet-600").toContain(
+      "bg-violet-600 font-semibold text-white",
+    );
+    const composited = compositeOver(TAILWIND.white!, sublabelAlpha(), TAILWIND["violet-600"]!);
+    expect(contrastRatio(composited, TAILWIND["violet-600"]!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("the STANDARD tile — slate-700 on white", () => {
+    expect(codeOnly).toContain("bg-white font-medium text-slate-700");
+    const composited = compositeOver(TAILWIND["slate-700"]!, sublabelAlpha(), TAILWIND.white!);
+    expect(contrastRatio(composited, TAILWIND.white!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("is measured at SMALL-text rules, never the score's large-text carve-out", () => {
+    // 11px regular is nowhere near WCAG's >=24px regular / >=18.66px bold
+    // carve-out, so 4.5 is the right floor above and 3.0 would be wrong.
+    expect(codeOnly).toContain("text-[11px]");
+    expect(codeOnly).not.toContain("text-[11px] font-bold");
+  });
+});
+
+describe("the tones are NON-TEXT colours, and this is where that stops being a comment", () => {
+  it("football's dismissal red would FAIL as text on its own board — 3.01:1, under the 4.5 floor", () => {
+    // The single most load-bearing number in this file. #d00000 on #0b1f16 is
+    // 3.01:1: it clears WCAG 1.4.11 for a graphical object by 0.01 and misses
+    // the 4.5 text floor by a mile — and it looks perfectly bold to the eye,
+    // which is precisely why "amber-on-dark and yellow-on-dark" got called out
+    // as the pairs to compute rather than judge. `--sport-dismissal` is
+    // therefore licensed for SWATCHES ONLY. A later wave putting a red-card
+    // indicator on the night board as TEXT has to change this assertion first,
+    // which is the point.
+    const football = resolveSportPalette("football");
+    expect(contrastRatio(football.board, football.dismissal)).toBeLessThan(4.5);
+    expect(contrastRatio(football.board, football.dismissal)).toBeGreaterThanOrEqual(3.0);
+  });
+
+  // R3 review round — THIS LICENCE HAD ALMOST NO TEETH. It grepped globals.css
+  // for the literal `color: var(--sport-<tone>)` and therefore missed the
+  // unspaced form, any wrapper (`color-mix(...)`), an arbitrary Tailwind value
+  // (`text-[var(--sport-dismissal)]`), an inline style, and — the one that
+  // matters most — the indirection the chassis actually uses everywhere:
+  // `.pad-tone-dismissal { --pad-tone: var(--sport-dismissal) }`, read back as
+  // `var(--pad-tone)`. A rule painting text from `--pad-tone` would have sailed
+  // straight through the assertion written to forbid exactly that.
+  //
+  // Rewritten to resolve the ALIAS GRAPH out of globals.css itself, and to scan
+  // the chassis source as well as the stylesheet.
+  describe("the licence, enforced through every route a tone can reach text", () => {
+    const rules = parseCss(readGlobalsCss());
+    /** Text-colour properties. `-webkit-text-fill-color` is in the list because
+     *  it WINS over `color` wherever both are set, so forbidding `color` alone
+     *  would leave the exact bypass a determined edit reaches for. */
+    const TEXT_PROPS = ["color", "-webkit-text-fill-color"];
+
+    /** Every custom property that resolves, transitively, to a tone. Computed
+     *  to a fixpoint rather than hand-listed, so a THIRD indirection added
+     *  later is covered the day it lands. */
+    function toneAliases(): Set<string> {
+      const aliases = new Set(SPORT_TONES.map((tone) => sportCustomProperty(tone)));
+      for (let pass = 0; pass < 8; pass++) {
+        const before = aliases.size;
+        for (const rule of rules) {
+          for (const raw of rule.declarations.split(";")) {
+            const colon = raw.indexOf(":");
+            if (colon === -1) continue;
+            const name = raw.slice(0, colon).trim();
+            const value = raw.slice(colon + 1);
+            if (!name.startsWith("--")) continue;
+            if ([...aliases].some((alias) => value.includes(`var(${alias}`))) aliases.add(name);
+          }
+        }
+        if (aliases.size === before) break;
+      }
+      return aliases;
+    }
+
+    it("resolves the indirection the chassis actually uses — --pad-tone IS a tone", () => {
+      // Vacuity guard: if this stopped finding `--pad-tone`, every assertion
+      // below would still pass while checking nothing that ships.
+      const aliases = toneAliases();
+      expect([...aliases]).toContain("--pad-tone");
+      expect(aliases.size).toBeGreaterThan(SPORT_TONES.length);
+    });
+
+    it("no rule in globals.css sets a TEXT colour from a tone, by any route", () => {
+      const aliases = [...toneAliases()];
+      const offenders: string[] = [];
+      for (const rule of rules) {
+        for (const raw of rule.declarations.split(";")) {
+          const colon = raw.indexOf(":");
+          if (colon === -1) continue;
+          const name = raw.slice(0, colon).trim();
+          const value = raw.slice(colon + 1);
+          if (!TEXT_PROPS.includes(name)) continue;
+          if (aliases.some((alias) => value.includes(`var(${alias}`))) {
+            offenders.push(`${rule.selector} { ${name}:${value.trim()} }`);
+          }
+        }
+      }
+      expect(offenders, `a tone is painted as text:\n${offenders.join("\n")}`).toEqual([]);
+    });
+
+    it("and no chassis or skin file reaches one through an arbitrary utility or an inline style", () => {
+      // The two routes that never touch globals.css at all: Tailwind's
+      // arbitrary-value syntax, and a React `style={{ color: … }}`. Comments
+      // stripped first so prose naming a token cannot false-positive.
+      const files = [
+        "scorebug.tsx",
+        "tile-grid.tsx",
+        "guided-sheet.tsx",
+        "detail-dock.tsx",
+        "swap-sheet.tsx",
+        "context-strip.tsx",
+        "activity.tsx",
+        "action-form.tsx",
+        "recording-chip.tsx",
+        "pad-host.tsx",
+        "skins/football.tsx",
+        "skins/cricket.tsx",
+      ];
+      const aliases = [...toneAliases()];
+      for (const file of files) {
+        const src = readFileSync(join(process.cwd(), "src/components/v2/scorepad/v3", file), "utf8")
+          .replace(/\/\*[\s\S]*?\*\//g, "")
+          .replace(/\/\/.*$/gm, "");
+        for (const alias of aliases) {
+          expect(
+            src.includes(`text-[var(${alias}`),
+            `${file}: text-[var(${alias})] paints a tone as text`,
+          ).toBe(false);
+          expect(
+            new RegExp(String.raw`color["']?\s*:\s*[^;\n}]*var\(` + alias).test(src),
+            `${file}: an inline text colour reads ${alias}`,
+          ).toBe(false);
+        }
+      }
+    });
   });
 });

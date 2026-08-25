@@ -20,8 +20,8 @@ one PR per wave, visual sign-off gate on each).
 | R1 | `R1-chassis.md` + plan `docs/superpowers/plans/2026-08-15-scorepad-v3-r1-chassis.md` | — | **MERGED #577 `86ce08b3`** (2026-08-16) — chassis behind an EMPTY `V3_SKINS`. Gate: unit 7709/7774 (4 pre-existing, in a file this branch never touched), tsc 0, lint 0 errors, legacy pad e2e 32/32 unedited vs a prod build, gallery 12/12 with 0px overflow at 320. Visual sign-off was the ABSENCE of change — owner acked by merging |
 | R2 | `R2-cricket.md` + plan `docs/superpowers/plans/2026-08-16-scorepad-v3-r2-cricket.md` | R1 | **MERGED #599 `5885952f`** (2026-08-17) — visual sign-off given (see the sign-off section below, incl. the caveat that the reviewed captures predate `072656b4`'s three restored capabilities). Pre-merge state, kept for the record: worktree `.claude/worktrees/r2-cricket`, branch `feat/scorepad-v3-r2-cricket`, HEAD `b45f77a0`, rebased onto main `252a073d`. Gate: unit 8155/8227 (the 4 failures are `schedule-build-honours-locks`, REPRODUCED IDENTICALLY on `origin/main 252a073d` in a throwaway worktree with its own `pnpm install` — pre-existing, not this wave), `turbo run typecheck --force` 2/2 tasks 0 errors, `turbo run lint --force` 0 errors / 77 warnings (was 78; no v3 path warns), v3 suites 300/300 across 15 files, cricket e2e + converted specs green, seven-width matrix 9/9, gallery 12/12 sports with 0px overflow at 320. Sign-off sheet published (15 cricket captures, 5 states × 3 widths). **NOT MERGEABLE until the owner rules the three decisions below and the verdicts are recorded here.** |
 | R2b | `R2b-cricket-over-by-over.md` + plan `docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-cricket-over.md` | R2 (MERGED, so unblocked) | **MERGED #610 `78191611a`** (tip `896c8e608`, 2026-08-18) — approval-on-merge, see the sign-off section below. Pre-merge state, kept for the record: **IN FLIGHT** 2026-08-17 — worktree `.claude/worktrees/r2b-cricket-over`, branch `feat/scorepad-v3-r2b-cricket-over` off `5885952f`. Both of the brief's open questions are RULED (see the R2b section below); the first turned out to be answered by the engine rather than by preference. Original row text, still accurate on the premise: cricket needs THREE granularities: innings totals, **over-by-over (runs + wickets)**, ball-by-ball. **Over-by-over ALREADY EXISTS in the engine** and v1 exposed it: it is `cricket.innings.summary` with **`partial: true`** (`cricket.ts:225,230-237`) posted once per over, NOT a separate event type. An earlier draft of this row claimed it never existed, off one negative grep for a `cricket.over` event that never needed to exist — wrong, and corrected. So: **no new event, no schema change, no golden re-baseline, no band decision** (already band 0/free; the ladder stays closed 0–3). The real gap is a PAD one — the v3 skin declares no tile for it, so a scorer must open "More" and scroll a generic form once per over. A pad wave, not an engine wave |
-| R2c | `R2c-candidate-narrowing.md` + design `R2c-task1-design.md` | R2b (MERGED, so unblocked) | **IN FLIGHT** 2026-08-18 — worktree `.claude/worktrees/r2c-candidates`, branch `feat/scorepad-v3-r2c-candidate-narrowing` off `main` `7023502a3`. Task 1 (the chassis capability) is DESIGNED and owner-approved before code — see the R2c section below. Closes C1/C2/C3 from `R2b-remaining.md` §C, the three surviving instances of "the pad offers what the engine will refuse" |
-| R3 | `R3-football.md` | R1 | TODO |
+| R2c | `R2c-candidate-narrowing.md` + design `R2c-task1-design.md` | R2b (MERGED, so unblocked) | **MERGED #614 `ca3a4357a`** (tip `3eda8a0ff`, 2026-08-18) — approval-on-merge, see the R2c sign-off section below; three screens (`08-bowlerpicker`, `09-retiresheet`, `10-reviewblocked`) carry NO individual verdict and are owed to R8's closing walkthrough. Pre-merge state, kept for the record: worktree `.claude/worktrees/r2c-candidates`, branch `feat/scorepad-v3-r2c-candidate-narrowing` off `main` `7023502a3`. Task 1 (the chassis capability) is DESIGNED and owner-approved before code — see the R2c section below. Closes C1/C2/C3 from `R2b-remaining.md` §C, the three surviving instances of "the pad offers what the engine will refuse" |
+| R3 | `R3-football.md` | R1 | **SIGNED OFF + PR RAISED** 2026-08-25 — worktree `.claude/worktrees/r3-football`, branch `feat/scorepad-v3-r3-football`, 51 commits rebased onto `origin/main`. All tasks A-F committed; five review rounds run and closed (round 5 CLEAN). Owner visual sign-off **15/15 APPROVE**, recorded below — that record is the merge gate, not the sheet. Do not treat any count in this row as a gate: the main thread re-runs the boundary gate itself. One thing NOT to re-derive: the two-step goal dock shipped INERT past unit tests and the gallery; see the inert-dock section at the end of this file before touching `DetailDock`/`pad-host` docks. |
 | R4 | `R4-tennis.md` | R1 | TODO |
 | R5 | `R5-racquet-split.md` | R1 | TODO |
 | R6 | `R6-period-pair.md` | R1 | TODO |
@@ -690,6 +690,601 @@ Worth generalising for R3-R7: a rendered-page check catches a whole class —
 copy that is right in isolation and wrong in context — that no assertion on the
 string can reach.
 
+### R3 (2026-08-24) — owner rulings, taken before any code
+
+Scoping session. All four taken against RE-PINNED facts, not the brief's
+pre-R1 line numbers.
+
+| # | Decision | Ruling |
+|---|---|---|
+| R3-1 | How far does the card flow go? | **Three colours inline + reason at band ≥2.** `[Yellow] [Red] [2nd Yellow]` on the tile, person via the dock, and a guided-sheet `Offence?` step that appears ONLY at band ≥2. Rejected the brief's yellow/red, which would leave `second_yellow` and all 13 `CardReason` values unreachable |
+| R3-2 | One sub per sheet, or a batched window? | **One pair per SwapSheet, `at` STAMPED from the view clock.** Three subs at one stoppage share a stamp and the engine folds them into one window itself. Rejected batching (needs a new chassis primitive all of R4-R7 inherit) and rejected omitting `at` (the `subWindows` cap would silently never fire) |
+| R3-3 | Football's band-2/band-3 entitlement collapse | **Band 3 reuses `scoring.ball_by_ball`.** See the finding below — a NEW key would not have created an upsell |
+| R3-4 | Where do the five non-tile event types live? | **The generic More sheet**, cricket's precedent. Tiles: Goal / Card / Sub / Period per side, Pen minor. `football.shot`, `football.sinbin.start`, `football.sinbin.end`, `football.shootout.kick` ride More |
+
+### R3 — false premises found (verified on `main` `94922743f`, before any code)
+
+- **The brief's register claim is WRONG.** `R3-football.md` says "Register rows
+  owed: D-4/D-5 on this surface". The register itself
+  (`2026-08-15-scoringpad-v3-redesign-design.md:271-272`) routes **D-4 → R7**
+  ("console chrome is barred to it") and **D-5 → R2, CLOSED for cricket, R8
+  audits the rest**. Neither row is R3's to close. R3 owes nothing to the
+  register; do not let a later session re-derive this from the brief.
+- **`FootballSub.off` and `.on` are both REQUIRED `PersonId`**
+  (`football.ts:254-255`). The brief's "commits instantly, engine fields are
+  optional — honest" is true of `FootballGoal` (`scorer`/`assist` both
+  `.optional()`, `:213-214`) and FALSE of `football.sub`. A substitution cannot
+  be recorded without both people, which is precisely why it is a two-step
+  sheet and not a tile.
+- **SwapSheet is NOT rejected surface.** A recon pass claimed cricket's dropping
+  of it meant R3 could not reuse it. Read the code: cricket dropped it for
+  cricket-specific reasons (two divergent entry points into `cricket.retire`,
+  an off-picker scoped to the whole side rather than the crease) and its own
+  comment says it "stays available for R3-R7"
+  (`v3/skins/cricket.tsx:2078-2093`). `SwapSheetSpec`'s docstring names
+  `"scorepad.skin.football.swap.off"` and `football.sub` — it was built FOR
+  this wave. R3 uses it.
+- **Substitutions have TWO independent caps, not one.** `maxSubs` (players,
+  `lineupPolicy`, `:1756`) AND `subWindows` (stoppages, `:1211`). A sub consumes
+  a window ONLY when `at` is stamped; an unstamped sub consumes none. The
+  brief's single refusal example ("3 of 3 subs used") covers `maxSubs` alone —
+  the window refusal ("`Home` has used all 3 substitution windows", `:1214`) is
+  a second string R3 owes.
+- **Bands 2 and 3 gate on the SAME paid boundary.** Every scoring-depth key —
+  `scoring.match_timeline`, `scoring.ball_by_ball`, `scoring.rally_by_rally` —
+  is granted `community:false / pro:true / business:true` (`V112:48-56`) and
+  `pro_plus:true` (`V290:29-31`). So minting a NEW `FeatureKey` for band 3 would
+  have produced four identical plan rows and changed nobody's access: the
+  paywall sits between band 1 and band 2, and band 2 → band 3 is free on every
+  plan. The collapse the owner asked to fix is a LABELLING problem, not an
+  upsell one. This was found only after the first ruling was taken on the
+  opposite premise, and the ruling was re-taken against it (R3-3).
+- **Football bands 2 and 3 differ by exactly ONE event**, `football.shot`
+  (`fidelityTiers`, `:2637-2673`). Band 2 already carries the attributed
+  timeline, so `stats.player` — floated during scoping — is the WRONG key: it
+  describes what band 2 already gives.
+- The `fidelityTiers` comment at `:2637` cites **"doc 14 §2"**, a document that
+  does not exist — the standing v2-era finding, unchanged.
+
+### R3 — owner ruling 2026-08-24: FIX SwapSheet in the chassis, then use it
+
+R3-5. The brief says "Sub via the Swap-sheet primitive" and the scoping design
+was approved on that basis. First real use of `SwapSheet` — cricket dropped it,
+so R3 is the first skin ever to reach this path — surfaced five defects, all
+verified in the chassis before the ruling was taken:
+
+1. **ONE `SwapSlot` per view.** `pad-host.tsx:564` is
+   `props.skin.swap?.(view) ?? null` and `:597` sets a single `swapOpen`
+   boolean, so EVERY `{swap:true}` tile opens the SAME sheet and the side comes
+   only from `slot.side`. Per-side Sub tiles were unreachable.
+2. **A swap tile is NEVER band-filtered.** `tileEventType` (`:233`) returns
+   `null` for `{swap:true}`. `football.sub` is absent from `fidelityTiers`
+   tiers 0/1, so a band-0 scorer would tap Sub, pick two people, and be refused
+   — a dead-end tap, the defect class this programme keeps hitting.
+3. **No `candidates`/`blocked` on the swap path.** The ON list is hardcoded
+   `pool:"bench"` and OFF `pool:"onfield"`. R2c built per-candidate refusal
+   reasons for `ContextSlot` and `SheetChoiceStep`; the swap path never got
+   them, so it cannot say WHY a player is ineligible.
+4. **`policyOk:false` with no `policyMessage`** falls through to the generic
+   `scorepad.attribution.noRoster` copy — a silent refusal.
+5. **The picked OFF person is never excluded from the ON list**
+   (`swapCandidates`, `swap-sheet.tsx:123`).
+
+The recommendation put to the owner was to sidestep all five by using two
+guided sheets (`subHome`/`subAway`) and leaving `SwapSheet` unused. **The owner
+ruled the other way: fix the chassis.** Reason it is the better call despite
+being the larger one — R4-R7 all inherit the primitive, and a defect left in
+place for football is a defect five more skins build on. R3 therefore carries a
+CHASSIS sub-wave ahead of the skin itself, and its sign-off surface grows to
+include the swap sheet.
+
+Contract changes owed, in this order, before football.tsx is written:
+- `swap?(view): SwapSlot[]` — plural. A slot needs its own id.
+- `TileSpec.action` `{swap:true}` becomes slot-addressed so per-side tiles reach
+  different slots; `swapOpen` becomes the open slot's id, not a boolean.
+- `tileEventType` resolves a swap tile's event type so the band filter sees it.
+  **Do NOT change the MORE sheet's `null`** — that null is deliberate and
+  documented (`:222-232`): MORE is where a LOW-band org reaches its only
+  recording action, and band-filtering it would remove that.
+- `SwapSlot` gains `candidates`/`blocked`, matching `ContextSlot`'s shape so the
+  two narrowing idioms do not fork.
+- `swapCandidates` excludes the picked OFF person.
+
+### R3 — the swap contract AFTER the chassis fix (2026-08-24)
+
+Six commits, `37bd18559`..`4eb48f7f1`, one per defect, each red-first. The
+shape every later skin builds against:
+
+```ts
+SkinDefV3.swap?(view): SwapSlot[]      // PLURAL; [] means "nothing offerable now"; still optional
+TileSpec.action = { swap: string }     // names a SwapSlot.id  (was {swap:true})
+SwapSlot { id, offLabel, onLabel, side, eventType, policyOk,
+           policyMessage?, candidates?, blocked?, buildEvent(off, on) }
+```
+
+Four properties that are NOT obvious from the types:
+
+- **`eventType` is declared STATICALLY and nothing checks it against what
+  `buildEvent` actually returns.** It has to be static because the band filter
+  runs before any person is picked, and `buildEvent(off,on)` cannot answer
+  until both are. A skin that declares one type and builds another gets a
+  correctly band-filtered tile that dispatches the WRONG event, with no gate.
+  **Every skin owes a test pinning the two together.**
+- **`candidates`/`blocked` narrow the ON list only** — same semantics and the
+  same renderer as `ContextSlot`, deliberately, so the two narrowing idioms
+  cannot fork.
+- **An unknown slot id fails CLOSED on opening but OPEN on the tile**: nothing
+  opens, the tile stays. Deliberate and documented.
+- **A refused verdict is still only visible AFTER an off pick.** The reason now
+  always renders rather than falling through to the generic `noRoster` copy,
+  but the off step itself does not carry it. Narrowing further redesigns the
+  flow; recorded, not done.
+
+Defect 5 (the picked OFF player offered as their own replacement) was
+**unreachable before defect 4** — onfield and bench are exact complements, so
+OFF could not appear in the ON list until `candidates` superseded the pool.
+Its regression test is written against a `candidates` list. Both facts are in
+the code so nobody deletes the guard as dead.
+
+New chassis-generic key, all four locales, `gen-keys` regenerated:
+`pad.swap.refused` — en "That change isn't allowed right now."
+
+**Routed to the football skin task:** `dedicatedEventTypes` now under-reports,
+so a swap's event ALSO stays listed in the MORE sheet as a duplicate generic
+form. Widening it is a MORE-sheet behaviour change; football is the first wave
+that can actually observe the duplicate, so it rules on it.
+
+**Left alone:** `tile-grid.tsx:188,233` carry stale `{swap: true}` comments.
+Code correct, comments only.
+
+### R3 — the ribbon takes NO vars; the skin supplies `detail` (2026-08-24)
+
+Found while authoring `pad.football.ribbon.*` (task C, commit `6d5d31079`).
+`buildRibbon` calls `padLabel(perSportKey, t, eventType)` with **no vars**, so
+an interpolation placeholder written into a ribbon key renders LITERALLY. The
+nine football ribbon keys are therefore var-free bases ("Goal recorded", "Card
+shown", "Penalty awarded", "Sent to the sin bin"). A line like
+"Goal — Rivera, assist Okafor" is the RENDERED result of
+`pad.ribbon.withDetail` = `"{base} — {detail}"`, with the **skin** supplying
+`detail`. Cricket ships exactly this split.
+
+**Nothing asserts a ribbon string is placeholder-free**, so a skin author who
+writes `"Goal — {scorer}"` into a dictionary gets a literal `{scorer}` on
+screen and no failing test. `skins/football.tsx` owns `detail`.
+
+Also settled by that task, so the skin does not re-derive them:
+- **Refusal copy is NOT a `PAD_LABEL_KEYS` concern.** Cricket's precedent puts
+  it at `pad.<sport>.context.<thing>.blocked.<reason>` (plus `.short` variants
+  sized to the layout), dictionary-only, authored WITH the skin that consumes
+  it. Football's two substitution refusals — `maxSubs` and `subWindows` — are
+  therefore owed by the SKIN task, not by i18n.
+- **`second_yellow` needs no new copy.** `cardColor.second_yellow` already
+  exists in all four locales and is registered at `scoring-vocab.ts:417-418` as
+  its own colour beside yellow and red. The skin builds it into `detail`.
+
+### R3 — the verify command in this wave's first three briefs was WRONG
+
+`npx vitest run --root apps/web` was written into three dispatch briefs. On
+`src/lib/__tests__` it reports **1743 total / 21 failed**; the correct form,
+`cd apps/web && ./node_modules/.bin/vitest run`, reports **1951 / 0**. So the
+flag loses 208 tests AND invents 21 ENOENT failures in the copy-truth family
+(`src/dictionaries/...`, `content/help/...`). `npx vitest` from the worktree
+ROOT does not run at all — the binary lives only at
+`apps/web/node_modules/.bin/vitest`.
+
+This is a KNOWN trap (it is failure mode #2 in the standing vitest-masking
+note) and it still went into three briefs in one session. Counts reported by
+task A and task B1 were taken with it and are re-run at the wave boundary by
+the main thread rather than trusted.
+
+### R3 — TWO CORRECTIONS to claims recorded earlier in this file (2026-08-24)
+
+Both were written here by the main thread before the code existed, both are
+FALSE, and both were caught by the wave's first review pass. Corrected in place
+rather than left for a later session to build on.
+
+**CORRECTION 1 — "R3 is the wave that turns `subWindows` on" is FALSE.** The
+`at`-stamp section above says v2 sends no `at`, so the window cap has never
+fired, and that R3 switches it on. The guard R3 built is correct, but it is
+**INERT**: `state.asOf` is written only at `football.ts:2528`, and only from an
+event that ALREADY carried `at`. No v3 football surface sends `at` except the
+swap, which copies an `asOf` that must pre-exist. On a pad-only stream
+`stampOf` always returns `undefined`, the window branch of `subPolicy` never
+runs, and `pad.football.context.sub.blocked.subWindows` is UNREACHABLE COPY.
+The only bootstrap is a More-sheet sinbin/shot form's own `at.*` fields.
+So `subWindows` still does not fire from the pad. Whoever wants it must give
+the pad a way to originate a stamp — engine-side, and not R3's.
+
+**F5 CLOSED (2026-08-24) — reachable, but only through the More sheet.** The
+sentence above ("the only bootstrap is a More-sheet sinbin/shot form's own
+`at.*` fields") was asserted, not shown, and a later session was going to have
+to re-derive it. It is CORRECT. The chain, end to end:
+
+1. `padSpec` spreads a shared `...stamp` — `{kind:"enum", path:"at.period"}` and
+   `{kind:"number", path:"at.elapsed"}` — across the football actions
+   (`football.ts`, `shootoutKickAction` / `penaltyAction` and their neighbours).
+2. The generic More form renders by `field.path` and never names the field, so
+   grepping the pad for a literal `"at"` finds NOTHING and reads as "no bootstrap
+   exists". That grep is the wrong instrument — it is how this was mis-called
+   once already.
+3. `ActionFormList` submits `buildActionPayload(action, values)`
+   (`v3/action-form.tsx`), which is `buildPathObject(entries)`
+   (`scorepad/view-model.ts:225-233`) — dotted paths NEST, so `at.period` +
+   `at.elapsed` arrive as `{ at: { period, elapsed } }`.
+4. `dedicatedEventTypes` (`v3/pad-host.tsx:229`) claims only types owning a
+   tile/sheet/swap. Football's board claims goal, card, sub, period, penalty —
+   so **`football.shot`, `football.sinbin.start`, `football.sinbin.end` and
+   `football.shootout.kick` stay in the More sheet, carrying `at.*`.**
+5. Any one of them submitted with the stamp filled sets `state.asOf`
+   (`football.ts:2528`). From then on `stampOf` (`skins/football.tsx:319`)
+   returns a stamp while `asOf.period === state.phase`, `football.sub` carries
+   `at` (`:1135`), windows accumulate, and `SUB_WINDOW_EXCEEDED`
+   (`football.ts:1211`) fires at the cfg cap.
+
+So the honest statement is NOT "inert". It is: **the dedicated Sub tile can
+never bootstrap the ledger by itself — a scorer must first stamp an unrelated
+More-sheet event — and until they do, `pad.football.context.sub.blocked.subWindows`
+is unreachable copy.** Whether that is acceptable is a DESIGN question for the
+wave that gives football a clock input (R6/R8), not a defect R3 can fix: R3 is
+engine-frozen apart from the spent `b00c85162` exception, and originating a
+stamp is engine-side work.
+
+No test is added for the More-sheet path here. It would pin a route the next
+wave is expected to replace, and the sub-side guard it would exercise is
+already covered by the skin's own `at` tests.
+
+**CORRECTION 2 — the ribbon does NOT render "Goal — Rivera, assist Okafor".**
+The ribbon section above describes that as the rendered result of
+`pad.ribbon.withDetail`. It is not: `buildRibbon` is called with four arguments
+and never `detail` (`pad-host.tsx:749`), so `withDetail` never fires on the TOP
+ribbon at all. `footballDetail` reaches only the Activity panel. `ribbon.ts` is
+untouched by this wave, so the gap is PRE-EXISTING and not football's — but the
+description written here was wrong about what a user sees.
+
+**The lesson worth keeping, because it is the third time this shape has cost
+this programme:** a claim written into `_INDEX.md` ahead of the code is a
+PREDICTION, not a record. Both of these were stated with the same confidence as
+the facts around them, and neither was true. Mark predictions as such, or write
+them after the code proves them.
+
+### R3 — the review pass that should have happened five tasks earlier
+
+R3 ran FIVE implementers back to back with ZERO review passes before the first
+reviewer was dispatched. `_RULES.md` §4 mandates Scout -> Implementer ->
+Reviewer -> loop until clean. What that first pass found, in one sweep:
+
+- Three **dead-end taps** (the pad offering what the engine refuses), two of
+  them reachable at BAND 0 — the exact class R2b and R2c each fixed in cricket,
+  reappearing in football because nobody looked between waves.
+- A **cricket pixel change** (`globals.css:1062`, focus ring violet -> lime)
+  violating R3-6's binding byte-identity ruling. It survived a dedicated
+  identity-proof because that proof ran in a NODE environment and the defect
+  lives in the CSS CASCADE.
+- **Two false-green tests** — the totality sweep that unions `dedicated` across
+  phases while production recomputes per phase, and a `sport-theme` assertion
+  comparing two hand-typed constants in the same file with no production symbol
+  on either side.
+
+Every one of those was in code whose own suite was green, written by an agent
+that also wrote the tests for it. **Test count is not review.** The wave was at
+3302 passing tests when the reviewer returned "Needs fixes".
+
+### R3-6 — owner ruling 2026-08-24: PER-SPORT VISUAL IDENTITY (reverses the theme lock)
+
+**This reverses a standing ruling. Do not "restore" the lock — read this first.**
+
+On 2026-08-15 (rulings round 3) the owner locked the theme: "daylight shell +
+stadium-night LCD scorebug tile", explicitly so eleven skins would share ONE
+family identity. R3 asked how ambitious football's visual design should be,
+with the theme lock named as the thing the largest option would break. The
+owner chose **full per-sport visual identity**.
+
+What that means, stated plainly so it is not softened later:
+- A per-sport TOKEN LAYER (`--sport-*`) lands in the chassis. Skins stop being
+  purely structural and gain a bounded visual voice.
+- Football gets its own palette, type treatment and board furniture.
+- **R4-R7 each now owe a visual identity too.** This is a permanent widening of
+  every remaining wave, not a one-off for football.
+- The programme's "one family identity" rationale is retired. `_RULES.md` and
+  the design of record (`2026-08-15-scoringpad-v3-redesign-design.md` §2) both
+  still assert it and are now STALE on this point.
+
+**Cricket does NOT have to be re-signed-off, and must not be re-themed as a
+side effect.** The option as put to the owner said cricket would need
+re-signing-off. That is avoidable and the cheaper design is also the safer one:
+build the token layer so that **cricket's current values ARE the default token
+set**. Cricket then renders byte-identical, its R2/R2b/R2c sign-offs stand, and
+only football overrides. Any implementation that changes a cricket pixel is
+wrong. A gallery diff of cricket before/after is the gate on that claim.
+
+### R3 — football's visual direction (design plan, before code)
+
+Calibration first, because the trap here is real: current AI-generated design
+clusters on (1) cream + high-contrast serif + terracotta, (2) near-black + one
+acid accent, (3) broadsheet hairlines. The locked product theme — night
+`#150b36` with lime `#a3e635` — already sits close to (2). Leaning football
+FURTHER into lime-on-night would be picking the default and calling it a
+decision.
+
+So football moves deliberately away from the family's lime, into its OWN
+vernacular:
+
+| token | value | why this, from football's own world |
+|---|---|---|
+| `--sport-board` | `#0b1f16` | floodlit turf at night: near-black with a green cast, NOT "pitch green" (the generic sports-app answer) |
+| `--sport-board-2` | `#122e21` | the band under the scores |
+| `--sport-led` | `#ffb703` | the FOURTH OFFICIAL'S BOARD amber — the signature |
+| `--sport-caution` | `#ffd60a` | a yellow card is yellow |
+| `--sport-dismissal` | `#d00000` | a red card is red |
+| `--sport-ink` | `#f2f7f4` | cool off-white, legible on the board in daylight |
+
+**Type:** condensed uppercase for the board, which is matchday-programme and
+scoreboard vernacular; tabular/monospaced figures for the scores so a 0->1
+change does not jitter the layout. Body face unchanged — the shell stays the
+product's.
+
+**Signature:** the strip becomes the **fourth official's added-time board** —
+an amber LED panel reading the period and added time. One memorable element,
+unmistakably football, and it replaces the dead `Clock —` field rather than
+adding furniture. Everything around it stays quiet.
+
+**The aesthetic risk, stated and justified:** football rejects the family's
+lime accent. Lime is the PRODUCT's brand colour; amber is the SPORT's. On a
+surface used pitch-side under floodlights, the sport's signal should win. If
+that reads as fragmentation rather than identity at sign-off, the token layer
+makes it a one-line revert per sport.
+
+**Cards carry their own colour, and this is the load-bearing argument.** Yellow
+and red are the only colours in football's visual language that CARRY MEANING —
+a referee does not raise a "destructive action". Today a red card renders in the
+chassis's generic `destructive` red, identical to every other destructive
+action, and a yellow renders as neutral `standard`. That is the one place in
+this pad where colour is INFORMATION rather than decoration, and the current
+build discards it.
+
+### R3 — the gallery's per-width captures can RACE the fold (2026-08-24)
+
+Found on R3's first football capture, and it undermines the sign-off gate
+itself, so it is not a football fact.
+
+`02-live` for football came back showing **three different boards at three
+widths from one state**: at 320 the pad rendered `Period pre` with ZERO tiles
+and "Nothing recorded yet"; at 768 and 1280 the same state rendered `Period H1`
+with the full tile set. Same fixture, same capture run, same declared state.
+
+The 320 shot was taken before `core.start` had folded through. Nothing in the
+harness failed, and nothing in `manifest.json` records that the widths disagree.
+
+Why this matters more than one bad PNG:
+
+- **320 is the width the horizontal-overflow measurement runs on**, always, even
+  when `GALLERY_WIDTHS` narrows the PNG set (the runbook is explicit that the
+  measurement must never be excluded). A 320 capture of a pad with NO TILES
+  measures the overflow of an empty board and records `0` — a clean number that
+  means nothing. That is a false green in the merge gate.
+- A reviewer looking only at 768/1280 sees a correct board and signs off; the
+  320 evidence in the same sheet contradicts it and reads as a real defect.
+  R2c's lesson in a new place: right in isolation, wrong in context.
+
+**Do not treat a `pre`-looking 320 capture as a pad defect without checking the
+other two widths first.** The real fix is a settle/assert on the expected phase
+before the first screenshot, not a sleep — routed to the e2e/gallery task (D),
+which is already re-pointing the football path.
+
+### R3 — debt routed OUT of this wave (found by the entitlement task)
+
+`packages/engine/src/sports/period/kernel.ts:2172-2178` justifies hockey's and
+icehockey's OWN band-2 = band-3 entitlement reuse by citing football's shape
+verbatim ("football's own `fidelityTiers` already carries
+`scoring.match_timeline` on both tier 2 AND tier 3"). R3 made that citation
+false. The code is still CORRECT — hockey and icehockey genuinely do share one
+key — only the justification is stale. Not fixed here: R3's engine exception is
+scoped to football alone. **R6 (period pair) or R8 owns the comment.**
+
+### R3 — where the `at` stamp comes from (found during scoping, 2026-08-24)
+
+R3-2 rules that a substitution is stamped. The source is the FOLD, not a UI
+clock: football's state carries `asOf: {period, elapsed}`, which is exactly a
+`GameTime` (`packages/engine/src/core/time.ts:51`). v2's own `readClock`
+(`skins/football-skin.tsx:115`) already reads it.
+
+Two things a later session must not re-derive:
+
+- **v2 football sends NO `at` on any event** — `git grep -an "at:"` over
+  `football-skin.tsx` returns nothing. Every substitution ever recorded through
+  the v2 pad is therefore UNSTAMPED, consumes no window, and the `subWindows`
+  cap (`football.ts:1211`) **has never fired in production**. R3 is the wave
+  that turns it on. Expect the refusal to be new behaviour to the owner in the
+  walkthrough, not a regression.
+- **`asOf` can be STALE.** `readClock` returns a placeholder when
+  `asOf.period !== ` the current phase, precisely so a stamp left over from a
+  phase the match has left never reads as "now". R3 applies the same guard: if
+  `asOf` is missing or its period is not the current one, **omit `at`** rather
+  than stamp a wrong value. `at` is `.optional()` on every football event, so
+  omitting is legal; the cost is that the sub consumes no window, which is the
+  honest failure — a WRONG window silently mis-attributes a stoppage. Do not
+  "fix" this later by stamping unconditionally.
+
+`pad-host.tsx:817` already carries chassis support for window elapsed, restored
+so R3-R6 inherit it.
+
+### R3 — the entitlement change, scoped
+
+`fidelityEntitlements` (`:2390`) and `fidelityTiers` tier 3 (`:2672`) are TWO
+hand-kept literals that must move in lockstep; neither is derived from the
+other. Band 3 flips to `scoring.ball_by_ball`, band 2 keeps
+`scoring.match_timeline`. No Flyway migration, no `entitlement-domains` entry,
+no `i18n:gen-keys` regen, no 4-locale marketing copy — the key already exists
+and is already granted on the identical boundary. `padSpec` is NOT in
+`schema-snapshot.test.ts`, so no module version bump and no golden re-baseline
+(`schema-snapshot.test.ts:64-68` covers `configSchema`/`eventSchema`/state
+only). This is a deliberate exception to R3's own "do NOT touch: engine" line
+and must be stated as such in the PR body, the way R2b recorded
+`nextBattingSide`.
+
+Accepted cost, recorded so nobody re-opens it: the `/pricing` matrix now shows
+ONE "ball by ball" bullet covering both cricket deliveries and football shots.
+
+### R3/B2 — the skin task's own rulings (2026-08-24)
+
+The football skin landed (`v3/skins/football.tsx`, registry flipped, football
+and cricket now both v3 and the other nine legacy). Two rulings the chassis
+wave routed here, and three defects the skin was the first surface able to
+observe. All five are fixed IN this wave — the standing "don't raise new
+issues" rule — and each is small, additive and separately committed.
+
+**Ruled: `dedicatedEventTypes` DOES resolve a swap tile (the routed defect).**
+`football.sub` used to appear both on its Sub tile and again as a generic
+More-sheet form. Fixed rather than lived with, because that generic form
+bypasses everything the swap sheet exists to give — the `lineupPolicy`
+verdict, the narrowed on/off lists, the already-substituted reason, and the
+skin's stale-`asOf` guard on `at`. It is the same two-divergent-entry-points
+defect R2c closed for `cricket.retire`. The old justification ("a swap's event
+cannot be known statically") died with defect 3's `SwapSlot.eventType`; only
+the slot table was missing, and it is now a REQUIRED third parameter (a
+default would silently reinstate the duplicate for a forgetful caller).
+Cricket declares no swap and passes `[]`.
+
+**Ruled: the `eventType` ↔ `buildEvent` pin is the SKIN's, and it now exists.**
+`skins/__tests__/football.test.ts` asserts, per slot, that
+`buildEvent(off, on).type === slot.eventType` and that the type is one the
+engine's own `eventSchemas` declares. Mutation-proved (declaring
+`core.lineup.substitution` while building `football.sub` reds it).
+
+**Three defects football was the first sport able to observe:**
+
+1. **`squadStateOf` read `state.squads` blind.** That field name is NOT
+   reserved for the kernel's adopted `SquadState`: football keeps its own
+   `{onPitch,bench,offUsed,sentOff}` projection there, with no `.members`
+   anywhere. Every consumer reads `.members`, so this THREW (not "returned a
+   wrong list") on football's first swap/person tap. Fixed by reusing
+   `isSquadState` — the identical structural guard the LEGACY lane has carried
+   for this exact sport since S10 (attribution-picker.tsx), never a second
+   check that could disagree with it.
+2. **The swap sheet's OFF list had no scope.** With the fix above, football's
+   `view.squads` is `initSquads(lineups)` — the KICKOFF sheet, which never
+   moves. One substitution later the off picker offers the player who came off
+   and hides the one who came on. `SwapSlot.offCandidates` (the additive field
+   the R3 chassis wave already priced in) closes it; `offBlocked` was NOT
+   minted — no caller, no test that could fail.
+3. **A dock chip could not carry a person's name.** `DockChip.label` is an
+   i18n key resolved through `t()`; football's goal dock is the first whose
+   chips name people. `DockChip.labelText` is the same key-plus-text pair
+   `TileSpec.labelText`/`ContextSlot.message`/`WhoLine.servingLabel` already
+   establish. Proved through a real render, not a pure helper.
+
+**Two skin-side decisions worth not re-deriving:**
+
+- **A tile is withheld above the ACTIVE band, not just the entitled one.**
+  `filterTilesByBand` (chassis) filters on ENTITLED bands while `buildPadView`
+  drops any action whose band exceeds the ACTIVE band — so an entitled org
+  scoring at band 0 would see card/sub/pen tiles and every tap would throw
+  through `createSkinDispatch`. The skin mirrors `padSpec(cfg).fidelity` as
+  `EVENT_BAND` (pinned against the engine in its test) and withholds them.
+  This is a CHASSIS-shaped gap that also affects cricket; not fixed here.
+- **Below band 2 the card tile dispatches nothing because it is withheld
+  entirely.** `GuidedSheet` renders `null` when no step is visible, so a tile
+  opening a fully `when`-gated-off sheet is a tap with no visible response at
+  all. Any later skin gating a single-step sheet must gate the TILE too.
+
+**Engine asymmetry found, NOT worked around (R6/R8 or a later engine wave):**
+`applyCard` accepts a card in phase `"pre"` (a pre-kickoff red is explicitly
+legal, football.md §9) but `padSpec(cfg)` declares no pre-phase panel — every
+football panel is `phase: "live"` — and `buildPadView` drops a panel whose
+phase is not current, so `createSkinDispatch` refuses ANY dispatch at pre/post.
+A pre-kickoff card is therefore unreachable from any declared pad surface, v2
+and v3 alike. The skin declares every tile `phases: ["live"]` rather than
+shipping a tile that throws on tap.
+
+**Copy:** 22 new keys × 4 locales, `i18n:gen-keys` regenerated. The nine
+ribbon bases stay var-free; the skin supplies `detail`, and
+`cardColor.second_yellow` was reused rather than re-minted, exactly as task C
+recorded.
+
+### R3/D — the e2e + gallery task's own findings (2026-08-24)
+
+**The fold race is FIXED, and the fix is an assertion, never a sleep.**
+`captureState` now takes a `StateProbe` and runs it before the 320 measurement
+AND before every width's screenshot, so a capture whose board is not the
+declared state FAILS instead of writing a misleading PNG. The shared probe
+compares the pad's own rendered event rows against the ledger count the harness
+just read — one probe honest for both lanes (v3 `[data-role="v3-activity-row"]`
+and the legacy `[data-role="timeline"] [data-event-id]`), because the race was
+always "the client has not folded yet", never anything sport-specific.
+`manifest.json` gained `padRowsByWidth`, so a published sheet can be PROVED to
+be three views of one state rather than three states. Runbook updated.
+
+Football's `04-dock` needed one more thing and it generalises: the v3 Detail
+Dock is a ~6s window, so football is the FIRST sport whose dock can close on
+its own mid-capture. `GallerySport.dockProbe` is the opt-in for that; the eight
+legacy docks are persistent expanded forms with nothing to race. Measured: the
+three widths capture comfortably inside the window.
+
+**Four defects/false premises found, three fixed here:**
+
+1. **FIXED — a real WCAG AA failure on football's board.** `TileSpec.sublabel`
+   renders at `text-[11px] opacity-70` (`tile-grid.tsx`), and football is the
+   first skin ever to put a sublabel on a `primary` tile. White at 70% over
+   violet-600 composites to `#d9bdff`: **3.55:1**, under the 4.5 floor — on the
+   word that says WHICH SIDE a tile belongs to, i.e. the most load-bearing word
+   on a two-lane board. Lifted to 90% (5.02:1). Cricket declares no sublabel at
+   all, so no cricket pixel moves. `contrast.test.ts` had measured the SCOREBUG
+   exhaustively and never the TILE GRID; it now computes both pairs from
+   tile-grid.tsx's own source, mutation-proved.
+2. **FIXED — `playwright.config.ts` cited a pin that did not exist.** Its
+   carve-out comment has said since #597 that
+   `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` pins "rest is a catch-all"
+   and "every file named in PARALLEL_HEAVY is real". **There was no such file
+   anywhere in the repo.** Written now, to those properties plus "no spec runs
+   nowhere" and "heavy + rest partition the unsliced project"; both mutations
+   (a typo'd heavy name, an explicit `rest` testMatch) proved red.
+3. **RECORDED, NOT FIXED — the v3 pad cannot record a penalty's `offence`.**
+   The v2 pad drew `football.penalty` through the generic ActionForm, which
+   rendered every `padSpec` field including the IFAB Law 12 `PenaltyOffence`
+   taxonomy (S4/#428). The v3 skin gives the penalty a dedicated two-step sheet
+   (`by`, `outcome`) and a dedicated sheet REMOVES its event from More
+   (`dedicatedEventTypes`), so there is no second route: `offence` is not
+   askable anywhere on the v3 pad. Asymmetric with the CARD, whose own offence
+   IS asked at band >=2 (R3-1). The converted test asserts `by` + `outcome` and
+   does NOT assert the absence — asserting it would enshrine it. Cost of the
+   fix is small and known (one `when: view.band >= 2` step mirroring the card's,
+   one new sheet-title key x4 locales; the 8 option labels already exist at
+   `ENUM_VOCAB.offence`). Routed to the wave to rule on, not taken unilaterally
+   in a test task.
+4. **RECORDED, NOT FIXED — the LED board's `Added` item can never render.**
+   B4's signature element reads
+   `state.periods[periods.length - 1]?.addedMinutes`, but `stampAddedMinutes`
+   stamps the period a marker CLOSES and `pushPeriod` immediately appends the
+   next one — so the current period never carries added time. The one state
+   where it would (`done`, after FT) is `decided`, and `fixture-console.tsx`
+   unmounts the pad entirely when decided. The PERIOD item does render, in
+   football's amber, and that is what the identity e2e asserts.
+
+**Two traps paid for, so nobody pays again:**
+- `FootballCfg.extraTime` is a plain `z.object` whose two fields are BOTH
+  required, with the default on the whole object. A division config patched to
+  `{ enabled: false }` fails the cfg parse — and because `setDivisionConfigSql`
+  writes the column by SQL, nothing validates on the way in: it surfaces as the
+  console rendering NO PAD, which reads as a pad defect.
+- The `Offence?` step's `view.band >= 2` predicate is **structurally
+  unobservable as false through the pad**: `football.card` is itself a band-2
+  event, so `buildTiles` withholds the card TILE below band 2 and the sheet is
+  unreachable. The e2e proves the honest form — at community band there is no
+  card, sub or penalty tile at all, while goal and period remain.
+
+**Coverage now in place:** the four football tests in `scorepad-skins.spec.ts`
+and the three in `scorepad-v2.spec.ts` drive the v3 DOM (nothing deleted — the
+v2 pad's timeline undo keeps its own coverage through `carrom-pad.spec.ts`),
+plus `scorepad-v3-football.spec.ts`: dock narrowing + every chip in the
+SUBMITTED payload; all three card colours with `second_yellow` gated on a prior
+yellow; the band floor; BOTH substitution caps (`maxSubs` and `subWindows`,
+independently reached — the window cap's first coverage anywhere, since v2 sent
+no `at` and it has never fired in production); the re-entry block rendered
+beside the name; the amber LED board and the caution/dismissal card codes as
+RESOLVED COLOURS; and all nine `football.*` types reachable, four via More with
+`football.shot` submitted for real and `football.shootout.kick` proved at the
+kicks.
+
 ### R2c — SIGN-OFF: approval-on-merge, 2026-08-18
 
 **What actually happened, recorded plainly because the gate cannot be
@@ -716,3 +1311,442 @@ Not covered by that approval, and therefore still owed by a later wave:
 Unlike R2b, this wave was NOT merged on "CI green" — see the PR for what CI
 actually reported, since neither smoke (PR-only) nor the seven-width e2e had
 ever run against this branch at the point the instruction was given.
+
+### R3/E — the review round's fixes, and the four rulings taken inside it (2026-08-24)
+
+The reviewer's verdict was "Needs fixes": four dead-end taps (two reachable at
+band 0), a cricket pixel change against R3-6, and two tests that should have
+caught them and were false-green. All fixed in-session, two commits
+(`b0bb1e230`, `74a912ee2`). What a later wave must not re-derive:
+
+**Ruled: a skin declares what its FOLD refuses, and the More sheet honours it.**
+New chassis contract `SkinDefV3.refusedEventTypes?(view)`, and `moreActions`
+takes it as a REQUIRED fourth argument beside `dedicated`. The two sets are
+NOT unioned into one parameter deliberately — `dedicated` means "already
+reachable through a narrowed surface", `refused` means "the fold will not
+accept this at all right now", and a later reader must be able to tell which
+applied. Required rather than defaulted for the same reason `dedicatedEventTypes`
+made `swaps` required: a defaulted argument silently restores the defect.
+
+Why the chassis cannot answer this itself, since it will be asked again: a
+`PadGate` on a `padSpec` panel is the ONLY phase rule `buildPadView` can see,
+and football keeps six of its phase rules inside `apply` (`isPlayPhase`) with
+its panels ungated `phase: "live"`. Its own `PadPhase` mapping then puts
+SHOOTOUT in "live" — correctly, it IS a phase of the match — so More listed
+goal, sub, shot and both sin-bin forms during the kicks, every one WRONG_PHASE
+on tap. A sport whose gates already live in `padSpec` never needs the method;
+it fails open when omitted.
+
+**Ruled: the penalty's `offence` returns as a band-2 DOCK, not a third sheet
+step.** R3/D routed the gap here to be ruled on and priced it as "one
+`when: view.band >= 2` step mirroring the card's". Taken the other way, for two
+reasons. The field's own shape decides it: `outcome` is REQUIRED and `offence`
+is `.optional()`, so a third step holds a required event hostage to an optional
+answer — the D-15 "wasted tap" this chassis exists to remove — while the dock
+is where this pad already puts optional enrichment of an event that has already
+committed (`ownGoal`/`penalty`, the goal's scorer, the card's person). And the
+step form is unshippable from a task barred from `apps/web/e2e/**`:
+`scorepad-skins.spec.ts:490` taps `saved` and then polls the ledger, so any
+third step hangs it. The dock form needs no e2e edit at all. One new key
+(`pad.football.dock.penalty.title`) x4 locales; the eight option labels already
+existed at `ENUM_VOCAB.offence`.
+
+**FALSE PREMISE in the review's own E7 item, corrected here.** It reads
+"`lineupPolicy` grants `exemptions.concussion` on top … the sheet shows
+`policyOk:false` for a substitution the engine would ACCEPT". The exemption
+does not widen `football.sub` at all: `applySub` always builds a
+`core.lineup.substitution`, and `reduceLineupEvent` consumes an exemption only
+for `core.lineup.replacement` — so a `football.sub` at the cap is refused
+whatever `concussionSubs` says. The REAL defect is one step to the left, in
+`liftSide` (`football.ts:2073`): `subsUsed = max(0, offUsed.length - exemptTotal)`,
+because an exempt replacement is permanent and therefore in `offUsed` too. The
+pad counted `offUsed` raw, so a side that had ALREADY taken a concussion
+replacement was refused its last legal ordinary substitution. Fixed as that
+subtraction, proved against a real fold carrying `core.lineup.replacement`.
+
+**ROUTED, NOT FIXED — the pad cannot ORIGINATE a concussion replacement.**
+`core.lineup.replacement` is the only event carrying `exemption`, and no
+football pad surface sends one (`padSpec` declares no such action; `football.sub`
+cannot). So a concussion substitution is unrecordable from v3, exactly as it was
+from v2. Engine/`padSpec` work, and R3's single engine exception is spent.
+**Owner: R6 (period pair) or R8's sweep**, alongside the `kernel.ts:2172-2178`
+stale-comment row already routed there.
+
+**ROUTED, NOT FIXED — the More tile can open an EMPTY sheet at bands 0-1.**
+In normal play at band 0 the only band-0 types are goal (a tile), period (a
+sheet) and the shoot-out kick (refused outside the kicks), so More has nothing
+in it and the tile is still drawn. The host CAN see this (`moreActionsList.length`)
+and dropping the tile is four lines — it was NOT taken because the tile is
+chassis-wide and cricket is signed off under R3-6's byte-identity ruling: if
+cricket's More is ever empty in any cfg/phase/band, that tile silently
+disappears from a signed-off screen and the sheet needs re-signing. It is also
+a wasted tap, not a dead end that errors. **Owner: R7 (universal console)**,
+which owns the chrome and can re-capture cricket in the same wave.
+
+**The cricket pixel, and why the guard against it had to change kind.**
+`globals.css`'s `.pad-half:focus-visible { outline-color: var(--sport-led) }` was
+UNLAYERED at (0,2,0) and beat the platform ring
+`:where(a, button, summary, [role="tab"]):focus-visible` at (0,1,0) — `:where()`
+scores ZERO, which B4's own comment misread as "the platform rule is
+zero-specificity, so this wins without `!important`". It did win, on every skin.
+The Tailwind utility it replaced (`focus-visible:outline-lime-400`) never had:
+`@layer utilities` loses to every unlayered rule, so cricket's ring had ALWAYS
+been the platform violet and nothing but leaving the layer changed it.
+
+Fixed by scoping the rule to `[data-sport-theme]`, a new attribute emitted by
+`PadHostV3` from `sportThemeAttr(skin.key)` — the attribute twin of
+`sportThemeStyle`, `undefined` for a sport with no palette. A CSS rule can READ
+`var(--sport-led)` but cannot ask whether anyone overrode it, and the default
+value is a real colour: that is the whole reason a "paint it in the sport's
+colour" rule had no way to leave an un-overriding sport alone. With the scope,
+`--sport-led` inside that rule can only ever be an overriding sport's OWN value,
+and R4-R7 inherit the behaviour by declaring a palette with no edit to
+globals.css.
+
+**A node test CAN see the cascade, if it computes one.** `v3/__tests__/_globals-css.ts`
+parses globals.css into rules that carry their layer, conditions, specificity
+(with `:where()` zeroed) and source order; `cascadeWinner` returns the rule that
+actually wins a property on a described element.
+`__tests__/focus-ring-cascade.test.ts` uses it. Its stated limits, which a later
+wave must respect rather than quietly widen: it sees NOTHING outside
+globals.css — sound for this question only because every Tailwind-generated
+utility lands in `@layer utilities` and therefore cannot beat any unlayered rule
+it does see, and NOT sound for a question about two utilities — and it throws
+rather than guesses on layer-vs-layer ordering and on `>`/`+`/`~`.
+
+**Three tests were false-green; all three now red on the defect they name.**
+- `football-dispatch-totality.test.ts` unioned `dedicated` across the live and
+  SHOOTOUT states while `pad-host.tsx` recomputes it per state, so its
+  no-duplicate assertions passed in exactly the phase where the duplicate
+  existed. Rewritten per SITUATION (one cfg, one really-folded state, one band),
+  with `football.apply` as the oracle via `__tests__/_football-fold.ts`.
+- `sport-theme.test.ts:226` compared two hand-typed constants declared ~90 lines
+  apart in the SAME new file — no production symbol on either side, so no edit
+  to `sport-theme.ts`, `tokens.ts` or `globals.css` could red it. The chain is
+  now class -> (globals.css's own parsed rule) -> token -> (`DEFAULT_SPORT_PALETTE`)
+  -> hex, compared against the independent pre-B4 table. And `:328` bound `.pad-*`
+  rules BY NAME (`css.toContain(".pad-" + base)`), so `.pad-board { background-color:
+  var(--sport-led) }` passed and `.pad-board` was satisfied by the substring
+  inside `.pad-board-2`; now matched as a whole class token against parsed
+  selectors.
+- `contrast.test.ts`'s non-text-tone licence (the `describe` named "the tones are
+  NON-TEXT colours, and this is where that stops being a comment" — cited by NAME
+  because an earlier `:479` here had already rotted to `:546` by the next commit)
+  grepped the literal
+  `color: var(--sport-<tone>)` and missed the unspaced form, `color-mix`
+  wrappers, arbitrary Tailwind values, inline styles and — the one that matters
+  — `var(--pad-tone)`, the indirection every tone actually ships through. It now
+  resolves the alias graph out of globals.css to a fixpoint and scans the
+  chassis and skin sources too.
+
+**The lesson, stated once because it is the third shape of it this programme has
+hit:** every one of these was written by an agent that also wrote its own tests,
+and every one of those tests was green. A test that asserts a skin against a
+MIRROR of the engine proves the mirror. Where an oracle exists — the fold, the
+CSS cascade, a production symbol — the test must go through it.
+
+
+---
+
+## R3/F — cricket impact, established from a gallery DIFF (2026-08-24)
+
+Task G was dispatched twice to answer "which cricket screens moved from F's
+chassis fixes" and stalled at the watchdog both times. Answered here directly.
+
+**Baseline:** `scratchpad/gallery-r3-final`, captured 15:17 — before E
+(`b0bb1e230` 15:55) and before every F commit (16:33-17:12). A genuine
+pre-wave baseline, not a re-capture of the same code.
+**New:** `scratchpad/gallery-r3-final2`, captured off the rebuilt bundle at
+HEAD. Both runs 2/2 passed, 45 PNGs each (cricket 30, football 15), 320px
+overflow measured on all 15 states and 0px everywhere.
+
+### The byte diff is CONTAMINATED — do not report it as the answer
+
+All 30 cricket PNGs differ by hash, and 44 of 45 overall. That is NOT 44
+changed screens. The harness seeds a fixture per run with a per-process `TAG`,
+so every fixture name changes between runs (`mt7bjrxorkhp` -> `mt7h9q4cwkxs`)
+and the proportional font re-wraps the title, shifting the whole page down.
+Compared visually, cricket `01-pre-768` is IDENTICAL apart from that tag.
+
+A hash diff of this gallery measures tag noise. The only instrument that
+answers the question is looking at the pixels.
+
+### What actually moved
+
+- **`ad55ec356` (ribbon detail) DOES change cricket.** The recording chip read
+  `Ball recorded` before and reads `Ball recorded - Cau...` after — the detail
+  suffix every skin already built, now rendered because `buildRibbon` finally
+  receives `detail`. Visible on `04-dock` at every width; cricket is a
+  SIGNED-OFF sport, so this copy change is owed a re-look.
+- **`7ada026e0` (scorebug who-line wrap)** produced no visible cricket change
+  in these states: the who-line fits at all three widths in both runs. It
+  guards a long unbroken name cricket's fixture does not produce.
+- **`8a66c00f6` (dock on screen when it opens)** produced no visible cricket
+  change: the WHO'S OUT dock renders in the same place in both runs.
+- **`74a912ee2` (E, cricket focus ring) is INVISIBLE to this gallery** and
+  always will be — it only paints on `:focus-visible`, and the harness focuses
+  nothing before screenshotting. It cannot be signed off from these PNGs. It
+  was verified instead by cascade reasoning plus `focus-ring-cascade.test.ts`,
+  whose 3 targeted tests go red when the `[data-sport-theme]` scope is
+  stripped. Do not read "no visual diff" as "no change" for that commit.
+
+### Consequence for the sign-off sheet
+
+Cricket's `04-dock` (and any state showing the chip) needs the owner's eye
+again — one copy change, not a re-review of the sport. Football is new in this
+wave and needs all five states reviewed regardless.
+
+
+---
+
+## R3 — `/code-review` round 3 (2026-08-24): 5 findings, 1 fixed, 2 DISPROVEN
+
+Run against the full branch diff (49 files). Verified each before acting;
+three did not survive verification in the form they were reported.
+
+**1. `pad-host.tsx` — `openSwapId` outlives its slot. REPORTED AS REACHABLE; IT
+IS NOT.** The mechanism is real: `openSwapId` is set on the tile tap (`:793`)
+and cleared only by `onSwap`/`onCancel` (`:1012`/`:1016`), so nothing resets it
+when the slot stops resolving. The stated scenario is wrong. It needs a
+play -> non-play -> play sequence, and football has none:
+`applyPeriod`'s `HT` arm is `pushPeriod(close(), "H2")` (`football.ts:1549`),
+and H1 and H2 are BOTH in the skin's `PLAY_PHASES` (`skins/football.tsx:181`),
+so the sheet never unmounts at half time. `FT` goes to `ET_H1` (also a play
+phase) or to `done`/`SHOOTOUT`, which never return to a play phase. A defensive
+reset was written and then REVERTED: no test can fail without it, and this
+repo's rule is that every change ships a test that does. Revisit if a wave ever
+adds a non-play interval a scorer can leave and re-enter.
+
+**2. `swap-sheet.tsx` — no refusal on the OFF step. ALREADY KNOWN, and pinned.**
+Not a new finding. `scorepad-v3-football.spec.ts` (~`:404`) already documents it
+as "a known limit of the R3 chassis fix, not an accident", and its e2e exists
+specifically so a later change cannot silently "fix" it. A fix was written and
+reverted on that basis. It is also bigger than it looks: `policyVerdict` does
+not change between steps, so refusing at the OFF step makes the ON step's
+refusal branch UNREACHABLE dead code, and breaks four existing tests that reach
+it. `SwapSheet` is chassis shared by eleven skins including signed-off cricket,
+so this is an owner decision, not a review fix.
+
+**3. `sport-theme.ts` — `SPORT_PALETTES` had a prototype. FIXED.** All three
+readers index the table by a bare string, so `SPORT_PALETTES["constructor"]`
+answered truthy: `sportThemeAttr` would emit `data-sport-theme="constructor"`
+while `sportThemeStyle` emitted no tokens, breaking the pair invariant that
+`[data-sport-theme] .pad-half:focus-visible` depends on and dropping the ring
+back onto the shared default. Now `Object.create(null)`, matching the choice
+`registry.ts` already made for `V3_SKINS` and for the same stated reason.
+Unreachable from today's sport keys; now unreachable by construction. Three
+tests added, two of which go red against the plain literal (the third is a
+deliberate control that passes both ways).
+
+**4. `football.ts` — the entitlement comment overclaimed. NARROWED.** Band 3's
+move to `scoring.ball_by_ball` is safe at the PLAN level, and that much was
+verified against V112/V290. But entitlements also resolve through
+`org_entitlement_overrides` and `competition_passes`, keyed per FEATURE
+(V306__entitlement_resolver_parity.sql), so an org holding an override or pass
+for `scoring.match_timeline` and not `scoring.ball_by_ball` silently loses band
+3. No such row is known to exist and none is created here; the comment now says
+plan-level and names the backfill that is owed.
+
+**5. `skins/football.tsx` — 24 dock chips for a goal. OWNER DECISION, not
+fixed.** `buildDock` pushes a scorer chip AND an assist chip per on-pitch
+player: 24 at 11-a-side, inside a ~6s soft-commit window, against a dock F4
+measured at 213px/369px. `block: "nearest"` then reveals only the top edge.
+The observation is sound and the arithmetic is right. The fix is a flow change
+(scorer first, assist after) that alters how every goal is recorded, which is a
+design ruling this review has no standing to make.
+
+
+---
+
+## R3 — OWNER VISUAL SIGN-OFF, RECORDED (2026-08-24)
+
+`_RULES.md` §1: visual sign-off is a MERGE GATE, and the gate is these
+verdicts being written here — not the sheet existing. All fifteen states
+**APPROVED**, no changes requested, nothing blocked.
+
+Sheet: https://claude.ai/code/artifact/f1a30e65-076e-41c1-9d1b-2b2953a9391a
+Captured from a production build at `2f4ac70c4` (46 commits on
+`feat/scorepad-v3-r3-football`), 45 captures, 3 widths each.
+
+| Sport | State | Verdict |
+| --- | --- | --- |
+| football | 01-pre | APPROVE |
+| football | 02-live | APPROVE |
+| football | 03-scored | APPROVE |
+| football | 04-dock | APPROVE |
+| football | 05-devicelink | APPROVE |
+| cricket | 01-pre | APPROVE |
+| cricket | 02-live | APPROVE |
+| cricket | 03-scored | APPROVE |
+| cricket | 04-dock | APPROVE |
+| cricket | 05-devicelink | APPROVE |
+| cricket | 06-overtile | APPROVE |
+| cricket | 07-oversheet | APPROVE |
+| cricket | 08-bowlerpicker | APPROVE |
+| cricket | 09-retiresheet | APPROVE |
+| cricket | 10-reviewblocked | APPROVE |
+
+**Cricket was re-signed deliberately, not carried over.** R2's sign-off did
+not cover this wave: three R3 commits change chassis code shared by eleven
+skins, so cricket's ten states were re-captured from the same build as
+football's and re-approved. `04-dock` is the one that genuinely moved — the
+recording chip now renders the detail suffix ("Ball recorded — Caught…") that
+`ad55ec356` finally passes into `buildRibbon`.
+
+**Three limits were stated ON the sheet and approved with them in view** — they
+are not discovered afterwards, and they are the honest boundary of what this
+sign-off covers:
+
+1. The crowded 11-a-side goal dock is **not pictured**. The capture fixture
+   rosters two or three players a side, so what was approved is the dock's
+   SHAPE, not its length. The 24 -> 13/12 chip reduction is covered by unit
+   test only.
+2. Cricket's focus ring is **invisible to this harness** by construction — it
+   paints on `:focus-visible` and the capture focuses nothing. Approved on the
+   cascade reasoning and `focus-ring-cascade.test.ts`, not on any pixel.
+3. 44 of 45 files differ byte-for-byte from the previous sheet purely because
+   the harness re-seeds fixture names per run. That is not 44 changed screens.
+
+**Gate at sign-off:** v3 unit 867/867 (0 files resolving outside the worktree),
+engine football 266/266, tsc EXIT=0 from the worktree root, eslint clean, i18n
+parity 5010 keys x 4 locales, 320px overflow 0px across all 15 states.
+
+**Merge is no longer blocked on sign-off.** What remains before merge is the PR
+itself, whose body owes: smoke deferred to **R8 by name**; the engine exception
+`b00c85162` (band 3 -> `scoring.ball_by_ball`) called out as deliberate; and the
+entitlement-override backfill this wave records but does not perform.
+
+
+---
+
+## R3 — rebased onto `origin/main`, and why the sign-off still stands (2026-08-24)
+
+48 commits rebased onto `origin/main` cleanly, no conflicts. Recovery tag
+`r3-prerebase` points at the pre-rebase head.
+
+**THE SIGN-OFF RECORD CITES A COMMIT THAT NO LONGER EXISTS.** The section above
+says the approved captures came from `2f4ac70c4`. Rebasing rewrote every SHA on
+this branch, so that commit is NOT reachable from it any more — a later reader
+looking it up finds nothing and cannot tell whether the sheet was real. The
+mapping, recorded rather than left to be re-derived:
+
+| Pre-rebase | Post-rebase | What it is |
+| --- | --- | --- |
+| `2f4ac70c4` | `7baadc9e4` | the build the approved captures came from |
+| `790626127` | `34e88ea53` | the sign-off record itself |
+| — | `21115f19a` | branch head after the rebase |
+
+**The captures were NOT retaken, and that is a decision with evidence behind
+it, not an omission.** Main's four commits (scheduling, exports, public-site,
+P9.5) overlap this branch in exactly five files: the four locale dictionaries
+and the GENERATED `i18n-keys.ts`. Checked rather than assumed:
+
+- main only ADDED keys — `documents.*`, `board.conflict.*`, `calendar.*`,
+  `poster.*`, `export.*`. The single removed line is `export.description.ticket`
+  re-added with a trailing comma.
+- **Zero `pad.*`, `score.*` or `scorepad.*` keys were touched**, so nothing the
+  pad renders changed.
+- `i18n:check` parity OK at 5025 keys x 4, and `i18n:gen-keys` is a NO-OP after
+  the rebase, so the generated file carries both sides' keys with no drift.
+
+A clean rebase is not evidence of a working tree — it only says the text
+merged. Gate re-run at the rebase boundary:
+
+- engine 4088 total / 4075 passed / **0 failed** across 1013 suites
+- apps/web 9830 total / 9756 passed / **0 real failures** / 74 pending, across
+  3090 suites, 0 files resolving outside the worktree
+- tsc EXIT=0 from the worktree ROOT, i18n parity 5025 x 4
+
+**The apps/web run first reported 4 failures, and they were ENVIRONMENTAL.** All
+four were in `schedule-build-honours-locks.test.ts`, the suite that solves
+through the CP-SAT placement service; without it running those paths fall back
+and the assertions go red for a reason that has nothing to do with the code.
+This mattered more than usual here and was NOT waved through on the known
+signature alone: main's four commits touch `packages/engine/src/scheduling/**`
+(P9.5, court windows), so a genuine regression would look identical. Started the
+service (`seazn-env up --label r3 --placement`) and re-ran that suite alone:
+**12/12**. Environmental, confirmed by re-running rather than by recognising the
+shape.
+
+If any pad-facing key ever DOES change on main under a signed-off wave, the
+captures are stale and the sign-off has to be retaken — that is the test to
+apply, not the fact that a rebase was clean.
+
+
+---
+
+## R3 — the two-step goal dock SHIPPED INERT, and unit tests could not see it (2026-08-25)
+
+The wave's one near-miss, and the reason `0b709fadd` exists AFTER the sign-off.
+
+The owner ruled 24 chips in a ~6s window undecidable, so `buildDock` was split
+to ask one question at a time: scorer chips, then assist chips, keyed on
+`held.payload.scorer`. Five unit tests, every one red without the change. **It
+never worked in the browser.** Two independent breaks, either alone sufficient:
+
+- `pad-host.tsx`'s `heldSubmit` captured `payload` at TAP time. A chip mutates
+  the QUEUE entry through `store.mutateHeld` and never that React state, so
+  `buildDock` was re-invoked forever with the ORIGINAL payload.
+- `dockController` closed over the `spec` it was constructed with, and
+  `DetailDock` rebuilds the controller only when `heldId` changes — so even a
+  fresh spec prop was ignored.
+
+**"It uses the same mechanism cricket already uses" was the false premise**, and
+it is what stopped the bug being reasoned out. Cricket's no-ball/plain-single
+dock genuinely works — its variants are chosen at TILE-TAP time, so each is a
+new `heldId` and gets a new controller. Football needed the spec to change
+WITHIN one held entry, which nothing supported.
+
+Three things generalise, and none is "add more unit tests":
+
+1. **A pure builder whose output depends on live state is fully testable AND
+   fully inert at once.** Unit tests call it directly with whatever state they
+   like; they prove the mapping and say NOTHING about re-invocation.
+2. **The test that catches it already existed, unrun.**
+   `scorepad-v3-football.spec.ts` already taps Penalty -> scorer -> assist in
+   sequence and would have failed the moment the split landed. The failure was
+   not missing coverage — it was not re-running the e2e that covers the thing
+   changed, because units were green and a screenshot looked right.
+3. **The gallery cannot see this class of defect.** The capture fixture rosters
+   two or three players a side, where a one-step and a two-step dock render
+   identically. The sign-off's limit 1 above already said the dock's LENGTH was
+   unpictured; this is what that limit costs when it is forgotten.
+
+Fix: `DockController.setSpec(next)` plus a live `current` spec read through
+getters, and a `dockStore` wrapper in `pad-host.tsx` that mirrors the mutation
+into local `held.payload` so the builder is re-invoked with the advanced value.
+
+### Review round 5 (2026-08-25) — CLEAN, plus three latent MINORs
+
+Reviewed `0b709fadd` in place, confirmed at HEAD (v3 870/870, paths resolved
+under the worktree). Verdict CLEAN: 0 blockers, 0 majors. What it confirmed is
+worth as much as what it found — **the new `DetailDock` rerender test drives the
+real component through the real React-dispatcher harness and fails pre-fix**,
+and the pre-existing e2e asserts the DRAINED payload, closing the "mutated a
+copy" loophole that made the original bug invisible.
+
+Three MINORs, none reachable today, all of the form "the NEXT skin pays":
+
+- **`setSpec(next: DockSpec)` takes no `null`.** A skin whose `dock()` goes
+  spec -> null for the SAME `heldId` would freeze the dock on stale chips
+  instead of dismissing it. Neither `buildDock` does this. Widen to
+  `DockSpec | null` when a skin needs it.
+- **`chip.mutate` is applied TWICE independently** — once through `queue.ts`'s
+  `mutateHeld`, once through the local mirror. Correct only because every
+  shipped chip is a pure last-write spread (checked all: football's
+  person/ownGoal/penalty/offence, cricket's batRun/extraRun) and because
+  football's step-gating means step-2 chips do not exist in the DOM until
+  step 1 lands. **Nothing in the `DockChip` contract enforces purity.** A
+  counter-style mutate would diverge between mirror and store.
+- **`controller.setSpec(spec)` is a render-BODY side effect.** Safe today
+  because `DetailDock` is unmemoized and this repo has no React Compiler; it
+  would silently stop working under a future `memo()` with nothing to catch it.
+
+Selection semantics checked and correct: football's ids are namespaced
+(`scorer:`/`assist:`) so no cross-step collision, and `ownGoal`/`penalty` are
+meant to stay selected across the step boundary.
+
+**Non-football impact, confirmed rather than assumed:** the `dockStore` wrapper
+calls `setHeld` on every landed chip mutation for EVERY skin. Cricket's
+`buildDock` output never depends on the mirrored payload (`extraKind` is fixed
+at hold time), so no behaviour change — only more render work.
