@@ -53,6 +53,12 @@ const emailMock = vi.hoisted(() => ({
   registration: vi.fn(),
   forceRegistrationResult: null as boolean | null,
   forceRegistrationError: null as Error | null,
+  // RS006 follow-up: staff alert for a registration refund that FAILS.
+  // Observed the same way as disputeLost above — a bare vi.fn(), asserted
+  // on directly — rather than forwarded to the real implementation, since
+  // these tests only need to prove the call sites TRIGGER it, not exercise
+  // its own template rendering (that lives in registration-refund-alert.test.ts).
+  registrationRefundFailedAlert: vi.fn().mockResolvedValue(true),
 }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
@@ -65,6 +71,7 @@ vi.mock("@/lib/email", async (importOriginal) => {
       if (emailMock.forceRegistrationResult !== null) return emailMock.forceRegistrationResult;
       return actual.sendRegistrationEmail(opts);
     },
+    sendRegistrationRefundFailedAlertEmail: emailMock.registrationRefundFailedAlert,
   };
 });
 
@@ -280,6 +287,7 @@ beforeEach(() => {
   emailMock.registration.mockClear();
   emailMock.forceRegistrationResult = null;
   emailMock.forceRegistrationError = null;
+  emailMock.registrationRefundFailedAlert.mockClear();
 });
 
 afterEach(() => {
@@ -672,6 +680,39 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     const promoted = await loadWithGroup(second.registration.id);
     expect(promoted.status).toBe("pending");
     expect(promoted.promoted_at).not.toBeNull();
+  });
+
+  it("RS006: withdrawCore alerts staff when the pre-lock auto-refund FAILS, but the withdrawal still succeeds", async () => {
+    const { orgId, competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 500)); // paid + payment_intent_id set
+    stripeMock.refundCreate.mockClear();
+    stripeMock.refundCreate.mockRejectedValueOnce(new Error("insufficient funds on connected account"));
+    process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
+    try {
+      const view = await withdrawRegistrationPublic(res.registration.id, res.access_token); // pre-lock auto-refund attempt
+      // Fail-open contract (withdrawCore's own comment above the catch):
+      // the refund failure must not undo the withdrawal.
+      expect(view.status).toBe("withdrawn");
+
+      expect(emailMock.registrationRefundFailedAlert).toHaveBeenCalledTimes(1);
+      const args = emailMock.registrationRefundFailedAlert.mock.calls[0]![0];
+      expect(args.to).toBe("ops@seazn.test");
+      expect(args.registrationId).toBe(res.registration.id);
+      expect(args.orgId).toBe(orgId);
+      expect(args.competitionId).toBe(competition.id);
+      expect(args.amountCents).toBe(500);
+      expect(args.currency).toBe(settings.currency);
+      expect(args.paymentIntentId).toContain("pi_test_");
+      expect(args.reason).toBe("insufficient funds on connected account");
+
+      // The refund really never landed — the alert is reporting a REAL gap,
+      // not a false positive.
+      const row = await loadWithGroup(res.registration.id);
+      expect(row.refunded_cents).toBe(0);
+    } finally {
+      delete process.env.STAFF_ALERT_EMAIL;
+    }
   });
 
   it("post-lock withdrawal does NOT auto-refund; manual partial refund works and over-refund 422s", async () => {
@@ -2195,6 +2236,35 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     const row = await loadWithGroup(res.registration.id);
     expect(row.refunded_cents).toBe(500);
     expect(row.group_refunded_cents).toBe(500);
+  });
+
+  it("RS006: confirmPaidRegistration alerts staff when a late-payment refund FAILS", async () => {
+    const { orgId, competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    await withdrawRegistrationPublic(res.registration.id, res.access_token); // pending -> withdrawn, never paid, no refund fires here
+    stripeMock.refundCreate.mockClear();
+    stripeMock.refundCreate.mockRejectedValueOnce(new Error("card declined"));
+    process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
+    try {
+      const session = fakeSession(res.registration.id, 500);
+      await handleRegistrationCheckoutCompleted(session); // late payment on an already-withdrawn reg -> refund attempted -> fails
+
+      expect(emailMock.registrationRefundFailedAlert).toHaveBeenCalledTimes(1);
+      const args = emailMock.registrationRefundFailedAlert.mock.calls[0]![0];
+      expect(args.to).toBe("ops@seazn.test");
+      expect(args.registrationId).toBe(res.registration.id);
+      expect(args.orgId).toBe(orgId);
+      expect(args.competitionId).toBe(competition.id);
+      expect(args.amountCents).toBe(500);
+      expect(args.currency).toBe(settings.currency);
+      expect(args.paymentIntentId).toBe(session.payment_intent);
+      expect(args.reason).toBe("card declined");
+
+      const row = await loadWithGroup(res.registration.id);
+      expect(row.refunded_cents).toBe(0); // the refund really never landed
+    } finally {
+      delete process.env.STAFF_ALERT_EMAIL;
+    }
   });
 
   it("review (major): a lost dispute accumulates via dispute.amount and never regresses the cart total", async () => {

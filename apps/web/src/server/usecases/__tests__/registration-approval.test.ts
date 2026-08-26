@@ -23,6 +23,20 @@ const stripeMock = vi.hoisted(() => {
 });
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
+// RS006 follow-up: observe the staff refund-failed alert without touching
+// the rest of the email module (send() is a no-op without RESEND_API_KEY
+// either way, same reasoning as registrations.test.ts's own emailMock).
+const emailMock = vi.hoisted(() => ({
+  registrationRefundFailedAlert: vi.fn().mockResolvedValue(true),
+}));
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return {
+    ...actual,
+    sendRegistrationRefundFailedAlertEmail: emailMock.registrationRefundFailedAlert,
+  };
+});
+
 import { sql, statementCount } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { seedRegistration } from "@/server/usecases/__tests__/_registration-fixtures";
@@ -54,6 +68,7 @@ beforeEach(() => {
     url: "https://checkout.stripe.test/session",
   });
   stripeMock.refundCreate.mockReset().mockResolvedValue({ id: "re_test_1" });
+  emailMock.registrationRefundFailedAlert.mockClear();
 });
 
 // ---------------------------------------------------------------------------
@@ -372,6 +387,55 @@ describe.skipIf(!HAS_DB)("reject/approve on a paid-awaiting-approval entry", () 
     const [row] = await sql<{ refunded_cents: number }[]>`
       select refunded_cents from registrations where id = ${regId}`;
     expect(row!.refunded_cents).toBe(1000);
+  });
+
+  it("RS006: rejectRegistration alerts staff when the refund FAILS, but the reject still succeeds", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, {
+      entrant_kind: "individual", fee_cents: 1000, payment_method: "stripe", approval: "manual",
+    });
+    await sql`update organizations set stripe_charges_enabled = true where id = ${orgId}`;
+    const submitted = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [{ division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Paid Reviewee" }], answers: {} }],
+      },
+    );
+    const regId = submitted.entries[0]!.registration_id;
+    await sql`update registrations set status = 'paid' where id = ${regId}`;
+    await sql`update registration_groups set payment_intent_id = 'pi_test_fake' where id = ${submitted.group_id}`;
+    const [groupRow] = await sql<{ currency: string }[]>`
+      select currency from registration_groups where id = ${submitted.group_id}`;
+
+    stripeMock.refundCreate.mockRejectedValueOnce(new Error("connected account restricted"));
+    process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
+    try {
+      const rejected = await rejectRegistration(owner, regId);
+      // Same fail-open contract as withdrawCore (rejectRegistration's own
+      // comment above the catch): the refund failure must not undo reject.
+      expect(rejected.status).toBe("rejected");
+
+      expect(emailMock.registrationRefundFailedAlert).toHaveBeenCalledTimes(1);
+      const args = emailMock.registrationRefundFailedAlert.mock.calls[0]![0];
+      expect(args.to).toBe("ops@seazn.test");
+      expect(args.registrationId).toBe(regId);
+      expect(args.orgId).toBe(orgId);
+      expect(args.competitionId).toBe(competition.id);
+      expect(args.amountCents).toBe(1000);
+      expect(args.currency).toBe(groupRow!.currency);
+      expect(args.paymentIntentId).toBe("pi_test_fake");
+      expect(args.reason).toBe("connected account restricted");
+
+      const [row] = await sql<{ refunded_cents: number }[]>`
+        select refunded_cents from registrations where id = ${regId}`;
+      expect(row!.refunded_cents).toBe(0); // the refund really never landed
+    } finally {
+      delete process.env.STAFF_ALERT_EMAIL;
+    }
   });
 
   it("approveRegistration refuses an already-refunded registration", async () => {

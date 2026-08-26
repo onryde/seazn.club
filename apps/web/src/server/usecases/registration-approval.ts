@@ -32,6 +32,7 @@ import {
   clearExpiresIfNoLongerNeeded,
   stripeRefund,
   notifyRefund,
+  maybeAlertRegistrationRefundFailed,
   type RegistrationWithGroupRow,
   type RegistrationSettingsRow,
 } from "./registrations";
@@ -257,7 +258,7 @@ export async function rejectRegistration(
         }, auth.userId);
         const refundCtx = await divisionCtx(sql, result.row.division_id);
         notifyRefund(result.refundable, refundCtx, remaining);
-      } catch {
+      } catch (err) {
         // Same fail-open contract as withdrawCore: a refund failure must not
         // undo the reject decision — surfaces on the organiser console
         // (rejected + refunded_cents < amount_cents).
@@ -265,6 +266,15 @@ export async function rejectRegistration(
           registration_id: regId,
           mode: "reject",
         }, auth.userId);
+        await maybeAlertRegistrationRefundFailed({
+          registrationId: regId,
+          orgId: auth.orgId,
+          competitionId: result.competitionId!,
+          amountCents: remaining,
+          currency: result.refundable!.currency,
+          paymentIntentId: result.refundable!.payment_intent_id,
+          reason: err instanceof Error ? err.message : String(err),
+        });
       }
     }
   }

@@ -31,6 +31,7 @@ import {
   sendRefundIssuedEmail,
   sendDisputeAlertEmail,
   sendDisputeLostEmail,
+  sendRegistrationRefundFailedAlertEmail,
 } from "@/lib/email";
 import type { RegistrationEmailArgs } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
@@ -2193,11 +2194,20 @@ async function confirmPaidRegistration(
     }, null);
     const ctxLate = await divisionCtx(sql, outcome.reg.division_id);
     notifyRefund(outcome.reg, ctxLate, outcome.reg.amount_cents);
-  } catch {
+  } catch (err) {
     await audit(sql, outcome.competitionId, outcome.reg.org_id, "registration.refund_failed", {
       registration_id: regId,
       mode: outcome.kind,
     }, null);
+    await maybeAlertRegistrationRefundFailed({
+      registrationId: regId,
+      orgId: outcome.reg.org_id,
+      competitionId: outcome.competitionId,
+      amountCents: outcome.reg.amount_cents,
+      currency: outcome.reg.currency,
+      paymentIntentId: outcome.intent,
+      reason: errText(err),
+    });
   }
 }
 
@@ -2931,6 +2941,61 @@ export function notifyRefund(reg: RegistrationWithGroupRow, ctx: DivisionCtx, am
   }).catch(() => {});
 }
 
+/** Plain string for a caught refund error — never rendered to a customer,
+ *  only into the staff alert body/log below. */
+function errText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+/**
+ * Best-effort staff alert (this task's gap): a registration refund FAILED,
+ * so the organiser now owes a registrant money that never moved.
+ * `registration.refund_failed` (the audit call every caller keeps making
+ * right alongside this) is written and never read outside tests — without
+ * this, the failure is invisible until the registrant complains.
+ *
+ * NEVER THROWS, and gated on STAFF_ALERT_EMAIL before anything else — the
+ * same discipline as maybeAlertOrgRepriceFailed (billing-events.ts) /
+ * maybeAlertOrgAllowance (extra-orgs.ts), which this deliberately mirrors.
+ * Every call site sits on a refund's OWN failure path, so an alert that
+ * threw would turn "a refund failed" into "the webhook/request fails and
+ * retries forever" — telemetry strictly worse than the fault it reports.
+ * Awaited rather than fire-and-forget: this path is rare, nothing here is
+ * user-facing latency a registrant/organiser is waiting on, and a floating
+ * promise cannot be tested honestly.
+ *
+ * Goes to the PLATFORM OPERATOR only (owner ruling) — never the organiser or
+ * the registrant. The usual causes (a restricted connected account, a
+ * reversed transfer with no headroom, a disconnected destination) are
+ * Connect/platform-level and not something an organiser can act on;
+ * alerting them would produce alarm with no remedy. An organiser-facing
+ * console surface is out of scope here.
+ *
+ * Exported so the never-throws contract can be tested DIRECTLY rather than
+ * through a caller's own catch, which would hide a missing wrapper.
+ */
+export async function maybeAlertRegistrationRefundFailed(opts: {
+  registrationId: string;
+  orgId: string;
+  competitionId: string;
+  amountCents: number;
+  currency: string;
+  paymentIntentId: string | null;
+  reason: string;
+}): Promise<void> {
+  try {
+    const alertTo = process.env.STAFF_ALERT_EMAIL;
+    if (!alertTo) return;
+    await sendRegistrationRefundFailedAlertEmail({ to: alertTo, ...opts });
+  } catch (err) {
+    log.error(
+      { registrationId: opts.registrationId, orgId: opts.orgId, err },
+      "registrations: refund-failed alert failed",
+    );
+  }
+}
+
 async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | null): Promise<void> {
   if (reg.status === "withdrawn") return; // idempotent
   // RULING A (RS002 W5 review, MAJOR): rejected is terminal from every
@@ -3042,13 +3107,22 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
         stripe_refund_id: refund.id,
       }, actorId);
       notifyRefund(locked, ctx, remaining);
-    } catch {
+    } catch (err) {
       // Refund failure must not undo the withdrawal — surfaces on the
       // organiser console (withdrawn + refunded_cents < amount_cents).
       await audit(sql, ctx.competition_id, ctx.org_id, "registration.refund_failed", {
         registration_id: reg.id,
         mode: "auto",
       }, actorId);
+      await maybeAlertRegistrationRefundFailed({
+        registrationId: reg.id,
+        orgId: ctx.org_id,
+        competitionId: ctx.competition_id,
+        amountCents: remaining,
+        currency: locked.currency,
+        paymentIntentId: locked.payment_intent_id,
+        reason: errText(err),
+      });
     }
   }
 }
