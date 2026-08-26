@@ -1514,6 +1514,71 @@ direction, restore. That direction is the one R2 shipped past.
 
 ---
 
+## Task N: Smoke both deciders (owner ruling 2026-08-26 — NOW, not R8)
+
+`_RULES.md` §5 wants all four test types per wave. R8 already owes cricket AND football
+smoke by name; deferring the same debt a second time is drift, not precedent. Owner ruled:
+add it here.
+
+**Files:** `scripts/smoke.ts`
+
+- [ ] **Step 1: Read how an existing suite is structured** — follow `playerStatsSuite`'s
+  shape (added by S8b, real HTTP, real numbers). Do not invent a second convention.
+- [ ] **Step 2: A cricket super-over check.** Seed a tie with `superOver: true`, post two
+  `cricket.superover.ball` events, and assert over real HTTP that the state's
+  `superOver.innings[0].runs` matches and `phase === "super_over"`. The point is that a
+  DEPLOYED build can reach and hold the decider, not that the skin renders.
+- [ ] **Step 3: A football shoot-out check.** Level at FT with `shootout: true`, post four
+  kicks, assert the summary headline carries the pens tally and that an out-of-turn kick is
+  refused with `INVALID_EVENT`.
+- [ ] **Step 4: Note the local gate.** Smoke's AI section is gated off locally; say which
+  checks actually ran rather than implying a full pass.
+
+---
+
+## Task O: The decided sentence must be LIVE (owner ruling 2026-08-26 — must-have)
+
+Task G shipped it SSR-computed, so a spectator watching a fixture sees the score change but
+NOT "won 3–0 on penalties" until they reload. Owner ruled that unacceptable: the score is live,
+so the sentence must be too.
+
+**The obstacle, measured:** `LiveScore` is a client component with ZERO i18n, and its route has
+no `DictProvider`. That is why Task G computed the sentence server-side.
+
+**Recommended shape — templates as props, not a provider.** The server component already
+localises; have it pass the localised TEMPLATES down (e.g. `"{winner} won {score} on penalties"`,
+one per method, plus the tie string), and let the client interpolate from the live `outcome` as it
+arrives. No `DictProvider` on the route, no client-side dictionary, and it works live. Verify this
+against how other client components on public routes receive copy before committing to it —
+if there is an established pattern, follow that instead.
+
+- [ ] **Step 1: Confirm the realtime payload actually carries `outcome` and `method`.** If it
+  carries only the summary, this task is blocked on widening that payload — say so rather than
+  faking it from the headline string.
+- [ ] **Step 2: Reuse `decidedOutcomeText`** (`lib/scoring-vocab.ts`) — Task G's single
+  resolver. Do NOT write a second copy for the client; that is the fork this wave already
+  removed from football's tally.
+- [ ] **Step 3: e2e proves it LIVE** — open the fixture, post the deciding event from another
+  context, and assert the sentence appears WITHOUT a reload. An assertion after a reload proves
+  the thing that already worked.
+
+---
+
+## Task P: Finish the fixture page's contrast (owner-approved scope)
+
+Six remaining `text-slate-400` in `fixture-console.tsx`: `:452` muted paragraph, `:614` event
+count, `:618` empty state, `:651` recorder name, `:657` timestamp, and the `:259`/`:261` status
+chips. Same file Task G already touched, same computed-ratio test already extended — marginal cost.
+
+**The status chips need individual judgment, not a blanket swap.** They are `text-slate-400` on
+`bg-slate-100`, a DIFFERENT pair from white, and "abandoned"/"cancelled" may be a deliberate
+muted-inactive signal. Compute each ratio against its real background and say what you decided.
+
+**Out of scope, route to R7:** `text-slate-400` also appears in ~6 other `components/v2` panels.
+R7 owns console chrome; fixing them here turns this into a chrome wave.
+
+---
+
 ## Wave gate
 
 Run every item; paste the numbers rather than describing them.
@@ -1525,7 +1590,7 @@ Run every item; paste the numbers rather than describing them.
 - [ ] `npm run openapi:gen` if any api-v1 zod moved
 - [ ] `git status --porcelain` empty
 - [ ] e2e: both scorepad v3 specs, plus the seven-width matrix, against a prod build on `localhost` with `E2E_PROD_TARGET=1`
-- [ ] Smoke: `scripts/smoke.ts` — R8 already owes cricket and football smoke; if this wave defers again, say so in the PR body and name R8
+- [ ] **Task N done** — smoke covers both deciders (owner ruled NOT deferred to R8)
 - [ ] axe per skin on the four new states
 - [ ] Screenshots 320 / 768 / 1280, no horizontal scroll, 44px targets
 - [ ] Gallery AFTER artifact published, presented as pairs against the Task A before-captures
