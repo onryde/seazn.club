@@ -21,8 +21,8 @@ one PR per wave, visual sign-off gate on each).
 | R2 | `R2-cricket.md` + plan `docs/superpowers/plans/2026-08-16-scorepad-v3-r2-cricket.md` | R1 | **MERGED #599 `5885952f`** (2026-08-17) — visual sign-off given (see the sign-off section below, incl. the caveat that the reviewed captures predate `072656b4`'s three restored capabilities). Pre-merge state, kept for the record: worktree `.claude/worktrees/r2-cricket`, branch `feat/scorepad-v3-r2-cricket`, HEAD `b45f77a0`, rebased onto main `252a073d`. Gate: unit 8155/8227 (the 4 failures are `schedule-build-honours-locks`, REPRODUCED IDENTICALLY on `origin/main 252a073d` in a throwaway worktree with its own `pnpm install` — pre-existing, not this wave), `turbo run typecheck --force` 2/2 tasks 0 errors, `turbo run lint --force` 0 errors / 77 warnings (was 78; no v3 path warns), v3 suites 300/300 across 15 files, cricket e2e + converted specs green, seven-width matrix 9/9, gallery 12/12 sports with 0px overflow at 320. Sign-off sheet published (15 cricket captures, 5 states × 3 widths). **NOT MERGEABLE until the owner rules the three decisions below and the verdicts are recorded here.** |
 | R2b | `R2b-cricket-over-by-over.md` + plan `docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-cricket-over.md` | R2 (MERGED, so unblocked) | **MERGED #610 `78191611a`** (tip `896c8e608`, 2026-08-18) — approval-on-merge, see the sign-off section below. Pre-merge state, kept for the record: **IN FLIGHT** 2026-08-17 — worktree `.claude/worktrees/r2b-cricket-over`, branch `feat/scorepad-v3-r2b-cricket-over` off `5885952f`. Both of the brief's open questions are RULED (see the R2b section below); the first turned out to be answered by the engine rather than by preference. Original row text, still accurate on the premise: cricket needs THREE granularities: innings totals, **over-by-over (runs + wickets)**, ball-by-ball. **Over-by-over ALREADY EXISTS in the engine** and v1 exposed it: it is `cricket.innings.summary` with **`partial: true`** (`cricket.ts:225,230-237`) posted once per over, NOT a separate event type. An earlier draft of this row claimed it never existed, off one negative grep for a `cricket.over` event that never needed to exist — wrong, and corrected. So: **no new event, no schema change, no golden re-baseline, no band decision** (already band 0/free; the ladder stays closed 0–3). The real gap is a PAD one — the v3 skin declares no tile for it, so a scorer must open "More" and scroll a generic form once per over. A pad wave, not an engine wave |
 | R2c | `R2c-candidate-narrowing.md` + design `R2c-task1-design.md` | R2b (MERGED, so unblocked) | **MERGED #614 `ca3a4357a`** (tip `3eda8a0ff`, 2026-08-18) — approval-on-merge, see the R2c sign-off section below; three screens (`08-bowlerpicker`, `09-retiresheet`, `10-reviewblocked`) carry NO individual verdict and are owed to R8's closing walkthrough. Pre-merge state, kept for the record: worktree `.claude/worktrees/r2c-candidates`, branch `feat/scorepad-v3-r2c-candidate-narrowing` off `main` `7023502a3`. Task 1 (the chassis capability) is DESIGNED and owner-approved before code — see the R2c section below. Closes C1/C2/C3 from `R2b-remaining.md` §C, the three surviving instances of "the pad offers what the engine will refuse" |
-| R3 | `R3-football.md` | R1 | **SIGNED OFF + PR RAISED** 2026-08-25 — worktree `.claude/worktrees/r3-football`, branch `feat/scorepad-v3-r3-football`, 51 commits rebased onto `origin/main`. All tasks A-F committed; five review rounds run and closed (round 5 CLEAN). Owner visual sign-off **15/15 APPROVE**, recorded below — that record is the merge gate, not the sheet. Do not treat any count in this row as a gate: the main thread re-runs the boundary gate itself. One thing NOT to re-derive: the two-step goal dock shipped INERT past unit tests and the gallery; see the inert-dock section at the end of this file before touching `DetailDock`/`pad-host` docks. |
-| R4 | `R4-tennis.md` | R1 | TODO |
+| R3 | `R3-football.md` | R1 | **MERGED #643 `bcc726300`** (2026-08-25). Pre-merge state, kept for the record: **SIGNED OFF + PR RAISED** 2026-08-25 — worktree `.claude/worktrees/r3-football`, branch `feat/scorepad-v3-r3-football`, 51 commits rebased onto `origin/main`. All tasks A-F committed; five review rounds run and closed (round 5 CLEAN). Owner visual sign-off **15/15 APPROVE**, recorded below — that record is the merge gate, not the sheet. Do not treat any count in this row as a gate: the main thread re-runs the boundary gate itself. One thing NOT to re-derive: the two-step goal dock shipped INERT past unit tests and the gallery; see the inert-dock section at the end of this file before touching `DetailDock`/`pad-host` docks. |
+| R4 | `R4-tennis.md` | R1 | **IN FLIGHT** 2026-08-25 — worktree `.claude/worktrees/r4-tennis`, branch `feat/scorepad-v3-r4-tennis` off `origin/main` `9080cb959`. Four owner rulings taken before any code (R4-1..R4-4 below); six false premises found in the brief and the register, one of which (D-2) removes the programme's only engine item as written. |
 | R5 | `R5-racquet-split.md` | R1 | TODO |
 | R6 | `R6-period-pair.md` | R1 | TODO |
 | R7 | `R7-universal-console.md` | R1 (chrome parts benefit from R2–R6 but do not block) | TODO |
@@ -1807,3 +1807,387 @@ override-only to plan-granted so `GET .../entitlements` would carry it).
 Whoever makes that change owns adding the smoke check in the same PR —
 recorded here so the gap is not silently rediscovered, or silently skipped,
 once that surface exists.
+
+---
+
+## R4 (2026-08-25) — owner rulings, taken before any code
+
+Scoping session, all four taken against RE-PINNED facts on `origin/main`
+`9080cb959`, not the brief's pre-R1 line numbers. Two of the four were put to
+the owner as A/B choices and came back as "what do you recommend" — the
+recommendation and the reason it was taken are recorded here in full, because
+a ruling whose reasoning is not written down gets re-litigated by the next
+session.
+
+| # | Decision | Ruling |
+|---|---|---|
+| R4-1 | The brief's `Fault/Let/Code/Retire` minor row — but the engine has no fault and no let event, and §9 bars new event types | **No new events. Drop Fault and Let as tiles; ship `ace / double_fault / winner / ue` as DOCK CHIPS on the point.** `NestedPointMeta.kind` (`nested/kernel.ts:200-205`) already carries exactly those four and is already optional on every `tennis.point`. See the false premise below — this is not a workaround, it is the surface the payload was built for |
+| R4-2 | Retire: `core.forfeit` folds (`kernel.ts:1899`) but tennis's `padSpec` declares no such action, and D-12 routes Forfeit/Abandon to console chrome | **No Retire tile.** `fixture-console.tsx:700-728` already ships a Forfeit control with a reason prompt, on the same page as the pad, so the tile would be a SECOND entry point to a capability that already exists one level up — the two-divergent-entry-points defect R2c closed for `cricket.retire`, rebuilt deliberately. R4 adds the **Interruption tile** (medical/heat/toilet) instead, which is what actually precedes a retirement and is today reachable only by scrolling a generic drawer form |
+| R4-3 | §9.1's engine item: the reader exists but needs a `serviceTurn`, derivable from `games`/`serving`/`tbFirstServer` | **Additive engine export**, not a skin-side derivation. One source of truth for the ITF rotation; a pad copy would be the placer/verifier fork this repo keeps paying for, and R5 (badminton/tabletennis doubles) inherits whichever answer this wave gives. Engine touched ⇒ conformance + golden replay + engine lint owed |
+| R4-4 | Tennis's `--sport-*` palette (R3-6 obligation) | **A — Hardcourt.** board `#0b2545`, board-2 `#13315c`, ink `#f4f7fb`, led `#d9f000`, caution `#f2a900`, dismissal `#c1272d`. `led` is spent on the serving player's pip and the strip digits and nothing else. Chosen over clay (its second colour IS white, so the pip has nothing to be, and cream+terracotta is one of the three generated-design default clusters) and over grass (Wimbledon purple measures **1.4:1** on the green, so the signature colour could never appear, and the board collides with football's floodlit turf in the same sign-off sheet). Comps: <https://claude.ai/code/artifact/7ee55396-2efd-42eb-8d66-e12c44f36db8> |
+
+**Recorded with R4-4, so it is not discovered at sign-off:** tennis's code
+violation ladder has FOUR steps (`warning → point_penalty → game_penalty →
+default`, `kernel.ts:250-255`) against TWO colour tokens. The ends take
+`caution` and `dismissal`; the two middle steps read as words in the sanction
+sheet and carry no colour.
+
+## R4 — false premises found (verified on `origin/main` `9080cb959`, before any code)
+
+Six. Two of them change what the wave IS, rather than how it is built.
+
+- **D-2's "`pairOrder` unread by the nested kernel (S3 seam left inert)" is
+  FALSE, and it is the programme's only engine item.** `expectedDoublesServer`
+  exists IN the nested kernel (`nested/kernel.ts:438-444`) and reads `pairOrder`
+  through `expectedPairServerOf` (`sports/squad-state.ts:130-137`). Both dossier
+  rows already describe it as shipped (`tennis/DOMAIN.md:65`,
+  `setbased/DOMAIN.tabletennis.md:41`). What is actually missing is a CALLER: the
+  function has zero production call sites, and its `serviceTurn` argument — which
+  service turn the side is on — has no reader anywhere. So §9.1 as written ("the
+  nested kernel consumes `pairOrder`") is already done, and the real work is the
+  `serviceTurn` derivation plus the pad that asks. R4-3 rules where that lives.
+  The seam was inert in the "no consumer" sense, never in the "not implemented"
+  sense, and the distinction decides how much engine work this wave carries.
+- **The brief's minor row is half unrepresentable.** Tennis declares exactly five
+  event types (`kernel.ts:1766-1772`): `point`, `set_summary`, `sanction`,
+  `interruption`, `game.award`. There is no fault event and no let event, and
+  §9.4 bars new ones. A Fault tile and a Let tile would dispatch nothing.
+- **…and the fix was already in the payload.** `NestedPointMeta.kind` is
+  `ace | double_fault | winner | ue` (`kernel.ts:200-205`), optional on every
+  point, and `NestedPersonTally` already folds ace and double-fault counts
+  crediting the SERVER (`kernel.ts:447-449`). The v2 pad cannot send any of it —
+  its one-tap Home/Away posts `{by}` alone (`skins/tennis-skin.tsx:291-323`) — so
+  tennis has a DECLARED stat model that is INERT from the pad. R4-1 makes it
+  live, and that is more product value than the two tiles it replaces. A
+  first-serve fault and a let genuinely have no representation and no stat: they
+  are "the point has not happened yet" states, and a per-serve model (first-serve
+  %) is out of scope by §9.
+- **D-16 is a DEAD-END TAP, not a layout complaint.** The register calls it
+  "set-score entry offered mid-game (tennis at 30–30)". `applySetSummary` already
+  refuses it — `if (setInProgress(state)) invalid("this set is being scored
+  point-by-point — a set summary is not allowed for it")` (`kernel.ts:1053-1055`)
+  — so today's tile 422s. It is the same coarse/fine mutual exclusion cricket has,
+  scoped PER SET rather than per innings, so a match may legally mix summary sets
+  and point-scored sets. Closing D-16 is therefore `refusedEventTypes` +
+  tile gating, and the copy must name the real cause (R2b's binding "never show a
+  generic error where the exact reason is known").
+- **D-3's root cause is a UNIT MISMATCH, and it is not in the engine.**
+  `positions.lineup.size = 1` for tennis (`sports/tennis/tennis.ts:10-13`) is one
+  nominated UNIT per side — correct, and the comment says so. The editor then
+  compares it against a count of PEOPLE: `startingCount` counts slots
+  (`lineup-editor.tsx:224`) and renders `lineup.starting {n}/{total}` against the
+  raw `lineupSize` (`:267`). A doubles pair is 2 people in 1 unit → "2/1". The
+  file already computes `pairShaped = isPairShaped(side.kind)` (`:217`) for a
+  different purpose, so the fix is one expression and one counter, exactly as the
+  brief predicted. Not the lineup editor's data model, not the engine.
+- **Tennis already declares real `fidelityEntitlements`.** `{3:
+  "scoring.rally_by_rally"}` (`kernel.ts:1478-1485`), so the recording chip has a
+  real band to gate and the R2 standing item does not bite here. Band 2 is
+  deliberately unoccupied for this kernel; bands are `set_summary` 0,
+  `sanction`/`interruption` 1, `point`/`game.award` 3. **Consequence worth stating
+  before it is discovered on a screenshot:** below band 3 the halves are not
+  tappable at all, because the point event is band 3 — a band-0 org's tennis pad
+  offers set summaries and nothing else. That is coherent (it is the coarse lane),
+  but it means tap model S is invisible to most orgs and the gallery must capture
+  a band-3 fixture or it pictures a board nobody can tap.
+- **The chassis already has tap model S and nobody has used it.**
+  `ScorebugHalf.tappable` + `tapEvent` exist (`v3/types.ts:91-92`), are enforced
+  by `assertScorebugSpec` (`:1050-1058`, tappable REQUIRES `hintKey` + `tapEvent`),
+  and `scorebug.tsx:150-155` already renders a tappable half as a real `<button>`.
+  Neither cricket nor football sets it. R4 is the first consumer, so no chassis
+  work is owed for the tap model itself — but R4 is also the first wave that can
+  observe defects in that path, and it inherits the R3 lesson about being the
+  first real user of a chassis primitive (`SwapSheet` surfaced five).
+
+### R4 — the doubles serve pip is UNTESTABLE until the e2e seeder can declare a pair order (2026-08-25)
+
+Found while scoping the e2e/gallery task, before that task was dispatched.
+Generalises past tennis: **R5 inherits it**, since badminton and table-tennis
+doubles reuse this exact pattern.
+
+`expectedDoublesServer` returns `null` unless the team sheet declared a
+`pairOrder`, and that is correct — `LineupSlot.pairOrder` is
+`.positive().optional()` (`core/types.ts:222`) and `lineup.ts:354` omits the key
+when absent, so an undeclared partner is filtered OUT of `pairOrderOf` rather
+than silently defaulting to 0. The documented "empty rather than guessing"
+posture holds end to end; this was checked rather than assumed, because a
+nullable column plus a `!== undefined` filter is exactly the shape that usually
+does NOT hold.
+
+The gap is on the test side: `RosterSlotSpec` (`e2e/helpers.ts:1015-1025`) has
+no pair-order field and `seedRosteredFixture`'s lineup PUT (`:1147-1153`) never
+sends one. So **every doubles fixture in e2e and in the gallery seeds a pair
+with no declared order**, and with it:
+
+- the `tennis-doubles` gallery screens — the ones the brief requires the owner
+  to verdict BY NAME as their stated pain — would render no serve pip at all.
+  The wave's headline feature would be absent from its own sign-off sheet and
+  would read as a defect rather than as missing fixture data.
+- the doubles serve-dot e2e would be vacuous.
+
+This is the R2c lesson in a new place: there, the gallery could not SEE the
+wave's change because no state opened the picker; here, the fixture cannot
+PRODUCE the change at all. A recapture fixes neither.
+
+The API already accepts it (`schemas.ts:941`, `pair_order` nullish) and the
+lineup editor already sends it, so the fix is three lines in the seeder and it
+lands BEFORE the e2e and gallery work rather than inside it. Spread-omit the
+field rather than sending an explicit `null`, so individual-entrant fixtures
+keep declaring nothing.
+
+### R4 — two more owner rulings, taken mid-wave off a review finding (2026-08-25)
+
+| # | Decision | Ruling |
+|---|---|---|
+| R4-5 | The v3 point dock records the shot type but not WHO won the point | **Scorer chips in doubles; auto-set in singles.** One chip per player of the winning pair, as the SECOND dock question after the shot type — football's goal-scorer dock, which is where `DockChip.labelText` came from. Singles sets `scorer` at tap time with no chip, because with one player there is nothing to choose |
+| R4-6 | `meta.receiverSide` (deuce/ad) is lost with it | **Stays out, knowingly.** It only applies at a no-ad deciding point, the fold never reads it, and the ~6s dock window is tightest on exactly that point. Dropped deliberately and recorded here, not discovered later |
+
+**The regression these answer, and why it is not what the review first called
+it.** The review reported that v2's tennis TILE posted `meta.receiverSide`.
+It did not — `git grep -a receiverSide` over `skins/tennis-skin.tsx` returns
+nothing. The real mechanism is one level up and costs more: `padSpec` declares
+TWO point actions sharing ONE wire type (`nested/kernel.ts:1422-1440`) — a bare
+`pointAction` and a `pointAttributedAction` carrying `meta.kind`,
+`meta.receiverSide` and person attribution for `server` AND `scorer`. Both were
+reachable as generic More-sheet forms in v2. Dedicating `tennis.point` in v3
+removes BOTH, and the v3 dock replaced only `meta.kind`.
+
+So the loss is not a niche enum. It is `scorer`: **in doubles, which partner
+won the point became unrecordable**, and `NestedPersonTally.points` folds
+exactly that field — leaving a doubles league's per-player point counts empty
+on the wave whose headline is that per-player tennis stats finally work from
+the pad. Singles was never affected (one player, never ambiguous).
+
+Worth generalising for R5, which converts three more sports onto the same
+chassis: **a v2 sport's capability inventory is not its skin's tile list.**
+Anything `padSpec` declared was reachable through the generic form, so
+dedicating a wire type silently retires every OTHER declared action sharing
+that type. Diff the padSpec actions by TYPE before flipping a registry entry,
+not the v2 skin's buttons.
+
+### R4 — what the two review passes found, and what they did not (2026-08-25)
+
+Two reviewers, disjoint lenses (correctness/contracts; product value/coverage).
+Both returned NEEDS FIXES. Recorded because the SHAPE of the result matters as
+much as the list.
+
+**Everything they blocked on is e2e and gallery — the one task not yet started
+— and nothing in the engine or the pad's contracts.** Verified clean by hand-
+derivation plus JSON-confirmed runs: `serveContext`/`completedGames` across
+game, tie-break and match-tie-break boundaries; the stale-serve omission
+(`hasStaleServeInfo`) proven against real folds rather than a fixture; the
+`nested` barrel exporting readers and no mutators; and `dedicatedEventTypes`'s
+tapModel-S widening proven for cricket and football through their OWN
+`buildScorebug`, not a stand-in.
+
+The blockers, in the order they hurt:
+
+1. **The sign-off gate cannot run at all.** Both `gallery.capture.ts` tennis
+   entries `scoreOne` by clicking `getByRole("button", {name: "Home"})`; a v3
+   half's accessible name is the PLAYER'S NAME plus hint text
+   (`scorebug.tsx:159`), so the script errors before capturing a single
+   screenshot. The owner would be asked to verdict a wave with zero pictures.
+2. **No `EXTRA_STATES` for tennis anywhere**, so even a fixed `scoreOne` never
+   opens the doubles serve pip or the sanction sheet — the wave's headline
+   feature would have no screen to sign off, which is R2c's standing
+   instruction ignored one wave later.
+3. **Three pre-existing e2e specs go red** (`scorepad-skins.spec.ts`,
+   `v6-sports.spec.ts` ×2) on selectors the build spec itself predicted would
+   break and which were then left unfixed. `registry.ts` routes tennis to v3
+   unconditionally — no flag — so whoever opens the PR gets them red in CI.
+4. **Zero tennis e2e exists**, so the dock's advance-on-tap has no
+   browser-level proof. The skin says so in its own source rather than
+   claiming coverage it lacks. This is R3's inert-dock incident with the
+   warning label already attached.
+
+**A process note worth keeping.** One reviewer ended its turn on the line
+"Waiting on the last fork to complete" and reported no findings at all — the
+stall shape where an agent returns `completed` carrying nothing. It had done
+the work; it just never said it. Woken with an explicit "report what you have,
+mark the rest UNANSWERED", it returned eight findings. A review that reports
+nothing is indistinguishable from a review that found nothing, and only one of
+those is safe to act on.
+
+---
+
+## R4 final review (2026-08-26) — two defects the green gate could not see
+
+The branch was already gated green (apps/web 10363/0, engine 4092/0, e2e 39/39,
+seven widths, gallery 12/12) and pushed as PR #649 when a final reviewer was
+scoped at the eight fix commits, `df23e0319`, and the rebase. It came back
+NEEDS FIXES, and following its lead surfaced a second defect it had not seen.
+Both are the same shape, and it is this programme's signature shape: **a test
+and the code it guards, wrong together, agreeing.**
+
+**D-20 — `serveContext` could name a partner off a rotation the fold never
+agreed to.** `bankSet` never advances `state.serving`, so a tier-0
+`*.set_summary` freezes it; the turn walk has no such gap and advances across
+the banked set's game parity. An odd-game summary (6-3, 6-1 — ordinary
+scorelines, not corner cases) desyncs the two permanently, and the composed
+answer pairs a stale side with an advanced turn index.
+
+Ruling **R4-7**: neither derivation is patched to match the other. The walk is
+right about the rotation; `serving` is right about what the fold committed to.
+`serveContext` compares them and reports `serveOrderKnown`, returning
+`personId: null` on disagreement. It is a **drift detector, not a summary-set
+sniffer** — it compares the two derivations rather than scanning history for an
+event type, so a future fold/walk fork trips it too.
+
+The guard is deliberately precise. An EVEN-game summary (6-4, 2-6) leaves both
+derivations in step and still names the partner — that is the common real case
+(a scorer backfilling the sets already played), and a blanket "any summary set
+kills the rotation" would have cost the feature exactly there.
+
+Correcting `state.serving` itself on the summary path is the real underlying
+fix. It moves the public scoreboard's serve indicator, which **ten golden
+streams pin**, so it belongs to its own wave — logged, not silently inherited.
+
+**D-21 — the pad's shim dropped two fields `serveContext` actually reads, and
+the covering test agreed by parity coincidence.** `deriveServeContext` builds a
+`Pick<NestedState, …>` shim; it omitted each closed set's `tb` block, which the
+walk reads to subtract the breaker's banked "+1" game and credit its real ITF
+turns. A 7-6 set therefore looked like 13 standard games, and the pad **named
+the wrong partner from the game after any tie-break** — live on this branch.
+
+The existing tie-break test passed the whole time: the shim's turn 6 and the
+true turn 8 share a parity and select the same player. One more game crosses
+the floor(_/2) boundary. `tbFirstServer` was the second missing field, newly
+read by R4-7's guard; without it the pad reads its own match as desynced for
+half of every tie-break.
+
+**The shim's own doc comment had predicted this precisely** — "a FUTURE kernel
+edit that makes the call graph read a FIFTH field this shim never populates …
+would still type-check and would still throw at render time." It did not throw;
+it silently answered wrong. A hand-copied field list at a module boundary is a
+standing liability, and the comment naming the liability is not a control.
+
+**What actually caught them, in order:** a reviewer told to try to BREAK the
+new code rather than confirm it; then five mutants, each required to be killed
+by a named test. Two of the five survived first time — the `tbFirstServer`
+fallback and the shim field — and each survivor was a genuine coverage hole,
+not a scoring artefact. **A mutant that survives is the finding.**
+
+Owner instruction recorded the same day: **verify every working feature
+VISUALLY, not on green counts.** `11-doublesserve` photographs service turn 0,
+and turn 0 names the right partner under every derivation anyone has shipped,
+correct or not — so the gallery was structurally blind to D-21. Added
+`14-serveafterbreaker`, the game after a closed tie-break, which is the screen
+where a wrong human name appears.
+
+### R4 final review, round two (2026-08-26) — two real, one not
+
+A second `/code-review high` over `main...HEAD` returned three findings. Two
+were real and are fixed here; the third was not, and saying so is part of the
+record — a review's severity claim is a hypothesis, and this programme has now
+had one over-claimed finding in each of its last two rounds.
+
+**D-22 — `walkServe` flipped the serve after a MATCH tie-break unconditionally,
+so the drift detector R4-7 introduced fired on a defect of its own.** ITF Rule
+5b hands the next set to the breaker's first server's opponent, and
+`applyTbPoint` enforces it on the fold side with an unconditional `serving:
+opponent(tbFirstServer)`. That overwrite lives on the ORDINARY-breaker branch
+only. A match tie-break has no next set to hand off to: its branch returns
+straight through `bankSet`, banking the raw point-by-point rotation, which
+flips after every odd point — `ceil(points / 2)` times in total. The walk
+flipped once regardless, so it agreed with the fold only when that count was
+odd. Every doubles match decided 10-1, 10-2, 10-5, 10-6 … reported
+`serveOrderKnown: false` and named nobody for the whole post-match view.
+
+The comment shipped alongside the bug asserted the opposite of the code it sat
+next to ("`applyTbPoint` still applies ITF 5b to `serving` on the closing
+point"). It does not. **A comment that states a cross-module invariant is a
+claim, and nothing type-checks it.**
+
+The test written to catch this pinned 10-0 only — and 10-0 is one of the
+parities where an unconditional flip is accidentally right. The suite was
+green over the defect it was authored for. Replaced with the full 10-0 … 10-8
+table; the unconditional-flip mutant now dies on exactly the four rows the
+reviewer predicted empirically, and nothing else.
+
+**D-23 — the pad inverted ace and double fault on half of every tie-break's
+points, on any fixture with no declared lineup.** `rosterlessServerSide`
+re-derives the serving SIDE for fixtures that can name no server person, and
+excluded the one boundary where `state.serving` runs ahead of the point just
+contested: the game/set close, detected by points reading back (0, 0). Inside a
+breaker `state.serving` also rotates MID-GAME, after every odd point, and a
+breaker at 5-3 is not at (0, 0). So `buildDock` offered `double_fault` where
+`ace` was correct, and the reverse — a wrong serving statistic recorded against
+a person, silently, in the phase of a set where aces decide it.
+
+Corrected rather than withheld: the rotation is a pure function of the point
+count, so the server of the point just played is the current `serving` flipped
+iff an odd number of points have been played. Withholding would have dropped
+the chips for half of every tie-break, which is the feature's best moment.
+
+**NOT a defect — the third finding.** The review reported `tennis.game.award`
+as a live dead-end tap through the More sheet during a breaker, reasoning that
+`buildTiles` withholds the tile, the type therefore drops out of
+`dedicatedEventTypes`, and `moreActions` puts the generic form back. Each step
+is true in isolation and the conclusion is still wrong: `nestedPadSpec`'s
+Award-game panel already carries a `gate` on `state.points.kind`
+(`kernel.ts`), so `buildPadView` never emits the action during a breaker and
+`moreActions` has nothing to offer. Verified against the running production
+build, not argued: with the pad-side refusal deliberately removed and the
+bundle rebuilt, the More sheet during a tie-break still read "Nothing else to
+record here yet."
+
+The pad-side refusal was kept anyway, as a second layer, and the tile's
+condition was extracted into ONE predicate both `buildTiles` and
+`refusedEventTypes` consume — a real drift class removed, since two copies of
+the same boolean is what the finding assumed had already gone wrong. It is
+labelled as defence in depth in the code and is not claimed as a fix.
+
+The hazard behind it IS real, and the second layer is not decorative: with
+BOTH the engine gate and the pad refusal removed, the same capture goes red
+with the sheet reading `More actions / Cancel / Award game`. So
+`16-breakermore` is a screen that can fail, over a mechanism that can happen —
+it is only the single-layer version of the story that was wrong.
+
+**Ruling R4-8**: a review finding is not a defect until the state it describes
+has been reproduced. Two of the three findings here reproduced on the live
+build within one capture each; the third did not, and the layer above it was
+found only by going looking for the reason it did not.
+
+### Cloud review (2026-08-26) — D-24, the guard that suppressed a correct answer
+
+One finding, real, and it was the thing the previous round had deliberately
+left alone. `hasStaleServeInfo` refused whenever ANY `tennis.set_summary` had
+folded, on the reasoning that `bankSet` never advances `state.serving` so the
+serve is "stale BY CONSTRUCTION for the REST of the match". Half right: a
+summary desyncs the fold from the turn walk only when it banks an ODD number
+of games, and R4-7's `serveOrderKnown` already said which.
+
+The cost was not cosmetic. Both callers short-circuited before
+`deriveServeContext` ran, so `buildHalf` stamped no `server`, every later
+`tennis.point` went out unattributed, and `NestedPersonTally` credited no ace
+or double fault again. **A scorer who backfills one already-played set lost
+the wave's headline capability for the rest of the match**, in the most
+ordinary workflow there is.
+
+Two lessons worth keeping apart:
+
+- **A guard that hides a defect looks exactly like a guard that prevents
+  one.** D-20 had "no UI symptom" precisely because this guard was suppressing
+  the whole feature. That absence of symptom was recorded last round as a
+  reason NOT to touch it. It was the defect.
+- **The pad second-guessed the engine after the engine had been taught to
+  answer.** R4-7 built the drift detector specifically so the pad would not
+  have to sniff for event types; the sniffer stayed anyway, coarser and wrong.
+  When a wave adds a precise answer, the imprecise callers it was written for
+  are part of the change.
+
+The covering test used a 6-0 summary — even, therefore derivable — so it
+pinned the over-refusal. Written to match the implementation, not the design.
+
+Singles is not exempt and a mutation test now says so: one player a side makes
+the PERSON unambiguous while the SIDE is still `state.serving`.
+
+`17-serveaftersummary` is the screen, proved red against the pre-fix bundle.
+
+### Merge
+
+Owner instruction 2026-08-26: **"No gaps then CI is green then merge"** — the
+`_RULES.md` §1 visual sign-off gate is satisfied by that instruction rather
+than by per-screen verdicts on the sheet. Recorded here because the rule says
+the gate is the verdicts being recorded in this file, and this is what was
+given in their place.

@@ -51,6 +51,7 @@ import type { AnySportModule, FidelityBand } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import type { SquadState } from "@seazn/engine/core";
 import {
+  buildScorebug,
   buildSheets,
   buildSwap,
   buildTiles,
@@ -149,7 +150,13 @@ function reachIn(s: Situation): Reach {
   // never from a union across phases, which is what this file used to do.
   const entitledBands = entitledBandsFrom(spec.fidelityEntitlements, entitlements);
   const tiles = filterTilesByBand(allTiles, sheets, slots, spec.fidelity, entitledBands);
-  const dedicated = dedicatedEventTypes(tiles, sheets, slots);
+  // R4/tennis widened this with the SCOREBUG, because tap model S makes a
+  // half a real entry point. Football's own scorebug is passed rather than a
+  // fixture: it is a tapModel-T readout that declares no `tappable` half, so
+  // it must contribute nothing — and asserting that through the production
+  // symbol is what proves this wave left football's More sheet alone, instead
+  // of a comment claiming it did.
+  const dedicated = dedicatedEventTypes(tiles, sheets, slots, buildScorebug(view, t));
 
   // A tile the current phase does not declare is not on screen, so nothing it
   // would open is reachable either.

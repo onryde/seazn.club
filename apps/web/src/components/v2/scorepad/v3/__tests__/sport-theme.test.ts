@@ -133,7 +133,11 @@ describe("CRICKET IS UNCHANGED — lock 1: data", () => {
     // `undefined`, not `{}`: React renders an empty style object as a real
     // `style=""` attribute, which would change cricket's own root markup.
     expect(sportThemeStyle("cricket")).toBeUndefined();
-    expect(sportThemeStyle("tennis")).toBeUndefined();
+    // R4: `tennis` USED to stand here as the second unthemed example, and it
+    // is themed now. The stand-in has to be a sport that genuinely has no
+    // palette, or this lock quietly stops asserting anything — `hockey` is
+    // still on the legacy lane with no entry in SPORT_PALETTES.
+    expect(sportThemeStyle("hockey")).toBeUndefined();
   });
 
   it("and NO data-sport-theme either, which is what keeps a sport-scoped CSS rule off it", () => {
@@ -141,9 +145,12 @@ describe("CRICKET IS UNCHANGED — lock 1: data", () => {
     // must agree with it on EVERY key, or a scoped rule fires where the
     // properties were never emitted (or fails to fire where they were).
     expect(sportThemeAttr("cricket")).toBeUndefined();
-    expect(sportThemeAttr("tennis")).toBeUndefined();
+    expect(sportThemeAttr("hockey")).toBeUndefined();
     expect(sportThemeAttr("football")).toBe("football");
-    for (const key of ["cricket", "tennis", "football", "no-such-sport"]) {
+    expect(sportThemeAttr("tennis")).toBe("tennis");
+    // `tennis` stays IN this loop: the pair invariant is the point, and it has
+    // to hold for a themed sport just as hard as for an unthemed one.
+    for (const key of ["cricket", "hockey", "tennis", "football", "no-such-sport"]) {
       expect(
         (sportThemeAttr(key) === undefined) === (sportThemeStyle(key) === undefined),
         `${key}: the attribute and the style disagree about whether this sport is themed`,

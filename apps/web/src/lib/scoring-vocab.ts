@@ -862,6 +862,22 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.tennis.panel.points",
   "pad.tennis.panel.sanctions",
   "pad.tennis.panel.setScore",
+  // R4/tennis (v3 ribbon). Five keys for the FIVE `tennis.*` types the engine
+  // declares (`kernel.ts:1766-1772`) — the brief said four; §9.1's own
+  // false-premises note corrects it, and this skin's ribbon coverage is
+  // complete, same as football's own note states for its nine. Registered
+  // HERE, not only in the dictionaries — `ribbon.ts`'s `buildRibbon` gates its
+  // per-sport lookup on membership in this array, so dictionary copy with no
+  // entry here stays on the generic fallback forever with nothing failing.
+  "pad.tennis.ribbon.point",
+  "pad.tennis.ribbon.set_summary",
+  "pad.tennis.ribbon.sanction",
+  "pad.tennis.ribbon.interruption",
+  "pad.tennis.ribbon.game.award",
+  // R4/tennis — tap model S's own hint. `ScorebugHalf.hintKey` resolves
+  // through this SAME `padLabel()` gate (scorebug.tsx), so an unregistered
+  // key would print its own raw dotted name as the visible hint text.
+  "pad.tennis.scorebug.point.hint",
 
   "pad.volleyball.action.expediteStart",
   "pad.volleyball.action.rally",

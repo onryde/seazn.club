@@ -1043,6 +1043,18 @@ export interface RosterSlotSpec {
    *  existing caller omits this and keeps seeding an all-starting XI,
    *  byte-identical to before this field existed. */
   slot?: "starting" | "bench";
+  /** R4/#tennis — the doubles serve order, `LineupSlot.pairOrder`. Which
+   *  partner of THIS pair was named first, which is a DECLARATION and cannot
+   *  be derived from `order_no` (a five-pair table-tennis tie has five
+   *  first-named players — `sports/squad-state.ts:95-104`).
+   *
+   *  Omit it for a singles or team fixture. Without it `expectedDoublesServer`
+   *  correctly answers `null` for the side, and any assertion about WHICH
+   *  PLAYER is serving is then vacuous — which is exactly what every doubles
+   *  fixture in this file and in `gallery.capture.ts` was before R4. Spread-
+   *  omitted below rather than sent as an explicit `null`, so every existing
+   *  caller keeps declaring nothing and stays byte-identical. */
+  pairOrder?: number;
 }
 
 export interface RosteredFixture {
@@ -1087,6 +1099,14 @@ export async function seedRosteredFixture(
     /** Leave false to stop after `start` — a spec that wants to drive the pad
      *  through `pre → live` itself must NOT have `core.start` already folded. */
     emitCoreStart?: boolean;
+    /** Seed the entrants and their MEMBERS, but declare no fixture LINEUP.
+     *  This is the pad's "rosterless" case and it is a real, common one — a
+     *  club scorer starts a match off two entrant names and never opens the
+     *  lineup editor. `PadHostView.squads` is `initSquads(lineups)`
+     *  (`v3/types.ts`), so no lineup means no on-field players, which is the
+     *  precondition of tennis's own `rosterlessServerSide` fallback. Nothing
+     *  else in the seeded fixture changes. */
+    skipLineups?: boolean;
   },
 ): Promise<RosteredFixture> {
   const kind = spec.entrantKind ?? "team";
@@ -1161,10 +1181,12 @@ export async function seedRosteredFixture(
   const fixtureId = fixtureIds[0]!;
   await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
 
-  for (const [entrantId, roster] of [
-    [homeEntrantId, spec.home],
-    [awayEntrantId, spec.away],
-  ] as const) {
+  for (const [entrantId, roster] of spec.skipLineups
+    ? []
+    : ([
+        [homeEntrantId, spec.home],
+        [awayEntrantId, spec.away],
+      ] as const)) {
     const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/lineups/${entrantId}`, "PUT", {
       slots: roster.map((s, i) => ({
         person_id: personIds[s.fullName],
@@ -1172,6 +1194,7 @@ export async function seedRosteredFixture(
         order_no: i + 1,
         roles: [],
         ...(s.positionKey ? { position_key: s.positionKey } : {}),
+        ...(s.pairOrder === undefined ? {} : { pair_order: s.pairOrder }),
       })),
     });
     if (res.status >= 300) {

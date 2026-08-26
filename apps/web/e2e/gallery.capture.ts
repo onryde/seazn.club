@@ -101,11 +101,93 @@ const EXTRA_STATES = [
   "08-bowlerpicker",
   "09-retiresheet",
   "10-reviewblocked",
+  // R4 (2026-08-25) — tennis's tap model S. Same reasoning as R2c's three
+  // above, restated because it keeps recurring: none of the five shared
+  // STATES opens a sheet or a dock, and tennis's own headline feature (the
+  // per-player point dock, R4-1/R4-5) and its named sign-off pain (the
+  // doubles serve pip, `_INDEX.md`'s "the doubles serve pip is UNTESTABLE
+  // until…") are BOTH invisible without a dedicated capture.
+  "11-doublesserve",
+  "12-pointdock",
+  "13-sanctionsheet",
+  // R4 review follow-up (2026-08-26) — `11-doublesserve` photographs service
+  // turn 0 only, and turn 0 names the right partner under every derivation
+  // anyone has shipped, correct or not. The rotation's real failure point is
+  // the game AFTER a closed tie-break, where a derivation that has lost the
+  // breaker's own ITF turn count crosses a floor(_/2) boundary and names the
+  // OTHER partner for the rest of the match. That is a wrong human name on
+  // the scorer's screen, so it is a screen the owner has to be able to see.
+  "14-serveafterbreaker",
+  // R4 final review (2026-08-26) — two more states no existing capture can
+  // reach, both INSIDE a tie-break, which no other tennis screen enters.
+  //   15 — the detail dock on a fixture with NO declared lineup, after an
+  //        ODD tie-break point. `state.serving` has already handed over
+  //        mid-breaker at that instant, so the pad used to offer the scorer
+  //        "Double fault" where "Ace" is correct. A wrong serving statistic,
+  //        recorded against a person, with nothing on screen to say so — the
+  //        owner has to see which chip is offered.
+  //   16 — the More sheet during a tie-break. The Award-game TILE was
+  //        already correctly withheld there, but withholding a tile is what
+  //        pushed the action into the generic More form, where tapping it
+  //        threw. The screen that proves it is gone is the sheet itself.
+  "15-breakerdock",
+  "16-breakermore",
+  // Cloud review (2026-08-26). The pad used to refuse to name a server for
+  // the REST of a match once ANY set had been entered as a summary — which
+  // also stopped stamping `server` on the tap, so no ace or double fault
+  // could be attributed to anyone again. Backfilling the sets already played
+  // is the most ordinary thing a late-arriving scorer does, so that was the
+  // wave's headline capability going dark in its most likely workflow. An
+  // EVEN-game summary leaves the rotation derivable and the engine says so;
+  // this is the screen where the pip has to still be there.
+  "17-serveaftersummary",
 ] as const;
 type ExtraGalleryState = (typeof EXTRA_STATES)[number];
 
 function pad(page: Page) {
   return page.locator('[data-testid="score-pad"]');
+}
+
+/**
+ * R4 — v3 tapModel S: tennis's scoreboard halves ARE the point buttons
+ * (v3/skins/tennis.tsx), so unlike every other sport in `SPORTS` below,
+ * `scoreOne` cannot address a `data-tile-id` or an accessible "Home"/"Away"
+ * button — a tappable half's accessible name is the PLAYER'S NAME plus the
+ * hint text (`scorebug.tsx`'s own `whoNames`), which this harness has no
+ * fixed string for. Indexes the halves grid positionally, home first
+ * (scorebug.tsx's own render order) — the same locator shape
+ * scorepad-skins.spec.ts's `scorebugHalf` and v6-sports.spec.ts's
+ * `tennisHalf` already use for the identical reason.
+ */
+/**
+ * Dispatch a real ledger event, reading `last_seq` fresh each call — the
+ * same shape `scorepad-v3-cricket.spec.ts`'s own `postEvent` uses, and for
+ * the same reason: driving a whole tie-break through the pad's own taps
+ * would be ~60 UI round trips of SETUP for one screenshot, and none of that
+ * setup is what the capture is proving.
+ */
+async function postEvent(
+  request: APIRequestContext,
+  fixtureId: string,
+  type: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
+  if (state.status !== 200 || !state.data) {
+    throw new Error(`gallery postEvent(${type}): GET state -> ${state.status}`);
+  }
+  const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+    expected_seq: state.data.last_seq,
+    type,
+    payload,
+  });
+  if (res.status >= 300) {
+    throw new Error(`gallery postEvent(${type}) -> ${res.status} ${JSON.stringify(res.error)}`);
+  }
+}
+
+function tennisHalf(page: Page, side: "home" | "away") {
+  return pad(page).locator('[data-role="v3-scorebug"] .grid > button').nth(side === "home" ? 0 : 1);
 }
 
 /**
@@ -789,12 +871,166 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Tennis Home ${tag}` }],
       away: [{ fullName: `Gallery Tennis Away ${tag}` }],
     }),
-    // Verified live: scorepad-skins.spec.ts "tennis skin: play points to
-    // deuce" — one tap of the same Home/Away pair is enough for "scored".
+    // R4 cutover — v3 tapModel S: the scoreboard half itself is the point
+    // button (`tennisHalf` above), never a "Home"/"Away" tile.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Home", exact: true }).click();
+      await tennisHalf(page, "home").click();
     },
-    openDock: async () => false,
+    // Reached by a SECOND, away point rather than by reopening the first —
+    // same reasoning as football's own `openDock` above: the Detail Dock is
+    // a property of a held tap, and there is no way to reopen one that has
+    // already flushed.
+    openDock: async (page) => {
+      await tennisHalf(page, "away").click();
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(tennis): a point tap must open the detail dock",
+      ).toBeVisible({ timeout: 10_000 });
+      return true;
+    },
+    // v3's Detail Dock is a TIMED surface (closes itself HOLD_MS=6s after
+    // the tap that opened it) — same risk football's own dock carries, and
+    // the same fix: fail the capture rather than silently keep a `04-dock`
+    // photograph of a dock that already closed under a slow run.
+    dockProbe: async (page) => {
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(tennis): the dock closed before this width was captured — the 6s hold " +
+          "window elapsed mid-capture, so this PNG would have shown a different state to its siblings",
+      ).toBeVisible({ timeout: 5_000 });
+    },
+    // R4 — 13-sanctionsheet. A fresh fixture (this entry's primary one is
+    // already two points into a live match by now): the Code violation
+    // sheet's own ladder — R4-4's tone treatment, `warning`/`default` toned,
+    // the two middle steps plain — is what the owner rules on here, stopped
+    // on its OPENING step (before picking a level), the same "stop before
+    // commit" posture every other sport's `openDock` above takes.
+    captureExtra: async (page, dir, tag, measurements) => {
+      const shTag = `${tag}sh`;
+      const fx = await seedRosteredFixture(page.request, {
+        label: `Gallery Tennis Sanction ${shTag}`,
+        sportKey: "tennis",
+        variantKey: "tour",
+        entrantKind: "individual",
+        home: [{ fullName: `Gallery Tennis Sanction Home ${shTag}` }],
+        away: [{ fullName: `Gallery Tennis Sanction Away ${shTag}` }],
+        emitCoreStart: true,
+      });
+      await page.goto(await fixturePath(page.request, fx.fixtureId));
+      await pad(page).locator('[data-tile-id="sanction-home"]').click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      await expect(sheet, "gallery(tennis): the sanction tile must open the skin's own sheet").toBeVisible({
+        timeout: 10_000,
+      });
+      await expect(
+        sheet.locator('[data-choice-option-id="warning"]'),
+        "gallery(tennis): the four-rung ladder must be on screen, not just the sheet shell",
+      ).toBeVisible();
+      await captureState(
+        page,
+        dir,
+        "13-sanctionsheet",
+        "tennis",
+        measurements,
+        visibleProbe(sheet, "gallery(tennis): 13-sanctionsheet must still show the code-violation sheet"),
+      );
+      // 15-breakerdock — the tie-break's per-point serve handoff, on a
+      // fixture with NO declared lineup. Both halves of that sentence are
+      // load-bearing: the side-only ace/double-fault fallback runs ONLY when
+      // there is no on-field roster to name a server person from, and
+      // `state.serving` rotates mid-"game" ONLY inside a breaker. No other
+      // tennis capture is in either state, let alone both.
+      const tbTag = `${tag}tb`;
+      const tb = await seedRosteredFixture(page.request, {
+        label: `Gallery Tennis Breaker Dock ${tbTag}`,
+        sportKey: "tennis",
+        variantKey: "tour",
+        entrantKind: "individual",
+        home: [{ fullName: `Gallery Tennis TB Home ${tbTag}` }],
+        away: [{ fullName: `Gallery Tennis TB Away ${tbTag}` }],
+        emitCoreStart: true,
+        skipLineups: true,
+      });
+      const tbRally = async (entrantId: string, points: number): Promise<void> => {
+        for (let i = 0; i < points; i += 1) {
+          await postEvent(page.request, tb.fixtureId, "tennis.point", { by: entrantId });
+        }
+      };
+      // 6 games each, ALTERNATING, to reach 6-6 in ONE set — 24 straight
+      // points to one side wins the whole set 6-0 instead, which is how the
+      // first draft of this capture ended up photographing set 3 at 0-0.
+      // At 6-6 the breaker opens; its first server is the set's own opener
+      // (home, after an even 12 games), so home serves point 1 and away
+      // serves points 2 AND 3. Two points are posted here, which makes the
+      // point the CAPTURE itself taps the breaker's THIRD — the odd point,
+      // the one at which `applyTbPoint` has already handed serve back to
+      // home by the time this dock renders.
+      for (let g = 0; g < 6; g += 1) {
+        await tbRally(tb.homeEntrantId, 4);
+        await tbRally(tb.awayEntrantId, 4);
+      }
+      await tbRally(tb.homeEntrantId, 1);
+      await tbRally(tb.awayEntrantId, 1);
+      await page.goto(await fixturePath(page.request, tb.fixtureId));
+      // Away served point 3 and away wins it -> ACE is the only legal offer.
+      await tennisHalf(page, "away").click();
+      const tbDock = pad(page).locator('[data-role="v3-dock"]');
+      await expect(tbDock, "gallery(tennis): a tie-break point tap must open the detail dock").toBeVisible({
+        timeout: 10_000,
+      });
+      await expect(
+        tbDock.getByRole("button", { name: "Ace", exact: true }),
+        "gallery(tennis): away served AND won this tie-break point, so Ace must be offered",
+      ).toBeVisible({ timeout: 4_000 }); // under HOLD_MS, so a miss is diagnosed with the dock still up
+      await expect(
+        tbDock.getByRole("button", { name: "Double fault", exact: true }),
+        "gallery(tennis): offering Double fault here is the inverted-serve defect itself",
+      ).toHaveCount(0);
+      await captureState(page, dir, "15-breakerdock", "tennis", measurements, async () => {
+        await expect(
+          tbDock,
+          "gallery(tennis): the dock closed before this width was captured",
+        ).toBeVisible({ timeout: 5_000 });
+        await expect(
+          tbDock.getByRole("button", { name: "Ace", exact: true }),
+          "gallery(tennis): 15-breakerdock must still show Ace, not Double fault",
+        ).toBeVisible();
+      });
+
+      // 16-breakermore — same fixture, still inside the breaker. The
+      // Award-game tile is withheld here (correctly), and this sheet is
+      // where that withholding used to REAPPEAR as a generic form that
+      // threw `GAME_AWARD_DURING_TIEBREAK` on tap.
+      await pad(page).locator('[data-tile-id="more"]').click();
+      const tbSheet = pad(page).locator('[data-role="v3-sheet"]');
+      await expect(tbSheet, "gallery(tennis): the More tile must open the action sheet").toBeVisible({
+        timeout: 10_000,
+      });
+      // Positive anchor FIRST. During a breaker every remaining tennis action
+      // already has its own tile, so the correct More sheet lists nothing —
+      // and a sheet that failed to render for some unrelated reason would
+      // satisfy the negative below just as well. Pinning the empty-state copy
+      // is what separates "rendered, and correctly has nothing to offer" from
+      // "did not render".
+      await expect(
+        tbSheet,
+        "gallery(tennis): the More sheet must have rendered its own empty state, not merely be absent",
+      ).toContainText("Nothing else to record here yet");
+      await expect(
+        tbSheet,
+        "gallery(tennis): a game cannot be awarded during a breaker, so no form for it may appear here",
+      ).not.toContainText(/Award game|Game award/);
+      await captureState(
+        page,
+        dir,
+        "16-breakermore",
+        "tennis",
+        measurements,
+        visibleProbe(tbSheet, "gallery(tennis): 16-breakermore must still show the More sheet"),
+      );
+
+      return ["13-sanctionsheet", "15-breakerdock", "16-breakermore"];
+    },
   },
   {
     slug: "tennis-doubles",
@@ -802,23 +1038,213 @@ const SPORTS: GallerySport[] = [
     sportKey: "tennis",
     variantKey: "doubles-noad-mtb10",
     entrantKind: "pair",
+    // `pairOrder` is what makes the serve pip renderable at all: without a
+    // DECLARED order `expectedDoublesServer` answers null for the side and the
+    // pad has no player to mark, so these screens would picture the wave's
+    // headline feature as absent (R4, `_INDEX.md`).
     roster: (tag) => ({
       home: [
-        { fullName: `Gallery Tennis Doubles Home1 ${tag}` },
-        { fullName: `Gallery Tennis Doubles Home2 ${tag}` },
+        { fullName: `Gallery Tennis Doubles Home1 ${tag}`, pairOrder: 1 },
+        { fullName: `Gallery Tennis Doubles Home2 ${tag}`, pairOrder: 2 },
       ],
       away: [
-        { fullName: `Gallery Tennis Doubles Away1 ${tag}` },
-        { fullName: `Gallery Tennis Doubles Away2 ${tag}` },
+        { fullName: `Gallery Tennis Doubles Away1 ${tag}`, pairOrder: 1 },
+        { fullName: `Gallery Tennis Doubles Away2 ${tag}`, pairOrder: 2 },
       ],
     }),
     // Same tap-only chassis as singles tennis; the ITF doubles variant +
     // paired entrants are what make this its own gallery entry (two names
     // per WhoLine instead of one), not a different action.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Home", exact: true }).click();
+      await tennisHalf(page, "home").click();
     },
-    openDock: async () => false,
+    openDock: async (page) => {
+      await tennisHalf(page, "away").click();
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(tennis-doubles): a point tap must open the detail dock",
+      ).toBeVisible({ timeout: 10_000 });
+      return true;
+    },
+    dockProbe: async (page) => {
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(tennis-doubles): the dock closed before this width was captured — the 6s hold " +
+          "window elapsed mid-capture, so this PNG would have shown a different state to its siblings",
+      ).toBeVisible({ timeout: 5_000 });
+    },
+    // R4 — the wave's two named sign-off screens for the sport's own headline
+    // pain (`_INDEX.md`, "the owner must verdict the DOUBLES screen
+    // specifically"): the serve pip on a KNOWN, declared player, and the
+    // dock's own SECOND question — which pair member won the point — which
+    // exists only in doubles (R4-5; singles auto-stamps `scorer` at tap
+    // time and never reaches this step, `buildDock`'s own doc). A fresh
+    // fixture, not the primary one: by this point the primary has already
+    // committed and dismissed its own dock via `openDock`/`dockProbe`
+    // above, and a held tap's dock cannot be reopened.
+    captureExtra: async (page, dir, tag, measurements) => {
+      const dsTag = `${tag}ds`;
+      const fx = await seedRosteredFixture(page.request, {
+        label: `Gallery Tennis Doubles Serve ${dsTag}`,
+        sportKey: "tennis",
+        variantKey: "doubles-noad-mtb10",
+        entrantKind: "pair",
+        home: [
+          { fullName: `Gallery Tennis DS Home1 ${dsTag}`, pairOrder: 1 },
+          { fullName: `Gallery Tennis DS Home2 ${dsTag}`, pairOrder: 2 },
+        ],
+        away: [
+          { fullName: `Gallery Tennis DS Away1 ${dsTag}`, pairOrder: 1 },
+          { fullName: `Gallery Tennis DS Away2 ${dsTag}`, pairOrder: 2 },
+        ],
+        emitCoreStart: true,
+      });
+      await page.goto(await fixturePath(page.request, fx.fixtureId));
+      // Home serves first by default (`kernel.ts`'s own init convention),
+      // and at serviceTurn 0 the due server is the pairOrder:1 partner
+      // (`expectedPairServer`, squad-state.ts) — a KNOWN person, never
+      // "whichever name got marked" (R4, `_INDEX.md`).
+      const server = pad(page).locator('[data-strip-item-id="server"]');
+      await expect(server, "gallery(tennis-doubles): the strip must name the due server").toBeVisible({
+        timeout: 20_000,
+      });
+      await expect(server).toContainText(`Gallery Tennis DS Home1 ${dsTag}`);
+      await captureState(
+        page,
+        dir,
+        "11-doublesserve",
+        "tennis-doubles",
+        measurements,
+        visibleProbe(server, "gallery(tennis-doubles): 11-doublesserve must still name the due server"),
+      );
+
+      // 12-pointdock — the dock's SECOND question. `by` names the WINNING
+      // side, so tapping home's half (home is on serve, but tapModel S
+      // scores for whichever half is tapped) then "Winner" advances past
+      // legality-by-side straight to "which partner won it", offering BOTH
+      // home players by name.
+      await tennisHalf(page, "home").click();
+      const dock = pad(page).locator('[data-role="v3-dock"]');
+      await expect(dock, "gallery(tennis-doubles): a point tap must open the detail dock").toBeVisible({
+        timeout: 10_000,
+      });
+      await dock.getByRole("button", { name: "Winner", exact: true }).click();
+      await expect(
+        dock.getByRole("button", { name: `Gallery Tennis DS Home2 ${dsTag}`, exact: true }),
+        "gallery(tennis-doubles): the dock's second question must name the winning pair",
+      ).toBeVisible({ timeout: 10_000 });
+      await captureState(page, dir, "12-pointdock", "tennis-doubles", measurements, async () => {
+        await expect(
+          dock,
+          "gallery(tennis-doubles): the dock closed before this width was captured",
+        ).toBeVisible({ timeout: 5_000 });
+        await expect(
+          dock.getByRole("button", { name: `Gallery Tennis DS Home2 ${dsTag}`, exact: true }),
+          "gallery(tennis-doubles): 12-pointdock must still show the scorer step",
+        ).toBeVisible();
+      });
+
+      // 14-serveafterbreaker — the rotation's real failure point. A fresh
+      // fixture again: the one above has an open dock and a scored point.
+      const brTag = `${tag}br`;
+      const br = await seedRosteredFixture(page.request, {
+        label: `Gallery Tennis Breaker Serve ${brTag}`,
+        sportKey: "tennis",
+        variantKey: "doubles-noad-mtb10",
+        entrantKind: "pair",
+        home: [
+          { fullName: `Gallery Tennis BR Home1 ${brTag}`, pairOrder: 1 },
+          { fullName: `Gallery Tennis BR Home2 ${brTag}`, pairOrder: 2 },
+        ],
+        away: [
+          { fullName: `Gallery Tennis BR Away1 ${brTag}`, pairOrder: 1 },
+          { fullName: `Gallery Tennis BR Away2 ${brTag}`, pairOrder: 2 },
+        ],
+        emitCoreStart: true,
+      });
+      const rally = async (entrantId: string, points: number): Promise<void> => {
+        for (let i = 0; i < points; i += 1) {
+          await postEvent(page.request, br.fixtureId, "tennis.point", { by: entrantId });
+        }
+      };
+      // 12 games to 6-6 (4 straight points never reaches a contested deuce,
+      // so each block of 4 closes exactly one game), a 7-0 breaker to close
+      // the set 7-6, then ONE game of set 2 — the game the old derivation
+      // got wrong. Serve is home's again here, at that side's 9th turn
+      // (index 8): even, so the pairOrder-1 partner is due, exactly as at
+      // turn 0. The lost-breaker-turns derivation answers index 7 and names
+      // the pairOrder-2 partner instead.
+      await rally(br.homeEntrantId, 5 * 4);
+      await rally(br.awayEntrantId, 5 * 4);
+      await rally(br.homeEntrantId, 4);
+      await rally(br.awayEntrantId, 4);
+      await rally(br.homeEntrantId, 7); // the breaker
+      await rally(br.awayEntrantId, 4); // set 2, game 1 — away opens
+      await page.goto(await fixturePath(page.request, br.fixtureId));
+      const brServer = pad(page).locator('[data-strip-item-id="server"]');
+      await expect(brServer, "gallery(tennis-doubles): the strip must name the due server").toBeVisible({
+        timeout: 20_000,
+      });
+      await expect(
+        brServer,
+        "gallery(tennis-doubles): after a closed tie-break the due server is the pairOrder-1 partner",
+      ).toContainText(`Gallery Tennis BR Home1 ${brTag}`);
+      await expect(
+        brServer,
+        "gallery(tennis-doubles): naming the pairOrder-2 partner here is the desync defect itself",
+      ).not.toContainText(`Gallery Tennis BR Home2 ${brTag}`);
+      await captureState(
+        page,
+        dir,
+        "14-serveafterbreaker",
+        "tennis-doubles",
+        measurements,
+        visibleProbe(brServer, "gallery(tennis-doubles): 14-serveafterbreaker must still name the due server"),
+      );
+
+      // 17-serveaftersummary — the serve pip surviving a backfilled set.
+      const suTag = `${tag}su`;
+      const su = await seedRosteredFixture(page.request, {
+        label: `Gallery Tennis Summary Serve ${suTag}`,
+        sportKey: "tennis",
+        variantKey: "doubles-noad-mtb10",
+        entrantKind: "pair",
+        home: [
+          { fullName: `Gallery Tennis SU Home1 ${suTag}`, pairOrder: 1 },
+          { fullName: `Gallery Tennis SU Home2 ${suTag}`, pairOrder: 2 },
+        ],
+        away: [
+          { fullName: `Gallery Tennis SU Away1 ${suTag}`, pairOrder: 1 },
+          { fullName: `Gallery Tennis SU Away2 ${suTag}`, pairOrder: 2 },
+        ],
+        emitCoreStart: true,
+      });
+      // One coarse-scored set, 6-4. TEN games — even — so the fold's own
+      // `serving` and the ITF turn walk stay in step and the rotation is
+      // genuinely derivable. Home has had 5 service turns, so turn index 5 is
+      // due: odd, which is the pairOrder-2 partner.
+      await postEvent(page.request, su.fixtureId, "tennis.set_summary", { home: 6, away: 4 });
+      await page.goto(await fixturePath(page.request, su.fixtureId));
+      const suServer = pad(page).locator('[data-strip-item-id="server"]');
+      await expect(
+        suServer,
+        "gallery(tennis-doubles): a backfilled EVEN-game set must not cost the serve pip",
+      ).toBeVisible({ timeout: 20_000 });
+      await expect(
+        suServer,
+        "gallery(tennis-doubles): home's 6th service turn (index 5, odd) is the pairOrder-2 partner",
+      ).toContainText(`Gallery Tennis SU Home2 ${suTag}`);
+      await captureState(
+        page,
+        dir,
+        "17-serveaftersummary",
+        "tennis-doubles",
+        measurements,
+        visibleProbe(suServer, "gallery(tennis-doubles): 17-serveaftersummary must still name the due server"),
+      );
+
+      return ["11-doublesserve", "12-pointdock", "14-serveafterbreaker", "17-serveaftersummary"];
+    },
   },
   {
     slug: "volleyball",

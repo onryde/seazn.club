@@ -493,14 +493,30 @@ describe("tile-grid.tsx's sublabel clears WCAG AA on every tile ground it can la
    *  because Tailwind's palette is not importable — the CLASS NAMES are read
    *  from the source below, so a change of class reds this rather than
    *  silently measuring the old one. */
+  /** Tailwind's own values for every literal `KIND_CLASS` uses as a tile's
+   *  ground or its text, read out of the BUILT stylesheet rather than from
+   *  memory: v3's palette moved several of these (slate-700 is #314158, not
+   *  the #334155 older references quote; red-600 is #e40014, not #dc2626),
+   *  and the difference is enough to flip a 4.35 into a 4.5. The CLASS NAMES
+   *  are parsed from the source below, so a change of class reds this rather
+   *  than silently measuring the old one. */
   const TAILWIND: Readonly<Record<string, string>> = {
     "violet-600": "#7f22fe",
     white: "#ffffff",
-    // Read out of the BUILT stylesheet's own `--color-slate-700`, not from
-    // memory: v3's palette moved these (slate-700 is #314158, not the #334155
-    // several older references still quote), and the difference is enough to
-    // flip a 4.35 into a 4.5.
+    transparent: "#ffffff", // a transparent tile composites over the pad's white ground
+    "slate-500": "#62748e",
+    "slate-600": "#45556c",
     "slate-700": "#314158",
+    // BOTH declarations ship for this one, and they are not the same colour:
+    // the stylesheet emits `--color-red-600:#e40014` as an sRGB fallback AND
+    // `lab(48.4493% 77.4328 61.5452)`, which every browser this app supports
+    // actually composites — that converts to #e7000b. Measuring the fallback
+    // overstates the margin (4.59 vs the real 4.54). The rule for this table
+    // is therefore: where a token ships two declarations, record the one the
+    // BROWSER uses, not the one that is easier to read out of the file. The
+    // R4 commit that added this row claimed to "read the built stylesheet"
+    // and read the wrong half of it.
+    "red-600": "#e7000b",
   };
 
   function sublabelAlpha(): number {
@@ -510,10 +526,118 @@ describe("tile-grid.tsx's sublabel clears WCAG AA on every tile ground it can la
     return spans[0]! / 100;
   }
 
+  /** Every per-kind tone override on the sublabel, as a kind -> tone map.
+   *
+   *  This used to be a single `.match()` that returned a tone only when the
+   *  FIRST override in the file happened to be the kind being asked about.
+   *  Its own comment claimed the opposite — "parsed rather than hand-listed so
+   *  adding a second override cannot silently escape the sweep" — and a second
+   *  override would have done exactly that: `sublabelToneFor("destructive")`
+   *  would answer undefined, the sweep would measure the INHERITED text-red-600
+   *  instead of the override, and the new tone would go unverified. Third
+   *  instance of the same shape in this one file (the kinds sweep sliced to
+   *  four before counting; the red-600 row read the sRGB fallback rather than
+   *  the lab() value browsers composite), which is why this one is a map. */
+  function sublabelTones(): ReadonlyMap<string, string> {
+    // Take the sublabel span's WHOLE class template first, then find every
+    // per-kind ternary inside it. Anchoring the ternary to the
+    // `text-[11px] opacity-NN` prefix — which the first two attempts at this
+    // did — can only ever see the FIRST override, because the second one is
+    // preceded by the first, not by the prefix. Proven by mutation: adding a
+    // second override (`destructive` -> a failing light red) left the suite
+    // green under the anchored form.
+    const templates = [...codeOnly.matchAll(/className=\{`([^`]*text-\[11px\][^`]*)`\}/g)].map((m) => m[1]!);
+    expect(templates.length, "tile-grid.tsx must still build the sublabel class as a template literal").toBeGreaterThan(0);
+    const out = new Map<string, string>();
+    for (const tpl of templates) {
+      for (const m of tpl.matchAll(/tile\.kind === "(\w+)"\s*\?\s*"text-([\w-]+)"/g)) {
+        const [, kind, tone] = m;
+        const seen = out.get(kind!);
+        // Both sublabel branches render the same overrides, so a repeat is
+        // expected — a CONFLICT between the two branches is not.
+        expect(seen === undefined || seen === tone, `tile-grid.tsx gives kind "${kind}" two different sublabel tones`).toBe(true);
+        out.set(kind!, tone!);
+      }
+    }
+    return out;
+  }
+
+  function sublabelToneFor(kind: string): string | undefined {
+    return sublabelTones().get(kind);
+  }
+
+  it("every per-kind sublabel tone override in the source is one the sweep below measures", () => {
+    // The guard that makes the map honest: a tone declared for a kind that
+    // KIND_CLASS does not know about would be parsed and then never measured.
+    const kinds = new Set(kindsFromSource().map((k) => k.kind));
+    for (const kind of sublabelTones().keys()) {
+      expect(kinds.has(kind), `sublabel declares a tone for unknown tile kind "${kind}"`).toBe(true);
+    }
+  });
+
+  /** Every tile kind, PARSED out of KIND_CLASS — never hand-listed.
+   *
+   *  R3 checked `primary` and `standard` only, while this describe's own name
+   *  claimed every ground, and its comment justified the omission: "`primary`
+   *  is the only KIND_CLASS ground that is a saturated colour rather than
+   *  white/transparent, so it is the binding case: pass here and every other
+   *  kind passes with room."
+   *
+   *  That is FALSE, and R4 paid for it. The binding case is not the saturated
+   *  GROUND, it is the lightest TEXT — `minor`'s slate-500, which at 90% on
+   *  white is 3.91:1. It went unmeasured for a wave and shipped a real axe
+   *  failure the moment tennis put the first sublabel on a `minor` tile.
+   *  Deriving the list from the source is the actual fix: a kind that exists
+   *  is a kind that is measured, and a fifth one cannot be forgotten. */
+  function kindsFromSource(): { kind: string; text: string; ground: string }[] {
+    // Bounded to KIND_CLASS's OWN object literal, and NOT `.slice(0, 4)`.
+    //
+    // The first version of this sweep sliced to four before asserting there
+    // were four, so the assertion could only ever catch FEWER kinds — a fifth
+    // was silently dropped and never measured. That is the precise bug this
+    // rewrite exists to prevent, reintroduced inside the fix for it; caught by
+    // review, which added a fifth failing kind and watched the suite stay
+    // green. Take the whole literal and let the cross-check below decide.
+    const open = codeOnly.indexOf("const KIND_CLASS");
+    expect(open, "tile-grid.tsx must still declare KIND_CLASS").toBeGreaterThan(-1);
+    const block = codeOnly.slice(open, codeOnly.indexOf("};", open));
+    const rows = [...block.matchAll(/(\w+):\s*"([^"]+)"/g)];
+
+    // Cross-checked against the TYPE, in the other file, so neither side can
+    // drift alone: a kind added to the union but not to KIND_CLASS, or to
+    // KIND_CLASS but not measured here, reds.
+    const typesSrc = readFileSync(join(process.cwd(), "src/components/v2/scorepad/v3/types.ts"), "utf8");
+    const union = /export type TileKind\s*=\s*([^;]+);/.exec(typesSrc)?.[1] ?? "";
+    const declared = [...union.matchAll(/"(\w+)"/g)].map((m) => m[1]!);
+    expect(declared.length, "types.ts must still declare the TileKind union as string literals").toBeGreaterThan(0);
+    expect([...rows.map(([, k]) => k)].sort(), "every TileKind must have a KIND_CLASS row, and vice versa").toEqual(
+      [...declared].sort(),
+    );
+    return rows.map(([, kind, classes]) => {
+      const text = /text-([\w-]+)/.exec(classes)?.[1];
+      const ground = /bg-([\w-]+)/.exec(classes)?.[1];
+      expect(text, `KIND_CLASS.${kind} must declare a text colour`).toBeTruthy();
+      expect(ground, `KIND_CLASS.${kind} must declare a ground`).toBeTruthy();
+      return { kind: kind!, text: text!, ground: ground! };
+    });
+  }
+
+  it("clears 4.5:1 on EVERY tile kind's own ground — parsed from KIND_CLASS, not hand-listed", () => {
+    const alpha = sublabelAlpha();
+    const failures: string[] = [];
+    for (const { kind, text, ground } of kindsFromSource()) {
+      const toneOverride = sublabelToneFor(kind);
+      const fg = TAILWIND[toneOverride ?? text];
+      const bg = TAILWIND[ground];
+      expect(fg, `no measured value for text colour ${toneOverride ?? text} (kind ${kind})`).toBeTruthy();
+      expect(bg, `no measured value for ground ${ground} (kind ${kind})`).toBeTruthy();
+      const ratio = contrastRatio(compositeOver(fg!, alpha, bg!), bg!);
+      if (ratio < 4.5) failures.push(`${kind}: ${ratio.toFixed(2)}:1 (${toneOverride ?? text} on ${ground})`);
+    }
+    expect(failures, `sublabel fails WCAG AA on: ${failures.join(", ")}`).toEqual([]);
+  });
+
   it("the PRIMARY tile — white on violet-600, the ground football's Goal tiles use", () => {
-    // The pair that actually failed. `primary` is the only KIND_CLASS ground
-    // that is a saturated colour rather than white/transparent, so it is the
-    // binding case: pass here and every other kind passes with room.
     expect(codeOnly, "KIND_CLASS.primary must still be white text on violet-600").toContain(
       "bg-violet-600 font-semibold text-white",
     );
@@ -521,9 +645,29 @@ describe("tile-grid.tsx's sublabel clears WCAG AA on every tile ground it can la
     expect(contrastRatio(composited, TAILWIND["violet-600"]!)).toBeGreaterThanOrEqual(4.5);
   });
 
+  it("the MINOR tile — the LIGHTEST text in the set, which is the real binding case", () => {
+    // Tennis's Award-game tiles are the first `minor` tile anywhere to carry a
+    // sublabel. Inheriting slate-500 at 90% is 3.91:1; the kind takes
+    // slate-600 instead, which is 5.83:1.
+    expect(codeOnly).toContain("bg-transparent font-medium text-slate-500");
+    expect(sublabelToneFor("minor"), "the minor sublabel must keep its own darker tone").toBe("slate-600");
+    const composited = compositeOver(TAILWIND["slate-600"]!, sublabelAlpha(), TAILWIND.white!);
+    expect(contrastRatio(composited, TAILWIND.white!)).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("the STANDARD tile — slate-700 on white", () => {
     expect(codeOnly).toContain("bg-white font-medium text-slate-700");
     const composited = compositeOver(TAILWIND["slate-700"]!, sublabelAlpha(), TAILWIND.white!);
+    expect(contrastRatio(composited, TAILWIND.white!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("the DESTRUCTIVE tile — red-600 on white, which passes by only 0.04", () => {
+    // 4.54:1 against the lab() colour browsers actually composite (see the
+    // TAILWIND note). Recorded with its margin BECAUSE it is thin: a palette
+    // nudge of one step, or any future dimming of this element, drops it
+    // under the floor. It was never measured at all before R4.
+    expect(codeOnly).toContain("bg-white font-medium text-red-600");
+    const composited = compositeOver(TAILWIND["red-600"]!, sublabelAlpha(), TAILWIND.white!);
     expect(contrastRatio(composited, TAILWIND.white!)).toBeGreaterThanOrEqual(4.5);
   });
 
@@ -548,6 +692,30 @@ describe("the tones are NON-TEXT colours, and this is where that stops being a c
     const football = resolveSportPalette("football");
     expect(contrastRatio(football.board, football.dismissal)).toBeLessThan(4.5);
     expect(contrastRatio(football.board, football.dismissal)).toBeGreaterThanOrEqual(3.0);
+  });
+
+  // R4/tennis. The licence above is football's, and it is football-shaped: a
+  // card IS a swatch, so a tone that fails the text floor is correct there.
+  // Tennis has no cards. Its penalty ladder (warning -> point penalty -> game
+  // penalty -> default, nested/kernel.ts:250-255) is WORDS, so both of its
+  // tones land on text and both owe the full 4.5.
+  //
+  // Pinned here rather than left to the licence scan below, because that scan
+  // is usage-driven: it can only see a tone once a skin renders text in it, so
+  // it says nothing at all about a palette that has landed ahead of its skin.
+  // Established by mutation — with the tennis skin absent, reverting
+  // `dismissal` to the originally-specced #c1272d (2.63:1) reds NOTHING
+  // without this block.
+  it("tennis's tones are TEXT, not swatches, so both clear the 4.5 floor on its own board", () => {
+    const tennis = resolveSportPalette("tennis");
+    for (const tone of ["caution", "dismissal"] as const) {
+      const ratio = contrastRatio(tennis.board, tennis[tone]);
+      expect(ratio, `tennis --sport-${tone} is ${ratio.toFixed(2)}:1 on its own board`).toBeGreaterThanOrEqual(4.5);
+    }
+    // The pip is the identity: `led` carries the serving player's mark and the
+    // strip digits, so it is text-adjacent at minimum and holds the same floor.
+    expect(contrastRatio(tennis.board, tennis.led)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(tennis["board-2"], tennis.ink)).toBeGreaterThanOrEqual(4.5);
   });
 
   // R3 review round — THIS LICENCE HAD ALMOST NO TEETH. It grepped globals.css

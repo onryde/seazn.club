@@ -121,8 +121,13 @@ describe("FOOTBALL keeps its own ring — the identity ruling, without the colla
     // sport: the rule fires only under `[data-sport-theme]`, and that
     // attribute is emitted only when a palette override exists — so
     // `--sport-led` inside it is always the overriding sport's own colour.
-    expect(Object.keys(SPORT_PALETTES)).toEqual(["football"]);
+    // R4 adds tennis. The list is pinned rather than counted so a sport that
+    // gains a palette without gaining an entry here is a red, not a silent
+    // pass — the point of the assertion is that EVERY key in this table has
+    // its own `led`, which is what makes the scoped rule safe.
+    expect(Object.keys(SPORT_PALETTES)).toEqual(["football", "tennis"]);
     expect(SPORT_PALETTES.football!.led).toBe("#ffb703");
+    expect(SPORT_PALETTES.tennis!.led).toBe("#d9f000");
   });
 
   it("the scoped rule outranks the platform ring, or football would silently inherit violet", () => {

@@ -50,6 +50,7 @@ import type { TFn } from "./context-strip";
 import type { SkinDefV3 } from "./types";
 import { cricketSkinV3 } from "./skins/cricket";
 import { footballSkinV3 } from "./skins/football";
+import { tennisSkinV3 } from "./skins/tennis";
 
 /**
  * Sport key -> v3 skin FACTORY. Empty through R1; populated sport-by-sport
@@ -76,6 +77,9 @@ V3_SKINS.cricket = cricketSkinV3;
 // file's header, and `__tests__/registry-totality.test.ts`'s
 // `@ts-expect-error` pin).
 V3_SKINS.football = footballSkinV3;
+// R4 — tennis, the third conversion. The FACTORY, never `tennisSkinV3(t)`,
+// same reason as football's own entry above.
+V3_SKINS.tennis = tennisSkinV3;
 
 /**
  * Every engine sport key NOT already owned by `V3_SKINS`, computed from
@@ -96,7 +100,7 @@ V3_SKINS.football = footballSkinV3;
  * gate's "double-owned" check structurally impossible to fail rather than
  * merely caught, which is the whole reason the two sets are maintained apart.
  */
-const CONVERTED_SPORTS: ReadonlySet<string> = new Set(["cricket", "football"]);
+const CONVERTED_SPORTS: ReadonlySet<string> = new Set(["cricket", "football", "tennis"]);
 
 export const LEGACY_SPORTS: ReadonlySet<string> = new Set(
   builtinModules.map((m) => m.key).filter((key) => !CONVERTED_SPORTS.has(key)),

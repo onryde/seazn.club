@@ -43,6 +43,30 @@ function pad(page: Page) {
   return page.locator('[data-testid="score-pad"]');
 }
 
+/**
+ * R4/tennis cutover — v3 tapModel S: the scoreboard halves ARE the point
+ * buttons (v3/skins/tennis.tsx); there is no separate "Home"/"Away" action
+ * button the way v2's plain `tennis.point` action rendered one. Indexes the
+ * halves grid positionally, home first (scorebug.tsx's own render order),
+ * duplicated locally rather than imported since this file keeps every
+ * locator helper self-contained (its own `pad()` above is the same choice).
+ *
+ * Scoped to `<button>` specifically, not a wildcard — load-bearing (found by
+ * running this file): a half renders a `<button>` only once LIVE at band>=3;
+ * before that it is a plain, click-inert `<div>` at the same grid position.
+ * `sendEvent(..., "core.start", {})` above confirms the SERVER folded it;
+ * the CLIENT's own re-render is a separate, later event a wildcard locator
+ * cannot see coming — it would happily click the still-present `<div>` and
+ * dispatch nothing. Scoping to `button` makes this locator match NOTHING
+ * until the client's re-render actually swaps the `<div>` for a `<button>`,
+ * so Playwright's ordinary actionability wait closes the race — the same
+ * "does not exist until ready" property a tile gets for free and a
+ * wildcard half-locator does not.
+ */
+function tennisHalf(page: Page, side: "home" | "away") {
+  return pad(page).locator('[data-role="v3-scorebug"] .grid > button').nth(side === "home" ? 0 : 1);
+}
+
 async function makeDivision(
   request: APIRequestContext,
   opts: { comp: string; sport: string; variant: string; entrants: string[]; kind?: "individual" | "team"; visibility?: string },
@@ -117,7 +141,7 @@ test("tennis: device-width pad speaks the score, banks a tie-break set, undo res
   });
   // A 2-entrant knockout's first-seeded entrant is always the fixture's
   // HOME side (verified against the real API) — Rune is entrants[0], so
-  // tapping the pad's Home button scores for Rune throughout this test.
+  // tapping the pad's home half scores for Rune throughout this test.
   const [rune, sasha] = entrantIds as [string, string];
   await sendEvent(request, fixtureId, "core.start", {});
 
@@ -126,36 +150,43 @@ test("tennis: device-width pad speaks the score, banks a tie-break set, undo res
   const scorePad = pad(page);
   await expect(scorePad).toBeVisible({ timeout: 20_000 });
 
-  // v2's tennis skin has no per-player button — the plain `tennis.point`
-  // action is a one-tap Home/Away pair, and the running score lives in the
-  // header's "Points" field (scorepad-skins.spec.ts's own tennis test is the
-  // worked example this mirrors). One tap per point; the header speaks 15
-  // then 30.
-  const homeBtn = scorePad.getByRole("button", { name: "Home", exact: true });
-  const pointsField = scorePad.getByText("Points", { exact: true }).locator("..");
-  await expect(homeBtn).toBeVisible({ timeout: 20_000 });
-  await homeBtn.click();
+  // R4/tennis cutover — v3 tapModel S: the scoreboard halves ARE the point
+  // buttons (v3/skins/tennis.tsx), and each half renders its OWN running
+  // score via `ScorebugHalf.big` — the v2-era one-tap "Home"/"Away" pair and
+  // the header's combined "Points" field this test used to read are both
+  // gone (scorepad-skins.spec.ts's own tennis test is the worked example
+  // this mirrors). This fixture has no real lineup (`makeDivision`'s
+  // `addEntrantsViaApi` mints display-name-only entrants), so each half's
+  // WhoLine falls back to the literal side label rather than "Rune"/"Sasha"
+  // — that only affects the who-line text, not the tap target or the score.
+  // One tap per point; each half speaks 15 then 30.
+  const homeHalf = tennisHalf(page, "home");
+  const awayHalf = tennisHalf(page, "away");
+  await expect(homeHalf).toBeVisible({ timeout: 20_000 });
+  await homeHalf.click();
   await expect
     .poll(
       async () => (await ledger(request, fixtureId)).filter((e) => e.type === "tennis.point").length,
       { timeout: 20_000 },
     )
     .toBe(1);
-  await expect(pointsField).toContainText("15–0");
+  await expect(homeHalf).toContainText("15");
+  await expect(awayHalf).toContainText("0");
   // usePadPipeline's double-submit guard swallows an identical payload
   // within DOUBLE_SUBMIT_WINDOW_MS (600ms) of the last ACCEPTED one, and the
   // ledger-count poll above can resolve well inside that window on a fast
   // local server — so the second identical tap needs its own clearance
   // rather than racing straight in behind the first.
   await page.waitForTimeout(700);
-  await homeBtn.click();
+  await homeHalf.click();
   await expect
     .poll(
       async () => (await ledger(request, fixtureId)).filter((e) => e.type === "tennis.point").length,
       { timeout: 20_000 },
     )
     .toBe(2);
-  await expect(pointsField).toContainText("30–0");
+  await expect(homeHalf).toContainText("30");
+  await expect(awayHalf).toContainText("0");
 
   // Drive to 6–6 via the ledger (games alternate), then the TB to 7–0.
   const game = async (by: string) => {
@@ -169,17 +200,18 @@ test("tennis: device-width pad speaks the score, banks a tie-break set, undo res
   await game(sasha); // 6–6 → tie-break
   await page.reload();
   await expect(scorePad).toBeVisible({ timeout: 20_000 });
-  // The header's amber "TIEBREAK" badge only exists while genuinely in one
-  // (tennis-skin.tsx's own header comment) — no hyphen in the dictionary
-  // copy ("Tiebreak"), unlike the v1 pad's own wording.
-  await expect(page.getByText(/tiebreak/i).first()).toBeVisible({ timeout: 20_000 });
+  // R4/tennis: v3's copy is "Tie-break" — WITH the hyphen (the v2 comment
+  // this replaces noted the opposite for v1's own wording, which is no
+  // longer true of v3's `pad.tennis.context.tiebreak`), rendered on the
+  // scorebug's own context line (`buildContext`, v3/skins/tennis.tsx).
+  await expect(pad(page).locator('[data-role="v3-scorebug"]')).toContainText(/tie-break/i, { timeout: 20_000 });
   for (let i = 0; i < 7; i++) await sendEvent(request, fixtureId, "tennis.point", { by: rune });
   await page.reload();
   await expect(scorePad).toBeVisible({ timeout: 20_000 });
   // Set strip shows the 7–6(0) form — this headline text is the engine's own
-  // (summary().headline), rendered both by the console's own header and
-  // inside the pad, unchanged from v1.
-  await expect(page.getByText("7–6(0)").first()).toBeVisible({ timeout: 20_000 });
+  // (summary().headline), rendered by the HOST rather than the skin
+  // (`data-role="v3-headline"`, pad-host.tsx), unchanged from v1/v2.
+  await expect(pad(page).locator('[data-role="v3-headline"]')).toContainText("7–6(0)", { timeout: 20_000 });
 
   // Undo restores the live point: score one, undo, the tally is unchanged.
   // fixture-console.tsx's "Undo last" reads its OWN `events` state, which
@@ -188,12 +220,13 @@ test("tennis: device-width pad speaks the score, banks a tie-break set, undo res
   // stream into the console — reload to pick them up" rule this file's own
   // icehockey test already relies on) it needs a reload before it will
   // target the point just scored rather than a stale earlier one.
-  await expect(homeBtn).toBeVisible({ timeout: 20_000 });
-  await homeBtn.click();
-  await expect(pointsField).toContainText("15–0", { timeout: 20_000 });
+  await expect(homeHalf).toBeVisible({ timeout: 20_000 });
+  await homeHalf.click();
+  await expect(homeHalf).toContainText("15", { timeout: 20_000 });
+  await expect(awayHalf).toContainText("0", { timeout: 20_000 });
   await page.reload();
   await expect(scorePad).toBeVisible({ timeout: 20_000 });
-  await expect(pointsField).toContainText("15–0", { timeout: 20_000 });
+  await expect(homeHalf).toContainText("15", { timeout: 20_000 });
   // A click straight after reload can land pre-hydration — retry until the
   // undo actually takes (same pattern as this file's own icehockey Release
   // flow, and the repo's re-fill loops generally). Checked against the real
@@ -207,7 +240,8 @@ test("tennis: device-width pad speaks the score, banks a tie-break set, undo res
       .poll(async () => (await ledger(request, fixtureId)).some((e) => e.type === "core.void"), { timeout: 3_000 })
       .toBe(true);
   }).toPass({ timeout: 20_000 });
-  await expect(pointsField).toContainText("0–0", { timeout: 20_000 });
+  await expect(homeHalf).toContainText("0", { timeout: 20_000 });
+  await expect(awayHalf).toContainText("0", { timeout: 20_000 });
 });
 
 test("tennis: console set-totals entry needs tie-break points for a 7–6 set", async ({
@@ -221,40 +255,64 @@ test("tennis: console set-totals entry needs tie-break points for a 7–6 set", 
     entrants: ["Mira", "Tess"],
   });
   await sendEvent(request, fixtureId, "core.start", {});
+
+  // R4/tennis cutover — v3's "Set score" tile opens ONE guided-sheet wizard
+  // (`setScoreSheet`, v3/skins/tennis.tsx), one step at a time, never the v2
+  // ActionForm this test used to fill (several labeled fields at once, then
+  // a single `[data-role="confirm"]`) and never the v2-era SECOND "Set score
+  // (tie-break)" tile — v3 has exactly one Set-score tile, and its `tbHome`/
+  // `tbAway` steps are `when`-gated on whether the ENTERED games are the
+  // tie-break shape (`isTbShape`, tennis.tsx — mirrors the engine's own
+  // strict-mode requirement, `kernel.ts:1081-1087`). So a bare `{home:7,
+  // away:6}` is no longer constructible through the sheet at all: reaching
+  // 7–6 as the games makes the wizard ASK for the tie-break score rather
+  // than letting the scorer skip past it — the client-side half of what this
+  // test used to prove with a server error message. The engine's own
+  // refusal (the other half — a 7–6 with no tie-break score is still
+  // genuinely invalid) is still real and is still proved here, directly
+  // against the API, since the sheet can no longer construct that payload
+  // to submit it through the UI.
+  const state0 = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
+  const bareRefusal = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+    expected_seq: state0.data!.last_seq,
+    type: "tennis.set_summary",
+    payload: { home: 7, away: 6 },
+  });
+  expect(
+    bareRefusal.status,
+    "a bare 7–6 with no tie-break score must still be refused by the engine",
+  ).toBeGreaterThanOrEqual(400);
+  const afterRefusal = await ledger(request, fixtureId);
+  expect(afterRefusal.some((e) => e.type === "tennis.set_summary")).toBe(false);
+
   await page.goto(await fixturePath(page.request, fixtureId));
   const scorePad = pad(page);
   await expect(scorePad).toBeVisible({ timeout: 20_000 });
 
-  // v2's tennis skin exposes TWO "Set score" tiles — the plain 2-field
-  // totals entry, and a tie-break-carrying variant (nested/kernel.ts's own
-  // `summaryTbAction`) that also collects `tb.home`/`tb.away`. Both declare
-  // the same event type (`tennis.set_summary`); tennis-skin.tsx used to
-  // resolve a group's shared type to only its FIRST PadActionView, which
-  // left the tie-break tile permanently unreachable from any UI state
-  // (fixed S13/#422 W11 cutover — `actionsByType` now resolves every
-  // PadActionView sharing a type, not just the first). Entering games alone
-  // for a 7–6 set through the PLAIN tile is exactly what this test proves
-  // the engine refuses.
-  await scorePad.getByRole("button", { name: "Set score", exact: true }).click();
-  await scorePad.getByLabel("Home", { exact: true }).fill("7");
-  await scorePad.getByLabel("Away", { exact: true }).fill("6");
-  await scorePad.locator('[data-role="confirm"]').click();
-  await expect(scorePad.getByText(/isn't valid for this match/i)).toBeVisible({ timeout: 20_000 });
-  const afterRefusal = await ledger(request, fixtureId);
-  expect(afterRefusal.some((e) => e.type === "tennis.set_summary")).toBe(false);
+  await scorePad.locator('[data-tile-id="setScore"]').click();
+  const sheet = scorePad.locator('[data-role="v3-sheet"]');
+  await expect(sheet, "the Set score tile must open the skin's guided sheet").toBeVisible({ timeout: 10_000 });
+  await sheet.getByLabel("Games — Home", { exact: true }).fill("7");
+  await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+  await sheet.getByLabel("Games — Away", { exact: true }).fill("6");
+  await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
 
-  // With tie-break points supplied through the TIE-BREAK tile, the SAME
-  // 7–6 totals entry succeeds — proving the requirement is real rather than
-  // merely unenforced by a form that never asks for it, and proving the
-  // tile itself is now reachable (this used to be sent directly via the API
-  // because no control on the actual page could reach `tb`). This headline
-  // text is the engine's own (summary().headline), unchanged from v1.
-  await scorePad.getByRole("button", { name: "Set score (tie-break)", exact: true }).click();
-  await scorePad.getByLabel("Home", { exact: true }).fill("7");
-  await scorePad.getByLabel("Away", { exact: true }).fill("6");
-  await scorePad.getByLabel("Tb home", { exact: true }).fill("7");
-  await scorePad.getByLabel("Tb away", { exact: true }).fill("5");
-  await scorePad.locator('[data-role="confirm"]').click();
+  // The tie-break steps are offered ONLY because 7–6 IS the tie-break shape
+  // — proves the `when` gate actually fired rather than the wizard always
+  // asking regardless of the games entered.
+  await expect(
+    sheet.getByLabel("Tie-break points — Home", { exact: true }),
+    "a 7–6 games total must ask for the tie-break score before the sheet can complete",
+  ).toBeVisible({ timeout: 10_000 });
+  await sheet.getByLabel("Tie-break points — Home", { exact: true }).fill("7");
+  await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+  await sheet.getByLabel("Tie-break points — Away", { exact: true }).fill("5");
+  await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+
+  // With tie-break points supplied, the SAME 7–6 totals entry succeeds —
+  // proving the requirement is real rather than merely unenforced by a
+  // wizard that never asks for it. This headline text is the engine's own
+  // (summary().headline), unchanged from v1/v2.
   await expect
     .poll(
       async () => (await ledger(request, fixtureId)).filter((e) => e.type === "tennis.set_summary").length,
@@ -262,7 +320,7 @@ test("tennis: console set-totals entry needs tie-break points for a 7–6 set", 
     )
     .toBe(1);
   await page.reload();
-  await expect(page.getByText("1 — 0 · 7–6(5)").first()).toBeVisible({ timeout: 20_000 });
+  await expect(pad(page).locator('[data-role="v3-headline"]')).toContainText("1 — 0 · 7–6(5)", { timeout: 20_000 });
 });
 
 test("icehockey: penalties drive the strength chip (5v4 → 5v3 → release), OT goal decides", async ({

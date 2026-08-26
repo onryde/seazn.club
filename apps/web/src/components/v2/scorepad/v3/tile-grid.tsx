@@ -282,20 +282,39 @@ function Tile({
       <span className={`break-words ${tile.kind === "minor" ? "text-xs" : "text-sm"}`}>
         {tile.labelText ?? t(tile.label)}
       </span>
-      {/* R3/task D — 90%, not 70%. Football is the FIRST skin to put a
+      {/* R3/task D — 90%, not 70%. Football was the FIRST skin to put a
           sublabel on a `primary` tile ("Goal / Home"), and white at 70% over
-          violet-600 composites to #d9bdff: 3.55:1 at 11px, under WCAG AA's
-          4.5 floor. Caught by the axe scan in scorepad-skins.spec.ts, which
-          had passed for every earlier skin only because none of them rendered
-          this element on this ground. 90% is 5.02:1 there and strictly
-          improves every other tile kind too (all of which sit on white or
-          transparent), so this stays ONE value rather than a per-kind branch.
-          Cricket declares no sublabel at all, so no cricket pixel moves.
-          `__tests__/contrast.test.ts` computes the pair from THIS class
-          string, so lowering it again reds a unit test rather than an e2e. */}
+          violet-600 composites to 3.55:1 at 11px, under WCAG AA's 4.5 floor.
+          90% is 5.02:1 there.
+
+          R4/tennis — AND A PER-KIND TONE, because R3's reason for keeping ONE
+          value was wrong. It argued 90% "strictly improves every other tile
+          kind too (all of which sit on white or transparent)", which reads as
+          if the saturated ground were the binding case. It is not: the binding
+          case is the LIGHTEST TEXT, and that is `minor`'s slate-500. Dimmed to
+          90% on white it composites to **3.91:1** — a fail, by the same margin
+          and for the same reason as the one R3 had just fixed one kind over.
+
+          Tennis's Award-game tiles are the first `minor` tile anywhere to
+          carry a sublabel, so the axe scan only reached it now. The sublabel
+          names WHICH SIDE the tile belongs to, so it is the most load-bearing
+          word on a two-lane board — exactly R3's own argument for fixing it
+          rather than lowering the bar.
+
+          One step darker for that kind only (slate-600 at 90% = 5.83:1). The
+          alpha stays uniform, so `primary`, `standard` and `destructive` are
+          byte-identical and no signed-off cricket or football pixel moves.
+          A per-kind branch is not a new idea here either — the label span
+          directly above already branches on `tile.kind === "minor"`.
+
+          Measured, not eyeballed, against the values the BUILT stylesheet
+          actually ships: primary 5.02, standard 7.69, destructive 4.59, minor
+          5.83. `__tests__/contrast.test.ts` now derives the kinds from
+          KIND_CLASS itself and checks ALL of them — it previously checked two
+          and claimed in its own describe name to check every one. */}
       {tile.sublabelText
-        ? <span className="break-words text-[11px] opacity-90">{tile.sublabelText}</span>
-        : tile.sublabel && <span className="break-words text-[11px] opacity-90">{t(tile.sublabel)}</span>}
+        ? <span className={`break-words text-[11px] opacity-90 ${tile.kind === "minor" ? "text-slate-600" : ""}`}>{tile.sublabelText}</span>
+        : tile.sublabel && <span className={`break-words text-[11px] opacity-90 ${tile.kind === "minor" ? "text-slate-600" : ""}`}>{t(tile.sublabel)}</span>}
     </button>
   );
 }

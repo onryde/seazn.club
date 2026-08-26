@@ -102,10 +102,25 @@ export function makeSquadAdopter<S extends SquadCarrier>(): SquadAdopter<S> {
  *
  * Ties on `pairOrder` fall back to `orderNo` so the answer is total and stable;
  * a side that declared no order at all returns empty rather than guessing.
+ *
+ * ALSO REQUIRES `onField` (R4 code review, defect 2). The rotation is
+ * defined over the nominated PAIR — the two people actually playing — not
+ * over every squad row that happens to carry a declared `pairOrder`.
+ * `lineup-editor.tsx` renders the pair-order select on every row, bench
+ * included, so a bench member can carry pair order 1 or 2 the same as an
+ * on-field one; without this check a pair-shaped side with such a row
+ * produces a THREE-element rotation, and `expectedPairServer`'s
+ * `turn % order.length` names the bench player as due every third turn —
+ * an authoritative-looking wrong answer, since no pip shows beside any
+ * on-field player when that happens. Filtering here, in the one function
+ * every reader composes over (`expectedPairServer`, and this kernel's own
+ * `declaresSquadDetail`), fixes it for every consumer at once — including
+ * the set-based kernel's badminton/table-tennis doubles, which share this
+ * exact function.
  */
 export function pairOrderOf(side: SideSquad): readonly string[] {
   return side.members
-    .filter((member) => member.role === "player" && member.pairOrder !== undefined)
+    .filter((member) => member.role === "player" && member.onField && member.pairOrder !== undefined)
     .map((member) => ({ id: member.personId, pair: member.pairOrder ?? 0, order: member.orderNo }))
     .sort((a, b) => (a.pair === b.pair ? a.order - b.order : a.pair - b.pair))
     .map((member) => member.id);

@@ -19,7 +19,7 @@ import type { MsgFn } from "@/lib/scoring-vocab";
 import { createSkinDispatch } from "../../skins/types";
 import { buildPadView, type PadViewCtx } from "../../view-model";
 import type { RejectionInfo } from "../../use-pad-pipeline";
-import type { GuidedSheetSpec, PadHostView, SkinDefV3, SwapSlot, TileSpec } from "../types";
+import type { GuidedSheetSpec, PadHostView, ScorebugSpec, SkinDefV3, SwapSlot, TileSpec } from "../types";
 import { MORE_SHEET_KEY } from "../types";
 import {
   adaptSwapSlot,
@@ -189,6 +189,34 @@ function tile(over: Partial<TileSpec> = {}): TileSpec {
   return { id: "t1", label: "pad.__fixture__.tile", kind: "standard", phases: ["live"], action: { event: { type: "cricket.toss", payload: {} } }, ...over };
 }
 
+/** A tapModel-T scorebug: both halves are pure READOUTS, which is every skin
+ *  before tennis. It must contribute NOTHING to the dedicated set — that is
+ *  what makes the R4 change provably inert for cricket and football. */
+function readoutScorebug(): ScorebugSpec {
+  return {
+    context: "T20 · Over 0.5",
+    phase: "live",
+    halves: [
+      { who: [{ name: "Home" }], big: "12/0" },
+      { who: [{ name: "Away" }], big: "0/0" },
+    ],
+    strip: [],
+  };
+}
+
+/** A tapModel-S scorebug: the half IS the button (tennis). */
+function tappableScorebug(type = "tennis.point"): ScorebugSpec {
+  return {
+    context: "Best of 3 · Set 1",
+    phase: "live",
+    halves: [
+      { who: [{ name: "Whitfield" }], big: "40", tappable: true, hintKey: "pad.tennis.half.hint", tapEvent: { type, payload: { by: "home" } } },
+      { who: [{ name: "Rivera" }], big: "30", tappable: true, hintKey: "pad.tennis.half.hint", tapEvent: { type, payload: { by: "away" } } },
+    ],
+    strip: [],
+  };
+}
+
 describe("dedicatedEventTypes", () => {
   it("collects every {event} tile's own type", () => {
     const types = dedicatedEventTypes(
@@ -198,6 +226,7 @@ describe("dedicatedEventTypes", () => {
       ],
       undefined,
       [],
+      readoutScorebug(),
     );
     expect([...types].sort()).toEqual(["cricket.declare", "cricket.toss"]);
   });
@@ -206,7 +235,7 @@ describe("dedicatedEventTypes", () => {
     const sheets: Record<string, GuidedSheetSpec> = {
       wicket: { event: "cricket.wicket", steps: [], buildPayload: () => ({}) },
     };
-    const types = dedicatedEventTypes([tile({ action: { sheet: "wicket" } })], sheets, []);
+    const types = dedicatedEventTypes([tile({ action: { sheet: "wicket" } })], sheets, [], readoutScorebug());
     expect([...types]).toEqual(["cricket.wicket"]);
   });
 
@@ -225,7 +254,7 @@ describe("dedicatedEventTypes", () => {
     const swaps: SwapSlot[] = [
       { id: "subHome", offLabel: "off", onLabel: "on", side: "home", eventType: "football.sub", policyOk: true, buildEvent: () => ({ type: "football.sub", payload: {} }) },
     ];
-    const types = dedicatedEventTypes([tile({ action: { swap: "subHome" } })], undefined, swaps);
+    const types = dedicatedEventTypes([tile({ action: { swap: "subHome" } })], undefined, swaps, readoutScorebug());
     expect([...types]).toEqual(["football.sub"]);
   });
 
@@ -233,11 +262,38 @@ describe("dedicatedEventTypes", () => {
     const swaps: SwapSlot[] = [
       { id: "subHome", offLabel: "off", onLabel: "on", side: "home", eventType: "football.sub", policyOk: true, buildEvent: () => ({ type: "football.sub", payload: {} }) },
     ];
-    expect(dedicatedEventTypes([tile({ action: { swap: "typo" } })], undefined, swaps).size).toBe(0);
+    expect(dedicatedEventTypes([tile({ action: { swap: "typo" } })], undefined, swaps, readoutScorebug()).size).toBe(0);
   });
 
   it("an EMPTY slot table leaves a swap tile contributing nothing — the pre-R3/football behaviour, for a skin with no swap at all", () => {
-    expect(dedicatedEventTypes([tile({ action: { swap: "subHome" } })], undefined, []).size).toBe(0);
+    expect(dedicatedEventTypes([tile({ action: { swap: "subHome" } })], undefined, [], readoutScorebug()).size).toBe(0);
+  });
+
+  // R4/tennis — the third instance of the two-entry-points defect, and the
+  // first one the SCOREBUG could cause. Tap model S makes the board itself the
+  // point button, so `tennis.point` was reachable from the half AND still
+  // offered as a bare generic form inside More. Worse than the swap case: the
+  // generic form bypasses the dock, so a chair recording a point through More
+  // silently loses the ace / double-fault / winner / unforced-error
+  // enrichment that is the only reason tennis's per-person tallies can be fed
+  // from the pad at all.
+  it("collects a tappable scorebug half's own tapEvent — tap model S is a real entry point, not a readout", () => {
+    const types = dedicatedEventTypes([], undefined, [], tappableScorebug());
+    expect([...types]).toEqual(["tennis.point"]);
+  });
+
+  // The property the whole change rests on, asserted rather than promised:
+  // cricket and football set `tappable` on no half, so they contribute
+  // nothing new and their More sheets cannot move. This is what makes the
+  // change safe for two signed-off sports.
+  it("a READOUT scorebug contributes nothing, which is what leaves every tapModel-T skin untouched", () => {
+    expect(dedicatedEventTypes([], undefined, [], readoutScorebug()).size).toBe(0);
+  });
+
+  it("does not invent a type from a half that carries a tapEvent but is not tappable", () => {
+    const half = { who: [{ name: "Whitfield" }], big: "40", tapEvent: { type: "tennis.point", payload: {} } };
+    const spec = { ...readoutScorebug(), halves: [half, half] } as ScorebugSpec;
+    expect(dedicatedEventTypes([], undefined, [], spec).size).toBe(0);
   });
 });
 
