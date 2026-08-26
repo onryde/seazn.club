@@ -718,7 +718,11 @@ export function MatchRuleFields({
             </select>
           )}
           {field.help && (
-            <span className="mt-0.5 block text-[11px] text-slate-400">{field.help}</span>
+            /* R3.5/Task P — was text-slate-400 (2.63:1 on the .card this
+               span renders inside at both call sites, under the WCAG AA
+               4.5:1 floor); text-slate-600 clears 7.58:1. Task I's
+               shootoutWin/shootoutLoss help text renders through here. */
+            <span className="mt-0.5 block text-[11px] text-slate-600">{field.help}</span>
           )}
         </label>
       ))}

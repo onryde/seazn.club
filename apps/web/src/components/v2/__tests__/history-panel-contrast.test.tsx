@@ -111,14 +111,14 @@ describe("HistoryPanel — save-point list stays legible (contrast regression)",
   });
 });
 
-// R3.5 accessibility fix (owner-approved 2026-08-26) — FixtureConsole's "vs"
-// separator rendered at text-slate-400 on a white card: an UNSCOPED axe run
-// during the football pass flagged it (pre-existing, not caused by that
-// wave), ~2.6:1 against WCAG AA's 4.5:1 floor for normal text. Same class of
-// bug the HistoryPanel suite above already caught once (slate-400/500 both
-// too faint on white) — computed here rather than eyeballed.
+// ---- Shared WCAG contrast primitives + Tailwind v4 hex table -------------
+// Hoisted to module scope so every describe block below (the original 'vs'-
+// separator regression suite, and the R3.5/Task P sweep-completion suite
+// added after it) shares one set of constants instead of each duplicating
+// them — two copies of the same OKLCH-derived hex values could quietly
+// drift apart.
 //
-// The WCAG formula is re-derived HERE rather than imported from
+// The formula is re-derived HERE rather than imported from
 // ../scorepad/v3/__tests__/contrast.ts, matching that file's own stated
 // reason for keeping it inline there: each contrast suite proves itself,
 // rather than trusting a cross-file import to still mean what it did.
@@ -128,36 +128,66 @@ describe("HistoryPanel — save-point list stays legible (contrast regression)",
 // sRGB (OKLab -> linear sRGB -> gamma), NOT the classic Tailwind v3 palette;
 // ../scorepad/v3/__tests__/contrast.test.ts's own notes document several
 // places where the two disagree enough to flip a real AA verdict.
+function srgbChannelToLinear(c: number): number {
+  const s = c / 255;
+  return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+}
+function relativeLuminance(hex: string): number {
+  const n = hex.replace("#", "");
+  const r = parseInt(n.slice(0, 2), 16);
+  const g = parseInt(n.slice(2, 4), 16);
+  const b = parseInt(n.slice(4, 6), 16);
+  return (
+    0.2126 * srgbChannelToLinear(r) +
+    0.7152 * srgbChannelToLinear(g) +
+    0.0722 * srgbChannelToLinear(b)
+  );
+}
+function contrastRatio(hexA: string, hexB: string): number {
+  const l1 = relativeLuminance(hexA);
+  const l2 = relativeLuminance(hexB);
+  const lighter = Math.max(l1, l2);
+  const darker = Math.min(l1, l2);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+// Tailwind v4's compiled sRGB for every slate tier touched by the suites in
+// this file (see the sourcing note above).
+const SLATE_100 = "#f1f5f9"; // oklch(96.8% 0.007 247.896)  — the chips' bg-slate-100
+const SLATE_400 = "#90a1b9"; // oklch(70.4% 0.04 256.788)   — the failing OLD token
+const SLATE_500 = "#62748e"; // oklch(55.4% 0.046 257.417)
+const SLATE_600 = "#45556c"; // oklch(44.6% 0.043 257.281)  — the fixed NEW token
+const SLATE_HEX: Record<string, string> = {
+  "100": SLATE_100,
+  "400": SLATE_400,
+  "500": SLATE_500,
+  "600": SLATE_600,
+};
+
+// `.card`'s background is what every non-chip instance in this file renders
+// on. Read LIVE from globals.css rather than trusting a bare "#ffffff"
+// literal with no tie back to the token the spans actually sit on (the gap
+// a reviewer found here): if `.card` is ever restyled off bg-white, the
+// sanity test below fails loudly instead of leaving every ratio in this
+// file silently wrong.
+const globalsCss = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
+const cardRuleMatch = /\.card\s*\{\s*@apply\s+([^;]+);/.exec(globalsCss);
+const WHITE = "#ffffff";
+
+describe("shared token sanity — .card's background", () => {
+  it("globals.css's .card rule still applies bg-white — every card-background ratio in this file depends on it", () => {
+    expect(cardRuleMatch, "globals.css must still define `.card { @apply ...; }`").not.toBeNull();
+    expect(cardRuleMatch![1]).toMatch(/\bbg-white\b/);
+  });
+});
+
+// R3.5 accessibility fix (owner-approved 2026-08-26) — FixtureConsole's "vs"
+// separator rendered at text-slate-400 on a white card: an UNSCOPED axe run
+// during the football pass flagged it (pre-existing, not caused by that
+// wave), ~2.6:1 against WCAG AA's 4.5:1 floor for normal text. Same class of
+// bug the HistoryPanel suite above already caught once (slate-400/500 both
+// too faint on white) — computed here rather than eyeballed.
 describe("FixtureConsole — 'vs' separator contrast (regression, R3.5)", () => {
-  function srgbChannelToLinear(c: number): number {
-    const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-  }
-  function relativeLuminance(hex: string): number {
-    const n = hex.replace("#", "");
-    const r = parseInt(n.slice(0, 2), 16);
-    const g = parseInt(n.slice(2, 4), 16);
-    const b = parseInt(n.slice(4, 6), 16);
-    return (
-      0.2126 * srgbChannelToLinear(r) +
-      0.7152 * srgbChannelToLinear(g) +
-      0.0722 * srgbChannelToLinear(b)
-    );
-  }
-  function contrastRatio(hexA: string, hexB: string): number {
-    const l1 = relativeLuminance(hexA);
-    const l2 = relativeLuminance(hexB);
-    const lighter = Math.max(l1, l2);
-    const darker = Math.min(l1, l2);
-    return (lighter + 0.05) / (darker + 0.05);
-  }
-
-  const WHITE = "#ffffff";
-  // Tailwind v4's compiled sRGB for --color-slate-400 / --color-slate-600
-  // (oklch(70.4% 0.04 256.788) / oklch(44.6% 0.043 257.281) respectively).
-  const SLATE_400 = "#90a1b9";
-  const SLATE_600 = "#45556c";
-
   it("sanity: the formula agrees with the known black-on-white extreme", () => {
     expect(contrastRatio("#000000", "#ffffff")).toBeCloseTo(21, 1);
   });
@@ -180,5 +210,127 @@ describe("FixtureConsole — 'vs' separator contrast (regression, R3.5)", () => 
     expect(vsSpan![1], "the 'vs' span must use slate-600 (>=4.5:1), never slate-400 or slate-500").toBe(
       "600",
     );
+  });
+});
+
+// R3.5/Task P — the rest of the contrast sweep the owner approved after Task
+// J's 'vs'-separator fix above: the five remaining non-chip text-slate-400
+// instances in fixture-console.tsx (the page an organiser opens for every
+// match), the two status chips (a DIFFERENT background — bg-slate-100, not
+// white — judged on their own rather than assumed to inherit the 7.58:1
+// figure above), and match-rules.tsx's shared field-help span, which Task I
+// put two new strings (shootoutWin/shootoutLoss) behind without the wave
+// noticing the span itself was already failing AA.
+//
+// Each instance is checked two ways, closing the gap a reviewer found in
+// the suite above (WHITE hardcoded with no tie back to what the span
+// actually sits on): (1) the ACTUAL source is read and regex-matched, so a
+// silent reintroduction of text-slate-400 is caught, not assumed fixed
+// forever; (2) the ratio is COMPUTED from whatever tier is actually present
+// (not a hardcoded assumption of "600"), so a partial fix — e.g. landing on
+// slate-500 instead of slate-600 — still fails, instead of passing a bare
+// "!= text-slate-400" spelling check.
+describe("FixtureConsole & MatchRuleFields — contrast sweep completion (R3.5/Task P)", () => {
+  const fixtureConsoleCode = readFileSync(
+    join(process.cwd(), "src/components/v2/fixture-console.tsx"),
+    "utf8",
+  )
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+  const matchRulesCode = readFileSync(join(process.cwd(), "src/components/v2/match-rules.tsx"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+
+  function tierHex(tier: string, siteLabel: string): string {
+    const hex = SLATE_HEX[tier];
+    expect(hex, `${siteLabel}: unrecognized slate tier text-slate-${tier}`).toBeDefined();
+    return hex;
+  }
+
+  // Both call sites of MatchRuleFields (division-builder.tsx's format-tab
+  // `<section className="card ...">` and division-settings.tsx's `Group`,
+  // which renders `<section className="card p-0 ...">`) wrap it in a
+  // `.card` — confirmed by reading both, not assumed — so the help span
+  // belongs in the white-background group below, same as the fixture-
+  // console instances.
+  const cardInstances = [
+    {
+      label: "fixture header — round/scheduled-time line",
+      src: fixtureConsoleCode,
+      regex: /<p className="mt-1 text-xs text-slate-(\d+)">\s*\{msg\("schedule\.round"/,
+    },
+    {
+      label: "event ledger header — activity count",
+      src: fixtureConsoleCode,
+      regex: /<span className="font-normal text-slate-(\d+)">\(\{events\.length\}\)<\/span>/,
+    },
+    {
+      label: "event ledger — empty state message",
+      src: fixtureConsoleCode,
+      regex: /<p className="px-4 py-4 text-sm text-slate-(\d+)">\{msg\("score\.noEvents"\)\}<\/p>/,
+    },
+    {
+      label: "event row — recorder attribution",
+      src: fixtureConsoleCode,
+      regex: /<span className="text-slate-(\d+)"> \(\{recorder\}\)<\/span>/,
+    },
+    {
+      label: "event row — timestamp wrapper",
+      src: fixtureConsoleCode,
+      regex: /<span className="shrink-0 text-slate-(\d+)">\s*<ClientTime value=\{e\.recorded_at\}/,
+    },
+    {
+      label: "match-rules.tsx — shared field help span",
+      src: matchRulesCode,
+      regex: /<span className="mt-0\.5 block text-\[11px\] text-slate-(\d+)">\{field\.help\}<\/span>/,
+    },
+  ];
+
+  it.each(cardInstances)(
+    "$label renders a slate tier that clears 4.5:1 on .card's white",
+    ({ label, src, regex }) => {
+      const m = regex.exec(src);
+      expect(m, `${label}: source no longer matches the expected markup shape`).not.toBeNull();
+      const tier = m![1];
+      const ratio = contrastRatio(tierHex(tier, label), WHITE);
+      expect(
+        ratio,
+        `${label}: text-slate-${tier} on white must clear 4.5:1 (got ${ratio.toFixed(2)})`,
+      ).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+
+  it("pins the fixed ratio: text-slate-600 on .card's white is 7.58:1 — same fix as the 'vs' separator", () => {
+    expect(contrastRatio(SLATE_600, WHITE)).toBeCloseTo(7.58, 1);
+  });
+
+  // The two status chips sit on bg-slate-100, NOT white — the 7.58 figure
+  // above does not transfer. Computed independently: slate-400-on-slate-100
+  // is actually SLIGHTLY worse than slate-400-on-white (2.40:1 vs 2.63:1),
+  // since slate-100 sits closer to slate-400 on the lightness scale than
+  // white does.
+  const chipInstances = [
+    { label: "abandoned", regex: /abandoned:\s*"bg-slate-(\d+) text-slate-(\d+)"/ },
+    { label: "cancelled", regex: /cancelled:\s*"bg-slate-(\d+) text-slate-(\d+)"/ },
+  ];
+
+  it.each(chipInstances)(
+    "STATUS_STYLE.$label clears 4.5:1 against its OWN background, not white",
+    ({ label, regex }) => {
+      const m = regex.exec(fixtureConsoleCode);
+      expect(m, `STATUS_STYLE.${label}: source no longer matches "bg-slate-N text-slate-M"`).not.toBeNull();
+      const [, bgTier, textTier] = m!;
+      const bgHex = tierHex(bgTier, `STATUS_STYLE.${label} background`);
+      const ratio = contrastRatio(tierHex(textTier, `STATUS_STYLE.${label} text`), bgHex);
+      expect(
+        ratio,
+        `STATUS_STYLE.${label}: text-slate-${textTier} on bg-slate-${bgTier} must clear 4.5:1 (got ${ratio.toFixed(2)})`,
+      ).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+
+  it("pins both chip ratios: slate-400 on slate-100 was 2.40:1 (fails AA), slate-600 on slate-100 is 6.92:1 (fixed)", () => {
+    expect(contrastRatio(SLATE_400, SLATE_100)).toBeCloseTo(2.4, 1);
+    expect(contrastRatio(SLATE_600, SLATE_100)).toBeCloseTo(6.92, 1);
   });
 });
