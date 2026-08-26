@@ -297,6 +297,62 @@ describe("dedicatedEventTypes", () => {
   });
 });
 
+// R3.5/B — see dedicatedEventTypes' own doc (pad-host.tsx) for the fourth,
+// inverted instance of the "claimed but not actually reachable" family this
+// closes: a cricket super over disables its ENTIRE delivery row, and the
+// loop used to add `cricket.superover.ball` from those disabled tiles
+// anyway, which closed the only remaining route to recording one (no
+// enabled tile or sheet claimed the type either).
+function bugStub(): ScorebugSpec {
+  return {
+    context: "", phase: "live", strip: [],
+    halves: [{ who: [{ name: "H" }], big: "0" }, { who: [{ name: "A" }], big: "0" }],
+  };
+}
+
+function evTile(id: string, type: string, disabled?: boolean): TileSpec {
+  return {
+    id, label: "l", kind: "standard", phases: ["live"],
+    action: { event: { type, payload: {} } },
+    ...(disabled === undefined ? {} : { disabled }),
+  };
+}
+
+describe("dedicatedEventTypes — a disabled tile is not a reachable surface", () => {
+  it("B1: every tile for a type disabled => the type is NOT claimed", () => {
+    const out = dedicatedEventTypes(
+      [evTile("run0", "cricket.superover.ball", true),
+       evTile("run1", "cricket.superover.ball", true)],
+      undefined, [], bugStub());
+    expect(out.has("cricket.superover.ball")).toBe(false);
+  });
+
+  it("B2: an enabled tile still claims its type", () => {
+    const out = dedicatedEventTypes([evTile("run0", "cricket.ball")], undefined, [], bugStub());
+    expect(out.has("cricket.ball")).toBe(true);
+  });
+
+  it("B3: one enabled + one disabled tile for the same type => still claimed", () => {
+    const out = dedicatedEventTypes(
+      [evTile("a", "football.goal", true), evTile("b", "football.goal")],
+      undefined, [], bugStub());
+    expect(out.has("football.goal")).toBe(true);
+  });
+
+  it("B4: a sheet still claims a type whose only tile is disabled", () => {
+    const out = dedicatedEventTypes(
+      [evTile("w", "cricket.wicket", true)],
+      { wicket: { event: "cricket.wicket", steps: [] } as never },
+      [], bugStub());
+    expect(out.has("cricket.wicket")).toBe(true);
+  });
+
+  it("B5: a tapModel-S scorebug half still claims its tapEvent type (R4's behaviour, unchanged)", () => {
+    const out = dedicatedEventTypes([], undefined, [], tappableScorebug());
+    expect(out.has("tennis.point")).toBe(true);
+  });
+});
+
 function field(over: Partial<PadField> = {}): PadField {
   return { kind: "toggle", path: "flag", ...over } as PadField;
 }

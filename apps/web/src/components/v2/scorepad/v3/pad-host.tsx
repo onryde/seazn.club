@@ -250,7 +250,21 @@ export function buildTopRibbon(
  *  `tappable` has no `tapEvent` to contribute — so cricket and football are
  *  provably unaffected (neither sets `tappable` on any half), and that is a
  *  property, not a promise: it falls out of the loop below rather than out of
- *  a special case. */
+ *  a special case.
+ *
+ *  R3.5/B closed a fourth instance, and this one is the INVERSE of the first
+ *  three. R3/football's swap, R2c's `cricket.retire`, and R4/tennis's tappable
+ *  half were all "this type IS reachable through a narrowed tile/sheet/half,
+ *  so the generic More form is a redundant, worse-enrichment duplicate" — the
+ *  type was claimed correctly, and the bug was a second route to it. Here the
+ *  type was claimed by tiles nobody could tap at all: a cricket super over
+ *  disables its ENTIRE delivery row (`TileSpec.disabled` — a transient
+ *  per-tile block, never a phase-gated removal), and this loop used to add
+ *  `cricket.superover.ball` from those disabled tiles regardless, which
+ *  closed the only remaining route to recording one, since no enabled tile or
+ *  sheet claimed the type either. Still not "the last" — but now the family
+ *  has both directions: claimed-and-reachable-twice, and claimed-but-
+ *  reachable-never. */
 export function dedicatedEventTypes(
   tiles: readonly TileSpec[],
   sheets: Record<string, GuidedSheetSpec> | undefined,
@@ -259,6 +273,11 @@ export function dedicatedEventTypes(
 ): Set<string> {
   const out = new Set<string>();
   for (const tile of tiles) {
+    // R3.5/B — a DISABLED tile is not a reachable surface (see this
+    // function's own doc above for the fourth, inverted instance this
+    // closes). Per-TYPE correctness falls out for free: a type with one
+    // enabled and one disabled tile is still added by the enabled one.
+    if (tile.disabled === true) continue;
     if ("event" in tile.action) out.add(tile.action.event.type);
     else if ("swap" in tile.action) {
       const slot = resolveSwapSlot(tile.action.swap, swaps);
