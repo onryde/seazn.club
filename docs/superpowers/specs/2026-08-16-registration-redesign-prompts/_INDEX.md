@@ -28,7 +28,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS002 | `RS002-core-usecases.md` | RS001b | **DONE** — PR #607 merged `4ff0bf8f` (2026-08-17) |
 | RS003 | `RS003-public-endpoints.md` | RS002 | **DONE** — PR #615 merged `29690ec8c` (2026-08-18) |
 | RS004 | `RS004-hub-settings-tab.md` | RS003 | **DONE** — merged `171df1376` (PR #641, 2026-08-25). Smoke still owed by RS010, as the PR states |
-| RS005 | `RS005-hub-registrants-tab.md` | RS004 | **IN FLIGHT** (2026-08-25) — branch `feat/rs005-registrants-tab` |
+| RS005 | `RS005-hub-registrants-tab.md` | RS004 | **DONE** — merged `9d2ad39bc` (PR #651, 2026-08-26), 16/16 checks green. Known-open and stated in the PR: no pagination in the read path; `resend-confirmation` has no throttle (mirrors the pre-existing `/remind`). Smoke still owed by RS010 |
 | RS006 | `RS006-public-stepper.md` | RS003 | TODO |
 | RS007 | `RS007-status-page-join-payments.md` | RS006 | TODO |
 | RS008 | `RS008-consent-claim-optout.md` | RS007 | TODO |
