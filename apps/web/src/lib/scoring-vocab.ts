@@ -1019,6 +1019,83 @@ export const engineErrorLabel = (code: string, m: MsgFn): string | null =>
   code in ENGINE_ERROR_KEY ? m(ENGINE_ERROR_KEY[code as EngineErrorCode]) : null;
 
 /**
+ * R3.5/Task G — a decided fixture's own `MatchOutcome` (kind/winner/loser/
+ * method, `packages/engine/src/core/types.ts`) reaches both the public
+ * fixture page and the organiser console as data, and until this task
+ * neither rendered anything from it: a reader had to decode
+ * "1 — 1 (3–0 pens)" for themselves. `method` is a plain string the sport
+ * modules extend freely, so only a CLOSED, deliberately-curated set gets its
+ * own clause here — everything else (an absent method, a plain `regulation`
+ * result, or a method nobody has written copy for yet, e.g. cricket's `dls`/
+ * `innings`) falls back to the plain winner sentence. That fallback is
+ * deliberate, not a gap: the winner is still true even when the copy for HOW
+ * isn't, and a method's raw token must never leak onto the page.
+ */
+const DECIDED_METHOD_KEY: Record<string, MessageKey> = {
+  shootout: "fixture.decidedBy.shootout",
+  super_over: "fixture.decidedBy.superOver",
+  boundary_count: "fixture.decidedBy.boundaryCount",
+  extra_time: "fixture.decidedBy.extraTime",
+};
+
+/** The minimal slice of `MatchOutcome` this module needs — structural rather
+ *  than importing the engine's own type, the same posture the pad chassis
+ *  takes on engine shapes elsewhere: a page that already has `outcome` as
+ *  loose JSON (a DB column, an API response) can pass it straight through. */
+export interface DecidedOutcomeLike {
+  kind?: string;
+  winner?: string;
+  method?: string;
+}
+
+/**
+ * The sentence a decided fixture owes its reader. `entrantNames` resolves
+ * `outcome.winner` to a display name (falling back to the raw id, matching
+ * every other id→name lookup in this app); `shootoutScore` is read out of
+ * `ScoreSummary.detail.shootout` by the caller (see `shootoutScoreFromDetail`
+ * below) — it is the ONE mapped method whose sentence needs a number, and
+ * this function has no engine import and no opinion on any one sport's
+ * `detail` shape, so the two numbers arrive already resolved.
+ *
+ * Returns null for anything this task was not asked to describe (`draw`,
+ * `no_result`, or no outcome at all) — callers render nothing rather than
+ * invent copy nobody specified.
+ */
+export function decidedOutcomeText(
+  outcome: DecidedOutcomeLike | null | undefined,
+  entrantNames: Record<string, string>,
+  m: MsgFn,
+  shootoutScore?: { home: number; away: number } | null,
+): string | null {
+  if (!outcome) return null;
+  if (outcome.kind === "tie") return m("fixture.decidedBy.tie");
+  if (outcome.kind !== "win" && outcome.kind !== "award") return null;
+  if (!outcome.winner) return null;
+  const winner = entrantNames[outcome.winner] ?? outcome.winner;
+  const key = outcome.method ? DECIDED_METHOD_KEY[outcome.method] : undefined;
+  if (key === "fixture.decidedBy.shootout" && shootoutScore) {
+    return m(key, { winner, score: `${shootoutScore.home}–${shootoutScore.away}` });
+  }
+  if (key && key !== "fixture.decidedBy.shootout") return m(key, { winner });
+  return m("fixture.decidedBy.plain", { winner });
+}
+
+/**
+ * `ScoreSummary.detail` is `z.unknown()` (sport-specific breakdown) — this
+ * narrows football's own shape (`{ shootout: { home, away } }`, set by
+ * `summary()` whenever a shoot-out tally exists, R3.5/Task H) without an
+ * engine import. Null for anything else, including every non-football
+ * sport's own `detail` shape and a decision reached with no shoot-out at all.
+ */
+export function shootoutScoreFromDetail(detail: unknown): { home: number; away: number } | null {
+  if (!detail || typeof detail !== "object") return null;
+  const shootout = (detail as Record<string, unknown>).shootout;
+  if (!shootout || typeof shootout !== "object") return null;
+  const { home, away } = shootout as Record<string, unknown>;
+  return typeof home === "number" && typeof away === "number" ? { home, away } : null;
+}
+
+/**
  * What a scoring surface should show when a write is refused. An engine code
  * wins, because its `message` is the engine's own English and is rendered
  * verbatim otherwise; anything else keeps the raw message (HTTP/auth failures
@@ -1043,5 +1120,6 @@ export const SCORING_VOCAB_KEYS: readonly MessageKey[] = [
   ...Object.values(AWARD_KEY),
   ...Object.values(SQUAD_ROLE_KEY), ...Object.values(SQUAD_PROVENANCE_KEY),
   ...Object.values(CONFIG_KEY), ...PAD_LABEL_KEYS,
+  ...Object.values(DECIDED_METHOD_KEY), "fixture.decidedBy.plain", "fixture.decidedBy.tie",
   ...Object.values(ENUM_VOCAB).flatMap((maps) => maps.flatMap((m) => Object.values(m))),
 ];

@@ -13,6 +13,7 @@ import { fixtureSubheading } from "./fixture-subheading";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
+import { decidedOutcomeText, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
 // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, same pattern
 // as data.ts:502-503 and every other public surface this fix round wires.
 // This IS a server component and getPublicFixture already carries `org`, so
@@ -21,6 +22,35 @@ import { msgFor } from "@/lib/messages-i18n";
 // Locale and never touches next/headers.
 const lookup = (locale: Parameters<typeof msgFor>[0]) =>
   (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor(locale, k, v);
+
+/**
+ * R3.5/Task G — the sentence a decided fixture owes its reader: WHO won and,
+ * where the copy exists, HOW. `fixture.outcome` (winner + method) and
+ * `fixture.summary` (headline + the shoot-out tally inside `detail`) were
+ * both already on this page as unused data; this composes them once so the
+ * page body, the OG description and the WhatsApp share text below can't
+ * drift on the wording.
+ */
+function decidedLineFor(
+  fixture: { outcome: { kind?: string; winner?: string; method?: string } | null; summary: { detail?: unknown } | null },
+  entrantNames: Record<string, string>,
+  msgFn: ReturnType<typeof lookup>,
+): string | null {
+  return decidedOutcomeText(
+    fixture.outcome,
+    entrantNames,
+    msgFn,
+    shootoutScoreFromDetail(fixture.summary?.detail),
+  );
+}
+
+/** Appends the decided sentence onto a headline (metadata/share text share
+ *  this exact join so the two surfaces read consistently). Never invents a
+ *  headline — a decided sentence with no headline stands alone. */
+function withDecidedLine(headline: string | undefined, decidedLine: string | null): string | undefined {
+  if (!decidedLine) return headline;
+  return headline ? `${headline} — ${decidedLine}` : decidedLine;
+}
 
 export const revalidate = 30;
 
@@ -50,9 +80,12 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const away = data.fixture.away_entrant_id
     ? (data.entrantNames[data.fixture.away_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
     : resolveSlotLabel(data.fixture.away_slot_label, msgFn, "schedule.tbd");
+  const decidedLine = decidedLineFor(data.fixture, data.entrantNames, msgFn);
   return {
     title: `${home} vs ${away} — ${data.division.name}`,
-    description: data.fixture.summary?.headline ?? `${home} vs ${away} at ${data.competition.name}`,
+    description:
+      withDecidedLine(data.fixture.summary?.headline, decidedLine) ??
+      `${home} vs ${away} at ${data.competition.name}`,
     ...(data.competition.visibility === "unlisted"
       ? { robots: { index: false, follow: false } }
       : {}),
@@ -73,6 +106,7 @@ export default async function FixturePage({ params }: Props) {
     ? (entrantNames[fixture.away_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
     : resolveSlotLabel(fixture.away_slot_label, msgFn, "schedule.tbd");
   const basePath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
+  const decidedLine = decidedLineFor(fixture, entrantNames, msgFn);
 
   const jsonLd = sportsEventJsonLd({
     name: `${home} vs ${away} — ${division.name}, ${competition.name}`,
@@ -116,12 +150,17 @@ export default async function FixturePage({ params }: Props) {
           title={`${home} vs ${away}`}
           text={
             fixture.status === "decided" || fixture.status === "finalized"
-              ? `${home} vs ${away} — ${fixture.summary?.headline ?? "full-time"} (${division.name}, ${competition.name})`
+              ? `${home} vs ${away} — ${withDecidedLine(fixture.summary?.headline, decidedLine) ?? "full-time"} (${division.name}, ${competition.name})`
               : `${home} vs ${away} — ${division.name}, ${competition.name}. Follow it live:`
           }
           url={`${basePath}/fixtures/${fixture.id}`}
         />
       </div>
+      {/* R3.5/Task G — the winner and, where mapped, HOW: the same data the
+          share text and OG description above draw on, made visible on the
+          page itself rather than left for the reader to decode out of the
+          tally below. */}
+      {decidedLine && <p className="mb-2 text-base font-semibold text-ink">{decidedLine}</p>}
       <p className="mb-4 text-sm text-ink-muted">
         {fixtureSubheading(fixture.status, fixture.scheduled_at)}
         {fixture.venue_name ? ` · ${fixture.venue_name}` : ""}

@@ -3,9 +3,11 @@ import {
   wicketLabel, extraLabel, sportLabel, swatchLabel,
   eventLabel, enumLabel, engineErrorLabel, scoringErrorText, positionLabel,
   padLabel, squadRoleLabel, squadProvenanceLabel, configLabel, playerStatLabel,
+  decidedOutcomeText, shootoutScoreFromDetail,
   EVENT_KEY, ENUM_VOCAB, ENGINE_ERROR_KEY, POSITION_KEY, PAD_LABEL_KEYS,
   SCORING_VOCAB_KEYS, SPORT_KEY, type MsgFn,
 } from "@/lib/scoring-vocab";
+import { interpolate } from "@/lib/i18n-runtime";
 import { buildRibbon, ribbonKeyFor } from "@/components/v2/scorepad/v3/ribbon";
 import { builtinModules } from "@seazn/engine/sports";
 import { EngineErrorCode, matchPositionOf, SquadRole } from "@seazn/engine/core";
@@ -705,5 +707,104 @@ describe("scoringErrorText keeps engine English off the scorer's screen", () => 
     expect(scoringErrorText("RATE_LIMITED", "Slow down", fr, "device.failed")).toBe("Slow down");
     expect(scoringErrorText(null, null, fr, "device.failed")).toBe(uiFr["device.failed"]);
     expect(scoringErrorText("UNKNOWN", "", fr, "device.failed")).toBe(uiFr["device.failed"]);
+  });
+});
+
+// R3.5/Task G — a decided fixture's own MatchOutcome (kind/winner/loser/method)
+// reached both the public fixture page and the organiser console as data and
+// had nothing rendering it: a reader had to decode "1 — 1 (3–0 pens)" for
+// themselves. ONE function composes the sentence for both surfaces so they
+// cannot drift on which methods get a clause and which fall back to plain.
+describe("decidedOutcomeText — a decided fixture names the winner and, where mapped, the method", () => {
+  const winnerName = "Riverside FC";
+  const names: Record<string, string> = { W: winnerName, L: "Oakdale United" };
+  // A real interpolating en lookup (unlike the module-level `en` stub above,
+  // which ignores `vars` entirely) — proves the ACTUAL dictionary template
+  // reads correctly with real values substituted in, not just that the right
+  // key was selected.
+  const say: MsgFn = (k, vars) => interpolate((uiEn as Record<string, string>)[k] ?? k, vars);
+
+  it("F18: shootout — names the winner and the penalty score", () => {
+    expect(
+      decidedOutcomeText({ kind: "win", winner: "W", method: "shootout" }, names, say, { home: 3, away: 0 }),
+    ).toBe("Riverside FC won 3–0 on penalties");
+  });
+
+  it("C23: super_over — names the winner, no score in the sentence", () => {
+    expect(decidedOutcomeText({ kind: "win", winner: "W", method: "super_over" }, names, say)).toBe(
+      "Riverside FC won on the super over",
+    );
+  });
+
+  it("C13: boundary_count — names the winner", () => {
+    expect(decidedOutcomeText({ kind: "win", winner: "W", method: "boundary_count" }, names, say)).toBe(
+      "Riverside FC won on boundary count",
+    );
+  });
+
+  it("extra_time — names the winner", () => {
+    expect(decidedOutcomeText({ kind: "win", winner: "W", method: "extra_time" }, names, say)).toBe(
+      "Riverside FC won after extra time",
+    );
+  });
+
+  it("an unmapped method (cricket's dls/innings, football's regulation) falls back to the plain sentence, never the raw token", () => {
+    expect(decidedOutcomeText({ kind: "win", winner: "W", method: "dls" }, names, say)).toBe("Riverside FC won");
+    expect(decidedOutcomeText({ kind: "win", winner: "W", method: "innings" }, names, say)).toBe("Riverside FC won");
+    expect(decidedOutcomeText({ kind: "win", winner: "W", method: "regulation" }, names, say)).toBe(
+      "Riverside FC won",
+    );
+    expect(decidedOutcomeText({ kind: "win", winner: "W", method: "dls" }, names, say)).not.toContain("dls");
+  });
+
+  it("an absent method also falls back to the plain sentence", () => {
+    expect(decidedOutcomeText({ kind: "win", winner: "W" }, names, say)).toBe("Riverside FC won");
+  });
+
+  it("C14/C15: tie — 'Match tied', no name resolution needed", () => {
+    expect(decidedOutcomeText({ kind: "tie" }, names, say)).toBe("Match tied");
+  });
+
+  it("draw / no_result / no outcome at all: null — nothing this task was asked to describe", () => {
+    expect(decidedOutcomeText({ kind: "draw" }, names, say)).toBeNull();
+    expect(decidedOutcomeText({ kind: "no_result" }, names, say)).toBeNull();
+    expect(decidedOutcomeText(null, names, say)).toBeNull();
+    expect(decidedOutcomeText(undefined, names, say)).toBeNull();
+  });
+
+  it("an award (forfeit/DQ) win gets the plain sentence too — it always carries a winner, never a method", () => {
+    expect(decidedOutcomeText({ kind: "award", winner: "W" }, names, say)).toBe("Riverside FC won");
+  });
+
+  it("resolves the winner id through entrantNames, falling back to the raw id when unmapped", () => {
+    expect(
+      decidedOutcomeText({ kind: "win", winner: "ghost-id", method: "shootout" }, names, say, { home: 1, away: 0 }),
+    ).toBe("ghost-id won 1–0 on penalties");
+  });
+
+  it("shootout with no resolvable score falls back to plain rather than printing 'undefined'", () => {
+    expect(decidedOutcomeText({ kind: "win", winner: "W", method: "shootout" }, names, say)).toBe(
+      "Riverside FC won",
+    );
+  });
+});
+
+describe("shootoutScoreFromDetail — narrows ScoreSummary.detail without an engine import", () => {
+  it("reads football's { shootout: { home, away } } shape (summary(), R3.5/Task H)", () => {
+    expect(shootoutScoreFromDetail({ periods: [], shootout: { home: 3, away: 0 } })).toEqual({
+      home: 3,
+      away: 0,
+    });
+  });
+
+  it("null for detail with no shootout key (every non-shootout decision)", () => {
+    expect(shootoutScoreFromDetail({ periods: [] })).toBeNull();
+  });
+
+  it("null for null/undefined/non-object detail, and for a malformed shootout shape", () => {
+    expect(shootoutScoreFromDetail(null)).toBeNull();
+    expect(shootoutScoreFromDetail(undefined)).toBeNull();
+    expect(shootoutScoreFromDetail("nope")).toBeNull();
+    expect(shootoutScoreFromDetail({ shootout: { home: "3", away: 0 } })).toBeNull();
   });
 });

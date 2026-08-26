@@ -223,7 +223,15 @@ export interface PublicFixture {
   venue_name: string | null;
   court_name: string | null;
   status: string;
-  outcome: { kind?: string; winner?: string } | null;
+  // R3.5/Task G — widened from `{ kind?; winner? }`. The SELECT below (and
+  // liveNow's/getPublicDivision's) already reads the whole `outcome` JSONB
+  // column — this type was just under-declaring what was already arriving at
+  // runtime (the same class of gap this file's own "lane/is_final" comment
+  // flags above), so `method`/`loser` reached nobody. `method` is what lets a
+  // decided fixture say HOW it was decided (decidedOutcomeText,
+  // lib/scoring-vocab.ts); `loser` isn't consumed yet but costs nothing to
+  // declare accurately since it is the same MatchOutcome shape either way.
+  outcome: { kind?: string; winner?: string; loser?: string; method?: string } | null;
   summary: {
     headline?: string;
     perSide?: { entrantId: string; line: string }[];

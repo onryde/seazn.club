@@ -14,6 +14,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderIsland, propsOf, textOf } from "@/components/__tests__/_hook-harness";
 import type { ReactElement, ReactNode } from "react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -106,5 +108,77 @@ describe("HistoryPanel — save-point list stays legible (contrast regression)",
     expect(count).toBeTruthy();
     expect(String(propsOf(heading!).className)).toContain("slate-600");
     expect(String(propsOf(count!).className)).toContain("slate-600");
+  });
+});
+
+// R3.5 accessibility fix (owner-approved 2026-08-26) — FixtureConsole's "vs"
+// separator rendered at text-slate-400 on a white card: an UNSCOPED axe run
+// during the football pass flagged it (pre-existing, not caused by that
+// wave), ~2.6:1 against WCAG AA's 4.5:1 floor for normal text. Same class of
+// bug the HistoryPanel suite above already caught once (slate-400/500 both
+// too faint on white) — computed here rather than eyeballed.
+//
+// The WCAG formula is re-derived HERE rather than imported from
+// ../scorepad/v3/__tests__/contrast.ts, matching that file's own stated
+// reason for keeping it inline there: each contrast suite proves itself,
+// rather than trusting a cross-file import to still mean what it did.
+//
+// Hex values are Tailwind v4's ACTUAL compiled output — read from this repo's
+// own node_modules/tailwindcss/theme.css oklch() swatches and converted to
+// sRGB (OKLab -> linear sRGB -> gamma), NOT the classic Tailwind v3 palette;
+// ../scorepad/v3/__tests__/contrast.test.ts's own notes document several
+// places where the two disagree enough to flip a real AA verdict.
+describe("FixtureConsole — 'vs' separator contrast (regression, R3.5)", () => {
+  function srgbChannelToLinear(c: number): number {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  }
+  function relativeLuminance(hex: string): number {
+    const n = hex.replace("#", "");
+    const r = parseInt(n.slice(0, 2), 16);
+    const g = parseInt(n.slice(2, 4), 16);
+    const b = parseInt(n.slice(4, 6), 16);
+    return (
+      0.2126 * srgbChannelToLinear(r) +
+      0.7152 * srgbChannelToLinear(g) +
+      0.0722 * srgbChannelToLinear(b)
+    );
+  }
+  function contrastRatio(hexA: string, hexB: string): number {
+    const l1 = relativeLuminance(hexA);
+    const l2 = relativeLuminance(hexB);
+    const lighter = Math.max(l1, l2);
+    const darker = Math.min(l1, l2);
+    return (lighter + 0.05) / (darker + 0.05);
+  }
+
+  const WHITE = "#ffffff";
+  // Tailwind v4's compiled sRGB for --color-slate-400 / --color-slate-600
+  // (oklch(70.4% 0.04 256.788) / oklch(44.6% 0.043 257.281) respectively).
+  const SLATE_400 = "#90a1b9";
+  const SLATE_600 = "#45556c";
+
+  it("sanity: the formula agrees with the known black-on-white extreme", () => {
+    expect(contrastRatio("#000000", "#ffffff")).toBeCloseTo(21, 1);
+  });
+
+  it("the OLD token (text-slate-400 on white) really did fail WCAG AA — the regression this fix closes", () => {
+    const ratio = contrastRatio(SLATE_400, WHITE);
+    expect(ratio).toBeCloseTo(2.63, 1);
+    expect(ratio).toBeLessThan(4.5);
+  });
+
+  it("the NEW token (text-slate-600 on white) clears the normal-text floor (4.5:1)", () => {
+    expect(contrastRatio(SLATE_600, WHITE)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("fixture-console.tsx's 'vs' span actually renders the new token, not a silent reintroduction of the old one", () => {
+    const src = readFileSync(join(process.cwd(), "src/components/v2/fixture-console.tsx"), "utf8");
+    const codeOnly = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    const vsSpan = /<span className="text-slate-(\d+)">\{msg\("schedule\.vs"\)\}<\/span>/.exec(codeOnly);
+    expect(vsSpan, "fixture-console.tsx must still render schedule.vs in its own span").not.toBeNull();
+    expect(vsSpan![1], "the 'vs' span must use slate-600 (>=4.5:1), never slate-400 or slate-500").toBe(
+      "600",
+    );
   });
 });

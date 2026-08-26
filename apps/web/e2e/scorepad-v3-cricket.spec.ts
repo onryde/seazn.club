@@ -1,5 +1,6 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import {
+  activeOrg,
   apiJson,
   fixturePath,
   seedRosteredFixture,
@@ -1083,6 +1084,110 @@ test(
     // No v3 scoring surface at all — nothing to disable, nothing to hide a
     // tile from, because the pad itself never mounts on a decided fixture.
     await expect(pad(page)).toHaveCount(0);
+  },
+);
+
+test(
+  "cricket v3: a super-over decision names the winner and the method, on the public page (R3.5/Task G, C23)",
+  async ({ page }) => {
+    test.setTimeout(60_000);
+    // Same tie-reaching recipe as the "genuinely terminal tie" test above,
+    // with superOver:true instead of false — the fork in behaviour Task C
+    // exists to prove — continued PAST the tie into an actual decision.
+    const fx = await seedRosteredFixture(page.request, {
+      label: `V3 Cricket SODecided ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [{ fullName: `V3 SOD Home1 ${TAG}` }, { fullName: `V3 SOD Home2 ${TAG}` }],
+      away: [{ fullName: `V3 SOD Away1 ${TAG}` }, { fullName: `V3 SOD Away2 ${TAG}` }],
+    });
+    const home1 = fx.personIds[`V3 SOD Home1 ${TAG}`]!;
+    const home2 = fx.personIds[`V3 SOD Home2 ${TAG}`]!;
+    const away1 = fx.personIds[`V3 SOD Away1 ${TAG}`]!;
+    const away2 = fx.personIds[`V3 SOD Away2 ${TAG}`]!;
+
+    const div = await apiJson<{ config: Record<string, unknown> }>(
+      page.request,
+      `/api/v1/divisions/${fx.divisionId}`,
+    );
+    expect(div.status, `GET division -> ${div.status}`).toBe(200);
+    await setDivisionConfigSql(fx.divisionId, { ...div.data!.config, superOver: true });
+
+    await postEvent(page.request, fx.fixtureId, "core.start", {});
+    // Innings 1 (home): one ball, then a manual close — home totals 1.
+    await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+      over: 0,
+      ballInOver: 1,
+      striker: home1,
+      nonStriker: home2,
+      bowler: away1,
+      runs: { bat: 1 },
+    });
+    await postEvent(page.request, fx.fixtureId, "cricket.innings.close", { reason: "other" });
+    // Innings 2 (away): target is home.runs + 1 = 2 — away scores EXACTLY
+    // target - 1, tying the match. With superOver:true this opens the super
+    // over instead of ending the fixture outright.
+    await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+      over: 0,
+      ballInOver: 1,
+      striker: away1,
+      nonStriker: away2,
+      bowler: home1,
+      runs: { bat: 1 },
+    });
+    await postEvent(page.request, fx.fixtureId, "cricket.innings.close", { reason: "other" });
+
+    const tied = await apiJson<{ status: string }>(page.request, `/api/v1/fixtures/${fx.fixtureId}`);
+    expect(tied.status, `GET fixture -> ${tied.status}`).toBe(200);
+    expect(tied.data!.status, "a tie WITH a super over stays live, not decided").toBe("in_play");
+
+    // Super over, innings 1: away bats (they batted second in the main
+    // innings), home bowls with a bowler who did NOT bowl the main innings'
+    // second over. Six dot balls closes it on the over — no wicket needed,
+    // so no third batter has to exist. Away totals 0.
+    for (let ball = 1; ball <= 6; ball++) {
+      await postEvent(page.request, fx.fixtureId, "cricket.superover.ball", {
+        over: 0,
+        ballInOver: ball,
+        striker: away1,
+        nonStriker: away2,
+        bowler: home2,
+        runs: { bat: 0 },
+      });
+    }
+    // Super over, innings 2: home bats, away bowls with a fresh bowler.
+    // Target is SO1's runs + 1 = 1 — the very first ball reaches it, deciding
+    // the match by super over on the spot (applySuperOverBall's own close
+    // condition: `target !== null && updated.runs >= target`).
+    await postEvent(page.request, fx.fixtureId, "cricket.superover.ball", {
+      over: 0,
+      ballInOver: 1,
+      striker: home1,
+      nonStriker: home2,
+      bowler: away2,
+      runs: { bat: 1 },
+    });
+
+    const decided = await apiJson<{
+      status: string;
+      outcome: { kind: string; winner: string; method?: string };
+    }>(page.request, `/api/v1/fixtures/${fx.fixtureId}`);
+    expect(decided.status, `GET fixture -> ${decided.status}`).toBe(200);
+    expect(decided.data!.status).toBe("decided");
+    expect(decided.data!.outcome).toMatchObject({
+      kind: "win",
+      winner: fx.homeEntrantId,
+      method: "super_over",
+    });
+
+    const org = await activeOrg(page);
+    const comp = await apiJson<{ slug: string }>(page.request, `/api/v1/competitions/${fx.competitionId}`);
+    const division = await apiJson<{ slug: string }>(page.request, `/api/v1/divisions/${fx.divisionId}`);
+    const publicPath = `/shared/${org.slug}/${comp.data!.slug}/${division.data!.slug}/fixtures/${fx.fixtureId}`;
+    await page.goto(publicPath);
+    // The winner is named AND the method — never the raw "super_over" token.
+    await expect(page.getByText(/won on the super over/)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText("super_over")).toHaveCount(0);
   },
 );
 
