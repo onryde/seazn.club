@@ -40,6 +40,7 @@
     "i18n:check": "node --experimental-strip-types scripts/i18n/check-parity.ts",
     "i18n:translate": "node --env-file-if-exists=apps/web/.env.local --experimental-strip-types scripts/i18n/translate.ts",
     "stripe:sync": "node --env-file-if-exists=apps/web/.env.local --experimental-strip-types scripts/stripe-sync.ts",
+    "stripe:connect-fixture": "node --env-file-if-exists=apps/web/.env.local --experimental-strip-types scripts/stripe-connect-fixture.ts",
     "openapi:gen": "node --experimental-strip-types scripts/openapi-gen.ts",
     "check:rls": "node --experimental-strip-types scripts/check-rls.ts",
     "backfill:pass-credit-redemptions": "node --env-file-if-exists=apps/web/.env.local --experimental-strip-types scripts/backfill-pass-credit-redemptions.ts"
