@@ -112,3 +112,72 @@ test("joint board renders court NAMES, never bare uuids, at every width", async 
     await shot(page, `joint-board-${v.name}`);
   }
 });
+
+// Comp-board stage grouping: the page used to disambiguate a stage across
+// divisions by baking the division into the stage NAME ("Alpha · League"),
+// which is exactly why every pill on this board ran long. Two divisions,
+// each with a stage of the SAME name, is the shape that used to need the
+// prefix — proving the group header carries that job now lets the pill go
+// back to being bare, same as the single-division board.
+test("joint board groups same-named stages by division, with bare pill labels", async ({
+  page,
+  request,
+}) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Joint Stages ${TAG}`,
+    visibility: "private",
+  });
+  const compId = comp.data!.id;
+
+  const divisionIds: string[] = [];
+  for (const name of ["Alpha", "Bravo"]) {
+    const div = await apiJson<{ id: string }>(
+      request,
+      `/api/v1/competitions/${compId}/divisions`,
+      "POST",
+      {
+        name,
+        slug: `${name.toLowerCase()}-${TAG}`,
+        sport_key: "generic",
+        variant_key: "score",
+        config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      },
+    );
+    divisionIds.push(div.data!.id);
+    // Same stage NAME in every division — the shape a prefix used to
+    // disambiguate, now the group header's job instead.
+    const stage = await apiJson(
+      request,
+      `/api/v1/divisions/${div.data!.id}/stages`,
+      "POST",
+      { seq: 1, kind: "league", name: "League" },
+    );
+    expect(stage.status, `stage created for ${name}`).toBeLessThan(300);
+  }
+
+  await page.goto(await competitionPath(page.request, compId, "/schedule"), {
+    waitUntil: "load",
+  });
+  await shot(page, "joint-board-stage-grouping-desktop");
+
+  const groups = page.getByTestId("schedule-stage-group");
+  await expect(groups).toHaveCount(2);
+  await expect(page.getByTestId("schedule-stage-group-label").nth(0)).toHaveText("Alpha");
+  await expect(page.getByTestId("schedule-stage-group-label").nth(1)).toHaveText("Bravo");
+
+  // Bare, not "Alpha · League" / "Bravo · League" — the group header is what
+  // now disambiguates the two identically-named stages.
+  const pills = page.getByTestId("schedule-stage");
+  await expect(pills).toHaveCount(2);
+  await expect(pills.nth(0)).toHaveText("League");
+  await expect(pills.nth(1)).toHaveText("League");
+
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.waitForTimeout(250);
+  await shot(page, "joint-board-stage-grouping-320");
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+  );
+  expect(overflow, "horizontal page scroll at 320px").toBe(false);
+});

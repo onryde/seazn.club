@@ -14,6 +14,7 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { Tip } from "@/components/ui/tip";
 import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import { apiV1 } from "@/lib/client-v1";
+import { divisionAccent } from "@/lib/division-hue";
 import { settingsErrorText } from "@/lib/schedule-error";
 import { track, EVENTS } from "@/lib/analytics";
 import { useMsg, useLocale, usePlural } from "@/components/i18n/dict-provider";
@@ -665,6 +666,27 @@ export function ScheduleBoard({
     () => stages.filter((s) => s.status !== "complete" && visibleIds.has(s.division_id)),
     [stages, visibleIds],
   );
+  // Comp board (several divisions on one board): a stage's NAME is not unique
+  // across divisions ("League" exists in every division), so the pill row
+  // used to disambiguate by baking the division into the label itself
+  // ("Under 12s · League"). That made every pill as long as its division's
+  // name. Grouping by division instead — same colour the legend already
+  // uses — keeps the pill bare and pushes the disambiguation into a group
+  // header shown once per division rather than once per stage. A single
+  // division (division board, or a comp board filtered down to one) yields
+  // exactly one group, so `stageGroups.length > 1` below reproduces the old
+  // flat, headerless row unchanged.
+  const stageGroups = useMemo(() => {
+    const byDivision = new Map<string, typeof runnableStages>();
+    for (const s of runnableStages) {
+      const list = byDivision.get(s.division_id) ?? [];
+      list.push(s);
+      byDivision.set(s.division_id, list);
+    }
+    return divisions
+      .filter((d) => byDivision.has(d.id))
+      .map((d) => ({ divisionId: d.id, stages: byDivision.get(d.id)! }));
+  }, [runnableStages, divisions]);
   const [pickedStageId, setPickedStageId] = useState<string | null>(null);
   // DERIVED, not synchronised by an effect. The division filter (URL-backed, so
   // it changes under a back button too) and a stage completing can each drop the
@@ -1157,33 +1179,56 @@ export function ScheduleBoard({
                   // (the tab-strip trap this repo has already paid for), while
                   // a wrapped group keeps every option — and the pressed
                   // state — on screen at the cost of a second line.
-                  className="flex flex-wrap gap-0.5 rounded-lg border border-slate-200 bg-slate-100 p-0.5"
+                  className="flex flex-wrap items-center gap-1.5"
                 >
-                  {runnableStages.map((s) => (
-                    // `aria-pressed`, not a radio group: these are toggle
-                    // buttons that re-aim a control, not a form value that
-                    // gets submitted.
-                    <button
-                      key={s.id}
-                      type="button"
-                      data-testid="schedule-stage"
-                      data-stage-id={s.id}
-                      aria-pressed={s.id === activeStage.id}
-                      onClick={() => setPickedStageId(s.id)}
-                      // A SELECTION, not an action. The purple fill this used
-                      // to carry put a second loud control next to the primary
-                      // button and made the pair read as one compound thing
-                      // ("Auto League"), which is precisely how it was
-                      // reported. Solid purple now means exactly one thing on
-                      // this bar: the action that rebuilds the board.
-                      className={`min-h-11 rounded-md px-3 py-1.5 text-xs transition ${
-                        s.id === activeStage.id
-                          ? "bg-white font-semibold text-slate-900 shadow-sm"
-                          : "text-slate-600 hover:text-slate-900"
-                      }`}
+                  {stageGroups.map((group) => (
+                    <div
+                      key={group.divisionId}
+                      data-testid="schedule-stage-group"
+                      data-division-id={group.divisionId}
+                      className="flex flex-wrap items-center gap-0.5 rounded-lg border border-slate-200 bg-slate-100 p-0.5"
                     >
-                      {s.name}
-                    </button>
+                      {stageGroups.length > 1 && (
+                        <span
+                          data-testid="schedule-stage-group-label"
+                          className="flex items-center gap-1 pl-2 pr-1 text-[10px] font-semibold text-slate-500"
+                        >
+                          <span
+                            aria-hidden
+                            className="h-2 w-2 rounded-sm"
+                            style={{ backgroundColor: divisionAccent(group.divisionId) }}
+                          />
+                          {divisionNames[group.divisionId]}
+                        </span>
+                      )}
+                      {group.stages.map((s) => (
+                        // `aria-pressed`, not a radio group: these are toggle
+                        // buttons that re-aim a control, not a form value that
+                        // gets submitted.
+                        <button
+                          key={s.id}
+                          type="button"
+                          data-testid="schedule-stage"
+                          data-stage-id={s.id}
+                          aria-pressed={s.id === activeStage.id}
+                          onClick={() => setPickedStageId(s.id)}
+                          // A SELECTION, not an action. The purple fill this
+                          // used to carry put a second loud control next to
+                          // the primary button and made the pair read as one
+                          // compound thing ("Auto League"), which is
+                          // precisely how it was reported. Solid purple now
+                          // means exactly one thing on this bar: the action
+                          // that rebuilds the board.
+                          className={`min-h-11 rounded-md px-3 py-1.5 text-xs transition ${
+                            s.id === activeStage.id
+                              ? "bg-white font-semibold text-slate-900 shadow-sm"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          {s.name}
+                        </button>
+                      ))}
+                    </div>
                   ))}
                 </div>
               </div>

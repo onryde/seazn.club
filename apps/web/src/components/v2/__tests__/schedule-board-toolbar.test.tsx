@@ -328,3 +328,59 @@ describe("the toolbar renders one action set, whatever the format's stage count"
     ).not.toContain("Runs on League");
   });
 });
+
+/**
+ * Competition-wide board (comp board), several divisions with a runnable
+ * stage each. Before this, the page baked the division into the stage
+ * NAME ("Under 12s · League"), because the flat pill row had no other way
+ * to tell two divisions' same-named stage apart — cramped, and the prefix
+ * duplicated colour the legend already carries. Grouping the pills by
+ * division lets the pills stay short again, matching the single-division
+ * board's look for every group.
+ */
+describe("the stage selector groups pills by division on the comp board", () => {
+  const TWO_DIVISIONS: BoardDivision[] = [
+    { id: "d1", name: "Under 12s", slug: "u12", status: "active", seq: 1, schedule_locked: false },
+    { id: "d2", name: "Under 14s", slug: "u14", status: "active", seq: 2, schedule_locked: false },
+  ];
+
+  /** Same stage NAME in both divisions — the shape a prefix used to disambiguate. */
+  const STAGES_ACROSS_DIVISIONS: BoardStage[] = [
+    { id: "s1", division_id: "d1", name: "League", kind: "round_robin", ordinal: 1 },
+    { id: "s2", division_id: "d2", name: "League", kind: "round_robin", ordinal: 1 },
+  ] as unknown as BoardStage[];
+
+  const multiDivisionProps = (): BoardProps =>
+    ({
+      ...baseProps(STAGES_ACROSS_DIVISIONS),
+      divisions: TWO_DIVISIONS,
+      activeEntrantCounts: { d1: 2, d2: 2 },
+      competition: {
+        id: "c1",
+        divisionSettings: { d1: SETTINGS, d2: SETTINGS },
+      },
+    }) as unknown as BoardProps;
+
+  it("labels one group per division and keeps the stage pills bare", () => {
+    const tree = renderIsland(ScheduleBoard, multiDivisionProps()).tree();
+
+    const groups = allWithProp(tree, "data-testid", "schedule-stage-group");
+    expect(groups.map((g) => propsOf(g)["data-division-id"])).toStrictEqual(["d1", "d2"]);
+
+    const labels = allWithProp(tree, "data-testid", "schedule-stage-group-label");
+    expect(labels.map((l) => (propsOf(l).children as unknown[]).at(-1))).toStrictEqual([
+      "Under 12s",
+      "Under 14s",
+    ]);
+
+    const options = allWithProp(tree, "data-testid", "schedule-stage");
+    expect(options.map((o) => propsOf(o).children)).toStrictEqual(["League", "League"]);
+  });
+
+  it("renders no group labels when only one division has a runnable stage", () => {
+    const island = renderIsland(ScheduleBoard, baseProps());
+    const tree = island.tree();
+
+    expect(allWithProp(tree, "data-testid", "schedule-stage-group-label")).toHaveLength(0);
+  });
+});
