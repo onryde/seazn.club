@@ -39,6 +39,8 @@ export function EntryDetails({
   selfPlayerIndex,
   seasonStartYear,
   dispatch,
+  importText,
+  onImportTextChange,
 }: {
   entry: CartEntry;
   /** Absent for a stale/unresolvable division_id (a restored cart against a
@@ -53,6 +55,10 @@ export function EntryDetails({
   selfPlayerIndex: number | null;
   seasonStartYear: number;
   dispatch: (action: CartAction) => void;
+  /** This entry's paste-roster draft — see roster-table.tsx's header for
+   *  why it's controlled from RegisterStepper rather than local state. */
+  importText: string;
+  onImportTextChange: (text: string) => void;
 }) {
   const t = useT();
 
@@ -87,6 +93,8 @@ export function EntryDetails({
           requiresDob={division.requires_dob}
           requiresGender={division.requires_gender}
           issuesByRow={rowIssues}
+          importText={importText}
+          onImportTextChange={onImportTextChange}
           onAddPlayer={() => dispatch({ type: "ADD_PLAYER", id: entry.id })}
           onRemovePlayer={(index) => dispatch({ type: "REMOVE_PLAYER", id: entry.id, index })}
           onUpdatePlayer={(index, patch) => dispatch({ type: "UPDATE_PLAYER", id: entry.id, index, patch })}

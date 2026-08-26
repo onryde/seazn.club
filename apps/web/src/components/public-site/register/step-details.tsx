@@ -13,12 +13,19 @@ export function StepDetails({
   dispatch,
   contact,
   seasonStartYear,
+  importTextByEntry,
+  onImportTextChange,
 }: {
   divisions: readonly DivisionLike[];
   cart: CartState;
   dispatch: (action: CartAction) => void;
   contact: ContactState;
   seasonStartYear: number;
+  /** Keyed by entry id — see roster-table.tsx's header for why the paste
+   *  draft lives here (RegisterStepper) rather than as RosterTable's own
+   *  local state. */
+  importTextByEntry: Record<string, string>;
+  onImportTextChange: (entryId: string, text: string) => void;
 }) {
   const t = useT();
   const byId = new Map(divisions.map((d) => [d.division_id, d]));
@@ -43,6 +50,8 @@ export function StepDetails({
             selfPlayerIndex={cart.selfPlayerIndex}
             seasonStartYear={seasonStartYear}
             dispatch={dispatch}
+            importText={importTextByEntry[entry.id] ?? ""}
+            onImportTextChange={(text) => onImportTextChange(entry.id, text)}
           />
         ))}
       </div>

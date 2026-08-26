@@ -9,7 +9,18 @@
 // had. Per-row dob/gender inputs render only when `requiresDob`/
 // `requiresGender` say the division needs them (same conditional
 // discipline as step-who.tsx).
-import { useState } from "react";
+//
+// The paste textarea's draft text is a CONTROLLED prop, not a local
+// `useState`, deliberately — every other component in this tree below
+// RegisterStepper is hookless (only the mocked, non-hook `useT()`), which
+// is what lets register-stepper-interaction.test.tsx's `deepExpand` walk
+// this component's rendered output by calling it directly outside React's
+// own render cycle; a real hook call there throws "Invalid hook call"
+// (`_hook-harness.tsx`'s own header). The draft lives on RegisterStepper
+// (`importTextByEntry`) instead — deliberately NOT part of the persisted
+// CartState (storage.ts): losing an in-progress paste on refresh is
+// acceptable, the same way the honeypot `website` field is top-level state
+// that's never included in `saveRegisterState`'s snapshot.
 import { useT } from "@/components/i18n/dict-provider";
 import type { EligibilityIssue } from "@/lib/registration-rules";
 import { MAX_ROSTER_PLAYERS } from "./cart";
@@ -31,6 +42,8 @@ export function RosterTable({
   requiresDob,
   requiresGender,
   issuesByRow,
+  importText,
+  onImportTextChange,
   onAddPlayer,
   onRemovePlayer,
   onUpdatePlayer,
@@ -41,13 +54,16 @@ export function RosterTable({
   requiresGender: boolean;
   /** Keyed by 1-based playerIndex, matching EligibilityIssue's convention. */
   issuesByRow: Map<number, EligibilityIssue[]>;
+  /** The paste textarea's draft — controlled from above, see this file's
+   *  header for why. */
+  importText: string;
+  onImportTextChange: (text: string) => void;
   onAddPlayer: () => void;
   onRemovePlayer: (index: number) => void;
   onUpdatePlayer: (index: number, patch: Partial<RosterPlayerState>) => void;
   onImportPlayers: (players: RosterPlayerState[]) => void;
 }) {
   const t = useT();
-  const [importText, setImportText] = useState("");
   const isTeam = entry.entrant_kind === "team";
   const parsedCount = parseRoster(importText).length;
 
@@ -159,7 +175,7 @@ export function RosterTable({
             <p className="mt-2 text-xs text-ink-muted">{t("register.details.roster.import.hint")}</p>
             <textarea
               value={importText}
-              onChange={(e) => setImportText(e.target.value)}
+              onChange={(e) => onImportTextChange(e.target.value)}
               rows={4}
               className={`${FIELD} mt-2 min-w-0`}
             />
@@ -171,7 +187,7 @@ export function RosterTable({
                 const parsed = parseRoster(importText);
                 if (parsed.length === 0) return;
                 onImportPlayers(parsed);
-                setImportText("");
+                onImportTextChange("");
               }}
             >
               {t("register.details.roster.import.button", { n: parsedCount })}

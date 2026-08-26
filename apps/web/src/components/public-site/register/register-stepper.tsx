@@ -96,6 +96,11 @@ export function RegisterStepper({
   const [whoAttempted, setWhoAttempted] = useState(false);
   const [entriesAttempted, setEntriesAttempted] = useState(false);
   const [detailsAttempted, setDetailsAttempted] = useState(false);
+  // Step 3's paste-roster drafts, keyed by entry id — top-level state, NOT
+  // persisted (storage.ts's snapshot never includes it), same reasoning as
+  // `website` below: see roster-table.tsx's header for why this lives here
+  // rather than as that component's own local state.
+  const [importTextByEntry, setImportTextByEntry] = useState<Record<string, string>>({});
   // Honeypot (design §4 step 5 / RS003's route.ts): hidden from real users,
   // a filled value is a bot. The route checks `input.website` server-side
   // (already shipped) — this chassis only needs to carry the field through
@@ -239,6 +244,8 @@ export function RegisterStepper({
             dispatch={dispatchCart}
             contact={contact}
             seasonStartYear={seasonStartYear}
+            importTextByEntry={importTextByEntry}
+            onImportTextChange={(entryId, text) => setImportTextByEntry((m) => ({ ...m, [entryId]: text }))}
           />
           {detailsAttempted && !detailsValidation.valid && detailsValidation.error && (
             <p role="alert" className="text-sm text-red-600">
