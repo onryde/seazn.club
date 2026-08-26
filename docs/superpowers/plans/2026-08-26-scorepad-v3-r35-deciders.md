@@ -1457,6 +1457,63 @@ the gate.
 
 ---
 
+## Task M: The help tree — three gaps this wave owns
+
+`_RULES.md` §6 makes help pages a ship item for user-visible change, and this wave changes what a
+scorer sees in both sports. English only — `content/help/**` is the stated i18n exception, so no
+dictionary work is owed here.
+
+**Registration is two-sided and a previous wave got it wrong.** An article needs BOTH the Markdown
+file and its slug in `HELP_ARTICLE_SLUGS` (`apps/web/src/lib/help.ts:8`); `help-content.test.ts`
+proves the list and the files on disk agree in both directions. R2 shipped
+`content/help/scoring/cricket.md` on disk WITHOUT the registry entry, so the article was
+unreachable and the repo's own guard was red and being ignored. Do not repeat it.
+
+**Files:**
+- Create: `apps/web/content/help/scoring/football.md`
+- Modify: `apps/web/content/help/scoring/cricket.md`, `.../knockout-deciders.md`, `.../basics.md`
+- Modify: `apps/web/src/lib/help.ts` (`HELP_ARTICLE_SLUGS`)
+- Test: `apps/web/src/server/__tests__/help-content.test.ts` must be green in BOTH directions
+
+- [ ] **Step 1: `scoring/football.md` — the sport has no article at all**
+
+Football is a v3 sport and has never had a help page; `basics.md:7` currently attributes shoot-outs
+to "the hockeys" alone. Cover what a scorer actually meets: goal/card/sub per side, the period
+markers, the penalty tile — and the shoot-out, which this wave changed: **the kicks now have their
+own tiles in the SHOOT-OUT phase only**, the board shows the running tally beside the regulation
+score as `1 (2)`, and it names whose kick is next. Say that kicks must alternate and that the pad
+will not let you record out of turn.
+
+- [ ] **Step 2: `cricket.md` — a super-over section**
+
+Eight headings today, none about the super over, and this wave is what makes it scoreable. It
+belongs after "The rest of the innings". Cover: a tie goes to a super over automatically when the
+division has it enabled; the board keeps scoring ball by ball with the same tiles; the side that
+batted second bats first; two wickets ends the innings; the reply chases the first innings + 1; and
+if it is still level, what your division's still-tied rule does (repeat / boundary count / shared).
+
+- [ ] **Step 3: `knockout-deciders.md` — it is now out of date in two ways**
+
+It tells organisers to hand-write `{ "shootout": true }` into the stage config, and it never
+mentions cricket at all. Add the super over as the cricket decider, and — once Task I lands — point
+at the new match-rules fields for the group-stage points split instead of raw JSON.
+
+- [ ] **Step 4: Register and prove reachable**
+
+Add `"scoring/football"` to `HELP_ARTICLE_SLUGS`, then:
+
+```bash
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/r35-deciders/apps/web && \
+  DATABASE_URL= rtk proxy npx vitest run src/server/__tests__/help-content.test.ts 2>&1 | tail -12
+```
+
+Mutation-proof it: remove the registry line, confirm the guard reds in the file-without-slug
+direction, restore. That direction is the one R2 shipped past.
+
+- [ ] **Step 5: Commit**
+
+---
+
 ## Wave gate
 
 Run every item; paste the numbers rather than describing them.
@@ -1475,7 +1532,7 @@ Run every item; paste the numbers rather than describing them.
 - [ ] Per-screen owner verdicts recorded in `_INDEX.md` — that record is the merge gate, not the sheet
 - [ ] Live walkthrough offered: server up, login link minted on `localhost`, on a seeded knockout that actually reaches both deciders
 - [ ] `_INDEX.md` updated: status, rulings, premises found false, register rows
-- [ ] Help pages (`content/help/**`, English only) if any user-visible behaviour changed
+- [ ] **Task M done** — football article created AND registered, cricket's super over documented, knockout-deciders corrected; `help-content.test.ts` green both directions
 - [ ] Log lines verified against a captured pino stream, and asserted to carry no payload values (K5)
 - [ ] Memory written + `scripts/agent-memory-snapshot.sh`
 
