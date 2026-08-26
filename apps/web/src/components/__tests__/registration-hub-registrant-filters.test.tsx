@@ -37,8 +37,10 @@ const DEFAULT_FILTERS: RegistrantsFilters = {
   status: null,
   divisionId: null,
   kind: null,
-  freeAgent: false,
-  consentPending: false,
+  // Tri-state (RS005 F3 finding 2): null means unset, distinct from an
+  // explicit false. See fetch-registrant-rows.test.ts for the parsing side.
+  freeAgent: null,
+  consentPending: null,
   text: "",
   sort: "newest",
 };
@@ -245,6 +247,19 @@ describe("free_agent / consent_pending checkboxes", () => {
     expect(propsOf(consentPending).defaultChecked).toBe(true);
   });
 
+  // RS005 F3 finding 2: the tri-state's explicit-false case must render
+  // identically to "unset" (both are an unchecked box — the DIFFERENCE is
+  // in what gets sent to the API on submit, not how the box looks), and
+  // must not crash/misrender now that `filters.freeAgent` is `boolean |
+  // null` rather than a plain boolean.
+  it("also reads as unchecked when the filter is explicitly false, not just when unset", () => {
+    const tree = render({ ...DEFAULT_FILTERS, freeAgent: false, consentPending: false });
+    const freeAgent = tree.find((e) => e.type === "input" && propsOf(e).name === "free_agent")!;
+    const consentPending = tree.find((e) => e.type === "input" && propsOf(e).name === "consent_pending")!;
+    expect(propsOf(freeAgent).defaultChecked).toBe(false);
+    expect(propsOf(consentPending).defaultChecked).toBe(false);
+  });
+
   it("each submits on change", () => {
     const tree = render();
     const freeAgent = tree.find((e) => e.type === "input" && propsOf(e).name === "free_agent")!;
@@ -348,6 +363,98 @@ describe("clear", () => {
     const tree = render({ ...DEFAULT_FILTERS, status: "paid" });
     const clearLink = tree.find((e) => propsOf(e).href === CLEAR_HREF);
     expect(clearLink).toBeTruthy();
+  });
+});
+
+// RS005 F3 finding 3: every control is uncontrolled (`defaultValue`/
+// `defaultChecked`, deliberately preserved — see the file's own header
+// comment), and a REAL browser never re-applies `defaultValue` to an
+// existing DOM node on a later render. Without something forcing a
+// remount, "Clear filters" (a plain <Link> navigation, not this form's own
+// submit) left every widget showing its PRE-clear value, and the next
+// change — `handleSubmit` reading LIVE `e.currentTarget.elements` — read
+// the stale DOM and silently resurrected the cleared filter. Browser Back
+// has the same effect: it delivers a fresh `filters` prop without ever
+// going through this form's own onChange/onSubmit path.
+//
+// This harness has no real DOM (`_hook-harness.tsx`'s own header comment),
+// so it structurally cannot reproduce "a stale DOM node persisting across a
+// re-render" — there is no persistent node to go stale; `tree()` just
+// re-reads whatever the current render's JSX says. What it CAN verify is
+// the mechanism that GUARANTEES a real browser resets one: React unmounts
+// and remounts an element when its `key` changes between renders — true
+// for any element, not only `.map()`-generated siblings (the same
+// technique as `<UserProfile key={userId} />`) — so a control keyed on its
+// OWN filter value forces the browser to re-read `defaultValue`/
+// `defaultChecked` from the fresh props exactly when that value changes,
+// regardless of what caused the new render (this form's own submit, Clear,
+// or Back/Forward). Scoped per-field (not one key on the whole `<form>`)
+// so changing ONE filter does not also tear down and refocus-lose every
+// OTHER, unrelated control.
+describe("uncontrolled controls key on their OWN filter value, forcing a remount when it changes (RS005 F3 finding 3)", () => {
+  function keyOf(tree: ReturnType<typeof render>, name: string) {
+    return tree.find((e) => (e.type === "select" || e.type === "input") && propsOf(e).name === name)!.key;
+  }
+
+  it("gives every uncontrolled control a real (non-null) key", () => {
+    const tree = render();
+    for (const name of ["status", "division_id", "kind", "q", "sort", "free_agent", "consent_pending"]) {
+      expect(keyOf(tree, name)).not.toBeNull();
+    }
+  });
+
+  it("changes the status select's key when status changes — forces a remount, resetting a stale DOM value", () => {
+    const cleared = keyOf(render(DEFAULT_FILTERS), "status");
+    const confirmed = keyOf(render({ ...DEFAULT_FILTERS, status: "confirmed" }), "status");
+    expect(cleared).not.toBe(confirmed);
+  });
+
+  it("keeps the SAME key across two renders with an unchanged status — no unnecessary remount", () => {
+    const k1 = keyOf(render({ ...DEFAULT_FILTERS, status: "confirmed" }), "status");
+    const k2 = keyOf(render({ ...DEFAULT_FILTERS, status: "confirmed" }), "status");
+    expect(k1).toBe(k2);
+  });
+
+  it("does NOT change the status select's key when an unrelated filter (sort) changes — only ITS OWN value forces a remount", () => {
+    const k1 = keyOf(render({ ...DEFAULT_FILTERS, status: "confirmed", sort: "newest" }), "status");
+    const k2 = keyOf(render({ ...DEFAULT_FILTERS, status: "confirmed", sort: "oldest" }), "status");
+    expect(k1).toBe(k2);
+  });
+
+  it("gives the division_id select a distinct key per division, and the kind select likewise", () => {
+    const a = keyOf(render({ ...DEFAULT_FILTERS, divisionId: "div-1" }), "division_id");
+    const b = keyOf(render({ ...DEFAULT_FILTERS, divisionId: "div-2" }), "division_id");
+    expect(a).not.toBe(b);
+
+    const team = keyOf(render({ ...DEFAULT_FILTERS, kind: "team" }), "kind");
+    const pair = keyOf(render({ ...DEFAULT_FILTERS, kind: "pair" }), "kind");
+    expect(team).not.toBe(pair);
+  });
+
+  it("gives the sort select a distinct key per value", () => {
+    const newest = keyOf(render({ ...DEFAULT_FILTERS, sort: "newest" }), "sort");
+    const oldest = keyOf(render({ ...DEFAULT_FILTERS, sort: "oldest" }), "sort");
+    expect(newest).not.toBe(oldest);
+  });
+
+  it("gives the search input a distinct key per text value — resets it too after Clear/Back, not just the dropdowns", () => {
+    const empty = keyOf(render(DEFAULT_FILTERS), "q");
+    const alex = keyOf(render({ ...DEFAULT_FILTERS, text: "Alex" }), "q");
+    expect(empty).not.toBe(alex);
+  });
+
+  it("gives the free_agent checkbox three DISTINCT keys across unset/true/false — the resurrection bug's exact scenario", () => {
+    const unset = keyOf(render({ ...DEFAULT_FILTERS, freeAgent: null }), "free_agent");
+    const on = keyOf(render({ ...DEFAULT_FILTERS, freeAgent: true }), "free_agent");
+    const off = keyOf(render({ ...DEFAULT_FILTERS, freeAgent: false }), "free_agent");
+    expect(new Set([unset, on, off]).size).toBe(3);
+  });
+
+  it("same three-way distinct keying for consent_pending", () => {
+    const unset = keyOf(render({ ...DEFAULT_FILTERS, consentPending: null }), "consent_pending");
+    const on = keyOf(render({ ...DEFAULT_FILTERS, consentPending: true }), "consent_pending");
+    const off = keyOf(render({ ...DEFAULT_FILTERS, consentPending: false }), "consent_pending");
+    expect(new Set([unset, on, off]).size).toBe(3);
   });
 });
 

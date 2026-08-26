@@ -102,6 +102,30 @@ const SEARCH_DEBOUNCE_MS = 300;
  * this component's own `filters`/`text` props: the props are last render's
  * server-sanitised values, and the field that just changed is uncontrolled
  * precisely so the DOM — not React — holds the truth in between.
+ *
+ * RS005 F3 finding 3: that same uncontrolled-ness has a cost React never
+ * papers over — a REAL browser never re-applies `defaultValue`/
+ * `defaultChecked` to an EXISTING DOM node on a later render. "Clear
+ * filters" is a plain `<Link>` navigation (not this form's own submit), so
+ * it delivers a fresh, all-cleared `filters` prop without ever touching
+ * this form's DOM; without something forcing a remount, every widget kept
+ * showing its PRE-clear value, and the NEXT change — `handleSubmit`
+ * reading LIVE `e.currentTarget.elements` — read that stale DOM and
+ * silently resurrected the filter the organiser had just cleared. Browser
+ * Back/Forward hits the same gap: it also delivers a fresh `filters` prop
+ * outside this form's own onChange/onSubmit path.
+ *
+ * Fixed by giving every uncontrolled control a `key` derived from its OWN
+ * filter value (below) — React unmounts and remounts an element whenever
+ * its `key` changes between renders (true for any element, not only
+ * `.map()`-generated siblings; the same technique as
+ * `<UserProfile key={userId} />`), which forces the browser to build a
+ * FRESH DOM node and re-read `defaultValue`/`defaultChecked` from the
+ * current props, regardless of what produced the new render — this form's
+ * own submit, Clear, or Back/Forward all look identical from here: a new
+ * `filters` prop arrived. Keyed per FIELD, not once on the whole `<form>`,
+ * so changing one filter does not also tear down (and lose the DOM
+ * identity/focus of) every other, unrelated control.
  */
 export function RegistrationHubRegistrantFilters({
   dict,
@@ -209,6 +233,7 @@ export function RegistrationHubRegistrantFilters({
       <label className="flex flex-col text-xs font-medium text-slate-600">
         {t(dict, "reg.hub.registrants.filters.status")}
         <select
+          key={`status:${filters.status ?? ""}`}
           name="status"
           defaultValue={filters.status ?? ""}
           onChange={submitOnChange}
@@ -226,6 +251,7 @@ export function RegistrationHubRegistrantFilters({
       <label className="flex flex-col text-xs font-medium text-slate-600">
         {t(dict, "reg.hub.registrants.filters.division")}
         <select
+          key={`division:${filters.divisionId ?? ""}`}
           name="division_id"
           defaultValue={filters.divisionId ?? ""}
           onChange={submitOnChange}
@@ -243,6 +269,7 @@ export function RegistrationHubRegistrantFilters({
       <label className="flex flex-col text-xs font-medium text-slate-600">
         {t(dict, "reg.hub.registrants.filters.kind")}
         <select
+          key={`kind:${filters.kind ?? ""}`}
           name="kind"
           defaultValue={filters.kind ?? ""}
           onChange={submitOnChange}
@@ -260,6 +287,7 @@ export function RegistrationHubRegistrantFilters({
       <label className="flex min-w-[10rem] flex-1 flex-col text-xs font-medium text-slate-600">
         {t(dict, "reg.hub.registrants.filters.search")}
         <input
+          key={`q:${filters.text}`}
           type="text"
           name="q"
           defaultValue={filters.text}
@@ -272,6 +300,7 @@ export function RegistrationHubRegistrantFilters({
       <label className="flex flex-col text-xs font-medium text-slate-600">
         {t(dict, "reg.hub.registrants.filters.sort")}
         <select
+          key={`sort:${filters.sort}`}
           name="sort"
           defaultValue={filters.sort}
           onChange={submitOnChange}
@@ -289,10 +318,15 @@ export function RegistrationHubRegistrantFilters({
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:min-h-11">
         <label className="flex items-center gap-2 text-sm text-slate-700">
           <input
+            key={`free_agent:${String(filters.freeAgent)}`}
             type="checkbox"
             name="free_agent"
             value="1"
-            defaultChecked={filters.freeAgent}
+            // Tri-state (`boolean | null`, RS005 F3 finding 2) coerced to a
+            // real boolean here — `defaultChecked` only accepts
+            // `boolean | undefined`, and `null`/unset must render the same
+            // as an explicit `false`: both are simply "not checked".
+            defaultChecked={filters.freeAgent === true}
             onChange={submitOnChange}
           />
           {t(dict, "reg.hub.registrants.filters.freeAgent")}
@@ -300,10 +334,11 @@ export function RegistrationHubRegistrantFilters({
 
         <label className="flex items-center gap-2 text-sm text-slate-700">
           <input
+            key={`consent_pending:${String(filters.consentPending)}`}
             type="checkbox"
             name="consent_pending"
             value="1"
-            defaultChecked={filters.consentPending}
+            defaultChecked={filters.consentPending === true}
             onChange={submitOnChange}
           />
           {t(dict, "reg.hub.registrants.filters.consentPending")}
