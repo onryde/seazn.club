@@ -19,6 +19,18 @@ Design of record: `docs/superpowers/specs/2026-08-15-scoringpad-v3-redesign-desi
 - **Prefix `cd <abs worktree> &&` in the SAME call as every command you judge.** The shell cwd resets to the main checkout between calls; a verify run silently executes on `main` and returns a false green.
 - **vitest is green ONLY via `--reporter=json --outputFile`** plus `numPassedTests` / `numTotalTests` / `numFailedTestSuites`. `rtk` prints `PASS(0) FAIL(0)` for a suite that failed to COLLECT. Prefix probes with `rtk proxy`.
 - **`DATABASE_URL=` (empty) for non-DB suites**, or the config refuses to start against the dev DB on :5432.
+- **Use `seazn-env` for build, typecheck, lint and the gate — never raw `turbo` or the root npm scripts** (owner instruction, 2026-08-26). The script wraps every call as `( cd "$root" && … )` pinned to the LABEL's recorded repo root, which is what makes it immune to the cwd reset:
+
+  ```bash
+  S=~/.claude/skills/seazn-local-env/scripts/seazn-env.sh
+  GATE_FILTER= $S gate --label r35     # full repo: 4 tasks — web+engine × typecheck+lint
+  $S gate --label r35                  # changed packages only (diffs vs origin/main)
+  $S rebuild --label r35               # code changed: rm -rf .next, rebuild, restart
+  ```
+
+  **Measured 2026-08-26: `GATE_FILTER= gate` runs 4 tasks — `@seazn/web:{typecheck,lint}` AND `@seazn/engine:{typecheck,lint}`.** A bare `npx turbo run typecheck lint` invoked after a cwd reset scopes to `@seazn/web` alone and silently skips the engine; that misreading happened once in this wave already. Tasks C and H touch the engine, so use the skill.
+
+  **Judge on the `Cached: N cached, M total` line, not on exit 0** — a cache hit replays a previous run's output and exits 0 without re-executing.
 - **apps/web typecheck needs `NODE_OPTIONS=--max-old-space-size=6144`** and must write its own `EXIT=$?` (a pipe reports tail's status).
 - **Engine module version stays `1.0.0`.** Every engine change in this plan is an additive export or an internal refactor — no fold change, no serialised-state change, so the frozen golden corpus is untouched. If any task finds itself needing a golden re-baseline, STOP and ask.
 - **New user-facing strings → all four dictionaries** (`en`, `es`, `fr`, `nl`), flat dotted keys, then `npm run i18n:gen-keys` (`lib/i18n-keys.ts` is GENERATED — never hand-edit) and `npm run i18n:check`.
@@ -195,7 +207,7 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/r35-deciders/apps/web &&
   echo "EXIT=$?"; \
   python3 -c "import json;d=json.load(open('/tmp/r35-baseline.json'));print(d['numPassedTests'],'/',d['numTotalTests'],'suites failed:',d['numFailedTestSuites'])"
 ```
-Record the numbers. Every later gate is judged against this, not against zero.
+**Measured 2026-08-26: 1028 / 1028, 0 failed suites.** Engine's own gate clean at the same point. Every later gate is judged against these, not against zero.
 
 ---
 
@@ -1391,8 +1403,7 @@ Run every item; paste the numbers rather than describing them.
 
 - [ ] Unit, apps/web: `--reporter=json --outputFile`, compare to the Task 0 baseline
 - [ ] Unit, engine: same, plus the golden corpus green with NO re-baseline
-- [ ] `npx turbo run typecheck --force` — 0 errors, `EXIT=0`, from the worktree root
-- [ ] `npx turbo run lint --force` — `✖ 0 problems`, root AND engine
+- [ ] `GATE_FILTER= seazn-env gate --label r35` — 4/4 tasks, 0 errors; read the `Cached:` line, not just exit 0
 - [ ] `npm run i18n:check` — 4 locales, and `lib/i18n-keys.ts` regenerated not hand-edited
 - [ ] `npm run openapi:gen` if any api-v1 zod moved
 - [ ] `git status --porcelain` empty
