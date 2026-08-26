@@ -527,8 +527,13 @@ test("the toolbar renders one action set, aimed at the picked stage", async ({ p
   for (const id of ["schedule-auto", "schedule-reflow", "schedule-polish"]) {
     await expect(page.getByTestId(id), `${id} is rendered once`).toHaveCount(1);
   }
-  // …and one caption for the group, not one per button per stage.
-  await expect(page.getByTestId("schedule-ladder-caption")).toHaveCount(1);
+  // …and one caption for the group, carried as a hover title, not one per
+  // button per stage.
+  await expect(page.getByTestId("schedule-action-bar")).toHaveCount(1);
+  await expect(page.getByTestId("schedule-action-bar")).toHaveAttribute(
+    "title",
+    "Rebuild → fix clashes → tighten times. Locked cards stay put.",
+  );
 
   const options = page.getByTestId("schedule-stage");
   await expect(options).toHaveCount(2);
