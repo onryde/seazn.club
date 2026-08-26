@@ -4334,6 +4334,8 @@
   "reg.hub.config.manageCurrency": "Gestionar en los ajustes de la organización",
   "reg.hub.config.feeCut": "Te quedas con el {keep}% de cada inscripción de pago — la comisión de la plataforma es del {pct}%. Esta tasa se fija para esta competición en cuanto paga tu primer inscrito.",
   "reg.hub.config.cardUnsupported": "Los pagos con tarjeta no están disponibles — tu cuenta de Stripe conectada liquida en {currency}, una moneda en la que no se pueden cobrar cuotas de inscripción.",
+  "reg.hub.config.waitlistRepriceWarning.one": "1 persona de la lista de espera pagará la nueva cuota cuando la promuevas.",
+  "reg.hub.config.waitlistRepriceWarning.other": "{count} personas de la lista de espera pagarán la nueva cuota cuando las promuevas.",
   "reg.hub.config.partialSavePatchOk": "Se guardaron la categoría y los ajustes de edad. El resto de este formulario no se guardó — corrige el error de abajo y vuelve a guardar.",
   "reg.hub.config.partialSavePutOk": "Se guardó el resto de este formulario. La categoría y los ajustes de edad no se guardaron — corrige el error de abajo y vuelve a guardar.",
   "eventImport.title": "Importar eventos de puntuación",

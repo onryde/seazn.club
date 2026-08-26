@@ -93,6 +93,7 @@ export function RegistrationHubSettingsPanel({
           currency={context.currency}
           feePercentPct={feePercentPct}
           cardUnsupportedCurrency={cardUnsupportedCurrency}
+          waitlistedCount={openRow.waitlisted}
           onClose={() => setOpenDivisionId(null)}
           onSaved={() => {
             // The row list is server-fetched (page.tsx); refresh re-runs

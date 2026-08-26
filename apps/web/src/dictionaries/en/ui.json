@@ -4334,6 +4334,8 @@
   "reg.hub.config.manageCurrency": "Manage in organisation settings",
   "reg.hub.config.feeCut": "You keep {keep}% of every paid entry — the platform fee is {pct}%. This rate locks in for this competition the moment your first entrant pays.",
   "reg.hub.config.cardUnsupported": "Card payments aren't available — your connected Stripe account settles in {currency}, which entry fees can't be charged in.",
+  "reg.hub.config.waitlistRepriceWarning.one": "1 person on the waitlist will be charged the new fee when you promote them.",
+  "reg.hub.config.waitlistRepriceWarning.other": "{count} people on the waitlist will be charged the new fee when you promote them.",
   "reg.hub.config.partialSavePatchOk": "Category and age settings saved. Everything else on this form did not save — fix the error below, then save again.",
   "reg.hub.config.partialSavePutOk": "Everything else on this form saved. Category and age settings did not save — fix the error below, then save again.",
   "eventImport.title": "Import score events",

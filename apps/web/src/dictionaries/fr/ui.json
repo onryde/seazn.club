@@ -4334,6 +4334,8 @@
   "reg.hub.config.manageCurrency": "Gérer dans les paramètres de l'organisation",
   "reg.hub.config.feeCut": "Vous conservez {keep}% de chaque inscription payante — les frais de plateforme sont de {pct}%. Ce taux se fixe pour cette compétition dès que votre premier inscrit paie.",
   "reg.hub.config.cardUnsupported": "Les paiements par carte ne sont pas disponibles — votre compte Stripe connecté règle en {currency}, une devise dans laquelle les frais d'inscription ne peuvent pas être facturés.",
+  "reg.hub.config.waitlistRepriceWarning.one": "1 personne sur liste d'attente paiera les nouveaux frais lorsque vous la promouvrez.",
+  "reg.hub.config.waitlistRepriceWarning.other": "{count} personnes sur liste d'attente paieront les nouveaux frais lorsque vous les promouvrez.",
   "reg.hub.config.partialSavePatchOk": "La catégorie et les paramètres d'âge sont enregistrés. Le reste de ce formulaire n'a pas été enregistré — corrigez l'erreur ci-dessous, puis enregistrez à nouveau.",
   "reg.hub.config.partialSavePutOk": "Le reste de ce formulaire est enregistré. La catégorie et les paramètres d'âge n'ont pas été enregistrés — corrigez l'erreur ci-dessous, puis enregistrez à nouveau.",
   "eventImport.title": "Importer des événements de score",

@@ -119,6 +119,10 @@ const BASE_PROPS = {
   currency: "usd" as const,
   feePercentPct: 8,
   cardUnsupportedCurrency: null,
+  // RS005 F4 — baseline "no one waiting" case, matching every OTHER fixture
+  // in this file that predates the re-price warning and asserts nothing
+  // about it.
+  waitlistedCount: 0,
   onClose: vi.fn(),
   onSaved: vi.fn(),
 };
@@ -860,6 +864,93 @@ describe("RegistrationHubConfigPanel — the panel does not make claims that are
     const pairText = expandedText(pair.tree());
     expect(pairText).not.toContain(t(uiEn, "reg.hub.config.freeAgentsHint"));
     expect(pairText).not.toContain(t(uiEn, "reg.hub.config.allowSolo"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS005 F4 — editing a fee re-prices everyone still on the waitlist:
+// promoteWaitlistedRow (registrations.ts, ~:875) reads the LIVE fee at
+// promotion time, never what a waitlisted entrant saw when they joined
+// (they hold amount_cents = 0, so there is no earlier quote to honour). The
+// panel has no way to tell the organiser that except this warning, so it is
+// the whole fix.
+// ---------------------------------------------------------------------------
+describe("RegistrationHubConfigPanel — MoneySection warns about the waitlist re-price (RS005 F4)", () => {
+  // Every prop MoneySection needs BESIDES waitlistedCount — same shape the
+  // "every routable field" describe block above already builds by hand for
+  // the identical reason (MoneySection is invoked directly here, outside
+  // React, so there is no panel/hook wiring to lean on).
+  const moneyProps = {
+    state: FULL_STATE,
+    errors: {},
+    patch: vi.fn(),
+    msg: testMsg,
+    orgTz: "UTC",
+    orgSlug: "riverside",
+    currency: "usd" as const,
+    feePercentPct: 8,
+    cardUnsupportedCurrency: null,
+    chargesEnabled: true,
+    orgPaymentInstructions: null,
+    feeText: null,
+    onFeeText: vi.fn(),
+    dtDrafts: {},
+    onDateTimeHalfChange: vi.fn(),
+  };
+
+  function warningEl(tree: ReturnType<typeof walk>) {
+    return tree.find((e) => propsOf(e)["data-registration-hub-waitlist-warning"] !== undefined);
+  }
+
+  it("says nothing at all when the division's waitlist is empty", () => {
+    const tree = walk(MoneySection({ ...moneyProps, waitlistedCount: 0 }));
+    expect(warningEl(tree)).toBeUndefined();
+  });
+
+  it("warns, in the singular, for exactly one waitlisted entry", () => {
+    const tree = walk(MoneySection({ ...moneyProps, waitlistedCount: 1 }));
+    const el = warningEl(tree);
+    expect(el).toBeTruthy();
+    expect(textOf(el!)).toBe(t(uiEn, "reg.hub.config.waitlistRepriceWarning.one", { count: 1 }));
+    // The two forms must actually read differently — a shared key here would
+    // pass the assertion above by coincidence.
+    expect(textOf(el!)).not.toBe(t(uiEn, "reg.hub.config.waitlistRepriceWarning.other", { count: 1 }));
+  });
+
+  it("warns, in the plural, for more than one waitlisted entry", () => {
+    const tree = walk(MoneySection({ ...moneyProps, waitlistedCount: 3 }));
+    const el = warningEl(tree);
+    expect(el).toBeTruthy();
+    expect(textOf(el!)).toBe(t(uiEn, "reg.hub.config.waitlistRepriceWarning.other", { count: 3 }));
+  });
+
+  // Money defaults COLLAPSED (this file's own header comment) — proves the
+  // warning actually reaches the organiser through the real panel, not just
+  // through a direct MoneySection call, via the deepExpand/expandedText
+  // route the panel's other collapsed-section tests already use.
+  it("is present, through the real panel, once Money is expanded", async () => {
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, waitlistedCount: 3 }, expandPanel);
+    await flush();
+    const el = warningEl(island.tree());
+    expect(el).toBeTruthy();
+    expect(textOf(el!)).toBe(t(uiEn, "reg.hub.config.waitlistRepriceWarning.other", { count: 3 }));
+  });
+
+  it("is absent through the real panel when the division's waitlist is empty", async () => {
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, waitlistedCount: 0 }, expandPanel);
+    await flush();
+    expect(warningEl(island.tree())).toBeUndefined();
+  });
+
+  // The panel owns wiring, not copy: this pins that RegistrationHubConfigPanel
+  // forwards its OWN waitlistedCount prop to MoneySection UNCHANGED, rather
+  // than e.g. always passing 0 (which the two tests above could not catch —
+  // BASE_PROPS's own baseline is 0).
+  it("forwards its own waitlistedCount prop to MoneySection, unchanged", async () => {
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, waitlistedCount: 5 }, expandPanel);
+    await flush();
+    const money = island.tree().find((e) => e.type === MoneySection)!;
+    expect(propsOf(money).waitlistedCount).toBe(5);
   });
 });
 

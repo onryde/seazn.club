@@ -289,6 +289,7 @@ export function RegistrationHubConfigPanel({
   currency,
   feePercentPct,
   cardUnsupportedCurrency,
+  waitlistedCount,
   onClose,
   onSaved,
 }: {
@@ -304,6 +305,12 @@ export function RegistrationHubConfigPanel({
   /** Non-null when the org's connected Stripe account settles outside the
    *  registration currency allowlist — card collection is not viable. */
   cardUnsupportedCurrency: string | null;
+  /** Registrations in `waitlisted` status for this division RIGHT NOW
+   *  (RS005 F4, fetchDivisionRows -> RegistrationHubRowData.waitlisted).
+   *  The Money section warns with this count that promoting any of them
+   *  charges whatever fee is live at promotion time, not what they saw when
+   *  they joined — see MoneySection's own comment. */
+  waitlistedCount: number;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -490,6 +497,7 @@ export function RegistrationHubConfigPanel({
                     currency={currency}
                     feePercentPct={feePercentPct}
                     cardUnsupportedCurrency={cardUnsupportedCurrency}
+                    waitlistedCount={waitlistedCount}
                     chargesEnabled={readOnly!.chargesEnabled}
                     orgPaymentInstructions={readOnly!.orgPaymentInstructions}
                     feeText={feeText}
@@ -786,6 +794,7 @@ export function MoneySection({
   currency,
   feePercentPct,
   cardUnsupportedCurrency,
+  waitlistedCount,
   chargesEnabled,
   orgPaymentInstructions,
   feeText,
@@ -802,6 +811,13 @@ export function MoneySection({
   currency: Currency;
   feePercentPct: number;
   cardUnsupportedCurrency: string | null;
+  /** RS005 F4 — registrations in `waitlisted` status for this division right
+   *  now. `promoteWaitlistedRow` (registrations.ts, ~:875) reads the LIVE
+   *  fee at promotion time, never whatever fee was showing when a
+   *  waitlisted entrant joined (they hold `amount_cents = 0`, so there is
+   *  no earlier quote to honour) — so a fee edited here silently re-prices
+   *  every one of them the moment they're promoted. Shown only when > 0. */
+  waitlistedCount: number;
   chargesEnabled: boolean;
   orgPaymentInstructions: string | null;
   /** Finding 3 — the fee input's in-progress draft, owned by the panel
@@ -883,6 +899,27 @@ export function MoneySection({
         />
         {errors.fee_cents && (<p data-field-error="fee_cents" role="alert" className="mt-1 text-xs text-red-600">{errors.fee_cents}</p>)}
       </label>
+      {/* RS005 F4: only ever a WARNING about entries already queued, never a
+          block on saving — the fee change itself is legitimate, the
+          organiser just needs to know who it reaches and when. Absent
+          entirely at zero, same discipline every other conditional notice
+          in this panel already follows (feeCut/refundLock/allowSolo below,
+          and the "does not make claims that are false for this division"
+          tests that pin them) — a fact that does not apply gets no
+          sentence explaining its own absence. */}
+      {waitlistedCount > 0 && (
+        <p
+          data-registration-hub-waitlist-warning
+          className="rounded-lg border border-amber-100 bg-amber-50 p-2 text-xs text-amber-800"
+        >
+          {msg(
+            waitlistedCount === 1
+              ? "reg.hub.config.waitlistRepriceWarning.one"
+              : "reg.hub.config.waitlistRepriceWarning.other",
+            { count: waitlistedCount },
+          )}
+        </p>
+      )}
       {/* The platform cut applies to CARD entries only — it is Stripe's
           application fee, taken as the money passes through. On "pay the
           organiser" the money never touches the platform and we take nothing,
