@@ -53,7 +53,12 @@ function isValidIsoDate(value: string): boolean {
 
 export interface ContactValidation {
   valid: boolean;
-  errors: Partial<Record<"name" | "email" | "dob" | "gender", string>>;
+  errors: {
+    name?: "nameRequired" | "nameTooLong";
+    email?: "emailRequired" | "emailInvalid";
+    dob?: "dobRequired" | "dobInvalid";
+    gender?: "genderRequired";
+  };
 }
 
 /** Mirrors `PublicRegisterGroupContact` (schemas.ts:2359) field-shape rules

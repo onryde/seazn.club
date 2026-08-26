@@ -4447,5 +4447,8 @@
   "register.entries.cart.max": "Winkelwagen is vol — maximaal {max} inschrijvingen per registratie.",
   "register.entries.unnamed.team": "Naamloos team",
   "register.entries.unnamed.pair": "Naamloos paar",
-  "register.entries.unnamed.individual": "Inschrijving"
+  "register.entries.unnamed.individual": "Inschrijving",
+  "register.nav.who": "Wie",
+  "register.nav.entries": "Inschrijvingen",
+  "register.entries.badge.closed": "Gesloten"
 }

@@ -6,6 +6,7 @@ import { EMPTY_CART, EMPTY_CONTACT, type CartState, type ContactState, type Divi
 
 const BASE_DIVISION: DivisionLike = {
   division_id: "d1",
+  name: "Open",
   entrant_kind: "individual",
   category: null,
   age_min: null,
@@ -22,6 +23,7 @@ const BASE_DIVISION: DivisionLike = {
   closes_at: null,
   fee_cents: 0,
   currency: "gbp",
+  payment_method: "offline",
 };
 
 describe("whoFieldRequirements", () => {

@@ -4447,5 +4447,8 @@
   "register.entries.cart.max": "El carrito está lleno — hasta {max} inscripciones por registro.",
   "register.entries.unnamed.team": "Equipo sin nombre",
   "register.entries.unnamed.pair": "Pareja sin nombre",
-  "register.entries.unnamed.individual": "Inscripción"
+  "register.entries.unnamed.individual": "Inscripción",
+  "register.nav.who": "Quién",
+  "register.nav.entries": "Inscripciones",
+  "register.entries.badge.closed": "Cerrada"
 }

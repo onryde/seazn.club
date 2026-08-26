@@ -13,6 +13,7 @@ import { EMPTY_CART, MAX_CART_ENTRIES, type CartEntry, type CartState, type Divi
 
 const TEAM_DIVISION: DivisionLike = {
   division_id: "div-team",
+  name: "Open Teams",
   entrant_kind: "team",
   category: null,
   age_min: null,
@@ -29,6 +30,7 @@ const TEAM_DIVISION: DivisionLike = {
   closes_at: null,
   fee_cents: 1000,
   currency: "gbp",
+  payment_method: "offline",
 };
 
 const INDIVIDUAL_DIVISION: DivisionLike = {

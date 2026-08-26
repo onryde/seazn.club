@@ -4447,5 +4447,8 @@
   "register.entries.cart.max": "Le panier est plein — jusqu'à {max} inscriptions par enregistrement.",
   "register.entries.unnamed.team": "Équipe sans nom",
   "register.entries.unnamed.pair": "Paire sans nom",
-  "register.entries.unnamed.individual": "Inscription"
+  "register.entries.unnamed.individual": "Inscription",
+  "register.nav.who": "Qui",
+  "register.nav.entries": "Inscriptions",
+  "register.entries.badge.closed": "Fermée"
 }

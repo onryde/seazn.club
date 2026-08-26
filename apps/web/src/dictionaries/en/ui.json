@@ -4447,5 +4447,8 @@
   "register.entries.cart.max": "Cart is full — up to {max} entries per registration.",
   "register.entries.unnamed.team": "Unnamed team",
   "register.entries.unnamed.pair": "Unnamed pair",
-  "register.entries.unnamed.individual": "Entry"
+  "register.entries.unnamed.individual": "Entry",
+  "register.nav.who": "Who",
+  "register.nav.entries": "Entries",
+  "register.entries.badge.closed": "Closed"
 }

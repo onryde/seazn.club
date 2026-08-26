@@ -30,6 +30,7 @@ export const EMPTY_CONTACT: ContactState = { name: "", email: "", dob: null, gen
  *  (including tests) can pass a hand-built object with no cast. */
 export interface DivisionLike {
   division_id: string;
+  name: string;
   entrant_kind: "team" | "individual" | "pair";
   category: string | null;
   age_min: number | null;
@@ -46,6 +47,7 @@ export interface DivisionLike {
   closes_at: string | null;
   fee_cents: number;
   currency: string;
+  payment_method: "offline" | "stripe";
 }
 
 /** One cart line, mid-build. `id` is CLIENT-ONLY — a stable React key and

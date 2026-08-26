@@ -1,0 +1,82 @@
+"use client";
+// RS006 Step 2 — ENTRIES (design §4 step 2). Orchestrates the division
+// cards + the cart panel; owns nothing itself beyond wiring cart.ts's
+// actions to fresh ids (crypto.randomUUID() — kept out of the pure reducer
+// on purpose, see cart.ts's header) and computing each division's
+// self-eligibility once per render.
+import { useT } from "@/components/i18n/dict-provider";
+import { canAddEntry, type CartAction } from "./cart";
+import { DivisionCard } from "./division-card";
+import { selfEligibilityForDivision } from "./eligibility-presentation";
+import { EntryCart } from "./entry-cart";
+import type { CartState, ContactState, DivisionLike } from "./types";
+
+export function StepEntries({
+  divisions,
+  cart,
+  dispatch,
+  contact,
+  imPlaying,
+  seasonStartYear,
+  locale,
+}: {
+  divisions: readonly DivisionLike[];
+  cart: CartState;
+  dispatch: (action: CartAction) => void;
+  contact: ContactState;
+  imPlaying: boolean;
+  seasonStartYear: number;
+  locale: string;
+}) {
+  const t = useT();
+  const canAdd = canAddEntry(cart);
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[1fr_320px] lg:items-start">
+      <div className="rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
+        <h2 className="font-display text-xl font-semibold uppercase tracking-wide text-ink">
+          {t("register.entries.heading")}
+        </h2>
+        <p className="mt-1 text-sm text-ink-muted">{t("register.entries.subtitle")}</p>
+
+        <div className="mt-4 space-y-3">
+          {divisions.map((division) => {
+            const selfEligibility = imPlaying
+              ? selfEligibilityForDivision(division, contact, seasonStartYear)
+              : null;
+            const addAt = (kind: DivisionLike["entrant_kind"], freeAgent: boolean) => () =>
+              dispatch({
+                type: "ADD_ENTRY",
+                id: crypto.randomUUID(),
+                division_id: division.division_id,
+                entrant_kind: kind,
+              });
+            return (
+              <DivisionCard
+                key={division.division_id}
+                division={division}
+                locale={locale}
+                selfEligibility={selfEligibility}
+                imPlaying={imPlaying}
+                onAddTeam={canAdd && division.entrant_kind === "team" ? addAt("team", false) : undefined}
+                onAddPair={canAdd && division.entrant_kind === "pair" ? addAt("pair", false) : undefined}
+                onAddIndividual={canAdd && division.entrant_kind === "individual" ? addAt("individual", false) : undefined}
+                onAddSoloSignup={
+                  canAdd && division.entrant_kind === "team" && division.allow_free_agents
+                    ? () => {
+                        const id = crypto.randomUUID();
+                        dispatch({ type: "ADD_ENTRY", id, division_id: division.division_id, entrant_kind: "team" });
+                        dispatch({ type: "UPDATE_ENTRY", id, patch: { free_agent: true } });
+                      }
+                    : undefined
+                }
+              />
+            );
+          })}
+        </div>
+      </div>
+
+      <EntryCart cart={cart} divisions={divisions} dispatch={dispatch} locale={locale} />
+    </div>
+  );
+}

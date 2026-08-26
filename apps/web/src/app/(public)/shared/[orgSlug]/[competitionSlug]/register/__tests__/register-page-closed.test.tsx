@@ -35,6 +35,7 @@ const render = async (): Promise<string> =>
   renderToStaticMarkup(
     await RegisterPage({
       params: Promise.resolve({ orgSlug: "riverside", competitionSlug: "summer-smash" }),
+      searchParams: Promise.resolve({}),
     }),
   );
 
