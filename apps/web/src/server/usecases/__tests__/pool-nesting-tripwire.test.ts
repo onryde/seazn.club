@@ -29,7 +29,9 @@ import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, deleteStage } from "@/server/usecases/stages";
 import { putScheduleSettings } from "@/server/usecases/schedule";
 import { buildDivisionDocModel } from "@/server/usecases/exports";
+import { importEvents } from "@/server/usecases/event-import";
 import { seedCourts } from "./_seed";
+import { seedOrg, startedDivisionWithFixture, decidingStream } from "./_rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -338,6 +340,33 @@ describe.skipIf(!HAS_DB)("connection-pool nesting tripwire", () => {
     );
 
     expect(doc.title).toContain("Open");
+  });
+
+  // P11 batch import (final review): `importEvents` is the densest shape this
+  // suite exists for — a POOLED read (loadDivision), a pooled entitlement
+  // resolve (`frozenCompetitionIds` → `getLimit`), then TWO `withTenant`
+  // blocks per stream (the dry-run fold and the write), with more pooled reads
+  // interleaved between them (the receipt pre-check, the started guard,
+  // `requireFeature`, the stage config lookup, the lock refresh). Every one of
+  // those pooled reads has to sit OUTSIDE both transactions; one of them
+  // sliding inside is a permanent hang, not a slow import.
+  it("importEvents completes against a one-slot pool", async () => {
+    // Seeded under the NORMAL pool, before the swap — same reasoning as
+    // `seedDivision`'s doc comment. Only the import itself runs one-slot.
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
+
+    const report = await withOneSlotPool("importEvents", () =>
+      importEvents(auth, divisionId, {
+        import_id: "pool-" + randomUUID().slice(0, 8),
+        streams: [{ fixture: { id: fixtureId }, events: decidingStream() }],
+      }),
+    );
+
+    // Asserting the IMPORT landed, not merely that the call returned: a
+    // "fix" that dropped the freeze resolve (or any other pooled read) would
+    // stop deadlocking and also stop working, and this is what catches that.
+    expect(report.results[0]!.status).toBe("imported");
   });
 
   // ── The guard still BITES ─────────────────────────────────────────────────

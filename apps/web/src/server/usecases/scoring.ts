@@ -267,19 +267,53 @@ async function assertEntitledToScore(
   const feature = requiredFeatureForEvent(sportModule, input.type);
   if (feature) await requireFeature(auth.orgId, feature);
 
-  if (input.type === "cricket.revise") {
-    const manualTarget = (input.payload as { target?: unknown } | null)?.target !== undefined;
-    const dlsEnabled =
-      (ctx.config as { dls?: { enabled?: boolean } } | null)?.dls?.enabled === true;
-    if (dlsEnabled && !manualTarget) await requireFeature(auth.orgId, "cricket.dls");
+  if (requiresDlsEntitlement(input.type, ctx.config, input.payload)) {
+    await requireFeature(auth.orgId, "cricket.dls");
   }
+}
+
+/**
+ * The SECOND, non-fidelity entitlement gate (doc 10 §2 rule 4). A
+ * `cricket.revise` carrying no manual umpire target, under a division whose
+ * config enables DLS, is what makes the fold COMPUTE a Duckworth-Lewis-Stern
+ * target — Pro only. A manual target is an umpire's own number and is always
+ * allowed.
+ *
+ * `requiredFeatureForEvent` cannot express this: `cricket.revise` is fidelity
+ * TIER 1 (packages/engine/src/sports/cricket/cricket.ts), so the fidelity map
+ * returns null for it and always will — the rule is about the event's PAYLOAD
+ * and the DIVISION's config, neither of which a tier table knows about.
+ *
+ * Exported (P11) for the batch importer, the same reason `onDecided` /
+ * `refreshDiscipline` / `refreshNews` are exported just below: the importer
+ * has to apply the identical gate, and one predicate with two callers is what
+ * stops the live path and the import path from drifting. `divisionConfig` is
+ * the DIVISION's `config` column — exactly what `assertEntitledToScore` reads
+ * above — never a fixture cfg snapshot, which can legitimately differ.
+ *
+ * Pure: no I/O, so it is unit-testable and safe to call from anywhere,
+ * including inside a transaction.
+ */
+export function requiresDlsEntitlement(
+  eventType: string,
+  divisionConfig: unknown,
+  payload: unknown,
+): boolean {
+  if (eventType !== "cricket.revise") return false;
+  const manualTarget = (payload as { target?: unknown } | null)?.target !== undefined;
+  const dlsEnabled = (divisionConfig as { dls?: { enabled?: boolean } } | null)?.dls?.enabled === true;
+  return dlsEnabled && !manualTarget;
 }
 
 // Discipline (SPEC-1): a decided/void write re-folds the division's card ledger
 // into suspensions (recompute-on-read's write-side twin) and advances the
 // serving counter — but only when the division has enabled rules. A one-query
 // probe keeps the hot scoring path free for every division without discipline.
-async function refreshDiscipline(auth: AuthCtx, fixtureId: string): Promise<void> {
+//
+// Exported (P11): the batch importer fires the exact same decided side
+// effects scoreEvent does, in the same order — reusing these three rather
+// than copying their bodies is what keeps the two paths from drifting apart.
+export async function refreshDiscipline(auth: AuthCtx, fixtureId: string): Promise<void> {
   await withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<{ division_id: string }[]>`
       select division_id from fixtures where id = ${fixtureId}`;
@@ -296,7 +330,7 @@ async function refreshDiscipline(auth: AuthCtx, fixtureId: string): Promise<void
 // (auto_posts) keeps the hot path free for divisions without news; the whole
 // hook is swallowed — a draft/template hiccup must NEVER fail the score write
 // (same isolation principle as the discipline/email fire-and-forget sends).
-async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<void> {
+export async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<void> {
   try {
     // The entitlement answer BEFORE the transaction: `hasFeature` is a pooled
     // read, and asking for it inside `withTenant` is the pool self-deadlock
@@ -317,7 +351,7 @@ async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<void> {
 
 // A decided fixture feeds brackets (winner_to/loser_to slots) and refreshes
 // the table-stage standings snapshot.
-async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unknown): Promise<void> {
+export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unknown): Promise<void> {
   // outcome may be null here (a void erased the decision) — recompute only.
   const o = (outcome ?? {}) as { kind?: string; winner?: string; loser?: string };
   const context = await withTenant(auth.orgId, async (tx) => {
@@ -446,7 +480,14 @@ export async function finalizeFixture(
 // write: Redis pub:v1:* (the /api/v1/public endpoints, doc 08 §6) and Next's
 // ISR tag cache (the (public) pages, doc 09 §3 — same write that publishes
 // realtime fires the tag).
-async function invalidatePublicCache(
+//
+// Exported (P11), the same reason `onDecided`/`refreshDiscipline`/`refreshNews`
+// above are: the batch importer has to invalidate exactly what a live score
+// write invalidates, and reusing this rather than copying its body is what
+// keeps the two paths from drifting. An import that skipped it left the public
+// pages, the public API and discovery serving pre-import content — on a
+// feature whose whole point is filling those pages (design doc §1/§2.1).
+export async function invalidatePublicCache(
   orgId: string,
   fixtureId: string,
   movesDiscovery = false,

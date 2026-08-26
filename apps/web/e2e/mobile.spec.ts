@@ -16,6 +16,7 @@ import {
   setOrgLocaleSql,
   scoreFixture,
   seedVenueWithCourts,
+  setBoolEntitlementOverrideSql,
 } from "./helpers";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
@@ -111,7 +112,14 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
     },
   );
   expect(settings.status).toBeLessThan(300);
-  orgSlug = (await activeOrg(page)).slug;
+  const org = await activeOrg(page);
+  orgSlug = org.slug;
+  // P11 (D6): import.events has no plan_entitlements row on any plan during
+  // rollout (design doc §2.4/R6) — without this override the import route
+  // added to "console routes" below renders page.tsx's notFound() instead of
+  // the real page, and a 404 has no overflow, i.e. exactly the vacuous pass
+  // the #349 comment on that test already warns about for six other routes.
+  await setBoolEntitlementOverrideSql(org.id, "import.events", true);
 });
 
 // "load" + a short settle instead of networkidle — the dev server's HMR
@@ -153,6 +161,11 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     { path: await divisionPath(request, divisionId, "/schedule?tab=board") },
     { path: await divisionPath(request, divisionId, "/schedule?tab=settings") },
     { path: await divisionPath(request, divisionId, "/schedule?tab=health") },
+    // P11 (D6) — division batch score-event import page, own route sibling
+    // to schedule/ (design doc §7, R8). Absent from this list = zero width
+    // coverage no matter how many other specs touch the page (design doc
+    // §9) — events-import.spec.ts covers the functional path, not width.
+    { path: await divisionPath(request, divisionId, "/import") },
     { path: "/settings?tab=organization" },
     { path: "/settings?tab=news" },
     { path: "/settings?tab=sponsors" },

@@ -2,7 +2,7 @@ import postgres from "postgres";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 type Sql = ReturnType<typeof postgres>;
-type Tx = postgres.TransactionSql;
+export type Tx = postgres.TransactionSql;
 
 /**
  * Lazily-initialised postgres client.

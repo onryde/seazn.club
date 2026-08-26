@@ -955,6 +955,54 @@ export const AppendEventRequest = z.object({
 });
 export type AppendEventRequest = z.infer<typeof AppendEventRequest>;
 
+/** P11 (D6) batch score-event import. `seq` is assigned server-side 0..n — a
+ *  caller never sends one. `core.void` is refused here rather than downstream:
+ *  a void is a live-scoring undo, and a wrong import is re-run under a new
+ *  import_id (owner ruling R2). */
+export const EventImportRequest = z.object({
+  import_id: z.string().min(1).max(200),
+  streams: z.array(
+    z.object({
+      fixture: z.union([
+        z.object({ id: z.uuid() }),
+        z.object({ ext_key: z.string().min(1).max(200) }),
+      ]),
+      events: z.array(
+        z.object({
+          type: z.string().min(1).refine((t) => t !== "core.void", {
+            message: "core.void cannot be imported",
+          }),
+          payload: z.record(z.string(), z.unknown()).default({}),
+          // A real ISO-8601 INSTANT, the same idiom every other timestamp in
+          // this file uses. Not decoration: `at` lands in a `timestamptz`
+          // column, the engine's own envelope only asks `.min(1)`, and the
+          // dry-run fold never touches it — so a malformed value used to
+          // survive every guard and raise Postgres 22007 inside the write
+          // transaction, which is neither a unique violation nor an
+          // EngineError and therefore rethrew as a 500, discarding the report
+          // for streams that had already committed.
+          at: z.iso.datetime({ offset: true }).optional(),
+        }),
+      ).min(1),
+    }),
+  ).min(1),
+});
+export type EventImportRequest = z.infer<typeof EventImportRequest>;
+
+export const EventImportReport = z.object({
+  importId: z.string(),
+  totals: z.object({ imported: z.number(), skipped: z.number(), rejected: z.number() }),
+  results: z.array(
+    z.object({
+      fixture: z.string(),
+      status: z.enum(["imported", "skipped_duplicate", "rejected"]),
+      eventsAppended: z.number(),
+      outcome: z.unknown().optional(),
+      error: z.object({ code: z.string() }).loose().optional(),
+    }),
+  ),
+});
+
 export const ScoreEvent = z.object({
   id: Uuid,
   seq: z.number().int(),
