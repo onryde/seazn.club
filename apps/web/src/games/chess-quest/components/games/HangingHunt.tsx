@@ -179,6 +179,7 @@ export function HangingHunt() {
       <Board
         position={position}
         labels
+        orientation={parseFEN(HUNTS[cur].fen).whiteToMove ? "white" : "black"}
         highlights={highlights}
         popToken={pop}
         shakeToken={shake}

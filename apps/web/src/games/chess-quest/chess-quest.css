@@ -1,17 +1,51 @@
 /* Chess Quest board + game animations. Scoped with cq- prefixes; layout and
-   typography around the board stay Tailwind. */
+   typography around the board stay Tailwind.
+   Every colour in this file (down to the printable-certificate section,
+   which is deliberately hardcoded light — see its own comment) comes from a
+   --cq-* custom property, themed per .cq-board[data-theme]. See
+   lib/progress.tsx (getBoardTheme/setBoardTheme) for the stored setting and
+   docs/superpowers/specs/2026-08-26-games-board-redesign-and-new-games-design.md
+   ("W1 — board") for the token table this mirrors. */
 
 .cq-board {
+  /* green — the default theme. */
+  --cq-light: #eeeed2;
+  --cq-dark: #769656;
+  --cq-sel: rgba(255, 255, 51, 0.5);
+  --cq-last: rgba(255, 255, 51, 0.4);
+  --cq-move: rgba(0, 0, 0, 0.14);
+  --cq-check: radial-gradient(#ff0000 0%, #e70000 25%, rgba(169, 0, 0, 0) 89%);
+  --cq-hint: #f59e0b;
+  --cq-coord-on-light: #769656;
+  --cq-coord-on-dark: #eeeed2;
+
   display: grid;
   grid-template-columns: repeat(8, 1fr);
   grid-template-rows: repeat(8, 1fr);
   width: 100%;
   max-width: 480px;
   aspect-ratio: 1;
-  border: 2px solid var(--color-purple-950, #3b0764);
-  border-radius: 10px;
+  border-radius: 6px;
+  box-shadow: var(--shadow-sm, 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1));
   overflow: hidden;
   touch-action: manipulation;
+}
+
+.cq-board[data-theme="brown"] {
+  --cq-light: #f0d9b5;
+  --cq-dark: #b58863;
+  --cq-coord-on-light: #b58863;
+  --cq-coord-on-dark: #f0d9b5;
+}
+
+.cq-board[data-theme="purple"] {
+  --cq-light: #faf5ff;
+  --cq-dark: #e9d5ff;
+  --cq-sel: rgba(147, 51, 234, 0.35);
+  --cq-last: rgba(147, 51, 234, 0.25);
+  --cq-move: rgba(88, 28, 135, 0.3);
+  --cq-coord-on-light: #7e22ce;
+  --cq-coord-on-dark: #7e22ce;
 }
 
 .cq-sq {
@@ -29,32 +63,55 @@
   line-height: 1;
 }
 .cq-light {
-  background: #faf5ff; /* purple-50 */
+  background: var(--cq-light);
 }
 .cq-dark {
-  background: #e9d5ff; /* purple-200 */
+  background: var(--cq-dark);
 }
 
-.cq-hl-sel {
-  box-shadow: inset 0 0 0 3px #9333ea; /* purple-600 */
+/* sel/last/check are full-square overlay elements (siblings rendered before
+   the piece in Board.tsx), not the square's own box-shadow, so any two of
+   them can combine on one square (e.g. a king in check that's also just been
+   selected). .cq-pc/.cq-coin get `position: relative` below so they paint
+   above these — see the CSS painting-order note in Board.tsx's comments. */
+.cq-ov {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: normal;
+  pointer-events: none;
 }
+.cq-ov-check {
+  background: var(--cq-check);
+}
+.cq-ov-last {
+  background: var(--cq-last);
+}
+.cq-ov-sel {
+  background: var(--cq-sel);
+}
+.cq-ov-hint {
+  /* Static ring always renders; the pulse keyframe (kept for kids relying on
+     it) is added back only under prefers-reduced-motion: no-preference below. */
+  box-shadow: inset 0 0 0 3px var(--cq-hint);
+}
+
 .cq-hl-move::after {
   content: "";
   position: absolute;
-  width: 26%;
-  height: 26%;
+  width: 30%;
+  height: 30%;
   border-radius: 9999px;
-  background: rgba(147, 51, 234, 0.45);
+  background: var(--cq-move);
 }
-.cq-hl-cap {
-  box-shadow: inset 0 0 0 3px #f43f5e; /* rose-500 */
-}
-.cq-hl-hint {
-  box-shadow: inset 0 0 0 3px #f59e0b; /* amber-500 */
-  animation: cq-hint-pulse 0.9s ease-in-out infinite;
+.cq-hl-cap::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(transparent 0 66%, var(--cq-move) 67%);
 }
 
 .cq-pc {
+  position: relative;
   pointer-events: none;
   width: 84%;
   height: 84%;
@@ -62,6 +119,7 @@
 }
 
 .cq-coin {
+  position: relative;
   width: 40%;
   height: 40%;
   border-radius: 9999px;
@@ -69,7 +127,12 @@
   box-shadow: 0 1px 3px rgba(120, 53, 15, 0.5);
 }
 
-/* rank number on the a-file, file letter on rank 1 */
+/* Coordinates are always on (Board.tsx defaults labels=true) — rank number on
+   the coordinate-column edge, file letter on the coordinate-row edge. Which
+   edge that is depends on orientation (Board.tsx picks it so it always stays
+   on the OUTER edge of the flipped board); this just styles whichever square
+   got the attribute, in the square's own opposite tone so it reads clearly
+   on either colour. */
 .cq-sq[data-rank]::before {
   content: attr(data-rank);
   position: absolute;
@@ -77,7 +140,6 @@
   left: 3px;
   font-size: 10px;
   font-weight: 600;
-  color: #7e22ce;
   opacity: 0.7;
 }
 .cq-sq[data-file]::before {
@@ -87,16 +149,36 @@
   right: 3px;
   font-size: 10px;
   font-weight: 600;
-  color: #7e22ce;
   opacity: 0.7;
 }
 .cq-sq[data-rank][data-file]::before {
   content: attr(data-rank) " " attr(data-file);
 }
-
-.cq-pop {
-  animation: cq-pop 0.3s ease-out;
+.cq-sq.cq-light[data-rank]::before,
+.cq-sq.cq-light[data-file]::before {
+  color: var(--cq-coord-on-light);
 }
+.cq-sq.cq-dark[data-rank]::before,
+.cq-sq.cq-dark[data-file]::before {
+  color: var(--cq-coord-on-dark);
+}
+
+/* Slide (Board.tsx's FLIP effect, JS-driven) checks prefers-reduced-motion
+   itself and skips the transform entirely. These three CSS keyframe
+   animations are guarded the CSS way: under reduced motion they simply never
+   apply, so hint falls back to the static ring above. */
+@media (prefers-reduced-motion: no-preference) {
+  .cq-pop {
+    animation: cq-pop 0.3s ease-out;
+  }
+  .cq-shake {
+    animation: cq-shake 0.3s ease-in-out;
+  }
+  .cq-ov-hint {
+    animation: cq-hint-pulse 0.9s ease-in-out infinite;
+  }
+}
+
 @keyframes cq-pop {
   0% {
     transform: scale(1.35);
@@ -106,9 +188,6 @@
   }
 }
 
-.cq-shake {
-  animation: cq-shake 0.3s ease-in-out;
-}
 @keyframes cq-shake {
   0%,
   100% {
@@ -125,10 +204,10 @@
 @keyframes cq-hint-pulse {
   0%,
   100% {
-    box-shadow: inset 0 0 0 3px #f59e0b;
+    box-shadow: inset 0 0 0 3px var(--cq-hint);
   }
   50% {
-    box-shadow: inset 0 0 0 5px #f59e0b;
+    box-shadow: inset 0 0 0 5px var(--cq-hint);
   }
 }
 

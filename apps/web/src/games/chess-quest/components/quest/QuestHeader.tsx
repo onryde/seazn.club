@@ -6,6 +6,7 @@ import { LANDS } from "../../content/lands";
 import { LESSONS } from "../../content/lessons";
 import { useCopy } from "../../lib/copy";
 import { useProgress } from "../../lib/progress";
+import { BoardThemePicker } from "../BoardThemePicker";
 
 export function QuestHeader({
   onOpenProfiles,
@@ -26,7 +27,7 @@ export function QuestHeader({
         <h2 className="mk-display text-2xl font-bold text-purple-950">
           {name ? `${name}'s ` : ""}Chess Quest <span aria-hidden>♞</span>
         </h2>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={onOpenProfiles}
@@ -44,6 +45,7 @@ export function QuestHeader({
           >
             📊 Progress
           </button>
+          <BoardThemePicker />
           <button
             type="button"
             aria-label={progress.getMuted() ? "Unmute sounds" : "Mute sounds"}

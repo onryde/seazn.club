@@ -311,6 +311,7 @@ export function TacticTrainer({ pack: initialPack = "fork" }: { pack?: string })
       <Board
         position={position}
         labels
+        orientation={parseFEN(cases[cur].fen).whiteToMove ? "white" : "black"}
         highlights={highlights}
         popToken={pop}
         shakeToken={shake}

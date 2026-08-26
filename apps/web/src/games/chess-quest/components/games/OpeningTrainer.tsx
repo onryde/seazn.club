@@ -161,6 +161,14 @@ export function OpeningTrainer({ opening }: { opening: string }) {
       <Board
         position={position}
         labels
+        // Every line here starts from the same fixed START FEN (always "w"),
+        // so parseFEN(START).whiteToMove is always true — it can't tell us
+        // which side the LEARNER plays (op.learnerSide; only the Scandinavian
+        // is "black"). Orienting to START's colour would leave the board
+        // white-side-up even when training a black opening, defeating the
+        // point of orientation, so this one game orients off op.learnerSide
+        // instead of a parsed FEN.
+        orientation={op.learnerSide}
         highlights={highlights}
         popToken={pop}
         shakeToken={shake}

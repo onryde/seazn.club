@@ -47,6 +47,26 @@ test("free-play arcade lists the eight games and one solves", async ({ page }) =
   await expect(page.getByText(/Checkmate/)).toBeVisible();
 });
 
+test("board theme picker switches data-theme and survives reload", async ({ page }) => {
+  await page.goto("/games/chess-quest");
+  await page.evaluate(() => localStorage.removeItem("seazn-games:chess-quest:v1"));
+  await page.reload();
+
+  // Default is green until changed.
+  await page.getByRole("button", { name: /Play Square Race/ }).click();
+  await expect(page.locator(".cq-board")).toHaveAttribute("data-theme", "green");
+  await page.getByRole("button", { name: "← Back to quest" }).click();
+
+  await page.getByLabel("Board theme").selectOption("brown");
+  await page.getByRole("button", { name: /Play Square Race/ }).click();
+  await expect(page.locator(".cq-board")).toHaveAttribute("data-theme", "brown");
+
+  // Survives a reload — a fresh mount reads the same persisted device setting.
+  await page.reload();
+  await page.getByRole("button", { name: /Play Square Race/ }).click();
+  await expect(page.locator(".cq-board")).toHaveAttribute("data-theme", "brown");
+});
+
 test("an Opening Trainer lesson launches and takes the first move", async ({ page }) => {
   await page.goto("/games/chess-quest");
   await page.evaluate(() => localStorage.removeItem("seazn-games:chess-quest:v1"));
