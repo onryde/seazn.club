@@ -77,12 +77,17 @@ export function TearOffTicket({
           {entries.map((entry) => {
             const stamp = STATUS_STAMP[entry.status] ?? STATUS_STAMP.pending!;
             return (
-              <div key={entry.id} className="flex items-center justify-between gap-4 px-6 py-4">
+              <div
+                key={entry.id}
+                className="flex flex-col gap-2 px-6 py-4 xs:flex-row xs:items-center xs:justify-between xs:gap-4"
+              >
                 <div className="min-w-0">
                   <p className="text-[11px] tracking-widest text-ink-muted uppercase">
                     {entry.divisionName}
                   </p>
-                  <p className="truncate text-lg font-semibold text-ink">{entry.displayName}</p>
+                  <p className="text-lg font-semibold break-words text-ink xs:truncate">
+                    {entry.displayName}
+                  </p>
                 </div>
                 <span
                   className={`shrink-0 -rotate-6 rounded border-2 px-2.5 py-1 font-display text-lg font-bold tracking-widest ${stamp.tone}`}
