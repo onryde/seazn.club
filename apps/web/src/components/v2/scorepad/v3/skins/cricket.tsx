@@ -87,7 +87,7 @@ import type { EventEnvelope } from "@seazn/engine/core";
 // narrow the bowler chip's candidates, not merely to test one name), which is
 // exactly what the engine's own filter already is, so the mirror is DELETED
 // and the rule imported. Same reasoning `nextBattingSide` was granted on.
-import { eligibleBowlers, nextBattingSide, reviewsRemaining } from "@seazn/engine/sports/cricket";
+import { activeInnings, eligibleBowlers, nextBattingSide, reviewsRemaining } from "@seazn/engine/sports/cricket";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
@@ -204,6 +204,18 @@ interface CricketInningsShape {
 interface CricketStateShape {
   phase?: "pre" | "live" | "super_over" | "done" | "final";
   innings?: CricketInningsShape[];
+  /** R3.5 — the super over's OWN innings list. The engine keeps it here and
+   *  never in `innings` (a super-over innings is the third and fourth of the
+   *  match, numbered by `activeInnings`'s own `offset`). Absent from this
+   *  shape until now, which is exactly why the pad spent every super over
+   *  describing the innings before it: `currentInnings`/`dueBattingSide`/
+   *  `chaseTarget` (below) could not see this field, so they answered every
+   *  question — score, target, bowler, whether tiles should be live — off
+   *  the closed MAIN innings, unconditionally. `null` is the fold's own
+   *  "not yet in a super over" value (`CricketState.superOver`,
+   *  cricket.ts:470-473); absent is the shape-probe default every OTHER
+   *  optional field on this interface already tolerates. */
+  superOver?: { innings?: CricketInningsShape[] } | null;
   orders?: { home?: string[]; away?: string[] };
   /** Set by `cricket.revise` (either branch — DLS auto-compute or a manual
    *  `target`), present from fidelity band 1 upward (cricket.ts:465-466).
@@ -271,10 +283,22 @@ export function bowlerIsReadOnly(innings: CricketInningsShape | null): boolean {
 }
 
 /** The open innings, or the most recently closed one once none is open
- *  (post-match display). `null` pre-toss / before any innings exists. */
+ *  (post-match display). `null` pre-toss / before any innings exists, and
+ *  `null` again between a tie and the first super-over ball (the SO innings
+ *  list exists but is empty — see `activeInnings`'s own doc for why that is
+ *  not the same thing as "no super over").
+ *
+ * R3.5 — delegates to the engine's `activeInnings` so this and the position
+ * axis (`cricketPosition`, cricket.ts) cannot fork on which innings list is
+ * live; see that function's own doc for why this is not a local switch. This
+ * keeps the pre-existing "fall back to the last innings once every one is
+ * closed" display rule, now applied to whichever list is ACTUALLY active. */
 export function currentInnings(state: CricketStateShape): CricketInningsShape | null {
-  const innings = state.innings ?? [];
-  return innings.find((i) => !i.closed) ?? innings[innings.length - 1] ?? null;
+  const { list } = activeInnings<CricketInningsShape>({
+    innings: state.innings ?? [],
+    superOver: state.superOver ? { innings: state.superOver.innings ?? [] } : null,
+  });
+  return list.find((i) => !i.closed) ?? list[list.length - 1] ?? null;
 }
 
 export type InningsFidelity = "unopened" | "coarse" | "fine";
@@ -318,8 +342,31 @@ export function inningsFidelity(innings: CricketInningsShape | null): InningsFid
  * branches, the recurring defect class this repo keeps hitting when a rule
  * gets forked across the engine/apps-web boundary. `state.innings.length`
  * is the SAME index `createInnings` itself addresses by (cricket.ts:662).
+ *
+ * R3.5 — inside a super over the MAIN-innings sequencing rule above does not
+ * apply: `nextBattingSide` counts main innings only, and by the time a super
+ * over exists both are always closed — it would report a main-innings side
+ * "due" while the engine is mid-decider, which is the fork this branch
+ * exists to stop. The super over's own rule is simply "the OTHER side bats
+ * next", and only while the current pair is incomplete: `null` while an
+ * innings is still open (its own `battingSide` already answers the
+ * question), `null` before the first ball of the whole super over (nobody is
+ * "due" yet — C2, the pad is about to offer the very first pick), and `null`
+ * once a pair has just completed (a `repeat` policy opens the next pair on
+ * the next ball itself, with no due-side gap to announce in between).
  */
 export function dueBattingSide(state: CricketStateShape, cfg: CricketCfgShape): "home" | "away" | null {
+  const so = state.superOver?.innings;
+  if (state.phase === "super_over" && so !== undefined) {
+    const open = so.find((i) => !i.closed);
+    if (open) return null; // an innings is in progress
+    if (so.length === 0) return null; // none created yet — C2
+    if (so.length % 2 === 1) {
+      // Pair incomplete: the other side is due.
+      return opponentSide((so[so.length - 1] as CricketInningsShape).battingSide ?? "home");
+    }
+    return null; // pair complete: a repeat opens the next pair on the next ball
+  }
   const innings = currentInnings(state);
   if (innings === null || innings.closed !== true) return null;
   return nextBattingSide({
@@ -882,6 +929,18 @@ export function runRate(runs: number, legalBalls: number, bpo: number): number |
  * same single check v2 uses for both cases.
  */
 export function chaseTarget(cfg: CricketCfgShape, state: CricketStateShape): { value: number; isDls: boolean } | null {
+  // R3.5 — a super over has its OWN target, and the main innings' is stale
+  // the moment the match goes to one. Engine rule (applySuperOverBall,
+  // cricket.ts:1572-1573): the SECOND innings of each pair chases the first
+  // + 1; the first chases nothing (nobody bats twice in the same pair), and
+  // neither does a pair still open (nothing to chase until the first
+  // innings of the pair has actually closed).
+  const so = state.superOver?.innings;
+  if (state.phase === "super_over" && so !== undefined) {
+    if (so.length === 0 || so.length % 2 === 1) return null;
+    const first = so[so.length - 2] as CricketInningsShape;
+    return typeof first.runs === "number" ? { value: first.runs + 1, isDls: false } : null;
+  }
   const innings = state.innings ?? [];
   const singleInnings = cfg.inningsPerSide !== 2;
   let value: number | null;

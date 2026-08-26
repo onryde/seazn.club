@@ -14,19 +14,32 @@
 // accepts", never "the skin offers X" asserted against a mirror of the
 // engine that can only ever agree with itself.
 //
-// THE DEFECT THIS PINS. Cricket's `wicket` tile is `{sheet: "wicket"}`, and
-// today's (pre-Task-C) skin disables the WHOLE delivery row — including
-// that tile — for the length of a super over (`blockedByClosure` in
-// `skins/cricket.tsx`, derived from `currentInnings`/`dueBattingSide` still
-// reading the closed MAIN innings rather than `state.superOver.innings`;
-// Task C's own fix). The `wicket` SHEET itself declares
-// `event: ballEventType(state)`, which is `"cricket.superover.ball"` in
-// that phase — and `dedicatedEventTypes`'s sheets loop used to add every
-// sheet's event unconditionally, regardless of whether any enabled tile
-// could still open it. So the type stayed "claimed" even though the only
-// tile able to open that sheet was unusable, which is exactly what
-// suppressed the Super-over panel from the More sheet and closed the last
-// route to recording a super-over ball at all.
+// THE DEFECT THIS ORIGINALLY PINNED (now fixed by Task C — see cricket.ts's
+// `activeInnings`/`skins/cricket.tsx`'s `currentInnings`/`dueBattingSide`).
+// Cricket's `wicket` tile is `{sheet: "wicket"}`, and the pre-Task-C skin
+// disabled the WHOLE delivery row — including that tile — for the length of
+// a super over (`blockedByClosure` in `skins/cricket.tsx`, derived from
+// `currentInnings`/`dueBattingSide` reading the closed MAIN innings rather
+// than `state.superOver.innings`). The `wicket` SHEET itself declares
+// `event: ballEventType(state)`, which is `"cricket.superover.ball"` in that
+// phase — and `dedicatedEventTypes`'s sheets loop used to add every sheet's
+// event unconditionally, regardless of whether any enabled tile could still
+// open it. So the type stayed "claimed" even though the only tile able to
+// open that sheet was unusable, which is exactly what suppressed the
+// Super-over panel from the More sheet and closed the last route to
+// recording a super-over ball at all.
+//
+// POST-TASK-C: the SAME real-folded state now has a genuinely open,
+// un-closed super-over innings, so `currentInnings` finds it directly and
+// the wicket tile is no longer disabled at all — `dedicatedEventTypes`
+// claims `cricket.superover.ball` via the enabled TILE itself, with no need
+// for the sheet to claim anything (Task B's own disabled-tile guard is not
+// even exercised by this fixture any more; it fires only when EVERY opening
+// tile for a type is disabled, which is no longer true here). Kept as a
+// real-fold regression witness rather than deleted: if a future change to
+// `currentInnings`/`dueBattingSide` reintroduces the closure block for a
+// LIVE super over, this is what would catch it, the same "against a REAL
+// fold, never a mirror" posture the rest of this file's header describes.
 //
 // Deliberately its own file, not folded into pad-host.test.ts (synthetic
 // tile/sheet-shape unit tests) or skins/__tests__/cricket.test.ts (task C's
@@ -89,7 +102,7 @@ function view(cfg: CricketCfg, state: CricketState): PadHostView {
 const t = (key: string) => key;
 
 describe("dedicatedEventTypes against a REAL folded cricket super over", () => {
-  it("a live super over does not suppress cricket.superover.ball from More via the disabled wicket sheet", () => {
+  it("a live super over's wicket tile is enabled, and dedicatedEventTypes claims its type via the tile itself", () => {
     const cfg = tiedWithSuperOver();
     const state = foldCricket(cfg, [
       ["core.start"],
@@ -114,14 +127,20 @@ describe("dedicatedEventTypes against a REAL folded cricket super over", () => {
 
     const v = view(cfg, state);
     const tiles = buildTiles(v, t);
-    // Pins the MECHANISM, not just the symptom: the wicket tile really is
-    // disabled in this real-folded state (today's pre-Task-C
-    // blockedByClosure defect) — which is what makes its sheet's own claim
-    // on cricket.superover.ball the ONLY thing suppressing the More panel.
+    // Task C's fix, witnessed against a REAL fold rather than a mirror: the
+    // super over's own innings is open (one ball in, not closed), so
+    // `currentInnings`/`dueBattingSide` find IT rather than falling back to
+    // the closed main innings — `blockedByClosure` is false and the wicket
+    // tile carries no `disabled` key at all (never merely `false`; the tile
+    // builders only ever spread `disabled: true` when a guard fires).
     const wicketTile = tiles.find((x) => x.id === "wicket");
-    expect(wicketTile?.disabled).toBe(true);
+    expect(wicketTile?.disabled).not.toBe(true);
 
+    // The type is claimed by the ENABLED tile itself now, independent of
+    // Task B's disabled-tile guard — this fixture no longer exercises that
+    // guard at all (every opening tile for the type is reachable), which is
+    // exactly the corrected state of the world Task C's fix produces.
     const dedicated = dedicatedEventTypes(tiles, buildSheets(v, t), [], buildScorebug(v, t));
-    expect(dedicated.has("cricket.superover.ball")).toBe(false);
+    expect(dedicated.has("cricket.superover.ball")).toBe(true);
   });
 });
