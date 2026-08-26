@@ -1,5 +1,5 @@
 // W1 acceptance criterion, verbatim: "`.cq-board` reads every colour from
-// custom properties; `data-theme` selects a set. Nothing else in the CSS
+// custom properties, all set once on .cq-board. Nothing else in the CSS
 // names a colour." This greps the compiled-away stylesheet source directly
 // (no build step involved) so a regression that reintroduces a hardcoded
 // board colour fails here instead of only showing up in a screenshot diff.
@@ -21,7 +21,7 @@ describe("chess-quest.css — board colours come from custom properties (W1)", (
     expect(printAt).toBeGreaterThan(0);
   });
 
-  it("defines all nine theme tokens on .cq-board, plus brown and purple overrides", () => {
+  it("defines all nine palette tokens on .cq-board", () => {
     for (const token of [
       "--cq-light",
       "--cq-dark",
@@ -35,8 +35,18 @@ describe("chess-quest.css — board colours come from custom properties (W1)", (
     ]) {
       expect(boardCss).toContain(`${token}:`);
     }
-    expect(boardCss).toContain('.cq-board[data-theme="brown"]');
-    expect(boardCss).toContain('.cq-board[data-theme="purple"]');
+  });
+
+  // Inverted, not deleted: these two lines used to assert the brown and
+  // purple overrides EXISTED. Owner ruling 2026-08-27 — the board is
+  // white/green and nothing else — so they now guard the removal. The
+  // literals are spelled out so a re-added override reddens even if it is
+  // hung off a different selector.
+  it("carries no alternate board palette", () => {
+    expect(boardCss).not.toContain("[data-theme=");
+    for (const hex of ["#f0d9b5", "#b58863", "#faf5ff", "#e9d5ff", "#7e22ce"]) {
+      expect(boardCss.toLowerCase()).not.toContain(hex);
+    }
   });
 
   it("square colours reference the theme tokens, not a literal colour", () => {

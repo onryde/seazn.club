@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createProgressState, resolveBoardTheme } from "../progress";
+import { createProgressState } from "../progress";
 
 // Minimal in-memory Storage for the persistence tests.
 function fakeStorage(): Storage {
@@ -219,40 +219,47 @@ describe("persistence", () => {
     expect(reloaded.getVoiceOn()).toBe(false);
   });
 
-  it("board theme defaults to green and persists across a reload", () => {
+  // The board-theme setting was removed on 2026-08-27 (one white/green
+  // board, owner ruling). Anyone who picked brown or purple while W1 was
+  // live still has {"boardTheme":"purple"} sitting in their localStorage,
+  // so the real risk is not the API — it is that a stale blob either
+  // crashes the loader or quietly survives a round-trip and comes back.
+  it("ignores a boardTheme left behind by W1 and never writes one back", () => {
     const storage = fakeStorage();
+    storage.setItem(
+      "seazn-games:chess-quest:v1",
+      JSON.stringify({
+        active: "p1",
+        seq: 1,
+        muted: false,
+        voiceOff: false,
+        boardTheme: "purple",
+        profiles: {
+          p1: {
+            name: "Player 1",
+            mode: "story",
+            weeks: {},
+            stars: {},
+            best: {},
+            solved: [],
+            solved2: [],
+            hunts: [],
+            tactics: {},
+            activity: [],
+            created: "2026-08-26",
+          },
+        },
+      }),
+    );
+
     const p = createProgressState(storage);
-    expect(p.getBoardTheme()).toBe("green");
-    p.setBoardTheme("brown");
-    expect(p.getBoardTheme()).toBe("brown");
-    const reloaded = createProgressState(storage);
-    expect(reloaded.getBoardTheme()).toBe("brown");
-  });
+    expect(p.getMuted()).toBe(false);
+    expect("getBoardTheme" in p).toBe(false);
 
-  it("board theme is a device setting shared across profiles", () => {
-    const storage = fakeStorage();
-    const p = createProgressState(storage);
-    p.setBoardTheme("purple");
-    p.addProfile("Kid", "story");
-    expect(p.getBoardTheme()).toBe("purple");
-    p.switchProfile("p1");
-    expect(p.getBoardTheme()).toBe("purple");
-  });
-});
-
-describe("resolveBoardTheme (unknown/corrupt values default to green)", () => {
-  it("passes through the three known themes", () => {
-    expect(resolveBoardTheme("green")).toBe("green");
-    expect(resolveBoardTheme("brown")).toBe("brown");
-    expect(resolveBoardTheme("purple")).toBe("purple");
-  });
-
-  it("defaults anything else to green", () => {
-    expect(resolveBoardTheme(undefined)).toBe("green");
-    expect(resolveBoardTheme(null)).toBe("green");
-    expect(resolveBoardTheme("")).toBe("green");
-    expect(resolveBoardTheme("neon")).toBe("green");
-    expect(resolveBoardTheme(42)).toBe("green");
-    expect(resolveBoardTheme({})).toBe("green");
+    // Force a write, then confirm the stale key did not survive it.
+    p.setMuted(true);
+    expect(JSON.parse(storage.getItem("seazn-games:chess-quest:v1")!)).not.toHaveProperty(
+      "boardTheme",
+    );
   });
 });

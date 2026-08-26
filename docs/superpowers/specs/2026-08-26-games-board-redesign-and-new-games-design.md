@@ -23,7 +23,7 @@ needs an org, a login or a database.
 | Decision | Choice |
 |----------|--------|
 | Chess scope | Board + polish only. **No** play-vs-computer, **no** member-vs-member, no cloud progress. |
-| Board palette | Theme tokens on `.cq-board[data-theme]`; `green` is the default; `purple` (today's look) and `brown` (lichess) ship as alternates; picker in settings, persisted as a device setting next to `muted`. |
+| Board palette | Theme tokens on `.cq-board[data-theme]`; `green` is the default; `purple` (today's look) and `brown` (lichess) ship as alternates; picker in settings, persisted as a device setting next to `muted`. **Superseded — see Amendment 1.** |
 | Pieces | Keep the Cburnett SVG set (`public/games/chess-quest/pieces/`). No piece-set picker in this wave. |
 | Input | Tap-tap stays the default and the e2e driver; drag is additive. |
 | New games | Daily Word (Wordle-style) and 2048. Sudoku, Minesweeper, Checkers (reusing the new board), Memory are follow-ups, in that order. |
@@ -67,6 +67,34 @@ for new orgs.
 `AGENTS.md`, i18n bullet: add `apps/web/src/games/**` to the English-only
 exception. One line. No code.
 
+## Amendment 1 (2026-08-27) — one board palette, no picker
+
+W1 shipped as written below and merged in #662. The owner then ruled that
+**every board is white/green, full stop**. The alternate palettes and the
+control that selected them were removed the same week:
+
+- `.cq-board[data-theme="brown"]` and `[data-theme="purple"]` — deleted. The
+  nine tokens stay, defined once on `.cq-board`; there is no `[data-theme]`
+  hook in the file any more and no `data-theme` attribute on the element.
+- `BoardThemePicker.tsx` and its test — deleted; unmounted from `QuestHeader`.
+- `BoardTheme`, `resolveBoardTheme`, `getBoardTheme`/`setBoardTheme` and the
+  `boardTheme` blob field — removed from `lib/progress.tsx`. `loadBlob` now
+  deletes a `boardTheme` left in an existing player's localStorage by W1, so
+  the retired key does not get written back on the next save.
+- `Board.tsx` no longer calls `useProgress()` at all — the theme read was its
+  only use of the context.
+
+The test probes were **inverted, not deleted**: the CSS test now asserts no
+`[data-theme=` selector and none of the five retired hex literals; the
+`QuestHeader` test asserts no board-theme control is mounted. So re-adding an
+alternate palette reddens the suite rather than shipping quietly. The
+brown/purple columns in the token table below are kept as the record of what
+W1 shipped — they are history, not a target.
+
+The `flex-wrap` on the header button row stays even though the picker that
+overflowed it is gone: it is what keeps the row safe at 320px the next time an
+item is added.
+
 ## W1 — board: themes, highlights, orientation, motion
 
 Files: `components/Board.tsx`, `chess-quest.css`, `lib/progress.tsx` (one
@@ -78,7 +106,7 @@ next to the existing mute toggle (the only caller of `setMuted`).
 `.cq-board` reads every colour from custom properties; `data-theme` selects a
 set. Nothing else in the CSS names a colour.
 
-| token | green (default) | brown | purple (legacy) |
+| token | green (the only palette; brown/purple retired — Amendment 1) | brown | purple (legacy) |
 |---|---|---|---|
 | `--cq-light` | `#EEEED2` | `#F0D9B5` | `#faf5ff` |
 | `--cq-dark` | `#769656` | `#B58863` | `#e9d5ff` |
@@ -144,8 +172,8 @@ unchanged so the e2e selectors keep working regardless of orientation.
 - Rendered: `Board` with `orientation="black"` places `a1` bottom-right (query
   `[data-square="a1"]` and compare `getBoundingClientRect` order in jsdom via
   grid order, or assert the `style.order` / grid-area used).
-- e2e: existing 9 pass unchanged (tap path). One new test: board theme picker
-  switches `data-theme` and survives reload.
+- e2e: existing 9 pass unchanged (tap path). ~~One new test: board theme picker
+  switches `data-theme` and survives reload.~~ Retired by Amendment 1.
 - Screenshots at 1280 / 768 / **320** (board = 288 px, square = 36 px, coords
   10 px) with no horizontal scroll; posted in the PR.
 
@@ -257,7 +285,7 @@ Small, extracted only as far as the two new games need:
   Sentry.
 - Audio unavailable / blocked autoplay → silent no-op.
 - Clipboard API missing → textarea fallback.
-- Unknown `data-theme` → green.
+- ~~Unknown `data-theme` → green.~~ Retired by Amendment 1 — no `data-theme` exists.
 
 ## Out of scope
 
