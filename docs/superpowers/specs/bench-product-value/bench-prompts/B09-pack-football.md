@@ -8,14 +8,17 @@ Parallel-safe with B07–B15.
 - **Suite 2 — org "UEFA Festival"** (football module).
 - Div A: **Euro 2024**, all 51 matches: every goal (scorer, minute,
   pen/OG flags), card, sub; shootouts (Portugal–Slovenia R16,
-  England–Switzerland QF). Div B: **B00's recorded decision** — Futsal
-  Euro 2026 (small-sided cfg: sinbin, rolling subs) or Women's Euro
-  2025 fallback (pens final: England d. Spain). Build to the decision,
-  don't re-open it.
+  England–Switzerland QF). Div B: **B00 DECIDED (2026-08-26) — Women's
+  Euro 2025**, not futsal (pens final: England d. Spain). Futsal was
+  rejected: `football.ts` has zero offside-replacement or
+  kick-in-vs-throw-in event modeling anywhere in the vocabulary, and
+  zero fixture/golden-corpus/domain-test evidence the module has ever
+  scored a futsal-shaped match — see spec §11 risk 3 for the evidence.
+  Build to WEuro25, don't re-open it.
 - Cfg: Div A standard 11-a-side, UEFA points; **division tiebreakers set
   to UEFA h2h-first** (engine has both cascades — this suite proves the
   config matters: Euro 2024 groups contained h2h-decided orders).
-  Div B per decision (small-sided knobs or WEuro same-variant).
+  Div B: same 11-a-side variant as Div A (WEuro25, not small-sided).
 - Sources: UEFA official match reports (goals/cards/lineups/refs),
   Wikipedia consolidated tables, squad lists.
 - Squads: full 26-man Euro squads ×24; officials: named referees per
@@ -35,8 +38,8 @@ Parallel-safe with B07–B15.
   at 3 goals (6 players — the leaders oracle must handle ties in the
   LEADERBOARD itself), suspension list, shootout scores.
 - Adaptations expected: R16 third-place mapping (UEFA permutation
-  table); if Div B = futsal and a cfg knob is missing → §7A per spec
-  (fallback already named).
+  table). No futsal adaptation needed — Div B is WEuro25, standard
+  11-a-side cfg.
 - Size: ~51+30 matches, ~40–60 events/match → ~4–5k events; ~700–900
   persons (two full squad sets).
 

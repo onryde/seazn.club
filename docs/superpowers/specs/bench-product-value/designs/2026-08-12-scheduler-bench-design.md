@@ -293,31 +293,117 @@ knob (1), draws + half points (4).
 
 ## 11. Risk register (verify at plan time; triage per §7 issue policy)
 
-1. Stage-progression automation may not exist → bench-as-organizer
-   fallback is the decided default.
-2. Swiss pairings are engine-incremental → historical pairings seeded as
-   manual fixtures; verify manual fixture creation API supports it.
-3. Futsal cfg fit unknown → Women's Euro 2025 is the named fallback for
-   suite 2 Div B.
-4. API `StageKind` (9 values) ⊃ DB CHECK (6, V210) — suites stick to
-   league/group/knockout/swiss; divergence itself goes through §7 triage.
-5. Event-POST throughput unknown (~40k events) — measure in suite 1; a
-   batch endpoint would be new public API surface → escalate, never
-   silently add.
-6. Tennis walkover/retirement representation — verify engine path; else
-   admin-finalize adaptation recorded in pack meta.
-7. Placement service must run locally (Python gRPC,
-   `PLACEMENT_SERVICE_HOST`) — pre-flight gate + seazn-local-env addendum.
-8. Plan→feature map must cover every deep tier the packs use
-   (`scoring.ball_by_ball`, `stats.player`, rally/strike keys if declared)
-   — verify which plan key carries each; provisioning via `setPlan` SQL
-   precedent. UI timeline rendering of tier-3 streams is explicitly not
-   gated.
-9. **Staleness by design**: every file:line, schema shape and enum cited
-   here predates the strict-wait window (§13) — S8–S13 and C0–C8 all land
-   on these surfaces before implementation begins. A scout re-pin of every
-   citation is the FIRST task of the implementation plan, not optional
-   hygiene (same rule the scoringpad index enforces).
+**B00 re-pin (2026-08-26).** All nine answered with evidence; none open.
+
+1. **RESOLVED — automation exists, bench-as-organizer fallback not
+   needed.** `completeStage` (`apps/web/src/server/usecases/stages.ts:2248`)
+   auto-advances on its `on_complete` timing branch
+   (`stages.ts:2336-2338`); the `setup`-timing branch computes a seed
+   proposal automatically too (`stages.ts:2269-2298`). All three P5/P6
+   engine entry points are plain REST routes, no UI dependency:
+   `POST /api/v1/stages/{id}/complete`
+   (`app/api/v1/stages/[id]/complete/route.ts:8`),
+   `POST /api/v1/stages/{id}/generate` → `generateStageFixtures`
+   (`.../generate/route.ts:8`), `POST .../seed-proposal/confirm` →
+   `confirmSeedProposal`. A bench caller drives full advancement with one
+   `POST .../complete` call (on_complete timing) or a two-step
+   complete→confirm (setup timing), guarded only by
+   `requireResourceAuth`.
+2. **RESOLVED — manual fixture creation API supports swiss directly.**
+   `POST /api/v1/stages/{id}/fixtures` → `addFixture`
+   (`app/api/v1/stages/[id]/fixtures/route.ts:11`,
+   `usecases/stages.ts:3219`). `ADHOC_STAGE_KINDS = new
+   Set(["league","group","swiss"])` (`stages.ts:3217`) explicitly
+   includes swiss (ladder/americano explicitly rejected at
+   `stages.ts:3238-3242`, brackets rejected generically at
+   `:3244-3245`). Request shape `AddFixture`
+   (`server/api-v1/schemas.ts:753`, `.strict()`): `home_entrant_id`,
+   `away_entrant_id`, optional `round_no`, `scheduled_at`, `venue_id`,
+   `court_id`. Body is a plain DB insert with round/seq bookkeeping
+   (`stages.ts:3291-3296`) — no scheduler/solver call. Arbitrary
+   entrant pairing + explicit `round_no` for a swiss stage is directly
+   supported.
+3. **DECIDED — futsal does not fit; use Women's Euro 2025.** Football's
+   cfg (`packages/engine/src/sports/football/football.ts`) is
+   futsal-aware on roster shape (`teamSize: 2-11` at `:158`, comment:
+   "FA Mini-Soccer and the small-sided/futsal codes run 5, 7 or 9 a
+   side"; `rollingSubs` at `:126`) but has **zero** offside-replacement
+   or kick-in-vs-throw-in representation anywhere in the event
+   vocabulary (grep for `offside`/`throw.in`/`kick.in` under
+   `sports/football/`: zero typed events, prose only), and **zero**
+   fixture/golden-corpus/domain-test evidence the module has ever
+   scored a futsal-shaped match (`football.domain.test.ts:421` mentions
+   futsal only in a comment). Suite 2 Div B uses Women's Euro 2025.
+4. **RESOLVED — the divergence itself is closed, not merely triaged.**
+   `StageKind` (`packages/engine/src/core/types.ts:91-101`, 9 values:
+   league, group, swiss, knockout, double_elim, stepladder, americano,
+   ladder, page_playoff) and the DB `stages_kind_check` are equal today.
+   `V298__page_playoff_stage_kind.sql:12-15` widened the original
+   6-value V210 constraint to all 9, matching the API enum exactly. No
+   migration since V298 touches it (confirmed by grepping every delta
+   for `kind in`). league/group/knockout/swiss were never actually at
+   risk — only the 3 extra values were the gap, and V298 closed it
+   2026-08-1x, pre-dating B00.
+5. **MEASURED — a batch endpoint already exists; it is not new public
+   surface.** Single-event path: `POST
+   /api/v1/fixtures/{id}/events` (`app/api/v1/fixtures/[id]/events/
+   route.ts:11`) → `scoreEvent` (`usecases/scoring.ts:82`), one event
+   per request. Batch path: `POST /api/v1/divisions/{id}/events/import`
+   (`app/api/v1/divisions/[id]/events/import/route.ts:24-32`), shipped
+   by P11 (D6, merged `ee5aa1a01` #653) — `EventImportRequest`
+   (`server/api-v1/schemas.ts:962-990`) takes `streams[]`, each a
+   fixture + its events; server assigns `seq`, `core.void` refused.
+   Hard caps in `usecases/event-import.ts:36` (`IMPORT_CAPS`): `streams:
+   50`, `eventsPerFixture: 1_000`, `eventsPerCall: 10_000` (413 on
+   breach, checked in cap order at `:91-108`). No per-request-count or
+   bandwidth rate limit exists on either route — `MUTATION_LIMIT`
+   (`lib/rate-limit.ts:74`) is defined but has zero callers. For suite
+   1's ~40k events / 55 fixtures: fits the batch route only split across
+   ≥4 calls (`eventsPerCall` cap) and ≥2 calls (`streams` cap, 55 > 50).
+   **Open for B05 to decide, not re-opened here**: the import route is
+   built for historical bulk load, not necessarily the live
+   simulate-never-feed-verdicts model (§8) — whether suite 1 uses batch
+   import for pack loading vs per-event `scoreEvent` POSTs during
+   simulation is a modeling call, made with full facts now on the
+   table. Either way, `import.events` is feature-gated with **no
+   `plan_entitlements` row yet** (dark until an org gets an override) —
+   using the batch route needs the `setPlan`-style SQL override
+   precedent (risk 8).
+6. **RESOLVED — real engine path exists, no pack-meta adaptation
+   needed.** `core.forfeit` folds at `kernel.ts:1899`. Tennis's
+   `padSpec` declares no Retire tile by design (R4 ruling R4-2,
+   `2026-08-15-scoringpad-v3-prompts/_INDEX.md:1825`) because
+   `fixture-console.tsx:700-728` already ships a Forfeit control with a
+   reason prompt at the fixture-console level — a second Retire entry
+   point in the pad would duplicate it. R4 also added an Interruption
+   tile (medical/heat/toilet) that precedes a real retirement. The
+   bench drives walkover/retirement through the console-level forfeit
+   endpoint, not a pad tile.
+7. **RESOLVED — recipe already exists**; addendum below adds the one
+   missing piece. `~/.claude/skills/seazn-local-env/SKILL.md` §3b
+   already covers env vars (`PLACEMENT_SERVICE_HOST`,
+   `PLACEMENT_SERVICE_SECRET`), native and container bring-up, and the
+   health probe (`{"event": "service_listening", "port": 50051}` log
+   line, 180s readiness budget). What it did NOT carry: the bench's
+   own run-both-ways rule (`_RULES.md` §2) — added to §3b as an
+   addendum in this B00 pass.
+8. **RESOLVED.** Registry: `db/migration/deltas/V112__entitlements_v2.sql`
+   — `scoring.ball_by_ball` (:48-50), `stats.player` (:60-62), and a
+   third deep-tier key not named in the original risk,
+   `scoring.rally_by_rally` (:51-53); all three also granted on
+   `pro_plus` (`V290__pro_plus_plan.sql:28,30,32`). No "strike"-keyed
+   entitlement exists anywhere (searched `apps/web/src`,
+   `packages/engine/src`) — packs must not declare one. Both original
+   keys are still literal and live at
+   `apps/web/src/lib/entitlement-domains.ts:30-31`. `setPlan`
+   (`scripts/smoke.ts:15529-15566`) flips `subscriptions.plan_key` via
+   raw SQL then calls `bustOrgEntitlements`; call pattern `await
+   setPlan(orgId, "pro", owner)`, 30+ precedent call sites in
+   `smoke.ts`. `sync:sports` = `package.json:36` →
+   `scripts/sync-sports.ts`.
+9. **Staleness — closed by this pass.** Every citation above and every
+   B-prompt referencing them is re-pinned as of 2026-08-26 (B00). Later
+   sessions re-pin locally per `_RULES.md` §1, as before.
 
 ## 12. Non-goals
 
