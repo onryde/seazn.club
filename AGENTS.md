@@ -96,23 +96,30 @@ before diagnosing a real bug:
   UI bar, pre-commit OpenAPI drift check, and the no-new-issues /
   fix-inline-unless-blast-radius rule. Every dispatch brief should
   restate the relevant parts inline or point here explicitly.
-- **`.github/workflows/e2e.yml` is LIVE on pull requests** (owner-confirmed
-  2026-08-14). It was disabled for a long time and this file said "never
-  enable it", which is why several sessions still assume e2e is local-only —
-  it is not. Three jobs — `e2e-parallel` (sharded), `e2e-serial`,
-  `e2e-mobile` (matrixed) — and **all seven width projects are covered**
-  between them. Do NOT trust a job/leg count written here: this paragraph
-  claimed "five legs" and was correct for about four hours until #597 split
-  the floor jobs (2026-08-17), making it seven. Read `e2e.yml` for the
-  current shape; the durable facts are "it runs on PRs" and "the seven
-  widths are covered", not the arithmetic. There is **no flag-forced
-  scorepad-v2 job**; the file contains no `scorepad` or `flag` reference at
-  all, so a scorepad change behind a flag gets NO dedicated CI coverage —
-  cover it from a project that actually runs. Two consequences:
-  an edit to that file's CONTENTS now affects live CI rather than being dead
-  weight, and e2e coverage no longer has to be argued for locally. Verifying
-  locally as well is still useful (prod build + `E2E_PROD_TARGET`) — CI is
-  the arbiter, not the only signal.
+- **`.github/workflows/e2e.yml` is LIVE, and it triggers on `push` — NOT on
+  pull requests** (`b87def3ab`, 2026-08-26; it was `pull_request:` from
+  2026-08-14 until then, and "disabled, never enable it" before that, which is
+  why some sessions still assume e2e is local-only — it is not). The `push:`
+  key carries **no branch filter**, so every push to every branch runs the
+  suite; `workflow_dispatch` additionally takes a `pr` input.
+  **Opening a PR does not run e2e — pushing does.** Two consequences that
+  invert the old advice: a PR that sits without new pushes gets no e2e signal
+  at all, and merging locally then pushing to `main` DOES run e2e (the exact
+  opposite of smoke, which is PR-only — see the next bullet; the two now
+  trigger on disjoint events, so neither one substitutes for the other).
+  Three jobs — `e2e-parallel` (sharded), `e2e-serial`, `e2e-mobile`
+  (matrixed) — and **all seven width projects are covered** between them.
+  Do NOT trust a job/leg count written here: this paragraph claimed "five
+  legs" and was right for about four hours until #597 split the floor jobs
+  (2026-08-17), then claimed "runs on PRs" until the trigger changed under it.
+  **Read `e2e.yml` itself** — the only durable fact is that the seven widths
+  are covered; the trigger and the arithmetic have both already gone stale
+  here once. There is **no flag-forced scorepad-v2 job**; the file contains no
+  `scorepad` or `flag` reference at all, so a scorepad change behind a flag
+  gets NO dedicated CI coverage — cover it from a project that actually runs.
+  An edit to that file's CONTENTS affects live CI rather than being dead
+  weight. Verifying locally as well is still useful (prod build +
+  `E2E_PROD_TARGET`) — CI is the arbiter, not the only signal.
 - Smoke CI runs on **PRs only** — merging locally and pushing to `main`
   skips it. Behavior changes need a PR or a local full-smoke first.
 - Every change ships a test that fails without it.
