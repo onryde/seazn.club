@@ -180,6 +180,40 @@ describe("applyAiPlans — chained accept", () => {
     });
   });
 
+  /**
+   * The refusal names the fixtures it is about, and that list has to survive the
+   * trip to the console.
+   *
+   * The server puts the blocking conflicts in the 409's envelope precisely so a
+   * client can point at them; until now `ai-apply` read only the code and the
+   * status, so the dock could say "this would clash" and nothing more — which,
+   * on a board of forty matches, is barely more actionable than the wrong
+   * sentence it replaced.
+   */
+  it("carries the blocking fixtures a SCHEDULE_CONFLICT named", async () => {
+    const { api } = recorder({
+      ...okHandlers,
+      "schedule/apply": () => {
+        throw new ApiV1Error("blocked", 409, "SCHEDULE_CONFLICT", {
+          conflicts: [
+            { fixture_id: "fa", code: "court_double_booked", blocking: true },
+            { fixture_id: "fb", code: "entrant_double_booked", blocking: true },
+            // Non-blocking rows ride along in the same envelope; they are not
+            // why the apply was refused, so they must not be listed as if they
+            // were.
+            { fixture_id: "fc", code: "rest", blocking: false },
+          ],
+        });
+      },
+    });
+    const out = await applyAiPlans(baseInput(), api);
+    expect(out).toMatchObject({ schedule: "error", errorCode: "SCHEDULE_CONFLICT", errorStatus: 409 });
+    expect(out.errorConflicts).toStrictEqual([
+      { fixtureId: "fa", code: "court_double_booked" },
+      { fixtureId: "fb", code: "entrant_double_booked" },
+    ]);
+  });
+
   it("officials failure leaves the schedule applied and carries its code + status", async () => {
     const { api } = recorder({
       ...okHandlers,

@@ -653,6 +653,28 @@ export function ScheduleBoard({
   // board scoped, which is the wrong number on a competition board — this
   // run only ever touches ONE stage, so a count borrowed from a sibling
   // division would report locks this click cannot even reach.
+  // ----------------------------------------------------------- action target
+  // The toolbar used to render one Auto-schedule / Re-flow / Improve-times
+  // triplet PER unfinished stage: a division with a league and a finals stage
+  // put six solver buttons in the row, the two captions repeated verbatim under
+  // each pair, and the row's length was a function of the format rather than of
+  // anything the organiser had asked for. One action set now aims at one stage,
+  // chosen here. Same filter the old `.map` used, so the selector offers exactly
+  // the stages that used to get their own buttons.
+  const runnableStages = useMemo(
+    () => stages.filter((s) => s.status !== "complete" && visibleIds.has(s.division_id)),
+    [stages, visibleIds],
+  );
+  const [pickedStageId, setPickedStageId] = useState<string | null>(null);
+  // DERIVED, not synchronised by an effect. The division filter (URL-backed, so
+  // it changes under a back button too) and a stage completing can each drop the
+  // picked stage out of the list between renders; an effect that corrected the
+  // state afterwards would leave one render — and any click inside it — aimed at
+  // a stage this board can no longer run. Falling back to the first runnable
+  // stage in the same expression that reads it means the aim is never stale by
+  // even a frame, and `null` here means there is nothing to run at all.
+  const activeStage =
+    runnableStages.find((s) => s.id === pickedStageId) ?? runnableStages[0] ?? null;
   const stageLockedCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const f of board) {
@@ -1085,90 +1107,137 @@ export function ScheduleBoard({
         />
       )}
 
-      {/* Action bar */}
-      <div className="flex flex-wrap items-center gap-2">
-        {canEdit &&
-          stages
-            .filter((s) => s.status !== "complete" && visibleIds.has(s.division_id))
-            .map((s) => (
-              // `min-h-11` on all three: `py-1.5 text-xs` alone renders a 28px
-              // control, well under the 44px touch target. These are the
-              // primary actions of the surface, so the floor holds at every
-              // width — it was previously dropped via `sm:min-h-0`, which
-              // activates at >=640px with no counter-override past that
-              // point, so the 28px height applied at every width from
-              // tablet through desktop, not just tablet (#349).
-              // items-end, not items-center (#pins-ui): Auto-schedule and
-              // Re-flow each grow a caption underneath, so the pills are
-              // bottom-aligned rather than vertically centered against
-              // Polish's plain single-line one — the row's buttons keep one
-              // shared baseline instead of Polish looking vertically adrift
-              // beside two taller neighbors.
-              <span key={s.id} className="inline-flex items-end gap-1">
-                {/* #465: the two original actions carry a stable id like their
-                    Polish sibling. Not tidiness — `board.autoSchedule` is
-                    "Auto-schedule {name}" and INTERPOLATES the division name, so
-                    the only text selector that can reach it is a regex that
-                    stops meaning the same thing the day a division is renamed. */}
-                <span className="flex flex-col items-start gap-0.5">
-                  <button
-                    type="button"
-                    data-testid="schedule-auto"
-                    disabled={actions.busy}
-                    onClick={() => {
-                      const locked = stageLockedCounts[s.id] ?? 0;
-                      // A confirm step only when THIS stage's rebuild would
-                      // touch a locked fixture — with zero locks the click
-                      // runs exactly as it always did (owner ruling).
-                      if (locked > 0) setPendingBuild({ stageId: s.id, divisionId: s.division_id, locked });
-                      else void runAuto(s.id, s.division_id, false);
-                    }}
-                    className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
-                  >
-                    {msg("board.autoSchedule", { name: stages.length > 1 ? s.name : "" })}
-                  </button>
-                  {/* Sublabel, not a hover title: the fact that a lock survives
-                      a rebuild has to be visible on touch, not discoverable
-                      only by hovering a desktop pointer over it. */}
-                  <span className="text-[10px] leading-tight text-slate-500">
-                    {msg("board.autoSubtitle")}
-                  </span>
+      {/* Action bar (toolbar redesign, 2026-08-25 — direction A "one desk, one
+          target"). Three zones, left to right: which stage the actions aim at,
+          the actions themselves, and the division's lifecycle. The zones are
+          separated by hairlines rather than by the stretched `flex-1` spacer
+          that used to sit here — that spacer stranded "Freeze schedule" alone
+          on row 1 at tablet widths (#349 Verdict D) and told a reader nothing
+          about why the two halves were apart. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        {canEdit && activeStage && (
+          <>
+            {/* One option per runnable stage, and only when there is something
+                to choose between: a single-stage division sees the actions
+                alone, exactly as it did before. */}
+            {runnableStages.length > 1 && (
+              <div className="flex items-center gap-2">
+                <span className="app-display text-[10px] font-semibold text-slate-500">
+                  {msg("board.stageLabel")}
                 </span>
-                <span className="flex flex-col items-start gap-0.5">
-                  <button
-                    type="button"
-                    data-testid="schedule-reflow"
-                    disabled={actions.busy}
-                    onClick={() => void runAuto(s.id, s.division_id, true)}
-                    className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
-                    title={msg("board.reflowTitle")}
-                  >
-                    {msg("board.reflow")}
-                  </button>
-                  <span className="text-[10px] leading-tight text-slate-500">
-                    {msg("board.reflowSubtitle")}
-                  </span>
-                </span>
+                <div
+                  role="group"
+                  aria-label={msg("board.stageAria")}
+                  // WRAPS, and that is the mobile answer rather than an
+                  // `overflow-x-auto` strip: a scrolling strip can leave the
+                  // ACTIVE option off-screen at 320px with nothing to say so
+                  // (the tab-strip trap this repo has already paid for), while
+                  // a wrapped group keeps every option — and the pressed
+                  // state — on screen at the cost of a second line.
+                  className="flex flex-wrap gap-0.5 rounded-lg border border-purple-200 bg-white p-0.5"
+                >
+                  {runnableStages.map((s) => (
+                    // `aria-pressed`, not a radio group: these are toggle
+                    // buttons that re-aim a control, not a form value that
+                    // gets submitted.
+                    <button
+                      key={s.id}
+                      type="button"
+                      data-testid="schedule-stage"
+                      data-stage-id={s.id}
+                      aria-pressed={s.id === activeStage.id}
+                      onClick={() => setPickedStageId(s.id)}
+                      className={`min-h-11 rounded-md px-3 py-1.5 text-xs transition ${
+                        s.id === activeStage.id
+                          ? "bg-purple-100 font-semibold text-purple-800"
+                          : "text-slate-600 hover:bg-purple-50"
+                      }`}
+                    >
+                      {s.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="hidden h-8 w-px bg-purple-100 lg:block" aria-hidden />
+            {/* The three solver actions, joined into one control and ordered by
+                how much of the board each disturbs: rebuild everything, then
+                fix only what clashes, then tighten the times already there.
+                `min-h-11` on all three: `py-1.5 text-xs` alone renders a 28px
+                control, well under the 44px touch target, and these are the
+                primary actions of the surface, so the floor holds at every
+                width (#349). */}
+            <div className="flex flex-col gap-1">
+              <div className="isolate inline-flex">
+                {/* #465: every action carries a stable id. Not tidiness —
+                    `board.autoSchedule` is a translated label, and a text
+                    selector for it stops meaning the same thing in any locale
+                    but English. */}
+                <button
+                  type="button"
+                  data-testid="schedule-auto"
+                  disabled={actions.busy}
+                  onClick={() => {
+                    const locked = stageLockedCounts[activeStage.id] ?? 0;
+                    // A confirm step only when THIS stage's rebuild would touch
+                    // a locked fixture — with zero locks the click runs exactly
+                    // as it always did (owner ruling).
+                    if (locked > 0)
+                      setPendingBuild({
+                        stageId: activeStage.id,
+                        divisionId: activeStage.division_id,
+                        locked,
+                      });
+                    else void runAuto(activeStage.id, activeStage.division_id, false);
+                  }}
+                  className="btn btn-primary relative min-h-11 rounded-r-none px-3 py-1.5 text-xs focus-visible:z-10"
+                >
+                  {msg("board.autoSchedule")}
+                </button>
+                <button
+                  type="button"
+                  data-testid="schedule-reflow"
+                  disabled={actions.busy}
+                  onClick={() => void runAuto(activeStage.id, activeStage.division_id, true)}
+                  className="btn btn-ghost relative -ml-px min-h-11 rounded-none px-3 py-1.5 text-xs hover:z-10 focus-visible:z-10"
+                  title={msg("board.reflowTitle")}
+                >
+                  {msg("board.reflow")}
+                </button>
                 {/* POLISH — the tier solver over a board that is already legal.
                     Beside its siblings rather than behind a menu: it is the same
                     kind of action, and the three only differ by what they ask
                     the solver for. The mode is passed EXPLICITLY because
                     `only_unlocked` cannot express it — polish and re-flow both
-                    send `true` and run different solvers. No confirm dialog and
-                    no sublabel (#pins-ui): POLISH already honoured a lock before
-                    this feature and nothing about it changed. */}
+                    send `true` and run different solvers. No confirm dialog
+                    (#pins-ui): POLISH already honoured a lock before that
+                    feature and nothing about it changed. */}
                 <button
                   type="button"
                   data-testid="schedule-polish"
                   disabled={actions.busy}
-                  onClick={() => void runAuto(s.id, s.division_id, true, "polish")}
-                  className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+                  onClick={() => void runAuto(activeStage.id, activeStage.division_id, true, "polish")}
+                  className="btn btn-ghost relative -ml-px min-h-11 rounded-l-none px-3 py-1.5 text-xs hover:z-10 focus-visible:z-10"
                   title={msg("board.polishTitle")}
                 >
                   {msg("board.polish")}
                 </button>
+              </div>
+              {/* ONE caption for the group. The two it replaces were rendered
+                  under two of the three buttons and repeated under every stage's
+                  triplet, so the row's captions grew with the format while
+                  saying the same two sentences. Still a sublabel and not a hover
+                  title: that a lock survives a rebuild has to be visible on
+                  touch, not discoverable only by hovering a desktop pointer. */}
+              <span
+                data-testid="schedule-ladder-caption"
+                className="text-[10px] leading-tight text-slate-500"
+              >
+                {msg("board.ladderCaption")}
               </span>
-            ))}
+            </div>
+          </>
+        )}
         {/* Pin semantics live next to the buttons they modify (v3/03 §4). */}
         {canEdit && <Tip id="schedule.locking" />}
         {/* AI schedule architect (v4) — the console dock's entry point. Free
@@ -1199,19 +1268,31 @@ export function ScheduleBoard({
             )}
           </button>
         )}
-        <div className="flex-1" />
         {/* Lifecycle actions travel as one cluster (#349 Verdict D): at
             tablet widths (md) the toolbar doesn't fit on one line, and the
             flat list used to let "Freeze schedule" alone fit on row 1 —
-            stranded past the stretched flex-1 spacer above — while
-            Publish/Start wrapped to row 2. Nesting the group means the
-            outer flex-wrap treats it as a single box: it either stays on
-            row 1 in full (desktop, unchanged) or wraps to row 2 in full
-            (tablet), never split mid-cluster. At >=1024 this renders
-            byte-identical to the flat list: same gap-2 value inside and
-            out, same item order, nothing here changes the hypothetical
-            width of any child. */}
-        <div className="flex flex-wrap items-center gap-2">
+            stranded past a stretched `flex-1` spacer — while Publish/Start
+            wrapped to row 2. Nesting the group means the outer flex-wrap
+            treats it as a single box: it either stays on row 1 in full
+            (desktop) or wraps to row 2 in full (tablet), never split
+            mid-cluster.
+
+            `ms-auto` replaces that spacer element. Both push the cluster to
+            the trailing edge on a row with room to spare, but an auto margin
+            is a property of the cluster rather than a sibling box competing
+            for the row: nothing can wrap BETWEEN a stretched spacer and the
+            thing it was pushing, because there is no longer a spacer to wrap
+            after. It also collapses to nothing once the row wraps, so the
+            cluster starts at the leading edge of its own line instead of
+            hanging off the right of a half-empty one — hence `lg:ms-auto`
+            rather than a bare `ms-auto`, which keeps pushing right even on a
+            wrapped second row (observed at 768: the cluster hung off the right
+            of an otherwise empty line). */}
+        <div className="hidden h-8 w-px bg-purple-100 lg:block" aria-hidden />
+        <div className="flex flex-wrap items-center gap-2 lg:ms-auto">
+          <span className="app-display hidden text-[10px] font-semibold text-slate-500 lg:inline">
+            {msg("board.divisionLabel")}
+          </span>
           {/* Whole-division freeze (Jul3/03 §4), surfaced on the board itself —
               single-division boards only; the competition board freezes per
               division on each division's own page. */}

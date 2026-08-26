@@ -16,6 +16,8 @@ When you're already at your plan's number, saving a new one **replaces the oldes
 
 AI restore points are separate: they don't use up your save points, and the newest three per division are kept.
 
+Restoring always says what it did — either how many changes it undid, or that there was nothing to undo. The second one is normal after an AI plan that failed to apply: nothing was written, so the restore point and the live schedule are already the same.
+
 ## Common questions
 
 **Does undo affect scores?** Never — schedule history and the score ledger are separate. Fixing a wrong score happens on the fixture itself.

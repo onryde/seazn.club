@@ -9,7 +9,8 @@ The **schedule board** is where fixtures meet the clock: courts across the top, 
 ## Working the board
 
 - **Drag** a match to a slot, or tap a match then tap a slot — both do the same thing, and the second works with a keyboard too.
-- **Auto-schedule** lays out everything unscheduled in one pass, respecting play hours, court counts and rest gaps from the division's settings.
+- **Auto-schedule** lays out everything unscheduled in one pass, respecting play hours, court counts and rest gaps from the division's settings. **Re-flow unlocked** fixes clashes while moving as little as possible, and **Improve times** tightens a board that is already legal — the three sit together, ordered by how much of the board each one disturbs.
+- **Stage** — when a division has more than one stage still to play (a league and its finals, say), pick the stage first: the three actions above run on whichever stage is selected, and leave the others alone.
 - **Filter chips** show just the divisions you care about; the filter lives in the page URL so a filtered view can be bookmarked or shared.
 - **Conflicts** — double-booked courts, impossible back-to-backs — appear as badges on the offending cards, with a full report in the conflicts panel.
 
