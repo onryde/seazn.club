@@ -1457,4 +1457,59 @@ test.describe("RS005 registrants tab", () => {
       "the OTHER division's entry must be filtered out",
     ).toHaveCount(0);
   });
+
+  // Clearing a filter must actually clear the WIDGETS, not only the URL.
+  // Every control is uncontrolled and the submit handler reads live DOM state,
+  // so before this was fixed the select still read "Confirmed" after Clear, and
+  // the next change to ANY other control silently pushed the cleared filter
+  // back. The unit test can only prove React WOULD remount (the hook harness
+  // has no DOM); this proves the browser actually shows a cleared control and
+  // does not resurrect the filter.
+  test("clearing filters clears the controls, and the next change does not resurrect them", async ({ page }) => {
+    const org = await activeOrg(page);
+    const suffix = `${TAG}-${Math.random().toString(36).slice(2, 7)}`;
+    const comp = await apiJson<{ id: string; slug: string }>(page.request, "/api/v1/competitions", "POST", {
+      name: `Clear ${suffix}`,
+      ends_on: "2030-12-31",
+      visibility: "public",
+    });
+    expect(comp.status).toBeLessThan(300);
+
+    // Real rows are required: with ZERO registrations the tab renders the
+    // "no registrations at all" empty state, which correctly has no filter
+    // bar to clear. One confirmed and one pending, so `status=confirmed`
+    // genuinely narrows.
+    const div = await apiJson<{ id: string }>(
+      page.request,
+      `/api/v1/competitions/${comp.data!.id}/divisions`,
+      "POST",
+      { name: "Open", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false } },
+    );
+    expect(div.status).toBeLessThan(300);
+    await seedBareRegistrationSql(comp.data!.id, div.data!.id, { status: "confirmed", displayName: "Cleared Confirmed" });
+    await seedBareRegistrationSql(comp.data!.id, div.data!.id, { status: "pending", displayName: "Cleared Pending" });
+
+    const hub = `/o/${org.slug}/c/${comp.data!.slug}/registration?tab=registrants`;
+    await page.goto(`${hub}&status=confirmed`, { waitUntil: "load" });
+    await expect(page.locator('select[name="status"]')).toHaveValue("confirmed");
+
+    // Scoped to the FORM: the filtered-empty state renders its own "Clear
+    // filters" link, so an unscoped role lookup is a strict-mode violation on
+    // a competition with no matching rows.
+    await page.locator("form").getByRole("link", { name: /clear filters/i }).click();
+    await page.waitForURL((u) => !u.search.includes("status="));
+    await expect(
+      page.locator('select[name="status"]'),
+      "the widget must reflect the URL the page is actually showing",
+    ).toHaveValue("");
+
+    // Change a DIFFERENT control. The submit handler reads the live form, so a
+    // stale select here is what used to push `status=confirmed` back.
+    await page.locator('select[name="sort"]').selectOption("oldest");
+    await page.waitForURL((u) => u.search.includes("sort=oldest"));
+    expect(new URL(page.url()).search).not.toContain("status=");
+    // And no empty parameters: the URL is a shareable artefact.
+    expect(new URL(page.url()).search).not.toMatch(/[?&][a-z_]+=(&|$)/);
+  });
+
 });
