@@ -31,7 +31,11 @@ import { t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import { DivisionCard } from "../division-card";
 import { EntryCart } from "../entry-cart";
+import { EntryDetails } from "../entry-details";
+import { FormFields } from "../form-fields";
 import { RegisterStepper, type RegisterInfo } from "../register-stepper";
+import { RosterTable } from "../roster-table";
+import { StepDetails } from "../step-details";
 import { StepEntries } from "../step-entries";
 import { StepWho } from "../step-who";
 import { EMPTY_CONTACT, type CartState, type DivisionLike } from "../types";
@@ -49,15 +53,28 @@ vi.mock("@/components/i18n/dict-provider", () => ({
 // ---------------------------------------------------------------------------
 
 type ComponentFn = (props: Record<string, unknown>) => ReactNode;
-const OPAQUE: ComponentFn[] = [StepWho, StepEntries, DivisionCard, EntryCart] as unknown as ComponentFn[];
+const OPAQUE: ComponentFn[] = [
+  StepWho,
+  StepEntries,
+  DivisionCard,
+  EntryCart,
+  StepDetails,
+  EntryDetails,
+  RosterTable,
+  FormFields,
+] as unknown as ComponentFn[];
 
 /** Flattens the WHOLE tree in one pass, including everything rendered
- *  inside StepWho/StepEntries/DivisionCard/EntryCart — a growing worklist
- *  re-checks `out.length` every iteration, so an opaque node discovered
- *  INSIDE an already-expanded opaque node (DivisionCard/EntryCart inside
- *  StepEntries) gets expanded too, arbitrary nesting depth, no recursion
- *  needed. All four components here only call the (mocked, non-hook) useT()
- *  internally, so invoking them outside the harness's render window is safe. */
+ *  inside every OPAQUE component above — a growing worklist re-checks
+ *  `out.length` every iteration, so an opaque node discovered INSIDE an
+ *  already-expanded opaque node (DivisionCard/EntryCart inside StepEntries;
+ *  EntryDetails/RosterTable/FormFields inside StepDetails) gets expanded
+ *  too, arbitrary nesting depth, no recursion needed. Every component here
+ *  only calls the (mocked, non-hook) useT() internally, so invoking them
+ *  outside the harness's render window is safe — RosterTable in particular
+ *  used to own a `useState` for its paste-textarea draft; that was lifted
+ *  to RegisterStepper (see roster-table.tsx's header) specifically so it
+ *  could join this list. */
 function deepExpand(node: ReactNode): ReactElement[] {
   const out = walk(node);
   for (let i = 0; i < out.length; i++) {
@@ -270,8 +287,8 @@ describe("finding #3 — a self-linked ineligible entry blocks progression and s
     (propsOf(stepWho()).onChange as (p: object) => void)({ gender: "f" });
     clickByText("Next"); // -> ENTRIES
     expect(entryCartText()).not.toContain("Not open to your gender for this category");
-    clickByText("Next"); // now advances past the last step
-    expect(pageText()).toContain("More steps on the way");
+    clickByText("Next"); // now advances past ENTRIES, onto DETAILS (step 3)
+    expect(pageText()).toContain("Player details");
   });
 
   it("an ineligible division does NOT block when it is not the self-linked one (design: stays pickable for team entries)", () => {
@@ -298,8 +315,8 @@ describe("finding #3 — a self-linked ineligible entry blocks progression and s
     // entries present it never auto-links, so no verdict/self checkbox
     // should be pinned to the womens entry, and Next must succeed.
     expect(pageText()).not.toContain("Resolve the eligibility issue on your entry before continuing");
-    clickByText("Next");
-    expect(pageText()).toContain("More steps on the way");
+    clickByText("Next"); // -> DETAILS (step 3)
+    expect(pageText()).toContain("Player details");
   });
 });
 
@@ -580,5 +597,177 @@ describe("item B — a self-ineligible division card dims its title/badges but n
       }),
     );
     expect(propsOf(notPlayingTree.find((el) => el.type === "h3")!).className as string).not.toContain("text-ink-muted");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 3 (DETAILS) — roster building, the mixed-composition meter,
+// per-row eligibility, pasted rosters. RS006 W3.
+// ---------------------------------------------------------------------------
+
+const DIV_MIXED_TEAM: DivisionLike = {
+  ...DIV_OPEN,
+  division_id: "div-mixed",
+  name: "Mixed Doubles",
+  entrant_kind: "team",
+  category: "mixed",
+  requires_gender: true,
+};
+
+const DIV_AGE_BANDED_TEAM: DivisionLike = {
+  ...DIV_OPEN,
+  division_id: "div-age",
+  name: "Adults League",
+  entrant_kind: "team",
+  age_min: 18,
+  requires_dob: true,
+};
+
+const DIV_TEAM: DivisionLike = {
+  ...DIV_OPEN,
+  division_id: "div-team",
+  name: "Open Teams",
+  entrant_kind: "team",
+};
+
+/** Fires onChange on the first native input/select whose aria-label
+ *  matches — RosterTable's own accessible-name convention
+ *  (`${rowLabel} — ${fieldLabel}`) doubles as this locator, so a broken
+ *  match here is also a real a11y regression, not just a stale selector. */
+function setByAriaLabel(island: ReturnType<typeof mount>["island"], label: string, value: string) {
+  const el = island.tree().find((e) => propsOf(e)["aria-label"] === label);
+  expect(el, `no field with aria-label "${label}"`).toBeTruthy();
+  (propsOf(el!).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
+}
+
+describe("step 3 — the mixed-composition meter blocks an all-male roster and clears once fixed", () => {
+  it("shows the unmet sentence, blocks Next; adding a female player clears both and unblocks", () => {
+    const { island, stepWho, divisionCard, clickByText, pageText } = mount([DIV_OPEN, DIV_MIXED_TEAM]);
+
+    // DIV_MIXED_TEAM.requires_gender makes gender a WHO-step requirement
+    // too (whoFieldRequirements: "any open division requires it") — this
+    // contact never self-links, but the field still gates "Next" on WHO.
+    (propsOf(stepWho()).onChange as (p: object) => void)({
+      name: "Alex Test",
+      email: "alex@example.com",
+      gender: "m",
+    });
+    clickByText("Next"); // -> ENTRIES
+
+    (propsOf(divisionCard("div-mixed")).onAddTeam as () => void)();
+    clickByText("Next"); // -> DETAILS
+
+    clickByText("+ Add player");
+    clickByText("+ Add player");
+
+    setByAriaLabel(island, "Player 1 — Your name", "Sam A");
+    setByAriaLabel(island, "Player 1 — Gender", "m");
+    setByAriaLabel(island, "Player 2 — Your name", "Sam B");
+    setByAriaLabel(island, "Player 2 — Gender", "m");
+
+    // The meter is LIVE (not gated behind "attempted") — same precedent as
+    // step 2's self-ineligibility notices.
+    expect(pageText()).toContain("Needs at least one male and one female player on the roster.");
+
+    clickByText("Next"); // attempt to advance — must be BLOCKED
+    expect(pageText()).toContain("Fill in the missing details above before continuing");
+    expect(pageText(), "must NOT have reached the end-cap").not.toContain("More steps on the way");
+
+    // Fix the roster: Player 2 becomes female — the SAME cart now unblocks.
+    setByAriaLabel(island, "Player 2 — Gender", "f");
+    expect(pageText()).toContain("Mixed roster requirement met");
+    expect(pageText()).not.toContain("Needs at least one male and one female player on the roster.");
+    expect(pageText()).not.toContain("Fill in the missing details above before continuing");
+
+    clickByText("Next"); // now advances past the last built step
+    expect(pageText()).toContain("More steps on the way");
+  });
+});
+
+describe("step 3 — an underage player is named BY ROW, not just anywhere on the page", () => {
+  it("the age-ineligibility notice attaches to the underage row only, never the adult row", () => {
+    const { island, stepWho, divisionCard, clickByText, pageText } = mount([DIV_OPEN, DIV_AGE_BANDED_TEAM]);
+
+    // DIV_AGE_BANDED_TEAM.requires_dob makes dob a WHO-step requirement too.
+    (propsOf(stepWho()).onChange as (p: object) => void)({
+      name: "Alex Test",
+      email: "alex@example.com",
+      dob: "1985-06-15",
+    });
+    clickByText("Next"); // -> ENTRIES
+    (propsOf(divisionCard("div-age")).onAddTeam as () => void)();
+    clickByText("Next"); // -> DETAILS
+
+    clickByText("+ Add player");
+    clickByText("+ Add player");
+
+    setByAriaLabel(island, "Player 1 — Your name", "Adult Player");
+    setByAriaLabel(island, "Player 1 — Date of birth", "1990-01-01");
+    setByAriaLabel(island, "Player 2 — Your name", "Young Player");
+    setByAriaLabel(island, "Player 2 — Date of birth", "2020-01-01");
+
+    // Scoped: slice the flat tree to JUST row 1 (the adult) — walk() is
+    // depth-first and contiguous per subtree, so everything between row 1's
+    // <li> and row 2's <li> IS row 1's own rendered output, nothing else's
+    // (same "scope to the component's own output" discipline entryCartText
+    // above uses, for the same reason: a page-wide search would pass even
+    // if the issue attached to the WRONG row). row1Slice is TIGHTLY bounded
+    // on both ends; row2Slice is bounded only from the front (there is no
+    // row 3 to close it against) — that's fine for a POSITIVE check (a
+    // false positive there would need the phrase to leak from somewhere
+    // downstream that isn't a roster row at all, which the source doesn't
+    // do), paired with row1Slice's tight NEGATIVE check above it.
+    const tree = island.tree();
+    const rows = tree.filter((e) => e.type === "li");
+    expect(rows, "expected exactly 2 roster rows").toHaveLength(2);
+    const row2Index = tree.indexOf(rows[1]!);
+    const row1Slice = tree.slice(tree.indexOf(rows[0]!), row2Index);
+    const row2Slice = tree.slice(row2Index);
+    expect(
+      textOf(row1Slice as unknown as ReactNode),
+      "the ADULT row must not carry the age issue",
+    ).not.toContain("Outside this division's age range");
+    expect(
+      textOf(row2Slice as unknown as ReactNode),
+      "the YOUNG row must carry the age issue",
+    ).toContain("Outside this division's age range");
+
+    clickByText("Next"); // structurally blocked (the young player's age issue)
+    expect(pageText()).toContain("Fill in the missing details above before continuing");
+  });
+});
+
+describe("step 3 — pasting a roster via the textarea parses into named rows (parseRoster)", () => {
+  it("parses pasted text into roster rows with the right names/squad numbers, and clears the draft", () => {
+    const { island, stepWho, divisionCard, clickByText } = mount([DIV_OPEN, DIV_TEAM]);
+
+    (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+    clickByText("Next"); // -> ENTRIES
+    (propsOf(divisionCard("div-team")).onAddTeam as () => void)();
+    clickByText("Next"); // -> DETAILS
+
+    const textarea = island.tree().find((e) => e.type === "textarea");
+    expect(textarea, "no paste textarea found").toBeTruthy();
+    (propsOf(textarea!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Jordan Blake, 7\nSam Ortiz, 10, 2004-11-30" },
+    });
+
+    const importButtonText = tRuntime(EN_UI, "register.details.roster.import.button", { n: 2 });
+    clickByText(importButtonText);
+
+    // Values live on the controlled inputs, not as rendered text (textOf()
+    // never sees an <input>'s value — it has no `children`), so assert on
+    // the actual input elements, not pageText().
+    const row1Name = island.tree().find((e) => propsOf(e)["aria-label"] === "Player 1 — Your name");
+    const row2Name = island.tree().find((e) => propsOf(e)["aria-label"] === "Player 2 — Your name");
+    expect(propsOf(row1Name!).value).toBe("Jordan Blake");
+    expect(propsOf(row2Name!).value).toBe("Sam Ortiz");
+
+    const row1Squad = island.tree().find((e) => propsOf(e)["aria-label"] === "Player 1 — Squad #");
+    expect(propsOf(row1Squad!).value).toBe("7");
+
+    // The draft clears after a successful import.
+    const clearedTextarea = island.tree().find((e) => e.type === "textarea");
+    expect(propsOf(clearedTextarea!).value).toBe("");
   });
 });
