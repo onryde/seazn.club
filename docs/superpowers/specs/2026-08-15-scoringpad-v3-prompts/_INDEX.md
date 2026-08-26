@@ -713,6 +713,25 @@ the review that opened the wave.
 
 ### R3.5 — false premises found (verified in the tree, before any code)
 
+- **REBASED onto `origin/main` 2026-08-26 (12 commits in, 28 ours out), tag
+  `r35-prerebase` kept.** One trivial conflict (`mobile.spec.ts`, both sides
+  added an import — both kept). The four dictionaries and the GENERATED
+  `lib/i18n-keys.ts` auto-merged; regenerating produced a byte-identical file
+  and `i18n:check` is clean at 5285 keys x 4, so the auto-merge matched the
+  generator. Post-rebase gate: v3 1088/1088 · engine 4123/4136 · `turbo
+  typecheck lint --force` 4/4 **0 cached** 0 errors · v3 e2e **37/37** ·
+  cricket+football gallery 2/2 at 0px overflow.
+- **The first post-rebase gate FAILED, and it was not our code.** `tsc` could
+  not resolve `pino` / `@grpc/grpc-js` from `scripts/bench/lib/**` — files main
+  introduced in `#658` after this worktree's install. `pnpm install
+  --frozen-lockfile` fixed it. **A rebase that pulls in new root-level scripts
+  needs a reinstall before the gate means anything.**
+- **`rtk` SWALLOWS `git diff` CONTENT** (`git diff A..B -- path` returned EMPTY
+  twice for a file that genuinely differed; `--name-only` survived). This
+  produced a false "the accessibility fix was lost in the rebase" reading that
+  cost a detour. Use `diff <(git show A:path) <(git show B:path)` to compare
+  file content in this repo.
+
 - **`assertDisabledTilesExplained` (`tile-grid.tsx:120`) is a chassis validator NO SKIN RUNS.**
   Its only callers are its own unit tests (`__tests__/tiles.test.ts`). So the
   "a disabled tile owes a context-strip message" rule is declared and inert,
