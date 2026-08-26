@@ -15,9 +15,13 @@ export const STAR_RULES = {
   pawnWars(whiteWon: boolean): number {
     return whiteWon ? 3 : 1;
   },
-  // Mate-in-1, Mate-in-2 and tier-2 tactics all award on solved count.
+  // Mate-in-1, Mate-in-2 and tier-2/tier-3 tactics all award on solved count.
   packStars(solved: number): number {
     return solved >= 12 ? 3 : solved >= 8 ? 2 : solved >= 4 ? 1 : 0;
+  },
+  // Mate-in-3: same shape as packStars, scaled to the pack's 9 puzzles.
+  mateInThree(solved: number): number {
+    return solved >= 9 ? 3 : solved >= 6 ? 2 : solved >= 3 ? 1 : 0;
   },
   hangingHunt(solved: number): number {
     return solved >= 8 ? 3 : solved >= 5 ? 2 : solved >= 3 ? 1 : 0;

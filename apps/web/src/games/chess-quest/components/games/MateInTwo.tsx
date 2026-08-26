@@ -1,24 +1,28 @@
 "use client";
 
-// Mate in 2 — two phases. Port of js/games.js mateInTwo (540–706): phase 1
-// accepts any move that forces mate in two (or an immediate mate), plays
-// black's toughest defense, then phase 2 asks for the finishing mate-in-1.
+// Mate-pack game, depth-parameterised. Port of js/games.js mateInTwo
+// (540–706), generalised for Mate in 3: force checkmate in `depth` moves,
+// one move at a time. Each intermediate move must force mate in exactly the
+// moves remaining (isMateInNAfter); black plays its toughest defense after
+// each one (bestDefense); the final move must deliver checkmate outright.
+// depth=2 (the default) is unchanged behaviour — same MATE2 pack, same
+// phase-1-then-phase-2 flow, same progress keys.
 import { useCallback, useEffect, useState } from "react";
 import {
   allLegalMoves,
   applyMove,
   bestDefense,
-  hasMateIn1,
+  hasMateInN,
   inCheck,
   isMate,
-  isMateIn2After,
+  isMateInNAfter,
   isWhitePiece,
   legalTargets,
   parseFEN,
   sqIdx,
   sqName,
 } from "../../engine";
-import { MATE2 } from "../../content/puzzles";
+import { MATE2, MATE3, MatePuzzle } from "../../content/puzzles";
 import { celebrate } from "../../lib/celebrate";
 import { sfx } from "../../lib/sfx";
 import { voice } from "../../lib/voice";
@@ -30,20 +34,32 @@ import { GameShell } from "../GameShell";
 import { PuzzleDots } from "./PuzzleDots";
 import { Chip, runMateMiss } from "./mate-miss-coach";
 
-function firstUnsolved(isSolved2: (i: number) => boolean) {
-  for (let i = 0; i < MATE2.length; i++) if (!isSolved2(i)) return i;
+function firstUnsolved(total: number, isSolved: (i: number) => boolean) {
+  for (let i = 0; i < total; i++) if (!isSolved(i)) return i;
   return 0;
 }
 
-export function MateInTwo() {
+export function MateInTwo({ depth = 2 }: { depth?: 2 | 3 }) {
+  const PACK: MatePuzzle[] = depth === 3 ? MATE3 : MATE2;
+  const gameId = depth === 3 ? "mateInThree" : "mateInTwo";
   const progress = useProgress();
   const { later, clearPending } = useLater();
-  const [cur, setCur] = useState(() => firstUnsolved(progress.isSolved2));
-  const [position, setPosition] = useState<string[]>(() => parseFEN(MATE2[cur].fen).board);
+
+  // depth=3's progress rides the generic tactic-pack store under its own
+  // gameId key; depth=2 keeps the original dedicated MATE2 fields untouched.
+  const isSolved = (i: number) =>
+    depth === 3 ? progress.isTacticSolved(gameId, i) : progress.isSolved2(i);
+  const markSolved = (i: number) =>
+    depth === 3 ? progress.setTacticSolved(gameId, i) : progress.setSolved2(i);
+  const solvedCount = () => (depth === 3 ? progress.tacticCount(gameId) : progress.solved2Count());
+  const resetSolved = () => (depth === 3 ? progress.resetTactics(gameId) : progress.resetPuzzles2());
+
+  const [cur, setCur] = useState(() => firstUnsolved(PACK.length, isSolved));
+  const [position, setPosition] = useState<string[]>(() => parseFEN(PACK[cur].fen).board);
   const [selIdx, setSelIdx] = useState(-1);
   const [tries, setTries] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [phase, setPhase] = useState<1 | 2>(1);
+  const [phase, setPhase] = useState(1); // 1..depth: which move number we're finding
   const [midBoard, setMidBoard] = useState<string[] | null>(null);
   const [highlights, setHighlights] = useState<Partial<Record<number, Highlight>>>({});
   const [pop, setPop] = useState<{ idx: number; n: number } | null>(null);
@@ -53,14 +69,14 @@ export function MateInTwo() {
   const [coachTap, setCoachTap] = useState<((idx: number) => void) | null>(null);
   const [status, setStatus] = useState(
     () =>
-      `<strong>${MATE2[cur].name}</strong> — white forces checkmate in <strong>two</strong> moves. Find move one!`,
+      `<strong>${PACK[cur].name}</strong> — white forces checkmate in <strong>${depth}</strong> moves. Find move one!`,
   );
 
   const load = useCallback(
     (i: number) => {
       clearPending();
       setCur(i);
-      setPosition(parseFEN(MATE2[i].fen).board);
+      setPosition(parseFEN(PACK[i].fen).board);
       setHighlights({});
       setSelIdx(-1);
       setTries(0);
@@ -70,10 +86,10 @@ export function MateInTwo() {
       setChips([]);
       setCoachTap(null);
       setStatus(
-        `<strong>${MATE2[i].name}</strong> — white forces checkmate in <strong>two</strong> moves. Find move one!`,
+        `<strong>${PACK[i].name}</strong> — white forces checkmate in <strong>${depth}</strong> moves. Find move one!`,
       );
     },
-    [clearPending],
+    [PACK, clearPending, depth],
   );
 
   useEffect(() => () => clearPending(), [clearPending]);
@@ -84,24 +100,26 @@ export function MateInTwo() {
   }
 
   function solved(i: number, msg: string) {
-    progress.setSolved2(i);
-    const n = progress.solved2Count();
-    progress.setGameStars("mateInTwo", STAR_RULES.packStars(n));
+    markSolved(i);
+    const n = solvedCount();
+    progress.setGameStars(gameId, depth === 3 ? STAR_RULES.mateInThree(n) : STAR_RULES.packStars(n));
     setStatus(msg);
     voice.say(msg);
     celebrate();
     setBusy(true);
     later(() => {
-      if (n < MATE2.length) load(firstUnsolved(progress.isSolved2));
+      if (n < PACK.length) load(firstUnsolved(PACK.length, isSolved));
       else
         setStatus(
-          "<strong>Pack complete!</strong> Twelve forced mates — real chess player thinking. ★★★",
+          `<strong>Pack complete!</strong> ${PACK.length === 9 ? "Nine" : "Twelve"} forced mates — real chess player thinking. ★★★`,
         );
     }, 1600);
   }
 
-  // Black plays its toughest defense, then hands the mate-in-1 back.
+  // Black plays its toughest defense, then hands the next phase back (or,
+  // if it has no reply at all, the last move was already mate).
   function blackReplies(afterWhite: string[]) {
+    const remainingAfterReply = depth - phase; // moves still to force once black has moved
     setBusy(true);
     later(() => {
       const d = bestDefense(afterWhite);
@@ -114,10 +132,12 @@ export function MateInTwo() {
       popAt(d.to);
       sfx.move();
       setMidBoard(afterBlack);
-      setPhase(2);
+      setPhase((p) => p + 1);
       setBusy(false);
       setStatus(
-        `Locked in! Black tries <strong>${sqName(d.from)}–${sqName(d.to)}</strong>… now finish it. <strong>Mate in one!</strong>`,
+        `Locked in! Black tries <strong>${sqName(d.from)}–${sqName(d.to)}</strong>… now finish it. <strong>${
+          remainingAfterReply === 1 ? "Mate in one!" : `Mate in ${remainingAfterReply}!`
+        }</strong>`,
       );
     }, 750);
   }
@@ -145,14 +165,47 @@ export function MateInTwo() {
     const next = applyMove(pos, selIdx, idx);
     const from = selIdx;
     setSelIdx(-1);
+    const remaining = depth - phase + 1; // moves needed from THIS move onward
 
-    if (phase === 1) {
+    if (remaining === 1) {
+      // Final move: must deliver mate now.
+      if (isMate(next, false)) {
+        setPosition(next);
+        setHighlights({});
+        popAt(idx);
+        solved(cur, "<strong>Checkmate!</strong> 🎉 A forced mate — beautifully done.");
+      } else {
+        const t = tries + 1;
+        setTries(t);
+        setPosition(next);
+        setHighlights({});
+        setBusy(true);
+        runMateMiss({
+          next,
+          resetBoard: midBoard ?? parseFEN(PACK[cur].fen).board,
+          extraNudge: t >= 2 ? " (The Hint button is your friend!)" : "",
+          setStatus,
+          setChips,
+          setCoachTap: (fn) => setCoachTap(() => fn),
+          setPosition,
+          setHighlights,
+          bumpShake: () => setShake((s) => s + 1),
+          later,
+          unlock: () => setBusy(false),
+          bad: sfx.bad,
+          good: sfx.good,
+        });
+      }
+    } else {
+      // Intermediate move: must force mate in `remaining` (or mate outright,
+      // even faster than asked — a welcome bonus, never actually reachable
+      // for a puzzle whose invariant already rules out a shorter mate).
       if (isMate(next, false)) {
         setPosition(next);
         setHighlights({});
         popAt(idx);
         solved(cur, "<strong>Checkmate — even faster than asked!</strong> 🎉");
-      } else if (isMateIn2After(pos, from, idx)) {
+      } else if (isMateInNAfter(pos, from, idx, remaining)) {
         setPosition(next);
         setHighlights({});
         popAt(idx);
@@ -169,7 +222,7 @@ export function MateInTwo() {
         const replies = allLegalMoves(next, false);
         let saveMove: { from: number; to: number } | null = null;
         for (const r of replies) {
-          if (!hasMateIn1(applyMove(next, r.from, r.to), true)) {
+          if (!hasMateInN(applyMove(next, r.from, r.to), true, remaining - 1)) {
             saveMove = r;
             break;
           }
@@ -179,7 +232,7 @@ export function MateInTwo() {
           ? `black plays <strong>${sqName(saveMove.from)}–${sqName(saveMove.to)}</strong> and there is no mate`
           : "black slips away";
         later(() => {
-          setPosition(parseFEN(MATE2[cur].fen).board);
+          setPosition(parseFEN(PACK[cur].fen).board);
           setShake((s) => s + 1);
           setBusy(false);
           setStatus(
@@ -190,66 +243,37 @@ export function MateInTwo() {
           );
         }, 900);
       }
-    } else {
-      // phase 2: must be mate in one
-      if (isMate(next, false)) {
-        setPosition(next);
-        setHighlights({});
-        popAt(idx);
-        solved(cur, "<strong>Checkmate!</strong> 🎉 A forced mate in two — beautifully done.");
-      } else {
-        const t = tries + 1;
-        setTries(t);
-        setPosition(next);
-        setHighlights({});
-        setBusy(true);
-        runMateMiss({
-          next,
-          resetBoard: midBoard ?? parseFEN(MATE2[cur].fen).board,
-          extraNudge: t >= 2 ? " (The Hint button is your friend!)" : "",
-          setStatus,
-          setChips,
-          setCoachTap: (fn) => setCoachTap(() => fn),
-          setPosition,
-          setHighlights,
-          bumpShake: () => setShake((s) => s + 1),
-          later,
-          unlock: () => setBusy(false),
-          bad: sfx.bad,
-          good: sfx.good,
-        });
-      }
     }
   }
 
   function hint() {
+    const remaining = depth - phase + 1;
     if (phase === 1) {
-      setHighlights({ [sqIdx(MATE2[cur].solution.slice(0, 2))]: "hint" });
-      setStatus(`<strong>${MATE2[cur].name}</strong> — ${MATE2[cur].hint}`);
-    } else if (midBoard) {
-      for (const m of allLegalMoves(midBoard, true)) {
-        if (isMate(applyMove(midBoard, m.from, m.to), false)) {
-          setHighlights({ [m.from]: "hint" });
-          break;
-        }
+      setHighlights({ [sqIdx(PACK[cur].solution.slice(0, 2))]: "hint" });
+      setStatus(`<strong>${PACK[cur].name}</strong> — ${PACK[cur].hint}`);
+      return;
+    }
+    // Later phases have no authored solution for "this exact move" — find one
+    // live from the current position, same style as the original final-move
+    // hint (which this generalises: remaining===1 is exactly that case).
+    if (!midBoard) return;
+    for (const m of allLegalMoves(midBoard, true)) {
+      const after = applyMove(midBoard, m.from, m.to);
+      const ok = remaining === 1 ? isMate(after, false) : isMateInNAfter(midBoard, m.from, m.to, remaining);
+      if (ok) {
+        setHighlights({ [m.from]: "hint" });
+        break;
       }
     }
   }
 
   return (
     <GameShell
-      title="Mate in 2"
-      score={`🧩 ${progress.solved2Count()} / ${MATE2.length} solved`}
+      title={`Mate in ${depth}`}
+      score={`🧩 ${solvedCount()} / ${PACK.length} solved`}
       status={status}
       chips={chips}
-      extra={
-        <PuzzleDots
-          count={MATE2.length}
-          current={cur}
-          isSolved={progress.isSolved2}
-          onPick={load}
-        />
-      }
+      extra={<PuzzleDots count={PACK.length} current={cur} isSolved={isSolved} onPick={load} />}
       controls={
         <>
           <button type="button" className="btn btn-ghost" onClick={hint}>
@@ -259,7 +283,7 @@ export function MateInTwo() {
             type="button"
             className="btn btn-ghost"
             onClick={() => {
-              progress.resetPuzzles2();
+              resetSolved();
               load(0);
             }}
           >

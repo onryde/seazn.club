@@ -24,13 +24,21 @@ describe("star formulas (ported thresholds)", () => {
     expect(STAR_RULES.pawnWars(true)).toBe(3);
     expect(STAR_RULES.pawnWars(false)).toBe(1);
   });
-  it("packStars (mate packs, tier-2 tactics)", () => {
+  it("packStars (mate packs, tier-2/tier-3 tactics)", () => {
     expect(STAR_RULES.packStars(12)).toBe(3);
     expect(STAR_RULES.packStars(11)).toBe(2);
     expect(STAR_RULES.packStars(8)).toBe(2);
     expect(STAR_RULES.packStars(7)).toBe(1);
     expect(STAR_RULES.packStars(4)).toBe(1);
     expect(STAR_RULES.packStars(3)).toBe(0);
+  });
+  it("mateInThree (9 puzzles total)", () => {
+    expect(STAR_RULES.mateInThree(9)).toBe(3);
+    expect(STAR_RULES.mateInThree(8)).toBe(2);
+    expect(STAR_RULES.mateInThree(6)).toBe(2);
+    expect(STAR_RULES.mateInThree(5)).toBe(1);
+    expect(STAR_RULES.mateInThree(3)).toBe(1);
+    expect(STAR_RULES.mateInThree(2)).toBe(0);
   });
   it("hangingHunt", () => {
     expect(STAR_RULES.hangingHunt(8)).toBe(3);

@@ -1,5 +1,7 @@
 // Chess Quest lands — transcribed verbatim from the original app
-// (chess-quest js/curriculum.js LANDS). 5 Track 1 lands + 4 Track 2 lands.
+// (chess-quest js/curriculum.js LANDS), later extended past the original
+// app's scope. 5 Track 1 lands + 4 Track 2 lands + Track 3 (Opening Range)
+// + Track 4 (Grandmaster Gorge).
 
 export type Land = {
   id: number;
@@ -9,7 +11,7 @@ export type Land = {
   goal: string;
   check: string; // Story register
   checkClassic: string; // Classic register
-  track?: 2 | 3; // present on Track 2 / Track 3 lands only
+  track?: 2 | 3 | 4; // present on Track 2 / 3 / 4 lands only
 };
 
 export const LANDS: Land[] = [
@@ -114,5 +116,16 @@ export const LANDS: Land[] = [
     check: "She plays the Italian, Ruy Lopez, Scotch, London and Scandinavian from memory.",
     checkClassic:
       "You reproduce five standard openings move-for-move and can state each one’s plan.",
+  },
+  {
+    id: 11,
+    glyph: "♟",
+    name: "Grandmaster Gorge",
+    weeks: [54, 58],
+    track: 4,
+    goal: "Deeper forcing chess: mate in three moves, and tactics that need a setup move before the point lands.",
+    check: "She forces mate in three on her own, and pulls off deflections, decoys and interference — real combinations.",
+    checkClassic:
+      "You force mate-in-three combinations and execute deflection, decoy, removal-of-the-defender and interference tactics without prompting.",
   },
 ];

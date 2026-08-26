@@ -395,3 +395,154 @@ export const TACTICS2: Record<"fork2" | "pin2" | "skewer2" | "disco2", TacticPuz
     },
   ],
 };
+
+// Mate-in-3 pack (Track 4). White to move; the engine accepts ANY move that
+// forces mate in three (isMateInNAfter … 3), then plays black's toughest
+// defense twice more. Authored in three groups of three, in this fixed
+// order: Queen + King (0-2), Single Rook (3-5), Double Rook (6-8) — see the
+// group-composition tests in content/__tests__/puzzles.test.ts. Every entry
+// is machine-verified: no mate-in-1, no mate-in-2, forced in exactly three
+// against every black defence, and carries an obstructing or decoy pawn
+// (pinned, too far away to matter, or just watching) so the position is
+// never a bare textbook box.
+export const MATE3: MatePuzzle[] = [
+  // --- Queen + King ---
+  {
+    fen: "7k/8/8/4K3/3p4/8/8/Q7 w - - 0 1",
+    solution: "e5f6",
+    name: "The frozen guard",
+    hint: "That little pawn is pinned to its own king — it can never move! Walk your king in first.",
+  },
+  {
+    fen: "7k/p7/3K4/8/8/8/6Q1/8 w - - 0 1",
+    solution: "d6e6",
+    name: "The far-off pawn",
+    hint: "Ignore the lonely pawn all the way over there. Walk your king closer, then box him in.",
+  },
+  {
+    fen: "7k/1p6/8/5K2/8/1Q6/8/8 w - - 0 1",
+    solution: "f5f6",
+    name: "Queen waits her turn",
+    hint: "March your king up first — the queen finishes the job from the side.",
+  },
+  // --- Single Rook ---
+  {
+    fen: "7k/8/8/5K2/8/8/8/6R1 w - - 0 1",
+    solution: "f5g6",
+    name: "The silent rook",
+    hint: "Neither move is check! Walk your king in close, then let the rook wait quietly.",
+  },
+  {
+    fen: "7k/8/8/4K3/8/8/8/R7 w - - 0 1",
+    solution: "e5f6",
+    name: "Two doors, one key",
+    hint: "Bring your king up. Wherever he runs next, your rook finds the far corner.",
+  },
+  {
+    fen: "7k/R7/4K3/8/8/8/8/8 w - - 0 1",
+    solution: "e6f7",
+    name: "One square left",
+    hint: "Step your king closer — he's down to one square. Then swing the rook clear across.",
+  },
+  // --- Double Rook ---
+  {
+    fen: "8/8/5k2/R7/8/3p4/8/1R4K1 w - - 0 1",
+    solution: "b1b6",
+    name: "The ladder, two rungs back",
+    hint: "That stray pawn can't help him. Climb the ladder one rank at a time.",
+  },
+  {
+    fen: "8/8/2k5/7R/8/4p3/6R1/6K1 w - - 0 1",
+    solution: "g2g6",
+    name: "Ladder from the right",
+    hint: "Same ladder, mirrored — the lonely pawn is just watching.",
+  },
+  {
+    fen: "8/8/5k2/R7/8/3p4/1R6/6K1 w - - 0 1",
+    solution: "b2b6",
+    name: "One more step back",
+    hint: "Patience — the ladder still works, it just needs one extra rung.",
+  },
+];
+
+// Tier-3 Trick Shots (Track 4): deflection, decoy, remove-the-defender,
+// interference — the "pull the guard away" family, one step up from
+// fork/pin/skewer/disco. Every entry carries a genuine defender, so the
+// motif has to be set up, not merely spotted: verified by material swing
+// (content/__tests__/puzzles.test.ts uses tacticGainAfter, since these
+// motifs have no single structural detector like isForkAfter) rather than
+// a shape check — solution must net >= 3 points against black's best
+// defense (or force mate), and be strictly better than every other move.
+export const TACTICS3: Record<
+  "deflection" | "decoy" | "removeDefender" | "interference",
+  TacticPuzzle[]
+> = {
+  deflection: [
+    {
+      fen: "2b4k/1r6/P7/8/8/8/8/K7 w - - 0 1",
+      solution: "a6b7",
+      story: "The bishop guards the rook... but pawns don't care about bishops. Snap it up!",
+    },
+    {
+      fen: "6k1/1p6/2q5/4N3/8/8/8/6K1 w - - 0 1",
+      solution: "e5c6",
+      story: "Fork the queen! She has a pawn standing by, but nothing that stops the pony in time.",
+    },
+    {
+      fen: "7k/1n6/8/8/1r6/P7/8/7K w - - 0 1",
+      solution: "a3b4",
+      story: "A little pawn does what a knight never could — it just walks past the guard.",
+    },
+  ],
+  decoy: [
+    {
+      fen: "7k/8/1p6/n7/1P6/8/8/R6K w - - 0 1",
+      solution: "b4a5",
+      story: "The pawn LOOKS like backup. Watch what happens if it actually tries to help.",
+    },
+    {
+      fen: "k7/8/8/6p1/7r/6P1/8/K7 w - - 0 1",
+      solution: "g3h4",
+      story: "A whole rook for one little pawn? Even if he bites back, take that trade every time.",
+    },
+    {
+      fen: "7k/2b5/1q6/3N4/8/8/8/7K w - - 0 1",
+      solution: "d5b6",
+      story: "The bishop stands guard over the queen — but your knight never asked permission.",
+    },
+  ],
+  removeDefender: [
+    {
+      fen: "r5k1/p7/1N6/8/8/8/8/6K1 w - - 0 1",
+      solution: "b6a8",
+      story: "That pawn on a7 looks like a bodyguard. Pawns can't defend backward — the rook's all alone!",
+    },
+    {
+      fen: "6k1/8/2b5/3n4/2P5/8/8/3R2K1 w - - 0 1",
+      solution: "c4d5",
+      story: "Clear the little guard first. However the bishop answers, your rook cleans up next.",
+    },
+    {
+      fen: "k7/5b2/6q1/4N3/8/8/8/K7 w - - 0 1",
+      solution: "e5g6",
+      story: "Take the queen! The bishop can bite back, but you still made the trade of the day.",
+    },
+  ],
+  interference: [
+    {
+      fen: "6k1/8/2p5/3q4/1N6/8/8/6K1 w - - 0 1",
+      solution: "b4d5",
+      story: "The pawn thinks it has the queen covered. Your knight strongly disagrees.",
+    },
+    {
+      fen: "7k/8/8/2p5/3r4/1N6/8/3R3K w - - 0 1",
+      solution: "b3d4",
+      story: "Grab the rook. If the pawn steps in to recapture, your OTHER rook is already lined up.",
+    },
+    {
+      fen: "k7/8/8/4p3/5n2/6P1/8/K4R2 w - - 0 1",
+      solution: "g3f4",
+      story: "Trade pawn for pony — and if his friend recaptures, your rook was waiting right there.",
+    },
+  ],
+};

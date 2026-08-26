@@ -46,6 +46,8 @@ function renderGame(game: GameId, opts: Opts) {
       return <MateInOne />;
     case "mateInTwo":
       return <MateInTwo />;
+    case "mateInThree":
+      return <MateInTwo depth={3} />;
     case "hangingHunt":
       return <HangingHunt />;
     case "tacticTrainer":
@@ -63,6 +65,7 @@ const ARCADE: { id: GameId; emoji: string; title: string; blurb: string; opts: O
   { id: "pawnWars", emoji: "⚔️", title: "Pawn Wars", blurb: "Pawns only — first to crown a queen wins.", opts: {} },
   { id: "mateInOne", emoji: "♚", title: "Mate in 1", blurb: "Deliver checkmate in a single move.", opts: {} },
   { id: "mateInTwo", emoji: "👑", title: "Mate in 2", blurb: "Force checkmate in two — think a move ahead.", opts: {} },
+  { id: "mateInThree", emoji: "🏆", title: "Mate in 3", blurb: "Force checkmate in three — plan two moves ahead.", opts: {} },
   { id: "hangingHunt", emoji: "🔍", title: "Piece Detective", blurb: "Spot the piece that's free to take.", opts: {} },
   { id: "tacticTrainer", emoji: "🎯", title: "Trick Shots", blurb: "Forks, pins, skewers, discovered attacks.", opts: { pack: "fork" } },
   { id: "rookMaze", emoji: "🧩", title: "Rook Maze", blurb: "Slide around the walls to catch the prey.", opts: {} },

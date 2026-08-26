@@ -12,6 +12,7 @@ export const GAME_LABEL: Record<GameId, string> = {
   pawnWars: "▶ Play Pawn Wars",
   mateInOne: "▶ Play Mate in 1",
   mateInTwo: "▶ Play Mate in 2",
+  mateInThree: "▶ Play Mate in 3",
   hangingHunt: "▶ Play Piece Detective",
   tacticTrainer: "▶ Play Trick Shots",
   rookMaze: "▶ Play Rook Maze",
