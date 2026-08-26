@@ -1545,6 +1545,90 @@ action set; confirm `waitlist.md`'s "place in line" copy still matches the
 `#`-position column; and RS005's CSV column list, which RS005's own prompt
 defers to RS010's help pass.
 
+**THE SESSION'S BIGGEST LESSON — reviews and tests did not find the defects an
+organiser finds in twenty minutes.** By the time the owner opened the product,
+this branch had four reviewers, ~10,500 green tests, a seven-width screenshot
+pass and a targeted `/code-review`. They then found EIGHT real defects by
+clicking: a filter that needed a button press, "Free agents only" surviving
+beside "Allow solo sign-ups", a hint explaining a control that could not be
+used, "You keep 92%" shown to an organiser collecting cash, a date-without-time
+that saved as UNSET, a withdrawn entry that would still "resend confirmation",
+a refund lock offered for offline payment, and an Approve button whose error
+told them to press a Mark-paid button that did not exist.
+
+Why the pipeline missed all eight — worth keeping, because the causes are
+structural, not effort:
+
+1. **Verification was of STRUCTURE, not USE.** The screenshots were of the
+   Registrants tab only; the config panel was never opened in a browser, no
+   action was ever clicked, no organiser task was completed end to end. Every
+   one of the eight sits behind an interaction or inside a collapsed section.
+2. **A test that asserts a string RENDERS cannot ask whether the string is
+   TRUE.** "You keep 92%", "Only available for team divisions", the refund-lock
+   label — each rendered exactly as designed and each was false for that
+   configuration. There is no gate for "is this sentence true here", and unit
+   tests structurally cannot be one.
+3. **Nothing compares organiser-facing VOCABULARY across surfaces**, which is
+   how "Free agents only" and "Allow solo sign-ups" coexisted three keys apart.
+4. **Reviewers were given file and diff lenses.** None was asked to use the
+   product as an organiser, so none did.
+
+**What changed, and what a later session should keep doing:** drive the real
+app before showing anyone screenshots. Doing it once immediately produced two
+more defects ("1 extra questions"; an empty "Actions" heading over a terminal
+entry's zero controls), caught a `next build` failure that `tsc` and vitest
+were both blind to (a client component importing `@/server/api-v1/schemas`,
+dragging gRPC and Node built-ins into the browser bundle), and stopped two
+FALSE reports: a "silent no-op" that was a confirm dialog waiting, and a
+"missing role=dialog" that was `role="alertdialog"` all along.
+
+**Traps re-confirmed the hard way this session** (all already in this file or
+the skill, all still cost time): vitest run from the worktree root reports
+`Cannot find package '@/...'` and 54 suites failing to COLLECT; a `{total: 38}`
+result with `EXIT=1` reads as green if judged on the exit code; and
+`seazn-env up --server` REUSES an existing bundle and says so in one line —
+skip that line and you review a build from before your own fix, which nearly
+had the Approve/Mark-paid fix reported as broken.
+
+**Late findings fixed after the reviews** (each with a test that fails without
+it, each mutation-proven):
+
+- `join_code` reached READ-ONLY roles through both list routes. The UI hid it;
+  the API did not, and `read` scope is `READ_ROLES` — viewer included. A bearer
+  credential that grants roster writes, handed over in one GET.
+- The CSV gave a viewer per-player **dob and gender** — data no UI surface
+  shows to ANY role, much of it minor-attendee personal data leaving the
+  platform as a file. Columns omitted, not blanked: a blank cell under
+  `player_dob` asserts "we hold no date of birth", which is false.
+- The `kind` filter used a bare `rs.entrant_kind = ?` while the SELECT
+  coalesced a missing settings row to `'individual'` — so an entry VISIBLY
+  listed as Individual vanished when filtered for Individual.
+- `consent_pending=0` was silently ignored (truthiness where its neighbour used
+  `!== undefined`), so "who is fully consented" returned everyone.
+- The CSV's question columns came from the RESULT rows, so the header moved
+  with the filter and two exports of one competition could not feed one
+  importer.
+- `POST /registrations/{id}/promote` 400'd on a body-less POST, making its own
+  documented default path unreachable.
+- `waitlist-queue.tsx` was still present although ruling 2 above says "The
+  component is deleted". It now is. **A wrong record is worse than a stray
+  file** — the next session trusts it.
+
+**Still open at close** (not silently dropped):
+
+- **The hub advertises a public page that cannot open.** `register/page.tsx`
+  renders "not open" UNCONDITIONALLY until RS006 ships the stepper, while the
+  division row still offers the toggle, the URL, Copy, Open and a printable QR.
+  An organiser can pin a dead QR to a noticeboard today. A notice is being
+  added rather than pulling RS006 forward; the controls stay so settings can be
+  configured ahead of launch.
+- **No pagination anywhere in the read path.** A large competition's tab grows
+  unbounded and every row mounts client islands whether expanded or not.
+  Flagged as a guess by the reviewer; needs a ~300-row profile to size.
+- **`resend-confirmation` has no throttle**, mirroring the pre-existing
+  `/remind` route. Not a regression; now two unthrottled organiser-triggered
+  mailers instead of one.
+
 **Pinned so no wave re-derives them:**
 
 - **Waitlist position must reproduce `promoteOldestWaitlisted`
