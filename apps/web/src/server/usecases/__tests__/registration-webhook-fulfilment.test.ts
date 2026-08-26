@@ -18,7 +18,7 @@
 //
 // Real Postgres required; skipped without DATABASE_URL (matches every other
 // DB-backed usecase suite in this directory).
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 
@@ -56,6 +56,7 @@ const stripeMock = vi.hoisted(() => {
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { balance, walletIdFor } from "@/lib/credits";
 import { processStripeEvent, runEvent } from "../billing-events";
 import { handleRegistrationCheckoutCompleted } from "../registrations";
@@ -99,6 +100,17 @@ beforeEach(() => {
   stripeMock.chargeRetrieve.mockReset();
   stripeMock.reversalCreate.mockReset().mockResolvedValue({ id: "trr_test_1" });
   stripeMock.reversalList.mockReset().mockResolvedValue({ data: [] });
+});
+
+// `log` is a module-level singleton shared by every `it()` in this file —
+// without this, a `vi.spyOn(log, "error")` installed by one test (cases
+// 13-14 below) is REUSED, not re-wrapped, by the next test that spies on
+// the same method (vitest returns the existing mock rather than nesting a
+// second one), so its `.mock.calls` history leaks a PRIOR test's call into
+// a later test's `toHaveBeenCalledWith`/`not.toHaveBeenCalled` assertions —
+// found the hard way: case 14 failed with case 13's own mismatch payload.
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 afterAll(async () => {
@@ -355,5 +367,66 @@ describe.skipIf(!HAS_DB)("registration webhook fulfilment (RS002/RS003 regressio
     const after = await loadWithGroup(res.registration.id);
     expect(after.entrant_id).toBe(entrantId); // no second entrant
     expect(await auditCount("registration.confirmed", res.registration.id)).toBe(1); // no second confirm audit
+  });
+
+  // -------------------------------------------------------------------------
+  // Destination-account drift (CHANGE 1, cases 13-14, payment-integrity)
+  // -------------------------------------------------------------------------
+
+  it("[13] a destination account that changed since mint still confirms the entry, but records the drift for the organiser", async () => {
+    const { orgId, competition, division, settings } = await stripeRig();
+    const [orgBefore] = await sql<{ stripe_account_id: string }[]>`
+      select stripe_account_id from organizations where id = ${orgId}`;
+    const mintedDestination = orgBefore!.stripe_account_id;
+    const res = await seedRegistration(competition.id, division.id, settings, { amountCents: 500 });
+
+    // The org reconnects a DIFFERENT Stripe account after mint, before this
+    // still-open session gets paid — exactly the hazard CHANGE 1 detects.
+    const reconnectedAccount = "acct_" + randomUUID().slice(0, 8);
+    await sql`update organizations set stripe_account_id = ${reconnectedAccount} where id = ${orgId}`;
+
+    const session = fakeSession(res.registration.id, 500);
+    (session.metadata as Record<string, string>).destination_account = mintedDestination;
+    const errSpy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+
+    await handleRegistrationCheckoutCompleted(session);
+
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("confirmed"); // still confirms — the registrant paid in good faith
+    expect(row.entrant_id).not.toBeNull();
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mintedDestination,
+        currentDestination: reconnectedAccount,
+        sessionId: session.id,
+      }),
+      expect.stringContaining("destination account"),
+    );
+    const [drift] = await sql<{ n: string }[]>`
+      select count(*)::text as n from competition_events
+      where type = 'registration.destination_account_mismatch'
+        and payload->>'checkout_session_id' = ${session.id}`;
+    expect(Number(drift!.n)).toBe(1);
+  });
+
+  it("[14] a destination account that still matches the org's current account writes no drift audit row", async () => {
+    const { orgId, competition, division, settings } = await stripeRig();
+    const [org] = await sql<{ stripe_account_id: string }[]>`
+      select stripe_account_id from organizations where id = ${orgId}`;
+    const res = await seedRegistration(competition.id, division.id, settings, { amountCents: 500 });
+    const session = fakeSession(res.registration.id, 500);
+    (session.metadata as Record<string, string>).destination_account = org!.stripe_account_id;
+    const errSpy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+
+    await handleRegistrationCheckoutCompleted(session);
+
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("confirmed");
+    expect(errSpy).not.toHaveBeenCalled();
+    const [drift] = await sql<{ n: string }[]>`
+      select count(*)::text as n from competition_events
+      where type = 'registration.destination_account_mismatch'
+        and payload->>'checkout_session_id' = ${session.id}`;
+    expect(Number(drift!.n)).toBe(0);
   });
 });

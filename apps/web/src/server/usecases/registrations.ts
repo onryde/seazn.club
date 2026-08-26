@@ -1665,12 +1665,22 @@ async function createRegistrationCheckout(
     // joins to ~370, proven in registrations.test.ts) rather than a single
     // registration_id. Wave 3b's webhook rework reads this to flip exactly
     // the listed entries.
+    //
+    // destination_account rides the session the same way fee_percent does
+    // (payment-integrity fix): the Connect account THIS charge's
+    // transfer_data.destination is frozen to, right now, at mint time. If
+    // the org reconnects a DIFFERENT account before this still-open session
+    // is paid, fulfilment compares this stamped value against the org's
+    // CURRENT stripe_account_id to detect the drift — see
+    // checkDestinationAccountDrift below. A short value (an account id),
+    // so it never threatens registration_ids' own near-budget cap above.
     metadata: {
       kind: "registration_group",
       registration_group_id: groupId,
       registration_ids: idsJoined,
       org_id: ctx.org_id,
       fee_percent: String(feePercent),
+      destination_account: destination,
     },
     line_items: entries.map((reg) => ({
       quantity: 1,
@@ -1759,6 +1769,72 @@ function checkoutRegistrationIds(session: Stripe.Checkout.Session): string[] {
 }
 
 /**
+ * Payment-integrity fix: `createRegistrationCheckout` freezes
+ * `transfer_data.destination` from the org's `stripe_account_id` AT MINT
+ * TIME (stamped onto `metadata.destination_account`, alongside
+ * `fee_percent`, above). If the org reconnects a DIFFERENT Stripe account
+ * before a still-open session is paid, Stripe has ALREADY routed the charge
+ * to the frozen (now stale) destination by the time this webhook fires —
+ * there is nothing left here to redirect, and `stripeRefund`'s
+ * `reverse_transfer: true` would fail against an account this platform no
+ * longer holds besides. Deliberately does NOT block, refund, or leave the
+ * entry pending — the registrant paid in good faith and must not lose their
+ * place over an organiser-side reconnect; this only records the drift for
+ * the organiser console. Metadata absent (every session minted before this
+ * change) means "cannot tell", and is always treated that way, never as a
+ * mismatch — same fallback shape as `chargedFeePercent` below.
+ *
+ * Resolved off `regIds[0]` (already parsed by the caller via
+ * `checkoutRegistrationIds`, always non-empty by the time this is called)
+ * rather than `session.metadata.registration_group_id` — every entry named
+ * in one session shares one group's org/competition, so any one of them is
+ * enough, and this mirrors `handleRegistrationCheckoutAsyncPaymentFailed`'s
+ * own registrations→divisions resolution below rather than adding a second,
+ * parallel lookup path off a metadata field nothing else in this file reads.
+ */
+async function checkDestinationAccountDrift(
+  session: Stripe.Checkout.Session,
+  regIds: string[],
+  paymentIntentId: string | null,
+): Promise<void> {
+  const mintedDestination = session.metadata?.destination_account;
+  if (!mintedDestination) return;
+  const [row] = await sql<
+    { org_id: string; competition_id: string; stripe_account_id: string | null }[]
+  >`
+    select r.org_id, d.competition_id, o.stripe_account_id
+    from registrations r
+    join divisions d on d.id = r.division_id
+    join organizations o on o.id = r.org_id
+    where r.id = ${regIds[0]!}`;
+  if (!row || row.stripe_account_id === mintedDestination) return;
+  log.error(
+    {
+      registrationId: regIds[0],
+      orgId: row.org_id,
+      mintedDestination,
+      currentDestination: row.stripe_account_id,
+      sessionId: session.id,
+      paymentIntentId,
+    },
+    "registration: destination account changed since checkout was minted — funds routed to the old account",
+  );
+  await audit(
+    sql,
+    row.competition_id,
+    row.org_id,
+    "registration.destination_account_mismatch",
+    {
+      checkout_session_id: session.id,
+      payment_intent_id: paymentIntentId,
+      minted_destination_account: mintedDestination,
+      current_destination_account: row.stripe_account_id,
+    },
+    null,
+  );
+}
+
+/**
  * Fulfilment for a `registration_group` checkout session (RS003 W3b —
  * re-keyed from a single `registration_id` to the group's comma-joined
  * `registration_ids`, W3a's `createRegistrationCheckout`): every NAMED entry
@@ -1804,6 +1880,10 @@ export async function handleRegistrationCheckoutCompleted(
   const raw = session.metadata?.fee_percent;
   const chargedFeePercent =
     raw != null && raw !== "" && Number.isFinite(Number(raw)) ? Number(raw) : null;
+  // Payment-integrity fix: detect (never block on) a Connect account that
+  // changed since this session was minted. Session-scoped, so it runs once
+  // per webhook, not once per named entry.
+  await checkDestinationAccountDrift(session, regIds, paymentIntent);
   // Sequential, not Promise.all, and no per-id try/catch: each call is its
   // own locked transaction, so a failure partway through must abort the rest
   // and leave the WHOLE event unprocessed (billing_events.processed_at stays
