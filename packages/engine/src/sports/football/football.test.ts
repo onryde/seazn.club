@@ -143,6 +143,31 @@ describe("football golden (b): knockout decided on penalties", () => {
     expect(football.declaredPointsSets(splitCfg)).toContain(3);
   });
 
+  it("F21 (R3.5/Task I): only one of shootoutWin/shootoutLoss set — the split does not fire, flat win/loss applies", () => {
+    // The engine's own gate (standingsDelta, football.ts) requires BOTH
+    // fields defined before it splits. The golden above already covers
+    // "both set" (F19) and "neither set" (F20) but never the asymmetric
+    // case — exactly the shape apps/web's new match-rules.tsx fields can
+    // produce if an organiser fills in only one of the pair.
+    const onlyWinCfg = football.configSchema.parse({
+      extraTime: { enabled: true, halfMinutes: 15 },
+      shootout: true,
+      points: { win: 3, draw: 1, loss: 0, shootoutWin: 2 },
+    });
+    const onlyWinState = foldMatch(football, onlyWinCfg, lineups, events);
+    const [hw, aw] = football.standingsDelta(onlyWinState.outcome!, onlyWinCfg, group, onlyWinState);
+    expect([hw.points, aw.points]).toEqual([3, 0]);
+
+    const onlyLossCfg = football.configSchema.parse({
+      extraTime: { enabled: true, halfMinutes: 15 },
+      shootout: true,
+      points: { win: 3, draw: 1, loss: 0, shootoutLoss: 1 },
+    });
+    const onlyLossState = foldMatch(football, onlyLossCfg, lineups, events);
+    const [hl, al] = football.standingsDelta(onlyLossState.outcome!, onlyLossCfg, group, onlyLossState);
+    expect([hl.points, al.points]).toEqual([3, 0]);
+  });
+
   it("enforces kick alternation and early decision arithmetic", () => {
     const early = stream(
       ["core.start"],
