@@ -123,10 +123,18 @@ async function tapTile(page: Page, fx: RosteredFixture, tileId: string): Promise
 /** Screenshot at the three widths the owner's standing UI bar names, and
  *  assert no horizontal page scroll at any of them. 320 is the one that
  *  actually catches things. */
-async function shotAllWidths(page: Page, name: string): Promise<void> {
+async function shotAllWidths(
+  page: Page,
+  name: string,
+  anchor?: (p: Page) => ReturnType<Page["locator"]>,
+): Promise<void> {
+  // A DECIDED fixture UNMOUNTS the pad (this wave's own F15/F16), so what to
+  // wait on differs by state — defaulting to the pad would fail the decided
+  // captures for a reason that is correct behaviour.
+  const waitFor = anchor ?? pad;
   for (const width of [1280, 768, 320]) {
     await page.setViewportSize({ width, height: width === 320 ? 900 : 1000 });
-    await expect(pad(page)).toBeVisible();
+    await expect(waitFor(page).first()).toBeVisible();
     await expectNoHorizontalScroll(page);
     await page.screenshot({ path: `e2e-artifacts/taskl/${name}-${width}.png`, fullPage: true });
   }
@@ -224,8 +232,10 @@ test(
     expect(kicks.length, "the ledger holds a different number of kicks than were tapped").toBe(taps.length);
     expect(kicks.map((k) => k.payload.scored)).toEqual(taps.map((t) => t.option === "scored"));
 
+    // The pad is gone by design once the match is decided; anchor the capture
+    // on the decided sentence Task G added instead.
     await page.reload();
-    await shotAllWidths(page, "football-shootout-decided");
+    await shotAllWidths(page, "football-shootout-decided", (p) => p.getByText(/won .* on penalties/));
   },
 );
 
