@@ -62,15 +62,29 @@ export function DivisionCard({
   const now = new Date();
   const notYetOpen = division.closed_reason === "window" && division.opens_at && new Date(division.opens_at) > now;
   const windowClosed = division.closed_reason === "window" && !notYetOpen;
+  // De-emphasis for a division the CONTACT personally doesn't qualify for
+  // (design: "grey-with-reason ... stays pickable for team entries" — the
+  // card must never read as disabled). A VISUAL cue only: the title and
+  // the colorful category/age badges drop to the SAME muted tone a closed
+  // division's badges already use elsewhere on this card (reusing this
+  // file's own existing token pairing, not inventing a new color — see the
+  // fix wave report for the contrast check), and the card gets the same
+  // muted background a closed card already gets. The amber reason notice
+  // below stays at full weight (never dimmed — it must stay legible), and
+  // every Add control keeps its normal opacity and stays enabled/keyboard-
+  // reachable; only presentation changes, never interactivity.
+  const selfIneligible = imPlaying && selfEligibility != null && !selfEligibility.eligible;
 
   return (
     <div
       className={`rounded-xl border p-4 shadow-sm transition sm:p-5 ${
-        division.open ? "border-zinc-200/80 bg-surface" : "border-zinc-200/80 bg-zinc-50"
+        division.open && !selfIneligible ? "border-zinc-200/80 bg-surface" : "border-zinc-200/80 bg-zinc-50"
       }`}
     >
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <h3 className="font-display text-lg font-semibold text-ink">{division.name}</h3>
+        <h3 className={`font-display text-lg font-semibold ${selfIneligible ? "text-ink-muted" : "text-ink"}`}>
+          {division.name}
+        </h3>
         <div className="font-display text-base font-bold text-ink">
           {feeLabel}
           {division.fee_cents > 0 && division.payment_method === "offline" && (
@@ -82,8 +96,14 @@ export function DivisionCard({
       </div>
 
       <div className="mt-2.5 flex flex-wrap gap-1.5">
-        <span className={`${BADGE} bg-accent-soft text-accent-strong`}>{t(categoryKey)}</span>
-        {ageLabel && <span className={`${BADGE} bg-accent-soft text-accent-strong`}>{ageLabel}</span>}
+        <span className={`${BADGE} ${selfIneligible ? "bg-zinc-100 text-ink-muted" : "bg-accent-soft text-accent-strong"}`}>
+          {t(categoryKey)}
+        </span>
+        {ageLabel && (
+          <span className={`${BADGE} ${selfIneligible ? "bg-zinc-100 text-ink-muted" : "bg-accent-soft text-accent-strong"}`}>
+            {ageLabel}
+          </span>
+        )}
         {division.closed_reason === "full" ? (
           <span className={`${BADGE} bg-amber-100 text-amber-800`}>{t("register.entries.badge.waitlist")}</span>
         ) : (

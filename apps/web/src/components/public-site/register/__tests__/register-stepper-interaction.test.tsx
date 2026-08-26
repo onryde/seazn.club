@@ -482,3 +482,90 @@ describe("finding #8 — an unresolvable division name (raw UUID fallback) never
     expect(propsOf(nameP!).className as string).toContain("truncate");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Item B (coordinator scope expansion) — self-ineligible division cards
+// de-emphasize visually, without ever disabling the Add control
+// ---------------------------------------------------------------------------
+//
+// DivisionCard has no hooks of its own besides the mocked (non-hook) useT,
+// so — same as EntryCart above — it can be called directly, no renderIsland
+// needed.
+
+describe("item B — a self-ineligible division card dims its title/badges but never disables Add", () => {
+  const INELIGIBLE_VERDICT = {
+    eligible: false,
+    issues: [{ code: "CATEGORY_MISMATCH" as const, message: "irrelevant — presentation reads issue.code, not .message" }],
+  };
+
+  it("dims the title and the category/age badges, and the card background matches a closed card's", () => {
+    const tree = walk(
+      DivisionCard({
+        division: DIV_WOMENS,
+        locale: "en",
+        selfEligibility: INELIGIBLE_VERDICT,
+        imPlaying: true,
+        onAddIndividual: () => {},
+      }),
+    );
+
+    const title = tree.find((el) => el.type === "h3");
+    expect(title, "title not found").toBeTruthy();
+    expect(propsOf(title!).className as string).toContain("text-ink-muted");
+
+    const categoryBadge = tree.find((el) => el.type === "span" && textOf(el) === "Women's");
+    expect(categoryBadge, "category badge not found").toBeTruthy();
+    expect(propsOf(categoryBadge!).className as string).toContain("bg-zinc-100");
+    expect(propsOf(categoryBadge!).className as string).not.toContain("bg-accent-soft");
+
+    // Root card div is the first element walk() ever pushes.
+    const root = tree[0]!;
+    expect(propsOf(root).className as string).toContain("bg-zinc-50");
+  });
+
+  it("the Add control is UNCHANGED — no disabled attribute, no pointer-events:none, still calls through", () => {
+    let called = false;
+    const tree = walk(
+      DivisionCard({
+        division: DIV_WOMENS,
+        locale: "en",
+        selfEligibility: INELIGIBLE_VERDICT,
+        imPlaying: true,
+        onAddIndividual: () => {
+          called = true;
+        },
+      }),
+    );
+    const addButton = tree.find((el) => el.type === "button" && textOf(el) === "Add an entry");
+    expect(addButton, "Add button not found").toBeTruthy();
+    expect(propsOf(addButton!).disabled).not.toBe(true);
+    expect(propsOf(addButton!).className as string).not.toContain("pointer-events-none");
+    (propsOf(addButton!).onClick as () => void)();
+    expect(called, "Add control's onClick must still fire").toBe(true);
+  });
+
+  it("stays at FULL visual weight when the contact IS eligible (or hasn't said they're playing) — regression guard", () => {
+    const eligibleTree = walk(
+      DivisionCard({
+        division: DIV_WOMENS,
+        locale: "en",
+        selfEligibility: { eligible: true, issues: [] },
+        imPlaying: true,
+        onAddIndividual: () => {},
+      }),
+    );
+    expect(propsOf(eligibleTree.find((el) => el.type === "h3")!).className as string).toContain("text-ink");
+    expect(propsOf(eligibleTree.find((el) => el.type === "h3")!).className as string).not.toContain("text-ink-muted");
+
+    const notPlayingTree = walk(
+      DivisionCard({
+        division: DIV_WOMENS,
+        locale: "en",
+        selfEligibility: null,
+        imPlaying: false,
+        onAddIndividual: () => {},
+      }),
+    );
+    expect(propsOf(notPlayingTree.find((el) => el.type === "h3")!).className as string).not.toContain("text-ink-muted");
+  });
+});
