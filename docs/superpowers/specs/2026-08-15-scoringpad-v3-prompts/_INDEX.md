@@ -2147,3 +2147,47 @@ it is only the single-layer version of the story that was wrong.
 has been reproduced. Two of the three findings here reproduced on the live
 build within one capture each; the third did not, and the layer above it was
 found only by going looking for the reason it did not.
+
+### Cloud review (2026-08-26) — D-24, the guard that suppressed a correct answer
+
+One finding, real, and it was the thing the previous round had deliberately
+left alone. `hasStaleServeInfo` refused whenever ANY `tennis.set_summary` had
+folded, on the reasoning that `bankSet` never advances `state.serving` so the
+serve is "stale BY CONSTRUCTION for the REST of the match". Half right: a
+summary desyncs the fold from the turn walk only when it banks an ODD number
+of games, and R4-7's `serveOrderKnown` already said which.
+
+The cost was not cosmetic. Both callers short-circuited before
+`deriveServeContext` ran, so `buildHalf` stamped no `server`, every later
+`tennis.point` went out unattributed, and `NestedPersonTally` credited no ace
+or double fault again. **A scorer who backfills one already-played set lost
+the wave's headline capability for the rest of the match**, in the most
+ordinary workflow there is.
+
+Two lessons worth keeping apart:
+
+- **A guard that hides a defect looks exactly like a guard that prevents
+  one.** D-20 had "no UI symptom" precisely because this guard was suppressing
+  the whole feature. That absence of symptom was recorded last round as a
+  reason NOT to touch it. It was the defect.
+- **The pad second-guessed the engine after the engine had been taught to
+  answer.** R4-7 built the drift detector specifically so the pad would not
+  have to sniff for event types; the sniffer stayed anyway, coarser and wrong.
+  When a wave adds a precise answer, the imprecise callers it was written for
+  are part of the change.
+
+The covering test used a 6-0 summary — even, therefore derivable — so it
+pinned the over-refusal. Written to match the implementation, not the design.
+
+Singles is not exempt and a mutation test now says so: one player a side makes
+the PERSON unambiguous while the SIDE is still `state.serving`.
+
+`17-serveaftersummary` is the screen, proved red against the pre-fix bundle.
+
+### Merge
+
+Owner instruction 2026-08-26: **"No gaps then CI is green then merge"** — the
+`_RULES.md` §1 visual sign-off gate is satisfied by that instruction rather
+than by per-screen verdicts on the sheet. Recorded here because the rule says
+the gate is the verdicts being recorded in this file, and this is what was
+given in their place.
