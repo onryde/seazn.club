@@ -16,6 +16,7 @@ import {
   nextBattingSide,
   eligibleBowlers,
   reviewsRemaining,
+  activeInnings,
   type CricketBallEv,
   type CricketCfg,
   type CricketEv,
@@ -1094,6 +1095,34 @@ describe("nextBattingSide", () => {
     expect(nextBattingSide({ ...base, inningsCount: 2 })).toBe("away");
     expect(nextBattingSide({ ...base, inningsCount: 3 })).toBe("home");
     expect(nextBattingSide({ ...base, inningsCount: 4 })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5 Task C — activeInnings: the ONE definition of "which innings list is
+// actually being played", shared by cricketPosition (below) and the v3 pad
+// (apps/web skins/cricket.tsx), which used to re-derive it as `state.innings`
+// alone and so spent every super over describing the innings before it.
+// ---------------------------------------------------------------------------
+
+describe("activeInnings — one definition, shared by the position axis and the pad", () => {
+  const main = [{ closed: true }, { closed: true }];
+  it("main innings while there is no super over", () => {
+    expect(activeInnings({ innings: main, superOver: null }))
+      .toEqual({ list: main, offset: 0, inSuperOver: false });
+  });
+  it("super-over innings once there is one, offset past the main innings", () => {
+    const so = [{ closed: false }];
+    expect(activeInnings({ innings: main, superOver: { innings: so } }))
+      .toEqual({ list: so, offset: 2, inSuperOver: true });
+  });
+  it("an EMPTY super-over list is still the active list", () => {
+    // The state decideTie leaves behind: phase super_over, no ball yet.
+    expect(activeInnings({ innings: main, superOver: { innings: [] } }))
+      .toEqual({ list: [], offset: 2, inSuperOver: true });
+  });
+  it("treats an absent superOver field the same as null", () => {
+    expect(activeInnings({ innings: main, superOver: undefined }).inSuperOver).toBe(false);
   });
 });
 

@@ -551,6 +551,47 @@ function oversText(balls: number, ballsPerOver: number): string {
 
 
 /**
+ * THE innings list actually being played, and how many innings precede it.
+ *
+ * ONE definition, read by the position axis below AND by the v3 pad
+ * (`skins/cricket.tsx`), so the two cannot fork on the question "which
+ * innings am I looking at". They did fork: the pad re-derived it as
+ * `state.innings` alone and therefore spent every super over describing the
+ * innings before it — a frozen score, a stale target, the wrong bowler, and
+ * a delivery row disabled by a closure that was not the match's.
+ *
+ * Structural and generic rather than taking `CricketState`, for the same
+ * reason `nextBattingSide` is: the pad holds a narrowed shape of the state
+ * and must be able to call this without either owning the full type or
+ * casting a partial object into one.
+ *
+ * THE SUPER OVER CONTINUES THE INNINGS COUNT, so `offset` is the main
+ * innings' length, never 0 — numbering a super over 1 and 2 would send
+ * position BACKWARDS mid-fixture, and W6 sorts a timeline by it.
+ *
+ * An EMPTY super-over list is still the active list. `decideTie` creates
+ * `superOver` with no innings in it, and the pad meets exactly that state
+ * between the tie and the first super-over ball; answering `state.innings`
+ * there is what told the pad the match was over.
+ */
+export interface ActiveInnings<T> {
+  list: readonly T[];
+  offset: number;
+  inSuperOver: boolean;
+}
+
+export function activeInnings<T>(m: {
+  innings: readonly T[];
+  superOver: { innings: readonly T[] } | null | undefined;
+}): ActiveInnings<T> {
+  const so = m.superOver;
+  if (so === null || so === undefined) {
+    return { list: m.innings, offset: 0, inSuperOver: false };
+  }
+  return { list: so.innings, offset: m.innings.length, inSuperOver: true };
+}
+
+/**
  * W4a (#425) T6b — "Innings 2 · Over 12.3", the cross-sport position axis.
  *
  * THE OVER COMES FROM `legalBalls`, AND ONLY FROM `legalBalls`. An innings also
@@ -565,12 +606,12 @@ function oversText(balls: number, ballsPerOver: number): string {
  * THE SUPER OVER CONTINUES THE INNINGS COUNT rather than restarting at 1: its
  * innings are the third and fourth of the match. Numbering them 1 and 2 would
  * send position BACKWARDS mid-fixture, and W6 sorts a timeline by this.
+ * Delegates to `activeInnings` (above) rather than keeping its own copy of
+ * the superOver/offset switch — see that function's own doc for why.
  */
 function cricketPosition(state: CricketState): MatchPosition {
   const live = state.outcome === null;
-  const superOver = state.superOver;
-  const list = superOver === null ? state.innings : superOver.innings;
-  const offset = superOver === null ? 0 : state.innings.length;
+  const { list, offset } = activeInnings<InningsState>(state);
   const number = unitNumber({
     // An innings is opened on its first ball, so `length` counts innings
     // STARTED — which is what keeps a match abandoned mid-innings from

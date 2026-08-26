@@ -22,6 +22,11 @@ export {
   // an illegal pick BEFORE the tap instead of surfacing a generic 422 after it.
   eligibleBowlers,
   reviewsRemaining,
+  // R3.5 — the pad must not re-derive "which innings is being played". Same
+  // posture as nextBattingSide/eligibleBowlers/reviewsRemaining above: a
+  // public mirror of a private rule, so the pad mirrors rather than forks.
+  activeInnings,
+  type ActiveInnings,
   type OverBowlerFacts,
   type CricketBallEv,
   type CricketState,
