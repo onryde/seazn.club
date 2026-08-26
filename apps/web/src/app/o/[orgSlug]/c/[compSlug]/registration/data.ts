@@ -49,6 +49,15 @@ export interface RawDivisionRow {
   approval: RegistrationHubRowData["approval"];
   allow_free_agents: boolean;
   taken: number;
+  /** Registrations in `waitlisted` status for this division (RS005 F4) —
+   *  read by the config panel's Money section to warn an organiser editing
+   *  the fee that promoting any of them re-prices at whatever fee is LIVE
+   *  at promotion time, not what they saw when they joined (waitlisted rows
+   *  hold `amount_cents = 0`, so there is no earlier quote to honour — see
+   *  `promoteWaitlistedRow`, registrations.ts). Counted by its OWN
+   *  subquery, deliberately never folded into `taken`'s SPOT_HOLDERS set —
+   *  a waitlisted entry holds no spot. */
+  waitlisted: number;
   /** Same value on every row (org-level, RS001b) — carried per-row rather
    *  than fetched separately so this stays a SINGLE query for the rows. */
   org_currency: string;
@@ -88,6 +97,8 @@ export async function fetchDivisionRows(
         coalesce(rs.allow_free_agents, false) as allow_free_agents,
         (select count(*)::int from registrations r
            where r.division_id = d.id and r.status in ${tx([...SPOT_HOLDERS])}) as taken,
+        (select count(*)::int from registrations r
+           where r.division_id = d.id and r.status = 'waitlisted') as waitlisted,
         (select currency from organizations where id = ${auth.orgId}) as org_currency,
         (select stripe_unsupported_currency from organizations where id = ${auth.orgId})
           as org_stripe_unsupported_currency

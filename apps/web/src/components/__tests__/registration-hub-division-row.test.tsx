@@ -36,6 +36,7 @@ const BASE_ROW: RegistrationHubRowData = {
   approval: "auto",
   allow_free_agents: false,
   taken: 0,
+  waitlisted: 0,
 };
 
 const BASE_CONTEXT: RegistrationHubRowContext = {

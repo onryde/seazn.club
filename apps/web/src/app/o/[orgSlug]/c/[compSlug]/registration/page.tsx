@@ -106,6 +106,7 @@ export default async function RegistrationHubPage({
       approval: r.approval,
       allow_free_agents: r.allow_free_agents,
       taken: r.taken,
+      waitlisted: r.waitlisted,
     }));
 
     // Finding 4 (whole-branch review, RS004): org_stripe_unsupported_currency

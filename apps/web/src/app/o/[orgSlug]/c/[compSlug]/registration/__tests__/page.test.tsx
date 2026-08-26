@@ -494,6 +494,10 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
         approval: "auto",
         allow_free_agents: false,
         taken: 3,
+        // RS005 F4 — a value distinct from `taken` so a mapping that
+        // accidentally reused the wrong source field cannot pass by
+        // coincidence.
+        waitlisted: 5,
         org_currency: "gbp",
       },
     ];
@@ -516,6 +520,7 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
         approval: "auto",
         allow_free_agents: false,
         taken: 3,
+        waitlisted: 5,
       },
     ]);
     expect((props.context as { currency: string }).currency).toBe("gbp");

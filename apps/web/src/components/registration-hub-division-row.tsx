@@ -54,6 +54,11 @@ export interface RegistrationHubRowData {
   /** Spots currently held (SPOT_HOLDERS: pending/paid/confirmed) — the
    *  capacity meter's numerator. */
   taken: number;
+  /** Registrations in `waitlisted` status (RS005 F4) — carried through to
+   *  the row-click config panel's Money section, which warns an organiser
+   *  editing the fee that promoting any of these re-prices them at the
+   *  LIVE fee. Not read by this row card itself. */
+  waitlisted: number;
 }
 
 /** Everything the row needs that is NOT per-division — computed once by the
