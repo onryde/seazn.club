@@ -1533,6 +1533,50 @@ export async function publicRegistrationInfo(
 // whole-branch review — zero production callers repo-wide, dead since W2).
 
 /**
+ * Payment-integrity fix: `createRegistrationCheckout` overwrites
+ * `registration_groups.checkout_session_id` every time it mints — nothing
+ * expired the session it replaced, so a registrant who clicks "Pay now"
+ * twice (an abandoned tab resumed, a reminder email re-minting the same
+ * still-open session) leaves a SECOND live, payable Stripe session behind
+ * for ~24h. Paying both is already handled (confirmPaidRegistration's
+ * `kind: "duplicate"` auto-refund), but preventing the second charge is
+ * better than reversing it days later.
+ *
+ * Must NOT fire for a DISJOINT prior session: `registrationIds` is an
+ * explicit subset (a waitlist promotion pays one entry while its siblings
+ * stay separately payable), but `registration_groups` has only ONE
+ * `checkout_session_id` column shared by the whole cart — so the "prior"
+ * session this reads back could belong to a sibling entry's own, still-
+ * legitimate mint. Expired ONLY when BOTH: the prior session is still
+ * `open` (a `complete` session is a paid session — never touch it), AND its
+ * own `registration_ids` metadata intersects the ids being minted now.
+ *
+ * Best-effort, like every other Stripe side-call in this file: never blocks
+ * minting the new session, never surfaces to the registrant.
+ */
+async function expireSupersededCheckoutSession(
+  priorSessionId: string,
+  newRegistrationIds: string[],
+): Promise<void> {
+  try {
+    const prior = await getStripe().checkout.sessions.retrieve(priorSessionId);
+    if (prior.status !== "open") return; // paid/expired/foreign — never touch it
+    const priorIds = checkoutRegistrationIds(prior);
+    if (!priorIds.some((id) => newRegistrationIds.includes(id))) return; // disjoint — a legitimate sibling session
+    await getStripe().checkout.sessions.expire(priorSessionId);
+    log.info(
+      { priorSessionId, newRegistrationIds },
+      "registration: expired a superseded checkout session on re-mint",
+    );
+  } catch (err) {
+    log.error(
+      { err, priorSessionId },
+      "registration: failed to expire a superseded checkout session — the new session still mints",
+    );
+  }
+}
+
+/**
  * Runs a Checkout Session create and translates Stripe's `amount_too_small`
  * refusal into a clean 422 with a stable code. Everything else rethrows
  * untouched — a blanket catch here would hide real integration failures behind
@@ -1699,6 +1743,12 @@ async function createRegistrationCheckout(
     cancel_url: `${returnBase}&checkout=cancelled`,
   }));
   if (!session.url) throw new HttpError(502, "Stripe did not return a checkout URL");
+  // Payment-integrity fix: `firstEntry.checkout_session_id` is still the
+  // PRIOR value here — the update below hasn't run yet. Best-effort; never
+  // blocks stamping the new session even if the expire attempt fails.
+  if (firstEntry.checkout_session_id) {
+    await expireSupersededCheckoutSession(firstEntry.checkout_session_id, registrationIds);
+  }
   // checkout_session_id/fee_percent live on the cart (V364) — one row to
   // stamp regardless of how many entries this session covers.
   await sql`
