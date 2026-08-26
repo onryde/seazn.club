@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import type { FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
@@ -10,6 +12,50 @@ import type {
   DivisionOption,
 } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 
+/** The minimal structural slice of a form control `buildFilteredHref` reads
+ *  — deliberately NOT `HTMLInputElement`/`Element`: `form.elements`
+ *  (`HTMLFormControlsCollection`) types its members as bare `Element` with
+ *  no `.name`/`.value` of its own, so the real call site below casts into
+ *  this shape too, and a plain array of these satisfies it directly in
+ *  tests with no DOM and no cast — see buildFilteredHref's own comment for
+ *  why `form.elements` rather than `FormData(form)`. */
+type FilterFormElement = { name: string; value: string; type?: string; checked?: boolean };
+
+/**
+ * Task 2 (RS005 R5): a filter change used to navigate to e.g.
+ * `?tab=registrants&status=confirmed&division_id=&kind=&q=&sort=newest` —
+ * every EMPTY control still contributed its key, because a native GET
+ * submission serialises every named field regardless of value. The tab's
+ * URL is a shareable/bookmarkable artefact (the entire reason the filters
+ * are a GET form), so it should carry only what an organiser actually SET.
+ *
+ * Reads `form.elements` (an `HTMLFormControlsCollection` in production) —
+ * never `FormData(form)`, which needs a real `HTMLFormElement` that this
+ * workspace's `environment: "node"` vitest config (no jsdom,
+ * `_hook-harness.tsx`'s own header comment) can never construct; typed
+ * against the minimal `FilterFormElement` shape instead so a plain array
+ * stands in for it in tests, and the exact resulting query string is
+ * directly assertable without a DOM. A checkbox contributes its value only
+ * while checked, matching the API's own 0/1 convention (the same
+ * convention `registrantsQueryString` — registration-hub-registrant-
+ * derive.ts's CSV export href — already uses); every other listed control
+ * (text/select/hidden, `tab` included) contributes unconditionally, empty
+ * string included — filtered out below rather than special-cased, so `tab`
+ * needs no carve-out: its value is simply never empty.
+ */
+export function buildFilteredHref(action: string, elements: ArrayLike<FilterFormElement>): string {
+  const params = new URLSearchParams();
+  for (const el of Array.from(elements)) {
+    if (!el.name) continue;
+    if (el.type === "checkbox" || el.type === "radio") {
+      if (el.checked) params.set(el.name, el.value);
+      continue;
+    }
+    if (el.value !== "") params.set(el.name, el.value);
+  }
+  return `${action}?${params.toString()}`;
+}
+
 /** How long the search box waits after the last keystroke before it
  *  navigates — long enough that a normal typing cadence never fires a
  *  submit per character, short enough that the result still feels live. */
@@ -17,21 +63,28 @@ const SEARCH_DEBOUNCE_MS = 300;
 
 /**
  * Registration hub — Registrants tab filter bar (RS005 W2a task 3, R4 task
- * 1 auto-submit).
+ * 1 auto-submit, R5 task 2 URL filtering).
  *
- * Still a `<form method="GET">`, and that is still the ENTIRE submission
- * mechanism — URL state, bookmarking, the back button and shareable views
- * all keep working exactly as before. What changed is WHO presses submit:
- * every control now calls the browser's real `form.requestSubmit()` itself
- * (via the changed element's own `.form` reference — no ref, no hand-rolled
- * query-string building) the moment it changes, so the organiser never
- * clicks a button that no longer exists. The owner's ruling (2026-08-26):
- * this console does not work without JS anyway (the config panel, the
- * action controls and the copy buttons are all client islands already), so
- * there is no no-JS fallback to preserve here either.
+ * Still a `<form method="GET">` — URL state, bookmarking, the back button
+ * and shareable views all keep working — but it is no longer the browser's
+ * OWN unfiltered submission that lands: every control calls the browser's
+ * real `form.requestSubmit()` itself (via the changed element's own `.form`
+ * reference) the moment it changes, exactly as before, but that submission
+ * (Enter-key implicit submission included) now runs through THIS
+ * component's own `onSubmit`, which reads the form's current fields,
+ * drops the empty ones (`buildFilteredHref`, above — a native GET
+ * submission serialises every named control regardless of value, which is
+ * exactly the noise task 2 removes), and navigates with `router.push`
+ * rather than letting the browser build the query string. `push`, not
+ * `replace`: each change is still its own back-button stop, matching what
+ * the native submission already did. The owner's ruling (2026-08-26): this
+ * console does not work without JS anyway (the config panel, the action
+ * controls and the copy buttons are all client islands already), so there
+ * is no no-JS fallback to preserve beyond the markup itself degrading to a
+ * plain (unfiltered) GET.
  *
- * A CLIENT component now (it wasn't before) purely because auto-submit
- * needs `onChange` handlers, which only a client component can attach.
+ * A CLIENT component (auto-submit needs `onChange` handlers, which only a
+ * client component can attach, and `onSubmit`/`useRouter` need one too).
  * `t` comes from `@/lib/i18n-runtime`, NOT `@/lib/i18n` — the latter's
  * `server-only` import poisons the whole module for a client bundle even
  * though `t` itself is pure (gotcha 6 in the original W2a dispatch); both
@@ -44,7 +97,11 @@ const SEARCH_DEBOUNCE_MS = 300;
  * search box's caret and in-progress text untouched by React while the
  * debounce timer is pending. A `useState`-controlled value would re-render
  * the input on every keystroke; an uncontrolled one is the DOM's own
- * problem, and the DOM never loses what the user just typed.
+ * problem, and the DOM never loses what the user just typed. It is ALSO
+ * why `onSubmit` has to re-read `form.elements` fresh rather than trust
+ * this component's own `filters`/`text` props: the props are last render's
+ * server-sanitised values, and the field that just changed is uncontrolled
+ * precisely so the DOM — not React — holds the truth in between.
  */
 export function RegistrationHubRegistrantFilters({
   dict,
@@ -75,6 +132,7 @@ export function RegistrationHubRegistrantFilters({
   statusOptions: readonly string[];
   kindOptions: readonly string[];
 }) {
+  const router = useRouter();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Flush any pending debounce on unmount — a navigation away (or the
@@ -85,6 +143,28 @@ export function RegistrationHubRegistrantFilters({
       if (debounceRef.current !== null) clearTimeout(debounceRef.current);
     };
   }, []);
+
+  // Task 2 (RS005 R5): the single interception point for every submission,
+  // however it was triggered — the onChange->requestSubmit() calls below,
+  // AND a native Enter-key implicit submission from the search box, which
+  // reaches here the same way since both fire the form's real `submit`
+  // event. `preventDefault` stops the browser's own (unfiltered) GET
+  // navigation; `buildFilteredHref` reads the CURRENT DOM state (never the
+  // `filters` prop — see the header comment) and drops empties.
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    // `.elements` types its members as bare `Element` (no `.name`/`.value`
+    // of their own) — every LISTED control here really is an input/select
+    // carrying both, `FilterFormElement`'s own comment explains why this
+    // is the cast site rather than a looser function signature.
+    const elements = e.currentTarget.elements as unknown as ArrayLike<{
+      name: string;
+      value: string;
+      type?: string;
+      checked?: boolean;
+    }>;
+    router.push(buildFilteredHref(action, elements));
+  }
 
   function clearPending() {
     if (debounceRef.current !== null) {
@@ -120,6 +200,7 @@ export function RegistrationHubRegistrantFilters({
     <form
       method="GET"
       action={action}
+      onSubmit={handleSubmit}
       data-registration-hub-registrant-filters
       className="card mb-4 flex flex-col gap-3 p-4 sm:flex-row sm:flex-wrap sm:items-end"
     >

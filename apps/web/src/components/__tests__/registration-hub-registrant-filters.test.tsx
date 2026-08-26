@@ -1,16 +1,35 @@
-// RS005 W2a task 3 / R4 task 1 — the Registrants tab's filter bar: a
-// `<form method="GET">` that now auto-submits itself (R4) rather than
-// waiting on a button click. Still shareable/back-buttonable — the FORM is
-// still the entire submission mechanism, JS just triggers it — but the
-// component is now a CLIENT one (auto-submit needs `onChange` handlers, and
-// the search box needs a debounce timer), so it renders through
-// `renderIsland` rather than a bare function call (`useRef`/`useEffect`
-// throw "Invalid hook call" outside React — see `_hook-harness.tsx`).
-import { describe, expect, it, vi } from "vitest";
+// RS005 W2a task 3 / R4 task 1 / R5 task 2 — the Registrants tab's filter
+// bar: a `<form method="GET">` that auto-submits itself (R4) rather than
+// waiting on a button click. The component is a CLIENT one (auto-submit
+// needs `onChange` handlers, the search box needs a debounce timer), so it
+// renders through `renderIsland` rather than a bare function call
+// (`useRef`/`useEffect` throw "Invalid hook call" outside React — see
+// `_hook-harness.tsx`).
+//
+// R5 task 2: every submit now goes through ONE `onSubmit` handler (native
+// Enter-key submission included, not just the onChange->requestSubmit()
+// path below) that reads the form's CURRENT fields, drops the empty ones,
+// and navigates with `router.push` — before this, a native GET submission
+// serialised EVERY named control regardless of value, so changing one
+// filter left `&division_id=&kind=&q=` noise in an otherwise-shareable URL.
+// `useRouter` throws outside a real Next tree the same way `useConfirm`
+// does (see registration-hub-registrant-actions.test.tsx's own header
+// comment) — the harness's `useContext` only ever returns a context's
+// DEFAULT, and nothing here mounts a provider, so the whole module is
+// mocked rather than relying on that fallback.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
-import { RegistrationHubRegistrantFilters } from "@/components/registration-hub-registrant-filters";
+import {
+  RegistrationHubRegistrantFilters,
+  buildFilteredHref,
+} from "@/components/registration-hub-registrant-filters";
 import { getDictionary, t } from "@/lib/i18n";
 import type { RegistrantsFilters, DivisionOption } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
+
+const nav = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: nav.push }),
+}));
 
 const dict = await getDictionary("en", "ui");
 
@@ -66,6 +85,10 @@ function form(tree: ReturnType<typeof render>) {
   return tree.find((e) => e.type === "form")!;
 }
 
+beforeEach(() => {
+  nav.push.mockClear();
+});
+
 /** A fake changed-control event, shaped exactly like the one every onChange
  *  handler in this component reads: `e.target.form`. Plain data, no DOM. */
 function changeEvent(fakeForm: { requestSubmit: () => void }) {
@@ -73,11 +96,18 @@ function changeEvent(fakeForm: { requestSubmit: () => void }) {
 }
 
 describe("RegistrationHubRegistrantFilters — the form itself", () => {
-  it("is a plain GET form posting to the given action — no client JS needed to render it", () => {
+  it("is a GET form posting to the given action — the markup itself degrades to a plain (unfiltered) submission with no JS", () => {
     const f = form(render());
     expect(propsOf(f).method).toBe("GET");
     expect(propsOf(f).action).toBe(ACTION);
-    expect(propsOf(f).onSubmit).toBeUndefined();
+  });
+
+  // R5 task 2: submission is now intercepted so the resulting URL can be
+  // filtered — see "auto-submit URL filtering" below for what it does with
+  // the submission once caught.
+  it("intercepts submission via onSubmit rather than letting the browser build the query string itself", () => {
+    const f = form(render());
+    expect(typeof propsOf(f).onSubmit).toBe("function");
   });
 
   it("carries a hidden tab=registrants input, so the action's bare path plus the form fields reconstructs ?tab=registrants on submit", () => {
@@ -353,5 +383,131 @@ describe("responsive layout", () => {
     const kids = walk(groupDiv);
     expect(kids.some((e) => e.type === "input" && propsOf(e).name === "free_agent")).toBe(true);
     expect(kids.some((e) => e.type === "input" && propsOf(e).name === "consent_pending")).toBe(true);
+  });
+});
+
+// RS005 R5 task 2: a filter change used to navigate to
+// `?tab=registrants&status=confirmed&division_id=&kind=&q=&sort=newest` —
+// every EMPTY control still contributed its key, because a native GET
+// submission serialises every named field regardless of value. The tab's
+// URL is the shareable/bookmarkable artefact (the entire reason the filters
+// are a GET form), so it should carry only what's actually SET.
+describe("buildFilteredHref — the pure filtering logic (RS005 R5 task 2)", () => {
+  // A plain array stands in for `form.elements` (an HTMLFormControlsCollection)
+  // — this suite runs `environment: "node"` with no jsdom (_hook-harness.tsx's
+  // own header comment), so a real HTMLFormElement/FormData is never
+  // available; buildFilteredHref is written against `ArrayLike<...>`
+  // specifically so this plain-array fixture IS what a real form.elements
+  // would look like to it, not a stand-in for something richer.
+  function el(name: string, value: string, extra: { type?: string; checked?: boolean } = {}) {
+    return { name, value, ...extra };
+  }
+
+  it("keeps only non-empty fields, in URLSearchParams order", () => {
+    const href = buildFilteredHref(ACTION, [
+      el("tab", "registrants"),
+      el("status", "confirmed"),
+      el("division_id", ""),
+      el("kind", ""),
+      el("q", ""),
+      el("sort", "newest"),
+    ]);
+    expect(href).toBe(`${ACTION}?tab=registrants&status=confirmed&sort=newest`);
+  });
+
+  it("drops a filter's key ENTIRELY once cleared back to empty — never an empty `key=`", () => {
+    const href = buildFilteredHref(ACTION, [el("tab", "registrants"), el("status", "")]);
+    expect(href).not.toContain("status");
+    expect(href).not.toContain("status=");
+  });
+
+  it("includes a checkbox's value only while checked, mirroring the API's own 1/0 convention", () => {
+    const checked = buildFilteredHref(ACTION, [
+      el("tab", "registrants"),
+      el("free_agent", "1", { type: "checkbox", checked: true }),
+    ]);
+    expect(checked).toContain("free_agent=1");
+
+    const unchecked = buildFilteredHref(ACTION, [
+      el("tab", "registrants"),
+      el("free_agent", "1", { type: "checkbox", checked: false }),
+    ]);
+    expect(unchecked).not.toContain("free_agent");
+  });
+
+  it("skips a field with no name at all (defensive — form.elements can include unnamed controls)", () => {
+    const href = buildFilteredHref(ACTION, [el("tab", "registrants"), el("", "stray")]);
+    expect(href).toBe(`${ACTION}?tab=registrants`);
+  });
+
+  it("carries tab=registrants through unchanged when it is the only real value", () => {
+    const href = buildFilteredHref(ACTION, [
+      el("tab", "registrants"),
+      el("status", ""),
+      el("division_id", ""),
+      el("kind", ""),
+      el("q", ""),
+      el("sort", ""),
+    ]);
+    expect(href).toBe(`${ACTION}?tab=registrants`);
+  });
+});
+
+describe("auto-submit URL filtering — wired through onSubmit (RS005 R5 task 2)", () => {
+  // Shaped exactly like the fake `changeEvent()` above: plain data standing
+  // in for the one thing the handler actually reads — here, a submit
+  // event's `currentTarget.elements`.
+  function submitEvent(elements: { name: string; value: string; type?: string; checked?: boolean }[]) {
+    return { preventDefault: vi.fn(), currentTarget: { elements } };
+  }
+
+  // "Baseline" here means every NARROWING filter is empty — `sort` isn't
+  // one of those (hasActiveFilters's own doc comment: "sort is deliberately
+  // excluded, it only orders") and its `<select>` has no blank option in
+  // this component at all, so it always carries a real value, "newest"
+  // included.
+  const BASELINE_ELEMENTS = [
+    { name: "tab", value: "registrants" },
+    { name: "status", value: "" },
+    { name: "division_id", value: "" },
+    { name: "kind", value: "" },
+    { name: "q", value: "" },
+    { name: "sort", value: "newest" },
+    { name: "free_agent", value: "1", type: "checkbox", checked: false },
+    { name: "consent_pending", value: "1", type: "checkbox", checked: false },
+  ];
+
+  it("calls preventDefault — the browser's own unfiltered navigation never happens", () => {
+    const f = form(render());
+    const e = submitEvent(BASELINE_ELEMENTS);
+    (propsOf(f).onSubmit as (e: unknown) => void)(e);
+    expect(e.preventDefault).toHaveBeenCalledTimes(1);
+  });
+
+  it("navigates via router.push to a URL carrying only the fields actually set", () => {
+    const f = form(render());
+    const e = submitEvent([
+      { name: "tab", value: "registrants" },
+      { name: "status", value: "confirmed" },
+      { name: "division_id", value: "" },
+      { name: "kind", value: "" },
+      { name: "q", value: "" },
+      { name: "sort", value: "newest" },
+    ]);
+    (propsOf(f).onSubmit as (e: unknown) => void)(e);
+    expect(nav.push).toHaveBeenCalledTimes(1);
+    expect(nav.push).toHaveBeenCalledWith(`${ACTION}?tab=registrants&status=confirmed&sort=newest`);
+  });
+
+  it("carries only tab=registrants and sort — the noise-free baseline once every NARROWING filter is empty", () => {
+    const f = form(render());
+    (propsOf(f).onSubmit as (e: unknown) => void)(submitEvent(BASELINE_ELEMENTS));
+    expect(nav.push).toHaveBeenCalledWith(`${ACTION}?tab=registrants&sort=newest`);
+  });
+
+  it("uses router.push, not replace — a change is still its own back-button stop, same as the native submission it replaces", () => {
+    const f = form(render());
+    (propsOf(f).onSubmit as (e: unknown) => void)(submitEvent(BASELINE_ELEMENTS));
+    expect(nav.push).toHaveBeenCalled();
   });
 });
