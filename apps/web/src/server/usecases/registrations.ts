@@ -981,7 +981,17 @@ async function buildCartMail(
     select contact_email, locale, ref_code, amount_cents, currency, expires_at,
            payment_method, competition_id
     from registration_groups where id = ${groupId}`;
-  if (!group) return null;
+  if (!group) {
+    // Silent before RS005 F1: a caller (notifySubmitted, resendRegistration-
+    // Confirmation, buildDisputeEvidence) just got a null it could not
+    // explain — the dispute-evidence caller in particular falls back to a
+    // placeholder that reads as "no receipt was sent" on a document
+    // submitted to Stripe as evidence. Should not happen in practice
+    // (registrations FK to their group), which is exactly why it needs a
+    // trace when it does.
+    log.error({ groupId }, "registration: buildCartMail found no group for this id — cart mail cannot be built");
+    return null;
+  }
 
   const entries = await sql<
     { id: string; division_id: string; display_name: string; status: RegistrationRow["status"]; amount_cents: number }[]
@@ -989,17 +999,43 @@ async function buildCartMail(
     select id, division_id, display_name, status, amount_cents
     from registrations where group_id = ${groupId}
     order by created_at, id`;
-  if (entries.length === 0) return null;
+  if (entries.length === 0) {
+    // Same "should not happen, but must not be invisible if it does" as the
+    // !group branch above — see this function's own doc comment on this
+    // defensive no-op.
+    log.error({ groupId }, "registration: buildCartMail's group has no entries — cart mail cannot be built");
+    return null;
+  }
 
   const ctx = await divisionCtx(sql, entries[0]!.division_id);
 
+  // The cart's payable subtotal, derived FRESH from the entries actually in
+  // it right now — never `group.amount_cents` (RS005 F1 finding 2). That
+  // column is a SUBMIT-TIME snapshot (registration-submit.ts's own
+  // `subtotal`) with exactly one other writer: `promoteWaitlistedRow`
+  // updates the promoted entry's own `registrations.amount_cents` but never
+  // this mirror, so a cart mail rebuilt after a promotion (resend, dispute
+  // evidence) read a stale 0 for an entry that now genuinely owes money.
+  // Summing the live entries here — the same "non-waitlisted" rule
+  // submit-time subtotal itself uses — self-heals regardless of which
+  // entry-level writer last touched a fee, matching this function's own
+  // re-select-fresh-state convention (see its doc comment re
+  // `mintGroupCheckout`) rather than adding a second mirror write that can
+  // drift again the next time a new promotion-shaped writer appears.
+  const totalCents = entries.reduce(
+    (sum, e) => sum + (e.status === "waitlisted" ? 0 : e.amount_cents),
+    0,
+  );
+
   // Same gate `notifyPromoted` uses for its single entry: offline AND money
-  // actually owed. A cart's paid divisions share one payment_method
-  // (assertUniformPaymentMethod at submit), so the first entry that still
-  // carries a fee is representative of the whole cart, not a guess across
-  // divisions that disagree.
+  // actually owed — reading the SAME derived `totalCents` above, not the
+  // stale column, for the identical reason (a promotion into an offline
+  // cart must surface its instructions too).  A cart's paid divisions
+  // share one payment_method (assertUniformPaymentMethod at submit), so
+  // the first entry that still carries a fee is representative of the
+  // whole cart, not a guess across divisions that disagree.
   let paymentInstructions: string | null = null;
-  if (group.payment_method === "offline" && group.amount_cents > 0) {
+  if (group.payment_method === "offline" && totalCents > 0) {
     const firstPaid = entries.find((e) => e.amount_cents > 0) ?? entries[0]!;
     const settings = await loadSettings(sql, firstPaid.division_id);
     paymentInstructions = settings?.payment_instructions ?? ctx.payment_instructions;
@@ -1017,7 +1053,7 @@ async function buildCartMail(
       orgName: ctx.org_name,
       competitionName: ctx.comp_name,
       entries: entries.map((e) => ({ displayName: e.display_name, status: e.status, feeCents: e.amount_cents })),
-      totalCents: group.amount_cents,
+      totalCents,
       currency: group.currency,
       paymentInstructions,
       payUrl,
@@ -1051,10 +1087,15 @@ export async function notifySubmitted(
 ): Promise<void> {
   try {
     const mail = await buildCartMail(groupId, origin, token, payUrl);
-    if (!mail) return;
+    if (!mail) return; // buildCartMail already logged why
     await sendRegistrationEmail({ to: mail.to, locale: toLocale(mail.locale), ...mail.args });
-  } catch {
-    /* fire-and-forget */
+  } catch (err) {
+    // RS005 F1 (owner: new code ships logging, 2026-08-12) — this used to
+    // swallow silently. That is exactly how the single biggest finding of
+    // this session went unnoticed for weeks: the confirmation send failed
+    // and nothing recorded it. Still fire-and-forget — the point is that a
+    // failure stops being invisible, not that submit starts failing.
+    log.error({ err, groupId }, "registration: submit confirmation send failed");
   }
 }
 
@@ -1083,14 +1124,30 @@ export async function resendRegistrationConfirmation(
   // Guarded HERE and not only in the UI: the button gate is a courtesy, this
   // is the rule. The route is reachable directly with a session or an API key.
   if (isTerminalRegistrationStatus(reg.status)) {
+    // RS005 F1: an organiser clicking Resend and getting a 422 with nothing
+    // recorded anywhere left no trace of who tried what on which entry.
+    log.warn(
+      { registrationId: regId, orgId: auth.orgId, actorId: auth.userId, status: reg.status },
+      "registration: confirmation resend refused — entry is terminal",
+    );
     throw new HttpError(
       422,
       `This registration is ${reg.status} — a confirmation would tell the registrant they are entered`,
     );
   }
   const mail = await buildCartMail(reg.group_id, origin, null, null);
-  if (!mail) return { sent: false };
+  if (!mail) return { sent: false }; // buildCartMail already logged why
   const sent = await sendRegistrationEmail({ to: mail.to, locale: toLocale(mail.locale), ...mail.args });
+  if (!sent) {
+    // Same standing rule as the terminal-refusal branch above: an organiser
+    // clicking Resend and getting nothing must leave a trace, distinct from
+    // the generic provider-level warn in lib/email.ts (which carries no
+    // registration/actor context to tie back to this click).
+    log.warn(
+      { registrationId: regId, orgId: auth.orgId, actorId: auth.userId, groupId: reg.group_id, to: mail.to },
+      "registration: confirmation resend — email provider did not accept the send",
+    );
+  }
   await withTenant(auth.orgId, (tx) =>
     audit(
       tx,

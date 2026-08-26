@@ -40,13 +40,33 @@ vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
 // Observe the dispute-lost organiser email without touching the rest of the
 // email module (send() is a no-op without RESEND_API_KEY either way).
+//
+// `registration` (RS005 F1) additionally wraps sendRegistrationEmail: every
+// call still forwards to the REAL implementation (so its actual rendered
+// subject/html/text — via the real registrationTemplate — stays observable
+// through the captured `RegistrationEmail` opts), but `forceResult`/
+// `forceError` let a single test override just the provider outcome
+// deterministically, without depending on whether RESEND_API_KEY happens to
+// be set in this environment.
 const emailMock = vi.hoisted(() => ({
   disputeLost: vi.fn().mockResolvedValue(true),
+  registration: vi.fn(),
+  forceRegistrationResult: null as boolean | null,
+  forceRegistrationError: null as Error | null,
 }));
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendDisputeLostEmail: emailMock.disputeLost,
-}));
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return {
+    ...actual,
+    sendDisputeLostEmail: emailMock.disputeLost,
+    sendRegistrationEmail: async (opts: Parameters<typeof actual.sendRegistrationEmail>[0]) => {
+      emailMock.registration(opts);
+      if (emailMock.forceRegistrationError) throw emailMock.forceRegistrationError;
+      if (emailMock.forceRegistrationResult !== null) return emailMock.forceRegistrationResult;
+      return actual.sendRegistrationEmail(opts);
+    },
+  };
+});
 
 // #267 T3 (SPEC-5 §2): a targeted, org-id-scoped walletIdFor failure, so the
 // referral best-effort test can force the referrer grant to throw without
@@ -105,7 +125,18 @@ import {
   registrationIcs,
   resumeRegistrationCheckout,
   mintGroupCheckout,
+  promoteOldestWaitlisted,
+  buildDisputeEvidence,
+  resendRegistrationConfirmation,
+  notifySubmitted,
 } from "../registrations";
+// RS005 F1: rendering the REAL production template off captured
+// `RegistrationEmail` args (see emailMock.registration above) — this file's
+// own convention for "assert the rendered text, not just that it sent",
+// same email-builders.test.ts fixture (emailsEn) other suites already use.
+import { registrationTemplate } from "@/lib/email-templates";
+import emailsEn from "@/dictionaries/en/emails.json";
+import type { Dict } from "@/lib/i18n";
 // The legacy `eligibilityIssues` string[] wrapper these pure tests used to
 // call was deleted at its source (RS002 W5 whole-branch review — zero
 // production callers repo-wide). Re-plumbed through the surviving evaluator
@@ -246,6 +277,9 @@ beforeEach(() => {
   stripeMock.reversalCreate.mockReset().mockResolvedValue({ id: "trr_test_1" });
   stripeMock.reversalList.mockReset().mockResolvedValue({ data: [] });
   emailMock.disputeLost.mockClear();
+  emailMock.registration.mockClear();
+  emailMock.forceRegistrationResult = null;
+  emailMock.forceRegistrationError = null;
 });
 
 afterEach(() => {
@@ -3370,5 +3404,193 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)",
       expect(ics).toContain("PRODID:-//seazn.club//registration//EN");
       expect(ics).not.toContain("PRODID:-//seazn.club//public-dashboard//EN");
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS005 F1 review: findings 1 & 2 — resend/promotion/dispute-evidence money
+// correctness (buildCartMail + registrationTemplate's "paid" gate)
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("RS005 F1 finding 1: a settled cart's resend does not re-demand money", () => {
+  it("resending confirmation for an offline-paid (now confirmed) entry omits the fee ask entirely", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE, fee_cents: 5000, payment_method: "offline",
+      payment_instructions: "Pay at the front desk",
+    });
+    const seeded = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Paid Team",
+    });
+    const confirmedRow = await markRegistrationPaidOffline(owner, seeded.registration.id);
+    expect(confirmedRow.status, "sanity: fully settled, not merely 'paid'").toBe("confirmed");
+
+    await resendRegistrationConfirmation(owner, seeded.registration.id, "https://test.local");
+    expect(emailMock.registration).toHaveBeenCalledTimes(1);
+    const sentArgs = emailMock.registration.mock.calls[0]![0] as Parameters<
+      typeof registrationTemplate
+    >[0] & { to: string; locale: string | null };
+
+    // The REAL template renders the args resendRegistrationConfirmation
+    // actually built — this is the "assert the rendered text, not just that
+    // it sent" bar, not a mock-behaviour assertion.
+    const rendered = registrationTemplate(sentArgs, emailsEn as Dict);
+    expect(rendered.html).not.toContain("Entry fee");
+    expect(rendered.text).not.toContain("Entry fee");
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS005 F1 finding 2: a promoted entry's mail/evidence carry its NEW fee", () => {
+  it("resending confirmation after a waitlist promotion carries the newly-owed fee, not the stale submit-time zero", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE, fee_cents: 1500, payment_method: "offline",
+      payment_instructions: "Pay at the front desk",
+    });
+    const waiting = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted",
+      displayName: "Waiting Team",
+    });
+    const promoted = await sql.begin((tx) => promoteOldestWaitlisted(tx, division.id, settings));
+    expect(promoted!.id).toBe(waiting.registration.id);
+    expect(promoted!.amount_cents, "sanity: the per-entry column IS updated by promotion").toBe(1500);
+
+    await resendRegistrationConfirmation(owner, promoted!.id, "https://test.local");
+    const sentArgs = emailMock.registration.mock.calls.at(-1)![0] as Parameters<
+      typeof registrationTemplate
+    >[0] & { to: string; locale: string | null };
+    // Before the fix: buildCartMail read the stale registration_groups.
+    // amount_cents (0 — the entry was waitlisted at submit time), so this
+    // was 0 and no fee panel rendered at all.
+    expect(sentArgs.totalCents).toBe(1500);
+    const rendered = registrationTemplate(sentArgs, emailsEn as Dict);
+    expect(rendered.html).toContain("Entry fee: £15.00");
+  });
+
+  it("the dispute-evidence pack's reconstructed receipt agrees with its own Amount row after a promotion", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE, fee_cents: 1500, payment_method: "offline",
+      payment_instructions: "Pay at the front desk",
+    });
+    const waiting = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted",
+      displayName: "Waiting Team",
+    });
+    const promoted = await sql.begin((tx) => promoteOldestWaitlisted(tx, division.id, settings));
+    expect(promoted!.id).toBe(waiting.registration.id);
+
+    const pack = await buildDisputeEvidence(owner, promoted!.id, "https://test.local");
+    // Amount row: this entry's own fee, straight off registrations.amount_cents
+    // (promoteWaitlistedRow already updates this correctly — never the bug).
+    expect(pack.html).toContain("15.00 GBP");
+    // The reconstructed receipt must AGREE. Before the fix it read the
+    // cart's stale submit-time (waitlisted then ⇒ 0) subtotal and rendered
+    // no fee panel at all — a receipt contradicting the Amount row right
+    // above it in the same document, submitted to Stripe as evidence.
+    expect(pack.html).toContain("Entry fee: £15.00");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS005 F1 (owner, 2026-08-12 standing rule): new code ships logging. The
+// three swallowed/silent paths this wave's own W4 code introduced —
+// buildCartMail's two null returns, notifySubmitted's bare catch, and
+// resendRegistrationConfirmation's refusal/send-failure — all left an
+// organiser or a registrant getting nothing with zero trace anywhere.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("RS005 F1: swallowed registration-mail failures are now logged", () => {
+  it("resendRegistrationConfirmation logs the refusal on a terminal entry, with the actor and registration id", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, fee_cents: 0 });
+    const seeded = await seedRegistration(competition.id, division.id, settings);
+    await withdrawRegistrationOrganiser(owner, seeded.registration.id);
+
+    const spy = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+    await expect(
+      resendRegistrationConfirmation(owner, seeded.registration.id, "https://test.local"),
+    ).rejects.toThrow(HttpError);
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({
+      registrationId: seeded.registration.id,
+      orgId,
+      actorId: ownerId,
+    });
+    expect(spy.mock.calls[0]?.[1]).toContain("resend refused");
+    spy.mockRestore();
+  });
+
+  it("resendRegistrationConfirmation logs when the provider does not accept the send", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, fee_cents: 0 });
+    const seeded = await seedRegistration(competition.id, division.id, settings);
+    emailMock.forceRegistrationResult = false;
+
+    const spy = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+    const result = await resendRegistrationConfirmation(owner, seeded.registration.id, "https://test.local");
+    expect(result.sent).toBe(false);
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls.at(-1)?.[0]).toMatchObject({ registrationId: seeded.registration.id, orgId });
+    expect(spy.mock.calls.at(-1)?.[1]).toContain("did not accept");
+    spy.mockRestore();
+  });
+
+  it("buildCartMail (via notifySubmitted) logs when the group cannot be found", async () => {
+    const missingGroupId = randomUUID();
+    const spy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+
+    await expect(
+      notifySubmitted(missingGroupId, "https://test.local", "tok_x", null),
+    ).resolves.toBeUndefined(); // still fire-and-forget — never throws
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({ groupId: missingGroupId });
+    expect(spy.mock.calls[0]?.[1]).toContain("no group");
+    spy.mockRestore();
+  });
+
+  it("buildCartMail (via notifySubmitted) logs when the group has no entries", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition } = await rig(owner);
+    const [{ id: groupId }] = await sql<{ id: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, access_token_hash, amount_cents, currency)
+      values (${competition.id}, 'Ghost', 'ghost@test.local', ${randomUUID()}, 0, 'gbp')
+      returning id`;
+    const spy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+
+    await notifySubmitted(groupId, "https://test.local", "tok_x", null);
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({ groupId });
+    expect(spy.mock.calls[0]?.[1]).toContain("no entries");
+    spy.mockRestore();
+  });
+
+  it("notifySubmitted logs (never throws) when the send itself throws", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, fee_cents: 0 });
+    const seeded = await seedRegistration(competition.id, division.id, settings);
+    const boom = new Error("provider exploded");
+    emailMock.forceRegistrationError = boom;
+
+    const spy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+    await expect(
+      notifySubmitted(seeded.registration.group_id, "https://test.local", seeded.access_token, null),
+    ).resolves.toBeUndefined(); // fire-and-forget semantics preserved
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({ err: boom, groupId: seeded.registration.group_id });
+    expect(spy.mock.calls[0]?.[1]).toContain("submit confirmation");
+    spy.mockRestore();
   });
 });

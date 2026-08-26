@@ -541,6 +541,59 @@ describe("email builders compose from the html templates", () => {
     expect(out.text).not.toContain("Team Waitlisted — Waitlisted (");
   });
 
+  // RS005 F1 finding 1: reusing this cart-shaped template for a RESEND (or a
+  // dispute-evidence reconstruction) on an already-settled entry must not
+  // re-ask for money already given — `totalCents` alone (the cart's whole
+  // historical subtotal) can't tell "still owed" from "already collected".
+  it("a settled (paid/confirmed) single entry gets no fee panel at all on resend/reconstruction", () => {
+    for (const status of ["paid", "confirmed"] as const) {
+      const out = registrationTemplate(
+        { ...registrationCartArgs, entries: [{ displayName: "Alex", status, feeCents: 2500 }] },
+        emailsEn as Dict,
+      );
+      expect(out.html, `status=${status}`).not.toContain("Entry fee");
+      expect(out.text, `status=${status}`).not.toContain("Entry fee");
+      // Not a blank/broken mail — the "received" framing still renders.
+      expect(out.html, `status=${status}`).toContain("Thanks Alex");
+    }
+  });
+
+  // Withdrawn/rejected/expired are the same "nothing left owed" case as
+  // paid/confirmed, just via a different route (the money was never
+  // collected AND never will be) — same gate, same expectation.
+  it("a withdrawn/rejected/expired single entry also gets no fee panel", () => {
+    for (const status of ["withdrawn", "rejected", "expired"] as const) {
+      const out = registrationTemplate(
+        { ...registrationCartArgs, entries: [{ displayName: "Alex", status, feeCents: 2500 }] },
+        emailsEn as Dict,
+      );
+      expect(out.html, `status=${status}`).not.toContain("Entry fee");
+    }
+  });
+
+  // A mixed cart must quote what is STILL owed, not the cart's whole
+  // historical subtotal (which would overstate it once one entry is
+  // already settled) — same underlying bug as the single-entry case above,
+  // just visible even when SOME money genuinely is still due.
+  it("a mixed cart's fee panel quotes only the entry still pending, not the whole cart's subtotal", () => {
+    const out = registrationTemplate(
+      {
+        ...registrationCartArgs,
+        entries: [
+          { displayName: "Already Paid", status: "confirmed", feeCents: 2500 },
+          { displayName: "Still Owing", status: "pending", feeCents: 1500 },
+        ],
+        // A caller might still pass the whole-cart historical subtotal here
+        // (registrations.ts's own `totalCents` field) — the template must
+        // not use it for the amount it quotes as due.
+        totalCents: 4000,
+      },
+      emailsEn as Dict,
+    );
+    expect(out.html).toContain("Entry fee: £15.00");
+    expect(out.html).not.toContain("£40.00");
+  });
+
   it("payment reminder without instructions points at the organiser", () => {
     const out = paymentReminderTemplate(
       { ...registrationArgs, paymentInstructions: null },

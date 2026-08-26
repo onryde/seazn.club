@@ -100,12 +100,27 @@ export function registrationTemplate(
   // state to lead with, so it always uses the neutral "received" framing
   // and lets the entries panel below carry the per-entry nuance.
   const waitlisted = single && first.status === "waitlisted";
-  // Cart-level, not summed from entries here: `totalCents` already excludes
-  // waitlisted entries (registrations.ts's own "payable subtotal" comment),
-  // so for a single non-waitlisted entry this is exactly opts.entries[0]'s
-  // own fee — byte-identical to the pre-cart `feeCents > 0 && !waitlisted`.
-  const paid = opts.totalCents > 0;
-  const amount = money(opts.totalCents, opts.currency);
+  // `totalCents` is the cart's whole payable SUBTOTAL — every non-waitlisted
+  // entry's fee, INCLUDING one that is already `paid`/`confirmed` (settled)
+  // or withdrawn/rejected (registrations.ts's buildCartMail sums exactly
+  // that). It answers "what did/does this cart cost", not "what is still
+  // owed right now" — and this template is reused for more than the fresh
+  // submit-time send: an organiser's resend on an already-settled entry, or
+  // a dispute-evidence reconstruction, both call it long after money changed
+  // hands. Gating the fee panel on `totalCents > 0` re-asked a PAID/
+  // CONFIRMED registrant for money they had already given (RS005 F1 finding
+  // 1) — `pending` is the one status that genuinely still owes: `paid`/
+  // `confirmed` already collected it, `waitlisted` never had a fee due, and
+  // withdrawn/rejected/expired never will again. Summing only THOSE
+  // entries' fees is what the payment block should gate and quote — for a
+  // fresh single-entry submit-time cart (the common case) every entry is
+  // `pending`, so this is byte-identical to the old `totalCents > 0`.
+  const owedCents = opts.entries.reduce(
+    (sum, e) => sum + (e.status === "pending" ? e.feeCents : 0),
+    0,
+  );
+  const paid = owedCents > 0;
+  const amount = money(owedCents, opts.currency);
   // Markdown instructions → plain text for the panel, with the registrant's
   // reference substituted for {{reference}}.
   const instructions = opts.paymentInstructions
