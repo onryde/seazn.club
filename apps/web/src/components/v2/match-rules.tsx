@@ -27,6 +27,21 @@ export interface RuleField {
    * own returns {} unconditionally.
    */
   build: (value: string, values: Record<string, string>) => Record<string, unknown>;
+  /**
+   * Inverse of `build`: given the division's saved config, return this
+   * field's current raw value (what the input should show on reopen), or
+   * `undefined` if there is nothing to show. Optional — a field with no
+   * `read` always reopens blank, same as every field did before
+   * R3.5/Task Q. Only implemented so far for the two fields that bug was
+   * actually reported against (shootoutWin/shootoutLoss): every other
+   * field's `build` above either writes a DIFFERENT key than `field.key`,
+   * derives a scaled/computed number, or chooses among several literal
+   * shapes — a correct generic inverse would have to be as bespoke as
+   * `build` itself, field by field, which is a bigger lift than this task
+   * scoped. Leaving it unimplemented is not a regression: those fields are
+   * exactly as blank-on-reopen as they always were.
+   */
+  read?: (config: Record<string, unknown>) => string | undefined;
 }
 
 const WIN_BY: RuleField = {
@@ -205,6 +220,10 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
             : {}),
         },
       }),
+      read: (config) => {
+        const points = config.points as { shootoutWin?: number } | undefined;
+        return points?.shootoutWin !== undefined ? String(points.shootoutWin) : undefined;
+      },
     },
     {
       key: "shootoutLoss",
@@ -221,6 +240,10 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
             : {}),
         },
       }),
+      read: (config) => {
+        const points = config.points as { shootoutLoss?: number } | undefined;
+        return points?.shootoutLoss !== undefined ? String(points.shootoutLoss) : undefined;
+      },
     },
     {
       key: "teamSize",
@@ -619,6 +642,26 @@ export function buildRuleOverride(
     if (value !== undefined && value !== "") Object.assign(override, field.build(value, values));
   }
   return override;
+}
+
+/**
+ * Initial `ruleValues` for MatchRuleFields, derived from the division's
+ * saved config through the SAME field list `buildRuleOverride` uses — so a
+ * field whose `build` nests/renames/scales its value only has to teach its
+ * own `read` the inverse, once, instead of a caller hand-listing keys per
+ * sport (R3.5/Task Q: `ruleValues` used to never hydrate at all, so every
+ * field showed blank on reopen no matter what was saved — most visibly
+ * Task I's shootoutWin/shootoutLoss, since a blank pair reads as "unset"
+ * and the engine gate requires both to be defined for the split to apply).
+ */
+export function hydrateRuleValues(sportKey: string, config: unknown): Record<string, string> {
+  const cfg = (config ?? {}) as Record<string, unknown>;
+  const values: Record<string, string> = {};
+  for (const field of SPORT_RULES[sportKey] ?? []) {
+    const value = field.read?.(cfg);
+    if (value !== undefined) values[field.key] = value;
+  }
+  return values;
 }
 
 /** The builder's field grid, extracted verbatim so both editors share it. */

@@ -9,7 +9,7 @@ import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { divisionAccent, monogram } from "@/lib/division-hue";
-import { MatchRuleFields, buildRuleOverride } from "./match-rules";
+import { MatchRuleFields, buildRuleOverride, hydrateRuleValues } from "./match-rules";
 import { STAGE_TEMPLATES, buildTemplateStages, clampKnob, detectTemplate, type StageDraft } from "./format-templates";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
@@ -186,6 +186,25 @@ export function currentQualifiedFromStages(
   return matched ? total : 4;
 }
 
+/**
+ * The standings-points editor's key names depend on the sport's pinned
+ * schema. `packages/engine/src/sports/generic/generic.ts:37-39` is the ONLY
+ * module using bare `w`/`d`/`l`; every other sport module spells them out —
+ * `packages/engine/src/sports/football/football.ts:110-112` (win/draw/loss,
+ * plus optional shootoutWin/shootoutLoss), cricket.ts, the period kernel
+ * (hockey/icehockey) and the nested kernel (tennis) all read `win`/`draw`/
+ * `loss` too. None of these `points` schemas is a Zod `.strict()` object, so
+ * sending the wrong set is not a validation error — the unknown keys are
+ * just silently dropped and the write never takes effect. (Cricket also has
+ * `tie`/`noResult`, and tennis has no `draw` at all — this editor only ever
+ * offers three boxes, so `win`/`draw`/`loss` is the closest schema-legal
+ * shape for every non-generic sport short of adding fields this task does
+ * not scope.)
+ */
+function standingsPointsKeyNames(sportKey: string): { win: string; draw: string; loss: string } {
+  return sportKey === "generic" ? { win: "w", draw: "d", loss: "l" } : { win: "win", draw: "draw", loss: "loss" };
+}
+
 export function DivisionSettings({
   division,
   orgId,
@@ -263,11 +282,17 @@ export function DivisionSettings({
   const [legs, setLegs] = useState(
     ((stages.find((st) => st.kind === "league" || st.kind === "group")?.config as { legs?: number } | null)?.legs) ?? 1,
   );
-  const cfg = (division.config ?? {}) as { points?: { w?: number; d?: number; l?: number }; progressScore?: boolean };
-  const [pointsW, setPointsW] = useState(cfg.points ? String(cfg.points.w ?? "") : "");
-  const [pointsD, setPointsD] = useState(cfg.points ? String(cfg.points.d ?? "") : "");
-  const [pointsL, setPointsL] = useState(cfg.points ? String(cfg.points.l ?? "") : "");
-  const [ruleValues, setRuleValues] = useState<Record<string, string>>({});
+  const cfg = (division.config ?? {}) as { points?: Record<string, number>; progressScore?: boolean };
+  // R3.5/Task Q — key names are sport-dependent (see standingsPointsKeyNames);
+  // reading `w`/`d`/`l` unconditionally left these three boxes blank for
+  // every sport but generic, even when the division had real saved points.
+  const pointsKeys = standingsPointsKeyNames(division.sport_key);
+  const [pointsW, setPointsW] = useState(cfg.points ? String(cfg.points[pointsKeys.win] ?? "") : "");
+  const [pointsD, setPointsD] = useState(cfg.points ? String(cfg.points[pointsKeys.draw] ?? "") : "");
+  const [pointsL, setPointsL] = useState(cfg.points ? String(cfg.points[pointsKeys.loss] ?? "") : "");
+  const [ruleValues, setRuleValues] = useState<Record<string, string>>(() =>
+    hydrateRuleValues(division.sport_key, division.config),
+  );
   const [advancedText, setAdvancedText] = useState("");
   // Entrants block (spec 2026-07-18): the ticked kinds, the default, and the
   // team extras seed from the resolved effective model.
@@ -414,12 +439,31 @@ export function DivisionSettings({
         delete override.resultMode;
         delete override.allowDraws;
       }
-      Object.assign(override, buildRuleOverride(division.sport_key, ruleValues));
-      if (pointsW !== "" || pointsD !== "" || pointsL !== "") {
+      // R3.5/Task Q — buildRuleOverride can return a nested `{ points: {...} }`
+      // (football's shootoutWin/shootoutLoss). A bare Object.assign of the
+      // whole rule override would REPLACE override.points wholesale, dropping
+      // whatever of the existing config's points (win/draw/loss, or a
+      // shootout half the organiser isn't touching right now) the rule
+      // fields didn't themselves resend. Merge points separately; everything
+      // else a rule field returns is a fine top-level Object.assign, exactly
+      // as before.
+      const { points: rulePoints, ...ruleOverrideRest } = buildRuleOverride(division.sport_key, ruleValues);
+      Object.assign(override, ruleOverrideRest);
+      if (rulePoints && typeof rulePoints === "object") {
         override.points = {
-          w: pointsW === "" ? (cfg.points?.w ?? 0) : Number(pointsW),
-          d: pointsD === "" ? (cfg.points?.d ?? 0) : Number(pointsD),
-          l: pointsL === "" ? (cfg.points?.l ?? 0) : Number(pointsL),
+          ...((override.points as Record<string, unknown>) ?? {}),
+          ...(rulePoints as Record<string, unknown>),
+        };
+      }
+      if (pointsW !== "" || pointsD !== "" || pointsL !== "") {
+        // Spread whatever survived above (shootout points included) rather
+        // than replacing override.points outright, and write the key names
+        // THIS sport's schema actually reads — see standingsPointsKeyNames.
+        override.points = {
+          ...((override.points as Record<string, unknown>) ?? {}),
+          [pointsKeys.win]: pointsW === "" ? (cfg.points?.[pointsKeys.win] ?? 0) : Number(pointsW),
+          [pointsKeys.draw]: pointsD === "" ? (cfg.points?.[pointsKeys.draw] ?? 0) : Number(pointsD),
+          [pointsKeys.loss]: pointsL === "" ? (cfg.points?.[pointsKeys.loss] ?? 0) : Number(pointsL),
         };
       }
       if (advancedText.trim() !== "") {
