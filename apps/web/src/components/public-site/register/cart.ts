@@ -461,3 +461,15 @@ export function summarizeCart(cart: CartState, divisions: readonly DivisionLike[
   });
   return { lines, subtotalCents, currency };
 }
+
+/** The division that decides the cart's payment PRESENTATION — step 5's
+ *  submit button label (register.submit.card/.fee) and its payment-method
+ *  note both read this, so the two can never disagree. The first line that
+ *  is actually charged now (not waitlisted/stale-closed, fee > 0); every
+ *  payable division in a cart shares one payment method by construction
+ *  (assertUniformPaymentMethod, registration-submit.ts), so any one of them
+ *  is representative. Undefined for an all-free/all-waitlisted cart — there
+ *  is nothing to describe how it's paid. */
+export function payableDivision(summary: CartSummary): DivisionLike | undefined {
+  return summary.lines.find((l) => !l.notChargedNow && l.division && l.division.fee_cents > 0)?.division;
+}

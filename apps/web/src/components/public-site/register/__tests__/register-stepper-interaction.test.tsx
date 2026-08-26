@@ -22,6 +22,14 @@
 // function component) — deepExpand() below is the flat-worklist fix for
 // that, expanding every opaque node it finds in one pass regardless of
 // nesting depth.
+// RS006 step 5 — mocks the submit POST. Hoisted so the factory below can
+// reference it (vi.mock is itself hoisted above every import by vitest's
+// transform) — same pattern as registration-submit.test.ts's refCodeMock.
+const apiV1Mock = vi.hoisted(() => ({ impl: vi.fn() }));
+vi.mock("@/lib/client-v1", () => ({
+  apiV1: (...args: unknown[]) => apiV1Mock.impl(...args),
+}));
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -35,8 +43,10 @@ import { EntryDetails } from "../entry-details";
 import { FormFields } from "../form-fields";
 import { RegisterStepper, type RegisterInfo } from "../register-stepper";
 import { RosterTable } from "../roster-table";
+import { StepConsent } from "../step-consent";
 import { StepDetails } from "../step-details";
 import { StepEntries } from "../step-entries";
+import { StepReview } from "../step-review";
 import { StepWho } from "../step-who";
 import { REGISTER_STATE_VERSION } from "../storage";
 import { EMPTY_CONTACT, type CartState, type DivisionLike } from "../types";
@@ -63,6 +73,8 @@ const OPAQUE: ComponentFn[] = [
   EntryDetails,
   RosterTable,
   FormFields,
+  StepConsent,
+  StepReview,
 ] as unknown as ComponentFn[];
 
 /** Flattens the WHOLE tree in one pass, including everything rendered
@@ -106,12 +118,26 @@ class MapStorage {
 }
 
 let fakeSessionStorage: MapStorage;
+// RS006 step 5 — this workspace has no jsdom (_hook-harness.tsx's own
+// header), so `window` does not exist at all unless stubbed: a submit test
+// whose success path reaches `window.location.assign` would otherwise throw
+// "window is not defined" INSIDE register-stepper.tsx's real code, not a
+// test assertion. Stubbed minimally, same "assign a browser global on
+// globalThis for the test's duration" convention as fakeSessionStorage
+// below — `assignMock` lets a test also confirm WHICH url was assigned,
+// computed independently via resolvePostSubmitNavigation's own (separately
+// unit-tested, submit.test.ts) logic rather than re-deriving it here.
+let assignMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   fakeSessionStorage = new MapStorage();
   (globalThis as { sessionStorage?: unknown }).sessionStorage = fakeSessionStorage;
+  assignMock = vi.fn();
+  (globalThis as { window?: unknown }).window = { location: { assign: assignMock } };
+  apiV1Mock.impl.mockReset();
 });
 afterEach(() => {
   delete (globalThis as { sessionStorage?: unknown }).sessionStorage;
+  delete (globalThis as { window?: unknown }).window;
 });
 
 const ORG_SLUG = "riverside";
@@ -160,6 +186,7 @@ const DIV_OPEN_2: DivisionLike = { ...DIV_OPEN, division_id: "div-open-2", name:
 function mount(divisions: DivisionLike[]) {
   const info: RegisterInfo = {
     competition: { name: "Test Cup", starts_on: "2026-09-01" },
+    org: { name: "Test Org" },
     divisions,
   };
   const island = renderIsland(
@@ -350,7 +377,14 @@ describe("RS006 — a registrant may self-link more than one cart entry", () => 
       key,
       JSON.stringify({
         version: REGISTER_STATE_VERSION,
-        contact: { name: "Alex Test", email: "alex@example.com", dob: "1990-01-01", gender: null },
+        contact: {
+          name: "Alex Test",
+          email: "alex@example.com",
+          dob: "1990-01-01",
+          gender: null,
+          guardian_name: null,
+          guardian_consent: false,
+        },
         imPlaying: true,
         cart: {
           entries: [
@@ -380,6 +414,7 @@ describe("RS006 — a registrant may self-link more than one cart entry", () => 
             },
           ],
         },
+        consent: { privacy_consent: false, media_consent: false },
         stepIndex: 1,
       }),
     );
@@ -494,9 +529,10 @@ describe("finding #5 — restoring a pristine saved snapshot never shows stale e
       key,
       JSON.stringify({
         version: REGISTER_STATE_VERSION,
-        contact: { name: "", email: "", dob: null, gender: null },
+        contact: { name: "", email: "", dob: null, gender: null, guardian_name: null, guardian_consent: false },
         imPlaying: false,
         cart: { entries: [] },
+        consent: { privacy_consent: false, media_consent: false },
         stepIndex: 0,
       }),
     );
@@ -843,6 +879,36 @@ function setByAriaLabel(island: ReturnType<typeof mount>["island"], label: strin
   (propsOf(el!).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
 }
 
+/** RosterTable's aria-label ("Player {n} — {field}") is scoped WITHIN one
+ *  entry's own roster, not globally unique — a cart with two individual
+ *  entries has two "Player 1 — Your name" fields. `.filter()` preserves
+ *  tree order (walk() is depth-first, and StepDetails renders one entry's
+ *  whole subtree before the next), so index 0/1/… lines up with cart.entries
+ *  order. */
+function allByAriaLabel(island: ReturnType<typeof mount>["island"], label: string) {
+  return island.tree().filter((e) => propsOf(e)["aria-label"] === label);
+}
+
+/** Always exactly 10 years old relative to whenever the suite actually
+ *  runs — a hardcoded dob would go stale the day it turns 18. Used by the
+ *  guardian-block tests below; every OTHER dob fixture in this file is a
+ *  fixed adult date (e.g. "1990-01-01"), which never goes stale in the
+ *  other direction. */
+function minorDob(): string {
+  const d = new Date();
+  d.setUTCFullYear(d.getUTCFullYear() - 10);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Finds an <input>/<select> by its `id` — step-consent.tsx/step-who.tsx's
+ *  own convention (mirrors WHO step fields, `id="reg-who-name"` etc.),
+ *  distinct from RosterTable's per-row aria-label scheme above. */
+function byId(island: ReturnType<typeof mount>["island"], id: string) {
+  const el = island.tree().find((e) => propsOf(e).id === id);
+  expect(el, `no field with id "${id}"`).toBeTruthy();
+  return el!;
+}
+
 describe("step 3 — the mixed-composition meter blocks an all-male roster and clears once fixed", () => {
   it("shows the unmet sentence, blocks Next; adding a female player clears both and unblocks", () => {
     const { island, stepWho, divisionCard, clickByText, pageText } = mount([DIV_OPEN, DIV_MIXED_TEAM]);
@@ -972,5 +1038,238 @@ describe("step 3 — pasting a roster via the textarea parses into named rows (p
     // The draft clears after a successful import.
     const clearedTextarea = island.tree().find((e) => e.type === "textarea");
     expect(propsOf(clearedTextarea!).value).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 4 — CONSENT
+// ---------------------------------------------------------------------------
+
+describe("step 4 — CONSENT", () => {
+  it("privacy consent is required to advance; media consent stays optional", () => {
+    const { stepWho, clickByText, pageText, island } = mount([DIV_OPEN]);
+    (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+    clickByText("Next"); // single open division collapses ENTRIES -> DETAILS
+    setByAriaLabel(island, "Player 1 — Your name", "Alex Test");
+    clickByText("Next"); // -> CONSENT
+
+    clickByText("Next"); // attempt to advance with no consent given — BLOCKED
+    expect(pageText()).toContain("Agree to the Privacy Policy to continue");
+
+    (propsOf(byId(island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({
+      target: { checked: true },
+    });
+
+    clickByText("Next"); // media consent never touched — must NOT block
+    expect(pageText()).toContain("Review & pay");
+  });
+
+  it("states owner ruling 5 plainly, at the moment of consent", () => {
+    const { stepWho, clickByText, pageText, island } = mount([DIV_OPEN]);
+    (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+    clickByText("Next"); // -> DETAILS
+    setByAriaLabel(island, "Player 1 — Your name", "Alex Test");
+    clickByText("Next"); // -> CONSENT
+    expect(pageText()).toContain(
+      "By default, your name appears publicly on this event's pages. You can switch to showing initials any time from your profile.",
+    );
+  });
+
+  it("the guardian block appears only for a self-registering minor, and blocks Next until both fields are given", () => {
+    const { stepWho, clickByText, pageText, island } = mount([DIV_OPEN]);
+    (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Young Player", email: "young@example.com", dob: minorDob() });
+    (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true); // auto-links the sole entry
+    clickByText("Next"); // -> DETAILS
+    setByAriaLabel(island, "Player 1 — Your name", "Young Player");
+    clickByText("Next"); // -> CONSENT
+
+    expect(pageText()).toContain("Under-18 entry — guardian consent");
+
+    (propsOf(byId(island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({
+      target: { checked: true },
+    });
+    clickByText("Next"); // privacy given, guardian info still missing — BLOCKED
+    expect(pageText()).toContain("Enter the guardian's name");
+    expect(pageText()).toContain("Guardian consent is required");
+
+    (propsOf(byId(island, "reg-guardian-name")).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Pat Guardian" },
+    });
+    clickByText("Next"); // name given, consent checkbox still missing — STILL BLOCKED
+    expect(pageText()).toContain("Guardian consent is required");
+    expect(pageText()).not.toContain("Enter the guardian's name");
+
+    (propsOf(byId(island, "reg-guardian-consent")).onChange as (e: { target: { checked: boolean } }) => void)({
+      target: { checked: true },
+    });
+    clickByText("Next"); // both given — unblocked
+    expect(pageText()).toContain("Review & pay");
+  });
+
+  it("never shows the guardian block for an adult contact, even when self-registering", () => {
+    const { stepWho, clickByText, pageText, island } = mount([DIV_OPEN]);
+    (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Adult Player", email: "adult@example.com", dob: "1990-01-01" });
+    (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true);
+    clickByText("Next"); // -> DETAILS
+    setByAriaLabel(island, "Player 1 — Your name", "Adult Player");
+    clickByText("Next"); // -> CONSENT
+    expect(pageText()).not.toContain("Under-18 entry — guardian consent");
+  });
+
+  it("the captain-roster notice appears when the cart names other people", () => {
+    const { stepWho, divisionCard, clickByText, pageText, island } = mount([DIV_OPEN, DIV_TEAM]);
+    (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Rep", email: "rep@example.com" });
+    clickByText("Next"); // -> ENTRIES (2 open divisions — not collapsed)
+    (propsOf(divisionCard("div-team")).onAddTeam as () => void)();
+    clickByText("Next"); // -> DETAILS
+    clickByText("+ Add player");
+    clickByText("+ Add player");
+    setByAriaLabel(island, "Player 1 — Your name", "Sam");
+    setByAriaLabel(island, "Player 2 — Your name", "Jordan");
+    clickByText("Next"); // -> CONSENT
+    expect(pageText()).toContain(
+      "You're entering other people in this registration. We'll ask each of them to confirm their own details and consent when they join or claim their spot.",
+    );
+  });
+
+  it("the captain-roster notice is ABSENT when the only player is the self-linked contact", () => {
+    const { stepWho, clickByText, pageText, island } = mount([DIV_OPEN]);
+    // dob is REQUIRED the moment imPlaying flips true (whoFieldRequirements),
+    // independent of DIV_OPEN's own requires_dob — omitting it would leave
+    // WHO's "Next" silently blocked and every step after it unreachable.
+    (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Solo Player", email: "solo@example.com", dob: "1990-01-01" });
+    (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true); // auto-links the sole entry
+    clickByText("Next"); // -> DETAILS
+    setByAriaLabel(island, "Player 1 — Your name", "Solo Player");
+    clickByText("Next"); // -> CONSENT
+    expect(pageText()).not.toContain("You're entering other people in this registration.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 5 — REVIEW→PAY
+// ---------------------------------------------------------------------------
+
+const DIV_PAID: DivisionLike = {
+  ...DIV_OPEN,
+  division_id: "div-paid",
+  name: "Paid Singles",
+  fee_cents: 2500,
+  currency: "gbp",
+  payment_method: "stripe",
+};
+
+const DIV_WAITLIST: DivisionLike = {
+  ...DIV_OPEN,
+  division_id: "div-wait",
+  name: "Full Division",
+  closed_reason: "full",
+  fee_cents: 1000,
+  currency: "gbp",
+};
+
+describe("step 5 — REVIEW→PAY line items", () => {
+  it("shows the fee per entry; a waitlisted entry is flagged 'not charged now' and excluded from the subtotal", () => {
+    const { stepWho, divisionCard, clickByText, pageText, island } = mount([DIV_PAID, DIV_WAITLIST]);
+    (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Rep", email: "rep@example.com" });
+    clickByText("Next"); // -> ENTRIES
+    (propsOf(divisionCard("div-paid")).onAddIndividual as () => void)();
+    (propsOf(divisionCard("div-wait")).onAddIndividual as () => void)();
+    clickByText("Next"); // -> DETAILS
+
+    const nameInputs = allByAriaLabel(island, "Player 1 — Your name");
+    expect(nameInputs, "expected one 'Player 1' row per entry").toHaveLength(2);
+    (propsOf(nameInputs[0]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Player One" } });
+    (propsOf(nameInputs[1]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Player Two" } });
+    clickByText("Next"); // -> CONSENT
+    (propsOf(byId(island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({
+      target: { checked: true },
+    });
+    clickByText("Next"); // -> REVIEW
+
+    const text = pageText();
+    expect(text).toContain("Review & pay");
+    expect(text).toContain("Paid Singles");
+    expect(text).toContain("Full Division");
+    expect(text).toContain("Not charged now — pay only if you're promoted from the waitlist.");
+    // Subtotal is the PAID division's £25 alone — the waitlisted £10 never joins it.
+    expect(text).toMatch(/£25(\.00)?/);
+    expect(text).not.toMatch(/£35(\.00)?/);
+  });
+});
+
+describe("step 5 — submit", () => {
+  /** Drives a single free (DIV_OPEN) cart from WHO through CONSENT, landing
+   *  on REVIEW with privacy consent already given — the shared setup every
+   *  submit test below starts from. */
+  async function reachReview() {
+    const m = mount([DIV_OPEN]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+    m.clickByText("Next"); // -> DETAILS
+    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    m.clickByText("Next"); // -> CONSENT
+    (propsOf(byId(m.island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({
+      target: { checked: true },
+    });
+    m.clickByText("Next"); // -> REVIEW
+    return m;
+  }
+
+  it("posts the built request body and redirects to the group status page (by rid+token) when checkout_url is null", async () => {
+    apiV1Mock.impl.mockResolvedValueOnce({
+      group_id: "g1",
+      ref_code: "SZ-TEST-01",
+      access_token: "tok123",
+      currency: "gbp",
+      amount_cents: 0,
+      checkout_url: null,
+      entries: [],
+    });
+    const { pageText, island } = await reachReview();
+    expect(pageText()).toContain("Enter the competition"); // register.submit.free — DIV_OPEN is fee_cents:0
+
+    const btn = island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition");
+    expect(btn, "submit button not found").toBeTruthy();
+    await (propsOf(btn!).onClick as () => Promise<void>)();
+
+    expect(apiV1Mock.impl).toHaveBeenCalledTimes(1);
+    const [url, options] = apiV1Mock.impl.mock.calls[0]!;
+    expect(url).toBe(`/api/v1/public/orgs/${ORG_SLUG}/competitions/${COMPETITION_SLUG}/register`);
+    expect((options as { method: string }).method).toBe("POST");
+    expect((options as { json: { privacy_consent: boolean; contact: { name: string } } }).json.privacy_consent).toBe(true);
+    expect((options as { json: { contact: { name: string } } }).json.contact.name).toBe("Alex Test");
+
+    expect(assignMock).toHaveBeenCalledWith(
+      `/shared/${ORG_SLUG}/${COMPETITION_SLUG}/register/status?rid=g1&token=tok123`,
+    );
+  });
+
+  it("redirects straight to Stripe checkout when checkout_url is present, never the status page", async () => {
+    apiV1Mock.impl.mockResolvedValueOnce({
+      group_id: "g1",
+      ref_code: "SZ-TEST-02",
+      access_token: "tok456",
+      currency: "gbp",
+      amount_cents: 2500,
+      checkout_url: "https://checkout.stripe.com/pay/xyz",
+      entries: [],
+    });
+    const { island } = await reachReview();
+    const btn = island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition");
+    await (propsOf(btn!).onClick as () => Promise<void>)();
+    expect(assignMock).toHaveBeenCalledWith("https://checkout.stripe.com/pay/xyz");
+    expect(assignMock).not.toHaveBeenCalledWith(expect.stringContaining("/register/status"));
+  });
+
+  it("a submit failure shows an inline error and re-enables the button, rather than leaving it stuck", async () => {
+    apiV1Mock.impl.mockRejectedValueOnce(new Error("Registration is not open for this division"));
+    const { pageText, island } = await reachReview();
+    const btn = island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition");
+    await (propsOf(btn!).onClick as () => Promise<void>)();
+
+    expect(pageText()).toContain("Registration is not open for this division");
+    const btnAfter = island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition");
+    expect(propsOf(btnAfter!).disabled, "button must not be stuck disabled after a failure").not.toBe(true);
+    expect(assignMock, "must never navigate away on a failed submit").not.toHaveBeenCalled();
   });
 });

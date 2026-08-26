@@ -10,6 +10,7 @@ import {
   cartHasOtherPlayers,
   cartReducer,
   clearSelfLinkWhenNotPlaying,
+  payableDivision,
   registeringSelfAnywhere,
   summarizeCart,
   toGroupEntry,
@@ -782,5 +783,23 @@ describe("summarizeCart", () => {
     const summary = summarizeCart(cart, []);
     expect(summary.lines[0]!.division).toBeUndefined();
     expect(summary.subtotalCents).toBe(0);
+  });
+
+  describe("payableDivision — the ONE division that decides the submit CTA and the payment-method note (step 5, so the two can never disagree)", () => {
+    it("undefined for an all-free/all-waitlisted cart — nothing to describe", () => {
+      const cart: CartState = { entries: [entry({ id: "e1", division_id: "waitlist", entrant_kind: "team" })] };
+      expect(payableDivision(summarizeCart(cart, [WAITLIST_DIV]))).toBeUndefined();
+    });
+
+    it("the first line that is actually charged now", () => {
+      const cart: CartState = {
+        entries: [
+          entry({ id: "e1", division_id: "waitlist", entrant_kind: "team" }),
+          entry({ id: "e2", division_id: "open-paid", entrant_kind: "team" }),
+        ],
+      };
+      const division = payableDivision(summarizeCart(cart, [WAITLIST_DIV, OPEN_PAID]));
+      expect(division?.division_id).toBe("open-paid");
+    });
   });
 });

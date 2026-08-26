@@ -3,16 +3,20 @@
 // strip on the same --ps-court slab the org masthead uses (layout.tsx), so
 // the stepper reads as a continuation of the courtside chrome rather than a
 // generic wizard bolted onto it. Only steps that are REAL and BUILT appear
-// (steps.ts's buildStepOrder) — no dimmed placeholders for consent/review
-// (steps 4-5, not built yet); see register-stepper.tsx's "more on the way"
-// end-cap for how that seam is surfaced instead.
+// (steps.ts's buildStepOrder) — as of step 4/5 landing, that is every step
+// design §4 specifies, so this rail never needs a dimmed placeholder.
 import { useT } from "@/components/i18n/dict-provider";
 import type { StepId } from "./types";
 
-const STEP_LABEL_KEY: Record<StepId, "register.nav.who" | "register.nav.entries" | "register.nav.details"> = {
+const STEP_LABEL_KEY: Record<
+  StepId,
+  "register.nav.who" | "register.nav.entries" | "register.nav.details" | "register.nav.consent" | "register.nav.review"
+> = {
   who: "register.nav.who",
   entries: "register.nav.entries",
   details: "register.nav.details",
+  consent: "register.nav.consent",
+  review: "register.nav.review",
 };
 
 /** 320px is the tightest of the three overflow risks the RS006 prompt names

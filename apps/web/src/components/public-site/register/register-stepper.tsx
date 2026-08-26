@@ -1,37 +1,54 @@
 "use client";
 // RS006 — public stepper chassis (design §4). Owns all client state: WHO
-// contact fields, the cart (steps.ts/cart.ts), the current step index, and
-// sessionStorage persistence (storage.ts) so a refresh mid-flow survives.
+// contact fields, the cart (steps.ts/cart.ts), CONSENT's two cart-wide
+// choices, the current step index, and sessionStorage persistence
+// (storage.ts) so a refresh mid-flow survives.
 //
-// Steps 4-5 (CONSENT, REVIEW→PAY) are NOT built this session — steps.ts's
-// step order tops out at "details", and pressing Next on the last one
-// advances stepIndex to stepOrder.length (one past the end), where the
-// "more steps" end-cap renders below. A later session appends real steps
-// to steps.ts's order and this file's step-switch; nothing here needs to
-// change shape to support that (steps.test.ts's "hypothetical" case proved
-// this for steps.ts itself; the same generic index math is used here).
+// All five steps are built as of this session: steps.ts's order runs
+// who -> [entries] -> details -> consent -> review, and "review" is a
+// genuine final step with its own Submit action (handleSubmit below) — not
+// a step before a "more steps" end-cap. There is therefore no longer a
+// one-past-the-end position to render (steps.test.ts's own "hypothetical"
+// case predicted exactly this generic index math, unchanged from earlier
+// waves).
 //
 // `?join=` deep-link (RS007): accepted as a prop and deliberately unused —
 // the seam is "render nothing, don't crash on the param" (RS006 prompt).
 import { useEffect, useState } from "react";
 import { useT } from "@/components/i18n/dict-provider";
+import { apiV1 } from "@/lib/client-v1";
+import { formatMinor, type Currency } from "@/lib/currency";
 import {
   autoLinkObviousSelf,
   autoSeedSingleDivision,
   cartReducer,
   clearSelfLinkWhenNotPlaying,
+  payableDivision,
+  summarizeCart,
   type CartAction,
 } from "./cart";
 import { seasonStartYearFrom } from "./eligibility-presentation";
-import { REGISTER_STATE_VERSION, loadRegisterState, saveRegisterState } from "./storage";
+import { clearRegisterState, REGISTER_STATE_VERSION, loadRegisterState, saveRegisterState } from "./storage";
+import { buildSubmitBody, resolvePostSubmitNavigation, type SubmitResultShape } from "./submit";
+import { StepConsent } from "./step-consent";
 import { StepDetails } from "./step-details";
 import { StepEntries } from "./step-entries";
 import { StepNav } from "./step-nav";
+import { StepReview } from "./step-review";
 import { StepWho } from "./step-who";
 import { buildStepOrder, nextStepIndex, prevStepIndex } from "./steps";
 import { BTN_GHOST, BTN_PRIMARY } from "./styles";
-import { EMPTY_CART, EMPTY_CONTACT, type CartState, type ContactState, type DivisionLike } from "./types";
 import {
+  EMPTY_CART,
+  EMPTY_CONSENT,
+  EMPTY_CONTACT,
+  type CartState,
+  type ConsentState,
+  type ContactState,
+  type DivisionLike,
+} from "./types";
+import {
+  validateConsent,
   validateContact,
   validateDetails,
   validateEntries,
@@ -60,6 +77,11 @@ const DETAILS_ERROR_KEY: Record<NonNullable<DetailsValidation["error"]>, string>
 
 export interface RegisterInfo {
   competition: { name: string; starts_on: string | null };
+  /** Widened at step 4 (CONSENT) — `org.name` interpolates into the GDPR
+   *  data-processing sentence (register.consent.data). The real
+   *  PublicRegistrationInfo the server hands page.tsx already carries this
+   *  (schemas.ts:2354); narrowed here the same way `divisions` already is. */
+  org: { name: string };
   divisions: DivisionLike[];
 }
 
@@ -96,6 +118,12 @@ export function RegisterStepper({
   const [whoAttempted, setWhoAttempted] = useState(false);
   const [entriesAttempted, setEntriesAttempted] = useState(false);
   const [detailsAttempted, setDetailsAttempted] = useState(false);
+  const [consentAttempted, setConsentAttempted] = useState(false);
+  // Step 4's two cart-wide choices (design §4 step 4) — a separate
+  // top-level slice from `contact`, matching ConsentState's own doc comment
+  // (types.ts): these are SIBLING fields on the wire request, not nested
+  // under `contact` the way guardian_name/guardian_consent are.
+  const [consent, setConsent] = useState<ConsentState>(EMPTY_CONSENT);
   // Step 3's paste-roster drafts, keyed by entry id — top-level state, NOT
   // persisted (storage.ts's snapshot never includes it), same reasoning as
   // `website` below: see roster-table.tsx's header for why this lives here
@@ -106,6 +134,10 @@ export function RegisterStepper({
   // (already shipped) — this chassis only needs to carry the field through
   // to whichever session wires the final submit body.
   const [website, setWebsite] = useState("");
+  // Step 5's submit — NOT persisted (a refresh mid-submit should retry, not
+  // silently resume a stale "submitting" state).
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Hydrate from sessionStorage once, client-only. The initial useState
   // values above are deterministic (same on server and first client
@@ -126,7 +158,11 @@ export function RegisterStepper({
       setContact(saved.contact);
       setImPlaying(saved.imPlaying);
       setCart(saved.cart);
-      setStepIndex(Math.min(saved.stepIndex, stepOrder.length));
+      setConsent(saved.consent);
+      // Clamped to the LAST real step, never stepOrder.length itself —
+      // "review" (step 5) has its own Submit action, not a "coming soon"
+      // end-cap one past it (storage.ts's own doc comment on this field).
+      setStepIndex(Math.min(saved.stepIndex, stepOrder.length - 1));
     }
     // A restored field the rep hasn't touched YET (this visit) must render
     // as pristine helper text, never a submitted-state error (fix wave
@@ -136,6 +172,7 @@ export function RegisterStepper({
     setWhoAttempted(false);
     setEntriesAttempted(false);
     setDetailsAttempted(false);
+    setConsentAttempted(false);
     setHydrated(true);
     // Intentionally empty deps: hydration runs exactly once, at mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -148,9 +185,10 @@ export function RegisterStepper({
       contact,
       imPlaying,
       cart,
+      consent,
       stepIndex,
     });
-  }, [hydrated, orgSlug, competitionSlug, contact, imPlaying, cart, stepIndex]);
+  }, [hydrated, orgSlug, competitionSlug, contact, imPlaying, cart, consent, stepIndex]);
 
   // See cart.ts's autoLinkObviousSelf doc comment: links the one cart entry
   // to "I'm playing" only when there is no ambiguity, never overriding an
@@ -199,8 +237,32 @@ export function RegisterStepper({
   const contactValidation = validateContact(contact, requirements);
   const entriesValidation = validateEntries(cart, info.divisions, contact, seasonStartYear);
   const detailsValidation = validateDetails(cart, info.divisions, contact, seasonStartYear);
+  const consentValidation = validateConsent(cart, contact, consent, new Date());
+  // Computed unconditionally every render, same convention as the three
+  // validations above — cheap for a cart capped at MAX_CART_ENTRIES, and
+  // both StepReview's own line items AND the submit button's label
+  // (handleSubmit/the nav row below) read this ONE result, never a second
+  // computation (summarizeCart's own doc comment).
+  const reviewSummary = summarizeCart(cart, info.divisions);
+  // Submit button label (design §4 step 5's three cases): free, pay-by-card-
+  // now, or pay-the-organiser-later. Reads `payableDivision` — the SAME
+  // lookup StepReview's own payment-method note reads — so the two can
+  // never disagree (payableDivision's own doc comment).
+  const reviewPayable = payableDivision(reviewSummary);
+  const submitLabel =
+    reviewSummary.subtotalCents === 0 || !reviewSummary.currency
+      ? t("register.submit.free")
+      : t(reviewPayable?.payment_method === "stripe" ? "register.submit.card" : "register.submit.fee", {
+          fee: formatMinor(reviewSummary.subtotalCents, reviewSummary.currency as Currency, locale),
+        });
 
-  const clampedIndex = Math.min(stepIndex, stepOrder.length);
+  // Clamped to the LAST real step, never stepOrder.length — "review" is a
+  // genuine final step with its own Submit action, not a position before a
+  // "coming soon" end-cap (matches the hydration effect's own clamp above).
+  // Re-clamped on EVERY render, not just at hydration: a division flipping
+  // `open` live (e.g. its window just closed) can shrink stepOrder between
+  // renders, and a stale stepIndex must not point past the new, shorter list.
+  const clampedIndex = Math.min(stepIndex, stepOrder.length - 1);
   const currentStep = stepOrder[clampedIndex];
   const canGoNext =
     currentStep === "who"
@@ -209,17 +271,50 @@ export function RegisterStepper({
         ? entriesValidation.valid
         : currentStep === "details"
           ? detailsValidation.valid
-          : false;
+          : currentStep === "consent"
+            ? consentValidation.valid
+            : false; // "review" advances via handleSubmit, never goNext
 
   function goNext() {
     if (currentStep === "who") setWhoAttempted(true);
     if (currentStep === "entries") setEntriesAttempted(true);
     if (currentStep === "details") setDetailsAttempted(true);
+    if (currentStep === "consent") setConsentAttempted(true);
     if (!canGoNext) return;
     setStepIndex((i) => nextStepIndex(i, stepOrder));
   }
   function goBack() {
     setStepIndex((i) => prevStepIndex(i));
+  }
+
+  /**
+   * Design §4 step 5: submit the whole cart. `checkout_url` non-null ->
+   * redirect to Stripe (window.location.assign, matching
+   * registration-actions.tsx's own precedent); null (free/offline) ->
+   * straight to the group status page, by id + token (resolvePostSubmit
+   * Navigation — the SAME `?rid=&token=` convention buildCartMail/
+   * createRegistrationCheckout already mint). The sessionStorage draft is
+   * cleared on EITHER success path: the cart is committed server-side
+   * either way, so nothing here should ever be replayed. `submitting` is
+   * deliberately left `true` on the success path — the page is about to
+   * navigate away, so there is no further interaction to unblock; only the
+   * catch branch resets it, so a failed attempt can be retried.
+   */
+  async function handleSubmit() {
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const result = await apiV1<SubmitResultShape>(
+        `/api/v1/public/orgs/${orgSlug}/competitions/${competitionSlug}/register`,
+        { method: "POST", json: buildSubmitBody(contact, consent, cart, website) },
+      );
+      clearRegisterState(orgSlug, competitionSlug);
+      const nav = resolvePostSubmitNavigation(result, orgSlug, competitionSlug);
+      window.location.assign(nav.url);
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : t("register.submit.error"));
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -275,13 +370,27 @@ export function RegisterStepper({
         </>
       )}
 
-      {clampedIndex >= stepOrder.length && (
-        <div className="rounded-xl border border-accent-line bg-accent-soft p-5 text-center">
-          <p className="font-display text-lg font-semibold uppercase tracking-wide text-accent-strong">
-            {t("register.nav.comingSoon.title")}
-          </p>
-          <p className="mt-1 text-sm text-ink-muted">{t("register.nav.comingSoon.body")}</p>
-        </div>
+      {currentStep === "consent" && (
+        <StepConsent
+          contact={contact}
+          onContactChange={(patch) => setContact((c) => ({ ...c, ...patch }))}
+          consent={consent}
+          onConsentChange={(patch) => setConsent((c) => ({ ...c, ...patch }))}
+          cart={cart}
+          orgName={info.org.name}
+          errors={consentAttempted ? consentValidation.errors : {}}
+        />
+      )}
+
+      {currentStep === "review" && (
+        <>
+          <StepReview summary={reviewSummary} locale={locale} />
+          {submitError && (
+            <p role="alert" className="text-sm text-red-600">
+              {submitError}
+            </p>
+          )}
+        </>
       )}
 
       {/* relative z-50: the SAME escape hatch cookie-consent.tsx documents
@@ -295,7 +404,11 @@ export function RegisterStepper({
         <button type="button" onClick={goBack} disabled={stepIndex === 0} className={BTN_GHOST}>
           {t("register.nav.back")}
         </button>
-        {clampedIndex < stepOrder.length && (
+        {currentStep === "review" ? (
+          <button type="button" onClick={handleSubmit} disabled={submitting} className={BTN_PRIMARY}>
+            {submitLabel}
+          </button>
+        ) : (
           <button type="button" onClick={goNext} className={BTN_PRIMARY}>
             {t("register.nav.next")}
           </button>

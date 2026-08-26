@@ -12,13 +12,17 @@ import { INELIGIBLE_MESSAGE_KEY, selfEligibilityForDivision } from "./eligibilit
 import { BTN_TEXT } from "./styles";
 import { MAX_CART_ENTRIES, type CartEntry, type CartState, type ContactState, type DivisionLike } from "./types";
 
-const UNNAMED_KEY: Record<CartEntry["entrant_kind"], "register.entries.unnamed.team" | "register.entries.unnamed.pair" | "register.entries.unnamed.individual"> = {
+// Exported for step-review.tsx (step 5) — a cart line reads the same either
+// way it's shown, so the naming fallback lives in exactly one place (same
+// "reuse, do not fork" principle summarizeCart's own doc comment states for
+// the subtotal math).
+export const UNNAMED_KEY: Record<CartEntry["entrant_kind"], "register.entries.unnamed.team" | "register.entries.unnamed.pair" | "register.entries.unnamed.individual"> = {
   team: "register.entries.unnamed.team",
   pair: "register.entries.unnamed.pair",
   individual: "register.entries.unnamed.individual",
 };
 
-function entryDisplayName(entry: CartEntry): string | null {
+export function entryDisplayName(entry: CartEntry): string | null {
   if (entry.free_agent) return null;
   if (entry.entrant_kind === "team") return entry.team_name;
   if (entry.entrant_kind === "pair") return entry.partner_name;
