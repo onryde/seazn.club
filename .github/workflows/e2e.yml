@@ -1,8 +1,10 @@
 name: E2E
 
 # Playwright UI e2e suite, split out of the CI smoke job so PRs stay fast.
-# Runs automatically on pull requests; workflow_dispatch also lets you target
-# a specific PR number.
+# Runs automatically on push to main ONLY (2026-08-26) — a PR sitting on a
+# feature branch gets no e2e signal until it merges. workflow_dispatch is the
+# escape hatch for a feature branch that needs a run before then; its `pr`
+# input lets you target a specific PR number instead of main.
 #
 # Split into three independent jobs — e2e-parallel / e2e-serial / e2e-mobile —
 # instead of one job chaining `playwright test --project=X && ... && ...`.
@@ -74,6 +76,7 @@ name: E2E
 # job's own throwaway DB.
 on:
   push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       pr:

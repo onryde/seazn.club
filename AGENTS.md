@@ -96,17 +96,19 @@ before diagnosing a real bug:
   UI bar, pre-commit OpenAPI drift check, and the no-new-issues /
   fix-inline-unless-blast-radius rule. Every dispatch brief should
   restate the relevant parts inline or point here explicitly.
-- **`.github/workflows/e2e.yml` is LIVE, and it triggers on `push` — NOT on
-  pull requests** (`b87def3ab`, 2026-08-26; it was `pull_request:` from
-  2026-08-14 until then, and "disabled, never enable it" before that, which is
-  why some sessions still assume e2e is local-only — it is not). The `push:`
-  key carries **no branch filter**, so every push to every branch runs the
-  suite; `workflow_dispatch` additionally takes a `pr` input.
-  **Opening a PR does not run e2e — pushing does.** Two consequences that
-  invert the old advice: a PR that sits without new pushes gets no e2e signal
-  at all, and merging locally then pushing to `main` DOES run e2e (the exact
-  opposite of smoke, which is PR-only — see the next bullet; the two now
-  trigger on disjoint events, so neither one substitutes for the other).
+- **`.github/workflows/e2e.yml` is LIVE, and it triggers on `push` to `main`
+  only — NOT on pull requests, and NOT on a push to any other branch**
+  (scoped to `branches: [main]` 2026-08-26, PR #656; before that it was
+  `push:` with no branch filter from `b87def3ab` the same day, `pull_request:`
+  from 2026-08-14 until then, and "disabled, never enable it" before that —
+  this trigger has now changed three times in one day, so re-read the file
+  rather than trust this paragraph). `workflow_dispatch` additionally takes a
+  `pr` input, and is now the ONLY way to get an e2e run against a feature
+  branch before it merges — a feature-branch push no longer triggers anything.
+  **Opening a PR does not run e2e — pushing to `main` does.** A PR that sits on
+  a feature branch gets zero automatic e2e signal, ever, until it merges (the
+  exact opposite of smoke, which is PR-only — see the next bullet; the two
+  trigger on disjoint events and neither substitutes for the other).
   Three jobs — `e2e-parallel` (sharded), `e2e-serial`, `e2e-mobile`
   (matrixed) — and **all seven width projects are covered** between them.
   Do NOT trust a job/leg count written here: this paragraph claimed "five
