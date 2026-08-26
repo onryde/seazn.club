@@ -2416,10 +2416,14 @@ async function regByRef(ref: string): Promise<RegistrationWithGroupRow> {
   const canonical = normalizeRefCode(ref);
   if (!isValidRefCode(canonical)) throw new HttpError(404, "registration not found");
   // ref_code lives on the cart now (V364) — shared by every entry in it. A
-  // cart with more than one entry (not reachable yet: nothing creates one
-  // until RS002/RS003) would have several rows match here; this picks the
-  // oldest deterministically rather than an arbitrary one. RS007 owns
-  // deciding whether /r/[ref] should show the whole cart instead of one entry.
+  // cart can hold more than one entry (RS002/RS003 shipped group submit) —
+  // this picks the oldest deterministically rather than an arbitrary one,
+  // which is exactly right for THIS function's actual callers: the
+  // single-entry ticket.png render, self-withdraw's target row, and
+  // reconcile's status check — none of which need every entry. RS006
+  // decided /r/[ref] itself shows the WHOLE cart: see publicCartByRef below,
+  // which calls this for the checksum/lookup/404 behaviour and then
+  // re-selects every entry in the resolved group.
   const [reg] = await sql<RegistrationWithGroupRow[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
@@ -2472,6 +2476,101 @@ export async function withdrawRegistrationByRef(
   const byToken = await regByToken(reg.id, token); // 404s on a bad token
   await withdrawCore(byToken, null);
   return publicRegistrationStatusByRef(ref, token);
+}
+
+/** One entry as /r/[ref] shows it to the general public — masked per THIS
+ *  entry's own division policy (see `PublicCartView`). */
+export interface PublicCartEntryView {
+  id: string;
+  status: RegistrationRow["status"];
+  display_name: string;
+  division_name: string;
+}
+
+/**
+ * What /r/[ref] shows the world for the WHOLE cart (RS006 — the owner's
+ * ruling, recorded here: a multi-entry cart shows every entry, not just the
+ * oldest, now that RS002/RS003 make multi-entry carts real). The group-level
+ * sibling of `PublicRefView`, same "never more than the success screen"
+ * contract — NOT `GroupStatusView` (`groupByRef`/`groupById`), which is
+ * token-GATED and deliberately unmasked for that reason. This is reachable
+ * by anyone with a bare ref code, so contact info, amounts/fees/currency,
+ * payment method and the access token are never on this shape, and every
+ * entry's `display_name` is masked through `resolveNameDisplay`/
+ * `maskDisplayName` for ITS OWN division — a cart can span a youth division
+ * and a non-youth one at once, so one mask for the whole cart would be
+ * wrong in either direction.
+ */
+export interface PublicCartView {
+  ref_code: string;
+  competition_name: string;
+  competition_slug: string;
+  org_slug: string;
+  org_name: string;
+  starts_on: string | null;
+  ends_on: string | null;
+  created_at: string;
+  /** True when the ?token= the viewer presented matches AND the entry that
+   *  `withdrawRegistrationByRef` actually acts on (the oldest) isn't already
+   *  withdrawn — same rule as `PublicRefView.can_withdraw`, evaluated
+   *  against the same target row so this predicts that call's outcome. */
+  can_withdraw: boolean;
+  entries: PublicCartEntryView[];
+}
+
+export async function publicCartByRef(ref: string, token?: string | null): Promise<PublicCartView> {
+  // regByRef owns the checksum/normalise/404 contract (shared with the
+  // single-entry read) and hands back the oldest entry joined to the cart's
+  // own columns — enough to resolve competition/org context (divisionCtx,
+  // same source `publicRegistrationStatusByRef` reads) and the access-token
+  // hash, without a second group lookup.
+  const reg = await regByRef(ref);
+  const ctx = await divisionCtx(sql, reg.division_id);
+
+  const entries = await sql<
+    {
+      id: string;
+      status: RegistrationRow["status"];
+      display_name: string;
+      division_name: string;
+      youth: boolean;
+      player_name_display: string | null;
+    }[]
+  >`
+    select r.id, r.status, r.display_name, d.name as division_name,
+           d.youth, d.player_name_display
+    from registrations r join divisions d on d.id = r.division_id
+    where r.group_id = ${reg.group_id}
+    order by r.created_at, r.id`;
+
+  // Mirrors PublicRefView's own can_withdraw check verbatim (not
+  // constant-time: the token is OPTIONAL here, so unlike groupByRef's
+  // required-token gate there is no ref-vs-token enumeration distinction to
+  // protect), against `reg` — the SAME oldest-entry row
+  // withdrawRegistrationByRef resolves and acts on.
+  const canWithdraw =
+    !!token && reg.status !== "withdrawn" && hashRegistrationToken(token) === reg.access_token_hash;
+
+  return {
+    ref_code: reg.ref_code!,
+    competition_name: ctx.comp_name,
+    competition_slug: ctx.comp_slug,
+    org_slug: ctx.org_slug,
+    org_name: ctx.org_name,
+    starts_on: ctx.starts_on,
+    ends_on: ctx.ends_on,
+    created_at: new Date(reg.created_at).toISOString(),
+    can_withdraw: canWithdraw,
+    entries: entries.map((e) => ({
+      id: e.id,
+      status: e.status,
+      display_name: maskDisplayName(
+        e.display_name,
+        resolveNameDisplay(e.player_name_display, e.youth),
+      ),
+      division_name: e.division_name,
+    })),
+  };
 }
 
 // ---------------------------------------------------------------------------

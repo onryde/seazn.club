@@ -28,11 +28,20 @@ import { HttpError } from "@/lib/errors";
 import {
   groupById,
   groupByRef,
+  publicCartByRef,
   reconcileRegistration,
   reconcileRegistrationBySession,
 } from "@/server/usecases/registrations";
 import { generateRefCode } from "@/lib/ref-code";
-import { asOwner, rig, seedOrg, seedRegistration, SETTINGS_BASE } from "./_registration-fixtures";
+import { createDivision } from "../divisions";
+import {
+  asOwner,
+  rig,
+  seedOrg,
+  seedRegistration,
+  seedSecondEntry,
+  SETTINGS_BASE,
+} from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -209,6 +218,108 @@ describe.skipIf(!HAS_DB)("groupById — token gate", () => {
     await expect(groupById("not-a-uuid", "regtok_" + randomUUID())).rejects.toMatchObject({
       status: 404,
     });
+  });
+});
+
+// RS006 (public stepper) — publicCartByRef: the TOKEN-LESS, group-level
+// sibling of publicRegistrationStatusByRef/PublicRefView, for the general-
+// public /r/[ref] page. Unlike groupByRef/GroupStatusView above (token
+// REQUIRED, deliberately unmasked because only the token-holder ever sees
+// it), this is reachable by anyone with a bare ref code, so every entry's
+// display name must be masked per ITS OWN division's policy — a cart can
+// hold an open-division entry alongside a youth-division one, and reusing
+// groupByRef here would leak full names to the public off a ref alone.
+describe.skipIf(!HAS_DB)("publicCartByRef — token-less, masked cart read", () => {
+  it("masks a youth division's entry but not an open division's entry in the SAME cart — SECURITY", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: openDiv } = await rig(owner);
+    const youthDiv = await createDivision(owner, competition.id, {
+      name: "Under 15",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      eligibility: [{ kind: "age", maxAgeAt: 15 }],
+    });
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${openDiv.id}, true, 'individual', 500, 'stripe', 'auto', false)`;
+    const refCode = freshRef();
+    const { registration } = await seedRegistration(
+      competition.id,
+      openDiv.id,
+      { fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode, displayName: "Alex Roberts" },
+    );
+    await seedSecondEntry(registration.group_id, youthDiv.id, 0, "Jamie Youngperson");
+
+    const view = await publicCartByRef(refCode);
+    expect(view.entries).toHaveLength(2);
+    const openEntry = view.entries.find((e) => e.division_name === "Open")!;
+    const youthEntry = view.entries.find((e) => e.division_name === "Under 15")!;
+    // Non-youth, default policy: unmasked.
+    expect(openEntry.display_name).toBe("Alex Roberts");
+    // Youth, default policy (no explicit player_name_display override):
+    // first_initial — this is the exact leak a whole-cart-shares-one-mask
+    // bug would miss, since the OTHER entry in this same cart is full.
+    expect(youthEntry.display_name).toBe("Jamie Y.");
+  });
+
+  it("returns every entry in the cart, in creation order — not just the oldest", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const refCode = freshRef();
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode, displayName: "First Entry" },
+    );
+    await seedSecondEntry(registration.group_id, division.id, 500, "Second Entry", "waitlisted");
+    await seedSecondEntry(registration.group_id, division.id, 500, "Third Entry", "confirmed");
+
+    const view = await publicCartByRef(refCode);
+    expect(view.entries.map((e) => e.display_name)).toEqual([
+      "First Entry",
+      "Second Entry",
+      "Third Entry",
+    ]);
+    expect(view.entries.map((e) => e.status)).toEqual(["pending", "waitlisted", "confirmed"]);
+  });
+
+  it("404s on an unknown ref, same contract as the single-entry sibling", async () => {
+    await expect(publicCartByRef(freshRef())).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("never exposes contact info, amounts, currency or payment method", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const refCode = freshRef();
+    await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode, contactEmail: "secret-contact@test.local" },
+    );
+
+    const view = await publicCartByRef(refCode);
+    const json = JSON.stringify(view);
+    expect(json).not.toContain("secret-contact@test.local");
+    expect(json).not.toMatch(/contact_email|contact_name|amount_cents|"currency"|payment_method|access_token/i);
+  });
+
+  it("can_withdraw is true only with the correct token — a wrong or missing token is false", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const refCode = freshRef();
+    const { access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode },
+    );
+
+    expect((await publicCartByRef(refCode)).can_withdraw).toBe(false);
+    expect((await publicCartByRef(refCode, "regtok_wrong")).can_withdraw).toBe(false);
+    expect((await publicCartByRef(refCode, access_token)).can_withdraw).toBe(true);
   });
 });
 
