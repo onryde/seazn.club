@@ -1,5 +1,6 @@
 import { v1, parseBody } from "@/server/api-v1/http";
 import { requireResourceAuth } from "@/server/api-v1/auth";
+import { organiserRegistration } from "@/server/api-v1/registration-response";
 import { RefundRegistration } from "@/server/api-v1/schemas";
 import { refundRegistration } from "@/server/usecases/registrations";
 
@@ -11,6 +12,6 @@ export async function POST(req: Request, { params }: Ctx) {
     const { id } = await params;
     const auth = await requireResourceAuth(req, "registration", id, "write");
     const input = await parseBody(req, RefundRegistration);
-    return refundRegistration(auth, id, input.amount_cents);
+    return organiserRegistration(await refundRegistration(auth, id, input.amount_cents), auth);
   });
 }

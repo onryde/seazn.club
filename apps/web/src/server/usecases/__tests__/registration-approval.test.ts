@@ -24,6 +24,8 @@ const stripeMock = vi.hoisted(() => {
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
 import { sql, statementCount } from "@/lib/db";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { seedRegistration } from "@/server/usecases/__tests__/_registration-fixtures";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -937,5 +939,78 @@ describe.skipIf(!HAS_DB)("listRegistrations cross-division filters", () => {
     const ids = rows.map((r) => r.id);
     expect(ids).toContain(falcons.entries[0]!.registration_id);
     expect(ids).not.toContain(comets.entries[0]!.registration_id);
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS005 review: frozen entitlements block reject and promote, not just approve", () => {
+  /** Drive `competitions.max_active` to 0 so every active competition the org
+   *  holds is frozen by the downgrade selector (entitlement-freeze.ts) — the
+   *  same fixture competition-schedule-ai-route.test.ts uses. */
+  async function freezeCompetitions(orgId: string): Promise<void> {
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, int_value)
+      values (${orgId}, 'competitions.max_active', 0)
+      on conflict (org_id, feature_key) do update set int_value = 0`;
+    await invalidateOrgEntitlements(orgId);
+  }
+
+  async function manualPendingEntry(status: "pending" | "waitlisted") {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0, approval: "manual" });
+    const [reg] = await sql<{ id: string }[]>`
+      insert into registrations (org_id, division_id, group_id, display_name, status, amount_cents, answers)
+      values (
+        ${orgId}, ${division.id},
+        (insert_group_placeholder := null),
+        'Frozen Case', ${status}, 0, '{}'::jsonb
+      ) returning id`;
+    return { owner, orgId, division, reg };
+  }
+
+  // Only approveRegistration carried the guard. Reject is not the harmless
+  // half of the pair — it REFUNDS a paid entry through Stripe and
+  // auto-promotes the waitlist — so on a frozen org Approve 402'd while Reject
+  // on the same row moved real money. RS005 is what first put both behind HTTP
+  // routes and UI buttons, which is what made the gap reachable.
+  it("refuses reject on a frozen competition, leaving the entry untouched", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0, approval: "manual" });
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+      { status: "pending", displayName: "Frozen Reject" },
+    );
+    await freezeCompetitions(orgId);
+
+    await expect(rejectRegistration(owner, registration.id)).rejects.toMatchObject({ status: 402 });
+
+    const [after] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${registration.id}`;
+    expect(after!.status, "a refused transition must not have half-run").toBe("pending");
+  });
+
+  it("refuses promote on a frozen competition", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0, approval: "manual" });
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+      { status: "waitlisted", displayName: "Frozen Promote" },
+    );
+    await freezeCompetitions(orgId);
+
+    await expect(promoteFromWaitlist(owner, division.id, {})).rejects.toMatchObject({ status: 402 });
+
+    const [after] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${registration.id}`;
+    expect(after!.status).toBe("waitlisted");
   });
 });

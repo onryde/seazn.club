@@ -4,8 +4,6 @@ description: Every registration gets a short reference — players use it to che
 order: 3
 ---
 
-**Registration is temporarily switched off** while the sign-up flow is rebuilt. Your division settings are kept and nothing you have configured is lost — the public page tells visitors that registration is not open, and this page describes how it works once it is back on.
-
 Every registration gets a **reference** like `SZ-7F3K-Q2ND`, shown on the confirmation ticket and in email. It's how players interact with their entry without creating an account.
 
 ## What a player can do with it

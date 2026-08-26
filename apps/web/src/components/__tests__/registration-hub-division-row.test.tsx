@@ -36,6 +36,7 @@ const BASE_ROW: RegistrationHubRowData = {
   approval: "auto",
   allow_free_agents: false,
   taken: 0,
+  waitlisted: 0,
 };
 
 const BASE_CONTEXT: RegistrationHubRowContext = {
@@ -47,6 +48,7 @@ const BASE_CONTEXT: RegistrationHubRowContext = {
   registerQrFileName: "register-summer-league.png",
   showRegisterLink: true,
   onOpen: vi.fn(),
+  canEdit: true,
 };
 
 describe("RegistrationHubDivisionRow — identity", () => {
@@ -187,6 +189,30 @@ describe("RegistrationHubDivisionRow — Configure affordance, same contract as 
     const btn = tree.find((e) => propsOf(e)["data-registration-hub-row-configure"] !== undefined);
     expect(propsOf(btn!)["aria-label"]).toBe(t(uiEn, "reg.hub.row.configure", { name: "Open Doubles" }));
   });
+
+  // RS005 W2a follow-up. Until 2026-08-25 the hub 404'd anyone who could not
+  // edit, so every reader of this row was an owner or admin. The owner
+  // reversed that (viewers get the hub read-only), which stranded a viewer in
+  // front of a Configure button opening a panel whose every save 403s — the
+  // organiser-facing cost being that a viewer believes they can administer
+  // registration until the moment they try. Absent, not disabled: the API
+  // refuses them either way, so a greyed control would only advertise it.
+  it("renders NO Configure button for a viewer", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, canEdit: false } }),
+    );
+    expect(tree.some((e) => propsOf(e)["data-registration-hub-row-configure"] !== undefined)).toBe(false);
+  });
+
+  it("still renders the rest of the row for a viewer — read-only, not empty", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, canEdit: false } }),
+    );
+    // The scan line an organiser reads is the whole point of the read-only
+    // view; a viewer losing the fee/capacity cells would be a different bug.
+    expect(tree.some((e) => propsOf(e)["data-feature"] === "registration.paid")).toBe(true);
+    expect(tree.some((e) => propsOf(e)["data-registration-hub-row"] !== undefined)).toBe(true);
+  });
 });
 
 describe("RegistrationHubDivisionRow — the copy control is never dropped", () => {
@@ -202,6 +228,62 @@ describe("RegistrationHubDivisionRow — the copy control is never dropped", () 
     const tree = walk(RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, showRegisterLink: false } }));
     expect(tree.some((e) => e.type === CopyLink)).toBe(false);
     expect(textOf(tree)).toContain(t(uiEn, "div.registrations.privateNotice"));
+  });
+});
+
+// RS005 R5 task 1 — the public register page is hardcoded closed until
+// RS006 ships the cart stepper (see the register page's own header
+// comment), so Copy/Open/QR here currently lead an organiser to "Registration
+// is not open for this competition" — worse for the QR, which gets printed
+// and pinned to a noticeboard. The controls stay (settings must remain
+// configurable ahead of launch); this only adds a notice an organiser reads
+// BEFORE reaching for Copy or QR.
+describe("RegistrationHubDivisionRow — public sign-up page not-live notice (RS005 R5 task 1)", () => {
+  it("renders the not-live notice whenever the copy/QR controls render", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, showRegisterLink: true } }),
+    );
+    expect(textOf(tree)).toContain(t(uiEn, "div.registrations.publicLink.notLive"));
+  });
+
+  it("places the notice BEFORE CopyLink in reading order — read before Copy/QR is ever reachable", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, showRegisterLink: true } }),
+    );
+    const notice = tree.find(
+      (e) => e.type === "p" && String(propsOf(e).children ?? "").includes(t(uiEn, "div.registrations.publicLink.notLive")),
+    );
+    const link = tree.find((e) => e.type === CopyLink);
+    expect(notice).toBeTruthy();
+    expect(link).toBeTruthy();
+    expect(tree.indexOf(notice!)).toBeLessThan(tree.indexOf(link!));
+  });
+
+  it("does NOT render the not-live notice when the competition is private (no link controls at all)", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, showRegisterLink: false } }),
+    );
+    expect(textOf(tree)).not.toContain(t(uiEn, "div.registrations.publicLink.notLive"));
+  });
+
+  it("does NOT render the not-live notice on a closed division (no link controls there either)", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, enabled: false },
+        context: { ...BASE_CONTEXT, showRegisterLink: true },
+      }),
+    );
+    expect(textOf(tree)).not.toContain(t(uiEn, "div.registrations.publicLink.notLive"));
+  });
+
+  it("still renders for a SCHEDULED division — an organiser can reach Copy/QR before the window opens, so the warning must too", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, enabled: true, opens_at: "2026-07-01T00:00:00Z", closes_at: null },
+        context: { ...BASE_CONTEXT, showRegisterLink: true },
+      }),
+    );
+    expect(textOf(tree)).toContain(t(uiEn, "div.registrations.publicLink.notLive"));
   });
 });
 
@@ -360,6 +442,7 @@ describe("RegistrationHubDivisionRow — full text against a fixture, not spot-c
       approval: "manual",
       allow_free_agents: true,
       taken: 5,
+      waitlisted: 0,
     };
     // showRegisterLink: false — the true branch renders <CopyLink label={…}
     // .../> with the label as a PROP, not a JSX child, so textOf (children

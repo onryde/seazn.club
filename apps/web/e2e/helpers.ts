@@ -610,6 +610,55 @@ export async function forceFreeAgentsTeamMismatchSql(divisionId: string): Promis
 }
 
 /**
+ * RS005: insert ONE registration directly — registration_groups ->
+ * registrations, bypassing registration_settings entirely (the V363/V364
+ * shape, mirroring usecases/__tests__/_registration-fixtures.ts's own
+ * seedRegistration, which listRegistrations' doc comment names as the
+ * precedent for exactly this scenario: "some rows in this table predate any
+ * registration_settings row for their division existing at all — direct-SQL
+ * test fixtures"). The API cannot express this: registration-submit.ts's
+ * loadSubmitSettings returns null for a division with no settings row at
+ * all, and submission is refused before anything is written — so a division
+ * an organiser has never configured can only be reached by writing under
+ * the API, the same way forceFreeAgentsTeamMismatchSql above does for its
+ * own unreachable-via-UI state.
+ */
+export async function seedBareRegistrationSql(
+  competitionId: string,
+  divisionId: string,
+  opts: {
+    displayName?: string;
+    contactEmail?: string;
+    status?: "pending" | "paid" | "confirmed" | "waitlisted" | "withdrawn" | "expired" | "rejected";
+    amountCents?: number;
+    currency?: string;
+  } = {},
+): Promise<{ registrationId: string; groupId: string; displayName: string }> {
+  const { randomBytes } = await import("node:crypto");
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const displayName = opts.displayName ?? `Bare Entry ${suffix}`;
+  const contactEmail = opts.contactEmail ?? `bare-${suffix}@example.com`;
+  const status = opts.status ?? "pending";
+  const amountCents = opts.amountCents ?? 0;
+  const currency = opts.currency ?? "usd";
+  const tokenHash = randomBytes(32).toString("hex");
+  return withDb(async (sql) => {
+    const [group] = await sql<{ id: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, access_token_hash, amount_cents, currency)
+      values (${competitionId}, ${displayName}, ${contactEmail}, ${tokenHash}, ${amountCents}, ${currency})
+      returning id`;
+    if (!group) throw new Error(`seedBareRegistrationSql: group insert failed for competition ${competitionId}`);
+    const [reg] = await sql<{ id: string }[]>`
+      insert into registrations (group_id, division_id, display_name, status, amount_cents)
+      values (${group.id}, ${divisionId}, ${displayName}, ${status}, ${amountCents})
+      returning id`;
+    if (!reg) throw new Error(`seedBareRegistrationSql: registration insert failed for division ${divisionId}`);
+    return { registrationId: reg.id, groupId: group.id, displayName };
+  });
+}
+
+/**
  * Drop an org's server-side entitlement cache (`ent:{org}:*`). SQL-flip
  * helpers mutate entitlement state behind the app's back; on a Redis-backed
  * target (staging) a limit resolved BEFORE the flip stays cached for up to

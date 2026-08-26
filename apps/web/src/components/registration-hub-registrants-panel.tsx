@@ -1,39 +1,149 @@
-import Link from "@/components/ui/console-link";
-import { ClipboardList } from "lucide-react";
+import { ClipboardList, SearchX } from "lucide-react";
+import { t } from "@/lib/i18n";
+import type { Dict } from "@/lib/i18n-constants";
+import { RegistrationHubRegistrantEmpty } from "@/components/registration-hub-registrant-empty";
+import { RegistrationHubRegistrantFilters } from "@/components/registration-hub-registrant-filters";
+import { RegistrationHubRegistrantTable } from "@/components/registration-hub-registrant-table";
+import { hasActiveFilters } from "@/components/registration-hub-registrant-derive";
+// A real (non-type-only) VALUE import — safe here because this file has no
+// "use client": it is a server component, never bundled for the browser, so
+// schemas.ts's own transitive reach into the engine's gRPC scheduling
+// client (Node built-ins: dns/net/http2) never becomes the browser's
+// problem. RegistrationHubRegistrantFilters (below) is the opposite case —
+// it BECAME a client component (R4's auto-submit needs onChange handlers)
+// and broke `next build` importing this same module directly, which is why
+// its two option lists are read HERE, server-side, and handed down as
+// plain string props instead.
+import { RegistrationStatus, EntrantKind } from "@/server/api-v1/schemas";
+import type {
+  RegistrantsFilters,
+  DivisionOption,
+  RegistrantDetails,
+} from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
+import type { RegistrationListRow } from "@/server/usecases/registrations";
 
 /**
- * Registration hub — Registrants tab, RS004 W2's placeholder.
+ * Registration hub — Registrants tab (RS005 W2a). RS004 W2 shipped this as
+ * a data-free designed placeholder; this wave replaces it with the real
+ * read surface: an export link, the filter bar, and either the table or one
+ * of TWO deliberately different empty states (task 5) — never the same
+ * "no one's registered" copy for "your competition is empty" and "you have
+ * over-filtered it", which would misinform an organiser about the former
+ * when it's actually the latter.
  *
- * Genuinely empty rather than unfinished: public registration is down until
- * RS006 ships, so there is nothing to list yet regardless of UI. RS005 wires
- * the real table (filters, row expand, approve/reject/promote/CSV) — the
- * copy names that capability in plain language, no ticket reference, and the
- * CTA sends the organiser to the one thing that IS live this wave: Settings.
+ * `canEdit` gated no visible control through W2a — that wave shipped no
+ * mutating controls at all. RS005 W2b's row-expand detail is the first
+ * consumer: the join-code copy control is ABSENT for a viewer (owner
+ * ruling: mutating controls must be ABSENT, not disabled). `canEdit` is
+ * still threaded to the root's `data-can-edit` attribute too, unchanged
+ * from W2a.
+ *
+ * Every href (`filtersAction`/`clearHref`/`exportHref`/`emptyCtaHref`) is
+ * pre-built by page.tsx via `routes.*`, exactly like the Settings panel's
+ * `registerHref` — this component never imports `routes` itself. W2b reuses
+ * `clearHref` a second time, as the table context's `baseHref`: a cart
+ * sibling's link (registration-hub-registrant-detail.tsx) needs the SAME
+ * filters-cleared URL, for the same reason the "filters matched nothing"
+ * empty state's CTA does — a sibling excluded by the active filter would
+ * otherwise link nowhere.
  */
 export function RegistrationHubRegistrantsPanel({
-  title,
-  body,
-  ctaLabel,
-  ctaHref,
+  rows,
+  filters,
+  divisions,
+  canEdit,
+  dict,
+  orgTz,
+  filtersAction,
+  clearHref,
+  exportHref,
+  emptyTitle,
+  emptyBody,
+  emptyCtaLabel,
+  emptyCtaHref,
+  details,
 }: {
-  title: string;
-  body: string;
-  ctaLabel: string;
-  ctaHref: string;
+  rows: RegistrationListRow[];
+  filters: RegistrantsFilters;
+  divisions: DivisionOption[];
+  canEdit: boolean;
+  dict: Dict;
+  orgTz: string;
+  filtersAction: string;
+  clearHref: string;
+  exportHref: string;
+  emptyTitle: string;
+  emptyBody: string;
+  emptyCtaLabel: string;
+  emptyCtaHref: string;
+  /** RS005 W2b — the row-expand detail's batched roster/siblings/form_fields
+   *  (fetchRegistrantDetails, task 3). Threaded straight through to the
+   *  table; this panel does no lookups of its own. */
+  details: RegistrantDetails;
 }) {
+  const filtered = hasActiveFilters(filters);
+
+  // "No registrations at all" — RS004's designed treatment, reused
+  // byte-for-byte, and nothing ELSE on the tab: a filter bar or export
+  // link above a "no one's registered yet" message has nothing to act on.
+  if (rows.length === 0 && !filtered) {
+    return (
+      <div data-registration-hub-registrants-panel data-can-edit={canEdit}>
+        <RegistrationHubRegistrantEmpty
+          icon={ClipboardList}
+          title={emptyTitle}
+          body={emptyBody}
+          ctaLabel={emptyCtaLabel}
+          ctaHref={emptyCtaHref}
+          variant="empty"
+        />
+      </div>
+    );
+  }
+
   return (
-    <div
-      data-registration-hub-registrants-panel
-      className="card flex flex-col items-center gap-3 px-6 py-14 text-center"
-    >
-      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-purple-100 text-purple-600">
-        <ClipboardList className="h-6 w-6" strokeWidth={1.75} aria-hidden />
-      </span>
-      <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-      <p className="max-w-md text-sm text-slate-500">{body}</p>
-      <Link href={ctaHref} className="btn btn-ghost mt-1">
-        {ctaLabel}
-      </Link>
+    <div data-registration-hub-registrants-panel data-can-edit={canEdit}>
+      <div className="mb-3 flex justify-end">
+        {/* A plain href, not a client fetch — this codebase's established
+            convention for every export button (documents-menu.tsx's own
+            header comment). Read-scope only (the route's own
+            requireResourceAuth(..., "read")), so this renders for a
+            viewer too (owner ruling). */}
+        <a href={exportHref} className="btn btn-ghost text-sm">
+          {t(dict, "reg.exportCsv")}
+        </a>
+      </div>
+
+      <RegistrationHubRegistrantFilters
+        dict={dict}
+        action={filtersAction}
+        filters={filters}
+        divisions={divisions}
+        clearHref={clearHref}
+        statusOptions={RegistrationStatus.options}
+        kindOptions={EntrantKind.options}
+      />
+
+      {rows.length === 0 ? (
+        // "Filters matched nothing" — task 5's OTHER, deliberately different
+        // empty state: a clear-filters affordance, not a "go to Settings"
+        // one, and different copy/icon so it never reads as "your
+        // competition is empty" when it is actually just over-filtered.
+        <RegistrationHubRegistrantEmpty
+          icon={SearchX}
+          title={t(dict, "reg.hub.registrants.emptyFiltered.title")}
+          body={t(dict, "reg.hub.registrants.emptyFiltered.body")}
+          ctaLabel={t(dict, "reg.hub.registrants.filters.clear")}
+          ctaHref={clearHref}
+          variant="filtered"
+        />
+      ) : (
+        <RegistrationHubRegistrantTable
+          rows={rows}
+          context={{ dict, orgTz, canEdit, baseHref: clearHref }}
+          details={details}
+        />
+      )}
     </div>
   );
 }

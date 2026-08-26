@@ -46,8 +46,15 @@ describe.skipIf(!HAS_DB)("fetchDivisionRows — real Postgres", () => {
 
     const settings = { fee_cents: 500, currency: "usd", payment_method: "offline" as const };
     await seedRegistration(competition.id, configured.id, settings, { status: "confirmed" });
+    await seedRegistration(competition.id, configured.id, settings, { status: "confirmed" });
     await seedRegistration(competition.id, configured.id, settings, { status: "pending" });
-    // Waitlisted holds no spot — must NOT count toward `taken`.
+    // Waitlisted holds no spot — must NOT count toward `taken`. Two of them,
+    // deliberately a DIFFERENT count than `taken` below (3, not 2): a
+    // `waitlisted` subquery that accidentally reused SPOT_HOLDERS (RS005 F4)
+    // would read 3 here instead of 2, and a `taken` subquery that accidentally
+    // counted 'waitlisted' too would read 5 instead of 3 — either mistake
+    // fails this assertion, which a same-count fixture could not catch.
+    await seedRegistration(competition.id, configured.id, settings, { status: "waitlisted" });
     await seedRegistration(competition.id, configured.id, settings, { status: "waitlisted" });
 
     const rows = await fetchDivisionRows(owner, competition.id);
@@ -69,6 +76,7 @@ describe.skipIf(!HAS_DB)("fetchDivisionRows — real Postgres", () => {
       approval: null,
       allow_free_agents: false,
       taken: 0,
+      waitlisted: 0,
     });
 
     const configuredRow = rows.find((r) => r.division_id === configured.id)!;
@@ -80,8 +88,11 @@ describe.skipIf(!HAS_DB)("fetchDivisionRows — real Postgres", () => {
       fee_cents: 500,
       approval: "manual",
       allow_free_agents: true,
-      // 1 confirmed + 1 pending hold a spot; the waitlisted one does not.
-      taken: 2,
+      // 2 confirmed + 1 pending hold a spot; the two waitlisted ones do not.
+      taken: 3,
+      // RS005 F4 — the Money section's re-price warning reads this. Counted
+      // by its OWN subquery (status = 'waitlisted'), never SPOT_HOLDERS.
+      waitlisted: 2,
     });
     expect(configuredRow.org_currency).toBeTruthy();
     // A fresh org's Stripe account is not connected at all — never

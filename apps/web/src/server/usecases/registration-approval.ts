@@ -175,6 +175,17 @@ export async function rejectRegistration(
   auth: AuthCtx,
   regId: string,
 ): Promise<RegistrationWithGroupRow> {
+  // Frozen entitlements block this exactly as they block approve. Reject is
+  // not the harmless half of the pair: it refunds a PAID entry through Stripe
+  // and auto-promotes the waitlist. Only approveRegistration carried the
+  // guard, so on a frozen org Approve 402'd while Reject on the same row moved
+  // real money — and this branch is what first put both behind HTTP routes and
+  // UI buttons, so the gap became reachable here.
+  //
+  // Resolved BEFORE the transaction for the same reason approve does it:
+  // `frozenCompetitionIds` queries the pooled `sql` proxy and `withTenant`
+  // pins a pooled connection for its whole callback.
+  const frozen = await frozenCompetitionIds(auth.orgId);
   const result = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
     if (reg.status === "rejected") {
@@ -193,6 +204,7 @@ export async function rejectRegistration(
       throw new HttpError(422, "This division uses automatic approval — there is nothing to reject manually");
     }
     const competitionId = await divisionCompetitionId(tx, reg.division_id);
+    assertNotFrozen(frozen, competitionId);
     await tx`
       update registrations set status = 'rejected', updated_at = now()
       where id = ${regId}`;
@@ -322,8 +334,13 @@ export async function promoteFromWaitlist(
   divisionId: string,
   opts: PromoteFromWaitlistOpts = {},
 ): Promise<RegistrationWithGroupRow | null> {
+  // Same freeze guard as approve/reject — a promotion re-quotes the fee, opens
+  // a pay window and emails the registrant, which is not work a frozen org
+  // should be able to start.
+  const frozen = await frozenCompetitionIds(auth.orgId);
   const result = await withTenant(auth.orgId, async (tx) => {
     const competitionId = await divisionCompetitionId(tx, divisionId);
+    assertNotFrozen(frozen, competitionId);
     const settings = await loadSettings(tx, divisionId);
 
     let promoted: RegistrationWithGroupRow | null;

@@ -36,6 +36,21 @@ const PAGE_QUERY = {
   limit: { schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },
 };
 
+/** RS005 W1b — the Registrants-tab list/export filter set (usecases/
+ *  registrations.ts's `ListRegistrationsFilters`), shared by the competition
+ *  list route and its CSV export twin so the two documented query surfaces
+ *  cannot drift apart. `free_agent`/`consent_pending` follow this file's
+ *  existing "1"/"0" boolean-query convention (e.g. `archived` above). */
+const REGISTRATION_LIST_QUERY = {
+  status: { schema: { type: "string", enum: S.RegistrationStatus.options } },
+  division_id: { schema: { type: "string" } },
+  kind: { schema: { type: "string", enum: S.EntrantKind.options } },
+  free_agent: { schema: { type: "string", enum: ["1", "0"] } },
+  consent_pending: { schema: { type: "string", enum: ["1", "0"] } },
+  q: { schema: { type: "string" } },
+  sort: { schema: { type: "string", enum: S.RegistrationSort.options } },
+};
+
 const pageOf = (item: ZodType) =>
   z.object({ items: z.array(item), nextCursor: z.string().nullable() });
 
@@ -187,15 +202,39 @@ export const ROUTES: RouteSpec[] = [
   // Registration & entry fees (doc 16 §1.1, PROMPT-20a)
   { path: "/divisions/{id}/registration-settings", method: "get", summary: "Division registration settings (defaults when unset)", tag: "registration", response: S.RegistrationSettings },
   { path: "/divisions/{id}/registration-settings", method: "put", summary: "Upsert registration settings (entry fees are Pro)", tag: "registration", request: S.PutRegistrationSettings, response: S.RegistrationSettings, errors: [402, 422] },
-  { path: "/divisions/{id}/registrations", method: "get", summary: "Organiser registration list (?status=)", tag: "registration", response: z.array(S.Registration), query: { status: { schema: { type: "string", enum: ["pending", "paid", "confirmed", "waitlisted", "withdrawn"] } } } },
-  { path: "/divisions/{id}/registrations/export", method: "get", summary: "CSV export of registrations; all plans (`exports`)", tag: "registration", errors: [402] },
+  { path: "/divisions/{id}/registrations", method: "get", summary: "Organiser registration list (?status=)", tag: "registration", response: z.array(S.RegistrationListEntry), query: { status: { schema: { type: "string", enum: S.RegistrationStatus.options } } } },
+  // CSV body shape (RS005 F1 finding 5 — no typed response: text/csv, not
+  // JSON): one row per PLAYER, not per registration — an entry with N
+  // players repeats its entry columns N times; an entry with none emits one
+  // row with blank player columns. Header starts `id,registration_id,...`
+  // — both the same value on every row (`id` kept for the pre-RS005-W1a
+  // one-row-per-registration contract, `registration_id` is the current
+  // name) — and varies by caller role: player dob/gender are editor-only,
+  // OMITTED (not blanked) for a viewer session or a read-scope API key.
+  { path: "/divisions/{id}/registrations/export", method: "get", summary: "CSV export of registrations; all plans (`exports`). One row per player, `id`+`registration_id` both present (same value); player dob/gender omitted for a viewer/read-scope key", tag: "registration", errors: [402] },
+  // RS005 W1b — competition-wide Registrants tab: the same read model
+  // (listRegistrations/exportRegistrationsCsv) as the division routes above,
+  // scoped to a whole competition with the full RS005 W1a filter set.
+  { path: "/competitions/{id}/registrations", method: "get", summary: "Cross-division organiser registration list — the Registrants tab read model (?status=&division_id=&kind=&free_agent=&consent_pending=&q=&sort=)", tag: "registration", response: z.array(S.RegistrationListEntry), query: REGISTRATION_LIST_QUERY },
+  { path: "/competitions/{id}/registrations/export", method: "get", summary: "CSV export of a competition's registrations, same filters as the list; all plans (`exports`). Same per-player CSV shape as the division export above", tag: "registration", errors: [402], query: REGISTRATION_LIST_QUERY },
   { path: "/registrations/{id}/confirm", method: "post", summary: "Approve: materialise the entrant (idempotent)", tag: "registration", response: S.Registration, errors: [422] },
   { path: "/registrations/{id}/mark-paid", method: "post", summary: "Record an offline (cash/bank) payment — confirms the entry", tag: "registration", response: S.Registration, errors: [422] },
   { path: "/registrations/{id}/waive", method: "post", summary: "Confirm without payment (fee waived, audited)", tag: "registration", response: S.Registration, errors: [422] },
+  // RS005 W1b — manual-approval review (registration-approval.ts). Approve
+  // mirrors /confirm's idempotent-materialise shape; reject is terminal.
+  { path: "/registrations/{id}/approve", method: "post", summary: "Manual-approval review: pending|paid → confirmed, materialises the entrant (idempotent); refused on an auto-approval division, an already-rejected row, or one already refunded", tag: "registration", response: S.Registration, errors: [422] },
+  { path: "/registrations/{id}/reject", method: "post", summary: "Manual-approval review: pending|paid → rejected (terminal); frees the spot (auto-promotes the waitlist) and refunds a paid entry", tag: "registration", response: S.Registration, errors: [422] },
   { path: "/registrations/{id}/waitlist", method: "post", summary: "Move a pending registration to the waitlist", tag: "registration", response: S.Registration, errors: [422] },
+  // RS005 W1b — the id's own division promotes oldest-first by default;
+  // body.registration_id overrides which waitlisted entry gets promoted.
+  { path: "/registrations/{id}/promote", method: "post", summary: "Promote from the waitlist: oldest-first in id's division by default, or an explicit registration_id override", tag: "registration", request: S.PromoteRegistration, response: S.Registration.nullable(), errors: [404, 422] },
   { path: "/registrations/{id}/withdraw", method: "post", summary: "Withdraw: frees the spot, auto-promotes, auto-refunds pre-lock", tag: "registration", response: S.Registration },
   { path: "/registrations/{id}/refund", method: "post", summary: "Manual refund (post-lock discretion; partial allowed; audited)", tag: "registration", request: S.RefundRegistration, response: S.Registration, errors: [422] },
   { path: "/registrations/{id}/remind", method: "post", summary: "Email an unpaid registrant a payment reminder (offline pay)", tag: "registration", response: z.object({ sent: z.boolean() }), errors: [422] },
+  // RS005 W4 — sendRegistrationEmail had zero callers before this wave; this
+  // is the organiser-facing resend of the cart-shaped confirmation the
+  // public register route now sends at submit.
+  { path: "/registrations/{id}/resend-confirmation", method: "post", summary: "Resend the registrant's confirmation email — the whole cart, not just this entry", tag: "registration", response: z.object({ sent: z.boolean() }) },
   { path: "/registrations/{id}/evidence", method: "get", summary: "Dispute evidence pack as a printable HTML attachment — registration record, receipt reconstruction, activity log, fixtures (session console, not key-accessible)", tag: "registration", errors: [404] },
   { path: "/orgs/{id}/connect", method: "get", summary: "Stripe Connect status (?refresh=1 re-reads from Stripe)", tag: "registration", response: S.ConnectStatus, query: { refresh: { schema: { type: "string", enum: ["1"] } } } },
   { path: "/orgs/{id}/connect", method: "post", summary: "Create the Express account + onboarding link (Pro)", tag: "registration", request: S.CreateConnectOnboarding, response: S.ConnectOnboardingLink, errors: [402] },

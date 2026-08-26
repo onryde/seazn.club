@@ -8,6 +8,9 @@ import { describe, expect, it } from "vitest";
 import {
   instantToOrgTzInputValue,
   orgTzInputValueToInstant,
+  orgTzDateTimeHalves,
+  isDateTimeHalvesIncomplete,
+  editOrgTzDateTimeHalf,
 } from "@/components/registration-hub-tz-input";
 
 describe("instantToOrgTzInputValue", () => {
@@ -70,5 +73,81 @@ describe("orgTzInputValueToInstant", () => {
     const tz = "Pacific/Auckland";
     const value = instantToOrgTzInputValue(iso, tz);
     expect(orgTzInputValueToInstant(value, tz)).toBe(iso);
+  });
+});
+
+// RS005 R4 task 2 — the half-filled clock bug. DateTimeSplitField's own
+// `joinValue` collapses a half-filled pair to "", identical to a fully
+// cleared one, before this module ever sees a value — so the fix has to
+// live where the two halves are still known separately. These three
+// functions are that layer; see the file's own header comment for why a
+// native `input.validity.badInput` check does not apply to this UI's actual
+// DOM shape (a split date input + time select, never a raw datetime-local).
+describe("orgTzDateTimeHalves", () => {
+  it("splits a stored instant into its date/time halves, in the org zone", () => {
+    expect(orgTzDateTimeHalves("2026-01-15T10:00:00Z", "Asia/Kolkata")).toEqual({
+      date: "2026-01-15",
+      time: "15:30",
+    });
+  });
+
+  it("returns two empty halves for null — never a bare date with a blank time", () => {
+    expect(orgTzDateTimeHalves(null, "UTC")).toEqual({ date: "", time: "" });
+  });
+});
+
+describe("isDateTimeHalvesIncomplete", () => {
+  it("is false when both halves are empty — a deliberate, complete clear", () => {
+    expect(isDateTimeHalvesIncomplete({ date: "", time: "" })).toBe(false);
+  });
+
+  it("is false when both halves are filled", () => {
+    expect(isDateTimeHalvesIncomplete({ date: "2026-08-24", time: "10:00" })).toBe(false);
+  });
+
+  it("is true when only the date is filled — THE bug this task fixes", () => {
+    expect(isDateTimeHalvesIncomplete({ date: "2026-08-24", time: "" })).toBe(true);
+  });
+
+  it("is true when only the time is filled", () => {
+    expect(isDateTimeHalvesIncomplete({ date: "", time: "10:00" })).toBe(true);
+  });
+});
+
+describe("editOrgTzDateTimeHalf", () => {
+  it("picking a date with the time still blank reports incomplete, with NO usable instant", () => {
+    const result = editOrgTzDateTimeHalf({ date: "", time: "" }, "date", "2026-08-24", "UTC");
+    expect(result.incomplete).toBe(true);
+    expect(result.instant).toBeNull();
+    expect(result.halves).toEqual({ date: "2026-08-24", time: "" });
+  });
+
+  it("then filling the time completes the pair and resolves the real instant", () => {
+    const afterDate = editOrgTzDateTimeHalf({ date: "", time: "" }, "date", "2026-08-24", "UTC");
+    const afterTime = editOrgTzDateTimeHalf(afterDate.halves, "time", "10:00", "UTC");
+    expect(afterTime.incomplete).toBe(false);
+    expect(afterTime.instant).toBe(orgTzInputValueToInstant("2026-08-24T10:00", "UTC"));
+  });
+
+  it("picking the time first, date still blank, is ALSO incomplete (both directions)", () => {
+    const result = editOrgTzDateTimeHalf({ date: "", time: "" }, "time", "10:00", "UTC");
+    expect(result.incomplete).toBe(true);
+    expect(result.instant).toBeNull();
+  });
+
+  it("clearing a fully-set pair back to both-empty is a real, complete clear — not incomplete", () => {
+    const cleared = editOrgTzDateTimeHalf({ date: "2026-08-24", time: "10:00" }, "date", "", "UTC");
+    // Time is still "10:00" here — one half filled, one blank: incomplete.
+    expect(cleared.incomplete).toBe(true);
+    const fullyCleared = editOrgTzDateTimeHalf(cleared.halves, "time", "", "UTC");
+    expect(fullyCleared.incomplete).toBe(false);
+    expect(fullyCleared.instant).toBeNull();
+  });
+
+  it("resolves the instant in the ORG timezone, not UTC", () => {
+    const withDate = editOrgTzDateTimeHalf({ date: "", time: "" }, "date", "2026-01-15", "Asia/Kolkata");
+    const complete = editOrgTzDateTimeHalf(withDate.halves, "time", "15:30", "Asia/Kolkata");
+    expect(complete.incomplete).toBe(false);
+    expect(complete.instant).toBe("2026-01-15T10:00:00.000Z");
   });
 });

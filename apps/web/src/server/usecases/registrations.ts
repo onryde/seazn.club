@@ -17,6 +17,8 @@ import type postgres from "postgres";
 import type Stripe from "stripe";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { mayHoldBearerCredential } from "@/lib/types";
+import { isTerminalRegistrationStatus } from "@/lib/registration-status";
 import { getLimit, hasFeature, requireFeature } from "@/lib/entitlements";
 import { platformFeeDefault } from "@/lib/platform-settings";
 import { getStripe } from "@/lib/stripe";
@@ -24,11 +26,13 @@ import { isRegistrationCurrency } from "@/lib/currency";
 import { SPOT_HOLDERS } from "@/lib/registration-status";
 import {
   sendPaymentReminderEmail,
+  sendRegistrationEmail,
   sendRegistrationPromotedEmail,
   sendRefundIssuedEmail,
   sendDisputeAlertEmail,
   sendDisputeLostEmail,
 } from "@/lib/email";
+import type { RegistrationEmailArgs } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
 import { toLocale } from "@/lib/i18n-constants";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
@@ -934,6 +938,227 @@ export async function notifyPromoted(
   } catch {
     /* fire-and-forget */
   }
+}
+
+/**
+ * Assembles the CART-shaped confirmation mail for one group — every
+ * CURRENT entry with its own display name/status/fee, the cart's total/
+ * currency/deadline/ref code, and (for an offline cart with money owed)
+ * the resolved payment instructions. Shared by the submit-time send
+ * (`notifySubmitted`), the organiser resend action
+ * (`resendRegistrationConfirmation`) and the dispute-evidence
+ * reconstruction (`buildDisputeEvidence`) — one query decides what "this
+ * cart's confirmation email" contains, the same re-select-fresh-state
+ * convention `mintGroupCheckout` uses rather than trusting a caller's
+ * snapshot. Returns null (never throws) for a nonexistent group or one
+ * with no entries — should not happen in practice; kept as a defensive
+ * no-op for the fire-and-forget submit-time caller.
+ *
+ * `token`: the plaintext access token, only ever available at the SUBMIT
+ * moment (only its sha256 is stored afterwards). When given, `statusUrl`
+ * carries it — the same full-access status-page URL shape
+ * `createRegistrationCheckout`'s own `returnBase` builds. When null
+ * (every other caller), it falls back to the token-less `/r/[ref]` page,
+ * mirroring that same function's fallback.
+ *
+ * `payUrl`: never minted here — a caller with a fresh checkout link
+ * resolves it itself and passes it straight through, exactly as
+ * `notifyPromoted` (above) does inline.
+ */
+async function buildCartMail(
+  groupId: string,
+  origin: string,
+  token: string | null,
+  payUrl: string | null,
+): Promise<{ to: string; locale: string | null; competitionId: string; args: RegistrationEmailArgs } | null> {
+  const [group] = await sql<
+    Pick<
+      RegistrationGroupRow,
+      | "contact_email" | "locale" | "ref_code" | "amount_cents" | "currency"
+      | "expires_at" | "payment_method" | "competition_id"
+    >[]
+  >`
+    select contact_email, locale, ref_code, amount_cents, currency, expires_at,
+           payment_method, competition_id
+    from registration_groups where id = ${groupId}`;
+  if (!group) {
+    // Silent before RS005 F1: a caller (notifySubmitted, resendRegistration-
+    // Confirmation, buildDisputeEvidence) just got a null it could not
+    // explain — the dispute-evidence caller in particular falls back to a
+    // placeholder that reads as "no receipt was sent" on a document
+    // submitted to Stripe as evidence. Should not happen in practice
+    // (registrations FK to their group), which is exactly why it needs a
+    // trace when it does.
+    log.error({ groupId }, "registration: buildCartMail found no group for this id — cart mail cannot be built");
+    return null;
+  }
+
+  const entries = await sql<
+    { id: string; division_id: string; display_name: string; status: RegistrationRow["status"]; amount_cents: number }[]
+  >`
+    select id, division_id, display_name, status, amount_cents
+    from registrations where group_id = ${groupId}
+    order by created_at, id`;
+  if (entries.length === 0) {
+    // Same "should not happen, but must not be invisible if it does" as the
+    // !group branch above — see this function's own doc comment on this
+    // defensive no-op.
+    log.error({ groupId }, "registration: buildCartMail's group has no entries — cart mail cannot be built");
+    return null;
+  }
+
+  const ctx = await divisionCtx(sql, entries[0]!.division_id);
+
+  // The cart's payable subtotal, derived FRESH from the entries actually in
+  // it right now — never `group.amount_cents` (RS005 F1 finding 2). That
+  // column is a SUBMIT-TIME snapshot (registration-submit.ts's own
+  // `subtotal`) with exactly one other writer: `promoteWaitlistedRow`
+  // updates the promoted entry's own `registrations.amount_cents` but never
+  // this mirror, so a cart mail rebuilt after a promotion (resend, dispute
+  // evidence) read a stale 0 for an entry that now genuinely owes money.
+  // Summing the live entries here — the same "non-waitlisted" rule
+  // submit-time subtotal itself uses — self-heals regardless of which
+  // entry-level writer last touched a fee, matching this function's own
+  // re-select-fresh-state convention (see its doc comment re
+  // `mintGroupCheckout`) rather than adding a second mirror write that can
+  // drift again the next time a new promotion-shaped writer appears.
+  const totalCents = entries.reduce(
+    (sum, e) => sum + (e.status === "waitlisted" ? 0 : e.amount_cents),
+    0,
+  );
+
+  // Same gate `notifyPromoted` uses for its single entry: offline AND money
+  // actually owed — reading the SAME derived `totalCents` above, not the
+  // stale column, for the identical reason (a promotion into an offline
+  // cart must surface its instructions too).  A cart's paid divisions
+  // share one payment_method (assertUniformPaymentMethod at submit), so
+  // the first entry that still carries a fee is representative of the
+  // whole cart, not a guess across divisions that disagree.
+  let paymentInstructions: string | null = null;
+  if (group.payment_method === "offline" && totalCents > 0) {
+    const firstPaid = entries.find((e) => e.amount_cents > 0) ?? entries[0]!;
+    const settings = await loadSettings(sql, firstPaid.division_id);
+    paymentInstructions = settings?.payment_instructions ?? ctx.payment_instructions;
+  }
+
+  const statusUrl = token
+    ? `${origin}/shared/${ctx.org_slug}/${ctx.comp_slug}/register/status?rid=${groupId}&token=${encodeURIComponent(token)}`
+    : `${origin}/r/${group.ref_code}`;
+
+  return {
+    to: group.contact_email,
+    locale: group.locale,
+    competitionId: group.competition_id,
+    args: {
+      orgName: ctx.org_name,
+      competitionName: ctx.comp_name,
+      entries: entries.map((e) => ({ displayName: e.display_name, status: e.status, feeCents: e.amount_cents })),
+      totalCents,
+      currency: group.currency,
+      paymentInstructions,
+      payUrl,
+      payDeadline: group.expires_at,
+      statusUrl,
+      refCode: group.ref_code,
+      refStatusUrl: group.ref_code ? `${origin}/r/${group.ref_code}` : null,
+    },
+  };
+}
+
+/**
+ * Post-submit confirmation (RS005 W4) — fire-and-forget, cart-shaped: every
+ * entry in the group with its own status/fee, the group's payable total,
+ * and `payUrl` exactly as resolved by the caller (the public register
+ * route, after its own `mintGroupCheckout` attempt succeeds, fails, or is
+ * skipped for a zero-subtotal cart) — this function never mints anything
+ * itself. `sendRegistrationEmail` had ZERO callers before this wave; this
+ * is the first one. A registrant who gets no mail because the provider
+ * rejected it, or because this function itself threw, still keeps a
+ * committed, capacity-holding cart — that is the entire reason this wraps
+ * everything in one try/catch, matching `notifyPromoted`'s contract
+ * exactly: a mail failure must never fail the submit that already
+ * committed.
+ */
+export async function notifySubmitted(
+  groupId: string,
+  origin: string,
+  token: string,
+  payUrl: string | null,
+): Promise<void> {
+  try {
+    const mail = await buildCartMail(groupId, origin, token, payUrl);
+    if (!mail) return; // buildCartMail already logged why
+    await sendRegistrationEmail({ to: mail.to, locale: toLocale(mail.locale), ...mail.args });
+  } catch (err) {
+    // RS005 F1 (owner: new code ships logging, 2026-08-12) — this used to
+    // swallow silently. That is exactly how the single biggest finding of
+    // this session went unnoticed for weeks: the confirmation send failed
+    // and nothing recorded it. Still fire-and-forget — the point is that a
+    // failure stops being invisible, not that submit starts failing.
+    log.error({ err, groupId }, "registration: submit confirmation send failed");
+  }
+}
+
+/**
+ * Organiser: resend the cart's confirmation email (RS005 W4) — the WHOLE
+ * cart `regId` belongs to, not just that one entry, since the mail itself
+ * is cart-shaped. No fresh checkout is minted here (unlike the submit-time
+ * send): the plaintext access token no longer exists once the cart is
+ * committed (only its hash is stored), and re-minting a live Stripe session
+ * on every resend click would leave a fresh abandoned session behind each
+ * time for no ask in this wave — the registrant reaches payment through the
+ * emailed status link, which already knows how to resume checkout.
+ */
+export async function resendRegistrationConfirmation(
+  auth: AuthCtx,
+  regId: string,
+  origin: string,
+): Promise<{ sent: boolean }> {
+  const reg = await withTenant(auth.orgId, (tx) => orgReg(tx, regId));
+  // A withdrawn/rejected/expired entry gets no confirmation. Observed live:
+  // the organiser could resend on a WITHDRAWN entry and the send succeeded, so
+  // someone who had pulled out received an email confirming their
+  // registration — and because the mail is cart-shaped, it re-stated their
+  // whole cart to them as though nothing had happened.
+  //
+  // Guarded HERE and not only in the UI: the button gate is a courtesy, this
+  // is the rule. The route is reachable directly with a session or an API key.
+  if (isTerminalRegistrationStatus(reg.status)) {
+    // RS005 F1: an organiser clicking Resend and getting a 422 with nothing
+    // recorded anywhere left no trace of who tried what on which entry.
+    log.warn(
+      { registrationId: regId, orgId: auth.orgId, actorId: auth.userId, status: reg.status },
+      "registration: confirmation resend refused — entry is terminal",
+    );
+    throw new HttpError(
+      422,
+      `This registration is ${reg.status} — a confirmation would tell the registrant they are entered`,
+    );
+  }
+  const mail = await buildCartMail(reg.group_id, origin, null, null);
+  if (!mail) return { sent: false }; // buildCartMail already logged why
+  const sent = await sendRegistrationEmail({ to: mail.to, locale: toLocale(mail.locale), ...mail.args });
+  if (!sent) {
+    // Same standing rule as the terminal-refusal branch above: an organiser
+    // clicking Resend and getting nothing must leave a trace, distinct from
+    // the generic provider-level warn in lib/email.ts (which carries no
+    // registration/actor context to tie back to this click).
+    log.warn(
+      { registrationId: regId, orgId: auth.orgId, actorId: auth.userId, groupId: reg.group_id, to: mail.to },
+      "registration: confirmation resend — email provider did not accept the send",
+    );
+  }
+  await withTenant(auth.orgId, (tx) =>
+    audit(
+      tx,
+      mail.competitionId,
+      auth.orgId,
+      "registration.confirmation_resent",
+      { registration_id: regId },
+      auth.userId,
+    ),
+  );
+  return { sent };
 }
 
 // ---------------------------------------------------------------------------
@@ -2652,8 +2877,11 @@ export async function sweepRegistrations(
 // ---------------------------------------------------------------------------
 
 export interface ListRegistrationsFilters {
-  /** Required when `divisionId` is null (cross-division hub mode); ignored
-   *  otherwise — a single division already pins its own competition. */
+  /** Required when `divisionId` is null (cross-division hub mode). When BOTH
+   *  are given they must AGREE — a division belonging to another competition
+   *  is a 404, not a silently-honoured override. This used to read "ignored
+   *  otherwise", and the code matched: it was the cross-competition read that
+   *  the RS005 W1b review caught (see the guard in `listRegistrations`). */
   competition_id?: string;
   kind?: RegistrationSettingsRow["entrant_kind"];
   free_agent?: boolean;
@@ -2661,7 +2889,81 @@ export interface ListRegistrationsFilters {
   consent_pending?: boolean;
   /** Matches the entry's display name or the cart's contact name/email. */
   text?: string;
+  /** RS005 W1a. Default `"oldest"` is `order by r.created_at, r.id` —
+   *  UNCHANGED from pre-W1a, so the live `/api/v1/divisions/[id]/registrations`
+   *  route (which never sets this) keeps its existing response order.
+   *  `"newest"` reverses both keys. */
+  sort?: "newest" | "oldest";
 }
+
+/** The sport's roster-cap expression: `sports.position_catalog.lineup.size +
+ *  .benchMax`, NULL when the sport declares no `lineup` key at all
+ *  (unlimited) — the same rule `registration-submit.ts`'s `joinTeamEntry`
+ *  (registration-submit.ts:742-748) already enforces at join time. Assumes
+ *  the surrounding query joins the sports row as `sp` (a hardcoded alias,
+ *  same convention as `regGroupCols`'s `r`/`g`).
+ *
+ *  This is the ONLY copy: RS005 W1b repointed `joinTeamEntry` at this export
+ *  (`008b3da27`), so the join-time cap and the displayed roster fill can no
+ *  longer drift. Do not re-inline it. */
+export function rosterCapExpr(db: AnySql) {
+  return db`(
+    (sp.position_catalog -> 'lineup' ->> 'size')::int +
+    coalesce((sp.position_catalog -> 'lineup' ->> 'benchMax')::int, 0)
+  )`;
+}
+
+/** `listRegistrations`' row (RS005 W1a), widened for the Registrants tab:
+ *  the division's own name/slug, its resolved `entrant_kind`, and three
+ *  values no consumer should recompute itself — `roster_count`/`roster_cap`/
+ *  `consent_pending_count` (per-entry correlated subqueries in the one query
+ *  below, same no-N+1 convention `card-stats.ts`'s `listDivisionCardStats`
+ *  already uses) and `waitlist_position` (tuple-comparison note on the query
+ *  below). Deliberately DROPS `access_token_hash` — the list/export surface
+ *  must never ship the cart's access-token hash to an organiser session; see
+ *  the strip at the bottom of `listRegistrations`. */
+export interface RegistrationListRow extends Omit<RegistrationWithGroupRow, "access_token_hash"> {
+  division_name: string;
+  division_slug: string;
+  entrant_kind: RegistrationSettingsRow["entrant_kind"];
+  roster_count: number;
+  /** null = unlimited (the sport declares no lineup config). */
+  roster_cap: number | null;
+  consent_pending_count: number;
+  /** 1-based rank within this row's DIVISION, `waitlisted` rows only; null
+   *  for every other status. */
+  waitlist_position: number | null;
+  /** The DIVISION's approval mode (`registration_settings.approval`), not the
+   *  entry's. RS005 W3 renders approve/reject only for a `manual` division —
+   *  on an `auto` division `approveRegistration` refuses with a 422, so
+   *  showing the control would offer an organiser a button that cannot work.
+   *  `coalesce`d to 'auto' because a division with no settings row at all
+   *  behaves exactly as auto (registration-approval.ts's own
+   *  `loadApprovalSettings` reads it the same way). */
+  approval: RegistrationSettingsRow["approval"];
+  /** The DIVISION's LIVE entry fee, not this entry's frozen `amount_cents`.
+   *
+   *  Both server gates read the live value — `approveRegistration` refuses
+   *  while a fee is outstanding, `markRegistrationPaidOffline` refuses when
+   *  the division has no fee — while the row only carried the amount quoted
+   *  at SUBMIT. `putRegistrationSettings` never re-quotes existing entries
+   *  (it contains no `update registrations` at all), so the two diverge the
+   *  moment an organiser edits a fee, and the UI then offers whichever
+   *  control the server refuses: raise 0 -> 20.00 and Approve renders but
+   *  422s "mark it paid first" while Mark paid is hidden; drop 20.00 -> 0 and
+   *  the mirror image. Either way the organiser is stuck with no working
+   *  control.
+   *
+   *  Carried on the row so the client gates on exactly what the server gates
+   *  on, correct on FIRST render. Costs nothing: `registration_settings` is
+   *  already LEFT JOINed for `entrant_kind`/`approval`. */
+  division_fee_cents: number;
+}
+
+/** Raw wire shape — `RegistrationListRow` plus the hash the query still
+ *  selects (via the shared `regGroupCols`) but the function strips before
+ *  returning. */
+type RawListRow = RegistrationListRow & { access_token_hash: string };
 
 /**
  * Organiser registration list. `divisionId` scopes to ONE division exactly as
@@ -2680,19 +2982,60 @@ export interface ListRegistrationsFilters {
  * `seedRegistration` in the test file), and an INNER JOIN would silently
  * drop those rows for the EXISTING single-division callers — a regression
  * this extension must not cause.
+ *
+ * RS005 W1a: widened the row (`RegistrationListRow`) and added `filters.sort`.
+ * `sports` is joined INNER, not LEFT, unlike `registration_settings` above —
+ * `divisions.sport_key` is `not null references sports(key)` (V209), so
+ * every division has exactly one sport row and this join can never drop one.
+ * `waitlist_position`'s subquery counts waitlisted SIBLINGS (same division)
+ * whose `(created_at, id)` tuple sorts strictly before this row's own, +1 —
+ * exactly `promoteOldestWaitlisted`'s (this file) own `order by created_at,
+ * id limit 1`, so position 1 is that function's pick on a quiescent table.
+ *
+ * It is a SNAPSHOT of that order, not a lock on it, and the difference is
+ * reachable: `promoteOldestWaitlisted` picks `for update skip locked`, so
+ * while another transaction holds the rank-1 row (a concurrent promotion, a
+ * withdraw's auto-promote, a refund) it promotes rank 2 instead, while this
+ * plain count still reports the locked row as #1. The organiser sees a
+ * position that was true when the page was rendered. Do NOT "fix" this by
+ * adding `skip locked` to the read — a display query that silently omits
+ * locked rows renumbers the whole queue under load, which is worse than a
+ * stale number. The ordering rule is what must not fork; the instant it is
+ * sampled may differ.
  */
 export async function listRegistrations(
   auth: AuthCtx,
   divisionId: string | null,
   status: string | null,
   filters: ListRegistrationsFilters = {},
-): Promise<RegistrationWithGroupRow[]> {
+): Promise<RegistrationListRow[]> {
   return withTenant(auth.orgId, async (tx) => {
     let competitionId: string;
     if (divisionId) {
       const [division] = await tx<{ competition_id: string }[]>`
         select competition_id from divisions where id = ${divisionId}`;
       if (!division) throw new HttpError(404, "division not found");
+      // SECURITY (RS005 W1b review, BLOCKER): when the caller named BOTH, the
+      // two must agree. This branch used to derive the competition from the
+      // division and silently DISCARD `filters.competition_id`, so a request
+      // addressed to competition A carrying a `division_id` from competition B
+      // returned B's rows under a 200 from A's URL.
+      //
+      // Same-org only (`withTenant` still scopes the read), so for a session
+      // user it leaks nothing they could not reach through B's own URL. The
+      // real breach is the API-key competition pin: `apiKeyAuth` resolves the
+      // pin from the URL PATH resource (`api-v1/auth.ts:162-172`,
+      // `resolvePinCompetition`) and never looks at query parameters, so a key
+      // pinned to A satisfied the pin on A's path and then read — and CSV
+      // exported — B's contact names, emails, answers and payment state. The
+      // pin is the entire boundary that endpoint sells.
+      //
+      // 404, not 403: the repo's existing convention for a pin miss is that it
+      // adds no existence oracle (same comment at `resolvePinCompetition`), and
+      // a caller who may not scope to this division must not learn it exists.
+      if (filters.competition_id && division.competition_id !== filters.competition_id) {
+        throw new HttpError(404, "division not found");
+      }
       competitionId = division.competition_id;
     } else {
       if (!filters.competition_id) {
@@ -2703,33 +3046,104 @@ export async function listRegistrations(
       competitionId = filters.competition_id;
     }
     const text = filters.text?.trim();
-    return tx<RegistrationWithGroupRow[]>`
-      select ${regGroupCols(tx)}
+    // LIKE metacharacters (`%`/`_`) in the search text must match LITERALLY,
+    // not as wildcards (RS005 F1 finding 4) — a registrant's own contact
+    // details routinely contain them ("100% Effort", "john_smith@…"), and
+    // left unescaped they turned an ordinary-looking search into an
+    // accidental wildcard that over-matched unrelated rows. `\` is escaped
+    // too: it is Postgres's OWN default LIKE escape character even with no
+    // explicit ESCAPE clause, so a literal `\` in the search text would
+    // otherwise start escaping whatever follows it instead of matching
+    // itself.
+    const likePattern = (s: string) => "%" + s.replace(/[\\%_]/g, "\\$&") + "%";
+    const rows = await tx<RawListRow[]>`
+      select ${regGroupCols(tx)},
+        d.name as division_name,
+        d.slug as division_slug,
+        coalesce(rs.entrant_kind, 'individual') as entrant_kind,
+        coalesce(rs.approval, 'auto') as approval,
+        coalesce(rs.fee_cents, 0) as division_fee_cents,
+        (select count(*)::int from registration_players rp
+          where rp.registration_id = r.id) as roster_count,
+        ${rosterCapExpr(tx)} as roster_cap,
+        (select count(*)::int from registration_players rp
+          where rp.registration_id = r.id and rp.consent_status = 'pending') as consent_pending_count,
+        case when r.status = 'waitlisted' then (
+          (select count(*)::int from registrations w
+            where w.division_id = r.division_id and w.status = 'waitlisted'
+              and (w.created_at, w.id) < (r.created_at, r.id)) + 1
+        ) else null end as waitlist_position
       from registrations r
       join registration_groups g on g.id = r.group_id
       join divisions d on d.id = r.division_id
+      join sports sp on sp.key = d.sport_key
       left join registration_settings rs on rs.division_id = r.division_id
       where d.competition_id = ${competitionId}
         ${divisionId ? tx`and r.division_id = ${divisionId}` : tx``}
         ${status ? tx`and r.status = ${status}` : tx``}
-        ${filters.kind ? tx`and rs.entrant_kind = ${filters.kind}` : tx``}
+        ${
+          // coalesce, matching the SELECT above. A division with no
+          // registration_settings row DISPLAYS as 'individual' (that is what
+          // the LEFT JOIN is for — those rows are real), but a bare
+          // `rs.entrant_kind = 'individual'` is NULL-false for exactly them:
+          // the row an organiser can see in the table vanished the moment they
+          // filtered for the kind it was showing. Filter and column must read
+          // the same expression or the list contradicts itself.
+          filters.kind ? tx`and coalesce(rs.entrant_kind, 'individual') = ${filters.kind}` : tx``
+        }
         ${filters.free_agent !== undefined ? tx`and r.free_agent = ${filters.free_agent}` : tx``}
         ${
-          filters.consent_pending
-            ? tx`and exists (
-                select 1 from registration_players rp
-                where rp.registration_id = r.id and rp.consent_status = 'pending'
-              )`
+          // `!== undefined`, like free_agent above — not truthiness. Both are
+          // documented as 1|0 and the query parser maps "0" to false, so
+          // truthiness made `consent_pending=0` mean "no filter" while
+          // `free_agent=0` filtered: the same documented input behaving two
+          // different ways one line apart. `0` now means what it says —
+          // entries with nothing outstanding.
+          filters.consent_pending !== undefined
+            ? filters.consent_pending
+              ? tx`and exists (
+                  select 1 from registration_players rp
+                  where rp.registration_id = r.id and rp.consent_status = 'pending'
+                )`
+              : tx`and not exists (
+                  select 1 from registration_players rp
+                  where rp.registration_id = r.id and rp.consent_status = 'pending'
+                )`
             : tx``
         }
         ${
           text
-            ? tx`and (r.display_name ilike ${"%" + text + "%"}
-                  or g.contact_name ilike ${"%" + text + "%"}
-                  or g.contact_email ilike ${"%" + text + "%"})`
+            ? tx`and (r.display_name ilike ${likePattern(text)} escape '\\'
+                  or g.contact_name ilike ${likePattern(text)} escape '\\'
+                  or g.contact_email ilike ${likePattern(text)} escape '\\')`
             : tx``
         }
-      order by r.created_at, r.id`;
+      ${filters.sort === "newest" ? tx`order by r.created_at desc, r.id desc` : tx`order by r.created_at, r.id`}`;
+    // Never ship the cart's access-token hash to the organiser list/export
+    // surface (RS005 W1a). regGroupCols stays the ONE shared column list —
+    // other callers legitimately need the hash for token verification — so
+    // it is stripped here in JS rather than forked into a second hand-copied
+    // SELECT list.
+    //
+    // `join_code` is stripped for anyone who cannot already write (RS005
+    // whole-branch review, BLOCKER). It is a BEARER CREDENTIAL, not a display
+    // field: `POST /public/.../register/join` accepts it from anyone and mints
+    // a roster row, and RS001 made it globally unique so it needs no other
+    // context to resolve. `read` scope is `READ_ROLES` — owner, admin AND
+    // viewer — so both list routes were handing a write-capable secret to a
+    // read-only role in one GET. The UI had it right (the detail body gates the
+    // copy control on canEdit and never puts the code in the RSC payload); the
+    // JSON API, which the same viewer session can simply request, did not.
+    //
+    // Gated on EDITOR_ROLES rather than "not viewer": an API key resolves
+    // `role: null` regardless of its scopes, and a key that cannot be shown to
+    // be write-capable should not receive a write-capable credential either.
+    // If an integration ever needs join codes, that is a deliberate decision
+    // with its own scope check — not a default.
+    const mayHoldJoinCode = mayHoldBearerCredential(auth.role);
+    return rows.map(({ access_token_hash: _accessTokenHash, ...rest }) =>
+      mayHoldJoinCode ? rest : { ...rest, join_code: null },
+    );
   });
 }
 
@@ -2993,42 +3407,169 @@ export async function refundRegistration(
   return row;
 }
 
-/** CSV export (organiser console; `exports` is the Pro gate, doc 10 §1). */
-export async function exportRegistrationsCsv(auth: AuthCtx, divisionId: string): Promise<string> {
+/** CSV export (organiser console; gated on the `exports` entitlement, doc 10
+ *  §1). Plain `exports` reaches community in **V285** ("Free plain exports",
+ *  v12); pro/business have held it since V101/V112 and event_pass since V270.
+ *  The Pro-only half is `exports.branded` — and not Pro-ONLY either: V306
+ *  grants it to event_pass as well (`lib/pass-features.ts:34`). So a denial
+ *  here means an explicit org override, never a plan tier.
+ *
+ * RS005 W1a replaces the old division-only, entry-flat exporter. Rows come
+ * from `listRegistrations` — the SAME read model the Registrants tab uses,
+ * no second query builds the entry set — scoped by `opts.divisionId` (one
+ * division) or `opts.competitionId`/`opts.filters.competition_id`
+ * (competition-wide; `listRegistrations` itself 400s if neither is given).
+ *
+ * RULING (RS005 W1a): one CSV row per PLAYER. An entry with N players emits
+ * N rows with its entry columns repeated; an entry with ZERO players (a free
+ * agent, or a team registered with an empty roster) emits ONE row with the
+ * player columns blank — dropping it would silently hide that entry from
+ * the export entirely.
+ */
+export async function exportRegistrationsCsv(
+  auth: AuthCtx,
+  opts: {
+    divisionId?: string | null;
+    competitionId?: string | null;
+    status?: string | null;
+    filters?: ListRegistrationsFilters;
+  },
+): Promise<string> {
   await requireFeature(auth.orgId, "exports");
-  return withTenant(auth.orgId, async (tx) => {
-    const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
-    if (!division) throw new HttpError(404, "division not found");
-    const settings = await loadSettings(tx, divisionId);
-    const fieldKeys = (settings?.form_fields ?? []).map((f) => f.key);
-    const rows = await tx<RegistrationWithGroupRow[]>`
-      select ${regGroupCols(tx)}
-      from registrations r join registration_groups g on g.id = r.group_id
-      where r.division_id = ${divisionId}
-      order by r.created_at, r.id`;
-    const esc = (v: unknown): string => {
-      const s = v === null || v === undefined ? "" : String(v);
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    // dob/gender/guardian_name/guardian_consent dropped from this export
-    // (RS001 registration demolition): they moved off the entry onto
-    // `registration_players` — one-to-many per entry, so there is no single
-    // flat value left to print here without inventing a flattening rule.
-    // RS005's Registrants tab CSV export owns the per-player-aware version.
-    const header = [
-      "id", "status", "display_name", "contact_email", "amount_cents",
-      "currency", "refunded_cents", "created_at", ...fieldKeys,
-    ];
-    const lines = rows.map((r) =>
-      [
-        r.id, r.status, r.display_name, r.contact_email,
-        r.amount_cents, r.currency, r.refunded_cents,
-        new Date(r.created_at).toISOString(),
-        ...fieldKeys.map((k) => (r.answers as Record<string, unknown>)[k] ?? ""),
-      ].map(esc).join(","),
-    );
-    return [header.join(","), ...lines].join("\n") + "\n";
+  const divisionId = opts.divisionId ?? null;
+  const filters: ListRegistrationsFilters = opts.competitionId
+    ? { ...(opts.filters ?? {}), competition_id: opts.competitionId }
+    : (opts.filters ?? {});
+  const rows = await listRegistrations(auth, divisionId, opts.status ?? null, filters);
+
+  // The field-key scope is the DIVISIONS THE EXPORT COVERS, not the divisions
+  // that happen to appear in `rows`. Deriving it from the rows makes the header
+  // depend on the filter: `?status=rejected` with no matches emitted a header
+  // with no question columns at all, and a competition-wide export's column set
+  // shifted as the filter changed — so two exports of the same competition
+  // could not be fed to the same importer. The old division-only exporter read
+  // the division's own form_fields and could not express this bug.
+  const scopeDivisionIds = divisionId
+    ? [divisionId]
+    : await withTenant(auth.orgId, (tx) =>
+        tx<{ id: string }[]>`
+          select d.id from divisions d
+          where d.competition_id = ${filters.competition_id ?? null}
+        `.then((ds) => ds.map((d) => d.id)),
+      );
+  const divisionIds = scopeDivisionIds.length > 0
+    ? scopeDivisionIds
+    : [...new Set(rows.map((r) => r.division_id))];
+  const regIds = rows.map((r) => r.id);
+  type PlayerCsvRow = {
+    registration_id: string;
+    full_name: string;
+    dob: string | null;
+    gender: string | null;
+    consent_status: string;
+    squad_number: number | null;
+    is_captain: boolean;
+  };
+  const { fieldKeys, playersByReg } = await withTenant(auth.orgId, async (tx) => {
+    // Form field keys: the union of every IN-SCOPE division's settings, so a
+    // competition-wide export is not shaped like any single division's form.
+    const fieldKeySet = new Set<string>();
+    if (divisionIds.length > 0) {
+      const settingsRows = await tx<{ form_fields: RegistrationFormField[] }[]>`
+        select form_fields from registration_settings where division_id in ${tx(divisionIds)}`;
+      for (const s of settingsRows) for (const f of s.form_fields ?? []) fieldKeySet.add(f.key);
+    }
+    const players =
+      regIds.length > 0
+        ? await tx<PlayerCsvRow[]>`
+            select registration_id, full_name, dob, gender, consent_status, squad_number, is_captain
+            from registration_players
+            where registration_id in ${tx(regIds)}
+            order by is_captain desc, created_at`
+        : [];
+    const playersByReg = new Map<string, PlayerCsvRow[]>();
+    for (const p of players) {
+      const list = playersByReg.get(p.registration_id) ?? [];
+      list.push(p);
+      playersByReg.set(p.registration_id, list);
+    }
+    return { fieldKeys: [...fieldKeySet].sort(), playersByReg };
   });
+
+  const esc = (v: unknown): string => {
+    let s = v === null || v === undefined ? "" : String(v);
+    // CSV/formula injection (RS005 F1 finding 3, OWASP's standard
+    // mitigation): Excel/LibreOffice evaluate a cell as a formula when it
+    // starts with =, +, -, @, or (some parsers, after stripping leading
+    // whitespace) TAB/CR — and this exporter's sink is registrant-controlled
+    // (contact_name, per-player full_name), so a name like
+    // `=cmd|'/c calc'!A1` or `@SUM(1+1)` was written raw and evaluated on
+    // open. Prepending a bare apostrophe forces every spreadsheet reader to
+    // treat the cell as literal text.
+    if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+    // `\r` joins the quoting trigger, not just `,`/`"`/`\n`: unquoted, a
+    // lone CR inside a value reads as a row break to a universal-newline CSV
+    // reader and silently splits one row into two.
+    return /["\n\r,]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  // Per-player DOB and GENDER are editor-only (RS005 whole-branch review).
+  // The owner's ruling deliberately allows a VIEWER to export — that is the
+  // point of a read-only seat that can still do the federation paperwork — but
+  // it weighed the join code, not this: dob/gender appear on NO UI surface for
+  // ANY role, so the export is the only path to them, and much of it is
+  // minor-attendee personal data leaving the platform as a file.
+  //
+  // The columns are OMITTED, not blanked. A blank column in a file headed
+  // `player_dob` reads as "we hold no date of birth", which is a different and
+  // false statement — and a spreadsheet built against that header would
+  // silently gain two empty columns depending on who exported it.
+  const maySeePlayerPersonalData = mayHoldBearerCredential(auth.role);
+  const playerHeader = maySeePlayerPersonalData
+    ? ["player_name", "player_dob", "player_gender", "player_consent_status", "squad_number", "is_captain"]
+    : ["player_name", "player_consent_status", "squad_number", "is_captain"];
+
+  // `id` + `registration_id` (RS005 F1 finding 5): main's exporter emitted
+  // one row per REGISTRATION under the column name `id`. RS005 W1a widened
+  // this to one row per PLAYER — a deliberate ruling (see this function's
+  // own doc comment above) kept as-is here, not reverted — but renamed the
+  // identifier column to `registration_id` and dropped `id` outright, with
+  // no response schema in openapi.ts for any drift gate to catch it. `id`
+  // is restored here, first column, byte-identical to `registration_id` on
+  // every row: an integration reading the OLD column name still finds the
+  // registration's id (now simply repeated once per player row) rather
+  // than losing it. See openapi.ts's summary for both export routes for the
+  // documented shape.
+  const header = [
+    "id", "registration_id", "ref_code", "division", "status", "kind", "display_name",
+    "contact_name", "contact_email", "amount_cents", "currency", "refunded_cents",
+    "payment_method", "waitlist_position", "created_at",
+    ...playerHeader,
+    ...fieldKeys,
+  ];
+  const lines: string[] = [];
+  for (const r of rows) {
+    const entryCols = [
+      r.id, r.id, r.ref_code, r.division_name, r.status, r.entrant_kind, r.display_name,
+      r.contact_name, r.contact_email, r.amount_cents, r.currency, r.refunded_cents,
+      r.payment_method, r.waitlist_position, new Date(r.created_at).toISOString(),
+    ];
+    const answerCols = fieldKeys.map((k) => (r.answers as Record<string, unknown>)[k] ?? "");
+    const players = playersByReg.get(r.id) ?? [];
+    if (players.length === 0) {
+      // One blank cell per player column, whichever set is in force — derived
+      // from playerHeader so the two can never fall out of step.
+      lines.push([...entryCols, ...playerHeader.map(() => ""), ...answerCols].map(esc).join(","));
+    } else {
+      for (const p of players) {
+        const playerCols = maySeePlayerPersonalData
+          ? [p.full_name, p.dob, p.gender, p.consent_status, p.squad_number, p.is_captain]
+          : [p.full_name, p.consent_status, p.squad_number, p.is_captain];
+        lines.push([...entryCols, ...playerCols, ...answerCols].map(esc).join(","));
+      }
+    }
+  }
+  return [header.join(","), ...lines].join("\n") + "\n";
 }
 
 // ---------------------------------------------------------------------------
@@ -3156,32 +3697,40 @@ export async function buildDisputeEvidence(
       order by f.round_no nulls last, f.scheduled_at nulls last`
     : [];
 
-  // The transactional receipt, reconstructed with the exact sender inputs. The
-  // division's settings are no longer among them: currency was the last thing
-  // read off them here, and it is the CART's snapshot now (RS001b) — which is
-  // also the more honest source for dispute evidence, since it is what the
-  // registrant was actually charged in rather than what the division is
-  // configured for today.
+  // The transactional receipt, reconstructed with the exact sender inputs.
+  // RS005 W4: the sent mail is now CART-shaped (owner ruling 2026-08-25), so
+  // this reconstructs the WHOLE cart via the same `buildCartMail` the
+  // submit-time send and the resend action use — not just `reg`'s own
+  // entry, which would again attest to a message shape that was never
+  // actually sent whenever this entry has cart-mates. `paymentInstructions`/
+  // `payDeadline` are forced null exactly as before this wave: instructions
+  // can change after the original send, and a reconstruction is not the
+  // place to guess whether they did (division settings are otherwise no
+  // longer among the inputs here — currency is the CART's snapshot,
+  // RS001b — which is also the more honest source for dispute evidence,
+  // since it is what the registrant was actually charged in rather than
+  // what the division is configured for today).
   const { registrationTemplate } = await import("@/lib/email-templates");
   const { getDictionary } = await import("@/lib/i18n");
+  const cartMail = await buildCartMail(reg.group_id, origin, null, null);
   // Reconstruct the receipt exactly as sent — in the registrant's captured
   // locale (cycle 47), so replayed dispute evidence matches the original mail.
-  const emailDict = await getDictionary(toLocale(reg.locale), "emails");
-  const emailText = registrationTemplate(
-    {
-      orgName: ctx.org_name,
-      competitionName: ctx.comp_name,
-      displayName: reg.display_name,
-      status: reg.status,
-      feeCents: reg.amount_cents,
-      currency: reg.currency,
-      paymentInstructions: null,
-      statusUrl: `${origin}/shared/${ctx.org_slug}/${ctx.comp_slug}/register/status`,
-      refCode: reg.ref_code,
-      refStatusUrl: reg.ref_code ? `${origin}/r/${reg.ref_code}` : null,
-    },
-    emailDict,
-  ).text;
+  const emailDict = await getDictionary(toLocale(cartMail?.locale ?? reg.locale), "emails");
+  const emailText = cartMail
+    ? registrationTemplate(
+        { ...cartMail.args, paymentInstructions: null, payDeadline: null },
+        emailDict,
+      ).text
+    // NEVER silently blank. This document is submitted to Stripe as evidence
+    // that a real person really registered; an empty receipt section reads as
+    // "no receipt was sent", which is a claim about the merchant, not about a
+    // missing row. Before RS005 W4 the receipt was rebuilt from `reg` itself
+    // and could not come out empty, so this failure mode is new — it needs a
+    // marker a human reviewer can act on rather than an absence they will
+    // read as an admission.
+    : `[Receipt could not be reconstructed: the registration group ${reg.group_id} `
+      + `could not be loaded at ${new Date().toISOString()}. The entry itself is `
+      + `evidenced by the registration record and activity log below.]`;
 
   const when = (d: Date | string | null) => (d ? new Date(d).toISOString() : "—");
   const ref = reg.ref_code ?? reg.id;

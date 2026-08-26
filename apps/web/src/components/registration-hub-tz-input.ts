@@ -16,6 +16,36 @@
 // than imported: this file is apps/web UI code and this task does not own
 // packages/engine, so it does not reach across that boundary for ten lines
 // of pure Intl arithmetic.
+//
+// RS005 R4 task 2 — the half-filled clock bug. This panel's clock fields
+// don't actually render a native `<input type="datetime-local">` (that
+// would make `input.validity.badInput` the natural detector, per the R4
+// dispatch's own framing) — DateTimeField/DateTimeSplitField
+// (v2/shared/datetime-field.tsx) already split every `kind="datetime-local"`
+// into a separate native date input and a time `<select>`, and THEIR OWN
+// `joinValue` (v2/shared/time-options.ts) deliberately collapses a
+// half-filled pair to `""` before this module ever sees it — the exact same
+// `""` a fully-cleared pair also produces, and once collapsed the two are
+// indistinguishable. `orgTzInputValueToInstant("")` returning null is
+// therefore correct for THAT string; the bug is that "date typed, time
+// blank" and "both blank" reach it as the identical string.
+//
+// So the fix lives one layer up, where the two halves are still separately
+// known: `editOrgTzDateTimeHalf` below tracks {date, time} directly (reusing
+// DateTimeSplitField's own splitValue/joinValue, not reimplementing them)
+// and reports `incomplete: true` — never a silently-nulled instant — the
+// moment exactly one half is filled. The config panel (registration-hub-
+// config-panel.tsx) owns the {date, time} draft as lifted state and renders
+// the two native halves itself via `OrgTzDateTimePair`, rather than going
+// through DateTimeSplitField, specifically so this incompleteness is
+// visible to it at all.
+import {
+  joinValue,
+  splitValue,
+  type DateTimeHalves,
+} from "@/components/v2/shared/time-options";
+
+export type { DateTimeHalves } from "@/components/v2/shared/time-options";
 
 /** An ISO instant (or Date) -> the wall-clock value a `datetime-local` input
  *  should show, as seen in `tz`. Empty string for null/unparseable input —
@@ -74,4 +104,52 @@ function zonedTimeToUtcMs(ymd: string, hhmm: string, tz: string): number {
     guess += target - wall;
   }
   return guess;
+}
+
+// ---------------------------------------------------------------------------
+// Half-filled detection (RS004 R4 task 2)
+// ---------------------------------------------------------------------------
+
+/** An instant (or null) -> the two-part wall-clock value the config panel's
+ *  own date/time pair should show, in `tz`. Empty halves for null/unparseable
+ *  input, same as `instantToOrgTzInputValue` — never "Invalid Date" leaking
+ *  into either half. */
+export function orgTzDateTimeHalves(instant: string | Date | null, tz: string): DateTimeHalves {
+  return splitValue(instantToOrgTzInputValue(instant, tz));
+}
+
+/** True when EXACTLY ONE half is filled — the state a native `datetime-local`
+ *  input can never produce (it is a single control) and this split pair
+ *  can: a date picked with the time left at "--:--", or vice versa. Both
+ *  halves empty is a deliberate, complete clear, not this. */
+export function isDateTimeHalvesIncomplete(halves: DateTimeHalves): boolean {
+  return (halves.date === "") !== (halves.time === "");
+}
+
+/** Result of typing into one half of the pair. `instant` is only meaningful
+ *  when `incomplete` is false — the caller (registration-hub-config-panel.tsx)
+ *  must not write it into RegistrationConfigState while incomplete is true,
+ *  which is the entire fix: the state a save reads from never silently
+ *  becomes "unset" just because the other half hasn't been typed yet. */
+export interface DateTimeHalfEditResult {
+  halves: DateTimeHalves;
+  incomplete: boolean;
+  instant: string | null;
+}
+
+/** Apply one half's new value (from the date input or the time select) to
+ *  the pair's current halves, and resolve what that means for the instant:
+ *  both filled -> a real instant (via `orgTzInputValueToInstant`, unchanged
+ *  semantics); both empty -> null (an explicit, complete clear); exactly one
+ *  filled -> `incomplete: true`, `instant` unusable. */
+export function editOrgTzDateTimeHalf(
+  current: DateTimeHalves,
+  half: "date" | "time",
+  value: string,
+  tz: string,
+): DateTimeHalfEditResult {
+  const halves = half === "date" ? { date: value, time: current.time } : { date: current.date, time: value };
+  const incomplete = isDateTimeHalvesIncomplete(halves);
+  const instant = incomplete ? null : orgTzInputValueToInstant(joinValue(halves.date, halves.time), tz);
+  return { halves, incomplete, instant };
 }

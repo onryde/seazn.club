@@ -28,7 +28,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS002 | `RS002-core-usecases.md` | RS001b | **DONE** — PR #607 merged `4ff0bf8f` (2026-08-17) |
 | RS003 | `RS003-public-endpoints.md` | RS002 | **DONE** — PR #615 merged `29690ec8c` (2026-08-18) |
 | RS004 | `RS004-hub-settings-tab.md` | RS003 | **DONE** — merged `171df1376` (PR #641, 2026-08-25). Smoke still owed by RS010, as the PR states |
-| RS005 | `RS005-hub-registrants-tab.md` | RS004 | TODO |
+| RS005 | `RS005-hub-registrants-tab.md` | RS004 | **IN FLIGHT** (2026-08-25) — branch `feat/rs005-registrants-tab` |
 | RS006 | `RS006-public-stepper.md` | RS003 | TODO |
 | RS007 | `RS007-status-page-join-payments.md` | RS006 | TODO |
 | RS008 | `RS008-consent-claim-optout.md` | RS007 | TODO |
@@ -1251,6 +1251,404 @@ untouched.
 deliberately builds NO context and issues NO queries — build its own rather
 than widening the settings one. `registrations.status` counting lives in
 `card-stats.ts` (`registered` and `awaiting_confirmation`, one aggregate).
+
+### RS005 (2026-08-25) — branch `feat/rs005-registrants-tab`
+
+**LIVE SESSION.** Worktree `.claude/worktrees/rs005` off `origin/main` @ `9080cb959`.
+DB label `rs005` on `127.0.0.1:54429`, schema **v375**; placement on `50311`.
+Baseline before any edit, main thread, JSON reporter: `registrations.test.ts` +
+`registration-approval.test.ts` + `card-stats-registration-counts.test.ts` +
+the hub's own `__tests__/` = **168 total / 168 passed / 0 failed / 0 failed
+suites**. Flyway high-water is **V375**, so any RS005 delta starts at V376 —
+none is expected: this session is read-model, endpoints and UI only.
+
+**Brief premises checked against the tree before writing anything. Most of
+scope item 4 ("API: org-side endpoints for list + transitions") ALREADY
+EXISTS.** What is actually missing is narrower than the prompt implies:
+
+- Live already: `GET /api/v1/divisions/[id]/registrations` (status filter),
+  `.../registrations/export` (CSV, `exports` entitlement),
+  `POST /registrations/[id]/{withdraw,remind,confirm,waive,mark-paid,refund,
+  waitlist}`.
+- `/registrations/[id]/waitlist` is move-**to**-waitlist, NOT promote. Nothing
+  in `app/` reaches `promoteFromWaitlist`, `approveRegistration` or
+  `rejectRegistration` — RS002 shipped all three usecases with no HTTP surface.
+- Genuinely new in RS005: competition-scoped list, `approve`, `reject`,
+  `promote`, and the filter-aware CSV.
+- `listRegistrations` (`registrations.ts:2684`) already implements EVERY filter
+  the prompt asks for — competition-wide, kind, free_agent, consent_pending,
+  text. What it lacks is the COLUMNS the table renders.
+
+**FINDING (2026-08-25): the registration confirmation email is never sent by
+any path.** `sendRegistrationEmail` (`lib/email.ts:427`) has ZERO callers —
+RS001 preserved the mailer, and neither RS002's submit nor RS003's route ever
+wired it. The dispute-evidence pack (`registrations.ts:3165`) rebuilds the
+receipt with `registrationTemplate` under a comment saying it is
+"reconstructed with the exact sender inputs" and "matches the original mail" —
+there is no original mail. So a registrant today receives nothing at submit,
+and the evidence pack attests to a message that was never delivered.
+Owner ruling (2026-08-25): **fix inline in RS005** — wire the first send into
+the submit path AND ship the resend action, per the no-new-issues rule. This
+widens the session's file set to `registration-submit.ts` / the public register
+route; asked and approved before starting, per `_RULES.md` §1.
+
+**Owner rulings taken this session:**
+
+1. **Confirmation email: send + resend, both in RS005** (above).
+2. **`waitlist-queue.tsx` is ABSORBED, not wired.** Its Promote calls
+   confirm/waive — pre-RS002 semantics — and its `positions` prop is
+   caller-computed, so wiring it verbatim forks promotion in exactly the
+   placer-vs-verifier way the prompt warns about. The waitlist becomes a
+   section of the one registrants table: same positions, same `#`-in-line, same
+   promote affordance, but server-computed order and `promoteFromWaitlist` as
+   the only writer. The component is deleted. Its lost assertions (queue order,
+   `#`-in-line, public waitlist count — they died with `reg-console.spec.ts`)
+   are restored against the new section, which is the obligation RS001 handed
+   over regardless of which component renders it.
+3. **Widen `listRegistrations`, do not add a second hub read model.** The extra
+   columns are additive, existing callers are unaffected, and it keeps the
+   prompt's ONE-source rule literally true rather than approximately true.
+4. **One CSV exporter, not two.** `exportRegistrationsCsv` becomes
+   competition-or-division scoped, filter-aware and per-player; the existing
+   division route delegates to it. A second exporter is two column contracts to
+   keep in sync — the repo's recurring fork class.
+5. **CSV shape: one row per PLAYER.** An N-player entry emits N rows with the
+   entry columns repeated; a zero-player entry (free agent, or a team
+   registered with an empty roster) emits one row with blank player columns.
+   Recorded because "one row per entry with a players column" is the other
+   defensible choice and RS010's help page has to document whichever shipped.
+6. **Default sort stays oldest-first.** The prompt asks for newest-first, but
+   flipping `listRegistrations`' default silently reorders the live
+   `/api/v1/divisions/[id]/registrations` response. A `sort` filter was added
+   instead, defaulting to the existing order; the hub passes `"newest"`.
+
+**FINDING (2026-08-25, W1b prep): `rejected` does not exist anywhere in the
+API contract, four RS001-dropped columns still do.** RS002 shipped `rejected`
+as a terminal status and `V364:90` allows it, but:
+
+- `apps/web/src/app/api/v1/divisions/[id]/registrations/route.ts:8`'s `STATUSES`
+  allowlist is `pending|paid|confirmed|waitlisted|withdrawn`, so
+  `?status=rejected` — and `?status=expired` — return **400 today**. The
+  organiser cannot list the entries they refused.
+- `api-v1/schemas.ts:2082` `RegistrationStatus` omits `rejected` for the same
+  reason, and `openapi.ts:189` repeats the short list a third time. Three
+  hand-maintained copies of one enum; the DB CHECK is the only complete one.
+- `api-v1/schemas.ts:2169` `Registration` still declares `dob`, `gender`,
+  `guardian_name` and `guardian_consent` — all four DROPPED from `registrations`
+  by RS001 (they moved to `registration_players`). The published OpenAPI
+  contract advertises four fields the table no longer has, and omits
+  `free_agent`, `join_code`, `group_id` and `contact_name`, which it does.
+
+Fixed in W1b, with the status enum reduced to ONE source rather than three.
+
+**OWNER RULING (2026-08-25) — RS004 ruling 2 is REVERSED. Viewers get the
+Registration hub, read-only.** RS004 made the whole hub owner/admin and 404'd
+viewers *because* the Registrants tab carries names, emails and consent state.
+W1b then established that the API never agreed: `requireResourceAuth(..., "read")`
+resolves to `READ_ROLES = owner, admin, viewer` (`lib/types.ts:28`), so the
+list and the CSV export have been viewer-readable all along on the division
+routes, and RS005 widens that to competition scope. Asked which way to resolve
+it; owner chose to widen the UI rather than narrow the API. Consequences:
+
+- The hub page drops its own `canEdit`-or-404 check and admits `READ_ROLES`.
+  This also re-converges the hub with competition settings, which already
+  renders a viewer a read-only page — RS004 called that divergence deliberate;
+  it is no longer.
+- Both tabs render read-only for a viewer. Every mutating control is **absent**,
+  not disabled: the API 403s a viewer on all of them anyway (`write` scope is
+  `EDITOR_ROLES`), so a disabled button would only advertise a capability the
+  server refuses.
+- CSV export IS available to a viewer. That is the deliberate part of this
+  ruling — it is the path that moves registrant data off-platform, and it rides
+  on `read`.
+- **Judgment call taken inside the ruling, flagged for override: the join code
+  is hidden from viewers.** It is not a display field, it is a bearer secret —
+  `join_code` is globally unique (RS001) and anyone holding it can add players
+  to that team entry, which is a WRITE a viewer does not otherwise have. Read
+  access to the roster does not imply the right to grant roster writes. Same
+  reasoning leaves `ref_code`/`access_token` visible: those authenticate the
+  REGISTRANT to their own entry and are already on the organiser's screen.
+
+**Fixed inline (no-new-issues rule), found by W1b in its own new routes and
+then confirmed in six pre-existing siblings:** `v1()` does not validate or
+strip against the OpenAPI response schema — it serializes whatever the handler
+returns (`api-v1/http.ts:124-149`). So the documented response type is
+documentation only, and `confirm`, `mark-paid`, `waive`, `waitlist`, `withdraw`
+and `refund` have all been returning `access_token_hash` to the client. Low
+severity (a hash, to a caller who already holds the row) but it is a
+credential-derived value that should never leave the server, and the fix is
+mechanical.
+
+**W1 CLOSED** (read model + HTTP surface). Commits `085f10ab7`, `30e2da35a`,
+`621c1b71b` (W1a) · `de0551b4e`, `3f8377ffe`, `46006b73d`, `008b3da27`,
+`ea687abc3` (W1b) · `72d365796`, `900afb29d` (review fixes). Boundary gate rerun
+by the main thread: `src/app/api/v1` + `src/server/api-v1` +
+`registration-list-read.test.ts` = **558 total / 558 passed / 0 failed / 0
+failed suites**; `turbo typecheck lint` **4/4 successful, 0 errors** (119
+warnings, 2 of them ours — the `{ x: _x, ...rest }` discard idiom, which is
+established repo precedent at `d/[divSlug]/page.tsx:145` and two siblings that
+carry the identical warning on `main`); `openapi:gen` + `i18n:gen-keys` leave
+`git status --porcelain` free of artifact drift.
+
+**W1b review BLOCKER — a cross-competition read, and an API-key pin bypass.**
+`listRegistrations` derived the competition from `division_id` whenever one was
+given and DISCARDED the caller's `competition_id`. A request addressed to
+competition A carrying a division from competition B returned B's rows under a
+200 from A's URL — and the filter's own doc comment said `competition_id` was
+"ignored otherwise", so the vulnerable behaviour was documented as intended.
+
+Same org either way (`withTenant` was never bypassed), so a session user learned
+nothing they could not reach through B's own URL. The teeth are on the API-key
+competition pin: `apiKeyAuth` resolves the pin from the URL PATH resource
+(`resolvePinCompetition`) and never reads query parameters, so a key pinned to A
+satisfied its pin on A's path and then read — and CSV EXPORTED — B's contact
+names, emails, answers and payment state. The pin is the entire boundary that
+endpoint sells. Guarded inside `listRegistrations` rather than in the two
+routes, so the export path and every future caller inherit it; **404, not 403**,
+matching the existing convention that a pin miss adds no existence oracle.
+Proven: removing the guard reds exactly the two new tests and nothing else.
+
+**Nine routes were returning the registrant's access-token hash.** `v1()`
+neither validates nor strips against the OpenAPI response schema — it
+serialises whatever the handler returns (`api-v1/http.ts:124-149`) — so
+`S.Registration` never declaring `access_token_hash` was documentation, not
+enforcement, and `tsc` sees an object with one extra string property as
+assignable. The six pre-existing action routes (confirm, mark-paid, waive,
+waitlist, withdraw, refund) all shipped it; W1b's three new ones each
+hand-stripped it, which was already three copies of a security-relevant line.
+All nine now call one `organiserRegistration()` helper
+(`api-v1/registration-response.ts`), so the next secret column is removed once
+rather than nine times. Proven: neutering the helper reds all five new cases
+plus the three existing assertions, nothing else.
+**Trap for later waves: a "no secret in the response" assertion is vacuous on a
+4xx.** The mark-paid case first passed against a 422 — that route gates on the
+DIVISION's `registration_settings.fee_cents`, which `rig()` never creates, not
+on the entry's own `amount_cents`. Every case now asserts the 200 first.
+
+**Also closed in W1b, from the same review:** the two competition routes parsed
+an identical seven-parameter filter set through two hand-written copies; folded
+onto one `parseRegistrationListQuery` (the export is the copy where a missed
+validation leaks bytes rather than JSON). And `RegistrationStatus` is now a
+single source with all seven DB-allowed values, so `?status=rejected` and
+`?status=expired` work — proven by a reference-equality test rather than by
+three copies agreeing today.
+
+**W2a CLOSED** (Registrants read surface). Commits `1491c0c50`..`6846905af`
+plus `5457db005`. Gate rerun by the main thread: registration page `__tests__/`
++ `src/components/__tests__` = **699 total / 699 passed / 0 failed / 0 failed
+suites**.
+
+**Architecture ruling: the read surface is server-rendered with ZERO
+JavaScript.** Filters are a plain `<form method="GET">`; the table is a server
+component calling `listRegistrations` directly rather than fetching the HTTP
+endpoint W1b built (`data.ts`'s existing "no client fetch, no N+1" rule).
+Consequences worth keeping: URL state is shareable and back-buttonable for
+free, the seven-width e2e can drive real filtering without waiting on
+hydration, and the tab works on a venue's bad wifi. Client islands arrive only
+in W3, where the actions genuinely need them. Row expand (W2b) is native
+`<details>` with NO toggle handler — which sidesteps RS004's invented-event
+crash by construction rather than by re-typing the handler that caused it.
+
+**RULING: there is NO separate waitlist section.** One table, one row
+renderer; `waitlist_position` renders in its own column and the `waitlisted`
+status filter is how an organiser scopes to the queue. A second renderer is
+what deleting `waitlist-queue.tsx` was FOR — re-introducing a second section in
+the same session would undo it for cosmetics.
+
+**CORRECTION to RS001's handover, which both sides could otherwise drop:**
+RS001 entry condition 3 says `waitlist-queue.tsx`'s lost coverage was "queue
+order, #-in-line and the public waitlist count". The first two land here. **The
+public waitlist count cannot be asserted from an organiser tab at all** — it is
+a public-surface number, so it is owed by **RS006/RS007**, not by RS005. Filed
+here so neither side assumes the other covered it.
+
+**The reversal had a second victim, found by W2a and fixed in `5457db005`.**
+Dropping the page-level `!canEdit` 404 admitted viewers to the SETTINGS tab
+too, where `RegistrationHubDivisionRow`'s Configure button rendered
+unconditionally — nobody had ever needed to gate it, because the page used to
+404 everyone who could not edit. A viewer would open the config panel, change a
+fee or a window, save, and get a 403: not a security hole (the API refuses them
+correctly) but a dead end that reads as a broken product. `canEdit` now rides on
+`RegistrationHubRowContext`; the control is ABSENT, not disabled, per the same
+ruling. Proven by forcing the gate true — reds exactly the viewer case.
+**Lesson for RS009/RS010: reversing a page-level guard does not just change who
+reaches the page, it silently promotes every unconditional control on it into a
+control a read-only role can now press.** Sweep for the whole class, not the
+instance.
+
+**Two product decisions taken inside W2a, both user-visible:**
+
+- **A foreign or nonexistent `division_id` drops that filter and re-renders**
+  rather than erroring. The read model 404s it (correctly — that is W1's
+  security guard), but a PAGE has no error envelope, and an organiser opening a
+  stale bookmark should see their registrants rather than a dead page.
+  Malformed enum values are ignored the same way.
+- **Unlimited roster renders `n/∞`** — compact enough for a table cell, and the
+  symbol needs no per-locale translation; only the surrounding template does.
+
+**Two distinct empty states, deliberately.** "No registrations at all" points at
+Settings and the register link; "your filters matched nothing" offers a clear.
+Shipping one for both tells an organiser their competition is empty when they
+have merely over-filtered — which, on a tab whose whole job is finding people,
+is the worst possible lie to tell.
+
+**OWNER RULING (2026-08-25) — the confirmation email is CART-SHAPED.** One
+email per cart, listing every entry with its own status, one total, one pay
+link. Rejected: one-email-per-entry (a rep entering five teams gets five mails,
+none of which shows what the single payment covered — and that one artefact is
+what gets forwarded to a treasurer), and one-email-per-cart on the existing
+single-entry template (silently misdescribes every multi-entry cart; a
+waitlisted sibling would read as confirmed). Costs a change to
+`lib/email-templates/registration.ts` and its four `emails.json` dictionaries,
+which is outside RS005's stated file set — asked and approved before starting,
+per `_RULES.md` §1.
+
+Consequence that is easy to miss: **the dispute-evidence pack must reconstruct
+the CART too.** `registrations.ts:3165` builds single-entry args today under a
+comment claiming the result "matches the original mail". Leaving it
+single-entry while the sent mail becomes cart-shaped would recreate the same
+class of lie this wave exists to remove.
+
+**Parallelism note for future sessions: `emails.json` and `ui.json` are
+SEPARATE files per locale, so a mail wave and a UI wave are genuinely
+file-disjoint — but `i18n-keys.ts` is GENERATED from all of them and is a
+shared artefact.** Two agents running `i18n:gen-keys` concurrently race on one
+file and both commit it. The rule adopted here: concurrent waves do not run
+`gen-keys` at all; the orchestrator regenerates once at the wave boundary.
+
+**FINDING (2026-08-25) — the help tree documents a console RS001 DELETED.**
+`apps/web/content/help/registration/open-registration.md:31` describes "The
+**Registrations** console opens on a **pulse strip** — confirmed / holding /
+waitlisted counts against capacity, money collected and due, and the next
+payment deadline — with the list below split into **Confirmed / Pending /
+Waitlist / All** tabs", plus row actions grouped Spot vs Money and a
+duplicate-contact hint. None of it exists: `registration-pulse.tsx` and
+`registrations-panel.tsx` went out with RS001 on 2026-08-17, and RS005 ships a
+differently shaped surface (one table, server-driven filters, approve/reject).
+
+Cost: an organiser following help hunts for a UI that is not there. It has been
+wrong for eight days and **no gate can see it** — the help tree is prose, has no
+tests, and `content/help/**` is deliberately English-only so even the i18n
+parity check never reads it. Nothing in CI will ever go red for this.
+
+Related, and self-correcting as of this session: `card-payments.md:21` promises
+"the confirmation email goes out". That was FALSE from RS001 until W4 wired the
+sender — the docs described the product we intended while the code had silently
+stopped delivering it. Worth noting as a pattern: **help prose is where an
+unimplemented promise survives longest**, because it is the one artefact no
+test, type or gate reads.
+
+**Owner ruling (2026-08-25): fix the help pages AFTER W3**, so the docs describe
+what actually shipped rather than what is half-built. Owed: rewrite
+`open-registration.md`'s console section for the hub's two tabs and the real
+action set; confirm `waitlist.md`'s "place in line" copy still matches the
+`#`-position column; and RS005's CSV column list, which RS005's own prompt
+defers to RS010's help pass.
+
+**THE SESSION'S BIGGEST LESSON — reviews and tests did not find the defects an
+organiser finds in twenty minutes.** By the time the owner opened the product,
+this branch had four reviewers, ~10,500 green tests, a seven-width screenshot
+pass and a targeted `/code-review`. They then found EIGHT real defects by
+clicking: a filter that needed a button press, "Free agents only" surviving
+beside "Allow solo sign-ups", a hint explaining a control that could not be
+used, "You keep 92%" shown to an organiser collecting cash, a date-without-time
+that saved as UNSET, a withdrawn entry that would still "resend confirmation",
+a refund lock offered for offline payment, and an Approve button whose error
+told them to press a Mark-paid button that did not exist.
+
+Why the pipeline missed all eight — worth keeping, because the causes are
+structural, not effort:
+
+1. **Verification was of STRUCTURE, not USE.** The screenshots were of the
+   Registrants tab only; the config panel was never opened in a browser, no
+   action was ever clicked, no organiser task was completed end to end. Every
+   one of the eight sits behind an interaction or inside a collapsed section.
+2. **A test that asserts a string RENDERS cannot ask whether the string is
+   TRUE.** "You keep 92%", "Only available for team divisions", the refund-lock
+   label — each rendered exactly as designed and each was false for that
+   configuration. There is no gate for "is this sentence true here", and unit
+   tests structurally cannot be one.
+3. **Nothing compares organiser-facing VOCABULARY across surfaces**, which is
+   how "Free agents only" and "Allow solo sign-ups" coexisted three keys apart.
+4. **Reviewers were given file and diff lenses.** None was asked to use the
+   product as an organiser, so none did.
+
+**What changed, and what a later session should keep doing:** drive the real
+app before showing anyone screenshots. Doing it once immediately produced two
+more defects ("1 extra questions"; an empty "Actions" heading over a terminal
+entry's zero controls), caught a `next build` failure that `tsc` and vitest
+were both blind to (a client component importing `@/server/api-v1/schemas`,
+dragging gRPC and Node built-ins into the browser bundle), and stopped two
+FALSE reports: a "silent no-op" that was a confirm dialog waiting, and a
+"missing role=dialog" that was `role="alertdialog"` all along.
+
+**Traps re-confirmed the hard way this session** (all already in this file or
+the skill, all still cost time): vitest run from the worktree root reports
+`Cannot find package '@/...'` and 54 suites failing to COLLECT; a `{total: 38}`
+result with `EXIT=1` reads as green if judged on the exit code; and
+`seazn-env up --server` REUSES an existing bundle and says so in one line —
+skip that line and you review a build from before your own fix, which nearly
+had the Approve/Mark-paid fix reported as broken.
+
+**Late findings fixed after the reviews** (each with a test that fails without
+it, each mutation-proven):
+
+- `join_code` reached READ-ONLY roles through both list routes. The UI hid it;
+  the API did not, and `read` scope is `READ_ROLES` — viewer included. A bearer
+  credential that grants roster writes, handed over in one GET.
+- The CSV gave a viewer per-player **dob and gender** — data no UI surface
+  shows to ANY role, much of it minor-attendee personal data leaving the
+  platform as a file. Columns omitted, not blanked: a blank cell under
+  `player_dob` asserts "we hold no date of birth", which is false.
+- The `kind` filter used a bare `rs.entrant_kind = ?` while the SELECT
+  coalesced a missing settings row to `'individual'` — so an entry VISIBLY
+  listed as Individual vanished when filtered for Individual.
+- `consent_pending=0` was silently ignored (truthiness where its neighbour used
+  `!== undefined`), so "who is fully consented" returned everyone.
+- The CSV's question columns came from the RESULT rows, so the header moved
+  with the filter and two exports of one competition could not feed one
+  importer.
+- `POST /registrations/{id}/promote` 400'd on a body-less POST, making its own
+  documented default path unreachable.
+- `waitlist-queue.tsx` was still present although ruling 2 above says "The
+  component is deleted". It now is. **A wrong record is worse than a stray
+  file** — the next session trusts it.
+
+**Still open at close** (not silently dropped):
+
+- **The hub advertises a public page that cannot open.** `register/page.tsx`
+  renders "not open" UNCONDITIONALLY until RS006 ships the stepper, while the
+  division row still offers the toggle, the URL, Copy, Open and a printable QR.
+  An organiser can pin a dead QR to a noticeboard today. A notice is being
+  added rather than pulling RS006 forward; the controls stay so settings can be
+  configured ahead of launch.
+- **No pagination anywhere in the read path.** A large competition's tab grows
+  unbounded and every row mounts client islands whether expanded or not.
+  Flagged as a guess by the reviewer; needs a ~300-row profile to size.
+- **`resend-confirmation` has no throttle**, mirroring the pre-existing
+  `/remind` route. Not a regression; now two unthrottled organiser-triggered
+  mailers instead of one.
+
+**Pinned so no wave re-derives them:**
+
+- **Waitlist position must reproduce `promoteOldestWaitlisted`
+  (`registrations.ts:799`) exactly**: `order by created_at, id` over
+  `status = 'waitlisted'` within ONE division. A tuple comparison
+  `(w.created_at, w.id) < (r.created_at, r.id)` reproduces it; a `row_number()`
+  over an unfiltered set does not. This is the session's regression test — the
+  displayed `#1` and the row the promote button actually moves are the same row
+  or this feature is lying.
+- **Roster fill (`5/7`) has a source already**: `registration-submit.ts:742-748`,
+  `(sports.position_catalog->'lineup'->>'size')::int + coalesce(benchMax, 0)`,
+  NULL = unlimited. Hand-copying that expression into the list query is the
+  fork; it is extracted to one place.
+- **`access_token_hash` ships to the client today.** `regGroupCols`
+  (`registrations.ts:404`) includes it and the organiser list route returns the
+  row verbatim. Dropped from the list path this session.
+- RS004 handover honoured: the Registrants tab builds its OWN context and
+  queries rather than widening `use-registration-hub-config.ts`.
+- RS004 ruling 4's deferred item lands here: the division page re-points into
+  the hub with its division pre-filtered.
 
 ## RS011 — why #412 moved here (2026-08-17)
 

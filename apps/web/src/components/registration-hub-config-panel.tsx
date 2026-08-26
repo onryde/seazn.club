@@ -43,7 +43,11 @@ import type { Currency } from "@/lib/currency";
 import type { MessageKey } from "@/lib/messages";
 import { FormBuilder } from "@/components/registration-hub-form-builder";
 import type { DivisionCategoryValue } from "@/components/registration-hub-row-derive";
-import type { RegistrationConfigState } from "@/components/registration-hub-config-state";
+import {
+  validateConfigState,
+  type RegistrationConfigState,
+  type ConfigValidationIssue,
+} from "@/components/registration-hub-config-state";
 import type { ConfigFieldKey } from "@/components/registration-hub-save-error";
 import {
   useRegistrationConfigPanelState,
@@ -55,7 +59,12 @@ import {
   firstErrorSection,
   type SectionId,
 } from "@/components/registration-hub-config-panel-sections";
-import { instantToOrgTzInputValue, orgTzInputValueToInstant } from "@/components/registration-hub-tz-input";
+import {
+  orgTzDateTimeHalves,
+  editOrgTzDateTimeHalf,
+  isDateTimeHalvesIncomplete,
+  type DateTimeHalves,
+} from "@/components/registration-hub-tz-input";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { fmtZoneAbbrev } from "@/lib/format";
 
@@ -66,6 +75,36 @@ const CUTOFF_TIME_OPTIONS = ["23:59"];
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
+/** The three fields this panel edits as a date+time PAIR rather than a
+ *  single value — see registration-hub-tz-input.ts's header for why (the
+ *  half-filled-value bug, RS005 R4 task 2). */
+const DATETIME_FIELDS = ["opens_at", "closes_at", "refund_lock_at"] as const;
+type DateTimeFieldKey = (typeof DATETIME_FIELDS)[number];
+
+/** ConfigValidationIssue -> organiser-facing copy. The ONE place that maps
+ *  validateConfigState's rule keys to dictionary strings — keeps that pure
+ *  function message-free (its own header comment) while every message still
+ *  lives in the four dictionaries, never hardcoded here. */
+function validationMessage(issue: ConfigValidationIssue, msg: Msg): string {
+  switch (issue) {
+    case "capacityRange":
+      return msg("reg.hub.config.capacityRangeError");
+    case "feeCentsRange":
+      return msg("reg.hub.config.feeCentsRangeError");
+    case "cardFeeMinimum":
+      return msg("reg.hub.config.cardFeeMinimumError");
+    case "datesOrder":
+      // Reuses the pre-existing (previously unused) key rather than minting
+      // a near-duplicate — same wording the pre-deletion component showed
+      // for this exact rule.
+      return msg("reg.settings.datesError");
+    case "duplicateFormFieldKeys":
+      return msg("reg.hub.config.duplicateFormFieldKeysError");
+    case "selectNeedsOptions":
+      return msg("reg.hub.config.selectNeedsOptionsError");
+  }
+}
+
 const DEFAULT_OPEN: Record<SectionId, boolean> = {
   eligibility: true,
   schedule: true,
@@ -74,7 +113,11 @@ const DEFAULT_OPEN: Record<SectionId, boolean> = {
   form: false,
 };
 
-function sectionTitle(id: SectionId, msg: Msg, formFieldCount: number): string {
+function sectionTitle(
+  id: SectionId,
+  msg: Msg,
+  formFieldCount: number,
+): string {
   switch (id) {
     case "eligibility":
       return msg("reg.hub.config.eligibility");
@@ -85,7 +128,20 @@ function sectionTitle(id: SectionId, msg: Msg, formFieldCount: number): string {
     case "money":
       return msg("reg.settings.money");
     case "form":
-      return `${msg("reg.settings.signupForm")} · ${msg("reg.settings.extraQuestions", { n: formFieldCount })}`;
+      // NOT `usePlural`: it throws outside a `DictProvider` and this panel is
+      // rendered without one — the same reason and the same shape as
+      // create-org-form.tsx:134-140, which documents it. Safe rather than a
+      // shortcut: all four shipped locales (en/es/fr/nl) put the one/other
+      // boundary at exactly 1, so this ternary IS the plural rule for every
+      // locale the product has. A locale with a dual or paucal form would
+      // need the real Intl.PluralRules path.
+      //
+      // It said "1 extra questions" before, and a division with one extra
+      // question is the COMMON case, not an edge one.
+      return `${msg("reg.settings.signupForm")} · ${msg(
+        formFieldCount === 1 ? "reg.settings.extraQuestions.one" : "reg.settings.extraQuestions.other",
+        { count: formFieldCount },
+      )}`;
   }
 }
 
@@ -143,6 +199,89 @@ export function Disclosure({
   );
 }
 
+/**
+ * One org-timezone date+time pair (RS005 R4 task 2), rendered as two native
+ * controls — a date input, a time select — rather than through
+ * `DateTimeField`'s own `kind="datetime-local"` (which delegates to
+ * `DateTimeSplitField`, v2/shared/datetime-split-field.tsx). That component
+ * owns its two halves as INTERNAL `useState`, seeded once, and only ever
+ * reports the JOINED value back out through `onChange` — by design (its own
+ * file doc): a half-filled pair joins to `""`, identical to a full clear,
+ * specifically so a caller never has to handle an unparseable intermediate
+ * value. That is exactly the information this panel needs and cannot get
+ * through it — `orgTzInputValueToInstant("")` returning null is correct for
+ * that string, but "date typed, time still blank" and "both blank" reach it
+ * as the identical string, so it cannot tell a genuine clear from a
+ * half-finished edit.
+ *
+ * So this panel renders the two halves itself, and tracks them as LIFTED
+ * state (`dtDrafts`, owned by `RegistrationHubConfigPanel` below and passed
+ * down as a prop) — the same pattern `MoneySection`'s `feeText`/`onFeeText`
+ * already uses, and for the identical reason: `OpenCloseSection`/
+ * `MoneySection` are invoked DIRECTLY by this panel's own test harness
+ * (deepExpand/OPAQUE_TYPES in the test file), which installs no hook
+ * dispatcher, so every exported Section-shaped helper here — this one
+ * included — must stay hookless.
+ *
+ * Exported (not a private closure) for the same reason `Disclosure` is: a
+ * test adds it to OPAQUE_TYPES to descend into it, the same way it already
+ * does for `Disclosure` and the five Sections.
+ */
+export function OrgTzDateTimePair({
+  label,
+  dataField,
+  halves,
+  timeLabel,
+  extraOptions,
+  onHalfChange,
+}: {
+  label: string;
+  /** Base name, UNSUFFIXED — suffixed `_date`/`_time` on the two rendered
+   *  controls below, and left bare on this component's own wrapping `<div>`
+   *  (so `findField`-style lookups by the PANEL's own field name still
+   *  resolve one element, exactly the way every other field here works).
+   *  Same suffixing convention DateTimeSplitField itself already
+   *  established — a bare name on either half would be a locator
+   *  addressing half a value. */
+  dataField: string;
+  halves: DateTimeHalves;
+  timeLabel: string;
+  extraOptions?: string[];
+  onHalfChange: (half: "date" | "time", value: string) => void;
+}) {
+  return (
+    // Same container-query shell as DateTimeSplitField: stacks under 18rem
+    // of its OWN width, sits side by side at or above it, regardless of the
+    // viewport around it (see that component's own regression test/comment
+    // for why a viewport media query is the wrong question here).
+    <div className="@container" data-field={dataField}>
+      <div className="flex flex-col gap-2 @[18rem]:flex-row @[18rem]:items-end">
+        <div className="min-w-0 flex-[3]">
+          <DateTimeField
+            kind="date"
+            label={label}
+            dataField={`${dataField}_date`}
+            value={halves.date}
+            onChange={(v) => onHalfChange("date", v)}
+          />
+        </div>
+        <div className="min-w-0 flex-[2]">
+          <DateTimeField
+            kind="time"
+            label={label}
+            labelHidden
+            selectAriaLabel={timeLabel}
+            extraOptions={extraOptions}
+            dataField={`${dataField}_time`}
+            value={halves.time}
+            onChange={(v) => onHalfChange("time", v)}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function RegistrationHubConfigPanel({
   division,
   orgTz,
@@ -150,6 +289,7 @@ export function RegistrationHubConfigPanel({
   currency,
   feePercentPct,
   cardUnsupportedCurrency,
+  waitlistedCount,
   onClose,
   onSaved,
 }: {
@@ -165,6 +305,12 @@ export function RegistrationHubConfigPanel({
   /** Non-null when the org's connected Stripe account settles outside the
    *  registration currency allowlist — card collection is not viable. */
   cardUnsupportedCurrency: string | null;
+  /** Registrations in `waitlisted` status for this division RIGHT NOW
+   *  (RS005 F4, fetchDivisionRows -> RegistrationHubRowData.waitlisted).
+   *  The Money section warns with this count that promoting any of them
+   *  charges whatever fee is live at promotion time, not what they saw when
+   *  they joined — see MoneySection's own comment. */
+  waitlistedCount: number;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -183,6 +329,37 @@ export function RegistrationHubConfigPanel({
   // falls back to a formatted (state.fee_cents / 100) whenever it's null,
   // so there's no separate "seed on load" step to get out of sync.
   const [feeText, setFeeText] = useState<string | null>(null);
+  // RS005 R4 task 2 — the three clock fields' in-progress halves, lifted
+  // here for the SAME reason feeText is (see its own comment above):
+  // OpenCloseSection/MoneySection are invoked directly by this panel's own
+  // test harness and must stay hookless. Empty until the organiser touches
+  // a half; `OrgTzDateTimePair`'s own comment and registration-hub-tz-
+  // input.ts explain why this can't just live inside `state` — a half-typed
+  // pair must NEVER collapse into state as a (wrong) null "clear".
+  const [dtDrafts, setDtDrafts] = useState<Partial<Record<DateTimeFieldKey, DateTimeHalves>>>({});
+  // Client-only validation errors (RS005 R4 task 2) — kept SEPARATE from the
+  // hook's own `errors` (server round-trip state) rather than written into
+  // it: these never touch the network, and folding them into `errors` would
+  // make a client-side rejection look like a failed save (wrong
+  // saveOutcome, a misleading "everything else saved" partial-save banner).
+  const [clientErrors, setClientErrors] = useState<Partial<Record<ConfigFieldKey, string>>>({});
+  // What every Section actually renders against — server errors first,
+  // client-only ones layered on top so the freshest, most-actionable
+  // message wins on a field that somehow has both.
+  const fieldErrors: Partial<Record<ConfigFieldKey, string>> = { ...errors, ...clientErrors };
+
+  function onDateTimeHalfChange(field: DateTimeFieldKey, half: "date" | "time", value: string) {
+    const current = dtDrafts[field] ?? orgTzDateTimeHalves(state![field], orgTz);
+    const result = editOrgTzDateTimeHalf(current, half, value, orgTz);
+    setDtDrafts((prev) => ({ ...prev, [field]: result.halves }));
+    // Never patch `state` while incomplete — that would be the exact bug
+    // this task fixes, just moved one layer up: an in-progress half-typed
+    // pair silently becoming a committed "unset". Leaving the committed
+    // value untouched here means a save attempted mid-edit still saves
+    // whatever was there BEFORE (blocked below by the incomplete check,
+    // never silently nulled).
+    if (!result.incomplete) patch({ [field]: result.instant });
+  }
 
   // Reveal whichever section holds the first error, at the moment the save
   // reports one. Deliberately NOT a `useEffect` on `errors`: writing state
@@ -196,6 +373,33 @@ export function RegistrationHubConfigPanel({
   // section by hand while the error is still live. Writing it once here means
   // the reveal survives until they deliberately close it again.
   async function saveAndReveal() {
+    if (!state) return;
+    // Client-side gate BEFORE the network round trip (RS005 R4 task 2): an
+    // incomplete clock field, or anything validateConfigState catches, must
+    // block the save outright — never merely warn after the fact. Datetime
+    // incompleteness wins over a validateConfigState issue on the SAME
+    // field (closes_at can be both mid-edit AND, on the last COMMITTED
+    // value, dates-order-invalid; the mid-edit problem is the one the
+    // organiser needs to resolve first).
+    const nextClientErrors: Partial<Record<ConfigFieldKey, string>> = {};
+    for (const field of DATETIME_FIELDS) {
+      const draft = dtDrafts[field];
+      if (draft && isDateTimeHalvesIncomplete(draft)) {
+        nextClientErrors[field] = msg("reg.hub.config.incompleteDateTime");
+      }
+    }
+    const issues = validateConfigState(state);
+    for (const key of Object.keys(issues) as ConfigFieldKey[]) {
+      if (nextClientErrors[key]) continue;
+      nextClientErrors[key] = validationMessage(issues[key]!, msg);
+    }
+    if (Object.keys(nextClientErrors).length > 0) {
+      setClientErrors(nextClientErrors);
+      const sectionId = firstErrorSection(nextClientErrors);
+      if (sectionId) setOpenSections((prev) => (prev[sectionId] ? prev : { ...prev, [sectionId]: true }));
+      return;
+    }
+    setClientErrors({});
     const failed = await save();
     const sectionId = firstErrorSection(failed);
     if (!sectionId) return;
@@ -266,18 +470,26 @@ export function RegistrationHubConfigPanel({
         {state && (
           <>
             {SECTION_IDS.map((id) => {
-              const hasError = SECTION_FIELDS[id].some((f) => errors[f]);
+              const hasError = SECTION_FIELDS[id].some((f) => fieldErrors[f]);
               const content =
                 id === "eligibility" ? (
-                  <EligibilitySection state={state} errors={errors} patch={patch} msg={msg} />
+                  <EligibilitySection state={state} errors={fieldErrors} patch={patch} msg={msg} />
                 ) : id === "schedule" ? (
-                  <OpenCloseSection state={state} errors={errors} patch={patch} msg={msg} orgTz={orgTz} />
+                  <OpenCloseSection
+                    state={state}
+                    errors={fieldErrors}
+                    patch={patch}
+                    msg={msg}
+                    orgTz={orgTz}
+                    dtDrafts={dtDrafts}
+                    onDateTimeHalfChange={onDateTimeHalfChange}
+                  />
                 ) : id === "capacity" ? (
-                  <CapacitySection state={state} errors={errors} patch={patch} msg={msg} />
+                  <CapacitySection state={state} errors={fieldErrors} patch={patch} msg={msg} />
                 ) : id === "money" ? (
                   <MoneySection
                     state={state}
-                    errors={errors}
+                    errors={fieldErrors}
                     patch={patch}
                     msg={msg}
                     orgTz={orgTz}
@@ -285,13 +497,16 @@ export function RegistrationHubConfigPanel({
                     currency={currency}
                     feePercentPct={feePercentPct}
                     cardUnsupportedCurrency={cardUnsupportedCurrency}
+                    waitlistedCount={waitlistedCount}
                     chargesEnabled={readOnly!.chargesEnabled}
                     orgPaymentInstructions={readOnly!.orgPaymentInstructions}
                     feeText={feeText}
                     onFeeText={setFeeText}
+                    dtDrafts={dtDrafts}
+                    onDateTimeHalfChange={onDateTimeHalfChange}
                   />
                 ) : (
-                  <FormSection state={state} errors={errors} patch={patch} />
+                  <FormSection state={state} errors={fieldErrors} patch={patch} />
                 );
               return (
                 <Disclosure
@@ -408,7 +623,14 @@ export function EligibilitySection({
         </select>
         {errors.approval && (<p data-field-error="approval" role="alert" className="mt-1 text-xs text-red-600">{errors.approval}</p>)}
       </label>
-      {isTeam ? (
+      {/* Nothing at all for a non-team division, rather than a line explaining
+          why a control they cannot use is missing. The hint ("Only available
+          for team divisions.") answered a question an organiser configuring a
+          Pair division never asked — the setting is not theirs to make, so its
+          absence needs no apology. Switching entrant_kind re-renders this, and
+          the select below already forces allow_free_agents false on the way
+          out of 'team', so no state is stranded. */}
+      {isTeam && (
         <label className="flex items-center gap-2 text-sm text-slate-700">
           <input
             type="checkbox"
@@ -418,8 +640,6 @@ export function EligibilitySection({
           />
           {msg("reg.hub.config.allowSolo")}
         </label>
-      ) : (
-        <p className="text-xs text-slate-400">{msg("reg.hub.config.freeAgentsHint")}</p>
       )}
       {errors.allow_free_agents && (<p data-field-error="allow_free_agents" role="alert" className="mt-1 text-xs text-red-600">{errors.allow_free_agents}</p>)}
     </section>
@@ -432,17 +652,24 @@ export function OpenCloseSection({
   patch,
   msg,
   orgTz,
+  dtDrafts,
+  onDateTimeHalfChange,
 }: {
   state: RegistrationConfigState;
   errors: Partial<Record<ConfigFieldKey, string>>;
   patch: (p: Partial<RegistrationConfigState>) => void;
   msg: Msg;
   orgTz: string;
+  /** RS005 R4 task 2 — this field's in-progress date/time halves, owned by
+   *  the panel (OrgTzDateTimePair's own comment explains why). */
+  dtDrafts: Partial<Record<DateTimeFieldKey, DateTimeHalves>>;
+  onDateTimeHalfChange: (field: DateTimeFieldKey, half: "date" | "time", value: string) => void;
 }) {
   // A short, DST-correct abbreviation ("BST", "IST") rather than the raw
   // IANA string — matches the zone labelling the row already shows
   // (registration-hub-row-derive.ts's formatRegistrationWindow).
   const zone = fmtZoneAbbrev(orgTz, new Date());
+  const timeLabel = msg("datetime.timeLabel");
   return (
     <section className="card space-y-3 p-4">
       <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -455,6 +682,20 @@ export function OpenCloseSection({
         {msg("reg.settings.openForPublic")}
       </label>
       {errors.enabled && (<p data-field-error="enabled" role="alert" className="mt-1 text-xs text-red-600">{errors.enabled}</p>)}
+      {/* TEMP(RS005 R5): the public register page is hardcoded closed until
+          RS006 ships the cart stepper (register/page.tsx's own header
+          comment) — this toggle does not open registration to anyone yet,
+          on or off. Unconditional (not just while `state.enabled`) so an
+          organiser reads it before ever turning this on, not after.
+          Companion notice: registration-hub-division-row.tsx, beside the
+          row's Copy/Open/QR controls. Remove both (and their two
+          dictionary keys) once RS006 makes the public page real. */}
+      <p
+        data-registration-hub-link-not-live
+        className="rounded-lg border border-amber-100 bg-amber-50 p-2 text-xs text-amber-800"
+      >
+        {msg("reg.settings.openForPublic.notLive")}
+      </p>
       <label className="label">
         {msg("reg.settings.entrantType")}
         <select
@@ -476,34 +717,36 @@ export function OpenCloseSection({
         {errors.entrant_kind && (<p data-field-error="entrant_kind" role="alert" className="mt-1 text-xs text-red-600">{errors.entrant_kind}</p>)}
       </label>
       <div className="grid grid-cols-1 gap-3">
-        {/* DateTimeField, not a hand-rolled <input type="datetime-local">.
-            `step` alone never bounded what a mouse could pick (Chrome's picker
-            popup renders a full 0-59 minute column regardless of it), so the
-            shared field owns the option list instead — and
-            v2/shared/__tests__/time-step-coverage.test.ts sweeps the tree for
-            raw clock inputs. It caught these three on RS004's first full CI
-            run; no local suite covers that sweep. */}
+        {/* OrgTzDateTimePair, not DateTimeField's own `kind="datetime-local"`
+            — see that component's header comment for why: this panel needs
+            to see a half-filled pair (RS005 R4 task 2), which
+            DateTimeSplitField's own internal state deliberately hides from
+            every caller. Still built on DateTimeField's `kind="date"`/
+            `kind="time"` underneath, so v2/shared/__tests__/time-step-
+            coverage.test.ts's sweep for raw clock inputs still covers these
+            three — nothing here reaches for a bare `<input type="date">` or
+            `<select>` of its own. */}
         <div>
-          <DateTimeField
-            kind="datetime-local"
+          <OrgTzDateTimePair
             label={`${msg("reg.settings.opens")} (${zone})`}
             dataField="opens_at"
-            value={instantToOrgTzInputValue(state.opens_at, orgTz)}
-            onChange={(v) => patch({ opens_at: orgTzInputValueToInstant(v, orgTz) })}
+            halves={dtDrafts.opens_at ?? orgTzDateTimeHalves(state.opens_at, orgTz)}
+            timeLabel={timeLabel}
+            onHalfChange={(half, v) => onDateTimeHalfChange("opens_at", half, v)}
           />
           {errors.opens_at && (<p data-field-error="opens_at" role="alert" className="mt-1 text-xs text-red-600">{errors.opens_at}</p>)}
         </div>
         <div>
-          <DateTimeField
-            kind="datetime-local"
+          <OrgTzDateTimePair
             label={`${msg("reg.settings.closes")} (${zone})`}
             dataField="closes_at"
             // A close is a DEADLINE, so it needs the one time the quarter-hour
             // grid cannot express: the grid tops out at 23:45, and "closes at
             // 23:45" is not what an organiser means by "closes that day".
             extraOptions={CUTOFF_TIME_OPTIONS}
-            value={instantToOrgTzInputValue(state.closes_at, orgTz)}
-            onChange={(v) => patch({ closes_at: orgTzInputValueToInstant(v, orgTz) })}
+            halves={dtDrafts.closes_at ?? orgTzDateTimeHalves(state.closes_at, orgTz)}
+            timeLabel={timeLabel}
+            onHalfChange={(half, v) => onDateTimeHalfChange("closes_at", half, v)}
           />
           {errors.closes_at && (<p data-field-error="closes_at" role="alert" className="mt-1 text-xs text-red-600">{errors.closes_at}</p>)}
         </div>
@@ -551,10 +794,13 @@ export function MoneySection({
   currency,
   feePercentPct,
   cardUnsupportedCurrency,
+  waitlistedCount,
   chargesEnabled,
   orgPaymentInstructions,
   feeText,
   onFeeText,
+  dtDrafts,
+  onDateTimeHalfChange,
 }: {
   state: RegistrationConfigState;
   errors: Partial<Record<ConfigFieldKey, string>>;
@@ -565,6 +811,13 @@ export function MoneySection({
   currency: Currency;
   feePercentPct: number;
   cardUnsupportedCurrency: string | null;
+  /** RS005 F4 — registrations in `waitlisted` status for this division right
+   *  now. `promoteWaitlistedRow` (registrations.ts, ~:875) reads the LIVE
+   *  fee at promotion time, never whatever fee was showing when a
+   *  waitlisted entrant joined (they hold `amount_cents = 0`, so there is
+   *  no earlier quote to honour) — so a fee edited here silently re-prices
+   *  every one of them the moment they're promoted. Shown only when > 0. */
+  waitlistedCount: number;
   chargesEnabled: boolean;
   orgPaymentInstructions: string | null;
   /** Finding 3 — the fee input's in-progress draft, owned by the panel
@@ -572,10 +825,33 @@ export function MoneySection({
    *  stays hookless. */
   feeText: string | null;
   onFeeText: (text: string) => void;
+  /** RS005 R4 task 2 — refund_lock_at's in-progress date/time halves, owned
+   *  by the panel (OrgTzDateTimePair's own comment explains why). */
+  dtDrafts: Partial<Record<DateTimeFieldKey, DateTimeHalves>>;
+  onDateTimeHalfChange: (field: DateTimeFieldKey, half: "date" | "time", value: string) => void;
 }) {
   const currencyCode = currency.toUpperCase();
   const cardUnavailable = !chargesEnabled || cardUnsupportedCurrency !== null;
   const paidConfigured = state.fee_cents > 0;
+  // The auto-refund the lock governs can ONLY happen on a card entry:
+  // withdrawCore's own predicate is `locked.payment_intent_id && …`
+  // (registrations.ts), and an offline entry has no payment intent, so
+  // nothing auto-refunds and the cutoff governs nothing. Shown for
+  // pay-the-organiser it asks the organiser to configure a policy that will
+  // never run — the same false-claim class as the platform-cut line above.
+  //
+  // A stored value SURVIVES a switch to offline and still applies to entries
+  // already paid by card; hiding the field does not clear it. That is the
+  // right trade: the field is a division setting, and the division is no
+  // longer taking cards.
+  // Rendered when it applies OR when a save error names it. The panel has an
+  // invariant test — "every routable field has a render site, never routed
+  // into a void" — and it is right: `errors.refund_lock_at` can arrive from
+  // the server for a value still stored from before the division switched to
+  // offline, and an error with nowhere to render is an error the organiser
+  // never sees while the save keeps failing.
+  const refundLockApplies =
+    (paidConfigured && state.payment_method === "stripe") || Boolean(errors.refund_lock_at);
   const zone = fmtZoneAbbrev(orgTz, new Date());
   // Falls back to the committed value, formatted, whenever there is no
   // in-progress draft — covers both "never touched yet" and "just blurred".
@@ -623,9 +899,38 @@ export function MoneySection({
         />
         {errors.fee_cents && (<p data-field-error="fee_cents" role="alert" className="mt-1 text-xs text-red-600">{errors.fee_cents}</p>)}
       </label>
-      <p className="text-xs text-slate-500">
-        {msg("reg.hub.config.feeCut", { keep: 100 - feePercentPct, pct: feePercentPct })}
-      </p>
+      {/* RS005 F4: only ever a WARNING about entries already queued, never a
+          block on saving — the fee change itself is legitimate, the
+          organiser just needs to know who it reaches and when. Absent
+          entirely at zero, same discipline every other conditional notice
+          in this panel already follows (feeCut/refundLock/allowSolo below,
+          and the "does not make claims that are false for this division"
+          tests that pin them) — a fact that does not apply gets no
+          sentence explaining its own absence. */}
+      {waitlistedCount > 0 && (
+        <p
+          data-registration-hub-waitlist-warning
+          className="rounded-lg border border-amber-100 bg-amber-50 p-2 text-xs text-amber-800"
+        >
+          {msg(
+            waitlistedCount === 1
+              ? "reg.hub.config.waitlistRepriceWarning.one"
+              : "reg.hub.config.waitlistRepriceWarning.other",
+            { count: waitlistedCount },
+          )}
+        </p>
+      )}
+      {/* The platform cut applies to CARD entries only — it is Stripe's
+          application fee, taken as the money passes through. On "pay the
+          organiser" the money never touches the platform and we take nothing,
+          so rendering this line unconditionally told an organiser collecting
+          cash at the door that we were taking 8% of it. That is a false claim
+          about their money, which is a worse defect than a missing sentence. */}
+      {state.payment_method === "stripe" && (
+        <p className="text-xs text-slate-500">
+          {msg("reg.hub.config.feeCut", { keep: 100 - feePercentPct, pct: feePercentPct })}
+        </p>
+      )}
 
       <fieldset className="space-y-2">
         <legend className="text-xs text-slate-500">{msg("reg.settings.howCollected")}</legend>
@@ -696,16 +1001,16 @@ export function MoneySection({
         </label>
       )}
 
-      {paidConfigured && (
+      {refundLockApplies && (
         <div>
-          <DateTimeField
-            kind="datetime-local"
+          <OrgTzDateTimePair
             label={`${msg("reg.settings.refundLock")} (${zone})`}
             dataField="refund_lock_at"
             // A cutoff, same as `closes_at` above.
             extraOptions={CUTOFF_TIME_OPTIONS}
-            value={instantToOrgTzInputValue(state.refund_lock_at, orgTz)}
-            onChange={(v) => patch({ refund_lock_at: orgTzInputValueToInstant(v, orgTz) })}
+            halves={dtDrafts.refund_lock_at ?? orgTzDateTimeHalves(state.refund_lock_at, orgTz)}
+            timeLabel={msg("datetime.timeLabel")}
+            onHalfChange={(half, v) => onDateTimeHalfChange("refund_lock_at", half, v)}
           />
           {errors.refund_lock_at && (<p data-field-error="refund_lock_at" role="alert" className="mt-1 text-xs text-red-600">{errors.refund_lock_at}</p>)}
         </div>

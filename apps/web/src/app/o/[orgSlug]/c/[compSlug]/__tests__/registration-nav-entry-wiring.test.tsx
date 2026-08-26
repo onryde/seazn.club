@@ -203,9 +203,24 @@ describe("competition overview — the Registration nav entry", () => {
     expect(props.details[1]).toContain(props.count);
   });
 
-  it("hides the entry for a role that cannot edit (viewer/scorer)", async () => {
+  // RS005, replacing "hides the entry for a role that cannot edit". RS004
+  // gated this on canEdit to match the hub page's own `if (!canEdit)
+  // notFound()`. The owner reversed that on 2026-08-25 — a viewer gets the
+  // hub read-only — and this entry was then the last thing hiding the tab
+  // from the audience the ruling was FOR: readable by URL, unreachable by
+  // clicking. A scorer never reaches this page at all (requireCompetitionPage
+  // 404s them), so canEdit is the wrong question here entirely.
+  it("shows the entry to a viewer — canEdit does not gate it any more", async () => {
     h.canEdit = false;
     const tree = walk(await Page({ params }));
-    expect(tree.some((e) => e.type === RegistrationHubNavEntry)).toBe(false);
+    expect(tree.some((e) => e.type === RegistrationHubNavEntry)).toBe(true);
+  });
+
+  it("points a viewer at the same hub URL as an editor", async () => {
+    h.canEdit = false;
+    const viewerHref = navProps(walk(await Page({ params })).find((e) => e.type === RegistrationHubNavEntry)!).href;
+    h.canEdit = true;
+    const editorHref = navProps(walk(await Page({ params })).find((e) => e.type === RegistrationHubNavEntry)!).href;
+    expect(viewerHref).toBe(editorHref);
   });
 });

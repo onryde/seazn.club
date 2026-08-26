@@ -189,10 +189,17 @@ export default async function CompetitionPage({
                 <span className="hidden sm:inline">{t(dict, "action.qr")}</span>
               </a>
             )}
-            {canEdit && (
-              // Owner/admin only (RS004 prompt scope item 1) — a viewer or
-              // scorer never sees this entry, matching the hub page's own
-              // canEdit guard (registration/page.tsx).
+            {(
+              // NOT gated on canEdit. RS004 shipped this as owner/admin-only
+              // to match the hub page's own `if (!canEdit) notFound()`; the
+              // owner reversed that on 2026-08-25 (viewers get the hub
+              // read-only) and RS005 deleted the guard, which left this entry
+              // as the last thing hiding the tab from the audience the ruling
+              // was FOR — readable by URL, unreachable by clicking.
+              //
+              // `requireCompetitionPage` already excludes a scorer (404), and
+              // this page does not render for one at all, so no gate is owed
+              // here: whoever sees this overview may see the hub.
               <RegistrationHubNavEntry
                 href={routes.competitionRegistration(orgSlug, compSlug)}
                 label={t(dict, "action.registration")}

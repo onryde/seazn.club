@@ -10,3 +10,22 @@
 
 /** Statuses that hold a capacity spot. */
 export const SPOT_HOLDERS = ["pending", "paid", "confirmed"] as const;
+
+/** Statuses no writer moves a registration OUT of.
+ *
+ *  `rejected` is terminal by RS002's RULING A (terminal from EVERY writer, no
+ *  exceptions); `withdrawn` and `expired` are terminal the same way in
+ *  practice — `joinTeamEntry` refuses all three with "This entry is no longer
+ *  accepting players", and nothing transitions them onward.
+ *
+ *  Declared HERE, beside SPOT_HOLDERS, for the same reason that array is: this
+ *  module is dependency-free, so the server usecases and the read-only UI can
+ *  share one list instead of the client re-deriving a second copy that drifts
+ *  the first time a fourth terminal status appears.
+ */
+export const TERMINAL_STATUSES = ["withdrawn", "rejected", "expired"] as const;
+
+/** True when the entry is in a state nothing moves it out of. */
+export function isTerminalRegistrationStatus(status: string): boolean {
+  return (TERMINAL_STATUSES as readonly string[]).includes(status);
+}

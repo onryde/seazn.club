@@ -54,6 +54,11 @@ export interface RegistrationHubRowData {
   /** Spots currently held (SPOT_HOLDERS: pending/paid/confirmed) — the
    *  capacity meter's numerator. */
   taken: number;
+  /** Registrations in `waitlisted` status (RS005 F4) — carried through to
+   *  the row-click config panel's Money section, which warns an organiser
+   *  editing the fee that promoting any of these re-prices them at the
+   *  LIVE fee. Not read by this row card itself. */
+  waitlisted: number;
 }
 
 /** Everything the row needs that is NOT per-division — computed once by the
@@ -76,6 +81,16 @@ export interface RegistrationHubRowContext {
    *  shared callback (identity stable across every row), same reasoning as
    *  every other field here — the settings-panel owns which row is open. */
   onOpen: (divisionId: string) => void;
+  /** RS005 W2a follow-up. The hub used to 404 anyone who could not edit
+   *  (RS004 ruling 2), so every reader of this row was an owner or admin and
+   *  Configure could render unconditionally. The owner reversed that on
+   *  2026-08-25 — viewers now get the hub read-only — which left a viewer
+   *  looking at a Configure button that opens a panel whose every save 403s.
+   *
+   *  The control is ABSENT rather than disabled, per the same ruling: the API
+   *  refuses a viewer regardless, so a greyed button would only advertise a
+   *  capability they do not have. */
+  canEdit: boolean;
 }
 
 const STATUS_STYLE: Record<RegistrationHubStatus, string> = {
@@ -200,15 +215,17 @@ export function RegistrationHubDivisionRow({
         <span data-feature="registration.paid" className="shrink-0 text-xs font-semibold tabular-nums text-slate-700">
           {feeText}
         </span>
-        <button
-          type="button"
-          data-registration-hub-row-configure
-          onClick={() => context.onOpen(row.division_id)}
-          aria-label={t(dict, "reg.hub.row.configure", { name: row.name })}
-          className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-purple-50 hover:text-purple-700"
-        >
-          <SlidersHorizontal className="h-4 w-4" strokeWidth={1.75} aria-hidden />
-        </button>
+        {context.canEdit && (
+          <button
+            type="button"
+            data-registration-hub-row-configure
+            onClick={() => context.onOpen(row.division_id)}
+            aria-label={t(dict, "reg.hub.row.configure", { name: row.name })}
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-purple-50 hover:text-purple-700"
+          >
+            <SlidersHorizontal className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+          </button>
+        )}
       </div>
 
       {/* Secondary line: everything else, small and muted — present, never
@@ -230,7 +247,21 @@ export function RegistrationHubDivisionRow({
         </div>
       )}
       {showLinkControls && (
-        <div>
+        // TEMP(RS005 R5): the public register page is hardcoded closed until
+        // RS006 ships the cart stepper (register/page.tsx's own header
+        // comment) — every one of Copy/Open/QR below currently leads to
+        // "Registration is not open for this competition", and the QR is the
+        // one an organiser prints and pins to a noticeboard. Remove this
+        // notice (and its two dictionary keys) once RS006 makes the public
+        // page real; until then it has to be read BEFORE Copy/QR are
+        // reachable, hence it renders first, above CopyLink, not beside it.
+        <div className="space-y-2">
+          <p
+            data-registration-hub-link-not-live
+            className="rounded-lg border border-amber-100 bg-amber-50 p-2 text-xs text-amber-800"
+          >
+            {t(dict, "div.registrations.publicLink.notLive")}
+          </p>
           <CopyLink
             path={context.registerHref}
             qrFileName={context.registerQrFileName}

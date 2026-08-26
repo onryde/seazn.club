@@ -53,4 +53,29 @@ describe("routes", () => {
       "/shared/acme/summer-smash/register",
     );
   });
+
+  // RS005 R2: the division page's own link into the hub, division
+  // pre-filtered (`&division_id=<uuid>`) — the param
+  // registration-list-query.ts's parseRegistrationListQuery and the hub's
+  // own data.ts (parseRegistrantsQuery) both read.
+  it("composes tab and divisionId independently, keeping every existing call site's output unchanged", () => {
+    const uuid = "11111111-2222-3333-4444-555555555555";
+    expect(routes.competitionRegistration("acme", "summer-smash", "registrants", uuid)).toBe(
+      `/o/acme/c/summer-smash/registration?tab=registrants&division_id=${uuid}`,
+    );
+    // divisionId with no tab — still composes, `tab` just absent.
+    expect(routes.competitionRegistration("acme", "summer-smash", undefined, uuid)).toBe(
+      `/o/acme/c/summer-smash/registration?division_id=${uuid}`,
+    );
+    // No divisionId (the pre-existing 5 call sites: competition page,
+    // hub's own filtersAction/clearHref/emptyCtaHref/tab-strip,
+    // breadcrumb-chain.ts) — unchanged from before this route grew a 4th
+    // param.
+    expect(routes.competitionRegistration("acme", "summer-smash")).toBe(
+      "/o/acme/c/summer-smash/registration",
+    );
+    expect(routes.competitionRegistration("acme", "summer-smash", "settings")).toBe(
+      "/o/acme/c/summer-smash/registration?tab=settings",
+    );
+  });
 });

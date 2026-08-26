@@ -37,12 +37,30 @@ import { PASS_KEYS, type PassKey } from "@/lib/currency";
 
 const LINK = "https://seazn.club/x?token=abc";
 
+// Single-entry shaped — feeds paymentReminderTemplate/registrationPromotedTemplate
+// below, which are UNCHANGED by RS005 W4 (only registrationTemplate went
+// cart-shaped). Kept under its original name since those two callers still
+// take these exact fields.
 const registrationArgs = {
   orgName: "Riverside Racquets",
   competitionName: "Spring Open 2026",
   displayName: "Alex",
   status: "pending",
   feeCents: 2500,
+  currency: "gbp",
+  paymentInstructions: "Bank transfer\nRef: SPRING",
+  statusUrl: LINK,
+};
+
+// Cart-shaped — RS005 W4: registrationTemplate now takes an entries array +
+// a cart total instead of one displayName/status/feeCents. A single-entry
+// cart (the common case) so most existing assertions carry over unchanged;
+// the multi-entry shape gets its own dedicated tests below.
+const registrationCartArgs = {
+  orgName: "Riverside Racquets",
+  competitionName: "Spring Open 2026",
+  entries: [{ displayName: "Alex", status: "pending", feeCents: 2500 }],
+  totalCents: 2500,
   currency: "gbp",
   paymentInstructions: "Bank transfer\nRef: SPRING",
   statusUrl: LINK,
@@ -66,7 +84,7 @@ function makeBuilders(
     ],
     ["account-deletion", accountDeletionTemplate(dict), "accountDeletion.subject"],
     ["invite", inviteTemplate("Riverside Racquets", LINK, dict), "invite.subject"],
-    ["registration", registrationTemplate(registrationArgs, dict), "registration.subject"],
+    ["registration", registrationTemplate(registrationCartArgs, dict), "registration.subject"],
     ["payment-reminder", paymentReminderTemplate(registrationArgs, dict), "paymentReminder.subject"],
     [
       "registration-promoted",
@@ -332,7 +350,7 @@ describe("email builders compose from the html templates", () => {
   it("card registration carries a Pay now button and the deadline", () => {
     const out = registrationTemplate(
       {
-        ...registrationArgs,
+        ...registrationCartArgs,
         paymentInstructions: null,
         payUrl: "https://checkout.stripe.test/cs_1",
         payDeadline: "2026-08-01T12:00:00Z",
@@ -414,7 +432,7 @@ describe("email builders compose from the html templates", () => {
       magicLinkTemplate(LINK, emailsEn as Dict),
       emailChangeConfirmTemplate(LINK, emailsEn as Dict),
       inviteTemplate("Org", LINK, emailsEn as Dict),
-      registrationTemplate(registrationArgs, emailsEn as Dict),
+      registrationTemplate(registrationCartArgs, emailsEn as Dict),
     ]) {
       expect(t.html).toContain(`href="${LINK}"`);
     }
@@ -423,9 +441,9 @@ describe("email builders compose from the html templates", () => {
   it("registration escapes user-supplied names in the html", () => {
     const out = registrationTemplate(
       {
-        ...registrationArgs,
+        ...registrationCartArgs,
         competitionName: 'Spring <script>alert("x")</script>',
-        displayName: "A & B",
+        entries: [{ displayName: "A & B", status: "pending", feeCents: 2500 }],
       },
       emailsEn as Dict,
     );
@@ -435,7 +453,7 @@ describe("email builders compose from the html templates", () => {
   });
 
   it("registration renders fee panel with instructions preserved", () => {
-    const out = registrationTemplate(registrationArgs, emailsEn as Dict);
+    const out = registrationTemplate(registrationCartArgs, emailsEn as Dict);
     expect(out.html).toContain("Entry fee: £25.00");
     expect(out.html).toContain(">Bank transfer\nRef: SPRING</p>");
   });
@@ -443,7 +461,7 @@ describe("email builders compose from the html templates", () => {
   it("registration carries the reference number + status link in html AND text (v3/05 §3)", () => {
     const out = registrationTemplate(
       {
-        ...registrationArgs,
+        ...registrationCartArgs,
         refCode: "SZ-ABCD-EFG2",
         refStatusUrl: "https://seazn.club/r/SZ-ABCD-EFG2",
       },
@@ -454,18 +472,126 @@ describe("email builders compose from the html templates", () => {
     expect(out.text).toContain("Your reference: SZ-ABCD-EFG2");
     expect(out.text).toContain("https://seazn.club/r/SZ-ABCD-EFG2");
     // Rows without a ref (pre-v2) keep the old shape — no dangling label.
-    expect(registrationTemplate(registrationArgs, emailsEn as Dict).text).not.toContain(
+    expect(registrationTemplate(registrationCartArgs, emailsEn as Dict).text).not.toContain(
       "Your reference",
     );
   });
 
   it("registration waitlist variant drops the fee panel", () => {
     const out = registrationTemplate(
-      { ...registrationArgs, status: "waitlisted" },
+      { ...registrationCartArgs, entries: [{ displayName: "Alex", status: "waitlisted", feeCents: 0 }], totalCents: 0 },
       emailsEn as Dict,
     );
     expect(out.html).toContain("on the waitlist");
     expect(out.html).not.toContain("Entry fee");
+  });
+
+  // RS005 W4: the cart-shaped rewrite's own acceptance bar — a single-entry
+  // cart (the common case) must still read like the pre-cart email, not a
+  // list of one.
+  it("single-entry cart reads as a single-entry email — no cart list, no entry count", () => {
+    const out = registrationTemplate(registrationCartArgs, emailsEn as Dict);
+    expect(out.html).toContain("Thanks Alex");
+    expect(out.html).not.toContain("Your entries");
+    expect(out.text).not.toContain("Your entries");
+  });
+
+  // The assertion the whole finding hinges on: a cart with one confirmed and
+  // one waitlisted entry must show BOTH their own states, not one repeated
+  // (owner ruling 2026-08-25: rejects one-email-per-cart on the old
+  // single-entry template for exactly this failure mode).
+  it("multi-entry cart renders every entry with its OWN status, not one repeated", () => {
+    const out = registrationTemplate(
+      {
+        ...registrationCartArgs,
+        entries: [
+          { displayName: "Riverside A", status: "confirmed", feeCents: 0 },
+          { displayName: "Riverside B", status: "waitlisted", feeCents: 0 },
+        ],
+        totalCents: 0,
+      },
+      emailsEn as Dict,
+    );
+    expect(out.html).toContain("Riverside A");
+    expect(out.html).toContain("Riverside B");
+    expect(out.html).toContain("Confirmed");
+    expect(out.html).toContain("Waitlisted");
+    expect(out.text).toContain("Riverside A");
+    expect(out.text).toContain("Riverside B");
+    expect(out.text).toContain("Confirmed");
+    expect(out.text).toContain("Waitlisted");
+    // Not the single-entry intro — a cart of two must not claim to be one.
+    expect(out.html).not.toContain("Thanks Riverside A");
+  });
+
+  it("multi-entry cart: a paid entry's own fee appears on its line, a waitlisted entry's does not", () => {
+    const out = registrationTemplate(
+      {
+        ...registrationCartArgs,
+        entries: [
+          { displayName: "Team Paid", status: "pending", feeCents: 1500 },
+          { displayName: "Team Waitlisted", status: "waitlisted", feeCents: 0 },
+        ],
+        totalCents: 1500,
+      },
+      emailsEn as Dict,
+    );
+    expect(out.text).toContain("Team Paid — Pending (£15.00)");
+    expect(out.text).toContain("Team Waitlisted — Waitlisted");
+    expect(out.text).not.toContain("Team Waitlisted — Waitlisted (");
+  });
+
+  // RS005 F1 finding 1: reusing this cart-shaped template for a RESEND (or a
+  // dispute-evidence reconstruction) on an already-settled entry must not
+  // re-ask for money already given — `totalCents` alone (the cart's whole
+  // historical subtotal) can't tell "still owed" from "already collected".
+  it("a settled (paid/confirmed) single entry gets no fee panel at all on resend/reconstruction", () => {
+    for (const status of ["paid", "confirmed"] as const) {
+      const out = registrationTemplate(
+        { ...registrationCartArgs, entries: [{ displayName: "Alex", status, feeCents: 2500 }] },
+        emailsEn as Dict,
+      );
+      expect(out.html, `status=${status}`).not.toContain("Entry fee");
+      expect(out.text, `status=${status}`).not.toContain("Entry fee");
+      // Not a blank/broken mail — the "received" framing still renders.
+      expect(out.html, `status=${status}`).toContain("Thanks Alex");
+    }
+  });
+
+  // Withdrawn/rejected/expired are the same "nothing left owed" case as
+  // paid/confirmed, just via a different route (the money was never
+  // collected AND never will be) — same gate, same expectation.
+  it("a withdrawn/rejected/expired single entry also gets no fee panel", () => {
+    for (const status of ["withdrawn", "rejected", "expired"] as const) {
+      const out = registrationTemplate(
+        { ...registrationCartArgs, entries: [{ displayName: "Alex", status, feeCents: 2500 }] },
+        emailsEn as Dict,
+      );
+      expect(out.html, `status=${status}`).not.toContain("Entry fee");
+    }
+  });
+
+  // A mixed cart must quote what is STILL owed, not the cart's whole
+  // historical subtotal (which would overstate it once one entry is
+  // already settled) — same underlying bug as the single-entry case above,
+  // just visible even when SOME money genuinely is still due.
+  it("a mixed cart's fee panel quotes only the entry still pending, not the whole cart's subtotal", () => {
+    const out = registrationTemplate(
+      {
+        ...registrationCartArgs,
+        entries: [
+          { displayName: "Already Paid", status: "confirmed", feeCents: 2500 },
+          { displayName: "Still Owing", status: "pending", feeCents: 1500 },
+        ],
+        // A caller might still pass the whole-cart historical subtotal here
+        // (registrations.ts's own `totalCents` field) — the template must
+        // not use it for the amount it quotes as due.
+        totalCents: 4000,
+      },
+      emailsEn as Dict,
+    );
+    expect(out.html).toContain("Entry fee: £15.00");
+    expect(out.html).not.toContain("£40.00");
   });
 
   it("payment reminder without instructions points at the organiser", () => {

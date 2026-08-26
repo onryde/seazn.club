@@ -94,6 +94,47 @@ describe.skipIf(!HAS_DB)("dispute evidence pack", () => {
     expect(audit).toBeDefined();
   });
 
+  // RS005 W4 — the sent confirmation is now cart-shaped (owner ruling
+  // 2026-08-25), so the reconstruction must render the WHOLE cart, not just
+  // the one entry a dispute happens to be filed against. Two entries in one
+  // group, DELIBERATELY different statuses/fees, so a reconstruction that
+  // silently collapsed back to one entry (or repeated one status for both)
+  // would be caught the same way email-builders.test.ts's own multi-entry
+  // test is.
+  it("reconstructs the CART, not just the disputed entry — both entries, their own status/fee", async () => {
+    const { owner, divisionId, compId } = await seed();
+    const ref = `SZ-EV${randomUUID().slice(0, 6).toUpperCase()}`;
+    const [{ id: groupId }] = await sql<{ id: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, access_token_hash, ref_code,
+         amount_cents, currency, payment_method, payment_intent_id, disputed_at, dispute_id)
+      values
+        (${compId}, 'Cart Rep', 'cart-rep@example.com', ${randomUUID()}, ${ref},
+         2500, 'gbp', 'stripe', 'pi_test_cart', now(), 'dp_test_cart')
+      returning id`;
+    const [{ id: disputedRegId }] = await sql<{ id: string }[]>`
+      insert into registrations (division_id, group_id, status, display_name, amount_cents)
+      values (${divisionId}, ${groupId}, 'confirmed', 'Disputed Entry', 2500)
+      returning id`;
+    await sql`
+      insert into registrations (division_id, group_id, status, display_name, amount_cents)
+      values (${divisionId}, ${groupId}, 'waitlisted', 'Sibling Entry', 0)`;
+
+    // Called against the DISPUTED entry's id — proves the reconstruction
+    // widens to the whole cart rather than staying scoped to it.
+    const pack = await buildDisputeEvidence(owner, disputedRegId, "https://test.local");
+    expect(pack.html).toContain("Disputed Entry");
+    expect(pack.html).toContain("Sibling Entry");
+    // The registration RECORD section still names the disputed entry alone
+    // (its own row) — the CART widening is specifically in the confirmation
+    // email reconstruction below it.
+    expect(pack.html).toContain("Confirmed");
+    expect(pack.html).toContain("Waitlisted");
+    // paymentInstructions/payDeadline stay forced null in the reconstruction
+    // (unchanged by this wave) — no stray "Pay now" button from a stale mint.
+    expect(pack.html).not.toContain("Pay now");
+  });
+
   // P9 sweep (pass 3c-4): the "fixtures for this entrant" section used to
   // SELECT fixtures.venue straight into the printed evidence document —
   // frozen since pass 3a, so a fixture played after the cutover printed a

@@ -83,6 +83,10 @@ const RULES: RouteRule[] = [
   { method: "POST", path: "/competitions/:id/divisions", scope: "manage", pin: "competition" },
   { method: "GET", path: "/competitions/:id/exports/timetable", scope: "read", pin: "competition" },
   { method: "GET", path: "/competitions/:id/exports/tickets", scope: "read", pin: "competition" },
+  // RS005 W1b — competition-wide Registrants tab, the cross-division twin of
+  // /divisions/:id/registrations(/export) above.
+  { method: "GET", path: "/competitions/:id/registrations", scope: "read", pin: "competition" },
+  { method: "GET", path: "/competitions/:id/registrations/export", scope: "read", pin: "competition" },
   // Joint multi-division AI scheduling (#350). Propose-only — nothing is
   // written — but it SPENDS AI CREDITS off the org wallet, so it sits at manage
   // with the other mutations, exactly like the per-division ai-plan.
@@ -248,8 +252,18 @@ const RULES: RouteRule[] = [
   { method: "POST", path: "/registrations/:id/mark-paid", scope: "manage", pin: "registration" },
   { method: "POST", path: "/registrations/:id/waive", scope: "manage", pin: "registration" },
   { method: "POST", path: "/registrations/:id/remind", scope: "manage", pin: "registration" },
+  { method: "POST", path: "/registrations/:id/resend-confirmation", scope: "manage", pin: "registration" },
   { method: "POST", path: "/registrations/:id/waitlist", scope: "manage", pin: "registration" },
   { method: "POST", path: "/registrations/:id/withdraw", scope: "manage", pin: "registration" },
+  // RS005 W1b — manual-approval review + waitlist promotion. Same family as
+  // confirm/waitlist above (state transitions, not a discretionary money
+  // amount), so `manage`, not excluded: `reject` can trigger a refund as a
+  // side effect exactly like withdraw already does, which is not the
+  // "refund excluded" case above (that is the free-amount manual refund
+  // door specifically).
+  { method: "POST", path: "/registrations/:id/approve", scope: "manage", pin: "registration" },
+  { method: "POST", path: "/registrations/:id/reject", scope: "manage", pin: "registration" },
+  { method: "POST", path: "/registrations/:id/promote", scope: "manage", pin: "registration" },
 
   // cross-division schedule ops (org-wide bodies — unpinnable)
   { method: "POST", path: "/schedule/clear", scope: "manage" },

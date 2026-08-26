@@ -1,0 +1,751 @@
+// RS005 W1a: the widened registrations read model (listRegistrations's new
+// RegistrationListRow — division name/slug, entrant_kind, roster_count/cap,
+// consent_pending_count, waitlist_position, sort) and the per-player CSV
+// exporter that replaces the old division-only, entry-flat one. Real
+// Postgres required; skipped without DATABASE_URL — same convention as
+// registrations.test.ts, which owns the pre-existing coverage this file
+// does not duplicate.
+import { describe, expect, it } from "vitest";
+import { sql } from "@/lib/db";
+import type { AuthCtx } from "@/server/api-v1/auth";
+import type { OrgRole } from "@/lib/types";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { PaymentRequiredError } from "@/lib/errors";
+import {
+  listRegistrations,
+  exportRegistrationsCsv,
+  promoteOldestWaitlisted,
+  putRegistrationSettings,
+} from "../registrations";
+import { createDivision } from "../divisions";
+import { seedOrg, asOwner, rig, seedRegistration, SETTINGS_BASE } from "./_registration-fixtures";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+
+/** seedOrg + asOwner + rig + putRegistrationSettings — the combination every
+ *  test below needs at minimum. `overrides` layers onto SETTINGS_BASE the
+ *  same way individual tests already hand-write it elsewhere in this suite. */
+async function baseRig(overrides: Record<string, unknown> = {}) {
+  const { orgId, ownerId } = await seedOrg("pro");
+  const owner = asOwner(orgId, ownerId);
+  const { competition, division } = await rig(owner);
+  const settings = await putRegistrationSettings(owner, division.id, {
+    ...SETTINGS_BASE,
+    fee_cents: 0,
+    ...overrides,
+  });
+  return { orgId, owner, competition, division, settings };
+}
+
+/** A second division under the SAME competition, sport_key repointed at a
+ *  freshly-seeded sport whose position_catalog declares NO `lineup` key at
+ *  all — the "unlimited roster" case `rosterCapExpr` must resolve to NULL.
+ *  Direct SQL, not createDivision's own sport wiring: divisions.sport_key is
+ *  a bare FK (V209, no variant-consistency constraint), so seeding the sports
+ *  row first and repointing after creation is safe and matches this suite's
+ *  established seed-then-mutate pattern (see seedRegistration). */
+async function noLineupDivision(owner: ReturnType<typeof asOwner>, competitionId: string) {
+  const division = await createDivision(owner, competitionId, {
+    name: "No Lineup " + Math.random().toString(36).slice(2, 8),
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    eligibility: [],
+  });
+  await sql`
+    insert into sports (key, name, module_version, position_catalog)
+    values ('rs005_no_lineup', 'RS005 No Lineup', '1.0.0', ${sql.json({ groups: [] })})
+    on conflict (key) do nothing`;
+  await sql`update divisions set sport_key = 'rs005_no_lineup' where id = ${division.id}`;
+  return division;
+}
+
+describe.skipIf(!HAS_DB)("RS005 W1a: listRegistrations widened read model", () => {
+  it("waitlist_position matches promoteOldestWaitlisted's own pick, including the id tiebreak on a tied created_at", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const a = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted",
+      displayName: "A",
+    });
+    const b = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted",
+      displayName: "B",
+    });
+    const c = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted",
+      displayName: "C",
+    });
+    // A and B tie EXACTLY on created_at; C is strictly later. Forces the id
+    // tiebreak between A/B — the exact case a `created_at`-only comparison
+    // (no tuple/id tiebreak) gets wrong.
+    const tie = new Date("2026-01-01T00:00:00Z");
+    const later = new Date("2026-01-02T00:00:00Z");
+    await sql`update registrations set created_at = ${tie} where id = ${a.registration.id}`;
+    await sql`update registrations set created_at = ${tie} where id = ${b.registration.id}`;
+    await sql`update registrations set created_at = ${later} where id = ${c.registration.id}`;
+
+    const before = await listRegistrations(owner, division.id, "waitlisted");
+    const first = before.find((r) => r.waitlist_position === 1);
+    const second = before.find((r) => r.waitlist_position === 2);
+    const third = before.find((r) => r.waitlist_position === 3);
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(third?.id).toBe(c.registration.id); // strictly later: always last
+    expect([a.registration.id, b.registration.id]).toContain(first!.id);
+    expect([a.registration.id, b.registration.id]).toContain(second!.id);
+    expect(first!.id).not.toBe(second!.id);
+
+    // The REAL function, not a re-derivation of its ordering: whichever of
+    // A/B it actually promotes must be exactly the row this read model
+    // ranked position 1 — read BEFORE this mutates the winner away from
+    // 'waitlisted'.
+    const promoted = await sql.begin((tx) => promoteOldestWaitlisted(tx, division.id, settings));
+    expect(promoted).toBeTruthy();
+    expect(promoted!.id).toBe(first!.id);
+  });
+
+  it("waitlist_position is null off the waitlist, and ranks independently per division", async () => {
+    const { owner, competition, division: divA, settings: settingsA } = await baseRig();
+    const divB = await createDivision(owner, competition.id, {
+      name: "Division B " + Math.random().toString(36).slice(2, 8),
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      eligibility: [],
+    });
+    const settingsB = await putRegistrationSettings(owner, divB.id, { ...SETTINGS_BASE, fee_cents: 0 });
+
+    const pending = await seedRegistration(competition.id, divA.id, settingsA, { status: "pending" });
+    const waitA = await seedRegistration(competition.id, divA.id, settingsA, { status: "waitlisted" });
+    const waitB = await seedRegistration(competition.id, divB.id, settingsB, { status: "waitlisted" });
+
+    const rowsA = await listRegistrations(owner, divA.id, null);
+    const rowsB = await listRegistrations(owner, divB.id, null);
+
+    expect(rowsA.find((r) => r.id === pending.registration.id)?.waitlist_position).toBeNull();
+    expect(rowsA.find((r) => r.id === waitA.registration.id)?.waitlist_position).toBe(1);
+    expect(rowsB.find((r) => r.id === waitB.registration.id)?.waitlist_position).toBe(1);
+  });
+
+  it("roster_cap reads sports.position_catalog.lineup.size+benchMax; null when the sport declares no lineup", async () => {
+    const { owner, competition, division: divGeneric, settings: settingsGeneric } = await baseRig();
+    const divNoLineup = await noLineupDivision(owner, competition.id);
+    const settingsNoLineup = await putRegistrationSettings(owner, divNoLineup.id, { ...SETTINGS_BASE, fee_cents: 0 });
+
+    // generic's seeded lineup is { size: 1, benchMax: 0 } -> cap 1 (same
+    // fixture every other suite relies on — see _registration-fixtures.ts).
+    const capped = await seedRegistration(competition.id, divGeneric.id, settingsGeneric);
+    const uncapped = await seedRegistration(competition.id, divNoLineup.id, settingsNoLineup);
+
+    const rowsGeneric = await listRegistrations(owner, divGeneric.id, null);
+    const rowsNoLineup = await listRegistrations(owner, divNoLineup.id, null);
+    expect(rowsGeneric.find((r) => r.id === capped.registration.id)?.roster_cap).toBe(1);
+    expect(rowsNoLineup.find((r) => r.id === uncapped.registration.id)?.roster_cap).toBeNull();
+  });
+
+  it("roster_count and consent_pending_count are per entry, correct with mixed consent states", async () => {
+    const { owner, competition, division, settings } = await baseRig({ entrant_kind: "team" });
+    const reg = await seedRegistration(competition.id, division.id, settings, {
+      players: [{ name: "P1" }, { name: "P2" }, { name: "P3" }],
+    });
+    const players = await sql<{ id: string }[]>`
+      select id from registration_players where registration_id = ${reg.registration.id} order by created_at`;
+    expect(players).toHaveLength(3);
+    // P1 -> granted; P2/P3 stay at the DB default 'pending'.
+    await sql`update registration_players set consent_status = 'granted' where id = ${players[0]!.id}`;
+
+    const rows = await listRegistrations(owner, division.id, null);
+    const row = rows.find((r) => r.id === reg.registration.id)!;
+    expect(row.roster_count).toBe(3);
+    expect(row.consent_pending_count).toBe(2);
+  });
+
+  it("filters.sort: default stays oldest-first (unchanged order); 'newest' reverses it", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const first = await seedRegistration(competition.id, division.id, settings, { displayName: "First" });
+    const second = await seedRegistration(competition.id, division.id, settings, { displayName: "Second" });
+    const third = await seedRegistration(competition.id, division.id, settings, { displayName: "Third" });
+    await sql`update registrations set created_at = '2026-01-01T00:00:00Z' where id = ${first.registration.id}`;
+    await sql`update registrations set created_at = '2026-01-02T00:00:00Z' where id = ${second.registration.id}`;
+    await sql`update registrations set created_at = '2026-01-03T00:00:00Z' where id = ${third.registration.id}`;
+
+    const oldestFirst = await listRegistrations(owner, division.id, null);
+    expect(oldestFirst.map((r) => r.id)).toEqual([
+      first.registration.id,
+      second.registration.id,
+      third.registration.id,
+    ]);
+
+    const newestFirst = await listRegistrations(owner, division.id, null, { sort: "newest" });
+    expect(newestFirst.map((r) => r.id)).toEqual([
+      third.registration.id,
+      second.registration.id,
+      first.registration.id,
+    ]);
+  });
+
+  it("never returns access_token_hash on the list surface", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    await seedRegistration(competition.id, division.id, settings);
+    const rows = await listRegistrations(owner, division.id, null);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(Object.prototype.hasOwnProperty.call(row, "access_token_hash")).toBe(false);
+    }
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS005 W1a: exportRegistrationsCsv (per-player)", () => {
+  it("emits one row per player; a zero-player entry emits one row with blank player columns", async () => {
+    const { owner, competition, division, settings } = await baseRig({ entrant_kind: "team" });
+    const withPlayers = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Team Alpha",
+      players: [{ name: "Alice" }, { name: "Bob" }],
+    });
+    const noPlayers = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Team Beta",
+    });
+
+    const csv = await exportRegistrationsCsv(owner, { divisionId: division.id });
+    const lines = csv.trimEnd().split("\n");
+    const header = lines[0]!.split(",");
+    const idIdx = header.indexOf("registration_id");
+    const nameIdx = header.indexOf("player_name");
+    expect(idIdx).toBeGreaterThanOrEqual(0);
+    expect(nameIdx).toBeGreaterThanOrEqual(0);
+
+    const alphaLines = lines.slice(1).filter((l) => l.split(",")[idIdx] === withPlayers.registration.id);
+    expect(alphaLines).toHaveLength(2);
+    expect(alphaLines.map((l) => l.split(",")[nameIdx]).sort()).toEqual(["Alice", "Bob"]);
+
+    const betaLines = lines.slice(1).filter((l) => l.split(",")[idIdx] === noPlayers.registration.id);
+    expect(betaLines).toHaveLength(1);
+    expect(betaLines[0]!.split(",")[nameIdx]).toBe("");
+  });
+
+  it("escapes a value containing both a comma and a double quote byte-exact", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const reg = await seedRegistration(competition.id, division.id, settings, {
+      displayName: 'Jane "JJ", Doe',
+    });
+
+    const csv = await exportRegistrationsCsv(owner, { divisionId: division.id });
+    const dataLine = csv.split("\n").find((l) => l.startsWith(reg.registration.id));
+    expect(dataLine).toBeDefined();
+    // display_name and contact_name (seedRegistration sets both to the same
+    // value) sit back-to-back in the column order — the doubled interior
+    // quotes AND the still-intact field-separating comma between the two
+    // occurrences prove the escaper closed each quoted field correctly
+    // rather than leaking into its neighbour.
+    expect(dataLine).toContain('"Jane ""JJ"", Doe","Jane ""JJ"", Doe"');
+    // The raw, unescaped source string never appears unescaped anywhere.
+    expect(dataLine).not.toContain(',Jane "JJ", Doe,');
+  });
+
+  it("competition-wide export unions every in-scope division's form_fields keys, stable-sorted", async () => {
+    const { owner, competition, division: divA } = await baseRig({
+      form_fields: [{ key: "shirt_size", label: "Shirt size", kind: "text", required: false }],
+    });
+    const divB = await createDivision(owner, competition.id, {
+      name: "Division B " + Math.random().toString(36).slice(2, 8),
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      eligibility: [],
+    });
+    const settingsB = await putRegistrationSettings(owner, divB.id, {
+      ...SETTINGS_BASE,
+      fee_cents: 0,
+      form_fields: [{ key: "dietary", label: "Dietary needs", kind: "text", required: false }],
+    });
+    const settingsA = await putRegistrationSettings(owner, divA.id, {
+      ...SETTINGS_BASE,
+      fee_cents: 0,
+      form_fields: [{ key: "shirt_size", label: "Shirt size", kind: "text", required: false }],
+    });
+    await seedRegistration(competition.id, divA.id, settingsA, { answers: { shirt_size: "M" } });
+    await seedRegistration(competition.id, divB.id, settingsB, { answers: { dietary: "Vegetarian" } });
+
+    const csv = await exportRegistrationsCsv(owner, { competitionId: competition.id });
+    const header = csv.split("\n")[0]!.split(",");
+    expect(header).toContain("shirt_size");
+    expect(header).toContain("dietary");
+    // stable (alphabetically) sorted, not division/insertion order.
+    expect(header.indexOf("dietary")).toBeLessThan(header.indexOf("shirt_size"));
+  });
+
+  it("still refuses without the exports entitlement (explicit deny — plain `exports` reaches every plan by V285, so a denial can only be an org override, never a plan tier)", async () => {
+    const { owner, orgId, division } = await baseRig();
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value)
+      values (${orgId}, 'exports', false)
+      on conflict (org_id, feature_key) do update set bool_value = false`;
+    await invalidateOrgEntitlements(orgId);
+    await expect(exportRegistrationsCsv(owner, { divisionId: division.id })).rejects.toThrow(PaymentRequiredError);
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS005 W1b review BLOCKER: division_id must belong to the named competition", () => {
+  // The guard exists for the API-key competition pin, which is the boundary
+  // that actually breaks: `apiKeyAuth` resolves the pin from the URL PATH
+  // resource only (api-v1/auth.ts, `resolvePinCompetition`) and never reads
+  // query parameters. A key pinned to competition A therefore satisfied its
+  // pin on A's path and then read B's rows, because `listRegistrations`
+  // derived the competition from `division_id` and discarded the caller's
+  // `competition_id` entirely. Same org both times — `withTenant` was never
+  // the thing being bypassed.
+  it("404s a division from another competition instead of returning its rows", async () => {
+    const { owner, competition: compA } = await baseRig();
+    const { competition: compB, division: divB } = await rig(owner);
+    const settingsB = await putRegistrationSettings(owner, divB.id, { ...SETTINGS_BASE, fee_cents: 0 });
+    const { registration: leaked } = await seedRegistration(compB.id, divB.id, settingsB, {
+      displayName: "Should Not Appear",
+      contactEmail: "b@example.test",
+    });
+
+    // Sanity: the row IS readable through its OWN competition, so a 404 below
+    // is the guard firing and not an empty fixture.
+    const ownScope = await listRegistrations(owner, divB.id, null, { competition_id: compB.id });
+    expect(ownScope.map((r) => r.id)).toContain(leaked.id);
+
+    await expect(
+      listRegistrations(owner, divB.id, null, { competition_id: compA.id }),
+    ).rejects.toThrow(/division not found/);
+  });
+
+  it("404s the CSV export the same way — the bulk path is the one that moves bytes", async () => {
+    const { owner, competition: compA } = await baseRig();
+    const { competition: compB, division: divB } = await rig(owner);
+    const settingsB = await putRegistrationSettings(owner, divB.id, { ...SETTINGS_BASE, fee_cents: 0 });
+    await seedRegistration(compB.id, divB.id, settingsB, {
+      displayName: "Should Not Appear",
+      contactEmail: "b@example.test",
+    });
+
+    await expect(
+      exportRegistrationsCsv(owner, { competitionId: compA.id, divisionId: divB.id }),
+    ).rejects.toThrow(/division not found/);
+  });
+
+  it("still allows the two when they agree, and when only one is given", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration: own } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "In Scope",
+      contactEmail: "a@example.test",
+    });
+
+    const agreeing = await listRegistrations(owner, division.id, null, { competition_id: competition.id });
+    expect(agreeing.map((r) => r.id)).toContain(own.id);
+
+    // The live /api/v1/divisions/[id]/registrations route passes no filters at
+    // all — the guard must not turn that into a 404.
+    const divisionOnly = await listRegistrations(owner, division.id, null, {});
+    expect(divisionOnly.map((r) => r.id)).toContain(own.id);
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS005: archiving a division does not hide its registrants", () => {
+  // CHARACTERISATION, and a deliberate one — this pins a behaviour that is
+  // correct today and that nothing else would notice losing.
+  //
+  // `listRegistrations` joins `divisions` with NO `archived_at` guard, unlike
+  // the Settings tab's own query (`registration/data.ts`, `where ... and
+  // d.archived_at is null`) and unlike the filter-dropdown query beside it.
+  // Those two SHOULD exclude archived divisions: one configures them, the
+  // other offers them as a filter. This one must not.
+  //
+  // The cost of getting it wrong is silent and lands on the worst day:
+  // archiving a division is exactly what an organiser does when a competition
+  // wraps, and the registrants are the people they still have to refund,
+  // export for their federation, or answer questions about. Copying that
+  // one-line predicate up here — an obvious-looking consistency fix, and the
+  // two queries sit ~200 lines apart in sibling files — would vanish every
+  // one of them, with no error, no empty-state distinction, and nothing red.
+  it("still lists (and exports) entries whose division has been archived", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Archived Division Entry",
+      contactEmail: "archived@example.test",
+    });
+
+    const before = await listRegistrations(owner, null, null, { competition_id: competition.id });
+    expect(before.map((r) => r.id)).toContain(registration.id);
+
+    await sql`update divisions set archived_at = now() where id = ${division.id}`;
+
+    const after = await listRegistrations(owner, null, null, { competition_id: competition.id });
+    expect(
+      after.map((r) => r.id),
+      "archiving a division must not hide the people who registered for it",
+    ).toContain(registration.id);
+    // The row still carries its division's identity — an organiser looking at
+    // a wrapped competition needs to know WHICH division each person is in.
+    expect(after.find((r) => r.id === registration.id)?.division_name).toBe(division.name);
+
+    const csv = await exportRegistrationsCsv(owner, { competitionId: competition.id });
+    expect(csv, "the CSV is how a federation report gets produced after wrap-up").toContain(
+      "Archived Division Entry",
+    );
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS005 W3 prep: the row carries its DIVISION's approval mode", () => {
+  // approve/reject may only be OFFERED on a manual-approval division —
+  // `approveRegistration` refuses an auto division with a 422, so rendering
+  // the control there hands an organiser a button that cannot work and an
+  // error that reads as a bug. The mode lives on the division, not the entry,
+  // and `registration_settings` is already LEFT JOINed here, so this costs no
+  // extra query and no second source of truth for the UI to drift from.
+  it("reports 'manual' for a manual division and 'auto' when a division has no settings row at all", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration: autoReg } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Auto Division Entry",
+    });
+
+    const manualDiv = await createDivision(owner, competition.id, {
+      name: "Manual " + Math.random().toString(36).slice(2, 7),
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      eligibility: [],
+    });
+    const manualSettings = await putRegistrationSettings(owner, manualDiv.id, {
+      ...SETTINGS_BASE,
+      fee_cents: 0,
+      approval: "manual",
+    });
+    const { registration: manualReg } = await seedRegistration(
+      competition.id,
+      manualDiv.id,
+      manualSettings,
+      { displayName: "Manual Division Entry" },
+    );
+
+    const rows = await listRegistrations(owner, null, null, { competition_id: competition.id });
+    expect(rows.find((r) => r.id === manualReg.id)?.approval).toBe("manual");
+    expect(rows.find((r) => r.id === autoReg.id)?.approval).toBe("auto");
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS005 whole-branch review BLOCKER: join_code is not a display field", () => {
+  // The owner ruled the join code hidden from viewers, and the UI honoured it
+  // (the detail body gates the copy control on canEdit and never puts the code
+  // in the RSC payload). The JSON API did not — and `read` scope is
+  // READ_ROLES, which INCLUDES viewer, so the same viewer session could simply
+  // request the list route and be handed the code.
+  //
+  // It is a bearer credential, not a field: POST /public/.../register/join
+  // accepts it from anyone and mints a roster row, and RS001 made it globally
+  // unique so it resolves with no other context. A read-only role holding one
+  // can write to a roster.
+  it("hands the code to an editor and withholds it from a viewer", async () => {
+    const { owner, orgId, competition, division, settings } = await baseRig();
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Team With A Code",
+    });
+    // Randomised, not a literal: join_code is GLOBALLY unique (RS001's partial
+    // unique index) and this DB persists between runs, so a hardcoded code
+    // passes once and then 23505s forever — the same trap RS003 hit with
+    // hardcoded ref_code literals.
+    const code = "JOIN" + Math.random().toString(36).slice(2, 10).toUpperCase();
+    await sql`update registrations set join_code = ${code} where id = ${registration.id}`;
+
+    const asOwnerRows = await listRegistrations(owner, null, null, { competition_id: competition.id });
+    expect(asOwnerRows.find((r) => r.id === registration.id)?.join_code).toBe(code);
+
+    const viewer = { ...owner, role: "viewer" as const };
+    const asViewerRows = await listRegistrations(viewer, null, null, { competition_id: competition.id });
+    const seen = asViewerRows.find((r) => r.id === registration.id);
+    expect(seen, "the viewer still SEES the entry — this is a read-only tab").toBeTruthy();
+    expect(seen?.join_code, "but never the code that would let them write to its roster").toBeNull();
+
+    // An API key resolves role: null whatever its scopes, so it cannot be
+    // shown to be write-capable and does not receive a write-capable secret.
+    const key = { ...owner, via: "api_key" as const, userId: null, role: null, keyId: "key-1" };
+    const asKeyRows = await listRegistrations(key, null, null, { competition_id: competition.id });
+    expect(asKeyRows.find((r) => r.id === registration.id)?.join_code).toBeNull();
+    expect(orgId).toBeTruthy();
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS005 review: the CSV's per-player personal data is editor-only", () => {
+  // The owner's ruling deliberately lets a VIEWER export — a read-only seat can
+  // still do the federation paperwork. It weighed the JOIN CODE, not this:
+  // player dob/gender appear on no UI surface for any role, so the export is
+  // the only path to them, and much of it is minor-attendee personal data
+  // leaving the platform as a file someone then emails around.
+  async function csvFor(role: OrgRole, ctx: AuthCtx, competitionId: string): Promise<string> {
+    return exportRegistrationsCsv({ ...ctx, role }, { competitionId });
+  }
+
+  it("gives an editor dob and gender, and gives a viewer neither the columns nor the values", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Junior Entry",
+      players: [{ name: "Kid Player", dob: "2014-05-06", gender: "f" }],
+    });
+    expect(registration.id).toBeTruthy();
+
+    const editorCsv = await csvFor("owner", owner, competition.id);
+    expect(editorCsv).toContain("player_dob");
+    expect(editorCsv).toContain("2014-05-06");
+
+    const viewerCsv = await csvFor("viewer", owner, competition.id);
+    // The header must not merely blank the column — a blank cell under
+    // `player_dob` asserts "we hold no date of birth", which is false.
+    expect(viewerCsv).not.toContain("player_dob");
+    expect(viewerCsv).not.toContain("player_gender");
+    expect(viewerCsv).not.toContain("2014-05-06");
+    // The viewer still gets a usable export — this is a narrowing, not a block.
+    expect(viewerCsv).toContain("Junior Entry");
+    expect(viewerCsv).toContain("Kid Player");
+    expect(viewerCsv).toContain("player_consent_status");
+  });
+
+  it("keeps every row's column count equal to its header, for both roles", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    // A rostered entry AND a zero-player entry: the blank-row path builds its
+    // cells from the same header, so a drift between them shows up here.
+    await seedRegistration(competition.id, division.id, settings, {
+      displayName: "With Roster",
+      players: [{ name: "A Player", dob: "2001-01-01", gender: "m" }],
+    });
+    await seedRegistration(competition.id, division.id, settings, { displayName: "No Roster" });
+
+    for (const role of ["owner", "viewer"] as const) {
+      const csv = await csvFor(role, owner, competition.id);
+      const [head, ...rest] = csv.trim().split("\n");
+      const width = head.split(",").length;
+      for (const line of rest) {
+        expect(line.split(",").length, `${role}: row width must match header`).toBe(width);
+      }
+    }
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS005 code-review: the filters agree with the columns they filter", () => {
+  // A division with NO registration_settings row is a real, ordinary case —
+  // the LEFT JOIN exists for it, and the SELECT coalesces its kind to
+  // 'individual' so the table shows something truthful. The filter did not
+  // coalesce, so `rs.entrant_kind = 'individual'` was NULL-false for exactly
+  // those rows: the entry an organiser could SEE listed as Individual vanished
+  // the moment they filtered for Individual. On a tab whose whole job is
+  // finding one person, a filter that hides matching rows is worse than no
+  // filter — the organiser concludes the entry does not exist.
+  it("kind=individual still finds an entry whose division has no settings row", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner); // rig() writes NO registration_settings
+    const [{ count: settingsRows }] = await sql<{ count: string }[]>`
+      select count(*)::text as count from registration_settings where division_id = ${division.id}`;
+    expect(settingsRows, "fixture must have no settings row for this to test anything").toBe("0");
+
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+      { displayName: "Unconfigured Division Entry" },
+    );
+
+    const unfiltered = await listRegistrations(owner, null, null, { competition_id: competition.id });
+    const shown = unfiltered.find((r) => r.id === registration.id);
+    expect(shown?.entrant_kind, "the table shows it as individual").toBe("individual");
+
+    const filtered = await listRegistrations(owner, null, null, {
+      competition_id: competition.id,
+      kind: "individual",
+    });
+    expect(
+      filtered.map((r) => r.id),
+      "so filtering for individual must still find it",
+    ).toContain(registration.id);
+  });
+
+  // free_agent used `!== undefined` and consent_pending used truthiness, one
+  // line apart, both documented as 1|0. So `consent_pending=0` silently meant
+  // "no filter" — an organiser asking "who is fully consented" got everyone,
+  // including the people still outstanding, which is the exact opposite of
+  // what they asked and is not visibly wrong on screen.
+  it("consent_pending=0 selects entries with nothing outstanding, not everything", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration: clean } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "All Consented",
+      players: [{ name: "Consented Player" }],
+    });
+    // The fixture leaves consent_status to the column DEFAULT, which is
+    // 'pending' (V363) — so a seeded player is outstanding unless said
+    // otherwise, and a test that assumes "seeded = consented" quietly
+    // measures nothing.
+    await sql`update registration_players set consent_status = 'granted'
+              where registration_id = ${clean.id}`;
+    const { registration: outstanding } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Consent Outstanding",
+      players: [{ name: "Pending Player" }],
+    });
+    await sql`update registration_players set consent_status = 'pending'
+              where registration_id = ${outstanding.id}`;
+
+    const pending = await listRegistrations(owner, null, null, {
+      competition_id: competition.id, consent_pending: true,
+    });
+    expect(pending.map((r) => r.id)).toContain(outstanding.id);
+    expect(pending.map((r) => r.id)).not.toContain(clean.id);
+
+    const settled = await listRegistrations(owner, null, null, {
+      competition_id: competition.id, consent_pending: false,
+    });
+    expect(settled.map((r) => r.id)).toContain(clean.id);
+    expect(settled.map((r) => r.id), "0 must mean 'nothing outstanding', not 'no filter'")
+      .not.toContain(outstanding.id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS005 F1 review finding 4: `q=` search must treat LIKE metacharacters
+// (`%`, `_`, and the escape character itself, `\`) as LITERAL text, not
+// wildcards. Unescaped, a registrant's own contact details routinely contain
+// them — "100% Effort", "john_smith@…" — and the search silently widened
+// into an accidental wildcard match across unrelated rows.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("RS005 F1 finding 4: `q=` search escapes LIKE metacharacters", () => {
+  it("a literal `%` in the search text matches only the row containing that literal substring", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration: literal } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "100% Effort",
+    });
+    // Same "100" prefix, but the next character is a literal X, not a `%`.
+    // An unescaped `%` in the search pattern is a wildcard that matches
+    // this too (any run of characters); escaped, it must not.
+    const { registration: decoy } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "100X Effort",
+    });
+
+    const rows = await listRegistrations(owner, null, null, {
+      competition_id: competition.id,
+      text: "100%",
+    });
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(literal.id);
+    expect(ids).not.toContain(decoy.id);
+  });
+
+  it("a literal `_` in the search text matches only that exact character, not 'any one character'", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration: literal } = await seedRegistration(competition.id, division.id, settings, {
+      contactEmail: "john_smith@test.local",
+    });
+    const { registration: decoy } = await seedRegistration(competition.id, division.id, settings, {
+      contactEmail: "johnXsmith@test.local",
+    });
+
+    const rows = await listRegistrations(owner, null, null, {
+      competition_id: competition.id,
+      text: "john_smith",
+    });
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(literal.id);
+    expect(ids).not.toContain(decoy.id);
+  });
+
+  it("a literal backslash in the search text is matched literally, not as an escape introducer", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration: literal } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Back\\Slash Club",
+    });
+
+    const rows = await listRegistrations(owner, null, null, {
+      competition_id: competition.id,
+      text: "Back\\Slash",
+    });
+    expect(rows.map((r) => r.id)).toContain(literal.id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS005 F1 review finding 3: the CSV exporter's `esc()` widened its sink to
+// registrant-controlled contact_name/full_name (plus a competition-wide
+// export reachable at `read` scope) without neutralising CSV/formula
+// injection, and dropped `\r` from its quoting trigger.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("RS005 F1 finding 3: CSV formula injection / row-splitting", () => {
+  it("neutralises a leading =, +, -, @ or TAB, byte-exact, without corrupting anything else", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const dangerous = ["=cmd|'/c calc'!A1", "+1+1", "-2+3", "@SUM(1+1)", "\tTabbed Name"];
+    const seeded: { registration: { id: string } }[] = [];
+    for (const name of dangerous) {
+      seeded.push(await seedRegistration(competition.id, division.id, settings, { displayName: name }));
+    }
+
+    const csv = await exportRegistrationsCsv(owner, { divisionId: division.id });
+    const lines = csv.trimEnd().split("\n");
+    const header = lines[0]!.split(",");
+    const idIdx = header.indexOf("registration_id");
+    const nameIdx = header.indexOf("display_name");
+    expect(idIdx).toBeGreaterThanOrEqual(0);
+
+    for (let i = 0; i < dangerous.length; i++) {
+      const row = lines.slice(1).find((l) => l.split(",")[idIdx] === seeded[i]!.registration.id)!;
+      expect(row, `row for ${JSON.stringify(dangerous[i])} must exist`).toBeDefined();
+      const cell = row.split(",")[nameIdx]!;
+      // A leading apostrophe forces every spreadsheet reader to treat the
+      // cell as literal text, never a formula — the standard mitigation.
+      expect(cell, `${JSON.stringify(dangerous[i])} must be neutralised`).toBe(`'${dangerous[i]}`);
+    }
+  });
+
+  it("a name containing \\r is quoted so a bare CR cannot be mistaken for a row break, byte-exact", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Line1\rLine2",
+    });
+
+    const csv = await exportRegistrationsCsv(owner, { divisionId: division.id });
+    const dataLine = csv.split("\n").find((l) => l.includes(registration.id));
+    expect(dataLine).toBeDefined();
+    // Quoted: a \r inside a quoted field is DATA to any RFC-4180-respecting
+    // reader, never a row terminator. Unquoted (main's regex, which only
+    // triggered on `"`/`,`/`\n`), the same raw \r reads as a row break to a
+    // universal-newline reader and splits one logical row into two.
+    expect(dataLine).toContain('"Line1\rLine2"');
+    expect(dataLine).not.toContain(",Line1\rLine2,");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS005 F1 review finding 5: the RS005 W1a per-player rewrite silently
+// dropped the pre-existing `id` column (renamed to `registration_id`) and
+// widened one-row-per-registration to one-row-per-player, with no response
+// schema in openapi.ts for a drift gate to ever see it. Decision taken
+// (documented in openapi.ts too): KEEP the per-player shape — RS005 W1a's
+// own ruling above `exportRegistrationsCsv` already treats it as deliberate
+// product value (per-player dob/gender/consent), not a defect — and restore
+// `id` alongside `registration_id` so a consumer reading the OLD column name
+// still finds the registration's id, just repeated once per player row.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("RS005 F1 finding 5: `id` restored alongside `registration_id`", () => {
+  it("keeps `id` as the first column, byte-identical to `registration_id`, across every player row", async () => {
+    const { owner, competition, division, settings } = await baseRig({ entrant_kind: "team" });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Team Gamma",
+      players: [{ name: "Casey" }, { name: "Drew" }],
+    });
+
+    const csv = await exportRegistrationsCsv(owner, { divisionId: division.id });
+    const lines = csv.trimEnd().split("\n");
+    const header = lines[0]!.split(",");
+    // Pinned: `id` is main's pre-RS005-W1a FIRST column; `registration_id`
+    // sits right beside it. An integration reading the old `id` column name
+    // by position or by header keeps working even though the shape widened.
+    expect(header.slice(0, 2)).toEqual(["id", "registration_id"]);
+
+    const idIdx = header.indexOf("id");
+    const regIdIdx = header.indexOf("registration_id");
+    const rows = lines.slice(1).filter((l) => l.split(",")[regIdIdx] === registration.id);
+    expect(rows, "one row per player").toHaveLength(2);
+    for (const row of rows) {
+      const cols = row.split(",");
+      expect(cols[idIdx]).toBe(registration.id);
+      expect(cols[regIdIdx]).toBe(registration.id);
+    }
+  });
+});

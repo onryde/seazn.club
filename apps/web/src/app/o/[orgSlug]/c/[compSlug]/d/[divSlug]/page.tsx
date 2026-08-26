@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 // Division console (PROMPT-15 task 1): entrants & rosters, fixture console
 // (per stage: generate/complete/schedule), standings with the cascade trace.
 import Link from "@/components/ui/console-link";
-import { Globe, MonitorPlay, Printer } from "lucide-react";
+import { Globe, MonitorPlay, Printer, UserPlus } from "lucide-react";
 import { StatusChip, divisionChipState } from "@/components/ui/status-chip";
 import { routes } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
@@ -313,8 +313,35 @@ export default async function DivisionPage({
               <MonitorPlay className="h-4 w-4" strokeWidth={1.75} />
               <span className="hidden sm:inline">{t(dict, "action.slideshow")} ↗</span>
             </Link>
-            {/* Division-level registration nav link removed (RS001 demolition)
-                — competition-level Registration hub replaces it (RS004). */}
+            {/* Division-level registration nav link removed (RS001
+                demolition); RS004 built the competition-level Registration
+                hub as its replacement but deliberately left this page's own
+                link into it for later ("the filter lands with the real
+                Registrants table" — design §5). RS005 R2 is that later:
+                straight into the hub's Registrants tab, this division
+                pre-filtered via `division_id` (routes.ts).
+                Reuses the competition page's own "Registration" nav
+                label/aria (action.registration/aria.registration) and icon
+                (UserPlus) — same destination, same concept, one fewer
+                dictionary key.
+                NOT gated on competition.visibility, unlike View Public/QR
+                below: this is an ORGANISER surface behind /o/, not the
+                public register link the deleted surface used to gate — a
+                private competition still has registrants to manage.
+                requireDivisionPage already routes through
+                requireCompetitionPage, which 404s a scorer and admits
+                everyone else who can reach this page at all, so (matching
+                the competition page's RegistrationHubNavEntry comment on
+                why IT skips a canEdit gate) no further gate is owed here
+                either. */}
+            <Link
+              href={routes.competitionRegistration(orgSlug, compSlug, "registrants", id)}
+              aria-label={t(dict, "aria.registration")}
+              className="btn btn-ghost gap-1.5"
+            >
+              <UserPlus className="h-4 w-4" strokeWidth={1.75} />
+              <span className="hidden sm:inline">{t(dict, "action.registration")}</span>
+            </Link>
             {competition.visibility !== "private" && (
               // G9: straight to this division's public page.
               <a

@@ -42,9 +42,34 @@ const h = vi.hoisted(() => ({
   // bothered to ask (RS004 gap-pass review).
   currencyQueries: 0,
   unsupportedQueries: 0,
+  // RS005 W2a: fetchDivisionRows' own query (the Settings tab's heavier
+  // shape) vs fetchDivisionOptions' (the Registrants tab's small id+name
+  // dropdown query) — tracked SEPARATELY so "Settings issues no registrant
+  // query / Registrants issues no division-ROWS query" can be pinned
+  // precisely in both directions, not just as one blunt total.
+  divisionRowsQueries: 0,
+  divisionOptionsQueries: 0,
+  divisionOptions: [] as unknown[],
+  // RS005 W2b: fetchRegistrantDetails' own 2 queries (registration_players,
+  // then registrations/registration_settings for siblings+form_fields) —
+  // tracked separately from divisionRowsQueries/divisionOptionsQueries for
+  // the same reason those two are split: "the OTHER tab's query never ran"
+  // has to be provable in both directions, not just as one blunt total.
+  rosterQueries: 0,
+  siblingsQueries: 0,
+  rosterRows: [] as unknown[],
+  siblingRows: [] as unknown[],
 }));
 
 const feePercentForMock = vi.hoisted(() => vi.fn(async () => 8));
+// listRegistrations is a HEAVY usecase (Stripe/entitlements/DB) — mocked the
+// same way feePercentFor already is, rather than exercised for real through
+// the @/lib/db fake below (that fake's tx() only ever answers the Settings
+// tab's own query shapes; listRegistrations' joined SELECT is a different
+// shape it was never built to recognise). Real SQL correctness for
+// fetchRegistrantRows/fetchDivisionOptions lives in
+// fetch-registrant-rows-db.test.ts instead.
+const listRegistrationsMock = vi.hoisted(() => vi.fn(async () => [] as unknown[]));
 
 vi.mock("@/server/page-auth", () => ({
   requireCompetitionPage: async () => {
@@ -75,7 +100,10 @@ vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 // not otherwise pull in) — real behaviour is covered by
 // fetch-division-rows.test.ts's real-Postgres suite, same split as
 // fetchDivisionRows/fetchOrgCurrency below.
-vi.mock("@/server/usecases/registrations", () => ({ feePercentFor: feePercentForMock }));
+vi.mock("@/server/usecases/registrations", () => ({
+  feePercentFor: feePercentForMock,
+  listRegistrations: listRegistrationsMock,
+}));
 
 // A tagged-template call (`.raw` on the strings array) resolves to `h.rows`
 // — UNLESS its first raw chunk identifies it as finding 6's dedicated
@@ -100,6 +128,27 @@ vi.mock("@/lib/db", () => ({
         h.unsupportedQueries += 1;
         return Promise.resolve([{ stripe_unsupported_currency: h.orgStripeUnsupportedCurrency }]);
       }
+      // fetchDivisionOptions (RS005 W2a, data.ts) — the Registrants tab's
+      // own small id+name dropdown query. Distinguishable from
+      // fetchDivisionRows' shape (falls through to the default branch
+      // below) by its distinct leading text.
+      if (first.startsWith("select id, name")) {
+        h.divisionOptionsQueries += 1;
+        return Promise.resolve(h.divisionOptions);
+      }
+      // fetchRegistrantDetails (RS005 W2b, data.ts) — the row-expand
+      // detail's 2 queries. Distinguished by their own distinct leading
+      // column lists (see data.ts's own SQL) so neither can be mistaken
+      // for fetchDivisionRows' shape and pollute divisionRowsQueries.
+      if (first.startsWith("select registration_id")) {
+        h.rosterQueries += 1;
+        return Promise.resolve(h.rosterRows);
+      }
+      if (first.startsWith("select r.id")) {
+        h.siblingsQueries += 1;
+        return Promise.resolve(h.siblingRows);
+      }
+      h.divisionRowsQueries += 1;
       return Promise.resolve(h.rows);
     };
     return fn(tx);
@@ -132,21 +181,51 @@ beforeEach(() => {
   h.withTenantCalls = 0;
   h.currencyQueries = 0;
   h.unsupportedQueries = 0;
+  h.divisionRowsQueries = 0;
+  h.divisionOptionsQueries = 0;
+  h.divisionOptions = [];
+  h.rosterQueries = 0;
+  h.siblingsQueries = 0;
+  h.rosterRows = [];
+  h.siblingRows = [];
   feePercentForMock.mockClear();
   feePercentForMock.mockResolvedValue(8);
+  listRegistrationsMock.mockClear();
+  listRegistrationsMock.mockResolvedValue([]);
 });
 
-describe("registration hub — owner/admin guard", () => {
+describe("registration hub — RS005 owner/admin/viewer access (reverses RS004 ruling 2)", () => {
   it("renders for an editor (owner/admin)", async () => {
     await expect(Page({ params, searchParams: noTab })).resolves.toBeTruthy();
   });
 
-  it("404s a member who cannot edit (viewer)", async () => {
+  it("renders for a viewer too — read-only, NOT a 404 (RS005 owner ruling, 2026-08-25)", async () => {
     h.canEdit = false;
-    await expect(Page({ params, searchParams: noTab })).rejects.toThrow("NOT_FOUND");
+    await expect(Page({ params, searchParams: noTab })).resolves.toBeTruthy();
   });
 
-  it("propagates the guard's own refusal (e.g. a scorer) without swallowing it", async () => {
+  it("threads canEdit through to the Settings panel — true for an editor, false for a viewer", async () => {
+    // Was `expect(panel).toBeTruthy()` only, with a comment saying the panel
+    // had no canEdit prop. It has one now (the row context carries it, so the
+    // Configure control can be absent for a viewer), and asserting only that
+    // the panel rendered would ship green against a hardcoded `canEdit: true`
+    // — which is precisely the regression that would put a 403-only control
+    // back in front of a read-only role.
+    h.canEdit = false;
+    let panel = walk(await Page({ params, searchParams: noTab })).find(
+      (e) => e.type === RegistrationHubSettingsPanel,
+    );
+    expect(panel).toBeTruthy();
+    expect((propsOf(panel!).context as { canEdit: boolean }).canEdit).toBe(false);
+
+    h.canEdit = true;
+    panel = walk(await Page({ params, searchParams: noTab })).find(
+      (e) => e.type === RegistrationHubSettingsPanel,
+    );
+    expect((propsOf(panel!).context as { canEdit: boolean }).canEdit).toBe(true);
+  });
+
+  it("still 404s the guard's own refusal (e.g. a scorer) without swallowing it — unrelated to this wave's change", async () => {
     h.refuseInGuard = true;
     await expect(Page({ params, searchParams: noTab })).rejects.toThrow("NOT_FOUND");
   });
@@ -189,14 +268,211 @@ describe("registration hub — ?tab= switching", () => {
     expect(tree.some((e) => e.type === RegistrationHubSettingsPanel)).toBe(false);
   });
 
-  it("does not run the division-rows query on the Registrants tab — no N+1, no wasted read", async () => {
+  it("does not run fetchDivisionRows' query on the Registrants tab — no N+1, no wasted read (RS005 W2a mirror, direction 1)", async () => {
     await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
-    expect(h.withTenantCalls).toBe(0);
+    expect(h.divisionRowsQueries).toBe(0);
+  });
+
+  it("DOES run its own small division-OPTIONS query (the filter dropdown) on the Registrants tab", async () => {
+    await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
+    expect(h.divisionOptionsQueries).toBe(1);
   });
 
   it("does not resolve fee_percent on the Registrants tab either — same wasted-read guard (W3c)", async () => {
     await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
     expect(feePercentForMock).not.toHaveBeenCalled();
+  });
+
+  it("does not run listRegistrations on the Settings tab (RS005 W2a mirror, direction 2 — task acceptance's own wording)", async () => {
+    await Page({ params, searchParams: noTab });
+    expect(listRegistrationsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not run fetchDivisionOptions' query on the Settings tab either", async () => {
+    await Page({ params, searchParams: noTab });
+    expect(h.divisionOptionsQueries).toBe(0);
+  });
+
+  it("DOES run listRegistrations exactly once on the Registrants tab", async () => {
+    await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
+    expect(listRegistrationsMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("registration hub — row-expand detail query wiring (RS005 W2b, task 3)", () => {
+  it("issues exactly ONE roster query and ONE siblings query for a multi-row Registrants page — never one per row", async () => {
+    listRegistrationsMock.mockResolvedValueOnce([
+      { id: "r1", group_id: "g1" },
+      { id: "r2", group_id: "g1" },
+      { id: "r3", group_id: "g2" },
+    ]);
+    await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
+    expect(h.rosterQueries).toBe(1);
+    expect(h.siblingsQueries).toBe(1);
+  });
+
+  it("issues ZERO detail queries when the Registrants tab has no rows — no wasted round trip", async () => {
+    await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
+    expect(h.rosterQueries).toBe(0);
+    expect(h.siblingsQueries).toBe(0);
+  });
+
+  it("never runs the detail queries on the Settings tab", async () => {
+    await Page({ params, searchParams: noTab });
+    expect(h.rosterQueries).toBe(0);
+    expect(h.siblingsQueries).toBe(0);
+  });
+
+  it("never pollutes divisionRowsQueries — the detail queries have their own distinct branches", async () => {
+    listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
+    await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
+    expect(h.divisionRowsQueries).toBe(0);
+  });
+
+  it("passes the resolved details straight through to the panel's details prop", async () => {
+    listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    const details = propsOf(panel).details as {
+      rosterByRegistration: Map<string, unknown>;
+      siblingsByGroup: Map<string, unknown>;
+      formFieldsByRegistration: Map<string, unknown>;
+    };
+    expect(details.rosterByRegistration).toBeInstanceOf(Map);
+    expect(details.siblingsByGroup).toBeInstanceOf(Map);
+    expect(details.formFieldsByRegistration).toBeInstanceOf(Map);
+  });
+});
+
+describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
+  it("threads a filter from the raw query string through to listRegistrations", async () => {
+    await Page({
+      params,
+      searchParams: Promise.resolve({ tab: "registrants", status: "paid" }),
+    });
+    expect(listRegistrationsMock).toHaveBeenCalledWith(
+      { orgId: "org-1" },
+      null,
+      "paid",
+      { competition_id: "comp-1", sort: "newest" },
+    );
+  });
+
+  it("maps listRegistrations' resolved rows onto the panel's rows prop", async () => {
+    const fakeRows = [{ id: "reg-1", display_name: "Alex Smith" }];
+    listRegistrationsMock.mockResolvedValueOnce(fakeRows);
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).rows).toBe(fakeRows);
+  });
+
+  it("maps fetchDivisionOptions' resolved rows onto the panel's divisions prop", async () => {
+    h.divisionOptions = [{ id: "div-1", name: "Open Singles" }];
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).divisions).toEqual([{ id: "div-1", name: "Open Singles" }]);
+  });
+
+  it("threads canEdit through — true for an editor, false for a viewer", async () => {
+    h.canEdit = true;
+    let tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    expect(propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!).canEdit).toBe(true);
+
+    h.canEdit = false;
+    tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    expect(propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!).canEdit).toBe(false);
+  });
+
+  it("passes the REAL empty-state strings from the dictionary — never a hardcoded literal or a mis-keyed lookup", async () => {
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    const props = propsOf(panel);
+    const dict = await getDictionary("en", "ui");
+    expect(props.emptyTitle).toBe(t(dict, "reg.hub.registrants.title"));
+    expect(props.emptyBody).toBe(t(dict, "reg.hub.registrants.body"));
+    expect(props.emptyCtaLabel).toBe(t(dict, "reg.hub.registrants.cta"));
+  });
+
+  it("builds the empty-state cta href pointing at the Settings tab", async () => {
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).emptyCtaHref).toBe("/o/riverside/c/summer-league/registration?tab=settings");
+  });
+
+  it("builds the CSV export href off THIS competition's id", async () => {
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).exportHref).toBe(
+      "/api/v1/competitions/comp-1/registrations/export?sort=newest",
+    );
+  });
+
+  // RS005 F3 finding 2: the export href must carry the SAME filter the
+  // table is actually showing, including the negative ("0") case — see
+  // registrantsExportHrefFor's own comment (data.ts).
+  it("carries the explicit '0' form on the export href when the table is narrowed to the negative case", async () => {
+    const tree = walk(
+      await Page({
+        params,
+        searchParams: Promise.resolve({ tab: "registrants", free_agent: "0", consent_pending: "0" }),
+      }),
+    );
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).exportHref).toBe(
+      "/api/v1/competitions/comp-1/registrations/export?sort=newest&free_agent=0&consent_pending=0",
+    );
+  });
+
+  it("builds filtersAction as the tab's BARE path (no query string — a GET form submit would otherwise discard it)", async () => {
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).filtersAction).toBe("/o/riverside/c/summer-league/registration");
+  });
+
+  it("resolves orgTz the SAME way the Settings tab does — org timezone, never UTC-by-coincidence", async () => {
+    h.orgTimezone = "Asia/Kolkata";
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).orgTz).toBe("Asia/Kolkata");
+  });
+});
+
+// RS005 F3 finding 1: a repeated `?q=a&q=b` reaches this page's
+// `searchParams` as `string[]` (Next's own docs), not `string` — before the
+// fix, `raw.q?.trim()` threw `TypeError: raw.q?.trim is not a function`,
+// and `o/[orgSlug]/c/[compSlug]/error.tsx` swallowed the WHOLE hub (title,
+// tab strip, both panels), not just the Registrants panel. Asserting the
+// page RENDERS is the point (per the dispatch's own framing) — not that it
+// throws some OTHER, different error.
+describe("registration hub — array-valued query params never 500 the page (RS005 F3 finding 1)", () => {
+  it("a repeated ?q=a&q=b renders instead of throwing", async () => {
+    await expect(
+      Page({ params, searchParams: Promise.resolve({ tab: "registrants", q: ["a", "b"] }) }),
+    ).resolves.toBeTruthy();
+  });
+
+  it("every other parsed field also survives an array value", async () => {
+    await expect(
+      Page({
+        params,
+        searchParams: Promise.resolve({
+          tab: "registrants",
+          status: ["paid", "confirmed"],
+          division_id: ["11111111-2222-3333-4444-555555555555", "not-a-uuid"],
+          kind: ["team", "pair"],
+          sort: ["oldest", "newest"],
+          free_agent: ["1", "0"],
+          consent_pending: ["0", "1"],
+        }),
+      }),
+    ).resolves.toBeTruthy();
+  });
+
+  it("still renders the Registrants panel (not the error boundary) on a repeated param", async () => {
+    const tree = walk(
+      await Page({ params, searchParams: Promise.resolve({ tab: "registrants", q: ["a", "b"] }) }),
+    );
+    expect(tree.some((e) => e.type === RegistrationHubRegistrantsPanel)).toBe(true);
   });
 });
 
@@ -218,6 +494,10 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
         approval: "auto",
         allow_free_agents: false,
         taken: 3,
+        // RS005 F4 — a value distinct from `taken` so a mapping that
+        // accidentally reused the wrong source field cannot pass by
+        // coincidence.
+        waitlisted: 5,
         org_currency: "gbp",
       },
     ];
@@ -240,6 +520,7 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
         approval: "auto",
         allow_free_agents: false,
         taken: 3,
+        waitlisted: 5,
       },
     ]);
     expect((props.context as { currency: string }).currency).toBe("gbp");

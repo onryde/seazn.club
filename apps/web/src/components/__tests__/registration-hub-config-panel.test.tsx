@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { Modal } from "@/components/modal";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
-import { instantToOrgTzInputValue } from "@/components/registration-hub-tz-input";
+import { orgTzDateTimeHalves, orgTzInputValueToInstant } from "@/components/registration-hub-tz-input";
 import { FormBuilder, type FormField } from "@/components/registration-hub-form-builder";
 import type { RegistrationConfigState, RegistrationSettingsResponse } from "@/components/registration-hub-config-state";
 import { ROUTABLE_FIELDS, type ConfigFieldKey } from "@/components/registration-hub-save-error";
@@ -20,6 +20,7 @@ import {
   CapacitySection,
   MoneySection,
   FormSection,
+  OrgTzDateTimePair,
 } from "@/components/registration-hub-config-panel";
 
 const net = vi.hoisted(() => ({
@@ -77,6 +78,11 @@ const OPAQUE_TYPES: SectionType[] = [
   CapacitySection as SectionType,
   MoneySection as SectionType,
   FormSection as SectionType,
+  // RS005 R4 task 2 — OrgTzDateTimePair renders TWO DateTimeField elements
+  // (kind="date"/"time") as its children; without expanding it here,
+  // deepExpand never sees them (same opacity every other Section-shaped
+  // helper in this file has).
+  OrgTzDateTimePair as unknown as SectionType,
 ];
 
 const FORM_FIELDS: FormField[] = [
@@ -113,6 +119,10 @@ const BASE_PROPS = {
   currency: "usd" as const,
   feePercentPct: 8,
   cardUnsupportedCurrency: null,
+  // RS005 F4 — baseline "no one waiting" case, matching every OTHER fixture
+  // in this file that predates the re-price warning and asserts nothing
+  // about it.
+  waitlistedCount: 0,
   onClose: vi.fn(),
   onSaved: vi.fn(),
 };
@@ -180,6 +190,22 @@ function expandPanel(node: ReactNode) {
     if (p.footer) out.push(...walk(p.footer as ReactNode));
   }
   return out;
+}
+
+/** Text of the DEEPLY expanded panel. `island.text()` only sees what the
+ *  shallow render produced, and both the fee copy and the solo-signups toggle
+ *  live inside sections the design collapses by default — the same place
+ *  RS004's "Bench takes 2%" copy for a nonexistent product hid until someone
+ *  screenshotted an opened section. */
+function expandedText(tree: ReturnType<typeof expandPanel>): string {
+  const parts: string[] = [];
+  for (const el of tree) {
+    const kids = propsOf(el).children;
+    for (const k of Array.isArray(kids) ? kids : [kids]) {
+      if (typeof k === "string" || typeof k === "number") parts.push(String(k));
+    }
+  }
+  return parts.join(" ");
 }
 
 function findField(tree: ReturnType<typeof expandPanel>, field: string) {
@@ -420,9 +446,15 @@ describe("RegistrationHubConfigPanel — save: full replace + both endpoints", (
 describe("RegistrationHubConfigPanel — every routable field has a render site (finding 1)", () => {
   it("mapSaveError's full set of routable fields is rendered, never routed into a void", () => {
     const commonProps = { state: FULL_STATE, errors: ALL_ROUTED_ERRORS, patch: vi.fn(), msg: testMsg };
+    // RS005 R4 task 2 — OpenCloseSection/MoneySection now also take dtDrafts/
+    // onDateTimeHalfChange (the lifted date/time-halves state). Empty here:
+    // this test only proves every data-field-error PARAGRAPH has a render
+    // site, which OrgTzDateTimePair's own presence doesn't affect (the
+    // paragraphs are its SIBLINGS, not its children).
+    const dtProps = { dtDrafts: {}, onDateTimeHalfChange: vi.fn() };
     const rendered = [
       ...walk(EligibilitySection(commonProps)),
-      ...walk(OpenCloseSection({ ...commonProps, orgTz: "UTC" })),
+      ...walk(OpenCloseSection({ ...commonProps, orgTz: "UTC", ...dtProps })),
       ...walk(CapacitySection(commonProps)),
       ...walk(
         MoneySection({
@@ -436,6 +468,8 @@ describe("RegistrationHubConfigPanel — every routable field has a render site 
           orgPaymentInstructions: null,
           feeText: null,
           onFeeText: vi.fn(),
+          waitlistedCount: 0,
+          ...dtProps,
         }),
       ),
       ...walk(FormSection(commonProps)),
@@ -444,6 +478,46 @@ describe("RegistrationHubConfigPanel — every routable field has a render site 
       const el = rendered.find((e) => propsOf(e)["data-field-error"] === field);
       expect(el, `expected a data-field-error render site for "${field}"`).toBeTruthy();
     }
+  });
+});
+
+// RS005 R5 task 1 — the same "leads nowhere" problem the row's Copy/Open/QR
+// controls have (registration-hub-division-row.test.tsx's own coverage),
+// but reached from the SETTING an organiser flips to turn registration on:
+// the public sign-up page is hardcoded closed until RS006 ships the cart
+// stepper, so entrants still cannot register even once this toggle is on.
+// Open & close defaults OPEN (this file's own header comment), so this needs
+// no deepExpand — a direct OpenCloseSection call, matching the "every
+// routable field" test above, is enough.
+describe("RegistrationHubConfigPanel — the open-for-public toggle does not promise more than it delivers (RS005 R5 task 1)", () => {
+  it("renders a not-live notice beside the toggle, unconditionally", () => {
+    const tree = walk(
+      OpenCloseSection({
+        state: FULL_STATE,
+        errors: {},
+        patch: vi.fn(),
+        msg: testMsg,
+        orgTz: "UTC",
+        dtDrafts: {},
+        onDateTimeHalfChange: vi.fn(),
+      }),
+    );
+    expect(textOf(tree)).toContain(t(uiEn, "reg.settings.openForPublic.notLive"));
+  });
+
+  it("still renders the notice when the toggle is OFF — an organiser reads it before ever turning registration on", () => {
+    const tree = walk(
+      OpenCloseSection({
+        state: { ...FULL_STATE, enabled: false },
+        errors: {},
+        patch: vi.fn(),
+        msg: testMsg,
+        orgTz: "UTC",
+        dtDrafts: {},
+        onDateTimeHalfChange: vi.fn(),
+      }),
+    );
+    expect(textOf(tree)).toContain(t(uiEn, "reg.settings.openForPublic.notLive"));
   });
 });
 
@@ -623,14 +697,30 @@ describe("RegistrationHubConfigPanel — the solo sign-ups toggle", () => {
 // element is exactly what this file can see, and it is also the whole contract
 // the panel owns. What DateTimeField then does with those props is that
 // component's own suite.
+// RS005 R4 task 2 rewrote this block's own accessor: OrgTzDateTimePair
+// replaced the single `kind="datetime-local"` DateTimeField with TWO
+// DateTimeFields (kind="date"/"time", dataField suffixed `_date`/`_time`)
+// so the panel can see a half-filled pair (registration-hub-tz-input.ts's
+// header comment explains why DateTimeSplitField's own `joinValue` hides
+// that from every caller). Same "assert the PROPS the panel hands
+// DateTimeField, not rendered markup" contract as before — DateTimeField's
+// OWN suite covers what it does with them.
 describe("RegistrationHubConfigPanel — the three clock fields", () => {
   async function clockFields() {
+    // A CARD division: the refund lock is card-only now (the auto-refund it
+    // governs gates on payment_intent_id, which an offline entry never has),
+    // so the default offline fixture renders two clock fields, not three.
+    // Switching the fixture keeps this suite asserting what it was written to
+    // assert — that all three route through the shared field — rather than
+    // quietly dropping the third from its expectations.
+    net.getResponse = { ...RESPONSE, fee_cents: 1500, payment_method: "stripe" };
     const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
     await flush();
     // Deduped by hook: `expandPanel` re-scans its own growing output, so a
     // section reached through the Disclosure wrapper is expanded more than
-    // once and the same element surfaces repeatedly. What matters here is
-    // WHICH fields exist and what they were handed, not how many times the
+    // once and the same element surfaces repeatedly. Keyed by the SUFFIXED
+    // dataField ("opens_at_date", "opens_at_time", …) — what matters is
+    // which halves exist and what they were handed, not how many times the
     // harness walked past them.
     const byField = new Map<string, Record<string, unknown>>();
     for (const el of island.tree()) {
@@ -638,48 +728,605 @@ describe("RegistrationHubConfigPanel — the three clock fields", () => {
       const props = propsOf(el);
       byField.set(String(props.dataField), props);
     }
-    return [...byField.values()];
+    return byField;
   }
 
-  it("routes all three through the shared field, each with its own hook", async () => {
+  it("routes all three through the shared pair, each as a date half and a time half", async () => {
     const fields = await clockFields();
-    expect(fields.map((f) => f.dataField)).toEqual([
-      "opens_at",
-      "closes_at",
-      "refund_lock_at",
-    ]);
-    // Every one is the composite, never a bare date or time half.
-    expect(fields.every((f) => f.kind === "datetime-local")).toBe(true);
+    expect([...fields.keys()].sort()).toEqual(
+      [
+        "opens_at_date",
+        "opens_at_time",
+        "closes_at_date",
+        "closes_at_time",
+        "refund_lock_at_date",
+        "refund_lock_at_time",
+      ].sort(),
+    );
+    expect(fields.get("opens_at_date")!.kind).toBe("date");
+    expect(fields.get("opens_at_time")!.kind).toBe("time");
+    // Never the old bare composite — that's the exact opacity this task
+    // fixed (DateTimeSplitField's own joinValue hid incompleteness).
+    expect([...fields.values()].every((f) => f.kind !== "datetime-local")).toBe(true);
   });
 
-  it("gives the two CUTOFFS the 23:59 option and the opening none", async () => {
+  it("gives the two CUTOFFS' time halves the 23:59 option, and the opening none", async () => {
     const fields = await clockFields();
-    const byField = Object.fromEntries(fields.map((f) => [f.dataField as string, f]));
     // The quarter-hour grid stops at 23:45. A deadline there shuts the door
     // fifteen minutes early; an OPENING at 23:45 is just an opening.
-    expect(byField.closes_at!.extraOptions).toEqual(["23:59"]);
-    expect(byField.refund_lock_at!.extraOptions).toEqual(["23:59"]);
-    expect(byField.opens_at!.extraOptions).toBeUndefined();
+    expect(fields.get("closes_at_time")!.extraOptions).toEqual(["23:59"]);
+    expect(fields.get("refund_lock_at_time")!.extraOptions).toEqual(["23:59"]);
+    expect(fields.get("opens_at_time")!.extraOptions).toBeUndefined();
+    // extraOptions is a TIME-half concept only — never on the date input.
+    expect(fields.get("closes_at_date")!.extraOptions).toBeUndefined();
   });
 
-  it("hands each one the value from state, converted into the ORG timezone", async () => {
+  it("hands each half the value from state, split in the ORG timezone", async () => {
     const fields = await clockFields();
-    const byField = Object.fromEntries(fields.map((f) => [f.dataField as string, f]));
     // RESPONSE holds 2026-01-01T00:00:00Z / 2026-02-01T00:00:00Z and a null
     // refund lock. BASE_PROPS' org timezone is what decides the wall clock —
     // a regression to browser-local would move these by the runner's offset.
-    expect(byField.opens_at!.value).toBe(
-      instantToOrgTzInputValue(RESPONSE.opens_at, BASE_PROPS.orgTz),
-    );
-    expect(byField.closes_at!.value).toBe(
-      instantToOrgTzInputValue(RESPONSE.closes_at, BASE_PROPS.orgTz),
-    );
-    // A null instant is an EMPTY field, never the epoch.
-    expect(byField.refund_lock_at!.value).toBe("");
+    const opens = orgTzDateTimeHalves(RESPONSE.opens_at, BASE_PROPS.orgTz);
+    const closes = orgTzDateTimeHalves(RESPONSE.closes_at, BASE_PROPS.orgTz);
+    expect(fields.get("opens_at_date")!.value).toBe(opens.date);
+    expect(fields.get("opens_at_time")!.value).toBe(opens.time);
+    expect(fields.get("closes_at_date")!.value).toBe(closes.date);
+    expect(fields.get("closes_at_time")!.value).toBe(closes.time);
+    // A null instant is TWO empty halves, never an epoch date with a blank
+    // time (which would itself be the half-filled bug this task fixes).
+    expect(fields.get("refund_lock_at_date")!.value).toBe("");
+    expect(fields.get("refund_lock_at_time")!.value).toBe("");
   });
 
-  it("labels each one with the zone, so a time is never bare wall-clock", async () => {
+  it("labels each pair with the zone, so a time is never bare wall-clock", async () => {
     const fields = await clockFields();
-    for (const f of fields) expect(String(f.label)).toMatch(/\(.+\)$/);
+    for (const key of ["opens_at_date", "opens_at_time", "closes_at_date", "closes_at_time"]) {
+      expect(String(fields.get(key)!.label)).toMatch(/\(.+\)$/);
+    }
+  });
+
+  it("hides the time half's label visually and gives it its own distinct accessible name", async () => {
+    const fields = await clockFields();
+    expect(fields.get("opens_at_time")!.labelHidden).toBe(true);
+    expect(fields.get("opens_at_date")!.labelHidden).toBeFalsy();
+    expect(fields.get("opens_at_time")!.selectAriaLabel).toBe(t(uiEn, "datetime.timeLabel"));
+  });
+});
+
+describe("RegistrationHubConfigPanel — the panel does not make claims that are false for this division", () => {
+  // The platform cut is Stripe's application fee, taken as money passes
+  // through. On "pay the organiser" nothing passes through us and we take
+  // NOTHING — so rendering the cut unconditionally told an organiser
+  // collecting cash at the door that we were taking 8% of it. A false claim
+  // about someone's money is a worse defect than a missing sentence.
+  it("shows the platform cut for card entries and NOT for pay-the-organiser", async () => {
+    net.getResponse = { ...RESPONSE, payment_method: "stripe" };
+    const onCard = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    expect(expandedText(onCard.tree())).toContain(t(uiEn, "reg.hub.config.feeCut", { keep: 92, pct: 8 }));
+
+    net.getResponse = { ...RESPONSE, payment_method: "offline" };
+    const onOffline = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    expect(
+      expandedText(onOffline.tree()),
+      "we take nothing when the organiser collects the money themselves",
+    ).not.toContain(t(uiEn, "reg.hub.config.feeCut", { keep: 92, pct: 8 }));
+  });
+
+  // The solo-signups setting belongs to team divisions. It used to render an
+  // explanation of its own absence to everyone else; a setting that is not
+  // yours to make needs no apology, and the sentence answered a question a
+  // Pair-division organiser never asked.
+  // The auto-refund the lock governs only fires on a card entry — withdrawCore
+  // gates on `locked.payment_intent_id`, which an offline entry never has. So
+  // for pay-the-organiser the field asks an organiser to configure a policy
+  // that cannot run.
+  it("offers the refund lock for card entries and not for pay-the-organiser", async () => {
+    // OrgTzDateTimePair carries `dataField` as a PROP, unsuffixed — its own
+    // wrapping element is enough to prove the field exists at all (it is
+    // ALSO in the tree once expanded — deepExpand pushes the opaque
+    // element itself as well as what it expands to — so this doesn't even
+    // need expansion). findField() (which reads the DOM `data-field`
+    // attribute) never sees a component-type element like this one, same
+    // reason DateTimeField itself is opaque to it.
+    const hasRefundLock = (tree: ReturnType<typeof expandPanel>) =>
+      tree.some((el) => el.type === OrgTzDateTimePair && propsOf(el).dataField === "refund_lock_at");
+
+    net.getResponse = { ...RESPONSE, fee_cents: 1500, payment_method: "stripe" };
+    const onCard = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    expect(hasRefundLock(onCard.tree())).toBe(true);
+
+    net.getResponse = { ...RESPONSE, fee_cents: 1500, payment_method: "offline" };
+    const onOffline = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    expect(hasRefundLock(onOffline.tree())).toBe(false);
+
+    // And still absent on a FREE card division — the pre-existing fee gate is
+    // untouched by this change.
+    net.getResponse = { ...RESPONSE, fee_cents: 0, payment_method: "stripe" };
+    const free = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    expect(hasRefundLock(free.tree())).toBe(false);
+  });
+
+  it("offers solo sign-ups on a team division and says nothing at all on a pair one", async () => {
+    net.getResponse = { ...RESPONSE, entrant_kind: "team" };
+    const team = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    expect(findField(team.tree(), "allow_free_agents")).toBeTruthy();
+    expect(expandedText(team.tree())).toContain(t(uiEn, "reg.hub.config.allowSolo"));
+
+    net.getResponse = { ...RESPONSE, entrant_kind: "pair", allow_free_agents: false };
+    const pair = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    expect(findField(pair.tree(), "allow_free_agents")).toBeFalsy();
+    const pairText = expandedText(pair.tree());
+    expect(pairText).not.toContain(t(uiEn, "reg.hub.config.freeAgentsHint"));
+    expect(pairText).not.toContain(t(uiEn, "reg.hub.config.allowSolo"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS005 F4 — editing a fee re-prices everyone still on the waitlist:
+// promoteWaitlistedRow (registrations.ts, ~:875) reads the LIVE fee at
+// promotion time, never what a waitlisted entrant saw when they joined
+// (they hold amount_cents = 0, so there is no earlier quote to honour). The
+// panel has no way to tell the organiser that except this warning, so it is
+// the whole fix.
+// ---------------------------------------------------------------------------
+describe("RegistrationHubConfigPanel — MoneySection warns about the waitlist re-price (RS005 F4)", () => {
+  // Every prop MoneySection needs BESIDES waitlistedCount — same shape the
+  // "every routable field" describe block above already builds by hand for
+  // the identical reason (MoneySection is invoked directly here, outside
+  // React, so there is no panel/hook wiring to lean on).
+  const moneyProps = {
+    state: FULL_STATE,
+    errors: {},
+    patch: vi.fn(),
+    msg: testMsg,
+    orgTz: "UTC",
+    orgSlug: "riverside",
+    currency: "usd" as const,
+    feePercentPct: 8,
+    cardUnsupportedCurrency: null,
+    chargesEnabled: true,
+    orgPaymentInstructions: null,
+    feeText: null,
+    onFeeText: vi.fn(),
+    waitlistedCount: 0,
+    dtDrafts: {},
+    onDateTimeHalfChange: vi.fn(),
+  };
+
+  function warningEl(tree: ReturnType<typeof walk>) {
+    return tree.find((e) => propsOf(e)["data-registration-hub-waitlist-warning"] !== undefined);
+  }
+
+  it("says nothing at all when the division's waitlist is empty", () => {
+    const tree = walk(MoneySection({ ...moneyProps, waitlistedCount: 0 }));
+    expect(warningEl(tree)).toBeUndefined();
+  });
+
+  it("warns, in the singular, for exactly one waitlisted entry", () => {
+    const tree = walk(MoneySection({ ...moneyProps, waitlistedCount: 1 }));
+    const el = warningEl(tree);
+    expect(el).toBeTruthy();
+    expect(textOf(el!)).toBe(t(uiEn, "reg.hub.config.waitlistRepriceWarning.one", { count: 1 }));
+    // The two forms must actually read differently — a shared key here would
+    // pass the assertion above by coincidence.
+    expect(textOf(el!)).not.toBe(t(uiEn, "reg.hub.config.waitlistRepriceWarning.other", { count: 1 }));
+  });
+
+  it("warns, in the plural, for more than one waitlisted entry", () => {
+    const tree = walk(MoneySection({ ...moneyProps, waitlistedCount: 3 }));
+    const el = warningEl(tree);
+    expect(el).toBeTruthy();
+    expect(textOf(el!)).toBe(t(uiEn, "reg.hub.config.waitlistRepriceWarning.other", { count: 3 }));
+  });
+
+  // Money defaults COLLAPSED (this file's own header comment) — proves the
+  // warning actually reaches the organiser through the real panel, not just
+  // through a direct MoneySection call, via the deepExpand/expandedText
+  // route the panel's other collapsed-section tests already use.
+  it("is present, through the real panel, once Money is expanded", async () => {
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, waitlistedCount: 3 }, expandPanel);
+    await flush();
+    const el = warningEl(island.tree());
+    expect(el).toBeTruthy();
+    expect(textOf(el!)).toBe(t(uiEn, "reg.hub.config.waitlistRepriceWarning.other", { count: 3 }));
+  });
+
+  it("is absent through the real panel when the division's waitlist is empty", async () => {
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, waitlistedCount: 0 }, expandPanel);
+    await flush();
+    expect(warningEl(island.tree())).toBeUndefined();
+  });
+
+  // The panel owns wiring, not copy: this pins that RegistrationHubConfigPanel
+  // forwards its OWN waitlistedCount prop to MoneySection UNCHANGED, rather
+  // than e.g. always passing 0 (which the two tests above could not catch —
+  // BASE_PROPS's own baseline is 0).
+  it("forwards its own waitlistedCount prop to MoneySection, unchanged", async () => {
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, waitlistedCount: 5 }, expandPanel);
+    await flush();
+    const money = island.tree().find((e) => e.type === MoneySection)!;
+    expect(propsOf(money).waitlistedCount).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS005 R4 task 2 — the known defect and its fix: a date typed with no time
+// (or vice versa) must be REFUSED, not silently saved as unset.
+// ---------------------------------------------------------------------------
+
+function findHalf(tree: ReturnType<typeof expandPanel>, field: string, half: "date" | "time") {
+  return tree.find((e) => e.type === DateTimeField && propsOf(e).dataField === `${field}_${half}`)!;
+}
+
+async function openPanel() {
+  const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+  await flush();
+  return island;
+}
+
+async function clickSave(island: Awaited<ReturnType<typeof openPanel>>) {
+  const saveBtn = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
+  await (propsOf(saveBtn).onClick as () => Promise<void>)();
+}
+
+describe("RegistrationHubConfigPanel — an incomplete date/time is refused, never silently saved", () => {
+  // opens_at/closes_at start FULLY SET in RESPONSE (both halves already
+  // filled) — editing only ONE half there keeps the pair complete (the
+  // OTHER half still carries its existing value), which isn't the scenario
+  // this task fixes at all. Worse, it's a trap: pushing opens_at past the
+  // still-unedited closes_at trips the (correct, separate) dates-order rule
+  // instead, and a test that doesn't force a null starting point can pass
+  // for that wrong reason — looking like it proves incompleteness-blocks-
+  // save while actually proving something else. Force the field to null
+  // first so editing one half is a genuine empty -> half-filled transition,
+  // same as an organiser configuring the window for the first time.
+  it("a date typed with the time left blank blocks the save outright — no PATCH or PUT is issued", async () => {
+    net.getResponse = { ...RESPONSE, opens_at: null };
+    const island = await openPanel();
+    (propsOf(findHalf(island.tree(), "opens_at", "date")).onChange as (v: string) => void)("2026-08-24");
+    net.calls = []; // isolate: only the save ATTEMPT itself matters from here
+    await clickSave(island);
+    expect(net.calls).toHaveLength(0);
+  });
+
+  it("shows a field-level error under opens_at — not a banner, not silence", async () => {
+    net.getResponse = { ...RESPONSE, opens_at: null };
+    const island = await openPanel();
+    (propsOf(findHalf(island.tree(), "opens_at", "date")).onChange as (v: string) => void)("2026-08-24");
+    await clickSave(island);
+    const errorEl = island.tree().find((e) => propsOf(e)["data-field-error"] === "opens_at");
+    expect(errorEl).toBeTruthy();
+    expect(textOf(errorEl!)).toBe(t(uiEn, "reg.hub.config.incompleteDateTime"));
+  });
+
+  it("the SAME bug the other direction — a time picked with the date left blank ALSO blocks the save", async () => {
+    net.getResponse = { ...RESPONSE, closes_at: null };
+    const island = await openPanel();
+    (propsOf(findHalf(island.tree(), "closes_at", "time")).onChange as (v: string) => void)("18:00");
+    net.calls = [];
+    await clickSave(island);
+    expect(net.calls).toHaveLength(0);
+    const errorEl = island.tree().find((e) => propsOf(e)["data-field-error"] === "closes_at");
+    expect(errorEl).toBeTruthy();
+  });
+
+  it("applies to refund_lock_at too, and reveals the default-collapsed Money section it lives in", async () => {
+    net.getResponse = { ...RESPONSE, fee_cents: 1500, payment_method: "stripe" };
+    const island = await openPanel();
+    expect(propsOf(accordionSection(island.tree(), "money")!).open).toBe(false);
+    (propsOf(findHalf(island.tree(), "refund_lock_at", "date")).onChange as (v: string) => void)("2026-08-24");
+    net.calls = [];
+    await clickSave(island);
+    expect(net.calls).toHaveLength(0);
+    expect(propsOf(accordionSection(island.tree(), "money")!).open).toBe(true);
+    expect(island.tree().find((e) => propsOf(e)["data-field-error"] === "refund_lock_at")).toBeTruthy();
+  });
+
+  it("does NOT block a save when the field is genuinely, deliberately cleared (both halves blank)", async () => {
+    // refund_lock_at starts null in RESPONSE — "clearing" an already-empty
+    // pair by touching then un-touching a half must stay a no-op, not a
+    // phantom incompleteness.
+    net.getResponse = { ...RESPONSE, fee_cents: 1500, payment_method: "stripe" };
+    const island = await openPanel();
+    const dateHalf = findHalf(island.tree(), "refund_lock_at", "date");
+    (propsOf(dateHalf).onChange as (v: string) => void)("2026-08-24");
+    (propsOf(findHalf(island.tree(), "refund_lock_at", "date")).onChange as (v: string) => void)("");
+    net.calls = [];
+    await clickSave(island);
+    const put = net.calls.find((c) => c.method === "PUT");
+    expect(put).toBeTruthy();
+    expect((put!.json as Record<string, unknown>).refund_lock_at).toBeNull();
+  });
+
+  it("completing the missing half clears the error and lets the save proceed, with the right instant", async () => {
+    net.getResponse = { ...RESPONSE, opens_at: null };
+    const island = await openPanel();
+    // Before closes_at (2026-02-01, from RESPONSE, untouched here) — a date
+    // AFTER it would trip the separate dates-order rule once completed,
+    // which is not what this test is about.
+    (propsOf(findHalf(island.tree(), "opens_at", "date")).onChange as (v: string) => void)("2025-12-01");
+    await clickSave(island); // blocked
+    expect(island.tree().find((e) => propsOf(e)["data-field-error"] === "opens_at")).toBeTruthy();
+
+    (propsOf(findHalf(island.tree(), "opens_at", "time")).onChange as (v: string) => void)("09:00");
+    net.calls = [];
+    await clickSave(island); // now proceeds
+    const put = net.calls.find((c) => c.method === "PUT")!;
+    expect(put).toBeTruthy();
+    expect((put.json as Record<string, unknown>).opens_at).toBe(
+      orgTzInputValueToInstant("2025-12-01T09:00", BASE_PROPS.orgTz),
+    );
+    expect(island.tree().find((e) => propsOf(e)["data-field-error"] === "opens_at")).toBeFalsy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS005 R4 task 2 — client-side prevention of the server-enforced rules the
+// dispatch names. The rule LOGIC itself (accept/reject boundaries) is
+// covered exhaustively in registration-hub-config-state.test.ts
+// (validateConfigState); this file proves the INTEGRATION — that the panel
+// actually wires that function into saveAndReveal, blocks the network
+// round trip, and shows the right field-level message.
+// ---------------------------------------------------------------------------
+describe("RegistrationHubConfigPanel — client-side validation blocks save before the round trip", () => {
+  it("capacity over 10,000 blocks the save and errors on capacity", async () => {
+    const island = await openPanel();
+    const capacityInput = findField(island.tree(), "capacity")!;
+    (propsOf(capacityInput).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "10001" },
+    });
+    net.calls = [];
+    await clickSave(island);
+    expect(net.calls).toHaveLength(0);
+    const errorEl = island.tree().find((e) => propsOf(e)["data-field-error"] === "capacity");
+    expect(errorEl).toBeTruthy();
+    expect(textOf(errorEl!)).toBe(t(uiEn, "reg.hub.config.capacityRangeError"));
+  });
+
+  it("capacity within range does NOT block the save", async () => {
+    const island = await openPanel();
+    const capacityInput = findField(island.tree(), "capacity")!;
+    (propsOf(capacityInput).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "500" },
+    });
+    net.calls = [];
+    await clickSave(island);
+    expect(net.calls.some((c) => c.method === "PUT")).toBe(true);
+  });
+
+  it("a fee over the 10,000,000-cent cap blocks the save and errors on fee_cents", async () => {
+    const island = await openPanel();
+    const feeInput = findField(island.tree(), "fee_cents")!;
+    (propsOf(feeInput).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "999999.99" },
+    });
+    net.calls = [];
+    await clickSave(island);
+    expect(net.calls).toHaveLength(0);
+    const errorEl = island.tree().find((e) => propsOf(e)["data-field-error"] === "fee_cents");
+    expect(errorEl).toBeTruthy();
+    expect(textOf(errorEl!)).toBe(t(uiEn, "reg.hub.config.feeCentsRangeError"));
+  });
+
+  it("a card fee under 1.00 blocks the save and errors on fee_cents with the CARD-specific message", async () => {
+    net.getResponse = { ...RESPONSE, payment_method: "offline" };
+    const island = await openPanel();
+    const stripeRadio = findField(island.tree(), "payment_method_stripe")!;
+    (propsOf(stripeRadio).onChange as () => void)();
+    const feeInput = findField(island.tree(), "fee_cents")!;
+    (propsOf(feeInput).onChange as (e: { target: { value: string } }) => void)({ target: { value: "0.50" } });
+    net.calls = [];
+    await clickSave(island);
+    expect(net.calls).toHaveLength(0);
+    const errorEl = island.tree().find((e) => propsOf(e)["data-field-error"] === "fee_cents");
+    expect(errorEl).toBeTruthy();
+    expect(textOf(errorEl!)).toBe(t(uiEn, "reg.hub.config.cardFeeMinimumError"));
+  });
+
+  it("the SAME sub-1.00 fee is fine paying the organiser offline — the minimum is card-only", async () => {
+    const island = await openPanel(); // RESPONSE defaults to payment_method: "offline"
+    const feeInput = findField(island.tree(), "fee_cents")!;
+    (propsOf(feeInput).onChange as (e: { target: { value: string } }) => void)({ target: { value: "0.50" } });
+    net.calls = [];
+    await clickSave(island);
+    expect(net.calls.some((c) => c.method === "PUT")).toBe(true);
+  });
+
+  it("closes_at on or before opens_at blocks the save and errors on closes_at", async () => {
+    const island = await openPanel();
+    // opens_at defaults to 2026-01-01T00:00:00Z (RESPONSE); move closes_at
+    // to a fully-specified instant BEFORE it.
+    (propsOf(findHalf(island.tree(), "closes_at", "date")).onChange as (v: string) => void)("2025-12-01");
+    (propsOf(findHalf(island.tree(), "closes_at", "time")).onChange as (v: string) => void)("00:00");
+    net.calls = [];
+    await clickSave(island);
+    expect(net.calls).toHaveLength(0);
+    const errorEl = island.tree().find((e) => propsOf(e)["data-field-error"] === "closes_at");
+    expect(errorEl).toBeTruthy();
+    expect(textOf(errorEl!)).toBe(t(uiEn, "reg.settings.datesError"));
+  });
+
+  it("two sign-up questions sharing a key block the save and error on form_fields", async () => {
+    const island = await openPanel();
+    const builder = island.tree().find((e) => e.type === FormBuilder)!;
+    const duplicated: FormField[] = [
+      { key: "shirt_size", label: "Shirt size", kind: "text", required: true },
+      { key: "shirt_size", label: "T-shirt size", kind: "text", required: false },
+    ];
+    (propsOf(builder).onChange as (fields: FormField[]) => void)(duplicated);
+    net.calls = [];
+    await clickSave(island);
+    expect(net.calls).toHaveLength(0);
+    const errorEl = island.tree().find((e) => propsOf(e)["data-field-error"] === "form_fields");
+    expect(errorEl).toBeTruthy();
+    expect(textOf(errorEl!)).toBe(t(uiEn, "reg.hub.config.duplicateFormFieldKeysError"));
+  });
+
+  it("a choice question with no options blocks the save and errors on form_fields", async () => {
+    const island = await openPanel();
+    const builder = island.tree().find((e) => e.type === FormBuilder)!;
+    const noOptions: FormField[] = [{ key: "size", label: "Size", kind: "select", options: [], required: false }];
+    (propsOf(builder).onChange as (fields: FormField[]) => void)(noOptions);
+    net.calls = [];
+    await clickSave(island);
+    expect(net.calls).toHaveLength(0);
+    const errorEl = island.tree().find((e) => propsOf(e)["data-field-error"] === "form_fields");
+    expect(errorEl).toBeTruthy();
+    expect(textOf(errorEl!)).toBe(t(uiEn, "reg.hub.config.selectNeedsOptionsError"));
+  });
+
+  it("a well-formed edit across several fields is not blocked by any of the above", async () => {
+    const island = await openPanel();
+    const capacityInput = findField(island.tree(), "capacity")!;
+    (propsOf(capacityInput).onChange as (e: { target: { value: string } }) => void)({ target: { value: "500" } });
+    const builder = island.tree().find((e) => e.type === FormBuilder)!;
+    (propsOf(builder).onChange as (fields: FormField[]) => void)([
+      { key: "size", label: "Size", kind: "select", options: ["S", "M", "L"], required: false },
+    ]);
+    net.calls = [];
+    await clickSave(island);
+    expect(net.calls.some((c) => c.method === "PUT")).toBe(true);
+    expect(island.tree().find((e) => propsOf(e)["data-field-error"])).toBeFalsy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS005 R4 task 2 — "save it properly": does every field the panel shows
+// actually round-trip through the two save endpoints? toRegistrationSettingsPutBody
+// / toDivisionPatchBody are already proven exhaustive in
+// registration-hub-config-state.test.ts; what's proven HERE is the other
+// half — that each field's own onChange handler updates state with the
+// value the organiser actually picked, not something else.
+// ---------------------------------------------------------------------------
+describe("RegistrationHubConfigPanel — every field round-trips through save", () => {
+  it("eligibility + schedule + capacity + approval fields all reach their bodies with the NEW values", async () => {
+    const island = await openPanel();
+    const tree = () => island.tree();
+
+    (propsOf(findField(tree(), "category")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "mens" },
+    });
+    (propsOf(findField(tree(), "age_min")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "12" },
+    });
+    (propsOf(findField(tree(), "age_max")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "20" },
+    });
+    (propsOf(findField(tree(), "approval")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "auto" },
+    });
+    (propsOf(findField(tree(), "enabled")!).onChange as (e: { target: { checked: boolean } }) => void)({
+      target: { checked: false },
+    });
+    (propsOf(findField(tree(), "capacity")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "64" },
+    });
+    (propsOf(findHalf(tree(), "opens_at", "date")).onChange as (v: string) => void)("2026-03-01");
+    (propsOf(findHalf(tree(), "opens_at", "time")).onChange as (v: string) => void)("08:00");
+    (propsOf(findHalf(tree(), "closes_at", "date")).onChange as (v: string) => void)("2026-04-01");
+    (propsOf(findHalf(tree(), "closes_at", "time")).onChange as (v: string) => void)("20:00");
+
+    net.calls = [];
+    await clickSave(island);
+    const patch = net.calls.find((c) => c.method === "PATCH")!;
+    const put = net.calls.find((c) => c.method === "PUT")!;
+    expect(patch.json).toEqual({ category: "mens", age_min: 12, age_max: 20 });
+    const body = put.json as Record<string, unknown>;
+    expect(body.approval).toBe("auto");
+    expect(body.enabled).toBe(false);
+    expect(body.capacity).toBe(64);
+    expect(body.opens_at).toBe(orgTzInputValueToInstant("2026-03-01T08:00", BASE_PROPS.orgTz));
+    expect(body.closes_at).toBe(orgTzInputValueToInstant("2026-04-01T20:00", BASE_PROPS.orgTz));
+  });
+
+  it("category='open' round-trips as null, not the literal string", async () => {
+    const island = await openPanel();
+    (propsOf(findField(island.tree(), "category")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "open" },
+    });
+    net.calls = [];
+    await clickSave(island);
+    const patch = net.calls.find((c) => c.method === "PATCH")!;
+    expect((patch.json as Record<string, unknown>).category).toBeNull();
+  });
+
+  it("unchecking allow_solo (allow_free_agents) on a team division round-trips false", async () => {
+    const island = await openPanel(); // RESPONSE: entrant_kind team, allow_free_agents true
+    const toggle = findField(island.tree(), "allow_free_agents")!;
+    (propsOf(toggle).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: false } });
+    net.calls = [];
+    await clickSave(island);
+    const put = net.calls.find((c) => c.method === "PUT")!;
+    expect((put.json as Record<string, unknown>).allow_free_agents).toBe(false);
+  });
+
+  it("switching entrant_kind round-trips the new kind AND force-clears allow_free_agents together", async () => {
+    const island = await openPanel(); // starts team / allow_free_agents true
+    const select = findField(island.tree(), "entrant_kind")!;
+    (propsOf(select).onChange as (e: { target: { value: string } }) => void)({ target: { value: "individual" } });
+    net.calls = [];
+    await clickSave(island);
+    const put = net.calls.find((c) => c.method === "PUT")!;
+    const body = put.json as Record<string, unknown>;
+    expect(body.entrant_kind).toBe("individual");
+    expect(body.allow_free_agents).toBe(false);
+  });
+
+  it("payment_instructions round-trips on an offline division", async () => {
+    const island = await openPanel(); // RESPONSE defaults to payment_method: offline
+    const textarea = findField(island.tree(), "payment_instructions")!;
+    (propsOf(textarea).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Bank transfer to club account, ref your name." },
+    });
+    net.calls = [];
+    await clickSave(island);
+    const put = net.calls.find((c) => c.method === "PUT")!;
+    expect((put.json as Record<string, unknown>).payment_instructions).toBe(
+      "Bank transfer to club account, ref your name.",
+    );
+  });
+
+  it("switching payment_method to stripe round-trips", async () => {
+    const island = await openPanel();
+    const stripeRadio = findField(island.tree(), "payment_method_stripe")!;
+    (propsOf(stripeRadio).onChange as () => void)();
+    net.calls = [];
+    await clickSave(island);
+    const put = net.calls.find((c) => c.method === "PUT")!;
+    expect((put.json as Record<string, unknown>).payment_method).toBe("stripe");
+  });
+
+  it("refund_lock_at round-trips once completed, on a paid card division", async () => {
+    net.getResponse = { ...RESPONSE, fee_cents: 1500, payment_method: "stripe" };
+    const island = await openPanel();
+    (propsOf(findHalf(island.tree(), "refund_lock_at", "date")).onChange as (v: string) => void)("2026-01-25");
+    (propsOf(findHalf(island.tree(), "refund_lock_at", "time")).onChange as (v: string) => void)("23:59");
+    net.calls = [];
+    await clickSave(island);
+    const put = net.calls.find((c) => c.method === "PUT")!;
+    expect((put.json as Record<string, unknown>).refund_lock_at).toBe(
+      orgTzInputValueToInstant("2026-01-25T23:59", BASE_PROPS.orgTz),
+    );
+  });
+
+  it("form_fields round-trips a changed question set", async () => {
+    const island = await openPanel();
+    const builder = island.tree().find((e) => e.type === FormBuilder)!;
+    const next: FormField[] = [
+      { key: "shirt_size", label: "Shirt size", kind: "select", options: ["S", "M", "L"], required: true },
+      { key: "notes", label: "Notes", kind: "text", required: false },
+    ];
+    (propsOf(builder).onChange as (fields: FormField[]) => void)(next);
+    net.calls = [];
+    await clickSave(island);
+    const put = net.calls.find((c) => c.method === "PUT")!;
+    expect((put.json as Record<string, unknown>).form_fields).toEqual(next);
   });
 });

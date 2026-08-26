@@ -31,6 +31,7 @@ const CONTEXT: Omit<RegistrationHubRowContext, "onOpen"> = {
   registerHref: "/shared/riverside/summer-league/register",
   registerQrFileName: "register-summer-league.png",
   showRegisterLink: true,
+  canEdit: true,
 };
 
 const ROW: RegistrationHubRowData = {
@@ -48,6 +49,7 @@ const ROW: RegistrationHubRowData = {
   approval: "auto",
   allow_free_agents: false,
   taken: 0,
+  waitlisted: 0,
 };
 
 const BASE_PROPS = {
@@ -174,6 +176,22 @@ describe("RegistrationHubSettingsPanel — opening/closing/saving the config pan
     (propsOf(panel).onClose as () => void)();
     expect(island.tree().some((e) => e.type === RegistrationHubConfigPanel)).toBe(false);
     expect(nav.refresh).not.toHaveBeenCalled();
+  });
+
+  // RS005 F4 — the Money section's re-price warning needs the OPEN row's own
+  // waitlisted count, not some other row's. A distinct value (3) on div-2,
+  // left at the ROW fixture's default (0) on div-1, so a mixup between rows
+  // (or a mixup with `taken`, also present on the row) cannot pass by
+  // coincidence.
+  it("passes the OPEN row's waitlisted count through to the config panel as waitlistedCount", () => {
+    const island = renderIsland(RegistrationHubSettingsPanel, {
+      ...BASE_PROPS,
+      rows: [ROW, { ...ROW, division_id: "div-2", name: "Open Doubles", taken: 7, waitlisted: 3 }],
+    });
+    const rows = island.tree().filter((e) => e.type === RegistrationHubDivisionRow);
+    (propsOf(rows[1]!).context as RegistrationHubRowContext).onOpen("div-2");
+    const panel = island.tree().find((e) => e.type === RegistrationHubConfigPanel)!;
+    expect(propsOf(panel).waitlistedCount).toBe(3);
   });
 
   it("onSaved unmounts the panel AND refreshes the router so the row reflects what was saved", () => {
