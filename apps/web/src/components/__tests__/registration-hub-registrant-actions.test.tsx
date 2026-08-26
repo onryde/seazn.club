@@ -462,6 +462,7 @@ describe("RegistrationHubRegistrantActions — finding 2: a failure never resurr
       status: "confirmed",
       approval: "manual",
       amountCents: 0,
+      divisionFeeCents: 0,
       paymentIntentId: null,
     });
     // The existing render-time prop-sync already reconciles to it —

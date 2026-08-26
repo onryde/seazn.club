@@ -468,6 +468,7 @@ describe("RegistrationHubConfigPanel — every routable field has a render site 
           orgPaymentInstructions: null,
           feeText: null,
           onFeeText: vi.fn(),
+          waitlistedCount: 0,
           ...dtProps,
         }),
       ),
@@ -894,6 +895,7 @@ describe("RegistrationHubConfigPanel — MoneySection warns about the waitlist r
     orgPaymentInstructions: null,
     feeText: null,
     onFeeText: vi.fn(),
+    waitlistedCount: 0,
     dtDrafts: {},
     onDateTimeHalfChange: vi.fn(),
   };

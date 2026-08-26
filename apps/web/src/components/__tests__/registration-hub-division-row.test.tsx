@@ -442,6 +442,7 @@ describe("RegistrationHubDivisionRow — full text against a fixture, not spot-c
       approval: "manual",
       allow_free_agents: true,
       taken: 5,
+      waitlisted: 0,
     };
     // showRegisterLink: false — the true branch renders <CopyLink label={…}
     // .../> with the label as a PROP, not a JSX child, so textOf (children

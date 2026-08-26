@@ -134,7 +134,7 @@ describe("deriveRegistrantPaymentState", () => {
 
   it("a zero-fee entry is 'free', even with a non-null payment_intent_id — the CART might have paid by card for a fee-bearing sibling", () => {
     expect(
-      deriveRegistrantPaymentState({ ...PAYMENT_BASE, amount_cents: 0, division_fee_cents: 0, payment_intent_id: "pi_123" }),
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, amount_cents: 0, payment_intent_id: "pi_123" }),
     ).toBe("free");
   });
 
@@ -464,9 +464,21 @@ describe("deriveRegistrantActionFlags", () => {
       for (const status of RegistrationStatus.options) {
         for (const approval of ["auto", "manual"] as const) {
           for (const amount_cents of [0, 1500]) {
+            // Sweep the DIVISION fee too: it is what the gate actually reads,
+            // so varying only the entry's frozen amount would leave the real
+            // input unexercised — including the diverged combinations a fee
+            // edit produces.
+            for (const division_fee_cents of [0, 1500]) {
             for (const payment_intent_id of [null, "pi_123"] as const) {
-              const flags = deriveRegistrantActionFlags({ status, approval, amount_cents, payment_intent_id });
+              const flags = deriveRegistrantActionFlags({
+                status,
+                approval,
+                amount_cents,
+                division_fee_cents,
+                payment_intent_id,
+              });
               expect(flags.canApprove && flags.canMarkPaid).toBe(false);
+            }
             }
           }
         }
@@ -483,8 +495,15 @@ describe("deriveRegistrantActionFlags", () => {
     for (const status of RegistrationStatus.options) {
       for (const approval of ["auto", "manual"] as const) {
         for (const amount_cents of [0, 1500]) {
+          for (const division_fee_cents of [0, 1500]) {
           for (const payment_intent_id of [null, "pi_123"] as const) {
-            const flags = deriveRegistrantActionFlags({ status, approval, amount_cents, payment_intent_id });
+            const flags = deriveRegistrantActionFlags({
+              status,
+              approval,
+              amount_cents,
+              division_fee_cents,
+              payment_intent_id,
+            });
             expect(typeof flags.canApprove).toBe("boolean");
             expect(typeof flags.canReject).toBe("boolean");
             expect(typeof flags.canWithdraw).toBe("boolean");
@@ -496,6 +515,7 @@ describe("deriveRegistrantActionFlags", () => {
             // FUTURE divergence between the two is a deliberate code change,
             // not a silent drift the sweep never notices.
             expect(flags.canResend).toBe(flags.canWithdraw);
+          }
           }
         }
       }
