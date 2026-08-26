@@ -212,16 +212,15 @@ environment, or ~700 tests skip and the run still reports green. The **Smoke** j
 both directories against a real Postgres.
 
 The smoke test needs `DATABASE_URL` (DB-backed suites skip silently without it). Stripe
-Connect destination charges additionally need `STRIPE_CONNECT_TEST_ACCOUNT` — a *real*
-test-mode connected account id with charges enabled, since smoke's fabricated
-`acct_smoke_*` id is rejected by Stripe. Without it that one assertion is skipped, not
-failed, and the check count is unchanged. See [`apps/web/.env.example`](apps/web/.env.example).
-
-The smoke test needs `DATABASE_URL` (DB-backed suites skip silently without it). Stripe
-Connect destination charges additionally need `STRIPE_CONNECT_TEST_ACCOUNT` — a *real*
-test-mode connected account id with charges enabled, since smoke's fabricated
-`acct_smoke_*` id is rejected by Stripe. Without it that one assertion is skipped, not
-failed, and the check count is unchanged. See [`apps/web/.env.example`](apps/web/.env.example).
+Connect destination charges — sponsor-package checkout **and** registration entry-fee
+checkout (RS006) — additionally need `STRIPE_CONNECT_TEST_ACCOUNT`: a *real* test-mode
+connected account id with charges enabled, since smoke's fabricated `acct_smoke_*` id is
+rejected by Stripe. Without it those assertions are skipped, not failed, and the check
+count is unchanged. `npm run stripe:connect-fixture` creates the account (idempotent —
+re-running with a healthy account already set just verifies it and exits); a fresh
+Express account still needs Stripe's own hosted onboarding completed once by hand
+(test-mode data — see the script's own header for why this can't run headless), after
+which the id it prints is durable. See [`apps/web/.env.example`](apps/web/.env.example).
 
 ---
 
