@@ -100,6 +100,23 @@ export interface ApplyOutcome {
    *  carries warnings, which are not why the apply was refused. Absent on every
    *  other failure. */
   errorConflicts?: { fixtureId: string; code: string }[];
+  /** How many per-stage schedule applies were PERSISTED before this outcome.
+   *
+   *  A refusal is not a rollback: the proposal is grouped by stage and each
+   *  stage is its own transaction with its own `expected_seq`, so a plan
+   *  spanning a league and its finals can write the first and be refused on the
+   *  second. The board then really has changed, and any copy that says
+   *  otherwise is wrong — this is the discriminator, and it is also what makes
+   *  offering Undo on a failure correct rather than confusing (the before-AI
+   *  checkpoint exists either way). 0 on a clean refusal, the stage count on a
+   *  success.
+   *
+   *  OPTIONAL because "unknown" is a real third answer: the console builds an
+   *  outcome of its own if `applyAiPlans` throws unexpectedly, and at that point
+   *  nobody knows how far the chain got. Undefined must therefore render NEITHER
+   *  "nothing changed" nor "part of it applied" — an honest silence over a
+   *  guess. Every return inside this function sets it. */
+  stagesApplied?: number;
 }
 
 /** The injected fetch seam — matches apiV1's shape (envelope-unwrapped). */
@@ -218,6 +235,7 @@ export async function applyAiPlans(input: ApplyAiInput, api: ApplyApi = apiV1): 
       schedule: "error",
       officials: "skipped",
       checkpointId: null,
+      stagesApplied: 0,
       errorCode: featureKeyOf(err) ?? codeOf(err),
       errorStatus: statusOf(err),
     };
@@ -234,6 +252,9 @@ export async function applyAiPlans(input: ApplyAiInput, api: ApplyApi = apiV1): 
     else byStage.set(a.stage_id, [a]);
   }
   let seq = input.expectedSeq;
+  // Counted, not inferred from `seq`: the caller's own expectedSeq is the base,
+  // and a reader working the difference back out would have to know that.
+  let stagesApplied = 0;
   for (const [stageId, group] of byStage) {
     try {
       await api(`/api/v1/stages/${stageId}/schedule/apply`, {
@@ -250,6 +271,7 @@ export async function applyAiPlans(input: ApplyAiInput, api: ApplyApi = apiV1): 
         },
       });
       seq += 1;
+      stagesApplied += 1;
     } catch (err) {
       const code = codeOf(err);
       const conflicts = blockingConflictsOf(err);
@@ -257,6 +279,7 @@ export async function applyAiPlans(input: ApplyAiInput, api: ApplyApi = apiV1): 
         schedule: code === "SEQ_CONFLICT" ? "seq_conflict" : "error",
         officials: "skipped",
         checkpointId,
+        stagesApplied,
         errorCode: code,
         errorStatus: statusOf(err),
         ...(conflicts ? { errorConflicts: conflicts } : {}),
@@ -301,6 +324,13 @@ export async function applyAiPlans(input: ApplyAiInput, api: ApplyApi = apiV1): 
   // so the caller can sharpen the note. errorCode/errorStatus stay absent on a
   // clean apply, so a success `toEqual` over the outcome keeps holding.
   return officialsError
-    ? { schedule: "applied", officials, checkpointId, errorCode: officialsError.code, errorStatus: officialsError.status }
-    : { schedule: "applied", officials, checkpointId };
+    ? {
+        schedule: "applied",
+        officials,
+        checkpointId,
+        stagesApplied,
+        errorCode: officialsError.code,
+        errorStatus: officialsError.status,
+      }
+    : { schedule: "applied", officials, checkpointId, stagesApplied };
 }

@@ -833,6 +833,11 @@ export function AiConsole({
           suggestions,
         });
       } catch {
+        // `stagesApplied` deliberately UNSET: applyAiPlans returns outcomes
+        // rather than throwing, so reaching here means something unexpected
+        // broke mid-chain and nobody knows how many stages were written. The
+        // apply step renders neither "nothing changed" nor "part of it applied"
+        // for an unknown, which is the honest answer.
         result = { schedule: "error", officials: "skipped", checkpointId: null };
       }
       setApplying(false);
@@ -847,6 +852,11 @@ export function AiConsole({
         // Map the real failure (checkpoint 402 save-point cap, schedule 422/409,
         // …) through aiErrorKey instead of the flat generic; the outcome now
         // carries the status+code applyErrorKey needs.
+        // A refusal is not a rollback: the proposal is applied one stage at a
+        // time, so a failure part-way through leaves stages already written.
+        // The board on screen is then showing ghosts over a state that has
+        // moved — refetch it for the same reason the seq-conflict branch does.
+        if ((result.stagesApplied ?? 0) > 0) onRefetch?.();
         const key = applyErrorKey(result);
         dispatch({
           type: "APPLY_ERROR",
@@ -1778,6 +1788,30 @@ export function ApplyStep({
                 Named in the board's own vocabulary (round code + matchup), the
                 way every other list in this dock names a fixture — never a raw
                 id. Blocked failures only; see the dispatch above. */}
+            {/* WHAT IS ON THE BOARD NOW. The error above says why the run
+                stopped; this says what it left behind, which is the part the
+                organiser has to act on. Three states on purpose: nothing
+                written, part written (with the undo that puts it back), and
+                unknown — `stagesApplied` absent, where the console's own catch
+                fired and a guess would be worse than silence. */}
+            {applyResult?.stagesApplied !== undefined && (
+              <p className="mt-1.5">
+                {applyResult.stagesApplied > 0
+                  ? msg("board.ai.apply.partial")
+                  : msg("board.ai.apply.nothingChanged")}
+              </p>
+            )}
+            {(applyResult?.stagesApplied ?? 0) > 0 && applyResult?.checkpointId && (
+              <button
+                type="button"
+                data-testid="ai-partial-undo"
+                disabled={undoing}
+                onClick={onUndo}
+                className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-red-300 bg-white px-2 py-1 text-[11px] font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {undoing ? msg("board.ai.apply.undoing") : msg("board.ai.apply.undo")}
+              </button>
+            )}
             {blockedLabels.length > 0 && (
               <div data-testid="ai-blocked-fixtures" className="mt-1.5">
                 <p className="font-semibold">{msg("board.ai.error.blockedList")}</p>

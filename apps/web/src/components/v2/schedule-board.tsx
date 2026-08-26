@@ -1114,6 +1114,27 @@ export function ScheduleBoard({
           that used to sit here — that spacer stranded "Freeze schedule" alone
           on row 1 at tablet widths (#349 Verdict D) and told a reader nothing
           about why the two halves were apart. */}
+      {/* ONE caption for the action group, on its OWN line above the bar.
+          Inline under the buttons it made the ladder taller than the stage
+          selector and the AI button beside it, so an `items-center` row put
+          three controls on three different baselines (reported: "still not
+          aligned in same line"). Above rather than below because it reads as
+          what the row is about before the row is used, and because a line
+          under the bar would sit between the actions and the day picker that
+          follows, reading as a caption for the wrong thing.
+
+          Still a visible sublabel and not a hover title: that a lock survives
+          a rebuild has to be legible on touch, not discoverable only by
+          hovering a desktop pointer. */}
+      {canEdit && activeStage && (
+        <p
+          data-testid="schedule-ladder-caption"
+          className="-mb-1 text-[11px] leading-tight text-slate-500"
+        >
+          {msg("board.ladderCaption")}
+        </p>
+      )}
+
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         {canEdit && activeStage && (
           <>
@@ -1134,7 +1155,7 @@ export function ScheduleBoard({
                   // (the tab-strip trap this repo has already paid for), while
                   // a wrapped group keeps every option — and the pressed
                   // state — on screen at the cost of a second line.
-                  className="flex flex-wrap gap-0.5 rounded-lg border border-purple-200 bg-white p-0.5"
+                  className="flex flex-wrap gap-0.5 rounded-lg border border-slate-200 bg-slate-100 p-0.5"
                 >
                   {runnableStages.map((s) => (
                     // `aria-pressed`, not a radio group: these are toggle
@@ -1147,10 +1168,16 @@ export function ScheduleBoard({
                       data-stage-id={s.id}
                       aria-pressed={s.id === activeStage.id}
                       onClick={() => setPickedStageId(s.id)}
+                      // A SELECTION, not an action. The purple fill this used
+                      // to carry put a second loud control next to the primary
+                      // button and made the pair read as one compound thing
+                      // ("Auto League"), which is precisely how it was
+                      // reported. Solid purple now means exactly one thing on
+                      // this bar: the action that rebuilds the board.
                       className={`min-h-11 rounded-md px-3 py-1.5 text-xs transition ${
                         s.id === activeStage.id
-                          ? "bg-purple-100 font-semibold text-purple-800"
-                          : "text-slate-600 hover:bg-purple-50"
+                          ? "bg-white font-semibold text-slate-900 shadow-sm"
+                          : "text-slate-600 hover:text-slate-900"
                       }`}
                     >
                       {s.name}
@@ -1167,74 +1194,67 @@ export function ScheduleBoard({
                 control, well under the 44px touch target, and these are the
                 primary actions of the surface, so the floor holds at every
                 width (#349). */}
-            <div className="flex flex-col gap-1">
-              <div className="isolate inline-flex">
-                {/* #465: every action carries a stable id. Not tidiness —
-                    `board.autoSchedule` is a translated label, and a text
-                    selector for it stops meaning the same thing in any locale
-                    but English. */}
-                <button
-                  type="button"
-                  data-testid="schedule-auto"
-                  disabled={actions.busy}
-                  onClick={() => {
-                    const locked = stageLockedCounts[activeStage.id] ?? 0;
-                    // A confirm step only when THIS stage's rebuild would touch
-                    // a locked fixture — with zero locks the click runs exactly
-                    // as it always did (owner ruling).
-                    if (locked > 0)
-                      setPendingBuild({
-                        stageId: activeStage.id,
-                        divisionId: activeStage.division_id,
-                        locked,
-                      });
-                    else void runAuto(activeStage.id, activeStage.division_id, false);
-                  }}
-                  className="btn btn-primary relative min-h-11 rounded-r-none px-3 py-1.5 text-xs focus-visible:z-10"
-                >
-                  {msg("board.autoSchedule")}
-                </button>
-                <button
-                  type="button"
-                  data-testid="schedule-reflow"
-                  disabled={actions.busy}
-                  onClick={() => void runAuto(activeStage.id, activeStage.division_id, true)}
-                  className="btn btn-ghost relative -ml-px min-h-11 rounded-none px-3 py-1.5 text-xs hover:z-10 focus-visible:z-10"
-                  title={msg("board.reflowTitle")}
-                >
-                  {msg("board.reflow")}
-                </button>
-                {/* POLISH — the tier solver over a board that is already legal.
-                    Beside its siblings rather than behind a menu: it is the same
-                    kind of action, and the three only differ by what they ask
-                    the solver for. The mode is passed EXPLICITLY because
-                    `only_unlocked` cannot express it — polish and re-flow both
-                    send `true` and run different solvers. No confirm dialog
-                    (#pins-ui): POLISH already honoured a lock before that
-                    feature and nothing about it changed. */}
-                <button
-                  type="button"
-                  data-testid="schedule-polish"
-                  disabled={actions.busy}
-                  onClick={() => void runAuto(activeStage.id, activeStage.division_id, true, "polish")}
-                  className="btn btn-ghost relative -ml-px min-h-11 rounded-l-none px-3 py-1.5 text-xs hover:z-10 focus-visible:z-10"
-                  title={msg("board.polishTitle")}
-                >
-                  {msg("board.polish")}
-                </button>
-              </div>
-              {/* ONE caption for the group. The two it replaces were rendered
-                  under two of the three buttons and repeated under every stage's
-                  triplet, so the row's captions grew with the format while
-                  saying the same two sentences. Still a sublabel and not a hover
-                  title: that a lock survives a rebuild has to be visible on
-                  touch, not discoverable only by hovering a desktop pointer. */}
-              <span
-                data-testid="schedule-ladder-caption"
-                className="text-[10px] leading-tight text-slate-500"
+          {/* The group says out loud which stage it is pointed at. The
+              selector beside it carries the same fact visually; this is the
+              one an organiser gets by hovering the thing they are about to
+              click, and it is why the buttons themselves can stay short. */}
+          <div
+            className="isolate inline-flex"
+            title={runnableStages.length > 1 ? msg("board.actionTarget", { name: activeStage.name }) : undefined}
+          >
+              {/* #465: every action carries a stable id. Not tidiness —
+                  `board.autoSchedule` is a translated label, and a text
+                  selector for it stops meaning the same thing in any locale
+                  but English. */}
+              <button
+                type="button"
+                data-testid="schedule-auto"
+                disabled={actions.busy}
+                onClick={() => {
+                  const locked = stageLockedCounts[activeStage.id] ?? 0;
+                  // A confirm step only when THIS stage's rebuild would touch
+                  // a locked fixture — with zero locks the click runs exactly
+                  // as it always did (owner ruling).
+                  if (locked > 0)
+                    setPendingBuild({
+                      stageId: activeStage.id,
+                      divisionId: activeStage.division_id,
+                      locked,
+                    });
+                  else void runAuto(activeStage.id, activeStage.division_id, false);
+                }}
+                className="btn btn-primary relative min-h-11 rounded-r-none px-3 py-1.5 text-xs focus-visible:z-10"
               >
-                {msg("board.ladderCaption")}
-              </span>
+                {msg("board.autoSchedule")}
+              </button>
+              <button
+                type="button"
+                data-testid="schedule-reflow"
+                disabled={actions.busy}
+                onClick={() => void runAuto(activeStage.id, activeStage.division_id, true)}
+                className="btn btn-ghost relative -ml-px min-h-11 rounded-none px-3 py-1.5 text-xs hover:z-10 focus-visible:z-10"
+                title={msg("board.reflowTitle")}
+              >
+                {msg("board.reflow")}
+              </button>
+              {/* POLISH — the tier solver over a board that is already legal.
+                  Beside its siblings rather than behind a menu: it is the same
+                  kind of action, and the three only differ by what they ask
+                  the solver for. The mode is passed EXPLICITLY because
+                  `only_unlocked` cannot express it — polish and re-flow both
+                  send `true` and run different solvers. No confirm dialog
+                  (#pins-ui): POLISH already honoured a lock before that
+                  feature and nothing about it changed. */}
+              <button
+                type="button"
+                data-testid="schedule-polish"
+                disabled={actions.busy}
+                onClick={() => void runAuto(activeStage.id, activeStage.division_id, true, "polish")}
+                className="btn btn-ghost relative -ml-px min-h-11 rounded-l-none px-3 py-1.5 text-xs hover:z-10 focus-visible:z-10"
+                title={msg("board.polishTitle")}
+              >
+                {msg("board.polish")}
+              </button>
             </div>
           </>
         )}

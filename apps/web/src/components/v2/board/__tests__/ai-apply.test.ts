@@ -72,7 +72,15 @@ describe("applyAiPlans — chained accept", () => {
       api,
     );
 
-    expect(out).toEqual({ schedule: "applied", officials: "applied", checkpointId: "cp-1" });
+    // `stagesApplied` is part of the outcome now: one stage's worth of
+    // assignments went in, and the console reads that count to tell a clean
+    // apply from a half-written one.
+    expect(out).toEqual({
+      schedule: "applied",
+      officials: "applied",
+      checkpointId: "cp-1",
+      stagesApplied: 1,
+    });
     const seam = calls.map((c) => `${c.method} ${c.url}`);
     expect(seam).toEqual([
       "POST /api/v1/divisions/div-1/checkpoints",
@@ -214,6 +222,62 @@ describe("applyAiPlans — chained accept", () => {
     ]);
   });
 
+  /**
+   * A REFUSAL IS NOT A ROLLBACK.
+   *
+   * `applyAiPlans` groups the proposal by stage and posts one apply per stage,
+   * each its own transaction with its own `expected_seq`. A division with a
+   * league and a finals stage therefore has a real partial state: stage one
+   * persists, stage two is refused, and the run reports failure over a board
+   * that DID change. The count is what lets the console tell that apart from
+   * the nothing-was-written case — and it is the same count that decides
+   * whether Undo is worth offering, since the before-AI checkpoint exists
+   * either way.
+   */
+  it("counts the stages that landed before a mid-plan refusal", async () => {
+    let applies = 0;
+    const { api } = recorder({
+      ...okHandlers,
+      "schedule/apply": () => {
+        applies += 1;
+        // First stage lands; the second is refused over a clash it would add.
+        if (applies > 1) {
+          throw new ApiV1Error("blocked", 409, "SCHEDULE_CONFLICT", {
+            conflicts: [{ fixture_id: "fb", code: "court_double_booked", blocking: true }],
+          });
+        }
+        return {};
+      },
+    });
+
+    const out = await applyAiPlans(
+      baseInput({
+        scheduleAssignments: [
+          { fixture_id: "fa", stage_id: "st-1", scheduled_at: "2026-08-01T09:00:00.000Z", court_id: "c1" },
+          { fixture_id: "fb", stage_id: "st-2", scheduled_at: "2026-08-01T09:00:00.000Z", court_id: "c1" },
+        ],
+      }),
+      api,
+    );
+
+    expect(out).toMatchObject({ schedule: "error", errorCode: "SCHEDULE_CONFLICT" });
+    expect(out.stagesApplied, "one stage was written before the refusal").toBe(1);
+    // The anchor is still there, which is what makes the partial state
+    // recoverable rather than merely reported.
+    expect(out.checkpointId).not.toBeNull();
+  });
+
+  it("reports zero stages applied when the first stage is the one refused", async () => {
+    const { api } = recorder({
+      ...okHandlers,
+      "schedule/apply": () => {
+        throw new ApiV1Error("blocked", 409, "SCHEDULE_CONFLICT");
+      },
+    });
+    const out = await applyAiPlans(baseInput(), api);
+    expect(out.stagesApplied).toBe(0);
+  });
+
   it("officials failure leaves the schedule applied and carries its code + status", async () => {
     const { api } = recorder({
       ...okHandlers,
@@ -280,6 +344,9 @@ describe("applyAiPlans — chained accept", () => {
       schedule: "error",
       officials: "skipped",
       checkpointId: null,
+      // The chain stopped at the anchor, so no stage was even attempted — the
+      // console can say "nothing changed" here and be right.
+      stagesApplied: 0,
       errorCode: "schedule.checkpoints.max",
       errorStatus: 402,
     });

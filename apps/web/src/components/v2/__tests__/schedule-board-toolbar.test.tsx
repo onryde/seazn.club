@@ -232,6 +232,35 @@ describe("the toolbar renders one action set, whatever the format's stage count"
     expect(lastAutoUrl()).toBe("/api/v1/stages/s2/schedule/auto");
   });
 
+  /**
+   * The buttons stayed short when the stage moved out of the label, so the
+   * group has to say what it is pointed at some other way. The selector shows
+   * it; this is the answer for someone hovering the button they are about to
+   * press — and it follows the selection rather than naming stage one forever.
+   */
+  it("names the stage the action group is pointed at", () => {
+    const island = renderIsland(ScheduleBoard, baseProps());
+    const group = withProp(island.tree(), "data-testid", "schedule-auto");
+    // The title lives on the group that wraps the three buttons, so walk to it
+    // by looking for the element whose title mentions the live stage.
+    const titled = island
+      .tree()
+      .filter((el) => typeof propsOf(el).title === "string")
+      .map((el) => propsOf(el).title as string);
+    expect(group).toBeTruthy();
+    expect(titled).toContain("Runs on League");
+
+    const finals = allWithProp(island.tree(), "data-testid", "schedule-stage")[1]!;
+    (propsOf(finals).onClick as () => void)();
+
+    const after = island
+      .tree()
+      .filter((el) => typeof propsOf(el).title === "string")
+      .map((el) => propsOf(el).title as string);
+    expect(after).toContain("Runs on Stepladder finals");
+    expect(after).not.toContain("Runs on League");
+  });
+
   /** A division with nothing to choose between shows no chooser. */
   it("drops the selector when only one stage can run", async () => {
     const island = renderIsland(ScheduleBoard, baseProps([TWO_STAGES[0]!]));
