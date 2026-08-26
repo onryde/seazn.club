@@ -319,8 +319,9 @@ knob (1), draws + half points (4).
    `:3244-3245`). Request shape `AddFixture`
    (`server/api-v1/schemas.ts:753`, `.strict()`): `home_entrant_id`,
    `away_entrant_id`, optional `round_no`, `scheduled_at`, `venue_id`,
-   `court_id`. Body is a plain DB insert with round/seq bookkeeping
-   (`stages.ts:3291-3296`) — no scheduler/solver call. Arbitrary
+   `court_id`. Body does round/seq bookkeeping (`stages.ts:3291-3296`)
+   then a plain `insert into fixtures (...) returning id`
+   (`stages.ts:3310-3318`) — no scheduler/solver call. Arbitrary
    entrant pairing + explicit `round_no` for a swiss stage is directly
    supported.
 3. **DECIDED — futsal does not fit; use Women's Euro 2025.** Football's
@@ -338,12 +339,13 @@ knob (1), draws + half points (4).
    `StageKind` (`packages/engine/src/core/types.ts:91-101`, 9 values:
    league, group, swiss, knockout, double_elim, stepladder, americano,
    ladder, page_playoff) and the DB `stages_kind_check` are equal today.
-   `V298__page_playoff_stage_kind.sql:12-15` widened the original
-   6-value V210 constraint to all 9, matching the API enum exactly. No
-   migration since V298 touches it (confirmed by grepping every delta
-   for `kind in`). league/group/knockout/swiss were never actually at
-   risk — only the 3 extra values were the gap, and V298 closed it
-   2026-08-1x, pre-dating B00.
+   Two migrations widened the original 6-value V210 constraint, not
+   one: `V249__format_extensions.sql` took it 6→8 (americano, ladder),
+   then `V298__page_playoff_stage_kind.sql:12-15` took it 8→9
+   (page_playoff), matching the API enum exactly. No migration since
+   V298 touches it (confirmed by grepping every delta for `kind in`).
+   league/group/knockout/swiss were never actually at risk — only the
+   3 extra values were the gap, and V298 closed it, pre-dating B00.
 5. **MEASURED — a batch endpoint already exists; it is not new public
    surface.** Single-event path: `POST
    /api/v1/fixtures/{id}/events` (`app/api/v1/fixtures/[id]/events/
@@ -353,9 +355,10 @@ knob (1), draws + half points (4).
    by P11 (D6, merged `ee5aa1a01` #653) — `EventImportRequest`
    (`server/api-v1/schemas.ts:962-990`) takes `streams[]`, each a
    fixture + its events; server assigns `seq`, `core.void` refused.
-   Hard caps in `usecases/event-import.ts:36` (`IMPORT_CAPS`): `streams:
+   Hard caps in `usecases/event-import.ts:40` (`IMPORT_CAPS`): `streams:
    50`, `eventsPerFixture: 1_000`, `eventsPerCall: 10_000` (413 on
-   breach, checked in cap order at `:91-108`). No per-request-count or
+   breach; `assertWithinCaps` checks streams/per-fixture at `:90-108`,
+   `eventsPerCall` at `:109-116`). No per-request-count or
    bandwidth rate limit exists on either route — `MUTATION_LIMIT`
    (`lib/rate-limit.ts:74`) is defined but has zero callers. For suite
    1's ~40k events / 55 fixtures: fits the batch route only split across
@@ -370,7 +373,11 @@ knob (1), draws + half points (4).
    using the batch route needs the `setPlan`-style SQL override
    precedent (risk 8).
 6. **RESOLVED — real engine path exists, no pack-meta adaptation
-   needed.** `core.forfeit` folds at `kernel.ts:1899`. Tennis's
+   needed.** `core.forfeit` folds in all three sport-family kernels —
+   `sports/nested/kernel.ts:2126`, `sports/period/kernel.ts:2402`,
+   `sports/setbased/kernel.ts:1713`. Tennis runs the nested-kernel
+   preset (`sports/tennis/tennis.ts:7`, `makeNestedModule`), so
+   `sports/nested/kernel.ts:2126` is the one that fires. Tennis's
    `padSpec` declares no Retire tile by design (R4 ruling R4-2,
    `2026-08-15-scoringpad-v3-prompts/_INDEX.md:1825`) because
    `fixture-console.tsx:700-728` already ships a Forfeit control with a
@@ -391,7 +398,8 @@ knob (1), draws + half points (4).
    — `scoring.ball_by_ball` (:48-50), `stats.player` (:60-62), and a
    third deep-tier key not named in the original risk,
    `scoring.rally_by_rally` (:51-53); all three also granted on
-   `pro_plus` (`V290__pro_plus_plan.sql:28,30,32`). No "strike"-keyed
+   `pro_plus` (`V290__pro_plus_plan.sql:28` ball_by_ball, `:30`
+   rally_by_rally, `:32` stats.player). No "strike"-keyed
    entitlement exists anywhere (searched `apps/web/src`,
    `packages/engine/src`) — packs must not declare one. Both original
    keys are still literal and live at
