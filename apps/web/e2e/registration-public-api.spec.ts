@@ -305,9 +305,12 @@ test.describe("RS003 public registration API", () => {
     expect(rows[0]!.n).toBe(0);
   });
 
-  test("two self-declarations cart-wide are refused", async ({ request }) => {
+  // RS006: a registrant may self-link on more than one cart entry (singles +
+  // doubles at the same tournament is the common racket-sports pattern) —
+  // this used to be refused cart-wide; that cap was a defect, not a rule.
+  test("two self-declarations across different entries in one cart both succeed", async ({ request }) => {
     const rig = await seedRig();
-    const { status } = await submitCart(
+    const { status, data } = await submitCart(
       request,
       rig,
       cart({
@@ -318,13 +321,22 @@ test.describe("RS003 public registration API", () => {
         },
         entries: [
           { ...individualEntry(rig.divisionId, "Self Twice"), registering_self: true, self_player_index: 0 },
-          { ...individualEntry(rig.divisionId, "Self Twice"), registering_self: true, self_player_index: 0 },
+          {
+            division_id: rig.teamDivisionId,
+            entrant_kind: "team",
+            team_name: `Self Twice Team ${randomBytes(2).toString("hex")}`,
+            players: [{ full_name: "Self Twice" }, { full_name: "Team Mate" }],
+            answers: {},
+            registering_self: true,
+            self_player_index: 0,
+          },
         ],
       }),
     );
 
-    expect(status).toBeGreaterThanOrEqual(400);
-    expect(status).toBeLessThan(500);
+    expect(status).toBe(201);
+    expect(data?.entries).toHaveLength(2);
+    expect(data?.entries.every((e) => e.status === "confirmed")).toBe(true);
   });
 
   test("a full division waitlists the entry at zero and never quotes a payment", async ({

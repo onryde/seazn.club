@@ -706,6 +706,80 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
     expect(unlinkedRow!.user_id).toBeNull();
   });
 
+  // RS006: the cart-wide "at most one self entry" cap was removed from the
+  // schema — this proves the usecase/persons layer the brief's analysis
+  // rested on actually behaves as claimed, against a real DB rather than
+  // trusting the reading: deriveLinkUserId is per-entry (no cart-wide
+  // state), and resolvePlayerPerson's on-conflict upsert on (org_id,
+  // user_id, 'player') means a SECOND self-linked entry for the same
+  // session resolves to the SAME persons row instead of erroring or
+  // duplicating.
+  it("two self-linked entries in ONE cart both link the session user, and resolve to ONE persons row", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0 });
+    const division2 = await createDivision(owner, competition.id, {
+      name: "Second",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      eligibility: [],
+    });
+    await seedSettings(division2.id, { entrant_kind: "individual", fee_cents: 0 });
+    const sessionUserId = await makeUser("multiself");
+
+    const res = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug, sessionUserId },
+      {
+        contact: baseContact({ dob: "1990-01-01" }),
+        privacy_consent: true,
+        entries: [
+          {
+            division_id: division.id,
+            entrant_kind: "individual",
+            registering_self: true,
+            self_player_index: 0,
+            players: [{ full_name: "Multi Self" }],
+            answers: {},
+          },
+          {
+            division_id: division2.id,
+            entrant_kind: "individual",
+            registering_self: true,
+            self_player_index: 0,
+            players: [{ full_name: "Multi Self" }],
+            answers: {},
+          },
+        ],
+      },
+    );
+
+    expect(res.entries).toHaveLength(2);
+    expect(res.entries.every((e) => e.status === "confirmed")).toBe(true);
+
+    const linkedRows = await sql<{ user_id: string | null }[]>`
+      select user_id from registration_players
+       where registration_id in (${res.entries[0]!.registration_id}, ${res.entries[1]!.registration_id})`;
+    expect(linkedRows).toHaveLength(2);
+    expect(linkedRows.every((r) => r.user_id === sessionUserId)).toBe(true);
+
+    const persons = await sql<{ id: string }[]>`
+      select id from persons where org_id = ${orgId} and user_id = ${sessionUserId} and lane = 'player'`;
+    expect(persons).toHaveLength(1);
+
+    const regs = await sql<{ entrant_id: string | null }[]>`
+      select entrant_id from registrations
+       where id in (${res.entries[0]!.registration_id}, ${res.entries[1]!.registration_id})`;
+    expect(regs.every((r) => r.entrant_id !== null)).toBe(true);
+    const members = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members
+       where entrant_id in (${regs[0]!.entrant_id as string}, ${regs[1]!.entrant_id as string})`;
+    expect(members).toHaveLength(2);
+    expect(members[0]!.person_id).toBe(members[1]!.person_id);
+    expect(members[0]!.person_id).toBe(persons[0]!.id);
+  });
+
   it("links the self row's OWN dob when the contact never repeated one at cart level (review MINOR 6)", async () => {
     const { orgId, orgSlug, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
