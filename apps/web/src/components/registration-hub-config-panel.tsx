@@ -113,7 +113,11 @@ const DEFAULT_OPEN: Record<SectionId, boolean> = {
   form: false,
 };
 
-function sectionTitle(id: SectionId, msg: Msg, formFieldCount: number): string {
+function sectionTitle(
+  id: SectionId,
+  msg: Msg,
+  formFieldCount: number,
+): string {
   switch (id) {
     case "eligibility":
       return msg("reg.hub.config.eligibility");
@@ -124,7 +128,20 @@ function sectionTitle(id: SectionId, msg: Msg, formFieldCount: number): string {
     case "money":
       return msg("reg.settings.money");
     case "form":
-      return `${msg("reg.settings.signupForm")} · ${msg("reg.settings.extraQuestions", { n: formFieldCount })}`;
+      // NOT `usePlural`: it throws outside a `DictProvider` and this panel is
+      // rendered without one — the same reason and the same shape as
+      // create-org-form.tsx:134-140, which documents it. Safe rather than a
+      // shortcut: all four shipped locales (en/es/fr/nl) put the one/other
+      // boundary at exactly 1, so this ternary IS the plural rule for every
+      // locale the product has. A locale with a dual or paucal form would
+      // need the real Intl.PluralRules path.
+      //
+      // It said "1 extra questions" before, and a division with one extra
+      // question is the COMMON case, not an edge one.
+      return `${msg("reg.settings.signupForm")} · ${msg(
+        formFieldCount === 1 ? "reg.settings.extraQuestions.one" : "reg.settings.extraQuestions.other",
+        { count: formFieldCount },
+      )}`;
   }
 }
 

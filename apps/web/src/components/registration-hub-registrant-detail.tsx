@@ -35,6 +35,7 @@ import {
   registrantRowAnchor,
 } from "@/components/registration-hub-registrant-derive";
 import { RegistrationHubRegistrantJoinCode } from "@/components/registration-hub-registrant-join-code";
+import { deriveRegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
 import { RegistrationHubRegistrantActions } from "@/components/registration-hub-registrant-actions";
 
 export interface RegistrationHubRegistrantDetailProps {
@@ -89,6 +90,10 @@ export function RegistrationHubRegistrantDetail({
   baseHref,
 }: RegistrationHubRegistrantDetailProps) {
   const paymentState = deriveRegistrantPaymentState(row);
+  // ONE source with the buttons themselves — the actions component calls the
+  // same function internally, so the heading can never advertise a control set
+  // the row does not actually offer.
+  const hasAnyAction = Object.values(deriveRegistrantActionFlags(row)).some(Boolean);
   const answers = Object.entries(row.answers ?? {});
   const amountText =
     row.amount_cents === 0 ? t(dict, "reg.hub.row.fee.free") : formatMinor(row.amount_cents, asCurrency(row.currency));
@@ -238,7 +243,15 @@ export function RegistrationHubRegistrantDetail({
           mutating controls are ABSENT for a viewer, never merely disabled.
           The write APIs all 403 a viewer regardless, so a disabled button
           here would only advertise a capability they don't have. */}
-      {canEdit && (
+      {/* ...and only when at least ONE action is legal. A terminal entry
+          (withdrawn/rejected/expired) has none — every control is correctly
+          gated off — which left an "Actions" heading standing over nothing.
+          Same class as the "Only available for team divisions." hint that was
+          removed from the config panel: a section header for a section with no
+          content tells the organiser something is missing rather than that
+          nothing applies. Derived through the SHARED flag function, not a
+          second rule that could disagree with the buttons it describes. */}
+      {canEdit && hasAnyAction && (
         <section className="sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.actions")}>
           <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.actions")}</h4>
           <RegistrationHubRegistrantActions

@@ -364,3 +364,34 @@ describe("RegistrationHubRegistrantDetail — action controls (RS005 W3, viewer/
     expect(viewerText).not.toContain(t(dict, "reg.hub.registrants.detail.section.actions"));
   });
 });
+
+describe("RegistrationHubRegistrantDetail — no empty Actions heading", () => {
+  // Found by driving the real product: a rejected entry correctly offers no
+  // controls (every one is gated off for a terminal status), which left an
+  // "Actions" heading standing over nothing. Same class as the "Only available
+  // for team divisions." hint removed from the config panel — a section header
+  // with no section under it tells an organiser something is missing rather
+  // than that nothing applies.
+  it.each(["withdrawn", "rejected", "expired"] as const)(
+    "renders no Actions section for a %s entry",
+    (status) => {
+      const tree = walk(
+        RegistrationHubRegistrantDetail(baseProps({ row: row({ status }), canEdit: true })),
+      );
+      const headings = tree.filter(
+        (e) => propsOf(e)["aria-label"] === t(dict, "reg.hub.registrants.detail.section.actions"),
+      );
+      expect(headings).toHaveLength(0);
+    },
+  );
+
+  it("still renders the Actions section when at least one control is legal", () => {
+    const tree = walk(
+      RegistrationHubRegistrantDetail(baseProps({ row: row({ status: "pending" }), canEdit: true })),
+    );
+    const headings = tree.filter(
+      (e) => propsOf(e)["aria-label"] === t(dict, "reg.hub.registrants.detail.section.actions"),
+    );
+    expect(headings.length).toBeGreaterThan(0);
+  });
+});
