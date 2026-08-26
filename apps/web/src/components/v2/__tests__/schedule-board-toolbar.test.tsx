@@ -290,4 +290,41 @@ describe("the toolbar renders one action set, whatever the format's stage count"
     await flush();
     expect(lastAutoUrl()).toBe("/api/v1/stages/s2/schedule/auto");
   });
+
+  /**
+   * …AND STILL SAYS WHICH STAGE THAT IS. Review finding on #650: a finished
+   * league beside a live playoff stage is the ordinary shape of a competition
+   * mid-way through, and it is the one case where no selector renders. The old
+   * button label named the stage whenever the DIVISION had more than one
+   * (`stages.length > 1`), so that board read "Auto-schedule Playoffs";
+   * gating the name on how many stages can still RUN dropped it entirely and
+   * left a destructive rebuild pointed at a stage nobody had named.
+   *
+   * Visible, not a hover title: the label it replaced was on screen at every
+   * width, and a `title` is desktop-only.
+   */
+  it("still names the stage when only one of several can run", () => {
+    const stages = [
+      { ...TWO_STAGES[0], status: "complete" },
+      TWO_STAGES[1],
+    ] as unknown as BoardStage[];
+    const tree = renderIsland(ScheduleBoard, baseProps(stages)).tree();
+
+    const chip = withProp(tree, "data-testid", "schedule-stage-static");
+    expect(propsOf(chip).children).toBe("Stepladder finals");
+    expect(
+      tree.filter((el) => typeof propsOf(el).title === "string").map((el) => propsOf(el).title),
+    ).toContain("Runs on Stepladder finals");
+  });
+
+  /** One stage in the whole division names nothing — there is nothing to
+   *  confuse it with, which is exactly what the old label did too. */
+  it("names nothing when the division has a single stage", () => {
+    const tree = renderIsland(ScheduleBoard, baseProps([TWO_STAGES[0]!])).tree();
+
+    expect(allWithProp(tree, "data-testid", "schedule-stage-static")).toHaveLength(0);
+    expect(
+      tree.filter((el) => typeof propsOf(el).title === "string").map((el) => propsOf(el).title),
+    ).not.toContain("Runs on League");
+  });
 });

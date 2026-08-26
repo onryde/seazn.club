@@ -1138,10 +1138,24 @@ export function ScheduleBoard({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         {canEdit && activeStage && (
           <>
-            {/* One option per runnable stage, and only when there is something
-                to choose between: a single-stage division sees the actions
-                alone, exactly as it did before. */}
-            {runnableStages.length > 1 && (
+            {/* A DIVISION WITH MORE THAN ONE STAGE ALWAYS NAMES THE ONE IT IS
+                POINTED AT — as a chooser when there is something to choose
+                between, and as a plain chip when there is not.
+
+                The chip is not decoration. Before this toolbar existed the
+                stage rode inside the button label, gated on `stages.length > 1`
+                — so a league that has FINISHED beside a playoff stage that has
+                not (the ordinary shape of a competition mid-way through) read
+                "Auto-schedule Playoffs". Naming it only when a SELECTOR renders
+                dropped that: one runnable stage means no selector, and the
+                organiser was left with a bare "Auto-schedule" and nothing
+                anywhere saying which stage a destructive rebuild would hit.
+                A `title` alone does not repair it either — the old name was
+                visible, and a hover title is desktop-only.
+
+                A single-stage division still shows nothing, exactly as before:
+                there is only one thing the actions could mean. */}
+            {runnableStages.length > 1 ? (
               <div className="flex items-center gap-2">
                 <span className="app-display text-[10px] font-semibold text-slate-500">
                   {msg("board.stageLabel")}
@@ -1185,8 +1199,25 @@ export function ScheduleBoard({
                   ))}
                 </div>
               </div>
+            ) : stages.length > 1 ? (
+              <div className="flex items-center gap-2">
+                <span className="app-display text-[10px] font-semibold text-slate-500">
+                  {msg("board.stageLabel")}
+                </span>
+                <span
+                  data-testid="schedule-stage-static"
+                  className="inline-flex min-h-11 items-center rounded-lg border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-900"
+                >
+                  {activeStage.name}
+                </span>
+              </div>
+            ) : null}
+            {/* The hairline separates the stage zone from the actions, so it
+                renders only when there IS a stage zone — otherwise it opens the
+                bar with a rule against nothing. */}
+            {stages.length > 1 && (
+              <div className="hidden h-8 w-px bg-purple-100 lg:block" aria-hidden />
             )}
-            <div className="hidden h-8 w-px bg-purple-100 lg:block" aria-hidden />
             {/* The three solver actions, joined into one control and ordered by
                 how much of the board each disturbs: rebuild everything, then
                 fix only what clashes, then tighten the times already there.
@@ -1200,7 +1231,11 @@ export function ScheduleBoard({
               click, and it is why the buttons themselves can stay short. */}
           <div
             className="isolate inline-flex"
-            title={runnableStages.length > 1 ? msg("board.actionTarget", { name: activeStage.name }) : undefined}
+            // Gated on the DIVISION's stage count, not on how many can still
+            // run: the surface names its target whenever there is more than one
+            // stage to confuse it with, which is the rule the old interpolated
+            // label followed.
+            title={stages.length > 1 ? msg("board.actionTarget", { name: activeStage.name }) : undefined}
           >
               {/* #465: every action carries a stable id. Not tidiness —
                   `board.autoSchedule` is a translated label, and a text
