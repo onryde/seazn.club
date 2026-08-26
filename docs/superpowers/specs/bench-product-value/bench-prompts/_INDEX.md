@@ -28,7 +28,7 @@ B03/B04/B05 are sequential (shared `scripts/bench/lib/`). B17 needs B15
 
 | Session | Prompt file | What | Depends on | Status |
 |---|---|---|---|---|
-| B00 | `B00-repin-and-refresh.md` | global re-pin, risk answers, env addendum | gate open | TODO |
+| B00 | `B00-repin-and-refresh.md` | global re-pin, risk answers, env addendum | gate open | **DONE 2026-08-26** |
 | B01 | `B01-runner-core.md` | CLI, pre-flight, HTTP client, report writer | B00 | TODO |
 | B02 | `B02-pack-lib.md` | PackSchema, stage-0 validator, reconstruction | B01 | TODO |
 | B03 | `B03-seeding-layer.md` | org/comp/divisions/persons/officials/plans/claims | B02 | TODO |
@@ -37,7 +37,7 @@ B03/B04/B05 are sequential (shared `scripts/bench/lib/`). B17 needs B15
 | B06 | `B06-pack-darts-pilot.md` | suite 11 (PDC) — pilot proves the playbook | B05 | TODO |
 | B07 | `B07-pack-carrom.md` | suite 10 (ICF) — thin-data resilience | B06 | TODO |
 | B08 | `B08-pack-cricket.md` | suite 1 (T20WC24 + CT25) — volume monster | B06 | TODO |
-| B09 | `B09-pack-football.md` | suite 2 (Euro24 + Futsal26/WEuro25) | B06 | TODO |
+| B09 | `B09-pack-football.md` | suite 2 (Euro24 + WEuro25, decided B00) | B06 | TODO |
 | B10 | `B10-pack-tennis.md` | suite 3 (Wimbledon 2025 ×2) | B06 | TODO |
 | B11 | `B11-pack-chess.md` | suite 4 (Candidates 24 + Grand Swiss 23) | B06 | TODO |
 | B12 | `B12-pack-badminton.md` | suite 5 (All England 25, MS + XD) | B06 | TODO |
@@ -74,9 +74,41 @@ may pair further if research proves thin — record the pairing here.)
 - Suite roster + per-suite constraints/specials: bench spec §3/§5/§8
   tables are the contract; deviations go through §7A adaptations.
 
+## Portfolio inventory (B00, 2026-08-26)
+
+All P1–P11 shipped. Every shared lib the bench was written to consume, or
+fall back from, is live — no B-prompt needs its fallback path.
+
+| Lib / flow | Portfolio session | Status | Where |
+|---|---|---|---|
+| `capacity.ts` (D2) | P1 | MERGED `78c8618f` #544 | — |
+| `health.ts` (D3) | P2 | MERGED `651c56c3` #547 | — |
+| D4 propose+confirm (advancement) | P5, P6 | MERGED `776ba389`/`cdcc3bef` #554/#568 | `completeStage`/`generateStageFixtures`/`confirmSeedProposal`, all plain REST — see spec §11 risk 1 |
+| `court-windows.ts` (D5b.5) | P9.5 | MERGED `203395b6a` #638 | `usableWindows`, 14 edge-matrix rows |
+| Calendar compiler (D5c) | P10 | MERGED #644 (`027fd535a`) | — |
+| D6 batch import (seeding speed) | P11 | MERGED `ee5aa1a01` #653 | `POST /api/v1/divisions/{id}/events/import` — **feature-gated, no `plan_entitlements` row yet**; bench needs a `setPlan`-style override to use it (spec §11 risk 5/8) |
+| Venues/courts schema+API (D5a) | P8 | DONE 2026-08-17 | V367, 4 tables, RLS forced |
+| Scheduler integration (D5b) | P9 | MERGED #621+#623+#633 | `ScheduleConfig.courts` = court UUIDs (`schemas.ts:1155`) |
+| Templates (D1a/D1b) | P4, P7 | MERGED `e35efff1`/`98e95c9e` #548/#582 | 2 known open defects (`uniqueSlug` race, modal 320 fold) — not bench-relevant |
+| News enrichment (D7) | P3 | MERGED `51601495` #545 | `generateWeeklyDigest` (`org-posts.ts:1506`), `draftPostsForDecidedFixture` (`:449`) — for B03 seeding if news items get seeded |
+
 ## Status log
 
 (append as sessions run)
 
 - 2026-08-13 — prompts authored, gated. S9+C0 merged; C1+S10 in flight.
   B-numbering: B16 intentionally absent (B15 covers suites 8+9).
+- 2026-08-26 — **B00 DONE.** Gate confirmed open: ScoringPad v2 S13
+  MERGED (v1 pad deleted, confirmed — no non-v2 scorepad path exists
+  anywhere in `apps/web/src`), release-2 C8 MERGED `e9a7c54a` #591 (its
+  three coverage losses also CLOSED, `0ccd2665` #594). ScoringPad v3
+  (R1–R4, R2b, R2c) is a separate, non-gating programme — bench talks
+  HTTP black-box, not pad UI, so v3 skin work does not touch anything
+  the bench pins. Full scout re-pin done; spec §11 risks 1–9 all
+  answered with evidence, none left open (see spec doc). Portfolio
+  inventory above. `seazn-local-env` §3b got the run-both-ways
+  addendum. B09's prompt (Div B suite 2) carried an open futsal-vs-WEuro25
+  choice — decided WEuro25 (spec §11 risk 3) and the prompt + this
+  index's B09 row are corrected. No other B-prompt cites a stale
+  file:line (only the design spec does; the B0*-B18 prompts cite none
+  directly, confirmed by grep).
