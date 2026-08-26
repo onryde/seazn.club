@@ -162,6 +162,66 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
       kind: "bool",
       build: (v) => ({ shootout: v === "on" }),
     },
+    // R3.5/Task I — cfg.points.shootoutWin/shootoutLoss have worked in the
+    // engine since spec 04 (standingsDelta, football.ts) but had ZERO
+    // references anywhere in apps/web, so no organiser could set them and
+    // every group-stage fixture decided on kicks awarded flat win/loss.
+    // NESTED inside `points`, not bare cfg keys — a UI writing a top-level
+    // `shootoutWin` would parse, persist, and silently never fire.
+    //
+    // Both fields' build() reads BOTH raw values out of `values` (not just
+    // its own) and re-emits whichever are actually set. buildRuleOverride's
+    // outer loop does a bare `Object.assign` per field's return value, so if
+    // each field only emitted its own key, the field processed LAST would
+    // silently overwrite the other's contribution to `points` — there is no
+    // other football field sharing a nested object today, so nothing else in
+    // this array needs the same treatment yet.
+    //
+    // A blank field must emit NO key, not 0 — undefined is what turns the
+    // split off (the engine gate reads `!== undefined`), and 0 is a legal
+    // points value ("a shoot-out win is worth nothing"). The outer loop
+    // already only calls build() when THIS field's own value is non-blank,
+    // so leaving one field blank naturally emits just the other's key.
+    //
+    // Ruling (R3.5-6, recorded in _INDEX.md): the pairing requirement is
+    // documented in both fields' help text rather than enforced by an
+    // interactive validator — match-rules.tsx/MatchRuleFields has no
+    // validation-error channel today, and the asymmetric case is already
+    // safe (F21: the unset side just falls back to a normal win/loss, it
+    // does not corrupt anything), so blocking the UI on it is not worth
+    // being the first field in this file to need one.
+    {
+      key: "shootoutWin",
+      label: "Points for a shoot-out win",
+      help: "Group stages only, and only when Penalty shootout is on. Both this and the loss points below must be set for the split to apply — leave either blank to award a normal win/loss instead.",
+      kind: "number",
+      min: 0,
+      max: 10,
+      build: (v, values) => ({
+        points: {
+          shootoutWin: Number(v),
+          ...(values.shootoutLoss !== undefined && values.shootoutLoss !== ""
+            ? { shootoutLoss: Number(values.shootoutLoss) }
+            : {}),
+        },
+      }),
+    },
+    {
+      key: "shootoutLoss",
+      label: "Points for a shoot-out loss",
+      help: "Group stages only, and only when Penalty shootout is on. Both this and the win points above must be set for the split to apply — leave either blank to award a normal win/loss instead.",
+      kind: "number",
+      min: 0,
+      max: 10,
+      build: (v, values) => ({
+        points: {
+          shootoutLoss: Number(v),
+          ...(values.shootoutWin !== undefined && values.shootoutWin !== ""
+            ? { shootoutWin: Number(values.shootoutWin) }
+            : {}),
+        },
+      }),
+    },
     {
       key: "teamSize",
       label: "Team size (players per side)",

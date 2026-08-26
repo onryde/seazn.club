@@ -989,3 +989,148 @@ test("football v3: kick tiles drive the shoot-out — reachable, tallied, cued, 
     "axe serious/critical on the shoot-out pad",
   ).toEqual([]);
 });
+
+// R3.5/Task G (F18) — home scores 3 in a row, away misses 3 in a row: decided
+// after the 6th kick (3-0, away's 2 remaining attempts can no longer reach
+// home's lead of 3) — the exact arithmetic football.test.ts's own "enforces
+// kick alternation and early decision" golden pins at the engine level.
+async function decideByShootout(request: APIRequestContext, fx: RosteredFixture): Promise<void> {
+  await postEvent(request, fx.fixtureId, "core.start", {});
+  await postEvent(request, fx.fixtureId, "football.period", { phase: "HT" });
+  await postEvent(request, fx.fixtureId, "football.period", { phase: "FT" });
+  const kicks: [string, boolean][] = [
+    [fx.homeEntrantId, true],
+    [fx.awayEntrantId, false],
+    [fx.homeEntrantId, true],
+    [fx.awayEntrantId, false],
+    [fx.homeEntrantId, true],
+    [fx.awayEntrantId, false],
+  ];
+  for (const [by, scored] of kicks) {
+    await postEvent(request, fx.fixtureId, "football.shootout.kick", { by, scored });
+  }
+}
+
+test("football v3: a shoot-out decision names the winner and the method — public page, organiser console, and the share text (R3.5/Task G, F18)", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 FB Decided ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [{ fullName: `V3 FBD Home ${TAG}`, positionKey: "FW" }],
+    away: [{ fullName: `V3 FBD Away ${TAG}`, positionKey: "GK" }],
+  });
+  await mergeDivisionConfig(page.request, fx.divisionId, {
+    shootout: true,
+    extraTime: { enabled: false, halfMinutes: 15 },
+  });
+  await decideByShootout(page.request, fx);
+
+  const decided = await apiJson<{
+    status: string;
+    outcome: { kind: string; winner: string; loser: string; method: string };
+  }>(page.request, `/api/v1/fixtures/${fx.fixtureId}`);
+  expect(decided.status, `GET fixture -> ${decided.status}`).toBe(200);
+  expect(decided.data!.status).toBe("decided");
+  expect(decided.data!.outcome).toEqual({
+    kind: "win",
+    winner: fx.homeEntrantId,
+    loser: fx.awayEntrantId,
+    method: "shootout",
+  });
+
+  const org = await activeOrg(page);
+  const comp = await apiJson<{ slug: string }>(page.request, `/api/v1/competitions/${fx.competitionId}`);
+  const division = await apiJson<{ slug: string }>(page.request, `/api/v1/divisions/${fx.divisionId}`);
+  const publicPath = `/shared/${org.slug}/${comp.data!.slug}/${division.data!.slug}/fixtures/${fx.fixtureId}`;
+
+  // Public fixture page — the winner AND the score-qualified method, never
+  // the raw "shootout" token.
+  await page.goto(publicPath);
+  await expect(page.getByText(/won 3–0 on penalties/)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("shootout", { exact: false })).toHaveCount(0);
+
+  // Organiser console — the v3 pad has UNMOUNTED (decided); this sentence is
+  // the one surface left that can say who won and how.
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(pad(page)).toHaveCount(0);
+  await expect(page.getByText(/won 3–0 on penalties/)).toBeVisible({ timeout: 20_000 });
+
+  // Share text — ShareButton's `text` prop reaches navigator.share/wa.me
+  // directly (share-button.tsx), never the DOM, so it is stubbed and its
+  // call arguments inspected rather than asserted as visible text.
+  await page.goto(publicPath);
+  await page.evaluate(() => {
+    Object.defineProperty(window.navigator, "share", {
+      configurable: true,
+      value: (data: unknown) => {
+        (window as unknown as { __shareCall?: unknown }).__shareCall = data;
+        return Promise.resolve();
+      },
+    });
+  });
+  await page.getByRole("button", { name: "Share on WhatsApp" }).click();
+  const shareCall = await page.evaluate(
+    () => (window as unknown as { __shareCall?: { text?: string } }).__shareCall,
+  );
+  expect(shareCall?.text, "the WhatsApp message must say who won and how").toContain(
+    "won 3–0 on penalties",
+  );
+});
+
+// R3.5/Task I (F19) — points.shootoutWin/shootoutLoss have worked in the
+// engine since spec 04 and had zero references in apps/web; this proves the
+// UI-shaped config (nested under `points`, per match-rules.tsx's own unit
+// tests) reaches a REAL decided fixture's standings row, not just that the
+// config round-trips. Stage kind is whatever seedRosteredFixture defaults to
+// (league) — football.ts's standingsDelta never reads StageCtx.kind, so a
+// league stage exercises the identical code path a group stage would.
+test("football v3: group-stage shoot-out points reach the standings (R3.5/Task I, F19)", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 FB SOPoints ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [{ fullName: `V3 FBP Home ${TAG}`, positionKey: "FW" }],
+    away: [{ fullName: `V3 FBP Away ${TAG}`, positionKey: "GK" }],
+  });
+  await mergeDivisionConfig(page.request, fx.divisionId, {
+    shootout: true,
+    extraTime: { enabled: false, halfMinutes: 15 },
+    points: { win: 3, draw: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 },
+  });
+  await decideByShootout(page.request, fx);
+
+  const fixture = await apiJson<{ status: string; stage_id: string }>(
+    page.request,
+    `/api/v1/fixtures/${fx.fixtureId}`,
+  );
+  expect(fixture.status, `GET fixture -> ${fixture.status}`).toBe(200);
+  expect(fixture.data!.status).toBe("decided");
+
+  await expect
+    .poll(
+      async () => {
+        const standings = await apiJson<{ rows: { entrantId: string; points: number }[] }>(
+          page.request,
+          `/api/v1/stages/${fixture.data!.stage_id}/standings`,
+        );
+        return standings.data?.rows.find((r) => r.entrantId === fx.homeEntrantId)?.points;
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(2); // shoot-out WIN pays 2, not the flat 3
+
+  const standings = await apiJson<{ rows: { entrantId: string; points: number }[] }>(
+    page.request,
+    `/api/v1/stages/${fixture.data!.stage_id}/standings`,
+  );
+  expect(
+    standings.data!.rows.find((r) => r.entrantId === fx.awayEntrantId)?.points,
+    "shoot-out LOSS pays 1, not the flat 0",
+  ).toBe(1);
+});

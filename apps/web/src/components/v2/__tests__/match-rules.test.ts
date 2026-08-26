@@ -131,3 +131,49 @@ describe("buildRuleOverride — football's two independent substitution caps", (
     expect(buildRuleOverride("football", {})).toEqual({});
   });
 });
+
+// R3.5/Task I — group-stage shoot-out points (football.ts's standingsDelta
+// gates the split on BOTH `cfg.points.shootoutWin`/`shootoutLoss` being
+// defined). Unlike every other football field above, these two are NOT
+// independent top-level keys: `buildRuleOverride`'s outer loop does a
+// SHALLOW `Object.assign` per field (match-rules.tsx's own doc), so if each
+// field's build() only emitted ITS OWN key inside `points`, whichever field
+// ran last would silently overwrite the other's contribution — the exact
+// trap the brief called out. Each field's build() therefore reads BOTH raw
+// values out of `values` and re-emits whichever are actually set.
+describe("buildRuleOverride — football's shoot-out points split, merged into ONE points object", () => {
+  it("F19: both set — one points object carrying both keys, regardless of field order", () => {
+    expect(buildRuleOverride("football", { shootoutWin: "2", shootoutLoss: "1" })).toEqual({
+      points: { shootoutWin: 2, shootoutLoss: 1 },
+    });
+  });
+
+  it("F21: only shootoutWin set — emits shootoutWin alone, never a fabricated 0 for the unset side", () => {
+    expect(buildRuleOverride("football", { shootoutWin: "2" })).toEqual({
+      points: { shootoutWin: 2 },
+    });
+  });
+
+  it("F21: only shootoutLoss set — emits shootoutLoss alone", () => {
+    expect(buildRuleOverride("football", { shootoutLoss: "1" })).toEqual({
+      points: { shootoutLoss: 1 },
+    });
+  });
+
+  it("F20: neither set — no points key at all, today's flat win/loss is untouched", () => {
+    expect(buildRuleOverride("football", { shootoutWin: "", shootoutLoss: "" })).toEqual({});
+    expect(buildRuleOverride("football", {})).toEqual({});
+  });
+
+  it("a shoot-out win worth zero is a real, distinct value from 'unset' — blank must never become 0", () => {
+    expect(buildRuleOverride("football", { shootoutWin: "0", shootoutLoss: "1" })).toEqual({
+      points: { shootoutWin: 0, shootoutLoss: 1 },
+    });
+  });
+
+  it("does not disturb football's other independent fields when combined in one save", () => {
+    expect(
+      buildRuleOverride("football", { shootoutWin: "2", shootoutLoss: "1", maxSubs: "3" }),
+    ).toEqual({ points: { shootoutWin: 2, shootoutLoss: 1 }, maxSubs: 3 });
+  });
+});
