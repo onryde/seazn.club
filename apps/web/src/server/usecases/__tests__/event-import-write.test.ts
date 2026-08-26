@@ -18,9 +18,15 @@ describe.skipIf(!HAS_DB)("importEvents — writes", () => {
     expect(report.results[0]!.status).toBe("imported");
     expect(report.totals).toEqual({ imported: 1, skipped: 0, rejected: 0 });
 
+    // Gapless 1..n, compared against the stream's OWN length — not against an
+    // array derived from `seqs` itself, which was the previous shape and made
+    // `[] === []` a pass: a run that appended nothing at all satisfied it
+    // (final review, minor).
     const seqs = await sql<{ seq: number }[]>`
       select seq from score_events where fixture_id = ${fixtureId} order by seq`;
-    expect(seqs.map((r) => r.seq)).toEqual(seqs.map((_, i) => i + 1)); // gapless
+    expect(seqs.map((r) => r.seq)).toEqual(
+      Array.from({ length: decidingStream().length }, (_, i) => i + 1),
+    );
     const [fixture] = await sql<{ status: string; outcome: unknown }[]>`
       select status, outcome from fixtures where id = ${fixtureId}`;
     expect(fixture!.outcome).not.toBeNull();
@@ -30,13 +36,16 @@ describe.skipIf(!HAS_DB)("importEvents — writes", () => {
     expect(n).toBe(1);
   });
 
-  it("rolls the whole fixture back when an append fails mid-stream", async () => {
-    // A stream that the dry run accepts but the writer refuses: score the
-    // fixture's first event through the live path AFTER the dry run has run is
-    // not reproducible here, so force it by importing the same fixture twice
-    // concurrently is also racy. Instead: import a stream, then import a
-    // DIFFERENT import_id into the same (now started) fixture — the guard
-    // rejects it before any write, and the ledger is unchanged.
+  it("refuses a second import_id into an already-imported fixture, leaving the ledger unchanged", async () => {
+    // Renamed (final review, minor): the old title said "rolls the whole
+    // fixture back mid-stream", which is not what the body does — the
+    // `fixture_started` guard fires BEFORE any write, so there is nothing to
+    // roll back. Genuine mid-stream rollback is covered at
+    // engine-db/__tests__/append-event-in-tx.test.ts:12.
+    //
+    // What this asserts: import a stream, then import a DIFFERENT import_id
+    // into the same (now started) fixture — the guard rejects it before any
+    // write, and the ledger is unchanged.
     const { auth } = await seedOrg();
     const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
     await importEvents(auth, divisionId, {

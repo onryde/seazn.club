@@ -371,8 +371,8 @@ async function runStream(
   } catch (err) {
     if (isUniqueViolation(err, "event_imports_key_idx")) {
       // Review finding #4: unreachable through any call this codebase can
-      // make, now that `importEvents` (above) holds a session lock over the
-      // whole call, per (division, import_id) — the ONLY writer of this
+      // make, now that `importEvents` (above) holds a LOCK ROW over the whole
+      // call, per (division, import_id) — the ONLY writer of this
       // table is `runStream`, so two writes to the same key can no longer
       // even be IN FLIGHT together, let alone race each other's insert. The
       // pooled pre-check (step 2) was the sole guard before the lock existed
@@ -389,11 +389,24 @@ async function runStream(
       return { fixture: fixtureId, status: "skipped_duplicate", eventsAppended: 0 };
     }
     if (err instanceof EngineError) {
-      // The dry run already validated this exact stream, so reaching here
-      // means something changed under us between the dry run and the write
-      // (e.g. a concurrent SEQ_CONFLICT) — a genuine race, not the common
-      // case the dry run exists to catch. Any throw here rolls the whole
-      // fixture back to zero rows (spec 03 §2 guarantee 2).
+      // Not race-only (final review, minor — the previous comment claimed it
+      // was). Two DETERMINISTIC paths reach here on a stream the dry run
+      // accepted:
+      //
+      //  - DRAW_NOT_ALLOWED (append-event.ts:263-274) is checked in the WRITER
+      //    and nowhere else — the dry-run fold never evaluates it — so a drawn
+      //    stream under a config that forbids draws passes the dry run every
+      //    time and is refused here every time;
+      //  - two concurrent calls carrying DIFFERENT `import_id`s on the same
+      //    fixture. The lock is keyed on (division, import_id), so it does not
+      //    exclude them, and `event_imports`'s unique index does not cover
+      //    them either. What keeps them correct is `appendEventInTx`'s own
+      //    `pg_advisory_xact_lock` + seq check (append-event.ts:136, :176-182),
+      //    which lands the loser here as a SEQ_CONFLICT.
+      //
+      // A genuine mid-flight race is a third way in. Whatever the cause, any
+      // throw here rolls the whole fixture back to zero rows (spec 03 §2
+      // guarantee 2).
       return {
         fixture: fixtureId,
         status: "rejected",
@@ -465,6 +478,14 @@ async function runStream(
  * connection is not `app_user` with `current_org_id()` set — same reason
  * every other pooled read in this file filters by org itself), so `org_id`
  * is an explicit predicate, not RLS's job.
+ *
+ * The takeover re-homes `org_id` along with the holder (final review, minor).
+ * Two orgs cannot legitimately hold the same `(division_id, import_id)` — a
+ * division belongs to one org — so this is unreachable today. It is not
+ * cosmetic, though: `refreshImportLock` and `releaseImportLock` BOTH filter on
+ * `org_id`, so a row left carrying a foreign one matches neither, and the new
+ * holder would import successfully and then strand its own lock for a full
+ * TTL, wedging every retry of that key for thirty minutes.
  */
 async function acquireImportLock(divisionId: string, importId: string, orgId: string): Promise<string | null> {
   const holder = randomUUID();
@@ -472,7 +493,8 @@ async function acquireImportLock(divisionId: string, importId: string, orgId: st
     insert into import_locks (division_id, import_id, org_id, holder, expires_at)
     values (${divisionId}, ${importId}, ${orgId}, ${holder}, now() + interval '30 minutes')
     on conflict (division_id, import_id) do update
-      set holder = excluded.holder, acquired_at = now(), expires_at = excluded.expires_at
+      set holder = excluded.holder, org_id = excluded.org_id,
+          acquired_at = now(), expires_at = excluded.expires_at
       where import_locks.expires_at < now()
     returning holder`;
   return row ? row.holder : null;
@@ -487,8 +509,15 @@ async function acquireImportLock(divisionId: string, importId: string, orgId: st
  * successor took over), this predicate simply matches zero rows and the
  * next `runStream` call proceeds regardless — the actual correctness
  * backstop is `event_imports`'s unique index, not this row.
+ *
+ * The `holder` predicate is load-bearing for the same reason release's is, and
+ * exported for the same reason: so a test can prove it directly (seed a row
+ * with one holder, refresh with another, assert `expires_at` did not move).
+ * A refresh that ignored `holder` is strictly worse than a release that does —
+ * it would let an already-timed-out caller keep pushing a SUCCESSOR's lock out
+ * by thirty minutes at a time, from a call the successor knows nothing about.
  */
-async function refreshImportLock(
+export async function refreshImportLock(
   divisionId: string,
   importId: string,
   orgId: string,

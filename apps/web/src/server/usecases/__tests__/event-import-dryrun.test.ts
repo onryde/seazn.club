@@ -70,15 +70,72 @@ describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
     expect(report.results[0]!.error?.code).toBe("import.not_decided");
   });
 
-  it("413s a call over the per-call event cap", async () => {
+  // Final review I-6. There used to be ONE cap test, built as
+  // `eventsPerCall + 1` events in a single stream — which trips the PER-FIXTURE
+  // ceiling first (assertWithinCaps checks streams → per-fixture → per-call, and
+  // 10,001 > 1,000), so the per-call branch it was named after was never
+  // reached. Design doc §9 asks for all three, and each case now pins
+  // `error.cap` as well as the status and code: without that field the three
+  // are indistinguishable from each other and any one of them can stand in for
+  // the other two.
+  it("413s a call over the STREAMS cap", async () => {
     const { auth } = await seedOrg();
     const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
-    const events = Array.from({ length: IMPORT_CAPS.eventsPerCall + 1 }, () => ({
+    const streams = Array.from({ length: IMPORT_CAPS.streams + 1 }, () => ({
+      fixture: { id: fixtureId },
+      events: [{ type: "core.start", payload: {} }],
+    }));
+    await expect(
+      importEvents(auth, divisionId, { import_id: "imp-many-streams", streams }),
+    ).rejects.toMatchObject({
+      status: 413,
+      code: "import.too_large",
+      extra: { cap: "streams", limit: IMPORT_CAPS.streams, actual: IMPORT_CAPS.streams + 1 },
+    });
+  });
+
+  it("413s a call over the per-FIXTURE event cap", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
+    const events = Array.from({ length: IMPORT_CAPS.eventsPerFixture + 1 }, () => ({
       type: "core.start", payload: {},
     }));
     await expect(
-      importEvents(auth, divisionId, { import_id: "imp-big", streams: [{ fixture: { id: fixtureId }, events }] }),
-    ).rejects.toMatchObject({ status: 413, code: "import.too_large" });
+      importEvents(auth, divisionId, { import_id: "imp-big-fixture", streams: [{ fixture: { id: fixtureId }, events }] }),
+    ).rejects.toMatchObject({
+      status: 413,
+      code: "import.too_large",
+      extra: {
+        cap: "eventsPerFixture",
+        limit: IMPORT_CAPS.eventsPerFixture,
+        actual: IMPORT_CAPS.eventsPerFixture + 1,
+      },
+    });
+  });
+
+  it("413s a call over the per-CALL event cap", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
+    // Every individual stream sits exactly ON the per-fixture ceiling (1,000,
+    // not over it) and the stream count is well under 50, so the first two
+    // checks pass and this is the only branch that can fire — which is exactly
+    // what the old single test could not arrange.
+    const events = Array.from({ length: IMPORT_CAPS.eventsPerFixture }, () => ({
+      type: "core.start", payload: {},
+    }));
+    const streamCount = Math.floor(IMPORT_CAPS.eventsPerCall / IMPORT_CAPS.eventsPerFixture) + 1;
+    const streams = Array.from({ length: streamCount }, () => ({ fixture: { id: fixtureId }, events }));
+    await expect(
+      importEvents(auth, divisionId, { import_id: "imp-big-call", streams }),
+    ).rejects.toMatchObject({
+      status: 413,
+      code: "import.too_large",
+      extra: {
+        cap: "eventsPerCall",
+        limit: IMPORT_CAPS.eventsPerCall,
+        actual: streamCount * IMPORT_CAPS.eventsPerFixture,
+      },
+    });
   });
 
   it("rejects an ext_key that matches two fixtures in the division", async () => {
