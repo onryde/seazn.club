@@ -126,8 +126,10 @@ before diagnosing a real bug:
   skips it. Behavior changes need a PR or a local full-smoke first.
 - Every change ships a test that fails without it.
 - Any new or changed user-facing string → all 4 locale dictionaries,
-  never hardcoded English. `content/help/**` is the exception: one
-  English tree, no i18n work owed.
+  never hardcoded English. Two exceptions, both English-only with no
+  i18n work owed: `content/help/**` (one English tree) and
+  `apps/web/src/games/**` (Seazn Games — declared 2026-08-26, spec
+  `docs/superpowers/specs/2026-08-26-games-board-redesign-and-new-games-design.md`).
 - UI work is verified by screenshot at desktop (1280), **320px**, and
   **768px**, with no horizontal page scroll at any of them; the
   seven-width e2e matrix (320/360/375/390/430/768/834, `mobile.spec.ts`
