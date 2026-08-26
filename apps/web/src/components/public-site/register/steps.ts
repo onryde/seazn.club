@@ -26,11 +26,16 @@ export function buildStepOrder(openDivisionCount: number): StepId[] {
  * "more steps coming soon" end-cap there rather than pretending steps 3-5
  * exist. A future session that appends real steps to the order list makes
  * that index a real step with NO change here.
+ *
+ * Generic over the step list's element type ON PURPOSE: this is pure
+ * index/length arithmetic that never inspects a step's identity, so it
+ * types (and tests — see steps.test.ts's "hypothetical" longer list) over
+ * any step-list shape, not just today's 2-element `StepId[]`.
  */
-export function nextStepIndex(current: number, order: readonly StepId[]): number {
+export function nextStepIndex(current: number, order: readonly unknown[]): number {
   return Math.min(current + 1, order.length);
 }
 
-export function prevStepIndex(current: number, order: readonly StepId[]): number {
+export function prevStepIndex(current: number, order: readonly unknown[]): number {
   return Math.max(current - 1, 0);
 }

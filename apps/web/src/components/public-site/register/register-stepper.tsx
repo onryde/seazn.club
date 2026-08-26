@@ -113,7 +113,11 @@ export function RegisterStepper({
     setCart((prev) => cartReducer(prev, action));
   }
 
-  const requirements = whoFieldRequirements(openDivisions, imPlaying);
+  // whoFieldRequirements filters to open divisions ITSELF (validation.ts) —
+  // passed the full list here, matching its tested contract, rather than
+  // pre-filtering and relying on a second filter pass being a harmless
+  // no-op.
+  const requirements = whoFieldRequirements(info.divisions, imPlaying);
   const contactValidation = validateContact(contact, requirements);
   const entriesValidation = validateEntries(cart);
 

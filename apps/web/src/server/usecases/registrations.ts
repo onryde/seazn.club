@@ -1318,7 +1318,14 @@ export interface PublicDivisionInfo {
   name: string;
   slug: string;
   sport_key: string;
-  entrant_kind: string;
+  // Needlessly widened to `string` before RS006; the row this is built from
+  // (RegistrationSettingsRow, via the `rs.*` select above) already carries
+  // the narrow union, and the wire contract (PublicRegistrationDivision,
+  // schemas.ts) already declares it as the EntrantKind enum — tightened
+  // here too so a client-side exhaustive switch (RS006's division-card.tsx)
+  // doesn't need a defensive `string` fallback for a value that can only
+  // ever be one of these three.
+  entrant_kind: "team" | "individual" | "pair";
   fee_cents: number;
   currency: string;
   /** How the entry fee is collected (spec §3). */
