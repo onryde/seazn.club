@@ -1398,6 +1398,65 @@ and codes only: payloads carry person ids and consented names."
 
 ---
 
+## Task L: Drive both deciders by hand, at the end (owner instruction, 2026-08-26)
+
+Everything before this proves the code behaves. This proves the PRODUCT works. They are not the
+same claim, and this programme has twice shipped a surface that passed its tests and did not work
+— R3's two-step goal dock shipped INERT past five red-without-it unit tests AND the gallery.
+
+**Captures are not this task.** A capture renders a state the harness seeded through the API. This
+task requires a person tapping the pad and the ledger agreeing with what they tapped.
+
+**Files:** none. This is a walkthrough, and its output is evidence.
+
+- [ ] **Step 1: Fresh env, current bundle**
+
+```bash
+S=~/.claude/skills/seazn-local-env/scripts/seazn-env.sh
+$S rebuild --label r35            # the bundle is stale the moment a skin changes
+eval "$($S env --label r35)"
+```
+A stale standalone bundle answers every health check while serving the old code. Confirm the build is newer than the last skin edit before believing anything below.
+
+- [ ] **Step 2: Seed a knockout that actually reaches both deciders**
+
+One cricket T20 with `superOver: true`, tied. One football fixture with `shootout: true` and
+`extraTime: { enabled: false, halfMinutes: 15 }`, level at FT. Mint an owner login link by SQL into
+`login_links` and open it on **`localhost`** — never `127.0.0.1`, which 401s on the secure cookie.
+
+- [ ] **Step 3: SCORE THE SUPER OVER THROUGH THE PAD**
+
+Not through the API. Tap the tiles: a boundary, a single, a wicket, a wide. After each tap confirm
+three things move together — the scorebug, the over dots, and the activity row. Then confirm the
+audit table at the foot of the page shows `cricket.superover.ball`, not `cricket.ball`.
+
+Close the first super-over innings and confirm the target chip appears for the reply reading
+`first + 1`. Complete the second and confirm the match decides.
+
+- [ ] **Step 4: SCORE THE SHOOT-OUT THROUGH THE PAD**
+
+Tap the kick tiles. Confirm: the scorebug's second figure moves (`1 (2)`), the next-kicker cue
+flips sides, the wrong-turn tile is disabled with a message that says why, and each activity row
+names the side that kicked. Take it to an early decision inside the regulation five.
+
+- [ ] **Step 5: Confirm the decided surface**
+
+Both fixtures. The pad is GONE by now (`fixture-console.tsx` unmounts it once `decided`), so this
+is Task G's sentence being read on the surface that survives: who won, and how.
+
+- [ ] **Step 6: Screenshot every step at 1280 / 768 / 320**
+
+No horizontal page scroll at any width, 44px targets. Publish as the AFTER half of the sign-off
+sheet, paired against Task A's before-captures.
+
+- [ ] **Step 7: Offer the live walkthrough**
+
+`_RULES.md` §1 requires the offer, not just the artifact: server up, login link minted, so the
+owner can tap through the decider themselves. A sheet is evidence; the product in their hands is
+the gate.
+
+---
+
 ## Wave gate
 
 Run every item; paste the numbers rather than describing them.
