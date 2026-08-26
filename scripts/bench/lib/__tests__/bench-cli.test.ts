@@ -16,8 +16,15 @@ describe("parseCliArgs", () => {
   });
 
   it("--suite is repeatable and collects into an array, in order", () => {
-    const config = parseCliArgs(["--suite", "_tiny", "--suite", "cricket"]);
-    expect(config.suites).toEqual(["_tiny", "cricket"]);
+    const config = parseCliArgs(["--suite", "_tiny", "--suite", "_tiny"]);
+    expect(config.suites).toEqual(["_tiny", "_tiny"]);
+  });
+
+  it("rejects an unknown --suite value before anything runs", () => {
+    // Validated at parse time, not inside the run loop — a typo must never
+    // lose an earlier, already-completed suite's results (bench.ts's main()
+    // writes exactly one report, after the whole loop finishes).
+    expect(() => parseCliArgs(["--suite", "_tiny", "--suite", "cricket"])).toThrow(/unknown --suite value\(s\): cricket/);
   });
 
   it("accepts each valid --engine value", () => {

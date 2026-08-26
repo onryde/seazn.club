@@ -1,7 +1,7 @@
 {
-  "runId": "1d94b56d69bd167947907ca1daf3a0c27cfdf930",
-  "startedAt": "2026-08-26T14:25:14.764Z",
-  "finishedAt": "2026-08-26T14:25:16.849Z",
+  "runId": "2e631bafff33e2768d9e1f0d3bbc791b53ed8f82",
+  "startedAt": "2026-08-26T14:45:08.657Z",
+  "finishedAt": "2026-08-26T14:45:09.829Z",
   "engine": "optimized",
   "base": "http://localhost:3373",
   "preflight": {
@@ -17,12 +17,13 @@
       "suite": "_tiny",
       "gate": "green",
       "timings": {
-        "seedMs": 1673,
-        "scheduleMs": 264
+        "seedMs": 888,
+        "scheduleMs": 147
       },
+      "keep": false,
       "solver": {
         "engine": "optimized",
-        "requestedEngine": "greedy",
+        "requestedEngine": "optimized",
         "status": "ok"
       },
       "conflictCount": 0

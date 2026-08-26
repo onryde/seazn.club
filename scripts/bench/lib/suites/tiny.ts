@@ -16,6 +16,11 @@ import type { SuiteReport } from "../report.ts";
 
 export interface TinySuiteInput {
   base: string;
+  /** The CLI's `--engine` value. Recorded in the report as `requestedEngine`
+   *  so a reader can see what was ASKED for — it is not, and cannot be,
+   *  honoured (see the comment at the `schedule/auto` call below: the real
+   *  API has no per-request engine field at all). */
+  engine: "optimized" | "greedy" | "both";
   /**
    * Recorded for the report; NOT enforced by this suite. `_tiny`'s own
    * footprint (one org/competition/division/2 entrants) is left in place
@@ -45,7 +50,7 @@ interface ValidateOut {
 }
 
 export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> {
-  const { base, log } = input;
+  const { base, engine, keep, log } = input;
   const errors: string[] = [];
   const runTag = randomUUID().slice(0, 8);
   const timings: { seedMs?: number; scheduleMs?: number } = {};
@@ -122,19 +127,18 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
       },
     });
 
-    // Greedy, hardcoded intent — _tiny is a proof of the runner, not a
-    // solver comparison (B01 brief), so it never threads the CLI's
-    // --engine flag into this call. There is, in fact, no request-level
-    // "engine" field on AutoScheduleRequest (schemas.ts:1496-1542) to force
-    // greedy WITH even if it wanted to: engine selection is entirely
+    // There is no request-level "engine" field on AutoScheduleRequest
+    // (schemas.ts:1496-1542) — engine selection is entirely
     // server-environment-determined by whether the placement service
     // answers (`_RULES.md` §2's "run gates both with and without a live
     // placement container" is exactly this fact, from the operator's
-    // side). So "hardcode greedy" is honoured the only way the HTTP
-    // contract allows — this suite asks nothing about engine — and the
-    // ACTUAL engine the response reports is recorded honestly below rather
-    // than overwritten to claim "greedy" when the environment gave it
-    // "optimized". Flagged in the PR body as a brief/API-shape finding.
+    // side). So `--engine` cannot be honoured by this call regardless of
+    // what the operator asked for; `requestedEngine` in the report below
+    // still records the CLI's actual value (`input.engine`), and the
+    // ACTUAL engine the response reports is recorded honestly alongside it
+    // rather than either one overwriting the other. Flagged in the PR body
+    // as a brief/API-shape finding.
+    log.info({ requestedEngine: engine }, "tiny: --engine is not honoured — AutoScheduleRequest has no per-request engine field");
     const auto = await request<AutoScheduleOut>(base, s, `/api/v1/stages/${stage.id}/schedule/auto`, {
       method: "POST",
       body: {},
@@ -170,7 +174,8 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     suite: "_tiny",
     gate,
     timings,
-    solver: { engine: solver?.engine, requestedEngine: "greedy", status: solver?.status },
+    keep,
+    solver: { engine: solver?.engine, requestedEngine: engine, status: solver?.status },
     conflictCount,
     errors: errors.length > 0 ? errors : undefined,
   };

@@ -28,6 +28,7 @@ const DEV_DB_PORT = 5432;
 
 export type RefusalReason =
   | "base_port_forbidden"
+  | "base_host_forbidden"
   | "own_db_dev_db_port"
   | "own_db_data_directory_mismatch"
   | "own_db_connection_failed"
@@ -120,6 +121,19 @@ export async function runPreflight(base: string, probes: PreflightProbes): Promi
         `--base resolves to port ${port}, which this bench refuses outright ` +
         "(3000 = the owner's local dev server, 3100 = the e2e target). Point --base " +
         "at a bench-owned server on another port.",
+    });
+  }
+
+  // Secure-cookie rule: the app's auth cookie is Secure-flagged, so it is
+  // silently dropped over plain http to a non-"localhost" host — a
+  // `127.0.0.1` base signs in "successfully" and then 401s on every
+  // subsequent call, which reads as an app bug rather than an env mistake.
+  if (new URL(base).hostname === "127.0.0.1") {
+    refusals.push({
+      reason: "base_host_forbidden",
+      detail:
+        `--base resolves to host "127.0.0.1" — the Secure-cookie rule drops the ` +
+        'auth cookie there. Use "localhost" instead (same server, same port).',
     });
   }
 
@@ -237,24 +251,29 @@ export function createRealPreflightProbes(): RealProbesHandle {
       // the real exit code the way `cmd | tail` or `rtk` do (_RULES.md §3 /
       // AGENTS.md verification traps); Node hands back lsof's own
       // exit/error directly, so there is no `EXIT=$?` capture to add here.
+      // `-sTCP:LISTEN`, not a bare `-i` — without it lsof also matches a
+      // CLIENT socket through this port (some unrelated process's outbound
+      // connection), which can false-alarm on a healthy server or, worse,
+      // false-clear a foreign process squatting the port (documented repo
+      // trap, `reference_server_ownership_check_needs_listen_filter`).
       try {
-        const { stdout } = await execFileAsync("lsof", ["-t", `-i:${port}`]);
+        const { stdout } = await execFileAsync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"]);
         const pid = Number(stdout.trim().split("\n")[0]);
         if (!Number.isFinite(pid) || pid <= 0) {
           return {
             ok: false,
             reason: "own_port_unbound",
-            detail: `lsof -t -i:${port} returned no usable PID ("${stdout.trim()}").`,
+            detail: `lsof -nP -iTCP:${port} -sTCP:LISTEN -t returned no usable PID ("${stdout.trim()}").`,
           };
         }
-        return { ok: true, detail: `port ${port} is bound to PID ${pid}.`, pid };
+        return { ok: true, detail: `port ${port} is bound (LISTEN) to PID ${pid}.`, pid };
       } catch (err) {
         // lsof exits non-zero (and prints nothing) when nothing matches —
         // the expected shape of "no server on this port", not a bug.
         return {
           ok: false,
           reason: "own_port_unbound",
-          detail: `lsof -t -i:${port} found no process bound to that port (${err instanceof Error ? err.message : String(err)}).`,
+          detail: `lsof -nP -iTCP:${port} -sTCP:LISTEN -t found no listening process on that port (${err instanceof Error ? err.message : String(err)}).`,
         };
       }
     },
@@ -296,8 +315,8 @@ export function createRealPreflightProbes(): RealProbesHandle {
 
     async checkSportsCatalogSynced(): Promise<SportsCatalogResult> {
       // Reuses the "funnel badminton" witness (apps/web/src/lib/__tests__/
-      // funnel.test.ts:94, `expect(div.sport_key).toBe("badminton")` — the
-      // B01 brief cited :88-89, which is now the query building `div`, not
+      // funnel.test.ts:91, `expect(div.sport_key).toBe("badminton")` — the
+      // B01 brief cited :88-89, which is the query building `div`, not
       // the assertion itself; re-verified 2026-08-26 per _RULES.md §1) by
       // checking
       // the same underlying fact `sync:sports` establishes — badminton and

@@ -78,7 +78,19 @@ export async function signIn(
   email: string,
 ): Promise<{ has_org: boolean; org_id: string; redirect: string }> {
   const req = (await call(base, s, "/api/auth/magic-link", "POST", { email })) as { login_url?: string };
-  const token = new URL(req.login_url ?? "").searchParams.get("token");
+  let token: string | null;
+  try {
+    token = new URL(req.login_url ?? "").searchParams.get("token");
+  } catch (err) {
+    // A raw `new URL()` throw here would surface as a bare "Invalid URL"
+    // TypeError with no indication of WHAT was invalid — unlike every other
+    // failure in this file, which at least names its endpoint. Re-throw with
+    // the actual (unparseable) value attached so a broken/renamed login_url
+    // shape is diagnosable from the error message alone.
+    throw new Error(
+      `/api/auth/magic-link: response's login_url ("${req.login_url}") is not a parseable URL (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
   return (await call(base, s, "/api/auth/magic-link/consume", "POST", { token })) as {
     has_org: boolean;
     org_id: string;

@@ -44,6 +44,12 @@ export const SuiteReport = z.object({
   suite: z.string(),
   gate: GateStatus,
   timings: PhaseTimings,
+  /** Whether `--keep`'s data was left in place (true) or `--wipe` was
+   *  requested (false) — a run's own intent, so a reader of a committed
+   *  report can tell what it left behind without re-reading the CLI
+   *  invocation. B01's `_tiny` records this but does not itself act on
+   *  `--wipe` (real teardown is B03's scope, per its own doc comment). */
+  keep: z.boolean().optional(),
   solver: SolverResult.optional(),
   conflictCount: z.number().optional(),
   believabilityMetrics: z.record(z.string(), z.number()).optional(),
@@ -164,6 +170,7 @@ function renderSuitesSection(report: BenchReport): string {
       t.simMs !== undefined ? `sim ${t.simMs}ms` : undefined,
     ].filter((part): part is string => part !== undefined);
     if (timingParts.length > 0) lines.push(`- Timings: ${timingParts.join(", ")}`);
+    if (suite.keep !== undefined) lines.push(`- Data left in place: ${suite.keep ? "yes (--keep)" : "no (--wipe requested)"}`);
     if (suite.solver) {
       lines.push(
         `- Solver: requested=${suite.solver.requestedEngine ?? "n/a"}, actual=${suite.solver.engine ?? "n/a"}, status=${suite.solver.status ?? "n/a"}`,

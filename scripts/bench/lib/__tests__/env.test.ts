@@ -117,6 +117,12 @@ describe("runPreflight — regression: three known real traps", () => {
     expect(result.refusals.some((r) => r.reason === "base_port_forbidden")).toBe(true);
   });
 
+  it("refuses a 127.0.0.1 base outright (Secure-cookie rule drops the auth cookie there)", async () => {
+    const result = await runPreflight("http://127.0.0.1:54301", fakeProbes());
+    expect(result.ok).toBe(false);
+    expect(result.refusals.some((r) => r.reason === "base_host_forbidden")).toBe(true);
+  });
+
   it("refuses a foreign data_directory (own-DB proof mismatched against BENCH_EXPECTED_DATA_DIR)", async () => {
     const mismatched: OwnDatabaseResult = {
       ok: false,

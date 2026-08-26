@@ -22,6 +22,8 @@ const execFileAsync = promisify(execFile);
 const ENGINES = ["optimized", "greedy", "both"] as const;
 type Engine = (typeof ENGINES)[number];
 
+const KNOWN_SUITES = ["_tiny"] as const;
+
 export interface BenchConfig {
   suites: string[];
   engine: Engine;
@@ -66,8 +68,19 @@ export function parseCliArgs(argv: string[]): BenchConfig {
     throw new Error("--keep and --wipe are mutually exclusive");
   }
 
+  const suites = values.suite as string[];
+  const unknown = suites.filter((s) => !(KNOWN_SUITES as readonly string[]).includes(s));
+  if (unknown.length > 0) {
+    // Validated up front, not inside the run loop: a typo in one of several
+    // --suite flags must never lose already-completed earlier suites'
+    // results because no report gets written until the whole loop finishes
+    // (bench.ts's main()) — failing here, before pre-flight or any suite
+    // runs, means nothing was lost because nothing ran yet.
+    throw new Error(`unknown --suite value(s): ${unknown.join(", ")} — known suites: ${KNOWN_SUITES.join(", ")}`);
+  }
+
   return {
-    suites: values.suite as string[],
+    suites,
     engine: engine as Engine,
     keep: !values.wipe,
     reportDir: values["report-dir"] as string,
@@ -83,7 +96,7 @@ async function gitSha(): Promise<string> {
 
 async function runSuite(key: string, config: BenchConfig): Promise<SuiteReport> {
   if (key === "_tiny") {
-    return runTinySuite({ base: config.base, keep: config.keep, log: suiteLogger("_tiny") });
+    return runTinySuite({ base: config.base, engine: config.engine, keep: config.keep, log: suiteLogger("_tiny") });
   }
   throw new Error(`unknown suite "${key}" — only "_tiny" exists until B02+ lands real packs`);
 }
