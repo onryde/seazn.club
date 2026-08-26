@@ -623,6 +623,72 @@ describe("kickerCue — the board says whose kick is next (R3.5/F)", () => {
       buildScorebug(withTwo, t).halves.map((h) => h.sub),
     );
   });
+
+  // F15/F16 (Task D) — `shootoutDecision`'s exact early-decision and sudden-
+  // death arithmetic is the ENGINE's own tested territory (football.test.ts's
+  // "enforces kick alternation and early decision arithmetic"); this proves
+  // only what the PAD does once a real fold reaches either outcome — the
+  // SAME "decided means unmounted" rule every sport follows
+  // (`reference_v3_pad_unmounts_on_decided_fixture` — `resolvePhase` maps
+  // `state.phase === "done"` to `PadPhase` "post", which is what makes
+  // fixture-console.tsx drop the whole scoring section).
+  it("F15: an early decision inside the regulation five reaches 'done', and the pad's own phase() maps it to post", () => {
+    const cfgObj = footballCfg({ shootout: true, extraTime: { enabled: false, halfMinutes: 15 } });
+    // H scores three straight, A misses three straight — away's remaining
+    // entitlement (2) can never close a 3-0 gap, so this decides at the
+    // sixth kick, inside the five-per-side regulation allotment.
+    const early = foldFootball(cfgObj, [
+      ["core.start"],
+      ["football.goal", { by: "H" }],
+      ["football.goal", { by: "A" }],
+      ["football.period", { phase: "HT" }],
+      ["football.period", { phase: "FT" }],
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: false }],
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: false }],
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: false }],
+    ]);
+    expect(early.phase, "this sequence must actually decide, or the case proves nothing").toBe("done");
+    expect(early.outcome).toMatchObject({ method: "shootout" });
+    expect(resolvePhase({ state: early })).toBe("post");
+  });
+
+  it("F16: tied after all five regulation pairs stays undecided (sudden death); the first pair with a lead decides it", () => {
+    const cfgObj = footballCfg({ shootout: true, extraTime: { enabled: false, halfMinutes: 15 } });
+    const throughRegulation: [type: string, payload?: unknown][] = [
+      ["core.start"],
+      ["football.goal", { by: "H" }],
+      ["football.goal", { by: "A" }],
+      ["football.period", { phase: "HT" }],
+      ["football.period", { phase: "FT" }],
+      // Both sides score all five regulation kicks — 5-5, still tied.
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: true }],
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: true }],
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: true }],
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: true }],
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: true }],
+    ];
+    const tied = foldFootball(cfgObj, throughRegulation);
+    expect(tied.phase, "5-5 after all five regulation pairs must still be undecided").toBe("SHOOTOUT");
+    expect(resolvePhase({ state: tied })).toBe("live");
+
+    // Sudden death: Home scores the sixth pair's kick, Away misses.
+    const decided = foldFootball(cfgObj, [
+      ...throughRegulation,
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: false }],
+    ]);
+    expect(decided.phase).toBe("done");
+    expect(decided.outcome).toMatchObject({ method: "shootout" });
+    expect(resolvePhase({ state: decided })).toBe("post");
+  });
 });
 
 // ---------------------------------------------------------------------------
