@@ -1099,6 +1099,14 @@ export async function seedRosteredFixture(
     /** Leave false to stop after `start` — a spec that wants to drive the pad
      *  through `pre → live` itself must NOT have `core.start` already folded. */
     emitCoreStart?: boolean;
+    /** Seed the entrants and their MEMBERS, but declare no fixture LINEUP.
+     *  This is the pad's "rosterless" case and it is a real, common one — a
+     *  club scorer starts a match off two entrant names and never opens the
+     *  lineup editor. `PadHostView.squads` is `initSquads(lineups)`
+     *  (`v3/types.ts`), so no lineup means no on-field players, which is the
+     *  precondition of tennis's own `rosterlessServerSide` fallback. Nothing
+     *  else in the seeded fixture changes. */
+    skipLineups?: boolean;
   },
 ): Promise<RosteredFixture> {
   const kind = spec.entrantKind ?? "team";
@@ -1173,10 +1181,12 @@ export async function seedRosteredFixture(
   const fixtureId = fixtureIds[0]!;
   await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
 
-  for (const [entrantId, roster] of [
-    [homeEntrantId, spec.home],
-    [awayEntrantId, spec.away],
-  ] as const) {
+  for (const [entrantId, roster] of spec.skipLineups
+    ? []
+    : ([
+        [homeEntrantId, spec.home],
+        [awayEntrantId, spec.away],
+      ] as const)) {
     const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/lineups/${entrantId}`, "PUT", {
       slots: roster.map((s, i) => ({
         person_id: personIds[s.fullName],

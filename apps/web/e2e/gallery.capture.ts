@@ -118,6 +118,20 @@ const EXTRA_STATES = [
   // OTHER partner for the rest of the match. That is a wrong human name on
   // the scorer's screen, so it is a screen the owner has to be able to see.
   "14-serveafterbreaker",
+  // R4 final review (2026-08-26) — two more states no existing capture can
+  // reach, both INSIDE a tie-break, which no other tennis screen enters.
+  //   15 — the detail dock on a fixture with NO declared lineup, after an
+  //        ODD tie-break point. `state.serving` has already handed over
+  //        mid-breaker at that instant, so the pad used to offer the scorer
+  //        "Double fault" where "Ace" is correct. A wrong serving statistic,
+  //        recorded against a person, with nothing on screen to say so — the
+  //        owner has to see which chip is offered.
+  //   16 — the More sheet during a tie-break. The Award-game TILE was
+  //        already correctly withheld there, but withholding a tile is what
+  //        pushed the action into the generic More form, where tapping it
+  //        threw. The screen that proves it is gone is the sheet itself.
+  "15-breakerdock",
+  "16-breakermore",
 ] as const;
 type ExtraGalleryState = (typeof EXTRA_STATES)[number];
 
@@ -911,7 +925,102 @@ const SPORTS: GallerySport[] = [
         measurements,
         visibleProbe(sheet, "gallery(tennis): 13-sanctionsheet must still show the code-violation sheet"),
       );
-      return ["13-sanctionsheet"];
+      // 15-breakerdock — the tie-break's per-point serve handoff, on a
+      // fixture with NO declared lineup. Both halves of that sentence are
+      // load-bearing: the side-only ace/double-fault fallback runs ONLY when
+      // there is no on-field roster to name a server person from, and
+      // `state.serving` rotates mid-"game" ONLY inside a breaker. No other
+      // tennis capture is in either state, let alone both.
+      const tbTag = `${tag}tb`;
+      const tb = await seedRosteredFixture(page.request, {
+        label: `Gallery Tennis Breaker Dock ${tbTag}`,
+        sportKey: "tennis",
+        variantKey: "tour",
+        entrantKind: "individual",
+        home: [{ fullName: `Gallery Tennis TB Home ${tbTag}` }],
+        away: [{ fullName: `Gallery Tennis TB Away ${tbTag}` }],
+        emitCoreStart: true,
+        skipLineups: true,
+      });
+      const tbRally = async (entrantId: string, points: number): Promise<void> => {
+        for (let i = 0; i < points; i += 1) {
+          await postEvent(page.request, tb.fixtureId, "tennis.point", { by: entrantId });
+        }
+      };
+      // 6 games each, ALTERNATING, to reach 6-6 in ONE set — 24 straight
+      // points to one side wins the whole set 6-0 instead, which is how the
+      // first draft of this capture ended up photographing set 3 at 0-0.
+      // At 6-6 the breaker opens; its first server is the set's own opener
+      // (home, after an even 12 games), so home serves point 1 and away
+      // serves points 2 AND 3. Two points are posted here, which makes the
+      // point the CAPTURE itself taps the breaker's THIRD — the odd point,
+      // the one at which `applyTbPoint` has already handed serve back to
+      // home by the time this dock renders.
+      for (let g = 0; g < 6; g += 1) {
+        await tbRally(tb.homeEntrantId, 4);
+        await tbRally(tb.awayEntrantId, 4);
+      }
+      await tbRally(tb.homeEntrantId, 1);
+      await tbRally(tb.awayEntrantId, 1);
+      await page.goto(await fixturePath(page.request, tb.fixtureId));
+      // Away served point 3 and away wins it -> ACE is the only legal offer.
+      await tennisHalf(page, "away").click();
+      const tbDock = pad(page).locator('[data-role="v3-dock"]');
+      await expect(tbDock, "gallery(tennis): a tie-break point tap must open the detail dock").toBeVisible({
+        timeout: 10_000,
+      });
+      await expect(
+        tbDock.getByRole("button", { name: "Ace", exact: true }),
+        "gallery(tennis): away served AND won this tie-break point, so Ace must be offered",
+      ).toBeVisible({ timeout: 4_000 }); // under HOLD_MS, so a miss is diagnosed with the dock still up
+      await expect(
+        tbDock.getByRole("button", { name: "Double fault", exact: true }),
+        "gallery(tennis): offering Double fault here is the inverted-serve defect itself",
+      ).toHaveCount(0);
+      await captureState(page, dir, "15-breakerdock", "tennis", measurements, async () => {
+        await expect(
+          tbDock,
+          "gallery(tennis): the dock closed before this width was captured",
+        ).toBeVisible({ timeout: 5_000 });
+        await expect(
+          tbDock.getByRole("button", { name: "Ace", exact: true }),
+          "gallery(tennis): 15-breakerdock must still show Ace, not Double fault",
+        ).toBeVisible();
+      });
+
+      // 16-breakermore — same fixture, still inside the breaker. The
+      // Award-game tile is withheld here (correctly), and this sheet is
+      // where that withholding used to REAPPEAR as a generic form that
+      // threw `GAME_AWARD_DURING_TIEBREAK` on tap.
+      await pad(page).locator('[data-tile-id="more"]').click();
+      const tbSheet = pad(page).locator('[data-role="v3-sheet"]');
+      await expect(tbSheet, "gallery(tennis): the More tile must open the action sheet").toBeVisible({
+        timeout: 10_000,
+      });
+      // Positive anchor FIRST. During a breaker every remaining tennis action
+      // already has its own tile, so the correct More sheet lists nothing —
+      // and a sheet that failed to render for some unrelated reason would
+      // satisfy the negative below just as well. Pinning the empty-state copy
+      // is what separates "rendered, and correctly has nothing to offer" from
+      // "did not render".
+      await expect(
+        tbSheet,
+        "gallery(tennis): the More sheet must have rendered its own empty state, not merely be absent",
+      ).toContainText("Nothing else to record here yet");
+      await expect(
+        tbSheet,
+        "gallery(tennis): a game cannot be awarded during a breaker, so no form for it may appear here",
+      ).not.toContainText(/Award game|Game award/);
+      await captureState(
+        page,
+        dir,
+        "16-breakermore",
+        "tennis",
+        measurements,
+        visibleProbe(tbSheet, "gallery(tennis): 16-breakermore must still show the More sheet"),
+      );
+
+      return ["13-sanctionsheet", "15-breakerdock", "16-breakermore"];
     },
   },
   {
