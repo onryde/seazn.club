@@ -323,6 +323,77 @@ describe("RS006 — a registrant may self-link more than one cart entry", () => 
     // The old cart-wide restriction copy no longer exists anywhere on the page.
     expect(pageText()).not.toContain("Only one entry can be linked to your account.");
   });
+
+  // Found by manual browser verification, not by any test: a restored
+  // sessionStorage snapshot with TWO self-linked entries lost BOTH links on
+  // mount. Root cause is a hydration race in register-stepper.tsx's
+  // autoLinkObviousSelf/clearSelfLinkWhenNotPlaying effect (deps
+  // `[imPlaying, cart.entries.length]`): on the FIRST render (before the
+  // hydration effect's setImPlaying/setCart calls are applied) this effect
+  // already fires once, with imPlaying's STALE pre-hydration value (false).
+  // Its `setCart(prev => ...)` functional updater still chains onto the
+  // hydration effect's newly-queued cart (React applies same-tick updates to
+  // a state variable in call order), so `clearSelfLinkWhenNotPlaying` sees
+  // "imPlaying is false" and a cart with self-linked entries, and clears
+  // every one of them. A SECOND invocation follows once the real (post-
+  // hydration) imPlaying/cart values commit — for exactly ONE cart entry,
+  // `autoLinkObviousSelf` silently re-links it (its own "exactly one,
+  // unambiguous" rule), which is why this was never visible under the OLD
+  // cart-wide single-self-link model: there could never be more than one
+  // entry to lose. With 2+ self-linked entries the second invocation's
+  // auto-link never fires (ambiguous), so the damage from the first
+  // invocation stands — RS006's multi-self-link feature is what finally
+  // makes this pre-existing race observable.
+  it("a restored snapshot with TWO self-linked entries keeps BOTH linked after mount — no click needed to reproduce the hydration race", () => {
+    const key = `seazn_register_${ORG_SLUG}_${COMPETITION_SLUG}`;
+    fakeSessionStorage.setItem(
+      key,
+      JSON.stringify({
+        version: REGISTER_STATE_VERSION,
+        contact: { name: "Alex Test", email: "alex@example.com", dob: "1990-01-01", gender: null },
+        imPlaying: true,
+        cart: {
+          entries: [
+            {
+              id: "e1",
+              division_id: "div-open",
+              entrant_kind: "individual",
+              team_name: null,
+              partner_name: null,
+              free_agent: false,
+              players: [{ full_name: "", dob: null, gender: null, email: "", squad_number: "", is_captain: false }],
+              answers: {},
+              registering_self: true,
+              self_player_index: null,
+            },
+            {
+              id: "e2",
+              division_id: "div-open-2",
+              entrant_kind: "individual",
+              team_name: null,
+              partner_name: null,
+              free_agent: false,
+              players: [{ full_name: "", dob: null, gender: null, email: "", squad_number: "", is_captain: false }],
+              answers: {},
+              registering_self: true,
+              self_player_index: null,
+            },
+          ],
+        },
+        stepIndex: 1,
+      }),
+    );
+
+    const { entryCartCart, selfCheckboxes } = mount([DIV_OPEN, DIV_OPEN_2]);
+
+    expect(
+      entryCartCart().entries.map((e) => e.registering_self),
+      "both entries must still be self-linked immediately after mount, with no interaction at all",
+    ).toEqual([true, true]);
+    const boxes = selfCheckboxes();
+    expect(boxes, "two entries, two checkboxes").toHaveLength(2);
+    expect(boxes.every((b) => propsOf(b).checked === true), "both checkboxes render checked").toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

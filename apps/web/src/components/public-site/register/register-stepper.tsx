@@ -162,10 +162,30 @@ export function RegisterStepper({
   // self-link, auto- or explicitly-made, or a stale registering_self:true
   // with no dob collected reaches submit. Composing the two is safe in
   // either order — each is a no-op exactly when the other one applies.
+  //
+  // `if (!hydrated) return` guards a hydration race (RS006 regression, found
+  // by manual browser verification against a restored multi-self-link
+  // snapshot): on the FIRST render — before the hydration effect above has
+  // applied its restored imPlaying/cart — this effect already fires once
+  // with imPlaying's STALE pre-hydration value (false). Its functional
+  // `setCart` updater still chains onto the hydration effect's newly-queued
+  // cart value (React applies same-tick updates to one state variable in
+  // call order), so clearSelfLinkWhenNotPlaying sees "imPlaying is false"
+  // plus a cart that already has self-linked entries, and clears every one
+  // of them — before the restored imPlaying:true ever commits. This was
+  // invisible under the OLD cart-wide single-self-link model: with exactly
+  // ONE entry, the SECOND invocation (once the real post-hydration values
+  // commit) silently re-links it via autoLinkObviousSelf's own "exactly
+  // one, unambiguous" rule, masking the bug. With 2+ self-linked entries
+  // that second invocation's auto-link never fires (ambiguous), so the
+  // damage from the stale first invocation stands. Matching the save
+  // effect's own guard above is the fix: this effect has nothing correct to
+  // do before hydration has applied the real values.
   useEffect(() => {
+    if (!hydrated) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setCart((prev) => clearSelfLinkWhenNotPlaying(autoLinkObviousSelf(prev, imPlaying), imPlaying));
-  }, [imPlaying, cart.entries.length]);
+  }, [hydrated, imPlaying, cart.entries.length]);
 
   function dispatchCart(action: CartAction) {
     setCart((prev) => cartReducer(prev, action));
