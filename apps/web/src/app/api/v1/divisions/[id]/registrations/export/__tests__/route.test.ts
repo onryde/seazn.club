@@ -72,11 +72,19 @@ describe.skipIf(!HAS_DB)("GET /divisions/:id/registrations/export", () => {
     // Real CSV, not `{"ok":true,...}` — the route returns NextResponse(csv, …)
     // directly on success, bypassing the v1() JSON envelope entirely.
     expect(body.startsWith("{")).toBe(false);
-    expect(body.split("\n")[0]).toBe(
-      "registration_id,ref_code,division,status,kind,display_name,contact_name,contact_email," +
+    // `id` leads, and `registration_id` follows it. This route's header is a
+    // PUBLISHED contract — it is key-reachable at scope `read` and openapi.ts
+    // declares no response schema, so no drift gate can see a change here. The
+    // per-player rewrite renamed `id` to `registration_id`; `id` is restored
+    // alongside it so an integration keyed on the original column keeps
+    // working, and this assertion is what pins that promise.
+    const header = body.split("\n")[0]!;
+    expect(header).toBe(
+      "id,registration_id,ref_code,division,status,kind,display_name,contact_name,contact_email," +
         "amount_cents,currency,refunded_cents,payment_method,waitlist_position,created_at," +
         "player_name,player_dob,player_gender,player_consent_status,squad_number,is_captain",
     );
+    expect(header.startsWith("id,"), "the pre-rewrite column must stay first").toBe(true);
     expect(body).toContain("Csv Export Case");
     expect(body).not.toContain("access_token_hash");
   });
