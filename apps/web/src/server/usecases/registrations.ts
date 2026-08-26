@@ -2941,6 +2941,23 @@ export interface RegistrationListRow extends Omit<RegistrationWithGroupRow, "acc
    *  behaves exactly as auto (registration-approval.ts's own
    *  `loadApprovalSettings` reads it the same way). */
   approval: RegistrationSettingsRow["approval"];
+  /** The DIVISION's LIVE entry fee, not this entry's frozen `amount_cents`.
+   *
+   *  Both server gates read the live value — `approveRegistration` refuses
+   *  while a fee is outstanding, `markRegistrationPaidOffline` refuses when
+   *  the division has no fee — while the row only carried the amount quoted
+   *  at SUBMIT. `putRegistrationSettings` never re-quotes existing entries
+   *  (it contains no `update registrations` at all), so the two diverge the
+   *  moment an organiser edits a fee, and the UI then offers whichever
+   *  control the server refuses: raise 0 -> 20.00 and Approve renders but
+   *  422s "mark it paid first" while Mark paid is hidden; drop 20.00 -> 0 and
+   *  the mirror image. Either way the organiser is stuck with no working
+   *  control.
+   *
+   *  Carried on the row so the client gates on exactly what the server gates
+   *  on, correct on FIRST render. Costs nothing: `registration_settings` is
+   *  already LEFT JOINed for `entrant_kind`/`approval`. */
+  division_fee_cents: number;
 }
 
 /** Raw wire shape — `RegistrationListRow` plus the hash the query still
@@ -3045,6 +3062,7 @@ export async function listRegistrations(
         d.slug as division_slug,
         coalesce(rs.entrant_kind, 'individual') as entrant_kind,
         coalesce(rs.approval, 'auto') as approval,
+        coalesce(rs.fee_cents, 0) as division_fee_cents,
         (select count(*)::int from registration_players rp
           where rp.registration_id = r.id) as roster_count,
         ${rosterCapExpr(tx)} as roster_cap,

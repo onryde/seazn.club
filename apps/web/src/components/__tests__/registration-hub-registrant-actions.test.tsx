@@ -91,6 +91,7 @@ const PROPS: ActionProps = {
   status: "pending",
   approval: "manual",
   amountCents: 0,
+  divisionFeeCents: 0,
   paymentIntentId: null,
 };
 
@@ -353,33 +354,33 @@ describe("RegistrationHubRegistrantActions — data hook", () => {
 // says it should, and that its confirm/success/revert plumbing is correct.
 describe("RegistrationHubRegistrantActions — mark paid (RS005 R1 finding 1)", () => {
   it("shows mark paid on a pending, fee-bearing, unpaid entry — and hides approve there, the dead end this wave closes", () => {
-    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, paymentIntentId: null });
+    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: null });
     expect(findAction(island, "mark-paid")).toBeTruthy();
     expect(findAction(island, "approve")).toBeUndefined();
   });
 
   it("hides mark paid once a payment_intent_id already exists", () => {
-    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, paymentIntentId: "pi_123" });
+    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: "pi_123" });
     expect(findAction(island, "mark-paid")).toBeUndefined();
   });
 
   it("hides mark paid on a free entry (amountCents 0)", () => {
-    const island = mount({ status: "pending", approval: "manual", amountCents: 0, paymentIntentId: null });
+    const island = mount({ status: "pending", approval: "manual", amountCents: 0, divisionFeeCents: 0, paymentIntentId: null });
     expect(findAction(island, "mark-paid")).toBeUndefined();
   });
 
   it("hides mark paid on a non-pending status", () => {
-    const island = mount({ status: "paid", approval: "manual", amountCents: 1500, paymentIntentId: null });
+    const island = mount({ status: "paid", approval: "manual", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: null });
     expect(findAction(island, "mark-paid")).toBeUndefined();
   });
 
   it("shows mark paid on an AUTO-approval division too — markRegistrationPaidOffline itself carries no approval-mode check", () => {
-    const island = mount({ status: "pending", approval: "auto", amountCents: 1500, paymentIntentId: null });
+    const island = mount({ status: "pending", approval: "auto", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: null });
     expect(findAction(island, "mark-paid")).toBeTruthy();
   });
 
   it("confirms before marking paid, reusing the pre-existing confirm.markPaidRegistration copy", async () => {
-    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, paymentIntentId: null });
+    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: null });
     await (propsOf(findAction(island, "mark-paid")!).onClick as () => Promise<void>)();
     expect(confirmMock.fn).toHaveBeenCalledTimes(1);
     expect(confirmMock.fn.mock.calls[0]![0]).toMatchObject({
@@ -395,7 +396,7 @@ describe("RegistrationHubRegistrantActions — mark paid (RS005 R1 finding 1)", 
 
   it("sends no request, and changes nothing, when the mark-paid confirm is cancelled", async () => {
     confirmMock.fn.mockImplementationOnce(async () => false);
-    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, paymentIntentId: null });
+    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: null });
     await (propsOf(findAction(island, "mark-paid")!).onClick as () => Promise<void>)();
     expect(net.calls.some((c) => c.url.endsWith("/mark-paid"))).toBe(false);
     expect(findAction(island, "mark-paid")).toBeTruthy();
@@ -404,7 +405,7 @@ describe("RegistrationHubRegistrantActions — mark paid (RS005 R1 finding 1)", 
   it("hides itself the instant mark-paid is confirmed (optimistic flip straight to confirmed — the real, single-step server behaviour), then reverts on a 4xx with the server's own message", async () => {
     const d = deferred<unknown>();
     net.next.set("mark-paid", d.promise);
-    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, paymentIntentId: null });
+    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: null });
 
     const click = (propsOf(findAction(island, "mark-paid")!).onClick as () => Promise<void>)();
     await vi.waitFor(() => expect(findAction(island, "mark-paid")).toBeUndefined());
@@ -422,7 +423,7 @@ describe("RegistrationHubRegistrantActions — mark paid (RS005 R1 finding 1)", 
   });
 
   it("keeps the optimistic flip and refreshes on a successful mark-paid, showing the dedicated 'marked as paid' message", async () => {
-    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, paymentIntentId: null });
+    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: null });
     await (propsOf(findAction(island, "mark-paid")!).onClick as () => Promise<void>)();
     expect(findAction(island, "mark-paid")).toBeUndefined();
     expect(findAction(island, "approve")).toBeUndefined();
@@ -445,7 +446,7 @@ describe("RegistrationHubRegistrantActions — finding 2: a failure never resurr
   it("a fresher prop landing mid-flight survives a subsequent 4xx — the row shows the SERVER's current status, never the click-time one", async () => {
     const d = deferred<unknown>();
     net.next.set("reject", d.promise);
-    const island = mount({ status: "paid", approval: "manual", amountCents: 0, paymentIntentId: null });
+    const island = mount({ status: "paid", approval: "manual", amountCents: 0, divisionFeeCents: 0, paymentIntentId: null });
 
     // Click time: optimistic flip to "rejected" (terminal) — approve AND
     // withdraw both disappear.
@@ -485,7 +486,7 @@ describe("RegistrationHubRegistrantActions — finding 2: a failure never resurr
   it("with NO concurrent prop change, a 4xx still reverts to the pre-click status exactly as before — the fix does not change the common case", async () => {
     const d = deferred<unknown>();
     net.next.set("withdraw", d.promise);
-    const island = mount({ status: "confirmed", approval: "auto", amountCents: 0, paymentIntentId: null });
+    const island = mount({ status: "confirmed", approval: "auto", amountCents: 0, divisionFeeCents: 0, paymentIntentId: null });
 
     const click = (propsOf(findAction(island, "withdraw")!).onClick as () => Promise<void>)();
     await vi.waitFor(() => expect(findAction(island, "withdraw")).toBeUndefined());
@@ -507,7 +508,7 @@ describe("RegistrationHubRegistrantActions — finding 2: a failure never resurr
 // what this row's OWN first action had just confirmed.
 describe("RegistrationHubRegistrantActions — finding 4 (RS005 F2): a later action's revert must not precede this row's own just-confirmed success", () => {
   it("approve succeeds (no rerender/refresh simulated); a SUBSEQUENT withdraw then 4xxs — must settle on 'confirmed', never resurrect approve/reject", async () => {
-    const island = mount({ status: "pending", approval: "manual", amountCents: 0, paymentIntentId: null });
+    const island = mount({ status: "pending", approval: "manual", amountCents: 0, divisionFeeCents: 0, paymentIntentId: null });
 
     // approve resolves immediately (nothing queued for "approve" -> the
     // net harness's default Promise.resolve({})). optimisticStatus flips to
@@ -547,54 +548,33 @@ describe("RegistrationHubRegistrantActions — finding 4 (RS005 F2): a later act
 // usecase's own distinctive English substring — the same "surface the
 // server's own English text" contract this file already depends on (see the
 // header comment; this repo never translates thrown messages).
-describe("RegistrationHubRegistrantActions — fee-edit drift recovery (RS005 F2 finding 3)", () => {
-  it("fee 0->2000: approve 422s 'mark it paid first' — mark paid becomes reachable, approve does not come back", async () => {
-    const d = deferred<unknown>();
-    net.next.set("approve", d.promise);
-    // The row's OWN frozen amountCents (0) predates the division's fee edit.
-    const island = mount({ status: "pending", approval: "manual", amountCents: 0, paymentIntentId: null });
-    expect(findAction(island, "approve")).toBeTruthy();
-    expect(findAction(island, "mark-paid")).toBeUndefined();
-
-    const click = (propsOf(findAction(island, "approve")!).onClick as () => Promise<void>)();
-    await vi.waitFor(() => expect(findAction(island, "approve")).toBeUndefined());
-    d.reject(new ApiV1Error("Awaiting payment — mark it paid first, or approve once payment arrives", 422, "ERROR"));
-    await click;
-
-    expect(findAction(island, "mark-paid")).toBeTruthy();
-    expect(findAction(island, "approve")).toBeUndefined();
+describe("RegistrationHubRegistrantActions — a fee edited after the entry exists", () => {
+  // The island now receives the DIVISION's live fee, so the correct control
+  // renders on the FIRST render. This replaces a version that inferred the fee
+  // from the server's 4xx TEXT: that needed a failed click before it could be
+  // right, and coupled these buttons to error prose no test pins — two
+  // unrelated fixtures had to be reworded to stop colliding with the match.
+  it("fee raised 0 -> 20.00 under a pending entry: offers mark paid, not approve", () => {
+    const island = mount({
+      status: "pending",
+      approval: "manual",
+      amountCents: 0, // quoted while the division was free
+      divisionFeeCents: 2000, // charged now
+      paymentIntentId: null,
+    });
+    expect(findAction(island, "mark-paid"), "the control the server accepts").toBeTruthy();
+    expect(findAction(island, "approve"), "approve would 422 'mark it paid first'").toBeUndefined();
   });
 
-  it("fee 2000->0: mark paid 422s 'no entry fee' — approve becomes reachable, mark paid does not come back", async () => {
-    const d = deferred<unknown>();
-    net.next.set("mark-paid", d.promise);
-    // The row's OWN frozen amountCents (2000) predates the division's fee
-    // edit down to 0 — the mirror-image drift.
-    const island = mount({ status: "pending", approval: "manual", amountCents: 2000, paymentIntentId: null });
-    expect(findAction(island, "mark-paid")).toBeTruthy();
-    expect(findAction(island, "approve")).toBeUndefined();
-
-    const click = (propsOf(findAction(island, "mark-paid")!).onClick as () => Promise<void>)();
-    await vi.waitFor(() => expect(findAction(island, "mark-paid")).toBeUndefined());
-    d.reject(new ApiV1Error("This division has no entry fee", 422, "ERROR"));
-    await click;
-
-    expect(findAction(island, "approve")).toBeTruthy();
-    expect(findAction(island, "mark-paid")).toBeUndefined();
-  });
-
-  it("an UNRELATED approve 4xx does not trigger the override", async () => {
-    const d = deferred<unknown>();
-    net.next.set("approve", d.promise);
-    const island = mount({ status: "pending", approval: "manual", amountCents: 0, paymentIntentId: null });
-    const click = (propsOf(findAction(island, "approve")!).onClick as () => Promise<void>)();
-    await vi.waitFor(() => expect(findAction(island, "approve")).toBeUndefined());
-    d.reject(new ApiV1Error("This registration was already refunded and cannot be approved", 422, "ERROR"));
-    await click;
-
-    // Reverts normally — mark-paid must NOT have been force-enabled by an
-    // unrelated error.
-    expect(findAction(island, "approve")).toBeTruthy();
-    expect(findAction(island, "mark-paid")).toBeUndefined();
+  it("fee dropped 20.00 -> 0 under a pending entry: offers approve, not mark paid", () => {
+    const island = mount({
+      status: "pending",
+      approval: "manual",
+      amountCents: 2000,
+      divisionFeeCents: 0,
+      paymentIntentId: null,
+    });
+    expect(findAction(island, "approve"), "nothing is owed, so approve is live").toBeTruthy();
+    expect(findAction(island, "mark-paid"), "mark paid would 422 'no entry fee'").toBeUndefined();
   });
 });

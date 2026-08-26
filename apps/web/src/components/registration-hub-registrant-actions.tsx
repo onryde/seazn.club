@@ -75,12 +75,13 @@
 // window reverts to what THIS row just confirmed, not to a stale prop.
 //
 // RS005 F2 finding 3: approve/markPaid's legality (deriveRegistrantActionFlags)
-// substitutes this row's frozen `amountCents` for the division's LIVE fee —
-// correct until an organiser edits that fee after the entry exists, at
-// which point the WRONG control renders and 422s while the RIGHT one stays
-// hidden. `feeOverride` state (below) corrects the guess from the server's
-// own 4xx once it actually happens, rather than this component reaching
-// into the read model for the division's live fee.
+// reads the DIVISION's live fee, which the read model now carries on the row
+// (`division_fee_cents`) — the same value both server gates read. The entry's
+// own `amountCents` is its submit-time quote and stops agreeing the moment an
+// organiser edits the fee, at which point the WRONG control renders and 422s
+// while the RIGHT one stays hidden. An earlier attempt inferred the fee from
+// the server's 4xx TEXT; that only self-corrected after a failed click and
+// coupled this component to error prose no test pins.
 //
 // Reject and withdraw confirm first — both are destructive: reject is
 // TERMINAL (no path returns a rejected entry to any other status) and
@@ -115,6 +116,10 @@ export interface RegistrationHubRegistrantActionsProps {
    *  division's settings. See that function's own doc comment for exactly
    *  when the two can diverge. */
   amountCents: number;
+  /** The DIVISION's LIVE fee — what BOTH server gates actually read. The
+   *  entry's own `amountCents` is its submit-time quote and diverges the
+   *  moment an organiser edits the fee. */
+  divisionFeeCents: number;
   /** The CART's payment_intent_id (RegistrationWithGroupRow) — set once a
    *  card payment lands, shared by every entry in the cart, null for an
    *  offline/unpaid one. Both the approve-awaiting-payment exclusion and
@@ -131,6 +136,7 @@ export function RegistrationHubRegistrantActions({
   status,
   approval,
   amountCents,
+  divisionFeeCents,
   paymentIntentId,
 }: RegistrationHubRegistrantActionsProps) {
   const msg = useMsg();
@@ -145,7 +151,6 @@ export function RegistrationHubRegistrantActions({
   // Corrects deriveRegistrantActionFlags's amount_cents-based guess with the
   // server's OWN authoritative answer, without this component needing the
   // division's live fee threaded onto the row.
-  const [feeOverride, setFeeOverride] = useState<"awaitingFee" | "noFee" | undefined>(undefined);
 
   // Re-syncs to the server's own truth once router.refresh() lands a fresh
   // `status` prop. The four deterministic actions already guessed right, so
@@ -187,9 +192,9 @@ export function RegistrationHubRegistrantActions({
       status: optimisticStatus,
       approval,
       amount_cents: amountCents,
+      division_fee_cents: divisionFeeCents,
       payment_intent_id: paymentIntentId,
     },
-    feeOverride,
   );
 
   async function runStatusAction(
@@ -226,11 +231,6 @@ export function RegistrationHubRegistrantActions({
       // never to something worse. Scoped to the action that just ran: an
       // unrelated approve/mark-paid 4xx (wrong division state, already
       // refunded, ...) must never flip this.
-      if (action === "approve" && text.includes("mark it paid first")) {
-        setFeeOverride("awaitingFee");
-      } else if (action === "mark-paid" && text.includes("no entry fee")) {
-        setFeeOverride("noFee");
-      }
       setFeedback({ tone: "error", text });
     } finally {
       setBusy(null);

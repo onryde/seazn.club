@@ -269,6 +269,7 @@ export function RegistrationHubRegistrantDetail({
             status={row.status}
             approval={row.approval}
             amountCents={row.amount_cents}
+            divisionFeeCents={row.division_fee_cents}
             paymentIntentId={row.payment_intent_id}
           />
         </section>

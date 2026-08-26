@@ -235,11 +235,13 @@ export interface RegistrantActionFlags {
  * comment that used to stand here claimed the opposite ("does not
  * special-case either") — that was false; the wrong control renders and
  * 422s in EITHER edit direction (fee raised from under a pending entry, or
- * dropped to zero under one). `feeOverride` (below) is the recovery: it
- * lets a caller correct this function's guess once the SERVER has said so
- * authoritatively (RegistrationHubRegistrantActions catches exactly that
- * 4xx), rather than this pure function reaching for the division's live fee
- * itself — it only ever sees one row, never the division's settings.
+ * dropped to zero under one). The fix is `row.division_fee_cents`: the read
+ * model now carries the DIVISION's live fee alongside the entry, so this
+ * function reads exactly the value the server reads and is right on the
+ * FIRST render. It briefly inferred the fee from the server's 4xx TEXT
+ * instead; that only corrected itself after a failed click, coupled the UI
+ * to error prose no test pins, and made two unrelated fixtures reword
+ * themselves to avoid colliding with the match.
  * `row.payment_intent_id` is exact, not a proxy: it is the SAME cart-level
  * column `reg.payment_intent_id` resolves to server-side. Deliberately does
  * NOT also exclude an already-refunded 'paid' row the way `approveRegistration`
@@ -293,23 +295,29 @@ export interface RegistrantActionFlags {
  *
  * promote: legal ONLY for a `waitlisted` entry — every other status has
  * nothing to promote FROM.
- *
- * @param feeOverride RS005 F2 finding 3 — an authoritative correction from
- * the server's own 4xx (see RegistrationHubRegistrantActions), never a
- * guess made here: "awaitingFee" forces the same treatment as a real
- * fee-bearing row (canApprove off, canMarkPaid a candidate), "noFee" forces
- * the opposite. Overrides ONLY the fee half of the computation — `status`
- * and `payment_intent_id` still gate canMarkPaid exactly as they always
- * did, so an override can never resurrect markPaid on a non-pending or
- * already-card-paid row.
  */
 export function deriveRegistrantActionFlags(
-  row: Pick<RegistrationListRow, "status" | "approval" | "amount_cents" | "payment_intent_id">,
-  feeOverride?: "awaitingFee" | "noFee",
+  row: Pick<
+    RegistrationListRow,
+    "status" | "approval" | "amount_cents" | "payment_intent_id" | "division_fee_cents"
+  >,
 ): RegistrantActionFlags {
   const awaitingManualDecision =
     row.approval === "manual" && (row.status === "pending" || row.status === "paid");
-  const feeOwed = feeOverride === "awaitingFee" ? true : feeOverride === "noFee" ? false : row.amount_cents > 0;
+  // The DIVISION's live fee, which is exactly what both server gates read —
+  // `approveRegistration` refuses while a fee is outstanding and
+  // `markRegistrationPaidOffline` refuses when the division has none. The
+  // entry's own `amount_cents` is the amount quoted at SUBMIT and stops
+  // agreeing the moment an organiser edits the fee, because
+  // putRegistrationSettings never re-quotes existing entries.
+  //
+  // This replaces an earlier correction that inferred the fee by matching
+  // English substrings of the server's 4xx text ("mark it paid first" / "no
+  // entry fee"). That worked only AFTER a failed click, coupled the UI to
+  // error prose no test pins, and forced two unrelated test fixtures to be
+  // reworded because their text collided with the match. Reading the same
+  // value the server reads is correct on the FIRST render and cannot drift.
+  const feeOwed = row.division_fee_cents > 0;
   const awaitingOfflineFee = row.status === "pending" && feeOwed && row.payment_intent_id === null;
   const nonTerminal = !isTerminalRegistrationStatus(row.status);
   return {
