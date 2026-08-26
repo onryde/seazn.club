@@ -87,7 +87,7 @@ import type { EventEnvelope } from "@seazn/engine/core";
 // narrow the bowler chip's candidates, not merely to test one name), which is
 // exactly what the engine's own filter already is, so the mirror is DELETED
 // and the rule imported. Same reasoning `nextBattingSide` was granted on.
-import { activeInnings, eligibleBowlers, nextBattingSide, reviewsRemaining } from "@seazn/engine/sports/cricket";
+import { activeInnings, eligibleBowlers, nextBattingSide, reviewsRemaining, soBattingSideAt } from "@seazn/engine/sports/cricket";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
@@ -367,9 +367,7 @@ export function inningsFidelity(innings: CricketInningsShape | null): InningsFid
  * "due" while the engine is mid-decider, which is the fork this branch
  * exists to stop. The super over's own rule is simply "the OTHER side bats
  * next": `null` while an innings is still open (its own `battingSide`
- * already answers the question), and `null` before the first ball of the
- * whole super over (nobody is "due" yet — C2, the pad is about to offer the
- * very first pick).
+ * already answers the question).
  *
  * R3.5 Task R (defect 3) — a pair having just completed is NOT the same as
  * "nothing further is due", and this used to return `null` here too: a
@@ -380,13 +378,42 @@ export function inningsFidelity(innings: CricketInningsShape | null): InningsFid
  * (`blockedByClosure`, `buildTiles` below) for this window while the fold
  * happily accepted the next `cricket.superover.ball` — the original
  * blocker bug Task C fixed, reproduced one pair later.
+ *
+ * R3.5 Task S — "before the first ball of the whole super over" (`so.length
+ * === 0`, C2) used to return `null` here too, on the theory that "nobody is
+ * due yet". WRONG: the ICC alternation rule (the engine's own
+ * `soBattingSideAt`, exported this task, cricket.ts) already picks a side
+ * at index 0, before any SO innings exists, the same way it picks one at
+ * every later index — this was the live 422 blocking every hand-scored
+ * super over (`resolvePeople`, below, had no OTHER source for `battingSide`
+ * in this exact state — `currentInnings` is `null` too, the SO list being
+ * empty — so it fell through to a literal `"home"` default, proposing the
+ * wrong side's batters and, so, the wrong side's bowler).
+ *
+ * Fixed HERE rather than in `resolvePeople` itself, the narrower change:
+ * `blockedByClosure` (`buildTiles` below) gates on `inningsClosed &&
+ * dueSide === null`, and `inningsClosed` is unconditionally `false` in this
+ * exact state (`currentInnings(state)` is `null`, so `innings?.closed ===
+ * true` reads `false`) — so returning a real side here can never flip
+ * `blockedByClosure` and re-enable anything that should stay disabled.
+ * Every OTHER reader of this branch's old `null` (`scoringInnings` above;
+ * `buildContext`'s own `dueBattingSide(...) !== null` check below) already
+ * converges on the identical result whether this branch returns `null` or
+ * the real side, because each one gates behind its OWN separate
+ * `innings === null`/`currentInnings(state) === null` check that fires
+ * first and independently already yields the same answer.
  */
 export function dueBattingSide(state: CricketStateShape, cfg: CricketCfgShape): "home" | "away" | null {
   const { list: so, inSuperOver } = activeSuperOver(state);
   if (inSuperOver) {
     const open = so.find((i) => !i.closed);
     if (open) return null; // an innings is in progress
-    if (so.length === 0) return null; // none created yet — C2
+    if (so.length === 0) {
+      // R3.5 Task S — index 0 is the engine's own resolving index here too:
+      // `applySuperOverBall` (cricket.ts) computes `so.innings.length - 1`
+      // (-1, undefined) then bumps to 0 before opening the first innings.
+      return soBattingSideAt({ battingFirst: state.battingFirst ?? "home" }, 0);
+    }
     if (so.length % 2 === 1) {
       // Pair incomplete: the other side is due.
       return opponentSide((so[so.length - 1] as CricketInningsShape).battingSide ?? "home");

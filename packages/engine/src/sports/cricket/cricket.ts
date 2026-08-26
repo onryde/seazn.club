@@ -1553,7 +1553,37 @@ function boundaryCount(state: CricketState, side: Side): number {
   return main + so;
 }
 
-function soBattingSideAt(state: CricketState, index: number): Side {
+/** Narrow shape `soBattingSideAt` (below) actually reads — same posture as
+ *  `BattingAlternationCfg` above and for the identical reason: a caller
+ *  outside this module (apps/web's v3 cricket skin) holds a narrowed,
+ *  all-optional local shape rather than a real `CricketState`, and must be
+ *  able to call this without owning one. */
+interface SuperOverAlternationCfg {
+  battingFirst: Side;
+}
+
+/**
+ * ICC super-over alternation rule (spec §2.3): the side batting second in
+ * the match bats first in the super over; the side batting second in a
+ * super over bats first in the next one. `index` addresses super-over
+ * innings the same way `applySuperOverBall` (below) does when it opens a
+ * fresh one — 0/1 is pair 1's two innings, 2/3 is pair 2's, and so on.
+ *
+ * Exported (R3.5 Task S) — same posture as `nextBattingSide`/
+ * `eligibleBowlers`/`reviewsRemaining`/`activeInnings` above: a public
+ * mirror of a private rule so a caller outside this module mirrors it
+ * instead of hand-copying it. This was the one rule in that family still
+ * missing its export: the pad's own `dueBattingSide` (apps/web
+ * skins/cricket.tsx) answered "who's due to bat" for every OTHER
+ * super-over window (mid-pair, pair-complete) by re-deriving the answer
+ * from the last RECORDED innings, but had no fold-backed value to read
+ * before the very FIRST super-over ball, when no innings has been created
+ * yet — the live 422 this task fixes. `resolvePeople`'s `battingSide`
+ * default silently fell through to a literal `"home"` in that state,
+ * proposing the wrong side's striker/non-striker and, so, the wrong side's
+ * bowler — refused outright by the fielding-lineup check.
+ */
+export function soBattingSideAt(state: SuperOverAlternationCfg, index: number): Side {
   // ICC: the side batting second in the match bats first in the super over;
   // the side batting second in a super over bats first in the next one.
   const pair = Math.floor(index / 2);

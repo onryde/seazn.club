@@ -26,6 +26,10 @@ export {
   // posture as nextBattingSide/eligibleBowlers/reviewsRemaining above: a
   // public mirror of a private rule, so the pad mirrors rather than forks.
   activeInnings,
+  // R3.5 Task S — the ICC super-over alternation rule, the one member of
+  // this family still missing its export; see its own doc (cricket.ts) for
+  // the live 422 that gap caused.
+  soBattingSideAt,
   type ActiveInnings,
   type OverBowlerFacts,
   type CricketBallEv,

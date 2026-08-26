@@ -2830,11 +2830,12 @@ describe("cricketSkinV3 — sheets() closes over the factory's own t (R2c)", () 
 // match `docs/superpowers/plans/2026-08-26-scorepad-v3-r35-deciders.md`'s
 // own matrix.
 //
-// `soBattingSideAt` (cricket.ts, private): battingFirst defaults to "home"
-// (no toss posted), so home bats main innings 1, away innings 2 — and by the
-// ICC rule the side batting SECOND in the match bats FIRST in the super
-// over. Every fixture below inherits that: SO pair 0's innings[0] is away,
-// innings[1] is home; pair 1 (a `repeat`) flips it back.
+// `soBattingSideAt` (cricket.ts — exported R3.5 Task S; private before
+// that): battingFirst defaults to "home" (no toss posted), so home bats
+// main innings 1, away innings 2 — and by the ICC rule the side batting
+// SECOND in the match bats FIRST in the super over. Every fixture below
+// inherits that: SO pair 0's innings[0] is away, innings[1] is home; pair 1
+// (a `repeat`) flips it back.
 // ---------------------------------------------------------------------------
 
 /** Folds a tied one-over-a-side match straight to `phase: "super_over"` with
@@ -3221,9 +3222,9 @@ describe("R3.5 Task R — super-over tile/target defects Task C left behind", ()
     const soInnings = (st.superOver as { innings: { closed: boolean }[] }).innings;
     expect(soInnings).toHaveLength(2);
     expect(soInnings.every((i) => i.closed)).toBe(true); // pair 1 fully closed; pair 2 has not started
-    // soBattingSideAt(state, 2) (cricket.ts:1556-1562, private — not part of
-    // the engine's public surface, so re-derived here rather than
-    // imported): pair = 1, pairFirst = battingFirst since pair % 2 !== 0,
+    // soBattingSideAt(state, 2) (cricket.ts, exported R3.5 Task S — this
+    // test predates that export, so the formula is re-derived here rather
+    // than imported): pair = 1, pairFirst = battingFirst since pair % 2 !== 0,
     // and battingFirst defaults to "home" (no toss posted — this suite's
     // own header comment above). Index 2 is even within its pair, so the
     // due side is pairFirst itself: "home" — the same side that just
@@ -3294,5 +3295,49 @@ describe("R3.5 Task R — super-over tile/target defects Task C left behind", ()
     // a stale 7.
     expect(chaseTarget(cfg, st)).toBeNull();
     expect(buildScorebug(v, t).strip.find((s) => s.label === "scorepad.skin.cricket.header.target")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5 Task S — THE BLOCKER. `resolvePeople`'s `battingSide` had no source
+// for C2's own window (`dueBattingSide` returned `null` there, on purpose —
+// Task R's own C2 ruling, `dueBattingSide`'s doc, cricket.tsx — and
+// `currentInnings` is `null` too, the SO list being empty), so it fell
+// through to a literal `"home"` default regardless of who actually opens the
+// super over. Every tapped delivery in that state embedded the WRONG side's
+// striker/non-striker and, so, the wrong side's bowler — refused 422 by the
+// engine's fielding-lineup check (`apps/web/e2e/
+// scorepad-v3-deciders-byhand.spec.ts`'s cricket case is the byhand proof).
+// Folds a REAL tie via `tieToSuperOver`/`foldCricket` (this suite's own C2
+// fixture, above) rather than a hand-built state literal — a mirror of the
+// engine agrees with itself; only a real fold can catch a fork like this one
+// (this suite's own "R3.5 Task C" header explains why, in full).
+// ---------------------------------------------------------------------------
+
+describe("R3.5 Task S — resolvePeople before the first super-over ball (C2's own window)", () => {
+  it("proposes the side that batted SECOND in the match, and a bowler from the FIELDING side's lineup, before any SO innings exists", () => {
+    const { cfg, events } = tieToSuperOver();
+    const st = foldCricket(cfg, events);
+    expect(st.phase).toBe("super_over");
+    // C2's own window, exactly: the SO list exists and is empty.
+    expect((st.superOver as { innings: unknown[] } | null)?.innings).toEqual([]);
+
+    const people = resolvePeople(st, {}, cfg);
+    // battingFirst defaults to "home" (no toss posted — this suite's own
+    // "R3.5 Task C" header above): home bats main innings 1, away innings 2.
+    // ICC: the side batting second in the MATCH bats first in the super
+    // over — away, never the pad's old literal "home" default.
+    expect(people.battingSide).toBe("away");
+    expect(people.bowlingSide).toBe("home");
+    // Lineup MEMBERSHIP, not just the side label — a side string can be
+    // "correct" by construction while the person id underneath it still
+    // isn't (e.g. an empty orders map or a stale default) — this is exactly
+    // the shape of assertion a bare `.battingSide` check would miss.
+    expect(st.orders.away).toContain(people.striker);
+    expect(st.orders.away).toContain(people.nonStriker);
+    expect(st.orders.home).toContain(people.bowler);
+    // The two batters must be distinct — a real opening pair, not the same
+    // person double-booked because the order came back empty.
+    expect(people.striker).not.toBe(people.nonStriker);
   });
 });

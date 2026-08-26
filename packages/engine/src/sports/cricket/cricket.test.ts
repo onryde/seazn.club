@@ -17,6 +17,7 @@ import {
   eligibleBowlers,
   reviewsRemaining,
   activeInnings,
+  soBattingSideAt,
   type CricketBallEv,
   type CricketCfg,
   type CricketEv,
@@ -1123,6 +1124,35 @@ describe("activeInnings — one definition, shared by the position axis and the 
   });
   it("treats an absent superOver field the same as null", () => {
     expect(activeInnings({ innings: main, superOver: undefined }).inSuperOver).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5 Task S — soBattingSideAt: the ICC super-over alternation rule, now
+// exported (same posture as nextBattingSide/eligibleBowlers/reviewsRemaining/
+// activeInnings above) so apps/web's v3 cricket skin can ask "who bats the
+// very first super-over ball" instead of hand-copying this formula — the
+// live 422 this task fixes. Each `it` below covers one `battingFirst` value
+// across indices 0..3 (pair 1's two innings, then pair 2's two), the same
+// "one cfg shape end to end, every index through the boundary" convention
+// `nextBattingSide`'s own suite (above) uses.
+// ---------------------------------------------------------------------------
+
+describe("soBattingSideAt", () => {
+  it("battingFirst home: the side batting second in the match (away) opens the super over, then alternates every innings, then flips again for pair 2", () => {
+    const state = { battingFirst: "home" as const };
+    expect(soBattingSideAt(state, 0)).toBe("away"); // pair 1, innings 1 — opponent of battingFirst
+    expect(soBattingSideAt(state, 1)).toBe("home"); // pair 1, innings 2
+    expect(soBattingSideAt(state, 2)).toBe("home"); // pair 2, innings 1 — the side batting second in pair 1
+    expect(soBattingSideAt(state, 3)).toBe("away"); // pair 2, innings 2
+  });
+
+  it("reads battingFirst, not a hardcoded home — an away-first match opens the super over with home instead", () => {
+    const state = { battingFirst: "away" as const };
+    expect(soBattingSideAt(state, 0)).toBe("home");
+    expect(soBattingSideAt(state, 1)).toBe("away");
+    expect(soBattingSideAt(state, 2)).toBe("away");
+    expect(soBattingSideAt(state, 3)).toBe("home");
   });
 });
 
