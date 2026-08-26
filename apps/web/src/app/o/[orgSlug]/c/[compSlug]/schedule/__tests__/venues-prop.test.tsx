@@ -168,3 +168,26 @@ describe("joint competition schedule page feeds ScheduleBoard its venues (P9 rev
     expect(names["22222222-2222-4222-8222-222222222222"]).not.toMatch(UUID_RE);
   });
 });
+
+// The division board (../../d/[divSlug]/schedule/page.tsx:313) already passes
+// `showSettings={false}` — its own comment says why: "Core scheduling
+// settings on their own tab (organiser ask) — moved off the board where they
+// crowded the grid." The joint (competition) board never got the same
+// treatment, so it still showed the inline toggle at the bottom of the board
+// — bound to ONE division's settings with no label saying which, on a page
+// that can hold five. There is no per-division "Settings" tab on this page to
+// move it to (each division already has its own, reachable from Directory),
+// so the fix here is the same one the division board already made: stop
+// rendering it, not relocate it.
+describe("joint competition schedule page hides the inline settings toggle (organiser ask)", () => {
+  beforeEach(() => {
+    spies.listVenues.mockReset().mockResolvedValue(VENUES);
+  });
+
+  it("passes showSettings=false to ScheduleBoard, same as the division board", async () => {
+    const board = find(await renderPage(), ScheduleBoard);
+    expect(board, "no ScheduleBoard rendered").not.toBeNull();
+    const props = board!.props as { showSettings?: boolean };
+    expect(props.showSettings).toBe(false);
+  });
+});
