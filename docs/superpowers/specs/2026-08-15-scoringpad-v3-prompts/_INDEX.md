@@ -2073,3 +2073,77 @@ and turn 0 names the right partner under every derivation anyone has shipped,
 correct or not — so the gallery was structurally blind to D-21. Added
 `14-serveafterbreaker`, the game after a closed tie-break, which is the screen
 where a wrong human name appears.
+
+### R4 final review, round two (2026-08-26) — two real, one not
+
+A second `/code-review high` over `main...HEAD` returned three findings. Two
+were real and are fixed here; the third was not, and saying so is part of the
+record — a review's severity claim is a hypothesis, and this programme has now
+had one over-claimed finding in each of its last two rounds.
+
+**D-22 — `walkServe` flipped the serve after a MATCH tie-break unconditionally,
+so the drift detector R4-7 introduced fired on a defect of its own.** ITF Rule
+5b hands the next set to the breaker's first server's opponent, and
+`applyTbPoint` enforces it on the fold side with an unconditional `serving:
+opponent(tbFirstServer)`. That overwrite lives on the ORDINARY-breaker branch
+only. A match tie-break has no next set to hand off to: its branch returns
+straight through `bankSet`, banking the raw point-by-point rotation, which
+flips after every odd point — `ceil(points / 2)` times in total. The walk
+flipped once regardless, so it agreed with the fold only when that count was
+odd. Every doubles match decided 10-1, 10-2, 10-5, 10-6 … reported
+`serveOrderKnown: false` and named nobody for the whole post-match view.
+
+The comment shipped alongside the bug asserted the opposite of the code it sat
+next to ("`applyTbPoint` still applies ITF 5b to `serving` on the closing
+point"). It does not. **A comment that states a cross-module invariant is a
+claim, and nothing type-checks it.**
+
+The test written to catch this pinned 10-0 only — and 10-0 is one of the
+parities where an unconditional flip is accidentally right. The suite was
+green over the defect it was authored for. Replaced with the full 10-0 … 10-8
+table; the unconditional-flip mutant now dies on exactly the four rows the
+reviewer predicted empirically, and nothing else.
+
+**D-23 — the pad inverted ace and double fault on half of every tie-break's
+points, on any fixture with no declared lineup.** `rosterlessServerSide`
+re-derives the serving SIDE for fixtures that can name no server person, and
+excluded the one boundary where `state.serving` runs ahead of the point just
+contested: the game/set close, detected by points reading back (0, 0). Inside a
+breaker `state.serving` also rotates MID-GAME, after every odd point, and a
+breaker at 5-3 is not at (0, 0). So `buildDock` offered `double_fault` where
+`ace` was correct, and the reverse — a wrong serving statistic recorded against
+a person, silently, in the phase of a set where aces decide it.
+
+Corrected rather than withheld: the rotation is a pure function of the point
+count, so the server of the point just played is the current `serving` flipped
+iff an odd number of points have been played. Withholding would have dropped
+the chips for half of every tie-break, which is the feature's best moment.
+
+**NOT a defect — the third finding.** The review reported `tennis.game.award`
+as a live dead-end tap through the More sheet during a breaker, reasoning that
+`buildTiles` withholds the tile, the type therefore drops out of
+`dedicatedEventTypes`, and `moreActions` puts the generic form back. Each step
+is true in isolation and the conclusion is still wrong: `nestedPadSpec`'s
+Award-game panel already carries a `gate` on `state.points.kind`
+(`kernel.ts`), so `buildPadView` never emits the action during a breaker and
+`moreActions` has nothing to offer. Verified against the running production
+build, not argued: with the pad-side refusal deliberately removed and the
+bundle rebuilt, the More sheet during a tie-break still read "Nothing else to
+record here yet."
+
+The pad-side refusal was kept anyway, as a second layer, and the tile's
+condition was extracted into ONE predicate both `buildTiles` and
+`refusedEventTypes` consume — a real drift class removed, since two copies of
+the same boolean is what the finding assumed had already gone wrong. It is
+labelled as defence in depth in the code and is not claimed as a fix.
+
+The hazard behind it IS real, and the second layer is not decorative: with
+BOTH the engine gate and the pad refusal removed, the same capture goes red
+with the sheet reading `More actions / Cancel / Award game`. So
+`16-breakermore` is a screen that can fail, over a mechanism that can happen —
+it is only the single-layer version of the story that was wrong.
+
+**Ruling R4-8**: a review finding is not a defect until the state it describes
+has been reproduced. Two of the three findings here reproduced on the live
+build within one capture each; the third did not, and the layer above it was
+found only by going looking for the reason it did not.
