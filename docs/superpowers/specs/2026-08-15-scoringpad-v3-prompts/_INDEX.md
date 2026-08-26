@@ -22,7 +22,8 @@ one PR per wave, visual sign-off gate on each).
 | R2b | `R2b-cricket-over-by-over.md` + plan `docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-cricket-over.md` | R2 (MERGED, so unblocked) | **MERGED #610 `78191611a`** (tip `896c8e608`, 2026-08-18) — approval-on-merge, see the sign-off section below. Pre-merge state, kept for the record: **IN FLIGHT** 2026-08-17 — worktree `.claude/worktrees/r2b-cricket-over`, branch `feat/scorepad-v3-r2b-cricket-over` off `5885952f`. Both of the brief's open questions are RULED (see the R2b section below); the first turned out to be answered by the engine rather than by preference. Original row text, still accurate on the premise: cricket needs THREE granularities: innings totals, **over-by-over (runs + wickets)**, ball-by-ball. **Over-by-over ALREADY EXISTS in the engine** and v1 exposed it: it is `cricket.innings.summary` with **`partial: true`** (`cricket.ts:225,230-237`) posted once per over, NOT a separate event type. An earlier draft of this row claimed it never existed, off one negative grep for a `cricket.over` event that never needed to exist — wrong, and corrected. So: **no new event, no schema change, no golden re-baseline, no band decision** (already band 0/free; the ladder stays closed 0–3). The real gap is a PAD one — the v3 skin declares no tile for it, so a scorer must open "More" and scroll a generic form once per over. A pad wave, not an engine wave |
 | R2c | `R2c-candidate-narrowing.md` + design `R2c-task1-design.md` | R2b (MERGED, so unblocked) | **MERGED #614 `ca3a4357a`** (tip `3eda8a0ff`, 2026-08-18) — approval-on-merge, see the R2c sign-off section below; three screens (`08-bowlerpicker`, `09-retiresheet`, `10-reviewblocked`) carry NO individual verdict and are owed to R8's closing walkthrough. Pre-merge state, kept for the record: worktree `.claude/worktrees/r2c-candidates`, branch `feat/scorepad-v3-r2c-candidate-narrowing` off `main` `7023502a3`. Task 1 (the chassis capability) is DESIGNED and owner-approved before code — see the R2c section below. Closes C1/C2/C3 from `R2b-remaining.md` §C, the three surviving instances of "the pad offers what the engine will refuse" |
 | R3 | `R3-football.md` | R1 | **MERGED #643 `bcc726300`** (2026-08-25). Pre-merge state, kept for the record: **SIGNED OFF + PR RAISED** 2026-08-25 — worktree `.claude/worktrees/r3-football`, branch `feat/scorepad-v3-r3-football`, 51 commits rebased onto `origin/main`. All tasks A-F committed; five review rounds run and closed (round 5 CLEAN). Owner visual sign-off **15/15 APPROVE**, recorded below — that record is the merge gate, not the sheet. Do not treat any count in this row as a gate: the main thread re-runs the boundary gate itself. One thing NOT to re-derive: the two-step goal dock shipped INERT past unit tests and the gallery; see the inert-dock section at the end of this file before touching `DetailDock`/`pad-host` docks. |
-| R4 | `R4-tennis.md` | R1 | **IN FLIGHT** 2026-08-25 — worktree `.claude/worktrees/r4-tennis`, branch `feat/scorepad-v3-r4-tennis` off `origin/main` `9080cb959`. Four owner rulings taken before any code (R4-1..R4-4 below); six false premises found in the brief and the register, one of which (D-2) removes the programme's only engine item as written. |
+| R4 | `R4-tennis.md` | R1 | **MERGED #649 `5f2951945`** (2026-08-26) — this row read `IN FLIGHT` on merged main until R3.5 corrected it, while the Order table on `main` still read `TODO`: two rows for one wave, both wrong, found by R3.5's planning scout. Pre-merge state kept for the record: worktree `.claude/worktrees/r4-tennis`, branch `feat/scorepad-v3-r4-tennis` off `origin/main` `9080cb959`. Four owner rulings taken before any code (R4-1..R4-4 below); six false premises found in the brief and the register, one of which (D-2) removes the programme's only engine item as written. |
+| R3.5 | `R3.5-deciders.md` | R2, R3, R4 (chassis shape) | **IN FLIGHT** 2026-08-26 — worktree `.claude/worktrees/r35-deciders`, branch `feat/scorepad-v3-r35-deciders` off `main` `5f2951945`. Remedial: the tie-breakers of the two converted sports. Cricket's super over is **unscoreable on the pad** (15/16 tiles disabled, the More escape hatch suppressed by a chassis bug) and football's shoot-out is recordable but illegible. Five rulings taken before any code (R3.5-1..R3.5-5 below), one of which AMENDS R3-4 for the `SHOOTOUT` phase only. Root cause of the whole class: **the gallery harness has no tie-break state**, so neither R2's nor R3's visual sign-off could ever have caught it — task A closes that first. |
 | R5 | `R5-racquet-split.md` | R1 | TODO |
 | R6 | `R6-period-pair.md` | R1 | TODO |
 | R7 | `R7-universal-console.md` | R1 (chrome parts benefit from R2–R6 but do not block) | TODO |
@@ -694,6 +695,40 @@ string can reach.
 
 Scoping session. All four taken against RE-PINNED facts, not the brief's
 pre-R1 line numbers.
+
+## R3.5 — rulings taken before any code (2026-08-26)
+
+Wave file: `R3.5-deciders.md`. Evidence for every claim below is a real fold or
+a real browser, re-verified on merged main `5f2951945`, not carried over from
+the review that opened the wave.
+
+| # | Decision | Ruling |
+|---|---|---|
+| R3.5-1 | One wave, or hotfix the cricket blocker separately? | **One wave, all findings.** The blocker is task C inside it, not a carve-out |
+| R3.5-2 | Sequence against R4 | **After R4 merges.** Taken while R4 was 34 commits in flight and actively rewriting `dedicatedEventTypes`; R4 merged during design, so the wave starts unblocked with no rebase owed |
+| R3.5-3 | Where does "which innings am I scoring" live? | **The engine exports it; the skin consumes it.** NOT a second copy of the switch `cricketPosition` already performs. The skin already imports `eligibleBowlers` / `nextBattingSide` / `reviewsRemaining` from the cricket module and `dueBattingSide` already calls one to mirror innings sequencing — the super over is simply the case nobody extended. Rejected: widening the skin's own shape alone (a hand-copied derivation, this repo's named recurring defect); rejected: a chassis `decider()` for every sport (cricket's decider is an innings, football's a tally, tennis's a game) |
+| R3.5-4 | `cfg.shootoutWin` / `cfg.shootoutLoss` have ZERO references in `apps/web` | **IN SCOPE** (task I). A group stage decided on kicks awards flat points today and nothing surfaces it. Widens blast radius past the pad into standings, so asked per `_RULES.md` §1 and granted |
+| R3.5-5 | Does the shoot-out kick get its own tile? | **R3-4 AMENDED, `SHOOTOUT` phase ONLY.** Phase-gated kick tiles in the space the Goal tiles vacate. R3-4 stands everywhere else — it placed four *rare* types in More, and in this phase the rare type is the whole match |
+
+### R3.5 — false premises found (verified in the tree, before any code)
+
+- **"The client cannot import the engine"** — S10's note, carried forward in
+  v2's index and still cited. STALE for v3: `skins/cricket.tsx:90` imports three
+  runtime helpers from `@seazn/engine/sports/cricket` today. Ruling R3.5-3
+  depends on this being false, so a later session must not re-derive it.
+- **Two Order rows disagreed about R4.** The row in this file read `IN FLIGHT`
+  after R4 had merged; the copy on `main` read `TODO` while it was 34 commits
+  deep. Corrected above.
+- **"Football's shoot-out tally is invisible"** — the review's own first read,
+  and wrong. `pad-host.tsx` renders the engine's `summary.headline`, so the band
+  above the scorebug reads `1 — 1 (2–1 pens)`. The real defect is narrower: two
+  score readouts on one screen, disagreeing. Recorded because the wrong version
+  is the intuitive one and will be re-derived otherwise.
+- **The gallery was never blind by omission of a sport — it is blind by omission
+  of a STATE.** `01-pre` … `10-reviewblocked`, no tie-break anywhere. R2 and R3
+  both signed off legitimately against a harness that could not render the
+  screen. This is the reusable lesson, not a cricket one.
+
 
 | # | Decision | Ruling |
 |---|---|---|
