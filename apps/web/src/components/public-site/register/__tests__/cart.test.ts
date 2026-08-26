@@ -7,8 +7,11 @@ import {
   autoLinkObviousSelf,
   autoSeedSingleDivision,
   canAddEntry,
+  cartHasOtherPlayers,
   cartReducer,
   clearSelfLinkWhenNotPlaying,
+  registeringSelfAnywhere,
+  summarizeCart,
   toGroupEntry,
 } from "../cart";
 import {
@@ -291,6 +294,25 @@ describe("cartReducer — SET_ENTRY_SELF (per-entry, independently settable — 
     const next = cartReducer(two, { type: "SET_ENTRY_SELF", id: "e1", isSelf: false });
     expect(next.entries.find((e) => e.id === "e2")).toEqual(two.entries[1]);
   });
+
+  // RS006 §D (known gap): a free-agent entry has NO roster UI (design:
+  // "Free-agent entries need nothing extra"), so nothing could ever resolve
+  // self_player_index for one — self-linking it would submit
+  // registering_self:true with an unresolvable index and 422 at submit with
+  // an error the registrant cannot act on (schemas.ts's own comment on this
+  // exact class of request). Refusing it HERE, at the reducer, is the
+  // innermost of three layers that make the UI structurally unable to
+  // produce it (the others: entry-cart.tsx's checkbox never renders for a
+  // free-agent entry; autoLinkObviousSelf below skips one too) — belt and
+  // suspenders, since a future call site could otherwise dispatch this
+  // directly.
+  it("refuses to set registering_self on a FREE-AGENT entry — no roster UI could ever resolve its self_player_index", () => {
+    const withFreeAgent: CartState = {
+      entries: [entry({ id: "fa1", division_id: "div-team", entrant_kind: "team", free_agent: true })],
+    };
+    const next = cartReducer(withFreeAgent, { type: "SET_ENTRY_SELF", id: "fa1", isSelf: true });
+    expect(next.entries[0]!.registering_self).toBe(false);
+  });
 });
 
 describe("cartReducer — SET_SELF_PLAYER_INDEX (step 3's self-row picker, per-entry)", () => {
@@ -507,6 +529,17 @@ describe("autoLinkObviousSelf — links the ONE cart entry to 'I'm playing' when
     const next = autoLinkObviousSelf(unlinked, true);
     expect(next.entries[0]!.registering_self).toBe(true);
   });
+
+  // RS006 §D (known gap) — see the matching SET_ENTRY_SELF test above for
+  // why. Without this, "sign up solo" (a free-agent division's ONLY entry)
+  // would auto-link on the very next imPlaying toggle and 422 at submit.
+  it("never auto-links a sole FREE-AGENT entry — same reason SET_ENTRY_SELF refuses it", () => {
+    const soleFreeAgent: CartState = {
+      entries: [entry({ id: "fa1", division_id: "div-team", entrant_kind: "team", free_agent: true })],
+    };
+    const next = autoLinkObviousSelf(soleFreeAgent, true);
+    expect(next).toBe(soleFreeAgent);
+  });
 });
 
 describe("clearSelfLinkWhenNotPlaying — the inverse of autoLinkObviousSelf (fix wave finding #2)", () => {
@@ -589,5 +622,165 @@ describe("toGroupEntry — maps a CartEntry onto PublicRegisterGroupEntry's step
     const b = toGroupEntry({ ...one, id: "e2", entrant_kind: "individual", registering_self: true, self_player_index: null });
     expect(a.registering_self).toBe(true);
     expect(b.registering_self).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS006 step 4 (CONSENT) — registeringSelfAnywhere mirrors
+// registration-submit.ts's own cart-wide flag of the same name (the guardian
+// gate's trigger condition), computed off the CART rather than the WHO
+// step's imPlaying toggle: imPlaying can be true with zero entries actually
+// linked (2+ entries is ambiguous — the rep must explicitly choose), and the
+// server's own gate keys off the ACTUAL link, not the intent to link.
+// ---------------------------------------------------------------------------
+
+describe("registeringSelfAnywhere", () => {
+  it("false for an empty cart or a cart with no self-linked entries", () => {
+    expect(registeringSelfAnywhere(EMPTY_CART)).toBe(false);
+    const none: CartState = { entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "individual" })] };
+    expect(registeringSelfAnywhere(none)).toBe(false);
+  });
+
+  it("true when ANY entry is self-linked, even if others aren't", () => {
+    const mixed: CartState = {
+      entries: [
+        entry({ id: "e1", division_id: "d1", entrant_kind: "individual" }),
+        entry({ id: "e2", division_id: "d2", entrant_kind: "individual", registering_self: true, self_player_index: 0 }),
+      ],
+    };
+    expect(registeringSelfAnywhere(mixed)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS006 step 4 (CONSENT) — the captain-roster notice's trigger (design §4
+// step 4: "Notice that captain-entered players will be asked to confirm
+// when they join/claim"). True whenever the cart, once submitted, names at
+// least one player who is NOT the contact's own self-linked row.
+// ---------------------------------------------------------------------------
+
+describe("cartHasOtherPlayers", () => {
+  it("false for an empty cart", () => {
+    expect(cartHasOtherPlayers(EMPTY_CART)).toBe(false);
+  });
+
+  it("false for a free-agent entry regardless of players — free agents carry no roster of 'other' people", () => {
+    const cart: CartState = {
+      entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "team", free_agent: true })],
+    };
+    expect(cartHasOtherPlayers(cart)).toBe(false);
+  });
+
+  it("false for a solo self-linked individual entry — the only player IS the contact", () => {
+    const cart: CartState = {
+      entries: [
+        {
+          ...entry({ id: "e1", division_id: "d1", entrant_kind: "individual", registering_self: true, self_player_index: 0 }),
+          players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Alex" }],
+        },
+      ],
+    };
+    expect(cartHasOtherPlayers(cart)).toBe(false);
+  });
+
+  it("true for a team roster with players beyond the self-linked row", () => {
+    const cart: CartState = {
+      entries: [
+        {
+          ...entry({ id: "e1", division_id: "d1", entrant_kind: "team", registering_self: true, self_player_index: 0 }),
+          players: [
+            { ...EMPTY_ROSTER_PLAYER, full_name: "Alex" },
+            { ...EMPTY_ROSTER_PLAYER, full_name: "Sam" },
+          ],
+        },
+      ],
+    };
+    expect(cartHasOtherPlayers(cart)).toBe(true);
+  });
+
+  it("true for an entry with players and NO self-link at all — every row is someone else", () => {
+    const cart: CartState = {
+      entries: [
+        {
+          ...entry({ id: "e1", division_id: "d1", entrant_kind: "pair" }),
+          players: [
+            { ...EMPTY_ROSTER_PLAYER, full_name: "Sam" },
+            { ...EMPTY_ROSTER_PLAYER, full_name: "Jordan" },
+          ],
+        },
+      ],
+    };
+    expect(cartHasOtherPlayers(cart)).toBe(true);
+  });
+
+  it("false for a team entry with an EMPTY roster — nobody entered yet", () => {
+    const cart: CartState = { entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "team" })] };
+    expect(cartHasOtherPlayers(cart)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS006 §C — summarizeCart is the ONE subtotal/waitlist computation shared
+// by entry-cart.tsx (step 2) and step-review.tsx (step 5): "waitlisted
+// entries flagged 'not charged now' and excluded from the subtotal (step 2's
+// cart already does this — reuse, do not fork the logic)". entry-cart.tsx's
+// OWN existing tests (register-stepper-interaction.test.tsx findings #4/#8)
+// pin its rendered COPY; these pin the shared MATH underneath both renderers.
+// ---------------------------------------------------------------------------
+
+describe("summarizeCart", () => {
+  const OPEN_PAID: DivisionLike = { ...TEAM_DIVISION, division_id: "open-paid", fee_cents: 2500, currency: "gbp" };
+  const WAITLIST_DIV: DivisionLike = { ...TEAM_DIVISION, division_id: "waitlist", closed_reason: "full", fee_cents: 1000 };
+  const STALE_CLOSED_DIV: DivisionLike = {
+    ...TEAM_DIVISION,
+    division_id: "stale",
+    open: false,
+    closed_reason: "window",
+    fee_cents: 1500,
+  };
+
+  it("sums only OPEN (non-closed) entries into the subtotal, in that division's currency", () => {
+    const cart: CartState = {
+      entries: [
+        entry({ id: "e1", division_id: "open-paid", entrant_kind: "team" }),
+        entry({ id: "e2", division_id: "waitlist", entrant_kind: "team" }),
+      ],
+    };
+    const summary = summarizeCart(cart, [OPEN_PAID, WAITLIST_DIV]);
+    expect(summary.subtotalCents).toBe(2500);
+    expect(summary.currency).toBe("gbp");
+  });
+
+  it("flags a 'full' closed division as waitlisted and not-charged-now, excluded from the subtotal", () => {
+    const cart: CartState = { entries: [entry({ id: "e1", division_id: "waitlist", entrant_kind: "team" })] };
+    const summary = summarizeCart(cart, [WAITLIST_DIV]);
+    expect(summary.lines[0]!.waitlisted).toBe(true);
+    expect(summary.lines[0]!.staleClosed).toBe(false);
+    expect(summary.lines[0]!.notChargedNow).toBe(true);
+    expect(summary.subtotalCents).toBe(0);
+  });
+
+  it("flags a non-'full' closed (stale) division distinctly — not-charged-now but NOT waitlisted", () => {
+    const cart: CartState = { entries: [entry({ id: "e1", division_id: "stale", entrant_kind: "team" })] };
+    const summary = summarizeCart(cart, [STALE_CLOSED_DIV]);
+    expect(summary.lines[0]!.waitlisted).toBe(false);
+    expect(summary.lines[0]!.staleClosed).toBe(true);
+    expect(summary.lines[0]!.notChargedNow).toBe(true);
+    expect(summary.subtotalCents).toBe(0);
+  });
+
+  it("an open, payable entry is charged now — neither flag set", () => {
+    const cart: CartState = { entries: [entry({ id: "e1", division_id: "open-paid", entrant_kind: "team" })] };
+    const summary = summarizeCart(cart, [OPEN_PAID]);
+    expect(summary.lines[0]!.waitlisted).toBe(false);
+    expect(summary.lines[0]!.staleClosed).toBe(false);
+    expect(summary.lines[0]!.notChargedNow).toBe(false);
+  });
+
+  it("a cart entry whose division cannot be found degrades to a not-found line, contributing nothing to the subtotal", () => {
+    const cart: CartState = { entries: [entry({ id: "e1", division_id: "missing", entrant_kind: "team" })] };
+    const summary = summarizeCart(cart, []);
+    expect(summary.lines[0]!.division).toBeUndefined();
+    expect(summary.subtotalCents).toBe(0);
   });
 });

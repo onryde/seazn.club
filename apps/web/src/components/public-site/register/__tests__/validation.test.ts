@@ -1,9 +1,18 @@
 // RS006 chassis — WHO-step field requirements + validation, ENTRIES-step
 // validation, DETAILS-step (step 3) validation (pure, no DOM).
 import { describe, expect, it } from "vitest";
-import { entryDetailsComplete, validateContact, validateDetails, validateEntries, whoFieldRequirements } from "../validation";
+import {
+  entryDetailsComplete,
+  guardianRequired,
+  validateConsent,
+  validateContact,
+  validateDetails,
+  validateEntries,
+  whoFieldRequirements,
+} from "../validation";
 import {
   EMPTY_CART,
+  EMPTY_CONSENT,
   EMPTY_CONTACT,
   EMPTY_ROSTER_PLAYER,
   type CartEntry,
@@ -513,5 +522,97 @@ describe("validateDetails — step 3's Next gate", () => {
 
   it("an empty cart is valid at this step (validateEntries already gates cart-emptiness on the PREVIOUS step)", () => {
     expect(validateDetails(EMPTY_CART, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CONSENT (step 4) — guardianRequired mirrors registration-submit.ts's own
+// gate verbatim: `registeringSelfAnywhere && contact.dob && isMinor(dob)`
+// (~line 429). Keyed off the CART's actual self-link, not the WHO step's
+// imPlaying toggle — see cart.ts's registeringSelfAnywhere doc comment.
+// ---------------------------------------------------------------------------
+
+describe("guardianRequired", () => {
+  const NOW = new Date("2026-06-15T00:00:00Z");
+  const selfLinkedCart: CartState = {
+    entries: [
+      entry({ id: "e1", division_id: "d1", entrant_kind: "individual", registering_self: true, self_player_index: 0 }),
+    ],
+  };
+  const unlinkedCart: CartState = {
+    entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "individual" })],
+  };
+
+  it("false when the cart has no self-linked entry at all, regardless of dob", () => {
+    expect(guardianRequired(unlinkedCart, { dob: "2015-01-01" }, NOW)).toBe(false);
+  });
+
+  it("false when the contact has no dob yet", () => {
+    expect(guardianRequired(selfLinkedCart, { dob: null }, NOW)).toBe(false);
+  });
+
+  it("false when self-linked but the contact is an adult", () => {
+    expect(guardianRequired(selfLinkedCart, { dob: "1990-01-01" }, NOW)).toBe(false);
+  });
+
+  it("true when self-linked AND the contact is under 18", () => {
+    expect(guardianRequired(selfLinkedCart, { dob: "2015-01-01" }, NOW)).toBe(true);
+  });
+});
+
+describe("validateConsent", () => {
+  const NOW = new Date("2026-06-15T00:00:00Z");
+  const adultContact: ContactState = { ...EMPTY_CONTACT, dob: "1990-01-01" };
+  const minorSelfContact: ContactState = { ...EMPTY_CONTACT, dob: "2015-01-01" };
+  const selfLinkedCart: CartState = {
+    entries: [
+      entry({ id: "e1", division_id: "d1", entrant_kind: "individual", registering_self: true, self_player_index: 0 }),
+    ],
+  };
+  const unlinkedCart: CartState = {
+    entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "individual" })],
+  };
+
+  it("invalid without privacy consent, regardless of anything else", () => {
+    const result = validateConsent(unlinkedCart, adultContact, EMPTY_CONSENT, NOW);
+    expect(result.valid).toBe(false);
+    expect(result.errors.privacy).toBe("required");
+  });
+
+  it("valid with privacy consent alone when no guardian is needed", () => {
+    const result = validateConsent(unlinkedCart, adultContact, { ...EMPTY_CONSENT, privacy_consent: true }, NOW);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual({});
+  });
+
+  it("media consent is never required — omitting it never blocks", () => {
+    const result = validateConsent(unlinkedCart, adultContact, { privacy_consent: true, media_consent: false }, NOW);
+    expect(result.valid).toBe(true);
+  });
+
+  it("a self-registering minor without guardian name/consent is blocked, even with privacy consent given", () => {
+    const result = validateConsent(selfLinkedCart, minorSelfContact, { ...EMPTY_CONSENT, privacy_consent: true }, NOW);
+    expect(result.valid).toBe(false);
+    expect(result.errors.guardianName).toBe("required");
+    expect(result.errors.guardianConsent).toBe("required");
+  });
+
+  it("a self-registering minor with BOTH guardian fields given is valid", () => {
+    const contact: ContactState = { ...minorSelfContact, guardian_name: "Pat Guardian", guardian_consent: true };
+    const result = validateConsent(selfLinkedCart, contact, { ...EMPTY_CONSENT, privacy_consent: true }, NOW);
+    expect(result.valid).toBe(true);
+  });
+
+  it("guardian name alone, without the consent checkbox, still blocks — and does not falsely report the name as missing", () => {
+    const contact: ContactState = { ...minorSelfContact, guardian_name: "Pat Guardian", guardian_consent: false };
+    const result = validateConsent(selfLinkedCart, contact, { ...EMPTY_CONSENT, privacy_consent: true }, NOW);
+    expect(result.valid).toBe(false);
+    expect(result.errors.guardianConsent).toBe("required");
+    expect(result.errors.guardianName).toBeUndefined();
+  });
+
+  it("a minor NOT self-registering (nobody linked) never needs a guardian", () => {
+    const result = validateConsent(unlinkedCart, minorSelfContact, { ...EMPTY_CONSENT, privacy_consent: true }, NOW);
+    expect(result.valid).toBe(true);
   });
 });

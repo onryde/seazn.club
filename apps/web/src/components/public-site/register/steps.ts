@@ -16,11 +16,14 @@ export function shouldCollapseEntries(openDivisionCount: number): boolean {
 /** The step list rendered today. `entries` drops out entirely (not merely
  *  disabled) when collapsed — same "absent, not disabled" convention
  *  RS005's canEdit gating used for a control nobody should see at all.
- *  "details" (step 3 — DETAILS) always follows, uncollapsed: unlike step 2,
- *  the design never skips it (every cart, however it was built, may still
- *  need a roster/form-fields/consent step before review). */
+ *  "details" (step 3 — DETAILS), "consent" (step 4) and "review" (step 5)
+ *  always follow, uncollapsed: unlike step 2, the design never skips them
+ *  (every cart, however it was built, still needs a roster/form-fields/
+ *  consent step and a final review before payment). */
 export function buildStepOrder(openDivisionCount: number): StepId[] {
-  return shouldCollapseEntries(openDivisionCount) ? ["who", "details"] : ["who", "entries", "details"];
+  return shouldCollapseEntries(openDivisionCount)
+    ? ["who", "details", "consent", "review"]
+    : ["who", "entries", "details", "consent", "review"];
 }
 
 /**

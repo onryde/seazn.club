@@ -10,7 +10,7 @@ import {
   saveRegisterState,
   type PersistedRegisterState,
 } from "../storage";
-import { EMPTY_CART, EMPTY_CONTACT } from "../types";
+import { EMPTY_CART, EMPTY_CONSENT, EMPTY_CONTACT } from "../types";
 
 class MapStorage {
   private map = new Map<string, string>();
@@ -47,6 +47,7 @@ const SNAPSHOT: PersistedRegisterState = {
     ],
   },
   stepIndex: 1,
+  consent: { ...EMPTY_CONSENT, privacy_consent: true },
 };
 
 describe("save/load round trip", () => {
@@ -110,6 +111,29 @@ describe("guarded against a malformed or stale entry — never throws", () => {
     storage.setItem(
       "seazn_register_riverside_summer-smash",
       JSON.stringify({ version: 1, contact: SNAPSHOT.contact, imPlaying: false, cart: preStep3Cart, stepIndex: 1 }),
+    );
+    expect(loadRegisterState("riverside", "summer-smash", storage)).toBeNull();
+  });
+
+  it("drops a v3 (pre-consent) snapshot whose ContactState lacks guardian_name/guardian_consent and whose top level lacks `consent`, instead of handing the stepper an incomplete shape — REGISTER_STATE_VERSION must be bumped past any release that persisted the OLD ContactState/PersistedRegisterState shape", () => {
+    const storage = new MapStorage();
+    // The exact shape RS006's chassis+WHO..DETAILS waves persisted, BEFORE
+    // step 4 (CONSENT) added guardian_name/guardian_consent to ContactState
+    // and a top-level `consent` field to PersistedRegisterState. Both fields
+    // are simply ABSENT here (not null/false) — reading
+    // `contact.guardian_consent`/`consent.privacy_consent` against this
+    // snapshot without the version bump would silently evaluate to
+    // `undefined` (falsy) rather than dropping the stale snapshot.
+    const v3Contact = { name: "Alex Test", email: "alex@example.com", dob: null, gender: null };
+    storage.setItem(
+      "seazn_register_riverside_summer-smash",
+      JSON.stringify({
+        version: 3,
+        contact: v3Contact,
+        imPlaying: false,
+        cart: { entries: [] },
+        stepIndex: 0,
+      }),
     );
     expect(loadRegisterState("riverside", "summer-smash", storage)).toBeNull();
   });

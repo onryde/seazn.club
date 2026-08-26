@@ -13,20 +13,44 @@
 
 export type Gender = "m" | "f" | "x";
 
-/** Step 1 (WHO) contact fields, cart-wide. Mirrors
- *  `PublicRegisterGroupContact` (schemas.ts:2359) minus guardian_name/
- *  guardian_consent, which are CONSENT-step (4) fields the design keeps
- *  separate from WHO — this session doesn't collect them, so they are
- *  intentionally absent here rather than reserved-but-unused. */
+/** Step 1 (WHO) contact fields, plus step 4 (CONSENT)'s guardian pair —
+ *  mirrors `PublicRegisterGroupContact` (schemas.ts:2368) field-for-field,
+ *  including `guardian_name`/`guardian_consent`. Earlier RS006 waves (before
+ *  step 4 existed) deliberately left the guardian pair off this shape "this
+ *  session doesn't collect them, so they are intentionally absent here
+ *  rather than reserved-but-unused" — this is that later session: the wire
+ *  shape nests them under `contact` (not a sibling top-level field), so they
+ *  belong HERE, not on a separate consent-only type, to keep the 1:1 mapping
+ *  onto `PublicRegisterGroupContact` this file's header describes. */
 export interface ContactState {
   name: string;
   email: string;
   /** ISO date (`YYYY-MM-DD`), or null until collected/needed. */
   dob: string | null;
   gender: Gender | null;
+  guardian_name: string | null;
+  guardian_consent: boolean;
 }
 
-export const EMPTY_CONTACT: ContactState = { name: "", email: "", dob: null, gender: null };
+export const EMPTY_CONTACT: ContactState = {
+  name: "",
+  email: "",
+  dob: null,
+  gender: null,
+  guardian_name: null,
+  guardian_consent: false,
+};
+
+/** Step 4 (CONSENT)'s two TOP-LEVEL wire fields (`PublicRegisterGroupRequest.
+ *  privacy_consent`/`.media_consent`, schemas.ts:2434 — siblings of `contact`,
+ *  not nested inside it, unlike the guardian pair above). Cart-wide, one
+ *  choice each for the whole submission. */
+export interface ConsentState {
+  privacy_consent: boolean;
+  media_consent: boolean;
+}
+
+export const EMPTY_CONSENT: ConsentState = { privacy_consent: false, media_consent: false };
 
 /** The subset of `PublicRegistrationDivision` (schemas.ts:2312) the chassis'
  *  pure logic reads. Narrow on purpose — the same reason
@@ -185,4 +209,4 @@ export const EMPTY_CART: CartState = { entries: [] };
 
 export const MAX_CART_ENTRIES = 10;
 
-export type StepId = "who" | "entries" | "details";
+export type StepId = "who" | "entries" | "details" | "consent" | "review";

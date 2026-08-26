@@ -4,9 +4,11 @@
 // PublicRegisterGroupRequest's superRefine) is truth — this file exists so
 // "Next" doesn't let a cart through that the server will 400/422 on submit,
 // not to replace that check.
+import { isMinor } from "@/lib/registration-rules";
+import { registeringSelfAnywhere } from "./cart";
 import { effectiveSelfPlayers } from "./roster";
 import { rosterEligibilityForDivision, selfEligibilityForDivision } from "./eligibility-presentation";
-import type { CartEntry, CartState, ContactState, DivisionLike } from "./types";
+import type { CartEntry, CartState, ConsentState, ContactState, DivisionLike } from "./types";
 
 export interface WhoFieldRequirements {
   dobRequired: boolean;
@@ -263,4 +265,65 @@ export function validateDetails(
   }
 
   return { valid: true, error: null };
+}
+
+// ---------------------------------------------------------------------------
+// CONSENT (step 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mirrors `registration-submit.ts`'s own guardian gate verbatim (~line 429):
+ * `registeringSelfAnywhere && contact.dob && isMinor(dob, now)`. Keyed off
+ * the CART's actual self-link (`registeringSelfAnywhere`, cart.ts), not the
+ * WHO step's `imPlaying` toggle — `imPlaying` can be true with ZERO entries
+ * actually linked (2+ entries is ambiguous, the rep must explicitly choose),
+ * and the server's own gate never fires in that case either, so keying off
+ * `imPlaying` here would over-trigger the block relative to what submit
+ * actually requires.
+ */
+export function guardianRequired(cart: CartState, contact: Pick<ContactState, "dob">, now: Date): boolean {
+  if (!contact.dob) return false;
+  if (!registeringSelfAnywhere(cart)) return false;
+  return isMinor(contact.dob, now);
+}
+
+export interface ConsentValidation {
+  valid: boolean;
+  /** Per-field, matching validateContact's convention (WHO step) rather
+   *  than validateEntries/validateDetails' single banner code — privacy and
+   *  the guardian pair are each a distinct form control that can carry its
+   *  own inline error. */
+  errors: {
+    privacy?: "required";
+    guardianName?: "required";
+    guardianConsent?: "required";
+  };
+}
+
+/**
+ * Step 4's "Next" gate. Privacy consent is UNCONDITIONALLY required (design
+ * §4: "required, versioned"; mirrors registration-submit.ts's own
+ * `if (!input.privacy_consent) throw ...`, entry condition 2). Media consent
+ * is NEVER checked here — RS006 §A: "media consent is OPTIONAL and must
+ * never block submit". The guardian pair is required only when
+ * `guardianRequired` above says so, and — per registration-submit.ts:429-430
+ * — BOTH fields independently (a name with no consent, or consent with no
+ * name, are each their own missing requirement).
+ */
+export function validateConsent(
+  cart: CartState,
+  contact: ContactState,
+  consent: ConsentState,
+  now: Date,
+): ConsentValidation {
+  const errors: ConsentValidation["errors"] = {};
+
+  if (!consent.privacy_consent) errors.privacy = "required";
+
+  if (guardianRequired(cart, contact, now)) {
+    if (!contact.guardian_name?.trim()) errors.guardianName = "required";
+    if (!contact.guardian_consent) errors.guardianConsent = "required";
+  }
+
+  return { valid: Object.keys(errors).length === 0, errors };
 }

@@ -7,7 +7,7 @@
 // common racket-sports case); checking one does NOT uncheck another.
 import { useT } from "@/components/i18n/dict-provider";
 import { formatMinor, type Currency } from "@/lib/currency";
-import type { CartAction } from "./cart";
+import { summarizeCart, type CartAction } from "./cart";
 import { INELIGIBLE_MESSAGE_KEY, selfEligibilityForDivision } from "./eligibility-presentation";
 import { BTN_TEXT } from "./styles";
 import { MAX_CART_ENTRIES, type CartEntry, type CartState, type ContactState, type DivisionLike } from "./types";
@@ -49,23 +49,11 @@ export function EntryCart({
   seasonStartYear: number;
 }) {
   const t = useT();
-  const byId = new Map(divisions.map((d) => [d.division_id, d]));
-
-  let subtotalCents = 0;
-  let currency: string | null = null;
-  for (const entry of cart.entries) {
-    const division = byId.get(entry.division_id);
-    if (!division) continue;
-    // Any closed reason (not just "full") means this division is not being
-    // charged for right now — "full" waitlists (design: still open, not
-    // charged until promoted); "window"/"payments_unavailable" mean the
-    // division closed since this entry was added (fix wave finding #4 — a
-    // restored cart is never re-validated against live divisions,
-    // storage.ts's own doc comment) and the entry is stale, not payable.
-    if (division.closed_reason != null) continue;
-    subtotalCents += division.fee_cents;
-    currency = division.currency;
-  }
+  // RS006 §C: summarizeCart is the ONE subtotal/waitlist computation shared
+  // with step-review.tsx (step 5) — see that function's own doc comment
+  // (cart.ts) for why this must not fork back into a second copy.
+  const summary = summarizeCart(cart, divisions);
+  const { subtotalCents, currency } = summary;
 
   return (
     <div className="rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
@@ -77,14 +65,7 @@ export function EntryCart({
         <p className="mt-3 text-sm text-ink-muted">{t("register.entries.cart.empty")}</p>
       ) : (
         <ul className="mt-3 space-y-2.5">
-          {cart.entries.map((entry) => {
-            const division = byId.get(entry.division_id);
-            const willWaitlist = division?.closed_reason === "full";
-            // Any OTHER non-null reason means the division closed since
-            // this entry was added (a restored cart is never re-validated
-            // against live divisions — storage.ts's own doc comment) —
-            // distinct from the waitlist case, fix wave finding #4.
-            const isStaleClosed = division != null && division.closed_reason != null && division.closed_reason !== "full";
+          {summary.lines.map(({ entry, division, waitlisted: willWaitlist, staleClosed: isStaleClosed }) => {
             const isSelf = entry.registering_self;
             const name = entryDisplayName(entry);
             // Fix wave finding #3: the self-linked entry's OWN eligibility
@@ -159,8 +140,13 @@ export function EntryCart({
                     hasn't said they're playing has nothing to link, so the
                     control is absent rather than merely disabled (same
                     "absent, not disabled" convention as steps.ts's
-                    collapsed ENTRIES step). */}
-                {imPlaying && (
+                    collapsed ENTRIES step). ALSO gated on !free_agent (RS006
+                    §D, known gap): a free-agent entry has no roster UI to
+                    ever resolve self_player_index — cart.ts's SET_ENTRY_SELF
+                    refuses the state this checkbox would otherwise produce,
+                    so the control itself is absent rather than offering a
+                    choice that would 422 at submit. */}
+                {imPlaying && !entry.free_agent && (
                   <label className="mt-2 flex items-center gap-2 text-xs text-ink-muted">
                     <input
                       type="checkbox"

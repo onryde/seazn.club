@@ -32,6 +32,14 @@ import {
   EMPTY_ROSTER_PLAYER,
 } from "./types";
 
+// RS006 step 4/5 (CONSENT, REVIEW→PAY) added the three cart-derived pure
+// functions at the end of this file: `registeringSelfAnywhere` (the
+// guardian gate's trigger), `cartHasOtherPlayers` (the captain-roster
+// notice's trigger), and `summarizeCart` (the ONE subtotal/waitlist
+// computation shared by entry-cart.tsx and step-review.tsx — see
+// `summarizeCart`'s own doc comment for why forking this math is the
+// specific thing the RS006 dispatch calls out not to do).
+
 export const MAX_ROSTER_PLAYERS = 50; // PublicRegisterGroupEntry.players.max(50), schemas.ts:2396
 
 export type CartAction =
@@ -147,10 +155,23 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
       // from an earlier link, matching the old cart-level behaviour's
       // "switching resets the index" rule, now scoped to one entry instead
       // of the whole cart.
+      //
+      // A FREE-AGENT entry refuses `isSelf: true` (RS006 §D, known gap):
+      // it has no roster UI (design: "Free-agent entries need nothing
+      // extra"), so nothing could ever resolve self_player_index for one —
+      // linking it would submit registering_self:true with an unresolvable
+      // index and 422 at submit with an error the registrant cannot act on.
+      // This is the innermost of three layers making the UI structurally
+      // unable to produce that state (the others: entry-cart.tsx never
+      // renders the checkbox for a free-agent entry; autoLinkObviousSelf
+      // below skips one too). `isSelf: false` (unlinking) is always allowed
+      // — refusing THAT would leave a stale link with no way to clear it.
       return {
         ...state,
         entries: state.entries.map((e) =>
-          e.id === action.id ? { ...e, registering_self: action.isSelf, self_player_index: null } : e,
+          e.id === action.id && (!action.isSelf || !e.free_agent)
+            ? { ...e, registering_self: action.isSelf, self_player_index: null }
+            : e,
         ),
       };
     }
@@ -279,6 +300,12 @@ export function autoLinkObviousSelf(cart: CartState, imPlaying: boolean): CartSt
   if (cart.entries.length !== 1) return cart;
   const only = cart.entries[0]!;
   if (only.registering_self) return cart;
+  // RS006 §D (known gap) — a free-agent entry has no roster UI to ever
+  // resolve self_player_index (see SET_ENTRY_SELF's own doc comment above,
+  // which the reducer call below would hit anyway — this early return just
+  // makes the refusal explicit at THIS call site too, rather than relying
+  // solely on the reducer's silent no-op).
+  if (only.free_agent) return cart;
   return cartReducer(cart, { type: "SET_ENTRY_SELF", id: only.id, isSelf: true });
 }
 
@@ -342,4 +369,95 @@ export function toGroupEntry(entry: CartEntry): {
         ? entry.self_player_index
         : undefined,
   };
+}
+
+/** Mirrors `registration-submit.ts`'s own cart-wide `registeringSelfAnywhere`
+ *  flag (the guardian-consent gate's trigger, ~line 429) — computed off the
+ *  CART's actual links, not the WHO step's `imPlaying` toggle: `imPlaying`
+ *  can be true with ZERO entries actually linked (2+ entries is ambiguous,
+ *  the rep must explicitly choose one), so gating the guardian block on
+ *  `imPlaying` alone would over-trigger it. Step 4 (CONSENT) uses this to
+ *  decide both whether to SHOW the guardian block and whether to REQUIRE it
+ *  before "Next" — see validation.ts's `guardianRequired`. */
+export function registeringSelfAnywhere(cart: CartState): boolean {
+  return cart.entries.some((e) => e.registering_self);
+}
+
+/** Design §4 step 4: "Notice that captain-entered players will be asked to
+ *  confirm when they join/claim" — true whenever the cart, once submitted,
+ *  names at least one player row who is NOT the contact's own self-linked
+ *  row. A free-agent entry never contributes (design: "nothing extra" — it
+ *  has no roster to speak of); an entry with no self-link at all counts
+ *  EVERY player row as "other" (nobody has claimed to be the contact on
+ *  it); a self-linked entry subtracts exactly one row (the linked one) from
+ *  its own player count, whether or not that row's index has been resolved
+ *  yet — an unresolved self-link still means "the OTHER rows are other
+ *  people," which is the only thing this notice claims. */
+export function cartHasOtherPlayers(cart: CartState): boolean {
+  return cart.entries.some((e) => {
+    if (e.free_agent) return false;
+    const selfRows = e.registering_self ? 1 : 0;
+    return e.players.length - selfRows > 0;
+  });
+}
+
+/** One cart line's payability, shared by `summarizeCart` below. */
+export interface CartLineSummary {
+  entry: CartEntry;
+  /** Absent for a stale/unresolvable division_id — same "degrade, don't
+   *  throw" precedent as entry-cart.tsx's own division lookup predates this
+   *  refactor with. */
+  division: DivisionLike | undefined;
+  /** True when this entry will NOT be charged now — waitlisted OR the
+   *  division has gone stale-closed since it was added (design: "not
+   *  charged now" covers both; a restored cart is never re-validated
+   *  against live divisions, storage.ts's own doc comment). Undefined
+   *  division counts as not-charged-now too (nothing to charge). */
+  notChargedNow: boolean;
+  /** True specifically for the waitlist case (`closed_reason === "full"`) —
+   *  distinct from a stale-closed entry, same distinction entry-cart.tsx
+   *  already drew (fix wave finding #4) before this refactor. */
+  waitlisted: boolean;
+  /** True for a NON-"full" closed reason (the division's window/payment
+   *  method changed since this entry was added), as opposed to waitlisted. */
+  staleClosed: boolean;
+}
+
+export interface CartSummary {
+  lines: CartLineSummary[];
+  subtotalCents: number;
+  /** The subtotal's currency, or null when the cart has nothing payable yet
+   *  (matches entry-cart.tsx's own pre-refactor `currency` variable). Every
+   *  payable division in a cart shares one currency by construction
+   *  (assertUniformPaymentMethod/same-currency rule, registration-submit.ts)
+   *  — the LAST payable line's currency is as good as any, same as the
+   *  pre-refactor loop's own behaviour. */
+  currency: string | null;
+}
+
+/**
+ * THE subtotal/waitlist computation for the whole cart — design §4 step 5:
+ * "waitlisted entries flagged 'not charged now' and excluded from the
+ * subtotal (step 2's cart already does this — reuse, do not fork the
+ * logic)". Extracted from entry-cart.tsx's own inline loop (RS006 step 2)
+ * so BOTH entry-cart.tsx (step 2, editable) and step-review.tsx (step 5,
+ * read-only) call this ONE function — a defect in "what counts as payable"
+ * can now only exist in one place, not two that could silently drift.
+ */
+export function summarizeCart(cart: CartState, divisions: readonly DivisionLike[]): CartSummary {
+  const byId = new Map(divisions.map((d) => [d.division_id, d]));
+  let subtotalCents = 0;
+  let currency: string | null = null;
+  const lines: CartLineSummary[] = cart.entries.map((entry) => {
+    const division = byId.get(entry.division_id);
+    const waitlisted = division?.closed_reason === "full";
+    const staleClosed = division != null && division.closed_reason != null && division.closed_reason !== "full";
+    const notChargedNow = division == null || division.closed_reason != null;
+    if (division && division.closed_reason == null) {
+      subtotalCents += division.fee_cents;
+      currency = division.currency;
+    }
+    return { entry, division, notChargedNow, waitlisted, staleClosed };
+  });
+  return { lines, subtotalCents, currency };
 }

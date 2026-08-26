@@ -7,7 +7,7 @@
 // try/catch around JSON parse/stringify, drop-and-continue on a malformed
 // or version-mismatched entry rather than throwing or misinterpreting it.
 // Never throws: a broken save/load must not break the stepper.
-import type { CartState, ContactState } from "./types";
+import type { CartState, ConsentState, ContactState } from "./types";
 
 // REGISTER_STATE_VERSION bumped 1 -> 2 at RS006 W3 (step 3 — DETAILS):
 // CartEntry gained REQUIRED `players`/`answers` fields (types.ts), so a v1
@@ -28,18 +28,38 @@ import type { CartState, ContactState } from "./types";
 // than a clean drop-and-continue — bumping routes it into the same
 // mismatch-drop path instead. Any future CartEntry/CartState shape change
 // that isn't purely additive-optional needs the same bump.
-export const REGISTER_STATE_VERSION = 3 as const;
+//
+// Bumped 3 -> 4 (RS006 step 4 — CONSENT): `ContactState` gained REQUIRED
+// `guardian_name`/`guardian_consent` fields, and `PersistedRegisterState`
+// gained a new top-level `consent` field. A v3 snapshot's `contact` object
+// lacks the guardian pair entirely (not null/false) and has no `consent`
+// sibling at all — reading either against a restored v3 snapshot would
+// silently evaluate to `undefined` (falsy: `guardianRequired`/
+// `validateConsent` would treat an unset guardian consent as "not granted",
+// which happens to be safe, but `consent.privacy_consent` reading as
+// `undefined` is indistinguishable from "not yet decided" only by luck, not
+// by contract) rather than a clean drop-and-continue.
+export const REGISTER_STATE_VERSION = 4 as const;
 
 export interface PersistedRegisterState {
   version: typeof REGISTER_STATE_VERSION;
   contact: ContactState;
   imPlaying: boolean;
   cart: CartState;
+  /** Step 4 (CONSENT)'s two cart-wide choices — see `ConsentState`'s own
+   *  doc comment (types.ts) for why these are a separate top-level field
+   *  rather than folded into `contact`. */
+  consent: ConsentState;
   /** Index into this session's step order (steps.ts) — NOT re-validated
    *  against today's division set on load; the stepper re-derives step
    *  order fresh from live `open` divisions every render and simply clamps
    *  the restored index into range, so a division that closed between
-   *  visits can't strand the restored position past the end. */
+   *  visits can't strand the restored position past the end. Clamped to
+   *  the LAST real step (`stepOrder.length - 1`), never `stepOrder.length`
+   *  itself — unlike earlier waves, "review" (step 5) is a genuine final
+   *  step with its own Submit action, not a step before a "more soon"
+   *  end-cap, so there is no longer a one-past-the-end position to restore
+   *  into. */
   stepIndex: number;
 }
 

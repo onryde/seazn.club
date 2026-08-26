@@ -15,13 +15,13 @@ describe("shouldCollapseEntries", () => {
 });
 
 describe("buildStepOrder", () => {
-  it("includes entries when 0 or 2+ open divisions exist", () => {
-    expect(buildStepOrder(0)).toEqual(["who", "entries", "details"]);
-    expect(buildStepOrder(3)).toEqual(["who", "entries", "details"]);
+  it("includes entries when 0 or 2+ open divisions exist, followed by consent and review", () => {
+    expect(buildStepOrder(0)).toEqual(["who", "entries", "details", "consent", "review"]);
+    expect(buildStepOrder(3)).toEqual(["who", "entries", "details", "consent", "review"]);
   });
 
-  it("drops entries (but NOT details) when exactly one open division exists", () => {
-    expect(buildStepOrder(1)).toEqual(["who", "details"]);
+  it("drops entries (but NOT details/consent/review) when exactly one open division exists", () => {
+    expect(buildStepOrder(1)).toEqual(["who", "details", "consent", "review"]);
   });
 });
 

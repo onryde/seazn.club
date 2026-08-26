@@ -663,6 +663,60 @@ describe("finding #8 — an unresolvable division name (raw UUID fallback) never
 });
 
 // ---------------------------------------------------------------------------
+// RS006 §D (known gap) — a free-agent entry has no roster UI to ever
+// resolve self_player_index, so the "This is me" checkbox must never render
+// for one (cart.ts's SET_ENTRY_SELF/autoLinkObviousSelf refuse the state;
+// this is the UI half of the same three-layer defence).
+// ---------------------------------------------------------------------------
+
+describe("RS006 §D — a free-agent cart line never offers 'This is me'", () => {
+  it("the self checkbox is absent on a free-agent line even while imPlaying is true, and present on an ordinary line in the same cart", () => {
+    const cart: CartState = {
+      entries: [
+        {
+          id: "fa1",
+          division_id: "div-team",
+          entrant_kind: "team",
+          team_name: null,
+          partner_name: null,
+          free_agent: true,
+          players: [],
+          answers: {},
+          registering_self: false,
+          self_player_index: null,
+        },
+        {
+          id: "e2",
+          division_id: "div-open-2",
+          entrant_kind: "individual",
+          team_name: null,
+          partner_name: null,
+          free_agent: false,
+          players: [],
+          answers: {},
+          registering_self: false,
+          self_player_index: null,
+        },
+      ],
+    };
+    const division: DivisionLike = { ...DIV_OPEN, division_id: "div-team", name: "Open Teams", entrant_kind: "team", allow_free_agents: true };
+    const tree = walk(
+      EntryCart({
+        cart,
+        divisions: [division, DIV_OPEN_2],
+        dispatch: () => {},
+        locale: "en",
+        contact: EMPTY_CONTACT,
+        imPlaying: true,
+        seasonStartYear: 2026,
+      }),
+    );
+    const checkboxes = tree.filter((e) => e.type === "input" && propsOf(e).type === "checkbox");
+    expect(checkboxes, "exactly one self checkbox — the free-agent line offers none").toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Item B (coordinator scope expansion) — self-ineligible division cards
 // de-emphasize visually, without ever disabling the Add control
 // ---------------------------------------------------------------------------
@@ -828,8 +882,8 @@ describe("step 3 — the mixed-composition meter blocks an all-male roster and c
     expect(pageText()).not.toContain("Needs at least one male and one female player on the roster.");
     expect(pageText()).not.toContain("Fill in the missing details above before continuing");
 
-    clickByText("Next"); // now advances past the last built step
-    expect(pageText()).toContain("More steps on the way");
+    clickByText("Next"); // now advances onto CONSENT (step 4)
+    expect(pageText()).toContain("Consent");
   });
 });
 
