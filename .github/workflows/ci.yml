@@ -163,6 +163,22 @@ jobs:
       - name: eslint
         run: npx turbo run lint
 
+      # Scheduler bench's own library code (B01, scripts/bench/lib/**) —
+      # pre-flight orchestration and the report schema/writer. DB-free BY
+      # DESIGN (env.ts's PreflightProbes injection exists specifically so
+      # this needs no live Postgres/server/placement container), so it runs
+      # in THIS job — not smoke-db below, which has a live Postgres and would
+      # not prove the DB-free claim. Same explicit-binary-path +
+      # explicit-target-path + dual reporter + testTimeout convention as the
+      # "Repo-root scripts tests" step in the smoke-db job (this file,
+      # further down): no root-level vitest install/config exists, so
+      # packages/engine's already-installed binary is invoked directly with
+      # an explicit target path rather than relying on config
+      # auto-discovery, which would walk up from cwd and find nothing to
+      # pick up scripts/bench at all.
+      - name: Bench lib unit tests (DB-free)
+        run: ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-bench.json --testTimeout=30000 scripts/bench
+
   # -------------------------------------------------------------------------
   # The apps/web unit / property / grid suite, in two shards. It was 216s — 182s
   # of it this one step — and second only to smoke-e2e once #600 landed, so it
