@@ -925,23 +925,31 @@ const SPORTS: GallerySport[] = [
       const soClosureMessage = pad(page).locator(
         '[data-role="context-strip"] [data-role="context-slot-message"][data-slot-id="bowler"]',
       );
-      // THE DEFECT, pinned rather than fixed — two real super-over balls are
-      // already on the ledger, yet the skin still reads ONLY
-      // `state.innings` (both main innings closed) and renders exactly the
-      // terminal "nothing left to record" gate: disabled tiles over a live
-      // decider (scorepad-v3-cricket.spec.ts's own ":1004" test asserts the
-      // identical gate with NO super-over ball posted yet — Task C rewrites
-      // that test; this gallery state is the OTHER half of the same bug,
-      // with real super-over deliveries already in play).
+      // Task A captured this state with the DEFECT still in it, and pinned
+      // the defect deliberately: `data-tile-disabled="true"` plus the closure
+      // message, over a live super over with two real deliveries already on
+      // the ledger. Those captures are the BEFORE half of this wave's
+      // sign-off and are preserved in the published sheet.
+      //
+      // Task C fixed it (`activeInnings`, cricket.ts — the skin now reads the
+      // super over's own innings instead of `state.innings`), so these probes
+      // are now inverted to pin the CORRECTED behaviour. That inversion is
+      // the point: had the probes merely been deleted, nothing would stop the
+      // defect returning. Read together with the before-captures, this state
+      // is the pair the merge gate is judged on.
       await captureState(page, dir, "11-superover", "cricket", measurements, async () => {
         await expect(
           soRunTile,
-          "gallery(cricket): 11-superover must still show the (wrongly) disabled delivery tiles",
-        ).toHaveAttribute("data-tile-disabled", "true");
+          "gallery(cricket): 11-superover delivery tiles must be ENABLED — a super over is live play",
+        ).toHaveAttribute("data-tile-disabled", "false");
         await expect(
           soClosureMessage,
-          "gallery(cricket): 11-superover must still show the closure message over a live super over",
-        ).toContainText("This innings is closed.");
+          "gallery(cricket): 11-superover must NOT claim the innings is closed while a super over is being bowled",
+        ).toHaveCount(0);
+        await expect(
+          pad(page).locator('[data-role="v3-scorebug"]'),
+          "gallery(cricket): 11-superover scorebug must read the SUPER OVER (6/0 off 0.2), not the closed innings",
+        ).toContainText("6/0");
       });
 
       // 12 — continue the SAME fixture to a decision: four more away balls
