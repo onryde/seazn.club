@@ -53,7 +53,7 @@ import {
   tryEarnGrant,
   walletIdFor,
 } from "@/lib/credits";
-import { ageAt, isMinor, requiresDob } from "./registration-eligibility";
+import { ageAt, isMinor, requiresDob, requiresGender } from "./registration-eligibility";
 
 type Tx = postgres.TransactionSql;
 
@@ -1332,7 +1332,17 @@ export interface PublicDivisionInfo {
   open: boolean;
   /** 'window' | 'full' | 'payments_unavailable' | null */
   closed_reason: string | null;
+  /** V364 first-class columns (RS006 W1), alongside the derived booleans
+   *  below — the ENTRIES step badges these directly and runs the SAME
+   *  category/age-band predicates (@/lib/registration-rules) to grey a
+   *  self-ineligible division, rather than forking new rules client-side. */
+  category: string | null;
+  age_min: number | null;
+  age_max: number | null;
+  /** Team-only; drives the ENTRIES step's free-agent option. */
+  allow_free_agents: boolean;
   requires_dob: boolean;
+  requires_gender: boolean;
   /** Youth division (v3/11 gap 8): the form always adds guardian consent. */
   youth: boolean;
   /** Queue length behind a full division (PROMPT-52) — public. */
@@ -1381,6 +1391,11 @@ export async function publicRegistrationInfo(
       eligibility: unknown[];
       // V364 first-class columns: `age_min`/`age_max` also drive
       // `requires_dob` below (a category-only division needs no DOB).
+      // `category` drives `requires_gender` the same way, and both ship on
+      // the wire (RS006 W1: the ENTRIES step badges category/age and greys
+      // a self-ineligible division, so the client needs the raw values, not
+      // just the derived booleans).
+      category: string | null;
       age_min: number | null;
       age_max: number | null;
       youth: boolean;
@@ -1388,7 +1403,7 @@ export async function publicRegistrationInfo(
       waitlisted: number;
     })[]
   >`
-    select rs.*, d.name, d.slug, d.sport_key, d.eligibility, d.age_min, d.age_max, d.youth,
+    select rs.*, d.name, d.slug, d.sport_key, d.eligibility, d.category, d.age_min, d.age_max, d.youth,
            (select count(*)::int from registrations r
              where r.division_id = rs.division_id
                and r.status in ${sql([...SPOT_HOLDERS])}) as active,
@@ -1439,6 +1454,17 @@ export async function publicRegistrationInfo(
       taken: r.active,
       open,
       closed_reason: reason,
+      // V364 first-class columns (RS006 W1): raw values, so the ENTRIES step
+      // can badge category/age and grey a self-ineligible division using the
+      // SAME evaluation the server ships (@/lib/registration-rules), instead
+      // of forking its own rules client-side.
+      category: r.category,
+      age_min: r.age_min,
+      age_max: r.age_max,
+      // Team-only (registration-eligibility's putRegistrationSettings rejects
+      // `true` on a non-team division) — drives the ENTRIES step's free-agent
+      // option (design §4 step 2).
+      allow_free_agents: r.allow_free_agents,
       // V364: a division can require a DOB via the jsonb rules OR via the
       // first-class age_min/age_max columns alone — requiresDob's
       // division-shaped overload checks both.
@@ -1447,6 +1473,9 @@ export async function publicRegistrationInfo(
         age_min: r.age_min,
         age_max: r.age_max,
       }),
+      // Same idea as requires_dob, for gender (RS006 WHO step): a jsonb
+      // GenderRule OR a mens/womens/mixed category.
+      requires_gender: requiresGender({ eligibility: r.eligibility ?? [], category: r.category }),
       youth: r.youth,
       waitlisted: r.waitlisted,
       form_fields: r.form_fields ?? [],

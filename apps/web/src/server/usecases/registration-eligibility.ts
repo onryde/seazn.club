@@ -155,6 +155,35 @@ export function requiresDob(
 }
 
 /**
+ * Division has a gender rule ⇒ the form must collect gender (RS006 WHO step,
+ * design §4 step 1: "dob/gender collected once, only if any division needs
+ * them"). Sibling of `requiresDob` above, same shape: a boolean the PUBLIC
+ * read model can hand a client so the client never has to re-derive WHICH
+ * divisions care about gender from raw jsonb rules it cannot even see (the
+ * public info response never carries the jsonb `eligibility` array itself,
+ * only booleans this module computes from it).
+ *
+ * Must agree with `divisionEligibilityIssues`'s two gender sources exactly:
+ * a jsonb `GenderRule` (`kind: "gender"`), OR the first-class `category`
+ * being `mens`/`womens` (individual-level: needs the specific gender) or
+ * `mixed` (roster-level: needs every player's gender to prove the roster
+ * balances). `open`/`null` need nothing on their own.
+ */
+export function requiresGender(division: {
+  eligibility: unknown[];
+  category: string | null;
+}): boolean {
+  if (
+    division.category === "mens" ||
+    division.category === "womens" ||
+    division.category === "mixed"
+  ) {
+    return true;
+  }
+  return division.eligibility.some((r) => (r as { kind?: string })?.kind === "gender");
+}
+
+/**
  * Full structured eligibility check for one player against one division:
  * the jsonb `eligibility` rules (doc 06 §2 — only 'age' and 'gender' are
  * checkable here; roster/grade/custom rules are organiser-side) PLUS the

@@ -17,6 +17,7 @@ import {
   formatEligibilityIssues,
   isMinor,
   requiresDob,
+  requiresGender,
   rosterIssues,
   type EligibilityDivision,
   type EligibilityIssue,
@@ -85,6 +86,44 @@ describe("requiresDob (division-aware overload, V364) — unaffected by the code
     expect(requiresDob([])).toBe(false);
     expect(requiresDob([{ kind: "age", maxAgeAt: 15 }])).toBe(true);
     expect(requiresDob([{ kind: "gender", allowed: ["f"] }])).toBe(false);
+  });
+});
+
+// RS006 chassis: the WHO step (design §4 step 1) shows a gender field only
+// when at least one open division needs one — mirrors requiresDob's own
+// "does the form need to collect this at all" role, but for gender. Must
+// agree EXACTLY with divisionEligibilityIssues's two gender sources (the
+// jsonb GenderRule loop and the mens/womens category block) or the public
+// read model would tell the client to hide a field the server's own
+// evaluator is about to require.
+describe("requiresGender (RS006) — mirrors divisionEligibilityIssues's gender sources", () => {
+  it("is true for mens/womens category (first-class column alone)", () => {
+    expect(requiresGender({ eligibility: [], category: "mens" })).toBe(true);
+    expect(requiresGender({ eligibility: [], category: "womens" })).toBe(true);
+  });
+
+  it("is true for a mixed category (roster composition needs every player's gender)", () => {
+    expect(requiresGender({ eligibility: [], category: "mixed" })).toBe(true);
+  });
+
+  it("is false for open/null category with no jsonb gender rule", () => {
+    expect(requiresGender({ eligibility: [], category: "open" })).toBe(false);
+    expect(requiresGender({ eligibility: [], category: null })).toBe(false);
+  });
+
+  it("is true when a jsonb GenderRule is present, regardless of category", () => {
+    expect(
+      requiresGender({ eligibility: [{ kind: "gender", allowed: ["f"] }], category: null }),
+    ).toBe(true);
+    expect(
+      requiresGender({ eligibility: [{ kind: "gender", allowed: ["m"] }], category: "open" }),
+    ).toBe(true);
+  });
+
+  it("ignores non-gender jsonb rules", () => {
+    expect(requiresGender({ eligibility: [{ kind: "age", maxAgeAt: 18 }], category: null })).toBe(
+      false,
+    );
   });
 });
 

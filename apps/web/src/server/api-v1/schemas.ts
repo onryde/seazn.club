@@ -2328,7 +2328,16 @@ export const PublicRegistrationDivision = z.object({
   open: z.boolean(),
   /** 'window' | 'full' (waitlist only) | 'payments_unavailable' | null */
   closed_reason: z.string().nullable(),
+  /** V364 first-class columns (RS006 W1): the ENTRIES step badges these and
+   *  greys a self-ineligible division using the same category/age-band
+   *  predicates the server evaluates with (@/lib/registration-rules). */
+  category: z.string().nullable(),
+  age_min: z.number().int().nullable(),
+  age_max: z.number().int().nullable(),
+  /** Team-only; drives the ENTRIES step's free-agent option. */
+  allow_free_agents: z.boolean(),
   requires_dob: z.boolean(),
+  requires_gender: z.boolean(),
   /** Youth division (v3/11 gap 8): the form always adds guardian consent. */
   youth: z.boolean(),
   form_fields: z.array(RegistrationFormField),
