@@ -16,7 +16,14 @@ import {
   padSpec,
   type FootballCfg,
   type FootballEv,
+  type FootballState,
 } from "./football.ts";
+// R3.5/Task H — the shared shoot-out primitive `summary()` must agree with
+// (see the new describe block below). Imported directly from the sibling
+// module, the same relative path football.ts's own import uses, rather than
+// through the barrel: this file already tests football.ts's internals
+// directly (the `./football.ts` import above bypasses `./index.ts` too).
+import { shootoutTally, type ShootoutKick } from "../period/shootout.ts";
 
 // Direct module.apply calls need the module's payload union on the envelope.
 const asFootball = (event: EventEnvelope) => event as EventEnvelope<FootballEv | CoreEv>;
@@ -166,6 +173,84 @@ describe("football golden (b): knockout decided on penalties", () => {
         makeEnvelope(early.length, { type: "football.shootout.kick", payload: { by: "H", scored: true } }),
       ]),
     ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" })); // H kicked out of turn
+  });
+});
+
+// R3.5/Task H (case F22) — `summary()` must not fork the shoot-out tally.
+// `shootout.ts`'s own doc explains why this must be the ONE tally:
+// `period/kernel.ts` already reads `shootoutTally` for its own summary, and
+// this was the THIRD hand-rolled copy — the inline `reduce` this wave found
+// counted a `void: true` kick's `scored` value, which `shootoutTally` does
+// not (a void kick is a retake pending; it happened, but it counts toward
+// neither `taken` nor `scored`).
+//
+// A PARITY guard, not a reachable-state test: `FootballShootoutKick`'s own
+// schema (this file, above) carries no `void` field, and `applyShootoutKick`
+// never writes one — no v3 football surface can record one today. `void` is
+// this shared primitive's OWN doc admits belongs to the OTHER sports that
+// reuse it (IIHF GWS / FIH App 12 foul outcomes, hockey/DOMAIN.md). The state
+// literal below is therefore built directly rather than folded through
+// `football.apply`, on purpose: proving `summary()`'s CODE does not fork the
+// tally does not require a state the fold can currently produce.
+describe("football golden (h): summary()'s pens tally IS shootoutTally, never a second copy (F22)", () => {
+  // A real SHOOTOUT-phase fold for everything BUT the kicks — goals, periods,
+  // squads all come from a genuine `foldMatch` walk; only `shootout.kicks`
+  // is substituted per case below.
+  const base: FootballState = fold(
+    knockoutCfg,
+    stream(
+      ["core.start"],
+      ["football.period", { phase: "HT" }],
+      ["football.period", { phase: "FT" }],
+      ["football.period", { phase: "ET_HT" }],
+      ["football.period", { phase: "ET_FT" }],
+    ),
+  );
+
+  // Object rows, deliberately — `it.each` SPREADS an array-shaped row as
+  // POSITIONAL arguments rather than binding it to one parameter (a real
+  // vitest/jest gotcha this test tripped over first: `it.each([[], [k1]])`
+  // called its callback with `kicks` bound to the row's first ELEMENT, or to
+  // `undefined` for an empty row, never to the row itself). A `{label,
+  // kicks}` table sidesteps it entirely, and names each case besides.
+  const KICK_CASES: readonly { label: string; kicks: ShootoutKick[] }[] = [
+    { label: "zero kicks", kicks: [] },
+    { label: "one kick", kicks: [{ side: "home", scored: true }] },
+    {
+      label: "a full alternating sequence",
+      kicks: [
+        { side: "home", scored: true },
+        { side: "away", scored: false },
+        { side: "home", scored: true },
+        { side: "away", scored: true },
+      ],
+    },
+    {
+      // The case that fails on the inline `reduce`: a void kick's `scored`
+      // must reach neither the tally nor the headline suffix.
+      label: "a sequence carrying a void kick",
+      kicks: [
+        { side: "home", scored: true },
+        { side: "home", scored: true, void: true },
+        { side: "away", scored: false },
+      ],
+    },
+  ];
+
+  it.each(KICK_CASES)("summary().detail.shootout equals shootoutTally(kicks) — $label", ({ kicks }) => {
+    const state: FootballState = { ...base, shootout: { kicks } };
+    const detail = football.summary(state).detail as { shootout?: { home: number; away: number } } | undefined;
+    expect(detail?.shootout).toEqual(shootoutTally(kicks));
+  });
+
+  it("the void kick's `scored` must not inflate the headline suffix either", () => {
+    const kicks: ShootoutKick[] = [
+      { side: "home", scored: true },
+      { side: "home", scored: true, void: true }, // would double-count home to 2 if summary forked
+      { side: "away", scored: false },
+    ];
+    const state: FootballState = { ...base, shootout: { kicks } };
+    expect(football.summary(state).headline).toBe("0 — 0 (1–0 pens)");
   });
 });
 
