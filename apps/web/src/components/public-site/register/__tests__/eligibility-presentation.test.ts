@@ -1,0 +1,91 @@
+// RS006 ENTRIES step — self-ineligibility presentation mapping (pure, no
+// DOM). Uses the SAME predicates the server evaluates with
+// (@/lib/registration-rules) — this file only maps their output onto a
+// division-card-shaped result, never re-derives the rule itself. That is
+// the whole point of the RS006 W1 leaf-extraction refactor: one evaluator,
+// two call sites.
+import { describe, expect, it } from "vitest";
+import { seasonStartYearFrom, selfEligibilityForDivision } from "../eligibility-presentation";
+
+describe("selfEligibilityForDivision", () => {
+  it("open/null category, no age band: everyone is eligible, even with no dob/gender known yet", () => {
+    const r = selfEligibilityForDivision(
+      { category: null, age_min: null, age_max: null },
+      { dob: null, gender: null },
+      2026,
+    );
+    expect(r.eligible).toBe(true);
+    expect(r.issues).toEqual([]);
+  });
+
+  it("womens category: a male contact is ineligible with CATEGORY_MISMATCH", () => {
+    const r = selfEligibilityForDivision(
+      { category: "womens", age_min: null, age_max: null },
+      { dob: null, gender: "m" },
+      2026,
+    );
+    expect(r.eligible).toBe(false);
+    expect(r.issues.map((i) => i.code)).toEqual(["CATEGORY_MISMATCH"]);
+  });
+
+  it("womens category: gender 'x' is eligible (owner ruling — x never blocks a category check)", () => {
+    const r = selfEligibilityForDivision(
+      { category: "womens", age_min: null, age_max: null },
+      { dob: null, gender: "x" },
+      2026,
+    );
+    expect(r.eligible).toBe(true);
+  });
+
+  it("mixed category imposes NOTHING at the individual level (roster-wide, not evaluated here)", () => {
+    const r = selfEligibilityForDivision(
+      { category: "mixed", age_min: null, age_max: null },
+      { dob: null, gender: "m" },
+      2026,
+    );
+    expect(r.eligible).toBe(true);
+  });
+
+  it("age band: too young/too old both surface with AGE_TOO_YOUNG/AGE_TOO_OLD", () => {
+    const division = { category: null, age_min: 18, age_max: 35 };
+    const tooYoung = selfEligibilityForDivision(division, { dob: "2020-01-01", gender: null }, 2026);
+    expect(tooYoung.issues.map((i) => i.code)).toEqual(["AGE_TOO_YOUNG"]);
+    const tooOld = selfEligibilityForDivision(division, { dob: "1950-01-01", gender: null }, 2026);
+    expect(tooOld.issues.map((i) => i.code)).toEqual(["AGE_TOO_OLD"]);
+    const inBand = selfEligibilityForDivision(division, { dob: "2000-01-01", gender: null }, 2026);
+    expect(inBand.eligible).toBe(true);
+  });
+
+  it("category AND age band together yield BOTH issues (independent, additive — matches divisionEligibilityIssues)", () => {
+    const r = selfEligibilityForDivision(
+      { category: "mens", age_min: 18, age_max: 35 },
+      { dob: "2020-01-01", gender: "f" },
+      2026,
+    );
+    expect(r.eligible).toBe(false);
+    expect(r.issues.map((i) => i.code).sort()).toEqual(["AGE_TOO_YOUNG", "CATEGORY_MISMATCH"]);
+  });
+
+  it("no dob known yet on an age-restricted division reads as MISSING_DOB, not silently eligible", () => {
+    const r = selfEligibilityForDivision(
+      { category: null, age_min: 18, age_max: null },
+      { dob: null, gender: null },
+      2026,
+    );
+    expect(r.issues.map((i) => i.code)).toEqual(["MISSING_DOB"]);
+  });
+});
+
+describe("seasonStartYearFrom", () => {
+  it("reads the year off a real starts_on date", () => {
+    expect(seasonStartYearFrom("2026-09-15")).toBe(2026);
+  });
+
+  it("falls back to the given date's year when starts_on is null", () => {
+    expect(seasonStartYearFrom(null, new Date("2027-03-01T00:00:00Z"))).toBe(2027);
+  });
+
+  it("falls back on an unparsable starts_on rather than propagating NaN", () => {
+    expect(seasonStartYearFrom("not-a-date", new Date("2027-03-01T00:00:00Z"))).toBe(2027);
+  });
+});

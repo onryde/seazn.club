@@ -1,0 +1,36 @@
+// RS006 chassis — step order + generic skip mechanism (pure, no DOM).
+//
+// This session builds "who" and "entries" only; steps.ts is still written
+// so the SKIP MECHANISM is generic over any step-list length (RS006 prompt:
+// "single-open-division competitions collapse step 2 ... the chassis must
+// support skipping a step"). A later session appending "details"/"consent"/
+// "review" to StepId + STEP_ORDER-building needs no change to
+// nextStepIndex/prevStepIndex — see steps.test.ts's "hypothetical" case.
+import type { StepId } from "./types";
+
+/** Design §4: "step 2 collapses when the competition has one open division." */
+export function shouldCollapseEntries(openDivisionCount: number): boolean {
+  return openDivisionCount === 1;
+}
+
+/** The step list THIS session can actually render. `entries` drops out
+ *  entirely (not merely disabled) when collapsed — same "absent, not
+ *  disabled" convention RS005's canEdit gating used for a control nobody
+ *  should see at all. */
+export function buildStepOrder(openDivisionCount: number): StepId[] {
+  return shouldCollapseEntries(openDivisionCount) ? ["who"] : ["who", "entries"];
+}
+
+/**
+ * One past the end on the last step, deliberately — the chassis renders a
+ * "more steps coming soon" end-cap there rather than pretending steps 3-5
+ * exist. A future session that appends real steps to the order list makes
+ * that index a real step with NO change here.
+ */
+export function nextStepIndex(current: number, order: readonly StepId[]): number {
+  return Math.min(current + 1, order.length);
+}
+
+export function prevStepIndex(current: number, order: readonly StepId[]): number {
+  return Math.max(current - 1, 0);
+}
