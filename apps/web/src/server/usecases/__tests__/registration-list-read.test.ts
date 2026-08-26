@@ -599,3 +599,153 @@ describe.skipIf(!HAS_DB)("RS005 code-review: the filters agree with the columns 
       .not.toContain(outstanding.id);
   });
 });
+
+// ---------------------------------------------------------------------------
+// RS005 F1 review finding 4: `q=` search must treat LIKE metacharacters
+// (`%`, `_`, and the escape character itself, `\`) as LITERAL text, not
+// wildcards. Unescaped, a registrant's own contact details routinely contain
+// them — "100% Effort", "john_smith@…" — and the search silently widened
+// into an accidental wildcard match across unrelated rows.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("RS005 F1 finding 4: `q=` search escapes LIKE metacharacters", () => {
+  it("a literal `%` in the search text matches only the row containing that literal substring", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration: literal } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "100% Effort",
+    });
+    // Same "100" prefix, but the next character is a literal X, not a `%`.
+    // An unescaped `%` in the search pattern is a wildcard that matches
+    // this too (any run of characters); escaped, it must not.
+    const { registration: decoy } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "100X Effort",
+    });
+
+    const rows = await listRegistrations(owner, null, null, {
+      competition_id: competition.id,
+      text: "100%",
+    });
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(literal.id);
+    expect(ids).not.toContain(decoy.id);
+  });
+
+  it("a literal `_` in the search text matches only that exact character, not 'any one character'", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration: literal } = await seedRegistration(competition.id, division.id, settings, {
+      contactEmail: "john_smith@test.local",
+    });
+    const { registration: decoy } = await seedRegistration(competition.id, division.id, settings, {
+      contactEmail: "johnXsmith@test.local",
+    });
+
+    const rows = await listRegistrations(owner, null, null, {
+      competition_id: competition.id,
+      text: "john_smith",
+    });
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(literal.id);
+    expect(ids).not.toContain(decoy.id);
+  });
+
+  it("a literal backslash in the search text is matched literally, not as an escape introducer", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration: literal } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Back\\Slash Club",
+    });
+
+    const rows = await listRegistrations(owner, null, null, {
+      competition_id: competition.id,
+      text: "Back\\Slash",
+    });
+    expect(rows.map((r) => r.id)).toContain(literal.id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS005 F1 review finding 3: the CSV exporter's `esc()` widened its sink to
+// registrant-controlled contact_name/full_name (plus a competition-wide
+// export reachable at `read` scope) without neutralising CSV/formula
+// injection, and dropped `\r` from its quoting trigger.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("RS005 F1 finding 3: CSV formula injection / row-splitting", () => {
+  it("neutralises a leading =, +, -, @ or TAB, byte-exact, without corrupting anything else", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const dangerous = ["=cmd|'/c calc'!A1", "+1+1", "-2+3", "@SUM(1+1)", "\tTabbed Name"];
+    const seeded: { registration: { id: string } }[] = [];
+    for (const name of dangerous) {
+      seeded.push(await seedRegistration(competition.id, division.id, settings, { displayName: name }));
+    }
+
+    const csv = await exportRegistrationsCsv(owner, { divisionId: division.id });
+    const lines = csv.trimEnd().split("\n");
+    const header = lines[0]!.split(",");
+    const idIdx = header.indexOf("registration_id");
+    const nameIdx = header.indexOf("display_name");
+    expect(idIdx).toBeGreaterThanOrEqual(0);
+
+    for (let i = 0; i < dangerous.length; i++) {
+      const row = lines.slice(1).find((l) => l.split(",")[idIdx] === seeded[i]!.registration.id)!;
+      expect(row, `row for ${JSON.stringify(dangerous[i])} must exist`).toBeDefined();
+      const cell = row.split(",")[nameIdx]!;
+      // A leading apostrophe forces every spreadsheet reader to treat the
+      // cell as literal text, never a formula — the standard mitigation.
+      expect(cell, `${JSON.stringify(dangerous[i])} must be neutralised`).toBe(`'${dangerous[i]}`);
+    }
+  });
+
+  it("a name containing \\r is quoted so a bare CR cannot be mistaken for a row break, byte-exact", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Line1\rLine2",
+    });
+
+    const csv = await exportRegistrationsCsv(owner, { divisionId: division.id });
+    const dataLine = csv.split("\n").find((l) => l.includes(registration.id));
+    expect(dataLine).toBeDefined();
+    // Quoted: a \r inside a quoted field is DATA to any RFC-4180-respecting
+    // reader, never a row terminator. Unquoted (main's regex, which only
+    // triggered on `"`/`,`/`\n`), the same raw \r reads as a row break to a
+    // universal-newline reader and splits one logical row into two.
+    expect(dataLine).toContain('"Line1\rLine2"');
+    expect(dataLine).not.toContain(",Line1\rLine2,");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS005 F1 review finding 5: the RS005 W1a per-player rewrite silently
+// dropped the pre-existing `id` column (renamed to `registration_id`) and
+// widened one-row-per-registration to one-row-per-player, with no response
+// schema in openapi.ts for a drift gate to ever see it. Decision taken
+// (documented in openapi.ts too): KEEP the per-player shape — RS005 W1a's
+// own ruling above `exportRegistrationsCsv` already treats it as deliberate
+// product value (per-player dob/gender/consent), not a defect — and restore
+// `id` alongside `registration_id` so a consumer reading the OLD column name
+// still finds the registration's id, just repeated once per player row.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("RS005 F1 finding 5: `id` restored alongside `registration_id`", () => {
+  it("keeps `id` as the first column, byte-identical to `registration_id`, across every player row", async () => {
+    const { owner, competition, division, settings } = await baseRig({ entrant_kind: "team" });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Team Gamma",
+      players: [{ name: "Casey" }, { name: "Drew" }],
+    });
+
+    const csv = await exportRegistrationsCsv(owner, { divisionId: division.id });
+    const lines = csv.trimEnd().split("\n");
+    const header = lines[0]!.split(",");
+    // Pinned: `id` is main's pre-RS005-W1a FIRST column; `registration_id`
+    // sits right beside it. An integration reading the old `id` column name
+    // by position or by header keeps working even though the shape widened.
+    expect(header.slice(0, 2)).toEqual(["id", "registration_id"]);
+
+    const idIdx = header.indexOf("id");
+    const regIdIdx = header.indexOf("registration_id");
+    const rows = lines.slice(1).filter((l) => l.split(",")[regIdIdx] === registration.id);
+    expect(rows, "one row per player").toHaveLength(2);
+    for (const row of rows) {
+      const cols = row.split(",");
+      expect(cols[idIdx]).toBe(registration.id);
+      expect(cols[regIdIdx]).toBe(registration.id);
+    }
+  });
+});

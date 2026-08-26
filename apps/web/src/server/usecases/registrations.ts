@@ -2972,6 +2972,16 @@ export async function listRegistrations(
       competitionId = filters.competition_id;
     }
     const text = filters.text?.trim();
+    // LIKE metacharacters (`%`/`_`) in the search text must match LITERALLY,
+    // not as wildcards (RS005 F1 finding 4) — a registrant's own contact
+    // details routinely contain them ("100% Effort", "john_smith@…"), and
+    // left unescaped they turned an ordinary-looking search into an
+    // accidental wildcard that over-matched unrelated rows. `\` is escaped
+    // too: it is Postgres's OWN default LIKE escape character even with no
+    // explicit ESCAPE clause, so a literal `\` in the search text would
+    // otherwise start escaping whatever follows it instead of matching
+    // itself.
+    const likePattern = (s: string) => "%" + s.replace(/[\\%_]/g, "\\$&") + "%";
     const rows = await tx<RawListRow[]>`
       select ${regGroupCols(tx)},
         d.name as division_name,
@@ -3028,9 +3038,9 @@ export async function listRegistrations(
         }
         ${
           text
-            ? tx`and (r.display_name ilike ${"%" + text + "%"}
-                  or g.contact_name ilike ${"%" + text + "%"}
-                  or g.contact_email ilike ${"%" + text + "%"})`
+            ? tx`and (r.display_name ilike ${likePattern(text)} escape '\\'
+                  or g.contact_name ilike ${likePattern(text)} escape '\\'
+                  or g.contact_email ilike ${likePattern(text)} escape '\\')`
             : tx``
         }
       ${filters.sort === "newest" ? tx`order by r.created_at desc, r.id desc` : tx`order by r.created_at, r.id`}`;
@@ -3412,8 +3422,20 @@ export async function exportRegistrationsCsv(
   });
 
   const esc = (v: unknown): string => {
-    const s = v === null || v === undefined ? "" : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    let s = v === null || v === undefined ? "" : String(v);
+    // CSV/formula injection (RS005 F1 finding 3, OWASP's standard
+    // mitigation): Excel/LibreOffice evaluate a cell as a formula when it
+    // starts with =, +, -, @, or (some parsers, after stripping leading
+    // whitespace) TAB/CR — and this exporter's sink is registrant-controlled
+    // (contact_name, per-player full_name), so a name like
+    // `=cmd|'/c calc'!A1` or `@SUM(1+1)` was written raw and evaluated on
+    // open. Prepending a bare apostrophe forces every spreadsheet reader to
+    // treat the cell as literal text.
+    if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+    // `\r` joins the quoting trigger, not just `,`/`"`/`\n`: unquoted, a
+    // lone CR inside a value reads as a row break to a universal-newline CSV
+    // reader and silently splits one row into two.
+    return /["\n\r,]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
 
   // Per-player DOB and GENDER are editor-only (RS005 whole-branch review).
@@ -3432,8 +3454,19 @@ export async function exportRegistrationsCsv(
     ? ["player_name", "player_dob", "player_gender", "player_consent_status", "squad_number", "is_captain"]
     : ["player_name", "player_consent_status", "squad_number", "is_captain"];
 
+  // `id` + `registration_id` (RS005 F1 finding 5): main's exporter emitted
+  // one row per REGISTRATION under the column name `id`. RS005 W1a widened
+  // this to one row per PLAYER — a deliberate ruling (see this function's
+  // own doc comment above) kept as-is here, not reverted — but renamed the
+  // identifier column to `registration_id` and dropped `id` outright, with
+  // no response schema in openapi.ts for any drift gate to catch it. `id`
+  // is restored here, first column, byte-identical to `registration_id` on
+  // every row: an integration reading the OLD column name still finds the
+  // registration's id (now simply repeated once per player row) rather
+  // than losing it. See openapi.ts's summary for both export routes for the
+  // documented shape.
   const header = [
-    "registration_id", "ref_code", "division", "status", "kind", "display_name",
+    "id", "registration_id", "ref_code", "division", "status", "kind", "display_name",
     "contact_name", "contact_email", "amount_cents", "currency", "refunded_cents",
     "payment_method", "waitlist_position", "created_at",
     ...playerHeader,
@@ -3442,7 +3475,7 @@ export async function exportRegistrationsCsv(
   const lines: string[] = [];
   for (const r of rows) {
     const entryCols = [
-      r.id, r.ref_code, r.division_name, r.status, r.entrant_kind, r.display_name,
+      r.id, r.id, r.ref_code, r.division_name, r.status, r.entrant_kind, r.display_name,
       r.contact_name, r.contact_email, r.amount_cents, r.currency, r.refunded_cents,
       r.payment_method, r.waitlist_position, new Date(r.created_at).toISOString(),
     ];
