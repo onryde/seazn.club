@@ -142,8 +142,15 @@ store, and re-running the call idempotently is how the report is seen again:
    rolls the fixture back to zero rows.
 6. **After commit**, the decided side effects exactly as live scoring fires
    them: `onDecided` (slot fill, standings), `refreshDiscipline`,
-   `refreshNews`. `captureServer` fires once if the stream crossed the
-   no-result→result line.
+   `refreshNews`, and — added at final review — `invalidatePublicCache` with
+   `movesDiscovery: true`, the FOURTH post-commit side effect. It is not
+   optional: §2.1's read path is the public CACHED one, so without it the
+   career/standings pages this feature exists to fill keep serving pre-import
+   content. `movesDiscovery` is unconditional here because the dry run already
+   proved the stream decides and an import always carries a `core.start`.
+   `captureServer` fires once if the stream crossed the no-result→result line.
+   Realtime publish is deliberately not fired — a backfill of finished results
+   has no pad watching it.
 
 Streams run **sequentially** within a call — bounded, predictable load.
 Callers parallelise across calls; the help page says so.
@@ -161,6 +168,11 @@ Callers parallelise across calls; the help page says so.
   `skipped_duplicate` per stream: zero appends, **side effects not re-fired**.
 - Caps (R4) → **413 `import.too_large`**, naming which ceiling was hit and
   its value.
+- The division's competition FROZEN by `competitions.max_active` (doc 10
+  §2.4) → call-level **402**, the same gate live scoring applies. Resolved
+  ONCE per call (owner ruling R-A, final review): one import addresses one
+  division, therefore one competition, so the verdict is identical for every
+  stream.
 - Division not started (R1) → call-level **409 `import.division_not_started`**
   carrying the division status. This code is **new** — the D6 spec's list
   predates R1.
@@ -169,9 +181,18 @@ Callers parallelise across calls; the help page says so.
 
 `import.fixture_started` · `import.fixture_unknown` · `import.fold_rejected`
 · `import.not_decided` · `import.entitlement` · `import.slots_unfilled`
-(D4 TBD fixture) — per stream. `import.too_large` (413) ·
-`import.concurrent` (409) · `import.division_not_started` (409) · 403
-non-admin · 402 without `import.events` — call level.
+(D4 TBD fixture) · `import.stream_failed` — per stream.
+`import.too_large` (413) · `import.concurrent` (409) ·
+`import.division_not_started` (409) · `import.division_not_found` (404) ·
+403 non-admin · 402 without `import.events` · 402
+`competitions.max_active` when the competition is frozen — call level.
+
+`import.stream_failed` is the per-stream catch-all added at final review: any
+unexpected throw out of a stream becomes a rejected row rather than escaping
+as a 500, because a throw would otherwise discard the whole report —
+including for the streams that had already committed — and break the "200
+whenever the call executed" promise above. The failing fixture's own
+transaction has already rolled back to zero rows before the row is written.
 
 ## 5. Data model — migration V376
 
