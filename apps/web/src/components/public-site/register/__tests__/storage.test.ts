@@ -41,6 +41,8 @@ const SNAPSHOT: PersistedRegisterState = {
         free_agent: false,
         players: [],
         answers: {},
+        registering_self: false,
+        self_player_index: null,
       },
     ],
   },
@@ -108,6 +110,37 @@ describe("guarded against a malformed or stale entry — never throws", () => {
     storage.setItem(
       "seazn_register_riverside_summer-smash",
       JSON.stringify({ version: 1, contact: SNAPSHOT.contact, imPlaying: false, cart: preStep3Cart, stepIndex: 1 }),
+    );
+    expect(loadRegisterState("riverside", "summer-smash", storage)).toBeNull();
+  });
+
+  it("drops a v2 (pre-self-rework) snapshot whose self-link lived cart-level (selfEntryId/selfPlayerIndex), instead of silently losing every restored self-link — REGISTER_STATE_VERSION must be bumped past any release that persisted the OLD CartState shape", () => {
+    const storage = new MapStorage();
+    // The exact shape RS006's step-3 (DETAILS) wave persisted, BEFORE the
+    // self-link fix moved registering_self/self_player_index onto EACH
+    // CartEntry. entry.registering_self is simply ABSENT here (not false) —
+    // reading it against this snapshot without the version bump would
+    // silently evaluate to undefined (falsy), quietly dropping every
+    // restored self-link rather than crashing OR degrading loudly.
+    const v2Cart = {
+      entries: [
+        {
+          id: "e1",
+          division_id: "d1",
+          entrant_kind: "individual",
+          team_name: null,
+          partner_name: null,
+          free_agent: false,
+          players: [],
+          answers: {},
+        },
+      ],
+      selfEntryId: "e1",
+      selfPlayerIndex: 0,
+    };
+    storage.setItem(
+      "seazn_register_riverside_summer-smash",
+      JSON.stringify({ version: 2, contact: SNAPSHOT.contact, imPlaying: true, cart: v2Cart, stepIndex: 1 }),
     );
     expect(loadRegisterState("riverside", "summer-smash", storage)).toBeNull();
   });

@@ -46,8 +46,8 @@ export function StepDetails({
             entry={entry}
             division={byId.get(entry.division_id)}
             contact={contact}
-            isSelfEntry={cart.selfEntryId === entry.id}
-            selfPlayerIndex={cart.selfPlayerIndex}
+            isSelfEntry={entry.registering_self}
+            selfPlayerIndex={entry.self_player_index}
             seasonStartYear={seasonStartYear}
             dispatch={dispatch}
             importText={importTextByEntry[entry.id] ?? ""}

@@ -16,9 +16,19 @@ import type { CartState, ContactState } from "./types";
 // `entry.players.length` (Cannot read properties of undefined), not a
 // graceful degrade. Bumping the version makes loadRegisterState's existing
 // mismatch check drop it instead (see below) — the mechanism this constant
-// exists for. Any future CartEntry/CartState shape change that isn't purely
-// additive-optional needs the same bump.
-export const REGISTER_STATE_VERSION = 2 as const;
+// exists for.
+//
+// Bumped 2 -> 3 (RS006 fix): self-link state moved from CartState-level
+// (`selfEntryId`/`selfPlayerIndex`) onto EACH CartEntry
+// (`registering_self`/`self_player_index`) — a v2 snapshot's entries lack
+// those fields entirely (ABSENT, not false/null) and its CartState carries
+// the now-deleted top-level pair. Any code reading `entry.registering_self`
+// against a restored v2 snapshot would silently see `undefined` (falsy, so
+// not a crash here, but a silent loss of every restored self-link) rather
+// than a clean drop-and-continue — bumping routes it into the same
+// mismatch-drop path instead. Any future CartEntry/CartState shape change
+// that isn't purely additive-optional needs the same bump.
+export const REGISTER_STATE_VERSION = 3 as const;
 
 export interface PersistedRegisterState {
   version: typeof REGISTER_STATE_VERSION;

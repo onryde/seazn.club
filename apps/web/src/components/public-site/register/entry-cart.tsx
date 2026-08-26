@@ -1,9 +1,10 @@
 "use client";
 // RS006 Step 2 — the cart panel (design §4 step 2). Naming a team/pair
 // happens INLINE on its cart row (typed at add-time or any time after);
-// there is no separate naming dialog. Self-link is single-select
-// cart-wide (cart.ts's SET_SELF_ENTRY) — rendered as individual checkboxes
-// that behave like a radio group (checking one unchecks any other).
+// there is no separate naming dialog. Self-link is PER-ENTRY (cart.ts's
+// SET_ENTRY_SELF) — a registrant may check "This is me" on any number of
+// entries independently (singles + doubles at the same tournament is the
+// common racket-sports case); checking one does NOT uncheck another.
 import { useT } from "@/components/i18n/dict-provider";
 import { formatMinor, type Currency } from "@/lib/currency";
 import type { CartAction } from "./cart";
@@ -84,7 +85,7 @@ export function EntryCart({
             // against live divisions — storage.ts's own doc comment) —
             // distinct from the waitlist case, fix wave finding #4.
             const isStaleClosed = division != null && division.closed_reason != null && division.closed_reason !== "full";
-            const isSelf = cart.selfEntryId === entry.id;
+            const isSelf = entry.registering_self;
             const name = entryDisplayName(entry);
             // Fix wave finding #3: the self-linked entry's OWN eligibility
             // verdict, via the SAME predicate DivisionCard greys the
@@ -165,7 +166,7 @@ export function EntryCart({
                       type="checkbox"
                       className="h-3.5 w-3.5 accent-accent"
                       checked={isSelf}
-                      onChange={(e) => dispatch({ type: "SET_SELF_ENTRY", id: e.target.checked ? entry.id : null })}
+                      onChange={(e) => dispatch({ type: "SET_ENTRY_SELF", id: entry.id, isSelf: e.target.checked })}
                     />
                     {t("register.entries.cart.self")}
                   </label>
@@ -178,10 +179,6 @@ export function EntryCart({
 
       {cart.entries.length >= MAX_CART_ENTRIES && (
         <p className="mt-2 text-xs text-ink-muted">{t("register.entries.cart.max", { max: MAX_CART_ENTRIES })}</p>
-      )}
-
-      {cart.selfEntryId && (
-        <p className="mt-2 text-xs text-ink-muted">{t("register.entries.cart.selfHint")}</p>
       )}
 
       {cart.entries.length > 0 && (

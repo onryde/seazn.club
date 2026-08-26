@@ -44,6 +44,8 @@ function entry(overrides: Partial<CartEntry> & Pick<CartEntry, "id" | "division_
     free_agent: false,
     players: [],
     answers: {},
+    registering_self: false,
+    self_player_index: null,
     ...overrides,
   };
 }
@@ -138,9 +140,7 @@ describe("validateEntries", () => {
 
     it("blocks with error 'selfIneligible' when the SELF-LINKED entry's division rejects the contact", () => {
       const cart: CartState = {
-        entries: [entry({ id: "e1", division_id: "d-womens", entrant_kind: "individual" })],
-        selfEntryId: "e1",
-        selfPlayerIndex: 0,
+        entries: [entry({ id: "e1", division_id: "d-womens", entrant_kind: "individual", registering_self: true, self_player_index: 0 })],
       };
       const male: ContactState = { ...EMPTY_CONTACT, gender: "m" };
       const r = validateEntries(cart, [WOMENS_DIVISION], male, SEASON_START_YEAR);
@@ -150,9 +150,7 @@ describe("validateEntries", () => {
 
     it("passes when the self-linked entry's division accepts the contact", () => {
       const cart: CartState = {
-        entries: [entry({ id: "e1", division_id: "d-womens", entrant_kind: "individual" })],
-        selfEntryId: "e1",
-        selfPlayerIndex: 0,
+        entries: [entry({ id: "e1", division_id: "d-womens", entrant_kind: "individual", registering_self: true, self_player_index: 0 })],
       };
       const female: ContactState = { ...EMPTY_CONTACT, gender: "f" };
       const r = validateEntries(cart, [WOMENS_DIVISION], female, SEASON_START_YEAR);
@@ -164,10 +162,8 @@ describe("validateEntries", () => {
       const cart: CartState = {
         entries: [
           entry({ id: "e1", division_id: "d-womens", entrant_kind: "individual" }),
-          entry({ id: "e2", division_id: "d1", entrant_kind: "individual" }),
+          entry({ id: "e2", division_id: "d1", entrant_kind: "individual", registering_self: true, self_player_index: 0 }), // linked to the OPEN/unrestricted division, not d-womens
         ],
-        selfEntryId: "e2", // linked to the OPEN/unrestricted division, not d-womens
-        selfPlayerIndex: 0,
       };
       const male: ContactState = { ...EMPTY_CONTACT, gender: "m" };
       const r = validateEntries(cart, [WOMENS_DIVISION, BASE_DIVISION], male, SEASON_START_YEAR);
@@ -177,8 +173,6 @@ describe("validateEntries", () => {
     it("no self-link at all — never evaluates eligibility, even with an ineligible-shaped division in the cart", () => {
       const cart: CartState = {
         entries: [entry({ id: "e1", division_id: "d-womens", entrant_kind: "individual" })],
-        selfEntryId: null,
-        selfPlayerIndex: null,
       };
       const male: ContactState = { ...EMPTY_CONTACT, gender: "m" };
       expect(validateEntries(cart, [WOMENS_DIVISION], male, SEASON_START_YEAR).valid).toBe(true);
@@ -186,12 +180,35 @@ describe("validateEntries", () => {
 
     it("the self-linked entry's division missing from the list (data gap) does not crash and does not block", () => {
       const cart: CartState = {
-        entries: [entry({ id: "e1", division_id: "d-unknown", entrant_kind: "individual" })],
-        selfEntryId: "e1",
-        selfPlayerIndex: 0,
+        entries: [entry({ id: "e1", division_id: "d-unknown", entrant_kind: "individual", registering_self: true, self_player_index: 0 })],
       };
       expect(() => validateEntries(cart, [], EMPTY_CONTACT, SEASON_START_YEAR)).not.toThrow();
       expect(validateEntries(cart, [], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(true);
+    });
+
+    it("RS006: TWO self-linked entries — blocks if EITHER is ineligible for the contact, not just the first", () => {
+      const cart: CartState = {
+        entries: [
+          entry({ id: "e1", division_id: "d1", entrant_kind: "individual", registering_self: true, self_player_index: 0 }), // eligible
+          entry({ id: "e2", division_id: "d-womens", entrant_kind: "individual", registering_self: true, self_player_index: 0 }), // ineligible
+        ],
+      };
+      const male: ContactState = { ...EMPTY_CONTACT, gender: "m" };
+      const r = validateEntries(cart, [BASE_DIVISION, WOMENS_DIVISION], male, SEASON_START_YEAR);
+      expect(r.valid).toBe(false);
+      expect(r.error).toBe("selfIneligible");
+    });
+
+    it("RS006: TWO self-linked entries, BOTH eligible — passes", () => {
+      const cart: CartState = {
+        entries: [
+          entry({ id: "e1", division_id: "d1", entrant_kind: "individual", registering_self: true, self_player_index: 0 }),
+          entry({ id: "e2", division_id: "d-womens", entrant_kind: "individual", registering_self: true, self_player_index: 0 }),
+        ],
+      };
+      const female: ContactState = { ...EMPTY_CONTACT, gender: "f" };
+      const r = validateEntries(cart, [BASE_DIVISION, WOMENS_DIVISION], female, SEASON_START_YEAR);
+      expect(r.valid).toBe(true);
     });
   });
 });
@@ -383,9 +400,16 @@ describe("validateDetails — step 3's Next gate", () => {
   it("uses the CONTACT's dob/gender as a fallback for the self row — does not false-positive block on a blank self row (design: 'collected once')", () => {
     const genderNeeded: DivisionLike = { ...BASE_DIVISION, division_id: "d-womens", category: "womens" };
     const cart: CartState = {
-      entries: [entry({ id: "e1", division_id: "d-womens", entrant_kind: "individual", players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Self" }] })],
-      selfEntryId: "e1",
-      selfPlayerIndex: 0,
+      entries: [
+        entry({
+          id: "e1",
+          division_id: "d-womens",
+          entrant_kind: "individual",
+          players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Self" }],
+          registering_self: true,
+          self_player_index: 0,
+        }),
+      ],
     };
     const contact: ContactState = { ...EMPTY_CONTACT, gender: "f" };
     expect(validateDetails(cart, [genderNeeded], contact, SEASON_START_YEAR).valid).toBe(true);
@@ -399,28 +423,81 @@ describe("validateDetails — step 3's Next gate", () => {
           division_id: "d1",
           entrant_kind: "team",
           players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Alex" }],
+          registering_self: true,
+          self_player_index: null,
         }),
       ],
-      selfEntryId: "e1",
-      selfPlayerIndex: null,
     };
     expect(validateDetails(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(false);
   });
 
   it("does NOT block a self-linked INDIVIDUAL entry lacking self_player_index (schema implies index 0)", () => {
     const cart: CartState = {
-      entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "individual", players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Alex" }] })],
-      selfEntryId: "e1",
-      selfPlayerIndex: null,
+      entries: [
+        entry({
+          id: "e1",
+          division_id: "d1",
+          entrant_kind: "individual",
+          players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Alex" }],
+          registering_self: true,
+          self_player_index: null,
+        }),
+      ],
     };
     expect(validateDetails(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(true);
   });
 
   it("does NOT block a self-linked FREE-AGENT entry lacking self_player_index (no roster UI exists for it this session — documented seam, not a regression)", () => {
     const cart: CartState = {
-      entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "team", free_agent: true })],
-      selfEntryId: "e1",
-      selfPlayerIndex: null,
+      entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "team", free_agent: true, registering_self: true, self_player_index: null })],
+    };
+    expect(validateDetails(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(true);
+  });
+
+  it("RS006: TWO self-linked entries — an unresolved self_player_index on EITHER one blocks, not just the first", () => {
+    const cart: CartState = {
+      entries: [
+        entry({
+          id: "e1",
+          division_id: "d1",
+          entrant_kind: "individual",
+          players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Alex" }],
+          registering_self: true,
+          self_player_index: null, // implied 0 — fine
+        }),
+        entry({
+          id: "e2",
+          division_id: "d1",
+          entrant_kind: "team",
+          players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Alex" }],
+          registering_self: true,
+          self_player_index: null, // team needs an EXPLICIT index — unresolved
+        }),
+      ],
+    };
+    expect(validateDetails(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(false);
+  });
+
+  it("RS006: TWO self-linked entries, both fully resolved — passes", () => {
+    const cart: CartState = {
+      entries: [
+        entry({
+          id: "e1",
+          division_id: "d1",
+          entrant_kind: "individual",
+          players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Alex" }],
+          registering_self: true,
+          self_player_index: null,
+        }),
+        entry({
+          id: "e2",
+          division_id: "d1",
+          entrant_kind: "team",
+          players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Alex" }],
+          registering_self: true,
+          self_player_index: 0,
+        }),
+      ],
     };
     expect(validateDetails(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(true);
   });

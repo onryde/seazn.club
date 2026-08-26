@@ -18,11 +18,12 @@ export interface WhoFieldRequirements {
  * them or the registrant plays."
  *
  * dobRequired has TWO independent sources, matched to
- * `PublicRegisterGroupRequest`'s superRefine (schemas.ts:2425-2435):
- *  - `imPlaying`: the contact intends to self-link ONE entry (cart.ts's
- *    single-select selfEntryId), and the schema requires `contact.dob`
- *    whenever ANY entry is `registering_self` — independent of whether the
- *    division they end up picking itself requires a dob.
+ * `PublicRegisterGroupRequest`'s superRefine (schemas.ts):
+ *  - `imPlaying`: the contact intends to self-link at least one entry
+ *    (cart.ts's per-entry SET_ENTRY_SELF — RS006: possibly more than one),
+ *    and the schema requires `contact.dob` whenever ANY entry is
+ *    `registering_self` — independent of whether the division they end up
+ *    picking itself requires a dob.
  *  - any OPEN division's own `requires_dob` (V364 first-class columns +
  *    jsonb rules, computed server-side — registration-eligibility.ts).
  * A CLOSED division's requires_dob is excluded: nothing can be added for it
@@ -117,11 +118,12 @@ export interface EntriesValidation {
  *  `selfEligibilityForDivision` predicate DivisionCard already greys the
  *  division with (@/lib/registration-rules, the one evaluator; see that
  *  file's header) is reused here, not re-derived, to decide whether "Next"
- *  may proceed. Only the SELF-LINKED entry is checked — an ineligible
- *  division sitting unlinked in the cart is fine (design: "stays pickable
- *  for team entries"). A self-linked entry whose division isn't in `divisions`
- *  (a data gap) is treated as unblocked rather than thrown on — the eligibility
- *  presentation layer's own contract elsewhere already degrades the same way. */
+ *  may proceed. Checked for EVERY self-linked entry (RS006: a registrant may
+ *  link more than one) — an ineligible division sitting UNLINKED in the cart
+ *  is fine (design: "stays pickable for team entries"). A self-linked entry
+ *  whose division isn't in `divisions` (a data gap) is treated as unblocked
+ *  rather than thrown on — the eligibility presentation layer's own contract
+ *  elsewhere already degrades the same way. */
 export function validateEntries(
   cart: CartState,
   divisions: readonly Pick<DivisionLike, "division_id" | "category" | "age_min" | "age_max">[],
@@ -130,13 +132,12 @@ export function validateEntries(
 ): EntriesValidation {
   if (cart.entries.length === 0) return { valid: false, error: "cartEmpty" };
 
-  if (cart.selfEntryId) {
-    const selfEntry = cart.entries.find((e) => e.id === cart.selfEntryId);
-    const division = selfEntry && divisions.find((d) => d.division_id === selfEntry.division_id);
-    if (division) {
-      const verdict = selfEligibilityForDivision(division, contact, seasonStartYear);
-      if (!verdict.eligible) return { valid: false, error: "selfIneligible" };
-    }
+  for (const entry of cart.entries) {
+    if (!entry.registering_self) continue;
+    const division = divisions.find((d) => d.division_id === entry.division_id);
+    if (!division) continue;
+    const verdict = selfEligibilityForDivision(division, contact, seasonStartYear);
+    if (!verdict.eligible) return { valid: false, error: "selfIneligible" };
   }
 
   return { valid: true, error: null };
@@ -206,14 +207,14 @@ export interface DetailsValidation {
  * complete (`entryDetailsComplete`) AND its roster must clear
  * `rosterEligibilityForDivision` — a roster that fails there is CERTAIN to
  * 422 at submit (registration-submit.ts's own `rosterIssues` call), so
- * blocking here is always safe, never a false negative. The self-linked
+ * blocking here is always safe, never a false negative. A self-linked
  * entry's roster is evaluated through `effectiveSelfPlayers` first (the
  * contact's WHO-step dob/gender covers a blank self row — design: "collected
  * once" — so this does NOT false-positive block on it).
  *
  * Also mirrors `PublicRegisterGroupRequest`'s superRefine
- * (schemas.ts:2453-2474): a self-linked TEAM/PAIR entry needs an EXPLICIT
- * `self_player_index` resolved (`cart.selfPlayerIndex`) or the self-link
+ * (schemas.ts): a self-linked TEAM/PAIR entry needs an EXPLICIT
+ * `self_player_index` resolved (`entry.self_player_index`) or the self-link
  * silently drops server-side with no submit-time error at all
  * (registration-submit.ts's own comment on why 0 is not a safe default
  * there) — blocking here is the only place that can tell the registrant
@@ -221,11 +222,16 @@ export interface DetailsValidation {
  * index 0). FREE-AGENT entries are exempt too, but for a different reason:
  * this session's roster builder renders NOTHING for a free-agent entry
  * (design: "nothing extra"), so there is no control that could ever set
- * `selfPlayerIndex` for one — blocking would be a dead end the registrant
+ * `self_player_index` for one — blocking would be a dead end the registrant
  * cannot resolve. A self-linked free agent's link therefore CAN still
  * silently drop at submit exactly as schemas.ts's comment describes; that
  * gap is left for whichever session wires the actual submit call (step 5)
  * to close, not papered over here with a check nobody could satisfy.
+ *
+ * Checked for EVERY entry independently (RS006: a registrant may self-link
+ * more than one) — each entry carries its own `registering_self`/
+ * `self_player_index` now, so this is a single per-entry loop rather than a
+ * per-entry loop PLUS a separate cart-wide follow-up check.
  *
  * A stale/unknown division_id degrades to "skip, don't block" — same
  * precedent as `validateEntries` above.
@@ -245,20 +251,13 @@ export function validateDetails(
 
     if (!entryDetailsComplete(entry, division)) return { valid: false, error: "incomplete" };
 
-    const isSelf = cart.selfEntryId === entry.id;
-    const effective = isSelf ? effectiveSelfPlayers(entry.players, cart.selfPlayerIndex, contact) : entry.players;
+    const effective = entry.registering_self
+      ? effectiveSelfPlayers(entry.players, entry.self_player_index, contact)
+      : entry.players;
     const verdict = rosterEligibilityForDivision(division, effective, seasonStartYear);
     if (!verdict.eligible) return { valid: false, error: "incomplete" };
-  }
 
-  if (cart.selfEntryId) {
-    const selfEntry = cart.entries.find((e) => e.id === cart.selfEntryId);
-    if (
-      selfEntry &&
-      selfEntry.entrant_kind !== "individual" &&
-      !selfEntry.free_agent &&
-      cart.selfPlayerIndex === null
-    ) {
+    if (entry.registering_self && entry.entrant_kind !== "individual" && entry.self_player_index === null) {
       return { valid: false, error: "incomplete" };
     }
   }

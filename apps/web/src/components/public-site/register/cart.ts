@@ -9,15 +9,20 @@
 // randomness, the standard `useReducer` shape.
 //
 // RS006 W3 (step 3 — DETAILS) added the roster (`*_PLAYER`/`IMPORT_PLAYERS`)
-// and answers (`SET_ANSWERS`) actions, plus cart-level `SET_SELF_PLAYER_INDEX`
-// (sibling of the existing `SET_SELF_ENTRY` — see types.ts's `CartState` doc
-// comment for why the index lives cart-wide, not per-entry). Two of the new
-// per-player actions are FINE-GRAINED (`REMOVE_PLAYER` takes an index,
-// `UPDATE_PLAYER` takes an index+patch) rather than a single coarse
-// "SET_PLAYERS" the caller computes — REMOVE specifically needs the reducer
-// itself to shift/clear `selfPlayerIndex` correctly (see its own doc
-// comment), which only works if the reducer knows WHICH index was removed,
-// not just the resulting array.
+// and answers (`SET_ANSWERS`) actions. Two of the new per-player actions are
+// FINE-GRAINED (`REMOVE_PLAYER` takes an index, `UPDATE_PLAYER` takes an
+// index+patch) rather than a single coarse "SET_PLAYERS" the caller
+// computes — REMOVE specifically needs the reducer itself to shift/clear
+// that entry's `self_player_index` correctly (see its own doc comment),
+// which only works if the reducer knows WHICH index was removed, not just
+// the resulting array.
+//
+// RS006 (post-W3 fix): self-link state (`registering_self`/
+// `self_player_index`) moved from a single cart-level pair onto EACH
+// `CartEntry` — see types.ts's `CartEntry`/`CartState` doc comments for why
+// (a registrant may link themselves on more than one entry). `SET_SELF_ENTRY`
+// (cart-wide) is replaced by `SET_ENTRY_SELF` (per-entry); the old cart-level
+// `SET_SELF_PLAYER_INDEX` now carries an `id` too.
 import {
   MAX_CART_ENTRIES,
   type CartEntry,
@@ -38,13 +43,13 @@ export type CartAction =
       id: string;
       patch: Partial<Pick<CartEntry, "team_name" | "partner_name" | "free_agent">>;
     }
-  | { type: "SET_SELF_ENTRY"; id: string | null }
+  | { type: "SET_ENTRY_SELF"; id: string; isSelf: boolean }
   | { type: "ADD_PLAYER"; id: string }
   | { type: "REMOVE_PLAYER"; id: string; index: number }
   | { type: "UPDATE_PLAYER"; id: string; index: number; patch: Partial<RosterPlayerState> }
   | { type: "IMPORT_PLAYERS"; id: string; players: RosterPlayerState[] }
   | { type: "SET_ANSWERS"; id: string; answers: Record<string, string | boolean> }
-  | { type: "SET_SELF_PLAYER_INDEX"; index: number | null };
+  | { type: "SET_SELF_PLAYER_INDEX"; id: string; index: number | null };
 
 export function canAddEntry(cart: CartState): boolean {
   return cart.entries.length < MAX_CART_ENTRIES;
@@ -80,17 +85,16 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
         free_agent: false,
         players: blankPlayers(action.entrant_kind),
         answers: {},
+        registering_self: false,
+        self_player_index: null,
       };
       return { ...state, entries: [...state.entries, entry] };
     }
 
     case "REMOVE_ENTRY": {
-      const wasSelf = state.selfEntryId === action.id;
-      return {
-        entries: state.entries.filter((e) => e.id !== action.id),
-        selfEntryId: wasSelf ? null : state.selfEntryId,
-        selfPlayerIndex: wasSelf ? null : state.selfPlayerIndex,
-      };
+      // Self-link state lives ON the entry now, so dropping it needs no
+      // separate cart-level cleanup — it simply leaves with the entry.
+      return { ...state, entries: state.entries.filter((e) => e.id !== action.id) };
     }
 
     case "DUPLICATE_ENTRY": {
@@ -102,7 +106,9 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
       // sharing "Team A" is worse than an empty field). Same philosophy for
       // the roster/answers below: a captain duplicating "Team A" into a
       // blank "Team B" must NOT inherit Team A's players or answers —
-      // re-SEED by kind (blankPlayers), never copy `source.players`.
+      // re-SEED by kind (blankPlayers), never copy `source.players`. The
+      // self-link never carries over either — a duplicate is a fresh,
+      // unlinked entry, same as every other field here.
       const clone: CartEntry = {
         id: action.newId,
         division_id: source.division_id,
@@ -112,6 +118,8 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
         free_agent: false,
         players: blankPlayers(source.entrant_kind),
         answers: {},
+        registering_self: false,
+        self_player_index: null,
       };
       return { ...state, entries: [...state.entries, clone] };
     }
@@ -131,12 +139,20 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
       };
     }
 
-    case "SET_SELF_ENTRY": {
-      // Single-select cart-wide (schemas.ts PublicRegisterGroupRequest
-      // superRefine: at most one entry may set registering_self) —
-      // switching resets selfPlayerIndex because the new entry's roster
-      // hasn't been picked yet.
-      return { ...state, selfEntryId: action.id, selfPlayerIndex: null };
+    case "SET_ENTRY_SELF": {
+      // PER-ENTRY (RS006) — independently settable on any number of
+      // entries, no cart-wide exclusivity. Every transition (on OR off)
+      // resets THIS entry's self_player_index to null: unlinking then
+      // re-linking the SAME entry must not silently keep a stale row pick
+      // from an earlier link, matching the old cart-level behaviour's
+      // "switching resets the index" rule, now scoped to one entry instead
+      // of the whole cart.
+      return {
+        ...state,
+        entries: state.entries.map((e) =>
+          e.id === action.id ? { ...e, registering_self: action.isSelf, self_player_index: null } : e,
+        ),
+      };
     }
 
     case "ADD_PLAYER": {
@@ -153,24 +169,26 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
     case "REMOVE_PLAYER": {
       const entry = state.entries.find((e) => e.id === action.id);
       if (!entry || !entry.players[action.index]) return state;
-      const entries = state.entries.map((e) =>
-        e.id === action.id ? { ...e, players: e.players.filter((_, i) => i !== action.index) } : e,
-      );
-      // The self-link points at a ROW POSITION within this entry's roster —
-      // removing a row shifts every later index down by one, so a stale
-      // `selfPlayerIndex` would silently point at the WRONG player after a
-      // removal (not just an out-of-range one). Only touched when the
-      // removal happened on the SELF-linked entry; unrelated entries never
-      // affect it.
-      const affectsSelf = action.id === state.selfEntryId && state.selfPlayerIndex !== null;
-      const selfPlayerIndex = !affectsSelf
-        ? state.selfPlayerIndex
-        : state.selfPlayerIndex === action.index
-          ? null // the linked row itself was removed
-          : state.selfPlayerIndex! > action.index
-            ? state.selfPlayerIndex! - 1 // shift down with the row it was tracking
-            : state.selfPlayerIndex; // a LATER row was removed — unaffected
-      return { ...state, entries, selfPlayerIndex };
+      const entries = state.entries.map((e) => {
+        if (e.id !== action.id) return e;
+        const players = e.players.filter((_, i) => i !== action.index);
+        // The self-link points at a ROW POSITION within THIS entry's own
+        // roster — removing a row shifts every later index down by one, so
+        // a stale `self_player_index` would silently point at the WRONG
+        // player after a removal (not just an out-of-range one). Scoped
+        // entirely to this entry now — no cart-level cross-reference needed,
+        // since the index already lives where the roster it indexes does.
+        const self_player_index =
+          e.self_player_index === null
+            ? null
+            : e.self_player_index === action.index
+              ? null // the linked row itself was removed
+              : e.self_player_index > action.index
+                ? e.self_player_index - 1 // shift down with the row it was tracking
+                : e.self_player_index; // a LATER row was removed — unaffected
+        return { ...e, players, self_player_index };
+      });
+      return { ...state, entries };
     }
 
     case "UPDATE_PLAYER": {
@@ -209,13 +227,16 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
     }
 
     case "SET_SELF_PLAYER_INDEX": {
-      // Sibling of SET_SELF_ENTRY, but this one only ever narrows WITHIN
-      // the already-linked entry (types.ts's CartState doc comment) — it
-      // does not touch `selfEntryId`, so dispatching it with no self entry
-      // linked is a harmless (if pointless) no-op-shaped write, not an
-      // error: the UI only ever renders this control once `selfEntryId` is
-      // already set.
-      return { ...state, selfPlayerIndex: action.index };
+      // Sibling of SET_ENTRY_SELF, but this one only ever narrows WITHIN
+      // the named entry's own roster — it does not touch `registering_self`,
+      // so dispatching it against an entry that isn't self-linked is a
+      // harmless (if pointless) no-op-shaped write, not an error: the UI
+      // only ever renders this control once that entry's `registering_self`
+      // is already true.
+      return {
+        ...state,
+        entries: state.entries.map((e) => (e.id === action.id ? { ...e, self_player_index: action.index } : e)),
+      };
     }
 
     default:
@@ -239,60 +260,67 @@ export function autoSeedSingleDivision(division: DivisionLike, id: string): Cart
       free_agent: false,
       players: blankPlayers(division.entrant_kind),
       answers: {},
+      registering_self: false,
+      self_player_index: null,
     },
   ];
 }
 
 /** Reactive convenience for the WHO step's "I'm playing" toggle: when there is
- *  exactly ONE cart entry and nothing is linked yet, that entry is the only
+ *  exactly ONE cart entry and it isn't self-linked yet, that entry is the only
  *  possible answer to "which entry is you", so link it automatically instead
  *  of making the rep re-state the obvious. Never overrides an EXPLICIT choice
- *  (a non-null `selfEntryId`) and never guesses across 2+ entries — that
- *  ambiguity is the rep's call (cart.ts's SET_SELF_ENTRY, driven by the
- *  ENTRIES step's per-entry "This is me" control). Returns the SAME
- *  reference when there is nothing to do, matching every other action here. */
+ *  and never guesses across 2+ entries — that ambiguity is the rep's call
+ *  (cart.ts's SET_ENTRY_SELF, driven by the ENTRIES step's per-entry "This is
+ *  me" control). Returns the SAME reference when there is nothing to do,
+ *  matching every other function here. */
 export function autoLinkObviousSelf(cart: CartState, imPlaying: boolean): CartState {
   if (!imPlaying) return cart;
-  if (cart.selfEntryId) return cart;
   if (cart.entries.length !== 1) return cart;
-  return cartReducer(cart, { type: "SET_SELF_ENTRY", id: cart.entries[0]!.id });
+  const only = cart.entries[0]!;
+  if (only.registering_self) return cart;
+  return cartReducer(cart, { type: "SET_ENTRY_SELF", id: only.id, isSelf: true });
 }
 
 /** Inverse of `autoLinkObviousSelf` (fix wave finding #2): once "I'm playing"
  *  is un-toggled, NO entry may remain linked as the contact — regardless of
  *  whether the link was made by the auto-link convenience above or an
- *  EXPLICIT "This is me" click. `imPlaying=false` means step 1's dob field
- *  may never have been shown/required (validation.ts's whoFieldRequirements
- *  keys dobRequired off imPlaying independently of any division), so a
- *  stale self-link would submit `registering_self:true` with
- *  `contact.dob:null` — guaranteed rejected by schemas.ts's superRefine
- *  (PublicRegisterGroupRequest, ~line 2446), with no client-side warning
- *  before that 400/422. Returns the SAME reference when there is nothing to
- *  clear, matching every other function here. */
+ *  EXPLICIT "This is me" click, and regardless of how MANY entries are
+ *  currently linked (RS006: a registrant may link more than one). `imPlaying
+ *  =false` means step 1's dob field may never have been shown/required
+ *  (validation.ts's whoFieldRequirements keys dobRequired off imPlaying
+ *  independently of any division), so a stale self-link would submit
+ *  `registering_self:true` with `contact.dob:null` — guaranteed rejected by
+ *  schemas.ts's superRefine (PublicRegisterGroupRequest), with no
+ *  client-side warning before that 400/422. Returns the SAME reference when
+ *  there is nothing to clear, matching every other function here. */
 export function clearSelfLinkWhenNotPlaying(cart: CartState, imPlaying: boolean): CartState {
   if (imPlaying) return cart;
-  if (cart.selfEntryId === null) return cart;
-  return cartReducer(cart, { type: "SET_SELF_ENTRY", id: null });
+  if (!cart.entries.some((e) => e.registering_self)) return cart;
+  return {
+    ...cart,
+    entries: cart.entries.map((e) =>
+      e.registering_self ? { ...e, registering_self: false, self_player_index: null } : e,
+    ),
+  };
 }
 
 /** Maps one cart line onto the step-2 subset of `PublicRegisterGroupEntry`
- *  (schemas.ts:2381) — drops the client-only `id`, adds the self-link
- *  fields resolved from the CART-LEVEL self state (types.ts). `players`/
- *  `answers` are NOT added here (step 3's job); a caller building the full
- *  request object spreads this together with those once they exist.
+ *  (schemas.ts:2390) — drops the client-only `id`, reading the self-link
+ *  fields off the entry itself (RS006: PER-ENTRY, not cart-level — see
+ *  types.ts's `CartEntry` doc comment). `players`/`answers` are NOT added
+ *  here (step 3's job); a caller building the full request object spreads
+ *  this together with those once they exist.
  *
  *  `self_player_index` stays `undefined` for an INDIVIDUAL entry — the
  *  schema itself implies index 0 for a one-player individual entry
- *  (schemas.ts:2456-2458), so sending it explicitly would just repeat what
+ *  (schemas.ts superRefine), so sending it explicitly would just repeat what
  *  the server already assumes. Every other self-linked kind (team/pair/
  *  free-agent) needs it explicit once step 3 resolves which roster row is
  *  the contact (schemas.ts superRefine rejects an unresolved claim rather
  *  than silently defaulting it — see that schema's own comment on why 0
  *  is not a safe default there). */
-export function toGroupEntry(
-  entry: CartEntry,
-  self: { isSelf: boolean; selfPlayerIndex: number | null },
-): {
+export function toGroupEntry(entry: CartEntry): {
   division_id: string;
   entrant_kind: CartEntry["entrant_kind"];
   team_name: string | null;
@@ -308,10 +336,10 @@ export function toGroupEntry(
     team_name: entry.team_name,
     partner_name: entry.partner_name,
     free_agent: entry.free_agent,
-    registering_self: self.isSelf,
+    registering_self: entry.registering_self,
     self_player_index:
-      self.isSelf && !impliesZero && self.selfPlayerIndex != null
-        ? self.selfPlayerIndex
+      entry.registering_self && !impliesZero && entry.self_player_index != null
+        ? entry.self_player_index
         : undefined,
   };
 }

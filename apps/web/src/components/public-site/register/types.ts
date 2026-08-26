@@ -148,23 +148,40 @@ export interface CartEntry {
    *  (`z.record(z.string(), z.unknown())`) to what this renderer actually
    *  ever produces. */
   answers: Record<string, string | boolean>;
+  /** True when the CONTACT themselves is one of THIS entry's players —
+   *  mirrors `PublicRegisterGroupEntry.registering_self` (schemas.ts:2399)
+   *  1:1, including its field name. PER-ENTRY on purpose (RS006): a
+   *  registrant may link themselves on more than one cart entry at once
+   *  (singles + doubles at the same tournament is the common racket-sports
+   *  case) — the schema's superRefine no longer caps this cart-wide, so the
+   *  client state must not reintroduce that cap either. Set/cleared by
+   *  `cart.ts`'s `SET_ENTRY_SELF` action. */
+  registering_self: boolean;
+  /** 0-based index into THIS entry's own `players`, identifying which row
+   *  is the contact — mirrors `PublicRegisterGroupEntry.self_player_index`
+   *  1:1. Stays `null` until step 3 resolves it (an individual entry's
+   *  implied index-0 needs no value here at all — see `toGroupEntry`).
+   *  Reset to `null` whenever `registering_self` flips on THIS entry (a
+   *  freshly (re-)linked entry's roster hasn't been picked yet), and
+   *  shifted/cleared by `REMOVE_PLAYER` when a row before/at the linked
+   *  index is removed — see that action's own doc comment. */
+  self_player_index: number | null;
 }
 
-/** The whole cart. `selfEntryId`/`selfPlayerIndex` are CART-LEVEL, not
- *  per-entry, because at most one entry cart-wide may be `registering_self`
- *  (schemas.ts:2426-2436 superRefine) — a single nullable field makes that
- *  invariant true by construction instead of a rule the reducer has to
- *  police across N booleans. `selfPlayerIndex` stays null until step 3
- *  resolves it (an individual entry's implied index-0 needs no value here
- *  at all — see `toGroupEntry`); reset to null whenever `selfEntryId`
- *  changes, since a new entry's roster hasn't been picked yet. */
+/** The whole cart. Self-link state lives PER-ENTRY (`CartEntry.
+ *  registering_self`/`self_player_index` above) since RS006 — earlier this
+ *  was a single cart-level `selfEntryId`/`selfPlayerIndex` pair, enforcing
+ *  (via the client alone; the server never required it) that at most one
+ *  entry cart-wide could be the contact. That was a defect inherited from
+ *  the pre-redesign single-entry schema, not a real constraint: a
+ *  registrant may link themselves on more than one entry (singles +
+ *  doubles). Do not reintroduce a cart-level self field "for safety" —
+ *  that would bring the defect back one layer down. */
 export interface CartState {
   entries: CartEntry[];
-  selfEntryId: string | null;
-  selfPlayerIndex: number | null;
 }
 
-export const EMPTY_CART: CartState = { entries: [], selfEntryId: null, selfPlayerIndex: null };
+export const EMPTY_CART: CartState = { entries: [] };
 
 export const MAX_CART_ENTRIES = 10;
 

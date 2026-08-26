@@ -152,6 +152,11 @@ const DIV_WOMENS: DivisionLike = {
   category: "womens",
 };
 
+/** A second unrestricted individual division — used for the RS006
+ *  multi-self-link test below, where two DIFFERENT entries both need to be
+ *  freely self-linkable with no eligibility noise from either one. */
+const DIV_OPEN_2: DivisionLike = { ...DIV_OPEN, division_id: "div-open-2", name: "Open Doubles" };
+
 function mount(divisions: DivisionLike[]) {
   const info: RegisterInfo = {
     competition: { name: "Test Cup", starts_on: "2026-09-01" },
@@ -189,6 +194,16 @@ function mount(divisions: DivisionLike[]) {
     expect(el, "EntryCart not in the tree — not on the ENTRIES step?").toBeTruthy();
     return textOf(walk((EntryCart as unknown as ComponentFn)(propsOf(el!))));
   };
+  // Direct state inspection (not a copy-text proxy): EntryCart's own `cart`
+  // prop, found via the un-expanded element deepExpand also leaves in the
+  // tree — same technique entryCartText uses. Lets a test assert on
+  // `entry.registering_self` itself rather than inferring the underlying
+  // state from whether some piece of copy happens to be on the page.
+  const entryCartCart = () => {
+    const el = island.tree().find((e) => e.type === EntryCart);
+    expect(el, "EntryCart not in the tree — not on the ENTRIES step?").toBeTruthy();
+    return propsOf(el!).cart as CartState;
+  };
   const clickByText = (text: string) => {
     const btn = island.tree().find((e) => e.type === "button" && textOf(e) === text);
     expect(btn, `no button with text "${text}"`).toBeTruthy();
@@ -197,7 +212,7 @@ function mount(divisions: DivisionLike[]) {
   };
   const pageText = () => textOf(island.tree());
 
-  return { island, stepWho, divisionCard, selfCheckboxes, clickByText, pageText, entryCartText };
+  return { island, stepWho, divisionCard, selfCheckboxes, clickByText, pageText, entryCartText, entryCartCart };
 }
 
 // ---------------------------------------------------------------------------
@@ -206,8 +221,8 @@ function mount(divisions: DivisionLike[]) {
 // ---------------------------------------------------------------------------
 
 describe("finding #2 — un-toggling \"I'm playing\" clears the self-link", () => {
-  it("auto-links the sole cart entry when imPlaying flips true; un-toggling both hides the checkbox AND clears the link (not just the UI)", () => {
-    const { stepWho, divisionCard, selfCheckboxes, clickByText, pageText } = mount([DIV_OPEN, DIV_WOMENS]);
+  it("auto-links the sole cart entry when imPlaying flips true; un-toggling both hides the checkbox AND clears the underlying registering_self flag (not just the UI)", () => {
+    const { stepWho, divisionCard, selfCheckboxes, entryCartCart, clickByText } = mount([DIV_OPEN, DIV_WOMENS]);
 
     // WHO: name+email+dob filled once up front — dob becomes required the
     // moment imPlaying flips true (whoFieldRequirements), so filling it
@@ -232,18 +247,80 @@ describe("finding #2 — un-toggling \"I'm playing\" clears the self-link", () =
     const linked = selfCheckboxes();
     expect(linked, "self checkbox renders once imPlaying is true").toHaveLength(1);
     expect(propsOf(linked[0]!).checked, "the sole entry auto-links").toBe(true);
-    expect(pageText()).toContain("Only one entry can be linked to your account.");
+    // Direct state check (not a copy-text proxy — RS006 removed the
+    // cart-wide "only one entry" hint that used to serve this purpose): the
+    // entry's OWN registering_self flag, off the cart EntryCart was
+    // actually given.
+    expect(entryCartCart().entries.map((e) => e.registering_self)).toEqual([true]);
 
     clickByText("Back"); // -> WHO
     (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(false);
     clickByText("Next"); // -> ENTRIES
 
     // Both halves of the fix, checked independently: the checkbox is gone
-    // (UI gate) AND the cart-level self hint is gone too — the hint is
-    // driven by cart.selfEntryId alone, untouched by the checkbox-gating
-    // change, so its absence is proof the LINK itself was cleared, not
-    // just that the control is hidden.
+    // (UI gate) AND the underlying flag is cleared too — checked directly on
+    // the cart state, so this proves the LINK itself was cleared, not just
+    // that the (already-hidden) control happens to also be absent.
     expect(selfCheckboxes(), "checkbox hidden once imPlaying is false again").toHaveLength(0);
+    expect(
+      entryCartCart().entries.map((e) => e.registering_self),
+      "the flag itself must be cleared, not just the UI hidden",
+    ).toEqual([false]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS006 — the cart-wide "at most one self entry" cap was removed. A
+// registrant may link themselves on more than one entry at once (singles +
+// doubles at the same tournament is the common racket-sports case).
+// ---------------------------------------------------------------------------
+
+describe("RS006 — a registrant may self-link more than one cart entry", () => {
+  it('checking "This is me" on a SECOND entry does not uncheck the first — both stay checked, no blocking copy appears', () => {
+    const { stepWho, divisionCard, selfCheckboxes, entryCartCart, clickByText, pageText } = mount([
+      DIV_OPEN,
+      DIV_OPEN_2,
+    ]);
+
+    (propsOf(stepWho()).onChange as (p: object) => void)({
+      name: "Alex Test",
+      email: "alex@example.com",
+      dob: "1990-01-01",
+    });
+    clickByText("Next"); // -> ENTRIES (imPlaying still false)
+
+    (propsOf(divisionCard("div-open")).onAddIndividual as () => void)();
+    (propsOf(divisionCard("div-open-2")).onAddIndividual as () => void)();
+
+    clickByText("Back"); // -> WHO
+    (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true);
+    clickByText("Next"); // -> ENTRIES — 2 entries present, autoLinkObviousSelf is a no-op (ambiguous, the rep must choose)
+
+    const boxes = selfCheckboxes();
+    expect(boxes, "two entries, two checkboxes").toHaveLength(2);
+    expect(
+      boxes.every((b) => propsOf(b).checked === false),
+      "neither pre-checked — 2 entries is ambiguous for auto-link",
+    ).toBe(true);
+
+    // Check the FIRST box.
+    (propsOf(boxes[0]!).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+    expect(entryCartCart().entries.map((e) => e.registering_self)).toEqual([true, false]);
+
+    // Check the SECOND box too — must NOT uncheck the first.
+    const boxesAfterFirst = selfCheckboxes();
+    (propsOf(boxesAfterFirst[1]!).onChange as (e: { target: { checked: boolean } }) => void)({
+      target: { checked: true },
+    });
+    expect(entryCartCart().entries.map((e) => e.registering_self), "BOTH stay checked").toEqual([true, true]);
+
+    const finalBoxes = selfCheckboxes();
+    expect(
+      finalBoxes.every((b) => propsOf(b).checked === true),
+      "both rendered checkbox elements read checked=true",
+    ).toBe(true);
+
+    // The old cart-wide restriction copy no longer exists anywhere on the page.
     expect(pageText()).not.toContain("Only one entry can be linked to your account.");
   });
 });
@@ -348,7 +425,7 @@ describe("finding #5 — restoring a pristine saved snapshot never shows stale e
         version: REGISTER_STATE_VERSION,
         contact: { name: "", email: "", dob: null, gender: null },
         imPlaying: false,
-        cart: { entries: [], selfEntryId: null, selfPlayerIndex: null },
+        cart: { entries: [] },
         stepIndex: 0,
       }),
     );
@@ -449,10 +526,10 @@ describe("finding #4 — a non-\"full\" closed division in the cart is excluded 
           free_agent: false,
           players: [],
           answers: {},
+          registering_self: false,
+          self_player_index: null,
         },
       ],
-      selfEntryId: null,
-      selfPlayerIndex: null,
     };
     const tree = walk(
       EntryCart({
@@ -490,10 +567,10 @@ describe("finding #8 — an unresolvable division name (raw UUID fallback) never
           free_agent: false,
           players: [],
           answers: {},
+          registering_self: false,
+          self_player_index: null,
         },
       ],
-      selfEntryId: null,
-      selfPlayerIndex: null,
     };
     // No matching division — entryDisplayName falls back to the raw
     // division_id (a 36-char UUID), the exact overflow risk finding #8 flags.

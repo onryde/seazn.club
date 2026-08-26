@@ -48,9 +48,10 @@ export function EntryDetails({
    *  same precedent as entry-cart.tsx's own `division` lookup. */
   division: DivisionLike | undefined;
   contact: ContactState;
-  /** Whether THIS entry is the cart-wide self-linked one (cart.selfEntryId
-   *  === entry.id) — drives both the contact dob/gender fallback and
-   *  whether the self-row picker renders at all. */
+  /** Whether THIS entry is self-linked (entry.registering_self) — drives
+   *  both the contact dob/gender fallback and whether the self-row picker
+   *  renders at all. RS006: per-entry, so more than one EntryDetails card
+   *  can have this true at once. */
   isSelfEntry: boolean;
   selfPlayerIndex: number | null;
   seasonStartYear: number;
@@ -133,6 +134,7 @@ export function EntryDetails({
             onChange={(e) =>
               dispatch({
                 type: "SET_SELF_PLAYER_INDEX",
+                id: entry.id,
                 index: e.target.value === "" ? null : Number(e.target.value),
               })
             }
