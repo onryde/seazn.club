@@ -58,10 +58,10 @@ test("division import: paste two streams, get one imported row and one rejected 
 
   // Three entrants -> a 3-fixture round robin (carrom-pad.spec.ts:44 pins the
   // 2-entrant/1-fixture case; C(3,2) = 3 here). Only fixtureIds[0] is ever
-  // named by the accepted stream, so the other two stay "scheduled" straight
-  // through the import call — the "two unstarted fixtures" the brief calls
-  // for holds both before AND after, proving the import touches only the
-  // fixture it is told to.
+  // named by the accepted stream; the untouched-fixture claim is ASSERTED at
+  // the end of this test (the getFixtureStatus block), not merely asserted in
+  // this comment — the "two unstarted fixtures" the brief calls for has to
+  // hold both before AND after the import call.
   await addEntrantsViaApi(request, divisionId, ["Ana", "Ben", "Cara"]);
   const { fixtureIds } = await createStageAndGenerate(request, divisionId, {
     kind: "league",
@@ -69,10 +69,12 @@ test("division import: paste two streams, get one imported row and one rejected 
   });
   expect(fixtureIds.length).toBeGreaterThanOrEqual(2);
 
-  // Starts the DIVISION only. division-archive.spec.ts's own comment on this
-  // exact call: "it appends no core.start to any fixture" — every fixture
-  // here stays "scheduled", which is what the import route's unstarted-
-  // fixture guard (event-import.ts step 3) requires.
+  // Starts the DIVISION only, which appends no core.start to any FIXTURE —
+  // division-archive.spec.ts:40-43 is the standing evidence: it calls this
+  // same /start and then still has to POST core.start to a fixture itself to
+  // get one started. So every fixture here stays "scheduled", which is what
+  // the import route's unstarted-fixture guard (event-import.ts step 3)
+  // requires. Asserted below rather than trusted.
   const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
   expect(started.status).toBeLessThan(300);
 
@@ -142,6 +144,23 @@ test("division import: paste two streams, get one imported row and one rejected 
   // fixture id), so ImportClient falls back to plain text (row.fixture as
   // given); this is a text anchor, not an attribute one, and is exactly what
   // proves the fallback path itself renders correctly.
+  // The untouched-fixture assertion the header comment promises. Read back
+  // through the same GET the rest of the suite uses (auto-schedule.spec.ts:88);
+  // `status` is in getFixture's select list (usecases/fixtures.ts:42).
+  // Both halves matter: fixtureIds[0] must have MOVED off "scheduled" (else a
+  // no-op import would satisfy the second half trivially and this whole check
+  // would be vacuous), and the two fixtures the payload never named must be
+  // exactly where they started.
+  const getFixtureStatus = async (id: string) =>
+    (await apiJson<{ status: string }>(request, `/api/v1/fixtures/${id}`)).data!.status;
+
+  expect(await getFixtureStatus(fixtureId)).not.toBe("scheduled");
+  for (const untouched of fixtureIds.slice(1)) {
+    expect(await getFixtureStatus(untouched), `fixture ${untouched} should be untouched`).toBe(
+      "scheduled",
+    );
+  }
+
   const rejectedRow = page.locator("tbody tr").filter({ hasText: unknownExtKey });
   await expect(rejectedRow).toHaveCount(1);
   await expect(rejectedRow.getByText("rejected", { exact: true })).toBeVisible();
