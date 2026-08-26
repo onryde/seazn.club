@@ -17,7 +17,7 @@ import type postgres from "postgres";
 import type Stripe from "stripe";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { EDITOR_ROLES } from "@/lib/types";
+import { mayHoldBearerCredential } from "@/lib/types";
 import { isTerminalRegistrationStatus } from "@/lib/registration-status";
 import { getLimit, hasFeature, requireFeature } from "@/lib/entitlements";
 import { platformFeeDefault } from "@/lib/platform-settings";
@@ -3055,7 +3055,7 @@ export async function listRegistrations(
     // be write-capable should not receive a write-capable credential either.
     // If an integration ever needs join codes, that is a deliberate decision
     // with its own scope check — not a default.
-    const mayHoldJoinCode = auth.role !== null && (EDITOR_ROLES as readonly string[]).includes(auth.role);
+    const mayHoldJoinCode = mayHoldBearerCredential(auth.role);
     return rows.map(({ access_token_hash: _accessTokenHash, ...rest }) =>
       mayHoldJoinCode ? rest : { ...rest, join_code: null },
     );
@@ -3427,8 +3427,7 @@ export async function exportRegistrationsCsv(
   // `player_dob` reads as "we hold no date of birth", which is a different and
   // false statement — and a spreadsheet built against that header would
   // silently gain two empty columns depending on who exported it.
-  const maySeePlayerPersonalData =
-    auth.role !== null && (EDITOR_ROLES as readonly string[]).includes(auth.role);
+  const maySeePlayerPersonalData = mayHoldBearerCredential(auth.role);
   const playerHeader = maySeePlayerPersonalData
     ? ["player_name", "player_dob", "player_gender", "player_consent_status", "squad_number", "is_captain"]
     : ["player_name", "player_consent_status", "squad_number", "is_captain"];

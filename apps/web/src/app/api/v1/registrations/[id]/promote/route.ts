@@ -57,6 +57,6 @@ export async function POST(req: Request, { params }: Ctx) {
       registrationId: input.registration_id,
     });
     if (!promoted) return null;
-    return organiserRegistration(promoted);
+    return organiserRegistration(promoted, auth);
   });
 }

@@ -10,6 +10,6 @@ export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;
     const auth = await requireResourceAuth(req, "registration", id, "write");
-    return organiserRegistration(await markRegistrationPaidOffline(auth, id));
+    return organiserRegistration(await markRegistrationPaidOffline(auth, id), auth);
   });
 }

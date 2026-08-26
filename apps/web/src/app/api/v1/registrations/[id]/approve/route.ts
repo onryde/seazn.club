@@ -15,6 +15,6 @@ export async function POST(req: Request, { params }: Ctx) {
     const { id } = await params;
     const auth = await requireResourceAuth(req, "registration", id, "write");
     const row = await approveRegistration(auth, id);
-    return organiserRegistration(row);
+    return organiserRegistration(row, auth);
   });
 }

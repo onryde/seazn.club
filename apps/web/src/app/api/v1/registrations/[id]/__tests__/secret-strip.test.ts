@@ -30,6 +30,8 @@ vi.mock("next/headers", () => ({
 }));
 
 import { sql } from "@/lib/db";
+import { organiserRegistration } from "@/server/api-v1/registration-response";
+import type { RegistrationWithGroupRow } from "@/server/usecases/registrations";
 import { putRegistrationSettings } from "@/server/usecases/registrations";
 import { asOwner, rig, seedOrg, seedRegistration } from "@/server/usecases/__tests__/_registration-fixtures";
 import { POST as confirmRoute } from "@/app/api/v1/registrations/[id]/confirm/route";
@@ -121,5 +123,34 @@ describe.skipIf(!HAS_DB)("organiser registration responses carry no access_token
       from registrations r join registration_groups g on g.id = r.group_id
       where r.id = ${registration.id}`;
     expect(row?.hash).toBeTruthy();
+  });
+});
+
+describe.skipIf(!HAS_DB)("action responses withhold the join code from a non-editor", () => {
+  // The list routes were gated first; the ACTION routes were not, and
+  // regGroupCols selects r.join_code while v1() strips nothing against the
+  // response schema. So an API key (role: null) that GET /registrations
+  // correctly refuses could simply POST /confirm and read the code out of the
+  // reply — and POST /public/.../register/join accepts that code with NO auth
+  // at all and mints a roster row.
+  it("returns the code to an editor session and null to an API key", async () => {
+    const registration = await freshPending();
+    await sql`update registrations set join_code = ${"JC" + Math.random().toString(36).slice(2, 9).toUpperCase()}
+              where id = ${registration.id}`;
+
+    const editorRes = await confirmRoute(
+      postReq(`/registrations/${registration.id}/confirm`),
+      ctx(registration.id),
+    );
+    const editorBody = (await editorRes.json()) as Envelope;
+    expect(editorRes.status).toBe(200);
+    expect(editorBody.data?.join_code, "an owner may hold it").toBeTruthy();
+
+    // Same row, same shape, non-editor caller.
+    const stripped = organiserRegistration(
+      { ...(editorBody.data as unknown as RegistrationWithGroupRow) },
+      { orgId: "org", via: "api_key", userId: null, role: null, keyId: "k" },
+    );
+    expect(stripped.join_code, "an API key may not").toBeNull();
   });
 });

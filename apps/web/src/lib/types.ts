@@ -27,6 +27,18 @@ export const EDITOR_ROLES = ["owner", "admin"] as const;
 /** Roles with org-wide read access (doc 13 §2 — scorers see assigned scope only). */
 export const READ_ROLES = ["owner", "admin", "viewer"] as const;
 
+/** May this caller hold a WRITE-CAPABLE credential (today: a team join code)?
+ *
+ *  An API key resolves `role: null` whatever its scopes, so it cannot be shown
+ *  to be write-capable and is refused — an integration that needs join codes
+ *  gets a deliberate scope check, not a default. Declared once here because the
+ *  rule is enforced on two different surfaces (the list read model and every
+ *  single-registration action response) and a second copy would drift the first
+ *  time the role set changes. */
+export function mayHoldBearerCredential(role: OrgRole | null): boolean {
+  return role !== null && (EDITOR_ROLES as readonly string[]).includes(role);
+}
+
 /** Scorer assignment scopes (doc 13 §3): fixture ⊂ division ⊂ competition. */
 export const SCORER_SCOPE_TYPES = ["competition", "division", "fixture"] as const;
 export type ScorerScopeType = (typeof SCORER_SCOPE_TYPES)[number];
