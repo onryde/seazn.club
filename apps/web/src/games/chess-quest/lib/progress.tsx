@@ -12,6 +12,18 @@ const KEY = "seazn-games:chess-quest:v1";
 
 export type Mode = "story" | "classic";
 
+// Board colour theme — a device setting (like muted/voiceOff), not per-profile.
+// green is the default; brown and purple (the original look) are alternates.
+export type BoardTheme = "green" | "brown" | "purple";
+
+const BOARD_THEMES: readonly BoardTheme[] = ["green", "brown", "purple"];
+
+export function resolveBoardTheme(value: unknown): BoardTheme {
+  return typeof value === "string" && (BOARD_THEMES as readonly string[]).includes(value)
+    ? (value as BoardTheme)
+    : "green";
+}
+
 type Profile = {
   name: string;
   mode: Mode;
@@ -31,6 +43,7 @@ type Blob = {
   seq: number;
   muted: boolean;
   voiceOff: boolean;
+  boardTheme?: BoardTheme;
   profiles: Record<string, Profile>;
 };
 
@@ -89,6 +102,8 @@ export type Progress = {
   setMuted(m: boolean): void;
   getVoiceOn(): boolean;
   setVoiceOn(on: boolean): void;
+  getBoardTheme(): BoardTheme;
+  setBoardTheme(theme: BoardTheme): void;
 };
 
 function todayISO(): string {
@@ -125,7 +140,14 @@ function blankProfile(): Profile {
 }
 
 function freshBlob(): Blob {
-  return { active: "p1", seq: 1, muted: false, voiceOff: false, profiles: { p1: blankProfile() } };
+  return {
+    active: "p1",
+    seq: 1,
+    muted: false,
+    voiceOff: false,
+    boardTheme: "green",
+    profiles: { p1: blankProfile() },
+  };
 }
 
 function loadBlob(storage?: Storage): Blob {
@@ -341,6 +363,11 @@ export function createProgressState(storage?: Storage): Progress {
       data.voiceOff = !on;
       save();
     },
+    getBoardTheme: () => resolveBoardTheme(data.boardTheme),
+    setBoardTheme: (theme) => {
+      data.boardTheme = resolveBoardTheme(theme);
+      save();
+    },
   };
 }
 
@@ -367,6 +394,7 @@ const MUTATORS = [
   "removeProfile",
   "setMuted",
   "setVoiceOn",
+  "setBoardTheme",
 ] as const;
 
 export function ProgressProvider({ children }: { children: React.ReactNode }) {

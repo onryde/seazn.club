@@ -271,6 +271,7 @@ export function MateInTwo() {
       <Board
         position={position}
         labels
+        orientation={parseFEN(MATE2[cur].fen).whiteToMove ? "white" : "black"}
         highlights={highlights}
         popToken={pop}
         shakeToken={shake}

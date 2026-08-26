@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createProgressState } from "../progress";
+import { createProgressState, resolveBoardTheme } from "../progress";
 
 // Minimal in-memory Storage for the persistence tests.
 function fakeStorage(): Storage {
@@ -217,5 +217,42 @@ describe("persistence", () => {
     const reloaded = createProgressState(storage);
     expect(reloaded.getMuted()).toBe(true);
     expect(reloaded.getVoiceOn()).toBe(false);
+  });
+
+  it("board theme defaults to green and persists across a reload", () => {
+    const storage = fakeStorage();
+    const p = createProgressState(storage);
+    expect(p.getBoardTheme()).toBe("green");
+    p.setBoardTheme("brown");
+    expect(p.getBoardTheme()).toBe("brown");
+    const reloaded = createProgressState(storage);
+    expect(reloaded.getBoardTheme()).toBe("brown");
+  });
+
+  it("board theme is a device setting shared across profiles", () => {
+    const storage = fakeStorage();
+    const p = createProgressState(storage);
+    p.setBoardTheme("purple");
+    p.addProfile("Kid", "story");
+    expect(p.getBoardTheme()).toBe("purple");
+    p.switchProfile("p1");
+    expect(p.getBoardTheme()).toBe("purple");
+  });
+});
+
+describe("resolveBoardTheme (unknown/corrupt values default to green)", () => {
+  it("passes through the three known themes", () => {
+    expect(resolveBoardTheme("green")).toBe("green");
+    expect(resolveBoardTheme("brown")).toBe("brown");
+    expect(resolveBoardTheme("purple")).toBe("purple");
+  });
+
+  it("defaults anything else to green", () => {
+    expect(resolveBoardTheme(undefined)).toBe("green");
+    expect(resolveBoardTheme(null)).toBe("green");
+    expect(resolveBoardTheme("")).toBe("green");
+    expect(resolveBoardTheme("neon")).toBe("green");
+    expect(resolveBoardTheme(42)).toBe("green");
+    expect(resolveBoardTheme({})).toBe("green");
   });
 });
