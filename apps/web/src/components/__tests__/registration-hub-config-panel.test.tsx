@@ -476,6 +476,46 @@ describe("RegistrationHubConfigPanel — every routable field has a render site 
   });
 });
 
+// RS005 R5 task 1 — the same "leads nowhere" problem the row's Copy/Open/QR
+// controls have (registration-hub-division-row.test.tsx's own coverage),
+// but reached from the SETTING an organiser flips to turn registration on:
+// the public sign-up page is hardcoded closed until RS006 ships the cart
+// stepper, so entrants still cannot register even once this toggle is on.
+// Open & close defaults OPEN (this file's own header comment), so this needs
+// no deepExpand — a direct OpenCloseSection call, matching the "every
+// routable field" test above, is enough.
+describe("RegistrationHubConfigPanel — the open-for-public toggle does not promise more than it delivers (RS005 R5 task 1)", () => {
+  it("renders a not-live notice beside the toggle, unconditionally", () => {
+    const tree = walk(
+      OpenCloseSection({
+        state: FULL_STATE,
+        errors: {},
+        patch: vi.fn(),
+        msg: testMsg,
+        orgTz: "UTC",
+        dtDrafts: {},
+        onDateTimeHalfChange: vi.fn(),
+      }),
+    );
+    expect(textOf(tree)).toContain(t(uiEn, "reg.settings.openForPublic.notLive"));
+  });
+
+  it("still renders the notice when the toggle is OFF — an organiser reads it before ever turning registration on", () => {
+    const tree = walk(
+      OpenCloseSection({
+        state: { ...FULL_STATE, enabled: false },
+        errors: {},
+        patch: vi.fn(),
+        msg: testMsg,
+        orgTz: "UTC",
+        dtDrafts: {},
+        onDateTimeHalfChange: vi.fn(),
+      }),
+    );
+    expect(textOf(tree)).toContain(t(uiEn, "reg.settings.openForPublic.notLive"));
+  });
+});
+
 describe("RegistrationHubConfigPanel — a field error inside a COLLAPSED section reveals itself", () => {
   it("a PUT-side error (fee) auto-opens the collapsed Money section instead of hiding invisibly", async () => {
     net.putRejection = new ApiV1Error("Card entry fees must be at least 1.00 (or 0 for free)", 422, "ERROR");

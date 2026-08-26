@@ -242,7 +242,21 @@ export function RegistrationHubDivisionRow({
         </div>
       )}
       {showLinkControls && (
-        <div>
+        // TEMP(RS005 R5): the public register page is hardcoded closed until
+        // RS006 ships the cart stepper (register/page.tsx's own header
+        // comment) — every one of Copy/Open/QR below currently leads to
+        // "Registration is not open for this competition", and the QR is the
+        // one an organiser prints and pins to a noticeboard. Remove this
+        // notice (and its two dictionary keys) once RS006 makes the public
+        // page real; until then it has to be read BEFORE Copy/QR are
+        // reachable, hence it renders first, above CopyLink, not beside it.
+        <div className="space-y-2">
+          <p
+            data-registration-hub-link-not-live
+            className="rounded-lg border border-amber-100 bg-amber-50 p-2 text-xs text-amber-800"
+          >
+            {t(dict, "div.registrations.publicLink.notLive")}
+          </p>
           <CopyLink
             path={context.registerHref}
             qrFileName={context.registerQrFileName}

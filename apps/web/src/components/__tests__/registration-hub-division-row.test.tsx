@@ -230,6 +230,62 @@ describe("RegistrationHubDivisionRow — the copy control is never dropped", () 
   });
 });
 
+// RS005 R5 task 1 — the public register page is hardcoded closed until
+// RS006 ships the cart stepper (see the register page's own header
+// comment), so Copy/Open/QR here currently lead an organiser to "Registration
+// is not open for this competition" — worse for the QR, which gets printed
+// and pinned to a noticeboard. The controls stay (settings must remain
+// configurable ahead of launch); this only adds a notice an organiser reads
+// BEFORE reaching for Copy or QR.
+describe("RegistrationHubDivisionRow — public sign-up page not-live notice (RS005 R5 task 1)", () => {
+  it("renders the not-live notice whenever the copy/QR controls render", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, showRegisterLink: true } }),
+    );
+    expect(textOf(tree)).toContain(t(uiEn, "div.registrations.publicLink.notLive"));
+  });
+
+  it("places the notice BEFORE CopyLink in reading order — read before Copy/QR is ever reachable", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, showRegisterLink: true } }),
+    );
+    const notice = tree.find(
+      (e) => e.type === "p" && String(propsOf(e).children ?? "").includes(t(uiEn, "div.registrations.publicLink.notLive")),
+    );
+    const link = tree.find((e) => e.type === CopyLink);
+    expect(notice).toBeTruthy();
+    expect(link).toBeTruthy();
+    expect(tree.indexOf(notice!)).toBeLessThan(tree.indexOf(link!));
+  });
+
+  it("does NOT render the not-live notice when the competition is private (no link controls at all)", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, showRegisterLink: false } }),
+    );
+    expect(textOf(tree)).not.toContain(t(uiEn, "div.registrations.publicLink.notLive"));
+  });
+
+  it("does NOT render the not-live notice on a closed division (no link controls there either)", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, enabled: false },
+        context: { ...BASE_CONTEXT, showRegisterLink: true },
+      }),
+    );
+    expect(textOf(tree)).not.toContain(t(uiEn, "div.registrations.publicLink.notLive"));
+  });
+
+  it("still renders for a SCHEDULED division — an organiser can reach Copy/QR before the window opens, so the warning must too", () => {
+    const tree = walk(
+      RegistrationHubDivisionRow({
+        row: { ...BASE_ROW, enabled: true, opens_at: "2026-07-01T00:00:00Z", closes_at: null },
+        context: { ...BASE_CONTEXT, showRegisterLink: true },
+      }),
+    );
+    expect(textOf(tree)).toContain(t(uiEn, "div.registrations.publicLink.notLive"));
+  });
+});
+
 describe("RegistrationHubDivisionRow — register link only for a non-closed division (finding 3)", () => {
   it("closed, not private: no link controls at all — the link would only ever refuse the visitor", () => {
     const tree = walk(
