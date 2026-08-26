@@ -15,6 +15,7 @@ import { loadLineupPair } from "./lineups";
 import { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
+import { log } from "@/server/logger";
 
 // What a caller supplies; persistence stamps id/seq/recordedAt (spec 03 §2 —
 // ids/time are injected). `id`/`recordedAt` are accepted for test determinism.
@@ -250,9 +251,31 @@ export async function appendEventInTx(
   // full and `prior` — which the ledger already accepted, under the cfg now
   // frozen above — is replayed. `fold.ts` and every other read path pass no
   // options at all.
-  const state = foldMatch(sportModule, cfg, lineups, stream, {
-    strictFromSeq: candidate.seq,
-  });
+  // R3.5 Task K — this funnel was entirely silent: every super-over ball,
+  // every shoot-out kick and every refusal on both was invisible in
+  // production. Wrap ONLY the fold: everything from here to the insert below
+  // runs inside `tx`, where a throw aborts the transaction before any write
+  // (PROMPT-61, above) — that must keep happening exactly as it does today,
+  // so the catch below re-throws unchanged and never touches SQL itself.
+  const state = (() => {
+    try {
+      return foldMatch(sportModule, cfg, lineups, stream, {
+        strictFromSeq: candidate.seq,
+      });
+    } catch (error) {
+      // IDs, types and codes only. The payload carries striker/nonStriker/
+      // bowler/person ids and, for some events, free text; persons in this
+      // product carry consent flags, so a payload is never a log-safe value
+      // (case K5).
+      if (EngineError.is(error)) {
+        log.warn(
+          { fixtureId, eventType: input.type, code: error.code },
+          "scoring event refused",
+        );
+      }
+      throw error;
+    }
+  })();
   const summary = sportModule.summary(state);
   const outcome = sportModule.outcome(state);
   const active = resolveVoids(stream);
@@ -299,11 +322,46 @@ export async function appendEventInTx(
   `;
 
   const status = nextStatus(candidate.type, outcome, active);
+  // R3.5 Task K — IDs, types and counts only (case K5: never a payload
+  // value). `phase` is the fold's OWN phase, which is what makes a decider
+  // visible: the first accepted line whose phase is "super_over"/"SHOOTOUT"
+  // IS the decider entry, deliberately with no separate line — the phase
+  // BEFORE this fold is not in scope here, and reconstructing it would mean
+  // a second fold on the scorer's tap path. `status` is the fixture row's;
+  // the two are different things and both matter.
+  log.info(
+    {
+      fixtureId,
+      sportKey: division.sport_key,
+      eventType: candidate.type,
+      seq: candidate.seq,
+      phase: (state as { phase?: unknown }).phase ?? null,
+      status,
+    },
+    "scoring event appended",
+  );
   // Fire once, on the transition from no-result to a decided result.
   const firstResult: FirstResult | null =
     fixture.outcome === null && outcome !== null
       ? { distinctId: candidate.recordedBy ?? `org:${orgId}`, sportKey: division.sport_key, status }
       : null;
+  if (firstResult !== null) {
+    // `method` is what a support question about a knockout result actually
+    // needs: shootout / super_over / boundary_count / extra_time — the
+    // difference between "they won" and "they won on penalties", and until
+    // now neither reached a log. Reuses the SAME `firstResult` computation
+    // above rather than re-testing `fixture.outcome`/`outcome` a second
+    // time, so the two can never disagree about when a fixture was decided.
+    log.info(
+      {
+        fixtureId,
+        sportKey: division.sport_key,
+        kind: (outcome as { kind?: unknown }).kind ?? null,
+        method: (outcome as { method?: unknown }).method ?? null,
+      },
+      "fixture decided",
+    );
+  }
   // Also rewrite when a void erased a previously-stored outcome — otherwise
   // fixtures.outcome would go stale against the fold (doc 08 §4 undo).
   if (status !== fixture.status || outcome !== null || fixture.outcome !== null) {
