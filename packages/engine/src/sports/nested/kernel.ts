@@ -549,14 +549,25 @@ function walkServe(state: NestedState): { turns: Record<Side, number>; opener: S
   };
   for (const set of state.sets) {
     if (set.mtb === true) {
-      const split = splitTbTurns(tbTurnsConsumed(set.home + set.away), opener);
+      const mtbPoints = set.home + set.away;
+      const split = splitTbTurns(tbTurnsConsumed(mtbPoints), opener);
       credit("home", split.home);
       credit("away", split.away);
-      // No next set to hand off to — but `applyTbPoint` still applies ITF 5b
-      // to `serving` on the closing point, so flip here too or the two
-      // derivations disagree for the whole of a finished match and
-      // `serveContext` reports a drift that is really just this omission.
-      opener = opponent(opener);
+      // ITF 5b does NOT apply to a match tie-break, and neither does the
+      // fold's 5b overwrite: `serving: opponent(tbFirstServer)` sits on
+      // `applyTbPoint`'s ORDINARY-breaker branch only, after which there is a
+      // next set to hand off to. The MTB branch returns straight through
+      // `bankSet`, which banks the raw point-by-point rotation value — the
+      // server flips after every odd point, so `ceil(points / 2)` times over
+      // the whole breaker. Mirror exactly that, or this walk and the fold
+      // disagree for the entire post-match view.
+      //
+      // An UNCONDITIONAL flip here was the review finding it replaces: it
+      // matches the fold only when `ceil(points / 2)` is odd, so a match
+      // decided 10-1, 10-2, 10-5, 10-6 … reported `serveOrderKnown: false`
+      // and named nobody — the drift detector firing on a defect of its own
+      // rather than on real drift.
+      if (Math.ceil(mtbPoints / 2) % 2 === 1) opener = opponent(opener);
       continue;
     }
     // `set.home`/`set.away` already carry the breaker's own "+1" credited

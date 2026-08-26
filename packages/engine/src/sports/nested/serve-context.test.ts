@@ -284,22 +284,55 @@ describe("serveContext", () => {
       });
     });
 
-    it("keeps the walk in step with ITF 5b across a CLOSED match tie-break", () => {
-      // `applyTbPoint` flips `serving` on the MTB's closing point like any
-      // other breaker. The walk has no next set to hand off to and could
-      // plausibly skip that flip — if it does, every finished MTB match
-      // reads as desynced and reports a drift that is really the walk's own
-      // omission. Mutation-proved: dropping the flip fails this test alone.
-      const cfg = cfgFor("doubles-noad-mtb10");
-      const done = fold(doubles, cfg, [start, summary(6, 4), summary(2, 6), ...straight(H, 10)]);
-      expect(done.sets[2]).toEqual({ home: 10, away: 0, mtb: true }); // sanity
-      expect(serveContext(done)).toEqual({
-        side: "away",
-        serviceTurn: 12,
-        personId: "A-first",
-        serveOrderKnown: true,
+    // A match tie-break is NOT handed off under ITF 5b — there is no next set
+    // to hand off to, and `applyTbPoint` skips the `serving:
+    // opponent(tbFirstServer)` overwrite it applies to an ordinary breaker,
+    // banking the raw point-by-point rotation instead. The walk must mirror
+    // that rotation, not assume a handoff.
+    //
+    // Pinned across EVERY reachable 10-N scoreline rather than one of them,
+    // because the two rules agree on a coincidence: an unconditional flip is
+    // right exactly when `ceil(points / 2)` is odd, so 10-0 — the obvious
+    // fixture, and the only one this file used to carry — passes under both.
+    // 10-1, 10-2, 10-5 and 10-6 are where they part.
+    //
+    // The domain claim under the whole table, independent of the arithmetic:
+    // once a match is OVER, its serve rotation is fully determined. There is
+    // no honest reason for `serveOrderKnown` to be false on any row.
+    const MTB_ROTATION: Array<{ lost: number; side: "home" | "away"; serviceTurn: number; personId: string }> = [
+      { lost: 0, side: "away", serviceTurn: 12, personId: "A-first" },
+      { lost: 1, side: "home", serviceTurn: 12, personId: "H-first" },
+      { lost: 2, side: "home", serviceTurn: 13, personId: "H-second" },
+      { lost: 3, side: "away", serviceTurn: 12, personId: "A-first" },
+      { lost: 4, side: "away", serviceTurn: 13, personId: "A-second" },
+      { lost: 5, side: "home", serviceTurn: 13, personId: "H-second" },
+      { lost: 6, side: "home", serviceTurn: 14, personId: "H-first" },
+      { lost: 7, side: "away", serviceTurn: 13, personId: "A-second" },
+      { lost: 8, side: "away", serviceTurn: 14, personId: "A-first" },
+    ];
+
+    for (const row of MTB_ROTATION) {
+      it(`tracks the fold's own rotation across a CLOSED match tie-break won 10-${row.lost}`, () => {
+        const cfg = cfgFor("doubles-noad-mtb10");
+        // Point ORDER cannot matter — the ITF handoff counts points, not who
+        // won them — so the loser's points are taken first, then the winner's.
+        const done = fold(doubles, cfg, [
+          start,
+          summary(6, 4),
+          summary(2, 6),
+          ...straight(A, row.lost),
+          ...straight(H, 10),
+        ]);
+        expect(done.sets[2]).toEqual({ home: 10, away: row.lost, mtb: true }); // sanity
+        expect(done.phase).toBe("done"); // sanity — the walk is answering for a finished match
+        expect(serveContext(done)).toEqual({
+          side: row.side,
+          serviceTurn: row.serviceTurn,
+          personId: row.personId,
+          serveOrderKnown: true,
+        });
       });
-    });
+    }
   });
 
   // A tier-0 `*.set_summary` banks a set without advancing `state.serving`
