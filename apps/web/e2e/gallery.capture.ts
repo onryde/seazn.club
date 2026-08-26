@@ -897,9 +897,14 @@ const SPORTS: GallerySport[] = [
       });
       await postEvent(page.request, fx5.fixtureId, "cricket.innings.close", { reason: "other" });
       // Away bats first in the super over (they batted second); home bowls
-      // with a bowler who did NOT bowl the previous over — h1 bowled away's
-      // chase, so h2 is the only eligible home bowler here
-      // (applyDelivery's "cannot bowl consecutive overs" gate, cricket.ts).
+      // with h2 — an arbitrary pick, not a forced one. `applySuperOverBall`
+      // (cricket.ts:1536-1561) always opens a super-over innings on a FRESH
+      // `fine` object (`freshFine()`, cricket.ts:683-698: `prevOverBowler:
+      // null`, `bowlerBalls: {}`), so nothing carries over from the second
+      // main innings h1 just bowled, and it passes `maxOversPerBowler:
+      // undefined` too — neither the "cannot bowl consecutive overs" gate
+      // nor the per-bowler quota (applyDelivery, cricket.ts:1201-1212) can
+      // fire on this ball. h1 would have been accepted exactly as legally.
       await postEvent(page.request, fx5.fixtureId, "cricket.superover.ball", {
         over: 0, ballInOver: 1, striker: so_a1, nonStriker: so_a2, bowler: so_h2, runs: { bat: 4 }, boundary: 4,
       });
@@ -989,7 +994,15 @@ const SPORTS: GallerySport[] = [
         visibleProbe(soFinalize, "gallery(cricket): 12-superover-decided must show the decided-match Finalize control"),
       );
 
-      return [...EXTRA_STATES];
+      return [
+        "06-overtile",
+        "07-oversheet",
+        "08-bowlerpicker",
+        "09-retiresheet",
+        "10-reviewblocked",
+        "11-superover",
+        "12-superover-decided",
+      ];
     },
   },
   {
@@ -1078,19 +1091,25 @@ const SPORTS: GallerySport[] = [
       await postEvent(page.request, fx.fixtureId, "football.shootout.kick", { by: fx.awayEntrantId, scored: true });
 
       await page.goto(await fixturePath(page.request, fx.fixtureId));
-      const ledStrip = pad(page).locator('[data-strip-tone="led"]').first();
+      // NOT `[data-strip-tone="led"]`.first() — the "period" item carries
+      // that tone in EVERY phase (buildScorebug, v3/skins/football.tsx:538-
+      // 545 pushes it unconditionally, first, as the fourth official's
+      // board), so a bare tone-selector probe stays visible at kickoff and
+      // at half-time too and proves nothing about which board is on screen.
+      // Anchor on the item's stable id instead and check its actual text —
+      // `phaseLabel` renders the SHOOTOUT phase as "Shoot-out"
+      // (dictionaries/en/ui.json's `pad.football.phase.SHOOTOUT`).
+      const periodStrip = pad(page).locator('[data-strip-item-id="period"]');
       // THE DEFECT, pinned rather than fixed: home leads 2-1 on kicks (four
       // taken), but ScorebugHalf carries no `sub` yet, so both halves below
       // still read the regulation 1-1 while the strip/headline already know
       // better.
-      await captureState(
-        page,
-        dir,
-        "11-shootout",
-        "football",
-        measurements,
-        visibleProbe(ledStrip, 'gallery(football): 11-shootout must show the "Shoot-out" strip'),
-      );
+      await captureState(page, dir, "11-shootout", "football", measurements, async () => {
+        await expect(
+          periodStrip,
+          'gallery(football): 11-shootout must show the "Shoot-out" strip',
+        ).toContainText("Shoot-out", { timeout: 20_000 });
+      });
 
       // 12 — three more kicks (home, away, home) decide it early: home's
       // 4th kick makes it 4 scored vs away's 1, a lead away's two remaining

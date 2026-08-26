@@ -126,11 +126,28 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
 // "load" + a short settle instead of networkidle — the dev server's HMR
 // socket keeps the network permanently busy and cold compiles already eat
 // the budget.
-async function auditRoute(page: Page, path: string, opts: { allowancePx?: number } = {}) {
+async function auditRoute(
+  page: Page,
+  path: string,
+  opts: { allowancePx?: number; requireScorePad?: boolean } = {},
+) {
   const response = await page.goto(path, { waitUntil: "load" });
   expect(response, `${path}: navigation produced no response`).not.toBeNull();
   expect(response!.status(), `${path} returned ${response!.status()}`).toBeLessThan(400);
   await page.waitForTimeout(300);
+  if (opts.requireScorePad) {
+    // R3.5 review round 1 (finding 3) — a 2xx status and no overflow both
+    // pass on a console that rendered its shell with NO pad at all (a
+    // division config that fails z.object parsing on the way in does
+    // exactly this — see the decider seeding below). Same class as the
+    // #349 404 vacuity this file already records above: a route that
+    // "passed" without ever rendering the surface it was meant to audit.
+    // Opt-in, not the default — most routes here legitimately have no pad.
+    await expect(
+      page.getByTestId("score-pad"),
+      `${path}: expected the score pad to be visible, not just a ${response!.status()} response`,
+    ).toBeVisible();
+  }
   await expectNoHorizontalScroll(page, opts);
 }
 
@@ -175,95 +192,6 @@ async function mergeDivisionConfig(
 }
 
 test("console routes: no horizontal scroll", async ({ page, request }) => {
-  // R3.5 Task A adds two fresh fixture seeds (below) on top of this test's
-  // existing ~20-route audit loop.
-  test.setTimeout(90_000);
-
-  // R3.5 Task A (2026-08-26) — the two live decider consoles. Neither
-  // defect is fixed yet (capture the broken state first): this is what
-  // proves the seven-width matrix had ZERO coverage of either screen before
-  // this wave, the same gap gallery.capture.ts's own 11-superover/
-  // 11-shootout states exist to close for the three-width gallery.
-  // Sequences are the wave plan's own (Task A steps 2 and 4), verbatim.
-  const soTag = `${TAG}so`;
-  const cricketDecider = await seedRosteredFixture(request, {
-    label: `Mobile Cricket SuperOver ${TAG}-${projectTag()}`,
-    sportKey: "cricket",
-    variantKey: "t20",
-    home: [
-      { fullName: `Mobile Cricket SO Home1 ${soTag}` },
-      { fullName: `Mobile Cricket SO Home2 ${soTag}` },
-    ],
-    away: [
-      { fullName: `Mobile Cricket SO Away1 ${soTag}` },
-      { fullName: `Mobile Cricket SO Away2 ${soTag}` },
-    ],
-  });
-  const mh1 = cricketDecider.personIds[`Mobile Cricket SO Home1 ${soTag}`]!;
-  const mh2 = cricketDecider.personIds[`Mobile Cricket SO Home2 ${soTag}`]!;
-  const ma1 = cricketDecider.personIds[`Mobile Cricket SO Away1 ${soTag}`]!;
-  const ma2 = cricketDecider.personIds[`Mobile Cricket SO Away2 ${soTag}`]!;
-  await mergeDivisionConfig(request, cricketDecider.divisionId, { superOver: true });
-  await postEvent(request, cricketDecider.fixtureId, "core.start", {});
-  await postEvent(request, cricketDecider.fixtureId, "cricket.ball", {
-    over: 0, ballInOver: 1, striker: mh1, nonStriker: mh2, bowler: ma1, runs: { bat: 1 },
-  });
-  await postEvent(request, cricketDecider.fixtureId, "cricket.ball", {
-    over: 0, ballInOver: 2, striker: mh2, nonStriker: mh1, bowler: ma1, runs: { bat: 1 },
-  });
-  await postEvent(request, cricketDecider.fixtureId, "cricket.innings.close", { reason: "other" });
-  // target = 3; away scores exactly 2 => TIE => phase super_over.
-  await postEvent(request, cricketDecider.fixtureId, "cricket.ball", {
-    over: 0, ballInOver: 1, striker: ma1, nonStriker: ma2, bowler: mh1, runs: { bat: 1 },
-  });
-  await postEvent(request, cricketDecider.fixtureId, "cricket.ball", {
-    over: 0, ballInOver: 2, striker: ma2, nonStriker: ma1, bowler: mh1, runs: { bat: 1 },
-  });
-  await postEvent(request, cricketDecider.fixtureId, "cricket.innings.close", { reason: "other" });
-  // Away bats first in the super over; home bowls with a bowler who did NOT
-  // bowl the previous over (h1 bowled away's chase, so h2 is the only
-  // eligible home bowler here).
-  await postEvent(request, cricketDecider.fixtureId, "cricket.superover.ball", {
-    over: 0, ballInOver: 1, striker: ma1, nonStriker: ma2, bowler: mh2, runs: { bat: 4 }, boundary: 4,
-  });
-  await postEvent(request, cricketDecider.fixtureId, "cricket.superover.ball", {
-    over: 0, ballInOver: 2, striker: ma1, nonStriker: ma2, bowler: mh2, runs: { bat: 2 },
-  });
-
-  const shTag = `${TAG}sh`;
-  const footballDecider = await seedRosteredFixture(request, {
-    label: `Mobile Football Shootout ${TAG}-${projectTag()}`,
-    sportKey: "football",
-    variantKey: "11-a-side",
-    home: [{ fullName: `Mobile Football SO Home ${shTag}`, positionKey: "FW" }],
-    away: [{ fullName: `Mobile Football SO Away ${shTag}`, positionKey: "GK" }],
-  });
-  // `extraTime` is a plain z.object whose two fields are BOTH required,
-  // defaulted only as a whole object — `{ enabled: false }` alone fails the
-  // cfg parse, and because the division config is written by SQL nothing
-  // validates it on the way in.
-  await mergeDivisionConfig(request, footballDecider.divisionId, {
-    shootout: true,
-    extraTime: { enabled: false, halfMinutes: 15 },
-  });
-  await postEvent(request, footballDecider.fixtureId, "core.start", {});
-  await postEvent(request, footballDecider.fixtureId, "football.goal", { by: footballDecider.homeEntrantId });
-  await postEvent(request, footballDecider.fixtureId, "football.goal", { by: footballDecider.awayEntrantId });
-  await postEvent(request, footballDecider.fixtureId, "football.period", { phase: "HT" });
-  await postEvent(request, footballDecider.fixtureId, "football.period", { phase: "FT" });
-  await postEvent(request, footballDecider.fixtureId, "football.shootout.kick", {
-    by: footballDecider.homeEntrantId, scored: true,
-  });
-  await postEvent(request, footballDecider.fixtureId, "football.shootout.kick", {
-    by: footballDecider.awayEntrantId, scored: false,
-  });
-  await postEvent(request, footballDecider.fixtureId, "football.shootout.kick", {
-    by: footballDecider.homeEntrantId, scored: true,
-  });
-  await postEvent(request, footballDecider.fixtureId, "football.shootout.kick", {
-    by: footballDecider.awayEntrantId, scored: true,
-  });
-
   const routes: Array<{ path: string; allowancePx?: number }> = [
     { path: "/dashboard" },
     // These six used to be legacy id-routes (/competitions/{id},
@@ -343,15 +271,126 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     // shape most likely to force a min-width overflow at 320 (grid items
     // default to `min-width: auto`).
     { path: `/o/${orgSlug}/c/new` },
-    // R3.5 Task A (2026-08-26) — the two live decider consoles seeded above.
-    // A new UI surface has ZERO width coverage until its path is in this
-    // array; neither of these had any before this wave.
-    { path: await fixturePath(request, cricketDecider.fixtureId) },
-    { path: await fixturePath(request, footballDecider.fixtureId) },
   ];
   for (const { path, allowancePx } of routes) {
     await auditRoute(page, path, { allowancePx });
   }
+});
+
+// R3.5 review round 1 (2026-08-26, finding 4) — split out of "console
+// routes: no horizontal scroll" above. Two fixture seeds plus ~18
+// postEvents (~36 round trips) used to run at the HEAD of that test's own
+// ~22-route audit, under this file's file-level `mode: "serial"` (top of
+// file). Any 4xx here, or a timeout, killed the pre-existing audit AND
+// skipped every later test in the file, across all seven projects — this
+// test's own failure now stays contained to just these two routes.
+test("decider consoles: no horizontal scroll, score pad renders (not just a 2xx)", async ({
+  page,
+  request,
+}) => {
+  // core.start poll + ~18 postEvents across two fixtures; same headroom
+  // convention as this file's other self-contained-fixture tests (e.g. the
+  // cricket v3 pad test below) that budget generously over their own sum.
+  test.setTimeout(90_000);
+
+  // R3.5 Task A (2026-08-26) — the two live decider consoles. Neither
+  // defect is fixed yet (capture the broken state first): this is what
+  // proves the seven-width matrix had ZERO coverage of either screen before
+  // this wave, the same gap gallery.capture.ts's own 11-superover/
+  // 11-shootout states exist to close for the three-width gallery.
+  // Sequences are the wave plan's own (Task A steps 2 and 4), verbatim.
+  //
+  // Tag folds in projectTag() (review finding 5) — bare `${TAG}so`/
+  // `${TAG}sh` collided across width projects that resolve the same
+  // millisecond TAG (`projectTag`'s own doc-comment above records a
+  // MEASURED collision), and persons are get-or-create BY NAME, so two
+  // width projects would otherwise silently share these six person rows.
+  const soTag = `${TAG}-${projectTag()}so`;
+  const cricketDecider = await seedRosteredFixture(request, {
+    label: `Mobile Cricket SuperOver ${TAG}-${projectTag()}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [
+      { fullName: `Mobile Cricket SO Home1 ${soTag}` },
+      { fullName: `Mobile Cricket SO Home2 ${soTag}` },
+    ],
+    away: [
+      { fullName: `Mobile Cricket SO Away1 ${soTag}` },
+      { fullName: `Mobile Cricket SO Away2 ${soTag}` },
+    ],
+  });
+  const mh1 = cricketDecider.personIds[`Mobile Cricket SO Home1 ${soTag}`]!;
+  const mh2 = cricketDecider.personIds[`Mobile Cricket SO Home2 ${soTag}`]!;
+  const ma1 = cricketDecider.personIds[`Mobile Cricket SO Away1 ${soTag}`]!;
+  const ma2 = cricketDecider.personIds[`Mobile Cricket SO Away2 ${soTag}`]!;
+  await mergeDivisionConfig(request, cricketDecider.divisionId, { superOver: true });
+  await postEvent(request, cricketDecider.fixtureId, "core.start", {});
+  await postEvent(request, cricketDecider.fixtureId, "cricket.ball", {
+    over: 0, ballInOver: 1, striker: mh1, nonStriker: mh2, bowler: ma1, runs: { bat: 1 },
+  });
+  await postEvent(request, cricketDecider.fixtureId, "cricket.ball", {
+    over: 0, ballInOver: 2, striker: mh2, nonStriker: mh1, bowler: ma1, runs: { bat: 1 },
+  });
+  await postEvent(request, cricketDecider.fixtureId, "cricket.innings.close", { reason: "other" });
+  // target = 3; away scores exactly 2 => TIE => phase super_over.
+  await postEvent(request, cricketDecider.fixtureId, "cricket.ball", {
+    over: 0, ballInOver: 1, striker: ma1, nonStriker: ma2, bowler: mh1, runs: { bat: 1 },
+  });
+  await postEvent(request, cricketDecider.fixtureId, "cricket.ball", {
+    over: 0, ballInOver: 2, striker: ma2, nonStriker: ma1, bowler: mh1, runs: { bat: 1 },
+  });
+  await postEvent(request, cricketDecider.fixtureId, "cricket.innings.close", { reason: "other" });
+  // Away bats first in the super over; home bowls with h2 — an arbitrary
+  // pick, not a forced one (see gallery.capture.ts's identical sequence:
+  // applySuperOverBall opens the innings on a fresh `fine`, so h1 would be
+  // accepted exactly as legally).
+  await postEvent(request, cricketDecider.fixtureId, "cricket.superover.ball", {
+    over: 0, ballInOver: 1, striker: ma1, nonStriker: ma2, bowler: mh2, runs: { bat: 4 }, boundary: 4,
+  });
+  await postEvent(request, cricketDecider.fixtureId, "cricket.superover.ball", {
+    over: 0, ballInOver: 2, striker: ma1, nonStriker: ma2, bowler: mh2, runs: { bat: 2 },
+  });
+
+  const shTag = `${TAG}-${projectTag()}sh`;
+  const footballDecider = await seedRosteredFixture(request, {
+    label: `Mobile Football Shootout ${TAG}-${projectTag()}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [{ fullName: `Mobile Football SO Home ${shTag}`, positionKey: "FW" }],
+    away: [{ fullName: `Mobile Football SO Away ${shTag}`, positionKey: "GK" }],
+  });
+  // `extraTime` is a plain z.object whose two fields are BOTH required,
+  // defaulted only as a whole object — `{ enabled: false }` alone fails the
+  // cfg parse, and because the division config is written by SQL nothing
+  // validates it on the way in.
+  await mergeDivisionConfig(request, footballDecider.divisionId, {
+    shootout: true,
+    extraTime: { enabled: false, halfMinutes: 15 },
+  });
+  await postEvent(request, footballDecider.fixtureId, "core.start", {});
+  await postEvent(request, footballDecider.fixtureId, "football.goal", { by: footballDecider.homeEntrantId });
+  await postEvent(request, footballDecider.fixtureId, "football.goal", { by: footballDecider.awayEntrantId });
+  await postEvent(request, footballDecider.fixtureId, "football.period", { phase: "HT" });
+  await postEvent(request, footballDecider.fixtureId, "football.period", { phase: "FT" });
+  await postEvent(request, footballDecider.fixtureId, "football.shootout.kick", {
+    by: footballDecider.homeEntrantId, scored: true,
+  });
+  await postEvent(request, footballDecider.fixtureId, "football.shootout.kick", {
+    by: footballDecider.awayEntrantId, scored: false,
+  });
+  await postEvent(request, footballDecider.fixtureId, "football.shootout.kick", {
+    by: footballDecider.homeEntrantId, scored: true,
+  });
+  await postEvent(request, footballDecider.fixtureId, "football.shootout.kick", {
+    by: footballDecider.awayEntrantId, scored: true,
+  });
+
+  // R3.5 review round 1 (finding 3) — `requireScorePad: true` on both: a 2xx
+  // status and no overflow both pass on a console that rendered its shell
+  // with NO pad at all, the same class as the #349 404 vacuity this file
+  // already records in "console routes: no horizontal scroll" above.
+  await auditRoute(page, await fixturePath(request, cricketDecider.fixtureId), { requireScorePad: true });
+  await auditRoute(page, await fixturePath(request, footballDecider.fixtureId), { requireScorePad: true });
 });
 
 // P8/D5a added a FOURTH Directory tab, which pushed "Venues" past the right
