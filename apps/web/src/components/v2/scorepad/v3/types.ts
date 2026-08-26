@@ -82,6 +82,24 @@ export interface TapEvent { type: string; payload: Record<string, unknown> }
 export interface ScorebugHalf {
   who: WhoLine[];
   big: string;                    // pre-formatted, tabular-nums rendering
+  /**
+   * R3.5 — an OPTIONAL second figure against `big`, for a decider running
+   * alongside the regulation score: football's shoot-out tally, and R6's
+   * `(GWS 2–1)` for icehockey and hockey, which `period/kernel.ts` already
+   * composes for its own summary and has nowhere to render.
+   *
+   * PRE-FORMATTED and pre-localised, the same convention `big` and
+   * `ScorebugSpec.context` already follow — brackets, separators and all.
+   * The chassis renders it verbatim and never resolves a sport-namespaced
+   * key.
+   *
+   * Absent on every half shipped before this, so the two render branches
+   * (scorebug.tsx's `HalfContent`) are byte-for-byte what R1–R4 rendered.
+   * Design note D-11 (one score, rendered once) is not weakened: this is
+   * the SAME score's decider, in the same element, not a second readout
+   * somewhere else on the page.
+   */
+  sub?: string;
   /** i18n KEY, resolved by the chassis (scorebug.tsx, via padLabel()) —
    *  REQUIRED iff tappable. Renamed from `hint` (R2b-cricket-over
    *  follow-up, hint-field naming pass, 2026-08-17): shared a bare name
@@ -807,6 +825,23 @@ export interface ActivityDetailContext {
    * captures `view.cfg` directly and forwards it here.
    */
   cfg?: unknown;
+  /**
+   * R3.5/Task E — `PadHostView.state` verbatim, the same "closure-captured,
+   * unknown" convention `cfg` above already takes. Exists for the identical
+   * reason: a per-row derivation can depend on a STATE-level fact no event
+   * payload carries on its own. Football's `football.shootout.kick` payload
+   * carries `by`, an entrant id — resolving it to a SIDE ("home"/"away") for
+   * the activity row needs `state.entrants`, which only the fold holds; no
+   * `cfg` fact and no payload field can answer it. `ActivityPanel` itself
+   * never learns what `state` means or that this field exists —
+   * `pad-host.tsx`'s own `resolveDetail` closure captures `view.state`
+   * directly and forwards it here, exactly as it already does for `cfg`.
+   *
+   * Optional/additive: every pre-R3.5 `activityDetail` implementation
+   * (cricket's `cricketBallDetail`) omits reading this and keeps behaving
+   * identically with zero change.
+   */
+  state?: unknown;
   /**
    * `PadHostView.personNames` verbatim — a static, closure-captured data
    * bag `pad-host.tsx`'s own `resolveDetail` closure forwards alongside

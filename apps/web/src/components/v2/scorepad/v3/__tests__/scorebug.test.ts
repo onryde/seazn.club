@@ -14,7 +14,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
 import { whoNames, Scorebug } from "../scorebug";
 import { NIGHT_TILE_CLASSES } from "../tokens";
-import type { ScorebugSpec, StripItem } from "../types";
+import type { ScorebugHalf, ScorebugSpec, StripItem } from "../types";
 import type { MsgFn } from "../ribbon";
 
 describe("whoNames", () => {
@@ -228,5 +228,51 @@ describe("the scorebug who-line with a long unbroken name (R3/F)", () => {
     // caught that.
     expect(cls, "an unbroken word never wraps without an overflow-wrap opportunity").toContain("wrap-anywhere");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5/Task D (cases B6, B7) — `ScorebugHalf.sub`, an OPTIONAL second figure
+// beside `big` for a decider running alongside the regulation score
+// (football's shoot-out tally now; R6's `(GWS 2-1)` for icehockey/hockey
+// next, which `period/kernel.ts` already composes with nowhere to put it).
+// Rendered through the SAME `HalfContent` every skin's ScorebugSpec shares,
+// so these two cases pin the CHASSIS half of the contract — the SPORT half
+// (football fills it only during SHOOTOUT) is skins/__tests__/football.test.ts's.
+// ---------------------------------------------------------------------------
+
+function renderHalfToString(half: Partial<ScorebugHalf> & Pick<ScorebugHalf, "who" | "big">): string {
+  const spec: ScorebugSpec = {
+    context: "ctx",
+    phase: "live",
+    halves: [{ ...half }, { who: [{ name: "Other" }], big: "0" }],
+    strip: [],
+  };
+  return renderToStaticMarkup(Scorebug({ spec, t }) as never);
+}
+
+describe("ScorebugHalf.sub — the decider's second figure (R3.5/D)", () => {
+  it("B6: a half with no `sub` renders exactly what it rendered before this field existed", () => {
+    const html = renderHalfToString({ who: [{ name: "Home" }], big: "1" });
+    expect(html).not.toContain("data-half-sub");
+  });
+
+  it("B7: a half with `sub` renders it once, beside the big figure", () => {
+    const html = renderHalfToString({ who: [{ name: "Home" }], big: "1", sub: "(2)" });
+    expect((html.match(/data-half-sub/g) ?? []).length).toBe(1);
+    expect(html).toContain("(2)");
+  });
+
+  it("renders `sub` on the SUBORDINATE cream token, never the lime the score digits use — equal weight is the confusion this field removes", () => {
+    const html = renderHalfToString({ who: [{ name: "Home" }], big: "1", sub: "(2)" });
+    const tag = html.slice(html.indexOf("data-half-sub"), html.indexOf(">", html.indexOf("data-half-sub")));
+    expect(tag).toContain(NIGHT_TILE_CLASSES.creamText);
+    expect(tag).not.toContain(NIGHT_TILE_CLASSES.limeText);
+    expect(tag).toContain("tabular-nums");
+  });
+
+  it("does not disturb the OTHER half, which has no `sub` of its own", () => {
+    const html = renderHalfToString({ who: [{ name: "Home" }], big: "1", sub: "(2)" });
+    expect((html.match(/data-half-sub/g) ?? []).length).toBe(1);
   });
 });

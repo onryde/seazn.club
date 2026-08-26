@@ -958,9 +958,22 @@ export function PadHostV3(props: PadHostV3Props) {
     () =>
       props.skin.activityDetail
         ? (eventType, payload, history) =>
-            props.skin.activityDetail!({ t, eventType, payload, history, cfg: view.cfg, personNames })
+            props.skin.activityDetail!({
+              t,
+              eventType,
+              payload,
+              history,
+              cfg: view.cfg,
+              // R3.5/Task E — `view.state` CAPTURED verbatim, same posture as
+              // `view.cfg` one line up (types.ts's `ActivityDetailContext.state`
+              // doc). Football's shoot-out kick is the first `activityDetail`
+              // case that needs a state-level fact (entrant->side) no payload
+              // field or cfg value can answer.
+              state: view.state,
+              personNames,
+            })
         : undefined,
-    [props.skin, t, view.cfg, personNames],
+    [props.skin, t, view.cfg, view.state, personNames],
   );
 
   const ribbon = buildTopRibbon(activityEvents, (id) => personNames[id] ?? id, t, resolveDetail);

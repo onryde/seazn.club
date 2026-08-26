@@ -1068,15 +1068,22 @@ const SPORTS: GallerySport[] = [
           "window elapsed mid-capture, so this PNG would have shown a different state to its siblings",
       ).toBeVisible({ timeout: 5_000 });
     },
-    // R3.5 Task A (2026-08-26) — the shoot-out the pad cannot yet show
-    // correctly, captured BEFORE Task D's fix (_RULES.md "capture the
-    // broken state first"). `ScorebugHalf` has no `sub` field yet, so the
-    // board keeps rendering the frozen regulation score (`state.goals`)
-    // while the headline above it already reads the pens tally correctly —
+    // R3.5 Task A (2026-08-26) captured this BEFORE Task D's fix (_RULES.md
+    // "capture the broken state first"): `ScorebugHalf` had no `sub` field,
+    // so the board kept rendering the frozen regulation score (`state.goals`)
+    // while the headline above it already read the pens tally correctly —
     // one screen, two disagreeing readouts, exactly what design note D-11
-    // exists to prevent. A fresh, minimal fixture: every event here is
-    // side-level (`by: entrantId`), the same one-outfield-player-per-side
-    // shape scorepad-v3-football.spec.ts's own proven shoot-out test uses.
+    // exists to prevent.
+    //
+    // Task D FIXED it — `sub` now carries the pens tally beside `big`
+    // (skins/football.tsx's `buildScorebug`, `shootoutTally`). The probe
+    // below is INVERTED, never deleted (R3.5 false-premise #2, `_INDEX.md`):
+    // deleting it would stop THIS capture failing but do nothing to stop the
+    // defect returning, so it now pins the CORRECTED `1 (2)` / `1 (1)`
+    // reading instead of the disagreement. A fresh, minimal fixture: every
+    // event here is side-level (`by: entrantId`), the same one-outfield-
+    // player-per-side shape scorepad-v3-football.spec.ts's own proven
+    // shoot-out test uses.
     captureExtra: async (page, dir, tag, measurements) => {
       const shTag = `${tag}sh`;
       const fx = await seedRosteredFixture(page.request, {
@@ -1115,15 +1122,27 @@ const SPORTS: GallerySport[] = [
       // `phaseLabel` renders the SHOOTOUT phase as "Shoot-out"
       // (dictionaries/en/ui.json's `pad.football.phase.SHOOTOUT`).
       const periodStrip = pad(page).locator('[data-strip-item-id="period"]');
-      // THE DEFECT, pinned rather than fixed: home leads 2-1 on kicks (four
-      // taken), but ScorebugHalf carries no `sub` yet, so both halves below
-      // still read the regulation 1-1 while the strip/headline already know
-      // better.
+      // Home leads 2-1 on kicks (four taken): kick(H,true), kick(A,false),
+      // kick(H,true), kick(A,true) -> home scored twice, away once.
+      // `data-half-sub` is the same stable hook __tests__/scorebug.test.ts's
+      // B6/B7 cases and the e2e drive-through use — home's half reads `1 (2)`,
+      // away's `1 (1)`, agreeing with the headline instead of repeating the
+      // frozen 1-1 regulation score a second time.
+      const homeSub = pad(page).locator("[data-half-sub]").first();
+      const awaySub = pad(page).locator("[data-half-sub]").nth(1);
       await captureState(page, dir, "11-shootout", "football", measurements, async () => {
         await expect(
           periodStrip,
           'gallery(football): 11-shootout must show the "Shoot-out" strip',
         ).toContainText("Shoot-out", { timeout: 20_000 });
+        await expect(
+          homeSub,
+          "gallery(football): 11-shootout must show home's pens tally beside the regulation score, not repeat it",
+        ).toHaveText("(2)");
+        await expect(
+          awaySub,
+          "gallery(football): 11-shootout must show away's pens tally beside the regulation score, not repeat it",
+        ).toHaveText("(1)");
       });
 
       // 12 — three more kicks (home, away, home) decide it early: home's

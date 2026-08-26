@@ -1,4 +1,5 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 import {
   activeOrg,
   apiJson,
@@ -851,10 +852,19 @@ test("football v3: all nine football.* event types are reachable — five on the
   expect(shot.payload).toMatchObject({ by: fx.homeEntrantId, outcome: "blocked" });
 });
 
-test("football v3: the ninth type, football.shootout.kick, is reachable once the match reaches the kicks", async ({
+// R3.5 (Tasks D, E, F, J) — this REPLACES the pre-wave test asserting
+// `football.shootout.kick` was reachable ONLY through the generic More sheet.
+// That claim is now FALSE (Task J gives it a dedicated tile+sheet pair, so
+// it is de-duplicated out of More by `dedicatedEventTypes` exactly like
+// Goal/Card/Sub/Period/Penalty already were) — this is the coverage Task J's
+// own brief calls for: "drive an entire decider through the board, tile taps
+// only", asserting the tally, the cue and the reachability change together,
+// since the four tasks all edit the same functions and a defect at their
+// seam would not show up testing any one task's slice alone.
+test("football v3: kick tiles drive the shoot-out — reachable, tallied, cued, side-attributed, and no longer duplicated in More (R3.5 D/E/F/J)", async ({
   page,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   // The shoot-out panel is gated TWICE: `cfg.shootout` decides whether the
   // FORMAT can ever reach one (a league fixture never declares it, so the
   // panel is simply absent), and a runtime gate on `state.phase === "SHOOTOUT"`
@@ -869,35 +879,99 @@ test("football v3: the ninth type, football.shootout.kick, is reachable once the
   });
   // No extra time: with `extraTime.enabled` false, a level score at FT goes
   // STRAIGHT to the kicks (`resolveFullTime`), which is the shortest legal
-  // route to the phase this test needs.
-  //
-  // `halfMinutes` is spelled out even though it is irrelevant here: `extraTime`
-  // is a plain `z.object` whose two fields are BOTH required, with the DEFAULT
-  // applied only to the whole object. `{ enabled: false }` alone therefore
-  // fails the cfg parse — and because the division config is written by SQL,
-  // nothing validates it on the way in: the failure surfaces as the console
-  // rendering no pad at all, which reads as a pad defect. (Measured, this
-  // session.)
+  // route to the phase this test needs. `halfMinutes` is spelled out even
+  // though it is irrelevant here: `extraTime` is a plain `z.object` whose two
+  // fields are BOTH required, with the DEFAULT applied only to the whole
+  // object — `{ enabled: false }` alone fails the cfg parse, and because the
+  // division config is written by SQL, nothing validates it on the way in:
+  // the failure surfaces as the console rendering no pad at all, which reads
+  // as a pad defect. (Measured, this session.) A goal each keeps the
+  // scorebug's `big` figures non-zero, so F3's assertion below is checking
+  // the SECOND figure, not the only one.
   await mergeDivisionConfig(page.request, fx.divisionId, {
     shootout: true,
     extraTime: { enabled: false, halfMinutes: 15 },
   });
   await postEvent(page.request, fx.fixtureId, "core.start", {});
+  await postEvent(page.request, fx.fixtureId, "football.goal", { by: fx.homeEntrantId });
+  await postEvent(page.request, fx.fixtureId, "football.goal", { by: fx.awayEntrantId });
   await postEvent(page.request, fx.fixtureId, "football.period", { phase: "HT" });
   await postEvent(page.request, fx.fixtureId, "football.period", { phase: "FT" });
   await openConsoleAlreadyLive(page, fx);
 
-  // SHOOTOUT is a phase of the MATCH, so it maps to `PadPhase` "live" and the
-  // pad keeps its chrome — but the ball is not in play, so every in-play tile
-  // is correctly gone. That leaves More as the only recording surface, which
-  // is exactly the case ruling R3-4 put the four rare types there for.
+  // F6/F7/F17 — kick tiles present, occupying the space Goal vacates; cards
+  // remain legal (SHOOTOUT is a phase of the MATCH, not of play).
   await expect(pad(page).locator('[data-strip-tone="led"]').first()).toContainText("Shoot-out");
   await expect(v3Tile(page, "goal-home"), "the ball is not in play during the kicks").toHaveCount(0);
+  await expect(v3Tile(page, "kick-home")).toBeVisible();
+  await expect(v3Tile(page, "kick-away")).toBeVisible();
+  await expect(v3Tile(page, "card-home")).toBeVisible();
+
+  // F9 — no cue, and NEITHER tile disabled, before the first kick: either
+  // side may start.
+  await expect(pad(page).locator('[data-strip-item-id="nextKicker"]')).toHaveCount(0);
+  await expect(v3Tile(page, "kick-home")).toHaveAttribute("data-tile-disabled", "false");
+  await expect(v3Tile(page, "kick-away")).toHaveAttribute("data-tile-disabled", "false");
+
+  // R3.5/Task J — the ninth type is no longer reachable through the generic
+  // More sheet at all now that it is dedicated; this is the corrected claim
+  // replacing the false one this test used to make.
   await v3Tile(page, "more").click();
-  const sheet = v3Sheet(page);
-  await expect(sheet).toBeVisible({ timeout: 10_000 });
-  await expect(
-    sheet.getByRole("button", { name: "Shoot-out kick", exact: true }),
-    "the shoot-out panel's own gate must open once the match reaches the kicks",
-  ).toBeVisible();
+  const moreSheet = v3Sheet(page);
+  await expect(moreSheet).toBeVisible({ timeout: 10_000 });
+  await expect(moreSheet.getByRole("button", { name: "Shoot-out kick", exact: true })).toHaveCount(0);
+
+  // Tap the kick tile — a real board interaction, not an API post. Tapping a
+  // new tile replaces whatever sheet the More tap above left open.
+  await v3Tile(page, "kick-home").click();
+  const kickSheet = v3Sheet(page);
+  await expect(kickSheet).toBeVisible({ timeout: 10_000 });
+  await kickSheet.locator('[data-choice-option-id="scored"]').click();
+  await expect
+    .poll(async () => countOf(page.request, fx.fixtureId, "football.shootout.kick"), { timeout: 20_000 })
+    .toBe(1);
+
+  // F3 — the scorebug's SECOND figure moves; the board now agrees with its
+  // own headline instead of showing the frozen 1-1 regulation score twice.
+  await expect(pad(page).locator("[data-half-sub]").first()).toHaveText("(1)");
+  // F10 — the cue names Away, and Home's own tile is now disabled — never
+  // absent, so the board never reads as broken.
+  await expect(pad(page).locator('[data-strip-item-id="nextKicker"]')).toContainText("Away");
+  await expect(v3Tile(page, "kick-home")).toHaveAttribute("data-tile-disabled", "true");
+  await expect(v3Tile(page, "kick-away")).toHaveAttribute("data-tile-disabled", "false");
+
+  // F12 — the SCORER's Activity panel (the one carrying the Void buttons, as
+  // opposed to the read-only audit table which already named the side) now
+  // names the side too. Rows are newest-first, so the first row is this kick.
+  const activity = pad(page).locator('[data-role="v3-activity-slot"]');
+  await expect(activity.locator('[data-role="v3-activity-row"]').first()).toContainText("Home");
+  await expect(activity.locator('[data-role="v3-activity-row"]').first()).toContainText("Scored");
+
+  // Away kicks and misses.
+  await v3Tile(page, "kick-away").click();
+  const kickSheet2 = v3Sheet(page);
+  await expect(kickSheet2).toBeVisible({ timeout: 10_000 });
+  await kickSheet2.locator('[data-choice-option-id="missed"]').click();
+  await expect
+    .poll(async () => countOf(page.request, fx.fixtureId, "football.shootout.kick"), { timeout: 20_000 })
+    .toBe(2);
+
+  // F13 — the missed kick's row also names the side.
+  await expect(activity.locator('[data-role="v3-activity-row"]').first()).toContainText("Away");
+  await expect(activity.locator('[data-role="v3-activity-row"]').first()).toContainText("Missed");
+
+  // The cue reverts to Home once kicks are tied 1-1 taken (`expectedKicker`
+  // falls back to whoever kicked first), and the tiles swap which one is
+  // disabled — the same mechanism F14's void-reversion relies on.
+  await expect(pad(page).locator('[data-strip-item-id="nextKicker"]')).toContainText("Home");
+  await expect(v3Tile(page, "kick-home")).toHaveAttribute("data-tile-disabled", "false");
+  await expect(v3Tile(page, "kick-away")).toHaveAttribute("data-tile-disabled", "true");
+
+  // Zero WCAG AA violations on this surface — never scanned before.
+  const axe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const blocking = axe.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(
+    blocking.map((v) => `${v.id} — ${v.nodes[0]?.html}`),
+    "axe serious/critical on the shoot-out console",
+  ).toEqual([]);
 });

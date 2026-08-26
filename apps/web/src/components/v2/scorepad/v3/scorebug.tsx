@@ -113,6 +113,22 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
       >
         {half.big}
       </div>
+      {/* R3.5/Task D — a decider's second figure, e.g. football's shoot-out
+       *  tally beside the frozen regulation score. `creamText`, NOT
+       *  `limeText`: the decider is subordinate to the regulation score, and
+       *  reusing the lime would give the two figures equal weight — which is
+       *  the confusion this field exists to remove. Absent on every half
+       *  shipped before this (types.ts's own doc), so this renders nothing
+       *  extra when `sub` is omitted. */}
+      {half.sub && (
+        <div
+          data-half-sub=""
+          className={`app-display text-base font-semibold leading-none ${NIGHT_TILE_CLASSES.creamText}`}
+          style={{ fontVariantNumeric: "tabular-nums" }}
+        >
+          {half.sub}
+        </div>
+      )}
       {half.tappable && hintText && (
         <span className={`text-[11px] font-medium ${NIGHT_TILE_CLASSES.creamTextMuted}`}>{hintText}</span>
       )}
