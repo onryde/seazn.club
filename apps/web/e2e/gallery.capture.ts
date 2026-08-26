@@ -132,6 +132,15 @@ const EXTRA_STATES = [
   //        threw. The screen that proves it is gone is the sheet itself.
   "15-breakerdock",
   "16-breakermore",
+  // Cloud review (2026-08-26). The pad used to refuse to name a server for
+  // the REST of a match once ANY set had been entered as a summary — which
+  // also stopped stamping `server` on the tap, so no ace or double fault
+  // could be attributed to anyone again. Backfilling the sets already played
+  // is the most ordinary thing a late-arriving scorer does, so that was the
+  // wave's headline capability going dark in its most likely workflow. An
+  // EVEN-game summary leaves the rotation derivable and the engine says so;
+  // this is the screen where the pip has to still be there.
+  "17-serveaftersummary",
 ] as const;
 type ExtraGalleryState = (typeof EXTRA_STATES)[number];
 
@@ -1193,7 +1202,48 @@ const SPORTS: GallerySport[] = [
         visibleProbe(brServer, "gallery(tennis-doubles): 14-serveafterbreaker must still name the due server"),
       );
 
-      return ["11-doublesserve", "12-pointdock", "14-serveafterbreaker"];
+      // 17-serveaftersummary — the serve pip surviving a backfilled set.
+      const suTag = `${tag}su`;
+      const su = await seedRosteredFixture(page.request, {
+        label: `Gallery Tennis Summary Serve ${suTag}`,
+        sportKey: "tennis",
+        variantKey: "doubles-noad-mtb10",
+        entrantKind: "pair",
+        home: [
+          { fullName: `Gallery Tennis SU Home1 ${suTag}`, pairOrder: 1 },
+          { fullName: `Gallery Tennis SU Home2 ${suTag}`, pairOrder: 2 },
+        ],
+        away: [
+          { fullName: `Gallery Tennis SU Away1 ${suTag}`, pairOrder: 1 },
+          { fullName: `Gallery Tennis SU Away2 ${suTag}`, pairOrder: 2 },
+        ],
+        emitCoreStart: true,
+      });
+      // One coarse-scored set, 6-4. TEN games — even — so the fold's own
+      // `serving` and the ITF turn walk stay in step and the rotation is
+      // genuinely derivable. Home has had 5 service turns, so turn index 5 is
+      // due: odd, which is the pairOrder-2 partner.
+      await postEvent(page.request, su.fixtureId, "tennis.set_summary", { home: 6, away: 4 });
+      await page.goto(await fixturePath(page.request, su.fixtureId));
+      const suServer = pad(page).locator('[data-strip-item-id="server"]');
+      await expect(
+        suServer,
+        "gallery(tennis-doubles): a backfilled EVEN-game set must not cost the serve pip",
+      ).toBeVisible({ timeout: 20_000 });
+      await expect(
+        suServer,
+        "gallery(tennis-doubles): home's 6th service turn (index 5, odd) is the pairOrder-2 partner",
+      ).toContainText(`Gallery Tennis SU Home2 ${suTag}`);
+      await captureState(
+        page,
+        dir,
+        "17-serveaftersummary",
+        "tennis-doubles",
+        measurements,
+        visibleProbe(suServer, "gallery(tennis-doubles): 17-serveaftersummary must still name the due server"),
+      );
+
+      return ["11-doublesserve", "12-pointdock", "14-serveafterbreaker", "17-serveaftersummary"];
     },
   },
   {

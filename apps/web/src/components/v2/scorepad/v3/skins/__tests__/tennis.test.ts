@@ -399,7 +399,14 @@ describe("servingInfo (via buildScorebug's strip + WhoLine dot) — real folds",
     expect(stripValue(view({ state: done, squads }), "server")).toBe(NAMES["A-first"]);
   });
 
-  it("a set ever scored by set_summary poisons serve info for the REST of the match, even a LATER point-scored set", () => {
+  // REPLACES "a set ever scored by set_summary poisons serve info for the REST
+  // of the match". That test pinned a local event sniffer that refused on ANY
+  // summary, and it used an EVEN one (6-0) — precisely the case the engine's
+  // R4-7 guard says is still derivable. It was a test written to match the
+  // implementation rather than the design, and the behaviour it locked in cost
+  // the scorer every ace and double-fault attribution for the rest of a match
+  // they had merely backfilled a set into. Cloud review, 2026-08-26.
+  it("an EVEN-game summary does NOT poison serve info — the engine says the rotation is still derivable", () => {
     const events: EventEnvelope[] = [
       makeEnvelope(0, start),
       makeEnvelope(1, { type: "tennis.set_summary", payload: { home: 6, away: 0 } }),
@@ -408,10 +415,40 @@ describe("servingInfo (via buildScorebug's strip + WhoLine dot) — real folds",
     const folded = foldClient(tennis, cfgFor(), SINGLES_LINEUPS, events, STRICT_ALL);
     const v = view({ state: folded, squads: singlesSquads(), events });
     const spec = buildScorebug(v, t);
-    expect(spec.halves.every((h) => h.who.every((w) => w.serving === undefined))).toBe(true);
+    expect(stripValue(v, "server")).toBeDefined();
+    expect(spec.halves.some((h) => h.who.some((w) => w.serving === true))).toBe(true);
+    // And the tap event carries the server, which is what makes ace /
+    // double-fault attribution reachable at all.
+    expect(spec.halves[0]!.tapEvent?.payload.server).toBeDefined();
+  });
+
+  it("an ODD-game summary DOES still refuse — the fold and the walk genuinely disagree there", () => {
+    const events: EventEnvelope[] = [
+      makeEnvelope(0, start),
+      makeEnvelope(1, { type: "tennis.set_summary", payload: { home: 6, away: 3 } }),
+      ...game("H").map((e, i) => makeEnvelope(2 + i, e)),
+    ];
+    const folded = foldClient(tennis, cfgFor(), SINGLES_LINEUPS, events, STRICT_ALL);
+    const v = view({ state: folded, squads: singlesSquads(), events });
+    const spec = buildScorebug(v, t);
     expect(stripValue(v, "server")).toBeUndefined();
-    // Also the tapEvent must not carry a `server` it cannot trust.
+    expect(spec.halves.every((h) => h.who.every((w) => w.serving === undefined))).toBe(true);
     expect(spec.halves[0]!.tapEvent?.payload.server).toBeUndefined();
+  });
+
+  it("MUTATION PROOF: a SINGLES side is not exempt — the person is unambiguous but the SIDE is not", () => {
+    // 9 banked games: `state.serving` never moved, the walk did. There is
+    // exactly one player per side, so naming the person is trivial — and
+    // still wrong, because the side it would be attached to is the wrong end
+    // of the court. A guard that special-cased singles would pass everything
+    // above and fail here.
+    const events: EventEnvelope[] = [
+      makeEnvelope(0, start),
+      makeEnvelope(1, { type: "tennis.set_summary", payload: { home: 6, away: 3 } }),
+    ];
+    const folded = foldClient(tennis, cfgFor(), SINGLES_LINEUPS, events, STRICT_ALL);
+    const v = view({ state: folded, squads: singlesSquads(), events });
+    expect(stripValue(v, "server")).toBeUndefined();
   });
 
   it("a VOIDED set_summary never poisons serve info — it genuinely never happened", () => {
@@ -1161,15 +1198,36 @@ describe("buildDock — defect 1 fix: lineup-less fixture still gates ace/double
     expect(spec.chips.map((c) => c.id)).toEqual(["winner", "ue"]);
   });
 
-  it("stays a safe omission with ANY set_summary history, even though the roster-less fallback would otherwise fire", () => {
-    const events: EventEnvelope[] = [makeEnvelope(0, { type: "tennis.set_summary", payload: { home: 6, away: 0 } })];
+  // Was "stays a safe omission with ANY set_summary history". It used an EVEN
+  // summary (6-0), which is exactly the case the engine's R4-7 guard says is
+  // still derivable — so it pinned an over-refusal that cost the scorer every
+  // ace and double fault after a backfilled set. Split in two: the refusal is
+  // now driven by the engine's verdict, not by the presence of a summary.
+  it("an ODD-game summary is still a safe omission — the fold and the walk disagree", () => {
     const v = view({
       squads: emptySquads(),
-      events,
-      state: state({ serving: "home", points: { kind: "standard", home: 1, away: 0, advantage: null } }),
+      // 9 banked games: `serving` never moved, the walk did.
+      state: state({
+        serving: "home",
+        sets: [{ home: 6, away: 3 }],
+        points: { kind: "standard", home: 1, away: 0, advantage: null },
+      }),
     });
     const spec = buildDock("tennis.point", v, t, { by: "H" })!;
     expect(spec.chips.map((c) => c.id)).toEqual(["winner", "ue"]);
+  });
+
+  it("an EVEN-game summary keeps the fallback working — the rotation is genuinely derivable", () => {
+    const v = view({
+      squads: emptySquads(),
+      state: state({
+        serving: "home",
+        sets: [{ home: 6, away: 0 }],
+        points: { kind: "standard", home: 1, away: 0, advantage: null },
+      }),
+    });
+    const spec = buildDock("tennis.point", v, t, { by: "H" })!;
+    expect(spec.chips.map((c) => c.id)).toEqual(["ace", "winner", "ue"]);
   });
 
   // Boundary TWO (final review). Inside a breaker `state.serving` rotates
@@ -1186,7 +1244,16 @@ describe("buildDock — defect 1 fix: lineup-less fixture still gates ace/double
     // home hit that ace.
     const v = view({
       squads: emptySquads(),
-      state: state({ serving: "away", points: { kind: "tiebreak", home: 1, away: 0 } }),
+      // `games: 6-6` and `tbFirstServer` are not decoration: a live tie-break
+      // at 0-0 games with no recorded first server is a state the fold can
+      // never produce, and the engine's drift guard now (correctly) refuses
+      // to answer for it. The fixture has to be a state that can exist.
+      state: state({
+        serving: "away",
+        games: { home: 6, away: 6 },
+        tbFirstServer: "home",
+        points: { kind: "tiebreak", home: 1, away: 0 },
+      }),
     });
     expect(buildDock("tennis.point", v, t, { by: "H" })!.chips.map((c) => c.id)).toEqual(["ace", "winner", "ue"]);
     expect(buildDock("tennis.point", v, t, { by: "A" })!.chips.map((c) => c.id)).toEqual([
@@ -1200,7 +1267,12 @@ describe("buildDock — defect 1 fix: lineup-less fixture still gates ace/double
     // Two points played; away is serving points 2-3 and won point 2.
     const v = view({
       squads: emptySquads(),
-      state: state({ serving: "away", points: { kind: "tiebreak", home: 1, away: 1 } }),
+      state: state({
+        serving: "away",
+        games: { home: 6, away: 6 },
+        tbFirstServer: "home",
+        points: { kind: "tiebreak", home: 1, away: 1 },
+      }),
     });
     expect(buildDock("tennis.point", v, t, { by: "A" })!.chips.map((c) => c.id)).toEqual(["ace", "winner", "ue"]);
   });
@@ -1208,7 +1280,13 @@ describe("buildDock — defect 1 fix: lineup-less fixture still gates ace/double
   it("REGRESSION: a MATCH tie-break hands off on the same odd-point rule", () => {
     const v = view({
       squads: emptySquads(),
-      state: state({ serving: "away", points: { kind: "matchTiebreak", home: 5, away: 4 } }),
+      // An MTB opens off `bankSet`, which zeroes `games` and records the
+      // first server — so 0-0 games IS the realistic shape here.
+      state: state({
+        serving: "away",
+        tbFirstServer: "home",
+        points: { kind: "matchTiebreak", home: 5, away: 4 },
+      }),
     });
     // 9 points played — odd, so away is serving NEXT and home served this one.
     expect(buildDock("tennis.point", v, t, { by: "H" })!.chips.map((c) => c.id)).toEqual(["ace", "winner", "ue"]);

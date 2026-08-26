@@ -74,8 +74,7 @@
 //     tile here would be a second entry point to that same capability, the
 //     defect R2c closed for `cricket.retire`, rebuilt deliberately.
 "use client";
-import type { EventEnvelope, SquadState } from "@seazn/engine/core";
-import { resolveVoids } from "@seazn/engine/core";
+import type { SquadState } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
 import { serveContext, type NestedState } from "@seazn/engine/sports/nested";
 import type { MessageKey } from "@/lib/messages";
@@ -318,6 +317,10 @@ interface ServeContext {
   side: Side;
   serviceTurn: number;
   personId: string | null;
+  /** The engine's own drift verdict (R4-7). `false` means the fold's
+   *  `state.serving` and the ITF turn walk disagree, so NOTHING derived from
+   *  the serve — not the person, not even the SIDE — can be trusted. */
+  serveOrderKnown: boolean;
 }
 
 /**
@@ -395,18 +398,30 @@ function deriveServeContext(state: TennisStateShape, squads: SquadState): ServeC
 }
 
 /**
- * A tier-0 `tennis.set_summary` never moves `state.serving` (`bankSet`,
- * `kernel.ts:753-789`, never calls `serveAfterGame`), so once ANY set has
- * ever been coarse-scored, `state.serving` — and everything derived from it —
- * is stale BY CONSTRUCTION for the REST of the match, not merely "during"
- * that one set: `completedGames` keeps counting correctly off the summary's
- * own numbers, but the side that toggles with it does not, so the two
- * desynchronise and never resynchronise. `resolveVoids` first, so a
- * set-summary that was recorded and then undone before anything else folded
- * never poisons this — it genuinely never happened.
+ * REPLACED a local `hasStaleServeInfo` event sniffer (cloud review,
+ * 2026-08-26). That function returned true if ANY non-voided
+ * `tennis.set_summary` had ever folded, on the reasoning that `bankSet` never
+ * advances `state.serving` so a coarse-scored set poisons the serve "for the
+ * REST of the match". The premise is half right and the conclusion was too
+ * broad: a summary desyncs the fold from the ITF turn walk only when it banks
+ * an ODD number of games. `6-4`, `2-6`, `6-0` leave the two in step, and the
+ * engine's R4-7 `serveContext` says so precisely, via `serveOrderKnown`.
+ *
+ * The cost of the coarse version was not cosmetic. Both callers short-circuit
+ * before `deriveServeContext` runs, so `buildHalf` stamped no `server` on the
+ * tap event, every subsequent `tennis.point` went out unattributed, and
+ * `NestedPersonTally` credited no ace or double fault for the remainder of the
+ * match — this wave's headline capability, silently unreachable, in the most
+ * ordinary workflow there is: a scorer entering the sets already played and
+ * then scoring the rest live.
+ *
+ * So the pad now asks the engine instead of second-guessing it. One
+ * derivation, one verdict. Voided summaries need no special handling any more
+ * either: this reads `state`, which is folded from already-resolved events,
+ * rather than scanning the raw event list.
  */
-function hasStaleServeInfo(view: PadHostView): boolean {
-  return resolveVoids(view.events as EventEnvelope[]).some((event) => event.type === SET_SUMMARY_TYPE);
+function serveOrderTrusted(ctx: ServeContext): boolean {
+  return ctx.serveOrderKnown;
 }
 
 /** The starting roster for one side, first-named first (pairOrder, falling
@@ -433,8 +448,8 @@ interface ServingInfo {
 
 /**
  * Who is serving right now, or `null` when that answer cannot be trusted
- * (`hasStaleServeInfo`) — an omitted fact beats an authoritative-looking
- * wrong one (build spec §1).
+ * (`serveOrderTrusted`, i.e. the engine's own `serveOrderKnown`) — an omitted
+ * fact beats an authoritative-looking wrong one (build spec §1).
  *
  * R4 ruling: a SINGLES side (one on-field player) names its own sole member
  * directly whenever it is that side's turn to serve — "the only member", not
@@ -444,9 +459,13 @@ interface ServingInfo {
  * guessing.
  */
 function servingInfo(view: PadHostView): ServingInfo | null {
-  if (hasStaleServeInfo(view)) return null;
   const state = asState(view.state);
   const ctx = deriveServeContext(state, view.squads);
+  // Refuse on the engine's verdict, never on "a summary exists". A singles
+  // fixture is NOT exempt: `players.length <= 1` makes the PERSON unambiguous
+  // but the SIDE is still `state.serving`, which an odd-game summary leaves
+  // pointing at the wrong end of the court.
+  if (!serveOrderTrusted(ctx)) return null;
   const players = onFieldPlayers(view.squads, ctx.side);
   if (players.length <= 1) return { side: ctx.side, personId: players[0]?.personId ?? null };
   return { side: ctx.side, personId: ctx.personId };
@@ -526,7 +545,7 @@ function buildHalf(
   // second question. This is "the only member", NOT a second copy of
   // `servingInfo`'s pair-rotation rule (`serveContext`) — it never asks who
   // is SERVING, only who is on this side at all, so it holds even while
-  // `hasStaleServeInfo` would refuse to name a server. A doubles side
+  // `serveOrderTrusted` would refuse to name a server. A doubles side
   // (`players.length > 1`) is left OFF the payload here on purpose — R4-5
   // makes that the dock's own second step, once the shot type is chosen
   // (see `buildDock` below).
@@ -1098,10 +1117,10 @@ function sideOfPerson(squads: SquadState, personId: string): Side | null {
  * `serving`, flipped iff an odd number of points have been played.
  */
 function rosterlessServerSide(view: PadHostView, state: TennisStateShape): Side | null {
-  if (hasStaleServeInfo(view)) return null;
   const played = (state.points?.home ?? 0) + (state.points?.away ?? 0);
   if (played === 0) return null; // boundary ONE — see the doc above
   const ctx = deriveServeContext(state, view.squads);
+  if (!serveOrderTrusted(ctx)) return null;
   // Boundary TWO. `points.kind` is the SAME discriminant `applyTbPoint` is
   // routed on (`applyPoint`, kernel.ts), so this asks "is a breaker in force"
   // the way the fold does, not by sniffing the score for a 6-6.
