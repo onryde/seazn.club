@@ -12,7 +12,7 @@ Last updated: 2026-08-13.
 | ScoringPad v2 (#407) | `../2026-08-06-scoringpad-v2-prompts/_INDEX.md` | S1–S13, L1–L3 | S1–S9 done; S10 in flight; S11–S13, L-lane open |
 | Release-2 scheduling | `../2026-08-12-release2-prompts/_INDEX.md` | C0–C8 | C0 done; C1 in flight; C2–C8 open |
 | Product portfolio (D1–D7) | `portfolio-prompts/_INDEX.md` | P1–P11 | authored; build-gated per session (owner green-light) |
-| Scheduler bench | `bench-prompts/_INDEX.md` | B00–B18 | authored; hard-gated (see below) |
+| Scheduler bench | `bench-prompts/_INDEX.md` | B00–B18 | gate open; B00 done 2026-08-26; B01 in review |
 | Format progression | `../2026-08-17-format-progression-prompts/_INDEX.md` | F1–F5 | F1 + F2 authored (F1 also planned); F3–F5 written after F2 **merges**. **F1 waits for L3/#414** (shared `stages.ts`) |
 
 ## Cross-programme gates
