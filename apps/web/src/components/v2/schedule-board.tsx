@@ -1182,52 +1182,61 @@ export function ScheduleBoard({
                   className="flex flex-wrap items-center gap-1.5"
                 >
                   {stageGroups.map((group) => (
+                    // COLUMN, header then pills — not one flex-wrap row with
+                    // both mixed in. A long division name and its pills as
+                    // wrap siblings left the name wrapping mid-text with a
+                    // pill stranded beside it and a dead gap before the rest
+                    // wrapped onto their own line (review finding on this
+                    // change). A header row on its own line is never fighting
+                    // a pill for the same line's remaining width.
                     <div
                       key={group.divisionId}
                       data-testid="schedule-stage-group"
                       data-division-id={group.divisionId}
-                      className="flex flex-wrap items-center gap-0.5 rounded-lg border border-slate-200 bg-slate-100 p-0.5"
+                      className="flex flex-col gap-0.5 rounded-lg border border-slate-200 bg-slate-100 p-0.5"
                     >
                       {stageGroups.length > 1 && (
                         <span
                           data-testid="schedule-stage-group-label"
-                          className="flex items-center gap-1 pl-2 pr-1 text-[10px] font-semibold text-slate-500"
+                          className="flex items-center gap-1 px-1.5 pt-0.5 text-[10px] font-semibold text-slate-500"
                         >
                           <span
                             aria-hidden
-                            className="h-2 w-2 rounded-sm"
+                            className="h-2 w-2 flex-none rounded-sm"
                             style={{ backgroundColor: divisionAccent(group.divisionId) }}
                           />
                           {divisionNames[group.divisionId]}
                         </span>
                       )}
-                      {group.stages.map((s) => (
-                        // `aria-pressed`, not a radio group: these are toggle
-                        // buttons that re-aim a control, not a form value that
-                        // gets submitted.
-                        <button
-                          key={s.id}
-                          type="button"
-                          data-testid="schedule-stage"
-                          data-stage-id={s.id}
-                          aria-pressed={s.id === activeStage.id}
-                          onClick={() => setPickedStageId(s.id)}
-                          // A SELECTION, not an action. The purple fill this
-                          // used to carry put a second loud control next to
-                          // the primary button and made the pair read as one
-                          // compound thing ("Auto League"), which is
-                          // precisely how it was reported. Solid purple now
-                          // means exactly one thing on this bar: the action
-                          // that rebuilds the board.
-                          className={`min-h-11 rounded-md px-3 py-1.5 text-xs transition ${
-                            s.id === activeStage.id
-                              ? "bg-white font-semibold text-slate-900 shadow-sm"
-                              : "text-slate-600 hover:text-slate-900"
-                          }`}
-                        >
-                          {s.name}
-                        </button>
-                      ))}
+                      <div className="flex flex-wrap gap-0.5">
+                        {group.stages.map((s) => (
+                          // `aria-pressed`, not a radio group: these are
+                          // toggle buttons that re-aim a control, not a form
+                          // value that gets submitted.
+                          <button
+                            key={s.id}
+                            type="button"
+                            data-testid="schedule-stage"
+                            data-stage-id={s.id}
+                            aria-pressed={s.id === activeStage.id}
+                            onClick={() => setPickedStageId(s.id)}
+                            // A SELECTION, not an action. The purple fill
+                            // this used to carry put a second loud control
+                            // next to the primary button and made the pair
+                            // read as one compound thing ("Auto League"),
+                            // which is precisely how it was reported. Solid
+                            // purple now means exactly one thing on this
+                            // bar: the action that rebuilds the board.
+                            className={`min-h-11 rounded-md px-3 py-1.5 text-xs transition ${
+                              s.id === activeStage.id
+                                ? "bg-white font-semibold text-slate-900 shadow-sm"
+                                : "text-slate-600 hover:text-slate-900"
+                            }`}
+                          >
+                            {s.name}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   ))}
                 </div>
