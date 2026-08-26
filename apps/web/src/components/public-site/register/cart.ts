@@ -127,6 +127,23 @@ export function autoLinkObviousSelf(cart: CartState, imPlaying: boolean): CartSt
   return cartReducer(cart, { type: "SET_SELF_ENTRY", id: cart.entries[0]!.id });
 }
 
+/** Inverse of `autoLinkObviousSelf` (fix wave finding #2): once "I'm playing"
+ *  is un-toggled, NO entry may remain linked as the contact — regardless of
+ *  whether the link was made by the auto-link convenience above or an
+ *  EXPLICIT "This is me" click. `imPlaying=false` means step 1's dob field
+ *  may never have been shown/required (validation.ts's whoFieldRequirements
+ *  keys dobRequired off imPlaying independently of any division), so a
+ *  stale self-link would submit `registering_self:true` with
+ *  `contact.dob:null` — guaranteed rejected by schemas.ts's superRefine
+ *  (PublicRegisterGroupRequest, ~line 2446), with no client-side warning
+ *  before that 400/422. Returns the SAME reference when there is nothing to
+ *  clear, matching every other function here. */
+export function clearSelfLinkWhenNotPlaying(cart: CartState, imPlaying: boolean): CartState {
+  if (imPlaying) return cart;
+  if (cart.selfEntryId === null) return cart;
+  return cartReducer(cart, { type: "SET_SELF_ENTRY", id: null });
+}
+
 /** Maps one cart line onto the step-2 subset of `PublicRegisterGroupEntry`
  *  (schemas.ts:2381) — drops the client-only `id`, adds the self-link
  *  fields resolved from the CART-LEVEL self state (types.ts). `players`/

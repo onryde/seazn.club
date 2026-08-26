@@ -96,8 +96,11 @@ describe("validateContact", () => {
 });
 
 describe("validateEntries", () => {
+  const SEASON_START_YEAR = 2026;
+
   it("an empty cart is invalid — at least one entry is required to proceed", () => {
-    expect(validateEntries(EMPTY_CART).valid).toBe(false);
+    expect(validateEntries(EMPTY_CART, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(false);
+    expect(validateEntries(EMPTY_CART, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).error).toBe("cartEmpty");
   });
 
   it("one entry, any shape, is enough to proceed (naming is encouraged in the UI, not gated here — schemas.ts leaves team_name/partner_name nullish)", () => {
@@ -107,6 +110,68 @@ describe("validateEntries", () => {
         { id: "e1", division_id: "d1", entrant_kind: "team", team_name: null, partner_name: null, free_agent: false },
       ],
     };
-    expect(validateEntries(cart).valid).toBe(true);
+    expect(validateEntries(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(true);
+  });
+
+  describe("self-linked ineligible entry blocks progression (fix wave finding #3)", () => {
+    const WOMENS_DIVISION: DivisionLike = { ...BASE_DIVISION, division_id: "d-womens", category: "womens" };
+
+    it("blocks with error 'selfIneligible' when the SELF-LINKED entry's division rejects the contact", () => {
+      const cart: CartState = {
+        entries: [{ id: "e1", division_id: "d-womens", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false }],
+        selfEntryId: "e1",
+        selfPlayerIndex: 0,
+      };
+      const male: ContactState = { ...EMPTY_CONTACT, gender: "m" };
+      const r = validateEntries(cart, [WOMENS_DIVISION], male, SEASON_START_YEAR);
+      expect(r.valid).toBe(false);
+      expect(r.error).toBe("selfIneligible");
+    });
+
+    it("passes when the self-linked entry's division accepts the contact", () => {
+      const cart: CartState = {
+        entries: [{ id: "e1", division_id: "d-womens", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false }],
+        selfEntryId: "e1",
+        selfPlayerIndex: 0,
+      };
+      const female: ContactState = { ...EMPTY_CONTACT, gender: "f" };
+      const r = validateEntries(cart, [WOMENS_DIVISION], female, SEASON_START_YEAR);
+      expect(r.valid).toBe(true);
+      expect(r.error).toBeNull();
+    });
+
+    it("an ineligible division does NOT block when it is not the self-linked one", () => {
+      const cart: CartState = {
+        entries: [
+          { id: "e1", division_id: "d-womens", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false },
+          { id: "e2", division_id: "d1", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false },
+        ],
+        selfEntryId: "e2", // linked to the OPEN/unrestricted division, not d-womens
+        selfPlayerIndex: 0,
+      };
+      const male: ContactState = { ...EMPTY_CONTACT, gender: "m" };
+      const r = validateEntries(cart, [WOMENS_DIVISION, BASE_DIVISION], male, SEASON_START_YEAR);
+      expect(r.valid).toBe(true);
+    });
+
+    it("no self-link at all — never evaluates eligibility, even with an ineligible-shaped division in the cart", () => {
+      const cart: CartState = {
+        entries: [{ id: "e1", division_id: "d-womens", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false }],
+        selfEntryId: null,
+        selfPlayerIndex: null,
+      };
+      const male: ContactState = { ...EMPTY_CONTACT, gender: "m" };
+      expect(validateEntries(cart, [WOMENS_DIVISION], male, SEASON_START_YEAR).valid).toBe(true);
+    });
+
+    it("the self-linked entry's division missing from the list (data gap) does not crash and does not block", () => {
+      const cart: CartState = {
+        entries: [{ id: "e1", division_id: "d-unknown", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false }],
+        selfEntryId: "e1",
+        selfPlayerIndex: 0,
+      };
+      expect(() => validateEntries(cart, [], EMPTY_CONTACT, SEASON_START_YEAR)).not.toThrow();
+      expect(validateEntries(cart, [], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(true);
+    });
   });
 });

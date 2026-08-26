@@ -17,6 +17,7 @@
 import {
   ageBandEligibilityIssues,
   categoryEligibilityIssues,
+  type EligibilityCode,
   type EligibilityIssue,
   type EligibilityPerson,
 } from "@/lib/registration-rules";
@@ -25,6 +26,22 @@ export interface SelfEligibility {
   eligible: boolean;
   issues: EligibilityIssue[];
 }
+
+/** The ONE presentation mapping from a structured issue code to its i18n
+ *  key — shared by DivisionCard's grey-with-reason notice AND EntryCart's
+ *  per-line self-link verdict (fix wave finding #3), so a cart line never
+ *  re-derives or re-words the rule DivisionCard already evaluated. No entry
+ *  for GENDER_NOT_ALLOWED/MIXED_NEEDS_BOTH_GENDERS: neither code is ever
+ *  produced by categoryEligibilityIssues/ageBandEligibilityIssues, the only
+ *  two functions `selfEligibilityForDivision` above composes, so a key here
+ *  would be untestable dead code. */
+export const INELIGIBLE_MESSAGE_KEY: Partial<Record<EligibilityCode, string>> = {
+  CATEGORY_MISMATCH: "register.entries.ineligible.category",
+  AGE_TOO_OLD: "register.entries.ineligible.age",
+  AGE_TOO_YOUNG: "register.entries.ineligible.age",
+  MISSING_DOB: "register.entries.ineligible.missingDob",
+  MISSING_GENDER: "register.entries.ineligible.missingGender",
+};
 
 /**
  * Whether the CONTACT (if they end up self-linking this entry) individually

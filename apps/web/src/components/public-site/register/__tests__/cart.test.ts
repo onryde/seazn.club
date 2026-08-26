@@ -7,6 +7,7 @@ import {
   autoSeedSingleDivision,
   canAddEntry,
   cartReducer,
+  clearSelfLinkWhenNotPlaying,
   toGroupEntry,
 } from "../cart";
 import { EMPTY_CART, MAX_CART_ENTRIES, type CartEntry, type CartState, type DivisionLike } from "../types";
@@ -288,6 +289,37 @@ describe("autoLinkObviousSelf — links the ONE cart entry to 'I'm playing' when
     const unlinked: CartState = { ...oneEntry, selfEntryId: null };
     const next = autoLinkObviousSelf(unlinked, true);
     expect(next.selfEntryId).toBe("e1");
+  });
+});
+
+describe("clearSelfLinkWhenNotPlaying — the inverse of autoLinkObviousSelf (fix wave finding #2)", () => {
+  const linked: CartState = {
+    entries: [
+      { id: "e1", division_id: "div-indiv", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false },
+    ],
+    selfEntryId: "e1",
+    selfPlayerIndex: 0,
+  };
+
+  it("clears an AUTO-linked self entry once imPlaying flips false", () => {
+    const next = clearSelfLinkWhenNotPlaying(linked, false);
+    expect(next.selfEntryId).toBeNull();
+    expect(next.selfPlayerIndex).toBeNull();
+  });
+
+  it("clears an EXPLICITLY-chosen self entry too — imPlaying=false means dob was never collected, so a stale link would submit registering_self:true with contact.dob:null (schemas.ts superRefine rejects that)", () => {
+    const explicit: CartState = { ...linked, selfPlayerIndex: 2 };
+    const next = clearSelfLinkWhenNotPlaying(explicit, false);
+    expect(next.selfEntryId).toBeNull();
+  });
+
+  it("does nothing while imPlaying is true", () => {
+    expect(clearSelfLinkWhenNotPlaying(linked, true)).toBe(linked);
+  });
+
+  it("does nothing when nothing is linked (same reference back)", () => {
+    const unlinked: CartState = { ...EMPTY_CART, entries: linked.entries };
+    expect(clearSelfLinkWhenNotPlaying(unlinked, false)).toBe(unlinked);
   });
 });
 

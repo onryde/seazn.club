@@ -58,10 +58,15 @@ export function StepWho({
             value={contact.name}
             onChange={(e) => onChange({ name: e.target.value })}
             aria-invalid={errors.name ? true : undefined}
+            aria-describedby="reg-who-name-hint"
           />
-          {errors.name && (
+          {errors.name ? (
             <p role="alert" className="mt-1 text-xs text-red-600">
               {t(ERROR_KEY[errors.name])}
+            </p>
+          ) : (
+            <p id="reg-who-name-hint" className="mt-1 text-xs text-ink-muted">
+              {t("register.who.name.hint")}
             </p>
           )}
         </div>

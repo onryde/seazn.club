@@ -79,7 +79,15 @@ export function StepEntries({
         </div>
       </div>
 
-      <EntryCart cart={cart} divisions={divisions} dispatch={dispatch} locale={locale} />
+      <EntryCart
+        cart={cart}
+        divisions={divisions}
+        dispatch={dispatch}
+        locale={locale}
+        contact={contact}
+        imPlaying={imPlaying}
+        seasonStartYear={seasonStartYear}
+      />
     </div>
   );
 }

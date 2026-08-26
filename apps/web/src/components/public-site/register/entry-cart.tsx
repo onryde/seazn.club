@@ -7,8 +7,9 @@
 import { useT } from "@/components/i18n/dict-provider";
 import { formatMinor, type Currency } from "@/lib/currency";
 import type { CartAction } from "./cart";
+import { INELIGIBLE_MESSAGE_KEY, selfEligibilityForDivision } from "./eligibility-presentation";
 import { BTN_TEXT } from "./styles";
-import { MAX_CART_ENTRIES, type CartEntry, type CartState, type DivisionLike } from "./types";
+import { MAX_CART_ENTRIES, type CartEntry, type CartState, type ContactState, type DivisionLike } from "./types";
 
 const UNNAMED_KEY: Record<CartEntry["entrant_kind"], "register.entries.unnamed.team" | "register.entries.unnamed.pair" | "register.entries.unnamed.individual"> = {
   team: "register.entries.unnamed.team",
@@ -28,11 +29,23 @@ export function EntryCart({
   divisions,
   dispatch,
   locale,
+  contact,
+  imPlaying,
+  seasonStartYear,
 }: {
   cart: CartState;
   divisions: readonly DivisionLike[];
   dispatch: (action: CartAction) => void;
   locale: string;
+  /** For the self-linked line's own eligibility verdict (fix wave finding
+   *  #3) — the SAME predicate DivisionCard already greys the division
+   *  with, not a second evaluation. */
+  contact: ContactState;
+  /** Gates the "This is me" checkbox (fix wave finding #2): a contact who
+   *  hasn't said they're playing has nothing to link, and showing the
+   *  control anyway is how a stale self-link survived un-toggling it. */
+  imPlaying: boolean;
+  seasonStartYear: number;
 }) {
   const t = useT();
   const byId = new Map(divisions.map((d) => [d.division_id, d]));
@@ -42,7 +55,13 @@ export function EntryCart({
   for (const entry of cart.entries) {
     const division = byId.get(entry.division_id);
     if (!division) continue;
-    if (division.closed_reason === "full") continue; // waitlisted — not charged now
+    // Any closed reason (not just "full") means this division is not being
+    // charged for right now — "full" waitlists (design: still open, not
+    // charged until promoted); "window"/"payments_unavailable" mean the
+    // division closed since this entry was added (fix wave finding #4 — a
+    // restored cart is never re-validated against live divisions,
+    // storage.ts's own doc comment) and the entry is stale, not payable.
+    if (division.closed_reason != null) continue;
     subtotalCents += division.fee_cents;
     currency = division.currency;
   }
@@ -60,13 +79,22 @@ export function EntryCart({
           {cart.entries.map((entry) => {
             const division = byId.get(entry.division_id);
             const willWaitlist = division?.closed_reason === "full";
+            // Any OTHER non-null reason means the division closed since
+            // this entry was added (a restored cart is never re-validated
+            // against live divisions — storage.ts's own doc comment) —
+            // distinct from the waitlist case, fix wave finding #4.
+            const isStaleClosed = division != null && division.closed_reason != null && division.closed_reason !== "full";
             const isSelf = cart.selfEntryId === entry.id;
             const name = entryDisplayName(entry);
+            // Fix wave finding #3: the self-linked entry's OWN eligibility
+            // verdict, via the SAME predicate DivisionCard greys the
+            // division with — never a second evaluation.
+            const selfVerdict = isSelf && division ? selfEligibilityForDivision(division, contact, seasonStartYear) : null;
             return (
               <li key={entry.id} className="rounded-lg border border-zinc-200 bg-canvas p-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="font-display text-sm font-semibold uppercase tracking-wide text-ink">
+                    <p className="truncate font-display text-sm font-semibold uppercase tracking-wide text-ink">
                       {division?.name ?? entry.division_id}
                     </p>
                     <p className="text-xs text-ink-muted">
@@ -113,16 +141,35 @@ export function EntryCart({
                 )}
 
                 {willWaitlist && <p className="mt-1.5 text-xs text-amber-700">{t("register.entries.cart.waitlistNote")}</p>}
+                {isStaleClosed && <p className="mt-1.5 text-xs text-red-700">{t("register.entries.cart.closedNote")}</p>}
 
-                <label className="mt-2 flex items-center gap-2 text-xs text-ink-muted">
-                  <input
-                    type="checkbox"
-                    className="h-3.5 w-3.5 accent-accent"
-                    checked={isSelf}
-                    onChange={(e) => dispatch({ type: "SET_SELF_ENTRY", id: e.target.checked ? entry.id : null })}
-                  />
-                  {t("register.entries.cart.self")}
-                </label>
+                {selfVerdict && !selfVerdict.eligible && (
+                  <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    {selfVerdict.issues
+                      .map((issue) => INELIGIBLE_MESSAGE_KEY[issue.code])
+                      .filter((key): key is string => Boolean(key))
+                      .map((key) => (
+                        <p key={key}>{t(key)}</p>
+                      ))}
+                  </div>
+                )}
+
+                {/* Gated on imPlaying (fix wave finding #2) — a contact who
+                    hasn't said they're playing has nothing to link, so the
+                    control is absent rather than merely disabled (same
+                    "absent, not disabled" convention as steps.ts's
+                    collapsed ENTRIES step). */}
+                {imPlaying && (
+                  <label className="mt-2 flex items-center gap-2 text-xs text-ink-muted">
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 accent-accent"
+                      checked={isSelf}
+                      onChange={(e) => dispatch({ type: "SET_SELF_ENTRY", id: e.target.checked ? entry.id : null })}
+                    />
+                    {t("register.entries.cart.self")}
+                  </label>
+                )}
               </li>
             );
           })}

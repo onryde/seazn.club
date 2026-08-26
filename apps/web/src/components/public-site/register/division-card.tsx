@@ -7,8 +7,7 @@
 // never whether the division accepts entries at all (that's `open`).
 import { useT } from "@/components/i18n/dict-provider";
 import { formatMinor, type Currency } from "@/lib/currency";
-import type { EligibilityCode } from "@/lib/registration-rules";
-import type { SelfEligibility } from "./eligibility-presentation";
+import { INELIGIBLE_MESSAGE_KEY, type SelfEligibility } from "./eligibility-presentation";
 import { BTN_GHOST, BTN_PRIMARY } from "./styles";
 import type { DivisionLike } from "./types";
 
@@ -18,14 +17,6 @@ const CATEGORY_KEY = {
   womens: "register.entries.category.womens",
   mixed: "register.entries.category.mixed",
 } as const;
-
-const INELIGIBLE_KEY: Partial<Record<EligibilityCode, string>> = {
-  CATEGORY_MISMATCH: "register.entries.ineligible.category",
-  AGE_TOO_OLD: "register.entries.ineligible.age",
-  AGE_TOO_YOUNG: "register.entries.ineligible.age",
-  MISSING_DOB: "register.entries.ineligible.missingDob",
-  MISSING_GENDER: "register.entries.ineligible.missingGender",
-};
 
 const BADGE = "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium";
 
@@ -121,7 +112,7 @@ export function DivisionCard({
       {imPlaying && selfEligibility && !selfEligibility.eligible && (
         <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           {selfEligibility.issues
-            .map((issue) => INELIGIBLE_KEY[issue.code])
+            .map((issue) => INELIGIBLE_MESSAGE_KEY[issue.code])
             .filter((key): key is string => Boolean(key))
             .map((key) => (
               <p key={key}>{t(key)}</p>

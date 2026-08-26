@@ -5,7 +5,11 @@
 // the whole point of the RS006 W1 leaf-extraction refactor: one evaluator,
 // two call sites.
 import { describe, expect, it } from "vitest";
-import { seasonStartYearFrom, selfEligibilityForDivision } from "../eligibility-presentation";
+import {
+  INELIGIBLE_MESSAGE_KEY,
+  seasonStartYearFrom,
+  selfEligibilityForDivision,
+} from "../eligibility-presentation";
 
 describe("selfEligibilityForDivision", () => {
   it("open/null category, no age band: everyone is eligible, even with no dob/gender known yet", () => {
@@ -73,6 +77,28 @@ describe("selfEligibilityForDivision", () => {
       2026,
     );
     expect(r.issues.map((i) => i.code)).toEqual(["MISSING_DOB"]);
+  });
+});
+
+describe("INELIGIBLE_MESSAGE_KEY — the ONE presentation mapping DivisionCard and EntryCart both key off (fix wave finding #3: no second rule evaluation)", () => {
+  it("has an i18n key for every code selfEligibilityForDivision can actually produce", () => {
+    const r = selfEligibilityForDivision(
+      { category: "mens", age_min: 18, age_max: 35 },
+      { dob: "2020-01-01", gender: "f" },
+      2026,
+    );
+    for (const issue of r.issues) {
+      expect(INELIGIBLE_MESSAGE_KEY[issue.code], `no key for ${issue.code}`).toBeTruthy();
+    }
+  });
+
+  it("MISSING_DOB and MISSING_GENDER map to their own distinct keys (not a shared generic one)", () => {
+    expect(INELIGIBLE_MESSAGE_KEY.MISSING_DOB).toBe("register.entries.ineligible.missingDob");
+    expect(INELIGIBLE_MESSAGE_KEY.MISSING_GENDER).toBe("register.entries.ineligible.missingGender");
+  });
+
+  it("AGE_TOO_OLD and AGE_TOO_YOUNG share the one generic age-range key", () => {
+    expect(INELIGIBLE_MESSAGE_KEY.AGE_TOO_OLD).toBe(INELIGIBLE_MESSAGE_KEY.AGE_TOO_YOUNG);
   });
 });
 

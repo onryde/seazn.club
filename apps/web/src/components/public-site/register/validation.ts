@@ -3,6 +3,7 @@
 // (registration-submit.ts, PublicRegisterGroupRequest's superRefine) is
 // truth — this file exists so "Next" doesn't let a cart through that the
 // server will 400/422 on submit, not to replace that check.
+import { selfEligibilityForDivision } from "./eligibility-presentation";
 import type { CartState, ContactState, DivisionLike } from "./types";
 
 export interface WhoFieldRequirements {
@@ -98,16 +99,43 @@ export function validateContact(
 
 export interface EntriesValidation {
   valid: boolean;
-  error: "cartEmpty" | null;
+  error: "cartEmpty" | "selfIneligible" | null;
 }
 
 /** `PublicRegisterGroupRequest.entries` is `.min(1).max(10)`
  *  (schemas.ts:2421) — the max is already enforced at the point of adding
  *  (cart.ts's canAddEntry gates the "Add" control, so a cart can never grow
- *  past it), so the only thing left to gate "Next" on here is non-empty.
- *  Per-entry naming (team_name/partner_name) is encouraged in the UI but
- *  not required — the schema itself leaves both nullish. */
-export function validateEntries(cart: CartState): EntriesValidation {
+ *  past it), so the first thing gated here is non-empty. Per-entry naming
+ *  (team_name/partner_name) is encouraged in the UI but not required — the
+ *  schema itself leaves both nullish.
+ *
+ *  Second gate (fix wave finding #3): a self-linked entry whose division the
+ *  CONTACT personally does not qualify for (category/age-band) is a cart the
+ *  server will certainly reject at submit — the same
+ *  `selfEligibilityForDivision` predicate DivisionCard already greys the
+ *  division with (@/lib/registration-rules, the one evaluator; see that
+ *  file's header) is reused here, not re-derived, to decide whether "Next"
+ *  may proceed. Only the SELF-LINKED entry is checked — an ineligible
+ *  division sitting unlinked in the cart is fine (design: "stays pickable
+ *  for team entries"). A self-linked entry whose division isn't in `divisions`
+ *  (a data gap) is treated as unblocked rather than thrown on — the eligibility
+ *  presentation layer's own contract elsewhere already degrades the same way. */
+export function validateEntries(
+  cart: CartState,
+  divisions: readonly Pick<DivisionLike, "division_id" | "category" | "age_min" | "age_max">[],
+  contact: Pick<ContactState, "dob" | "gender">,
+  seasonStartYear: number,
+): EntriesValidation {
   if (cart.entries.length === 0) return { valid: false, error: "cartEmpty" };
+
+  if (cart.selfEntryId) {
+    const selfEntry = cart.entries.find((e) => e.id === cart.selfEntryId);
+    const division = selfEntry && divisions.find((d) => d.division_id === selfEntry.division_id);
+    if (division) {
+      const verdict = selfEligibilityForDivision(division, contact, seasonStartYear);
+      if (!verdict.eligible) return { valid: false, error: "selfIneligible" };
+    }
+  }
+
   return { valid: true, error: null };
 }

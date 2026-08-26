@@ -43,7 +43,15 @@ export default async function RegisterPage({ params, searchParams }: Props) {
   const locale = await resolveLocale();
   const ui = await getDictionary(locale, "ui");
 
-  if (info.divisions.length === 0) {
+  // `divisions` is filtered on rs.enabled only (registrations.ts) — a
+  // division can be enabled but window-closed/payments-unavailable, so
+  // `.length === 0` alone let an all-closed competition fall through to the
+  // live stepper (fix wave finding #1: stranded on ENTRIES behind a generic
+  // "add an entry" error, never told registration had closed). `.every(!open)`
+  // is true both for zero divisions AND for one-or-more that are all
+  // closed — the empty-array case is vacuously true, so this subsumes the
+  // original check rather than adding a second branch.
+  if (info.divisions.every((d) => !d.open)) {
     return (
       <DictProvider dict={ui} locale={locale}>
         <div className="mx-auto max-w-2xl">

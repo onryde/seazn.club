@@ -18,6 +18,7 @@ import {
   autoLinkObviousSelf,
   autoSeedSingleDivision,
   cartReducer,
+  clearSelfLinkWhenNotPlaying,
   type CartAction,
 } from "./cart";
 import { seasonStartYearFrom } from "./eligibility-presentation";
@@ -28,7 +29,16 @@ import { StepWho } from "./step-who";
 import { buildStepOrder, nextStepIndex, prevStepIndex } from "./steps";
 import { BTN_GHOST, BTN_PRIMARY } from "./styles";
 import { EMPTY_CART, EMPTY_CONTACT, type CartState, type ContactState, type DivisionLike } from "./types";
-import { validateContact, validateEntries, whoFieldRequirements } from "./validation";
+import { validateContact, validateEntries, whoFieldRequirements, type EntriesValidation } from "./validation";
+
+/** validation.ts's EntriesValidation error codes don't share a naming
+ *  scheme with the register.errors.* dictionary keys — same reasoning as
+ *  step-who.tsx's ERROR_KEY, an explicit map avoids silently building a key
+ *  that doesn't exist. */
+const ENTRIES_ERROR_KEY: Record<NonNullable<EntriesValidation["error"]>, string> = {
+  cartEmpty: "register.errors.cartEmpty",
+  selfIneligible: "register.errors.selfIneligible",
+};
 
 export interface RegisterInfo {
   competition: { name: string; starts_on: string | null };
@@ -94,6 +104,13 @@ export function RegisterStepper({
       setCart(saved.cart);
       setStepIndex(Math.min(saved.stepIndex, stepOrder.length));
     }
+    // A restored field the rep hasn't touched YET (this visit) must render
+    // as pristine helper text, never a submitted-state error (fix wave
+    // finding #5) — reset explicitly so restore is correct BY CONSTRUCTION,
+    // rather than relying on these already defaulting to false from
+    // whichever mount path got here.
+    setWhoAttempted(false);
+    setEntriesAttempted(false);
     setHydrated(true);
     // Intentionally empty deps: hydration runs exactly once, at mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -115,10 +132,14 @@ export function RegisterStepper({
   // explicit choice. A reactive convenience over user input (the toggle,
   // the cart shrinking/growing to exactly one entry), not a derivation of
   // props/state that could be computed during render instead — genuinely
-  // effect-shaped.
+  // effect-shaped. clearSelfLinkWhenNotPlaying is the inverse direction
+  // (fix wave finding #2): un-toggling "I'm playing" must clear ANY
+  // self-link, auto- or explicitly-made, or a stale registering_self:true
+  // with no dob collected reaches submit. Composing the two is safe in
+  // either order — each is a no-op exactly when the other one applies.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setCart((prev) => autoLinkObviousSelf(prev, imPlaying));
+    setCart((prev) => clearSelfLinkWhenNotPlaying(autoLinkObviousSelf(prev, imPlaying), imPlaying));
   }, [imPlaying, cart.entries.length]);
 
   function dispatchCart(action: CartAction) {
@@ -131,7 +152,7 @@ export function RegisterStepper({
   // no-op.
   const requirements = whoFieldRequirements(info.divisions, imPlaying);
   const contactValidation = validateContact(contact, requirements);
-  const entriesValidation = validateEntries(cart);
+  const entriesValidation = validateEntries(cart, info.divisions, contact, seasonStartYear);
 
   const clampedIndex = Math.min(stepIndex, stepOrder.length);
   const currentStep = stepOrder[clampedIndex];
@@ -178,9 +199,9 @@ export function RegisterStepper({
             seasonStartYear={seasonStartYear}
             locale={locale}
           />
-          {entriesAttempted && !entriesValidation.valid && (
+          {entriesAttempted && !entriesValidation.valid && entriesValidation.error && (
             <p role="alert" className="text-sm text-red-600">
-              {t("register.errors.cartEmpty")}
+              {t(ENTRIES_ERROR_KEY[entriesValidation.error])}
             </p>
           )}
         </>
@@ -195,7 +216,14 @@ export function RegisterStepper({
         </div>
       )}
 
-      <div className="flex items-center justify-between">
+      {/* relative z-50: the SAME escape hatch cookie-consent.tsx documents
+          for dialogs (its own header comment — "nothing needs to sit above
+          a modal") — z-50 matches the confirm-dialog tier so the fixed,
+          z-40 cookie banner never wins the tie and swallows a click on
+          Back/Next (fix wave finding #6; regression-pinned in
+          register-stepper-interaction.test.tsx via the SAME z-index
+          source-contract convention as cookie-consent-below-dialogs.test.ts). */}
+      <div className="relative z-50 flex items-center justify-between">
         <button type="button" onClick={goBack} disabled={stepIndex === 0} className={BTN_GHOST}>
           {t("register.nav.back")}
         </button>
