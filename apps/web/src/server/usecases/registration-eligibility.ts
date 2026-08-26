@@ -19,7 +19,15 @@ import "server-only";
 // RS011 re-homing exists to prevent" (this file's own prior header) applies
 // just as much to a server/client fork as to two server-side copies. What
 // stayed here: everything that reads the jsonb `eligibility` rules (never
-// shipped to the client) and the roster-composition check.
+// shipped to the client).
+//
+// RS006 W3 (step 3 — DETAILS) moved the roster-composition check
+// (`rosterIssues`'s hasM/hasF tally) out to `@/lib/registration-rules` too
+// (`rosterCompositionIssues`), for the same reason: the public stepper's
+// mixed-composition METER needs the identical rule, and unlike the jsonb
+// loop, the composition check only reads `category` (public) and each
+// player's `gender` — nothing server-only. `rosterIssues` below now calls
+// it instead of tallying inline.
 //
 // Two eligibility sources exist side by side, and are read TOGETHER, never
 // one replacing the other:
@@ -56,7 +64,9 @@ import {
   ageBandEligibilityIssues,
   categoryEligibilityIssues,
   isMinor,
+  mixedCompositionTally,
   requiresDob,
+  rosterCompositionIssues,
   type EligibilityCode,
   type EligibilityIssue,
   type EligibilityPerson,
@@ -64,7 +74,15 @@ import {
 
 // Re-exported verbatim so every existing importer of THIS file keeps
 // compiling unchanged — see the header comment above.
-export { ageAt, isMinor, requiresDob, categoryEligibilityIssues, ageBandEligibilityIssues };
+export {
+  ageAt,
+  isMinor,
+  requiresDob,
+  categoryEligibilityIssues,
+  ageBandEligibilityIssues,
+  mixedCompositionTally,
+  rosterCompositionIssues,
+};
 export type { EligibilityCode, EligibilityIssue, EligibilityPerson };
 
 interface AgeRule {
@@ -238,21 +256,14 @@ export function rosterIssues(
   seasonStartYear: number,
 ): EligibilityIssue[] {
   const issues: EligibilityIssue[] = [];
-  let hasM = false;
-  let hasF = false;
   players.forEach((player, i) => {
     for (const issue of divisionEligibilityIssues(division, player, seasonStartYear)) {
       issues.push({ ...issue, playerIndex: i + 1, playerName: player.full_name ?? null });
     }
-    if (player.gender === "m") hasM = true;
-    if (player.gender === "f") hasF = true;
   });
-  if (division.category === "mixed" && !(hasM && hasF)) {
-    issues.push({
-      code: "MIXED_NEEDS_BOTH_GENDERS",
-      message: "This division requires a mixed roster (at least one male and one female player).",
-    });
-  }
+  // Roster-wide (not per-player) — @/lib/registration-rules, RS006 W3. Same
+  // ordering as before the extraction: per-player issues first, this last.
+  issues.push(...rosterCompositionIssues(division, players));
   return issues;
 }
 

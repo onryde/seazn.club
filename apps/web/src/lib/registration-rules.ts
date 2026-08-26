@@ -17,13 +17,22 @@
 // (components/public-site/register/**) imports straight from here.
 //
 // What stays OUT of this file, on purpose: `divisionEligibilityIssues`'s
-// jsonb-rules loop and `rosterIssues`'s roster-composition check. Both
-// read `divisions.eligibility` (jsonb), which the public read model never
-// ships to the client (`PublicRegistrationDivision` carries only the
-// booleans `requires_dob`/`requires_gender` derived FROM it) — so the
-// client structurally cannot evaluate those rules, correctly. Only the
-// first-class `category`/`age_min`/`age_max` columns (V364) are public
-// (badges need the raw values), so only their predicates belong here.
+// jsonb-rules loop. It reads `divisions.eligibility` (jsonb), which the
+// public read model never ships to the client (`PublicRegistrationDivision`
+// carries only the booleans `requires_dob`/`requires_gender` derived FROM
+// it) — so the client structurally cannot evaluate those rules, correctly.
+// Only the first-class `category`/`age_min`/`age_max` columns (V364) are
+// public (badges need the raw values), so only their predicates belong here.
+//
+// `rosterIssues`'s roster-composition check (`mixedCompositionTally`/
+// `rosterCompositionIssues` below) moved IN at RS006 W3 (step 3 — DETAILS):
+// unlike the jsonb loop, it reads only `category` (public) and each
+// player's `gender` (collected client-side, in the roster the stepper is
+// building) — nothing it needs is server-only, and the public stepper's
+// mixed-composition METER needs the SAME rule the server enforces at
+// submit. `server/usecases/registration-eligibility.ts`'s `rosterIssues`
+// now calls `rosterCompositionIssues` from here instead of tallying inline
+// — see that file's header for the other half of this split.
 
 /** Whole years between dob and `at` (doc 06 §2.1: never approximate). */
 export function ageAt(dobIso: string, at: Date): number {
@@ -187,4 +196,59 @@ export function ageBandEligibilityIssues(
     });
   }
   return issues;
+}
+
+/**
+ * Roster-wide gender tally — at least one player recorded as `m`, at least
+ * one recorded as `f`. `x` and null/undefined count toward NEITHER side
+ * (owner ruling, RS002 — mirrored from `categoryEligibilityIssues`'s "x
+ * never blocks" comment): an all-`x` roster fails a mixed division for want
+ * of both sides, not because `x` itself is disqualifying.
+ *
+ * Split out from `rosterCompositionIssues` so the stepper's METER (RS006
+ * step 3) can render the live count/status without re-deriving the tally
+ * from the pass/fail issue list.
+ */
+export function mixedCompositionTally(players: readonly EligibilityPerson[]): {
+  hasM: boolean;
+  hasF: boolean;
+} {
+  let hasM = false;
+  let hasF = false;
+  for (const player of players) {
+    if (player.gender === "m") hasM = true;
+    if (player.gender === "f") hasF = true;
+  }
+  return { hasM, hasF };
+}
+
+/**
+ * Roster-level mixed-composition check (V364 `category === "mixed"`):
+ * satisfied when the roster has at least one `m` AND at least one `f`
+ * player (`mixedCompositionTally` above). Roster-wide, so the returned
+ * issue (when present) carries no `playerIndex`/`playerName` — a caller
+ * attributing per-player issues to a row (`rosterIssues` server-side,
+ * `rosterEligibilityForDivision` client-side) adds those to every OTHER
+ * issue it collects, never to this one.
+ *
+ * Extracted from `server/usecases/registration-eligibility.ts`'s
+ * `rosterIssues` (RS006 W3) — see this file's header for why it belongs
+ * here now. An empty roster is NOT vacuously satisfied: zero players means
+ * zero of each gender, so `!(hasM && hasF)` is true and the division still
+ * reports the issue — a mixed division isn't "mixed-compliant by having no
+ * one enrolled yet."
+ */
+export function rosterCompositionIssues(
+  division: { category: string | null },
+  players: readonly EligibilityPerson[],
+): EligibilityIssue[] {
+  if (division.category !== "mixed") return [];
+  const { hasM, hasF } = mixedCompositionTally(players);
+  if (hasM && hasF) return [];
+  return [
+    {
+      code: "MIXED_NEEDS_BOTH_GENDERS",
+      message: "This division requires a mixed roster (at least one male and one female player).",
+    },
+  ];
 }
