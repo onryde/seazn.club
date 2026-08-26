@@ -200,6 +200,31 @@ describe("aiConsoleReducer", () => {
     expect(s.run).toBe("idle");
   });
 
+  /**
+   * A failed run must not follow the organiser around the stepper.
+   *
+   * `GOTO_STEP` used to carry `run: "error"` and the error object forward
+   * untouched, and BOTH the brief step and the apply step render that block —
+   * so a failed apply, followed by stepping back to re-brief, showed the same
+   * red sentence twice: once where it happened and once where it did not. The
+   * proposal is deliberately kept (an error must never blank the board the
+   * organiser was about to apply); only the failure is dismissed.
+   */
+  it("GOTO_STEP dismisses a failed run instead of carrying it to the next step", () => {
+    const failed = aiConsoleReducer(withProposal(), {
+      type: "APPLY_ERROR",
+      error: { status: 409, message: "blocked", key: "board.ai.error.blocked" },
+    });
+    expect(failed.run).toBe("error");
+
+    const back = aiConsoleReducer(failed, { type: "GOTO_STEP", step: "brief" });
+    expect(back.error).toBeNull();
+    // A plan is still on screen, so the console returns to the state that
+    // renders it rather than to idle.
+    expect(back.run).toBe("proposal");
+    expect(back.schedulePlan).toBe(failed.schedulePlan);
+  });
+
   it("RESET clears both plans and returns to the initial state", () => {
     const busy = aiConsoleReducer(
       aiConsoleReducer(withProposal(), { type: "OFFICIALS_DONE", plan: officialsPlan, instruction: "Senior ref on the final." }),
@@ -216,8 +241,32 @@ describe("aiErrorKey (status → localized copy key)", () => {
   it("maps each dedicated status to its own key", () => {
     expect(aiErrorKey(402)).toBe("board.ai.error.upgrade");
     expect(aiErrorKey(429)).toBe("board.ai.error.rateLimited");
-    expect(aiErrorKey(409)).toBe("board.ai.error.conflict");
     expect(aiErrorKey(400)).toBe("board.ai.error.invalid");
+  });
+
+  /**
+   * 409 IS NOT ONE FAILURE. Three server codes answer 409 on this path and they
+   * ask the organiser for three different things:
+   *
+   *   SEQ_CONFLICT           the board moved while the plan was being made —
+   *                          reopening genuinely is the fix.
+   *   SCHEDULE_CONFLICT      the plan ITSELF would double-book the board.
+   *                          Nothing changed and nothing will change on a
+   *                          retry: re-sending the same proposal against the
+   *                          same board reproduces it exactly.
+   *   SCHEDULE_APPLY_TOO_LARGE  too many assignments in one call.
+   *
+   * All three used to render "The schedule changed while planning — reopen and
+   * try again", which for the middle one is not merely unhelpful, it is false:
+   * the schedule did not change, and the advice it gives loops forever. That is
+   * the reported bug, and it is why a bare 409 now falls to the generic line
+   * rather than borrowing the stale-board sentence for a cause nobody checked.
+   */
+  it("splits 409 on the server code: stale board, blocked plan, too large", () => {
+    expect(aiErrorKey(409, "SEQ_CONFLICT")).toBe("board.ai.error.conflict");
+    expect(aiErrorKey(409, "SCHEDULE_CONFLICT")).toBe("board.ai.error.blocked");
+    expect(aiErrorKey(409, "SCHEDULE_APPLY_TOO_LARGE")).toBe("board.ai.error.tooLarge");
+    expect(aiErrorKey(409)).toBe("board.ai.errorGeneric");
   });
 
   it("splits 402 on the feature key: an empty AI wallet tops up, a plan gate upgrades", () => {
@@ -275,8 +324,14 @@ describe("applyErrorKey (apply outcome → localized copy key)", () => {
     expect(applyErrorKey(outcome({ errorCode: "COMPETITION_FROZEN", errorStatus: 422 }))).toBe("board.ai.error.invalid");
     // Schedule 422 too-large → narrow-scope line (the code sharpens 422).
     expect(applyErrorKey(outcome({ errorCode: "AI_PLAN_TOO_LARGE", errorStatus: 422 }))).toBe("board.ai.error.tooLarge");
-    // A blocking SCHEDULE_CONFLICT (409) → the conflict line.
-    expect(applyErrorKey(outcome({ errorCode: "SCHEDULE_CONFLICT", errorStatus: 409 }))).toBe("board.ai.error.conflict");
+    // A blocking SCHEDULE_CONFLICT (409) → the BLOCKED line, not the stale-board
+    // one. This assertion used to expect `error.conflict` ("the schedule changed
+    // while planning — reopen and try again"), which is false for this code:
+    // nothing changed, the plan itself double-books the board, and reopening
+    // produces the identical refusal.
+    expect(applyErrorKey(outcome({ errorCode: "SCHEDULE_CONFLICT", errorStatus: 409 }))).toBe("board.ai.error.blocked");
+    // …and the stale-board line still belongs to the code that really means it.
+    expect(applyErrorKey(outcome({ errorCode: "SEQ_CONFLICT", errorStatus: 409 }))).toBe("board.ai.error.conflict");
     // 429 on any leg → the rate-limited line.
     expect(applyErrorKey(outcome({ errorCode: "RATE_LIMITED", errorStatus: 429 }))).toBe("board.ai.error.rateLimited");
     // Officials-leg 422 (schedule already applied) → the invalid line.

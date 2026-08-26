@@ -83,6 +83,18 @@ export function HistoryPanel({
    *  bookmark. Naming it is the whole point — an organiser who is not told
    *  which label went looks for it later and finds a hole. */
   const [evicted, setEvicted] = useState<string | null>(null);
+  /** How many edits the last restore actually undid.
+   *
+   *  `restoreCheckpoint` returns `{ steps: 0 }` — HTTP 200, nothing written —
+   *  whenever the division's watermark is already at or before the checkpoint's,
+   *  and the commonest way to reach that is an AI apply that FAILED: the
+   *  "Before AI" anchor was saved, the apply was refused, so the anchor and the
+   *  live board are the same state. Restoring then reloads a board that looks
+   *  exactly as it did, which is indistinguishable from a restore that did not
+   *  work. The number is kept (not a boolean) because the two cases read
+   *  differently: "nothing to undo" answers a question, "undid 2 changes"
+   *  confirms an action. */
+  const [restored, setRestored] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -110,6 +122,7 @@ export function HistoryPanel({
     // Cleared per action, not per save: the notice belongs to the action the
     // organiser just took, and a stale one beside an undo would be a lie.
     setEvicted(null);
+    setRestored(null);
     setBusy(true);
     try {
       await fn();
@@ -256,6 +269,30 @@ export function HistoryPanel({
               was refused. The count is the manual group's own length, which
               after an eviction IS the plan's window width — no second read,
               and it cannot disagree with the list right below it. */}
+          {/* What the restore did, including when it did nothing. Sits beside
+              the eviction notice and obeys the same rule: non-blocking, cleared
+              at the start of the next action, never an error — a no-op restore
+              is a correct outcome that simply has to be said out loud. */}
+          {restored !== null && (
+            <p
+              data-testid="history-restore-notice"
+              className="rounded-md bg-purple-50 px-2.5 py-1.5 text-[11px] leading-snug text-purple-800"
+            >
+              {/* `msg` over the two plural forms, not `usePlural`: that hook
+                  THROWS outside a DictProvider, and this panel is mounted in
+                  node-environment tests that have no provider tree (`useMsg`
+                  falls back to the English catalog there, which is the
+                  production copy). All four shipped locales use one/other, so
+                  picking the form here loses nothing a plural runtime would
+                  give — and a fifth locale with more categories would need a
+                  provider-safe plural hook anyway. */}
+              {restored === 0
+                ? msg("history.restore.noop")
+                : restored === 1
+                  ? msg("history.restore.done.one")
+                  : msg("history.restore.done.other", { count: String(restored) })}
+            </p>
+          )}
           {evicted && (
             <p className="rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
               {msg("history.checkpoint.evicted", {
@@ -338,12 +375,20 @@ export function HistoryPanel({
                                       confirmLabel: msg("confirm.restoreCheckpoint.label"),
                                     });
                                     if (!ok) return;
-                                    void run(() =>
-                                      apiV1(`/api/v1/divisions/${divisionId}/restore`, {
-                                        method: "POST",
-                                        json: { checkpoint_id: cp.id, confirm: true },
-                                      }),
-                                    );
+                                    void run(async () => {
+                                      const res = await apiV1<{ steps?: number }>(
+                                        `/api/v1/divisions/${divisionId}/restore`,
+                                        {
+                                          method: "POST",
+                                          json: { checkpoint_id: cp.id, confirm: true },
+                                        },
+                                      );
+                                      // `steps` is the server's own count of
+                                      // undos performed; 0 is a real answer,
+                                      // not a missing field, so it is reported
+                                      // rather than treated as absent.
+                                      setRestored(res?.steps ?? 0);
+                                    });
                                   }}
                                 >
                                   {msg("history.checkpoint.restore")}

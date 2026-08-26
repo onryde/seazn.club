@@ -850,7 +850,17 @@ export function AiConsole({
         const key = applyErrorKey(result);
         dispatch({
           type: "APPLY_ERROR",
-          error: { status: result.errorStatus ?? 0, message: msg(key), key },
+          error: {
+            status: result.errorStatus ?? 0,
+            message: msg(key),
+            key,
+            // Only the blocked line has anything to do with a fixture list; any
+            // other failure carrying one would be naming matches for a reason
+            // that is not why it failed.
+            ...(key === "board.ai.error.blocked" && result.errorConflicts
+              ? { conflicts: result.errorConflicts }
+              : {}),
+          },
         });
       }
     },
@@ -1611,7 +1621,12 @@ export function OfficialsStep({
 // officials, apply schedule only, or discard. The orchestration + outcome live
 // in the parent (doApply / applyAiPlans); this step renders the pre-apply, the
 // stale-board recovery (re-run as refine), the error, and the applied states.
-function ApplyStep({
+/** How many blocking fixtures the refusal lists before folding the rest into a
+ *  count. Four keeps the block inside the dock's density; the counter keeps the
+ *  total honest. */
+const BLOCKED_LIST_MAX = 4;
+
+export function ApplyStep({
   state,
   plan,
   currency,
@@ -1644,6 +1659,21 @@ function ApplyStep({
 }) {
   const excluded = useMemo(() => new Set(state.excludedFixtures), [state.excludedFixtures]);
   const suggestKeys = useMemo(() => suggestionKeysOf(plan?.constraint_suggestions), [plan]);
+  /** The blocking fixtures a refused apply named, resolved to the labels the
+   *  rest of the dock uses. A conflict whose fixture is not on this board (a
+   *  cross-stage clash the server can see and the dock's slice cannot) still
+   *  gets a row — the count would otherwise disagree with the server's. */
+  const blockedLabels = useMemo(() => {
+    if (state.error?.key !== "board.ai.error.blocked") return [];
+    const byId = new Map(fixtures.map((f) => [f.id, f]));
+    const seen = new Set<string>();
+    return (state.error.conflicts ?? []).flatMap((c) => {
+      if (seen.has(c.fixtureId)) return []; // one row per fixture, not per rule
+      seen.add(c.fixtureId);
+      const f = byId.get(c.fixtureId);
+      return [{ id: c.fixtureId, label: f ? `${f.code} · ${f.matchup}` : c.fixtureId.slice(0, 8) }];
+    });
+  }, [fixtures, state.error]);
   const [ticked, setTicked] = useState<Set<SuggestionKey>>(() => new Set(suggestKeys));
 
   if (!plan) return <Empty msg={msg} k="board.ai.schedule.empty" />;
@@ -1738,9 +1768,34 @@ function ApplyStep({
         state.error.key === "board.ai.error.outOfCredits" ? (
           <AiOutOfCredits currency={currency} />
         ) : (
-          <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-            <span className="font-semibold">{msg("board.ai.errorLabel")}</span> {state.error.message}
-          </p>
+          <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+            <p>
+              <span className="font-semibold">{msg("board.ai.errorLabel")}</span> {state.error.message}
+            </p>
+            {/* WHICH matches. A refusal the organiser cannot locate is a dead
+                end: the plan is still on screen, and the only way to act on
+                "this clashes with the board" is to know what it clashes with.
+                Named in the board's own vocabulary (round code + matchup), the
+                way every other list in this dock names a fixture — never a raw
+                id. Blocked failures only; see the dispatch above. */}
+            {blockedLabels.length > 0 && (
+              <div data-testid="ai-blocked-fixtures" className="mt-1.5">
+                <p className="font-semibold">{msg("board.ai.error.blockedList")}</p>
+                <ul className="mt-0.5 space-y-0.5">
+                  {blockedLabels.slice(0, BLOCKED_LIST_MAX).map((row) => (
+                    <li key={row.id}>{row.label}</li>
+                  ))}
+                  {blockedLabels.length > BLOCKED_LIST_MAX && (
+                    <li className="opacity-80">
+                      {msg("board.ai.error.blockedMore", {
+                        count: String(blockedLabels.length - BLOCKED_LIST_MAX),
+                      })}
+                    </li>
+                  )}
+                </ul>
+              </div>
+            )}
+          </div>
         )
       )}
 

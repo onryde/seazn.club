@@ -127,7 +127,17 @@ export interface AiConsoleState {
    *  resolved to (the render reads it to enrich the `ai.credits` out-of-credits
    *  state into an action block); it's optional so the reducer's callers can omit
    *  it and the pure reducer tests stay shape-agnostic. */
-  error: { status: number; message: string; key?: string } | null;
+  error: {
+    status: number;
+    message: string;
+    key?: string;
+    /** The fixtures a blocking 409 named (`SCHEDULE_CONFLICT` carries them in
+     *  the error envelope). The apply step lists them, because "this would
+     *  clash with what is already on the board" is only actionable if the
+     *  organiser can see WHICH matches — without them the sentence is another
+     *  dead end. Absent on every other failure. */
+    conflicts?: { fixtureId: string; code: string }[];
+  } | null;
 }
 
 export type AiConsoleAction =
@@ -317,12 +327,22 @@ export function aiConsoleReducer(s: AiConsoleState, a: AiConsoleAction): AiConso
       return { ...s, run: "error", error: a.error };
 
     case "GOTO_STEP": {
+      // Moving through the stepper DISMISSES a failed run. Both the brief step
+      // and the apply step render `state.error`, so carrying it forward showed
+      // the same red sentence a second time, on a step where nothing had gone
+      // wrong. The proposal itself survives — an error must never blank the
+      // board the organiser was about to apply (brief §Step 1) — so the run
+      // falls back to whichever state describes what is still on screen.
+      const cleared =
+        s.run === "error"
+          ? { error: null, run: (s.schedulePlan ? "proposal" : "idle") as AiRunState }
+          : {};
       // Brief is always reachable (go back and re-brief). Every downstream step
       // needs a schedule plan to exist — including apply, which is reachable
       // from schedule with officials skipped.
-      if (a.step === "brief") return { ...s, step: "brief" };
+      if (a.step === "brief") return { ...s, ...cleared, step: "brief" };
       if (!s.schedulePlan) return s; // gated no-op
-      return { ...s, step: a.step };
+      return { ...s, ...cleared, step: a.step };
     }
 
     case "OFFICIALS_DONE":
@@ -414,6 +434,7 @@ export type AiErrorKey =
   | "board.ai.error.unavailable"
   | "board.ai.error.rateLimited"
   | "board.ai.error.conflict"
+  | "board.ai.error.blocked"
   | "board.ai.error.tooLarge"
   | "board.ai.error.invalid"
   | "board.ai.errorGeneric";
@@ -439,7 +460,19 @@ export function aiErrorKey(status: number, code?: string): AiErrorKey {
     case 429:
       return "board.ai.error.rateLimited";
     case 409:
-      return "board.ai.error.conflict";
+      // THREE server codes answer 409 here and they ask for three different
+      // things. SEQ_CONFLICT is the only one the "the schedule changed while
+      // planning — reopen and try again" line is true of: the board moved under
+      // the plan. SCHEDULE_CONFLICT is the opposite — nothing moved, the plan
+      // itself would double-book the board, and re-sending it reproduces the
+      // refusal exactly, so telling the organiser to reopen and retry sends them
+      // round a loop that cannot end. An unrecognised 409 falls through to the
+      // generic line rather than borrowing either sentence for a cause nobody
+      // checked.
+      if (code === "SEQ_CONFLICT") return "board.ai.error.conflict";
+      if (code === "SCHEDULE_CONFLICT") return "board.ai.error.blocked";
+      if (code === "SCHEDULE_APPLY_TOO_LARGE") return "board.ai.error.tooLarge";
+      return "board.ai.errorGeneric";
     case 400:
       return "board.ai.error.invalid";
     case 422:

@@ -93,6 +93,13 @@ export interface ApplyOutcome {
    *  via aiErrorKey(errorStatus, errorCode) (a checkpoint 402 save-point cap, a
    *  422 frozen/too-large, …). Set alongside errorCode; absent on a clean apply. */
   errorStatus?: number;
+  /** The fixtures a blocking `SCHEDULE_CONFLICT` (409) named. The server puts
+   *  them in the error envelope so a client can point at the matches the plan
+   *  would have double-booked; "this would clash with the board" is not an
+   *  actionable sentence on its own. Blocking rows only — the same envelope
+   *  carries warnings, which are not why the apply was refused. Absent on every
+   *  other failure. */
+  errorConflicts?: { fixtureId: string; code: string }[];
 }
 
 /** The injected fetch seam — matches apiV1's shape (envelope-unwrapped). */
@@ -106,6 +113,21 @@ const statusOf = (err: unknown): number => (err instanceof ApiV1Error ? err.stat
  *  save-point-specific line, not the misleading "upgrade to use AI". */
 const featureKeyOf = (err: unknown): string | undefined =>
   err instanceof ApiV1Error && typeof err.extra.feature_key === "string" ? err.extra.feature_key : undefined;
+/** The blocking conflicts a 409 SCHEDULE_CONFLICT rides with (http.ts forwards
+ *  `err.data.conflicts` into the envelope's extra). Read defensively: the shape
+ *  is a wire payload, and a malformed one must degrade to "no list" rather than
+ *  take down the apply's own error reporting. */
+const blockingConflictsOf = (err: unknown): { fixtureId: string; code: string }[] | undefined => {
+  if (!(err instanceof ApiV1Error) || !Array.isArray(err.extra.conflicts)) return undefined;
+  const rows = (err.extra.conflicts as unknown[])
+    .filter((c): c is { fixture_id: string; code: string; blocking?: boolean } => {
+      if (typeof c !== "object" || c === null) return false;
+      const r = c as { fixture_id?: unknown; code?: unknown; blocking?: unknown };
+      return typeof r.fixture_id === "string" && typeof r.code === "string" && r.blocking !== false;
+    })
+    .map((c) => ({ fixtureId: c.fixture_id, code: c.code }));
+  return rows.length > 0 ? rows : undefined;
+};
 
 // -------------------------------------------------------- constraint suggestions
 /** The architect's inferred durable rule changes (a delta over config.constraints). */
@@ -230,12 +252,14 @@ export async function applyAiPlans(input: ApplyAiInput, api: ApplyApi = apiV1): 
       seq += 1;
     } catch (err) {
       const code = codeOf(err);
+      const conflicts = blockingConflictsOf(err);
       return {
         schedule: code === "SEQ_CONFLICT" ? "seq_conflict" : "error",
         officials: "skipped",
         checkpointId,
         errorCode: code,
         errorStatus: statusOf(err),
+        ...(conflicts ? { errorConflicts: conflicts } : {}),
       };
     }
   }
