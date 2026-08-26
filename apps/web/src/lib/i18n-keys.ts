@@ -3767,7 +3767,6 @@ export type DictionaryKey =
   | "register.entries.cart.max"
   | "register.entries.cart.remove"
   | "register.entries.cart.self"
-  | "register.entries.cart.selfHint"
   | "register.entries.cart.subtotal"
   | "register.entries.cart.waitlistNote"
   | "register.entries.category.mens"

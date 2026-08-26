@@ -4436,7 +4436,6 @@
   "register.entries.cart.remove": "Retirer",
   "register.entries.cart.duplicate": "Ajouter un autre",
   "register.entries.cart.self": "C'est moi",
-  "register.entries.cart.selfHint": "Une seule inscription peut être liée à votre compte.",
   "register.entries.cart.freeAgentBadge": "Inscription solo",
   "register.entries.cart.waitlistNote": "Non facturé pour l'instant — vous ne payez que si vous êtes promu depuis la liste d'attente.",
   "register.entries.cart.closedNote": "Cette catégorie s'est fermée depuis l'ajout de cette inscription — elle ne sera pas facturée et devra peut-être être supprimée.",

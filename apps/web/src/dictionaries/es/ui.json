@@ -4436,7 +4436,6 @@
   "register.entries.cart.remove": "Quitar",
   "register.entries.cart.duplicate": "Añadir otro",
   "register.entries.cart.self": "Este soy yo",
-  "register.entries.cart.selfHint": "Solo se puede vincular una inscripción a tu cuenta.",
   "register.entries.cart.freeAgentBadge": "Inscripción en solitario",
   "register.entries.cart.waitlistNote": "No se cobra ahora — solo pagarás si te promocionan desde la lista de espera.",
   "register.entries.cart.closedNote": "Esta categoría se ha cerrado desde que añadiste esta inscripción — no se cobrará y puede que debas eliminarla.",

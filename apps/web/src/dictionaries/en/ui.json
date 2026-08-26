@@ -4436,7 +4436,6 @@
   "register.entries.cart.remove": "Remove",
   "register.entries.cart.duplicate": "Add another",
   "register.entries.cart.self": "This is me",
-  "register.entries.cart.selfHint": "Only one entry can be linked to your account.",
   "register.entries.cart.freeAgentBadge": "Solo sign-up",
   "register.entries.cart.waitlistNote": "Not charged now — pay only if you're promoted from the waitlist.",
   "register.entries.cart.closedNote": "This division has closed since you added this entry — it won't be charged and may need to be removed.",

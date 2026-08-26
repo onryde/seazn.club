@@ -4436,7 +4436,6 @@
   "register.entries.cart.remove": "Verwijderen",
   "register.entries.cart.duplicate": "Nog een toevoegen",
   "register.entries.cart.self": "Dit ben ik",
-  "register.entries.cart.selfHint": "Slechts één inschrijving kan aan je account gekoppeld worden.",
   "register.entries.cart.freeAgentBadge": "Solo-inschrijving",
   "register.entries.cart.waitlistNote": "Nu niet in rekening gebracht — je betaalt alleen als je van de wachtlijst wordt gepromoveerd.",
   "register.entries.cart.closedNote": "Deze categorie is gesloten sinds je deze inschrijving toevoegde — er wordt niet voor in rekening gebracht en je moet hem mogelijk verwijderen.",
