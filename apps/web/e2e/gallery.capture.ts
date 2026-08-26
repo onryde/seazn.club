@@ -90,6 +90,13 @@ type GalleryState = (typeof STATES)[number];
  * these two states from all twelve sports, not just the one whose wave
  * added them.
  */
+// Only ever read as a TYPE now (`ExtraGalleryState`, below) — cricket's hook
+// used to spread it as a value, and stopped when the review found it was
+// over-claiming states it never captured. It stays because the union it
+// produces is what makes a typo in any `captureExtra` return a COMPILE error
+// (it types captureState's `state`, the hook return, and buildIndexHtml's
+// `extraStates`), which is exactly the class of bug that over-claim was.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- type source; see above
 const EXTRA_STATES = [
   "06-overtile",
   "07-oversheet",
