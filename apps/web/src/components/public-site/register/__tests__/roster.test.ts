@@ -5,8 +5,8 @@
 // plus the round-trip property test the RS006 dispatch calls for.
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { effectiveSelfPlayers, parseRoster, serializeRoster, toGroupPlayer, toGroupPlayers } from "../roster";
-import { EMPTY_ROSTER_PLAYER, type RosterPlayerState } from "../types";
+import { effectiveSelfDob, effectiveSelfPlayers, parseRoster, serializeRoster, toGroupPlayer, toGroupPlayers } from "../roster";
+import { EMPTY_ROSTER_PLAYER, type CartEntry, type RosterPlayerState } from "../types";
 
 function player(overrides: Partial<RosterPlayerState>): RosterPlayerState {
   return { ...EMPTY_ROSTER_PLAYER, ...overrides };
@@ -188,5 +188,62 @@ describe("effectiveSelfPlayers — presentation-only fallback of the self row's 
   it("an out-of-range selfIndex degrades to the players unchanged rather than throwing", () => {
     const players = [player({ full_name: "Solo" })];
     expect(effectiveSelfPlayers(players, 5, contact)).toBe(players);
+  });
+});
+
+describe("effectiveSelfDob — guardian-consent-bypass fix: the self row's OWN dob wins over contact.dob", () => {
+  const contact = { dob: "1990-01-01" as string | null };
+
+  type SelfEntry = Pick<CartEntry, "registering_self" | "self_player_index" | "entrant_kind" | "players">;
+  function selfEntry(overrides: Partial<SelfEntry> = {}): SelfEntry {
+    return {
+      registering_self: true,
+      self_player_index: 0,
+      entrant_kind: "individual",
+      players: [player({ full_name: "Self" })],
+      ...overrides,
+    };
+  }
+
+  it("not self-linked at all -> null, regardless of any dob on the roster", () => {
+    expect(effectiveSelfDob(selfEntry({ registering_self: false }), contact)).toBeNull();
+  });
+
+  it("the self row's OWN dob wins over contact.dob — the bug this function exists to fix", () => {
+    const e = selfEntry({ players: [player({ full_name: "Self", dob: "2015-01-01" })] });
+    expect(effectiveSelfDob(e, contact)).toBe("2015-01-01");
+  });
+
+  it("falls back to contact.dob when the self row's own dob is blank", () => {
+    const e = selfEntry({ players: [player({ full_name: "Self", dob: null })] });
+    expect(effectiveSelfDob(e, contact)).toBe("1990-01-01");
+  });
+
+  it("individual kind resolves index 0 even though self_player_index stays null on the client (entry-details.tsx never renders a self-row picker for it)", () => {
+    const e = selfEntry({ self_player_index: null, players: [player({ full_name: "Self", dob: "2015-01-01" })] });
+    expect(effectiveSelfDob(e, contact)).toBe("2015-01-01");
+  });
+
+  it("a non-individual entry with an unresolved self_player_index falls back to contact.dob rather than reading the wrong row", () => {
+    const e = selfEntry({
+      entrant_kind: "team",
+      self_player_index: null,
+      players: [player({ full_name: "Other", dob: "2015-01-01" }), player({ full_name: "Self", dob: "2016-01-01" })],
+    });
+    expect(effectiveSelfDob(e, contact)).toBe("1990-01-01");
+  });
+
+  it("resolves an EXPLICIT self_player_index on a team entry, not just index 0", () => {
+    const e = selfEntry({
+      entrant_kind: "team",
+      self_player_index: 1,
+      players: [player({ full_name: "Other", dob: "1988-01-01" }), player({ full_name: "Self", dob: "2015-01-01" })],
+    });
+    expect(effectiveSelfDob(e, contact)).toBe("2015-01-01");
+  });
+
+  it("an out-of-range self_player_index degrades to contact.dob rather than throwing", () => {
+    const e = selfEntry({ entrant_kind: "team", self_player_index: 5, players: [player({ full_name: "Self" })] });
+    expect(effectiveSelfDob(e, contact)).toBe("1990-01-01");
   });
 });

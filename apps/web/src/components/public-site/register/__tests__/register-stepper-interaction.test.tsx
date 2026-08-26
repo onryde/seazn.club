@@ -1045,6 +1045,19 @@ describe("step 3 — pasting a roster via the textarea parses into named rows (p
 // Step 4 — CONSENT
 // ---------------------------------------------------------------------------
 
+/** Individual + requires_dob — needed for the guardian-bypass regression
+ *  test below: RosterTable only renders a row's dob <input> at all when
+ *  `requiresDob` is true (roster-table.tsx:116), so proving the self row's
+ *  OWN dob can override an adult contact.dob needs a division that actually
+ *  shows that input. No age band (age_min/age_max stay null, inherited from
+ *  DIV_OPEN) — isolates the guardian gate from age-eligibility rejection. */
+const DIV_REQUIRES_DOB: DivisionLike = {
+  ...DIV_OPEN,
+  division_id: "div-req-dob",
+  name: "Age-Checked Singles",
+  requires_dob: true,
+};
+
 describe("step 4 — CONSENT", () => {
   it("privacy consent is required to advance; media consent stays optional", () => {
     const { stepWho, clickByText, pageText, island } = mount([DIV_OPEN]);
@@ -1114,6 +1127,31 @@ describe("step 4 — CONSENT", () => {
     setByAriaLabel(island, "Player 1 — Your name", "Adult Player");
     clickByText("Next"); // -> CONSENT
     expect(pageText()).not.toContain("Under-18 entry — guardian consent");
+  });
+
+  it("guardian consent bypass fix: the block appears (and blocks Next) when an ADULT contact self-links a roster row carrying a MINOR dob", () => {
+    const { stepWho, clickByText, pageText, island } = mount([DIV_REQUIRES_DOB]);
+    (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Self Row", email: "self@example.com", dob: "1990-01-01" });
+    (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true); // auto-links the sole entry
+    clickByText("Next"); // -> DETAILS
+    setByAriaLabel(island, "Player 1 — Your name", "Self Row");
+    // The roster row's OWN dob — not contact.dob — is what a real registrant
+    // types here. No readOnly/disabled on this input (roster-table.tsx),
+    // even though this IS the self-linked row.
+    setByAriaLabel(island, "Player 1 — Date of birth", minorDob());
+    clickByText("Next"); // -> CONSENT (structurally complete; no age band on this division)
+
+    expect(
+      pageText(),
+      "guardian block must show — the self row is a minor even though contact.dob is an adult",
+    ).toContain("Under-18 entry — guardian consent");
+
+    (propsOf(byId(island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({
+      target: { checked: true },
+    });
+    clickByText("Next"); // privacy given, guardian info still missing — must stay BLOCKED
+    expect(pageText(), "must not advance without guardian consent").not.toContain("Review & pay");
+    expect(pageText()).toContain("Guardian consent is required");
   });
 
   it("the captain-roster notice appears when the cart names other people", () => {

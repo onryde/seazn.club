@@ -9,10 +9,9 @@
 // every other step's own live-feedback pieces (division-card.tsx's
 // selfIneligible, entry-details.tsx's mixedUnmet).
 import { useT } from "@/components/i18n/dict-provider";
-import { isMinor } from "@/lib/registration-rules";
-import { cartHasOtherPlayers, registeringSelfAnywhere } from "./cart";
+import { cartHasOtherPlayers } from "./cart";
 import { FIELD, FIELD_LABEL as LABEL } from "./styles";
-import type { ConsentValidation } from "./validation";
+import { guardianRequired, type ConsentValidation } from "./validation";
 import type { CartState, ConsentState, ContactState } from "./types";
 
 /** validation.ts's error codes don't share a naming scheme with the
@@ -46,8 +45,13 @@ export function StepConsent({
 }) {
   const t = useT();
   // Same "now" convention as division-card.tsx's own live window checks —
-  // computed inline, no state, re-evaluated every render.
-  const showGuardian = registeringSelfAnywhere(cart) && !!contact.dob && isMinor(contact.dob, new Date());
+  // computed inline, no state, re-evaluated every render. Delegates to
+  // validation.ts's guardianRequired (rather than re-deriving the same
+  // check here inline, which is how this and validateConsent's own gate
+  // drifted out of sync with the EFFECTIVE self dob in the first place —
+  // guardian-consent-bypass fix, HIGH, 2026-08-26) so the block's visibility
+  // and whether "Next" is blocked can never disagree again.
+  const showGuardian = guardianRequired(cart, contact, new Date());
   const showRosterNotice = cartHasOtherPlayers(cart);
 
   return (

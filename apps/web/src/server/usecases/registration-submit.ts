@@ -427,10 +427,21 @@ export async function submitRegistrationGroup(
     prepared.push({ input: entry, settings, players, selfIndex, displayName, answers });
   }
 
-  // Guardian consent — only the CONTACT's own minority matters at submit;
-  // a captain-entered player's own consent (including guardian consent for a
-  // minor) is deferred to their claim/join moment (design §4 step 4).
-  if (registeringSelfAnywhere && input.contact.dob && isMinor(input.contact.dob, now)) {
+  // Guardian consent — the EFFECTIVE self dob decides minority, not
+  // `input.contact.dob` alone (guardian-consent-bypass fix, HIGH,
+  // 2026-08-26): `prepared[i].players[selfIndex].dob` already carries the
+  // SAME `p.dob ?? contact.dob` fallback applied above (~line 412-416), so
+  // a self-linked roster row's own dob — client-editable with no
+  // readOnly/disabled once a division requires_dob (roster-table.tsx:
+  // 116-118) — can no longer be masked by an adult `contact.dob` from step
+  // 1. A captain-entered OTHER player's own consent is still deferred to
+  // their claim/join moment (design §4 step 4) — this only widens the
+  // check to the CONTACT'S OWN row on every self-linked entry, which never
+  // gets a later claim moment.
+  const selfDobs = prepared
+    .map((p) => (p.selfIndex !== null ? p.players[p.selfIndex]?.dob : null))
+    .filter((dob): dob is string => Boolean(dob));
+  if (registeringSelfAnywhere && selfDobs.some((dob) => isMinor(dob, now))) {
     if (!input.contact.guardian_consent || !input.contact.guardian_name?.trim()) {
       throw new HttpError(422, "A guardian's name and consent are required for players under 18");
     }

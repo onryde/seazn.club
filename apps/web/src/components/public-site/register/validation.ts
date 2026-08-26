@@ -6,7 +6,7 @@
 // not to replace that check.
 import { isMinor } from "@/lib/registration-rules";
 import { registeringSelfAnywhere } from "./cart";
-import { effectiveSelfPlayers } from "./roster";
+import { effectiveSelfDob, effectiveSelfPlayers } from "./roster";
 import { rosterEligibilityForDivision, selfEligibilityForDivision } from "./eligibility-presentation";
 import type { CartEntry, CartState, ConsentState, ContactState, DivisionLike } from "./types";
 
@@ -272,19 +272,29 @@ export function validateDetails(
 // ---------------------------------------------------------------------------
 
 /**
- * Mirrors `registration-submit.ts`'s own guardian gate verbatim (~line 429):
- * `registeringSelfAnywhere && contact.dob && isMinor(dob, now)`. Keyed off
- * the CART's actual self-link (`registeringSelfAnywhere`, cart.ts), not the
- * WHO step's `imPlaying` toggle — `imPlaying` can be true with ZERO entries
- * actually linked (2+ entries is ambiguous, the rep must explicitly choose),
- * and the server's own gate never fires in that case either, so keying off
- * `imPlaying` here would over-trigger the block relative to what submit
- * actually requires.
+ * Mirrors `registration-submit.ts`'s own guardian gate (~line 430-444): true
+ * when ANY self-linked entry's EFFECTIVE self dob (`effectiveSelfDob`,
+ * roster.ts — the roster row's own dob, falling back to `contact.dob`) is
+ * under 18. Guardian-consent-bypass fix (HIGH, 2026-08-26): this used to key
+ * on `contact.dob` alone, which a self-linked roster row's own (editable)
+ * dob input can silently override in the opposite direction once a division
+ * requires_dob (roster-table.tsx renders a plain editable date input for
+ * EVERY row, including the self row — no `readOnly`/`disabled`).
+ *
+ * Keyed off the CART's actual self-link (`registeringSelfAnywhere`, cart.ts
+ * — checked first, as a fast exit for the common "nobody self-linking"
+ * case), not the WHO step's `imPlaying` toggle — `imPlaying` can be true
+ * with ZERO entries actually linked (2+ entries is ambiguous, the rep must
+ * explicitly choose), and the server's own gate never fires in that case
+ * either, so keying off `imPlaying` here would over-trigger the block
+ * relative to what submit actually requires.
  */
 export function guardianRequired(cart: CartState, contact: Pick<ContactState, "dob">, now: Date): boolean {
-  if (!contact.dob) return false;
   if (!registeringSelfAnywhere(cart)) return false;
-  return isMinor(contact.dob, now);
+  return cart.entries.some((entry) => {
+    const dob = effectiveSelfDob(entry, contact);
+    return dob !== null && isMinor(dob, now);
+  });
 }
 
 export interface ConsentValidation {

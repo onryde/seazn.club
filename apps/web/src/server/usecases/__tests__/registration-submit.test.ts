@@ -357,6 +357,41 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
     expect(row!.consent_status).toBe("granted");
   });
 
+  it("guardian consent bypass fix: a MINOR dob typed directly onto the self roster row is caught even when contact.dob is an ADULT", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0 });
+
+    // The roster row's OWN dob is a minor's — this must win over the adult
+    // contact.dob for the guardian gate, the same `p.dob ?? contact.dob`
+    // fallback the persisted player row itself gets (~line 412-416).
+    // roster-table.tsx renders this row's dob as a plain editable
+    // <input type="date"> with no readOnly/disabled, so a real registrant
+    // can type exactly this.
+    const entry: SubmitGroupEntryInput = {
+      division_id: division.id,
+      entrant_kind: "individual",
+      registering_self: true,
+      self_player_index: 0,
+      players: [{ full_name: "Self Row", dob: "2015-01-01" }],
+      answers: {},
+    };
+
+    await expect(
+      submitRegistrationGroup(
+        { orgSlug, compSlug: competition.slug },
+        { contact: baseContact({ dob: "1990-01-01" }), privacy_consent: true, entries: [entry] },
+      ),
+    ).rejects.toMatchObject({ status: 422 });
+
+    // Nothing persisted — same "refused submissions leave no trace" proof
+    // the privacy-consent test above uses.
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from registration_groups where competition_id = ${competition.id}`;
+    expect(n).toBe(0);
+  });
+
   it("an entry's declared entrant_kind must match the division's configured kind (review MINOR: entrant_kind mismatch)", async () => {
     const { orgId, orgSlug, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);

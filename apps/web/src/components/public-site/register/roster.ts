@@ -128,3 +128,43 @@ export function effectiveSelfPlayers(
   if (selfIndex === null || !players[selfIndex]) return players;
   return players.map((p, i) => (i === selfIndex ? { ...p, dob: p.dob ?? contact.dob, gender: p.gender ?? contact.gender } : p));
 }
+
+/**
+ * The effective dob for the CONTACT'S OWN row on ONE self-linked entry —
+ * the same fallback `effectiveSelfPlayers` above applies (`p.dob ??
+ * contact.dob`), for exactly the row identified as "self." Used by
+ * validation.ts's `guardianRequired` (guardian-consent-bypass fix, HIGH,
+ * 2026-08-26): `roster-table.tsx` renders a plain editable
+ * `<input type="date">` for EVERY roster row once a division requires_dob,
+ * including the row marked "This is me" — no `readOnly`/`disabled`. Before
+ * this fix, both `guardianRequired` and `step-consent.tsx`'s guardian-block
+ * trigger keyed on `contact.dob` ALONE, so typing a minor's dob directly
+ * into the self row (leaving an adult step-1 `contact.dob` untouched)
+ * skipped the guardian block entirely on the client — and
+ * registration-submit.ts's own gate had the identical `contact.dob`-only
+ * blind spot server-side (fixed in the same change).
+ *
+ * Resolves WHICH row is "self" the same way `registration-submit.ts` does
+ * (~line 398-406), including its individual-implies-index-0 fallback:
+ * entry-details.tsx's self-row picker never renders for an "individual"
+ * entry (`showSelfPicker`), so `self_player_index` stays `null` in client
+ * state for that kind forever — the schema still implies row 0 is the
+ * contact.
+ *
+ * Falls back to `contact.dob` (the OLD, pre-fix signal) whenever no row can
+ * be resolved at all — e.g. mid-flow before step 3 has built out a roster,
+ * or a pair/team entry whose self-row picker hasn't been used yet. This
+ * function only WIDENS what can trigger the guardian block; it must never
+ * narrow it back to "unknown" just because a roster row isn't there yet.
+ * Returns null only when the entry isn't self-linked at all.
+ */
+export function effectiveSelfDob(
+  entry: Pick<CartEntry, "registering_self" | "self_player_index" | "entrant_kind" | "players">,
+  contact: Pick<ContactState, "dob">,
+): string | null {
+  if (!entry.registering_self) return null;
+  const idx =
+    entry.self_player_index ?? (entry.entrant_kind === "individual" && entry.players.length === 1 ? 0 : null);
+  const row = idx !== null ? entry.players[idx] : undefined;
+  return (row ? row.dob : null) ?? contact.dob;
+}

@@ -527,9 +527,13 @@ describe("validateDetails — step 3's Next gate", () => {
 
 // ---------------------------------------------------------------------------
 // CONSENT (step 4) — guardianRequired mirrors registration-submit.ts's own
-// gate verbatim: `registeringSelfAnywhere && contact.dob && isMinor(dob)`
-// (~line 429). Keyed off the CART's actual self-link, not the WHO step's
-// imPlaying toggle — see cart.ts's registeringSelfAnywhere doc comment.
+// gate (~line 430-444): true when ANY self-linked entry's EFFECTIVE self dob
+// (roster.ts's effectiveSelfDob — the roster row's own dob, falling back to
+// contact.dob) is under 18, not just contact.dob alone (guardian-consent-
+// bypass fix, HIGH, 2026-08-26 — effectiveSelfDob's own test file,
+// roster.test.ts, covers the row-resolution cases in more depth). Keyed off
+// the CART's actual self-link, not the WHO step's imPlaying toggle — see
+// cart.ts's registeringSelfAnywhere doc comment.
 // ---------------------------------------------------------------------------
 
 describe("guardianRequired", () => {
@@ -557,6 +561,38 @@ describe("guardianRequired", () => {
 
   it("true when self-linked AND the contact is under 18", () => {
     expect(guardianRequired(selfLinkedCart, { dob: "2015-01-01" }, NOW)).toBe(true);
+  });
+
+  it("guardian bypass fix: true when the self row's OWN dob is a minor's, even though contact.dob is an adult", () => {
+    const cart: CartState = {
+      entries: [
+        entry({
+          id: "e1",
+          division_id: "d1",
+          entrant_kind: "individual",
+          registering_self: true,
+          self_player_index: 0,
+          players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Self", dob: "2015-01-01" }],
+        }),
+      ],
+    };
+    expect(guardianRequired(cart, { dob: "1990-01-01" }, NOW)).toBe(true);
+  });
+
+  it("guardian bypass fix: false when the self row's own dob is an adult's, even though contact.dob is a minor's (the row wins in both directions)", () => {
+    const cart: CartState = {
+      entries: [
+        entry({
+          id: "e1",
+          division_id: "d1",
+          entrant_kind: "individual",
+          registering_self: true,
+          self_player_index: 0,
+          players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Self", dob: "1990-01-01" }],
+        }),
+      ],
+    };
+    expect(guardianRequired(cart, { dob: "2015-01-01" }, NOW)).toBe(false);
   });
 });
 
