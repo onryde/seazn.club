@@ -12,6 +12,7 @@
     "node": ">=26"
   },
   "scripts": {
+    "bench:scheduler": "node --experimental-strip-types scripts/bench/bench.ts",
     "dev": "npm run dev --workspace apps/web",
     "build": "npm run build --workspace apps/web",
     "start": "npm run start --workspace apps/web",
@@ -44,7 +45,9 @@
     "backfill:pass-credit-redemptions": "node --env-file-if-exists=apps/web/.env.local --experimental-strip-types scripts/backfill-pass-credit-redemptions.ts"
   },
   "dependencies": {
+    "@grpc/grpc-js": "^1.14.4",
     "@seazn/engine": "workspace:*",
+    "pino": "^10.3.1",
     "postgres": "^3.4.9",
     "stripe": "^22.3.0"
   },

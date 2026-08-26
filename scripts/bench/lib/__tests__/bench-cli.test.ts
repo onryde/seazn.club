@@ -1,0 +1,88 @@
+// Unit coverage for bench.ts's argv parsing — pure, no process spawned, no
+// network/DB touched. Lives under lib/__tests__ (rather than a top-level
+// scripts/bench/__tests__) purely so every bench test collects from one
+// glob; it tests ../../bench.ts, one level up from the other lib tests.
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { parseCliArgs } from "../../bench.ts";
+
+describe("parseCliArgs", () => {
+  // --base is required (no default — see the dedicated test below for why).
+  // Every test that isn't specifically exercising that requirement sets
+  // SMOKE_BASE so it doesn't have to pass --base on every single call,
+  // mirroring how a real invocation gets it (seazn-env.sh's `env --label`).
+  const ORIGINAL_SMOKE_BASE = process.env.SMOKE_BASE;
+  beforeEach(() => {
+    process.env.SMOKE_BASE = "http://localhost:54301";
+  });
+  afterEach(() => {
+    if (ORIGINAL_SMOKE_BASE === undefined) delete process.env.SMOKE_BASE;
+    else process.env.SMOKE_BASE = ORIGINAL_SMOKE_BASE;
+  });
+
+  it("--base is required — no default, and specifically no :3000 default", () => {
+    delete process.env.SMOKE_BASE;
+    // A default of :3000 would collide with lib/env.ts's own
+    // FORBIDDEN_BASE_PORTS and make the CLI's own default invocation
+    // permanently unrunnable — this is a regression test for exactly that.
+    expect(() => parseCliArgs([])).toThrow(/--base is required/);
+  });
+
+  it("defaults: no suites, optimized engine, keep=true, bench-report dir", () => {
+    const config = parseCliArgs([]);
+    expect(config.suites).toEqual([]);
+    expect(config.engine).toBe("optimized");
+    expect(config.keep).toBe(true);
+    expect(config.reportDir).toBe("bench-report");
+    expect(config.runId).toBeUndefined();
+  });
+
+  it("--suite is repeatable and collects into an array, in order", () => {
+    const config = parseCliArgs(["--suite", "_tiny", "--suite", "_tiny"]);
+    expect(config.suites).toEqual(["_tiny", "_tiny"]);
+  });
+
+  it("rejects an unknown --suite value before anything runs", () => {
+    // Validated at parse time, not inside the run loop — a typo must never
+    // lose an earlier, already-completed suite's results (bench.ts's main()
+    // writes exactly one report, after the whole loop finishes).
+    expect(() => parseCliArgs(["--suite", "_tiny", "--suite", "cricket"])).toThrow(/unknown --suite value\(s\): cricket/);
+  });
+
+  it("accepts each valid --engine value", () => {
+    expect(parseCliArgs(["--engine", "optimized"]).engine).toBe("optimized");
+    expect(parseCliArgs(["--engine", "greedy"]).engine).toBe("greedy");
+    expect(parseCliArgs(["--engine", "both"]).engine).toBe("both");
+  });
+
+  it("rejects an invalid --engine value", () => {
+    expect(() => parseCliArgs(["--engine", "quantum"])).toThrow(/--engine must be one of/);
+  });
+
+  it("--wipe flips keep to false", () => {
+    expect(parseCliArgs(["--wipe"]).keep).toBe(false);
+  });
+
+  it("--keep (explicit) keeps keep=true", () => {
+    expect(parseCliArgs(["--keep"]).keep).toBe(true);
+  });
+
+  it("rejects --keep and --wipe together", () => {
+    expect(() => parseCliArgs(["--keep", "--wipe"])).toThrow(/mutually exclusive/);
+  });
+
+  it("--report-dir overrides the default", () => {
+    expect(parseCliArgs(["--report-dir", "/tmp/custom-bench-report"]).reportDir).toBe("/tmp/custom-bench-report");
+  });
+
+  it("--run-id is passed through", () => {
+    expect(parseCliArgs(["--run-id", "my-run"]).runId).toBe("my-run");
+  });
+
+  it("--base overrides SMOKE_BASE", () => {
+    expect(parseCliArgs(["--base", "http://localhost:54999"]).base).toBe("http://localhost:54999");
+  });
+
+  it("rejects an unknown flag", () => {
+    expect(() => parseCliArgs(["--not-a-real-flag"])).toThrow();
+  });
+});

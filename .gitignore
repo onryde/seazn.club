@@ -17,6 +17,13 @@ test-results/
 playwright-report/
 # PROMPT-14 simulation failure artifacts (uploaded by CI, replayed via sim:replay)
 sim-failures/
+# Scheduler bench output (B01, scripts/bench/). --keep is the default, so a
+# local run leaves this populated with real, browsable data on purpose (bench
+# design doc §10) — not something every run should add to git history. A
+# specific run's report is committed deliberately as PR evidence with
+# `git add -f` when a bench PR needs to show its own proof run, not by
+# removing this entry.
+bench-report/
 
 # next.js
 .next/
