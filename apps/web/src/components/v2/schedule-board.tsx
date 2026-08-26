@@ -14,7 +14,7 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { Tip } from "@/components/ui/tip";
 import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import { apiV1 } from "@/lib/client-v1";
-import { divisionAccent } from "@/lib/division-hue";
+import { StagePicker } from "./board/stage-picker";
 import { settingsErrorText } from "@/lib/schedule-error";
 import { track, EVENTS } from "@/lib/analytics";
 import { useMsg, useLocale, usePlural } from "@/components/i18n/dict-provider";
@@ -670,12 +670,13 @@ export function ScheduleBoard({
   // across divisions ("League" exists in every division), so the pill row
   // used to disambiguate by baking the division into the label itself
   // ("Under 12s · League"). That made every pill as long as its division's
-  // name. Grouping by division instead — same colour the legend already
-  // uses — keeps the pill bare and pushes the disambiguation into a group
-  // header shown once per division rather than once per stage. A single
-  // division (division board, or a comp board filtered down to one) yields
-  // exactly one group, so `stageGroups.length > 1` below reproduces the old
-  // flat, headerless row unchanged.
+  // name, and a pill per stage per division pushed the solver buttons into a
+  // ragged wrap. The comp board now shows ONE chip naming the target and a
+  // menu behind it (StagePicker), grouped by division in the competition's
+  // division order — same colour the legend already uses — so the stage
+  // names stay bare and the disambiguation lives in a group header shown
+  // once per division. Only the comp board consumes this; the division board
+  // keeps its flat pill row.
   const stageGroups = useMemo(() => {
     const byDivision = new Map<string, typeof runnableStages>();
     for (const s of runnableStages) {
@@ -1165,7 +1166,23 @@ export function ScheduleBoard({
 
                 A single-stage division still shows nothing, exactly as before:
                 there is only one thing the actions could mean. */}
-            {runnableStages.length > 1 ? (
+            {runnableStages.length > 1 && divisions.length > 1 ? (
+              // COMPETITION board: one chip naming the target, a menu grouped
+              // by division behind it. Pills multiplied by five divisions
+              // pushed the solver buttons into a ragged wrap; the chip keeps
+              // the action row to one line at every width and scales to any
+              // division count. Gated on the DIVISION count, not on how many
+              // groups survive the legend filter, so the control does not
+              // change shape when an organiser filters down to one division.
+              <StagePicker
+                groups={stageGroups}
+                divisionNames={divisionNames}
+                activeStage={activeStage}
+                onPick={setPickedStageId}
+                label={msg("board.stageLabel")}
+                menuLabel={msg("board.stageAria")}
+              />
+            ) : runnableStages.length > 1 ? (
               <div className="flex items-center gap-2">
                 <span className="app-display text-[10px] font-semibold text-slate-500">
                   {msg("board.stageLabel")}
@@ -1179,65 +1196,33 @@ export function ScheduleBoard({
                   // (the tab-strip trap this repo has already paid for), while
                   // a wrapped group keeps every option — and the pressed
                   // state — on screen at the cost of a second line.
-                  className="flex flex-wrap items-center gap-1.5"
+                  className="flex flex-wrap rounded-lg border border-slate-200 bg-slate-100 p-0.5"
                 >
-                  {stageGroups.map((group) => (
-                    // COLUMN, header then pills — not one flex-wrap row with
-                    // both mixed in. A long division name and its pills as
-                    // wrap siblings left the name wrapping mid-text with a
-                    // pill stranded beside it and a dead gap before the rest
-                    // wrapped onto their own line (review finding on this
-                    // change). A header row on its own line is never fighting
-                    // a pill for the same line's remaining width.
-                    <div
-                      key={group.divisionId}
-                      data-testid="schedule-stage-group"
-                      data-division-id={group.divisionId}
-                      className="flex flex-col gap-0.5 rounded-lg border border-slate-200 bg-slate-100 p-0.5"
+                  {runnableStages.map((s) => (
+                    // `aria-pressed`, not a radio group: these are toggle
+                    // buttons that re-aim a control, not a form value that
+                    // gets submitted.
+                    <button
+                      key={s.id}
+                      type="button"
+                      data-testid="schedule-stage"
+                      data-stage-id={s.id}
+                      aria-pressed={s.id === activeStage.id}
+                      onClick={() => setPickedStageId(s.id)}
+                      // A SELECTION, not an action. The purple fill this used
+                      // to carry put a second loud control next to the
+                      // primary button and made the pair read as one compound
+                      // thing ("Auto League"), which is precisely how it was
+                      // reported. Solid purple now means exactly one thing on
+                      // this bar: the action that rebuilds the board.
+                      className={`min-h-11 rounded-md px-3 py-1.5 text-xs transition ${
+                        s.id === activeStage.id
+                          ? "bg-white font-semibold text-slate-900 shadow-sm"
+                          : "text-slate-600 hover:text-slate-900"
+                      }`}
                     >
-                      {stageGroups.length > 1 && (
-                        <span
-                          data-testid="schedule-stage-group-label"
-                          className="flex items-center gap-1 px-1.5 pt-0.5 text-[10px] font-semibold text-slate-500"
-                        >
-                          <span
-                            aria-hidden
-                            className="h-2 w-2 flex-none rounded-sm"
-                            style={{ backgroundColor: divisionAccent(group.divisionId) }}
-                          />
-                          {divisionNames[group.divisionId]}
-                        </span>
-                      )}
-                      <div className="flex flex-wrap gap-0.5">
-                        {group.stages.map((s) => (
-                          // `aria-pressed`, not a radio group: these are
-                          // toggle buttons that re-aim a control, not a form
-                          // value that gets submitted.
-                          <button
-                            key={s.id}
-                            type="button"
-                            data-testid="schedule-stage"
-                            data-stage-id={s.id}
-                            aria-pressed={s.id === activeStage.id}
-                            onClick={() => setPickedStageId(s.id)}
-                            // A SELECTION, not an action. The purple fill
-                            // this used to carry put a second loud control
-                            // next to the primary button and made the pair
-                            // read as one compound thing ("Auto League"),
-                            // which is precisely how it was reported. Solid
-                            // purple now means exactly one thing on this
-                            // bar: the action that rebuilds the board.
-                            className={`min-h-11 rounded-md px-3 py-1.5 text-xs transition ${
-                              s.id === activeStage.id
-                                ? "bg-white font-semibold text-slate-900 shadow-sm"
-                                : "text-slate-600 hover:text-slate-900"
-                            }`}
-                          >
-                            {s.name}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                      {s.name}
+                    </button>
                   ))}
                 </div>
               </div>
@@ -1387,9 +1372,15 @@ export function ScheduleBoard({
             of an otherwise empty line). */}
         <div className="hidden h-8 w-px bg-purple-100 lg:block" aria-hidden />
         <div className="flex flex-wrap items-center gap-2 lg:ms-auto">
-          <span className="app-display hidden text-[10px] font-semibold text-slate-500 lg:inline">
-            {msg("board.divisionLabel")}
-          </span>
+          {/* The caption introduces freeze / publish / start, which only the
+              single-division board renders. On the comp board it captioned
+              nothing — the conflicts badge beside it hides at zero — and sat
+              alone at the right edge of the row. */}
+          {single && (
+            <span className="app-display hidden text-[10px] font-semibold text-slate-500 lg:inline">
+              {msg("board.divisionLabel")}
+            </span>
+          )}
           {/* Whole-division freeze (Jul3/03 §4), surfaced on the board itself —
               single-division boards only; the competition board freezes per
               division on each division's own page. */}
