@@ -3,7 +3,7 @@ import {
   wicketLabel, extraLabel, sportLabel, swatchLabel,
   eventLabel, enumLabel, engineErrorLabel, scoringErrorText, positionLabel,
   padLabel, squadRoleLabel, squadProvenanceLabel, configLabel, playerStatLabel,
-  decidedOutcomeText, shootoutScoreFromDetail,
+  decidedOutcomeText, shootoutScoreFromDetail, decidedOutcomeTemplates, renderDecidedOutcome,
   EVENT_KEY, ENUM_VOCAB, ENGINE_ERROR_KEY, POSITION_KEY, PAD_LABEL_KEYS,
   SCORING_VOCAB_KEYS, SPORT_KEY, type MsgFn,
 } from "@/lib/scoring-vocab";
@@ -784,6 +784,62 @@ describe("decidedOutcomeText — a decided fixture names the winner and, where m
 
   it("shootout with no resolvable score falls back to plain rather than printing 'undefined'", () => {
     expect(decidedOutcomeText({ kind: "win", winner: "W", method: "shootout" }, names, say)).toBe(
+      "Riverside FC won",
+    );
+  });
+});
+
+// R3.5/Task O — the public fixture page's decided sentence has to update on a
+// LIVE poll, not only on the next full page render, and the client polling
+// island has no dictionary to call `m()` against (see live-score-no-i18n).
+// `decidedOutcomeText` is split into a template half (needs `m`, runs once
+// server-side) and an interpolation half (`renderDecidedOutcome`, pure — no
+// `MsgFn`, safe for a client island) so the client can substitute a live
+// `outcome` into pre-localized copy without a second, hand-kept vocabulary.
+describe("decidedOutcomeTemplates / renderDecidedOutcome — the server/client split (R3.5/Task O)", () => {
+  const winnerName = "Riverside FC";
+  const names: Record<string, string> = { W: winnerName, L: "Oakdale United" };
+  const say: MsgFn = (k, vars) => interpolate((uiEn as Record<string, string>)[k] ?? k, vars);
+  const templates = decidedOutcomeTemplates(say);
+
+  it("carries a template for every method DECIDED_METHOD_KEY maps, plus the tie and plain fallbacks — never blank", () => {
+    for (const method of ["shootout", "super_over", "boundary_count", "extra_time"]) {
+      expect(templates.byMethod[method], `byMethod.${method}`).toBeTruthy();
+    }
+    expect(templates.tie).toBeTruthy();
+    expect(templates.plain).toBeTruthy();
+  });
+
+  it("renderDecidedOutcome reproduces decidedOutcomeText's own sentence for every mapped method — one vocabulary, not two", () => {
+    for (const method of ["shootout", "super_over", "boundary_count", "extra_time"]) {
+      const outcome = { kind: "win", winner: "W", method };
+      const score = method === "shootout" ? { home: 3, away: 0 } : undefined;
+      expect(renderDecidedOutcome(outcome, names, templates, score)).toBe(
+        decidedOutcomeText(outcome, names, say, score),
+      );
+    }
+  });
+
+  it("an unmapped method (cricket's dls) renders the plain fallback template, never blank or the raw token", () => {
+    const rendered = renderDecidedOutcome({ kind: "win", winner: "W", method: "dls" }, names, templates, null);
+    expect(rendered).toBe("Riverside FC won");
+    expect(rendered).not.toContain("dls");
+  });
+
+  it("a method the server has never heard of at all still falls back to plain — the client cannot need a string the server did not send", () => {
+    expect(
+      renderDecidedOutcome({ kind: "win", winner: "W", method: "some_future_method" }, names, templates, null),
+    ).toBe("Riverside FC won");
+  });
+
+  it("tie, draw, and no-outcome match decidedOutcomeText's own branches", () => {
+    expect(renderDecidedOutcome({ kind: "tie" }, names, templates)).toBe("Match tied");
+    expect(renderDecidedOutcome({ kind: "draw" }, names, templates)).toBeNull();
+    expect(renderDecidedOutcome(null, names, templates)).toBeNull();
+  });
+
+  it("shootout with no resolvable score falls back to plain, matching decidedOutcomeText", () => {
+    expect(renderDecidedOutcome({ kind: "win", winner: "W", method: "shootout" }, names, templates)).toBe(
       "Riverside FC won",
     );
   });

@@ -31,6 +31,7 @@
 import type { MessageKey } from "@/lib/messages";
 import type { EngineErrorCode, SquadProvenance, SquadRole } from "@seazn/engine/core";
 import { swatchName } from "@/lib/brand-palette";
+import { interpolate } from "@/lib/i18n-runtime";
 
 export type WicketKind =
   | "bowled" | "caught" | "lbw" | "runout" | "stumped"
@@ -1049,6 +1050,74 @@ export interface DecidedOutcomeLike {
 }
 
 /**
+ * R3.5/Task O — every localized sentence shape `decidedOutcomeText` below
+ * can produce, pre-resolved but NOT yet interpolated (`{winner}`/`{score}`
+ * stay literal — both `msg()` and `msgFor()` short-circuit on an absent
+ * `vars` and hand back the raw template). This is the object a server
+ * render hands to a client island that has no dictionary of its own (see
+ * the `live-score-no-i18n` posture): the island can only ever need one of
+ * these strings, never one it invents, so a method the island sees live
+ * that this object has no entry for has an explicit, tested answer
+ * (`renderDecidedOutcome` below falls back to `plain`) rather than a blank
+ * sentence. `byMethod` is keyed by the SAME raw `outcome.method` tokens as
+ * `DECIDED_METHOD_KEY` and built FROM it (`decidedOutcomeTemplates` below),
+ * so the two cannot drift apart.
+ */
+export interface DecidedOutcomeTemplates {
+  tie: string;
+  plain: string;
+  byMethod: Record<string, string>;
+}
+
+/**
+ * Builds `DecidedOutcomeTemplates` from a `MsgFn` — the only place in this
+ * split that needs a dictionary, so the only place a server (or anything
+ * else that has `m`) has to call. Mechanically derived from
+ * `DECIDED_METHOD_KEY`'s own keys rather than hand-listing "shootout",
+ * "super_over", … a second time — if that map ever gains or loses a method,
+ * this follows with no edit.
+ */
+export function decidedOutcomeTemplates(m: MsgFn): DecidedOutcomeTemplates {
+  const byMethod: Record<string, string> = {};
+  for (const [method, key] of Object.entries(DECIDED_METHOD_KEY)) {
+    byMethod[method] = m(key);
+  }
+  return { tie: m("fixture.decidedBy.tie"), plain: m("fixture.decidedBy.plain"), byMethod };
+}
+
+/**
+ * The interpolation half of `decidedOutcomeText` — no `MsgFn`, no
+ * dictionary, so it is safe to call from a client island that has neither
+ * (R3.5/Task O: the public fixture page's `LiveScore`, `"use client"`, on a
+ * route with no `<DictProvider>`). Takes the `templates` a server resolved
+ * ONCE via `decidedOutcomeTemplates` and substitutes `winner`/`score` with
+ * plain string interpolation (`@/lib/i18n-runtime`'s `interpolate`, itself
+ * free of `server-only`). The branching mirrors `decidedOutcomeText` exactly
+ * because it IS that function's body — factored out so a server's initial
+ * render and a client's later live update share this one implementation
+ * instead of two hand-kept copies of the same vocabulary.
+ */
+export function renderDecidedOutcome(
+  outcome: DecidedOutcomeLike | null | undefined,
+  entrantNames: Record<string, string>,
+  templates: DecidedOutcomeTemplates,
+  shootoutScore?: { home: number; away: number } | null,
+): string | null {
+  if (!outcome) return null;
+  if (outcome.kind === "tie") return interpolate(templates.tie);
+  if (outcome.kind !== "win" && outcome.kind !== "award") return null;
+  if (!outcome.winner) return null;
+  const winner = entrantNames[outcome.winner] ?? outcome.winner;
+  const key = outcome.method ? DECIDED_METHOD_KEY[outcome.method] : undefined;
+  const template = outcome.method ? templates.byMethod[outcome.method] : undefined;
+  if (key === "fixture.decidedBy.shootout" && template && shootoutScore) {
+    return interpolate(template, { winner, score: `${shootoutScore.home}–${shootoutScore.away}` });
+  }
+  if (template && key !== "fixture.decidedBy.shootout") return interpolate(template, { winner });
+  return interpolate(templates.plain, { winner });
+}
+
+/**
  * The sentence a decided fixture owes its reader. `entrantNames` resolves
  * `outcome.winner` to a display name (falling back to the raw id, matching
  * every other id→name lookup in this app); `shootoutScore` is read out of
@@ -1060,6 +1129,11 @@ export interface DecidedOutcomeLike {
  * Returns null for anything this task was not asked to describe (`draw`,
  * `no_result`, or no outcome at all) — callers render nothing rather than
  * invent copy nobody specified.
+ *
+ * R3.5/Task O: now a thin composition of `decidedOutcomeTemplates` +
+ * `renderDecidedOutcome` above, kept so every existing server-side caller
+ * (the public fixture page's `generateMetadata`/share text, the organiser
+ * console) needs no change at all.
  */
 export function decidedOutcomeText(
   outcome: DecidedOutcomeLike | null | undefined,
@@ -1067,17 +1141,7 @@ export function decidedOutcomeText(
   m: MsgFn,
   shootoutScore?: { home: number; away: number } | null,
 ): string | null {
-  if (!outcome) return null;
-  if (outcome.kind === "tie") return m("fixture.decidedBy.tie");
-  if (outcome.kind !== "win" && outcome.kind !== "award") return null;
-  if (!outcome.winner) return null;
-  const winner = entrantNames[outcome.winner] ?? outcome.winner;
-  const key = outcome.method ? DECIDED_METHOD_KEY[outcome.method] : undefined;
-  if (key === "fixture.decidedBy.shootout" && shootoutScore) {
-    return m(key, { winner, score: `${shootoutScore.home}–${shootoutScore.away}` });
-  }
-  if (key && key !== "fixture.decidedBy.shootout") return m(key, { winner });
-  return m("fixture.decidedBy.plain", { winner });
+  return renderDecidedOutcome(outcome, entrantNames, decidedOutcomeTemplates(m), shootoutScore);
 }
 
 /**

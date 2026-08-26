@@ -1080,6 +1080,53 @@ test("football v3: a shoot-out decision names the winner and the method — publ
   );
 });
 
+// R3.5/Task O — the test above proves the SSR sentence is correct on a FRESH
+// navigation to an ALREADY-decided fixture (`decideByShootout` finishes
+// before `page.goto` ever runs), which is the reload case and proves nothing
+// about liveness. This one opens the public page FIRST, on a fixture that
+// has not even started, then decides it from a separate API context while
+// the page stays open — no `page.goto`/`page.reload` between opening it and
+// the final assertion. `LiveScore`'s own 15 s poll (`POLL_MS`,
+// components/public-site/live-score.tsx) is the only mechanism that can
+// produce the sentence once the page is already sitting open, so this test
+// has to actually wait it out rather than assert something already true at
+// load.
+test("football v3: the public page's decided sentence updates live while already open, with no reload (R3.5/Task O)", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 FB Live Decide ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [{ fullName: `V3 FBLD Home ${TAG}`, positionKey: "FW" }],
+    away: [{ fullName: `V3 FBLD Away ${TAG}`, positionKey: "GK" }],
+  });
+  await mergeDivisionConfig(page.request, fx.divisionId, {
+    shootout: true,
+    extraTime: { enabled: false, halfMinutes: 15 },
+  });
+
+  const org = await activeOrg(page);
+  const comp = await apiJson<{ slug: string }>(page.request, `/api/v1/competitions/${fx.competitionId}`);
+  const division = await apiJson<{ slug: string }>(page.request, `/api/v1/divisions/${fx.divisionId}`);
+  const publicPath = `/shared/${org.slug}/${comp.data!.slug}/${division.data!.slug}/fixtures/${fx.fixtureId}`;
+
+  // Open the page BEFORE a single event has been posted (seedRosteredFixture
+  // never emits core.start unless asked), and never navigate again.
+  await page.goto(publicPath);
+  await expect(page.getByText("Not started")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/won .* on penalties/)).toHaveCount(0);
+
+  // A DIFFERENT context posts every event — the same helper the reload test
+  // above uses, run against `page.request` (a raw HTTP call), never a click
+  // on this open page.
+  await decideByShootout(page.request, fx);
+
+  await expect(page.getByText(/won 3–0 on penalties/)).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("shootout", { exact: false })).toHaveCount(0);
+});
+
 // R3.5/Task I (F19) — points.shootoutWin/shootoutLoss have worked in the
 // engine since spec 04 and had zero references in apps/web; this proves the
 // UI-shaped config (nested under `points`, per match-rules.tsx's own unit

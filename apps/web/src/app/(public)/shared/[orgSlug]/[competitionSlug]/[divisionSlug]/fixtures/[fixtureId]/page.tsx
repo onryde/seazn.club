@@ -13,7 +13,7 @@ import { fixtureSubheading } from "./fixture-subheading";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
-import { decidedOutcomeText, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
+import { decidedOutcomeText, decidedOutcomeTemplates, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
 // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, same pattern
 // as data.ts:502-503 and every other public surface this fix round wires.
 // This IS a server component and getPublicFixture already carries `org`, so
@@ -156,23 +156,29 @@ export default async function FixturePage({ params }: Props) {
           url={`${basePath}/fixtures/${fixture.id}`}
         />
       </div>
-      {/* R3.5/Task G — the winner and, where mapped, HOW: the same data the
-          share text and OG description above draw on, made visible on the
-          page itself rather than left for the reader to decode out of the
-          tally below. */}
-      {decidedLine && <p className="mb-2 text-base font-semibold text-ink">{decidedLine}</p>}
       <p className="mb-4 text-sm text-ink-muted">
         {fixtureSubheading(fixture.status, fixture.scheduled_at)}
         {fixture.venue_name ? ` · ${fixture.venue_name}` : ""}
         {fixture.court_name ? ` · ${fixture.court_name}` : ""}
       </p>
 
+      {/* R3.5/Task G gave this page the winner-and-HOW sentence (`decidedLine`
+          above, still used by the OG description and share text below, which
+          are inherently one-shot renders). R3.5/Task O moved the VISIBLE copy
+          of it from a static paragraph here into `LiveScore` itself: a Server
+          Component can only render `decidedLine` once, at request time, so a
+          spectator already on this page when a decider lands never saw it
+          without a reload. `LiveScore` recomputes the same sentence from its
+          own live `data.outcome` on every poll/realtime update — the
+          `decidedTemplates` prop is the (pre-localized, not yet interpolated)
+          copy this client island has no dictionary of its own to produce. */}
       <LiveScore
         fixtureId={fixture.id}
         initial={{ status: fixture.status, summary: fixture.summary, outcome: fixture.outcome }}
         realtime={realtime}
         entrantNames={entrantNames}
         sportKey={division.sport_key}
+        decidedTemplates={decidedOutcomeTemplates(msgFn)}
       />
     </div>
   );

@@ -20,6 +20,11 @@ import {
   fetchPublicRealtimeToken,
   type LiveFixtureData,
 } from "./live-score-data";
+import {
+  renderDecidedOutcome,
+  shootoutScoreFromDetail,
+  type DecidedOutcomeTemplates,
+} from "@/lib/scoring-vocab";
 
 const POLL_MS = 15_000;
 
@@ -31,9 +36,26 @@ interface Props {
   realtime: boolean; // org entitlement, resolved server-side
   entrantNames: Record<string, string>;
   sportKey: string;
+  /**
+   * R3.5/Task O — the decided-fixture sentence's pre-localized templates,
+   * resolved ONCE server-side (`decidedOutcomeTemplates`, `@/lib/
+   * scoring-vocab`) by the page component, which has a dictionary this
+   * client island does not. Every live poll/realtime update interpolates a
+   * NEW `data.outcome` into these SAME strings via `renderDecidedOutcome`,
+   * so the sentence updates live instead of only on the next full page
+   * load — the gap this task exists to close (see `live-score-no-i18n`).
+   */
+  decidedTemplates: DecidedOutcomeTemplates;
 }
 
-export function LiveScore({ fixtureId, initial, realtime, entrantNames, sportKey }: Props) {
+export function LiveScore({
+  fixtureId,
+  initial,
+  realtime,
+  entrantNames,
+  sportKey,
+  decidedTemplates,
+}: Props) {
   const [data, setData] = useState<LiveFixtureData>(initial);
 
   const refresh = useCallback(async () => {
@@ -106,8 +128,17 @@ export function LiveScore({ fixtureId, initial, realtime, entrantNames, sportKey
   const periods = periodBreakdown(data.summary);
   const discipline = disciplineList(data.summary);
   const serving = inPlay ? servingSide(data.summary) : null;
+  // R3.5/Task O — recomputed from `data` on every render, so a live poll or
+  // realtime push that lands a decided `outcome` updates this sentence the
+  // same tick it updates the score above, with no reload. Previously this
+  // sentence was rendered ONCE, server-side, by the page component itself
+  // (R3.5/Task G) — correct at first paint but frozen after that, since a
+  // Server Component cannot react to a client-side data change.
+  const shootoutScore = shootoutScoreFromDetail(data.summary?.detail);
+  const decidedLine = renderDecidedOutcome(data.outcome, entrantNames, decidedTemplates, shootoutScore);
   return (
     <div className="space-y-4">
+      {decidedLine ? <p className="text-base font-semibold text-ink">{decidedLine}</p> : null}
       {/* Court-slab scorebug — the broadcast moment of the page. */}
       <div className="overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg">
         <div className="p-5 sm:p-6">
