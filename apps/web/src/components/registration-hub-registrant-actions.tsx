@@ -71,7 +71,7 @@
 // confirm.markPaidRegistration copy (scaffolded for this exact action,
 // never previously wired to any component). Approve, promote and resend do
 // not confirm (owner ruling).
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1 } from "@/lib/client-v1";
 import { useConfirm } from "@/components/ui/confirm-provider";
@@ -145,7 +145,15 @@ export function RegistrationHubRegistrantActions({
   // still read what the server most recently said, rather than resurrecting
   // a value frozen at click time. Read only from that catch, below.
   const latestStatusRef = useRef(status);
-  latestStatusRef.current = status;
+  // Synced in an EFFECT, not by mutating during render. Assigning to a ref
+  // while rendering is unsafe under concurrent rendering (React may render a
+  // component without committing it), and the lint rule that flags it —
+  // "Cannot access refs during render" — is pointing at that, not at style.
+  // An effect commits before the user can click anything, so the catch below
+  // still reads the freshest status the server has actually delivered.
+  useEffect(() => {
+    latestStatusRef.current = status;
+  }, [status]);
 
   const flags = deriveRegistrantActionFlags({
     status: optimisticStatus,

@@ -7,6 +7,8 @@
 // does not duplicate.
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
+import type { AuthCtx } from "@/server/api-v1/auth";
+import type { OrgRole } from "@/lib/types";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { PaymentRequiredError } from "@/lib/errors";
 import {
@@ -472,7 +474,7 @@ describe.skipIf(!HAS_DB)("RS005 review: the CSV's per-player personal data is ed
   // player dob/gender appear on no UI surface for any role, so the export is
   // the only path to them, and much of it is minor-attendee personal data
   // leaving the platform as a file someone then emails around.
-  async function csvFor(role, ctx, competitionId) {
+  async function csvFor(role: OrgRole, ctx: AuthCtx, competitionId: string): Promise<string> {
     return exportRegistrationsCsv({ ...ctx, role }, { competitionId });
   }
 
@@ -510,7 +512,7 @@ describe.skipIf(!HAS_DB)("RS005 review: the CSV's per-player personal data is ed
     });
     await seedRegistration(competition.id, division.id, settings, { displayName: "No Roster" });
 
-    for (const role of ["owner", "viewer"]) {
+    for (const role of ["owner", "viewer"] as const) {
       const csv = await csvFor(role, owner, competition.id);
       const [head, ...rest] = csv.trim().split("\n");
       const width = head.split(",").length;
