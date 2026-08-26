@@ -3,6 +3,7 @@
 // (storage.ts) can treat CartState as a plain snapshot.
 import { describe, expect, it } from "vitest";
 import {
+  MAX_ROSTER_PLAYERS,
   autoLinkObviousSelf,
   autoSeedSingleDivision,
   canAddEntry,
@@ -10,7 +11,15 @@ import {
   clearSelfLinkWhenNotPlaying,
   toGroupEntry,
 } from "../cart";
-import { EMPTY_CART, MAX_CART_ENTRIES, type CartEntry, type CartState, type DivisionLike } from "../types";
+import {
+  EMPTY_CART,
+  EMPTY_ROSTER_PLAYER,
+  MAX_CART_ENTRIES,
+  type CartEntry,
+  type CartState,
+  type DivisionLike,
+  type RosterPlayerState,
+} from "../types";
 
 const TEAM_DIVISION: DivisionLike = {
   division_id: "div-team",
@@ -32,6 +41,7 @@ const TEAM_DIVISION: DivisionLike = {
   fee_cents: 1000,
   currency: "gbp",
   payment_method: "offline",
+  form_fields: [],
 };
 
 const INDIVIDUAL_DIVISION: DivisionLike = {
@@ -41,26 +51,58 @@ const INDIVIDUAL_DIVISION: DivisionLike = {
   allow_free_agents: false,
 };
 
+const PAIR_DIVISION: DivisionLike = {
+  ...TEAM_DIVISION,
+  division_id: "div-pair",
+  entrant_kind: "pair",
+  allow_free_agents: false,
+};
+
+/** Base fixture for a hand-built CartEntry in these tests — every field a
+ *  real reducer output would carry, so `toEqual` assertions below compare
+ *  the WHOLE shape rather than silently ignoring players/answers. */
+function entry(overrides: Partial<CartEntry> & Pick<CartEntry, "id" | "division_id" | "entrant_kind">): CartEntry {
+  return {
+    team_name: null,
+    partner_name: null,
+    free_agent: false,
+    players: [],
+    answers: {},
+    ...overrides,
+  };
+}
+
 describe("cartReducer — ADD_ENTRY", () => {
-  it("appends a new entry for the division, defaults blank", () => {
+  it("appends a new entry for the division, defaults blank, players/answers empty for a team", () => {
     const next = cartReducer(EMPTY_CART, {
       type: "ADD_ENTRY",
       id: "e1",
       division_id: TEAM_DIVISION.division_id,
       entrant_kind: TEAM_DIVISION.entrant_kind,
     });
-    expect(next.entries).toEqual([
-      {
-        id: "e1",
-        division_id: "div-team",
-        entrant_kind: "team",
-        team_name: null,
-        partner_name: null,
-        free_agent: false,
-      },
-    ]);
+    expect(next.entries).toEqual([entry({ id: "e1", division_id: "div-team", entrant_kind: "team" })]);
     // Does not touch the self-link.
     expect(next.selfEntryId).toBeNull();
+  });
+
+  it("seeds exactly 1 blank player row for an individual entry (schema's own min AND max)", () => {
+    const next = cartReducer(EMPTY_CART, {
+      type: "ADD_ENTRY",
+      id: "e1",
+      division_id: "div-indiv",
+      entrant_kind: "individual",
+    });
+    expect(next.entries[0]!.players).toEqual([EMPTY_ROSTER_PLAYER]);
+  });
+
+  it("seeds exactly 2 blank player rows for a pair entry (the second is the partner field)", () => {
+    const next = cartReducer(EMPTY_CART, {
+      type: "ADD_ENTRY",
+      id: "e1",
+      division_id: "div-pair",
+      entrant_kind: "pair",
+    });
+    expect(next.entries[0]!.players).toEqual([EMPTY_ROSTER_PLAYER, EMPTY_ROSTER_PLAYER]);
   });
 
   it("does not mutate the input state", () => {
@@ -77,14 +119,9 @@ describe("cartReducer — ADD_ENTRY", () => {
   it("refuses a cart already at MAX_CART_ENTRIES (schemas.ts entries.max(10))", () => {
     const full: CartState = {
       ...EMPTY_CART,
-      entries: Array.from({ length: MAX_CART_ENTRIES }, (_, i) => ({
-        id: `e${i}`,
-        division_id: "div-team",
-        entrant_kind: "team" as const,
-        team_name: null,
-        partner_name: null,
-        free_agent: false,
-      })),
+      entries: Array.from({ length: MAX_CART_ENTRIES }, (_, i) =>
+        entry({ id: `e${i}`, division_id: "div-team", entrant_kind: "team" }),
+      ),
     };
     const next = cartReducer(full, {
       type: "ADD_ENTRY",
@@ -102,14 +139,9 @@ describe("canAddEntry", () => {
     expect(canAddEntry(EMPTY_CART)).toBe(true);
     const atCap: CartState = {
       ...EMPTY_CART,
-      entries: Array.from({ length: MAX_CART_ENTRIES }, (_, i) => ({
-        id: `e${i}`,
-        division_id: "d",
-        entrant_kind: "individual" as const,
-        team_name: null,
-        partner_name: null,
-        free_agent: false,
-      })),
+      entries: Array.from({ length: MAX_CART_ENTRIES }, (_, i) =>
+        entry({ id: `e${i}`, division_id: "d", entrant_kind: "individual" }),
+      ),
     };
     expect(canAddEntry(atCap)).toBe(false);
   });
@@ -118,8 +150,8 @@ describe("canAddEntry", () => {
 describe("cartReducer — REMOVE_ENTRY", () => {
   const withTwo: CartState = {
     entries: [
-      { id: "e1", division_id: "div-team", entrant_kind: "team", team_name: "Team A", partner_name: null, free_agent: false },
-      { id: "e2", division_id: "div-indiv", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false },
+      entry({ id: "e1", division_id: "div-team", entrant_kind: "team", team_name: "Team A" }),
+      entry({ id: "e2", division_id: "div-indiv", entrant_kind: "individual" }),
     ],
     selfEntryId: "e2",
     selfPlayerIndex: 0,
@@ -147,9 +179,7 @@ describe("cartReducer — DUPLICATE_ENTRY", () => {
   it("clones the division/kind with a FRESH id and blank name (not the source name)", () => {
     const one: CartState = {
       ...EMPTY_CART,
-      entries: [
-        { id: "e1", division_id: "div-team", entrant_kind: "team", team_name: "Team A", partner_name: null, free_agent: false },
-      ],
+      entries: [entry({ id: "e1", division_id: "div-team", entrant_kind: "team", team_name: "Team A" })],
     };
     const next = cartReducer(one, { type: "DUPLICATE_ENTRY", sourceId: "e1", newId: "e2" });
     expect(next.entries).toHaveLength(2);
@@ -160,17 +190,31 @@ describe("cartReducer — DUPLICATE_ENTRY", () => {
     expect(clone.team_name).toBeNull(); // "Team B" is the rep's call, not a guess
   });
 
+  it("re-seeds a BLANK roster by kind rather than copying the source's players", () => {
+    const withRoster: CartState = {
+      ...EMPTY_CART,
+      entries: [
+        {
+          ...entry({ id: "e1", division_id: "div-pair", entrant_kind: "pair" }),
+          players: [
+            { ...EMPTY_ROSTER_PLAYER, full_name: "Alex Kim" },
+            { ...EMPTY_ROSTER_PLAYER, full_name: "Sam Ortiz" },
+          ],
+        },
+      ],
+    };
+    const next = cartReducer(withRoster, { type: "DUPLICATE_ENTRY", sourceId: "e1", newId: "e2" });
+    const clone = next.entries[1]!;
+    // Still 2 rows (pair's required count) but BLANK, not "Alex Kim"/"Sam Ortiz".
+    expect(clone.players).toEqual([EMPTY_ROSTER_PLAYER, EMPTY_ROSTER_PLAYER]);
+  });
+
   it("is a no-op at the cart cap", () => {
     const full: CartState = {
       ...EMPTY_CART,
-      entries: Array.from({ length: MAX_CART_ENTRIES }, (_, i) => ({
-        id: `e${i}`,
-        division_id: "div-team",
-        entrant_kind: "team" as const,
-        team_name: null,
-        partner_name: null,
-        free_agent: false,
-      })),
+      entries: Array.from({ length: MAX_CART_ENTRIES }, (_, i) =>
+        entry({ id: `e${i}`, division_id: "div-team", entrant_kind: "team" }),
+      ),
     };
     const next = cartReducer(full, { type: "DUPLICATE_ENTRY", sourceId: "e0", newId: "overflow" });
     expect(next).toBe(full);
@@ -185,9 +229,7 @@ describe("cartReducer — DUPLICATE_ENTRY", () => {
 describe("cartReducer — UPDATE_ENTRY", () => {
   const one: CartState = {
     ...EMPTY_CART,
-    entries: [
-      { id: "e1", division_id: "div-team", entrant_kind: "team", team_name: null, partner_name: null, free_agent: false },
-    ],
+    entries: [entry({ id: "e1", division_id: "div-team", entrant_kind: "team" })],
   };
 
   it("patches team_name on the matching entry only", () => {
@@ -209,8 +251,8 @@ describe("cartReducer — UPDATE_ENTRY", () => {
 describe("cartReducer — SET_SELF_ENTRY (single-select cart-wide)", () => {
   const two: CartState = {
     entries: [
-      { id: "e1", division_id: "div-team", entrant_kind: "team", team_name: "Team A", partner_name: null, free_agent: false },
-      { id: "e2", division_id: "div-indiv", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false },
+      entry({ id: "e1", division_id: "div-team", entrant_kind: "team", team_name: "Team A" }),
+      entry({ id: "e2", division_id: "div-indiv", entrant_kind: "individual" }),
     ],
     selfEntryId: "e1",
     selfPlayerIndex: 2,
@@ -235,27 +277,174 @@ describe("cartReducer — SET_SELF_ENTRY (single-select cart-wide)", () => {
   });
 });
 
+describe("cartReducer — SET_SELF_PLAYER_INDEX (step 3's self-row picker)", () => {
+  it("sets cart.selfPlayerIndex directly, independent of entries", () => {
+    const cart: CartState = { ...EMPTY_CART, selfEntryId: "e1", selfPlayerIndex: null };
+    const next = cartReducer(cart, { type: "SET_SELF_PLAYER_INDEX", index: 1 });
+    expect(next.selfPlayerIndex).toBe(1);
+    expect(next.selfEntryId).toBe("e1"); // untouched
+  });
+
+  it("null clears the row pick without clearing which entry is self", () => {
+    const cart: CartState = { ...EMPTY_CART, selfEntryId: "e1", selfPlayerIndex: 1 };
+    const next = cartReducer(cart, { type: "SET_SELF_PLAYER_INDEX", index: null });
+    expect(next.selfPlayerIndex).toBeNull();
+    expect(next.selfEntryId).toBe("e1");
+  });
+});
+
+describe("cartReducer — ADD_PLAYER / REMOVE_PLAYER / UPDATE_PLAYER (team roster building)", () => {
+  const teamEntry = entry({ id: "e1", division_id: "div-team", entrant_kind: "team" });
+  const base: CartState = { ...EMPTY_CART, entries: [teamEntry] };
+
+  it("ADD_PLAYER appends one blank row", () => {
+    const next = cartReducer(base, { type: "ADD_PLAYER", id: "e1" });
+    expect(next.entries[0]!.players).toEqual([EMPTY_ROSTER_PLAYER]);
+    const next2 = cartReducer(next, { type: "ADD_PLAYER", id: "e1" });
+    expect(next2.entries[0]!.players).toHaveLength(2);
+  });
+
+  it("ADD_PLAYER refuses past MAX_ROSTER_PLAYERS (schemas.ts players.max(50))", () => {
+    const full: CartState = {
+      ...EMPTY_CART,
+      entries: [{ ...teamEntry, players: Array.from({ length: MAX_ROSTER_PLAYERS }, () => ({ ...EMPTY_ROSTER_PLAYER })) }],
+    };
+    const next = cartReducer(full, { type: "ADD_PLAYER", id: "e1" });
+    expect(next.entries[0]!.players).toHaveLength(MAX_ROSTER_PLAYERS);
+  });
+
+  it("UPDATE_PLAYER patches one row's fields by index, leaves others untouched", () => {
+    const twoRows: CartState = {
+      ...EMPTY_CART,
+      entries: [{ ...teamEntry, players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Row 0" }, { ...EMPTY_ROSTER_PLAYER, full_name: "Row 1" }] }],
+    };
+    const next = cartReducer(twoRows, {
+      type: "UPDATE_PLAYER",
+      id: "e1",
+      index: 1,
+      patch: { full_name: "Jamie Lee", dob: "2005-04-12" },
+    });
+    expect(next.entries[0]!.players[0]!.full_name).toBe("Row 0"); // untouched
+    expect(next.entries[0]!.players[1]!).toEqual({ ...EMPTY_ROSTER_PLAYER, full_name: "Jamie Lee", dob: "2005-04-12" });
+  });
+
+  it("REMOVE_PLAYER drops the row at index and leaves selfPlayerIndex alone when this isn't the self entry", () => {
+    const three: CartState = {
+      entries: [{ ...teamEntry, players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "A" }, { ...EMPTY_ROSTER_PLAYER, full_name: "B" }, { ...EMPTY_ROSTER_PLAYER, full_name: "C" }] }],
+      selfEntryId: null,
+      selfPlayerIndex: null,
+    };
+    const next = cartReducer(three, { type: "REMOVE_PLAYER", id: "e1", index: 1 });
+    expect(next.entries[0]!.players.map((p) => p.full_name)).toEqual(["A", "C"]);
+  });
+
+  it("REMOVE_PLAYER is a no-op when the index doesn't exist", () => {
+    const cart: CartState = { ...EMPTY_CART, entries: [{ ...teamEntry, players: [EMPTY_ROSTER_PLAYER] }] };
+    const next = cartReducer(cart, { type: "REMOVE_PLAYER", id: "e1", index: 5 });
+    expect(next).toBe(cart);
+  });
+
+  describe("REMOVE_PLAYER — selfPlayerIndex tracking (only when the removal is on the SELF entry)", () => {
+    function threeRowSelfCart(selfPlayerIndex: number): CartState {
+      return {
+        entries: [{ ...teamEntry, players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "A" }, { ...EMPTY_ROSTER_PLAYER, full_name: "B" }, { ...EMPTY_ROSTER_PLAYER, full_name: "C" }] }],
+        selfEntryId: "e1",
+        selfPlayerIndex,
+      };
+    }
+
+    it("removing the LINKED row clears selfPlayerIndex to null", () => {
+      const next = cartReducer(threeRowSelfCart(1), { type: "REMOVE_PLAYER", id: "e1", index: 1 });
+      expect(next.selfPlayerIndex).toBeNull();
+    });
+
+    it("removing a row BEFORE the linked one shifts the index down (still tracks the same player)", () => {
+      const next = cartReducer(threeRowSelfCart(2), { type: "REMOVE_PLAYER", id: "e1", index: 0 });
+      expect(next.entries[0]!.players.map((p) => p.full_name)).toEqual(["B", "C"]);
+      expect(next.selfPlayerIndex).toBe(1); // "C" is now at index 1, same player as before
+    });
+
+    it("removing a row AFTER the linked one leaves the index unchanged", () => {
+      const next = cartReducer(threeRowSelfCart(0), { type: "REMOVE_PLAYER", id: "e1", index: 2 });
+      expect(next.selfPlayerIndex).toBe(0);
+    });
+
+    it("a removal on a DIFFERENT entry never touches this entry's self-link", () => {
+      const cart: CartState = {
+        entries: [
+          { ...teamEntry, id: "e1", players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "A" }] },
+          { ...teamEntry, id: "e2", players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "X" }, { ...EMPTY_ROSTER_PLAYER, full_name: "Y" }] },
+        ],
+        selfEntryId: "e2",
+        selfPlayerIndex: 1,
+      };
+      const next = cartReducer(cart, { type: "REMOVE_PLAYER", id: "e1", index: 0 });
+      expect(next.selfEntryId).toBe("e2");
+      expect(next.selfPlayerIndex).toBe(1);
+    });
+  });
+});
+
+describe("cartReducer — IMPORT_PLAYERS (pasted roster)", () => {
+  const teamEntry = entry({ id: "e1", division_id: "div-team", entrant_kind: "team" });
+
+  it("appends parsed rows rather than replacing the existing roster", () => {
+    const cart: CartState = { ...EMPTY_CART, entries: [{ ...teamEntry, players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Existing" }] }] };
+    const imported: RosterPlayerState[] = [
+      { ...EMPTY_ROSTER_PLAYER, full_name: "Jordan Blake", squad_number: "7" },
+      { ...EMPTY_ROSTER_PLAYER, full_name: "Sam Ortiz", dob: "2004-11-30" },
+    ];
+    const next = cartReducer(cart, { type: "IMPORT_PLAYERS", id: "e1", players: imported });
+    expect(next.entries[0]!.players.map((p) => p.full_name)).toEqual(["Existing", "Jordan Blake", "Sam Ortiz"]);
+  });
+
+  it("caps the result at MAX_ROSTER_PLAYERS", () => {
+    const cart: CartState = {
+      ...EMPTY_CART,
+      entries: [{ ...teamEntry, players: Array.from({ length: MAX_ROSTER_PLAYERS - 1 }, () => ({ ...EMPTY_ROSTER_PLAYER, full_name: "X" })) }],
+    };
+    const imported: RosterPlayerState[] = [
+      { ...EMPTY_ROSTER_PLAYER, full_name: "Y1" },
+      { ...EMPTY_ROSTER_PLAYER, full_name: "Y2" },
+      { ...EMPTY_ROSTER_PLAYER, full_name: "Y3" },
+    ];
+    const next = cartReducer(cart, { type: "IMPORT_PLAYERS", id: "e1", players: imported });
+    expect(next.entries[0]!.players).toHaveLength(MAX_ROSTER_PLAYERS);
+  });
+});
+
+describe("cartReducer — SET_ANSWERS", () => {
+  it("replaces the answers object for the matching entry only", () => {
+    const cart: CartState = {
+      ...EMPTY_CART,
+      entries: [
+        entry({ id: "e1", division_id: "div-team", entrant_kind: "team" }),
+        entry({ id: "e2", division_id: "div-team", entrant_kind: "team" }),
+      ],
+    };
+    const next = cartReducer(cart, { type: "SET_ANSWERS", id: "e1", answers: { shirt_size: "L", court_rules_ack: true } });
+    expect(next.entries[0]!.answers).toEqual({ shirt_size: "L", court_rules_ack: true });
+    expect(next.entries[1]!.answers).toEqual({}); // untouched
+  });
+});
+
 describe("autoSeedSingleDivision — single-open-division collapse (RS006 prompt)", () => {
-  it("seeds one blank entry for the division (self-linking is autoLinkObviousSelf's job, not this function's)", () => {
+  it("seeds one blank entry for the division with kind-appropriate blank players (self-linking is autoLinkObviousSelf's job, not this function's)", () => {
     const entries = autoSeedSingleDivision(INDIVIDUAL_DIVISION, "seed-1");
     expect(entries).toEqual<CartEntry[]>([
-      {
-        id: "seed-1",
-        division_id: "div-indiv",
-        entrant_kind: "individual",
-        team_name: null,
-        partner_name: null,
-        free_agent: false,
-      },
+      entry({ id: "seed-1", division_id: "div-indiv", entrant_kind: "individual", players: [EMPTY_ROSTER_PLAYER] }),
     ]);
+  });
+
+  it("seeds a team division with zero players (unconstrained roster)", () => {
+    const entries = autoSeedSingleDivision(TEAM_DIVISION, "seed-1");
+    expect(entries[0]!.players).toEqual([]);
   });
 });
 
 describe("autoLinkObviousSelf — links the ONE cart entry to 'I'm playing' when there's no ambiguity", () => {
   const oneEntry: CartState = {
-    entries: [
-      { id: "e1", division_id: "div-indiv", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false },
-    ],
+    entries: [entry({ id: "e1", division_id: "div-indiv", entrant_kind: "individual" })],
     selfEntryId: null,
     selfPlayerIndex: null,
   };
@@ -280,7 +469,7 @@ describe("autoLinkObviousSelf — links the ONE cart entry to 'I'm playing' when
     expect(autoLinkObviousSelf(EMPTY_CART, true)).toBe(EMPTY_CART);
     const two: CartState = {
       ...EMPTY_CART,
-      entries: [...oneEntry.entries, { id: "e2", division_id: "d2", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false }],
+      entries: [...oneEntry.entries, entry({ id: "e2", division_id: "d2", entrant_kind: "individual" })],
     };
     expect(autoLinkObviousSelf(two, true)).toBe(two);
   });
@@ -294,9 +483,7 @@ describe("autoLinkObviousSelf — links the ONE cart entry to 'I'm playing' when
 
 describe("clearSelfLinkWhenNotPlaying — the inverse of autoLinkObviousSelf (fix wave finding #2)", () => {
   const linked: CartState = {
-    entries: [
-      { id: "e1", division_id: "div-indiv", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false },
-    ],
+    entries: [entry({ id: "e1", division_id: "div-indiv", entrant_kind: "individual" })],
     selfEntryId: "e1",
     selfPlayerIndex: 0,
   };
@@ -324,17 +511,10 @@ describe("clearSelfLinkWhenNotPlaying — the inverse of autoLinkObviousSelf (fi
 });
 
 describe("toGroupEntry — maps a CartEntry onto PublicRegisterGroupEntry's step-2 fields", () => {
-  const entry: CartEntry = {
-    id: "e1",
-    division_id: "div-team",
-    entrant_kind: "team",
-    team_name: "Team A",
-    partner_name: null,
-    free_agent: false,
-  };
+  const one = entry({ id: "e1", division_id: "div-team", entrant_kind: "team", team_name: "Team A" });
 
   it("drops the client-only id and maps 1:1 otherwise", () => {
-    const mapped = toGroupEntry(entry, { isSelf: false, selfPlayerIndex: null });
+    const mapped = toGroupEntry(one, { isSelf: false, selfPlayerIndex: null });
     expect(mapped).toEqual({
       division_id: "div-team",
       entrant_kind: "team",
@@ -347,14 +527,14 @@ describe("toGroupEntry — maps a CartEntry onto PublicRegisterGroupEntry's step
   });
 
   it("an individual self entry needs no explicit self_player_index (schema implies 0)", () => {
-    const indiv: CartEntry = { ...entry, entrant_kind: "individual", team_name: null };
+    const indiv: CartEntry = { ...one, entrant_kind: "individual", team_name: null };
     const mapped = toGroupEntry(indiv, { isSelf: true, selfPlayerIndex: null });
     expect(mapped.registering_self).toBe(true);
     expect(mapped.self_player_index).toBeUndefined();
   });
 
   it("a team self entry carries self_player_index explicitly once step 3 resolves it", () => {
-    const mapped = toGroupEntry(entry, { isSelf: true, selfPlayerIndex: 2 });
+    const mapped = toGroupEntry(one, { isSelf: true, selfPlayerIndex: 2 });
     expect(mapped.registering_self).toBe(true);
     expect(mapped.self_player_index).toBe(2);
   });

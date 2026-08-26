@@ -7,7 +7,27 @@
 // own fresh id(s) (`crypto.randomUUID()` at the call site in the component),
 // keeping the reducer a pure function of (state, action) with no hidden
 // randomness, the standard `useReducer` shape.
-import { MAX_CART_ENTRIES, type CartEntry, type CartState, type DivisionLike } from "./types";
+//
+// RS006 W3 (step 3 — DETAILS) added the roster (`*_PLAYER`/`IMPORT_PLAYERS`)
+// and answers (`SET_ANSWERS`) actions, plus cart-level `SET_SELF_PLAYER_INDEX`
+// (sibling of the existing `SET_SELF_ENTRY` — see types.ts's `CartState` doc
+// comment for why the index lives cart-wide, not per-entry). Two of the new
+// per-player actions are FINE-GRAINED (`REMOVE_PLAYER` takes an index,
+// `UPDATE_PLAYER` takes an index+patch) rather than a single coarse
+// "SET_PLAYERS" the caller computes — REMOVE specifically needs the reducer
+// itself to shift/clear `selfPlayerIndex` correctly (see its own doc
+// comment), which only works if the reducer knows WHICH index was removed,
+// not just the resulting array.
+import {
+  MAX_CART_ENTRIES,
+  type CartEntry,
+  type CartState,
+  type DivisionLike,
+  type RosterPlayerState,
+  EMPTY_ROSTER_PLAYER,
+} from "./types";
+
+export const MAX_ROSTER_PLAYERS = 50; // PublicRegisterGroupEntry.players.max(50), schemas.ts:2396
 
 export type CartAction =
   | { type: "ADD_ENTRY"; id: string; division_id: string; entrant_kind: CartEntry["entrant_kind"] }
@@ -18,10 +38,33 @@ export type CartAction =
       id: string;
       patch: Partial<Pick<CartEntry, "team_name" | "partner_name" | "free_agent">>;
     }
-  | { type: "SET_SELF_ENTRY"; id: string | null };
+  | { type: "SET_SELF_ENTRY"; id: string | null }
+  | { type: "ADD_PLAYER"; id: string }
+  | { type: "REMOVE_PLAYER"; id: string; index: number }
+  | { type: "UPDATE_PLAYER"; id: string; index: number; patch: Partial<RosterPlayerState> }
+  | { type: "IMPORT_PLAYERS"; id: string; players: RosterPlayerState[] }
+  | { type: "SET_ANSWERS"; id: string; answers: Record<string, string | boolean> }
+  | { type: "SET_SELF_PLAYER_INDEX"; index: number | null };
 
 export function canAddEntry(cart: CartState): boolean {
   return cart.entries.length < MAX_CART_ENTRIES;
+}
+
+/** Individual: exactly 1 row (the schema's own minimum AND maximum —
+ *  `registration-submit.ts` rejects anything else). Pair: exactly 2 (the
+ *  second IS the partner field, design §4 step 3). Team: unconstrained, so
+ *  it starts at 0 and grows via ADD_PLAYER/IMPORT_PLAYERS — the schema
+ *  places no minimum on a team roster (unlike individual/pair). Free-agent
+ *  status is deliberately NOT a parameter: `entrant_kind` alone decides the
+ *  seed, because ADD_ENTRY always constructs kind team/pair/individual
+ *  first and free_agent is set via a SEPARATE UPDATE_ENTRY dispatch right
+ *  after (step-entries.tsx's solo-signup handler) — seeding by kind here
+ *  keeps this function correct regardless of which order those two
+ *  dispatches land in. A free-agent entry's `players` is simply never
+ *  rendered (design: "Free-agent entries need nothing extra"). */
+function blankPlayers(kind: CartEntry["entrant_kind"]): RosterPlayerState[] {
+  const n = kind === "individual" ? 1 : kind === "pair" ? 2 : 0;
+  return Array.from({ length: n }, () => ({ ...EMPTY_ROSTER_PLAYER }));
 }
 
 export function cartReducer(state: CartState, action: CartAction): CartState {
@@ -35,6 +78,8 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
         team_name: null,
         partner_name: null,
         free_agent: false,
+        players: blankPlayers(action.entrant_kind),
+        answers: {},
       };
       return { ...state, entries: [...state.entries, entry] };
     }
@@ -54,7 +99,10 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
       if (!source) return state;
       // Blank name fields on purpose — "Team B" is the rep's call to make,
       // not a guess this chassis should bake in (two entries silently
-      // sharing "Team A" is worse than an empty field).
+      // sharing "Team A" is worse than an empty field). Same philosophy for
+      // the roster/answers below: a captain duplicating "Team A" into a
+      // blank "Team B" must NOT inherit Team A's players or answers —
+      // re-SEED by kind (blankPlayers), never copy `source.players`.
       const clone: CartEntry = {
         id: action.newId,
         division_id: source.division_id,
@@ -62,6 +110,8 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
         team_name: null,
         partner_name: null,
         free_agent: false,
+        players: blankPlayers(source.entrant_kind),
+        answers: {},
       };
       return { ...state, entries: [...state.entries, clone] };
     }
@@ -85,8 +135,87 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
       // Single-select cart-wide (schemas.ts PublicRegisterGroupRequest
       // superRefine: at most one entry may set registering_self) —
       // switching resets selfPlayerIndex because the new entry's roster
-      // hasn't been picked yet (step 3's job).
+      // hasn't been picked yet.
       return { ...state, selfEntryId: action.id, selfPlayerIndex: null };
+    }
+
+    case "ADD_PLAYER": {
+      return {
+        ...state,
+        entries: state.entries.map((e) =>
+          e.id === action.id && e.players.length < MAX_ROSTER_PLAYERS
+            ? { ...e, players: [...e.players, { ...EMPTY_ROSTER_PLAYER }] }
+            : e,
+        ),
+      };
+    }
+
+    case "REMOVE_PLAYER": {
+      const entry = state.entries.find((e) => e.id === action.id);
+      if (!entry || !entry.players[action.index]) return state;
+      const entries = state.entries.map((e) =>
+        e.id === action.id ? { ...e, players: e.players.filter((_, i) => i !== action.index) } : e,
+      );
+      // The self-link points at a ROW POSITION within this entry's roster —
+      // removing a row shifts every later index down by one, so a stale
+      // `selfPlayerIndex` would silently point at the WRONG player after a
+      // removal (not just an out-of-range one). Only touched when the
+      // removal happened on the SELF-linked entry; unrelated entries never
+      // affect it.
+      const affectsSelf = action.id === state.selfEntryId && state.selfPlayerIndex !== null;
+      const selfPlayerIndex = !affectsSelf
+        ? state.selfPlayerIndex
+        : state.selfPlayerIndex === action.index
+          ? null // the linked row itself was removed
+          : state.selfPlayerIndex! > action.index
+            ? state.selfPlayerIndex! - 1 // shift down with the row it was tracking
+            : state.selfPlayerIndex; // a LATER row was removed — unaffected
+      return { ...state, entries, selfPlayerIndex };
+    }
+
+    case "UPDATE_PLAYER": {
+      return {
+        ...state,
+        entries: state.entries.map((e) =>
+          e.id === action.id
+            ? {
+                ...e,
+                players: e.players.map((p, i) => (i === action.index ? { ...p, ...action.patch } : p)),
+              }
+            : e,
+        ),
+      };
+    }
+
+    case "IMPORT_PLAYERS": {
+      // Appends (never overwrites/replaces existing rows) — same behaviour
+      // as the recovered TeamRoster's "Add N players from list", and capped
+      // at MAX_ROSTER_PLAYERS the same way ADD_PLAYER is.
+      return {
+        ...state,
+        entries: state.entries.map((e) =>
+          e.id === action.id
+            ? { ...e, players: [...e.players, ...action.players].slice(0, MAX_ROSTER_PLAYERS) }
+            : e,
+        ),
+      };
+    }
+
+    case "SET_ANSWERS": {
+      return {
+        ...state,
+        entries: state.entries.map((e) => (e.id === action.id ? { ...e, answers: action.answers } : e)),
+      };
+    }
+
+    case "SET_SELF_PLAYER_INDEX": {
+      // Sibling of SET_SELF_ENTRY, but this one only ever narrows WITHIN
+      // the already-linked entry (types.ts's CartState doc comment) — it
+      // does not touch `selfEntryId`, so dispatching it with no self entry
+      // linked is a harmless (if pointless) no-op-shaped write, not an
+      // error: the UI only ever renders this control once `selfEntryId` is
+      // already set.
+      return { ...state, selfPlayerIndex: action.index };
     }
 
     default:
@@ -108,6 +237,8 @@ export function autoSeedSingleDivision(division: DivisionLike, id: string): Cart
       team_name: null,
       partner_name: null,
       free_agent: false,
+      players: blankPlayers(division.entrant_kind),
+      answers: {},
     },
   ];
 }
