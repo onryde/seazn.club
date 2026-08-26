@@ -1002,10 +1002,33 @@ test(
 );
 
 test(
-  "cricket v3: a terminal closed innings disables delivery tiles with a closure message and keeps the final score on the scorebug",
+  "cricket v3: a genuinely terminal tie (no super over) decides the match outright — the v3 pad does not render at all, superOver's own live state is the contrast",
   async ({ page }) => {
-    // Entirely API-driven setup (a config flip + five events) plus one page
+    // Entirely API-driven setup (a config flip + five events), then a page
     // load — no held dispatch at all.
+    //
+    // R3.5 Task C — this test used to force `superOver: true` to reach this
+    // fixture, and asserted the pad's tiles were PRESENT-but-disabled. That
+    // was never actually testing "a terminal closed innings": for a default
+    // inningsPerSide:1 cfg, `dueBattingSide` returning null and the engine
+    // deciding the match outright (decideAfterClose -> decideWin/decideTie,
+    // phase "done") are the SAME transition — the only way to keep the pad
+    // LOOKING live while nothing further was due was `cfg.superOver`, whose
+    // whole point is that the match is NOT actually over yet. So the old
+    // fixture WAS a live super over in disguise, and asserting "disabled,
+    // with a closure message" against it was asserting the bug this task
+    // fixes.
+    //
+    // Genuinely terminal (superOver: false) reaches fixture status
+    // "decided" — confirmed empirically against this build: the v3 score
+    // pad (`data-testid="score-pad"`) does not mount AT ALL once a fixture
+    // is decided (gallery.capture.ts's own comment: "score-pad section is
+    // gated on !decided") — the route renders a decided-match summary
+    // instead. So there is no "tiles disabled" state to observe here; the
+    // whole scoring surface is gone, by a mechanism this task does not
+    // touch. The super-over case right below is the actual contrast this
+    // task exists to prove: tied AND superOver:true keeps status "live" and
+    // the SAME pad mounted, fully enabled.
     test.setTimeout(60_000);
     const fx = await seedRosteredFixture(page.request, {
       label: `V3 Cricket ClosedGate ${TAG}`,
@@ -1019,22 +1042,12 @@ test(
     const away1 = fx.personIds[`V3 CG Away1 ${TAG}`]!;
     const away2 = fx.personIds[`V3 CG Away2 ${TAG}`]!;
 
-    // `dueBattingSide`/`blockedByClosure` (skins/cricket.tsx, R2b-next) go
-    // null/true ONLY once NOTHING further is due — for a default
-    // inningsPerSide:1 cfg that is the SAME moment the engine decides the
-    // match outright (decideAfterClose -> decideWin/decideTie, phase
-    // "done"), and a "done"/"final" phase hides these tiles entirely
-    // (tile-grid.tsx filters by phase before `disabled` ever applies) rather
-    // than disabling them. A TIE with superOver:true is the one config where
-    // the match stays phase "super_over" instead (resolvePhase maps that to
-    // "live", same as an ordinary live match) — forced deliberately, before
-    // the first event, not an incidental config choice.
     const div = await apiJson<{ config: Record<string, unknown> }>(
       page.request,
       `/api/v1/divisions/${fx.divisionId}`,
     );
     expect(div.status, `GET division -> ${div.status}`).toBe(200);
-    await setDivisionConfigSql(fx.divisionId, { ...div.data!.config, superOver: true });
+    await setDivisionConfigSql(fx.divisionId, { ...div.data!.config, superOver: false });
 
     await postEvent(page.request, fx.fixtureId, "core.start", {});
     // Innings 1 (home): a single ball, then a manual close — home totals 1.
@@ -1048,8 +1061,9 @@ test(
     });
     await postEvent(page.request, fx.fixtureId, "cricket.innings.close", { reason: "other" });
     // Innings 2 (away): target is home.runs + 1 = 2 — away scores EXACTLY
-    // target - 1 (a single ball, bat:1) so the second close TIES the match
-    // rather than deciding it outright.
+    // target - 1 (a single ball, bat:1), tying the match. Without a super
+    // over this TIE is the match's own final result (phase "done"), not an
+    // innings break.
     await postEvent(page.request, fx.fixtureId, "cricket.ball", {
       over: 0,
       ballInOver: 1,
@@ -1060,25 +1074,102 @@ test(
     });
     await postEvent(page.request, fx.fixtureId, "cricket.innings.close", { reason: "other" });
 
+    const decided = await apiJson<{ status: string }>(page.request, `/api/v1/fixtures/${fx.fixtureId}`);
+    expect(decided.status, `GET fixture -> ${decided.status}`).toBe(200);
+    expect(decided.data!.status, "a tie without a super over is genuinely terminal").toBe("decided");
+
+    await page.goto(await fixturePath(page.request, fx.fixtureId));
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible({ timeout: 20_000 });
+    // No v3 scoring surface at all — nothing to disable, nothing to hide a
+    // tile from, because the pad itself never mounts on a decided fixture.
+    await expect(pad(page)).toHaveCount(0);
+  },
+);
+
+test(
+  "cricket v3: a LIVE super over enables every delivery tile, drops the closure message, and the scorebug follows the super over's own score",
+  async ({ page }) => {
+    // Same tie as the test above, but with `superOver: true` — the case this
+    // whole task exists to fix. Before Task C, `currentInnings` read
+    // `state.innings` alone, so the pad answered every one of these
+    // questions off the two CLOSED main innings: fifteen delivery tiles
+    // disabled, "This innings is closed." printed over a live decider, and
+    // the scorebug frozen on away's closed 1/0 forever. This test drives one
+    // super-over ball past the tie and asserts the opposite of all three.
+    test.setTimeout(60_000);
+    const fx = await seedRosteredFixture(page.request, {
+      label: `V3 Cricket SuperOverLive ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [{ fullName: `V3 SOL Home1 ${TAG}` }, { fullName: `V3 SOL Home2 ${TAG}` }],
+      away: [{ fullName: `V3 SOL Away1 ${TAG}` }, { fullName: `V3 SOL Away2 ${TAG}` }],
+    });
+    const home1 = fx.personIds[`V3 SOL Home1 ${TAG}`]!;
+    const home2 = fx.personIds[`V3 SOL Home2 ${TAG}`]!;
+    const away1 = fx.personIds[`V3 SOL Away1 ${TAG}`]!;
+    const away2 = fx.personIds[`V3 SOL Away2 ${TAG}`]!;
+
+    const div = await apiJson<{ config: Record<string, unknown> }>(
+      page.request,
+      `/api/v1/divisions/${fx.divisionId}`,
+    );
+    expect(div.status, `GET division -> ${div.status}`).toBe(200);
+    await setDivisionConfigSql(fx.divisionId, { ...div.data!.config, superOver: true });
+
+    await postEvent(page.request, fx.fixtureId, "core.start", {});
+    await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+      over: 0,
+      ballInOver: 1,
+      striker: home1,
+      nonStriker: home2,
+      bowler: away1,
+      runs: { bat: 1 },
+    });
+    await postEvent(page.request, fx.fixtureId, "cricket.innings.close", { reason: "other" });
+    await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+      over: 0,
+      ballInOver: 1,
+      striker: away1,
+      nonStriker: away2,
+      bowler: home1,
+      runs: { bat: 1 },
+    });
+    await postEvent(page.request, fx.fixtureId, "cricket.innings.close", { reason: "other" });
+    // Tied 1-1; superOver:true sends the fold to phase "super_over". Away
+    // batted second in the match, so — per the ICC rule the engine's own
+    // `soBattingSideAt` encodes — away bats FIRST in the super over. One
+    // ball, a boundary, bowled by home1 again: a super-over innings starts
+    // with a fresh ledger, so no consecutive-over restriction carries over
+    // from the main innings.
+    await postEvent(page.request, fx.fixtureId, "cricket.superover.ball", {
+      over: 0,
+      ballInOver: 1,
+      striker: away1,
+      nonStriker: away2,
+      bowler: home1,
+      runs: { bat: 4 },
+      boundary: 4,
+    });
+
     await openConsoleAlreadyLive(page, fx);
 
     for (const tileId of ["run0", "run1", "wicket"]) {
       const tile = pad(page).locator(`[data-tile-id="${tileId}"]`);
-      await expect(tile, `${tileId} must be present, carrying data-tile-disabled="true"`).toHaveAttribute(
+      await expect(tile, `${tileId} must carry data-tile-disabled="false" during a live super over`).toHaveAttribute(
         "data-tile-disabled",
-        "true",
+        "false",
       );
-      await expect(tile).toBeDisabled();
+      await expect(tile).toBeEnabled();
     }
     const closureMessage = pad(page).locator(
       '[data-role="context-strip"] [data-role="context-slot-message"][data-slot-id="bowler"]',
     );
-    await expect(closureMessage).toContainText("This innings is closed.");
+    await expect(closureMessage).not.toBeVisible();
 
-    // currentInnings' own "falls back to the last innings once every innings
-    // is closed" rule — the scorebug must keep showing away's final 1/0, not
-    // blank out or revert to home's.
-    await expect(pad(page).locator('[data-role="v3-scorebug"]')).toContainText("1/0");
+    // The scorebug follows the super over's own 4/0 — never away's closed
+    // main-innings 1/0, which is what the pre-fix pad showed forever.
+    await expect(pad(page).locator('[data-role="v3-scorebug"]')).toContainText("4/0");
+    await expect(pad(page).locator('[data-role="v3-scorebug"]')).not.toContainText("1/0");
   },
 );
 
