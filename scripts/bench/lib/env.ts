@@ -313,7 +313,10 @@ export function createRealPreflightProbes(): RealProbesHandle {
 
     async checkSportsCatalogSynced(): Promise<SportsCatalogResult> {
       // Reuses the "funnel badminton" witness (apps/web/src/lib/__tests__/
-      // funnel.test.ts:88-89, `div.sport_key === "badminton"`) by checking
+      // funnel.test.ts:94, `expect(div.sport_key).toBe("badminton")` — the
+      // B01 brief cited :88-89, which is now the query building `div`, not
+      // the assertion itself; re-verified 2026-08-26 per _RULES.md §1) by
+      // checking
       // the same underlying fact `sync:sports` establishes — badminton and
       // its system variants are present in `sports`/`sport_variants` —
       // directly against the DB, rather than re-importing the test's own
