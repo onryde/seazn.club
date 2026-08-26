@@ -256,11 +256,14 @@ describe("RegistrationHubRegistrantActions — optimistic flip + 4xx revert", ()
     const click = (propsOf(findAction(island, "approve")!).onClick as () => Promise<void>)();
     await vi.waitFor(() => expect(findAction(island, "approve")).toBeUndefined());
 
-    d.reject(new ApiV1Error("Awaiting payment — mark it paid first, or approve once payment arrives", 422, "ERROR"));
+    // A generic revert check — deliberately NOT the awaiting-payment text,
+    // which now drives the fee-override recovery covered in its own
+    // describe block below (RS005 F2 finding 3).
+    d.reject(new ApiV1Error("This registration was already refunded and cannot be approved", 422, "ERROR"));
     await click;
 
     expect(findAction(island, "approve")).toBeTruthy();
-    expect(island.text()).toContain("Awaiting payment — mark it paid first, or approve once payment arrives");
+    expect(island.text()).toContain("This registration was already refunded and cannot be approved");
   });
 
   it("reverts a failed withdraw back to its controls too", async () => {
@@ -408,11 +411,14 @@ describe("RegistrationHubRegistrantActions — mark paid (RS005 R1 finding 1)", 
     expect(findAction(island, "approve")).toBeUndefined();
     expect(findAction(island, "withdraw")).toBeTruthy(); // optimistically "confirmed", not terminal
 
-    d.reject(new ApiV1Error("This division has no entry fee", 422, "ERROR"));
+    // A generic revert check — deliberately NOT the no-entry-fee text,
+    // which now drives the fee-override recovery covered in its own
+    // describe block below (RS005 F2 finding 3).
+    d.reject(new ApiV1Error("This registration was paid by card — refund it on the payments trail instead", 422, "ERROR"));
     await click;
 
     expect(findAction(island, "mark-paid")).toBeTruthy();
-    expect(island.text()).toContain("This division has no entry fee");
+    expect(island.text()).toContain("This registration was paid by card — refund it on the payments trail instead");
   });
 
   it("keeps the optimistic flip and refreshes on a successful mark-paid, showing the dedicated 'marked as paid' message", async () => {
@@ -489,5 +495,106 @@ describe("RegistrationHubRegistrantActions — finding 2: a failure never resurr
 
     expect(findAction(island, "withdraw")).toBeTruthy();
     expect(island.text()).toContain("Something went wrong");
+  });
+});
+
+// RS005 F2 finding 4 — one level deeper than finding 2 above. `latestStatusRef`
+// only ever learned a fresh status from the `status` PROP (via the effect in
+// the component), which lags until router.refresh() actually lands new server
+// data. router.refresh() is fire-and-forget and `finally` re-enables every
+// button before that lands — so a SECOND action on the SAME row, clicked in
+// that window, used to revert to whatever the ref held from mount, never to
+// what this row's OWN first action had just confirmed.
+describe("RegistrationHubRegistrantActions — finding 4 (RS005 F2): a later action's revert must not precede this row's own just-confirmed success", () => {
+  it("approve succeeds (no rerender/refresh simulated); a SUBSEQUENT withdraw then 4xxs — must settle on 'confirmed', never resurrect approve/reject", async () => {
+    const island = mount({ status: "pending", approval: "manual", amountCents: 0, paymentIntentId: null });
+
+    // approve resolves immediately (nothing queued for "approve" -> the
+    // net harness's default Promise.resolve({})). optimisticStatus flips to
+    // "confirmed" and STAYS there — this test never calls island.rerender(),
+    // matching the real world where router.refresh() has not landed yet.
+    await (propsOf(findAction(island, "approve")!).onClick as () => Promise<void>)();
+    expect(findAction(island, "approve")).toBeUndefined();
+    expect(findAction(island, "withdraw")).toBeTruthy(); // "confirmed" is non-terminal
+
+    // A second action, still within that same in-flight-refresh window, now
+    // fails.
+    const d = deferred<unknown>();
+    net.next.set("withdraw", d.promise);
+    const click = (propsOf(findAction(island, "withdraw")!).onClick as () => Promise<void>)();
+    await vi.waitFor(() => expect(findAction(island, "withdraw")).toBeUndefined());
+    d.reject(new ApiV1Error("This registration was already refunded and cannot be approved", 422, "ERROR"));
+    await click;
+
+    // The bug: reverting to latestStatusRef's stale, prop-derived value
+    // ("pending") would resurrect approve/reject on an entry the server
+    // already confirmed. Must settle on "confirmed" instead — approve/
+    // reject both illegal there (past the awaiting-decision window),
+    // withdraw legal again.
+    expect(findAction(island, "approve")).toBeUndefined();
+    expect(findAction(island, "reject")).toBeUndefined();
+    expect(findAction(island, "withdraw")).toBeTruthy();
+  });
+});
+
+// RS005 F2 finding 3: deriveRegistrantActionFlags's amount_cents-based guess
+// stands in for the division's LIVE registration_settings.fee_cents
+// (registration-approval.ts:128, registrations.ts:3147) — after an organiser
+// edits the division's fee, the two disagree and the WRONG control renders
+// and 422s while the RIGHT one stays hidden. Neither error carries a
+// distinguishing `code` (both default to "UNKNOWN" — HttpError's optional
+// `code` was never passed for either), so the recovery matches each
+// usecase's own distinctive English substring — the same "surface the
+// server's own English text" contract this file already depends on (see the
+// header comment; this repo never translates thrown messages).
+describe("RegistrationHubRegistrantActions — fee-edit drift recovery (RS005 F2 finding 3)", () => {
+  it("fee 0->2000: approve 422s 'mark it paid first' — mark paid becomes reachable, approve does not come back", async () => {
+    const d = deferred<unknown>();
+    net.next.set("approve", d.promise);
+    // The row's OWN frozen amountCents (0) predates the division's fee edit.
+    const island = mount({ status: "pending", approval: "manual", amountCents: 0, paymentIntentId: null });
+    expect(findAction(island, "approve")).toBeTruthy();
+    expect(findAction(island, "mark-paid")).toBeUndefined();
+
+    const click = (propsOf(findAction(island, "approve")!).onClick as () => Promise<void>)();
+    await vi.waitFor(() => expect(findAction(island, "approve")).toBeUndefined());
+    d.reject(new ApiV1Error("Awaiting payment — mark it paid first, or approve once payment arrives", 422, "ERROR"));
+    await click;
+
+    expect(findAction(island, "mark-paid")).toBeTruthy();
+    expect(findAction(island, "approve")).toBeUndefined();
+  });
+
+  it("fee 2000->0: mark paid 422s 'no entry fee' — approve becomes reachable, mark paid does not come back", async () => {
+    const d = deferred<unknown>();
+    net.next.set("mark-paid", d.promise);
+    // The row's OWN frozen amountCents (2000) predates the division's fee
+    // edit down to 0 — the mirror-image drift.
+    const island = mount({ status: "pending", approval: "manual", amountCents: 2000, paymentIntentId: null });
+    expect(findAction(island, "mark-paid")).toBeTruthy();
+    expect(findAction(island, "approve")).toBeUndefined();
+
+    const click = (propsOf(findAction(island, "mark-paid")!).onClick as () => Promise<void>)();
+    await vi.waitFor(() => expect(findAction(island, "mark-paid")).toBeUndefined());
+    d.reject(new ApiV1Error("This division has no entry fee", 422, "ERROR"));
+    await click;
+
+    expect(findAction(island, "approve")).toBeTruthy();
+    expect(findAction(island, "mark-paid")).toBeUndefined();
+  });
+
+  it("an UNRELATED approve 4xx does not trigger the override", async () => {
+    const d = deferred<unknown>();
+    net.next.set("approve", d.promise);
+    const island = mount({ status: "pending", approval: "manual", amountCents: 0, paymentIntentId: null });
+    const click = (propsOf(findAction(island, "approve")!).onClick as () => Promise<void>)();
+    await vi.waitFor(() => expect(findAction(island, "approve")).toBeUndefined());
+    d.reject(new ApiV1Error("This registration was already refunded and cannot be approved", 422, "ERROR"));
+    await click;
+
+    // Reverts normally — mark-paid must NOT have been force-enabled by an
+    // unrelated error.
+    expect(findAction(island, "approve")).toBeTruthy();
+    expect(findAction(island, "mark-paid")).toBeUndefined();
   });
 });

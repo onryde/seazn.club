@@ -91,13 +91,29 @@ export function renderRegistrantStatusCell(
  *  Settings row's existing "Free" copy — same concept, same key), plus a
  *  refund note when this entry has actually been refunded anything. Scoped
  *  deliberately narrow for a READ surface: no mark-paid/refund CONTROLS
- *  here, those are mutating actions out of W2a's scope. */
+ *  here, those are mutating actions out of W2a's scope.
+ *
+ *  RS005 F2 finding 2: a WAITLISTED entry's `amount_cents` is forced to 0 at
+ *  submit regardless of the division's real fee (registration-submit.ts:542
+ *  — they are never charged at submit, only on promotion) — reading that as
+ *  "Free" told an organiser a fee-bearing division's waitlisted entrant
+ *  owed nothing. Checked before the amount_cents branch: this row alone
+ *  cannot say what the division's LIVE fee actually is, so this says only
+ *  what's actually known — nothing has been charged yet. Reuses
+ *  `deriveRegistrantPaymentState`'s own "waitlisted" copy
+ *  (registration-hub-registrant-derive.ts) rather than minting a second
+ *  string with the same meaning. */
 export function renderRegistrantPaymentCell(
-  row: Pick<RegistrationListRow, "amount_cents" | "refunded_cents" | "currency">,
+  row: Pick<RegistrationListRow, "amount_cents" | "refunded_cents" | "currency" | "status">,
   dict: Dict,
 ): ReactNode {
   const currency = asCurrency(row.currency);
-  const amountText = row.amount_cents === 0 ? t(dict, "reg.hub.row.fee.free") : formatMinor(row.amount_cents, currency);
+  const amountText =
+    row.status === "waitlisted"
+      ? t(dict, "reg.hub.registrants.detail.paymentState.waitlisted")
+      : row.amount_cents === 0
+        ? t(dict, "reg.hub.row.fee.free")
+        : formatMinor(row.amount_cents, currency);
   return (
     <span className="flex flex-col">
       <span className="tabular-nums">{amountText}</span>

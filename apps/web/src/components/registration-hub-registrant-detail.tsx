@@ -95,8 +95,18 @@ export function RegistrationHubRegistrantDetail({
   // the row does not actually offer.
   const hasAnyAction = Object.values(deriveRegistrantActionFlags(row)).some(Boolean);
   const answers = Object.entries(row.answers ?? {});
+  // RS005 F2 finding 2 — same waitlisted override as registration-hub-
+  // registrant-table.tsx's renderRegistrantPaymentCell (this file
+  // deliberately does not import that one, see the file header — the
+  // condition is one field read, not worth a cross-file dependency either
+  // way), reusing the SAME key so the two can't drift into two different
+  // words for the same fact.
   const amountText =
-    row.amount_cents === 0 ? t(dict, "reg.hub.row.fee.free") : formatMinor(row.amount_cents, asCurrency(row.currency));
+    row.status === "waitlisted"
+      ? t(dict, "reg.hub.registrants.detail.paymentState.waitlisted")
+      : row.amount_cents === 0
+        ? t(dict, "reg.hub.row.fee.free")
+        : formatMinor(row.amount_cents, asCurrency(row.currency));
   const paymentMethodText = row.payment_method
     ? t(dict, row.payment_method === "stripe" ? "reg.settings.cardPayment" : "reg.settings.payOrganiser")
     : "—";

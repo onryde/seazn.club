@@ -637,6 +637,7 @@
   "reg.hub.registrants.detail.paymentState.paid": "Payé",
   "reg.hub.registrants.detail.paymentState.awaitingPayment": "En attente de paiement",
   "reg.hub.registrants.detail.paymentState.free": "Gratuit",
+  "reg.hub.registrants.detail.paymentState.waitlisted": "Pas encore facturé",
   "reg.hub.registrants.detail.answers.empty": "Aucune réponse envoyée.",
   "reg.hub.registrants.detail.answers.yes": "Oui",
   "reg.hub.registrants.detail.answers.no": "Non",

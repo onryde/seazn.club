@@ -135,6 +135,19 @@ describe("renderRegistrantPaymentCell", () => {
     const text = textOf(renderRegistrantPaymentCell(row({ amount_cents: 2500, refunded_cents: 0 }), dict));
     expect(text.toLowerCase()).not.toContain("refund");
   });
+
+  // RS005 F2 finding 2: registration-submit.ts:542 forces amount_cents to 0
+  // for EVERY waitlisted entry at submit, regardless of the division's real
+  // fee — they are never charged until promotion re-snapshots the live fee.
+  // Reading that 0 as "Free" told an organiser a fee-bearing division's
+  // waitlisted entrant owed nothing.
+  it("shows 'not charged yet', never Free, for a waitlisted entry", () => {
+    const text = textOf(
+      renderRegistrantPaymentCell(row({ status: "waitlisted", amount_cents: 0, refunded_cents: 0 }), dict),
+    );
+    expect(text.toLowerCase()).not.toContain("free");
+    expect(text).toContain(t(dict, "reg.hub.registrants.detail.paymentState.waitlisted"));
+  });
 });
 
 describe("RegistrationHubRegistrantRow — the expand mechanism (task 1)", () => {

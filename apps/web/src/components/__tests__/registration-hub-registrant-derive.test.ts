@@ -113,7 +113,7 @@ const PAYMENT_BASE = {
   amount_cents: 1500,
   refunded_cents: 0,
   disputed_at: null,
-  offline_marked_paid_at: null,
+  payment_intent_id: null as string | null,
   status: "confirmed" as const,
 };
 
@@ -132,25 +132,74 @@ describe("deriveRegistrantPaymentState", () => {
     expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, refunded_cents: 500 })).toBe("partiallyRefunded");
   });
 
-  it("a zero-fee entry is 'free', even with a non-null offline_marked_paid_at", () => {
+  it("a zero-fee entry is 'free', even with a non-null payment_intent_id — the CART might have paid by card for a fee-bearing sibling", () => {
     expect(
-      deriveRegistrantPaymentState({ ...PAYMENT_BASE, amount_cents: 0, offline_marked_paid_at: new Date() }),
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, amount_cents: 0, payment_intent_id: "pi_123" }),
     ).toBe("free");
   });
 
-  it("marked paid offline, no refund, is 'paidOffline'", () => {
-    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, offline_marked_paid_at: new Date() })).toBe(
-      "paidOffline",
+  // RS005 F2 finding 2: amount_cents is forced to 0 at submit for EVERY
+  // waitlisted entry regardless of the division's real fee
+  // (registration-submit.ts:542) — this must never fall into the 'free'
+  // branch above, so the check is ordered ahead of it.
+  it("a waitlisted entry reads 'waitlisted', never 'free'", () => {
+    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "waitlisted", amount_cents: 0 })).toBe(
+      "waitlisted",
     );
   });
 
-  it("status paid or confirmed, no offline mark, is 'paid' (card payment captured)", () => {
-    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "paid" })).toBe("paid");
-    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "confirmed" })).toBe("paid");
+  // RS005 F2 finding 1: this used to read `offline_marked_paid_at`, which
+  // V363/V364 moved onto `registration_groups` (CART-level, shared by every
+  // entry in the cart) — reads the ENTRY's own `status` first instead.
+  it("status paid/confirmed with no card payment_intent is 'paidOffline'", () => {
+    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "paid", payment_intent_id: null })).toBe(
+      "paidOffline",
+    );
+    expect(
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "confirmed", payment_intent_id: null }),
+    ).toBe("paidOffline");
+  });
+
+  it("status paid or confirmed WITH a card payment_intent is 'paid' (card payment captured)", () => {
+    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "paid", payment_intent_id: "pi_123" })).toBe(
+      "paid",
+    );
+    expect(
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "confirmed", payment_intent_id: "pi_123" }),
+    ).toBe("paid");
   });
 
   it("a pending fee-bearing entry with no payment yet is 'awaitingPayment'", () => {
     expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "pending" })).toBe("awaitingPayment");
+  });
+
+  it("a pending entry stays 'awaitingPayment' even when payment_intent_id is set — payment_intent_id alone never implies THIS entry is paid", () => {
+    expect(
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "pending", payment_intent_id: "pi_123" }),
+    ).toBe("awaitingPayment");
+  });
+
+  // RS005 F2 finding 1's exact scenario, from the dispatch: one cart, two
+  // offline-fee entries, only ONE marked paid. Both entries share the
+  // cart's payment_intent_id (null — an offline cart never gets one); the
+  // divergence must come from `status`, each entry's OWN column.
+  it("in one cart, marking ONE entry paid does not relabel the OTHER — the sibling still reads 'awaitingPayment'", () => {
+    const entryA_markedPaid = deriveRegistrantPaymentState({
+      amount_cents: 1000,
+      refunded_cents: 0,
+      disputed_at: null,
+      payment_intent_id: null,
+      status: "confirmed", // A was just marked paid -> materialised to confirmed
+    });
+    const entryB_stillPending = deriveRegistrantPaymentState({
+      amount_cents: 2000,
+      refunded_cents: 0,
+      disputed_at: null,
+      payment_intent_id: null, // same cart column, untouched by A's mark-paid
+      status: "pending", // B's own status, untouched by A's mark-paid
+    });
+    expect(entryA_markedPaid).toBe("paidOffline");
+    expect(entryB_stillPending).toBe("awaitingPayment");
   });
 });
 
@@ -442,5 +491,74 @@ describe("deriveRegistrantActionFlags", () => {
         }
       }
     }
+  });
+
+  // RS005 F2 finding 3: approveRegistration/markRegistrationPaidOffline both
+  // gate on the DIVISION's LIVE registration_settings.fee_cents
+  // (registration-approval.ts:128, registrations.ts:3147), not this row's
+  // frozen amount_cents. After a fee edit the two disagree and the WRONG
+  // control renders. feeOverride lets a caller (RegistrationHubRegistrantActions)
+  // correct the guess once the SERVER has said so authoritatively, without
+  // this pure function reaching for the division's live fee itself.
+  describe("feeOverride (RS005 F2 finding 3)", () => {
+    it("with no override, behaves exactly as the 1-arg call site always has", () => {
+      expect(
+        deriveRegistrantActionFlags({ status: "pending", approval: "manual", amount_cents: 0, payment_intent_id: null }),
+      ).toMatchObject({ canApprove: true, canMarkPaid: false });
+    });
+
+    it("'awaitingFee' forces canMarkPaid on and canApprove off, even when amount_cents reads 0 (fee 0->2000 drift)", () => {
+      const flags = deriveRegistrantActionFlags(
+        { status: "pending", approval: "manual", amount_cents: 0, payment_intent_id: null },
+        "awaitingFee",
+      );
+      expect(flags.canApprove).toBe(false);
+      expect(flags.canMarkPaid).toBe(true);
+    });
+
+    it("'noFee' forces canApprove on and canMarkPaid off, even when amount_cents reads > 0 (fee 2000->0 drift)", () => {
+      const flags = deriveRegistrantActionFlags(
+        { status: "pending", approval: "manual", amount_cents: 2000, payment_intent_id: null },
+        "noFee",
+      );
+      expect(flags.canApprove).toBe(true);
+      expect(flags.canMarkPaid).toBe(false);
+    });
+
+    it("an override never resurrects canMarkPaid once payment_intent_id or status rules it out on OTHER grounds", () => {
+      // A card payment already on file — refunds on the payments trail
+      // instead, regardless of what the fee override claims.
+      expect(
+        deriveRegistrantActionFlags(
+          { status: "pending", approval: "manual", amount_cents: 0, payment_intent_id: "pi_123" },
+          "awaitingFee",
+        ).canMarkPaid,
+      ).toBe(false);
+      // A non-pending status — "Only pending registrations can be marked paid".
+      expect(
+        deriveRegistrantActionFlags(
+          { status: "paid", approval: "manual", amount_cents: 0, payment_intent_id: null },
+          "awaitingFee",
+        ).canMarkPaid,
+      ).toBe(false);
+    });
+
+    it("stays mutually exclusive with canApprove even with an override applied", () => {
+      for (const feeOverride of ["awaitingFee", "noFee"] as const) {
+        for (const status of RegistrationStatus.options) {
+          for (const approval of ["auto", "manual"] as const) {
+            for (const amount_cents of [0, 1500]) {
+              for (const payment_intent_id of [null, "pi_123"] as const) {
+                const flags = deriveRegistrantActionFlags(
+                  { status, approval, amount_cents, payment_intent_id },
+                  feeOverride,
+                );
+                expect(flags.canApprove && flags.canMarkPaid).toBe(false);
+              }
+            }
+          }
+        }
+      }
+    });
   });
 });

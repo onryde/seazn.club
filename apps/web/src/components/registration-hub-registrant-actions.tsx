@@ -61,6 +61,27 @@
 // click-time snapshot, so a failure always restores the server's latest
 // known truth for this row.
 //
+// RS005 F2 finding 4: `latestStatusRef` still only learned a fresh status
+// from the `status` PROP — which lags until router.refresh() actually lands
+// new data. That left a gap the same SHAPE as finding 2, one level deeper:
+// click approve (succeeds, optimisticStatus flips to "confirmed",
+// router.refresh() fired but not yet landed) → click withdraw on the SAME
+// row before that refresh lands → it 422s → the catch restored
+// latestStatusRef.current, which was STILL "pending" (the ref never learned
+// from this row's OWN successful action, only from a prop change) —
+// resurrecting approve/reject on an entry the server had already confirmed.
+// runStatusAction (below) now also writes `nextStatus` into the ref the
+// instant its OWN request succeeds, so a second action started in that same
+// window reverts to what THIS row just confirmed, not to a stale prop.
+//
+// RS005 F2 finding 3: approve/markPaid's legality (deriveRegistrantActionFlags)
+// substitutes this row's frozen `amountCents` for the division's LIVE fee —
+// correct until an organiser edits that fee after the entry exists, at
+// which point the WRONG control renders and 422s while the RIGHT one stays
+// hidden. `feeOverride` state (below) corrects the guess from the server's
+// own 4xx once it actually happens, rather than this component reaching
+// into the read model for the division's live fee.
+//
 // Reject and withdraw confirm first — both are destructive: reject is
 // TERMINAL (no path returns a rejected entry to any other status) and
 // withdraw frees the spot and can trigger a refund. markPaid (RS005 R1)
@@ -119,6 +140,12 @@ export function RegistrationHubRegistrantActions({
   const [promotedOptimistically, setPromotedOptimistically] = useState(false);
   const [busy, setBusy] = useState<ActionKey | null>(null);
   const [feedback, setFeedback] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  // RS005 F2 finding 3 — set once approve or mark-paid 422s with the
+  // server's own fee-drift message (see runStatusAction's catch, below).
+  // Corrects deriveRegistrantActionFlags's amount_cents-based guess with the
+  // server's OWN authoritative answer, without this component needing the
+  // division's live fee threaded onto the row.
+  const [feeOverride, setFeeOverride] = useState<"awaitingFee" | "noFee" | undefined>(undefined);
 
   // Re-syncs to the server's own truth once router.refresh() lands a fresh
   // `status` prop. The four deterministic actions already guessed right, so
@@ -155,12 +182,15 @@ export function RegistrationHubRegistrantActions({
     latestStatusRef.current = status;
   }, [status]);
 
-  const flags = deriveRegistrantActionFlags({
-    status: optimisticStatus,
-    approval,
-    amount_cents: amountCents,
-    payment_intent_id: paymentIntentId,
-  });
+  const flags = deriveRegistrantActionFlags(
+    {
+      status: optimisticStatus,
+      approval,
+      amount_cents: amountCents,
+      payment_intent_id: paymentIntentId,
+    },
+    feeOverride,
+  );
 
   async function runStatusAction(
     action: "approve" | "reject" | "withdraw" | "mark-paid",
@@ -173,12 +203,35 @@ export function RegistrationHubRegistrantActions({
     setOptimisticStatus(nextStatus);
     try {
       await apiV1(`/api/v1/registrations/${registrationId}/${path}`, { method: "POST" });
+      // RS005 F2 finding 4 — see the file header. Written the instant THIS
+      // request succeeds, not left to the prop-driven effect above, so a
+      // SECOND action on this same row started before router.refresh()
+      // (below) lands reverts to what THIS action just confirmed rather
+      // than a stale prop.
+      latestStatusRef.current = nextStatus;
       setFeedback({ tone: "success", text: successText });
       router.refresh();
     } catch (err) {
       // Latest known server truth, never the click-time snapshot — finding 2.
       setOptimisticStatus(latestStatusRef.current);
-      setFeedback({ tone: "error", text: errorText(err) });
+      const text = errorText(err);
+      // RS005 F2 finding 3 — see the file header. approveRegistration
+      // (registration-approval.ts:128) and markRegistrationPaidOffline
+      // (registrations.ts:3147) both gate on the DIVISION's LIVE fee, not
+      // this row's frozen amountCents. Neither throw carries a
+      // distinguishing `code` (both default to "UNKNOWN" — HttpError's
+      // optional `code` was never passed for either), so this matches each
+      // usecase's own distinctive English substring — fragile to a future
+      // reword, but a silent miss only falls back to today's known gap,
+      // never to something worse. Scoped to the action that just ran: an
+      // unrelated approve/mark-paid 4xx (wrong division state, already
+      // refunded, ...) must never flip this.
+      if (action === "approve" && text.includes("mark it paid first")) {
+        setFeeOverride("awaitingFee");
+      } else if (action === "mark-paid" && text.includes("no entry fee")) {
+        setFeeOverride("noFee");
+      }
+      setFeedback({ tone: "error", text });
     } finally {
       setBusy(null);
     }

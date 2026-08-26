@@ -157,6 +157,40 @@ describe("RegistrationHubRegistrantDetail — contact and entry fields", () => {
     expect(text).toContain(t(dict, "reg.hub.registrants.detail.paymentState.refunded"));
   });
 
+  // RS005 F2 finding 1: offline_marked_paid_at lives on registration_groups
+  // (V363/V364) — CART-level, shared by every entry in the cart.
+  // markRegistrationPaidOffline stamps it for the whole cart while
+  // confirming only ONE entry, so a still-pending SIBLING used to inherit
+  // "Paid offline" from it. This entry's own `status` (untouched by the
+  // sibling's mark-paid) must win instead.
+  it("a still-pending entry reads 'Awaiting payment', never a paid state, even when a SIBLING in its cart was already marked paid offline", () => {
+    const text = textOf(
+      RegistrationHubRegistrantDetail(
+        baseProps({
+          row: row({
+            status: "pending",
+            amount_cents: 1500,
+            payment_intent_id: null,
+            offline_marked_paid_at: new Date("2026-01-16T09:00:00Z"),
+          }),
+        }),
+      ),
+    );
+    expect(text).toContain(t(dict, "reg.hub.registrants.detail.paymentState.awaitingPayment"));
+  });
+
+  // RS005 F2 finding 2: amount_cents is forced to 0 at submit for EVERY
+  // waitlisted entry (registration-submit.ts:542), regardless of the
+  // division's real fee — both the "Payment" amount field and the "Payment
+  // state" field must say so truthfully rather than "Free".
+  it("renders 'not charged yet', never Free, for a waitlisted entry on a fee-bearing division", () => {
+    const text = textOf(
+      RegistrationHubRegistrantDetail(baseProps({ row: row({ status: "waitlisted", amount_cents: 0 }) })),
+    );
+    expect(text).not.toContain(t(dict, "reg.hub.row.fee.free"));
+    expect(text).toContain(t(dict, "reg.hub.registrants.detail.paymentState.waitlisted"));
+  });
+
   it("renders submitted-at in the ORG timezone, not UTC/browser-local", () => {
     const utcText = textOf(RegistrationHubRegistrantDetail(baseProps({ orgTz: "UTC" })));
     const kolkataText = textOf(RegistrationHubRegistrantDetail(baseProps({ orgTz: "Asia/Kolkata" })));

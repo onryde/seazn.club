@@ -637,6 +637,7 @@
   "reg.hub.registrants.detail.paymentState.paid": "Betaald",
   "reg.hub.registrants.detail.paymentState.awaitingPayment": "Wacht op betaling",
   "reg.hub.registrants.detail.paymentState.free": "Gratis",
+  "reg.hub.registrants.detail.paymentState.waitlisted": "Nog niet geïnd",
   "reg.hub.registrants.detail.answers.empty": "Geen antwoorden ingediend.",
   "reg.hub.registrants.detail.answers.yes": "Ja",
   "reg.hub.registrants.detail.answers.no": "Nee",

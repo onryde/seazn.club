@@ -100,6 +100,7 @@ export type RegistrantPaymentState =
   | "disputed"
   | "refunded"
   | "partiallyRefunded"
+  | "waitlisted"
   | "paidOffline"
   | "paid"
   | "awaitingPayment"
@@ -115,25 +116,61 @@ export type RegistrantPaymentState =
  *
  * Precedence, checked in order: a dispute wins over everything (Stripe has
  * already pulled the money back pending resolution); then refunded/partially
- * refunded; then a zero-fee entry is simply "free" (never "awaiting
- * payment" — there is nothing to await); then an offline mark; then a
- * paid/confirmed status with no offline mark reads as a captured card
- * payment; anything left (an unpaid fee-bearing entry) is "awaitingPayment".
+ * refunded; then a WAITLISTED entry reads "waitlisted", never "free" (RS005
+ * F2 finding 2, below); then a genuinely zero-fee entry is "free" (never
+ * "awaiting payment" — there is nothing to await); then a paid/confirmed
+ * status is "paid" or "paidOffline" depending on `payment_intent_id`
+ * (RS005 F2 finding 1, below); anything left (an unpaid fee-bearing entry,
+ * still pending) is "awaitingPayment".
+ *
+ * RS005 F2 finding 1: this used to read `offline_marked_paid_at`, which
+ * V363/V364 moved onto `registration_groups` — CART-level, shared by every
+ * entry in the cart. Marking ONE entry paid (markRegistrationPaidOffline,
+ * registrations.ts, stamps that column for the whole cart while confirming
+ * only the one entry it was called for) made every OTHER still-pending
+ * sibling in the same cart read "Paid offline" too. Fixed by reading
+ * `payment_intent_id` instead, gated behind `status` — genuinely per-entry
+ * truth:
+ * - `status` (paid/confirmed) is THIS row's own column, written by a
+ *   `where id = ${reg.id}` update scoped to exactly one entry (materialise/
+ *   markRegistrationPaidOffline). Checked FIRST, so a still-pending sibling
+ *   always falls through to "awaitingPayment" regardless of what happened
+ *   elsewhere in its cart.
+ * - `payment_intent_id` IS cart-level (registration_groups), but correctly
+ *   so here: a cart pays through Stripe AT MOST ONCE for its full total
+ *   (design §3, "one cart pays once" — RegistrationRow's own doc comment),
+ *   so its presence/absence is uniform truth for every fee-bearing entry
+ *   inside it. Once `status` has already confirmed THIS entry reached
+ *   paid/confirmed, a null `payment_intent_id` means that could only have
+ *   happened through the offline attestation path (approveRegistration and
+ *   markRegistrationPaidOffline both refuse a fee-bearing, still-unpaid,
+ *   card-less entry — see deriveRegistrantActionFlags below), never a card
+ *   charge.
+ *
+ * RS005 F2 finding 2: a WAITLISTED entry's `amount_cents` is forced to 0 at
+ * submit REGARDLESS of the division's real fee (registration-submit.ts:542,
+ * `waitlisted ? 0 : live.fee_cents` — they are never charged at submit; they
+ * pay on promotion, which re-snapshots the live fee). Reading that 0 as
+ * "free" told an organiser a fee-bearing division's waitlisted entrant owed
+ * nothing, right up until promotion re-quoted the real fee. This row alone
+ * cannot say what that live fee actually is, so "waitlisted" says only
+ * what's actually known: nothing has been charged yet — truthful whether
+ * the division's real fee is zero or not.
  */
 export function deriveRegistrantPaymentState(
   row: Pick<
     RegistrationListRow,
-    "amount_cents" | "refunded_cents" | "disputed_at" | "offline_marked_paid_at" | "status"
+    "amount_cents" | "refunded_cents" | "disputed_at" | "payment_intent_id" | "status"
   >,
 ): RegistrantPaymentState {
   if (row.disputed_at !== null) return "disputed";
   if (row.refunded_cents > 0) {
     return row.refunded_cents >= row.amount_cents ? "refunded" : "partiallyRefunded";
   }
+  if (row.status === "waitlisted") return "waitlisted";
   if (row.amount_cents === 0) return "free";
-  if (row.offline_marked_paid_at !== null) return "paidOffline";
-  if (row.status === "paid" || row.status === "confirmed") return "paid";
-  return "awaitingPayment";
+  if (row.status !== "paid" && row.status !== "confirmed") return "awaitingPayment";
+  return row.payment_intent_id === null ? "paidOffline" : "paid";
 }
 
 /** Answers label lookup (task 2): the division's declared form-field LABEL
@@ -189,9 +226,20 @@ export interface RegistrantActionFlags {
  * row, never the division's settings, so it substitutes `row.amount_cents`
  * — THIS entry's OWN quoted fee, frozen at submission (RegistrationRow's own
  * doc comment) — as the fee signal (RS005 R1 dispatch's own instruction:
- * "the row already carries what you need"). The two can only diverge if an
- * organiser edits the division's fee AFTER this entry already exists, which
- * `approveRegistration`'s own check does not special-case either.
+ * "the row already carries what you need"). RS005 F2 finding 3 (whole-branch
+ * review): the two DO diverge, routinely, once an organiser edits the
+ * division's fee after this entry already exists — `approveRegistration`'s
+ * own check (registration-approval.ts:128) reads `settings.fee_cents` FRESH
+ * on every call, never this entry's frozen amount, so it moves the instant
+ * the fee changes while this row's own `amount_cents` stays put. The
+ * comment that used to stand here claimed the opposite ("does not
+ * special-case either") — that was false; the wrong control renders and
+ * 422s in EITHER edit direction (fee raised from under a pending entry, or
+ * dropped to zero under one). `feeOverride` (below) is the recovery: it
+ * lets a caller correct this function's guess once the SERVER has said so
+ * authoritatively (RegistrationHubRegistrantActions catches exactly that
+ * 4xx), rather than this pure function reaching for the division's live fee
+ * itself — it only ever sees one row, never the division's settings.
  * `row.payment_intent_id` is exact, not a proxy: it is the SAME cart-level
  * column `reg.payment_intent_id` resolves to server-side. Deliberately does
  * NOT also exclude an already-refunded 'paid' row the way `approveRegistration`
@@ -245,13 +293,24 @@ export interface RegistrantActionFlags {
  *
  * promote: legal ONLY for a `waitlisted` entry — every other status has
  * nothing to promote FROM.
+ *
+ * @param feeOverride RS005 F2 finding 3 — an authoritative correction from
+ * the server's own 4xx (see RegistrationHubRegistrantActions), never a
+ * guess made here: "awaitingFee" forces the same treatment as a real
+ * fee-bearing row (canApprove off, canMarkPaid a candidate), "noFee" forces
+ * the opposite. Overrides ONLY the fee half of the computation — `status`
+ * and `payment_intent_id` still gate canMarkPaid exactly as they always
+ * did, so an override can never resurrect markPaid on a non-pending or
+ * already-card-paid row.
  */
 export function deriveRegistrantActionFlags(
   row: Pick<RegistrationListRow, "status" | "approval" | "amount_cents" | "payment_intent_id">,
+  feeOverride?: "awaitingFee" | "noFee",
 ): RegistrantActionFlags {
   const awaitingManualDecision =
     row.approval === "manual" && (row.status === "pending" || row.status === "paid");
-  const awaitingOfflineFee = row.status === "pending" && row.amount_cents > 0 && row.payment_intent_id === null;
+  const feeOwed = feeOverride === "awaitingFee" ? true : feeOverride === "noFee" ? false : row.amount_cents > 0;
+  const awaitingOfflineFee = row.status === "pending" && feeOwed && row.payment_intent_id === null;
   const nonTerminal = !isTerminalRegistrationStatus(row.status);
   return {
     canApprove: awaitingManualDecision && !awaitingOfflineFee,
