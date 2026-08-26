@@ -12,9 +12,10 @@
 // mounted through the shared hook harness and every button is fired through its
 // own production `onClick`.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactElement } from "react";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import type { ReactElement, ReactNode } from "react";
+import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
 import type { BoardDivision, BoardFixture, BoardStage } from "../board/types";
+import { StagePicker, StagePickerMarkup, type StagePickerProps } from "../board/stage-picker";
 
 const nav = vi.hoisted(() => ({ refresh: vi.fn(), replace: vi.fn(), push: vi.fn(), search: "" }));
 
@@ -130,6 +131,29 @@ const baseProps = (stages: BoardStage[] = TWO_STAGES): BoardProps =>
     officialsWithBlackout: 0,
     competition: { id: "c1", divisionSettings: { d1: SETTINGS } },
   }) as unknown as BoardProps;
+
+/** StagePicker (comp board only) owns its own <details> ref + dismiss
+ *  listeners via hooks, so the harness — one component deep — cannot expand
+ *  into it directly. `StagePickerMarkup` is the hookless half that actually
+ *  renders the chip and menu; find StagePicker in the top tree and call the
+ *  markup component with a throwaway ref, the same way `expandRows` in
+ *  create-org-form.test.tsx expands a hookless child. */
+const expandBoard = (node: ReactNode): ReactElement[] => {
+  const top = walk(node);
+  const pickers = top.filter((el) => el.type === StagePicker);
+  return [
+    ...top,
+    ...pickers.flatMap((el) =>
+      walk(
+        StagePickerMarkup({
+          ...(propsOf(el) as unknown as StagePickerProps),
+          rootRef: { current: null },
+          close: () => {},
+        }),
+      ),
+    ),
+  ];
+};
 
 const localStore = new Map<string, string>();
 vi.stubGlobal("window", {
@@ -326,5 +350,112 @@ describe("the toolbar renders one action set, whatever the format's stage count"
     expect(
       tree.filter((el) => typeof propsOf(el).title === "string").map((el) => propsOf(el).title),
     ).not.toContain("Runs on League");
+  });
+});
+
+/**
+ * Competition-wide board (comp board), several divisions with a runnable
+ * stage each. Before this, the page baked the division into the stage
+ * NAME ("Under 12s · League"), because the flat pill row had no other way
+ * to tell two divisions' same-named stage apart — and with five divisions
+ * the pill row, grouped or not, pushed the solver buttons into a ragged
+ * wrap. The comp board now carries ONE chip naming the target
+ * ("Under 12s · League") and a menu behind it, grouped by division; the
+ * single-division board keeps its pills, where two or three of them fit.
+ */
+describe("the stage selector is a target chip with a grouped menu on the comp board", () => {
+  const TWO_DIVISIONS: BoardDivision[] = [
+    { id: "d1", name: "Under 12s", slug: "u12", status: "active", seq: 1, schedule_locked: false },
+    { id: "d2", name: "Under 14s", slug: "u14", status: "active", seq: 2, schedule_locked: false },
+  ];
+
+  /** Same stage NAME in both divisions — the shape a prefix used to disambiguate. */
+  const STAGES_ACROSS_DIVISIONS: BoardStage[] = [
+    { id: "s1", division_id: "d1", name: "League", kind: "round_robin", ordinal: 1 },
+    { id: "s2", division_id: "d2", name: "League", kind: "round_robin", ordinal: 1 },
+  ] as unknown as BoardStage[];
+
+  const multiDivisionProps = (): BoardProps =>
+    ({
+      ...baseProps(STAGES_ACROSS_DIVISIONS),
+      divisions: TWO_DIVISIONS,
+      activeEntrantCounts: { d1: 2, d2: 2 },
+      competition: {
+        id: "c1",
+        divisionSettings: { d1: SETTINGS, d2: SETTINGS },
+      },
+    }) as unknown as BoardProps;
+
+  /** The chip names BOTH halves of the target: the division (which the bare
+   *  stage name no longer carries) and the stage. */
+  it("names the target division and stage on the chip", () => {
+    const tree = renderIsland(ScheduleBoard, multiDivisionProps(), expandBoard).tree();
+
+    expect(allWithProp(tree, "data-testid", "schedule-stage-picker")).toHaveLength(1);
+    expect(propsOf(withProp(tree, "data-testid", "schedule-stage-picker-division")).children).toBe(
+      "Under 12s",
+    );
+    expect(propsOf(withProp(tree, "data-testid", "schedule-stage-picker-stage")).children).toBe(
+      "League",
+    );
+  });
+
+  /** The menu lists every runnable stage under its division, stage names bare —
+   *  two same-named stages are told apart by the group they sit in. */
+  it("groups the menu by division and keeps the stage names bare", () => {
+    const tree = renderIsland(ScheduleBoard, multiDivisionProps(), expandBoard).tree();
+
+    const groups = allWithProp(tree, "data-testid", "schedule-stage-group");
+    expect(groups.map((g) => propsOf(g)["data-division-id"])).toStrictEqual(["d1", "d2"]);
+
+    const labels = allWithProp(tree, "data-testid", "schedule-stage-group-label");
+    expect(labels.map((l) => (propsOf(l).children as unknown[]).at(-1))).toStrictEqual([
+      "Under 12s",
+      "Under 14s",
+    ]);
+
+    const options = allWithProp(tree, "data-testid", "schedule-stage");
+    expect(options.map((o) => propsOf(o).children)).toStrictEqual(["League", "League"]);
+    expect(options.map((o) => propsOf(o)["aria-selected"])).toStrictEqual([true, false]);
+  });
+
+  /** Picking from the menu re-aims the chip AND the solver — the wiring, not
+   *  the paint, same claim as the single-division spec above. */
+  it("aims the chip and the action set at the picked stage", async () => {
+    const island = renderIsland(ScheduleBoard, multiDivisionProps(), expandBoard);
+
+    const u14 = allWithProp(island.tree(), "data-testid", "schedule-stage")[1]!;
+    (propsOf(u14).onClick as () => void)();
+
+    const after = island.tree();
+    expect(propsOf(withProp(after, "data-testid", "schedule-stage-picker-division")).children).toBe(
+      "Under 14s",
+    );
+    expect(allWithProp(after, "data-testid", "schedule-stage").map((o) => propsOf(o)["aria-selected"]))
+      .toStrictEqual([false, true]);
+
+    await (propsOf(withProp(after, "data-testid", "schedule-auto")).onClick as () => void)();
+    await flush();
+    expect(lastAutoUrl()).toBe("/api/v1/stages/s2/schedule/auto");
+  });
+
+  /** The single-division board is untouched: pills, no chip, no groups. */
+  it("keeps the pill row, and no chip, on a single-division board", () => {
+    const tree = renderIsland(ScheduleBoard, baseProps()).tree();
+
+    expect(allWithProp(tree, "data-testid", "schedule-stage-picker")).toHaveLength(0);
+    expect(allWithProp(tree, "data-testid", "schedule-stage-group")).toHaveLength(0);
+    expect(allWithProp(tree, "data-testid", "schedule-stage")).toHaveLength(2);
+  });
+
+  /** The trailing cluster's "Division" caption introduced freeze / publish /
+   *  start, which only the single-division board renders. On the comp board
+   *  it captioned nothing and sat alone at the right edge. */
+  it("renders no 'Division' caption on the comp board", () => {
+    const tree = renderIsland(ScheduleBoard, multiDivisionProps(), expandBoard).tree();
+    const captions = tree
+      .filter((el) => typeof propsOf(el).children === "string")
+      .map((el) => propsOf(el).children as string);
+    expect(captions).not.toContain("Division");
   });
 });

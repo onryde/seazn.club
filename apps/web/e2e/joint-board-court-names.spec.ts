@@ -112,3 +112,116 @@ test("joint board renders court NAMES, never bare uuids, at every width", async 
     await shot(page, `joint-board-${v.name}`);
   }
 });
+
+// Comp-board stage picker: the page used to disambiguate a stage across
+// divisions by baking the division into the stage NAME ("Alpha · League"),
+// which is exactly why every pill on this board ran long — and a row of
+// pills, one per stage per division, pushed the solver buttons into a
+// ragged wrap. The board now carries ONE chip naming the target and a menu
+// grouped by division behind it. Two divisions, each with a stage of the
+// SAME name, is the shape that used to need the prefix — the menu's group
+// headers carry that job now, and the stage names stay bare.
+//
+// A real browser is the only witness for the two claims that matter here:
+// the menu actually OPENS from the chip (a <details> the unit harness sees
+// as static markup either way), and picking from it re-aims the chip.
+test("joint board picks a stage from a chip whose menu is grouped by division", async ({
+  page,
+  request,
+}) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Joint Stages ${TAG}`,
+    visibility: "private",
+  });
+  const compId = comp.data!.id;
+
+  /** The one stage each division gets, in division order. */
+  const divisionStageIds: string[] = [];
+  for (const name of ["Alpha", "Bravo"]) {
+    const div = await apiJson<{ id: string }>(
+      request,
+      `/api/v1/competitions/${compId}/divisions`,
+      "POST",
+      {
+        name,
+        slug: `${name.toLowerCase()}-${TAG}`,
+        sport_key: "generic",
+        variant_key: "score",
+        config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      },
+    );
+    // Same stage NAME in every division — the shape a prefix used to
+    // disambiguate, now the group header's job instead.
+    const stage = await apiJson<{ id: string }>(
+      request,
+      `/api/v1/divisions/${div.data!.id}/stages`,
+      "POST",
+      { seq: 1, kind: "league", name: "League" },
+    );
+    expect(stage.status, `stage created for ${name}`).toBeLessThan(300);
+    divisionStageIds.push(stage.data!.id);
+  }
+
+  await page.goto(await competitionPath(page.request, compId, "/schedule"), {
+    waitUntil: "load",
+  });
+  await shot(page, "joint-board-stage-picker-desktop");
+
+  // The chip names both halves of the target, and defaults to the first
+  // division's first stage.
+  const chip = page.getByTestId("schedule-stage-picker");
+  await expect(chip).toHaveCount(1);
+  await expect(page.getByTestId("schedule-stage-picker-division")).toHaveText("Alpha");
+  await expect(page.getByTestId("schedule-stage-picker-stage")).toHaveText("League");
+
+  // Closed until clicked — a <details> keeps the menu in the DOM, so this is
+  // a visibility claim, not an existence one.
+  const options = page.getByTestId("schedule-stage");
+  await expect(options.nth(0)).toBeHidden();
+  await chip.click();
+  await expect(options.nth(0)).toBeVisible();
+  await shot(page, "joint-board-stage-picker-open");
+
+  const groups = page.getByTestId("schedule-stage-group");
+  await expect(groups).toHaveCount(2);
+  await expect(page.getByTestId("schedule-stage-group-label").nth(0)).toHaveText("Alpha");
+  await expect(page.getByTestId("schedule-stage-group-label").nth(1)).toHaveText("Bravo");
+
+  // Bare, not "Alpha · League" / "Bravo · League" — the group header is what
+  // now disambiguates the two identically-named stages.
+  await expect(options).toHaveCount(2);
+  await expect(options.nth(0)).toHaveText("League");
+  await expect(options.nth(1)).toHaveText("League");
+  await expect(options.nth(0)).toHaveAttribute("aria-selected", "true");
+
+  // Picking re-aims the chip and closes the menu.
+  await options.nth(1).click();
+  await expect(page.getByTestId("schedule-stage-picker-division")).toHaveText("Bravo");
+  await expect(chip).toHaveAttribute("data-stage-id", divisionStageIds[1]!);
+  await expect(options.nth(1)).toBeHidden();
+
+  // Escape closes it too — the dismiss rule DocumentsMenu already carries.
+  await chip.click();
+  await expect(options.nth(1)).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(options.nth(1)).toBeHidden();
+
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.waitForTimeout(250);
+  await shot(page, "joint-board-stage-picker-320");
+  let overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+  );
+  expect(overflow, "horizontal page scroll at 320px").toBe(false);
+
+  // The OPEN menu must not push the page sideways either: a fixed-width
+  // panel anchored to a chip that starts mid-row is the shape that overflows.
+  await chip.click();
+  await expect(options.nth(0)).toBeVisible();
+  await shot(page, "joint-board-stage-picker-320-open");
+  overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+  );
+  expect(overflow, "horizontal page scroll at 320px with the menu open").toBe(false);
+});

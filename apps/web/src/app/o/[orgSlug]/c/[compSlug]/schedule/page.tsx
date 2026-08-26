@@ -184,7 +184,7 @@ export default async function CompetitionSchedulePage({
               division_id: division.id,
               seq: s.seq,
               kind: s.kind,
-              name: `${division.name} · ${s.name}`,
+              name: s.name,
               status: s.status,
             })),
           )}

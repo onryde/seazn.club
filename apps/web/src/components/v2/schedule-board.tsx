@@ -14,6 +14,7 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { Tip } from "@/components/ui/tip";
 import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import { apiV1 } from "@/lib/client-v1";
+import { StagePicker } from "./board/stage-picker";
 import { settingsErrorText } from "@/lib/schedule-error";
 import { track, EVENTS } from "@/lib/analytics";
 import { useMsg, useLocale, usePlural } from "@/components/i18n/dict-provider";
@@ -665,6 +666,28 @@ export function ScheduleBoard({
     () => stages.filter((s) => s.status !== "complete" && visibleIds.has(s.division_id)),
     [stages, visibleIds],
   );
+  // Comp board (several divisions on one board): a stage's NAME is not unique
+  // across divisions ("League" exists in every division), so the pill row
+  // used to disambiguate by baking the division into the label itself
+  // ("Under 12s · League"). That made every pill as long as its division's
+  // name, and a pill per stage per division pushed the solver buttons into a
+  // ragged wrap. The comp board now shows ONE chip naming the target and a
+  // menu behind it (StagePicker), grouped by division in the competition's
+  // division order — same colour the legend already uses — so the stage
+  // names stay bare and the disambiguation lives in a group header shown
+  // once per division. Only the comp board consumes this; the division board
+  // keeps its flat pill row.
+  const stageGroups = useMemo(() => {
+    const byDivision = new Map<string, typeof runnableStages>();
+    for (const s of runnableStages) {
+      const list = byDivision.get(s.division_id) ?? [];
+      list.push(s);
+      byDivision.set(s.division_id, list);
+    }
+    return divisions
+      .filter((d) => byDivision.has(d.id))
+      .map((d) => ({ divisionId: d.id, stages: byDivision.get(d.id)! }));
+  }, [runnableStages, divisions]);
   const [pickedStageId, setPickedStageId] = useState<string | null>(null);
   // DERIVED, not synchronised by an effect. The division filter (URL-backed, so
   // it changes under a back button too) and a stage completing can each drop the
@@ -1143,7 +1166,23 @@ export function ScheduleBoard({
 
                 A single-stage division still shows nothing, exactly as before:
                 there is only one thing the actions could mean. */}
-            {runnableStages.length > 1 ? (
+            {runnableStages.length > 1 && divisions.length > 1 ? (
+              // COMPETITION board: one chip naming the target, a menu grouped
+              // by division behind it. Pills multiplied by five divisions
+              // pushed the solver buttons into a ragged wrap; the chip keeps
+              // the action row to one line at every width and scales to any
+              // division count. Gated on the DIVISION count, not on how many
+              // groups survive the legend filter, so the control does not
+              // change shape when an organiser filters down to one division.
+              <StagePicker
+                groups={stageGroups}
+                divisionNames={divisionNames}
+                activeStage={activeStage}
+                onPick={setPickedStageId}
+                label={msg("board.stageLabel")}
+                menuLabel={msg("board.stageAria")}
+              />
+            ) : runnableStages.length > 1 ? (
               <div className="flex items-center gap-2">
                 <span className="app-display text-[10px] font-semibold text-slate-500">
                   {msg("board.stageLabel")}
@@ -1157,7 +1196,7 @@ export function ScheduleBoard({
                   // (the tab-strip trap this repo has already paid for), while
                   // a wrapped group keeps every option — and the pressed
                   // state — on screen at the cost of a second line.
-                  className="flex flex-wrap gap-0.5 rounded-lg border border-slate-200 bg-slate-100 p-0.5"
+                  className="flex flex-wrap rounded-lg border border-slate-200 bg-slate-100 p-0.5"
                 >
                   {runnableStages.map((s) => (
                     // `aria-pressed`, not a radio group: these are toggle
@@ -1171,9 +1210,9 @@ export function ScheduleBoard({
                       aria-pressed={s.id === activeStage.id}
                       onClick={() => setPickedStageId(s.id)}
                       // A SELECTION, not an action. The purple fill this used
-                      // to carry put a second loud control next to the primary
-                      // button and made the pair read as one compound thing
-                      // ("Auto League"), which is precisely how it was
+                      // to carry put a second loud control next to the
+                      // primary button and made the pair read as one compound
+                      // thing ("Auto League"), which is precisely how it was
                       // reported. Solid purple now means exactly one thing on
                       // this bar: the action that rebuilds the board.
                       className={`min-h-11 rounded-md px-3 py-1.5 text-xs transition ${
@@ -1333,9 +1372,15 @@ export function ScheduleBoard({
             of an otherwise empty line). */}
         <div className="hidden h-8 w-px bg-purple-100 lg:block" aria-hidden />
         <div className="flex flex-wrap items-center gap-2 lg:ms-auto">
-          <span className="app-display hidden text-[10px] font-semibold text-slate-500 lg:inline">
-            {msg("board.divisionLabel")}
-          </span>
+          {/* The caption introduces freeze / publish / start, which only the
+              single-division board renders. On the comp board it captioned
+              nothing — the conflicts badge beside it hides at zero — and sat
+              alone at the right edge of the row. */}
+          {single && (
+            <span className="app-display hidden text-[10px] font-semibold text-slate-500 lg:inline">
+              {msg("board.divisionLabel")}
+            </span>
+          )}
           {/* Whole-division freeze (Jul3/03 §4), surfaced on the board itself —
               single-division boards only; the competition board freezes per
               division on each division's own page. */}
