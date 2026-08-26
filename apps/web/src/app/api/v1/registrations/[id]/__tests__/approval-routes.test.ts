@@ -333,3 +333,58 @@ describe.skipIf(!HAS_DB)("POST /registrations/:id/promote", () => {
     ).toBe(200);
   });
 });
+
+describe.skipIf(!HAS_DB)("POST /registrations/:id/promote — the documented default path is reachable", () => {
+  // `registration_id` is optional and omitting it promotes the oldest
+  // waitlisted entry — the route's doc comment and its OpenAPI summary both
+  // say so. But parseBody does `await req.json()`, which throws on an EMPTY
+  // body, so `curl -X POST .../promote` with no body 400'd and could never
+  // reach the behaviour the contract advertises. The UI always sends a body,
+  // which is why nothing local caught it.
+  it("accepts a body-less POST and promotes the oldest waitlisted entry", async () => {
+    const { owner } = await signedInOwner();
+    const { competition, division } = await rig(owner);
+    const older = await seedRegistration(competition.id, division.id, SETTINGS, {
+      displayName: "First In Line",
+      status: "waitlisted",
+    });
+    await sql`update registrations set created_at = now() - interval '2 hours' where id = ${older.registration.id}`;
+    await seedRegistration(competition.id, division.id, SETTINGS, {
+      displayName: "Second In Line",
+      status: "waitlisted",
+    });
+
+    // No body at all — not "{}", which is what the UI sends and what every
+    // existing test sends.
+    const bodyless = new Request(
+      `https://test.local/api/v1/registrations/${older.registration.id}/promote`,
+      { method: "POST" },
+    );
+    const { status: httpStatus, body } = await read(
+      await promoteRoute(bodyless, ctx(older.registration.id)),
+    );
+
+    expect(httpStatus).toBe(200);
+    expect(body.data, "the oldest waitlisted entry is the one promoted").toMatchObject({
+      id: older.registration.id,
+    });
+    expect(await status(older.registration.id)).not.toBe("waitlisted");
+  });
+
+  it("still refuses MALFORMED json with the same 400, not a raw parser crash", async () => {
+    const { owner } = await signedInOwner();
+    const { competition, division } = await rig(owner);
+    const { registration } = await seedRegistration(competition.id, division.id, SETTINGS, {
+      displayName: "Waiting",
+      status: "waitlisted",
+    });
+
+    const broken = new Request(
+      `https://test.local/api/v1/registrations/${registration.id}/promote`,
+      { method: "POST", headers: { "content-type": "application/json" }, body: "{not json" },
+    );
+    const { status: httpStatus, body } = await read(await promoteRoute(broken, ctx(registration.id)));
+    expect(httpStatus).toBe(400);
+    expect(body.error?.message).toMatch(/valid JSON/i);
+  });
+});
