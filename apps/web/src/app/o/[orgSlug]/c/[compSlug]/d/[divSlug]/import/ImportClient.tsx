@@ -154,6 +154,18 @@ function describeError(msg: Msg, code: string, extra: Record<string, unknown>): 
     // say what IS known: this fixture wrote nothing, its siblings are fine.
     case "import.stream_failed":
       return msg("eventImport.error.stream_failed");
+    // Call-level 402. Two distinct refusals arrive under this one transport
+    // code (http.ts:79/221): the over-quota competition FREEZE that the batch
+    // importer now enforces alongside live scoring — which is not about a
+    // missing feature at all, and whose fix is archiving a competition rather
+    // than upgrading — and every other plan gate, which is. Falling through to
+    // `.generic` printed the bare "Import failed (PAYMENT_REQUIRED)." for both.
+    case "PAYMENT_REQUIRED": {
+      const feature = String(extra.feature ?? extra.feature_key ?? "");
+      return feature === "competitions.max_active"
+        ? msg("eventImport.error.competition_frozen")
+        : msg("eventImport.error.entitlement", { feature });
+    }
     default:
       return msg("eventImport.error.generic", { code });
   }

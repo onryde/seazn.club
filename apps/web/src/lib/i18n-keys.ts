@@ -1837,6 +1837,7 @@ export type DictionaryKey =
   | "eventImport.cap.eventsPerFixture"
   | "eventImport.cap.streams"
   | "eventImport.empty"
+  | "eventImport.error.competition_frozen"
   | "eventImport.error.concurrent"
   | "eventImport.error.division_not_started"
   | "eventImport.error.entitlement"

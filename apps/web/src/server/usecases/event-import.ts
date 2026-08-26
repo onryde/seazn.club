@@ -422,16 +422,37 @@ async function runStream(
   // here: the dry run already proved this stream decides, and import never
   // carries a core.void, so there is no "outcome erased by an undo" case to
   // special-case the way scoreEvent's own condition does.
-  await onDecided(auth, fixtureId, last.outcome);
-  await refreshDiscipline(auth, fixtureId);
-  await refreshNews(auth, fixtureId);
-  if (firstResult) {
-    await captureServer({
-      event: EVENTS.RESULT_ENTERED,
-      distinctId: firstResult.distinctId,
-      orgId: auth.orgId,
-      properties: { sport_key: firstResult.sportKey, status: firstResult.status, fixture_id: fixtureId },
-    });
+  //
+  // Guarded as a block, and the guard is load-bearing: every line below runs
+  // AFTER the transaction committed, so the events and the receipt are already
+  // durable. `onDecided` and `refreshDiscipline` do not swallow their own
+  // failures (scoring.ts), and `runImport`'s per-stream catch-all would turn
+  // any throw here into `rejected / eventsAppended: 0` — reporting a fully
+  // imported fixture as if nothing had been written, skewing the totals and
+  // telling the operator to resend a stream that already landed. A side effect
+  // that fails is a stale standings table, not a failed import; log it and
+  // report the truth.
+  try {
+    await onDecided(auth, fixtureId, last.outcome);
+    await refreshDiscipline(auth, fixtureId);
+    await refreshNews(auth, fixtureId);
+    if (firstResult) {
+      await captureServer({
+        event: EVENTS.RESULT_ENTERED,
+        distinctId: firstResult.distinctId,
+        orgId: auth.orgId,
+        properties: {
+          sport_key: firstResult.sportKey,
+          status: firstResult.status,
+          fixture_id: fixtureId,
+        },
+      });
+    }
+  } catch (err) {
+    log.error(
+      { err, fixture: fixtureId },
+      "event-import: a post-commit side effect failed (the import itself stands)",
+    );
   }
   // Public caches, fire-and-forget in the same style scoring.ts:146 uses. Not
   // optional decoration: §2.1's read path IS the public cached one, so without
@@ -444,7 +465,15 @@ async function runStream(
   // it from. `publishFixtureUpdate`/`publishDivisionUpdate` are deliberately
   // NOT fired (out of scope): realtime addresses a pad watching a live fixture,
   // which is not what a backfill of finished results is.
-  void invalidatePublicCache(auth.orgId, fixtureId, true);
+  //
+  // `.catch` where `scoring.ts:146` has none: an unhandled rejection is the one
+  // failure channel the block above and `runImport`'s catch-all both miss, and
+  // on this path it would crash the process for a cache sweep. The
+  // `.catch(() => null)` shape is the repo's own (scoring.ts:143-145).
+  void invalidatePublicCache(auth.orgId, fixtureId, true).catch((err: unknown) => {
+    log.error({ err, fixture: fixtureId }, "event-import: public cache invalidation failed");
+    return null;
+  });
 
   return {
     fixture: fixtureId,

@@ -295,6 +295,33 @@ describe("ImportClient — call-level rejections (no per-stream result exists at
     expect(island.text()).toContain(msg("eventImport.error.concurrent"));
   });
 
+  // Both 402s arrive under the SAME transport code (http.ts:79/221), so the
+  // only thing separating them is `feature`. The freeze became reachable from
+  // this page when the importer started enforcing it alongside live scoring,
+  // and it is not a "buy this feature" refusal — archiving a competition fixes
+  // it, upgrading is merely the other option. Before this branch existed both
+  // fell through to `.generic` and printed "Import failed (PAYMENT_REQUIRED).".
+  it("renders the over-quota competition freeze as its own sentence, not a bare code", async () => {
+    net.rejection = new ApiV1Error("Plan upgrade required: competitions.max_active", 402, "PAYMENT_REQUIRED", {
+      feature: "competitions.max_active",
+      feature_key: "competitions.max_active",
+    });
+    const island = renderIsland(ImportClient, BASE_PROPS);
+    await setPastedAndSubmit(island, JSON.stringify({ import_id: "x", streams: [] }));
+    expect(island.text()).toContain(msg("eventImport.error.competition_frozen"));
+    expect(island.text()).not.toContain(msg("eventImport.error.generic", { code: "PAYMENT_REQUIRED" }));
+  });
+
+  it("renders any OTHER call-level 402 as the named-feature entitlement sentence", async () => {
+    net.rejection = new ApiV1Error("Plan upgrade required: import.events", 402, "PAYMENT_REQUIRED", {
+      feature: "import.events",
+      feature_key: "import.events",
+    });
+    const island = renderIsland(ImportClient, BASE_PROPS);
+    await setPastedAndSubmit(island, JSON.stringify({ import_id: "x", streams: [] }));
+    expect(island.text()).toContain(msg("eventImport.error.entitlement", { feature: "import.events" }));
+  });
+
   it("renders import.division_not_started with the division's status interpolated", async () => {
     net.rejection = new ApiV1Error("not started", 409, "import.division_not_started", {
       divisionStatus: "scheduled",

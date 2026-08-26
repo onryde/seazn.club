@@ -4284,5 +4284,6 @@
   "eventImport.error.concurrent": "Er loopt al een andere import met dezelfde import-ID voor deze divisie. Wacht tot deze klaar is en probeer het opnieuw.",
   "eventImport.error.division_not_started": "Deze divisie is nog niet begonnen (status: {divisionStatus}). Start de divisie voordat je importeert.",
   "eventImport.error.stream_failed": "Deze wedstrijd kon niet worden geïmporteerd door een onverwachte fout, dus er is niets voor weggeschreven. Controleer de gebeurtenissen en probeer het opnieuw — de andere wedstrijden in deze aanroep zijn niet beïnvloed.",
+  "eventImport.error.competition_frozen": "Deze competitie is alleen-lezen omdat je organisatie over de limiet voor actieve competities van het abonnement zit. Archiveer een competitie of upgrade het abonnement en importeer opnieuw.",
   "eventImport.error.generic": "Importeren mislukt ({code})."
 }

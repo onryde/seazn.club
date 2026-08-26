@@ -4284,5 +4284,6 @@
   "eventImport.error.concurrent": "Another import with the same import ID is already running for this division. Wait for it to finish, then try again.",
   "eventImport.error.division_not_started": "This division hasn't started yet (status: {divisionStatus}). Start it before importing.",
   "eventImport.error.stream_failed": "This fixture couldn't be imported because of an unexpected error, so nothing was written for it. Check its events and try again — the other fixtures in this call are unaffected.",
+  "eventImport.error.competition_frozen": "This competition is read-only because your organization is over its plan's limit on active competitions. Archive a competition or upgrade your plan, then import again.",
   "eventImport.error.generic": "Import failed ({code})."
 }

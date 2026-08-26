@@ -4284,5 +4284,6 @@
   "eventImport.error.concurrent": "Ya se está ejecutando otra importación con el mismo ID de importación para esta división. Espera a que termine e inténtalo de nuevo.",
   "eventImport.error.division_not_started": "Esta división todavía no ha comenzado (estado: {divisionStatus}). Iníciala antes de importar.",
   "eventImport.error.stream_failed": "Este partido no se pudo importar por un error inesperado, así que no se escribió nada para él. Revisa sus eventos e inténtalo de nuevo; los demás partidos de esta llamada no se ven afectados.",
+  "eventImport.error.competition_frozen": "Esta competición es de solo lectura porque tu organización supera el límite de competiciones activas de su plan. Archiva una competición o mejora tu plan y vuelve a importar.",
   "eventImport.error.generic": "La importación falló ({code})."
 }
