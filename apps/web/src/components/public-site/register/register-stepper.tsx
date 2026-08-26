@@ -3,12 +3,13 @@
 // contact fields, the cart (steps.ts/cart.ts), the current step index, and
 // sessionStorage persistence (storage.ts) so a refresh mid-flow survives.
 //
-// Steps 3-5 (DETAILS/roster, CONSENT, REVIEW→PAY) are NOT built this
-// session — steps.ts's step order only ever contains "who"/"entries", and
-// pressing Next on the last one advances stepIndex to stepOrder.length
-// (one past the end), where the "more steps" end-cap renders below. A
-// later session appends real steps to steps.ts's order and this file's
-// step-switch; nothing here needs to change shape to support that.
+// Steps 4-5 (CONSENT, REVIEW→PAY) are NOT built this session — steps.ts's
+// step order tops out at "details", and pressing Next on the last one
+// advances stepIndex to stepOrder.length (one past the end), where the
+// "more steps" end-cap renders below. A later session appends real steps
+// to steps.ts's order and this file's step-switch; nothing here needs to
+// change shape to support that (steps.test.ts's "hypothetical" case proved
+// this for steps.ts itself; the same generic index math is used here).
 //
 // `?join=` deep-link (RS007): accepted as a prop and deliberately unused —
 // the seam is "render nothing, don't crash on the param" (RS006 prompt).
@@ -23,13 +24,21 @@ import {
 } from "./cart";
 import { seasonStartYearFrom } from "./eligibility-presentation";
 import { REGISTER_STATE_VERSION, loadRegisterState, saveRegisterState } from "./storage";
+import { StepDetails } from "./step-details";
 import { StepEntries } from "./step-entries";
 import { StepNav } from "./step-nav";
 import { StepWho } from "./step-who";
 import { buildStepOrder, nextStepIndex, prevStepIndex } from "./steps";
 import { BTN_GHOST, BTN_PRIMARY } from "./styles";
 import { EMPTY_CART, EMPTY_CONTACT, type CartState, type ContactState, type DivisionLike } from "./types";
-import { validateContact, validateEntries, whoFieldRequirements, type EntriesValidation } from "./validation";
+import {
+  validateContact,
+  validateDetails,
+  validateEntries,
+  whoFieldRequirements,
+  type DetailsValidation,
+  type EntriesValidation,
+} from "./validation";
 
 /** validation.ts's EntriesValidation error codes don't share a naming
  *  scheme with the register.errors.* dictionary keys — same reasoning as
@@ -38,6 +47,15 @@ import { validateContact, validateEntries, whoFieldRequirements, type EntriesVal
 const ENTRIES_ERROR_KEY: Record<NonNullable<EntriesValidation["error"]>, string> = {
   cartEmpty: "register.errors.cartEmpty",
   selfIneligible: "register.errors.selfIneligible",
+};
+
+/** Same reasoning as ENTRIES_ERROR_KEY above. DETAILS_ERROR_KEY has only
+ *  one code ("incomplete") deliberately: per-entry detail already renders
+ *  inline (roster rows, the mixed meter, required-field markers all show
+ *  their own state live) — this banner just confirms something up there is
+ *  blocking, it doesn't re-enumerate every reason. */
+const DETAILS_ERROR_KEY: Record<NonNullable<DetailsValidation["error"]>, string> = {
+  incomplete: "register.errors.detailsIncomplete",
 };
 
 export interface RegisterInfo {
@@ -77,6 +95,7 @@ export function RegisterStepper({
   const [stepIndex, setStepIndex] = useState(0);
   const [whoAttempted, setWhoAttempted] = useState(false);
   const [entriesAttempted, setEntriesAttempted] = useState(false);
+  const [detailsAttempted, setDetailsAttempted] = useState(false);
   // Honeypot (design §4 step 5 / RS003's route.ts): hidden from real users,
   // a filled value is a bot. The route checks `input.website` server-side
   // (already shipped) — this chassis only needs to carry the field through
@@ -111,6 +130,7 @@ export function RegisterStepper({
     // whichever mount path got here.
     setWhoAttempted(false);
     setEntriesAttempted(false);
+    setDetailsAttempted(false);
     setHydrated(true);
     // Intentionally empty deps: hydration runs exactly once, at mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -153,6 +173,7 @@ export function RegisterStepper({
   const requirements = whoFieldRequirements(info.divisions, imPlaying);
   const contactValidation = validateContact(contact, requirements);
   const entriesValidation = validateEntries(cart, info.divisions, contact, seasonStartYear);
+  const detailsValidation = validateDetails(cart, info.divisions, contact, seasonStartYear);
 
   const clampedIndex = Math.min(stepIndex, stepOrder.length);
   const currentStep = stepOrder[clampedIndex];
@@ -161,11 +182,14 @@ export function RegisterStepper({
       ? contactValidation.valid
       : currentStep === "entries"
         ? entriesValidation.valid
-        : false;
+        : currentStep === "details"
+          ? detailsValidation.valid
+          : false;
 
   function goNext() {
     if (currentStep === "who") setWhoAttempted(true);
     if (currentStep === "entries") setEntriesAttempted(true);
+    if (currentStep === "details") setDetailsAttempted(true);
     if (!canGoNext) return;
     setStepIndex((i) => nextStepIndex(i, stepOrder));
   }
@@ -202,6 +226,23 @@ export function RegisterStepper({
           {entriesAttempted && !entriesValidation.valid && entriesValidation.error && (
             <p role="alert" className="text-sm text-red-600">
               {t(ENTRIES_ERROR_KEY[entriesValidation.error])}
+            </p>
+          )}
+        </>
+      )}
+
+      {currentStep === "details" && (
+        <>
+          <StepDetails
+            divisions={info.divisions}
+            cart={cart}
+            dispatch={dispatchCart}
+            contact={contact}
+            seasonStartYear={seasonStartYear}
+          />
+          {detailsAttempted && !detailsValidation.valid && detailsValidation.error && (
+            <p role="alert" className="text-sm text-red-600">
+              {t(DETAILS_ERROR_KEY[detailsValidation.error])}
             </p>
           )}
         </>

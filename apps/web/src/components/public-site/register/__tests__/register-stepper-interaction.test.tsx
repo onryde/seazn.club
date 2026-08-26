@@ -119,6 +119,7 @@ const DIV_OPEN: DivisionLike = {
   fee_cents: 0,
   currency: "gbp",
   payment_method: "offline",
+  form_fields: [],
 };
 
 /** Womens-category, individual — categoryEligibilityIssues rejects a
@@ -417,10 +418,20 @@ describe("finding #4 — a non-\"full\" closed division in the cart is excluded 
       fee_cents: 1500,
       currency: "gbp",
       payment_method: "offline",
+      form_fields: [],
     };
     const cart: CartState = {
       entries: [
-        { id: "e1", division_id: "div-stale", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false },
+        {
+          id: "e1",
+          division_id: "div-stale",
+          entrant_kind: "individual",
+          team_name: null,
+          partner_name: null,
+          free_agent: false,
+          players: [],
+          answers: {},
+        },
       ],
       selfEntryId: null,
       selfPlayerIndex: null,
@@ -459,6 +470,8 @@ describe("finding #8 — an unresolvable division name (raw UUID fallback) never
           team_name: null,
           partner_name: null,
           free_agent: false,
+          players: [],
+          answers: {},
         },
       ],
       selfEntryId: null,

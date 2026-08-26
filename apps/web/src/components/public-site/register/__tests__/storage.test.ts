@@ -29,7 +29,21 @@ const SNAPSHOT: PersistedRegisterState = {
   version: REGISTER_STATE_VERSION,
   contact: { ...EMPTY_CONTACT, name: "Alex Test", email: "alex@example.com" },
   imPlaying: true,
-  cart: { ...EMPTY_CART, entries: [{ id: "e1", division_id: "d1", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false }] },
+  cart: {
+    ...EMPTY_CART,
+    entries: [
+      {
+        id: "e1",
+        division_id: "d1",
+        entrant_kind: "individual",
+        team_name: null,
+        partner_name: null,
+        free_agent: false,
+        players: [],
+        answers: {},
+      },
+    ],
+  },
   stepIndex: 1,
 };
 

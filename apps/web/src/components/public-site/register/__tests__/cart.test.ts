@@ -51,13 +51,6 @@ const INDIVIDUAL_DIVISION: DivisionLike = {
   allow_free_agents: false,
 };
 
-const PAIR_DIVISION: DivisionLike = {
-  ...TEAM_DIVISION,
-  division_id: "div-pair",
-  entrant_kind: "pair",
-  allow_free_agents: false,
-};
-
 /** Base fixture for a hand-built CartEntry in these tests — every field a
  *  real reducer output would carry, so `toEqual` assertions below compare
  *  the WHOLE shape rather than silently ignoring players/answers. */
