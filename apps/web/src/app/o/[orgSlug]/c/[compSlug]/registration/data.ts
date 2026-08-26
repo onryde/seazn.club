@@ -7,6 +7,15 @@
 import { withTenant } from "@/lib/db";
 import { SPOT_HOLDERS } from "@/lib/registration-status";
 import { HttpError } from "@/lib/errors";
+// A real (non-type-only) VALUE import of a "components" module, into this
+// data layer — safe here (no bundling concern, unlike the client filter
+// component's own header comment about @/server/api-v1/schemas): this file
+// is server-only and registration-hub-registrant-derive.ts is itself
+// "pure and dependency-light (no React, no i18n, no DB)" per its own header
+// comment. Its OWN reach back into this file is type-only
+// (`import type {...} from ".../data"`), so there is no runtime cycle.
+// Used by registrantsExportHrefFor below (RS005 F3 finding 2).
+import { registrantsExportHref } from "@/components/registration-hub-registrant-derive";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { RegistrationHubRowData } from "@/components/registration-hub-division-row";
 import {
@@ -131,15 +140,52 @@ export type RegistrantEntrantKind = "team" | "individual" | "pair";
 
 /** The tab's raw `?status=`/`?division_id=`/... — untyped strings straight
  *  off `searchParams`, exactly as Next hands them over (a page's own
- *  `{ tab?: string }` shape, widened). */
+ *  `{ tab?: string }` shape, widened).
+ *
+ *  Each field is `string | string[]`, not just `string` (RS005 F3 finding
+ *  1): a REPEATED key (`?q=a&q=b`) reaches a page's `searchParams` as
+ *  `string[]`, per Next's own docs (`/shop?a=1&a=2` -> `{ a: ['1', '2'] }`),
+ *  and Next never dedupes. `page.tsx`'s `searchParams` prop is typed
+ *  `Promise<any>` by Next's own generated `PageProps`, so a `RawQuery`
+ *  declared as plain `string` fields used to hide that shape from tsc
+ *  entirely — `parseRegistrantsQuery` below is where it actually gets
+ *  handled, via `firstOf`. */
 export interface RegistrantsRawQuery {
-  status?: string;
-  division_id?: string;
-  kind?: string;
-  free_agent?: string;
-  consent_pending?: string;
-  q?: string;
-  sort?: string;
+  status?: string | string[];
+  division_id?: string | string[];
+  kind?: string | string[];
+  free_agent?: string | string[];
+  consent_pending?: string | string[];
+  q?: string | string[];
+  sort?: string | string[];
+}
+
+/** RS005 F3 finding 1: collapses a possibly-repeated query param to ONE
+ *  string before anything else touches it. FIRST VALUE WINS — the same
+ *  choice `URLSearchParams.get()` already makes for the API route's
+ *  identical parsing job (registration-list-query.ts's `sp.get(...)`),
+ *  rather than "ignore the field entirely": a dupe is far more likely a
+ *  bookmarked/hand-edited URL carrying one stale copy alongside the current
+ *  one than a deliberate "no value" signal. An empty array (should Next
+ *  ever produce one) falls through to `undefined`, same as truly absent. */
+function firstOf(v: string | string[] | undefined): string | undefined {
+  return Array.isArray(v) ? v[0] : v;
+}
+
+/** "1" -> true (filter ON), "0" -> explicit false (narrows to the OPPOSITE
+ *  case), anything else — absent, malformed, or an array `firstOf` already
+ *  reduced to its first value — -> null, meaning "no filter" (RS005 F3
+ *  finding 2). This page's own convention has to keep "unset" and
+ *  "explicitly false" distinguishable, mirroring `queryBool`'s
+ *  true/false/undefined split in registration-list-query.ts, just with
+ *  `null` standing in for `undefined` to match this file's OWN "unset"
+ *  convention (status/divisionId/kind, above) rather than introducing a
+ *  second one. Never throws (unlike `queryBool`) — this page's ruling that
+ *  a malformed value must be ignored, not fatal, applies here too. */
+function parseTriBool(v: string | undefined): boolean | null {
+  if (v === "1") return true;
+  if (v === "0") return false;
+  return null;
 }
 
 /** The SANITIZED filter set — what actually got applied, after dropping
@@ -151,8 +197,14 @@ export interface RegistrantsFilters {
   status: string | null;
   divisionId: string | null;
   kind: RegistrantEntrantKind | null;
-  freeAgent: boolean;
-  consentPending: boolean;
+  /** Tri-state (RS005 F3 finding 2): `null` means unset (no filter — every
+   *  row passes); `true`/`false` are both ACTIVE, opposite filters. Never
+   *  collapse this back to a plain boolean — `toListFilters` below (and
+   *  `registrantsExportHrefFor`) both depend on telling "unset" and
+   *  "explicitly false" apart. */
+  freeAgent: boolean | null;
+  /** Same tri-state as `freeAgent`, same reason. */
+  consentPending: boolean | null;
   text: string;
   sort: "newest" | "oldest";
 }
@@ -173,29 +225,32 @@ export interface RegistrantsFilters {
  *  cross-competition retry (below) expects. Same regex
  *  app/admin/fixtures/page.tsx already uses for the identical reason. */
 export function parseRegistrantsQuery(raw: RegistrantsRawQuery): RegistrantsFilters {
+  const rawStatus = firstOf(raw.status);
   const status =
-    raw.status && (RegistrationStatus.options as readonly string[]).includes(raw.status)
-      ? raw.status
-      : null;
+    rawStatus && (RegistrationStatus.options as readonly string[]).includes(rawStatus) ? rawStatus : null;
+  const rawKind = firstOf(raw.kind);
   const kind =
-    raw.kind && (EntrantKind.options as readonly string[]).includes(raw.kind)
-      ? (raw.kind as RegistrantEntrantKind)
+    rawKind && (EntrantKind.options as readonly string[]).includes(rawKind)
+      ? (rawKind as RegistrantEntrantKind)
       : null;
   // This tab's OWN default is "newest" (task 4) — deliberately NOT
   // listRegistrations' own default ("oldest", unchanged for the pre-existing
   // division-scoped route that never sets `sort` at all).
+  const rawSort = firstOf(raw.sort);
   const sort: "newest" | "oldest" =
-    raw.sort && (RegistrationSort.options as readonly string[]).includes(raw.sort)
-      ? (raw.sort as "newest" | "oldest")
+    rawSort && (RegistrationSort.options as readonly string[]).includes(rawSort)
+      ? (rawSort as "newest" | "oldest")
       : "newest";
-  const divisionId = raw.division_id && UUID_RE.test(raw.division_id) ? raw.division_id : null;
+  const rawDivisionId = firstOf(raw.division_id);
+  const divisionId = rawDivisionId && UUID_RE.test(rawDivisionId) ? rawDivisionId : null;
+  const rawQ = firstOf(raw.q);
   return {
     status,
     divisionId,
     kind,
-    freeAgent: raw.free_agent === "1",
-    consentPending: raw.consent_pending === "1",
-    text: raw.q?.trim() ?? "",
+    freeAgent: parseTriBool(firstOf(raw.free_agent)),
+    consentPending: parseTriBool(firstOf(raw.consent_pending)),
+    text: rawQ?.trim() ?? "",
     sort,
   };
 }
@@ -203,8 +258,13 @@ export function parseRegistrantsQuery(raw: RegistrantsRawQuery): RegistrantsFilt
 function toListFilters(competitionId: string, filters: RegistrantsFilters): ListRegistrationsFilters {
   const listFilters: ListRegistrationsFilters = { competition_id: competitionId, sort: filters.sort };
   if (filters.kind) listFilters.kind = filters.kind;
-  if (filters.freeAgent) listFilters.free_agent = true;
-  if (filters.consentPending) listFilters.consent_pending = true;
+  // `!== null`, not truthiness (RS005 F3 finding 2) — the same distinction
+  // registration-list-query.ts's own `queryBool` draws (`!== undefined`), so
+  // an explicit `false` (query "0") reaches `listRegistrations` as an
+  // explicit false rather than being collapsed into "omit the filter",
+  // which a plain `if (filters.freeAgent)` guard did before this fix.
+  if (filters.freeAgent !== null) listFilters.free_agent = filters.freeAgent;
+  if (filters.consentPending !== null) listFilters.consent_pending = filters.consentPending;
   if (filters.text) listFilters.text = filters.text;
   return listFilters;
 }
@@ -266,6 +326,35 @@ export async function fetchRegistrantRows(
     }
     throw err;
   }
+}
+
+/**
+ * RS005 F3 finding 2: wraps `registrantsExportHref` (registration-hub-
+ * registrant-derive.ts, this wave's do-not-touch list — owned by a sibling
+ * agent) so the CSV export link matches what `fetchRegistrantRows` actually
+ * put on screen. `registrantsExportHref`'s own `registrantsQueryString`
+ * only ever emits the "1" form of free_agent/consent_pending (both fields
+ * were plain booleans everywhere until this wave's tri-state fix, above) —
+ * an explicit `false` (the table narrowed to "no free agents" /
+ * "nothing outstanding") silently vanished from the export link entirely,
+ * so the exported file could disagree with the table the organiser was
+ * looking at.
+ *
+ * Rather than editing the owned-by-another-agent file (a second hand-kept
+ * copy of its query-building would be exactly the drift class RS005 W1b's
+ * status-enum work removed), this appends the explicit "0" ONLY when the
+ * table is actually narrowed to the negative case — never for a bare
+ * "unset" `null`, which stays absent from the query string same as every
+ * other filter. `registrantsExportHref`'s own result always carries at
+ * least `sort=...` (set unconditionally), so it always already has a `?`
+ * to append `&` onto.
+ */
+export function registrantsExportHrefFor(competitionId: string, filters: RegistrantsFilters): string {
+  const href = registrantsExportHref(competitionId, filters);
+  const negatives: string[] = [];
+  if (filters.freeAgent === false) negatives.push("free_agent=0");
+  if (filters.consentPending === false) negatives.push("consent_pending=0");
+  return negatives.length === 0 ? href : `${href}&${negatives.join("&")}`;
 }
 
 export interface DivisionOption {

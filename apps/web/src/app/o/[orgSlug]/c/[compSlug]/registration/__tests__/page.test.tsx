@@ -407,6 +407,22 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
     );
   });
 
+  // RS005 F3 finding 2: the export href must carry the SAME filter the
+  // table is actually showing, including the negative ("0") case — see
+  // registrantsExportHrefFor's own comment (data.ts).
+  it("carries the explicit '0' form on the export href when the table is narrowed to the negative case", async () => {
+    const tree = walk(
+      await Page({
+        params,
+        searchParams: Promise.resolve({ tab: "registrants", free_agent: "0", consent_pending: "0" }),
+      }),
+    );
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).exportHref).toBe(
+      "/api/v1/competitions/comp-1/registrations/export?sort=newest&free_agent=0&consent_pending=0",
+    );
+  });
+
   it("builds filtersAction as the tab's BARE path (no query string — a GET form submit would otherwise discard it)", async () => {
     const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
@@ -418,6 +434,45 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
     const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
     expect(propsOf(panel).orgTz).toBe("Asia/Kolkata");
+  });
+});
+
+// RS005 F3 finding 1: a repeated `?q=a&q=b` reaches this page's
+// `searchParams` as `string[]` (Next's own docs), not `string` — before the
+// fix, `raw.q?.trim()` threw `TypeError: raw.q?.trim is not a function`,
+// and `o/[orgSlug]/c/[compSlug]/error.tsx` swallowed the WHOLE hub (title,
+// tab strip, both panels), not just the Registrants panel. Asserting the
+// page RENDERS is the point (per the dispatch's own framing) — not that it
+// throws some OTHER, different error.
+describe("registration hub — array-valued query params never 500 the page (RS005 F3 finding 1)", () => {
+  it("a repeated ?q=a&q=b renders instead of throwing", async () => {
+    await expect(
+      Page({ params, searchParams: Promise.resolve({ tab: "registrants", q: ["a", "b"] }) }),
+    ).resolves.toBeTruthy();
+  });
+
+  it("every other parsed field also survives an array value", async () => {
+    await expect(
+      Page({
+        params,
+        searchParams: Promise.resolve({
+          tab: "registrants",
+          status: ["paid", "confirmed"],
+          division_id: ["11111111-2222-3333-4444-555555555555", "not-a-uuid"],
+          kind: ["team", "pair"],
+          sort: ["oldest", "newest"],
+          free_agent: ["1", "0"],
+          consent_pending: ["0", "1"],
+        }),
+      }),
+    ).resolves.toBeTruthy();
+  });
+
+  it("still renders the Registrants panel (not the error boundary) on a repeated param", async () => {
+    const tree = walk(
+      await Page({ params, searchParams: Promise.resolve({ tab: "registrants", q: ["a", "b"] }) }),
+    );
+    expect(tree.some((e) => e.type === RegistrationHubRegistrantsPanel)).toBe(true);
   });
 });
 

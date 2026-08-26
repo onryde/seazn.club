@@ -27,7 +27,6 @@ import {
 } from "@/components/registration-hub-tab";
 import { RegistrationHubSettingsPanel } from "@/components/registration-hub-settings-panel";
 import { RegistrationHubRegistrantsPanel } from "@/components/registration-hub-registrants-panel";
-import { registrantsExportHref } from "@/components/registration-hub-registrant-derive";
 import type {
   RegistrationHubRowData,
   RegistrationHubRowContext,
@@ -39,6 +38,7 @@ import {
   fetchRegistrantRows,
   fetchDivisionOptions,
   fetchRegistrantDetails,
+  registrantsExportHrefFor,
   type RegistrantsRawQuery,
 } from "./data";
 
@@ -171,7 +171,10 @@ export default async function RegistrationHubPage({
         orgTz={orgTz}
         filtersAction={routes.competitionRegistration(orgSlug, compSlug)}
         clearHref={routes.competitionRegistration(orgSlug, compSlug, "registrants")}
-        exportHref={registrantsExportHref(id, registrants.filters)}
+        // RS005 F3 finding 2: registrantsExportHrefFor (data.ts) wraps
+        // registrantsExportHref so the negative-filter case (?free_agent=0
+        // etc.) is carried too — see that function's own comment.
+        exportHref={registrantsExportHrefFor(id, registrants.filters)}
         emptyTitle={t(dict, "reg.hub.registrants.title")}
         emptyBody={t(dict, "reg.hub.registrants.body")}
         emptyCtaLabel={t(dict, "reg.hub.registrants.cta")}

@@ -33,13 +33,20 @@ beforeEach(() => {
 });
 
 describe("parseRegistrantsQuery — pure, no DB", () => {
-  it("defaults every filter to 'off' on an empty query, sort defaulting to newest", () => {
+  // RS005 F3 finding 2: freeAgent/consentPending are tri-state
+  // (true/false/null), not a plain boolean — an ABSENT query param must
+  // stay distinguishable from an EXPLICIT `free_agent=0`/`consent_pending=0`,
+  // the same true/false/undefined split registration-list-query.ts's own
+  // `queryBool` already draws for the API route, just with `null` standing
+  // in for `undefined` to match this file's own "unset" convention
+  // (status/divisionId/kind, below) rather than introducing a second one.
+  it("defaults every filter to unset (null) on an empty query, sort defaulting to newest", () => {
     expect(parseRegistrantsQuery({})).toEqual({
       status: null,
       divisionId: null,
       kind: null,
-      freeAgent: false,
-      consentPending: false,
+      freeAgent: null,
+      consentPending: null,
       text: "",
       sort: "newest",
     });
@@ -79,16 +86,18 @@ describe("parseRegistrantsQuery — pure, no DB", () => {
     expect(parseRegistrantsQuery({ division_id: DIVISION_ID }).divisionId).toBe(DIVISION_ID);
   });
 
-  it("free_agent=1 turns the filter on; any other value (including '0' and 'true') leaves it off", () => {
+  it("free_agent: '1' -> true, '0' -> explicit false, anything else (including 'true') or absent -> null/unset (RS005 F3 finding 2)", () => {
     expect(parseRegistrantsQuery({ free_agent: "1" }).freeAgent).toBe(true);
     expect(parseRegistrantsQuery({ free_agent: "0" }).freeAgent).toBe(false);
-    expect(parseRegistrantsQuery({ free_agent: "true" }).freeAgent).toBe(false);
-    expect(parseRegistrantsQuery({}).freeAgent).toBe(false);
+    expect(parseRegistrantsQuery({ free_agent: "true" }).freeAgent).toBeNull();
+    expect(parseRegistrantsQuery({}).freeAgent).toBeNull();
   });
 
-  it("consent_pending=1 turns the filter on; any other value leaves it off", () => {
+  it("consent_pending: same tri-state split — '1' true, '0' explicit false, else null", () => {
     expect(parseRegistrantsQuery({ consent_pending: "1" }).consentPending).toBe(true);
     expect(parseRegistrantsQuery({ consent_pending: "0" }).consentPending).toBe(false);
+    expect(parseRegistrantsQuery({ consent_pending: "bogus" }).consentPending).toBeNull();
+    expect(parseRegistrantsQuery({}).consentPending).toBeNull();
   });
 
   it("trims q, and an all-whitespace q is the same as absent", () => {
@@ -102,6 +111,61 @@ describe("parseRegistrantsQuery — pure, no DB", () => {
     expect(parseRegistrantsQuery({ sort: "newest" }).sort).toBe("newest");
     expect(parseRegistrantsQuery({ sort: "bogus" }).sort).toBe("newest");
     expect(parseRegistrantsQuery({}).sort).toBe("newest");
+  });
+});
+
+// RS005 F3 finding 1: Next hands a REPEATED `?x=a&x=b` query param over as
+// `string[]`, not `string` (Next's own docs — `/shop?a=1&a=2` ->
+// `{ a: ['1', '2'] }`), and never dedupes. page.tsx's `searchParams` is
+// typed `Promise<any>` by Next's own generated PageProps, so the cast into
+// this file's `RegistrantsRawQuery` shape hid that from tsc entirely —
+// `raw.q?.trim()` threw `TypeError: raw.q?.trim is not a function` for a
+// real `GET …?q=a&q=b`, and `error.tsx` swallowed the whole hub (title, tab
+// strip, panel), not just the Registrants panel. Every field this parser
+// reads is exercised here, not just `q`.
+//
+// Choice made: FIRST VALUE WINS, not "ignore the field entirely" — the same
+// choice `URLSearchParams.get()` already makes for the API route's identical
+// parsing job (registration-list-query.ts's `sp.get(...)`), and a dupe is
+// far more likely a bookmarked/hand-edited URL carrying one stale copy
+// alongside the current one than a deliberate "no value" signal.
+describe("parseRegistrantsQuery — array-valued params never throw (RS005 F3 finding 1)", () => {
+  it("never throws for any parsed field, and renders (not just 'doesn't throw differently')", () => {
+    expect(() =>
+      parseRegistrantsQuery({
+        status: ["paid", "confirmed"],
+        division_id: [DIVISION_ID, "11111111-2222-3333-4444-000000000000"],
+        kind: ["team", "pair"],
+        free_agent: ["1", "0"],
+        consent_pending: ["0", "1"],
+        q: ["Alex", "Sam"],
+        sort: ["oldest", "newest"],
+      }),
+    ).not.toThrow();
+  });
+
+  it("first value wins for every field", () => {
+    const result = parseRegistrantsQuery({
+      status: ["paid", "confirmed"],
+      division_id: [DIVISION_ID, "11111111-2222-3333-4444-000000000000"],
+      kind: ["team", "pair"],
+      free_agent: ["1", "0"],
+      consent_pending: ["0", "1"],
+      q: ["  Alex  ", "Sam"],
+      sort: ["oldest", "newest"],
+    });
+    expect(result.status).toBe("paid");
+    expect(result.divisionId).toBe(DIVISION_ID);
+    expect(result.kind).toBe("team");
+    expect(result.freeAgent).toBe(true);
+    expect(result.consentPending).toBe(false);
+    expect(result.text).toBe("Alex");
+    expect(result.sort).toBe("oldest");
+  });
+
+  it("an empty array behaves like absent, not a crash", () => {
+    expect(parseRegistrantsQuery({ q: [] }).text).toBe("");
+    expect(parseRegistrantsQuery({ status: [] }).status).toBeNull();
   });
 });
 
@@ -155,10 +219,29 @@ describe("fetchRegistrantRows — wiring to listRegistrations", () => {
       status: null,
       divisionId: null,
       kind: null,
-      freeAgent: false,
-      consentPending: false,
+      freeAgent: null,
+      consentPending: null,
       text: "",
       sort: "oldest",
+    });
+  });
+
+  // RS005 F3 finding 2: registration-list-query.ts's own `queryBool` reads
+  // `!== undefined` (not truthiness) so an explicit `free_agent=0`/
+  // `consent_pending=0` reaches `listRegistrations` as `false`, and
+  // `listRegistrations` honours that false case with its own `not exists
+  // (...)` arm. Before this fix, `toListFilters`'s `if (filters.freeAgent)`
+  // guard only ever SET the key on `true` — an explicit `0` collapsed to
+  // "omit the filter entirely", so `?consent_pending=0` rendered every row
+  // while the API (given the identical query string) returned only the
+  // narrowed set. This proves the page's own wiring now matches.
+  it("free_agent=0 / consent_pending=0 reach listRegistrations as an explicit false, not omitted (RS005 F3 finding 2)", async () => {
+    await fetchRegistrantRows(AUTH, COMPETITION_ID, { free_agent: "0", consent_pending: "0" });
+    expect(listRegistrationsMock).toHaveBeenCalledWith(AUTH, null, null, {
+      competition_id: COMPETITION_ID,
+      sort: "newest",
+      free_agent: false,
+      consent_pending: false,
     });
   });
 
