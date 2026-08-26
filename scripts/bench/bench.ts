@@ -79,12 +79,24 @@ export function parseCliArgs(argv: string[]): BenchConfig {
     throw new Error(`unknown --suite value(s): ${unknown.join(", ")} — known suites: ${KNOWN_SUITES.join(", ")}`);
   }
 
+  // NO "http://localhost:3000" fallback here (there was one; it collided
+  // with lib/env.ts's own FORBIDDEN_BASE_PORTS, which makes it a real
+  // dev-server port, not a placeholder — so the CLI's own default invocation
+  // could never pass pre-flight). The bench always owns its own throwaway
+  // server; there is no port a default could safely guess, so an unset
+  // --base/SMOKE_BASE is a clear parse-time error instead of a silently
+  // wrong default that fails identically on every run.
+  const base = values.base ?? process.env.SMOKE_BASE;
+  if (!base) {
+    throw new Error("--base is required (or set SMOKE_BASE) — point it at the bench's own throwaway server, never :3000.");
+  }
+
   return {
     suites,
     engine: engine as Engine,
     keep: !values.wipe,
     reportDir: values["report-dir"] as string,
-    base: values.base ?? process.env.SMOKE_BASE ?? "http://localhost:3000",
+    base,
     runId: values["run-id"] as string | undefined,
   };
 }

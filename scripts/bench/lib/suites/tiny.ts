@@ -65,39 +65,55 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     log.info({ email }, "tiny: signing in");
     const { org_id: orgId } = await signIn(base, s, email);
 
-    const venue = await request<IdOut>(base, s, `/api/v1/orgs/${orgId}/venues`, {
-      method: "POST",
-      body: { name: `Bench Tiny Venue ${runTag}` },
-    });
-    const court = await request<IdOut>(base, s, `/api/v1/orgs/${orgId}/venues/${venue.id}/courts`, {
-      method: "POST",
-      body: { name: "Court 1" },
-    });
+    // Two independent chains (venue->court needs only orgId; competition->
+    // division needs neither venue nor court) run concurrently on the same
+    // session — safe here because nothing past sign-in issues a fresh
+    // Set-Cookie, so there is no cookie-jar write race to worry about, only
+    // ordinary concurrent reads of `s`.
+    const [{ court }, { division }] = await Promise.all([
+      (async () => {
+        const venue = await request<IdOut>(base, s, `/api/v1/orgs/${orgId}/venues`, {
+          method: "POST",
+          body: { name: `Bench Tiny Venue ${runTag}` },
+        });
+        const court = await request<IdOut>(base, s, `/api/v1/orgs/${orgId}/venues/${venue.id}/courts`, {
+          method: "POST",
+          body: { name: "Court 1" },
+        });
+        return { venue, court };
+      })(),
+      (async () => {
+        const comp = await request<IdOut>(base, s, "/api/v1/competitions", {
+          method: "POST",
+          body: { ends_on: "2099-12-31", name: `Bench Tiny ${runTag}` },
+        });
+        const division = await request<IdOut>(base, s, `/api/v1/competitions/${comp.id}/divisions`, {
+          method: "POST",
+          body: {
+            name: "Tiny",
+            sport_key: "generic",
+            variant_key: "score",
+            config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+          },
+        });
+        return { comp, division };
+      })(),
+    ]);
 
-    const comp = await request<IdOut>(base, s, "/api/v1/competitions", {
-      method: "POST",
-      body: { ends_on: "2099-12-31", name: `Bench Tiny ${runTag}` },
-    });
-    const division = await request<IdOut>(base, s, `/api/v1/competitions/${comp.id}/divisions`, {
-      method: "POST",
-      body: {
-        name: "Tiny",
-        sport_key: "generic",
-        variant_key: "score",
-        config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      },
-    });
-    await request(base, s, `/api/v1/divisions/${division.id}/entrants`, {
-      method: "POST",
-      body: [
-        { kind: "individual", display_name: "Bench A", seed: 1 },
-        { kind: "individual", display_name: "Bench B", seed: 2 },
-      ],
-    });
-    const stage = await request<IdOut>(base, s, `/api/v1/divisions/${division.id}/stages`, {
-      method: "POST",
-      body: { seq: 1, kind: "league", name: "League" },
-    });
+    // Both only need division.id, so these two run concurrently too.
+    const [, stage] = await Promise.all([
+      request(base, s, `/api/v1/divisions/${division.id}/entrants`, {
+        method: "POST",
+        body: [
+          { kind: "individual", display_name: "Bench A", seed: 1 },
+          { kind: "individual", display_name: "Bench B", seed: 2 },
+        ],
+      }),
+      request<IdOut>(base, s, `/api/v1/divisions/${division.id}/stages`, {
+        method: "POST",
+        body: { seq: 1, kind: "league", name: "League" },
+      }),
+    ]);
     const generated = await request<GenerateOut>(base, s, `/api/v1/stages/${stage.id}/generate`, { method: "POST" });
     if (generated.fixtures.length !== 1) {
       errors.push(`expected exactly 1 fixture from a 2-entrant league, got ${generated.fixtures.length}`);

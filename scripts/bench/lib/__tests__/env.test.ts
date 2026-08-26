@@ -32,6 +32,16 @@ function fakeProbes(overrides: Partial<PreflightProbes> = {}): PreflightProbes {
 }
 
 describe("runPreflight — verdict matrix", () => {
+  it("a malformed --base is a named refusal, not a thrown TypeError", async () => {
+    // Regression: resolvePort()/new URL(base) used to be unguarded, so this
+    // crashed straight out of runPreflight — contradicting its own doc
+    // comment ("never throws itself").
+    await expect(runPreflight("not a url", fakeProbes())).resolves.not.toThrow();
+    const result = await runPreflight("not a url", fakeProbes());
+    expect(result.ok).toBe(false);
+    expect(result.refusals).toEqual([{ reason: "base_url_invalid", detail: expect.stringContaining("not a url") }]);
+  });
+
   it("passes when every probe passes and the base port is not forbidden", async () => {
     const result = await runPreflight("http://localhost:54301", fakeProbes());
     expect(result.ok).toBe(true);

@@ -1,10 +1,10 @@
-# Scheduler bench — run `2e631bafff33e2768d9e1f0d3bbc791b53ed8f82`
+# Scheduler bench — run `2b864f64e973ad9b7a16145dd410db62474f65dc`
 
 - Gate: **GREEN**
 - Engine: optimized
 - Base: http://localhost:3373
-- Started: 2026-08-26T14:45:08.657Z
-- Finished: 2026-08-26T14:45:09.829Z
+- Started: 2026-08-26T15:07:32.459Z
+- Finished: 2026-08-26T15:07:35.683Z
 
 ## Pre-flight
 
@@ -15,7 +15,7 @@
 
 ### _tiny — GREEN
 
-- Timings: seed 888ms, schedule 147ms
+- Timings: seed 2817ms, schedule 269ms
 - Data left in place: no (--wipe requested)
 - Solver: requested=optimized, actual=optimized, status=ok
 - Blocking conflicts: 0

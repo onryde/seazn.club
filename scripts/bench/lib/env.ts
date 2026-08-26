@@ -27,6 +27,7 @@ const FORBIDDEN_BASE_PORTS = new Set([3000, 3100]);
 const DEV_DB_PORT = 5432;
 
 export type RefusalReason =
+  | "base_url_invalid"
   | "base_port_forbidden"
   | "base_host_forbidden"
   | "own_db_dev_db_port"
@@ -96,8 +97,7 @@ export interface PreflightResult {
   port: number;
 }
 
-function resolvePort(base: string): number {
-  const url = new URL(base);
+function resolvePort(url: URL): number {
   if (url.port) return Number(url.port);
   return url.protocol === "https:" ? 443 : 80;
 }
@@ -109,9 +109,30 @@ function resolvePort(base: string): number {
  * this function throws is a bug in a probe implementation, not an expected
  * environmental failure. Every probe runs regardless of the others' outcome
  * so a run refuses on ALL applicable reasons at once, not just the first.
+ * A malformed `--base` is the one exception: nothing else here is checkable
+ * without a parseable URL (there is no port to bind, no host to fetch), so
+ * that alone short-circuits straight to a named refusal instead of a raw
+ * `TypeError` escaping this function's own "never throws itself" contract.
  */
 export async function runPreflight(base: string, probes: PreflightProbes): Promise<PreflightResult> {
-  const port = resolvePort(base);
+  let url: URL;
+  try {
+    url = new URL(base);
+  } catch (err) {
+    return {
+      ok: false,
+      refusals: [
+        {
+          reason: "base_url_invalid",
+          detail: `--base "${base}" is not a parseable URL: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      ],
+      placement: await probes.checkPlacementHealth(),
+      base,
+      port: NaN,
+    };
+  }
+  const port = resolvePort(url);
   const refusals: Refusal[] = [];
 
   if (FORBIDDEN_BASE_PORTS.has(port)) {
@@ -128,7 +149,7 @@ export async function runPreflight(base: string, probes: PreflightProbes): Promi
   // silently dropped over plain http to a non-"localhost" host — a
   // `127.0.0.1` base signs in "successfully" and then 401s on every
   // subsequent call, which reads as an app bug rather than an env mistake.
-  if (new URL(base).hostname === "127.0.0.1") {
+  if (url.hostname === "127.0.0.1") {
     refusals.push({
       reason: "base_host_forbidden",
       detail:
@@ -209,23 +230,24 @@ export function createRealPreflightProbes(): RealProbesHandle {
           detail: `DATABASE_URL is not a valid URL: ${err instanceof Error ? err.message : String(err)}`,
         };
       }
+      // Port checked first — a pure check against the parsed URL, no
+      // connection opened — so a dev-DB target is refused on that fact
+      // alone without ever running `show data_directory` against it. The
+      // two are still independent traps (seazn-local-env skill §1) and
+      // either can fire without the other; this only orders which one is
+      // allowed to touch the shared dev DB at all (neither, ideally).
+      if (port === DEV_DB_PORT) {
+        return {
+          ok: false,
+          reason: "own_db_dev_db_port",
+          detail: `DATABASE_URL targets port ${DEV_DB_PORT}, the shared local dev DB (seazn-local-env skill §1). Use a throwaway bench DB on another port.`,
+          port,
+        };
+      }
       try {
         const sql = getSql();
         const [row] = await sql<{ data_directory: string }[]>`show data_directory`;
         const dataDirectory = row?.data_directory ?? "";
-        // Port checked first: a dev-DB connection is refused on that fact
-        // alone, before ever asking whether BENCH_EXPECTED_DATA_DIR agrees —
-        // the two are independent traps (seazn-local-env skill §1) and
-        // either can fire without the other.
-        if (port === DEV_DB_PORT) {
-          return {
-            ok: false,
-            reason: "own_db_dev_db_port",
-            detail: `DATABASE_URL targets port ${DEV_DB_PORT}, the shared local dev DB (seazn-local-env skill §1). Use a throwaway bench DB on another port.`,
-            dataDirectory,
-            port,
-          };
-        }
         const expected = process.env.BENCH_EXPECTED_DATA_DIR;
         if (expected && dataDirectory !== expected) {
           return {
