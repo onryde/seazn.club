@@ -184,12 +184,12 @@ describe("the toolbar renders one action set, whatever the format's stage count"
     }
   });
 
-  /** One caption for the group, not one per button and not one per stage. */
+  /** One caption for the group, carried as a hover title, not one per button or stage. */
   it("captions the group once", () => {
     const island = renderIsland(ScheduleBoard, baseProps());
-    const captions = allWithProp(island.tree(), "data-testid", "schedule-ladder-caption");
-    expect(captions).toHaveLength(1);
-    expect(propsOf(captions[0]!).children).toBe(
+    const bars = allWithProp(island.tree(), "data-testid", "schedule-action-bar");
+    expect(bars).toHaveLength(1);
+    expect(propsOf(bars[0]!).title).toBe(
       "Rebuild → fix clashes → tighten times. Locked cards stay put.",
     );
   });

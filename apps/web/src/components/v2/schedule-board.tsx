@@ -1114,28 +1114,16 @@ export function ScheduleBoard({
           that used to sit here — that spacer stranded "Freeze schedule" alone
           on row 1 at tablet widths (#349 Verdict D) and told a reader nothing
           about why the two halves were apart. */}
-      {/* ONE caption for the action group, on its OWN line above the bar.
-          Inline under the buttons it made the ladder taller than the stage
-          selector and the AI button beside it, so an `items-center` row put
-          three controls on three different baselines (reported: "still not
-          aligned in same line"). Above rather than below because it reads as
-          what the row is about before the row is used, and because a line
-          under the bar would sit between the actions and the day picker that
-          follows, reading as a caption for the wrong thing.
-
-          Still a visible sublabel and not a hover title: that a lock survives
-          a rebuild has to be legible on touch, not discoverable only by
-          hovering a desktop pointer. */}
-      {canEdit && activeStage && (
-        <p
-          data-testid="schedule-ladder-caption"
-          className="-mb-1 text-[11px] leading-tight text-slate-500"
-        >
-          {msg("board.ladderCaption")}
-        </p>
-      )}
-
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      {/* Owner ruling (2026-08-26): the caption that used to sit here as a
+          visible line was traded for a hover title on the action group,
+          knowingly reintroducing the desktop-only gap the two comments below
+          (and #652) had argued against — locked-card behaviour is no longer
+          legible on touch without a tap-and-hold. */}
+      <div
+        data-testid="schedule-action-bar"
+        className="flex flex-wrap items-center gap-x-3 gap-y-2"
+        title={canEdit && activeStage ? msg("board.ladderCaption") : undefined}
+      >
         {canEdit && activeStage && (
           <>
             {/* A DIVISION WITH MORE THAN ONE STAGE ALWAYS NAMES THE ONE IT IS
