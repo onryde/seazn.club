@@ -9,7 +9,16 @@
 // Never throws: a broken save/load must not break the stepper.
 import type { CartState, ContactState } from "./types";
 
-export const REGISTER_STATE_VERSION = 1 as const;
+// REGISTER_STATE_VERSION bumped 1 -> 2 at RS006 W3 (step 3 — DETAILS):
+// CartEntry gained REQUIRED `players`/`answers` fields (types.ts), so a v1
+// snapshot's entries lack them entirely — not "empty", ABSENT. Handing that
+// to validateDetails/rosterEligibilityForDivision crashes on
+// `entry.players.length` (Cannot read properties of undefined), not a
+// graceful degrade. Bumping the version makes loadRegisterState's existing
+// mismatch check drop it instead (see below) — the mechanism this constant
+// exists for. Any future CartEntry/CartState shape change that isn't purely
+// additive-optional needs the same bump.
+export const REGISTER_STATE_VERSION = 2 as const;
 
 export interface PersistedRegisterState {
   version: typeof REGISTER_STATE_VERSION;

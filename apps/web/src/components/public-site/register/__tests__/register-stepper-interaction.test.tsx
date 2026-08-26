@@ -38,6 +38,7 @@ import { RosterTable } from "../roster-table";
 import { StepDetails } from "../step-details";
 import { StepEntries } from "../step-entries";
 import { StepWho } from "../step-who";
+import { REGISTER_STATE_VERSION } from "../storage";
 import { EMPTY_CONTACT, type CartState, type DivisionLike } from "../types";
 
 const EN_UI: Dict = JSON.parse(
@@ -344,7 +345,7 @@ describe("finding #5 — restoring a pristine saved snapshot never shows stale e
     fakeSessionStorage.setItem(
       key,
       JSON.stringify({
-        version: 1,
+        version: REGISTER_STATE_VERSION,
         contact: { name: "", email: "", dob: null, gender: null },
         imPlaying: false,
         cart: { entries: [], selfEntryId: null, selfPlayerIndex: null },

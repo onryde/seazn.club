@@ -91,6 +91,26 @@ describe("guarded against a malformed or stale entry — never throws", () => {
     );
     expect(loadRegisterState("riverside", "summer-smash", storage)).toBeNull();
   });
+
+  it("drops a v1 (pre-step-3) snapshot whose CartEntry rows lack players/answers, instead of handing the stepper a shape it will crash reading — REGISTER_STATE_VERSION must be bumped past any release that persisted the OLD CartEntry shape", () => {
+    const storage = new MapStorage();
+    // The exact shape RS006's chassis+WHO+ENTRIES wave persisted, BEFORE
+    // step 3 added players/answers to CartEntry (register-stepper.tsx's own
+    // saveRegisterState effect ran on every keystroke, so any browser that
+    // ever loaded that build has one of these sitting in sessionStorage).
+    const preStep3Cart = {
+      entries: [
+        { id: "e1", division_id: "d1", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false },
+      ],
+      selfEntryId: null,
+      selfPlayerIndex: null,
+    };
+    storage.setItem(
+      "seazn_register_riverside_summer-smash",
+      JSON.stringify({ version: 1, contact: SNAPSHOT.contact, imPlaying: false, cart: preStep3Cart, stepIndex: 1 }),
+    );
+    expect(loadRegisterState("riverside", "summer-smash", storage)).toBeNull();
+  });
 });
 
 describe("no storage available (SSR / privacy mode) — degrades to a no-op, never throws", () => {
