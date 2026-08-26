@@ -973,7 +973,15 @@ export const EventImportRequest = z.object({
             message: "core.void cannot be imported",
           }),
           payload: z.record(z.string(), z.unknown()).default({}),
-          at: z.string().optional(),
+          // A real ISO-8601 INSTANT, the same idiom every other timestamp in
+          // this file uses. Not decoration: `at` lands in a `timestamptz`
+          // column, the engine's own envelope only asks `.min(1)`, and the
+          // dry-run fold never touches it — so a malformed value used to
+          // survive every guard and raise Postgres 22007 inside the write
+          // transaction, which is neither a unique violation nor an
+          // EngineError and therefore rethrew as a 500, discarding the report
+          // for streams that had already committed.
+          at: z.iso.datetime({ offset: true }).optional(),
         }),
       ).min(1),
     }),

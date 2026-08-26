@@ -125,7 +125,7 @@ describe("ImportClient — the report table (every rejection code the design doc
   it("renders one localized message per code, a linked fixture, an unresolved reference as plain text, and the totals row", async () => {
     const REPORT = {
       importId: "imp-1",
-      totals: { imported: 1, skipped: 1, rejected: 7 },
+      totals: { imported: 1, skipped: 1, rejected: 8 },
       results: [
         {
           fixture: "fx-1",
@@ -166,6 +166,10 @@ describe("ImportClient — the report table (every rejection code the design doc
           error: { code: "import.entitlement", feature: "scoring.ball_by_ball" },
         },
         { fixture: "fx-8", status: "rejected", eventsAppended: 0, error: { code: "import.slots_unfilled" } },
+        // Final review I-4: the catch-all row. It carries no named fields, so
+        // a page that fell through to `.generic` here would print the raw code
+        // at the operator instead of a sentence.
+        { fixture: "fx-9", status: "rejected", eventsAppended: 0, error: { code: "import.stream_failed" } },
       ],
     };
     net.response = REPORT;
@@ -174,7 +178,7 @@ describe("ImportClient — the report table (every rejection code the design doc
     await setPastedAndSubmit(island, submitted);
 
     const text = island.text();
-    expect(text).toContain(msg("eventImport.totals.summary", { imported: 1, skipped: 1, rejected: 7 }));
+    expect(text).toContain(msg("eventImport.totals.summary", { imported: 1, skipped: 1, rejected: 8 }));
     expect(text).toContain(msg("eventImport.status.imported"));
     expect(text).toContain(msg("eventImport.status.skipped_duplicate"));
     expect(text).toContain(msg("eventImport.status.rejected"));
@@ -205,6 +209,9 @@ describe("ImportClient — the report table (every rejection code the design doc
     expect(text).toContain(msg("eventImport.error.not_decided"));
     expect(text).toContain(msg("eventImport.error.entitlement", { feature: "scoring.ball_by_ball" }));
     expect(text).toContain(msg("eventImport.error.slots_unfilled"));
+    expect(text).toContain(msg("eventImport.error.stream_failed"));
+    // And it is a real sentence, not the generic fallback naming the code.
+    expect(text).not.toContain(msg("eventImport.error.generic", { code: "import.stream_failed" }));
 
     // Fixture (linked): fx-1 resolves through fixtureNoById -> a real console link.
     const tree = island.tree();
@@ -228,7 +235,7 @@ describe("ImportClient — Outcome column renders every MatchOutcome kind as a l
   it("localizes draw/tie/no_result/award, and falls back to the bare kind string for an unrecognised kind — never a UUID or the raw payload", async () => {
     const REPORT = {
       importId: "imp-2",
-      totals: { imported: 5, skipped: 0, rejected: 0 },
+      totals: { imported: 6, skipped: 0, rejected: 0 },
       results: [
         { fixture: "fx-a", status: "imported", eventsAppended: 1, outcome: { kind: "draw" } },
         { fixture: "fx-b", status: "imported", eventsAppended: 1, outcome: { kind: "tie" } },
@@ -240,6 +247,11 @@ describe("ImportClient — Outcome column renders every MatchOutcome kind as a l
           outcome: { kind: "award", winner: "33333333-3333-4333-8333-333333333333" },
         },
         { fixture: "fx-e", status: "imported", eventsAppended: 1, outcome: { kind: "future_kind_v9" } },
+        // Final review (minor): an outcome object with NO `kind` at all. The
+        // old fallback was `String(outcome)`, which renders the literal text
+        // `[object Object]` — the raw payload leaking in the ugliest form
+        // available, and the exact opposite of what this column promises.
+        { fixture: "fx-f", status: "imported", eventsAppended: 1, outcome: { winner: "nobody" } },
       ],
     };
     net.response = REPORT;
@@ -256,6 +268,9 @@ describe("ImportClient — Outcome column renders every MatchOutcome kind as a l
     // never the raw payload.
     expect(text).toContain("future_kind_v9");
     expect(text).not.toContain("33333333-3333-4333-8333-333333333333");
+    // A kind-less outcome renders nothing at all rather than `[object Object]`.
+    expect(text).not.toContain("[object Object]");
+    expect(text).not.toContain("nobody");
   });
 });
 

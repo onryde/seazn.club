@@ -657,7 +657,41 @@ async function runImport(
   const results: ImportStreamResult[] = [];
   for (const stream of input.streams) {
     // Sequential, by design (design doc §4) — bounded, predictable load.
-    results.push(await runStream(auth, division, input.import_id, stream));
+    //
+    // Catch-all, per stream (final review I-4). Design doc §4 promises "200
+    // whenever the call executed — per-stream outcomes are data, not transport
+    // errors", and an unexpected throw out of `runStream` broke that in the
+    // worst way available: it discarded the WHOLE report, including the streams
+    // that had already committed, so the operator was told nothing happened
+    // while some fixtures were fully imported. `runStream`'s own catches name
+    // the failures it anticipated (unique violation, EngineError); this closes
+    // the class rather than the one trigger that was found — the write
+    // transaction has already rolled its own fixture back to zero rows before
+    // control reaches here, so a rejected row is the honest report.
+    //
+    // Deliberately NOT wrapping the call-level checks above (`assertWithinCaps`
+    // 413, the freeze 402, the phase gate 409): those mean no stream ran at
+    // all, and turning them into rows would report a refused call as a
+    // successful one.
+    try {
+      results.push(await runStream(auth, division, input.import_id, stream));
+    } catch (err) {
+      log.error(
+        {
+          err,
+          division: divisionId,
+          import_id: input.import_id,
+          fixture: fixtureRefLabel(stream.fixture),
+        },
+        "event-import: stream failed unexpectedly (reported as import.stream_failed)",
+      );
+      results.push({
+        fixture: fixtureRefLabel(stream.fixture),
+        status: "rejected",
+        eventsAppended: 0,
+        error: { code: "import.stream_failed" },
+      });
+    }
     // Between streams, never inside one — design doc §5.1. A refresh run
     // from inside runStream's own write transaction would be invisible to
     // every other caller until that transaction commits, which is the

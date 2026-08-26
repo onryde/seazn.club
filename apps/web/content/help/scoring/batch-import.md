@@ -46,7 +46,7 @@ A few things worth knowing about the shape:
 
 - **`fixture`** is either `{ "id": … }` or `{ "ext_key": … }` — whichever you use has to match exactly one fixture in the division. Most people pasting a file by hand will find `ext_key` easier, since the console shows fixtures by number, not by their internal id; `id` matters more when you're scripting the import against fixtures you've already fetched from the API.
 - **`events[].type` and `.payload`** are the same event vocabulary that sport's live pad uses — `core.start` and `core.finalize` on every sport, plus sport-specific ones like the `generic.result` above, or cricket's `cricket.ball`. List them in the order they happened; `payload` can be left out for an event that carries none.
-- **`events[].at`** is optional — the original time the event happened, if you know it. Leave it out and the event is stamped with the import time instead.
+- **`events[].at`** is optional — the original time the event happened, if you know it. When you do send it, it has to be a full ISO-8601 instant carrying a timezone, like `"2026-08-20T14:05:00Z"` (an explicit offset such as `"2026-08-20T14:05:00+02:00"` works too, and fractional seconds are fine). A bare date like `"2026-08-20"`, a local time with no zone, or anything the format doesn't cover is refused before the call runs, so a whole file is never half-imported over one bad timestamp. Leave it out and the event is stamped with the import time instead.
 - Don't send a **`seq`**. The server numbers each fixture's events itself, starting at 1, in the order you listed them.
 - **`core.void`** — the live pad's undo — can't be imported at all. If a stream is wrong, fix the file itself rather than trying to cancel one event with another.
 - `import_id` only has to be unique within a division — reusing the same name for a different division is fine.
@@ -77,6 +77,7 @@ Nothing is written for a rejected fixture, not even part of its stream, so it's 
 - **Needs a detail level this plan doesn't include.** One of the events needs a scoring detail level your organisation isn't entitled to. See [Choosing a detail level](/help/scoring/fidelity) — simplify the stream to a level you have, or upgrade.
 - **Something in the stream is invalid partway through.** One of the events isn't valid for this sport at that point in the match — the report names which event in the list. Check it against what actually happened and resend.
 - **The stream never reaches a result.** Every event was valid, but read start to finish they don't add up to a finished match — you're likely missing the last event or two. Add what's missing and resend.
+- **Something unexpected went wrong on this fixture.** A catch-all for a failure none of the cases above describes. Nothing was written for this fixture and the rest of the call carried on regardless, so the other fixtures in the same file are unaffected — resend just this one. If it happens again on the same fixture, the deployment's logs carry the detail.
 
 ## Sending it again safely
 

@@ -12,6 +12,7 @@ import {
   CreateStage,
   CreateTeam,
   Division,
+  EventImportRequest,
   LineupSlotInput,
   PatchCompetition,
   PatchDivision,
@@ -620,5 +621,55 @@ describe("PutRegistrationSettings (RS004 approval / free agents)", () => {
     const r = PutRegistrationSettings.safeParse({ ...BASE, allow_free_agents: true });
     expect(r.success).toBe(true);
     if (r.success) expect(r.data.allow_free_agents).toBe(true);
+  });
+});
+
+// P11 (D6) batch score-event import. Both cases below guard a REFINEMENT that
+// nothing else on the branch exercises, which means either one is deletable
+// with the rest of the suite green.
+describe("EventImportRequest (P11 batch import)", () => {
+  const stream = (event: Record<string, unknown>) => ({
+    import_id: "imp-1",
+    streams: [{ fixture: { ext_key: "M1" }, events: [event] }],
+  });
+
+  it("accepts a minimal stream (the control every rejection below is measured against)", () => {
+    const r = EventImportRequest.safeParse(stream({ type: "core.start" }));
+    expect(r.success).toBe(true);
+    // `payload` defaults rather than staying undefined — the usecase hands it
+    // straight to the engine and to `appendEventInTx`, neither of which has a
+    // fallback of its own.
+    if (r.success) expect(r.data.streams[0]!.events[0]!.payload).toEqual({});
+  });
+
+  // Final review I-5: owner ruling R2 refuses `core.void` at the request
+  // schema — an undo is a live-scoring action, and a wrong import is re-run
+  // under a new import_id, never cancelled event by event. Nothing on the
+  // branch asserted it, so the refine could be deleted with the suite green.
+  it("refuses core.void (owner ruling R2 — an undo is not importable)", () => {
+    const r = EventImportRequest.safeParse(stream({ type: "core.void", payload: { event_id: UUID } }));
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some((i) => i.path.join(".").endsWith("events.0.type"))).toBe(true);
+    }
+  });
+
+  // Final review I-4: `at` used to be a bare `z.string().optional()` and the
+  // engine only asks `.min(1)`, so a malformed timestamp survived the dry run
+  // and raised Postgres 22007 INSIDE the write transaction — neither a unique
+  // violation nor an EngineError, so it rethrew as a 500 and discarded the
+  // report for every stream that had already committed.
+  it("refuses an `at` that is not a parseable ISO-8601 instant", () => {
+    for (const at of ["not-a-timestamp", "2026-13-45T99:99:99Z", "20/08/2026", "", "2026-08-20"]) {
+      const r = EventImportRequest.safeParse(stream({ type: "core.start", at }));
+      expect(r.success, `expected ${JSON.stringify(at)} to be refused`).toBe(false);
+    }
+  });
+
+  it("accepts a real ISO-8601 instant, in Z and in an explicit offset", () => {
+    for (const at of ["2026-08-20T14:05:00Z", "2026-08-20T14:05:00.123Z", "2026-08-20T14:05:00+02:00"]) {
+      const r = EventImportRequest.safeParse(stream({ type: "core.start", at }));
+      expect(r.success, `expected ${JSON.stringify(at)} to be accepted`).toBe(true);
+    }
   });
 });

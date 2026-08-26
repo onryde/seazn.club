@@ -79,12 +79,23 @@ const OUTCOME_KEY: Record<string, MessageKey> = {
  * ONE localized label per kind; an unrecognised kind (a future engine
  * addition this page hasn't learned yet) falls back to the bare kind
  * string, never the raw payload.
+ *
+ * Final review (minor): the fallback used to be a bare `String(outcome)`,
+ * which for the one case it exists to handle — an outcome that is an object
+ * WITHOUT a `kind` — renders the literal text `[object Object]`, i.e. the
+ * raw payload leaking in the ugliest available form, which is exactly what
+ * the paragraph above promises never happens. Only a `kind` (or a bare
+ * string outcome) is renderable; anything else renders as an empty cell,
+ * which says nothing rather than saying nonsense. Unreachable today — every
+ * MatchOutcome the engine produces carries a `kind`.
  */
 function describeOutcome(msg: Msg, outcome: unknown): string {
   const kind =
     outcome && typeof outcome === "object" && "kind" in outcome
       ? String((outcome as { kind: unknown }).kind)
-      : String(outcome);
+      : typeof outcome === "string"
+        ? outcome
+        : "";
   const key = OUTCOME_KEY[kind];
   return key ? msg(key) : kind;
 }
@@ -137,6 +148,12 @@ function describeError(msg: Msg, code: string, extra: Record<string, unknown>): 
       return msg("eventImport.error.concurrent");
     case "import.division_not_started":
       return msg("eventImport.error.division_not_started", { divisionStatus: String(extra.divisionStatus ?? "") });
+    // The catch-all row (final review I-4): a stream that failed for a reason
+    // the importer did not anticipate. It carries no named fields — by
+    // definition nobody knew what to put in them — so the sentence's job is to
+    // say what IS known: this fixture wrote nothing, its siblings are fine.
+    case "import.stream_failed":
+      return msg("eventImport.error.stream_failed");
     default:
       return msg("eventImport.error.generic", { code });
   }

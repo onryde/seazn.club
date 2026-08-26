@@ -1846,6 +1846,7 @@ export type DictionaryKey =
   | "eventImport.error.generic"
   | "eventImport.error.not_decided"
   | "eventImport.error.slots_unfilled"
+  | "eventImport.error.stream_failed"
   | "eventImport.error.too_large"
   | "eventImport.eventRef.unknown"
   | "eventImport.eventRef.withIndex"

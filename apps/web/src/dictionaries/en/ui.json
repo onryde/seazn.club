@@ -4283,5 +4283,6 @@
   "eventImport.error.too_large": "Too many {capLabel}: {actual} exceeds the limit of {limit}.",
   "eventImport.error.concurrent": "Another import with the same import ID is already running for this division. Wait for it to finish, then try again.",
   "eventImport.error.division_not_started": "This division hasn't started yet (status: {divisionStatus}). Start it before importing.",
+  "eventImport.error.stream_failed": "This fixture couldn't be imported because of an unexpected error, so nothing was written for it. Check its events and try again — the other fixtures in this call are unaffected.",
   "eventImport.error.generic": "Import failed ({code})."
 }
