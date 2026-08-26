@@ -20,6 +20,7 @@ import { resolveModule, resolveFixtureCfg } from "@/server/engine-db";
 import { loadLineupPair } from "@/server/engine-db/lineups";
 import { appendEventInTx, type AppendResult, type FirstResult } from "@/server/engine-db/append-event";
 import { requiredFeatureForEvent } from "./fidelity";
+import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { onDecided, refreshDiscipline, refreshNews } from "./scoring";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
@@ -49,6 +50,7 @@ export type ImportReport = {
 interface DivisionCtx {
   id: string;
   status: string;
+  competitionId: string;
   sportKey: string;
   moduleVersion: string;
   config: unknown;
@@ -114,14 +116,22 @@ function assertWithinCaps(input: EventImportRequest): void {
  *  and cfg — one round trip instead of a second lookup later. */
 async function loadDivision(auth: AuthCtx, divisionId: string): Promise<DivisionCtx> {
   const [row] = await sql<
-    { id: string; status: string; sport_key: string; module_version: string; config: unknown }[]
+    {
+      id: string;
+      status: string;
+      competition_id: string;
+      sport_key: string;
+      module_version: string;
+      config: unknown;
+    }[]
   >`
-    select id, status, sport_key, module_version, config
+    select id, status, competition_id, sport_key, module_version, config
     from divisions where id = ${divisionId} and org_id = ${auth.orgId}`;
   if (!row) throw new HttpError(404, "division not found", "import.division_not_found");
   return {
     id: row.id,
     status: row.status,
+    competitionId: row.competition_id,
     sportKey: row.sport_key,
     moduleVersion: row.module_version,
     config: row.config,
@@ -587,6 +597,24 @@ async function runImport(
   const startedAt = performance.now();
   assertWithinCaps(input);
   const division = await loadDivision(auth, divisionId);
+  // Over-quota freeze (doc 10 §2.4), the same gate `scoreEvent` applies at the
+  // live scoring door (scoring.ts:195 + :214): a downgraded org's frozen
+  // competitions are READ-ONLY, and a bulk write is still a write.
+  //
+  // Call-level, resolved ONCE (owner ruling R-A): an import addresses exactly
+  // one division, therefore exactly one competition, so the verdict is
+  // identical for every stream in the call — per-stream it would be N
+  // identical lookups producing one answer, and a partial import of a frozen
+  // competition is not a state anyone wants either.
+  //
+  // Ordering is not stylistic. `frozenCompetitionIds` opens with `getLimit`,
+  // which queries the POOLED `sql` proxy, and `withTenant` pins one pooled
+  // connection for its whole callback — asking the pool for a second while the
+  // first is held is the permanent self-deadlock of 2026-08-05
+  // (entitlement-freeze.ts:68-77, __tests__/pool-nesting-tripwire.test.ts). It
+  // therefore runs HERE, before any stream (and so before any transaction)
+  // opens, never from inside one.
+  assertNotFrozen(await frozenCompetitionIds(auth.orgId), division.competitionId);
   // Doc 12 §1 / R1: import inherits live scoring's phase gate — a published
   // but unstarted timetable stays read-only.
   if (division.status === "setup" || division.status === "scheduled") {
