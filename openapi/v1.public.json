@@ -37234,7 +37234,7 @@
     },
     "/api/v1/divisions/{id}/registrations/export": {
       "get": {
-        "summary": "CSV export of registrations; all plans (`exports`)",
+        "summary": "CSV export of registrations; all plans (`exports`). One row per player, `id`+`registration_id` both present (same value); player dob/gender omitted for a viewer/read-scope key",
         "tags": [
           "registration"
         ],
@@ -38048,7 +38048,7 @@
     },
     "/api/v1/competitions/{id}/registrations/export": {
       "get": {
-        "summary": "CSV export of a competition's registrations, same filters as the list; all plans (`exports`)",
+        "summary": "CSV export of a competition's registrations, same filters as the list; all plans (`exports`). Same per-player CSV shape as the division export above",
         "tags": [
           "registration"
         ],

@@ -203,12 +203,20 @@ export const ROUTES: RouteSpec[] = [
   { path: "/divisions/{id}/registration-settings", method: "get", summary: "Division registration settings (defaults when unset)", tag: "registration", response: S.RegistrationSettings },
   { path: "/divisions/{id}/registration-settings", method: "put", summary: "Upsert registration settings (entry fees are Pro)", tag: "registration", request: S.PutRegistrationSettings, response: S.RegistrationSettings, errors: [402, 422] },
   { path: "/divisions/{id}/registrations", method: "get", summary: "Organiser registration list (?status=)", tag: "registration", response: z.array(S.RegistrationListEntry), query: { status: { schema: { type: "string", enum: S.RegistrationStatus.options } } } },
-  { path: "/divisions/{id}/registrations/export", method: "get", summary: "CSV export of registrations; all plans (`exports`)", tag: "registration", errors: [402] },
+  // CSV body shape (RS005 F1 finding 5 — no typed response: text/csv, not
+  // JSON): one row per PLAYER, not per registration — an entry with N
+  // players repeats its entry columns N times; an entry with none emits one
+  // row with blank player columns. Header starts `id,registration_id,...`
+  // — both the same value on every row (`id` kept for the pre-RS005-W1a
+  // one-row-per-registration contract, `registration_id` is the current
+  // name) — and varies by caller role: player dob/gender are editor-only,
+  // OMITTED (not blanked) for a viewer session or a read-scope API key.
+  { path: "/divisions/{id}/registrations/export", method: "get", summary: "CSV export of registrations; all plans (`exports`). One row per player, `id`+`registration_id` both present (same value); player dob/gender omitted for a viewer/read-scope key", tag: "registration", errors: [402] },
   // RS005 W1b — competition-wide Registrants tab: the same read model
   // (listRegistrations/exportRegistrationsCsv) as the division routes above,
   // scoped to a whole competition with the full RS005 W1a filter set.
   { path: "/competitions/{id}/registrations", method: "get", summary: "Cross-division organiser registration list — the Registrants tab read model (?status=&division_id=&kind=&free_agent=&consent_pending=&q=&sort=)", tag: "registration", response: z.array(S.RegistrationListEntry), query: REGISTRATION_LIST_QUERY },
-  { path: "/competitions/{id}/registrations/export", method: "get", summary: "CSV export of a competition's registrations, same filters as the list; all plans (`exports`)", tag: "registration", errors: [402], query: REGISTRATION_LIST_QUERY },
+  { path: "/competitions/{id}/registrations/export", method: "get", summary: "CSV export of a competition's registrations, same filters as the list; all plans (`exports`). Same per-player CSV shape as the division export above", tag: "registration", errors: [402], query: REGISTRATION_LIST_QUERY },
   { path: "/registrations/{id}/confirm", method: "post", summary: "Approve: materialise the entrant (idempotent)", tag: "registration", response: S.Registration, errors: [422] },
   { path: "/registrations/{id}/mark-paid", method: "post", summary: "Record an offline (cash/bank) payment — confirms the entry", tag: "registration", response: S.Registration, errors: [422] },
   { path: "/registrations/{id}/waive", method: "post", summary: "Confirm without payment (fee waived, audited)", tag: "registration", response: S.Registration, errors: [422] },
