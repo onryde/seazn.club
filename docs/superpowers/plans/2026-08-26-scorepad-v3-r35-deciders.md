@@ -121,7 +121,8 @@ Written before the tasks so no task invents its own coverage. Every row is a tes
 | B1 | All tiles for type X disabled | X NOT in `dedicatedEventTypes`; X appears in `moreActions` | B |
 | B2 | All tiles for type X enabled | X IS in `dedicatedEventTypes`; X absent from `moreActions` (unchanged) | B |
 | B3 | Type X on one enabled AND one disabled tile | X IS in `dedicatedEventTypes` — still genuinely reachable | B |
-| B4 | Type X disabled as a tile but owned by a `sheets` entry | X IS in `dedicatedEventTypes` — the sheet loop still claims it | B |
+| B4 | ~~Type X disabled as a tile but owned by a `sheets` entry → X IS claimed~~ | **WRONG — this row WAS the bug.** Measured 2026-08-26: cricket's `wicket` sheet declares `event: "cricket.superover.ball"` and its only opening tile is disabled, so the sheet loop kept claiming the type and the tile guard achieved nothing. `resolveSheet` has ONE call site (`pad-host.tsx:854`), reached only from a tile tap — a sheet is never independently reachable. Corrected: **a sheet whose every opening tile is disabled claims nothing** | B |
+| B4b | A sheet with NO tile at all (cricket's `overSummary` in the fine lane) | UNCHANGED — still claimed. Deliberately not widened: un-claiming it would surface `cricket.innings.summary` in More during a fine innings, where the fold refuses it (`cricket.ts:1402-1404`), creating exactly the dead-end path R3 spent a review round killing. Cricket declares no `refusedEventTypes`; that question belongs to Task C | B |
 | B5 | A tapModel-S scorebug half | Unchanged from R4 — `tappable` halves still claim their type | B |
 | B6 | `ScorebugHalf.sub` absent | Rendered markup byte-identical to before this wave | D |
 | B7 | `ScorebugHalf.sub` present | Rendered beside `big`; contrast passes computed from tokens; tabular-nums | D |
