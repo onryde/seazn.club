@@ -1,0 +1,32 @@
+{
+  "runId": "1d94b56d69bd167947907ca1daf3a0c27cfdf930",
+  "startedAt": "2026-08-26T14:25:14.764Z",
+  "finishedAt": "2026-08-26T14:25:16.849Z",
+  "engine": "optimized",
+  "base": "http://localhost:3373",
+  "preflight": {
+    "ok": true,
+    "refusals": [],
+    "placement": {
+      "status": "live",
+      "detail": "placement channel to localhost:50740 reached READY within 3s."
+    }
+  },
+  "suites": [
+    {
+      "suite": "_tiny",
+      "gate": "green",
+      "timings": {
+        "seedMs": 1673,
+        "scheduleMs": 264
+      },
+      "solver": {
+        "engine": "optimized",
+        "requestedEngine": "greedy",
+        "status": "ok"
+      },
+      "conflictCount": 0
+    }
+  ],
+  "gate": "green"
+}

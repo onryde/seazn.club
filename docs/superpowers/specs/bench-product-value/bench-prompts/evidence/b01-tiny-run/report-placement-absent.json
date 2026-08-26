@@ -1,0 +1,32 @@
+{
+  "runId": "1d94b56d69bd167947907ca1daf3a0c27cfdf930",
+  "startedAt": "2026-08-26T14:26:13.751Z",
+  "finishedAt": "2026-08-26T14:26:18.100Z",
+  "engine": "optimized",
+  "base": "http://localhost:3373",
+  "preflight": {
+    "ok": true,
+    "refusals": [],
+    "placement": {
+      "status": "absent",
+      "detail": "placement channel to placement.flycast:50051 did not reach READY within 3s (Failed to connect before the deadline)."
+    }
+  },
+  "suites": [
+    {
+      "suite": "_tiny",
+      "gate": "green",
+      "timings": {
+        "seedMs": 1086,
+        "scheduleMs": 186
+      },
+      "solver": {
+        "engine": "greedy",
+        "requestedEngine": "greedy",
+        "status": "solver_unavailable"
+      },
+      "conflictCount": 0
+    }
+  ],
+  "gate": "green"
+}

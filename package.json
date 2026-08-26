@@ -45,6 +45,7 @@
     "backfill:pass-credit-redemptions": "node --env-file-if-exists=apps/web/.env.local --experimental-strip-types scripts/backfill-pass-credit-redemptions.ts"
   },
   "dependencies": {
+    "@grpc/grpc-js": "^1.14.4",
     "@seazn/engine": "workspace:*",
     "pino": "^10.3.1",
     "postgres": "^3.4.9",

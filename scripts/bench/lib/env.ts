@@ -13,7 +13,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import postgres from "postgres";
-import { PlacementError, solveBuild } from "@seazn/engine/scheduling/placement-client";
+import * as grpc from "@grpc/grpc-js";
 
 const execFileAsync = promisify(execFile);
 
@@ -261,53 +261,36 @@ export function createRealPreflightProbes(): RealProbesHandle {
 
     async checkPlacementHealth(): Promise<PlacementHealthResult> {
       const host = process.env.PLACEMENT_SERVICE_HOST ?? "placement.flycast:50051";
-      const secret = process.env.PLACEMENT_SERVICE_SECRET ?? "";
+      // NOT `@seazn/engine/scheduling/placement-client` — that module's
+      // static import graph reaches `./generated/scheduler.ts`, which
+      // declares a TS `enum`. Node's `--experimental-strip-types` (this
+      // script's own runtime, matching `scripts/smoke.ts`) erases types but
+      // cannot synthesize an enum's runtime object, so ANY static or dynamic
+      // import of that file throws `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` at
+      // load time — confirmed live: a full `_tiny` run crashed the whole CLI
+      // before a single probe ran. `@grpc/grpc-js` itself is plain published
+      // JS (no stripping involved) and needs no generated proto stubs for a
+      // liveness-only check, so it's added as a root dependency (pinned to
+      // packages/engine's own `^1.14.4`) and used directly here via the raw
+      // `grpc.Client` channel API — this proves a real HTTP/2 gRPC
+      // connection came up, without decoding any RPC response.
+      const channel = new grpc.Client(host, grpc.credentials.createInsecure());
+      const deadline = Date.now() + 3000;
       try {
-        // Sanctioned reuse, not a hand-copy: `@seazn/engine/scheduling/
-        // placement-client` is a real published package subpath (the same
-        // one apps/web's own usecase tests import), and it is the ONLY way
-        // to reach `SchedulerServiceClient` from scripts/bench at all —
-        // `@grpc/grpc-js` is a dependency of packages/engine, not of the
-        // repo root (confirmed: no node_modules/@grpc at the repo root, and
-        // pnpm-workspace.yaml hoists only pdfkit/exceljs, deliberately, on
-        // named evidence), so it does not resolve as a bare import from a
-        // script run with plain `node --experimental-strip-types` from the
-        // repo root. Calling `solveBuild` exercises the EXACT `new
-        // SchedulerServiceClient(host, grpc.credentials.createInsecure())`
-        // construction the brief names (placement-client.ts:300) without
-        // reaching into packages/engine/src directly.
-        const outcome = await solveBuild(
-          {
-            // Degenerate, genuinely lightweight board: zero fixtures/courts,
-            // a 1-second wall budget. CP-SAT solves an empty problem
-            // instantly — this call exists to prove the channel answers,
-            // not to solve anything. `deadlineMsFor` (wallSeconds + 2s
-            // margin) gives it a short ~3s ceiling either way.
-            courts: [],
-            fixtures: [],
-            grid: { slots: [], stepMinutes: 30 },
-            existing: [],
-            dependencies: [],
-            ruleGroups: [],
-            constraints: { matchMinutes: 30, gapMinutes: 0 },
-            wallSeconds: 1,
-          },
-          { host, secret, requestId: "bench-preflight" },
-        );
-        return { status: "live", detail: `placement answered: status=${outcome.status}, elapsedMs=${outcome.elapsedMs}.` };
+        await new Promise<void>((resolve, reject) => {
+          channel.waitForReady(deadline, (err) => {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+        return { status: "live", detail: `placement channel to ${host} reached READY within 3s.` };
       } catch (err) {
-        if (err instanceof PlacementError) {
-          // unauthenticated/invalid_request still means a service answered
-          // the call — it just rejected this particular probe. That is
-          // "live" for pre-flight purposes: the report cares whether
-          // build/polish/reflow will find a service to talk to at all, not
-          // whether this exact placeholder secret happens to be valid.
-          if (err.failure === "unauthenticated" || err.failure === "invalid_request") {
-            return { status: "live", detail: `placement reachable but rejected the probe (${err.failure}): ${err.message}` };
-          }
-          return { status: "absent", detail: `placement unreachable (${err.failure}): ${err.message}` };
-        }
-        return { status: "absent", detail: `placement probe failed: ${err instanceof Error ? err.message : String(err)}` };
+        return {
+          status: "absent",
+          detail: `placement channel to ${host} did not reach READY within 3s (${err instanceof Error ? err.message : String(err)}).`,
+        };
+      } finally {
+        channel.close();
       }
     },
 
