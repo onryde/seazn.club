@@ -267,12 +267,42 @@ async function assertEntitledToScore(
   const feature = requiredFeatureForEvent(sportModule, input.type);
   if (feature) await requireFeature(auth.orgId, feature);
 
-  if (input.type === "cricket.revise") {
-    const manualTarget = (input.payload as { target?: unknown } | null)?.target !== undefined;
-    const dlsEnabled =
-      (ctx.config as { dls?: { enabled?: boolean } } | null)?.dls?.enabled === true;
-    if (dlsEnabled && !manualTarget) await requireFeature(auth.orgId, "cricket.dls");
+  if (requiresDlsEntitlement(input.type, ctx.config, input.payload)) {
+    await requireFeature(auth.orgId, "cricket.dls");
   }
+}
+
+/**
+ * The SECOND, non-fidelity entitlement gate (doc 10 §2 rule 4). A
+ * `cricket.revise` carrying no manual umpire target, under a division whose
+ * config enables DLS, is what makes the fold COMPUTE a Duckworth-Lewis-Stern
+ * target — Pro only. A manual target is an umpire's own number and is always
+ * allowed.
+ *
+ * `requiredFeatureForEvent` cannot express this: `cricket.revise` is fidelity
+ * TIER 1 (packages/engine/src/sports/cricket/cricket.ts), so the fidelity map
+ * returns null for it and always will — the rule is about the event's PAYLOAD
+ * and the DIVISION's config, neither of which a tier table knows about.
+ *
+ * Exported (P11) for the batch importer, the same reason `onDecided` /
+ * `refreshDiscipline` / `refreshNews` are exported just below: the importer
+ * has to apply the identical gate, and one predicate with two callers is what
+ * stops the live path and the import path from drifting. `divisionConfig` is
+ * the DIVISION's `config` column — exactly what `assertEntitledToScore` reads
+ * above — never a fixture cfg snapshot, which can legitimately differ.
+ *
+ * Pure: no I/O, so it is unit-testable and safe to call from anywhere,
+ * including inside a transaction.
+ */
+export function requiresDlsEntitlement(
+  eventType: string,
+  divisionConfig: unknown,
+  payload: unknown,
+): boolean {
+  if (eventType !== "cricket.revise") return false;
+  const manualTarget = (payload as { target?: unknown } | null)?.target !== undefined;
+  const dlsEnabled = (divisionConfig as { dls?: { enabled?: boolean } } | null)?.dls?.enabled === true;
+  return dlsEnabled && !manualTarget;
 }
 
 // Discipline (SPEC-1): a decided/void write re-folds the division's card ledger

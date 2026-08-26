@@ -21,7 +21,7 @@ import { loadLineupPair } from "@/server/engine-db/lineups";
 import { appendEventInTx, type AppendResult, type FirstResult } from "@/server/engine-db/append-event";
 import { requiredFeatureForEvent } from "./fidelity";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
-import { onDecided, refreshDiscipline, refreshNews } from "./scoring";
+import { onDecided, refreshDiscipline, refreshNews, requiresDlsEntitlement } from "./scoring";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { log } from "@/server/logger";
@@ -239,6 +239,17 @@ async function runStream(
   for (const ev of stream.events) {
     const feature = requiredFeatureForEvent(sportModule, ev.type);
     if (feature) requiredFeatures.add(feature);
+    // The second, non-fidelity gate `scoreEvent` applies (scoring.ts's
+    // `requiresDlsEntitlement`): a `cricket.revise` with no manual umpire
+    // target under a DLS-enabled division computes a DLS target, which is Pro
+    // only. `cricket.revise` is fidelity TIER 1, so the loop above returns null
+    // for it and would otherwise wave it straight through — a non-entitled org
+    // buying a DLS target by importing instead of scoring. Shared predicate,
+    // not a copy, so the two paths cannot drift; `division.config` is the same
+    // division-level config `assertEntitledToScore` reads (owner ruling R-B).
+    if (requiresDlsEntitlement(ev.type, division.config, ev.payload)) {
+      requiredFeatures.add("cricket.dls");
+    }
   }
   for (const feature of requiredFeatures) {
     try {

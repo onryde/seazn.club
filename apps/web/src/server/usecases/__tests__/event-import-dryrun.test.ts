@@ -126,4 +126,54 @@ describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
       feature: "scoring.ball_by_ball",
     });
   });
+
+  // Final review C-2: a SECOND entitlement gate the fidelity map cannot
+  // express. `cricket.revise` is fidelity TIER 1, so `requiredFeatureForEvent`
+  // returns null for it and step 5's loop asks for nothing — but a revise with
+  // no manual umpire target, under a division whose config enables DLS, is
+  // exactly what makes the fold compute a Duckworth-Lewis-Stern target, which
+  // is Pro-only at the live scoring door (scoring.ts's `requiresDlsEntitlement`).
+  // Without the import-side counterpart a non-entitled org buys a DLS target by
+  // importing instead of scoring.
+  it("rejects a DLS-computed cricket.revise when the org lacks cricket.dls (import.entitlement)", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedCricketDivisionWithFixture(auth);
+    // The division-level config is what BOTH paths read (owner ruling R-B) —
+    // not the fixture's cfg snapshot — so parity with `scoreEvent` is
+    // byte-for-byte rather than approximate.
+    await sql`
+      update divisions set config = config || '{"dls":{"enabled":true}}'::jsonb
+      where id = ${divisionId}`;
+
+    const report = await importEvents(auth, divisionId, {
+      import_id: "imp-dls",
+      streams: [{ fixture: { id: fixtureId }, events: [{ type: "cricket.revise", payload: {} }] }],
+    });
+    expect(report.results[0]!.error).toMatchObject({
+      code: "import.entitlement",
+      feature: "cricket.dls",
+    });
+  });
+
+  // Non-vacuousness control: an IDENTICAL stream with a manual umpire target is
+  // not a DLS computation at all and must sail past the gate — so this rejects
+  // for a different reason (the fold, which this fixture has no lineups for),
+  // never `import.entitlement`. Without it, a "fix" that demanded `cricket.dls`
+  // for every `cricket.revise` would pass the case above.
+  it("negative control: a cricket.revise WITH a manual target never asks for cricket.dls", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedCricketDivisionWithFixture(auth);
+    await sql`
+      update divisions set config = config || '{"dls":{"enabled":true}}'::jsonb
+      where id = ${divisionId}`;
+
+    const report = await importEvents(auth, divisionId, {
+      import_id: "imp-dls-manual",
+      streams: [{
+        fixture: { id: fixtureId },
+        events: [{ type: "cricket.revise", payload: { target: 148 } }],
+      }],
+    });
+    expect(report.results[0]!.error?.code).not.toBe("import.entitlement");
+  });
 });
