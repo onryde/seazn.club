@@ -604,8 +604,15 @@ async function runImport(
     // Between streams, never inside one — design doc §5.1. A refresh run
     // from inside runStream's own write transaction would be invisible to
     // every other caller until that transaction commits, which is the
-    // opposite of what keeping the lock alive is for.
-    await refreshImportLock(divisionId, input.import_id, auth.orgId, lockHolder);
+    // opposite of what keeping the lock alive is for. Guarded the same way
+    // the release path already is (withLock's finally, above): a lock-table
+    // hiccup here must not abort an import whose per-fixture writes already
+    // committed.
+    try {
+      await refreshImportLock(divisionId, input.import_id, auth.orgId, lockHolder);
+    } catch (err) {
+      log.error({ err }, "event-import: refreshing the import lock failed (import result unaffected)");
+    }
   }
   const report = buildReport(input.import_id, results);
   const appended = results.reduce((n, r) => n + r.eventsAppended, 0);

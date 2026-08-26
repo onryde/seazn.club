@@ -110,12 +110,7 @@ describe.skipIf(!HAS_DB)("event-import — regression proofs (P11 Task 6)", () =
     // proved: 2 entrants, split across 2 league stages, each stage's round
     // robin over the SAME 2 division entrants yielding exactly 1 fixture —
     // so A and B share entrant identity by construction (_rig.ts's own
-    // docstring on startedDivisionWithFixture). divisionRig's `doubleRound`
-    // option does NOT produce this shape: it sets division.config.rounds,
-    // but generateStageFixtures reads `legs` off the STAGE's config
-    // (stages.ts:750), and every stage this rig creates is `config: {}` — so
-    // `doubleRound` is currently a no-op for fixture generation. Noted in
-    // the Task 6 report; not fixed here (no production code in this task).
+    // docstring on startedDivisionWithFixture).
     const { divisionId, fixtureIds } = await startedDivisionWithFixture(auth, { fixtures: 2 });
     const [aId, bId] = fixtureIds;
     expect(fixtureIds).toHaveLength(2);

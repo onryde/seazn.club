@@ -61,6 +61,34 @@ const CAP_KEY: Record<string, MessageKey> = {
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
+const OUTCOME_KEY: Record<string, MessageKey> = {
+  win: "eventImport.outcome.win",
+  draw: "eventImport.outcome.draw",
+  tie: "eventImport.outcome.tie",
+  no_result: "eventImport.outcome.no_result",
+  award: "eventImport.outcome.award",
+};
+
+/**
+ * `row.outcome` is the engine's MatchOutcome verbatim (packages/engine
+ * core/types.ts — win/draw/tie/no_result/award). `winner`/`loser` inside it
+ * are entrant ids this response cannot resolve to names (found by
+ * screenshotting the live page: the cell was printing the raw payload, bare
+ * UUIDs included) — an operator can't read that, and the row's own fixture
+ * link is where a human goes for who won. So only `kind` renders, through
+ * ONE localized label per kind; an unrecognised kind (a future engine
+ * addition this page hasn't learned yet) falls back to the bare kind
+ * string, never the raw payload.
+ */
+function describeOutcome(msg: Msg, outcome: unknown): string {
+  const kind =
+    outcome && typeof outcome === "object" && "kind" in outcome
+      ? String((outcome as { kind: unknown }).kind)
+      : String(outcome);
+  const key = OUTCOME_KEY[kind];
+  return key ? msg(key) : kind;
+}
+
 /**
  * Every rejection code the design doc (§4) says this page must render,
  * mapped through ONE function so a per-row error cell (a stream the call
@@ -165,7 +193,7 @@ export function ImportClient({ divisionId, orgSlug, compSlug, divSlug, fixtureNo
       if (err instanceof ApiV1Error) {
         setCallError(describeError(msg, err.code, err.extra));
       } else {
-        setCallError(err instanceof Error ? err.message : String(err));
+        setCallError(msg("eventImport.error.generic", { code: err instanceof Error ? err.message : String(err) }));
       }
     } finally {
       setBusy(false);
@@ -263,7 +291,7 @@ export function ImportClient({ divisionId, orgSlug, compSlug, divSlug, fixtureNo
                         </span>
                       </td>
                       <td className="py-1.5 pr-3">{row.eventsAppended}</td>
-                      <td className="py-1.5 pr-3">{row.outcome ? JSON.stringify(row.outcome) : "—"}</td>
+                      <td className="py-1.5 pr-3">{row.outcome ? describeOutcome(msg, row.outcome) : "—"}</td>
                       <td className="py-1.5 pr-3">{row.error ? describeError(msg, row.error.code, row.error) : "—"}</td>
                     </tr>
                   );

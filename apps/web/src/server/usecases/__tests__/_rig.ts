@@ -56,7 +56,7 @@ export async function seedOrg(): Promise<{ auth: AuthCtx }> {
  *  needed. */
 export async function divisionRig(
   auth: AuthCtx,
-  opts: { start?: boolean; entrants?: number; doubleRound?: boolean; stages?: number } = {},
+  opts: { start?: boolean; entrants?: number; stages?: number } = {},
 ): Promise<{
   divisionId: string;
   fixtureIds: string[];
@@ -68,7 +68,7 @@ export async function divisionRig(
   });
   const division = await createDivision(auth, competition.id, {
     name: "Open", sport_key: "generic", variant_key: "score",
-    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false, ...(opts.doubleRound ? { rounds: 2 } : {}) },
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
     eligibility: [],
   });
   const names = Array.from({ length: opts.entrants ?? 2 }, (_, i) => String.fromCharCode(65 + i));

@@ -125,9 +125,19 @@ describe("ImportClient — the report table (every rejection code the design doc
   it("renders one localized message per code, a linked fixture, an unresolved reference as plain text, and the totals row", async () => {
     const REPORT = {
       importId: "imp-1",
-      totals: { imported: 1, skipped: 1, rejected: 6 },
+      totals: { imported: 1, skipped: 1, rejected: 7 },
       results: [
-        { fixture: "fx-1", status: "imported", eventsAppended: 3, outcome: { winner: "home" } },
+        {
+          fixture: "fx-1",
+          status: "imported",
+          eventsAppended: 3,
+          outcome: {
+            kind: "win",
+            winner: "11111111-1111-4111-8111-111111111111",
+            loser: "22222222-2222-4222-8222-222222222222",
+            method: "regulation",
+          },
+        },
         { fixture: "fx-2", status: "skipped_duplicate", eventsAppended: 0 },
         { fixture: "fx-3", status: "rejected", eventsAppended: 0, error: { code: "import.fixture_started" } },
         {
@@ -164,10 +174,20 @@ describe("ImportClient — the report table (every rejection code the design doc
     await setPastedAndSubmit(island, submitted);
 
     const text = island.text();
-    expect(text).toContain(msg("eventImport.totals.summary", { imported: 1, skipped: 1, rejected: 6 }));
+    expect(text).toContain(msg("eventImport.totals.summary", { imported: 1, skipped: 1, rejected: 7 }));
     expect(text).toContain(msg("eventImport.status.imported"));
     expect(text).toContain(msg("eventImport.status.skipped_duplicate"));
     expect(text).toContain(msg("eventImport.status.rejected"));
+
+    // Fix wave (deferred finding 1): the Outcome column renders a localized
+    // label for `kind`, never the raw payload or the entrant UUIDs inside it
+    // (packages/engine's MatchOutcome) — this response can't resolve winner/
+    // loser ids to names, and the row's own fixture link is where a human
+    // goes for who won.
+    expect(text).toContain(msg("eventImport.outcome.win"));
+    expect(text).not.toContain(JSON.stringify(REPORT.results[0]!.outcome));
+    expect(text).not.toContain("11111111-1111-4111-8111-111111111111");
+
     expect(text).toContain(msg("eventImport.error.fixture_started"));
     expect(text).toContain(msg("eventImport.error.fixture_unknown", { matches: 2 }));
     expect(text).toContain(
@@ -201,6 +221,41 @@ describe("ImportClient — the report table (every rejection code the design doc
     // Re-running is the "show me that report again" path (design doc §7):
     // the textarea keeps exactly what was submitted.
     expect(propsOf(findTextarea(tree)).value).toBe(submitted);
+  });
+});
+
+describe("ImportClient — Outcome column renders every MatchOutcome kind as a localized label (fix wave, deferred finding 1)", () => {
+  it("localizes draw/tie/no_result/award, and falls back to the bare kind string for an unrecognised kind — never a UUID or the raw payload", async () => {
+    const REPORT = {
+      importId: "imp-2",
+      totals: { imported: 5, skipped: 0, rejected: 0 },
+      results: [
+        { fixture: "fx-a", status: "imported", eventsAppended: 1, outcome: { kind: "draw" } },
+        { fixture: "fx-b", status: "imported", eventsAppended: 1, outcome: { kind: "tie" } },
+        { fixture: "fx-c", status: "imported", eventsAppended: 1, outcome: { kind: "no_result" } },
+        {
+          fixture: "fx-d",
+          status: "imported",
+          eventsAppended: 1,
+          outcome: { kind: "award", winner: "33333333-3333-4333-8333-333333333333" },
+        },
+        { fixture: "fx-e", status: "imported", eventsAppended: 1, outcome: { kind: "future_kind_v9" } },
+      ],
+    };
+    net.response = REPORT;
+    const island = renderIsland(ImportClient, BASE_PROPS);
+    await setPastedAndSubmit(island, JSON.stringify({ import_id: "imp-2", streams: [] }));
+
+    const text = island.text();
+    expect(text).toContain(msg("eventImport.outcome.draw"));
+    expect(text).toContain(msg("eventImport.outcome.tie"));
+    expect(text).toContain(msg("eventImport.outcome.no_result"));
+    expect(text).toContain(msg("eventImport.outcome.award"));
+    // Defensive fallback: an unrecognised kind (e.g. a future engine
+    // addition this page hasn't learned yet) renders the bare kind string,
+    // never the raw payload.
+    expect(text).toContain("future_kind_v9");
+    expect(text).not.toContain("33333333-3333-4333-8333-333333333333");
   });
 });
 
@@ -239,5 +294,12 @@ describe("ImportClient — call-level rejections (no per-stream result exists at
     const island = renderIsland(ImportClient, BASE_PROPS);
     await setPastedAndSubmit(island, JSON.stringify({ import_id: "x", streams: [] }));
     expect(island.text()).toContain(msg("eventImport.error.generic", { code: "INTERNAL" }));
+  });
+
+  it("routes a non-ApiV1Error (a transport failure) through the localized generic error key, never the raw English message unwrapped", async () => {
+    net.rejection = new Error("Failed to fetch");
+    const island = renderIsland(ImportClient, BASE_PROPS);
+    await setPastedAndSubmit(island, JSON.stringify({ import_id: "x", streams: [] }));
+    expect(island.text()).toContain(msg("eventImport.error.generic", { code: "Failed to fetch" }));
   });
 });
