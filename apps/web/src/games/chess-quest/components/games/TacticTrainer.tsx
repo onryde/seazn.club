@@ -20,7 +20,7 @@ import {
   sqIdx,
   tacticGainAfter,
 } from "../../engine";
-import { TACTICS, TACTICS2, TACTICS3 } from "../../content/puzzles";
+import { TACTICS, TACTICS2, TACTICS3, TACTICS4 } from "../../content/puzzles";
 import { useCopy } from "../../lib/copy";
 import { celebrate } from "../../lib/celebrate";
 import { sfx } from "../../lib/sfx";
@@ -46,6 +46,10 @@ const PACK_INFO: Record<string, { name: string; ask: string }> = {
   decoy: { name: "The Decoy", ask: "Something looks like help. Find out why it actually isn't." },
   removeDefender: { name: "Remove the Defender", ask: "Clear the guard first — then the prize is yours." },
   interference: { name: "Interference", ask: "Step into the defensive line and cut the connection!" },
+  doubleCheck: { name: "Double Check", ask: "Find the move that checks with two pieces at once!" },
+  backRank: { name: "The Back-Rank Trap", ask: "His own pawns are a wall — slide down the open rank!" },
+  trappedPiece: { name: "The Trapped Piece", ask: "It looks like it can run — count its escape squares first." },
+  pawnFork: { name: "The Pawn Fork", ask: "Push the little guy — one move, two targets!" },
 };
 
 const DETECTOR: Record<string, (b: BoardType, to: number) => boolean> = {
@@ -62,6 +66,7 @@ DETECTOR.disco2 = DETECTOR.disco;
 const TIER1 = ["fork", "pin", "skewer", "disco"];
 const TIER2 = ["fork2", "pin2", "skewer2", "disco2"];
 const TIER3 = ["deflection", "decoy", "removeDefender", "interference"];
+const TIER4 = ["doubleCheck", "backRank", "trappedPiece", "pawnFork"];
 const PACK_GLYPH: Record<string, string> = {
   fork: "🍴",
   pin: "📌",
@@ -75,6 +80,10 @@ const PACK_GLYPH: Record<string, string> = {
   decoy: "🎣",
   removeDefender: "🛡",
   interference: "🚧",
+  doubleCheck: "⚡",
+  backRank: "🏰",
+  trappedPiece: "🕸",
+  pawnFork: "♟",
 };
 
 function casesOf(pack: string) {
@@ -82,9 +91,24 @@ function casesOf(pack: string) {
   return (
     (TACTICS as Record<string, Cases>)[pack] ??
     (TACTICS2 as Record<string, Cases>)[pack] ??
-    (TACTICS3 as Record<string, Cases>)[pack]
+    (TACTICS3 as Record<string, Cases>)[pack] ??
+    (TACTICS4 as Record<string, Cases>)[pack]
   );
 }
+
+function tierOf(pack: string): 1 | 2 | 3 | 4 {
+  if (TIER4.includes(pack)) return 4;
+  if (TIER3.includes(pack)) return 3;
+  if (pack.endsWith("2")) return 2;
+  return 1;
+}
+const TIER_KEYS = { 1: TIER1, 2: TIER2, 3: TIER3, 4: TIER4 } as const;
+const TIER_GAME_ID = {
+  1: "tacticTrainer",
+  2: "tacticTrainer2",
+  3: "tacticTrainer3",
+  4: "tacticTrainer4",
+} as const;
 
 export function TacticTrainer({ pack: initialPack = "fork" }: { pack?: string }) {
   const progress = useProgress();
@@ -139,12 +163,10 @@ export function TacticTrainer({ pack: initialPack = "fork" }: { pack?: string })
 
   function solved() {
     progress.setTacticSolved(pack, cur);
-    const tier = TIER3.includes(pack) ? 3 : pack.endsWith("2") ? 2 : 1;
-    const keys = tier === 3 ? TIER3 : tier === 2 ? TIER2 : TIER1;
-    const total = keys.reduce((s, p) => s + progress.tacticCount(p), 0);
-    const tierGameId = tier === 3 ? "tacticTrainer3" : tier === 2 ? "tacticTrainer2" : "tacticTrainer";
+    const tier = tierOf(pack);
+    const total = TIER_KEYS[tier].reduce((s, p) => s + progress.tacticCount(p), 0);
     progress.setGameStars(
-      tierGameId,
+      TIER_GAME_ID[tier],
       tier === 1 ? STAR_RULES.tacticTier1(total) : STAR_RULES.packStars(total),
     );
     setStatus(`<strong>${info.name}!</strong> 🎯 Beautifully done.`);
@@ -191,7 +213,8 @@ export function TacticTrainer({ pack: initialPack = "fork" }: { pack?: string })
     const next = applyMove(pos, selIdx, idx);
     const from = selIdx;
     setSelIdx(-1);
-    const passed = TIER3.includes(pack) ? tacticGainAfter(pos, from, idx) >= 3 : DETECTOR[pack](next, idx);
+    const gainJudged = TIER3.includes(pack) || TIER4.includes(pack);
+    const passed = gainJudged ? tacticGainAfter(pos, from, idx) >= 3 : DETECTOR[pack](next, idx);
     if (passed) {
       setPosition(next);
       setHighlights({});
@@ -262,7 +285,7 @@ export function TacticTrainer({ pack: initialPack = "fork" }: { pack?: string })
       backSoon(
         "A skewer pokes the <strong>big one in front</strong> so it must run. What treasure stands behind it? Find that line!",
       );
-    } else if (TIER3.includes(pack)) {
+    } else if (TIER3.includes(pack) || TIER4.includes(pack)) {
       backSoon(
         "Not quite — count it out: after black's best answer, does that move really win three points or more? Look for the move that sets up a bigger prize.",
       );
@@ -277,7 +300,7 @@ export function TacticTrainer({ pack: initialPack = "fork" }: { pack?: string })
     setHighlights({ [sqIdx(cases[cur].solution.slice(0, 2))]: "hint" });
   }
 
-  const allPacks = [...TIER1, ...TIER2, ...TIER3];
+  const allPacks = [...TIER1, ...TIER2, ...TIER3, ...TIER4];
 
   return (
     <GameShell

@@ -546,3 +546,84 @@ export const TACTICS3: Record<
     },
   ],
 };
+
+// Tier-4 Trick Shots (appended to Track 4 / Grandmaster Gorge): double
+// check, back-rank mate, trapped piece, pawn fork. Same verification shape
+// as TACTICS3 (tacticGainAfter: material swing, or a dominating sentinel
+// for forced mate; solution must be uniquely best). The engine has no
+// castling, en passant or under-promotion (engine/board.ts) — back-rank
+// kings are placed directly rather than reached by castling, and no entry
+// here depends on en passant.
+export const TACTICS4: Record<
+  "doubleCheck" | "backRank" | "trappedPiece" | "pawnFork",
+  TacticPuzzle[]
+> = {
+  doubleCheck: [
+    {
+      fen: "7k/6p1/8/7N/8/8/8/K6R w - - 0 1",
+      solution: "h5f6",
+      story: "Two checks at once — the pony reveals the rook AND checks him itself. No answer to that!",
+    },
+    {
+      fen: "7k/6p1/8/3r3N/8/8/8/K6R w - - 0 1",
+      solution: "h5f6",
+      story: "That lonely rook over there won't make it back in time. Two checks, nowhere to go!",
+    },
+    {
+      fen: "7k/6p1/8/7N/1b6/8/p7/K6R w - - 0 1",
+      solution: "h5f6",
+      story: "Ignore the spectators on the other side of the board — this hop ends it with a double check.",
+    },
+  ],
+  backRank: [
+    {
+      fen: "r5k1/5ppp/8/8/8/8/8/R6K w - - 0 1",
+      solution: "a1a8",
+      story: "The back row is wide open — his own pawns won't let him escape upward!",
+    },
+    {
+      fen: "1k6/ppp5/8/8/5n2/8/8/6KQ w - - 0 1",
+      solution: "h1h8",
+      story: "Slide all the way across the board — three little pawns are a wall, not a shield.",
+    },
+    {
+      fen: "4k3/3ppp2/8/8/1b6/8/8/R6K w - - 0 1",
+      solution: "a1a8",
+      story: "That bishop only watched from far away. Your rook owns the whole back rank.",
+    },
+  ],
+  trappedPiece: [
+    {
+      fen: "k7/8/7b/8/8/8/K7/7R w - - 0 1",
+      solution: "h1h6",
+      story: "That bishop wandered all the way to the rim with nowhere safe left to go. Scoop it up!",
+    },
+    {
+      fen: "k7/8/8/n7/8/2B5/8/6K1 w - - 0 1",
+      solution: "c3a5",
+      story: "A knight on the rim is dim — and this one has no way back home.",
+    },
+    {
+      fen: "7k/8/8/8/q7/2N5/8/6K1 w - - 0 1",
+      solution: "c3a4",
+      story: "The queen went hunting alone and got cut off. Your pony collects the bounty.",
+    },
+  ],
+  pawnFork: [
+    {
+      fen: "k7/8/3n1n2/8/4P3/8/8/7K w - - 0 1",
+      solution: "e4e5",
+      story: "Even the smallest soldier can poke two ponies at once. Which one runs?",
+    },
+    {
+      fen: "k7/8/1n1n4/8/2P5/8/8/7K w - - 0 1",
+      solution: "c4c5",
+      story: "One little push, two knights in trouble — they can't both escape.",
+    },
+    {
+      fen: "k7/8/4n1n1/8/5P2/8/8/7K w - - 0 1",
+      solution: "f4f5",
+      story: "Push the pawn and fork both knights — the littlest piece does the biggest damage.",
+    },
+  ],
+};

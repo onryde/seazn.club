@@ -121,11 +121,11 @@ export const LANDS: Land[] = [
     id: 11,
     glyph: "♟",
     name: "Grandmaster Gorge",
-    weeks: [54, 58],
+    weeks: [54, 62],
     track: 4,
     goal: "Deeper forcing chess: mate in three moves, and tactics that need a setup move before the point lands.",
-    check: "She forces mate in three on her own, and pulls off deflections, decoys and interference — real combinations.",
+    check: "She forces mate in three on her own, pulls off deflections and decoys, and spots double checks, back-rank mates, trapped pieces and pawn forks on sight.",
     checkClassic:
-      "You force mate-in-three combinations and execute deflection, decoy, removal-of-the-defender and interference tactics without prompting.",
+      "You force mate-in-three combinations, execute deflection/decoy/remove-the-defender/interference tactics, and convert double checks, back-rank mates, trapped pieces and pawn forks without prompting.",
   },
 ];

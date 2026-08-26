@@ -21,7 +21,7 @@ import {
   isDiscoveredAfter,
   tacticGainAfter,
 } from "../../engine";
-import { MATE1, HUNTS, TACTICS, MATE2, TACTICS2, MATE3, TACTICS3 } from "../puzzles";
+import { MATE1, HUNTS, TACTICS, MATE2, TACTICS2, MATE3, TACTICS3, TACTICS4 } from "../puzzles";
 
 const mv = (sol: string) => ({ from: sqIdx(sol.slice(0, 2)), to: sqIdx(sol.slice(2, 4)) });
 
@@ -191,6 +191,40 @@ describe("TACTICS3: tier-3 packs (defended targets — the motif has to be set u
         expect(whiteToMove).toBe(true);
         expect(inCheck(board, false)).toBe(false);
         expect(inCheck(board, true)).toBe(false);
+        const { from, to } = mv(tc.solution);
+        expect(legalTargets(board, from)).toContain(to);
+        const gain = tacticGainAfter(board, from, to);
+        expect(gain).toBeGreaterThanOrEqual(3);
+        for (const m of allLegalMoves(board, true)) {
+          if (m.from === from && m.to === to) continue;
+          expect(tacticGainAfter(board, m.from, m.to)).toBeLessThan(gain);
+        }
+      },
+    );
+  }
+});
+
+// Tier-4 Trick Shots: double check, back-rank mate, trapped piece, pawn
+// fork. Same verification shape as TACTICS3 (material swing + uniqueness —
+// "or mate" is folded in since tacticGainAfter returns a dominating
+// sentinel for a forced mate). No castling/en passant/under-promotion
+// anywhere in this pack (engine/board.ts does not model them): back-rank
+// kings are placed directly, pawn forks never depend on en passant.
+describe("TACTICS4: tier-4 packs (double check / back-rank / trapped piece / pawn fork)", () => {
+  it("has all four packs of 3", () => {
+    for (const pack of ["doubleCheck", "backRank", "trappedPiece", "pawnFork"] as const) {
+      expect(TACTICS4[pack]).toHaveLength(3);
+    }
+  });
+  for (const pack of ["doubleCheck", "backRank", "trappedPiece", "pawnFork"] as const) {
+    it.each(TACTICS4[pack].map((tc, i) => [`${pack} ${i + 1}`, tc] as const))(
+      "%s",
+      (_label, tc) => {
+        const { board, whiteToMove } = parseFEN(tc.fen);
+        expect(whiteToMove).toBe(true);
+        expect(inCheck(board, false)).toBe(false);
+        expect(inCheck(board, true)).toBe(false);
+        expect(board.filter((p) => p !== "").length).toBeLessThanOrEqual(8);
         const { from, to } = mv(tc.solution);
         expect(legalTargets(board, from)).toContain(to);
         const gain = tacticGainAfter(board, from, to);
