@@ -7,6 +7,8 @@
 import { describe, expect, it } from "vitest";
 import {
   INELIGIBLE_MESSAGE_KEY,
+  rosterEligibilityForDivision,
+  rosterIssueMessageKey,
   seasonStartYearFrom,
   selfEligibilityForDivision,
 } from "../eligibility-presentation";
@@ -99,6 +101,101 @@ describe("INELIGIBLE_MESSAGE_KEY — the ONE presentation mapping DivisionCard a
 
   it("AGE_TOO_OLD and AGE_TOO_YOUNG share the one generic age-range key", () => {
     expect(INELIGIBLE_MESSAGE_KEY.AGE_TOO_OLD).toBe(INELIGIBLE_MESSAGE_KEY.AGE_TOO_YOUNG);
+  });
+});
+
+describe("rosterEligibilityForDivision — step 3's per-player + roster-wide verdict", () => {
+  it("every player's own category/age-band issues carry a 1-based playerIndex and playerName", () => {
+    const division = { category: "womens", age_min: null, age_max: null };
+    const r = rosterEligibilityForDivision(
+      division,
+      [
+        { full_name: "Alex", gender: "f", dob: null },
+        { full_name: "Sam", gender: "m", dob: null },
+      ],
+      2026,
+    );
+    expect(r.eligible).toBe(false);
+    const samIssue = r.issues.find((i) => i.playerName === "Sam");
+    expect(samIssue?.code).toBe("CATEGORY_MISMATCH");
+    expect(samIssue?.playerIndex).toBe(2);
+    expect(r.issues.find((i) => i.playerName === "Alex")).toBeUndefined();
+  });
+
+  it("a mixed division with only one gender present reports MIXED_NEEDS_BOTH_GENDERS with NO playerIndex (roster-wide)", () => {
+    const division = { category: "mixed", age_min: null, age_max: null };
+    const r = rosterEligibilityForDivision(
+      division,
+      [
+        { full_name: "Alex", gender: "m", dob: null },
+        { full_name: "Sam", gender: "m", dob: null },
+      ],
+      2026,
+    );
+    expect(r.eligible).toBe(false);
+    const mixedIssue = r.issues.find((i) => i.code === "MIXED_NEEDS_BOTH_GENDERS");
+    expect(mixedIssue).toBeTruthy();
+    expect(mixedIssue?.playerIndex).toBeUndefined();
+  });
+
+  it("a mixed division with both genders present, and every player's own eligibility satisfied, is fully eligible", () => {
+    const division = { category: "mixed", age_min: null, age_max: null };
+    const r = rosterEligibilityForDivision(
+      division,
+      [
+        { full_name: "Alex", gender: "m", dob: null },
+        { full_name: "Sam", gender: "f", dob: null },
+      ],
+      2026,
+    );
+    expect(r.eligible).toBe(true);
+    expect(r.issues).toEqual([]);
+  });
+
+  it("an underage player is named by row (age-banded division)", () => {
+    const division = { category: null, age_min: 18, age_max: null };
+    const r = rosterEligibilityForDivision(
+      division,
+      [
+        { full_name: "Adult Player", gender: null, dob: "1990-01-01" },
+        { full_name: "Young Player", gender: null, dob: "2020-01-01" },
+      ],
+      2026,
+    );
+    expect(r.eligible).toBe(false);
+    const issue = r.issues[0]!;
+    expect(issue.code).toBe("AGE_TOO_YOUNG");
+    expect(issue.playerIndex).toBe(2);
+    expect(issue.playerName).toBe("Young Player");
+  });
+
+  it("an empty roster on a non-mixed division is vacuously eligible (nothing to check yet)", () => {
+    const r = rosterEligibilityForDivision({ category: null, age_min: null, age_max: null }, [], 2026);
+    expect(r.eligible).toBe(true);
+  });
+});
+
+describe("rosterIssueMessageKey — step 3's roster-row override for MISSING_DOB/MISSING_GENDER", () => {
+  it("MISSING_DOB/MISSING_GENDER get roster-row-specific copy, NOT the step-1-framed INELIGIBLE_MESSAGE_KEY sentence", () => {
+    expect(rosterIssueMessageKey("MISSING_DOB")).not.toBe(INELIGIBLE_MESSAGE_KEY.MISSING_DOB);
+    expect(rosterIssueMessageKey("MISSING_GENDER")).not.toBe(INELIGIBLE_MESSAGE_KEY.MISSING_GENDER);
+    expect(rosterIssueMessageKey("MISSING_DOB")).toBeTruthy();
+    expect(rosterIssueMessageKey("MISSING_GENDER")).toBeTruthy();
+  });
+
+  it("every other code falls back to INELIGIBLE_MESSAGE_KEY unchanged — one shared mapping, not a second parallel table", () => {
+    expect(rosterIssueMessageKey("CATEGORY_MISMATCH")).toBe(INELIGIBLE_MESSAGE_KEY.CATEGORY_MISMATCH);
+    expect(rosterIssueMessageKey("AGE_TOO_OLD")).toBe(INELIGIBLE_MESSAGE_KEY.AGE_TOO_OLD);
+    expect(rosterIssueMessageKey("AGE_TOO_YOUNG")).toBe(INELIGIBLE_MESSAGE_KEY.AGE_TOO_YOUNG);
+    expect(rosterIssueMessageKey("MIXED_NEEDS_BOTH_GENDERS")).toBe(INELIGIBLE_MESSAGE_KEY.MIXED_NEEDS_BOTH_GENDERS);
+  });
+});
+
+describe("INELIGIBLE_MESSAGE_KEY now covers MIXED_NEEDS_BOTH_GENDERS too (RS006 W3 — rosterEligibilityForDivision produces it)", () => {
+  it("has a key, distinct from every other code's key", () => {
+    const key = INELIGIBLE_MESSAGE_KEY.MIXED_NEEDS_BOTH_GENDERS;
+    expect(key).toBeTruthy();
+    expect(Object.values(INELIGIBLE_MESSAGE_KEY).filter((k) => k === key)).toHaveLength(1);
   });
 });
 

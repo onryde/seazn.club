@@ -1,22 +1,25 @@
-// RS006 ENTRIES step — self-ineligibility presentation mapping (pure, no
+// RS006 ENTRIES/DETAILS steps — eligibility presentation mapping (pure, no
 // DOM, no server import). Design §4 step 2: "Divisions the registrant
 // cannot enter *as a player* are greyed with the reason but stay pickable
-// for team entries."
+// for team entries." Step 3 (DETAILS): "live per-player eligibility
+// including the mixed-composition meter."
 //
 // Calls the SAME predicates the server evaluates with
 // (@/lib/registration-rules — the RS006 W1 leaf extracted from
-// server/usecases/registration-eligibility.ts's first-class-column block)
-// rather than re-deriving the rule client-side, which is the exact "two
-// eligibility evaluators" drift that module's header warns against. Only
-// the first-class category/age-band predicates are usable here at all: the
-// jsonb `eligibility` rules never ship to the client (the public read model
-// exposes only the derived `requires_dob`/`requires_gender` booleans), so
-// this can never be a full substitute for the server's verdict — it is
-// UX only, exactly as the RS006 prompt requires ("Client pre-checks are
-// UX; the server verdict is truth").
+// server/usecases/registration-eligibility.ts's first-class-column block,
+// widened at RS006 W3 with the roster-composition check) rather than
+// re-deriving the rule client-side, which is the exact "two eligibility
+// evaluators" drift that module's header warns against. Only the
+// first-class category/age-band/composition predicates are usable here at
+// all: the jsonb `eligibility` rules never ship to the client (the public
+// read model exposes only the derived `requires_dob`/`requires_gender`
+// booleans), so this can never be a full substitute for the server's
+// verdict — it is UX only, exactly as the RS006 prompt requires ("Client
+// pre-checks are UX; the server verdict is truth").
 import {
   ageBandEligibilityIssues,
   categoryEligibilityIssues,
+  rosterCompositionIssues,
   type EligibilityCode,
   type EligibilityIssue,
   type EligibilityPerson,
@@ -31,24 +34,45 @@ export interface SelfEligibility {
  *  key — shared by DivisionCard's grey-with-reason notice AND EntryCart's
  *  per-line self-link verdict (fix wave finding #3), so a cart line never
  *  re-derives or re-words the rule DivisionCard already evaluated. No entry
- *  for GENDER_NOT_ALLOWED/MIXED_NEEDS_BOTH_GENDERS: neither code is ever
- *  produced by categoryEligibilityIssues/ageBandEligibilityIssues, the only
- *  two functions `selfEligibilityForDivision` above composes, so a key here
- *  would be untestable dead code. */
+ *  for GENDER_NOT_ALLOWED: never produced by ANY client-safe predicate — it
+ *  is jsonb-rule-only (server-side `divisionEligibilityIssues`), so a key
+ *  here would be untestable dead code. MIXED_NEEDS_BOTH_GENDERS DOES have
+ *  an entry (RS006 W3): `rosterEligibilityForDivision` below produces it via
+ *  `rosterCompositionIssues`, which — unlike the jsonb loop — is client-safe. */
 export const INELIGIBLE_MESSAGE_KEY: Partial<Record<EligibilityCode, string>> = {
   CATEGORY_MISMATCH: "register.entries.ineligible.category",
   AGE_TOO_OLD: "register.entries.ineligible.age",
   AGE_TOO_YOUNG: "register.entries.ineligible.age",
   MISSING_DOB: "register.entries.ineligible.missingDob",
   MISSING_GENDER: "register.entries.ineligible.missingGender",
+  MIXED_NEEDS_BOTH_GENDERS: "register.details.mixedMeter.unmet",
 };
+
+/**
+ * Step 3's roster-ROW override for MISSING_DOB/MISSING_GENDER: the base
+ * `INELIGIBLE_MESSAGE_KEY` sentences for those two codes are framed for the
+ * CONTACT's own step-1 fields ("Add your date of birth in step 1 ...") —
+ * correct for DivisionCard/EntryCart's self-verdict, wrong for an arbitrary
+ * roster row that may not be the contact at all. Every OTHER code keeps
+ * `INELIGIBLE_MESSAGE_KEY`'s sentence unchanged — this is an override of
+ * two entries, not a second parallel mapping (the RULE evaluation stays
+ * 100% shared; only these two DISPLAY strings vary by context).
+ */
+const ROSTER_ROW_MESSAGE_OVERRIDE: Partial<Record<EligibilityCode, string>> = {
+  MISSING_DOB: "register.details.issue.missingDob",
+  MISSING_GENDER: "register.details.issue.missingGender",
+};
+
+export function rosterIssueMessageKey(code: EligibilityCode): string | undefined {
+  return ROSTER_ROW_MESSAGE_OVERRIDE[code] ?? INELIGIBLE_MESSAGE_KEY[code];
+}
 
 /**
  * Whether the CONTACT (if they end up self-linking this entry) individually
  * qualifies for `division`. Deliberately does not evaluate
  * `MIXED_NEEDS_BOTH_GENDERS` — that is a roster-wide property
- * (`rosterIssues`, server-side, step 3's roster isn't built yet), not
- * something one person's own dob/gender can answer.
+ * (`rosterEligibilityForDivision` below, step 3), not something one
+ * person's own dob/gender can answer on its own.
  */
 export function selfEligibilityForDivision(
   division: { category: string | null; age_min: number | null; age_max: number | null },
@@ -59,6 +83,44 @@ export function selfEligibilityForDivision(
     ...categoryEligibilityIssues(division, person),
     ...ageBandEligibilityIssues(division, person, seasonStartYear),
   ];
+  return { eligible: issues.length === 0, issues };
+}
+
+export interface RosterEligibility {
+  eligible: boolean;
+  /** Per-player issues carry `playerIndex`(1-based)/`playerName`; the
+   *  roster-wide `MIXED_NEEDS_BOTH_GENDERS` (when present) carries neither
+   *  — same convention as the server's `rosterIssues`. */
+  issues: EligibilityIssue[];
+}
+
+/**
+ * Step 3's live roster verdict: every player's own category/age-band
+ * issues (attributed to their row, `playerIndex 1-based`/`playerName`) PLUS
+ * the roster-wide mixed-composition check — the client-safe mirror of
+ * `server/usecases/registration-eligibility.ts`'s `rosterIssues`, minus the
+ * jsonb-rules loop that module alone can evaluate (never shipped to the
+ * client — same limitation `selfEligibilityForDivision` above documents).
+ * "Client pre-checks are UX; the server verdict is truth": a roster that
+ * passes here can still 422 at submit on a jsonb-only rule; a roster this
+ * flags is CERTAIN to be rejected, so blocking "Next" on it is always safe.
+ */
+export function rosterEligibilityForDivision(
+  division: { category: string | null; age_min: number | null; age_max: number | null },
+  players: readonly (EligibilityPerson & { full_name?: string | null })[],
+  seasonStartYear: number,
+): RosterEligibility {
+  const issues: EligibilityIssue[] = [];
+  players.forEach((player, i) => {
+    const playerIssues = [
+      ...categoryEligibilityIssues(division, player),
+      ...ageBandEligibilityIssues(division, player, seasonStartYear),
+    ];
+    for (const issue of playerIssues) {
+      issues.push({ ...issue, playerIndex: i + 1, playerName: player.full_name ?? null });
+    }
+  });
+  issues.push(...rosterCompositionIssues(division, players));
   return { eligible: issues.length === 0, issues };
 }
 
