@@ -645,6 +645,54 @@ describe("buildTiles — D-16 (set score withheld while the set is in progress)"
     expect(refusedEventTypes(view({ state: state({ games: { home: 1, away: 0 } }) }))).not.toContain("tennis.point");
   });
 
+  // DEFENCE IN DEPTH, deliberately not labelled a defect fix. A review
+  // reported a live dead-end tap here — tile withheld during a breaker =>
+  // type drops out of `dedicatedEventTypes` => `moreActions` re-offers the
+  // generic form => tapping it throws `GAME_AWARD_DURING_TIEBREAK`. The
+  // mechanism is real but it never fires: `nestedPadSpec`'s Award-game panel
+  // already gates on `state.points.kind`, so the action is not in
+  // `buildPadView`'s output during a breaker and there is nothing to
+  // re-offer. Verified on a running production build with this refusal
+  // removed — the More sheet still had nothing in it.
+  //
+  // These tests therefore pin the SECOND layer, over a hazard that is real
+  // (with both layers removed the sheet does render an Award-game form) but
+  // currently unreachable. Read them as "this cannot regress if the engine
+  // gate moves", never as "this was broken for users".
+  describe("game.award during a breaker — defence in depth over the engine's own panel gate", () => {
+    const breaker = (kind: "tiebreak" | "matchTiebreak") =>
+      view({ state: state({ points: { kind, home: 3, away: 2 } }) });
+
+    it("withholds both Award-game tiles during a tie-break", () => {
+      const tiles = buildTiles(breaker("tiebreak"));
+      expect(tiles.filter((tile) => tile.label === "pad.tennis.action.gameAward")).toEqual([]);
+    });
+
+    it("REGRESSION: refusedEventTypes lists tennis.game.award during a tie-break, so More cannot re-offer it", () => {
+      expect(refusedEventTypes(breaker("tiebreak"))).toContain("tennis.game.award");
+    });
+
+    it("REGRESSION: the same holds in a MATCH tie-break — the engine refuses both kinds alike", () => {
+      expect(refusedEventTypes(breaker("matchTiebreak"))).toContain("tennis.game.award");
+    });
+
+    it("does NOT refuse it in a standard game — the tile is the only offer, and it is a legal one", () => {
+      expect(refusedEventTypes(view())).not.toContain("tennis.game.award");
+      expect(buildTiles(view()).some((tile) => tile.label === "pad.tennis.action.gameAward")).toBe(true);
+    });
+
+    it("MUTATION PROOF: a withheld tile is NOT a dedicated type — which is the hazard this layer covers", () => {
+      const v = breaker("tiebreak");
+      const dedicated = dedicatedEventTypes(buildTiles(v), buildSheets(v), [], buildScorebug(v, t));
+      // Withholding the tile removes it from `dedicated`, so `moreActions`
+      // would re-offer the type if anything still put it in the PadSpec's
+      // panels. Today nothing does (the engine gate); this pins the pad's
+      // own half so the two cannot BOTH be missing.
+      expect([...dedicated]).not.toContain("tennis.game.award");
+      expect(refusedEventTypes(v)).toContain("tennis.game.award");
+    });
+  });
+
   // The replacement guarantee, asserted where it actually lives now. This is
   // the test that matters: if the chassis ever stops resolving a tappable
   // half, the point silently gains a second entry point through the generic
@@ -1122,6 +1170,58 @@ describe("buildDock — defect 1 fix: lineup-less fixture still gates ace/double
     });
     const spec = buildDock("tennis.point", v, t, { by: "H" })!;
     expect(spec.chips.map((c) => c.id)).toEqual(["winner", "ue"]);
+  });
+
+  // Boundary TWO (final review). Inside a breaker `state.serving` rotates
+  // MID-GAME — after every odd point (`applyTbPoint`) — and the (0, 0) guard
+  // cannot see it, because a breaker at 3-2 is not at (0, 0). Read raw, the
+  // re-derived side names the NEXT point's server, so ace and double_fault
+  // came out INVERTED on half of every tie-break's points: a wrong serving
+  // statistic against a person, recorded silently, in the phase of a set
+  // where aces decide it. Recoverable exactly (the rotation is a pure
+  // function of the point count), so it is corrected, not withheld.
+  it("REGRESSION: names the server of the point JUST PLAYED after an ODD tie-break point, not the next one", () => {
+    // Home served TB point 1 and won it. `applyTbPoint` has already handed
+    // serve to away for points 2-3, so `state.serving` reads "away" — but
+    // home hit that ace.
+    const v = view({
+      squads: emptySquads(),
+      state: state({ serving: "away", points: { kind: "tiebreak", home: 1, away: 0 } }),
+    });
+    expect(buildDock("tennis.point", v, t, { by: "H" })!.chips.map((c) => c.id)).toEqual(["ace", "winner", "ue"]);
+    expect(buildDock("tennis.point", v, t, { by: "A" })!.chips.map((c) => c.id)).toEqual([
+      "double_fault",
+      "winner",
+      "ue",
+    ]);
+  });
+
+  it("REGRESSION: does NOT step back on an EVEN tie-break point — serve did not hand off there", () => {
+    // Two points played; away is serving points 2-3 and won point 2.
+    const v = view({
+      squads: emptySquads(),
+      state: state({ serving: "away", points: { kind: "tiebreak", home: 1, away: 1 } }),
+    });
+    expect(buildDock("tennis.point", v, t, { by: "A" })!.chips.map((c) => c.id)).toEqual(["ace", "winner", "ue"]);
+  });
+
+  it("REGRESSION: a MATCH tie-break hands off on the same odd-point rule", () => {
+    const v = view({
+      squads: emptySquads(),
+      state: state({ serving: "away", points: { kind: "matchTiebreak", home: 5, away: 4 } }),
+    });
+    // 9 points played — odd, so away is serving NEXT and home served this one.
+    expect(buildDock("tennis.point", v, t, { by: "H" })!.chips.map((c) => c.id)).toEqual(["ace", "winner", "ue"]);
+  });
+
+  it("MUTATION PROOF: the step-back is breaker-ONLY — a standard game never hands off mid-game", () => {
+    // 15-0: one point played, odd. A step-back that ignored `points.kind`
+    // would invert this, calling home's own ace a double fault.
+    const v = view({
+      squads: emptySquads(),
+      state: state({ serving: "home", points: { kind: "standard", home: 1, away: 0, advantage: null } }),
+    });
+    expect(buildDock("tennis.point", v, t, { by: "H" })!.chips.map((c) => c.id)).toEqual(["ace", "winner", "ue"]);
   });
 
   it("MUTATION PROOF: a game-ending point stays a safe omission — a naive post-fold recompute would MISCLASSIFY it, not merely omit it", () => {

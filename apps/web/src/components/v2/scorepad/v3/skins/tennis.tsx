@@ -662,7 +662,7 @@ export function buildTiles(view: PadHostView): TileSpec[] {
   // breaker itself IS the deciding game (`applyGameAward`, `kernel.ts:
   // 1081-1101`; mirrored here via `state.points.kind`, the SAME condition the
   // engine's own gate reads, `kernel.ts:1526-1532`).
-  if (offerable(GAME_AWARD_TYPE) && (state.points?.kind ?? "standard") === "standard") {
+  if (offerable(GAME_AWARD_TYPE) && !gameAwardRefused(state)) {
     for (const side of SIDES) {
       tiles.push({
         id: gameAwardTileId(side),
@@ -720,12 +720,36 @@ export function buildTiles(view: PadHostView): TileSpec[] {
  * `SkinDefV3.refusedEventTypes` — the More sheet's second exclusion set:
  * "the fold will not accept this at all right now".
  *
- * ONE entry, and it is a real refusal. `applySetSummary` throws for a set
- * already being scored point-by-point (`nested/kernel.ts`), so offering the
- * generic form mid-set is the D-16 dead-end tap this wave closes. Listed only
- * in that state, mirroring `buildTiles`'s own withholding condition exactly —
- * the two must never disagree, or the pad either hides a legal action or
- * offers a refused one.
+ * TWO entries, each a state the fold genuinely throws in, and each listed
+ * only in that state:
+ *
+ *   - `set_summary` — `applySetSummary` throws for a set already being scored
+ *     point-by-point (`nested/kernel.ts`), so offering the generic form
+ *     mid-set is the D-16 dead-end tap this wave closes. This one is the
+ *     ONLY defence: nothing upstream withholds the action.
+ *   - `game.award` — `applyGameAward` throws `GAME_AWARD_DURING_TIEBREAK`
+ *     while a breaker is in force (`gameAwardRefused`). This one is DEFENCE
+ *     IN DEPTH, not a fix, and the distinction is worth keeping straight.
+ *
+ * On `game.award`, a review (2026-08-26) reported a live dead-end tap here:
+ * `buildTiles` withholds the tile during a breaker, the type therefore drops
+ * out of `dedicatedEventTypes`, and `moreActions` puts the generic form back
+ * — withholding a tile does not remove an action, it MOVES it into the More
+ * sheet. Every step of that is true, and the conclusion still is not:
+ * `nestedPadSpec`'s Award-game panel already carries a `gate` on
+ * `state.points.kind` (`kernel.ts`), so `buildPadView` never emits the action
+ * during a breaker and `moreActions` has nothing to re-offer. Checked against
+ * a running production build, not argued from the source.
+ *
+ * The entry is kept because that gate lives in another package and nothing
+ * ties the two together: with BOTH layers removed the sheet does render an
+ * "Award game" form (proved the same way, and `16-breakermore` in
+ * `gallery.capture.ts` is the screen that shows it), so this is a real second
+ * layer over a real hazard — just not a defect that ever reached a user.
+ *
+ * Both mirror `buildTiles`'s own withholding condition — `game.award` by
+ * literally sharing the predicate, which is the only version of "must never
+ * disagree" that a future editor cannot break by halves.
  *
  * `tennis.point` USED TO BE LISTED HERE and no longer is. It was never a
  * refusal — the fold accepts a point whenever the match is live — it was this
@@ -743,7 +767,10 @@ export function buildTiles(view: PadHostView): TileSpec[] {
  */
 export function refusedEventTypes(view: PadHostView): string[] {
   const state = asState(view.state);
-  return setInProgressOf(state) ? [SET_SUMMARY_TYPE] : [];
+  const refused: string[] = [];
+  if (setInProgressOf(state)) refused.push(SET_SUMMARY_TYPE);
+  if (gameAwardRefused(state)) refused.push(GAME_AWARD_TYPE);
+  return refused;
 }
 
 // ---------------------------------------------------------------------------
@@ -756,6 +783,24 @@ export function refusedEventTypes(view: PadHostView): string[] {
  *  it straight off `cfg` too rather than via `rulesFor`, so there is no
  *  already-imported reader to derive this from either. A re-derivation, kept
  *  and renamed rather than left claiming to mirror something reachable. */
+/**
+ * `applyGameAward`'s own refusal condition (`kernel.ts:1233-1240`), read off
+ * the SAME `state.points.kind` discriminant the engine gates on: a breaker IS
+ * the deciding game, so there is no separate game left to concede and the
+ * fold throws `GAME_AWARD_DURING_TIEBREAK`.
+ *
+ * ONE predicate, consumed by BOTH `buildTiles` (which withholds the tile) and
+ * `refusedEventTypes` (which withholds the generic More form) — extracted in
+ * review, when the two carried the same boolean separately and only
+ * `buildTiles` had it. That asymmetry turned out to be masked by a gate one
+ * package up (see `refusedEventTypes`), so it was a latent liability rather
+ * than a live defect; the predicate is what stops it becoming one if that
+ * gate ever moves.
+ */
+function gameAwardRefused(state: TennisStateShape): boolean {
+  return (state.points?.kind ?? "standard") !== "standard";
+}
+
 function gamesFieldBound(cfg: TennisCfgShape): number {
   const set = cfg.set ?? {};
   const base = set.tiebreakAt === null ? 200 : (set.gamesTo ?? 6) + (set.winBy ?? 2) + 2;
@@ -1026,24 +1071,43 @@ function sideOfPerson(squads: SquadState, personId: string): Side | null {
  * this deliberately leaves withheld, exactly as before (`buildDock`'s own
  * doc above).
  *
- * Safe only when this exact point did not just END a game/tiebreak/set:
+ * `state.serving` runs AHEAD of the point just contested at two different
+ * boundaries, not one, and each needs its own treatment.
+ *
+ * ONE — the game/set boundary, which is unrecoverable and stays withheld.
  * `winGame`/`bankSet` (kernel.ts:791-825/752-789) rotate `state.serving` AND
  * reset `state.points` to a fresh (0, 0) TOGETHER on every exit path of both
  * functions (checked exhaustively) — so a (0, 0) readout immediately after a
  * point was just applied can only mean THIS point closed the game, and
  * `state.serving` has therefore already rotated past what was true when the
- * point was actually contested. Recomputing there would not merely be
- * imprecise, it would be WRONG both ways (a held-serve winner reads back as
- * the new receiver, a broken-serve winner reads back as the new server), so
- * that one boundary point stays a safe omission — the same omission an
- * unresolved doubles order already gets — while every other point on a
- * lineup-less fixture is now correctly gated.
+ * point was contested. Recomputing there would be WRONG both ways (a
+ * held-serve winner reads back as the new receiver, a broken-serve winner as
+ * the new server), so that one point stays a safe omission — the same
+ * omission an unresolved doubles order already gets.
+ *
+ * TWO — the tie-break's PER-POINT handoff, which is exactly recoverable and
+ * so is corrected rather than withheld. Inside a breaker `state.serving`
+ * rotates mid-"game", after every ODD point (`applyTbPoint`, kernel.ts:993),
+ * and the (0, 0) guard above cannot see it because a breaker at 5-3 is not
+ * at (0, 0). Reading `ctx.side` raw there names the NEXT point's server, so
+ * `buildDock` offered `double_fault` where `ace` is correct, and the reverse,
+ * on half of every tie-break's points — recording the wrong serving
+ * statistic against a person, silently, in the phase of a set where aces
+ * decide it. The rotation is a pure function of the point count, so step it
+ * back instead: the server of the point just played is the current
+ * `serving`, flipped iff an odd number of points have been played.
  */
 function rosterlessServerSide(view: PadHostView, state: TennisStateShape): Side | null {
   if (hasStaleServeInfo(view)) return null;
-  if ((state.points?.home ?? 0) === 0 && (state.points?.away ?? 0) === 0) return null;
+  const played = (state.points?.home ?? 0) + (state.points?.away ?? 0);
+  if (played === 0) return null; // boundary ONE — see the doc above
   const ctx = deriveServeContext(state, view.squads);
-  return onFieldPlayers(view.squads, ctx.side).length === 0 ? ctx.side : null;
+  // Boundary TWO. `points.kind` is the SAME discriminant `applyTbPoint` is
+  // routed on (`applyPoint`, kernel.ts), so this asks "is a breaker in force"
+  // the way the fold does, not by sniffing the score for a 6-6.
+  const inBreaker = (state.points?.kind ?? "standard") !== "standard";
+  const side: Side = inBreaker && played % 2 === 1 ? (ctx.side === "home" ? "away" : "home") : ctx.side;
+  return onFieldPlayers(view.squads, side).length === 0 ? side : null;
 }
 
 function pointKindChip(kind: string): DockChip {
