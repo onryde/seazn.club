@@ -26,6 +26,7 @@ vi.mock("@/lib/stripe", () => ({
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import {
+  groupById,
   groupByRef,
   reconcileRegistration,
   reconcileRegistrationBySession,
@@ -151,6 +152,63 @@ describe.skipIf(!HAS_DB)("groupByRef — token gate", () => {
 
     const view = await groupByRef(refCode, rawToken);
     expect(view.entries).toEqual([]);
+  });
+});
+
+// RS006 §C — the post-submit status page resolves the group by its DB id
+// (`?rid=<group_id>&token=...`, the SAME convention `buildCartMail`'s
+// statusUrl and `createRegistrationCheckout`'s Stripe success/cancel URLs
+// already use), never by ref_code: `ref_code` is nullable on the schema and
+// `rid` is the primary key, always present. Same three security claims as
+// groupByRef above, proven the same way.
+describe.skipIf(!HAS_DB)("groupById — token gate", () => {
+  it("a real group id with the WRONG token and a nonexistent id are indistinguishable", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+
+    const wrongToken = await groupById(registration.group_id, "regtok_" + randomUUID()).then(
+      () => null,
+      (e: unknown) => e as HttpError,
+    );
+    const absentId = await groupById(randomUUID(), "regtok_" + randomUUID()).then(
+      () => null,
+      (e: unknown) => e as HttpError,
+    );
+
+    // Both must be errors at all — a null here would mean one of them RESOLVED.
+    expect(wrongToken).toBeInstanceOf(HttpError);
+    expect(absentId).toBeInstanceOf(HttpError);
+    // …and byte-identical in every field a caller (or an attacker) can read.
+    expect(wrongToken!.status).toBe(404);
+    expect(absentId!.status).toBe(404);
+    expect(wrongToken!.message).toBe(absentId!.message);
+    expect(wrongToken!.message).toBe("registration not found");
+  });
+
+  it("the correct token returns the cart, so the 404s above are not just a broken read", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef(), players: [{ name: "Sam Player" }] },
+    );
+
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.ref_code).toBe(registration.ref_code);
+    expect(view.entries).toHaveLength(1);
+    expect(view.entries[0]!.players.map((p) => p.full_name)).toEqual(["Sam Player"]);
+  });
+
+  it("a malformed id string 404s cleanly rather than throwing a raw DB syntax error", async () => {
+    await expect(groupById("not-a-uuid", "regtok_" + randomUUID())).rejects.toMatchObject({
+      status: 404,
+    });
   });
 });
 

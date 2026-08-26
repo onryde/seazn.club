@@ -301,6 +301,10 @@ export interface RegistrationGroupRow {
   fee_percent: number | null;
   privacy_consent_at: Date | null;
   privacy_consent_version: string | null;
+  /** Optional, versioned the same way as privacy consent (RS006 §A) — never
+   *  blocks submit; null means "not given", not "unknown". */
+  media_consent_at: Date | null;
+  media_consent_version: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -390,7 +394,7 @@ export type RegistrationWithGroupRow = RegistrationRow &
     | "payment_intent_id" | "expires_at" | "reminded_at"
     | "refunded_at" | "disputed_at" | "dispute_id" | "offline_marked_paid_at"
     | "offline_marked_paid_by" | "fee_percent" | "privacy_consent_at"
-    | "privacy_consent_version"
+    | "privacy_consent_version" | "media_consent_at" | "media_consent_version"
   > & {
     /** The CART's accumulated refund total (`registration_groups.refunded_cents`,
      *  V363) — aliased so it can never collide with `RegistrationRow`'s own
@@ -416,7 +420,7 @@ function regGroupCols(db: AnySql) {
     g.refunded_cents as group_refunded_cents,
     g.refunded_at, g.disputed_at, g.dispute_id, g.offline_marked_paid_at,
     g.offline_marked_paid_by, g.fee_percent, g.privacy_consent_at,
-    g.privacy_consent_version`;
+    g.privacy_consent_version, g.media_consent_at, g.media_consent_version`;
 }
 
 const SETTINGS_COLS = [
@@ -2549,6 +2553,45 @@ export async function groupByRef(ref: string, accessToken: string): Promise<Grou
   if (!isValidRefCode(canonical)) throw notFound();
   const [group] = await sql<RegistrationGroupRow[]>`
     select * from registration_groups where ref_code = ${canonical}`;
+  return buildGroupStatusView(group, accessToken, notFound);
+}
+
+const GROUP_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The whole cart by its DB id (RS006 §C) — the shape the post-submit status
+ * page actually navigates to (`?rid=<group_id>&token=...`), matching the
+ * SAME convention `buildCartMail`'s statusUrl and
+ * `createRegistrationCheckout`'s Stripe success/cancel URLs already mint.
+ * Keyed on `id` rather than `ref_code` deliberately: `ref_code` is nullable
+ * on the schema (a submit whose ref-mint retries were exhausted still
+ * commits the cart — see `submitRegistrationGroup`), so a status link built
+ * right after submit needs the ALWAYS-present primary key, not the
+ * sometimes-absent human-quotable one. Same token-gate contract as
+ * `groupByRef` (see that function's own doc comment for the three security
+ * claims): a wrong token and a nonexistent id are indistinguishable, and a
+ * malformed id string 404s cleanly rather than reaching the DB as invalid
+ * `uuid` input syntax.
+ */
+export async function groupById(id: string, accessToken: string): Promise<GroupStatusView> {
+  const notFound = () => new HttpError(404, "registration not found");
+  if (!GROUP_ID_RE.test(id)) throw notFound();
+  const [group] = await sql<RegistrationGroupRow[]>`
+    select * from registration_groups where id = ${id}`;
+  return buildGroupStatusView(group, accessToken, notFound);
+}
+
+/** Shared by `groupByRef`/`groupById` once each has resolved its own
+ *  candidate row (or none) by its own key — token-checks it and, on success,
+ *  assembles the full `GroupStatusView` (competition/org context, entries,
+ *  players). Kept as ONE function so the token-gate's timing/shape
+ *  guarantees (see `groupByRef`'s doc comment) and the entries/players
+ *  assembly can never drift between the two lookup paths. */
+async function buildGroupStatusView(
+  group: RegistrationGroupRow | undefined,
+  accessToken: string,
+  notFound: () => HttpError,
+): Promise<GroupStatusView> {
   const tokenOk = tokenMatchesHash(accessToken, group?.access_token_hash ?? DUMMY_ACCESS_HASH);
   if (!group || !tokenOk) throw notFound();
 

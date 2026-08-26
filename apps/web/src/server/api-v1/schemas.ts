@@ -2432,6 +2432,10 @@ export const PublicRegisterGroupRequest = z
     contact: PublicRegisterGroupContact,
     locale: z.string().max(10).nullish(),
     privacy_consent: z.boolean(),
+    /** Optional — mirrors `privacy_consent` structurally but never blocks
+     *  submit (RS006 §A). Stamped the same way (timestamp + LEGAL_VERSION,
+     *  registration-submit.ts) when true; left null otherwise. */
+    media_consent: z.boolean().optional(),
     entries: z.array(PublicRegisterGroupEntry).min(1).max(10),
     /** Honeypot (v3/05 §4): hidden on the real form; the ROUTE decides what
      *  to do with a filled one, not this schema. */

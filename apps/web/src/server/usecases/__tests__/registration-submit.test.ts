@@ -243,6 +243,55 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
     expect(group!.privacy_consent_version).toBe(LEGAL_VERSION);
   });
 
+  it("media consent, when given, stamps media_consent_at/media_consent_version the same way privacy_consent does", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0 });
+
+    const res = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        media_consent: true,
+        entries: [
+          { division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Media Yes" }], answers: {} },
+        ],
+      },
+    );
+
+    const [group] = await sql<{ media_consent_at: Date | null; media_consent_version: string | null }[]>`
+      select media_consent_at, media_consent_version from registration_groups where id = ${res.group_id}`;
+    expect(group!.media_consent_at).not.toBeNull();
+    expect(group!.media_consent_version).toBe(LEGAL_VERSION);
+  });
+
+  it("media consent, when omitted, leaves media_consent_at/media_consent_version null and never blocks submit", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0 });
+
+    const res = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        // media_consent intentionally omitted — optional, must never block submit.
+        entries: [
+          { division_id: division.id, entrant_kind: "individual", players: [{ full_name: "No Media" }], answers: {} },
+        ],
+      },
+    );
+
+    expect(res.entries[0]!.status).toBe("confirmed");
+    const [group] = await sql<{ media_consent_at: Date | null; media_consent_version: string | null }[]>`
+      select media_consent_at, media_consent_version from registration_groups where id = ${res.group_id}`;
+    expect(group!.media_consent_at).toBeNull();
+    expect(group!.media_consent_version).toBeNull();
+  });
+
   it("privacy consent (GDPR) is required — a submission without it is refused", async () => {
     const { orgId, orgSlug, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);

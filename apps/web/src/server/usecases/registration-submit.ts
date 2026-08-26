@@ -96,6 +96,10 @@ export interface SubmitGroupInput {
    *  out with `submitRegistration` and nothing in the tree fails without it
    *  (RS002 entry condition 2). */
   privacy_consent: boolean;
+  /** Optional, versioned the same way (RS006 §A) — never blocks submit.
+   *  Undefined/false both mean "not given"; the group row's
+   *  media_consent_at/media_consent_version stay null either way. */
+  media_consent?: boolean;
   entries: SubmitGroupEntryInput[];
 }
 
@@ -501,12 +505,14 @@ export async function submitRegistrationGroup(
             insert into registration_groups
               (competition_id, contact_name, contact_email, user_id, locale,
                ref_code, access_token_hash, amount_cents, currency,
-               privacy_consent_at, privacy_consent_version)
+               privacy_consent_at, privacy_consent_version,
+               media_consent_at, media_consent_version)
             values (
               ${competitionId}, ${input.contact.name}, ${input.contact.email},
               ${linkUserId}, ${input.locale ?? null}, ${candidate},
               ${hashRegistrationToken(secret)}, 0, ${first.org_currency},
-              now(), ${LEGAL_VERSION}
+              now(), ${LEGAL_VERSION},
+              ${input.media_consent ? sp`now()` : null}, ${input.media_consent ? LEGAL_VERSION : null}
             )
             returning id`;
           refCode = candidate;
