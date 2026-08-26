@@ -53,6 +53,7 @@ export const HELP_ARTICLE_SLUGS = [
   "scoring/attribution",
   "scoring/offline-scoring",
   "scoring/corrections",
+  "scoring/batch-import",
   "divisions/lifecycle",
   "divisions/archive",
   "divisions/settings",
