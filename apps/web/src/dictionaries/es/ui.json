@@ -4448,5 +4448,22 @@
   "register.entries.unnamed.individual": "Inscripción",
   "register.nav.who": "Quién",
   "register.nav.entries": "Inscripciones",
-  "register.entries.badge.closed": "Cerrada"
+  "register.entries.badge.closed": "Cerrada",
+  "register.nav.details": "Detalles",
+  "register.details.heading": "Datos de los jugadores",
+  "register.details.subtitle": "Añade quién juega en cada inscripción y responde lo que necesite el organizador.",
+  "register.details.freeAgent.note": "No se necesita nada más para una inscripción en solitario — el organizador te asignará a un equipo en cuanto haya sitio.",
+  "register.details.roster.team.hint": "Añade tu equipo ahora, o déjalo en blanco — el organizador podrá completarlo más tarde.",
+  "register.details.roster.addPlayer": "+ Añadir jugador",
+  "register.details.roster.import.summary": "Pegar una lista en su lugar",
+  "register.details.roster.import.hint": "Un jugador por línea — nombre, número de dorsal opcional, fecha de nacimiento opcional (AAAA-MM-DD), separados por comas.",
+  "register.details.roster.import.button": "Añadir {n} jugadores de la lista",
+  "register.details.player.label": "Jugador {n}",
+  "register.details.player.partnerLabel": "Jugador {n} · Compañero/a",
+  "register.details.player.squadNumber.placeholder": "Dorsal",
+  "register.details.mixedMeter.satisfied": "Requisito de equipo mixto cumplido — al menos un jugador y una jugadora.",
+  "register.details.mixedMeter.unmet": "Se necesita al menos un jugador y una jugadora en el equipo.",
+  "register.details.issue.missingDob": "Añade la fecha de nacimiento de este jugador para comprobar su elegibilidad",
+  "register.details.issue.missingGender": "Añade el género de este jugador para comprobar su elegibilidad",
+  "register.errors.detailsIncomplete": "Completa los datos que faltan arriba antes de continuar"
 }

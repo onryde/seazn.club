@@ -4448,5 +4448,22 @@
   "register.entries.unnamed.individual": "Entry",
   "register.nav.who": "Who",
   "register.nav.entries": "Entries",
-  "register.entries.badge.closed": "Closed"
+  "register.entries.badge.closed": "Closed",
+  "register.nav.details": "Details",
+  "register.details.heading": "Player details",
+  "register.details.subtitle": "Add who's playing on each entry, and answer anything the organiser needs to know.",
+  "register.details.freeAgent.note": "Nothing else needed for a solo sign-up — the organiser will assign you to a team once one has space.",
+  "register.details.roster.team.hint": "Add your squad now, or leave it blank — the organiser can fill it in later.",
+  "register.details.roster.addPlayer": "+ Add player",
+  "register.details.roster.import.summary": "Paste a list instead",
+  "register.details.roster.import.hint": "One player per line — name, optional squad number, optional date of birth (YYYY-MM-DD), comma-separated.",
+  "register.details.roster.import.button": "Add {n} players from list",
+  "register.details.player.label": "Player {n}",
+  "register.details.player.partnerLabel": "Player {n} · Partner",
+  "register.details.player.squadNumber.placeholder": "Squad #",
+  "register.details.mixedMeter.satisfied": "Mixed roster requirement met — at least one male and one female player.",
+  "register.details.mixedMeter.unmet": "Needs at least one male and one female player on the roster.",
+  "register.details.issue.missingDob": "Enter this player's date of birth to check eligibility",
+  "register.details.issue.missingGender": "Enter this player's gender to check eligibility",
+  "register.errors.detailsIncomplete": "Fill in the missing details above before continuing"
 }

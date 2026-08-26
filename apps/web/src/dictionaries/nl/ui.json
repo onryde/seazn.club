@@ -4448,5 +4448,22 @@
   "register.entries.unnamed.individual": "Inschrijving",
   "register.nav.who": "Wie",
   "register.nav.entries": "Inschrijvingen",
-  "register.entries.badge.closed": "Gesloten"
+  "register.entries.badge.closed": "Gesloten",
+  "register.nav.details": "Details",
+  "register.details.heading": "Spelersgegevens",
+  "register.details.subtitle": "Voeg toe wie er bij elke inschrijving speelt en beantwoord wat de organisator nodig heeft.",
+  "register.details.freeAgent.note": "Voor een solo-inschrijving is verder niets nodig — de organisator wijst je aan een team toe zodra er plek is.",
+  "register.details.roster.team.hint": "Voeg nu je team toe, of laat het leeg — de organisator kan het later aanvullen.",
+  "register.details.roster.addPlayer": "+ Speler toevoegen",
+  "register.details.roster.import.summary": "Plak in plaats daarvan een lijst",
+  "register.details.roster.import.hint": "Eén speler per regel — naam, optioneel rugnummer, optionele geboortedatum (JJJJ-MM-DD), gescheiden door komma's.",
+  "register.details.roster.import.button": "{n} spelers uit de lijst toevoegen",
+  "register.details.player.label": "Speler {n}",
+  "register.details.player.partnerLabel": "Speler {n} · Partner",
+  "register.details.player.squadNumber.placeholder": "Rugnummer",
+  "register.details.mixedMeter.satisfied": "Aan de eis voor een gemengd team voldaan — minstens één man en één vrouw.",
+  "register.details.mixedMeter.unmet": "Er is minstens één man en één vrouw nodig in het team.",
+  "register.details.issue.missingDob": "Voeg de geboortedatum van deze speler toe om de geschiktheid te controleren",
+  "register.details.issue.missingGender": "Voeg het geslacht van deze speler toe om de geschiktheid te controleren",
+  "register.errors.detailsIncomplete": "Vul de ontbrekende gegevens hierboven in voordat je verdergaat"
 }

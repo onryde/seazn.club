@@ -4448,5 +4448,22 @@
   "register.entries.unnamed.individual": "Inscription",
   "register.nav.who": "Qui",
   "register.nav.entries": "Inscriptions",
-  "register.entries.badge.closed": "Fermée"
+  "register.entries.badge.closed": "Fermée",
+  "register.nav.details": "Détails",
+  "register.details.heading": "Détails des joueurs",
+  "register.details.subtitle": "Ajoutez qui joue pour chaque inscription et répondez à ce dont l'organisateur a besoin.",
+  "register.details.freeAgent.note": "Rien d'autre n'est nécessaire pour une inscription en solo — l'organisateur vous assignera à une équipe dès qu'une place sera disponible.",
+  "register.details.roster.team.hint": "Ajoutez votre effectif maintenant, ou laissez vide — l'organisateur pourra le compléter plus tard.",
+  "register.details.roster.addPlayer": "+ Ajouter un joueur",
+  "register.details.roster.import.summary": "Coller une liste à la place",
+  "register.details.roster.import.hint": "Un joueur par ligne — nom, numéro de maillot facultatif, date de naissance facultative (AAAA-MM-JJ), séparés par des virgules.",
+  "register.details.roster.import.button": "Ajouter {n} joueurs depuis la liste",
+  "register.details.player.label": "Joueur {n}",
+  "register.details.player.partnerLabel": "Joueur {n} · Partenaire",
+  "register.details.player.squadNumber.placeholder": "N° de maillot",
+  "register.details.mixedMeter.satisfied": "Condition d'équipe mixte remplie — au moins un homme et une femme.",
+  "register.details.mixedMeter.unmet": "Il faut au moins un homme et une femme dans l'effectif.",
+  "register.details.issue.missingDob": "Ajoutez la date de naissance de ce joueur pour vérifier son éligibilité",
+  "register.details.issue.missingGender": "Ajoutez le genre de ce joueur pour vérifier son éligibilité",
+  "register.errors.detailsIncomplete": "Complétez les informations manquantes ci-dessus avant de continuer"
 }
