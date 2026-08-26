@@ -1,0 +1,391 @@
+// Pre-flight checks the bench runs before touching anything: proves the
+// target DB is not the shared dev DB, proves a real server is bound to the
+// target port, proves the sports catalog is synced, proves the app answers
+// healthy, and records (never refuses on) placement-service liveness.
+//
+// Every check is expressed as an injected async probe (`PreflightProbes`),
+// so `runPreflight` itself is pure and unit-testable with fakes — no live
+// Postgres, server, or placement container required in vitest. `bench.ts`
+// wires the real implementations below (`createRealPreflightProbes`)
+// against actual infrastructure; tests wire fakes. This split is not
+// optional polish — it is how the unit/regression suite stays DB-free and
+// CI-safe (B01 brief).
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import postgres from "postgres";
+import { PlacementError, solveBuild } from "@seazn/engine/scheduling/placement-client";
+
+const execFileAsync = promisify(execFile);
+
+/** Ports this bench refuses to ever target — the owner's local dev server
+ *  and the e2e target (seazn-local-env skill §1, AGENTS.md). The bench
+ *  always owns its own throwaway server. */
+const FORBIDDEN_BASE_PORTS = new Set([3000, 3100]);
+
+/** The shared local dev Postgres always listens here (seazn-local-env skill
+ *  §1) — a bench DATABASE_URL must never resolve to it. */
+const DEV_DB_PORT = 5432;
+
+export type RefusalReason =
+  | "base_port_forbidden"
+  | "own_db_dev_db_port"
+  | "own_db_data_directory_mismatch"
+  | "own_db_connection_failed"
+  | "own_port_unbound"
+  | "sports_catalog_unsynced"
+  | "app_health_unreachable"
+  | "app_health_not_ok";
+
+export interface Refusal {
+  reason: RefusalReason;
+  detail: string;
+}
+
+export interface OwnDatabaseResult {
+  ok: boolean;
+  reason?: RefusalReason;
+  detail: string;
+  dataDirectory?: string;
+  port?: number;
+}
+
+export interface OwnPortResult {
+  ok: boolean;
+  reason?: RefusalReason;
+  detail: string;
+  pid?: number;
+}
+
+/** Both `"live"` and `"absent"` are legitimate outcomes — this is a report
+ *  field, never a refusal (B01 brief, `_RULES.md` §2: "run gates BOTH with
+ *  and without a live placement container"). */
+export interface PlacementHealthResult {
+  status: "live" | "absent";
+  detail: string;
+}
+
+export interface SportsCatalogResult {
+  ok: boolean;
+  reason?: RefusalReason;
+  detail: string;
+}
+
+export interface AppHealthResult {
+  ok: boolean;
+  reason?: RefusalReason;
+  detail: string;
+}
+
+/** One async probe per pre-flight fact. Real implementations do real I/O
+ *  (see `createRealPreflightProbes`); tests inject fakes — see
+ *  `lib/__tests__/env.test.ts`. */
+export interface PreflightProbes {
+  checkOwnDatabase(): Promise<OwnDatabaseResult>;
+  checkOwnPort(port: number): Promise<OwnPortResult>;
+  checkPlacementHealth(): Promise<PlacementHealthResult>;
+  checkSportsCatalogSynced(): Promise<SportsCatalogResult>;
+  checkAppHealth(base: string): Promise<AppHealthResult>;
+}
+
+export interface PreflightResult {
+  ok: boolean;
+  refusals: Refusal[];
+  placement: PlacementHealthResult;
+  base: string;
+  port: number;
+}
+
+function resolvePort(base: string): number {
+  const url = new URL(base);
+  if (url.port) return Number(url.port);
+  return url.protocol === "https:" ? 443 : 80;
+}
+
+/**
+ * Pure orchestration: runs every probe, collects named refusals, never
+ * throws itself. A probe's own failure is a returned `{ ok: false, reason,
+ * detail }`, not an exception (see each probe's doc comment) — the only way
+ * this function throws is a bug in a probe implementation, not an expected
+ * environmental failure. Every probe runs regardless of the others' outcome
+ * so a run refuses on ALL applicable reasons at once, not just the first.
+ */
+export async function runPreflight(base: string, probes: PreflightProbes): Promise<PreflightResult> {
+  const port = resolvePort(base);
+  const refusals: Refusal[] = [];
+
+  if (FORBIDDEN_BASE_PORTS.has(port)) {
+    refusals.push({
+      reason: "base_port_forbidden",
+      detail:
+        `--base resolves to port ${port}, which this bench refuses outright ` +
+        "(3000 = the owner's local dev server, 3100 = the e2e target). Point --base " +
+        "at a bench-owned server on another port.",
+    });
+  }
+
+  const [db, ownPort, catalog, health, placement] = await Promise.all([
+    probes.checkOwnDatabase(),
+    probes.checkOwnPort(port),
+    probes.checkSportsCatalogSynced(),
+    probes.checkAppHealth(base),
+    probes.checkPlacementHealth(),
+  ]);
+
+  for (const result of [db, ownPort, catalog, health]) {
+    if (!result.ok && result.reason) refusals.push({ reason: result.reason, detail: result.detail });
+  }
+
+  return { ok: refusals.length === 0, refusals, placement, base, port };
+}
+
+/* -------------------------------------------------------------------------
+ * Real probe implementations — the I/O boundary. Deliberately untested at
+ * the unit level: each needs a live Postgres, a live process bound to a
+ * port, or a live app server, which is exactly what the DI split above
+ * exists to keep OUT of vitest. Proven only by an actual `_tiny` run
+ * against real infrastructure (this task's smoke/e2e layer).
+ * ---------------------------------------------------------------------- */
+
+export interface RealProbesHandle {
+  probes: PreflightProbes;
+  /** Closes the DB connection this factory opened. Call once, after the
+   *  pre-flight (and any other DB-touching check) is done with it. */
+  dispose(): Promise<void>;
+}
+
+/**
+ * Wires every probe to real infrastructure. The `postgres` usage
+ * (connection.search_path, DATABASE_SSL convention) is hand-copied from
+ * `scripts/smoke.ts`'s own pattern (e.g. smoke.ts:4219) — smoke.ts itself is
+ * never imported (_RULES.md §1 / B01 brief: no smoke.ts refactor, the
+ * 13k-line monolith stays untouched).
+ */
+export function createRealPreflightProbes(): RealProbesHandle {
+  const databaseUrl = process.env.DATABASE_URL;
+  let sqlClient: ReturnType<typeof postgres> | undefined;
+
+  function getSql(): ReturnType<typeof postgres> {
+    if (!databaseUrl) {
+      throw new Error("DATABASE_URL is not set — the bench needs its own throwaway DB (seazn-local-env skill §1).");
+    }
+    if (!sqlClient) {
+      const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(databaseUrl);
+      sqlClient = postgres(databaseUrl, {
+        connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+        ssl: process.env.DATABASE_SSL === "disable" ? false : isLocal ? false : "require",
+        max: 1,
+      });
+    }
+    return sqlClient;
+  }
+
+  const probes: PreflightProbes = {
+    async checkOwnDatabase(): Promise<OwnDatabaseResult> {
+      if (!databaseUrl) {
+        return { ok: false, reason: "own_db_connection_failed", detail: "DATABASE_URL is not set." };
+      }
+      let port: number;
+      try {
+        const parsed = new URL(databaseUrl);
+        port = parsed.port ? Number(parsed.port) : DEV_DB_PORT;
+      } catch (err) {
+        return {
+          ok: false,
+          reason: "own_db_connection_failed",
+          detail: `DATABASE_URL is not a valid URL: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+      try {
+        const sql = getSql();
+        const [row] = await sql<{ data_directory: string }[]>`show data_directory`;
+        const dataDirectory = row?.data_directory ?? "";
+        // Port checked first: a dev-DB connection is refused on that fact
+        // alone, before ever asking whether BENCH_EXPECTED_DATA_DIR agrees —
+        // the two are independent traps (seazn-local-env skill §1) and
+        // either can fire without the other.
+        if (port === DEV_DB_PORT) {
+          return {
+            ok: false,
+            reason: "own_db_dev_db_port",
+            detail: `DATABASE_URL targets port ${DEV_DB_PORT}, the shared local dev DB (seazn-local-env skill §1). Use a throwaway bench DB on another port.`,
+            dataDirectory,
+            port,
+          };
+        }
+        const expected = process.env.BENCH_EXPECTED_DATA_DIR;
+        if (expected && dataDirectory !== expected) {
+          return {
+            ok: false,
+            reason: "own_db_data_directory_mismatch",
+            detail: `show data_directory returned "${dataDirectory}", which does not match BENCH_EXPECTED_DATA_DIR "${expected}" — this DATABASE_URL reaches someone else's Postgres.`,
+            dataDirectory,
+            port,
+          };
+        }
+        return { ok: true, detail: `own DB confirmed: ${dataDirectory} on port ${port}.`, dataDirectory, port };
+      } catch (err) {
+        return {
+          ok: false,
+          reason: "own_db_connection_failed",
+          detail: `could not connect to DATABASE_URL: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    },
+
+    async checkOwnPort(port: number): Promise<OwnPortResult> {
+      // `execFile`, never a shell pipeline — no intermediate wrapper can mask
+      // the real exit code the way `cmd | tail` or `rtk` do (_RULES.md §3 /
+      // AGENTS.md verification traps); Node hands back lsof's own
+      // exit/error directly, so there is no `EXIT=$?` capture to add here.
+      try {
+        const { stdout } = await execFileAsync("lsof", ["-t", `-i:${port}`]);
+        const pid = Number(stdout.trim().split("\n")[0]);
+        if (!Number.isFinite(pid) || pid <= 0) {
+          return {
+            ok: false,
+            reason: "own_port_unbound",
+            detail: `lsof -t -i:${port} returned no usable PID ("${stdout.trim()}").`,
+          };
+        }
+        return { ok: true, detail: `port ${port} is bound to PID ${pid}.`, pid };
+      } catch (err) {
+        // lsof exits non-zero (and prints nothing) when nothing matches —
+        // the expected shape of "no server on this port", not a bug.
+        return {
+          ok: false,
+          reason: "own_port_unbound",
+          detail: `lsof -t -i:${port} found no process bound to that port (${err instanceof Error ? err.message : String(err)}).`,
+        };
+      }
+    },
+
+    async checkPlacementHealth(): Promise<PlacementHealthResult> {
+      const host = process.env.PLACEMENT_SERVICE_HOST ?? "placement.flycast:50051";
+      const secret = process.env.PLACEMENT_SERVICE_SECRET ?? "";
+      try {
+        // Sanctioned reuse, not a hand-copy: `@seazn/engine/scheduling/
+        // placement-client` is a real published package subpath (the same
+        // one apps/web's own usecase tests import), and it is the ONLY way
+        // to reach `SchedulerServiceClient` from scripts/bench at all —
+        // `@grpc/grpc-js` is a dependency of packages/engine, not of the
+        // repo root (confirmed: no node_modules/@grpc at the repo root, and
+        // pnpm-workspace.yaml hoists only pdfkit/exceljs, deliberately, on
+        // named evidence), so it does not resolve as a bare import from a
+        // script run with plain `node --experimental-strip-types` from the
+        // repo root. Calling `solveBuild` exercises the EXACT `new
+        // SchedulerServiceClient(host, grpc.credentials.createInsecure())`
+        // construction the brief names (placement-client.ts:300) without
+        // reaching into packages/engine/src directly.
+        const outcome = await solveBuild(
+          {
+            // Degenerate, genuinely lightweight board: zero fixtures/courts,
+            // a 1-second wall budget. CP-SAT solves an empty problem
+            // instantly — this call exists to prove the channel answers,
+            // not to solve anything. `deadlineMsFor` (wallSeconds + 2s
+            // margin) gives it a short ~3s ceiling either way.
+            courts: [],
+            fixtures: [],
+            grid: { slots: [], stepMinutes: 30 },
+            existing: [],
+            dependencies: [],
+            ruleGroups: [],
+            constraints: { matchMinutes: 30, gapMinutes: 0 },
+            wallSeconds: 1,
+          },
+          { host, secret, requestId: "bench-preflight" },
+        );
+        return { status: "live", detail: `placement answered: status=${outcome.status}, elapsedMs=${outcome.elapsedMs}.` };
+      } catch (err) {
+        if (err instanceof PlacementError) {
+          // unauthenticated/invalid_request still means a service answered
+          // the call — it just rejected this particular probe. That is
+          // "live" for pre-flight purposes: the report cares whether
+          // build/polish/reflow will find a service to talk to at all, not
+          // whether this exact placeholder secret happens to be valid.
+          if (err.failure === "unauthenticated" || err.failure === "invalid_request") {
+            return { status: "live", detail: `placement reachable but rejected the probe (${err.failure}): ${err.message}` };
+          }
+          return { status: "absent", detail: `placement unreachable (${err.failure}): ${err.message}` };
+        }
+        return { status: "absent", detail: `placement probe failed: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    },
+
+    async checkSportsCatalogSynced(): Promise<SportsCatalogResult> {
+      // Reuses the "funnel badminton" witness (apps/web/src/lib/__tests__/
+      // funnel.test.ts:88-89, `div.sport_key === "badminton"`) by checking
+      // the same underlying fact `sync:sports` establishes — badminton and
+      // its system variants are present in `sports`/`sport_variants` —
+      // directly against the DB, rather than re-importing the test's own
+      // helpers (createFunnelDraft/consumeFunnelDraft/createFromDraft are
+      // app internals, off limits per the brief's read-only-reference
+      // rule). There is no read-only HTTP endpoint that exposes the sport
+      // catalog as JSON (checked: no GET /api/v1/sports-shaped route
+      // exists anywhere under apps/web/src/app/api, and adding one would be
+      // product code, out of this task's scope) — the funnel test itself
+      // proves the fact by direct SQL, and this probe mirrors exactly that
+      // query shape rather than inventing an HTTP call that does not exist.
+      try {
+        const sql = getSql();
+        const [sport] = await sql<{ key: string }[]>`select key from sports where key = 'badminton'`;
+        if (!sport) {
+          return {
+            ok: false,
+            reason: "sports_catalog_unsynced",
+            detail: "sports.key = 'badminton' not found — run `npm run sync:sports` against this DB.",
+          };
+        }
+        const [variant] = await sql<{ key: string }[]>`
+          select key from sport_variants where sport_key = 'badminton' and is_system limit 1`;
+        if (!variant) {
+          return {
+            ok: false,
+            reason: "sports_catalog_unsynced",
+            detail: "badminton has no system sport_variants rows — run `npm run sync:sports` against this DB.",
+          };
+        }
+        return { ok: true, detail: "sports catalog synced: badminton + system variants present." };
+      } catch (err) {
+        return {
+          ok: false,
+          reason: "sports_catalog_unsynced",
+          detail: `could not query the sports catalog: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    },
+
+    async checkAppHealth(base: string): Promise<AppHealthResult> {
+      // localhost, never 127.0.0.1 — the Secure-cookie rule
+      // (apps/web/e2e/global-setup.ts:75-85's own contract): require
+      // res.ok AND the body to include `"ok":true`, not just a 200 (a
+      // standalone build served without its static tree staged, or a DB
+      // the server cannot reach, both still answer 200/503 with a body
+      // that says otherwise).
+      try {
+        const res = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(10_000) });
+        const body = await res.text().catch(() => "");
+        if (!res.ok || !body.includes('"ok":true')) {
+          return {
+            ok: false,
+            reason: "app_health_not_ok",
+            detail: `${base}/api/health returned ${res.status}: ${body.slice(0, 200)}`,
+          };
+        }
+        return { ok: true, detail: `${base}/api/health is healthy.` };
+      } catch (err) {
+        return {
+          ok: false,
+          reason: "app_health_unreachable",
+          detail: `no server answering at ${base}/api/health: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    },
+  };
+
+  return {
+    probes,
+    async dispose() {
+      await sqlClient?.end();
+    },
+  };
+}

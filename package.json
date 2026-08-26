@@ -12,6 +12,7 @@
     "node": ">=26"
   },
   "scripts": {
+    "bench:scheduler": "node --experimental-strip-types scripts/bench/bench.ts",
     "dev": "npm run dev --workspace apps/web",
     "build": "npm run build --workspace apps/web",
     "start": "npm run start --workspace apps/web",
@@ -45,6 +46,7 @@
   },
   "dependencies": {
     "@seazn/engine": "workspace:*",
+    "pino": "^10.3.1",
     "postgres": "^3.4.9",
     "stripe": "^22.3.0"
   },
