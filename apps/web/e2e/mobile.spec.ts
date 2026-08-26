@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Locator } from "@playwright/test";
+import { test, expect, type Page, type Locator, type APIRequestContext } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import {
   TAG,
@@ -17,6 +17,7 @@ import {
   scoreFixture,
   seedVenueWithCourts,
   setBoolEntitlementOverrideSql,
+  setDivisionConfigSql,
 } from "./helpers";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
@@ -133,7 +134,136 @@ async function auditRoute(page: Page, path: string, opts: { allowancePx?: number
   await expectNoHorizontalScroll(page, opts);
 }
 
+/** R3.5 Task A — dispatch a real ledger event, reading `last_seq` fresh each
+ *  call. Same shape as gallery.capture.ts's and scorepad-v3-football.spec.ts's
+ *  own `postEvent`, needed here to seed the two decider console routes below
+ *  without hand-tracking `expected_seq` across a dozen calls. */
+async function postEvent(
+  request: APIRequestContext,
+  fixtureId: string,
+  type: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
+  if (state.status !== 200 || !state.data) {
+    throw new Error(`postEvent(${type}): GET state -> ${state.status} ${JSON.stringify(state.error)}`);
+  }
+  const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+    expected_seq: state.data.last_seq,
+    type,
+    payload,
+  });
+  if (res.status >= 300) {
+    throw new Error(`postEvent(${type}) -> ${res.status} ${JSON.stringify(res.error)}`);
+  }
+}
+
+/** R3.5 Task A — MERGE a few cfg keys into the division's existing config,
+ *  never replace it (same shape as gallery.capture.ts's own
+ *  `mergeDivisionConfig`). Called BEFORE the first event so no fold has read
+ *  the old shape. */
+async function mergeDivisionConfig(
+  request: APIRequestContext,
+  divisionId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const div = await apiJson<{ config: Record<string, unknown> }>(request, `/api/v1/divisions/${divisionId}`);
+  if (div.status !== 200 || !div.data) {
+    throw new Error(`mergeDivisionConfig: GET division -> ${div.status} ${JSON.stringify(div.error)}`);
+  }
+  await setDivisionConfigSql(divisionId, { ...div.data.config, ...patch });
+}
+
 test("console routes: no horizontal scroll", async ({ page, request }) => {
+  // R3.5 Task A adds two fresh fixture seeds (below) on top of this test's
+  // existing ~20-route audit loop.
+  test.setTimeout(90_000);
+
+  // R3.5 Task A (2026-08-26) — the two live decider consoles. Neither
+  // defect is fixed yet (capture the broken state first): this is what
+  // proves the seven-width matrix had ZERO coverage of either screen before
+  // this wave, the same gap gallery.capture.ts's own 11-superover/
+  // 11-shootout states exist to close for the three-width gallery.
+  // Sequences are the wave plan's own (Task A steps 2 and 4), verbatim.
+  const soTag = `${TAG}so`;
+  const cricketDecider = await seedRosteredFixture(request, {
+    label: `Mobile Cricket SuperOver ${TAG}-${projectTag()}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [
+      { fullName: `Mobile Cricket SO Home1 ${soTag}` },
+      { fullName: `Mobile Cricket SO Home2 ${soTag}` },
+    ],
+    away: [
+      { fullName: `Mobile Cricket SO Away1 ${soTag}` },
+      { fullName: `Mobile Cricket SO Away2 ${soTag}` },
+    ],
+  });
+  const mh1 = cricketDecider.personIds[`Mobile Cricket SO Home1 ${soTag}`]!;
+  const mh2 = cricketDecider.personIds[`Mobile Cricket SO Home2 ${soTag}`]!;
+  const ma1 = cricketDecider.personIds[`Mobile Cricket SO Away1 ${soTag}`]!;
+  const ma2 = cricketDecider.personIds[`Mobile Cricket SO Away2 ${soTag}`]!;
+  await mergeDivisionConfig(request, cricketDecider.divisionId, { superOver: true });
+  await postEvent(request, cricketDecider.fixtureId, "core.start", {});
+  await postEvent(request, cricketDecider.fixtureId, "cricket.ball", {
+    over: 0, ballInOver: 1, striker: mh1, nonStriker: mh2, bowler: ma1, runs: { bat: 1 },
+  });
+  await postEvent(request, cricketDecider.fixtureId, "cricket.ball", {
+    over: 0, ballInOver: 2, striker: mh2, nonStriker: mh1, bowler: ma1, runs: { bat: 1 },
+  });
+  await postEvent(request, cricketDecider.fixtureId, "cricket.innings.close", { reason: "other" });
+  // target = 3; away scores exactly 2 => TIE => phase super_over.
+  await postEvent(request, cricketDecider.fixtureId, "cricket.ball", {
+    over: 0, ballInOver: 1, striker: ma1, nonStriker: ma2, bowler: mh1, runs: { bat: 1 },
+  });
+  await postEvent(request, cricketDecider.fixtureId, "cricket.ball", {
+    over: 0, ballInOver: 2, striker: ma2, nonStriker: ma1, bowler: mh1, runs: { bat: 1 },
+  });
+  await postEvent(request, cricketDecider.fixtureId, "cricket.innings.close", { reason: "other" });
+  // Away bats first in the super over; home bowls with a bowler who did NOT
+  // bowl the previous over (h1 bowled away's chase, so h2 is the only
+  // eligible home bowler here).
+  await postEvent(request, cricketDecider.fixtureId, "cricket.superover.ball", {
+    over: 0, ballInOver: 1, striker: ma1, nonStriker: ma2, bowler: mh2, runs: { bat: 4 }, boundary: 4,
+  });
+  await postEvent(request, cricketDecider.fixtureId, "cricket.superover.ball", {
+    over: 0, ballInOver: 2, striker: ma1, nonStriker: ma2, bowler: mh2, runs: { bat: 2 },
+  });
+
+  const shTag = `${TAG}sh`;
+  const footballDecider = await seedRosteredFixture(request, {
+    label: `Mobile Football Shootout ${TAG}-${projectTag()}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [{ fullName: `Mobile Football SO Home ${shTag}`, positionKey: "FW" }],
+    away: [{ fullName: `Mobile Football SO Away ${shTag}`, positionKey: "GK" }],
+  });
+  // `extraTime` is a plain z.object whose two fields are BOTH required,
+  // defaulted only as a whole object — `{ enabled: false }` alone fails the
+  // cfg parse, and because the division config is written by SQL nothing
+  // validates it on the way in.
+  await mergeDivisionConfig(request, footballDecider.divisionId, {
+    shootout: true,
+    extraTime: { enabled: false, halfMinutes: 15 },
+  });
+  await postEvent(request, footballDecider.fixtureId, "core.start", {});
+  await postEvent(request, footballDecider.fixtureId, "football.goal", { by: footballDecider.homeEntrantId });
+  await postEvent(request, footballDecider.fixtureId, "football.goal", { by: footballDecider.awayEntrantId });
+  await postEvent(request, footballDecider.fixtureId, "football.period", { phase: "HT" });
+  await postEvent(request, footballDecider.fixtureId, "football.period", { phase: "FT" });
+  await postEvent(request, footballDecider.fixtureId, "football.shootout.kick", {
+    by: footballDecider.homeEntrantId, scored: true,
+  });
+  await postEvent(request, footballDecider.fixtureId, "football.shootout.kick", {
+    by: footballDecider.awayEntrantId, scored: false,
+  });
+  await postEvent(request, footballDecider.fixtureId, "football.shootout.kick", {
+    by: footballDecider.homeEntrantId, scored: true,
+  });
+  await postEvent(request, footballDecider.fixtureId, "football.shootout.kick", {
+    by: footballDecider.awayEntrantId, scored: true,
+  });
+
   const routes: Array<{ path: string; allowancePx?: number }> = [
     { path: "/dashboard" },
     // These six used to be legacy id-routes (/competitions/{id},
@@ -213,6 +343,11 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     // shape most likely to force a min-width overflow at 320 (grid items
     // default to `min-width: auto`).
     { path: `/o/${orgSlug}/c/new` },
+    // R3.5 Task A (2026-08-26) — the two live decider consoles seeded above.
+    // A new UI surface has ZERO width coverage until its path is in this
+    // array; neither of these had any before this wave.
+    { path: await fixturePath(request, cricketDecider.fixtureId) },
+    { path: await fixturePath(request, footballDecider.fixtureId) },
   ];
   for (const { path, allowancePx } of routes) {
     await auditRoute(page, path, { allowancePx });

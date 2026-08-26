@@ -141,6 +141,21 @@ const EXTRA_STATES = [
   // EVEN-game summary leaves the rotation derivable and the engine says so;
   // this is the screen where the pip has to still be there.
   "17-serveaftersummary",
+  // R3.5 Task A (2026-08-26) — the gallery ran 01-pre..10-reviewblocked (plus
+  // tennis's 11-17 above) and had NO tie-break state at all, which is why
+  // R2's and R3's own visual sign-offs both passed over a cricket super over
+  // that cannot be scored and a football shoot-out that shows the wrong
+  // score. These four are captured BEFORE either defect is fixed — proving
+  // the gap existed is the point, not a clean "after" picture (see Task C
+  // and Task D). Cricket's own 11/12 and football's own 11/12 are
+  // deliberately independent per-sport sequences sharing this one flat
+  // string union, the same way tennis's 11-doublesserve/12-pointdock above
+  // coexist with these unambiguously: a capture's real address is
+  // `${sport.slug}/${state}-${width}.png`, never `state` alone.
+  "11-superover",
+  "12-superover-decided",
+  "11-shootout",
+  "12-shootout-decided",
 ] as const;
 type ExtraGalleryState = (typeof EXTRA_STATES)[number];
 
@@ -184,6 +199,27 @@ async function postEvent(
   if (res.status >= 300) {
     throw new Error(`gallery postEvent(${type}) -> ${res.status} ${JSON.stringify(res.error)}`);
   }
+}
+
+/**
+ * R3.5 Task A — MERGE a few cfg keys into the division's existing config,
+ * never replace it. `setDivisionConfigSql` writes the column verbatim, so a
+ * bare object would drop every default the division was created with — the
+ * same read-then-write shape this file's own cricket hook already uses for
+ * `reviews.perInnings` a few states up, and scorepad-v3-football.spec.ts's
+ * own `mergeDivisionConfig`. Called BEFORE the first event so no fold has
+ * read the old shape.
+ */
+async function mergeDivisionConfig(
+  request: APIRequestContext,
+  divisionId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const div = await apiJson<{ config: Record<string, unknown> }>(request, `/api/v1/divisions/${divisionId}`);
+  if (div.status !== 200 || !div.data) {
+    throw new Error(`gallery mergeDivisionConfig: GET division -> ${div.status} ${JSON.stringify(div.error)}`);
+  }
+  await setDivisionConfigSql(divisionId, { ...div.data.config, ...patch });
 }
 
 function tennisHalf(page: Page, side: "home" | "away") {
@@ -809,6 +845,150 @@ const SPORTS: GallerySport[] = [
         ).toHaveAttribute("data-blocked", "true");
       });
 
+      // 11/12 (R3.5 Task A, 2026-08-26) — the super over the pad cannot yet
+      // score, captured BEFORE Task C's fix (_RULES.md "capture the broken
+      // state first"). `currentInnings` today reads `state.innings` alone,
+      // so once both main innings are closed the skin cannot tell a LIVE
+      // super over from a finished match — it disables every delivery tile
+      // and shows the terminal-closure message over a super over that
+      // already has real deliveries on the ledger. A fresh fixture: the
+      // primary fixture and fx2-fx4 above are all on ordinary (non-super-
+      // over) configs by now.
+      const soTag = `${tag}so`;
+      const fx5 = await seedRosteredFixture(page.request, {
+        label: `Gallery Cricket SuperOver ${soTag}`,
+        sportKey: "cricket",
+        variantKey: "t20",
+        home: [
+          { fullName: `Gallery Cricket SO Home1 ${soTag}` },
+          { fullName: `Gallery Cricket SO Home2 ${soTag}` },
+        ],
+        away: [
+          { fullName: `Gallery Cricket SO Away1 ${soTag}` },
+          { fullName: `Gallery Cricket SO Away2 ${soTag}` },
+        ],
+      });
+      const so_h1 = fx5.personIds[`Gallery Cricket SO Home1 ${soTag}`]!;
+      const so_h2 = fx5.personIds[`Gallery Cricket SO Home2 ${soTag}`]!;
+      const so_a1 = fx5.personIds[`Gallery Cricket SO Away1 ${soTag}`]!;
+      const so_a2 = fx5.personIds[`Gallery Cricket SO Away2 ${soTag}`]!;
+
+      // Plan doc 2026-08-26 (Task A step 2), used verbatim: two one-run-a-
+      // ball innings force-closed at two balls each ties the match 2-2
+      // (target 3; away stops at EXACTLY target-1), then two live
+      // super-over balls. `superOver` merged onto the division's EXISTING
+      // config, never a bare object, or setDivisionConfigSql's verbatim
+      // write drops every default the division was created with.
+      await mergeDivisionConfig(page.request, fx5.divisionId, { superOver: true });
+      await postEvent(page.request, fx5.fixtureId, "core.start", {});
+      await postEvent(page.request, fx5.fixtureId, "cricket.ball", {
+        over: 0, ballInOver: 1, striker: so_h1, nonStriker: so_h2, bowler: so_a1, runs: { bat: 1 },
+      });
+      await postEvent(page.request, fx5.fixtureId, "cricket.ball", {
+        over: 0, ballInOver: 2, striker: so_h2, nonStriker: so_h1, bowler: so_a1, runs: { bat: 1 },
+      });
+      await postEvent(page.request, fx5.fixtureId, "cricket.innings.close", { reason: "other" });
+      // target = 3; away scores exactly 2 => TIE => phase super_over.
+      await postEvent(page.request, fx5.fixtureId, "cricket.ball", {
+        over: 0, ballInOver: 1, striker: so_a1, nonStriker: so_a2, bowler: so_h1, runs: { bat: 1 },
+      });
+      await postEvent(page.request, fx5.fixtureId, "cricket.ball", {
+        over: 0, ballInOver: 2, striker: so_a2, nonStriker: so_a1, bowler: so_h1, runs: { bat: 1 },
+      });
+      await postEvent(page.request, fx5.fixtureId, "cricket.innings.close", { reason: "other" });
+      // Away bats first in the super over (they batted second); home bowls
+      // with a bowler who did NOT bowl the previous over — h1 bowled away's
+      // chase, so h2 is the only eligible home bowler here
+      // (applyDelivery's "cannot bowl consecutive overs" gate, cricket.ts).
+      await postEvent(page.request, fx5.fixtureId, "cricket.superover.ball", {
+        over: 0, ballInOver: 1, striker: so_a1, nonStriker: so_a2, bowler: so_h2, runs: { bat: 4 }, boundary: 4,
+      });
+      await postEvent(page.request, fx5.fixtureId, "cricket.superover.ball", {
+        over: 0, ballInOver: 2, striker: so_a1, nonStriker: so_a2, bowler: so_h2, runs: { bat: 2 },
+      });
+
+      await page.goto(await fixturePath(page.request, fx5.fixtureId));
+      await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+      const soRunTile = pad(page).locator('[data-tile-id="run0"]');
+      const soClosureMessage = pad(page).locator(
+        '[data-role="context-strip"] [data-role="context-slot-message"][data-slot-id="bowler"]',
+      );
+      // THE DEFECT, pinned rather than fixed — two real super-over balls are
+      // already on the ledger, yet the skin still reads ONLY
+      // `state.innings` (both main innings closed) and renders exactly the
+      // terminal "nothing left to record" gate: disabled tiles over a live
+      // decider (scorepad-v3-cricket.spec.ts's own ":1004" test asserts the
+      // identical gate with NO super-over ball posted yet — Task C rewrites
+      // that test; this gallery state is the OTHER half of the same bug,
+      // with real super-over deliveries already in play).
+      await captureState(page, dir, "11-superover", "cricket", measurements, async () => {
+        await expect(
+          soRunTile,
+          "gallery(cricket): 11-superover must still show the (wrongly) disabled delivery tiles",
+        ).toHaveAttribute("data-tile-disabled", "true");
+        await expect(
+          soClosureMessage,
+          "gallery(cricket): 11-superover must still show the closure message over a live super over",
+        ).toContainText("This innings is closed.");
+      });
+
+      // 12 — continue the SAME fixture to a decision: four more away balls
+      // close super-over innings 1 at 6/0 (target 7 for the reply), then
+      // home falls three runs short at 3/0 — an ordinary finish on the
+      // sixth ball, not a wicket (`allOut: 2` for a super over is not
+      // exercised here). Striker/non-striker are spelled out per ball to
+      // match how a real scorer would file the card (odd runs flip strike),
+      // though the fold trusts the named pair per ball rather than
+      // re-deriving rotation itself (applyDelivery's non-strict-order
+      // branch for a super over).
+      for (const ballInOver of [3, 4, 5, 6]) {
+        await postEvent(page.request, fx5.fixtureId, "cricket.superover.ball", {
+          over: 0, ballInOver, striker: so_a1, nonStriker: so_a2, bowler: so_h2, runs: { bat: 0 },
+        });
+      }
+      await postEvent(page.request, fx5.fixtureId, "cricket.superover.ball", {
+        over: 0, ballInOver: 1, striker: so_h1, nonStriker: so_h2, bowler: so_a1, runs: { bat: 1 },
+      });
+      await postEvent(page.request, fx5.fixtureId, "cricket.superover.ball", {
+        over: 0, ballInOver: 2, striker: so_h2, nonStriker: so_h1, bowler: so_a1, runs: { bat: 1 },
+      });
+      await postEvent(page.request, fx5.fixtureId, "cricket.superover.ball", {
+        over: 0, ballInOver: 3, striker: so_h1, nonStriker: so_h2, bowler: so_a1, runs: { bat: 1 },
+      });
+      await postEvent(page.request, fx5.fixtureId, "cricket.superover.ball", {
+        over: 0, ballInOver: 4, striker: so_h2, nonStriker: so_h1, bowler: so_a1, runs: { bat: 0 },
+      });
+      await postEvent(page.request, fx5.fixtureId, "cricket.superover.ball", {
+        over: 0, ballInOver: 5, striker: so_h2, nonStriker: so_h1, bowler: so_a1, runs: { bat: 0 },
+      });
+      await postEvent(page.request, fx5.fixtureId, "cricket.superover.ball", {
+        over: 0, ballInOver: 6, striker: so_h2, nonStriker: so_h1, bowler: so_a1, runs: { bat: 0 },
+      });
+
+      // Re-navigate (not merely re-polled) before reading the decided
+      // state — every other fresh-state read in this file does the same
+      // after a burst of page.request-driven setup, rather than trusting a
+      // still-open page to pick up a decider that landed entirely outside
+      // any UI tap.
+      await page.goto(await fixturePath(page.request, fx5.fixtureId));
+      // NOT `pad(page).locator('[data-role="v3-headline"]')` — the whole
+      // `data-testid="score-pad"` section (v3-headline included) is gated
+      // on `!decided` (fixture-console.tsx: `scorePadV2 && scoring &&
+      // !decided && home && away`) and unmounts entirely once a match is
+      // done. The SAME headline text moves to the console's own header
+      // paragraph instead; the "Finalize (lock ledger)" button is gated
+      // directly on `decided`, which is what this state is actually
+      // proving, so it is the more precise anchor of the two.
+      const soFinalize = page.getByRole("button", { name: "Finalize (lock ledger)", exact: true });
+      await captureState(
+        page,
+        dir,
+        "12-superover-decided",
+        "cricket",
+        measurements,
+        visibleProbe(soFinalize, "gallery(cricket): 12-superover-decided must show the decided-match Finalize control"),
+      );
+
       return [...EXTRA_STATES];
     },
   },
@@ -859,6 +1039,88 @@ const SPORTS: GallerySport[] = [
         "gallery(football): the dock closed before this width was captured — the 6s hold " +
           "window elapsed mid-capture, so this PNG would have shown a different state to its siblings",
       ).toBeVisible({ timeout: 5_000 });
+    },
+    // R3.5 Task A (2026-08-26) — the shoot-out the pad cannot yet show
+    // correctly, captured BEFORE Task D's fix (_RULES.md "capture the
+    // broken state first"). `ScorebugHalf` has no `sub` field yet, so the
+    // board keeps rendering the frozen regulation score (`state.goals`)
+    // while the headline above it already reads the pens tally correctly —
+    // one screen, two disagreeing readouts, exactly what design note D-11
+    // exists to prevent. A fresh, minimal fixture: every event here is
+    // side-level (`by: entrantId`), the same one-outfield-player-per-side
+    // shape scorepad-v3-football.spec.ts's own proven shoot-out test uses.
+    captureExtra: async (page, dir, tag, measurements) => {
+      const shTag = `${tag}sh`;
+      const fx = await seedRosteredFixture(page.request, {
+        label: `Gallery Football Shootout ${shTag}`,
+        sportKey: "football",
+        variantKey: "11-a-side",
+        home: [{ fullName: `Gallery Football SO Home ${shTag}`, positionKey: "FW" }],
+        away: [{ fullName: `Gallery Football SO Away ${shTag}`, positionKey: "GK" }],
+      });
+      // `extraTime` is a plain z.object whose two fields are BOTH required,
+      // defaulted only as a whole object — `{ enabled: false }` alone fails
+      // the cfg parse, and because the division config is written by SQL
+      // nothing validates it on the way in: the failure surfaces as the
+      // console rendering no pad at all, which reads as a pad defect.
+      await mergeDivisionConfig(page.request, fx.divisionId, {
+        shootout: true,
+        extraTime: { enabled: false, halfMinutes: 15 },
+      });
+      await postEvent(page.request, fx.fixtureId, "core.start", {});
+      await postEvent(page.request, fx.fixtureId, "football.goal", { by: fx.homeEntrantId });
+      await postEvent(page.request, fx.fixtureId, "football.goal", { by: fx.awayEntrantId });
+      await postEvent(page.request, fx.fixtureId, "football.period", { phase: "HT" });
+      await postEvent(page.request, fx.fixtureId, "football.period", { phase: "FT" });
+      await postEvent(page.request, fx.fixtureId, "football.shootout.kick", { by: fx.homeEntrantId, scored: true });
+      await postEvent(page.request, fx.fixtureId, "football.shootout.kick", { by: fx.awayEntrantId, scored: false });
+      await postEvent(page.request, fx.fixtureId, "football.shootout.kick", { by: fx.homeEntrantId, scored: true });
+      await postEvent(page.request, fx.fixtureId, "football.shootout.kick", { by: fx.awayEntrantId, scored: true });
+
+      await page.goto(await fixturePath(page.request, fx.fixtureId));
+      const ledStrip = pad(page).locator('[data-strip-tone="led"]').first();
+      // THE DEFECT, pinned rather than fixed: home leads 2-1 on kicks (four
+      // taken), but ScorebugHalf carries no `sub` yet, so both halves below
+      // still read the regulation 1-1 while the strip/headline already know
+      // better.
+      await captureState(
+        page,
+        dir,
+        "11-shootout",
+        "football",
+        measurements,
+        visibleProbe(ledStrip, 'gallery(football): 11-shootout must show the "Shoot-out" strip'),
+      );
+
+      // 12 — three more kicks (home, away, home) decide it early: home's
+      // 4th kick makes it 4 scored vs away's 1, a lead away's two remaining
+      // kicks cannot close (shootoutDecision, packages/engine/src/sports/
+      // period/shootout.ts) — an ordinary early finish, not sudden death.
+      await postEvent(page.request, fx.fixtureId, "football.shootout.kick", { by: fx.homeEntrantId, scored: true });
+      await postEvent(page.request, fx.fixtureId, "football.shootout.kick", { by: fx.awayEntrantId, scored: false });
+      await postEvent(page.request, fx.fixtureId, "football.shootout.kick", { by: fx.homeEntrantId, scored: true });
+
+      // Re-navigate before reading the decided state — every kick above was
+      // posted via page.request, never a UI tap, so nothing on the still-
+      // open page has a reason to have refetched on its own.
+      await page.goto(await fixturePath(page.request, fx.fixtureId));
+      // NOT `pad(page).locator('[data-role="v3-headline"]')` — the whole
+      // `data-testid="score-pad"` section is gated on `!decided`
+      // (fixture-console.tsx) and unmounts entirely once a match is done;
+      // the headline text moves to the console's own header paragraph
+      // instead. "Finalize (lock ledger)" is gated directly on `decided`,
+      // which is what this state is actually proving.
+      const decidedFinalize = page.getByRole("button", { name: "Finalize (lock ledger)", exact: true });
+      await captureState(
+        page,
+        dir,
+        "12-shootout-decided",
+        "football",
+        measurements,
+        visibleProbe(decidedFinalize, "gallery(football): 12-shootout-decided must show the decided-match Finalize control"),
+      );
+
+      return ["11-shootout", "12-shootout-decided"];
     },
   },
   {
