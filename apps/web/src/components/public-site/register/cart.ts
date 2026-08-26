@@ -112,6 +112,21 @@ export function autoSeedSingleDivision(division: DivisionLike, id: string): Cart
   ];
 }
 
+/** Reactive convenience for the WHO step's "I'm playing" toggle: when there is
+ *  exactly ONE cart entry and nothing is linked yet, that entry is the only
+ *  possible answer to "which entry is you", so link it automatically instead
+ *  of making the rep re-state the obvious. Never overrides an EXPLICIT choice
+ *  (a non-null `selfEntryId`) and never guesses across 2+ entries — that
+ *  ambiguity is the rep's call (cart.ts's SET_SELF_ENTRY, driven by the
+ *  ENTRIES step's per-entry "This is me" control). Returns the SAME
+ *  reference when there is nothing to do, matching every other action here. */
+export function autoLinkObviousSelf(cart: CartState, imPlaying: boolean): CartState {
+  if (!imPlaying) return cart;
+  if (cart.selfEntryId) return cart;
+  if (cart.entries.length !== 1) return cart;
+  return cartReducer(cart, { type: "SET_SELF_ENTRY", id: cart.entries[0]!.id });
+}
+
 /** Maps one cart line onto the step-2 subset of `PublicRegisterGroupEntry`
  *  (schemas.ts:2381) — drops the client-only `id`, adds the self-link
  *  fields resolved from the CART-LEVEL self state (types.ts). `players`/

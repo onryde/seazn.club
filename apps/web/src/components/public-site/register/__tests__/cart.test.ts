@@ -3,6 +3,7 @@
 // (storage.ts) can treat CartState as a plain snapshot.
 import { describe, expect, it } from "vitest";
 import {
+  autoLinkObviousSelf,
   autoSeedSingleDivision,
   canAddEntry,
   cartReducer,
@@ -232,7 +233,7 @@ describe("cartReducer — SET_SELF_ENTRY (single-select cart-wide)", () => {
 });
 
 describe("autoSeedSingleDivision — single-open-division collapse (RS006 prompt)", () => {
-  it("seeds one blank entry for the division, marked self by default for an individual kind", () => {
+  it("seeds one blank entry for the division (self-linking is autoLinkObviousSelf's job, not this function's)", () => {
     const entries = autoSeedSingleDivision(INDIVIDUAL_DIVISION, "seed-1");
     expect(entries).toEqual<CartEntry[]>([
       {
@@ -244,6 +245,47 @@ describe("autoSeedSingleDivision — single-open-division collapse (RS006 prompt
         free_agent: false,
       },
     ]);
+  });
+});
+
+describe("autoLinkObviousSelf — links the ONE cart entry to 'I'm playing' when there's no ambiguity", () => {
+  const oneEntry: CartState = {
+    entries: [
+      { id: "e1", division_id: "div-indiv", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false },
+    ],
+    selfEntryId: null,
+    selfPlayerIndex: null,
+  };
+
+  it("links the single entry when imPlaying is true and nothing is linked yet", () => {
+    const next = autoLinkObviousSelf(oneEntry, true);
+    expect(next.selfEntryId).toBe("e1");
+  });
+
+  it("does nothing when imPlaying is false", () => {
+    const next = autoLinkObviousSelf(oneEntry, false);
+    expect(next).toBe(oneEntry);
+  });
+
+  it("does not override an already-explicit self choice", () => {
+    const alreadyLinked: CartState = { ...oneEntry, selfEntryId: "e1" };
+    const next = autoLinkObviousSelf(alreadyLinked, true);
+    expect(next).toBe(alreadyLinked);
+  });
+
+  it("does nothing when the cart is empty or has 2+ entries — ambiguous, the rep must choose", () => {
+    expect(autoLinkObviousSelf(EMPTY_CART, true)).toBe(EMPTY_CART);
+    const two: CartState = {
+      ...EMPTY_CART,
+      entries: [...oneEntry.entries, { id: "e2", division_id: "d2", entrant_kind: "individual", team_name: null, partner_name: null, free_agent: false }],
+    };
+    expect(autoLinkObviousSelf(two, true)).toBe(two);
+  });
+
+  it("re-links automatically when the rep un-links then re-toggles imPlaying (still exactly one entry, still no explicit choice)", () => {
+    const unlinked: CartState = { ...oneEntry, selfEntryId: null };
+    const next = autoLinkObviousSelf(unlinked, true);
+    expect(next.selfEntryId).toBe("e1");
   });
 });
 
