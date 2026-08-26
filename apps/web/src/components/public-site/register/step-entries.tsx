@@ -44,7 +44,10 @@ export function StepEntries({
             const selfEligibility = imPlaying
               ? selfEligibilityForDivision(division, contact, seasonStartYear)
               : null;
-            const addAt = (kind: DivisionLike["entrant_kind"], freeAgent: boolean) => () =>
+            // free_agent starts false for every kind here — the solo-signup
+            // handler below sets it via a SEPARATE UPDATE_ENTRY dispatch
+            // right after adding, rather than this helper branching on it.
+            const addAt = (kind: DivisionLike["entrant_kind"]) => () =>
               dispatch({
                 type: "ADD_ENTRY",
                 id: crypto.randomUUID(),
@@ -58,9 +61,9 @@ export function StepEntries({
                 locale={locale}
                 selfEligibility={selfEligibility}
                 imPlaying={imPlaying}
-                onAddTeam={canAdd && division.entrant_kind === "team" ? addAt("team", false) : undefined}
-                onAddPair={canAdd && division.entrant_kind === "pair" ? addAt("pair", false) : undefined}
-                onAddIndividual={canAdd && division.entrant_kind === "individual" ? addAt("individual", false) : undefined}
+                onAddTeam={canAdd && division.entrant_kind === "team" ? addAt("team") : undefined}
+                onAddPair={canAdd && division.entrant_kind === "pair" ? addAt("pair") : undefined}
+                onAddIndividual={canAdd && division.entrant_kind === "individual" ? addAt("individual") : undefined}
                 onAddSoloSignup={
                   canAdd && division.entrant_kind === "team" && division.allow_free_agents
                     ? () => {

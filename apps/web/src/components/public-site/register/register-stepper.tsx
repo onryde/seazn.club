@@ -80,6 +80,15 @@ export function RegisterStepper({
   useEffect(() => {
     const saved = loadRegisterState(orgSlug, competitionSlug);
     if (saved) {
+      // react-hooks/set-state-in-effect flags this as a cascade risk in
+      // general, but there is no other correct place to do it: reading
+      // sessionStorage during the render itself (e.g. a useState lazy
+      // initializer) would make the CLIENT's first-pass markup diverge
+      // from what the SERVER rendered (sessionStorage doesn't exist
+      // server-side) and React would discard the mismatched client tree.
+      // Applying the restored snapshot here, strictly after the identical
+      // first paint, is the standard fix for this exact class of problem.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setContact(saved.contact);
       setImPlaying(saved.imPlaying);
       setCart(saved.cart);
@@ -103,10 +112,13 @@ export function RegisterStepper({
 
   // See cart.ts's autoLinkObviousSelf doc comment: links the one cart entry
   // to "I'm playing" only when there is no ambiguity, never overriding an
-  // explicit choice.
+  // explicit choice. A reactive convenience over user input (the toggle,
+  // the cart shrinking/growing to exactly one entry), not a derivation of
+  // props/state that could be computed during render instead — genuinely
+  // effect-shaped.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCart((prev) => autoLinkObviousSelf(prev, imPlaying));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imPlaying, cart.entries.length]);
 
   function dispatchCart(action: CartAction) {
@@ -137,7 +149,7 @@ export function RegisterStepper({
     setStepIndex((i) => nextStepIndex(i, stepOrder));
   }
   function goBack() {
-    setStepIndex((i) => prevStepIndex(i, stepOrder));
+    setStepIndex((i) => prevStepIndex(i));
   }
 
   return (

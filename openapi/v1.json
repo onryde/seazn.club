@@ -57334,7 +57334,47 @@
                                   }
                                 ]
                               },
+                              "category": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "age_min": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "age_max": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "allow_free_agents": {
+                                "type": "boolean"
+                              },
                               "requires_dob": {
+                                "type": "boolean"
+                              },
+                              "requires_gender": {
                                 "type": "boolean"
                               },
                               "youth": {
@@ -57405,7 +57445,12 @@
                               "taken",
                               "open",
                               "closed_reason",
+                              "category",
+                              "age_min",
+                              "age_max",
+                              "allow_free_agents",
                               "requires_dob",
+                              "requires_gender",
                               "youth",
                               "form_fields"
                             ],
@@ -57458,7 +57503,12 @@
                         "taken": -9007199254740991,
                         "open": true,
                         "closed_reason": "example",
+                        "category": "example",
+                        "age_min": -9007199254740991,
+                        "age_max": -9007199254740991,
+                        "allow_free_agents": true,
                         "requires_dob": true,
+                        "requires_gender": true,
                         "youth": true,
                         "form_fields": [
                           {

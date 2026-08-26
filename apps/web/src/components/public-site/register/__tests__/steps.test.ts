@@ -37,15 +37,14 @@ describe("nextStepIndex / prevStepIndex — generic over ANY step list length", 
     expect(nextStepIndex(4, hypothetical)).toBe(5);
   });
 
-  it("prevStepIndex never goes below 0", () => {
-    const order = buildStepOrder(2);
-    expect(prevStepIndex(1, order)).toBe(0);
-    expect(prevStepIndex(0, order)).toBe(0);
+  it("prevStepIndex never goes below 0 (no order/length dependence — see its own doc comment)", () => {
+    expect(prevStepIndex(1)).toBe(0);
+    expect(prevStepIndex(0)).toBe(0);
   });
 
   it("the collapsed single-step order still round-trips through next/prev without an out-of-range index", () => {
     const order = buildStepOrder(1); // ["who"]
     expect(nextStepIndex(0, order)).toBe(1); // one past the end, same seam as the multi-step case
-    expect(prevStepIndex(0, order)).toBe(0);
+    expect(prevStepIndex(0)).toBe(0);
   });
 });

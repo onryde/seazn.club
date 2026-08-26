@@ -36,6 +36,12 @@ export function nextStepIndex(current: number, order: readonly unknown[]): numbe
   return Math.min(current + 1, order.length);
 }
 
-export function prevStepIndex(current: number, order: readonly unknown[]): number {
+/** No `order` parameter, deliberately — going back never depends on the
+ *  step list's length, only the floor at 0. Kept as a separate named
+ *  function (not just inlined `Math.max(i - 1, 0)` at each call site) so
+ *  every "go back" call site reads the same, and a future change to the
+ *  back-navigation rule (e.g. skipping a step that becomes invalid) has
+ *  one place to land. */
+export function prevStepIndex(current: number): number {
   return Math.max(current - 1, 0);
 }
