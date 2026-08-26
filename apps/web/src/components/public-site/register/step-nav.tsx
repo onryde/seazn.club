@@ -2,16 +2,17 @@
 // RS006 chassis — step rail. Visual signature: a "matchday card" progress
 // strip on the same --ps-court slab the org masthead uses (layout.tsx), so
 // the stepper reads as a continuation of the courtside chrome rather than a
-// generic wizard bolted onto it. Only steps that are REAL this session
-// appear (steps.ts's buildStepOrder) — no dimmed placeholders for
-// details/consent/review; see register-stepper.tsx's "more on the way"
+// generic wizard bolted onto it. Only steps that are REAL and BUILT appear
+// (steps.ts's buildStepOrder) — no dimmed placeholders for consent/review
+// (steps 4-5, not built yet); see register-stepper.tsx's "more on the way"
 // end-cap for how that seam is surfaced instead.
 import { useT } from "@/components/i18n/dict-provider";
 import type { StepId } from "./types";
 
-const STEP_LABEL_KEY: Record<StepId, "register.nav.who" | "register.nav.entries"> = {
+const STEP_LABEL_KEY: Record<StepId, "register.nav.who" | "register.nav.entries" | "register.nav.details"> = {
   who: "register.nav.who",
   entries: "register.nav.entries",
+  details: "register.nav.details",
 };
 
 /** 320px is the tightest of the three overflow risks the RS006 prompt names

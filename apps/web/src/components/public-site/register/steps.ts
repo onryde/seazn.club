@@ -1,11 +1,11 @@
 // RS006 chassis — step order + generic skip mechanism (pure, no DOM).
 //
-// This session builds "who" and "entries" only; steps.ts is still written
-// so the SKIP MECHANISM is generic over any step-list length (RS006 prompt:
-// "single-open-division competitions collapse step 2 ... the chassis must
-// support skipping a step"). A later session appending "details"/"consent"/
-// "review" to StepId + STEP_ORDER-building needs no change to
-// nextStepIndex/prevStepIndex — see steps.test.ts's "hypothetical" case.
+// steps.ts is written so the SKIP MECHANISM is generic over any step-list
+// length (RS006 prompt: "single-open-division competitions collapse step 2
+// ... the chassis must support skipping a step"). "details" (step 3) was
+// appended below with NO change to nextStepIndex/prevStepIndex — see
+// steps.test.ts's "hypothetical" case, which predicted exactly this. A
+// later session appending "consent"/"review" needs no change here either.
 import type { StepId } from "./types";
 
 /** Design §4: "step 2 collapses when the competition has one open division." */
@@ -13,12 +13,14 @@ export function shouldCollapseEntries(openDivisionCount: number): boolean {
   return openDivisionCount === 1;
 }
 
-/** The step list THIS session can actually render. `entries` drops out
- *  entirely (not merely disabled) when collapsed — same "absent, not
- *  disabled" convention RS005's canEdit gating used for a control nobody
- *  should see at all. */
+/** The step list rendered today. `entries` drops out entirely (not merely
+ *  disabled) when collapsed — same "absent, not disabled" convention
+ *  RS005's canEdit gating used for a control nobody should see at all.
+ *  "details" (step 3 — DETAILS) always follows, uncollapsed: unlike step 2,
+ *  the design never skips it (every cart, however it was built, may still
+ *  need a roster/form-fields/consent step before review). */
 export function buildStepOrder(openDivisionCount: number): StepId[] {
-  return shouldCollapseEntries(openDivisionCount) ? ["who"] : ["who", "entries"];
+  return shouldCollapseEntries(openDivisionCount) ? ["who", "details"] : ["who", "entries", "details"];
 }
 
 /**
