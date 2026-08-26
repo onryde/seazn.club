@@ -21,7 +21,13 @@ import { loadLineupPair } from "@/server/engine-db/lineups";
 import { appendEventInTx, type AppendResult, type FirstResult } from "@/server/engine-db/append-event";
 import { requiredFeatureForEvent } from "./fidelity";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
-import { onDecided, refreshDiscipline, refreshNews, requiresDlsEntitlement } from "./scoring";
+import {
+  invalidatePublicCache,
+  onDecided,
+  refreshDiscipline,
+  refreshNews,
+  requiresDlsEntitlement,
+} from "./scoring";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { log } from "@/server/logger";
@@ -414,6 +420,18 @@ async function runStream(
       properties: { sport_key: firstResult.sportKey, status: firstResult.status, fixture_id: fixtureId },
     });
   }
+  // Public caches, fire-and-forget in the same style scoring.ts:146 uses. Not
+  // optional decoration: §2.1's read path IS the public cached one, so without
+  // this the career/standings pages this feature exists to fill keep serving
+  // pre-import content until a TTL happens to lapse.
+  //
+  // `movesDiscovery` is unconditionally true here, where `scoreEvent` has to
+  // compute it: the dry run above already proved this stream DECIDES, and an
+  // import always carries a `core.start` — the two conditions scoring derives
+  // it from. `publishFixtureUpdate`/`publishDivisionUpdate` are deliberately
+  // NOT fired (out of scope): realtime addresses a pad watching a live fixture,
+  // which is not what a backfill of finished results is.
+  void invalidatePublicCache(auth.orgId, fixtureId, true);
 
   return {
     fixture: fixtureId,

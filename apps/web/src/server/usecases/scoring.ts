@@ -480,7 +480,14 @@ export async function finalizeFixture(
 // write: Redis pub:v1:* (the /api/v1/public endpoints, doc 08 §6) and Next's
 // ISR tag cache (the (public) pages, doc 09 §3 — same write that publishes
 // realtime fires the tag).
-async function invalidatePublicCache(
+//
+// Exported (P11), the same reason `onDecided`/`refreshDiscipline`/`refreshNews`
+// above are: the batch importer has to invalidate exactly what a live score
+// write invalidates, and reusing this rather than copying its body is what
+// keeps the two paths from drifting. An import that skipped it left the public
+// pages, the public API and discovery serving pre-import content — on a
+// feature whose whole point is filling those pages (design doc §1/§2.1).
+export async function invalidatePublicCache(
   orgId: string,
   fixtureId: string,
   movesDiscovery = false,
