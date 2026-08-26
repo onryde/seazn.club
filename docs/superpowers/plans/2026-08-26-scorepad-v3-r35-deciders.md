@@ -269,9 +269,11 @@ await postEvent(request, fx.fixtureId, "football.shootout.kick", { by: fx.awayEn
 
 `extraTime` is a plain `z.object` whose two fields are BOTH required with the default applied to the whole object, so `{ enabled: false }` alone fails the cfg parse — and because the division config is written by SQL nothing validates it on the way in. The failure surfaces as the console rendering no pad at all, which reads as a pad defect. Spell `halfMinutes` out.
 
-- [ ] **Step 5: Add all four to the seven-width matrix**
+- [ ] **Step 5: Add the two decider routes to the seven-width matrix**
 
-Register the same four states in `e2e/mobile.spec.ts` so they run at 320/360/375/390/430/768/834. A new UI surface has ZERO width coverage until it is named there.
+**Corrected by the scout: `mobile.spec.ts` has NO per-surface registration API.** The whole file runs under all seven width *projects* (Playwright config) and iterates routes with `for (const path of routes)` — see the arrays around `:204`, `:327`, `:384`. So a new surface joins the matrix by being added to the relevant `routes` array, not by being "registered".
+
+Add the two live decider console routes. A new UI surface has ZERO width coverage until its path is in one of those arrays.
 
 - [ ] **Step 6: Run the capture and publish the BEFORE artifact**
 
@@ -1123,38 +1125,70 @@ Include a sequence carrying `void: true`. It fails today: the inline `reduce` co
 
 ---
 
-## Task I: Group-stage shoot-out points reachable
+## Task I: Group-stage shoot-out points reachable — UI ONLY
+
+**Scout resolved the plan's one open question: the engine ALREADY does this, correctly.**
+`football.ts:2599-2606` gates a split on `outcome.method === "shootout"` and both fields being defined, then awards `cfg.points.shootoutWin` / `cfg.points.shootoutLoss` instead of `win`/`loss`. So this task adds **no engine code**.
+
+**The field path in the plan's first draft was wrong.** They are `cfg.points.shootoutWin` and `cfg.points.shootoutLoss` — nested inside the `points` object (`football.ts:110-118`), not bare cfg keys. A UI writing `{ shootoutWin: 2 }` at the top level would parse, persist, and silently never fire. Write into `points`.
+
+The review's finding stands: zero references in `apps/web`, so no organiser can set them and every group stage decided on kicks awards flat win/loss.
 
 **Files:**
-- Modify: `apps/web/src/components/v2/match-rules.tsx`
-- Modify: `packages/engine/src/sports/football/football.ts` (`standingsDelta`) if it does not already honour the fields
-- Test: `packages/engine/src/sports/football/football.test.ts`, `apps/web/e2e/formats.spec.ts` or the match-rules spec
+- Modify: `apps/web/src/components/v2/match-rules.tsx` (the football rule set — the `shootout` boolean at `:159-163`)
+- Test: `packages/engine/src/sports/football/football.test.ts` (regression guards, if absent), and the match-rules spec
 
-- [ ] **Step 1: Establish the truth before writing UI**
+**Interfaces:**
+- Consumes: `cfg.points.shootoutWin?: number`, `cfg.points.shootoutLoss?: number` — both `z.number().int().nonnegative().optional()`.
+- Produces: nothing new. UI reach for existing engine behaviour.
+
+- [ ] **Step 1: Check whether F19/F20/F21 already exist as engine tests**
 
 ```bash
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/r35-deciders && \
-  sed -n "/standingsDelta/,/^  },/p" packages/engine/src/sports/football/football.ts | head -60
+  git grep -an "shootoutWin" -- packages/engine/src/sports/football/football.test.ts
 ```
-Determine whether `standingsDelta` already reads `shootoutWin`/`shootoutLoss`. If it does, this task is UI-only. If it does not, the engine half comes first. Do not assume — the review established only that `apps/web` has zero references.
+If the split already has coverage, do NOT duplicate it — add only what is missing. If it has none, write F19/F20/F21 as regression guards against the CURRENT behaviour (they must pass immediately; that is correct for a guard on shipped code, and they still earn their place because nothing pins this today).
 
-- [ ] **Step 2: Write the failing standings tests (F19, F20, F21)**
+- [ ] **Step 2: Add the two fields, writing into `points`**
+
+Follow the neighbouring `shootoutAttempts` field's shape in the same file. The `build` function must merge into `points`, never replace it:
 
 ```ts
-it("F19: a group fixture decided on kicks awards the split", () => {
-  const cfg = football.configSchema.parse({ shootout: true, shootoutWin: 2, shootoutLoss: 1 });
-  const [w, l] = football.standingsDelta(shootoutOutcome, cfg, { kind: "league" }, state);
-  expect([w.points, l.points]).toEqual([2, 1]);
-});
-it("F20: neither field set => today's flat win/loss, unchanged", () => { /* … */ });
-it("F21: only shootoutWin set => defined, pinned behaviour", () => { /* … */ });
+    {
+      key: "shootoutWin",
+      label: "Points for a shoot-out win",
+      help: "Group stages only, and only when Penalty shootout is on. Leave blank to award a normal win.",
+      kind: "number",
+      min: 0,
+      build: (v, values) => ({
+        points: {
+          ...defaultPoints(values),
+          ...(v === "" ? {} : { shootoutWin: Number(v) }),
+        },
+      }),
+    },
 ```
 
-- [ ] **Step 3: Add the two fields to the match-rules editor**
+A blank field must emit NO key rather than `0` — `undefined` is what turns the split off, and `0` is a legal points value meaning "a shoot-out win is worth nothing". The two are not the same and the engine gate reads `!== undefined`.
 
-Follow the existing `shootoutAttempts` pattern in that file — `help` text stating they apply only to a group stage decided on kicks, and only when `shootout` is on.
+- [ ] **Step 3: Both fields or neither**
 
-- [ ] **Step 4: Commit**
+The engine requires BOTH to be defined before it splits. A UI that lets an organiser set only the win silently does nothing. Either validate the pair in the editor, or state the rule in the `help` text of both — decide, and write the choice into `_INDEX.md` as a ruling rather than leaving it to the reader.
+
+- [ ] **Step 4: e2e — set both, decide a group fixture on kicks, assert the table**
+
+The value of this task is a correct league table, so the test must read the STANDINGS, not the config round-trip.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git commit -m "feat(football): let an organiser set group-stage shoot-out points
+
+points.shootoutWin/shootoutLoss have worked in the engine since spec 04
+and had zero references in apps/web, so every group stage decided on
+kicks awarded flat win/loss and nothing surfaced it. UI only."
+```
 
 ---
 
@@ -1260,28 +1294,36 @@ it("K5: never logs an event payload, a person name, or an email", () => {
 
 - [ ] **Step 2: Instrument the accept path**
 
+Scout-verified scope at the call site: the fold is `append-event.ts:266-268` producing `state`; `outcome` at `:270`; `status` from `nextStatus(...)` at `:314`; `candidate.type` / `candidate.seq` are the event. **`fixture.status` is the fixture's STATUS, not the engine phase** — the plan's first draft called these `phaseBefore`/`phaseAfter`, which do not exist.
+
 ```ts
 import { log } from "@/server/logger";
 
-// … after the fold succeeds and the row is written:
+// … after the insert into match_states:
   // R3.5 — this funnel was entirely silent. IDs, types and counts only:
   // payloads carry person ids and free text, and persons in this product
   // carry consent flags, so a payload is never a log-safe value (K5).
+  //
+  // `phase` is the fold's OWN phase, which is what makes a decider visible;
+  // `status` is the fixture row's. They are different things and both matter.
   log.info(
     {
       fixtureId,
-      eventType: input.type,
-      seq: result.seq,
-      phaseBefore,
-      phaseAfter,
+      sportKey: division.sport_key,
+      eventType: candidate.type,
+      seq: candidate.seq,
+      phase: (state as { phase?: unknown }).phase ?? null,
+      status,
     },
     "scoring event appended",
   );
 ```
 
+**There is no "entered a decider" line.** The phase BEFORE the fold is not in scope here — reconstructing it would mean a second fold on the scorer's tap path, which is not worth it. A decider entry is already visible as the first accepted line whose `phase` is `super_over` or `SHOOTOUT`, which is the same information without the cost. The plan's first draft invented a `DECIDER_PHASES` transition check against variables that do not exist; it is dropped.
+
 - [ ] **Step 3: Instrument the refusal path**
 
-Wrap the fold/apply call so every `EngineError` is logged once, at `warn`, before it propagates — a refusal is the scorer hitting a wall, which is the single most useful line this funnel can emit:
+**Scout-verified: `append-event.ts` contains ZERO `try {` blocks today**, and everything here runs inside `tx` where a throw aborts the transaction before the insert — which is load-bearing behaviour (see the PROMPT-61 comment at `:272`). Wrap ONLY the `foldMatch` call, log, and re-throw unchanged, so the abort still happens exactly as it does now. Do not wrap the transaction, and do not run SQL inside the catch — a rejected statement poisons the rest of the tx.
 
 ```ts
   } catch (error) {
@@ -1297,28 +1339,29 @@ Wrap the fold/apply call so every `EngineError` is logged once, at `warn`, befor
 
 Re-throw unchanged — this task adds observability and must not alter a single HTTP status or message.
 
-- [ ] **Step 4: Log the two decider transitions at info**
+- [ ] **Step 4: Log the decided transition — reusing the one already computed**
 
-These are rare and high-value, and they are exactly what was unobservable:
+`append-event.ts:316` ALREADY computes exactly this transition for `firstResult`:
+`fixture.outcome === null && outcome !== null`. Do not invent a second test of the same condition — log inside that existing branch, so the two can never disagree about when a fixture was decided.
 
 ```ts
-  // Entering a decider — a tie that went to a super over, or a level score at
-  // full time that went to kicks.
-  if (phaseAfter !== phaseBefore && DECIDER_PHASES.has(phaseAfter)) {
-    log.info({ fixtureId, sportKey, phase: phaseAfter }, "fixture entered a decider");
-  }
-  // Resolving one — `method` distinguishes shootout / super_over /
-  // boundary_count / extra_time, which is the fact a support question about a
-  // knockout result actually needs.
-  if (outcomeAfter !== null && outcomeBefore === null) {
-    log.info(
-      { fixtureId, sportKey, kind: outcomeAfter.kind, method: outcomeAfter.method ?? null },
-      "fixture decided",
-    );
-  }
+    const firstResult: FirstResult | null = /* …unchanged… */;
+    if (firstResult !== null) {
+      // R3.5 — `method` is what a support question about a knockout result
+      // actually needs: shootout / super_over / boundary_count / extra_time.
+      // It is the difference between "they won" and "they won on penalties",
+      // and until now neither reached a log.
+      log.info(
+        {
+          fixtureId,
+          sportKey: division.sport_key,
+          kind: (outcome as { kind?: unknown }).kind ?? null,
+          method: (outcome as { method?: unknown }).method ?? null,
+        },
+        "fixture decided",
+      );
+    }
 ```
-
-`DECIDER_PHASES` is a module-local `ReadonlySet<string>` of `"super_over"` and `"SHOOTOUT"`, declared beside `LOCKED_FIXTURE_STATUSES` which already establishes that pattern in this file.
 
 - [ ] **Step 5: Verify the log level convention**
 
