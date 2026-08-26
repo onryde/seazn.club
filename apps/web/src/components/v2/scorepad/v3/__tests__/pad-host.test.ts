@@ -318,6 +318,16 @@ function evTile(id: string, type: string, disabled?: boolean): TileSpec {
   };
 }
 
+/** A tile that OPENS a sheet, rather than emitting an event directly —
+ *  `{sheet: key}`, cricket's real `wicket` tile's own action shape. */
+function sheetTile(id: string, sheetKey: string, disabled?: boolean): TileSpec {
+  return {
+    id, label: "l", kind: "standard", phases: ["live"],
+    action: { sheet: sheetKey },
+    ...(disabled === undefined ? {} : { disabled }),
+  };
+}
+
 describe("dedicatedEventTypes — a disabled tile is not a reachable surface", () => {
   it("B1: every tile for a type disabled => the type is NOT claimed", () => {
     const out = dedicatedEventTypes(
@@ -339,9 +349,45 @@ describe("dedicatedEventTypes — a disabled tile is not a reachable surface", (
     expect(out.has("football.goal")).toBe(true);
   });
 
-  it("B4: a sheet still claims a type whose only tile is disabled", () => {
+  // B4 WAS WRONG (coordinator finding, R3.5/B follow-up) and asserted the
+  // opposite of this until now. `resolveSheet` (pad-host.tsx:854) has
+  // exactly ONE call site, reached only from a tile tap — a sheet is never
+  // an independently reachable surface. A sheet whose every opening tile is
+  // disabled is exactly as unreachable as those tiles, so claiming its
+  // event unconditionally suppressed the More panel that was the LAST route
+  // to it: cricket's real `wicket` sheet declares `cricket.superover.ball`
+  // (ballEventType(state) in a super over) and goes disabled with the whole
+  // delivery row for the length of one — see
+  // dedicated-event-types-superover.test.ts for the real-fold proof this
+  // synthetic case is modelling.
+  it("B4: a sheet whose ONLY opening tile is disabled => the type is NOT claimed", () => {
     const out = dedicatedEventTypes(
-      [evTile("w", "cricket.wicket", true)],
+      [sheetTile("w", "wicket", true)],
+      { wicket: { event: "cricket.wicket", steps: [] } as never },
+      [], bugStub());
+    expect(out.has("cricket.wicket")).toBe(false);
+  });
+
+  // NOT the same case as B4, and must not be conflated with it. `undefined`
+  // (no tile anywhere points at this sheet) stays CLAIMED, deliberately:
+  // cricket's `overSummary` sheet has no opening tile at all in the fine
+  // (ball-by-ball) lane, and un-claiming it would surface
+  // `cricket.innings.summary` in More during a fine innings, where the fold
+  // refuses it outright (cricket.ts:1402-1404) — a brand-new dead-end tap,
+  // the exact class of defect this whole exclusion set exists to prevent.
+  // Pinned as its own case so a later change cannot quietly widen B4's fix
+  // from "every opener disabled" to "no opener found".
+  it("B4b: a sheet with NO tile pointing at it at all => still claimed", () => {
+    const out = dedicatedEventTypes(
+      [],
+      { overSummary: { event: "cricket.innings.summary", steps: [] } as never },
+      [], bugStub());
+    expect(out.has("cricket.innings.summary")).toBe(true);
+  });
+
+  it("B4c: a sheet with one enabled and one disabled opener => still claimed", () => {
+    const out = dedicatedEventTypes(
+      [sheetTile("w1", "wicket", true), sheetTile("w2", "wicket")],
       { wicket: { event: "cricket.wicket", steps: [] } as never },
       [], bugStub());
     expect(out.has("cricket.wicket")).toBe(true);

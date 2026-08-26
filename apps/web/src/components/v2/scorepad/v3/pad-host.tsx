@@ -257,14 +257,25 @@ export function buildTopRibbon(
  *  half were all "this type IS reachable through a narrowed tile/sheet/half,
  *  so the generic More form is a redundant, worse-enrichment duplicate" — the
  *  type was claimed correctly, and the bug was a second route to it. Here the
- *  type was claimed by tiles nobody could tap at all: a cricket super over
- *  disables its ENTIRE delivery row (`TileSpec.disabled` — a transient
- *  per-tile block, never a phase-gated removal), and this loop used to add
- *  `cricket.superover.ball` from those disabled tiles regardless, which
- *  closed the only remaining route to recording one, since no enabled tile or
- *  sheet claimed the type either. Still not "the last" — but now the family
- *  has both directions: claimed-and-reachable-twice, and claimed-but-
- *  reachable-never. */
+ *  type is claimed by a surface nobody can actually reach: a cricket super
+ *  over disables its ENTIRE delivery row (`TileSpec.disabled` — a transient
+ *  per-tile block, never a phase-gated removal), and BOTH loops below used to
+ *  add `cricket.superover.ball` regardless — the tile loop directly, and the
+ *  `wicket` SHEET (`{sheet: "wicket"}` is that same tile's own action) a
+ *  second, independent way, because a sheet's claim on its own event used to
+ *  be unconditional. Fixing only the tile loop was not enough: `resolveSheet`
+ *  (:854) has exactly ONE call site, reached only from a tile tap, so a sheet
+ *  is never an independently reachable surface — one whose every opening
+ *  tile is disabled is exactly as unreachable as those tiles, which is what
+ *  `sheetOpenable` below answers. A sheet NO tile points at at all
+ *  (`undefined`, never observed as `false`) stays claimed on purpose:
+ *  cricket's `overSummary` sheet has no opening tile in the fine lane, and
+ *  un-claiming it would surface `cricket.innings.summary` in More during a
+ *  fine innings, where the fold refuses it outright (cricket.ts:1402-1404) —
+ *  a brand-new dead-end tap, the exact defect class this whole function
+ *  exists to prevent. Still not "the last" — but now the family has both
+ *  directions: claimed-and-reachable-twice, and claimed-but-reachable-never.
+ */
 export function dedicatedEventTypes(
   tiles: readonly TileSpec[],
   sheets: Record<string, GuidedSheetSpec> | undefined,
@@ -284,7 +295,26 @@ export function dedicatedEventTypes(
       if (slot) out.add(slot.eventType);
     }
   }
-  if (sheets) for (const spec of Object.values(sheets)) out.add(spec.event);
+  // Which sheets an ENABLED tile can actually open — see this function's
+  // own doc above for why a sheet is not an independent surface. Built from
+  // EVERY tile (disabled included), unlike the loop above: a disabled
+  // opener still needs to be counted so a sheet with only disabled openers
+  // reads as `false`, not `undefined` (silently and wrongly treated as
+  // "no opener at all", which stays claimed).
+  const sheetOpenable = new Map<string, boolean>();
+  for (const tile of tiles) {
+    if (!("sheet" in tile.action)) continue;
+    const key = tile.action.sheet;
+    sheetOpenable.set(key, (sheetOpenable.get(key) ?? false) || tile.disabled !== true);
+  }
+  if (sheets) {
+    for (const [key, spec] of Object.entries(sheets)) {
+      // `false` = every tile that opens it is disabled — not claimed.
+      // `undefined` = NO tile opens it at all — left claimed, deliberately.
+      if (sheetOpenable.get(key) === false) continue;
+      out.add(spec.event);
+    }
+  }
   // A tapModel-S half. `tappable` and `tapEvent` travel together by contract
   // (`assertScorebugSpec` refuses one without the other), so the `tapEvent`
   // guard is belt-and-braces against a spec that never reached the assert —
