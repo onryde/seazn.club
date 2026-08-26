@@ -7,10 +7,12 @@ happens** (the scoringpad/release-2 pattern).
 
 Programme origin: bench spec §14 (`../designs/2026-08-12-scheduler-bench-design.md`).
 **Whole programme is creative-complete but BUILD-GATED: owner green-light
-required per session.** Two extra hard gates: P8–P10 wait for the
-release-2 C-chain (shared `schedule.ts`/`build.ts`); P11 waits for
-ScoringPad S13 (scoring-ingest cutover). The bench itself stays
-strict-wait (S13+C8) per its own spec — it is NOT a row here.
+required per session.** P8–P10 waited on the release-2 C-chain (shared
+`schedule.ts`/`build.ts`) — that chain is DONE (release-2 CLOSED, z3 gone).
+P11 waited on ScoringPad S13 (scoring-ingest cutover) — **P11 merged
+2026-08-26 as squash `ee5aa1a01` (PR #653)**; both gates are now history,
+not open blockers. The bench itself stays strict-wait (S13+C8) per its own
+spec — it is NOT a row here.
 
 Specs of record (all in `../designs/`):
 
@@ -49,8 +51,8 @@ S13-gated. New-branch-in-worktree rule applies to every session.
 | P8 | D5a venues/courts schema + API + **Directory** UI | `P08-venues-schema-ui.md` | — | green-light + **release-2 C-chain done** (cleared: C7 `298da0af`, C8 `e9a7c54a`) | **DONE 2026-08-17** — V367 (4 tables, RLS forced, composite FKs, `on delete restrict`), 8 routes, archive at court AND venue level, Directory venues tab (NOT org settings — amendment A2), calendar editor, reusable tag-chip input, 84 i18n keys ×4. Gates: unit 8401/8329/4 (the 4 = pre-existing `schedule-build-honours-locks`), e2e 2/2 + an active-tab guard at 320/430/768, smoke 8/8 venues checks, screenshots 1280/320/768. **Six design amendments A1–A6** corrected in place in the D5 spec with a log at its foot. Status: `docs/superpowers/plans/2026-08-17-p8-session-status.md` |
 | P9 | D5b scheduler integration + stored-config migration | `P09-venues-scheduler.md` | P8 | same as P8 | **IN REVIEW** — V374 (renumbered twice: main took V368, then V371), `ScheduleConfig.courts` = court uuids, one shared candidate filter used by build/validate/AI, `NO_MATCHING_COURT` 422, `court_tag_mismatch` (26th conflict kind), court multi-picker, AI pack speaks court NAMES while storage stays ids. 17 defects found, all one mechanism — identity changed under code that read it. Status: `docs/superpowers/plans/2026-08-17-p9-session-status.md` **MERGED** — #621 (main) + #623 (third-review follow-ups) + #633 (round-scoped court tags, spun out as #622). |
 | P9.5 | D5b.5 one court-availability function + the two constraints the placer never learned | `P09-5-window-unification.md` | P9 | same as P8 | **MERGED 2026-08-24 `203395b6a` (#638, squashed, 20/20 CI green)** — `court-windows.ts` `usableWindows` shipped (all 14 edge-matrix rows, mutation-proven); lattice, GREEDY and `/validate` now honour V367 court hours via `outside_court_hours`, the 27th conflict kind; start-window rule un-forked; solver start-window breaches now rejected at the build gate. **Both of the prompt's premises were FALSE — see the status log.** |
-| P10 | D5c calendars + window compiler | `P10-venues-calendars.md` | **P9.5** (cleared) | same as P8 | **DONE 2026-08-24** — branch `feat/p10-venues-calendars`, not yet merged (owner opens the PR). **Prompt scope items 1–2 were SUPERSEDED by P9.5 and the calendar editor was P8's (A4) — this session did not re-plan from the prompt file.** Shipped: `stranded_fixture` (28th conflict kind, reported never blocking), `resolveCourtDay` deleted with the single-source guard now scanning apps/web too, one `verifyConfigForDivision` builder across all 5 sites, capacity precheck moved server-side with the board card stale-marked. e2e (`court-tags-scheduling.spec.ts`) proves both halves of the non-blocking ruling in one flow: the conflict is visible on the board and publishing still goes through. **Findings from Tasks 1–6, and one lint regression — see the status log.** Design: `docs/superpowers/specs/bench-product-value/designs/2026-08-24-p10-stranded-fixtures-and-capacity-design.md`; plan: `docs/superpowers/plans/2026-08-24-p10-stranded-fixtures-and-capacity.md` |
-| P11 | D6 batch import | `P11-batch-import.md` | — | green-light + **ScoringPad S13 done** | TODO |
+| P10 | D5c calendars + window compiler | `P10-venues-calendars.md` | **P9.5** (cleared) | same as P8 | **MERGED 2026-08-24** — `feat/p10-venues-calendars`, PR #644 (squash `027fd535a`), plus follow-up fix commits `bf89074b4` and `9080cb959`. **Prompt scope items 1–2 were SUPERSEDED by P9.5 and the calendar editor was P8's (A4) — this session did not re-plan from the prompt file.** Shipped: `stranded_fixture` (28th conflict kind, reported never blocking), `resolveCourtDay` deleted with the single-source guard now scanning apps/web too, one `verifyConfigForDivision` builder across all 5 sites, capacity precheck moved server-side with the board card stale-marked. e2e (`court-tags-scheduling.spec.ts`) proves both halves of the non-blocking ruling in one flow: the conflict is visible on the board and publishing still goes through. **Findings from Tasks 1–6, and one lint regression — see the status log.** Design: `docs/superpowers/specs/bench-product-value/designs/2026-08-24-p10-stranded-fixtures-and-capacity-design.md`; plan: `docs/superpowers/plans/2026-08-24-p10-stranded-fixtures-and-capacity.md` |
+| P11 | D6 batch import | `P11-batch-import.md` | — | green-light + **ScoringPad S13 done** | **MERGED 2026-08-26** — squash `ee5aa1a01`, PR #653. Open follow-ups: `import.events` has no `plan_entitlements` row yet (feature dark until one exists or an org gets a per-org override); 320px report-table dead-space wart shipped as-is per owner choice. |
 
 ## Decisions already made (do not re-open)
 
@@ -621,8 +623,10 @@ rung — ask what test drives that shape before trusting the suite.
   standalone playoff template. It needs `TemplateStage.seeding`, which
   reads `stages.seeding` — P5's V360 — so P7 unblocks the moment P5
   lands. `euro24` and `t20-super8` are P7's too.
-- **P8–P10 (D5 venues)** — still gated on the release-2 C-chain.
-- **P11 (D6)** — still gated on ScoringPad S13.
+- **P8–P10 (D5 venues)** — release-2 C-chain gate cleared; all three merged
+  (P10 last, 2026-08-24, PR #644).
+- **P11 (D6)** — ScoringPad S13 gate cleared; merged 2026-08-26, PR #653
+  (squash `ee5aa1a01`).
 
 ### Known-slow e2e, handed to its own session
 
