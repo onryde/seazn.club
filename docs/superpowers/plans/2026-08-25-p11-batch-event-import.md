@@ -1096,11 +1096,19 @@ Add the page to `apps/web/e2e/mobile.spec.ts` alongside the other division-conso
 - [ ] **Step 3: Run**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/apps/web && \
-  PLAYWRIGHT_BASE_URL=http://localhost:3100 npx playwright test events-import.spec.ts
+cd <worktree>/apps/web && rtk proxy env -u REDIS_URL \
+  DATABASE_URL=… DATABASE_SSL=disable \
+  PLAYWRIGHT_BASE=http://localhost:<port> E2E_PROD_TARGET=1 \
+  npx playwright test events-import.spec.ts --reporter=line
 ```
 
-Playwright needs `apps/web` as cwd and the base URL set. Assert the server on 3100 is yours (`lsof -t -sTCP:LISTEN -i:3100`) before believing a pass. Never run a long e2e inside a subagent — the 600s watchdog kills it and reports success.
+Three corrections found running this for real (2026-08-26): the variable is
+**`PLAYWRIGHT_BASE`**, not `PLAYWRIGHT_BASE_URL` — a wrong name is ignored
+silently and the preflight then probes `localhost:3000`. **`E2E_PROD_TARGET=1`**
+is a FLAG, not a URL. And plain `rtk` mangles Playwright output into a
+vitest-shaped `PASS (0) FAIL (0)` in under a second, which reads as a pass —
+`rtk proxy` is mandatory. `REDIS_URL` must be unset, or the fail-closed
+magic-link limiter throttles the suite's own logins. Assert the server on 3100 is yours (`lsof -t -sTCP:LISTEN -i:3100`) before believing a pass. Never run a long e2e inside a subagent — the 600s watchdog kills it and reports success.
 
 - [ ] **Step 4: Commit**
 
