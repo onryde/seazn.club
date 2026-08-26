@@ -10,3 +10,4 @@
 
 # vitest JSON reporter output (CI collection reconciliation, #339)
 vitest-results-*.json
+e2e-artifacts/

@@ -532,7 +532,16 @@ export function resolvePeople(
   // they already do before innings ONE's own first ball.
   const innings = scoringInnings(state, cfg);
   const due = dueBattingSide(state, cfg);
-  const battingSide = due ?? innings?.battingSide ?? "home";
+  // R3.5/Task S follow-up — the last fallback was a bare `"home"`, which is
+  // right only when nobody has said otherwise. Before innings ONE has a ball
+  // (`innings` null, nothing due), an away side that won the toss and elected
+  // to bat is already recorded in `state.battingFirst`, and ignoring it put
+  // the striker on the wrong side and the BOWLER on the batting side — the
+  // fold then refuses the first ball of an ordinary match with "bowler … is
+  // not in the fielding lineup", the same 422 the super over gave. Measured,
+  // not reasoned: probe returned battingSide=home, bowler=A1 for
+  // `battingFirst: "away"`. `"home"` survives as the no-toss-recorded default.
+  const battingSide = due ?? innings?.battingSide ?? state.battingFirst ?? "home";
   const bowlingSide = opponentSide(battingSide);
   const battingOrder = state.orders?.[battingSide] ?? [];
   const bowlingOrder = state.orders?.[bowlingSide] ?? [];

@@ -3341,3 +3341,39 @@ describe("R3.5 Task S — resolvePeople before the first super-over ball (C2's o
     expect(people.striker).not.toBe(people.nonStriker);
   });
 });
+
+// ---------------------------------------------------------------------------
+// R3.5 Task S follow-up — the SAME wrong-side fallback, with no super over
+// anywhere near it. Found by the Task S implementer while fixing the super
+// over, then reproduced directly before being believed: `resolvePeople`
+// ended in a bare `?? "home"`, so before innings one has a ball an away side
+// that won the toss and elected to bat still read as "home batting". The
+// striker came from the wrong order and the BOWLER came from the batting
+// side, which the fold refuses with "bowler … is not in the fielding
+// lineup" — the first ball of an ordinary match, not a decider.
+// ---------------------------------------------------------------------------
+describe("R3.5 Task S follow-up — the side batting first is read, not assumed", () => {
+  it("away wins the toss and elects to bat: the pad proposes AWAY batting and a HOME bowler", () => {
+    const cfg = cricket.configSchema.parse({ ballsPerInnings: 6, ballsPerOver: 6, minOversForResult: 1 });
+    const st = foldCricket(cfg, [["cricket.toss", { wonBy: "A", elected: "bat" }], ["core.start"]]);
+    expect(st.battingFirst, "the fold must record who bats first").toBe("away");
+    expect(st.innings, "this case is specifically BEFORE innings one has a ball").toHaveLength(0);
+
+    const people = resolvePeople(st, {}, cfg);
+    expect(people.battingSide).toBe("away");
+    expect(people.bowlingSide).toBe("home");
+    // The assertion that actually reproduces the 422: membership, not the
+    // side label. A bowler drawn from the batting order is what the fold
+    // rejects, and a side-string-only assertion would not have seen it.
+    expect(st.orders.home, "the proposed bowler must be in the FIELDING lineup").toContain(people.bowler);
+    expect(st.orders.away).toContain(people.striker);
+  });
+
+  it("no toss recorded: the home default survives", () => {
+    const cfg = cricket.configSchema.parse({ ballsPerInnings: 6, ballsPerOver: 6, minOversForResult: 1 });
+    const st = foldCricket(cfg, [["core.start"]]);
+    const people = resolvePeople(st, {}, cfg);
+    expect(people.battingSide).toBe("home");
+    expect(st.orders.away).toContain(people.bowler);
+  });
+});
