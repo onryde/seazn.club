@@ -232,7 +232,14 @@ export function MateInTwo({ depth = 2 }: { depth?: 2 | 3 }) {
           ? `black plays <strong>${sqName(saveMove.from)}–${sqName(saveMove.to)}</strong> and there is no mate`
           : "black slips away";
         later(() => {
+          // Reset ALL the way to phase 1, not just the board — a miss on the
+          // second intermediate move (depth=3) used to leave `phase` at 2
+          // while the board went back to the puzzle's start; every retry
+          // then checked "mate in 2" against a mate-in-3 start and could
+          // never pass, soft-locking the puzzle forever.
           setPosition(parseFEN(PACK[cur].fen).board);
+          setPhase(1);
+          setMidBoard(null);
           setShake((s) => s + 1);
           setBusy(false);
           setStatus(
@@ -295,7 +302,7 @@ export function MateInTwo({ depth = 2 }: { depth?: 2 | 3 }) {
       <Board
         position={position}
         labels
-        orientation={parseFEN(MATE2[cur].fen).whiteToMove ? "white" : "black"}
+        orientation={parseFEN(PACK[cur].fen).whiteToMove ? "white" : "black"}
         highlights={highlights}
         popToken={pop}
         shakeToken={shake}

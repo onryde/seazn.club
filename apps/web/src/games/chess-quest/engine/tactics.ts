@@ -104,6 +104,20 @@ const MATE_GAIN = 1000;
 
 // Best immediate result for the side to move on `board`: a forced mate
 // (MATE_GAIN) if one exists, else the most valuable capture on offer, else 0.
+//
+// KNOWN GAP (found in review 2026-08-27, not fixed here): this counts the
+// captured piece's raw value without checking the capturing piece survives
+// the reply — a one-ply "is the capture square then attacked" guard makes
+// the pawnFork trio in TACTICS4 fail their own >=3 bar (their real forced
+// net is +2: the retreating knight can hop to the square the forking pawn
+// just vacated, e.g. d6-e4 after e4-e5, which defends the OTHER forked
+// knight's square too). That is a real content gap in those 3 puzzles, not
+// just a heuristic imprecision — but fixing it needs new positions (the
+// vacated-pawn-square defense is structural to a same-rank two-knight pawn
+// fork), not a one-line change here, and reverting the safety check found
+// zero effect on the other 21 TACTICS3/4 puzzles (hand-verified 5 of them
+// in review; sound only because material was too sparse to exploit this).
+// Left as designed pending a pawnFork redesign.
 function bestFollowUp(board: Board, white: boolean): number {
   for (const m of allLegalMoves(board, white)) {
     if (isMate(applyMove(board, m.from, m.to), !white)) return MATE_GAIN;

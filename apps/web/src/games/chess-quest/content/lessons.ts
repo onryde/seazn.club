@@ -999,7 +999,7 @@ export const LESSONS: Lesson[] = [
     },
   },
 
-  /* ---- Track 4: Grandmaster Gorge (lessons 54–58, Days 107–115) ---- */
+  /* ---- Track 4: Grandmaster Gorge (lessons 54–62, Days 107–123) ---- */
   {
     n: 54,
     land: 11,
@@ -1019,7 +1019,7 @@ export const LESSONS: Lesson[] = [
     diagram: {
       fen: "7k/8/8/4K3/3p4/8/8/Q7 w - - 0 1",
       from: "e5",
-      caption: "That pawn on d4 is pinned to its own king — it can never move. Walk your king in first.",
+      caption: "That pawn on d4 can't help black at all — ignore it and walk your king in first.",
     },
   },
   {

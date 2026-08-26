@@ -403,15 +403,16 @@ export const TACTICS2: Record<"fork2" | "pin2" | "skewer2" | "disco2", TacticPuz
 // group-composition tests in content/__tests__/puzzles.test.ts. Every entry
 // is machine-verified: no mate-in-1, no mate-in-2, forced in exactly three
 // against every black defence, and carries an obstructing or decoy pawn
-// (pinned, too far away to matter, or just watching) so the position is
-// never a bare textbook box.
+// (too far away to matter, or just watching) so the position is never a
+// bare textbook box. None of these pawns are actually pinned — an earlier
+// draft claimed one was and the engine disproved it (2026-08-27).
 export const MATE3: MatePuzzle[] = [
   // --- Queen + King ---
   {
     fen: "7k/8/8/4K3/3p4/8/8/Q7 w - - 0 1",
     solution: "e5f6",
     name: "The frozen guard",
-    hint: "That little pawn is pinned to its own king — it can never move! Walk your king in first.",
+    hint: "That little pawn can't help black at all — ignore it and walk your king in first.",
   },
   {
     fen: "7k/p7/3K4/8/8/8/6Q1/8 w - - 0 1",
