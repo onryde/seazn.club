@@ -8194,9 +8194,16 @@ async function postPaidRegistrationWebhook(args: {
  * one org may hold the real account at a time. The sponsor-orders Connect
  * check earlier in main() claims it for its own org and never releases it,
  * so this suite — which runs later, in main()'s curated tail — releases
- * whichever org currently holds it before claiming it for its own fresh org,
- * and hands it back to null when done so a suite added after this one still
- * finds it free.
+ * whichever org currently holds it before claiming it for its own fresh org.
+ * That release is a real hand-off, not a discard: whoever held it is
+ * remembered and restored when this suite is done, because "whoever holds
+ * it" is not always another suite from the SAME run — pointed at a
+ * persistent/shared dev DB rather than CI's disposable one, it can be a
+ * real, already-onboarded org someone is using right now. Blanking that
+ * org's stripe_account_id to null and leaving it there (an earlier version
+ * of this suite did exactly that) silently disconnects Stripe Connect for
+ * an org this run never touched on purpose — caught by hand, once, against
+ * a local rs006 fixture org that lost its connected account this way.
  */
 async function registrationPaidLoopSuite(): Promise<void> {
   if (!process.env.STRIPE_SECRET_KEY) {
@@ -8236,6 +8243,11 @@ async function registrationPaidLoopSuite(): Promise<void> {
     prepare: !dbUrl.includes(":6543"),
     max: 1,
   });
+  // Whoever holds the fixture account right now (an earlier suite in this
+  // SAME run, or a real org outside this run entirely on a persistent DB) —
+  // captured so the finally block below can hand it back rather than leave
+  // stripe_account_id null. See this function's own doc comment.
+  let previousHolderId: string | null = null;
   try {
     // Defensive sports seed (v1Suite's own fallback, one section up): CI runs
     // sync:sports, but a local run against a DB that hasn't keeps this suite
@@ -8247,13 +8259,16 @@ async function registrationPaidLoopSuite(): Promise<void> {
     await db`insert into sport_variants (sport_key, key, name, config, is_system)
              values ('generic', 'score', 'Score', ${db.json(genericConfig)}, true)
              on conflict do nothing`;
-    // Release whichever org currently holds the fixture account (see this
-    // function's own doc comment), then hand it to the fresh org this suite
-    // just created. A destination charge's currency must match what the
-    // connected account can actually receive — pin the org to gbp, the
-    // currency scripts/stripe-connect-fixture.ts's onboarded test account
-    // actually settles in, rather than trust whatever a fresh signup defaults
-    // to (this repo's default is NOT necessarily gbp).
+    // Release whichever org currently holds the fixture account, then hand
+    // it to the fresh org this suite just created. A destination charge's
+    // currency must match what the connected account can actually receive —
+    // pin the org to gbp, the currency scripts/stripe-connect-fixture.ts's
+    // onboarded test account actually settles in, rather than trust
+    // whatever a fresh signup defaults to (this repo's default is NOT
+    // necessarily gbp).
+    const [holder] = await db<{ id: string }[]>`
+      select id from organizations where stripe_account_id = ${CONNECT_TEST_ACCOUNT}`;
+    previousHolderId = holder?.id ?? null;
     await db`update organizations set stripe_account_id = null where stripe_account_id = ${CONNECT_TEST_ACCOUNT}`;
     await db`update organizations set currency = 'gbp' where id = ${orgId}`;
   } finally {
@@ -8344,9 +8359,15 @@ async function registrationPaidLoopSuite(): Promise<void> {
       (reg?.status === "paid" || reg?.status === "confirmed") && !!reg?.entrant_id,
     );
   } finally {
-    // Hand the fixture account back so a suite added after this one still
-    // finds it free (see this function's own doc comment).
+    // Release this suite's own claim, then restore whoever held the fixture
+    // account BEFORE this suite ran (captured above) — never just leave it
+    // null. A suite added after this one still finds the account free either
+    // way: null if nothing held it going in, or held by its rightful owner
+    // again if something did. See this function's own doc comment.
     await db2`update organizations set stripe_account_id = null where id = ${orgId}`;
+    if (previousHolderId) {
+      await db2`update organizations set stripe_account_id = ${CONNECT_TEST_ACCOUNT} where id = ${previousHolderId}`;
+    }
     await db2.end();
   }
 }
