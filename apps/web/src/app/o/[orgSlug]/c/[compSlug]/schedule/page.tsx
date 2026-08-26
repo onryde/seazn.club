@@ -223,6 +223,16 @@ export default async function CompetitionSchedulePage({
           // entitlement gate is structural here, and re-checked server-side on
           // all three joint endpoints.
           competition={{ id, divisionSettings }}
+          // Same call the division board already made (../d/[divSlug]/schedule
+          // /page.tsx:313, "moved off the board where they crowded the grid"):
+          // the inline settings toggle is dropped here too. On this page it was
+          // worse than crowding — `settings.division_id` above is always
+          // `divisions[0]`, so on any competition with more than one division
+          // the toggle silently opened the FIRST division's settings no matter
+          // which stage or division the board was actually pointed at, with
+          // nothing on the button saying so. Each division already has its own
+          // Settings tab, reachable from Directory.
+          showSettings={false}
         />
         </RungConfigProvider>
       </main>
