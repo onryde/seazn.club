@@ -16,7 +16,7 @@ When you're already at your plan's number, saving a new one **replaces the oldes
 
 AI restore points are separate: they don't use up your save points, and the newest three per division are kept.
 
-Restoring always says what it did — either how many changes it undid, or that there was nothing to undo. The second one is normal after an AI plan that failed to apply: nothing was written, so the restore point and the live schedule are already the same.
+Restoring always says what it did — either how many changes it undid, or that there was nothing to undo. The second one is normal after an AI plan that was refused outright, because nothing was written: the restore point and the live schedule are already the same. An AI plan that stopped **part-way** is the other case — some of it did land, the dock says so and offers an undo of its own, and restoring here really does rewind.
 
 ## Common questions
 

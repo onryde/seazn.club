@@ -552,3 +552,63 @@ test("the toolbar renders one action set, aimed at the picked stage", async ({ p
     expect(f.scheduled_at, `league fixture ${id} must be untouched`).toBeNull();
   }
 });
+
+/**
+ * The 409 envelope the AI console reads its fixture list out of.
+ *
+ * `board.ai.error.blocked` names the matches a refused apply clashed with, and
+ * the only source for those names is `error.conflicts` inside the refusal
+ * itself (`api-v1/http.ts` forwards `SCHEDULE_CONFLICT`'s payload). That is a
+ * wire contract between two layers with no shared type: a server that stopped
+ * sending the array, or renamed a field inside it, would leave the dock
+ * rendering its sentence over an empty list, and every unit test on both sides
+ * would still pass.
+ *
+ * TWO APPLIES, not one carrying both cards. The delta gate compares the board
+ * BEFORE against the board AFTER, so a clash contained entirely within a single
+ * apply is a different case from one that lands on top of what is already
+ * there — and the second is exactly what a per-stage AI apply does once its
+ * first stage has been written.
+ */
+test("a refused apply names the fixtures it clashed with, in the 409 envelope", async ({ request }) => {
+  const { stageId, fixtureIds, courts } = await seedBoard(request, "refusal");
+  const when = slotAt(0);
+  const courtId = courts[0]!.id;
+
+  const first = await apiJson(request, `/api/v1/stages/${stageId}/schedule/apply`, "POST", {
+    assignments: [{ fixture_id: fixtureIds[0]!, scheduled_at: when, court_id: courtId }],
+    source: "manual",
+  });
+  expect(first.status, "the first card lands cleanly").toBe(200);
+
+  // …now put a second card exactly on top of it. `apiJson` keeps only
+  // code/message from the envelope, so this one is read raw: the payload IS
+  // the assertion.
+  const res = await request.fetch(`/api/v1/stages/${stageId}/schedule/apply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    data: {
+      assignments: [{ fixture_id: fixtureIds[1]!, scheduled_at: when, court_id: courtId }],
+      source: "manual",
+    },
+  });
+  expect(res.status()).toBe(409);
+  const body = (await res.json()) as {
+    error?: { code?: string; conflicts?: { fixture_id?: string; code?: string; blocking?: boolean }[] };
+  };
+  expect(body.error?.code).toBe("SCHEDULE_CONFLICT");
+  const conflicts = body.error?.conflicts ?? [];
+  expect(conflicts.length, "the refusal carries its blocking rows").toBeGreaterThan(0);
+  // The three fields the console reads: the id that names the card, the code
+  // that says what kind of clash it is, and `blocking` — which is what keeps
+  // warnings out of a list that claims to explain a refusal.
+  const court = conflicts.find((c) => c.code === "conflict.court");
+  expect(court, `no conflict.court row in ${JSON.stringify(conflicts)}`).toBeTruthy();
+  expect(court!.blocking).toBe(true);
+  expect([fixtureIds[0], fixtureIds[1]]).toContain(court!.fixture_id);
+
+  // And nothing was written — which is what lets the console say "nothing
+  // changed" for a refusal on the first stage it tries.
+  const second = await getFixture(request, fixtureIds[1]!);
+  expect(second.scheduled_at).not.toBe(when);
+});

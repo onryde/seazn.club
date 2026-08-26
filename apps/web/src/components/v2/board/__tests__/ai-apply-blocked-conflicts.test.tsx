@@ -21,6 +21,7 @@ import { ApplyStep } from "../ai-console";
 import { initialAiConsoleState, type AiConsoleState } from "../ai-console-state";
 import type { AiConsoleFixture } from "../ai-diff";
 import type { AiPlanResponse } from "@/server/api-v1/schemas";
+import type { ApplyOutcome } from "../ai-apply";
 import en from "@/dictionaries/en/ui.json";
 
 const enDict = en as Record<string, string>;
@@ -59,7 +60,10 @@ function format(key: string, vars?: Record<string, string | number>): string {
   return vars ? raw.replace(/\{(\w+)\}/g, (m, n: string) => (n in vars ? String(vars[n]) : m)) : raw;
 }
 
-function applyStep(error: AiConsoleState["error"]): string {
+function applyStep(
+  error: AiConsoleState["error"],
+  applyResult: ApplyOutcome | null = null,
+): string {
   const state: AiConsoleState = {
     ...initialAiConsoleState,
     step: "apply",
@@ -76,7 +80,7 @@ function applyStep(error: AiConsoleState["error"]): string {
         fixtures={fixtures}
         settingsReady
         applying={false}
-        applyResult={null}
+        applyResult={applyResult}
         undoing={false}
         undone={false}
         onApply={() => {}}
@@ -154,5 +158,79 @@ describe("a blocked apply names the matches it clashed with", () => {
 
     expect(html).toContain("The schedule changed while planning");
     expect(html).not.toContain('data-testid="ai-blocked-fixtures"');
+  });
+});
+
+/**
+ * A REFUSAL IS NOT A ROLLBACK, and the copy has to survive that.
+ *
+ * The proposal is applied one stage at a time, each its own transaction, so a
+ * plan spanning a league and its finals can write the first and be refused on
+ * the second. "Applying this would clash … so nothing changed" is then a lie
+ * about the organiser's own board, and — worse — the console offered no Undo on
+ * the error path at all, while the before-AI checkpoint was sitting right there.
+ *
+ * Three states, three sentences: nothing written, part written, and unknown
+ * (the console's own catch, where the chain's progress is genuinely not known
+ * and an honest silence beats a guess).
+ */
+describe("what the apply step says was left behind", () => {
+  const outcome = (over: Partial<ApplyOutcome>): ApplyOutcome => ({
+    schedule: "error",
+    officials: "skipped",
+    checkpointId: "cp-1",
+    ...over,
+  });
+
+  const blocked: AiConsoleState["error"] = {
+    status: 409,
+    message: format("board.ai.error.blocked"),
+    key: "board.ai.error.blocked",
+    conflicts: [{ fixtureId: F(2), code: "court_double_booked" }],
+  };
+
+  it("says nothing changed only when nothing was written", () => {
+    const html = applyStep(blocked, outcome({ stagesApplied: 0 }));
+    expect(html).toContain("Nothing was written to the board.");
+    expect(html).not.toContain("Part of this plan was applied");
+    // Nothing to undo, so nothing to offer.
+    expect(html).not.toContain('data-testid="ai-partial-undo"');
+  });
+
+  it("owns up to a half-applied board and offers the undo for it", () => {
+    const html = applyStep(blocked, outcome({ stagesApplied: 1 }));
+    expect(html).toContain("Part of this plan was applied before this stopped the rest");
+    expect(html).not.toContain("Nothing was written to the board.");
+    // The before-AI checkpoint exists on the error path too — this is the only
+    // affordance that puts the board back.
+    expect(html).toContain('data-testid="ai-partial-undo"');
+    expect(html).toContain("Undo");
+  });
+
+  it("offers no undo for a partial state with no checkpoint to return to", () => {
+    // The anchor POST is the first step; if it failed, nothing was applied
+    // either — but a defensive render must not print a dead button if that ever
+    // stops being true.
+    const html = applyStep(blocked, outcome({ stagesApplied: 2, checkpointId: null }));
+    expect(html).toContain("Part of this plan was applied before this stopped the rest");
+    expect(html).not.toContain('data-testid="ai-partial-undo"');
+  });
+
+  it("stays silent about the board when the outcome is unknown", () => {
+    // `stagesApplied` absent = the console's own catch around applyAiPlans.
+    const html = applyStep(blocked, outcome({}));
+    expect(html).not.toContain("Nothing was written to the board.");
+    expect(html).not.toContain("Part of this plan was applied");
+  });
+
+  it("reports a partial write on any failure, not just a blocked one", () => {
+    // A 429 mid-plan leaves exactly the same half-applied board, and the
+    // organiser needs the same two things: to be told, and to be able to undo.
+    const html = applyStep(
+      { status: 429, message: format("board.ai.error.rateLimited"), key: "board.ai.error.rateLimited" },
+      outcome({ stagesApplied: 1 }),
+    );
+    expect(html).toContain("Part of this plan was applied before this stopped the rest");
+    expect(html).toContain('data-testid="ai-partial-undo"');
   });
 });
