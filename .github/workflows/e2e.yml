@@ -73,7 +73,7 @@ name: E2E
 # dev link exposure. Runs leave TAG-prefixed e2e users/orgs behind in that
 # job's own throwaway DB.
 on:
-  pull_request:
+  push:
   workflow_dispatch:
     inputs:
       pr:
