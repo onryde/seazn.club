@@ -2631,9 +2631,18 @@ the seam under test. That is the folder charter applied correctly.
 **Two spec bugs found by tapping, both fixed inside `e2e/` only** (verified: both
 commits touch nothing outside that folder): row scoping — each row's detail
 panel lists the sibling entry, so an unscoped locator reads the wrong row — and
-a status pill rendered twice (phone + desktop), needing `:visible`. Asked back
-whether the row-scoping one is a product defect or correct cart behaviour;
-answer pending.
+a status pill rendered twice (phone + desktop), needing `:visible`.
+
+Asked back whether the row-scoping one was a product defect or correct cart
+behaviour. **Correct behaviour, confirmed**: the siblings section
+(`registration-hub-registrant-detail.tsx:223-248`) renders each sibling's own
+`display_name` beside its own `status` under a "Cart siblings" heading, as a
+link to jump to that row — properly labelled, no misattribution. The locator
+had matched the whole `<details>` subtree's text. The lane also volunteered
+that it fixed this defensively from reading the sibling-rendering code and
+**never observed the strict-mode failure empirically** — worth more than the
+tidier claim, because "I fixed a bug" and "I pre-empted one I never saw" are
+different evidence, and only the first belongs on a findings register.
 
 **What it does NOT catch, stated by the lane rather than discovered later:**
 #4, #10 and #13. No media-consent interaction in the join form, a single
