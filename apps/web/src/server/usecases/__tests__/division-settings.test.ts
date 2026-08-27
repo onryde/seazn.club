@@ -316,9 +316,9 @@ describe.skipIf(!HAS_DB)("cricket pairs-6-a-side removal (#431 ruling 3)", () =>
     };
     const [division] = await sql<{ id: string }[]>`
       insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
-                             module_version, eligibility, tiebreakers, youth)
+                             module_version, tiebreakers, youth)
       values (${competition.id}, 'Pairs Legacy', ${slug}, 'cricket', 'pairs-6-a-side',
-              ${sql.json(staleConfig)}, ${cricket.version}, ${sql.json([])}, null, false)
+              ${sql.json(staleConfig)}, ${cricket.version}, null, false)
       returning id`;
 
     // A CONFIG-ONLY patch — variant_key is not even in the payload. The guard

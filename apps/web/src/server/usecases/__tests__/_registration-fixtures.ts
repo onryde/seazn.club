@@ -73,10 +73,7 @@ export const asOwner = (orgId: string, userId: string): AuthCtx => ({
   keyId: null,
 });
 
-export async function rig(
-  owner: AuthCtx,
-  opts: { eligibility?: Record<string, unknown>[]; startsOn?: string } = {},
-) {
+export async function rig(owner: AuthCtx, opts: { startsOn?: string } = {}) {
   const competition = await createCompetition(owner, {
     name: "Reg Cup " + randomUUID().slice(0, 6),
     visibility: "public",
@@ -89,7 +86,6 @@ export async function rig(
     sport_key: "generic",
     variant_key: "score",
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    eligibility: opts.eligibility ?? [],
   });
   return { competition, division };
 }

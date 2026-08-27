@@ -97,7 +97,7 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { HANDLED_EVENT_TYPES, processStripeEvent } from "../billing-events";
 import { createCompetition } from "../competitions";
-import { createDivision } from "../divisions";
+import { createDivision, patchDivision } from "../divisions";
 import {
   ageAt,
   applicationFeeCents,
@@ -205,31 +205,37 @@ describe("age & eligibility (pure, doc 06 §2)", () => {
     expect(isMinor("2008-07-06", now)).toBe(false); // 18 today
   });
 
-  const U16 = [
-    {
-      kind: "age",
-      maxAgeAt: 15,
-      cutoff: { month: 9, day: 1, yearOf: "season_start" },
-    },
-  ];
+  // RS007/V380: age_cutoff_month/age_cutoff_day replace the old jsonb rule's
+  // `cutoff: {month, day, yearOf: "season_start"}` — same U16-on-1-Sept
+  // scenario, now expressed on the first-class columns.
+  const U16 = { age_max: 15, age_cutoff_month: 9, age_cutoff_day: 1 };
 
-  const noCategoryOrAgeBand = { category: null, age_min: null, age_max: null };
+  const noCategoryOrAgeBand = {
+    category: null,
+    age_min: null,
+    age_max: null,
+    age_cutoff_month: null,
+    age_cutoff_day: null,
+  };
 
   it("U16 cutoff rule: 15-or-younger on Sep 1 of the season-start year", () => {
     // Season starts 2026 → cutoff 2026-09-01.
-    const division = { eligibility: U16, ...noCategoryOrAgeBand };
+    const division = { ...noCategoryOrAgeBand, ...U16 };
     expect(divisionEligibilityIssues(division, { dob: "2011-08-31" }, 2026)).toEqual([]); // 15 on cutoff
     expect(divisionEligibilityIssues(division, { dob: "2010-09-01" }, 2026)).not.toEqual([]); // 16 on cutoff
   });
 
   it("age rule without a DOB is an issue (form must collect it)", () => {
-    const division = { eligibility: U16, ...noCategoryOrAgeBand };
+    const division = { ...noCategoryOrAgeBand, ...U16 };
     expect(divisionEligibilityIssues(division, { dob: null }, 2026)).not.toEqual([]);
   });
 
   it("gender rule checks the allowed list", () => {
-    const rules = [{ kind: "gender", allowed: ["f", "x"] }];
-    const division = { eligibility: rules, ...noCategoryOrAgeBand };
+    // RS007/V380: jsonb `allowed: ["f", "x"]` maps onto category "womens" —
+    // categoryEligibilityIssues' own "x never blocks" rule means x always
+    // passes any category, so `womens` admits exactly {f, x} and rejects m,
+    // the identical allow-set the old jsonb rule expressed.
+    const division = { ...noCategoryOrAgeBand, category: "womens" };
     expect(divisionEligibilityIssues(division, { dob: null, gender: "f" }, 2026)).toEqual([]);
     expect(divisionEligibilityIssues(division, { dob: null, gender: "m" }, 2026)).not.toEqual([]);
     expect(divisionEligibilityIssues(division, { dob: null, gender: null }, 2026)).not.toEqual([]);
@@ -1230,17 +1236,19 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
 
   // ── Youth privacy (v3/11 gap 8, PROMPT-34) ──
 
-  it("U16 eligibility auto-sets divisions.youth; /r/[ref] masks the name to first-initial", async () => {
+  it("U16 age band auto-sets divisions.youth; /r/[ref] masks the name to first-initial", async () => {
     const { orgId, ownerId } = await seedOrg();
     const owner = asOwner(orgId, ownerId);
-    const { competition, division } = await rig(owner, {
-      eligibility: [
-        {
-          kind: "age",
-          maxAgeAt: 15,
-          cutoff: { month: 9, day: 1, yearOf: "season_start" },
-        },
-      ],
+    const { competition, division: created } = await rig(owner);
+    // RS007/V380: age band (and the youth flag it derives) is PATCH-only —
+    // createDivision no longer accepts a jsonb rule to set it at create
+    // time; rig() itself can no longer take one either (its own `eligibility`
+    // opt is gone). age_max: 15 < 18 re-derives youth=true (divisions.ts's
+    // deriveYouth) — the property this test actually exercises.
+    const division = await patchDivision(owner, created.id, {
+      age_max: 15,
+      age_cutoff_month: 9,
+      age_cutoff_day: 1,
     });
     expect(division.youth).toBe(true);
     expect(resolveNameDisplay(division.player_name_display, division.youth)).toBe("first_initial");

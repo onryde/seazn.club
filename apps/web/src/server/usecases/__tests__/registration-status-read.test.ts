@@ -52,7 +52,7 @@ import {
   resendRegistrationConfirmationPublic,
 } from "@/server/usecases/registrations";
 import { generateRefCode } from "@/lib/ref-code";
-import { createDivision } from "../divisions";
+import { createDivision, patchDivision } from "../divisions";
 import {
   asOwner,
   rig,
@@ -485,13 +485,17 @@ describe.skipIf(!HAS_DB)("publicCartByRef — token-less, masked cart read", () 
     const { orgId, ownerId } = await seedOrg();
     const owner = asOwner(orgId, ownerId);
     const { competition, division: openDiv } = await rig(owner);
-    const youthDiv = await createDivision(owner, competition.id, {
+    const youthDivCreated = await createDivision(owner, competition.id, {
       name: "Under 15",
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [{ kind: "age", maxAgeAt: 15 }],
     });
+    // RS007/V380: age band (and the youth flag it derives) is PATCH-only —
+    // createDivision no longer accepts a jsonb rule to set it at create
+    // time. age_max: 15 < 18 re-derives youth=true (divisions.ts's
+    // deriveYouth), which is the property this test actually needs.
+    const youthDiv = await patchDivision(owner, youthDivCreated.id, { age_max: 15 });
     await sql`
       insert into registration_settings
         (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)

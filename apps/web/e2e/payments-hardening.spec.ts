@@ -214,9 +214,9 @@ async function seedStripeDivision(
     const [{ id: divisionId }] = await sql<{ id: string }[]>`
       insert into divisions
         (competition_id, name, slug, sport_key, variant_key, config, module_version,
-         eligibility, tiebreakers, youth)
+         tiebreakers, youth)
       values (${compId}, 'Open', ${divSlug}, 'generic', 'score',
-              ${sql.json(GENERIC_CONFIG)}, ${moduleVersion}, ${sql.json([])}, null, false)
+              ${sql.json(GENERIC_CONFIG)}, ${moduleVersion}, null, false)
       returning id`;
     await sql`
       insert into registration_settings

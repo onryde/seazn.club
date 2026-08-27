@@ -183,14 +183,13 @@ async function seedSettings(
 
 async function setDivisionEligibility(
   divisionId: string,
-  over: { category?: string | null; age_min?: number | null; age_max?: number | null; eligibility?: unknown[] } = {},
+  over: { category?: string | null; age_min?: number | null; age_max?: number | null } = {},
 ): Promise<void> {
   await sql`
     update divisions set
       category = ${over.category ?? null},
       age_min = ${over.age_min ?? null},
-      age_max = ${over.age_max ?? null},
-      eligibility = ${sql.json((over.eligibility ?? []) as never)}
+      age_max = ${over.age_max ?? null}
     where id = ${divisionId}`;
 }
 
