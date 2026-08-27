@@ -27,6 +27,9 @@ function repoRoot(): string {
 
 const ROOT = repoRoot();
 const STG_ORIGIN = "https://stg.seazn.club";
+/** RS007: `registrations-sweep.yml` sweeps production as well as staging, so
+ *  a workflow BASE_URL is no longer necessarily the staging one. */
+const PROD_ORIGIN = "https://seazn.club";
 
 describe("staging base URL", () => {
   const toml = readFileSync(join(ROOT, "fly.stg.toml"), "utf8");
@@ -45,7 +48,7 @@ describe("staging base URL", () => {
     expect(urls).toEqual([STG_ORIGIN, STG_ORIGIN, STG_ORIGIN]);
   });
 
-  it("matches every staging workflow that carries a base URL", () => {
+  it("matches every workflow that carries a base URL — staging or production, never a third host", () => {
     const dir = join(ROOT, ".github", "workflows");
     const hits: Array<[string, string]> = [];
     for (const file of readdirSync(dir).filter((f) => f.endsWith(".yml"))) {
@@ -56,6 +59,24 @@ describe("staging base URL", () => {
     }
     // Guards the regex itself: a renamed key would otherwise pass vacuously.
     expect(hits.length).toBeGreaterThanOrEqual(5);
-    expect(hits.filter(([, url]) => url !== STG_ORIGIN)).toEqual([]);
+
+    // Until RS007 every workflow BASE_URL was the staging origin, and this
+    // asserted exactly that. `registrations-sweep.yml` broke the assumption
+    // legitimately: it sweeps BOTH environments, so it carries the repo's
+    // first PRODUCTION base URL.
+    //
+    // Widened to "one of the two known origins" rather than dropped, because
+    // the property worth keeping is not "everything points at staging" — it is
+    // that NO workflow points at a host nobody meant, which is what a half-done
+    // domain change or a typo produces. A third origin still fails here.
+    expect(
+      hits.filter(([, url]) => url !== STG_ORIGIN && url !== PROD_ORIGIN),
+      "a workflow base URL points at neither the staging nor the production origin",
+    ).toEqual([]);
+
+    // The staging copies are still the ones that must agree with
+    // fly.stg.toml, so they keep their own floor — otherwise renaming every
+    // staging leg to production would satisfy the check above.
+    expect(hits.filter(([, url]) => url === STG_ORIGIN).length).toBeGreaterThanOrEqual(5);
   });
 });
