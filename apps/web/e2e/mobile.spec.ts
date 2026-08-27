@@ -2893,8 +2893,16 @@ test("badminton v3 pad: both scoring halves and the Set-score tile hold the 44px
     // `entrantKind` is required rather than optional here.
     variantKey: "bwf",
     entrantKind: "individual",
-    home: [{ fullName: `Mobile BD Home ${TAG}` }],
-    away: [{ fullName: `Mobile BD Away ${TAG}` }],
+    // PERSON NAMES CARRY `projectTag()`, not just the fixture label — review
+    // finding 5's rule (this file's own header, line ~303), and the reason is
+    // structural rather than stylistic: `e2e.yml`'s `phones-large` leg runs
+    // `--project=mobile-14 --project=mobile-430` in ONE process, and `TAG` is
+    // per PROCESS. Two width projects therefore seed the SAME person name, and
+    // `seedRosteredFixture` get-or-creates a person by name — so the second
+    // fixture rosters the first one's person. The fixture label alone does not
+    // save it: the collision is on the PERSON row, not the fixture.
+    home: [{ fullName: `Mobile BD Home ${TAG}-${projectTag()}` }],
+    away: [{ fullName: `Mobile BD Away ${TAG}-${projectTag()}` }],
     emitCoreStart: true,
   });
 
@@ -2938,8 +2946,11 @@ test("table tennis v3 pad: the serve-anchor tile and its sheet hold the 44px flo
     sportKey: "tabletennis",
     variantKey: "bo5",
     entrantKind: "individual",
-    home: [{ fullName: `Mobile TT Home ${TAG}` }],
-    away: [{ fullName: `Mobile TT Away ${TAG}` }],
+    // `projectTag()` for the same reason the badminton test above states: the
+    // two projects that share a CI process are exactly the two that failed
+    // without it (mobile-14 and mobile-430).
+    home: [{ fullName: `Mobile TT Home ${TAG}-${projectTag()}` }],
+    away: [{ fullName: `Mobile TT Away ${TAG}-${projectTag()}` }],
     emitCoreStart: true,
   });
 
