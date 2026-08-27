@@ -302,10 +302,27 @@ test("volleyball skin: a set summary then a rally", async ({ page, request }) =>
   // actual rejection): a set is scored EITHER rally-by-rally OR by summary,
   // never both, so the only way to drive both actions for real is to close
   // set 1 by summary FIRST, then open+score set 2 with a rally.
-  await pad(page).getByRole("button", { name: "Set score", exact: true }).click();
-  await pad(page).getByLabel("Points — Home", { exact: true }).fill("25");
-  await pad(page).getByLabel("Points — Away", { exact: true }).fill("20");
-  await pad(page).locator('[data-role="confirm"]').click();
+  // R5 — THE SET SCORE SHEET IS GUIDED, one field per STEP. The three lines
+  // that used to stand here were written against the v2 form and had never
+  // been run since the cutover: `getByLabel("Points — Away")` timed out at
+  // 120s, and `[data-role="confirm"]` has ZERO producers anywhere in v3. Same
+  // idiom as `scorepad-v3-volleyball.spec.ts`, which does run: fill the ONE
+  // spinbutton the current step shows, Confirm, and the sheet advances to the
+  // next. HOME is step one, AWAY step two — the order the sheet asks in.
+  await v3Tile(page, "setScore").click();
+  const setScoreSheet = v3Sheet(page);
+  await expect(setScoreSheet).toBeVisible({ timeout: 20_000 });
+  for (const value of ["25", "20"]) {
+    const field = setScoreSheet.getByRole("spinbutton");
+    // The retry wraps BOTH the fill and the read-back: the step's own field
+    // remounts between steps, so a fill racing that remount lands in a node
+    // that is already gone.
+    await expect(async () => {
+      await field.fill(value);
+      await expect(field).toHaveValue(value, { timeout: 1_000 });
+    }).toPass({ timeout: 20_000 });
+    await setScoreSheet.getByRole("button", { name: "Confirm", exact: true }).click();
+  }
   await expect
     .poll(
       async () => (await ledger(request, fx.fixtureId)).filter((e) => e.type === "volleyball.set.summary").length,
