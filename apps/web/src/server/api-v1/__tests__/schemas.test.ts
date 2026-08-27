@@ -398,6 +398,66 @@ describe("division tiebreakers are validated keys (F5)", () => {
   });
 });
 
+// RS007/V380: the wizard's Eligibility tab used to POST a jsonb `eligibility`
+// array CreateDivision never declared — a NON-strict z.object, so zod parsed
+// successfully and silently DROPPED it, and every wizard-created division
+// shipped with no restriction at all. These columns are the replacement; the
+// regression this guards is exactly that silent strip, so every "accepts"
+// assertion below checks the PARSED value, not just `.success` (a schema
+// that still doesn't know a field would report `.success: true` on the rest
+// of an otherwise-valid payload too).
+describe("CreateDivision — eligibility columns (RS007 wizard rewire)", () => {
+  const base = { name: "Open", sport_key: "football", variant_key: "std" };
+
+  it("accepts and RETAINS category/age_max/age_cutoff_month/age_cutoff_day/eligibility_note", () => {
+    const r = CreateDivision.safeParse({
+      ...base,
+      category: "mens",
+      age_max: 15,
+      age_cutoff_month: 9,
+      age_cutoff_day: 1,
+      eligibility_note: "School-registered students only",
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.category).toBe("mens");
+      expect(r.data.age_max).toBe(15);
+      expect(r.data.age_cutoff_month).toBe(9);
+      expect(r.data.age_cutoff_day).toBe(1);
+      expect(r.data.eligibility_note).toBe("School-registered students only");
+    }
+  });
+
+  it("every eligibility field is optional — a create naming none of them still parses (no restriction)", () => {
+    const r = CreateDivision.safeParse(base);
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.category).toBeUndefined();
+      expect(r.data.age_max).toBeUndefined();
+    }
+  });
+
+  it("rejects an unknown category value", () => {
+    expect(CreateDivision.safeParse({ ...base, category: "u12" }).success).toBe(false);
+  });
+
+  it("rejects age_max less than age_min — the SAME checkAgeBand refine PatchDivision uses", () => {
+    const r = CreateDivision.safeParse({ ...base, age_min: 12, age_max: 8 });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some((i) => i.path.join(".") === "age_max")).toBe(true);
+    }
+  });
+
+  it("rejects a cutoff month without its day — the SAME checkAgeCutoff refine PatchDivision uses", () => {
+    const r = CreateDivision.safeParse({ ...base, age_cutoff_month: 9 });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some((i) => i.path.join(".") === "age_cutoff_day")).toBe(true);
+    }
+  });
+});
+
 // S12/#421 pass D, V361 — `pair_order` mirrors `order_no`'s own convention
 // exactly (`.nullish()`, not `.default()`): optional on the inferred
 // PutLineup TS type so every pre-existing caller that builds a slots array

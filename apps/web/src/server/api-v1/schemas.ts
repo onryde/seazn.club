@@ -190,15 +190,31 @@ function checkAgeCutoff(
   }
 }
 
-export const CreateDivision = z.object({
-  name: z.string().min(1).max(200),
-  slug: Slug.optional(),
-  sport_key: z.string().min(1),
-  variant_key: z.string().min(1),
-  /** Merged over the variant preset, then validated by the sport module. */
-  config: z.record(z.string(), z.unknown()).default({}),
-  tiebreakers: z.array(TiebreakerKeyS).nullish(),
-});
+export const CreateDivision = z
+  .object({
+    name: z.string().min(1).max(200),
+    slug: Slug.optional(),
+    sport_key: z.string().min(1),
+    variant_key: z.string().min(1),
+    /** Merged over the variant preset, then validated by the sport module. */
+    config: z.record(z.string(), z.unknown()).default({}),
+    tiebreakers: z.array(TiebreakerKeyS).nullish(),
+    /** RS007/V380: the SAME first-class eligibility columns PatchDivision
+     *  carries (field comments below), now writable at create time too — the
+     *  division-creation wizard's Eligibility tab used to POST a jsonb
+     *  `eligibility` array this (non-strict) schema didn't declare, which
+     *  zod silently dropped, so every wizard-created division shipped with
+     *  no restriction at all. All optional: a division created with none of
+     *  these set has no restriction, exactly as before. */
+    category: DivisionCategory.nullable().optional(),
+    age_min: z.number().int().min(0).max(120).nullable().optional(),
+    age_max: z.number().int().min(0).max(120).nullable().optional(),
+    age_cutoff_month: z.number().int().min(1).max(12).nullable().optional(),
+    age_cutoff_day: z.number().int().min(1).max(31).nullable().optional(),
+    eligibility_note: z.string().max(2000).nullable().optional(),
+  })
+  .superRefine(checkAgeBand)
+  .superRefine(checkAgeCutoff);
 export type CreateDivision = z.infer<typeof CreateDivision>;
 
 export const PatchDivision = z

@@ -257,17 +257,29 @@ export async function createDivision(
     // Shared by both slug paths so the generated one can be RETRIED against
     // the unique index — `q` is the savepoint, and replaces `tx` inside it.
     const insert = async (slug: string, q: postgres.TransactionSql): Promise<DivisionRow> => {
-      // No age band at create time (age_min/age_max, like category, have
-      // always been PATCH-only — see the registration hub config panel) —
-      // `deriveYouth(null)` is always false here; a division only becomes
-      // youth once a later PATCH sets age_max (patchDivision re-derives it).
+      // RS007/V380: category/age_min/age_max/age_cutoff_month/age_cutoff_day/
+      // eligibility_note are writable at create time now — the division-
+      // creation wizard's Eligibility tab writes them directly (see
+      // schemas.ts's CreateDivision; the registration hub config panel still
+      // edits the SAME columns via PATCH, which stays the only path for an
+      // already-created division). `??`, not the schema's own `undefined`,
+      // because postgres.js sends a bound JS `undefined` as literal SQL
+      // `undefined`, not `null` — every other create-time column here already
+      // follows this rule (e.g. `input.tiebreakers ? ... : null` two lines
+      // below). `deriveYouth` reads the effective age_max from THIS request —
+      // the SAME single derivation patchDivision re-runs on an age_max PATCH,
+      // not a second copy (deriveYouth's own doc comment).
+      const ageMax = input.age_max ?? null;
       const [row] = await q<DivisionRow[]>`
         insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
-                               module_version, tiebreakers, youth)
+                               module_version, tiebreakers, category, age_min, age_max,
+                               age_cutoff_month, age_cutoff_day, eligibility_note, youth)
         values (${competitionId}, ${input.name}, ${slug}, ${input.sport_key}, ${input.variant_key},
                 ${q.json(parsed.data as never)}, ${sport.module_version},
                 ${input.tiebreakers ? q.json(input.tiebreakers as never) : null},
-                ${deriveYouth(null)})
+                ${input.category ?? null}, ${input.age_min ?? null}, ${ageMax},
+                ${input.age_cutoff_month ?? null}, ${input.age_cutoff_day ?? null},
+                ${input.eligibility_note ?? null}, ${deriveYouth(ageMax)})
         returning ${q(COLS)}`;
       return row!;
     };
