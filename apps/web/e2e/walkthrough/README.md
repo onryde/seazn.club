@@ -48,12 +48,14 @@ That blindness is the whole reason the defects survived.
 | `scorepad-v3-deciders-fullmatch` | football to penalties; cricket to a tie, then the super over; undo in and after a decider |
 | `scorepad-v3-tennis-mtb` | tennis, through the deciding-set match tie-break, then the match point undone |
 | `registration-connect` | the money path: organiser settings → public team entry on a paid division → card on `checkout.stripe.com` → webhook → confirmed |
+| `rs007-invite-pay-cancel` | invite + pay + cancel: two team entries in one cart (capacity ONE waitlists the second), one Stripe checkout for the cart's real subtotal, a claim link followed, the waitlisted sibling promoted but never paid, then cancelled through the status page — witnesses two confirmed defects (the subtotal keeping a withdrawn entry's fee; the cancel dialog promising a refund sourced from a sibling's charge). Meant to FAIL. |
 
-`registration-connect` is **opt-in** and skips loudly without
-`CONNECT_WALKTHROUGH=1` and `STRIPE_CONNECT_TEST_ACCOUNT` — it is the only
-place in the suite that genuinely produces `checkout.session.completed`, so a
-run that skips it proves nothing about fulfilment. Read its skip warning in the
-job log rather than the "1 skipped" in the summary.
+`registration-connect` and `rs007-invite-pay-cancel` are both **opt-in** and
+skip loudly without `CONNECT_WALKTHROUGH=1` and `STRIPE_CONNECT_TEST_ACCOUNT`
+— between them they are the only places in the suite that genuinely produce
+`checkout.session.completed`, so a run that skips both proves nothing about
+fulfilment. Read the skip warning in the job log rather than the "N skipped"
+in the summary.
 
 ## Running them
 
