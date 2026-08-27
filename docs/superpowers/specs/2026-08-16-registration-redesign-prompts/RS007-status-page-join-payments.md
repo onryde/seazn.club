@@ -59,8 +59,9 @@ closes the consent gap for captain-entered rosters, and the money edge cases
 - [ ] An entry with money owed renders how to pay it: "pay now" for card,
       the resolved `paymentInstructions` for offline — no state that states
       a debt and offers nothing
-- [ ] Reconcile-on-load closes the missed-webhook window: a paid session
-      whose webhook never arrived reads as paid on first view of `/r/<ref>`
+- [ ] Reconcile-on-load closes the missed-webhook window on the page the
+      paid flow actually returns to: with the webhook suppressed, a visit to
+      `…/register/status?…&session_id=…` reads as paid on first view
 - [ ] ×4 locales; screenshots 1280/768/320; both surfaces in seven-width
       matrix
 - [ ] Counts from JSON reporter; `tsc EXIT=0`; lint clean; drift gates clean
@@ -96,15 +97,24 @@ The first CHANGES THIS WAVE'S SCOPE; read it before estimating.
   at exactly two (`registration-submit.ts` 422s otherwise), so "join" there
   means CLAIMING a named row, not growing a roster.
 
-- **Registrations have no missed-webhook fallback, and the status page is
-  where it belongs.** The webhook is the ONLY path that flips an entry to
-  paid; billing has `reconcileCheckout` for exactly this and registrations
-  have no equivalent. A registrant who pays and lands on `/r/<ref>` inside
-  the retry window is told they have not paid, and either pays twice or
-  emails the organiser about a payment that succeeded. Porting reconcile
-  onto this page pays off three times: production self-heals, the local
+- **The missed-webhook fallback is on the wrong page — it exists, and the
+  paid flow never reaches it.** `reconcileRegistrationBySession`
+  (`registrations.ts:2522`) is wired into `/r/[ref]` and covered by that
+  page's tests. But `createRegistrationCheckout`'s `returnBase` takes the
+  TOKEN branch whenever a token exists — which a cart submit always has —
+  so a paying registrant returns to
+  `/shared/<org>/<comp>/register/status?rid=…&token=…&checkout=success&session_id=…`,
+  and `status/page.tsx` contains no reference to `reconcile`, `session_id`
+  or `checkout` at all. Stripe appends that `session_id` specifically for
+  this page to consume and the page drops it on the floor. Verified by
+  paying a real destination charge: the redirect lands on the status page,
+  not `/r/<ref>`.
+
+  So the fix is a wiring job, not new plumbing: call the existing usecase
+  from the status page as `/r/[ref]` already does. It pays off three
+  times — production self-heals inside the webhook retry window, the local
   walkthrough stops needing `stripe listen`, and a genuinely end-to-end
-  paid test becomes possible in CI. Keep the webhook primary regardless —
+  paid test becomes possible in CI. Keep the webhook primary regardless:
   async payment methods settle days later and a registrant may never
   revisit the page.
 
