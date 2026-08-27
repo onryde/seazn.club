@@ -639,11 +639,11 @@ interface RacquetServingRecipe {
   variantKey: string;
   entrantKind?: "individual" | "team" | "pair";
   /**
-   * WHICH PAD LANE this sport renders on today. R5 converted BADMINTON ONLY;
-   * table tennis and volleyball still render `racquet-skin.tsx` (v2) and their
-   * own two entries below are byte-identical to the BEFORE run because this
-   * field DEFAULTS to "v2" — a converting wave adds `lane: "v3"` to its own
-   * sport and touches nothing else.
+   * WHICH PAD LANE this sport renders on today. R5/C1 converted badminton;
+   * R5/C2 converts table tennis. Volleyball still renders `racquet-skin.tsx`
+   * (v2) and its own entry below is byte-identical to the BEFORE run because
+   * this field DEFAULTS to "v2" — a converting wave adds `lane: "v3"` to its
+   * own sport and touches nothing else.
    *
    * The two lanes disagree about every locator in this recipe (v2 has a
    * `[data-role="racquet-header"]` with three captioned fields; v3 has a
@@ -660,6 +660,22 @@ interface RacquetServingRecipe {
    * player would satisfy the negative and is precisely R4's D-21.
    */
   expectedServer?: string;
+  /**
+   * R5/C2 — table tennis's own requirement, badminton never needed this.
+   * `serve.within: "fixed-turns"` (ITTF 2.13.3) is a pure function of the
+   * SCORE once the set's first server is known, and — unlike badminton's
+   * side-out rotation — is NEVER updated by an individual rally's own
+   * winner: `setBasedServeContext` answers `serveOrderKnown: false` FOREVER
+   * on this sport until something declares who served one rally
+   * (`packages/engine/src/sports/setbased/kernel.ts`'s own
+   * `believedServer`). The FIRST of the three rallies below is therefore
+   * routed through the skin's own `serveAnchor` tile + guided sheet (two
+   * choice steps: who served, who won) instead of a plain tappable-half
+   * click, naming the side that served it; the remaining two rallies tap the
+   * scoreboard half exactly as every other recipe does. Absent (the default)
+   * for every sport whose rotation self-heals from an ordinary tap.
+   */
+  declareServingAnchor?: "home" | "away";
   /** The kernel's FULLY QUALIFIED coarse event type, `${sportKey}.${preset.
    *  coarseEventType}` (setbased/kernel.ts:1560) — "badminton.game.summary",
    *  "tabletennis.game.summary", "volleyball.set.summary". The bare
@@ -727,15 +743,27 @@ async function captureRacquetServing(
   // instead of on it. The same three taps leave badminton and volleyball
   // (serve follows the rally winner) equally past their own first handover.
   const lane = recipe.lane ?? "v2";
-  for (const side of ["home", "away", "home"] as const) {
+  for (const [index, side] of (["home", "away", "home"] as const).entries()) {
     const before = await ledgerCount(page.request, fx.fixtureId);
-    // v2: SideTapAction's own Home/Away buttons (racquet-skin.tsx), which only
-    // exist at band 3. v3: tap model S — the scoreboard HALF is the rally
-    // button, and its accessible name is the player's own name plus hint text,
-    // so it can only be addressed positionally.
-    if (lane === "v3") {
+    if (index === 0 && recipe.declareServingAnchor !== undefined) {
+      // Table tennis's own requirement (`RacquetServingRecipe.
+      // declareServingAnchor`'s own doc) — the FIRST rally is routed through
+      // the `serveAnchor` tile + its two-step guided sheet instead of a
+      // plain tap, because this sport's rotation cannot resolve at all
+      // without a declaration.
+      await pad(page).locator('[data-tile-id="serveAnchor"]').click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      await expect(sheet, `gallery(${recipe.slug}): the serve anchor sheet must open`).toBeVisible({ timeout: 20_000 });
+      await sheet.locator(`[data-choice-option-id="${recipe.declareServingAnchor}"]`).click();
+      await sheet.locator(`[data-choice-option-id="${side}"]`).click();
+    } else if (lane === "v3") {
+      // v3: tap model S — the scoreboard HALF is the rally button, and its
+      // accessible name is the player's own name plus hint text, so it can
+      // only be addressed positionally.
       await v3Half(page, side).click();
     } else {
+      // v2: SideTapAction's own Home/Away buttons (racquet-skin.tsx), which
+      // only exist at band 3.
       await pad(page)
         .getByRole("button", { name: side === "home" ? "Home" : "Away", exact: true })
         .click();
@@ -2150,26 +2178,34 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Tabletennis Home ${tag}` }],
       away: [{ fullName: `Gallery Tabletennis Away ${tag}` }],
     }),
-    // No e2e precedent exists anywhere in this repo for table tennis
-    // specifically (confirmed by search) — this mirrors badminton/volleyball
-    // by construction: all three share racquet-skin.tsx
-    // (`racquetSkin.sports = ["volleyball","badminton","tabletennis"]`),
-    // verified live against the running server before this harness shipped.
+    // R5/C2 — TABLE TENNIS HAS CONVERTED. It no longer shares
+    // racquet-skin.tsx with volleyball (which still does, and whose own
+    // entry is unchanged): tap model S makes the scoreboard HALF the rally
+    // button, addressed positionally exactly as badminton's own entry above
+    // documents.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Home", exact: true }).click();
+      await v3Half(page, "home").click();
     },
+    // The v3 lane's genuine multi-field entry surface, opened and left
+    // unconfirmed — badminton's own choice of tile and the same reason:
+    // `scoreOne` above has just put a rally into game 1, and D-16's fix
+    // withholds the Set score tile for a game already being scored
+    // rally-by-rally, so reaching for it here would find nothing.
     openDock: async (page) => {
-      const setScore = pad(page).getByRole("button", { name: "Set score", exact: true });
-      if (!(await setScore.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await setScore.click();
-      const homeField = pad(page).getByLabel("Home", { exact: true });
-      if (!(await homeField.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await homeField.fill("11");
+      const sanction = pad(page).locator('[data-tile-id="sanction-home"]');
+      if (!(await sanction.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
+      await sanction.click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      if (!(await sheet.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
       return true;
     },
-    // R5 — D-17 and D-13. The three rally taps here are the first time table
-    // tennis has been driven past a serve-rotation boundary in a browser at
-    // all (`turnLength: 2`, setbased/tabletennis.ts).
+    // R5/C2 — D-17 and D-13. Table tennis's OWN rotation cannot resolve at
+    // all without a declaration (`declareServingAnchor`'s own doc), so the
+    // first of the three rally taps here is routed through the `serveAnchor`
+    // tile + sheet — away serves it, home wins it — and the remaining two are
+    // TAPPED on the scoreboard halves, past the `turnLength: 2` rotation
+    // boundary this sport alone among the three R5 racquet sports has to
+    // walk. The first time table tennis has been driven in a browser at all.
     captureExtra: async (page, dir, tag, measurements) => [
       await captureRacquetServing(page, dir, tag, measurements, {
         slug: "tabletennis",
@@ -2177,11 +2213,24 @@ const SPORTS: GallerySport[] = [
         sportKey: "tabletennis",
         variantKey: "bo5",
         entrantKind: "individual",
+        lane: "v3",
         coarseType: "tabletennis.game.summary",
         // ITTF game 1 is to 11 (setbased/tabletennis.ts).
         summary: { home: 11, away: 7 },
         expectedSets: racquetScoreline(1, 0),
         expectedPoints: racquetScoreline(2, 1),
+        declareServingAnchor: "away",
+        // Anchor (rally 1): away served, home won. Before rally 2 away is
+        // still due to serve (turnLength: 2 — the SAME turn's second serve),
+        // and away is the side tapped, so away also wins it. That completes
+        // away's turn: before rally 3 home is due to serve (their FIRST serve
+        // of the next turn), and home is the side tapped, so home wins it
+        // too. After all three, home is due to serve next — their SECOND
+        // serve of that same turn. The identical side/turn-index walk
+        // `__tests__/tabletennis.test.ts`'s own "resolves once the anchor
+        // declares it" test proves against the real fold, tapped here in a
+        // real browser instead.
+        expectedServer: `Gallery tabletennis SV Home ${tag}sv`,
       }),
     ],
   },
