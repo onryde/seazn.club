@@ -947,7 +947,14 @@ export async function promoteWaitlistedRow(
         promotion_expires_at = case
           when ${stripeWindow} then now() + interval '48 hours'
           else null
-        end
+        end,
+        -- REVIEW FIX (money-path defect #12): every promotion opens a FRESH
+        -- reminder window — a re-promotion (lapsed once, re-offered later)
+        -- must not carry its FIRST promotion's "already reminded" mark into
+        -- this one. Unconditional: a row promoted for the first time already
+        -- has this null, so the write is a no-op there.
+        promotion_reminded_at = null,
+        promotion_reminder_claimed_at = null
     where id = ${regId}`;
   await tx`
     update registration_groups

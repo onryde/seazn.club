@@ -4042,6 +4042,62 @@ describe.skipIf(!HAS_DB)("RS007: sweep reminds a promoted entry off its OWN cloc
     expect(afterRetry.promotion_reminded_at, "the retried send is now marked sent").not.toBeNull();
     expect(sentCallsForOurs()).toHaveLength(2);
   });
+
+  // REVIEW FIX (money-path defect #12) — neither promoteWaitlistedRow nor the
+  // sweep's lapse UPDATE ever cleared promotion_reminded_at, but pass (1b)
+  // filters `promotion_reminded_at is null`. A re-promoted entry (lapsed once,
+  // then re-offered a slot) carries its FIRST promotion's stale "already
+  // reminded" mark into its SECOND window and is silently skipped forever —
+  // it cannot fall back to pass (1a) either, which requires promoted_at is
+  // null (this row's promoted_at is freshly set by the second promotion).
+  it("REVIEW FIX: a re-promoted entry is reminded again for its NEW window, not silenced by its first promotion's stale mark", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const contactEmail = `re-promoted-remind-${randomUUID().slice(0, 8)}@test.local`;
+    const waiting = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted",
+      contactEmail,
+    });
+    const firstPromo = await sql.begin((tx) =>
+      promoteWaitlistedRow(tx, waiting.registration.id, waiting.registration.group_id, settings),
+    );
+    // Simulate: pass (1b) already reminded this entry once, for its FIRST
+    // promotion window (a real prior sweep would have set both columns).
+    await sql`update registrations
+              set promotion_reminder_claimed_at = now(), promotion_reminded_at = now()
+              where id = ${firstPromo!.id}`;
+
+    // T lapses back to the waitlist and is promoted a SECOND time — same
+    // write shape sweepRegistrations' lapse branch produces (waitlisted then
+    // re-promoted), driven directly here to isolate this fix from the
+    // re-offer/ordering behaviour covered elsewhere.
+    await sql`update registrations set status = 'waitlisted' where id = ${firstPromo!.id}`;
+    const secondPromo = await sql.begin((tx) =>
+      promoteWaitlistedRow(tx, firstPromo!.id, firstPromo!.group_id, settings),
+    );
+    expect(secondPromo!.status).toBe("pending");
+    expect(secondPromo!.promotion_expires_at, "sanity: a fresh window opened").not.toBeNull();
+
+    const [row] = await sql<{ promotion_reminded_at: Date | null }[]>`
+      select promotion_reminded_at from registrations where id = ${firstPromo!.id}`;
+    // Reverting the fix makes this fail: the stale mark from the FIRST
+    // promotion survives the second promoteWaitlistedRow write.
+    expect(row!.promotion_reminded_at).toBeNull();
+
+    // End to end: pull the fresh window into the reminder sweep's range and
+    // confirm the reminder actually fires a second time.
+    await sql`update registrations set promotion_expires_at = now() + interval '10 hours'
+              where id = ${firstPromo!.id}`;
+    const sentCallsForOurs = () =>
+      emailMock.paymentReminder.mock.calls.filter(
+        ([opts]) => (opts as { to?: string })?.to === contactEmail,
+      );
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.reminded).toBeGreaterThanOrEqual(1);
+    expect(sentCallsForOurs()).toHaveLength(1); // reminded again, for the NEW window
+    const [row2] = await sql<{ promotion_reminded_at: Date | null }[]>`
+      select promotion_reminded_at from registrations where id = ${firstPromo!.id}`;
+    expect(row2!.promotion_reminded_at).not.toBeNull();
+  });
 });
 
 describe.skipIf(!HAS_DB)("RS007: a promoted entry's reminder does not block a still-pending sibling's own reminder", () => {
