@@ -3377,3 +3377,110 @@ describe("R3.5 Task S follow-up — the side batting first is read, not assumed"
     expect(st.orders.away).toContain(people.bowler);
   });
 });
+
+// ---------------------------------------------------------------------------
+// R3.5 F1 (review finding, BLOCKER) — a wicket in a super over left
+// `fine.striker`/`.nonStriker` explicitly `null` ("awaiting replacement" —
+// `FineInnings.striker`'s own doc, cricket.ts), which `resolvePeople`'s old
+// `?? battingOrder[0]` fallback resolved straight to the batter JUST
+// dismissed whenever they were first in the order — the fold then refused
+// the very next tap ("… is not eligible (already dismissed)",
+// cricket.ts:1290-1291). Every super-over fold in this suite up to here
+// deliberately avoids a wicket (this file's own "R3.5 Task C" header); this
+// one takes one, in C2's own window (`so.length === 0`) so the fixture
+// composes directly with `tieToSuperOver` rather than a second copy of it.
+// ---------------------------------------------------------------------------
+describe("R3.5 F1 — resolvePeople after a super-over wicket proposes an ELIGIBLE replacement, never the batter just dismissed", () => {
+  function tiedWithSuperOverWicket() {
+    const { cfg, events } = tieToSuperOver();
+    const bso = ballSeq();
+    // Away bats first in the super over (Task S — the side batting second
+    // in the match). The very FIRST super-over ball dismisses the striker,
+    // A-1 — leaving fine.striker null and fine.nonStriker "A-2" (survivor).
+    const wicketBall = bso("cricket.superover.ball", {
+      striker: "A-1", nonStriker: "A-2", bowler: "H-11", bat: 0,
+      wicket: { kind: "bowled", out: "A-1", bowlerCredited: true },
+    });
+    const st = foldCricket(cfg, [...events, wicketBall]);
+    return { cfg, st };
+  }
+
+  it("the fold itself leaves the striker end null, awaiting a replacement — proves the fixture reaches the real bug window", () => {
+    const { st } = tiedWithSuperOverWicket();
+    const so = (st.superOver as { innings: { closed: boolean; fine: { striker: string | null; nonStriker: string | null; dismissed: string[] } }[] }).innings;
+    expect(so).toHaveLength(1);
+    expect(so[0]!.closed).toBe(false); // 1 wicket, not 2 — still open, awaiting the next ball
+    expect(so[0]!.fine.striker).toBeNull();
+    expect(so[0]!.fine.nonStriker).toBe("A-2");
+    expect(so[0]!.fine.dismissed).toEqual(["A-1"]);
+  });
+
+  it("proposes the next ELIGIBLE away batter for the null end, never A-1 (the batter just dismissed)", () => {
+    const { cfg, st } = tiedWithSuperOverWicket();
+    const people = resolvePeople(st, {}, cfg);
+    expect(people.striker).not.toBe("A-1");
+    expect(people.striker).toBe("A-3"); // first eligible away batter once A-1 (dismissed) and A-2 (survivor) are excluded
+    expect(people.nonStriker).toBe("A-2"); // the survivor, unchanged
+  });
+
+  it("the SUBMITTED next-ball payload (buildTiles) carries the eligible default too — the exact tap that used to 422", () => {
+    const { cfg, st } = tiedWithSuperOverWicket();
+    const v = view({ cfg, state: st });
+    const run1 = buildTiles(v).find((tl) => tl.id === "run1")!;
+    expect(run1.action).toMatchObject({
+      event: { type: "cricket.superover.ball", payload: { striker: "A-3", nonStriker: "A-2" } },
+    });
+  });
+
+  it("mutation guard: the OLD battingOrder[0] read this fix replaced names the dismissed batter — proves this suite would have caught the pre-fix bug", () => {
+    const { st } = tiedWithSuperOverWicket();
+    const battingOrder = (st.orders as { away: string[] }).away;
+    expect(battingOrder[0]).toBe("A-1"); // the pre-fix fallback's own answer
+    expect(resolvePeople(st, {}, tieToSuperOver().cfg).striker).not.toBe(battingOrder[0]);
+  });
+
+  it("a repeat pair carries the earlier pair's dismissals forward — a fresh innings for the SAME side later in the super over skips them, never resetting to battingOrder[0]/[1]", () => {
+    // Pair 1: away's A-1 then A-3 are dismissed on the first two balls
+    // (A-2 survives both — the crease's other end). 2 wickets is all-out for
+    // a super-over innings, so it closes right there at 0/2. Home's reply
+    // matches at 0 (six dot balls, closing on the over) — a tie, which
+    // "repeat" (this cfg's default `superOverStillTied`) sends to pair 2.
+    const { cfg, events } = tieToSuperOver();
+    const bso1 = ballSeq();
+    const awayPair1 = [
+      bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-11", bat: 0, wicket: { kind: "bowled", out: "A-1", bowlerCredited: true } }),
+      bso1("cricket.superover.ball", { striker: "A-3", nonStriker: "A-2", bowler: "H-11", bat: 0, wicket: { kind: "bowled", out: "A-3", bowlerCredited: true } }),
+    ];
+    const st1 = foldCricket(cfg, [...events, ...awayPair1]);
+    const so1Innings = (st1.superOver as { innings: { closed: boolean; wickets: number; runs: number }[] }).innings;
+    expect(so1Innings[0]).toMatchObject({ closed: true, wickets: 2, runs: 0 }); // all-out — confirmed before building on it
+    const bso2 = ballSeq();
+    const homePair1 = Array.from({ length: 6 }, () => bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-4", bat: 0 }));
+    const stTied = foldCricket(cfg, [...events, ...awayPair1, ...homePair1]);
+    expect(stTied.phase).toBe("super_over"); // repeat — tied 0-0, pair 2 is live, not decided
+    // Pair 2's FIRST innings is whoever batted second in pair 1 — home
+    // (soBattingSideAt(state, 2), same formula Task R's own defect-3/4 test
+    // already pins for this identical fixture shape).
+    expect(dueBattingSide(stTied, cfg)).toBe("home");
+    // Close pair 2's home innings too (six more dots — the score no longer
+    // matters, only that it closes and opens pair 2's SECOND innings: away,
+    // batting a genuinely FRESH innings for the first time since pair 1).
+    const bso3 = ballSeq();
+    const homePair2 = Array.from({ length: 6 }, () => bso3("cricket.superover.ball", { striker: "H-3", nonStriker: "H-4", bowler: "A-5", bat: 0 }));
+    const st = foldCricket(cfg, [...events, ...awayPair1, ...homePair1, ...homePair2]);
+    const soInnings = (st.superOver as { innings: { battingSide: "home" | "away"; closed: boolean }[] }).innings;
+    expect(soInnings).toHaveLength(3);
+    expect(soInnings.every((i) => i.closed)).toBe(true);
+    expect(dueBattingSide(st, cfg)).toBe("away"); // pair 2's second innings — away's turn again
+    // The window this case exists to prove: away's NEXT innings has not been
+    // created yet (no ball folded for it), so `fine` is entirely absent —
+    // the "both ends null, AND prior-pair history applies" case `crease`
+    // alone (empty here) cannot exclude. Only `state.superOver.dismissed.
+    // away` (carried, never reset between pairs) can.
+    const soDismissedAway = (st.superOver as { dismissed: { away: string[] } }).dismissed.away;
+    expect(soDismissedAway).toEqual(["A-1", "A-3"]);
+    const people = resolvePeople(st, {}, cfg);
+    expect(people.striker).toBe("A-2"); // first ELIGIBLE away batter — A-1 excluded
+    expect(people.nonStriker).toBe("A-4"); // second eligible — A-3 excluded too, never re-offered
+  });
+});

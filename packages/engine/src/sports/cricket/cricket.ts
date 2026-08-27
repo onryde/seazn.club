@@ -1591,6 +1591,45 @@ export function soBattingSideAt(state: SuperOverAlternationCfg, index: number): 
   return index % 2 === 0 ? pairFirst : opponent(pairFirst);
 }
 
+/**
+ * Batting-order candidates still eligible to come to the crease in a super
+ * over, in lineup order — exported (R3.5 F1, review finding, BLOCKER) for
+ * the v3 pad's own default-picker (`resolvePeople`, apps/web `skins/
+ * cricket.tsx`), same posture as `nextBattingSide`/`eligibleBowlers`/
+ * `activeInnings`/`soBattingSideAt` above: a public mirror of a rule this
+ * file already enforces, so a caller outside this module mirrors it rather
+ * than hand-copying it a third time.
+ *
+ * Mirrors `applyDelivery`'s own super-over eligibility check verbatim (this
+ * file, the "resolve open ends against eligibility" branch): a named batter
+ * is refused when `fine.dismissed.includes(person) || ctx.soIneligible.
+ * includes(person)` — `dismissed`/`soIneligible` below are exactly those two
+ * arguments. `crease` is who is CURRENTLY at the batting end(s) and must be
+ * renamed on the very next ball rather than replaced (the same check's
+ * "batter … is at the crease and must stay" refusal) — never a spent name to
+ * union into `dismissed`, a genuinely separate reason to withhold a
+ * candidate.
+ *
+ * The pad needs this the instant a super-over wicket sets `fine.striker`/
+ * `.nonStriker` to `null` ("awaiting replacement" — this file's own
+ * `FineInnings.striker` doc): unlike the main innings (`strictOrder: true`,
+ * `resolveIncoming` above resolves a real replacement inside the fold
+ * itself), a super-over wicket leaves the fold's own state with a `null`
+ * end and requires the NEXT ball to name a real, eligible replacement — the
+ * fold has no opinion on WHICH one, so a caller building a default proposal
+ * needs this list rather than guessing `battingOrder[0]`, which can be the
+ * batter just dismissed.
+ */
+export function soEligibleBatters(
+  battingOrder: readonly string[],
+  dismissed: readonly string[],
+  soIneligible: readonly string[],
+  crease: readonly string[],
+): string[] {
+  const unavailable = new Set<string>([...dismissed, ...soIneligible, ...crease]);
+  return battingOrder.filter((person) => !unavailable.has(person));
+}
+
 function applySuperOverBall(
   state: CricketState,
   payload: CricketBallEv,

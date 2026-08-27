@@ -18,6 +18,7 @@ import {
   reviewsRemaining,
   activeInnings,
   soBattingSideAt,
+  soEligibleBatters,
   type CricketBallEv,
   type CricketCfg,
   type CricketEv,
@@ -1153,6 +1154,33 @@ describe("soBattingSideAt", () => {
     expect(soBattingSideAt(state, 1)).toBe("away");
     expect(soBattingSideAt(state, 2)).toBe("away");
     expect(soBattingSideAt(state, 3)).toBe("home");
+  });
+});
+
+// R3.5 F1 (review finding, BLOCKER) — the eligibility predicate
+// `applyDelivery`'s super-over branch checks verbatim (`fine.dismissed.
+// includes(person) || ctx.soIneligible.includes(person)`), exported so the
+// v3 pad's own default-picker (`resolvePeople`, apps/web `skins/cricket.tsx`)
+// can reuse it rather than forking a third copy — the same posture
+// `nextBattingSide`/`eligibleBowlers`/`activeInnings`/`soBattingSideAt` above
+// are exported for.
+describe("soEligibleBatters", () => {
+  it("excludes dismissed-this-innings, so-wide-ineligible, and crease occupants — returns the rest in batting order", () => {
+    expect(
+      soEligibleBatters(["p1", "p2", "p3", "p4", "p5"], ["p2"], ["p4"], ["p1"]),
+    ).toEqual(["p3", "p5"]);
+  });
+
+  it("returns the whole order when nobody is unavailable", () => {
+    expect(soEligibleBatters(["p1", "p2"], [], [], [])).toEqual(["p1", "p2"]);
+  });
+
+  it("returns an empty list, never a name outside the order, when everyone is unavailable", () => {
+    expect(soEligibleBatters(["p1", "p2"], ["p1"], [], ["p2"])).toEqual([]);
+  });
+
+  it("a name unioned across dismissed AND soIneligible is excluded only once, never breaking the filter", () => {
+    expect(soEligibleBatters(["p1", "p2"], ["p1"], ["p1"], [])).toEqual(["p2"]);
   });
 });
 

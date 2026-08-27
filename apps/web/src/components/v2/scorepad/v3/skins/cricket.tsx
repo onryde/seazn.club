@@ -87,7 +87,7 @@ import type { EventEnvelope } from "@seazn/engine/core";
 // narrow the bowler chip's candidates, not merely to test one name), which is
 // exactly what the engine's own filter already is, so the mirror is DELETED
 // and the rule imported. Same reasoning `nextBattingSide` was granted on.
-import { activeInnings, eligibleBowlers, nextBattingSide, reviewsRemaining, soBattingSideAt } from "@seazn/engine/sports/cricket";
+import { activeInnings, eligibleBowlers, nextBattingSide, reviewsRemaining, soBattingSideAt, soEligibleBatters } from "@seazn/engine/sports/cricket";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
@@ -186,6 +186,14 @@ interface CricketFineShape {
    *  this shape until this fix; see `resolvePeople`'s own doc for why. */
   prevOverBowler?: string | null;
   bowlerBalls?: Record<string, number>;
+  /** R3.5 F1 (review finding, BLOCKER) — mirrors the engine's own
+   *  `FineInnings.dismissed` (cricket.ts:413). Needed by `resolvePeople`'s
+   *  super-over crease default: the ONE ground, alongside `superOver.
+   *  dismissed` below, `applyDelivery`'s super-over branch refuses a named
+   *  batter on ("… is not eligible (already dismissed)", cricket.ts:1290-
+   *  1291). Absent from this shape until this fix, same "add the field this
+   *  fix needs" pattern every other addition here already follows. */
+  dismissed?: string[];
 }
 interface CricketInningsShape {
   battingSide?: "home" | "away";
@@ -215,7 +223,16 @@ interface CricketStateShape {
    *  "not yet in a super over" value (`CricketState.superOver`,
    *  cricket.ts:470-473); absent is the shape-probe default every OTHER
    *  optional field on this interface already tolerates. */
-  superOver?: { innings?: CricketInningsShape[] } | null;
+  /** R3.5 F1 (review finding, BLOCKER) — `dismissed` mirrors the engine's
+   *  own `CricketState.superOver.dismissed` (cricket.ts:472): the running,
+   *  NEVER-RESET-between-pairs per-side dismissal list `applySuperOverBall`
+   *  passes as `ctx.soIneligible` (cricket.ts: `soIneligible: so.dismissed
+   *  [battingSide]`). `resolvePeople`'s super-over crease default reads this
+   *  alongside `fine.dismissed` above, matching the fold's own OR verbatim
+   *  rather than trusting one is always a superset of the other. Absent
+   *  from this shape until this fix — the exact gap that let a `repeat`
+   *  pair's own dismissed-in-pair-1 batters get proposed again in pair 2. */
+  superOver?: { innings?: CricketInningsShape[]; dismissed?: { home?: string[]; away?: string[] } } | null;
   orders?: { home?: string[]; away?: string[] };
   /** Set by `cricket.revise` (either branch — DLS auto-compute or a manual
    *  `target`), present from fidelity band 1 upward (cricket.ts:465-466).
@@ -547,11 +564,57 @@ export function resolvePeople(
   const bowlingOrder = state.orders?.[bowlingSide] ?? [];
   const fine = innings?.fine ?? null;
   const bpo = ballsPerOverOf(cfg);
+  // R3.5 F1 (review finding, BLOCKER) — `fine.striker`/`.nonStriker` land as
+  // an explicit `null` ("awaiting replacement") the instant a super-over
+  // wicket falls: unlike the main innings (`strictOrder: true`, the fold
+  // itself resolves a real replacement via `resolveIncoming`), a super-over
+  // wicket leaves the fold's own state with a null end and requires the
+  // NEXT ball to name a real, eligible replacement (`applyDelivery`'s
+  // super-over branch, cricket.ts — see `FineInnings.striker`'s own doc,
+  // "null = awaiting replacement (super over only)"). The old `?? battingOrder
+  // [0]`/`[1]` fallback below read straight past that null to the raw
+  // lineup order, which can be the batter just dismissed — the fold then
+  // refused the very next tap ("… is not eligible (already dismissed)",
+  // cricket.ts:1290-1291).
+  //
+  // `soEligibleBatters` (imported) is the SAME predicate that check applies,
+  // exported for exactly this reuse rather than a third hand-copy in this
+  // file — the recurring engine/pad-fork defect class `nextBattingSide`/
+  // `eligibleBowlers`/`activeInnings`/`soBattingSideAt` above were each
+  // exported to stop. `crease` excludes whichever end the fold DID keep
+  // (the survivor) — the same batter the fold itself refuses to let a next
+  // ball silently drop ("… is at the crease and must stay") — so it is
+  // never handed to the OTHER, now-null end as a duplicate candidate.
+  // `soIneligible` reads `state.superOver.dismissed[battingSide]`, which —
+  // unlike `fine.dismissed` — survives across a `repeat` pair boundary onto
+  // a fresh innings for the SAME side (`applySuperOverBall`'s own
+  // `so.dismissed`, never reset); `fine.dismissed` is read too, matching
+  // the fold's own OR verbatim rather than trusting one is always a
+  // superset of the other.
+  //
+  // A sequential `nextEligible()` cursor, not two independent lookups: the
+  // only OTHER reachable null-both case (a fresh super-over innings, before
+  // its first ball) must not hand the SAME eligible name to both ends —
+  // advancing past whichever name the striker's own resolution just
+  // consumed is what stops that. For every case this fix does not touch
+  // (fine null/coarse; both ends already real) `dismissed`/`soIneligible`/
+  // `crease` are all empty and `eligible` equals `battingOrder` outright, so
+  // `nextEligible()` reproduces the OLD `battingOrder[0]`/`[1]` reads
+  // exactly — this is additive, not a rewrite of the ordinary path.
+  const soCrease = [fine?.striker, fine?.nonStriker].filter((p): p is string => typeof p === "string");
+  const soEligible = soEligibleBatters(
+    battingOrder,
+    fine?.dismissed ?? [],
+    state.superOver?.dismissed?.[battingSide] ?? [],
+    soCrease,
+  );
+  let soNextIdx = 0;
+  const nextEligible = (): string => soEligible[soNextIdx++] ?? "";
   return {
     battingSide,
     bowlingSide,
-    striker: overrides.striker ?? fine?.striker ?? battingOrder[0] ?? "",
-    nonStriker: overrides.nonStriker ?? fine?.nonStriker ?? battingOrder[1] ?? "",
+    striker: overrides.striker ?? fine?.striker ?? nextEligible(),
+    nonStriker: overrides.nonStriker ?? fine?.nonStriker ?? nextEligible(),
     bowler:
       overrides.bowler ??
       fine?.currentBowler ??
