@@ -90,6 +90,51 @@ describe.skipIf(!HAS_DB)("publicRegistrationInfo — RS006 eligibility/free-agen
     expect(info.divisions[0]!.eligibility_note).toBe("School-registered students only");
   });
 
+  // RS007/V380 — publicRegistrationInfo never selected age_cutoff_month/
+  // age_cutoff_day, so the ENTRIES step's client-side self-check
+  // (ageBandEligibilityIssues) always used the 1-January default and would
+  // disagree with the server for any division with a real cutoff. This is
+  // that column pair's own entry condition proof, alongside category/
+  // age_min/age_max above.
+  it("returns age_cutoff_month/age_cutoff_day for a division that has a real cutoff set", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+
+    await sql`
+      update divisions set age_max = 15, age_cutoff_month = 9, age_cutoff_day = 1
+      where id = ${division.id}`;
+    await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      payment_method: "offline",
+      form_fields: [],
+    });
+
+    const info = await publicRegistrationInfo(orgSlug, competition.slug);
+    expect(info.divisions[0]!.age_cutoff_month).toBe(9);
+    expect(info.divisions[0]!.age_cutoff_day).toBe(1);
+  });
+
+  it("age_cutoff_month/age_cutoff_day are null by default (no cutoff configured)", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+
+    await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      payment_method: "offline",
+      form_fields: [],
+    });
+
+    const info = await publicRegistrationInfo(orgSlug, competition.slug);
+    expect(info.divisions[0]!.age_cutoff_month).toBeNull();
+    expect(info.divisions[0]!.age_cutoff_day).toBeNull();
+  });
+
   it("a mixed category requires gender (roster-composition signal) even with no age band", async () => {
     const { orgId, orgSlug, ownerId } = await seedOrg();
     const owner = asOwner(orgId, ownerId);

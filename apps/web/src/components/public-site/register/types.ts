@@ -63,6 +63,16 @@ export interface DivisionLike {
   category: string | null;
   age_min: number | null;
   age_max: number | null;
+  /** RS007/V380 — the age-band cutoff override (default 1 January when
+   *  absent), read by `ageBandEligibilityIssues` (@/lib/registration-rules)
+   *  via `selfEligibilityForDivision`/`rosterEligibilityForDivision` below.
+   *  Optional on this narrow type for the SAME reason `eligibility_note`
+   *  above is (and the same choice `ageBandEligibilityIssues`' own
+   *  parameter type makes) — every pre-existing `DivisionLike` fixture
+   *  across the stepper's test suite stays compiling unchanged; `undefined`
+   *  reads the same as the 1-January default everywhere this is checked. */
+  age_cutoff_month?: number | null;
+  age_cutoff_day?: number | null;
   requires_dob: boolean;
   requires_gender: boolean;
   allow_free_agents: boolean;

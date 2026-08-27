@@ -1442,6 +1442,16 @@ export interface PublicDivisionInfo {
   category: string | null;
   age_min: number | null;
   age_max: number | null;
+  /** RS007/V380 — the age-band cutoff override (default 1 January when
+   *  null). Threaded onto the wire so the ENTRIES step's client-side self-
+   *  check (`ageBandEligibilityIssues`, @/lib/registration-rules) evaluates
+   *  the SAME cutoff the server enforces at submit — before this field
+   *  existed here, the client silently defaulted to 1 January for every
+   *  division, and would disagree with the server for any division with a
+   *  real cutoff (the exact "two cutoffs disagree" defect V380 exists to
+   *  kill, resurfaced client-side). */
+  age_cutoff_month: number | null;
+  age_cutoff_day: number | null;
   /** Team-only; drives the ENTRIES step's free-agent option. */
   allow_free_agents: boolean;
   requires_dob: boolean;
@@ -1506,6 +1516,8 @@ export async function publicRegistrationInfo(
       category: string | null;
       age_min: number | null;
       age_max: number | null;
+      age_cutoff_month: number | null;
+      age_cutoff_day: number | null;
       youth: boolean;
       active: number;
       waitlisted: number;
@@ -1513,6 +1525,7 @@ export async function publicRegistrationInfo(
     })[]
   >`
     select rs.*, d.name, d.slug, d.sport_key, d.category, d.age_min, d.age_max, d.youth,
+           d.age_cutoff_month, d.age_cutoff_day,
            d.eligibility_note,
            (select count(*)::int from registrations r
              where r.division_id = rs.division_id
@@ -1571,6 +1584,8 @@ export async function publicRegistrationInfo(
       category: r.category,
       age_min: r.age_min,
       age_max: r.age_max,
+      age_cutoff_month: r.age_cutoff_month,
+      age_cutoff_day: r.age_cutoff_day,
       // Team-only (registration-eligibility's putRegistrationSettings rejects
       // `true` on a non-team division) — drives the ENTRIES step's free-agent
       // option (design §4 step 2).

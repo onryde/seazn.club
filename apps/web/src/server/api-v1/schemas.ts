@@ -2378,6 +2378,11 @@ export const PublicRegistrationDivision = z.object({
   category: z.string().nullable(),
   age_min: z.number().int().nullable(),
   age_max: z.number().int().nullable(),
+  /** RS007/V380 — the age-band cutoff override (default 1 January when
+   *  null), threaded onto the wire so the ENTRIES step's client-side self-
+   *  check evaluates the SAME cutoff the server enforces at submit. */
+  age_cutoff_month: z.number().int().nullable(),
+  age_cutoff_day: z.number().int().nullable(),
   /** Team-only; drives the ENTRIES step's free-agent option. */
   allow_free_agents: z.boolean(),
   requires_dob: z.boolean(),

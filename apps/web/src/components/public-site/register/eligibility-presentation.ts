@@ -75,9 +75,22 @@ export function rosterIssueMessageKey(code: EligibilityCode): string | undefined
  * `MIXED_NEEDS_BOTH_GENDERS` — that is a roster-wide property
  * (`rosterEligibilityForDivision` below, step 3), not something one
  * person's own dob/gender can answer on its own.
+ *
+ * `age_cutoff_month`/`age_cutoff_day` are OPTIONAL on `division` — RS007/
+ * V380 threaded the real cutoff onto `DivisionLike`, but this function's own
+ * parameter type stays narrow ("a hand-built test fixture needs no cast",
+ * types.ts's own DivisionLike comment) and forwards whatever the caller
+ * passed straight into `ageBandEligibilityIssues`, which defaults to 1
+ * January itself when either side is absent.
  */
 export function selfEligibilityForDivision(
-  division: { category: string | null; age_min: number | null; age_max: number | null },
+  division: {
+    category: string | null;
+    age_min: number | null;
+    age_max: number | null;
+    age_cutoff_month?: number | null;
+    age_cutoff_day?: number | null;
+  },
   person: EligibilityPerson,
   seasonStartYear: number,
 ): SelfEligibility {
@@ -108,7 +121,13 @@ export interface RosterEligibility {
  * flags is CERTAIN to be rejected, so blocking "Next" on it is always safe.
  */
 export function rosterEligibilityForDivision(
-  division: { category: string | null; age_min: number | null; age_max: number | null },
+  division: {
+    category: string | null;
+    age_min: number | null;
+    age_max: number | null;
+    age_cutoff_month?: number | null;
+    age_cutoff_day?: number | null;
+  },
   players: readonly (EligibilityPerson & { full_name?: string | null })[],
   seasonStartYear: number,
 ): RosterEligibility {

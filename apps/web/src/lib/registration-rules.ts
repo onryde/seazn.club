@@ -22,11 +22,13 @@
 // representation, server and client alike, so this file's predicates are no
 // longer a deliberately-narrower subset of a wider server-side evaluator —
 // `divisionEligibilityIssues` (registration-eligibility.ts) is now a thin
-// wrapper over exactly these two functions plus nothing else. The public read
-// model (`PublicRegistrationDivision`) still ships only the derived booleans
-// `requires_dob`/`requires_gender`, not the cutoff fields — a client-side
-// caller of `ageBandEligibilityIssues` gets the 1-January default until a
-// later wave threads the real cutoff onto the wire.
+// wrapper over exactly these two functions plus nothing else. The public
+// read model (`PublicRegistrationDivision`) now ships `age_cutoff_month`/
+// `age_cutoff_day` alongside the derived `requires_dob`/`requires_gender`
+// booleans, so a client-side caller of `ageBandEligibilityIssues` (via
+// `DivisionLike`, components/public-site/register/types.ts) evaluates the
+// SAME cutoff the server enforces at submit — the 1-January default below
+// now only ever fires for a division that genuinely has no cutoff set.
 //
 // `rosterIssues`'s roster-composition check (`mixedCompositionTally`/
 // `rosterCompositionIssues` below) moved IN at RS006 W3 (step 3 — DETAILS):
@@ -157,11 +159,12 @@ export function categoryEligibilityIssues(
  * branch, which this replaces exactly (same anchor, same reason).
  *
  * The two cutoff fields are OPTIONAL on this narrow parameter type (unlike
- * `EligibilityDivision`, server-side, which always carries them) — a caller
- * that only has `category`/`age_min`/`age_max` in hand, e.g. the public
- * stepper's client-safe division shape (the wire contract does not ship the
- * cutoff to the client yet), keeps compiling unchanged and gets the same
- * 1-January default it always has.
+ * `EligibilityDivision`, server-side, which always carries them) — RS007/
+ * V380 threads the real cutoff onto the wire (`PublicRegistrationDivision`)
+ * and the public stepper's `DivisionLike` now carries it too, but a caller
+ * that only has `category`/`age_min`/`age_max` in hand (a hand-built test
+ * fixture, or a narrower division shape elsewhere) still keeps compiling
+ * unchanged and gets the same 1-January default it always has.
  *
  * Extracted from `divisionEligibilityIssues`'s first-class block for the
  * same reason as `categoryEligibilityIssues` above.

@@ -43119,6 +43119,30 @@
                                   }
                                 ]
                               },
+                              "age_cutoff_month": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "age_cutoff_day": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
                               "allow_free_agents": {
                                 "type": "boolean"
                               },
@@ -43209,6 +43233,8 @@
                               "category",
                               "age_min",
                               "age_max",
+                              "age_cutoff_month",
+                              "age_cutoff_day",
                               "allow_free_agents",
                               "requires_dob",
                               "requires_gender",
@@ -43268,6 +43294,8 @@
                         "category": "example",
                         "age_min": -9007199254740991,
                         "age_max": -9007199254740991,
+                        "age_cutoff_month": -9007199254740991,
+                        "age_cutoff_day": -9007199254740991,
                         "allow_free_agents": true,
                         "requires_dob": true,
                         "requires_gender": true,
