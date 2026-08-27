@@ -840,14 +840,29 @@ export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: str
  * reclaimed place in line — even though its OWN `created_at` may be far
  * older than theirs.
  */
+/**
+ * REVIEW FIX (money-path defect #5) — `excludeId` is optional, additive, and
+ * ONLY ever passed by `sweepRegistrations`' lapse branch. `for update skip
+ * locked` skips rows locked by an OTHER transaction, never one this same
+ * transaction already holds — so a call made in the SAME tx that just
+ * flipped a row to 'waitlisted' can, when that row is the only (or oldest)
+ * candidate, re-select and immediately re-promote the very row that just
+ * lapsed, in the same instant it was returned to the queue. Every OTHER
+ * caller (withdrawCore, the sweep's expiry branch, registration-approval.ts's
+ * promoteFromWaitlist) omits it and is byte-for-byte unchanged: none of them
+ * lock a waitlisted candidate ahead of this call the way the lapse branch
+ * does.
+ */
 export async function promoteOldestWaitlisted(
   tx: Tx,
   divisionId: string,
   settings: RegistrationSettingsRow | null,
+  excludeId?: string,
 ): Promise<RegistrationWithGroupRow | null> {
   const [picked] = await tx<{ id: string; group_id: string }[]>`
     select id, group_id from registrations
     where division_id = ${divisionId} and status = 'waitlisted'
+      ${excludeId ? tx`and id <> ${excludeId}` : tx``}
     order by coalesce(waitlisted_at, created_at), id limit 1
     for update skip locked`;
   if (!picked) return null;
@@ -4061,7 +4076,11 @@ export async function sweepRegistrations(
       const settings = await loadSettings(tx, division_id);
       const [div] = await tx<{ competition_id: string; org_id: string }[]>`
         select competition_id, org_id from divisions where id = ${division_id}`;
-      const promoted = await promoteOldestWaitlisted(tx, division_id, settings);
+      // REVIEW FIX (money-path defect #5): exclude the row THIS pass just
+      // lapsed — see promoteOldestWaitlisted's own doc comment for why
+      // `for update skip locked` alone cannot stop this call from
+      // re-selecting it.
+      const promoted = await promoteOldestWaitlisted(tx, division_id, settings, id);
       await audit(tx, div.competition_id, div.org_id, "registration.promotion_lapsed", {
         registration_id: id,
         promoted_registration_id: promoted?.id ?? null,

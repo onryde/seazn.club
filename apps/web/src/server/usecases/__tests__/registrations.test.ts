@@ -3761,6 +3761,41 @@ describe.skipIf(!HAS_DB)("RS007: sweep lapses an overdue promotion back to the w
   });
 });
 
+describe.skipIf(!HAS_DB)("REVIEW FIX (money-path defect #5): a lapsing promotion with NO bystander must not immediately re-promote itself", () => {
+  it("the only waitlisted candidate in the division stays waitlisted after its own lapse — never self-re-promoted in the SAME sweep", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const t = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted", contactEmail: "solo-lapse@test.local",
+    });
+    const promotedT = await sql.begin((tx) =>
+      promoteWaitlistedRow(tx, t.registration.id, t.registration.group_id, settings),
+    );
+    expect(promotedT!.promotion_expires_at, "sanity").not.toBeNull();
+    // Deliberately NO bystander anywhere in this (fresh, per-test) division —
+    // T is the ONLY waitlisted row in it when its own clock lapses.
+
+    await sql`update registrations set promotion_expires_at = now() - interval '1 minute'
+              where id = ${t.registration.id}`;
+
+    const res = await sweepRegistrations("https://test.local");
+
+    const tRow = await loadWithGroup(t.registration.id);
+    // Reverting the fix makes this fail: `for update skip locked` does NOT
+    // skip a row locked by the CURRENT transaction, so
+    // promoteOldestWaitlisted — called in the SAME tx right after the lapse
+    // UPDATE — re-selects T itself and immediately flips it back to
+    // 'pending' with a fresh 48h window. Capacity never actually releases,
+    // and a non-payer gets an endless string of "you've been promoted"
+    // emails, once per sweep cycle, forever.
+    expect(tRow.status).toBe("waitlisted");
+    expect(tRow.promoted_at).toBeNull();
+    expect(res.lapsed).toBeGreaterThanOrEqual(1); // identity checked above, not the platform-wide tally
+    const [tCols] = await sql<{ promotion_expires_at: Date | null }[]>`
+      select promotion_expires_at from registrations where id = ${t.registration.id}`;
+    expect(tCols!.promotion_expires_at).toBeNull();
+  });
+});
+
 describe.skipIf(!HAS_DB)("RS007: sweep sibling isolation on a promotion lapse", () => {
   it("lapsing ONE promoted entry in a multi-entry cart does not touch its still-pending sibling", async () => {
     const { competition, division, settings } = await stripeRig({ feeCents: 500 });
