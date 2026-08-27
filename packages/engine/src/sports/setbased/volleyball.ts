@@ -112,12 +112,19 @@ export const volleyball = makeSetBasedModule({
   //    the order would otherwise reach them. The side is still reported — the
   //    side is not in doubt.
   //  * 7.6.2: six positions, rotated one place each time the team takes the
-  //    serve back. Reported only for a side with six players on court.
+  //    serve back. Reported only for a side with six players on court — and
+  //    an ordinary indoor sheet does not persist a squad to count (six
+  //    starters and their positions declare nothing the pre-wave lineup model
+  //    could not hold), so `rotationImpliedBy` names the cfg fact that stands
+  //    in for it: indoor has a bench and records substitutions, the beach
+  //    pair has neither (FIVB Beach §7, the same fact `records` moved into
+  //    cfg for in S6/#416). A declared squad still wins where there is one.
   serve: {
     within: "rally-winner",
     setStart: "alternate",
     decidingSetTossed: true,
     serverFromPairOrder: true,
+    rotationImpliedBy: "substitutions",
     nonServingRoles: ["libero"],
     rotationCycle: 6,
   },

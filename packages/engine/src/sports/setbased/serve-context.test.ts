@@ -74,6 +74,33 @@ function sixSide(entrantId: string): Lineup {
 }
 const SIX: LineupPair = { home: sixSide("H"), away: sixSide("A") };
 
+/** The sheet a referee actually files: six starters, positions, and NOTHING
+ *  the pre-wave lineup model could not already hold — so `declaresSquadDetail`
+ *  keeps no snapshot and `state.squads` is absent. */
+function sixPlainSide(entrantId: string): Lineup {
+  return {
+    entrantId,
+    slots: ["S", "OH", "MB", "OPP", "OH", "MB"].map((positionKey, i) => ({
+      personId: `${entrantId}-p${i + 1}`,
+      positionKey,
+      slot: "starting" as const,
+      orderNo: i + 1,
+    })),
+  };
+}
+const SIX_PLAIN: LineupPair = { home: sixPlainSide("H"), away: sixPlainSide("A") };
+
+/** A pair whose sheet declares no order at all — two starters, nothing else. */
+function barePairSide(entrantId: string): Lineup {
+  return {
+    entrantId,
+    slots: [
+      { personId: `${entrantId}-a`, slot: "starting", orderNo: 1 },
+      { personId: `${entrantId}-b`, slot: "starting", orderNo: 2 },
+    ],
+  };
+}
+
 function ctx(
   mod: SetBasedModule,
   cfg: SetBasedCfg,
@@ -779,6 +806,50 @@ describe("volleyball", () => {
     expect(answer.servingSide).toBe("A");
     expect(answer.serviceTurn).toBeUndefined();
     expect(answer.rotation).toBeUndefined();
+  });
+
+  it("numbers the rotation off an ORDINARY indoor sheet — six starters, no coach", () => {
+    // The number is a pure count of side-outs, so it needs no team-sheet
+    // detail. It was gated on `state.squads` all the same, and nothing
+    // persists a squad for a plain sheet (`sports/squad-state.ts` keeps one
+    // only where the sheet declares a `pairOrder` or a non-`player` role) —
+    // so the rotation was dark on every ordinary indoor fixture, and the test
+    // above only sees a number because it puts a COACH on the bench.
+    const events = stream(
+      ["core.start"],
+      rally(volleyball, { wonBy: "H", serving: "H" }), // H opened, holds serve
+      rally(volleyball, { wonBy: "A" }), // A takes it: A rotates once
+      rally(volleyball, { wonBy: "H" }), // H takes it back: H rotates once
+    );
+    // The premise, stated rather than assumed.
+    const folded: SetBasedState = foldMatch(volleyball, cfg, SIX_PLAIN, events, STRICT_ALL);
+    expect(folded.squads).toBeUndefined();
+    expect(ctxAfter(volleyball, cfg, SIX_PLAIN, events, 2).rotation).toBe(1);
+    expect(ctxAfter(volleyball, cfg, SIX_PLAIN, events, 3).rotation).toBe(2);
+    const answer = ctx(volleyball, cfg, SIX_PLAIN, events);
+    expect(answer.rotation).toBe(2);
+    // …and still names nobody. FIVB 7.6's six-position court rotation is not
+    // folded, so the PERSON needs an order this sheet does not declare.
+    expect(answer.serverPersonId).toBeNull();
+  });
+
+  it("gives a beach PAIR no rotation number even off a sheet that declares no order", () => {
+    // The other half of that ungating. With no squad to size, how many are on
+    // court comes from the code the fixture is played under: beach records no
+    // substitutions because a pair has no bench (FIVB Beach §7 — the S6/#416
+    // regression), and a pair has no six-position rotation to number.
+    const bare: LineupPair = { home: barePairSide("H"), away: barePairSide("A") };
+    const events = stream(
+      ["core.start"],
+      rally(volleyball, { wonBy: "H", serving: "H" }),
+      rally(volleyball, { wonBy: "A" }), // a side-out, which WOULD advance a rotation
+    );
+    const folded: SetBasedState = foldMatch(volleyball, beach, bare, events, STRICT_ALL);
+    expect(folded.squads).toBeUndefined(); // the same bare sheet as indoor's
+    const answer = ctx(volleyball, beach, bare, events);
+    expect(answer.servingSide).toBe("A");
+    expect(answer.rotation).toBeUndefined();
+    expect(answer.serverPersonId).toBeNull();
   });
 
   it("gives a beach PAIR no six-position rotation number, but does name its server", () => {

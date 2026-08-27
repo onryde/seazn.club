@@ -931,6 +931,24 @@ export interface SetBasedServeRotation {
    *  the side actually has that many players on court, so a pair never gets a
    *  six-position rotation number. */
   readonly rotationCycle?: number;
+  /**
+   * How to tell a side has `rotationCycle` players on court when the fold kept
+   * NO squad — which is the ordinary case, not a corner one. A team sheet
+   * survives into State only where it declares something the pre-wave lineup
+   * model could not hold (`sports/squad-state.ts`: a `pairOrder` or a
+   * non-`player` role), and the sheet a referee actually files — six
+   * starters and their positions — declares neither. So `state.squads` is
+   * absent on an ordinary indoor fixture, and gating the rotation on it left
+   * the number dark on all of them.
+   *
+   * Names a `cfg.records` flag that separates the codes playing under this one
+   * preset, because a preset field cannot vary per variant (the S6/#416
+   * lesson, and why `records` lives in cfg at all): FIVB indoor has a bench
+   * and records substitutions, the beach pair has neither (FIVB Beach §7).
+   * A squad, WHERE THE FOLD KEPT ONE, still wins — a declared pair is a pair
+   * whatever the flag says. Unstated means an unknown count stays unknown.
+   */
+  readonly rotationImpliedBy?: keyof SetBasedRecordFlags;
 }
 
 /** What the reader needs off a module: its key (for the event type strings it
@@ -1293,6 +1311,30 @@ function setBasedServeWalk(
 }
 
 /**
+ * Does this side field the `rotationCycle` players FIVB 7.6.2 numbers?
+ *
+ * The rotation NUMBER itself is pure ledger — the side-outs this side has
+ * taken — so nothing here gates the arithmetic; the only question is whether a
+ * six-position rotation applies to this side at all. The squad answers it
+ * where the fold kept one, and where it did not the preset's
+ * `rotationImpliedBy` cfg flag stands in for it (see its doc comment).
+ */
+function sideFieldsTheRotation(
+  source: SetBasedServeSource,
+  state: SetBasedState,
+  side: Side,
+): boolean {
+  const { rotationCycle: cycle, rotationImpliedBy: implied } = source.serveRotation;
+  if (cycle === undefined) return false;
+  const squad = state.squads?.[side];
+  // A beach pair plays the same side-out rules under the same preset and has
+  // no six-position rotation to number, so a declared squad is SIZED, never
+  // assumed.
+  if (squad !== undefined) return onFieldPersons(squad).length === cycle;
+  return implied !== undefined && state.cfg.records[implied] === true;
+}
+
+/**
  * WHO IS SERVING — the reader D-17 was open for.
  *
  * A pure reader over the ledger and the folded state, with no fold effect: it
@@ -1350,13 +1392,8 @@ export function setBasedServeContext(
 
   let rotationNumber: number | undefined;
   const cycle = rotation.rotationCycle;
-  if (cycle !== undefined && chainComplete && state.squads !== undefined) {
-    // Reported only for a side that really has that many players on court —
-    // a beach pair plays the same side-out rules under the same preset and
-    // has no six-position rotation to number.
-    if (onFieldPersons(state.squads[side]).length === cycle) {
-      rotationNumber = (walk.gains[side] % cycle) + 1;
-    }
+  if (cycle !== undefined && chainComplete && sideFieldsTheRotation(source, state, side)) {
+    rotationNumber = (walk.gains[side] % cycle) + 1;
   }
 
   let serverPersonId: string | null = null;
