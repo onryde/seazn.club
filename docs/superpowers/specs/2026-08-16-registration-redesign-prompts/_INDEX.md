@@ -2318,3 +2318,199 @@ the greenfield stance covers registration ROWS (owner, 2026-08-16), it was never
 a statement about divisions, and this session conflated the two.
 
 Follow-up: V382 + the `requiresGender` predicate, dispatched 2026-08-27.
+
+## RS007 FINDINGS REGISTER — `/code-review max 677`, 2026-08-27
+
+Fifteen findings, every one marked CONFIRMED by the reviewer's own verify pass.
+Recorded here verbatim-in-substance because until now they lived only in a task
+notification — one compaction from being lost, while the PR body still said
+"two lower-severity review findings are recorded but unfixed".
+
+**Verdict as it stands: the branch is NOT mergeable.** Two CRITICAL money
+defects and one safeguarding HIGH that re-creates the exact bug V380 exists to
+fix. Statuses below are as of the moment of writing; update them in place.
+
+| # | Severity | Location | Status |
+| --- | --- | --- | --- |
+| 1 | CRITICAL | `registrations.ts:3332` | OPEN — money lane |
+| 2 | CRITICAL | `registrations.ts:2247` | OPEN — money lane |
+| 3 | HIGH | `V380__…consolidation.sql:70` | OPEN — safeguarding |
+| 4 | HIGH | `register/join/view-model.ts:119` | OPEN |
+| 5 | HIGH | `registrations.ts:3983` | OPEN — money lane |
+| 6 | HIGH | `registrations.ts:3768` | **FIXED** `097c1949b` |
+| 7 | HIGH | `registrations.ts:3762` | OPEN — money lane |
+| 8 | HIGH | `register/status/view-model.ts:59` | OPEN |
+| 9 | HIGH | `registrations.ts:3740` | OPEN — money lane |
+| 10 | HIGH | `register/status/view-model.ts:62` | OPEN |
+| 11 | HIGH | `register/status/page.tsx:95` | IN FLIGHT — status lane |
+| 12 | MEDIUM | `registrations.ts:929` | OPEN — money lane |
+| 13 | MEDIUM | `register/status/entry-card.tsx:98` | OPEN |
+| 14 | MEDIUM | `register-stepper.tsx:209` | **FIXED** `d33ecea48` |
+| 15 | MEDIUM | `register/join/page.tsx:80` | OPEN |
+
+### The two CRITICALs
+
+1. **A cancel can refund against someone else's payment.**
+   `buildGroupStatusView` feeds the CART-level `group.payment_intent_id` into a
+   PER-ENTRY `resolveRefundPolicy`, so an entry that was never charged reads
+   `refundable: true`. Cart holds paid entry A (£25, sets
+   `group.payment_intent_id = pi_A`) and waitlisted B; B is promoted (pending,
+   2500, refunded 0); `refundable: !!paymentIntentId && remaining > 0 && …`
+   (`:3526`) passes on pi_A, the CancelEntry dialog promises "£25.00 will be
+   refunded", and `withdrawCore` runs a real `stripeRefund(pi_A, 2500)`. The
+   organiser loses £25 and A shows a phantom refund.
+   FIX: pass the ENTRY's own charge reference (or a per-entry `paid`
+   predicate), never `group.payment_intent_id`.
+2. **Paid, not entered, not queued, not refunded.**
+   `confirmPaidRegistration`'s late-payment branch matches only
+   `withdrawn|expired|rejected`, but RS007's own lapse pass parks rows in
+   `waitlisted`. Promoted entry X at T+48h: the sweep sets
+   `status='waitlisted'` while X's checkout is in flight; the webhook misses
+   the guard at `:2247` and falls through to `update registrations set status =
+   'paid'`; `promoteOldestWaitlisted` selects `status='waitlisted'` (`:850`) so
+   X is gone from the queue too.
+   FIX: add `waitlisted` to the terminal-status list at `:2247` so the `late`
+   refund branch fires. **This defect is CREATED BY THIS BRANCH** — the
+   `waitlisted` parking state is RS007's lapse pass.
+
+### #3 — the safeguarding one, and why the V380 amendment did not cover it
+
+`V380:70`'s `age_rule` and `gender_rule` CTEs `cross join lateral
+jsonb_array_elements(...)` with **no per-division dedup** (unlike
+`custom_rule`, which does have `distinct on`), and `:81` coalesces toward the
+stale column. Proven in psql: `[{minAgeAt:8},{maxAgeAt:15}]` yields `UPDATE 1`
+and lands `age_min=8, age_max=NULL`. `:150`'s recompute then reads
+`youth = (age_max is not null and age_max < 18)` as **false**,
+`resolveNameDisplay` returns `full`, and `og/model.ts:87` stops suppressing
+rows — **a genuine U16 division publishes minors' full names.**
+
+That is defect 2 from the migration's own header, re-created by the migration
+written to fix it. The 2026-08-27 amendment (`625bd9eac`) did not touch it:
+that amendment was scoped to the GENDER path (preserving unconvertible rules
+as `eligibility_note`), and the loss here is on the AGE path and is arithmetic,
+not conversion.
+
+FIX: `distinct on (d.id) … order by d.id, r.ord` on both CTEs, and **merge
+min/max across rules** rather than taking one arbitrary row — a division may
+legitimately carry a min rule and a max rule as two separate objects, which is
+precisely the shape that breaks.
+Blast radius: staging + dev only; production is greenfield.
+
+### The rest, in the reviewer's own terms
+
+4. **`register/join/view-model.ts:119` — the joiner's consent is collected and
+   discarded.** The join page renders a consent step and hard-blocks submit on
+   privacy consent, but `buildJoinBody` sends neither `privacy_consent` nor
+   `media_consent`, and `PublicJoinRequest` has no field to receive them.
+   `joinTeamEntry` derives `consent_status` purely from age, and the consent
+   columns live on `registration_groups` from the CAPTAIN's submit — so a
+   joiner's deliberate media REFUSAL is silently overridden by the captain's
+   choice, and the privacy consent is never recorded despite being a hard UI
+   gate. FIX: add both fields to `PublicJoinRequest`, persist per-player.
+5. **`registrations.ts:3983` — infinite re-promotion.** The lapse pass sets a
+   row to `waitlisted` then calls `promoteOldestWaitlisted` in the SAME
+   transaction; `for update skip locked` does **not** skip rows locked by the
+   current transaction, so the just-lapsed non-payer is immediately re-promoted
+   — every 48h forever, capacity never released, the sweep reporting
+   `{lapsed:1, promoted:1}` each cycle. FIX: exclude the just-lapsed id, or
+   promote in a separate transaction after commit.
+7. **`registrations.ts:3762` — the reminder claim is GROUP-scoped, so siblings
+   are never reminded.** Pass (1a) iterates PER ENTRY but claims and marks a
+   group column. In a cart with pending A and B, A wins the claim and sets
+   `reminded_at`; B hits `continue`, and the `g.reminded_at is null` filter
+   excludes the cart from every future sweep. B expires unpaid — and since each
+   mail mints a checkout for `[reg.id]` alone, B's fee is never presented to
+   anyone. **V381's lease did not fix this** — the lease is still group-scoped.
+   FIX: move the claim and the sent mark onto the ENTRY, as pass (1b) already
+   does with `promotion_reminded_at`.
+8. **`register/status/view-model.ts:59` — pay-then-refund on a stale deadline.**
+   `resolveMoneyState` gates on `status === "pending" && amount_cents > 0` and
+   never checks whether the deadline it is about to print has passed. The sweep
+   is hourly (`cron: "37 * * * *"`), so a cart whose `expires_at` passed at
+   14:00 is still pending at 14:36: the page renders a live Pay button above a
+   stale "Pay by", `resumeRegistrationCheckout` has no deadline guard either and
+   mints a real session, the registrant pays, and the 14:37 sweep expires the
+   row and auto-refunds. Money in and straight back out. FIX: return an expired
+   state when `effectivePayDeadline` is past, AND re-check server-side in
+   `resumeRegistrationCheckout`.
+9. **`registrations.ts:3740` — the Stripe session is minted BEFORE the claim.**
+   A losing iteration still stamps `registration_groups.checkout_session_id`
+   with a session nobody holds. A mints S_A, wins, emails S_A; B mints S_B
+   unconditionally (stamping the group), loses, and `continue`s. The registrant
+   pays via S_A and returns to `?session_id=S_A`, where
+   `if (sessionId !== reg.checkout_session_id) return false` (`:2652`) refuses.
+   **Registrations have no missed-webhook fallback** (billing does), so a paid
+   cart renders pending with no path back. FIX: mint after the claim succeeds.
+   V381 left the ordering unchanged.
+10. **`register/status/view-model.ts:62` — a lapse timer with no way to pay.**
+    The per-entry money state is decided from the CART-level `payment_method`,
+    while V378's 48h `promotion_expires_at` is set from the DIVISION's method.
+    A cart of {free manual-approval → pending} + {paid stripe → waitlisted}
+    commits with `payment_method = null`; on promotion the entry gets the 48h
+    clock while the group's method write is suppressed by its `not exists
+    (other pending)` guard. The page reads the null cart method, renders
+    `offline_due` with no PayButton and no instructions, `notifyPromoted` reads
+    the same column so the email carries no pay link — and 48h later it lapses.
+    FIX: resolve the money state from the DIVISION's payment method.
+11. **`register/status/page.tsx:95` — the subtotal never comes down.** It
+    filters only `status !== "waitlisted"`, so withdrawn, expired and rejected
+    entries keep contributing their full fee **on the very page that offers the
+    Cancel button**. Cancel B in a £50 cart and B is correctly badged
+    "Withdrawn" with its button gone while the footer still reads £50.00 —
+    `withdrawCore` never zeroes `amount_cents`. The new "Resend confirmation"
+    button emails the identical inflated figure. FIX: filter on the set of
+    statuses that actually owe money.
+12. **`registrations.ts:929` — a second promotion is never reminded.** Neither
+    `promoteWaitlistedRow` nor the lapse UPDATE clears
+    `promotion_reminded_at`, but pass (1b) filters
+    `and r.promotion_reminded_at is null`. A re-promoted entry is skipped
+    permanently, and cannot fall back to pass (1a) either (that requires
+    `r.promoted_at is null`). FIX: null it in the same UPDATE that sets a new
+    `promotion_expires_at`.
+13. **`register/status/entry-card.tsx:98` — the deadline shown is neither the
+    registrant's clock nor the one enforced.** Rendered
+    `fmtDateTime(UTC, money.deadline)` — hardcoded UTC, module-constant `en-GB`.
+    An Asia/Kolkata org's cart expiring `2026-09-01T19:00Z` (00:30 on 2 Sept
+    local) renders "01/09/2026, 19:00": wrong clock, wrong calendar day, no zone
+    label; identical at `:114`. Separately `notifyPromoted` sends
+    `payDeadline: promoted.expires_at` (`:987`) — the GROUP column — while the
+    lapse pass keys strictly on the ENTRY's `promotion_expires_at`, so an
+    entrant who pays by the emailed date is lapsed anyway. FIX: thread the org
+    timezone already resolved as `refundTz` onto `GroupStatusView`; send the
+    entry's own clock in the mail.
+15. **`register/join/page.tsx:80` — a throttled teammate is told the link is
+    dead.** 5 previews/300s per IP, and a throttled visit renders the terminal
+    "This join link isn't valid … it may have expired" at HTTP 200 with no
+    `Retry-After`. A captain sharing claim links with a team on one venue wifi
+    or CGNAT egress IP burns the bucket — which is shared byte-for-byte with the
+    GET route `refreshSlots()` also spends, so one visitor plus two refreshes is
+    3 of the 5. On the POST side `classifyJoinFailure` has no `rateLimited` arm
+    (429 is not 404, not 409, not ≥500), so it returns `rejected`, whose copy
+    its own doc comment scopes to roster cap and eligibility. FIX: add a
+    `rateLimited` arm and a distinct retry state.
+
+### What the findings say about this session's own process
+
+- **Five of these (#2, #5, #7, #9, #12) are defects RS007 CREATED**, all in
+  the promotion/lapse/reminder machinery this wave added, and all in code that
+  had never run in production because the sweep had no scheduler. This wave
+  turns that code on. The reminder path in particular goes live for the FIRST
+  TIME because of this PR — the same observation the first adversarial pass made
+  about its finding #3, still true, now with five confirmed defects behind it.
+- **V381 was a partial fix, twice over.** Written to stop a crash losing a
+  reminder forever, it left the claim group-scoped (#7) and the mint ordering
+  unchanged (#9). Both were visible in the same twenty lines. A lease that
+  fixes the crash window while leaving the scoping wrong reads as "reminders are
+  now safe" and is not.
+- **#14 is a hole in my own fix.** `2d4d7b623` narrowed the collapse rule to
+  close a 422 dead end; the hydration effect's `if (saved) … else if
+  (collapseEntries)` reopened it for a restored EMPTY cart. The whole-branch
+  review's probe (e) had explicitly reported "no dead path found" here — it
+  tested a narrower claim (a division whose entrant kind CHANGED) than the one
+  it appeared to settle. A refutation is only as strong as the case it tested.
+- **No walkthrough crosses invite-and-pay.** `rs007-registration-journey` is a
+  FREE division (captain enters, mate claims, no money);
+  `registration-connect` is a paid entry with NO invite and NO claim. Several of
+  these findings live exactly on that seam, and #4 (join consent collected then
+  discarded) would very likely have failed a walkthrough that crossed it. The
+  invite-and-pay-and-cancel walkthrough is the missing witness for #4, #10, #13.
