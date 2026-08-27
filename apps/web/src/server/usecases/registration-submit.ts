@@ -901,7 +901,11 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
       age_min: divCtx.age_min,
       age_max: divCtx.age_max,
     }),
-    requires_gender: requiresGender({ category: divCtx.category }),
+    // eligibility_note included (RS007 review fix) — requiresGender now
+    // also collects gender defensively for a division whose category alone
+    // can no longer prove it unrestricted (registration-eligibility.ts's
+    // own doc comment on requiresGender has the full account).
+    requires_gender: requiresGender({ category: divCtx.category, eligibility_note: divCtx.eligibility_note }),
     total_players: totalPlayers,
     eligibility_note: divCtx.eligibility_note,
   };

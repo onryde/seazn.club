@@ -1587,6 +1587,14 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
       await sql`update divisions set eligibility_note = 'School-registered students only' where id = ${division.id}`;
       const preview = await previewJoinEntry(entry.join_code!);
       expect(preview.eligibility_note).toBe("School-registered students only");
+      // Review fix (2026-08-27): a null-category division carrying a note
+      // now also collects gender defensively (requiresGender,
+      // registration-eligibility.ts) — V380 could not convert every jsonb
+      // gender-rule shape onto `category`, so `category` alone can no
+      // longer prove this division unrestricted. Proves the wiring from
+      // divCtx.eligibility_note into requiresGender actually reaches this
+      // preview, not just the pure function in isolation.
+      expect(preview.requires_gender).toBe(true);
     });
 
     it("eligibility_note is null when the division has none set", async () => {
