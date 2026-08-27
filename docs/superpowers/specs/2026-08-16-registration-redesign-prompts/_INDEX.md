@@ -2514,3 +2514,34 @@ Blast radius: staging + dev only; production is greenfield.
   these findings live exactly on that seam, and #4 (join consent collected then
   discarded) would very likely have failed a walkthrough that crossed it. The
   invite-and-pay-and-cancel walkthrough is the missing witness for #4, #10, #13.
+
+### Lane closed 2026-08-27 — youth override, `ref_code`, stranded cutoff
+
+Not part of the 15 above; these came from the gap review and were the "two
+lower-severity findings recorded but unfixed" the PR body used to mention.
+All three fixed, counts re-run by the main thread (80/80,
+`registration-hub-config-panel.test.tsx` + `divisions.test.ts`, paths confirmed
+inside the rs007 worktree).
+
+- **Youth override no longer lost on a hub Save** (`divisions.ts`,
+  `afbe8118c`). An active override is detected by comparing stored `youth`
+  against `deriveYouth(stored age_max)`; a mismatch can only have come from an
+  earlier explicit PATCH, so it survives. 2/4 red → 4/4.
+- **`ref_code` was non-null-asserted and genuinely can be null**
+  (`9cd05d9c6`). `groupById`'s own doc comment and the status page's both say a
+  ref-mint-exhausted submit still commits. **The trap worth keeping: `!` erases
+  at compile time, so a behavioral test passes identically with and without it**
+  — 2/2 green before the fix. The only red was `tsc --noEmit`, and only after
+  the declared type was widened to `string | null`: 1 error → 0. Recorded as
+  `reference_non_null_assertion_red_is_tsc_only`.
+- **Clearing an age band now clears its cutoff** (`c2ee0f0e6`). Not a DB
+  rejection — `divisions_age_cutoff_check` enforces cutoff month/day
+  both-or-neither and is indifferent to the band, so the value was silently
+  stranded, and the cutoff controls `disable` once the band clears, leaving no
+  UI path to remove it. 2/76 red → 76/76.
+
+Lane-boundary note: the sibling status-page lane's concurrent edits briefly
+contaminated one `tsc` run with an error on a file this lane was told not to
+touch. It cleared when they committed. Two lanes in one worktree share the
+index and the type graph — this is the shared-worktree contamination trap, and
+it presented here as someone else's compile error inside this lane's gate.
