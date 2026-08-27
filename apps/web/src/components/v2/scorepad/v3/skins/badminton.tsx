@@ -1141,6 +1141,7 @@ function join(parts: (string | undefined)[]): string | undefined {
 
 export function badmintonDetail(ctx: ActivityDetailContext): string | undefined {
   const { t, eventType, payload, personNames } = ctx;
+  const state = asState(ctx.state);
   const named = (id: unknown): string | undefined =>
     typeof id === "string" && id.length > 0 ? (personNames?.[id] ?? t("eventCopy.unknownPerson")) : undefined;
 
@@ -1162,6 +1163,22 @@ export function badmintonDetail(ctx: ActivityDetailContext): string | undefined 
         named(payload.person),
         typeof payload.reason === "string" ? payload.reason : undefined,
       ]);
+    case TIMEOUT_TYPE: {
+      // R5 review: this case was MISSING, so the ribbon rendered a bare
+      // "Time-out recorded" with no side, where both siblings name one
+      // (`tabletennis.tsx`'s and `volleyball.tsx`'s own TIMEOUT_TYPE cases).
+      // Not an unreachable path: `refusedEventTypes` reads `records.timeouts`
+      // PER FIXTURE rather than hardcoding the type off, so any cfg that
+      // records time-outs reaches this line.
+      //
+      // `payload.by` is an ENTRANT id — `ctx.state` (R3.5/Task E's own
+      // addition to this contract) is what resolves it to a home/away side;
+      // `ActivityDetailContext` carries no fold otherwise. Undefined (falling
+      // back to the bare base copy) rather than a raw id when the side cannot
+      // be resolved.
+      const side = sideOfEntrant(state, payload.by);
+      return side ? t(SIDE_LABEL[side]) : undefined;
+    }
     default:
       return undefined;
   }

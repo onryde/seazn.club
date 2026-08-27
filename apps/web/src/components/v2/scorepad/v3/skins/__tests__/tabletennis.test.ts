@@ -881,9 +881,46 @@ describe("dock()", () => {
     expect(step2.title).toBe("pad.tabletennis.dock.rally.expedite.title");
   });
 
-  it("stops offering the return chip once this rally has already flagged one", () => {
+  // R5 review, finding 2 — this test USED to assert `toBeNull()` here, and in
+  // doing so it froze a real defect as intended behaviour: the scorer answered
+  // the expedite question and the dock, with its "Send now", vanished. It sat
+  // two tests below the very "STAYS OPEN" fix it should have been modelled on.
+  // The chip stops being OFFERED (step 2 no longer asks), which is what the
+  // old title meant; the dock still CONFIRMS the answer.
+  it("stops OFFERING the return chip once this rally has flagged one, but keeps CONFIRMING it — singles included", () => {
     const v = view({ events: stream(expedite(), anchor("H", "A")) });
-    expect(buildDock(RALLY_TYPE, v, t, { wonBy: "H", scorer: "H1", returns: EXPEDITE_RETURNS_THRESHOLD })).toBeNull();
+    const settled = buildDock(RALLY_TYPE, v, t, {
+      wonBy: "H",
+      scorer: "H1",
+      returns: EXPEDITE_RETURNS_THRESHOLD,
+    })!;
+    expect(settled, "a singles scorer answered a real question — the dock must not vanish").not.toBeNull();
+    expect(settled.title).toBe("pad.tabletennis.dock.rally.expedite.title");
+    expect(settled.chips.map((c) => c.id)).toEqual(["expediteReturn"]);
+    // No scorer chip: singles never asked that question (`buildHalf` stamps
+    // the sole scorer at tap time), so there is nothing of that kind to show.
+  });
+
+  it("confirms BOTH answers once a doubles rally under expedite has settled them", () => {
+    const v = view({ lineups: DOUBLES, events: stream(expedite(), anchor("H", "A")) });
+    const settled = buildDock(RALLY_TYPE, v, t, {
+      wonBy: "H",
+      scorer: "H-second",
+      returns: EXPEDITE_RETURNS_THRESHOLD,
+    })!;
+    // The scorer chip alone was the whole dock before this fix, so the
+    // expedite answer went unconfirmed even in the case the fix was written
+    // for.
+    expect(settled.chips.map((c) => c.id)).toEqual(["scorer:H-second", "expediteReturn"]);
+    expect(settled.title).toBe("pad.tabletennis.dock.rally.expedite.title");
+  });
+
+  it("still shows NO dock at all when a singles rally was never asked anything", () => {
+    // The one genuine null: no expedite, and a singles side whose sole scorer
+    // was stamped at tap time. Nothing was asked, so there is nothing to keep
+    // open — this is the case the pair test legitimately guards.
+    const v = view({ events: stream(anchor("H", "A")) });
+    expect(buildDock(RALLY_TYPE, v, t, { wonBy: "H", scorer: "H1" })).toBeNull();
   });
 
   it("declines every other event type outright", () => {

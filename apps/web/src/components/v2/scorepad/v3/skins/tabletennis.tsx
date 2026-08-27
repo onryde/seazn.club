@@ -1026,7 +1026,7 @@ export function buildDock(
   }
 
   // Step 3 — EVERY question settled, and the dock STAYS OPEN showing the
-  // answer, exactly as badminton's does. Falling through to `null` here was a
+  // answers, exactly as badminton's does. Falling through to `null` here was a
   // real defect, found by driving a doubles fixture rather than by any
   // assertion: the moment the scorer tapped a chip the whole dock vanished,
   // taking with it both the confirmation of what they had just chosen and the
@@ -1034,16 +1034,34 @@ export function buildDock(
   // scorer moving between this pad and badminton's would have met two
   // different behaviours for the same gesture.
   //
-  // Only for a genuine PAIR: a singles side had nothing to ask (`buildHalf`
-  // stamps its sole scorer at tap time), so it had no dock to leave open.
-  if (scorer !== undefined && winner !== null) {
-    const pair = onFieldPlayers(view.squads, winner);
-    if (pair.length > 1) {
-      return {
-        title: t("pad.tabletennis.dock.rally.scorer.title"),
-        chips: [scorerChip(scorer, nameOf(view, scorer, t))],
-      };
-    }
+  // The rule is ONE QUESTION ASKED, ONE ANSWER SHOWN — never "was it a pair?".
+  // The first cut of this fix gated the whole branch on `pair.length > 1`,
+  // reasoning that a singles side has no scorer to ask for (true: `buildHalf`
+  // stamps its sole scorer at tap time). But step 2 asks a second question
+  // that has nothing to do with pairs — the ITTF expedite return count — so
+  // under expedite a SINGLES scorer answered a real question and watched the
+  // dock and its "Send now" vanish anyway, and a DOUBLES scorer got the
+  // scorer chip back with no confirmation of the expedite answer at all. Both
+  // are the same defect this step exists to close, so each answered question
+  // contributes its own chip and the pair test only gates the scorer's.
+  const settled: DockChip[] = [];
+  if (scorer !== undefined && winner !== null && onFieldPlayers(view.squads, winner).length > 1) {
+    settled.push(scorerChip(scorer, nameOf(view, scorer, t)));
+  }
+  if (returns !== undefined) {
+    settled.push(expediteReturnChip());
+  }
+  if (settled.length > 0) {
+    // Titled by the question the scorer answered LAST — expedite is step 2, so
+    // when it is present it is the more recent of the two.
+    return {
+      title: t(
+        returns === undefined
+          ? "pad.tabletennis.dock.rally.scorer.title"
+          : "pad.tabletennis.dock.rally.expedite.title",
+      ),
+      chips: settled,
+    };
   }
 
   return null;

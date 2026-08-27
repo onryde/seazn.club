@@ -775,12 +775,14 @@ describe("dock()", () => {
 // ---------------------------------------------------------------------------
 
 describe("activityDetail()", () => {
-  const ctx = (eventType: string, payload: Record<string, unknown>) => ({
+  const ctx = (eventType: string, payload: Record<string, unknown>, state?: unknown) => ({
     t,
     eventType,
     payload,
     personNames: NAMES,
+    state,
   });
+  const FOLDED = foldClient(badminton, BWF_CFG, SINGLES, []);
 
   it("distinguishes two rallies of the same type by who scored them", () => {
     expect(badmintonDetail(ctx(RALLY_TYPE, { wonBy: "H", scorer: "H-first" }))).toBe(NAMES["H-first"]);
@@ -801,6 +803,19 @@ describe("activityDetail()", () => {
     expect(badmintonDetail(ctx(SANCTION_TYPE, { by: "H", level: "warning", person: "H1" }))).toBe(
       `sanction.warning · ${NAMES.H1}`,
     );
+  });
+
+  // R5 review, finding 3 — `badmintonDetail` had NO `TIMEOUT_TYPE` case at
+  // all, so a recorded time-out reached the ribbon as a bare "Time-out
+  // recorded" with no side, while both siblings named one. Not a dead path:
+  // `refusedEventTypes` reads `records.timeouts` per FIXTURE, so any cfg that
+  // records time-outs reaches it.
+  it("names the SIDE for a timeout, resolved through ctx.state — the payload alone only has an entrant id", () => {
+    expect(badmintonDetail(ctx(TIMEOUT_TYPE, { by: "H" }, FOLDED))).toBe("scorepad.attribution.home");
+    expect(badmintonDetail(ctx(TIMEOUT_TYPE, { by: "A" }, FOLDED))).toBe("scorepad.attribution.away");
+    // No state at all: cannot resolve, falls to the bare ribbon caption
+    // rather than printing a raw entrant id at the scorer.
+    expect(badmintonDetail(ctx(TIMEOUT_TYPE, { by: "H" }))).toBeUndefined();
   });
 
   it("adds nothing for a type it has no vocabulary for", () => {
