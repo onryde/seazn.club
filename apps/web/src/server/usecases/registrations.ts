@@ -3689,6 +3689,20 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
  * serialises: webhook first → paid wins; sweep first → the late payment
  * auto-refunds (confirmPaidRegistration).
  */
+
+// The reminder passes' claim window (V381) — long enough that a genuinely
+// in-flight mint+send is never double-claimed, short enough that a crashed
+// claim recovers well inside the sweep's own hourly cadence (registrations-
+// sweep.yml). The Stripe client this call chain uses has a hard 10s timeout
+// and zero retries (lib/stripe.ts's `timeout`/`maxNetworkRetries`), and the
+// reminder email is a single, unretried fetch (lib/email.ts) — so one row's
+// realistic worst-case mint+send is on the order of seconds, at most a
+// couple dozen. 5 minutes leaves roughly an order of magnitude of headroom
+// over that, while still being a twelfth of the hourly cadence, so an
+// ungraceful death recovers on the very next scheduled sweep rather than
+// sitting stale for hours.
+const REMINDER_LEASE_MINUTES = 5;
+
 export async function sweepRegistrations(
   origin: string,
 ): Promise<{ reminded: number; expired: number; promoted: number; lapsed: number }> {
@@ -3724,24 +3738,32 @@ export async function sweepRegistrations(
       const ctx = await divisionCtx(sql, reg.division_id);
       if (!ctx.charges_enabled) continue; // Connect broke — nothing to link to
       const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, null);
-      // RS007 follow-up: the mark is now a CLAIM taken right before the
-      // send it gates, not a receipt written after it — nothing re-checked
-      // it at write time before, so a client-side retry racing the same
-      // sweep (registrations-sweep.yml's own curl --retry, landing while
-      // the first invocation is still running server-side) could mint+email
-      // this row twice: the second mint silently supersedes/expires the
-      // first's session, so the FIRST email goes out carrying a dead pay
-      // link. Minting stays unconditional either way — harmless if wasted,
-      // and createRegistrationCheckout's own checkout_session_id CAS
-      // already settles which session survives a genuine re-mint — but only
-      // the invocation that wins THIS claim may send. Reverted in the catch
-      // below on a genuine send failure, so a real failure still retries
-      // next sweep — never a silent, permanent loss.
+      // RS007 follow-up (V381) — the CAS-before-send claim (648c56503) only
+      // reverted on a THROWN failure. An ungraceful death (deploy, OOM,
+      // SIGKILL, container eviction) between this UPDATE committing and the
+      // send below completing runs no `catch`, so a permanent claim would
+      // stick forever and `where reminded_at is null` would never match this
+      // row again — a silently lost reminder, worse than the double-send the
+      // claim exists to prevent (routine here: registrations-sweep.yml's own
+      // curl --max-time 60 --retry lands while a 200-row serial sweep is
+      // still running server-side). reminder_claimed_at is a LEASE instead
+      // of a permanent mark: it blocks a concurrent claim for
+      // REMINDER_LEASE_MINUTES, then goes stale and the row is claimable
+      // again, so a crash costs a delay, never the reminder. reminded_at —
+      // set only after a real send below — stays the permanent record; the
+      // "due" SELECT above filters on THAT column alone, never the lease.
+      // Minting stays unconditional either way — harmless if wasted, and
+      // createRegistrationCheckout's own checkout_session_id CAS already
+      // settles which session survives a genuine re-mint — but only the
+      // invocation that wins THIS lease may send.
       const [row] = await sql<{ id: string }[]>`
-        update registration_groups set reminded_at = now(), updated_at = now()
+        update registration_groups
+        set reminder_claimed_at = now(), updated_at = now()
         where id = ${reg.group_id} and reminded_at is null
+          and (reminder_claimed_at is null
+               or reminder_claimed_at < now() - make_interval(mins => ${REMINDER_LEASE_MINUTES}))
         returning id`;
-      if (!row) continue; // a concurrent sweep already claimed this row
+      if (!row) continue; // lease held by a concurrent sweep, or already sent
       claimed = true;
       await sendPaymentReminderEmail({
         to: reg.contact_email,
@@ -3755,12 +3777,18 @@ export async function sweepRegistrations(
         checkoutUrl: url,
         payDeadline: reg.expires_at,
       });
+      // Send succeeded — promote the lease to the permanent SENT record.
+      await sql`update registration_groups set reminded_at = now(), updated_at = now()
+                where id = ${reg.group_id}`;
     } catch {
       if (claimed) {
-        await sql`update registration_groups set reminded_at = null, updated_at = now()
+        // Thrown failure: clear the LEASE, not the (still-null) sent mark,
+        // so the next sweep retries promptly instead of waiting out the
+        // window.
+        await sql`update registration_groups set reminder_claimed_at = null, updated_at = now()
                   where id = ${reg.group_id}`;
       }
-      continue; // reminded_at stays/reverts to null — the next sweep retries
+      continue; // reminded_at (sent) stays null either way — a later sweep retries
     }
     reminded++;
   }
@@ -3791,14 +3819,17 @@ export async function sweepRegistrations(
       const ctx = await divisionCtx(sql, reg.division_id);
       if (!ctx.charges_enabled) continue; // Connect broke — nothing to link to
       const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, null);
-      // RS007 follow-up — same CAS-claim fix as pass (1a) above, on this
+      // RS007 follow-up (V381) — same lease fix as pass (1a) above, on this
       // entry's OWN mark (never the group's, per this pass's own doc
       // comment on why).
       const [row] = await sql<{ id: string }[]>`
-        update registrations set promotion_reminded_at = now(), updated_at = now()
+        update registrations
+        set promotion_reminder_claimed_at = now(), updated_at = now()
         where id = ${reg.id} and promotion_reminded_at is null
+          and (promotion_reminder_claimed_at is null
+               or promotion_reminder_claimed_at < now() - make_interval(mins => ${REMINDER_LEASE_MINUTES}))
         returning id`;
-      if (!row) continue; // a concurrent sweep already claimed this row
+      if (!row) continue; // lease held by a concurrent sweep, or already sent
       claimed = true;
       await sendPaymentReminderEmail({
         to: reg.contact_email,
@@ -3812,12 +3843,17 @@ export async function sweepRegistrations(
         checkoutUrl: url,
         payDeadline: reg.promotion_expires_at,
       });
+      // Send succeeded — promote the lease to the permanent SENT record.
+      await sql`update registrations set promotion_reminded_at = now(), updated_at = now()
+                where id = ${reg.id}`;
     } catch {
       if (claimed) {
-        await sql`update registrations set promotion_reminded_at = null, updated_at = now()
+        // Thrown failure: clear the LEASE, not the (still-null) sent mark —
+        // see pass (1a)'s comment above.
+        await sql`update registrations set promotion_reminder_claimed_at = null, updated_at = now()
                   where id = ${reg.id}`;
       }
-      continue; // promotion_reminded_at stays/reverts to null — the next sweep retries
+      continue; // promotion_reminded_at (sent) stays null either way — a later sweep retries
     }
     reminded++;
   }

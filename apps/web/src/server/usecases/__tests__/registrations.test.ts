@@ -1974,6 +1974,56 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(row.reminded_at, "the winner's claim stuck").not.toBeNull();
   });
 
+  // V381/RS007: the claim above is now a LEASE, not a permanent mark — see
+  // the migration's own doc comment for why a permanent claim loses a
+  // reminder forever on an ungraceful death (deploy, OOM, SIGKILL) between
+  // the claim committing and the send completing. Simulated here by writing
+  // the lease column directly via SQL — exactly what a crashed sweep would
+  // leave behind — rather than trying to kill a real process mid-test.
+  // Asserted via the email mock, not stripeMock.checkoutCreate: minting
+  // stays unconditional even when a claim is blocked (see the pass's own
+  // comment), so a blocked sweep still wastes a mint — checkoutCreate count
+  // is not a reliable send proxy here, same reason the racing-sweeps test
+  // above uses the email mock instead of it.
+  it("V381: a fresh lease blocks a concurrent claim; a stale one is retried and the reminder still goes out", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const contactEmail = `lease-fresh-${randomUUID().slice(0, 8)}@test.local`;
+    const a = await seedRegistration(competition.id, division.id, settings, { contactEmail });
+    await sql`update registration_groups set expires_at = now() + interval '10 hours'
+              where id = ${a.registration.group_id}`;
+
+    const sentCallsForOurs = () =>
+      emailMock.paymentReminder.mock.calls.filter(
+        ([opts]) => (opts as { to?: string })?.to === contactEmail,
+      );
+    const sentMark = async () => {
+      const [row] = await sql<{ reminded_at: Date | null }[]>`
+        select reminded_at from registration_groups where id = ${a.registration.group_id}`;
+      return row!.reminded_at;
+    };
+
+    // Simulate a crash: an earlier invocation claimed the lease and died
+    // before the send completed — reminded_at (sent) is still null. This is
+    // exactly the state 648c56503's permanent claim would have left forever.
+    await sql`update registration_groups set reminder_claimed_at = now()
+              where id = ${a.registration.group_id}`;
+
+    // The lease is still fresh — this sweep must not double-claim or send.
+    await sweepRegistrations("http://test.local");
+    expect(await sentMark(), "still unsent while the lease is fresh").toBeNull();
+    expect(sentCallsForOurs(), "blocked — no send while the lease holds").toHaveLength(0);
+
+    // Age the lease out of its window (well beyond any reasonable lease
+    // duration, so this does not depend on the exact minutes chosen) — a
+    // later sweep must treat this row as claimable again and actually send.
+    await sql`update registration_groups set reminder_claimed_at = now() - interval '1 day'
+              where id = ${a.registration.group_id}`;
+    const res = await sweepRegistrations("http://test.local");
+    expect(res.reminded).toBeGreaterThanOrEqual(1);
+    expect(await sentMark(), "the stale lease was retried and the reminder sent").not.toBeNull();
+    expect(sentCallsForOurs(), "exactly one send once the lease actually goes through").toHaveLength(1);
+  });
+
   it("reconciles by session from /r/[ref] (token-free return)", async () => {
     const { competition, division, settings } = await stripeRig();
     const res = await seedRegistration(competition.id, division.id, settings, {
@@ -3625,6 +3675,49 @@ describe.skipIf(!HAS_DB)("RS007: sweep reminds a promoted entry off its OWN cloc
       select promotion_reminded_at from registrations where id = ${promoted!.id}`;
     expect(cols2!.promotion_reminded_at).toEqual(remindedAt);
     expect(checkoutsFor(promoted!.id)).toBe(1); // still exactly one — no re-send
+  });
+
+  // V381/RS007 — same lease fix, same semantics, on this pass's OWN column
+  // (promotion_reminder_claimed_at). Mirrors the group-level lease test in
+  // "card submit path (spec §3)"; kept separate because this pass
+  // claims/sends off registrations.promotion_reminded_at, never the group's.
+  it("V381: the promoted entry's own lease behaves the same — fresh blocks, stale retries and sends", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const contactEmail = `lease-promoted-${randomUUID().slice(0, 8)}@test.local`;
+    const waiting = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted",
+      contactEmail,
+    });
+    const promoted = await sql.begin((tx) =>
+      promoteWaitlistedRow(tx, waiting.registration.id, waiting.registration.group_id, settings),
+    );
+    await sql`update registrations set promotion_expires_at = now() + interval '10 hours'
+              where id = ${promoted!.id}`;
+
+    const sentCallsForOurs = () =>
+      emailMock.paymentReminder.mock.calls.filter(
+        ([opts]) => (opts as { to?: string })?.to === contactEmail,
+      );
+    const sentMark = async () => {
+      const [row] = await sql<{ promotion_reminded_at: Date | null }[]>`
+        select promotion_reminded_at from registrations where id = ${promoted!.id}`;
+      return row!.promotion_reminded_at;
+    };
+
+    // Simulate a crash on this entry's OWN lease column.
+    await sql`update registrations set promotion_reminder_claimed_at = now()
+              where id = ${promoted!.id}`;
+
+    await sweepRegistrations("https://test.local");
+    expect(await sentMark(), "still unsent while the lease is fresh").toBeNull();
+    expect(sentCallsForOurs(), "blocked — no send while the lease holds").toHaveLength(0);
+
+    await sql`update registrations set promotion_reminder_claimed_at = now() - interval '1 day'
+              where id = ${promoted!.id}`;
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.reminded).toBeGreaterThanOrEqual(1);
+    expect(await sentMark(), "the stale lease was retried and the reminder sent").not.toBeNull();
+    expect(sentCallsForOurs(), "exactly one send once the lease actually goes through").toHaveLength(1);
   });
 });
 
