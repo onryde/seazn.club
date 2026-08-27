@@ -305,7 +305,20 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
     // token-less, from-an-email route.) `waitUntil: "commit"` because the
     // default "load" does not fire reliably on the hop back from Stripe.
     await anon.waitForURL(/\/register\/status\?/, { timeout: 120_000, waitUntil: "commit" });
-    await expect(anon.getByText("confirmed")).toBeVisible({ timeout: 60_000 });
+    // `getByText("confirmed")` used to be unambiguous here and is not any
+    // more: RS007's status page rebuild added a roster meter ("1 of 3
+    // confirmed") and a per-player chip ("Confirmed"), so the loose locator
+    // now resolves to three elements and fails strict mode — on a page where
+    // the payment SUCCEEDED. Anchor on the entry's own status badge instead
+    // (exact, so the capitalised per-player chip does not match).
+    await expect(anon.getByText("confirmed", { exact: true })).toBeVisible({ timeout: 60_000 });
+    // And assert the money actually settled rather than only that a word
+    // appeared: a still-payable entry keeps its pay control, so the absence
+    // of one is what distinguishes "webhook fulfilled this" from "the page
+    // merely rendered". The webhook is registrations' ONLY fulfilment path —
+    // there is no reconcile fallback — so this is the assertion that would
+    // catch a broken `checkout.session.completed` dispatch.
+    await expect(anon.getByRole("button", { name: /pay now/i })).toHaveCount(0);
     await anon.waitForTimeout(4000);
     await anon.screenshot({ path: `${SHOTS}/9-paid-confirmation.png`, fullPage: true });
     await anon.waitForTimeout(2500);
