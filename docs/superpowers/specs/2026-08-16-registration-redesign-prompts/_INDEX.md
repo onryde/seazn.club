@@ -2248,3 +2248,39 @@ sequencing only** and is deleted; `L2` now sequences against RS
   600s watchdog. Every RS dispatch since carries an explicit "the worktree
   exists; never create/remove one; never `git checkout|restore|reset|clean|
   stash`; commit at each milestone" block.
+
+## RS007 ruling — the entries-step collapse is entrant-kind dependent (2026-08-27)
+
+**Found by walking the shipped flow by hand, not by a test.** RS006 design §4
+collapses step 2 when a competition has one open division, and `cart.ts`
+auto-seeds that division as the only cart entry. For a TEAM division that seed
+is `team_name: null, free_agent: false`, and step 2 is the ONLY surface that
+renders a team-name input or the "sign up solo" choice. So the captain walked
+WHO → DETAILS → CONSENT → REVIEW, saw the entry rendered as **"Unnamed team"**
+beside an enabled Enter button, submitted, and got `422 A team name is
+required` — with no field anywhere in the flow to answer it. Unrecoverable.
+A single division is the commonest shape a small club has, so for those orgs
+this was the entire public registration funnel.
+
+**Ruling:** collapse step 2 only when the one open division needs nothing typed
+or chosen — i.e. `entrant_kind === "individual"`. Team and pair keep the step.
+An unknown kind does not collapse (an extra click costs less than a lost entry).
+`shouldCollapseEntries` now takes the entrant kind; `buildStepOrder` passes it.
+
+**Why no test caught it.** Three separate blind spots lined up:
+- `steps.test.ts` asserted `shouldCollapseEntries(1) === true` with no entrant
+  kind at all — it froze the defect as the specification. Inverted, not deleted.
+- The register interaction tests mount with `DIV_OPEN` fixtures and drive the
+  reducer; none of them submits, so the 422 is unreachable from unit tests.
+- `validateEntries`' `teamNameMissing` gate (RS007, commit `e50c9c6f3`) lives on
+  the entries step. When that step does not render, the gate never runs — the
+  fix for "a nameless team is rejected at the end" only covered the path where
+  the step exists.
+
+**Second copy of the rule.** `register-stepper.tsx`'s auto-seed branch stated
+the collapse condition independently as `openDivisions.length === 1` rather
+than calling the predicate. Both now ask `shouldCollapseEntries`, so a
+collapsed step 2 and a seeded entry cannot disagree again. (Same shape as the
+"TWO vocab paths drift" trap already recorded for this repo.)
+
+Commit `2d4d7b623`. Register component suite 304/304, from 4 red.
