@@ -9,6 +9,15 @@ any code fixes; docs may land on main per repo convention.
    `seazn-local-env`; placement live AND a second greedy-only pass
    without placement (both-ways at programme scale). All gates green or
    each red triaged §7 (fix-inline vs escalate) before close.
+   Suite 13 (`club-open`, B16) runs in this pass exactly as it does
+   daily — UI-first, Stripe test mode, pad-tapped — so pre-flight must
+   include `stripe listen` + Chromium (customer-journey spec §6).
+1b. **Registration-at-volume pass** (customer-journey spec §2 D2, §7):
+   one extra run `--entry registration --keep` over suites 1–12 (API
+   path, free/open/auto-approve, no Stripe). Report-only: entries /
+   entrants / funnel wall per suite in a "Registration at volume"
+   section. Never gates. Committed beside the perf baseline as the
+   reference numbers for future registration-code changes.
 2. **Perf baseline**: consolidated report — per suite: seed/schedule/
    sim walls, events/s, solver status + wall, greedy-vs-optimized
    deltas, believability metrics, provenance %, nondeterminism %.
@@ -29,7 +38,10 @@ any code fixes; docs may land on main per repo convention.
 
 ## Acceptance
 
-- [ ] Full-run report committed; zero unexplained gate reds
+- [ ] Full-run report committed; zero unexplained gate reds (suite 13
+      funnel + result oracles included)
+- [ ] `--entry registration` pass committed under the baseline dir,
+      "Registration at volume" table present, no gate added for it
 - [ ] Baseline dir committed with the run's raw JSON + md
 - [ ] Every §7B finding across the programme has an outcome recorded
       (fixed inline w/ regression test, or escalated w/ owner ruling)
@@ -40,7 +52,8 @@ any code fixes; docs may land on main per repo convention.
 ## Verify (verbatim)
 
 ```bash
-npm run bench:scheduler -- --engine both            # full roster
+npm run bench:scheduler -- --engine both            # full roster (suite 13 UI-first)
+npm run bench:scheduler -- --entry registration --keep   # volume pass, report-only
 npx vitest run --reporter=json --outputFile=/tmp/b18.json scripts/bench
 jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/b18.json
 rtk proxy npm run lint
