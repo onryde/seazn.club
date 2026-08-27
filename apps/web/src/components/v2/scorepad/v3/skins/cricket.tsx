@@ -87,13 +87,14 @@ import type { EventEnvelope } from "@seazn/engine/core";
 // narrow the bowler chip's candidates, not merely to test one name), which is
 // exactly what the engine's own filter already is, so the mirror is DELETED
 // and the rule imported. Same reasoning `nextBattingSide` was granted on.
-import { eligibleBowlers, nextBattingSide, reviewsRemaining } from "@seazn/engine/sports/cricket";
+import { activeInnings, eligibleBowlers, nextBattingSide, reviewsRemaining, soBattingSideAt, soEligibleBatters } from "@seazn/engine/sports/cricket";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
   type Blocked,
   MORE_SHEET_KEY,
   type ActivityDetailContext,
+  type ContextSlot,
   type ContextStripSpec,
   type DockChip,
   type DockSpec,
@@ -186,6 +187,14 @@ interface CricketFineShape {
    *  this shape until this fix; see `resolvePeople`'s own doc for why. */
   prevOverBowler?: string | null;
   bowlerBalls?: Record<string, number>;
+  /** R3.5 F1 (review finding, BLOCKER) — mirrors the engine's own
+   *  `FineInnings.dismissed` (cricket.ts:413). Needed by `resolvePeople`'s
+   *  super-over crease default: the ONE ground, alongside `superOver.
+   *  dismissed` below, `applyDelivery`'s super-over branch refuses a named
+   *  batter on ("… is not eligible (already dismissed)", cricket.ts:1290-
+   *  1291). Absent from this shape until this fix, same "add the field this
+   *  fix needs" pattern every other addition here already follows. */
+  dismissed?: string[];
 }
 interface CricketInningsShape {
   battingSide?: "home" | "away";
@@ -204,6 +213,27 @@ interface CricketInningsShape {
 interface CricketStateShape {
   phase?: "pre" | "live" | "super_over" | "done" | "final";
   innings?: CricketInningsShape[];
+  /** R3.5 — the super over's OWN innings list. The engine keeps it here and
+   *  never in `innings` (a super-over innings is the third and fourth of the
+   *  match, numbered by `activeInnings`'s own `offset`). Absent from this
+   *  shape until now, which is exactly why the pad spent every super over
+   *  describing the innings before it: `currentInnings`/`dueBattingSide`/
+   *  `chaseTarget` (below) could not see this field, so they answered every
+   *  question — score, target, bowler, whether tiles should be live — off
+   *  the closed MAIN innings, unconditionally. `null` is the fold's own
+   *  "not yet in a super over" value (`CricketState.superOver`,
+   *  cricket.ts:470-473); absent is the shape-probe default every OTHER
+   *  optional field on this interface already tolerates. */
+  /** R3.5 F1 (review finding, BLOCKER) — `dismissed` mirrors the engine's
+   *  own `CricketState.superOver.dismissed` (cricket.ts:472): the running,
+   *  NEVER-RESET-between-pairs per-side dismissal list `applySuperOverBall`
+   *  passes as `ctx.soIneligible` (cricket.ts: `soIneligible: so.dismissed
+   *  [battingSide]`). `resolvePeople`'s super-over crease default reads this
+   *  alongside `fine.dismissed` above, matching the fold's own OR verbatim
+   *  rather than trusting one is always a superset of the other. Absent
+   *  from this shape until this fix — the exact gap that let a `repeat`
+   *  pair's own dismissed-in-pair-1 batters get proposed again in pair 2. */
+  superOver?: { innings?: CricketInningsShape[]; dismissed?: { home?: string[]; away?: string[] } } | null;
   orders?: { home?: string[]; away?: string[] };
   /** Set by `cricket.revise` (either branch — DLS auto-compute or a manual
    *  `target`), present from fidelity band 1 upward (cricket.ts:465-466).
@@ -270,11 +300,41 @@ export function bowlerIsReadOnly(innings: CricketInningsShape | null): boolean {
   return innings?.fine?.currentBowler !== null;
 }
 
+/**
+ * R3.5 Task R (defect 5) — the ONE presence-based fork `currentInnings`/
+ * `dueBattingSide`/`chaseTarget` all need, shared instead of each
+ * re-deriving it: this function already called `activeInnings` here but
+ * only read its `.list`, while `dueBattingSide`/`chaseTarget` (below)
+ * independently gated on `state.phase === "super_over"` instead — a check
+ * that goes FALSE the instant the match is decided (`done`/`final`), even
+ * though `state.superOver` stays populated forever once a super over has
+ * been played. Post-decision that fork made the scorebug (via
+ * `currentInnings`) keep reading the super over while
+ * `dueBattingSide`/`chaseTarget` silently fell back to the main innings
+ * underneath it — `inSuperOver` is the single rule now, for all three.
+ */
+function activeSuperOver(state: CricketStateShape): { list: readonly CricketInningsShape[]; inSuperOver: boolean } {
+  return activeInnings<CricketInningsShape>({
+    innings: state.innings ?? [],
+    superOver: state.superOver ? { innings: state.superOver.innings ?? [] } : null,
+  });
+}
+
 /** The open innings, or the most recently closed one once none is open
- *  (post-match display). `null` pre-toss / before any innings exists. */
+ *  (post-match display). `null` pre-toss / before any innings exists, and
+ *  `null` again between a tie and the first super-over ball (the SO innings
+ *  list exists but is empty — see `activeInnings`'s own doc for why that is
+ *  not the same thing as "no super over").
+ *
+ * R3.5 — delegates to the engine's `activeInnings` (via `activeSuperOver`
+ * above) so this and the position axis (`cricketPosition`, cricket.ts)
+ * cannot fork on which innings list is live; see that function's own doc
+ * for why this is not a local switch. This keeps the pre-existing "fall
+ * back to the last innings once every one is closed" display rule, now
+ * applied to whichever list is ACTUALLY active. */
 export function currentInnings(state: CricketStateShape): CricketInningsShape | null {
-  const innings = state.innings ?? [];
-  return innings.find((i) => !i.closed) ?? innings[innings.length - 1] ?? null;
+  const { list } = activeSuperOver(state);
+  return list.find((i) => !i.closed) ?? list[list.length - 1] ?? null;
 }
 
 export type InningsFidelity = "unopened" | "coarse" | "fine";
@@ -318,8 +378,87 @@ export function inningsFidelity(innings: CricketInningsShape | null): InningsFid
  * branches, the recurring defect class this repo keeps hitting when a rule
  * gets forked across the engine/apps-web boundary. `state.innings.length`
  * is the SAME index `createInnings` itself addresses by (cricket.ts:662).
+ *
+ * R3.5 — inside a super over the MAIN-innings sequencing rule above does not
+ * apply: `nextBattingSide` counts main innings only, and by the time a super
+ * over exists both are always closed — it would report a main-innings side
+ * "due" while the engine is mid-decider, which is the fork this branch
+ * exists to stop. The super over's own rule is simply "the OTHER side bats
+ * next": `null` while an innings is still open (its own `battingSide`
+ * already answers the question).
+ *
+ * R3.5 Task R (defect 3) — a pair having just completed is NOT the same as
+ * "nothing further is due", and this used to return `null` here too: a
+ * `repeat` policy (or a fresh tie under ANY still-tied policy) opens the
+ * next pair on the very next ball, so there is exactly as much of a due
+ * side to announce as there is mid-pair — the old comment's claim otherwise
+ * was the bug. The pad was disabling the WHOLE delivery row
+ * (`blockedByClosure`, `buildTiles` below) for this window while the fold
+ * happily accepted the next `cricket.superover.ball` — the original
+ * blocker bug Task C fixed, reproduced one pair later.
+ *
+ * R3.5 Task S — "before the first ball of the whole super over" (`so.length
+ * === 0`, C2) used to return `null` here too, on the theory that "nobody is
+ * due yet". WRONG: the ICC alternation rule (the engine's own
+ * `soBattingSideAt`, exported this task, cricket.ts) already picks a side
+ * at index 0, before any SO innings exists, the same way it picks one at
+ * every later index — this was the live 422 blocking every hand-scored
+ * super over (`resolvePeople`, below, had no OTHER source for `battingSide`
+ * in this exact state — `currentInnings` is `null` too, the SO list being
+ * empty — so it fell through to a literal `"home"` default, proposing the
+ * wrong side's batters and, so, the wrong side's bowler).
+ *
+ * Fixed HERE rather than in `resolvePeople` itself, the narrower change:
+ * `blockedByClosure` (`buildTiles` below) gates on `inningsClosed &&
+ * dueSide === null`, and `inningsClosed` is unconditionally `false` in this
+ * exact state (`currentInnings(state)` is `null`, so `innings?.closed ===
+ * true` reads `false`) — so returning a real side here can never flip
+ * `blockedByClosure` and re-enable anything that should stay disabled.
+ * Every OTHER reader of this branch's old `null` (`scoringInnings` above;
+ * `buildContext`'s own `dueBattingSide(...) !== null` check below) already
+ * converges on the identical result whether this branch returns `null` or
+ * the real side, because each one gates behind its OWN separate
+ * `innings === null`/`currentInnings(state) === null` check that fires
+ * first and independently already yields the same answer.
  */
 export function dueBattingSide(state: CricketStateShape, cfg: CricketCfgShape): "home" | "away" | null {
+  const { list: so, inSuperOver } = activeSuperOver(state);
+  if (inSuperOver) {
+    const open = so.find((i) => !i.closed);
+    if (open) return null; // an innings is in progress
+    if (so.length === 0) {
+      // R3.5 Task S — index 0 is the engine's own resolving index here too:
+      // `applySuperOverBall` (cricket.ts) computes `so.innings.length - 1`
+      // (-1, undefined) then bumps to 0 before opening the first innings.
+      return soBattingSideAt({ battingFirst: state.battingFirst ?? "home" }, 0);
+    }
+    if (so.length % 2 === 1) {
+      // Pair incomplete: the other side is due.
+      return opponentSide((so[so.length - 1] as CricketInningsShape).battingSide ?? "home");
+    }
+    // Pair complete: the side that bats FIRST in the next pair is the side
+    // that batted SECOND (last) in the one that just finished — ICC rule,
+    // `soBattingSideAt`'s own comment (cricket.ts:1556-1558). Verified
+    // algebraically against that function for every completed pair
+    // boundary, not just this one: `so[so.length-1].battingSide` and
+    // `soBattingSideAt(state, so.length)` always agree.
+    //
+    // R3.5 F4 (review finding, MAJOR) — `?? "home"`, not `?? null`: this used
+    // to disagree with the mid-pair branch just above, which already
+    // defaults an absent `battingSide` to `"home"` (a real `foldMatch`
+    // always populates it — `InningsState.battingSide` is required on the
+    // engine's own type — so this is a defensive-shape-only fork, never
+    // reachable through a real fold). The two branches are not made to
+    // return the SAME final value (they never did even when the field is
+    // present — this branch returns the side directly, the one above
+    // returns its opponent) — they now agree on what the MISSING raw fact
+    // itself is assumed to be. `null` here specifically re-arms
+    // `blockedByClosure` (`buildTiles`) and disables the whole delivery row
+    // while the fold happily accepts the next ball — exactly the defect
+    // class Tasks C and R exist to remove, reproduced by malformed data
+    // instead of a real state transition.
+    return (so[so.length - 1] as CricketInningsShape).battingSide ?? "home";
+  }
   const innings = currentInnings(state);
   if (innings === null || innings.closed !== true) return null;
   return nextBattingSide({
@@ -426,17 +565,72 @@ export function resolvePeople(
   // they already do before innings ONE's own first ball.
   const innings = scoringInnings(state, cfg);
   const due = dueBattingSide(state, cfg);
-  const battingSide = due ?? innings?.battingSide ?? "home";
+  // R3.5/Task S follow-up — the last fallback was a bare `"home"`, which is
+  // right only when nobody has said otherwise. Before innings ONE has a ball
+  // (`innings` null, nothing due), an away side that won the toss and elected
+  // to bat is already recorded in `state.battingFirst`, and ignoring it put
+  // the striker on the wrong side and the BOWLER on the batting side — the
+  // fold then refuses the first ball of an ordinary match with "bowler … is
+  // not in the fielding lineup", the same 422 the super over gave. Measured,
+  // not reasoned: probe returned battingSide=home, bowler=A1 for
+  // `battingFirst: "away"`. `"home"` survives as the no-toss-recorded default.
+  const battingSide = due ?? innings?.battingSide ?? state.battingFirst ?? "home";
   const bowlingSide = opponentSide(battingSide);
   const battingOrder = state.orders?.[battingSide] ?? [];
   const bowlingOrder = state.orders?.[bowlingSide] ?? [];
   const fine = innings?.fine ?? null;
   const bpo = ballsPerOverOf(cfg);
+  // R3.5 F1 (review finding, BLOCKER) — `fine.striker`/`.nonStriker` land as
+  // an explicit `null` ("awaiting replacement") the instant a super-over
+  // wicket falls: unlike the main innings (`strictOrder: true`, the fold
+  // itself resolves a real replacement via `resolveIncoming`), a super-over
+  // wicket leaves the fold's own state with a null end and requires the
+  // NEXT ball to name a real, eligible replacement (`applyDelivery`'s
+  // super-over branch, cricket.ts — see `FineInnings.striker`'s own doc,
+  // "null = awaiting replacement (super over only)"). The old `?? battingOrder
+  // [0]`/`[1]` fallback below read straight past that null to the raw
+  // lineup order, which can be the batter just dismissed — the fold then
+  // refused the very next tap ("… is not eligible (already dismissed)",
+  // cricket.ts:1290-1291).
+  //
+  // `soEligibleBatters` (imported) is the SAME predicate that check applies,
+  // exported for exactly this reuse rather than a third hand-copy in this
+  // file — the recurring engine/pad-fork defect class `nextBattingSide`/
+  // `eligibleBowlers`/`activeInnings`/`soBattingSideAt` above were each
+  // exported to stop. `crease` excludes whichever end the fold DID keep
+  // (the survivor) — the same batter the fold itself refuses to let a next
+  // ball silently drop ("… is at the crease and must stay") — so it is
+  // never handed to the OTHER, now-null end as a duplicate candidate.
+  // `soIneligible` reads `state.superOver.dismissed[battingSide]`, which —
+  // unlike `fine.dismissed` — survives across a `repeat` pair boundary onto
+  // a fresh innings for the SAME side (`applySuperOverBall`'s own
+  // `so.dismissed`, never reset); `fine.dismissed` is read too, matching
+  // the fold's own OR verbatim rather than trusting one is always a
+  // superset of the other.
+  //
+  // A sequential `nextEligible()` cursor, not two independent lookups: the
+  // only OTHER reachable null-both case (a fresh super-over innings, before
+  // its first ball) must not hand the SAME eligible name to both ends —
+  // advancing past whichever name the striker's own resolution just
+  // consumed is what stops that. For every case this fix does not touch
+  // (fine null/coarse; both ends already real) `dismissed`/`soIneligible`/
+  // `crease` are all empty and `eligible` equals `battingOrder` outright, so
+  // `nextEligible()` reproduces the OLD `battingOrder[0]`/`[1]` reads
+  // exactly — this is additive, not a rewrite of the ordinary path.
+  const soCrease = [fine?.striker, fine?.nonStriker].filter((p): p is string => typeof p === "string");
+  const soEligible = soEligibleBatters(
+    battingOrder,
+    fine?.dismissed ?? [],
+    state.superOver?.dismissed?.[battingSide] ?? [],
+    soCrease,
+  );
+  let soNextIdx = 0;
+  const nextEligible = (): string => soEligible[soNextIdx++] ?? "";
   return {
     battingSide,
     bowlingSide,
-    striker: overrides.striker ?? fine?.striker ?? battingOrder[0] ?? "",
-    nonStriker: overrides.nonStriker ?? fine?.nonStriker ?? battingOrder[1] ?? "",
+    striker: overrides.striker ?? fine?.striker ?? nextEligible(),
+    nonStriker: overrides.nonStriker ?? fine?.nonStriker ?? nextEligible(),
     bowler:
       overrides.bowler ??
       fine?.currentBowler ??
@@ -882,6 +1076,34 @@ export function runRate(runs: number, legalBalls: number, bpo: number): number |
  * same single check v2 uses for both cases.
  */
 export function chaseTarget(cfg: CricketCfgShape, state: CricketStateShape): { value: number; isDls: boolean } | null {
+  // R3.5 — a super over has its OWN target, and the main innings' is stale
+  // the moment the match goes to one. Engine rule (applySuperOverBall,
+  // cricket.ts:1572-1573): the SECOND innings of each pair chases the
+  // first + 1; the first chases nothing (nobody bats twice in the same
+  // pair).
+  const { list: so, inSuperOver } = activeSuperOver(state);
+  if (inSuperOver) {
+    // R3.5 Task R (defect 4) — mirror the ENGINE's own "which innings is
+    // this ball about to score against" index (same function,
+    // cricket.ts:1572-1573: `let index = inningsList.length - 1; ... if
+    // (innings === undefined || innings.closed) index += 1;`), not the raw
+    // array length. The old `so.length % 2 === 1` check asked "has an ODD
+    // NUMBER of innings been created" — true right up until a pair
+    // completes, then FALSE for the whole window before the next pair's
+    // first innings exists, during which it fell through and returned the
+    // FINISHED pair's own target instead of null. Indexing by the innings a
+    // next ball would actually resolve to (bumping past a closed/absent
+    // last entry, exactly like the fold does) agrees with the fold by
+    // construction — and, as a side effect, surfaces the target the instant
+    // the chased-FROM innings closes rather than waiting for the chasing
+    // innings to be created, which is when the engine itself already
+    // treats the target as live (the very next ball is validated against
+    // it either way).
+    const index = so.length > 0 && (so[so.length - 1] as CricketInningsShape).closed !== true ? so.length - 1 : so.length;
+    if (index % 2 !== 1) return null;
+    const first = so[index - 1] as CricketInningsShape;
+    return typeof first.runs === "number" ? { value: first.runs + 1, isDls: false } : null;
+  }
   const innings = state.innings ?? [];
   const singleInnings = cfg.inningsPerSide !== 2;
   let value: number | null;
@@ -1121,6 +1343,21 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   const dueSide = dueBattingSide(state, cfg);
   const blockedByClosure = inningsClosed && dueSide === null;
   const dueAwareTile = (spec: TileSpec): TileSpec => (blockedByClosure ? { ...spec, disabled: true } : spec);
+  // R3.5 Task R (defects 1/2) — four non-ball tiles the fold refuses
+  // outright during a super over, independent of `inningsClosed`/
+  // `blockedByClosure` above: `review`/`retire` (`requireOpenInnings`,
+  // cricket.ts:1742), `inningsClose` and `declare` (each checks
+  // `state.phase !== "live"` directly, cricket.ts:3133/:3125), and the
+  // coarse `overSummary` tile (`applySummary`, cricket.ts:1481 — a super
+  // over is always ball-by-ball, never coarse). PadPhase gating cannot
+  // express this: `resolvePhase` maps engine phase `super_over` DOWN to
+  // PadPhase `"live"` (this file's header), so every `phases: ["live"]`
+  // tile renders regardless. Before Task C, `closedTile`/`dueAwareTile`
+  // happened to disable these anyway, because `currentInnings` still read
+  // the CLOSED main innings underneath a super over; now that it correctly
+  // reads the super over itself (open, or between pairs), that coincidence
+  // is gone and the engine phase has to be checked directly.
+  const superOverTile = (spec: TileSpec): TileSpec => (state.phase === "super_over" ? { ...spec, disabled: true } : spec);
 
   const tiles: TileSpec[] = [
     { id: "toss", label: "pad.cricket.action.toss", kind: "primary", phases: ["pre"], action: { sheet: "toss" } },
@@ -1183,7 +1420,7 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
     }
   }
 
-  tiles.push(closedTile({ id: "review", label: "pad.cricket.action.review", kind: "standard", phases: ["live"], action: { sheet: "review" } }));
+  tiles.push(superOverTile(closedTile({ id: "review", label: "pad.cricket.action.review", kind: "standard", phases: ["live"], action: { sheet: "review" } })));
   // R2c / C2 (owner-approved amendment to R2b's defect-4 ruling, 2026-08-18):
   // Retire is a tile again, but a `{sheet}` one rather than the `{swap:true}`
   // tile R2b removed. Both faults that justified the removal are gone — the
@@ -1193,23 +1430,34 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   // exactly why the generic More-sheet `cricket.retire` stayed reachable
   // alongside it, whereas a sheet's own `event` IS counted, so declaring
   // `retireSheet` removes the generic entry with no extra wiring.
-  tiles.push(closedTile({ id: "retire", label: "pad.cricket.action.retire", kind: "standard", phases: ["live"], action: { sheet: "retire" } }));
-  tiles.push(closedTile({
+  tiles.push(superOverTile(closedTile({ id: "retire", label: "pad.cricket.action.retire", kind: "standard", phases: ["live"], action: { sheet: "retire" } })));
+  tiles.push(superOverTile(closedTile({
     id: "inningsClose",
     label: "pad.cricket.action.inningsClose",
     kind: "standard",
     phases: ["live"],
     action: { sheet: "inningsClose" },
-  }));
+  })));
 
   if (twoInnings) {
-    tiles.push(closedTile({
+    // R3.5 Task R — `cricket.innings.declare` also checks
+    // `state.phase !== "live"` (cricket.ts:3125), so it is refused in a
+    // super over exactly like review/retire/inningsClose above. In
+    // practice this branch never actually fires while
+    // `state.phase === "super_over"` — the cfg refine forbids
+    // `superOver: true` together with `inningsPerSide: 2` (C21,
+    // cricket.test.ts), and `declare` only exists when `twoInnings` is
+    // true — but the gate is added anyway, for the same reason the other
+    // three are direct engine-phase checks rather than a `PadPhase`/
+    // closure one: it must not silently start passing a live tap through
+    // if that cfg exclusivity ever changes.
+    tiles.push(superOverTile(closedTile({
       id: "declare",
       label: "pad.cricket.action.declare",
       kind: "standard",
       phases: ["live"],
       action: { event: { type: "cricket.innings.declare", payload: {} } },
-    }));
+    })));
   }
 
   // R2b (Q1 owner ruling): the over-by-over entry point — hidden once this
@@ -1223,7 +1471,17 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   // round 1's own note), so this is a deliberate exception, not a defect.
   if (fidelity !== "fine") {
     const overLabel = "pad.cricket.action.endOfOver";
-    tiles.push(dueAwareTile({
+    // R3.5 Task R (defect 2) — `cricket.innings.summary` is refused
+    // outright in a super over (`applySummary`, cricket.ts:1481: a super
+    // over is always ball-by-ball, never coarse), independent of
+    // `dueAwareTile`'s own `blockedByClosure` gate above. Before Task C
+    // this coincided with `fidelity === "fine"` hiding this whole branch
+    // whenever a super-over innings was open — but the window where
+    // `scoring` (and so `fidelity`) resolves to "unopened" DURING a super
+    // over (no SO innings created yet, or — after the defect-3 fix above —
+    // between two pairs) pushed this tile fully enabled, and the fold
+    // rejects it on tap either way.
+    tiles.push(superOverTile(dueAwareTile({
       id: "overSummary",
       label: overLabel,
       // R2b follow-up (owner sign-off, single-line label fix): the over
@@ -1243,7 +1501,7 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
       span: 2,
       phases: ["live"],
       action: { sheet: "overSummary" },
-    }));
+    })));
   }
 
   tiles.push({
@@ -1256,6 +1514,52 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   });
 
   return tiles;
+}
+
+/**
+ * `SkinDefV3.refusedEventTypes` — the More sheet's second exclusion set:
+ * "the fold will not accept this at all right now" (types.ts's own doc).
+ *
+ * R3.5 F2 (review finding, BLOCKER) — `superOverTile` (above) disables five
+ * non-ball tiles outright for the WHOLE of a super over: review/retire/
+ * inningsClose/declare (the engine's own phase checks — `requireOpenInnings`
+ * for review/retire, `state.phase !== "live"` for inningsClose/declare,
+ * cricket.ts) and overSummary (`applySummary`, cricket.ts:1481 — a super
+ * over is always ball-by-ball, never coarse). `dedicatedEventTypes`
+ * (pad-host.tsx) skips a DISABLED tile's own event type entirely (Task B's
+ * own fix for the mirror-image defect: a claimed-but-unreachable surface) —
+ * so once `superOverTile` disables these five, all five drop OUT of
+ * `dedicated`, and `moreActions` lists every one of them in the generic
+ * More sheet as a live 422: five dead-end taps, precisely the class
+ * `dedicatedEventTypes`'s own doc says it exists to prevent. Cricket had
+ * declared no `refusedEventTypes` at all — only football and tennis did
+ * (types.ts's own doc on the method) — so nothing closed this gap.
+ *
+ * Mirrors `superOverTile`'s own gate literally (`state.phase ===
+ * "super_over"`) rather than re-deriving it — the two can never disagree,
+ * the same "one condition, two readers" posture tennis's own
+ * `gameAwardRefused` takes for the identical shape (buildTiles withholds a
+ * tile on a predicate; refusedEventTypes withholds the generic form on the
+ * SAME predicate).
+ *
+ * `cricket.innings.declare` is listed even though it can never actually be
+ * OFFERED alongside a super over (the cfg refine forbids `inningsPerSide: 2`
+ * together with `superOver: true`, C21) — same defensive posture
+ * `buildTiles`'s own `superOverTile(closedTile({id: "declare", ...}))`
+ * already takes for the identical reason (that tile's own comment: "the
+ * gate is added anyway ... it must not silently start passing a live tap
+ * through if that cfg exclusivity ever changes").
+ */
+export function refusedEventTypes(view: PadHostView): string[] {
+  const state = asState(view.state);
+  if (state.phase !== "super_over") return [];
+  return [
+    "cricket.review",
+    "cricket.retire",
+    "cricket.innings.close",
+    "cricket.innings.declare",
+    "cricket.innings.summary",
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -1545,12 +1849,48 @@ export function bowlerBlocked(
 // editable" convention rather than writing a redundant `readOnly: false`.
 // ---------------------------------------------------------------------------
 
+/**
+ * R3.5 F3 (review finding, MAJOR) — `superOverTile` (`buildTiles` above)
+ * disables review/retire/inningsClose/declare/overSummary for the WHOLE of
+ * a super over, unconditionally — every ball of every super-over innings,
+ * not merely the two windows `buildContext` used to go fully `null` for
+ * (before the first super-over ball; between two pairs). Even mid-innings
+ * the ordinary striker/nonStriker/bowler slots carry a message only when
+ * closure or a bowler-eligibility block ALSO applies, which is not every
+ * ball — so most of a super over disabled five tiles with nothing anywhere
+ * explaining why. `assertDisabledTilesExplained` (tile-grid.tsx) exists to
+ * catch exactly this ("if any tile is disabled, at least one context slot
+ * must carry a non-empty message somewhere") and Task R's own comment
+ * already conceded no skin exercised it against real output.
+ *
+ * A single, UNCONDITIONAL slot — present whenever `state.phase ===
+ * "super_over"`, independent of whatever the ordinary slots do or don't
+ * say — is what makes that true for every window at once with one
+ * mechanism, matching the validator's own "one explanation, set-level, not
+ * per-tile" shape. Returned even when the rest of `buildContext` would
+ * otherwise be `null` (the two gap windows) — this file's own factory
+ * builds `{slots: [...]}` around it either way, never a bare early `null`
+ * once a super over is live.
+ */
+function superOverNoticeSlot(state: CricketStateShape, t: TFn): ContextSlot | null {
+  if (state.phase !== "super_over") return null;
+  return {
+    id: "superOver",
+    label: "pad.cricket.context.superOver.label",
+    pool: "onfield", // unused — readOnly, so no picker ever opens on this slot
+    required: false,
+    readOnly: true,
+    message: t("pad.cricket.context.superOver.message"),
+  };
+}
+
 export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextStripSpec | null {
   const state = asState(view.state);
   if (state.phase !== "live" && state.phase !== "super_over") return null;
   const cfg = asCfg(view.cfg);
+  const superOverSlot = superOverNoticeSlot(state, t);
   const innings = currentInnings(state);
-  if (innings === null) return null;
+  if (innings === null) return superOverSlot ? { slots: [superOverSlot] } : null;
   // R2b-next (owner-confirmed live blocker, 2026-08-17): closed, with
   // another innings due, is treated identically to "no innings open yet"
   // (the check right above) — there is genuinely no fold-backed state to
@@ -1560,7 +1900,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
   // through today. `basePayload`/`resolvePeople` (below, and in buildTiles)
   // still compute correct silent defaults for that first tap, exactly as
   // they already do before innings one's own first ball.
-  if (dueBattingSide(state, cfg) !== null) return null;
+  if (dueBattingSide(state, cfg) !== null) return superOverSlot ? { slots: [superOverSlot] } : null;
   const people = resolvePeople(state, view.contextOverrides, cfg);
   const bowlerReadOnly = bowlerIsReadOnly(innings);
   // R2b (owner ruling, live-tile audit defect 2, `_INDEX.md`): closure is the
@@ -1580,6 +1920,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
   const blockReason = inningsClosed ? null : bowlerBlockReason(state, people, cfg);
   return {
     slots: [
+      ...(superOverSlot ? [superOverSlot] : []),
       {
         id: "striker",
         label: "pad.cricket.context.striker",
@@ -2108,6 +2449,10 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     dock: (eventType, _view, payload) => buildDock(eventType, t, payload),
     context: (view) => buildContext(view, t),
     sheets: (view) => buildSheets(view, t),
+    // R3.5 F2 (review finding, BLOCKER) — closes the gap that let the More
+    // sheet re-offer review/retire/inningsClose/declare/overSummary as
+    // dead-end taps during a super over (this function's own doc, above).
+    refusedEventTypes,
     // D2 (R2 sign-off): the skin supplies per-ball detail so the activity
     // panel's rows differ from one another. Declared HERE rather than the
     // chassis importing `cricketBallDetail` directly — sport vocabulary stays

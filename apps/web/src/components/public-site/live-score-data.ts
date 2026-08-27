@@ -11,7 +11,15 @@ export interface LiveFixtureData {
     perSide?: { entrantId: string; line: string }[];
     detail?: unknown;
   } | null;
-  outcome: { kind?: string; winner?: string } | null;
+  // R3.5/Task O — widened from `{ kind?; winner? }`, same gap and same fix as
+  // `PublicFixture.outcome` (server/public-site/data.ts, R3.5/Task G): the
+  // live polling endpoint (`/api/v1/public/fixtures/[id]`, `publicFixture()`
+  // in server/usecases/public.ts) already selects the WHOLE `outcome` JSONB
+  // off `public_fixtures_v`, so `method` was already arriving at runtime —
+  // this hand-written client type was just under-declaring it. Without
+  // `method` here, `LiveScore` cannot say HOW a fixture it is polling was
+  // decided, only who won.
+  outcome: { kind?: string; winner?: string; loser?: string; method?: string } | null;
 }
 
 export interface PublicRealtimeToken {

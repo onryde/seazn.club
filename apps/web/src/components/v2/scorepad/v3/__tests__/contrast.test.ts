@@ -102,6 +102,24 @@ describe("night-tile token pairs meet WCAG AA", () => {
   it("the lime pair's large-text carve-out is backed by an actual >=24px rendered size", () => {
     expect(SCORE_TEXT_PX).toBeGreaterThanOrEqual(24);
   });
+
+  // R3.5/Task D — `ScorebugHalf.sub` (the shoot-out pens tally, `HalfContent`'s
+  // `data-half-sub` div) renders on `NIGHT_TILE_CLASSES.creamText`, the SAME
+  // token the who-line already uses — deliberately NOT `limeText` (the score
+  // digits): the decider is subordinate to the regulation score, and reusing
+  // the lime would give the two figures equal weight, which is the confusion
+  // this field exists to remove. `sub` renders at `text-base` (16px,
+  // font-semibold) — nowhere near WCAG's large-text carve-out (>=18.66px
+  // bold) `big` is separately licensed for above — so it needs the STRICT
+  // 4.5:1 normal-text floor, the same one `creamOnNight` already clears.
+  // Computed from the token, not asserted from a class name: this is not a
+  // NEW colour (it is `creamOnNight` again), and this test exists so a
+  // reviewer searching this file for "sub" finds an explicit pin rather than
+  // having to infer coverage transitively.
+  it("the decider sub-figure (ScorebugHalf.sub) clears the normal-text floor on the tile it actually renders on", () => {
+    const { bg, fg } = NIGHT_TILE_PAIRS.creamOnNight;
+    expect(contrastRatio(bg, fg)).toBeGreaterThanOrEqual(4.5);
+  });
 });
 
 // Task A3 (R2 wave, silent-desync closure): before this block, scorebug.tsx

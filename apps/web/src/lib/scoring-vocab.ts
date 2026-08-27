@@ -31,6 +31,7 @@
 import type { MessageKey } from "@/lib/messages";
 import type { EngineErrorCode, SquadProvenance, SquadRole } from "@seazn/engine/core";
 import { swatchName } from "@/lib/brand-palette";
+import { interpolate } from "@/lib/i18n-runtime";
 
 export type WicketKind =
   | "bowled" | "caught" | "lbw" | "runout" | "stumped"
@@ -1019,6 +1020,172 @@ export const engineErrorLabel = (code: string, m: MsgFn): string | null =>
   code in ENGINE_ERROR_KEY ? m(ENGINE_ERROR_KEY[code as EngineErrorCode]) : null;
 
 /**
+ * R3.5/Task G — a decided fixture's own `MatchOutcome` (kind/winner/loser/
+ * method, `packages/engine/src/core/types.ts`) reaches both the public
+ * fixture page and the organiser console as data, and until this task
+ * neither rendered anything from it: a reader had to decode
+ * "1 — 1 (3–0 pens)" for themselves. `method` is a plain string the sport
+ * modules extend freely, so only a CLOSED, deliberately-curated set gets its
+ * own clause here — everything else (an absent method, a plain `regulation`
+ * result, or a method nobody has written copy for yet, e.g. cricket's `dls`/
+ * `innings`) falls back to the plain winner sentence. That fallback is
+ * deliberate, not a gap: the winner is still true even when the copy for HOW
+ * isn't, and a method's raw token must never leak onto the page.
+ */
+const DECIDED_METHOD_KEY: Record<string, MessageKey> = {
+  shootout: "fixture.decidedBy.shootout",
+  super_over: "fixture.decidedBy.superOver",
+  boundary_count: "fixture.decidedBy.boundaryCount",
+  extra_time: "fixture.decidedBy.extraTime",
+};
+
+/** The minimal slice of `MatchOutcome` this module needs — structural rather
+ *  than importing the engine's own type, the same posture the pad chassis
+ *  takes on engine shapes elsewhere: a page that already has `outcome` as
+ *  loose JSON (a DB column, an API response) can pass it straight through. */
+export interface DecidedOutcomeLike {
+  kind?: string;
+  winner?: string;
+  method?: string;
+}
+
+/**
+ * R3.5/Task O — every localized sentence shape `decidedOutcomeText` below
+ * can produce, pre-resolved but NOT yet interpolated (`{winner}`/`{score}`
+ * stay literal — both `msg()` and `msgFor()` short-circuit on an absent
+ * `vars` and hand back the raw template). This is the object a server
+ * render hands to a client island that has no dictionary of its own (see
+ * the `live-score-no-i18n` posture): the island can only ever need one of
+ * these strings, never one it invents, so a method the island sees live
+ * that this object has no entry for has an explicit, tested answer
+ * (`renderDecidedOutcome` below falls back to `plain`) rather than a blank
+ * sentence. `byMethod` is keyed by the SAME raw `outcome.method` tokens as
+ * `DECIDED_METHOD_KEY` and built FROM it (`decidedOutcomeTemplates` below),
+ * so the two cannot drift apart.
+ */
+export interface DecidedOutcomeTemplates {
+  tie: string;
+  plain: string;
+  /**
+   * F8 (R3.5 review) — shootout is the one method whose template
+   * (`byMethod.shootout`) needs a `{score}`, so it is the one method that
+   * needs a SECOND template for when the tally is unavailable (a trimmed API
+   * projection, a coarse or replayed summary, or `LiveScore` before its
+   * first poll returns `detail`). Every other mapped method's template takes
+   * only `{winner}` and already survives a missing score untouched — a
+   * separate "plain" variant for each of THEM would be dead weight.
+   */
+  shootoutPlain: string;
+  byMethod: Record<string, string>;
+}
+
+/**
+ * Builds `DecidedOutcomeTemplates` from a `MsgFn` — the only place in this
+ * split that needs a dictionary, so the only place a server (or anything
+ * else that has `m`) has to call. Mechanically derived from
+ * `DECIDED_METHOD_KEY`'s own keys rather than hand-listing "shootout",
+ * "super_over", … a second time — if that map ever gains or loses a method,
+ * this follows with no edit.
+ */
+export function decidedOutcomeTemplates(m: MsgFn): DecidedOutcomeTemplates {
+  const byMethod: Record<string, string> = {};
+  for (const [method, key] of Object.entries(DECIDED_METHOD_KEY)) {
+    byMethod[method] = m(key);
+  }
+  return {
+    tie: m("fixture.decidedBy.tie"),
+    plain: m("fixture.decidedBy.plain"),
+    shootoutPlain: m("fixture.decidedBy.shootoutPlain"),
+    byMethod,
+  };
+}
+
+/**
+ * The interpolation half of `decidedOutcomeText` — no `MsgFn`, no
+ * dictionary, so it is safe to call from a client island that has neither
+ * (R3.5/Task O: the public fixture page's `LiveScore`, `"use client"`, on a
+ * route with no `<DictProvider>`). Takes the `templates` a server resolved
+ * ONCE via `decidedOutcomeTemplates` and substitutes `winner`/`score` with
+ * plain string interpolation (`@/lib/i18n-runtime`'s `interpolate`, itself
+ * free of `server-only`). The branching mirrors `decidedOutcomeText` exactly
+ * because it IS that function's body — factored out so a server's initial
+ * render and a client's later live update share this one implementation
+ * instead of two hand-kept copies of the same vocabulary.
+ */
+export function renderDecidedOutcome(
+  outcome: DecidedOutcomeLike | null | undefined,
+  entrantNames: Record<string, string>,
+  templates: DecidedOutcomeTemplates,
+  shootoutScore?: { home: number; away: number } | null,
+): string | null {
+  if (!outcome) return null;
+  if (outcome.kind === "tie") return interpolate(templates.tie);
+  if (outcome.kind !== "win" && outcome.kind !== "award") return null;
+  if (!outcome.winner) return null;
+  const winner = entrantNames[outcome.winner] ?? outcome.winner;
+  const key = outcome.method ? DECIDED_METHOD_KEY[outcome.method] : undefined;
+  const template = outcome.method ? templates.byMethod[outcome.method] : undefined;
+  if (key === "fixture.decidedBy.shootout") {
+    if (template && shootoutScore) {
+      return interpolate(template, { winner, score: `${shootoutScore.home}–${shootoutScore.away}` });
+    }
+    // F8 (R3.5 review) — a missing tally (trimmed API projection, coarse or
+    // replayed summary, `LiveScore` before its first poll) used to fall all
+    // the way to `templates.plain`, silently dropping "on penalties" — the
+    // one thing that distinguishes this method from every other win. Every
+    // OTHER mapped method's template takes only `{winner}` and already
+    // survives a missing score; shootout is the one method whose HOW must
+    // not be thrown away just because the score is unknown.
+    if (templates.shootoutPlain) return interpolate(templates.shootoutPlain, { winner });
+    return interpolate(templates.plain, { winner });
+  }
+  if (template) return interpolate(template, { winner });
+  return interpolate(templates.plain, { winner });
+}
+
+/**
+ * The sentence a decided fixture owes its reader. `entrantNames` resolves
+ * `outcome.winner` to a display name (falling back to the raw id, matching
+ * every other id→name lookup in this app); `shootoutScore` is read out of
+ * `ScoreSummary.detail.shootout` by the caller (see `shootoutScoreFromDetail`
+ * below) — it is the ONE mapped method whose sentence needs a number, and
+ * this function has no engine import and no opinion on any one sport's
+ * `detail` shape, so the two numbers arrive already resolved.
+ *
+ * Returns null for anything this task was not asked to describe (`draw`,
+ * `no_result`, or no outcome at all) — callers render nothing rather than
+ * invent copy nobody specified.
+ *
+ * R3.5/Task O: now a thin composition of `decidedOutcomeTemplates` +
+ * `renderDecidedOutcome` above, kept so every existing server-side caller
+ * (the public fixture page's `generateMetadata`/share text, the organiser
+ * console) needs no change at all.
+ */
+export function decidedOutcomeText(
+  outcome: DecidedOutcomeLike | null | undefined,
+  entrantNames: Record<string, string>,
+  m: MsgFn,
+  shootoutScore?: { home: number; away: number } | null,
+): string | null {
+  return renderDecidedOutcome(outcome, entrantNames, decidedOutcomeTemplates(m), shootoutScore);
+}
+
+/**
+ * `ScoreSummary.detail` is `z.unknown()` (sport-specific breakdown) — this
+ * narrows football's own shape (`{ shootout: { home, away } }`, set by
+ * `summary()` whenever a shoot-out tally exists, R3.5/Task H) without an
+ * engine import. Null for anything else, including every non-football
+ * sport's own `detail` shape and a decision reached with no shoot-out at all.
+ */
+export function shootoutScoreFromDetail(detail: unknown): { home: number; away: number } | null {
+  if (!detail || typeof detail !== "object") return null;
+  const shootout = (detail as Record<string, unknown>).shootout;
+  if (!shootout || typeof shootout !== "object") return null;
+  const { home, away } = shootout as Record<string, unknown>;
+  return typeof home === "number" && typeof away === "number" ? { home, away } : null;
+}
+
+/**
  * What a scoring surface should show when a write is refused. An engine code
  * wins, because its `message` is the engine's own English and is rendered
  * verbatim otherwise; anything else keeps the raw message (HTTP/auth failures
@@ -1043,5 +1210,7 @@ export const SCORING_VOCAB_KEYS: readonly MessageKey[] = [
   ...Object.values(AWARD_KEY),
   ...Object.values(SQUAD_ROLE_KEY), ...Object.values(SQUAD_PROVENANCE_KEY),
   ...Object.values(CONFIG_KEY), ...PAD_LABEL_KEYS,
+  ...Object.values(DECIDED_METHOD_KEY), "fixture.decidedBy.plain", "fixture.decidedBy.tie",
+  "fixture.decidedBy.shootoutPlain",
   ...Object.values(ENUM_VOCAB).flatMap((maps) => maps.flatMap((m) => Object.values(m))),
 ];

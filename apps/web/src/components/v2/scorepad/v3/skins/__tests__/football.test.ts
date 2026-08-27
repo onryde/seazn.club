@@ -23,11 +23,19 @@ import type { AnySportModule, PadAction, PadField } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
+import { football } from "@seazn/engine/sports/football";
 import { foldClient } from "../../../module-client";
 import { dedicatedEventTypes, squadStateOf } from "../../pad-host";
 import { answerStep, currentStep, initialSheetState } from "../../guided-sheet";
 import type { GuidedSheetSpec, PadHostView, TileSpec } from "../../types";
-import { cricketSkinV3 } from "../cricket";
+import { cricketSkinV3, buildScorebug as buildCricketScorebug } from "../cricket";
+import { buildScorebug as buildTennisScorebug } from "../tennis";
+// R3.5 — the wave's own lesson (`_INDEX.md`: "a mirror agrees with itself"):
+// every shoot-out assertion below drives this REAL fold helper, never a
+// hand-built `state()` literal, the same discipline `_cricket-fold.ts` and
+// `football-dispatch-totality.test.ts` already hold football's phase rules
+// to.
+import { foldedPhases, foldFootball, footballCfg } from "../../__tests__/_football-fold";
 import {
   CARD_COLORS,
   CARD_REASONS,
@@ -41,6 +49,7 @@ import {
   buildTiles,
   footballDetail,
   footballSkinV3,
+  kickerCue,
   legalPeriodMarkers,
   periodMarkersOf,
   phaseAllows,
@@ -146,6 +155,38 @@ function sideOfTile(tile: TileSpec): "home" | "away" | null {
   if (tile.sublabel === "scorepad.attribution.home") return "home";
   if (tile.sublabel === "scorepad.attribution.away") return "away";
   return null;
+}
+
+/**
+ * R3.5 (Tasks D, E, F, J) — a REAL `PadHostView` reaching `SHOOTOUT`, with
+ * `kicks` recorded through the real fold (never a hand-built `state({
+ * shootout: {...} })` literal — see this file's new header note and
+ * `_football-fold.ts`'s own header for why: a fixture that agrees with
+ * itself proves nothing about the engine).
+ *
+ * `preGoals` defaults to a 1-1 regulation draw — the ONLY way `resolveFullTime`
+ * (football.ts) reaches `SHOOTOUT` at all is a LEVEL score at FT with
+ * `extraTime.enabled: false` and `cfg.shootout: true`; a non-level score
+ * decides in regulation and the phase never gets there.
+ */
+function shootoutView(
+  kicks: readonly (readonly ["home" | "away", boolean])[],
+  opts: { band?: PadHostView["band"]; personNames?: Readonly<Record<string, string>> } = {},
+): PadHostView {
+  const cfgObj = footballCfg({ shootout: true, extraTime: { enabled: false, halfMinutes: 15 } });
+  const specs: [type: string, payload?: unknown][] = [
+    ["core.start"],
+    ["football.goal", { by: "H" }],
+    ["football.goal", { by: "A" }],
+    ["football.period", { phase: "HT" }],
+    ["football.period", { phase: "FT" }],
+    ...kicks.map(([side, scored]): [string, unknown] => [
+      "football.shootout.kick",
+      { by: side === "home" ? "H" : "A", scored },
+    ]),
+  ];
+  const folded = foldFootball(cfgObj, specs);
+  return view({ cfg: cfgObj, state: folded, band: opts.band ?? 3, personNames: opts.personNames ?? NAMES });
 }
 
 const BANDS = [0, 1, 2, 3] as const;
@@ -467,6 +508,187 @@ describe("buildScorebug", () => {
   it("carries the skin's own phase() answer, never the host's tab state", () => {
     expect(buildScorebug(view({ state: state({ phase: "final" }), phase: "live" }), t).phase).toBe("post");
   });
+
+  // -------------------------------------------------------------------------
+  // R3.5/Task D — `ScorebugHalf.sub`, the pens tally riding the SAME halves as
+  // the regulation score. Before this the board showed `1` and `1` while the
+  // headline above it already read "1 — 1 (2-1 pens)": two disagreeing score
+  // readouts on one screen, exactly what design note D-11 exists to prevent.
+  // -------------------------------------------------------------------------
+
+  it("F3: football's halves carry the pens tally during SHOOTOUT, against a REAL fold", () => {
+    const v = shootoutView([
+      ["home", true],
+      ["away", false],
+      ["home", true],
+      ["away", true],
+    ]);
+    const bug = buildScorebug(v, t);
+    expect(bug.halves.map((h) => [h.big, h.sub])).toEqual([
+      ["1", "(2)"],
+      ["1", "(1)"],
+    ]);
+  });
+
+  it("F4: no `sub` in any non-SHOOTOUT phase, across every REAL folded phase", () => {
+    let sawShootout = false;
+    for (const { label, phase, cfg: foldedCfg, state: foldedState } of foldedPhases()) {
+      const bug = buildScorebug(view({ cfg: foldedCfg, state: foldedState }), t);
+      if (phase === "SHOOTOUT") {
+        sawShootout = true;
+        continue; // F3 above covers the positive case
+      }
+      expect(bug.halves[0].sub, label).toBeUndefined();
+      expect(bug.halves[1].sub, label).toBeUndefined();
+    }
+    // Vacuity guard: this loop proves nothing about the phase it never sees.
+    expect(sawShootout, "foldedPhases() must still include a SHOOTOUT case").toBe(true);
+  });
+
+  it("F5: cricket and tennis never set `sub` — the field is opt-in, not chassis-forced", () => {
+    // The documented degrade every v3 builder honours (this file's own
+    // `resolvePhase` test above already relies on the identical `state: {}`
+    // shape) — proving the field absent under the REAL cricket/tennis
+    // builders, not a hand-typed stand-in for them.
+    const empty = view({ state: {}, cfg: {} });
+    for (const half of buildCricketScorebug(empty, t).halves) expect(half.sub, "cricket").toBeUndefined();
+    for (const half of buildTennisScorebug(empty, t).halves) expect(half.sub, "tennis").toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// kickerCue() / expectedKicker — R3.5/Task F. The engine's OWN alternation
+// rule, surfaced as an LED strip item so the pad prevents the out-of-turn
+// refusal rather than explaining it afterwards in English no matter the
+// scorer's locale (server-side messages are not localised).
+// ---------------------------------------------------------------------------
+
+describe("kickerCue — the board says whose kick is next (R3.5/F)", () => {
+  it("F9: no cue before the first kick — either side may start", () => {
+    const v = shootoutView([]);
+    expect(kickerCue(v.state, t)).toBeUndefined();
+    // …and the strip carries no item for it either — a real answer (null)
+    // renders NOTHING, not a guess.
+    expect(buildScorebug(v, t).strip.find((item) => item.id === "nextKicker")).toBeUndefined();
+  });
+
+  it("F10: after home kicks, the cue names Away", () => {
+    const v = shootoutView([["home", true]]);
+    expect(kickerCue(v.state, t)).toBe("scorepad.attribution.away");
+    const item = buildScorebug(v, t).strip.find((i) => i.id === "nextKicker");
+    expect(item?.value).toBe("scorepad.attribution.away");
+    expect(item?.tone).toBe("led");
+  });
+
+  it("the cue is absent outside SHOOTOUT even if a stray `shootout` object is present", () => {
+    // Defensive: `expectedKicker` on its own cannot see phase, only kicks —
+    // `kickerCue` must gate on the FOLD's phase itself, the same guard
+    // `phaseAllows("football.shootout.kick", …)` already applies to the tile.
+    const v = shootoutView([["home", true]]);
+    const doneState = { ...(v.state as Record<string, unknown>), phase: "done" };
+    expect(kickerCue(doneState, t)).toBeUndefined();
+  });
+
+  it("F11: the engine still refuses an out-of-turn kick, naming the ENTRANT (not a UUID) — regression guard", () => {
+    const cfgObj = footballCfg({ shootout: true, extraTime: { enabled: false, halfMinutes: 15 } });
+    const afterHomeKick = foldFootball(cfgObj, [
+      ["core.start"],
+      ["football.goal", { by: "H" }],
+      ["football.goal", { by: "A" }],
+      ["football.period", { phase: "HT" }],
+      ["football.period", { phase: "FT" }],
+      ["football.shootout.kick", { by: "H", scored: true }],
+    ]);
+    const outOfTurn = envelope(999, "football.shootout.kick", { by: "H", scored: true });
+    expect(() => football.apply(afterHomeKick, outOfTurn as never, { strict: true })).toThrowError(
+      new RegExp(`expected "${afterHomeKick.entrants.away}"`),
+    );
+  });
+
+  it("F14: voiding a kick reverts the tally and the expected kicker — a voided event is simply never replayed", () => {
+    // Football's own event schema carries no per-kick `void` flag (that
+    // belongs to the shared shoot-out primitive's OTHER sports); a "voided"
+    // kick here means the chassis's generic void/undo path re-derives state
+    // with that ledger event excluded — so "reverts" is a property of
+    // REPLAY, proved by comparing two real folds that differ by one kick.
+    const withTwo = shootoutView([
+      ["home", true],
+      ["away", true],
+    ]);
+    const asIfVoided = shootoutView([["home", true]]);
+    expect(kickerCue(withTwo.state, t)).toBe("scorepad.attribution.home"); // tied 1-1 taken -> kicks[0]
+    expect(kickerCue(asIfVoided.state, t)).toBe("scorepad.attribution.away"); // reverts
+    expect(buildScorebug(withTwo, t).halves.map((h) => h.sub)).toEqual(["(1)", "(1)"]);
+    expect(buildScorebug(asIfVoided, t).halves.map((h) => h.sub)).not.toEqual(
+      buildScorebug(withTwo, t).halves.map((h) => h.sub),
+    );
+  });
+
+  // F15/F16 (Task D) — `shootoutDecision`'s exact early-decision and sudden-
+  // death arithmetic is the ENGINE's own tested territory (football.test.ts's
+  // "enforces kick alternation and early decision arithmetic"); this proves
+  // only what the PAD does once a real fold reaches either outcome — the
+  // SAME "decided means unmounted" rule every sport follows
+  // (`reference_v3_pad_unmounts_on_decided_fixture` — `resolvePhase` maps
+  // `state.phase === "done"` to `PadPhase` "post", which is what makes
+  // fixture-console.tsx drop the whole scoring section).
+  it("F15: an early decision inside the regulation five reaches 'done', and the pad's own phase() maps it to post", () => {
+    const cfgObj = footballCfg({ shootout: true, extraTime: { enabled: false, halfMinutes: 15 } });
+    // H scores three straight, A misses three straight — away's remaining
+    // entitlement (2) can never close a 3-0 gap, so this decides at the
+    // sixth kick, inside the five-per-side regulation allotment.
+    const early = foldFootball(cfgObj, [
+      ["core.start"],
+      ["football.goal", { by: "H" }],
+      ["football.goal", { by: "A" }],
+      ["football.period", { phase: "HT" }],
+      ["football.period", { phase: "FT" }],
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: false }],
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: false }],
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: false }],
+    ]);
+    expect(early.phase, "this sequence must actually decide, or the case proves nothing").toBe("done");
+    expect(early.outcome).toMatchObject({ method: "shootout" });
+    expect(resolvePhase({ state: early })).toBe("post");
+  });
+
+  it("F16: tied after all five regulation pairs stays undecided (sudden death); the first pair with a lead decides it", () => {
+    const cfgObj = footballCfg({ shootout: true, extraTime: { enabled: false, halfMinutes: 15 } });
+    const throughRegulation: [type: string, payload?: unknown][] = [
+      ["core.start"],
+      ["football.goal", { by: "H" }],
+      ["football.goal", { by: "A" }],
+      ["football.period", { phase: "HT" }],
+      ["football.period", { phase: "FT" }],
+      // Both sides score all five regulation kicks — 5-5, still tied.
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: true }],
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: true }],
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: true }],
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: true }],
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: true }],
+    ];
+    const tied = foldFootball(cfgObj, throughRegulation);
+    expect(tied.phase, "5-5 after all five regulation pairs must still be undecided").toBe("SHOOTOUT");
+    expect(resolvePhase({ state: tied })).toBe("live");
+
+    // Sudden death: Home scores the sixth pair's kick, Away misses.
+    const decided = foldFootball(cfgObj, [
+      ...throughRegulation,
+      ["football.shootout.kick", { by: "H", scored: true }],
+      ["football.shootout.kick", { by: "A", scored: false }],
+    ]);
+    expect(decided.phase).toBe("done");
+    expect(decided.outcome).toMatchObject({ method: "shootout" });
+    expect(resolvePhase({ state: decided })).toBe("post");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -620,6 +842,98 @@ describe("buildTiles", () => {
     expect(ids).not.toContain("period");
     expect(ids).toContain("card-home");
     expect(ids).toContain("more");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5/Task J (ruling R3.5-5) — phase-gated kick tiles. R3-4 AMENDED for the
+// SHOOTOUT phase ONLY: it put four RARE types in the generic More sheet and
+// still stands everywhere else, but in this phase the rare type is the whole
+// match, and the board otherwise holds two card tiles and nothing else while
+// the only action of the phase sat two taps deep. Every case below drives a
+// REAL fold (`shootoutView`) — see this file's header note.
+// ---------------------------------------------------------------------------
+
+describe("buildTiles — phase-gated kick tiles during SHOOTOUT (R3.5/J)", () => {
+  it("F6: kick tiles present, goal tiles absent, during a REAL shoot-out", () => {
+    const v = shootoutView([]);
+    const ids = buildTiles(v).map((tile) => tile.id);
+    expect(ids).toEqual(expect.arrayContaining(["kick-home", "kick-away"]));
+    expect(ids).not.toEqual(expect.arrayContaining(["goal-home", "goal-away"]));
+  });
+
+  it("F7: no kick tiles in any phase but SHOOTOUT, across every REAL folded phase", () => {
+    let sawShootout = false;
+    for (const { label, phase, cfg: foldedCfg, state: foldedState } of foldedPhases()) {
+      const ids = buildTiles(view({ cfg: foldedCfg, state: foldedState })).map((tile) => tile.id);
+      if (phase === "SHOOTOUT") {
+        sawShootout = true;
+        expect(ids, label).toEqual(expect.arrayContaining(["kick-home", "kick-away"]));
+        continue;
+      }
+      expect(ids, label).not.toContain("kick-home");
+      expect(ids, label).not.toContain("kick-away");
+    }
+    expect(sawShootout, "foldedPhases() must still include a SHOOTOUT case").toBe(true);
+  });
+
+  it("kick tiles occupy the Goal tiles' own slot: primary, span 2, matching sublabels, opening a two-outcome sheet", () => {
+    const v = shootoutView([]);
+    const home = tileById(buildTiles(v), "kick-home")!;
+    const away = tileById(buildTiles(v), "kick-away")!;
+    expect(home.label).toBe("pad.football.action.shootoutKick");
+    expect(home.sublabel).toBe("scorepad.attribution.home");
+    expect(home.kind).toBe("primary");
+    expect(home.span).toBe(2);
+    expect(home.phases).toEqual(["live"]);
+    expect(home.action).toEqual({ sheet: "kick-home" });
+    expect(away.sublabel).toBe("scorepad.attribution.away");
+    expect(away.action).toEqual({ sheet: "kick-away" });
+  });
+
+  it("F9/F10 (tiles): at zero kicks neither tile is disabled; once a side has kicked, the OTHER side's tile is", () => {
+    const zero = shootoutView([]);
+    expect(tileById(buildTiles(zero), "kick-home")!.disabled).toBeUndefined();
+    expect(tileById(buildTiles(zero), "kick-away")!.disabled).toBeUndefined();
+
+    const afterHome = shootoutView([["home", true]]);
+    expect(tileById(buildTiles(afterHome), "kick-home")!.disabled).toBe(true);
+    expect(tileById(buildTiles(afterHome), "kick-away")!.disabled).toBeUndefined();
+  });
+
+  it("F17: card tiles remain legal during a REAL shoot-out fold", () => {
+    const ids = buildTiles(shootoutView([])).map((tile) => tile.id);
+    expect(ids).toContain("card-home");
+    expect(ids).toContain("card-away");
+  });
+
+  it("F8: the kick-home sheet records football.shootout.kick for HOME; kick-away for AWAY", () => {
+    const v = shootoutView([]);
+    const sheets = buildSheets(v, t);
+    expect(drive(sheets["kick-home"]!, ["scored"])).toEqual({
+      type: "football.shootout.kick",
+      payload: { by: "H", scored: true },
+    });
+    expect(drive(sheets["kick-away"]!, ["missed"])).toEqual({
+      type: "football.shootout.kick",
+      payload: { by: "A", scored: false },
+    });
+  });
+
+  it("the kick sheets are ALWAYS declared (same convention as period/penalty/card) so copy-truth sees them", () => {
+    const keys = Object.keys(buildSheets(view(), t));
+    expect(keys).toContain("kick-home");
+    expect(keys).toContain("kick-away");
+  });
+
+  it("every {sheet} kick tile names a sheet buildSheets() actually builds — the same closed-loop check every other tile gets", () => {
+    const v = shootoutView([]);
+    const sheetKeys = new Set(Object.keys(buildSheets(v, t)));
+    for (const tile of buildTiles(v)) {
+      if ("sheet" in tile.action && tile.action.sheet !== "__pad-host/more__") {
+        expect(sheetKeys.has(tile.action.sheet), tile.id).toBe(true);
+      }
+    }
   });
 });
 
@@ -1075,6 +1389,27 @@ describe("buildDock", () => {
     const red = buildDock("football.card", v, t, { by: "home-1", color: "red" })!;
     expect(red.chips.map((c) => c.id)).toEqual(["person:h1", "person:h2", "person:h3"]);
   });
+
+  // R3.5/Task J — the kick tile's own doc states the reason this exists:
+  // "band-2+ taker attribution stays reachable". Before this task the
+  // generic More form's `attribution` field carried `person`; a dedicated
+  // sheet removes that route entirely, so this dock case is what keeps the
+  // claim true rather than a regression this task quietly shipped.
+  it("football.shootout.kick: offers on-pitch person chips for the KICKING side, at band >= 2", () => {
+    const home = buildDock("football.shootout.kick", view({ band: 2 }), t, { by: "home-1" })!;
+    expect(home.chips.map((c) => c.id)).toEqual(["person:h1", "person:h2", "person:h3"]);
+    const away = buildDock("football.shootout.kick", view({ band: 3 }), t, { by: "away-1" })!;
+    expect(away.chips.map((c) => c.id)).toEqual(["person:a1", "person:a2", "person:a3"]);
+    expect(home.title).toBe("pad.football.dock.shootoutKick.title");
+  });
+
+  it("football.shootout.kick: no dock at all below band 2 — nothing else to enrich", () => {
+    expect(buildDock("football.shootout.kick", view({ band: 1 }), t, { by: "home-1" })).toBeNull();
+  });
+
+  it("football.shootout.kick: no dock when the entrant is unresolvable", () => {
+    expect(buildDock("football.shootout.kick", view({ band: 3 }), t, { by: "some-foreign-entrant" })).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1084,7 +1419,15 @@ describe("buildDock", () => {
 // ---------------------------------------------------------------------------
 
 function detail(eventType: string, payload: Record<string, unknown>): string | undefined {
-  return footballDetail({ t, eventType, payload, personNames: NAMES, cfg: cfg() });
+  // R3.5/Task E — `state` joins `cfg`/`personNames` as a THIRD verbatim
+  // capture `ActivityDetailContext` now carries (types.ts, `ActivityDetailContext.state`):
+  // `football.shootout.kick` is the first `footballDetail` case that needs an
+  // entrant->side lookup (`sideOfEntrant`), which only the fold's own
+  // `state.entrants` can answer. `state()`'s entrants (`home-1`/`away-1`) are
+  // exactly the ids every OTHER test in this describe block already passes as
+  // `by`, so this is additive: those tests' assertions never depended on the
+  // side prefix this now also resolves.
+  return footballDetail({ t, eventType, payload, personNames: NAMES, cfg: cfg(), state: state() });
 }
 
 describe("footballDetail", () => {
@@ -1117,6 +1460,35 @@ describe("footballDetail", () => {
     expect(detail("football.penalty", { by: "home-1", outcome: "saved", taker: "h1" })).toContain("outcome.saved");
     expect(detail("football.shot", { by: "home-1", outcome: "blocked" })).toContain("outcome.blocked");
     expect(detail("football.shootout.kick", { by: "home-1", scored: true, person: "h1" })).toContain("outcome.scored");
+  });
+
+  // ---------------------------------------------------------------------------
+  // R3.5/Task E (cases F12, F13) — the kick log names the SIDE. For every
+  // other football event the side is inferable because the score moves; for a
+  // shoot-out kick it is the entire content of the event, and this is the
+  // panel a scorer voids from, so a mis-tap was being corrected blind. The
+  // review's original "the log cannot say which side kicked" framing was
+  // WRONG (corrected in `_INDEX.md`): the read-only audit table already names
+  // it — only the SCORER's Activity panel (the one carrying the Void
+  // buttons) did not.
+  // ---------------------------------------------------------------------------
+
+  it("F12: a scored kick names the side and the outcome, with no person given", () => {
+    expect(detail("football.shootout.kick", { by: "home-1", scored: true })).toBe(
+      "scorepad.attribution.home · outcome.scored",
+    );
+  });
+
+  it("F13: a missed kick names the side, the outcome, and the taker", () => {
+    expect(detail("football.shootout.kick", { by: "away-1", scored: false, person: "a1" })).toBe(
+      "scorepad.attribution.away · outcome.missed · Away One",
+    );
+  });
+
+  it("an unresolvable entrant drops the side segment rather than printing a raw id — the S13 defect", () => {
+    expect(detail("football.shootout.kick", { by: "some-foreign-entrant-uuid", scored: true })).toBe(
+      "outcome.scored",
+    );
   });
 
   it("names the player for both sin-bin events", () => {

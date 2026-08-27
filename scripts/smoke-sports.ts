@@ -153,7 +153,11 @@ async function setPlan(orgId: string, plan: string): Promise<void> {
 }
 
 async function cleanup(): Promise<void> {
-  const emails = [`sports_${tag}@example.com`, `community_${tag}@example.com`];
+  const emails = [
+    `sports_${tag}@example.com`,
+    `community_${tag}@example.com`,
+    `superover_${tag}@example.com`,
+  ];
   const sql = db();
   try {
     // sponsor_orders are RESTRICT (V299): money rows must go before their org.
@@ -192,6 +196,12 @@ interface SportDriver {
   variantKey: string;
   /** Overrides merged over the variant preset at division create. */
   config?: Record<string, unknown>;
+  /** Entrant kind the 4 RR entrants are created with (default "individual").
+   *  Football/cricket/volleyball's entrantModel declares `kinds: ["team", …]`
+   *  with no "individual" — entrants.ts's spec-2026-07-18 shape gate 422s
+   *  ENTRANT_KIND_NOT_ALLOWED otherwise (verified empirically: this default
+   *  used to be unconditional and broke exactly those three). */
+  entrantKind?: "individual" | "team" | "pair";
   /** After core.start: events that decide the fixture with HOME winning. */
   decideEvents(fx: Fx): Ev[];
   /** Sport-specific edge cases on a dedicated fixture. */
@@ -201,8 +211,22 @@ interface SportDriver {
 async function state(s: Session, fixtureId: string) {
   return data<{
     status: string;
-    outcome: { kind?: string; winner?: string } | null;
+    // `method` is real API surface (MatchOutcome.method — core/types.ts): the
+    // deciding detail ('shootout' | 'super_over' | 'regulation' | 'dls' | …),
+    // not just kind/winner. R3.5/Task N — both original decider defects (a
+    // cricket super over and a football shoot-out) shipped past every gate
+    // that only checked "it ended", so the smoke checks for both assert this
+    // field explicitly.
+    outcome: { kind?: string; winner?: string; method?: string } | null;
     last_seq: number;
+    // Raw engine fold state (row.state, FixtureStateOut.state) — cricket's
+    // super-over ledger lives at `state.superOver.innings`, NEVER
+    // `state.innings` (that array stays the main-match 2, unaffected).
+    state: {
+      phase?: string;
+      innings?: unknown[];
+      superOver?: { innings?: unknown[] } | null;
+    } | null;
   }>(await must(s, `/api/v1/fixtures/${fixtureId}/state`));
 }
 
@@ -274,6 +298,8 @@ const DRIVERS: SportDriver[] = [
     sportKey: "football",
     variantKey: "11-a-side",
     config: { shootout: true }, // knockout-style decider for the drawn-FT edge
+    // football's entrantModel is `kinds: ["team"]` only — no "individual".
+    entrantKind: "team",
     decideEvents: (fx) => [
       { type: "football.goal", payload: { by: fx.home, minute: 21 } },
       { type: "football.period", payload: { phase: "HT" } },
@@ -325,9 +351,14 @@ const DRIVERS: SportDriver[] = [
         );
         st = await state(s, fx.id);
       }
+      // R3.5/Task N — assert the METHOD, not just that a winner landed: "it
+      // ended" is the assertion that let the original broken shoot-out
+      // (no attribution, no running tally) ship past every prior gate.
       check(
-        `${label}: shootout decides for home`,
-        st.outcome?.kind === "win" && st.outcome.winner === fx.home,
+        `${label}: shootout decides for home by method`,
+        st.outcome?.kind === "win" &&
+          st.outcome.winner === fx.home &&
+          st.outcome.method === "shootout",
         JSON.stringify(st.outcome),
       );
       const late = await append(s, fx.id, { type: "football.goal", payload: { by: fx.away } }, seq);
@@ -337,6 +368,8 @@ const DRIVERS: SportDriver[] = [
   {
     sportKey: "cricket",
     variantKey: "t20",
+    // cricket's entrantModel is `kinds: ["team"]` only — no "individual".
+    entrantKind: "team",
     decideEvents: () => [
       // Innings 1 (no toss → home bat first): 120/5 off the full quota.
       {
@@ -493,6 +526,9 @@ const DRIVERS: SportDriver[] = [
   {
     sportKey: "volleyball",
     variantKey: "indoor",
+    // volleyball's entrantModel is `kinds: ["team", "pair"]` — no
+    // "individual".
+    entrantKind: "team",
     decideEvents: (fx) => {
       void fx;
       return Array.from({ length: 3 }, () => ({
@@ -679,7 +715,7 @@ async function runSport(s: Session, compId: string, d: SportDriver): Promise<voi
     `/api/v1/divisions/${divId}/entrants`,
     "POST",
     ["A", "B", "C", "D"].map((n, i) => ({
-      kind: "individual",
+      kind: d.entrantKind ?? "individual",
       display_name: `${n} ${label}`,
       seed: i + 1,
     })),
@@ -890,8 +926,11 @@ async function communityGateSuite(): Promise<void> {
     s,
     `/api/v1/divisions/${divId}/entrants`,
     "POST",
+    // volleyball's entrantModel is `kinds: ["team", "pair"]` — no
+    // "individual" (entrants.ts's spec-2026-07-18 shape gate 422s
+    // ENTRANT_KIND_NOT_ALLOWED otherwise; same fix as the DRIVERS entry).
     ["A", "B"].map((n, i) => ({
-      kind: "individual",
+      kind: "team",
       display_name: `${n} gate`,
       seed: i + 1,
     })),
@@ -933,6 +972,200 @@ async function communityGateSuite(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Cricket super over (R3.5/Task N) — R2's sign-off shipped a super over that
+// could not be scored on the pad at all, and nothing here drove a tie past
+// the point of decision to catch it. The DRIVERS cricket entry above never
+// exercises this: it only ever posts coarse `cricket.innings.summary`
+// events, which have no super-over analogue — `cricket.superover.ball` is
+// tier 3 (scoring.ball_by_ball) ball-by-ball only, so a real fixture roster
+// (persons + lineups), not just bare entrants, is load-bearing here.
+// ---------------------------------------------------------------------------
+
+async function cricketSuperOverSuite(): Promise<void> {
+  const s = newSession();
+  const ver = data<{ org_id: string }>(await signIn(s, `superover_${tag}@example.com`));
+  // cricket.ball / cricket.superover.ball are tier 3 — same gate
+  // communityGateSuite exercises above for volleyball's rally-by-rally.
+  await setPlan(ver.org_id, "pro");
+
+  // Two 2-player rosters — tagged so a leftover run's persons can never
+  // collide with this run's. Only 2 players per side are ever needed: no
+  // wicket falls anywhere in this sequence.
+  const teamA = [`SO A1 ${tag}`, `SO A2 ${tag}`];
+  const teamB = [`SO B1 ${tag}`, `SO B2 ${tag}`];
+  const personIds: Record<string, string> = {};
+  for (const full_name of [...teamA, ...teamB]) {
+    const person = await must(s, "/api/v1/persons", "POST", { full_name });
+    personIds[full_name] = data<{ id: string }>(person).id;
+  }
+
+  const comp = await must(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
+    name: `Super Over Smoke ${tag}`,
+  });
+  const compId = data<{ id: string }>(comp).id;
+  // `superOver` defaults false (cricket.ts) even under the "t20" preset —
+  // the same override shape the football driver above uses for `shootout`.
+  const div = await must(s, `/api/v1/competitions/${compId}/divisions`, "POST", {
+    name: "Super Over",
+    sport_key: "cricket",
+    variant_key: "t20",
+    config: { superOver: true },
+  });
+  const divId = data<{ id: string }>(div).id;
+
+  const entrants = data<{ id: string }[]>(
+    await must(s, `/api/v1/divisions/${divId}/entrants`, "POST", [
+      {
+        kind: "team",
+        display_name: `Team A ${tag}`,
+        seed: 1,
+        members: teamA.map((n) => ({ person_id: personIds[n] })),
+      },
+      {
+        kind: "team",
+        display_name: `Team B ${tag}`,
+        seed: 2,
+        members: teamB.map((n) => ({ person_id: personIds[n] })),
+      },
+    ]),
+  );
+  // Keyed by the ACTUAL entrant id, not assumed submission order — the
+  // fixture's own home/away assignment (read below) is what decides which
+  // roster bats first, not the order these were posted in.
+  const rosterOf: Record<string, string[]> = {
+    [entrants[0].id]: teamA,
+    [entrants[1].id]: teamB,
+  };
+
+  const stage = await must(s, `/api/v1/divisions/${divId}/stages`, "POST", {
+    seq: 1,
+    kind: "league",
+    name: "League",
+  });
+  const stageId = data<{ id: string }>(stage).id;
+  const gen = data<{
+    fixtures: { id: string; home_entrant_id: string; away_entrant_id: string }[];
+  }>(await must(s, `/api/v1/stages/${stageId}/generate`, "POST"));
+  const fx = gen.fixtures[0];
+  const fixtureId = fx.id;
+  const homeEntrantId = fx.home_entrant_id;
+  const awayEntrantId = fx.away_entrant_id;
+  const [home1, home2] = rosterOf[homeEntrantId];
+  const [away1, away2] = rosterOf[awayEntrantId];
+  await must(s, `/api/v1/divisions/${divId}/start`, "POST");
+
+  await must(s, `/api/v1/fixtures/${fixtureId}/lineups/${homeEntrantId}`, "PUT", {
+    slots: [home1, home2].map((n, i) => ({ person_id: personIds[n], order_no: i + 1 })),
+  });
+  await must(s, `/api/v1/fixtures/${fixtureId}/lineups/${awayEntrantId}`, "PUT", {
+    slots: [away1, away2].map((n, i) => ({ person_id: personIds[n], order_no: i + 1 })),
+  });
+
+  // No toss event → battingFirst defaults to home (same convention the
+  // DRIVERS cricket entry above relies on for its own happy path).
+  let seq = await appendAll(s, fixtureId, [start], 0);
+  // Innings 1 (home): one ball, then a manual close — home totals 1.
+  seq = await appendAll(
+    s,
+    fixtureId,
+    [
+      {
+        type: "cricket.ball",
+        payload: {
+          over: 0,
+          ballInOver: 1,
+          striker: personIds[home1],
+          nonStriker: personIds[home2],
+          bowler: personIds[away1],
+          runs: { bat: 1 },
+        },
+      },
+      { type: "cricket.innings.close", payload: { reason: "other" } },
+      // Innings 2 (away): target is home.runs + 1 = 2 — away scores EXACTLY
+      // target - 1, tying the match.
+      {
+        type: "cricket.ball",
+        payload: {
+          over: 0,
+          ballInOver: 1,
+          striker: personIds[away1],
+          nonStriker: personIds[away2],
+          bowler: personIds[home1],
+          runs: { bat: 1 },
+        },
+      },
+      { type: "cricket.innings.close", payload: { reason: "other" } },
+    ],
+    seq,
+  );
+
+  const tied = await state(s, fixtureId);
+  check(
+    "cricket super-over: a tie with superOver:true opens a LIVE super over, not an outright decision",
+    tied.status === "in_play" && tied.state?.phase === "super_over",
+    `status ${tied.status} phase ${tied.state?.phase}`,
+  );
+
+  // Super over, innings 1: away bats (they batted second in the main match —
+  // ICC rule, `soBattingSideAt` in cricket.ts). Six dot balls closes it on
+  // the over; no wicket needed. Away totals 0. Batched into one appendAll
+  // call — same pattern the main-innings block above uses — since no
+  // assertion runs between individual balls.
+  seq = await appendAll(
+    s,
+    fixtureId,
+    [1, 2, 3, 4, 5, 6].map((ball) => ({
+      type: "cricket.superover.ball",
+      payload: {
+        over: 0,
+        ballInOver: ball,
+        striker: personIds[away1],
+        nonStriker: personIds[away2],
+        bowler: personIds[home2],
+        runs: { bat: 0 },
+      },
+    })),
+    seq,
+  );
+  // Super over, innings 2: home bats. Target is SO1's runs + 1 = 1 — the very
+  // first ball reaches it, deciding the match by super over on the spot.
+  await appendAll(
+    s,
+    fixtureId,
+    [
+      {
+        type: "cricket.superover.ball",
+        payload: {
+          over: 0,
+          ballInOver: 1,
+          striker: personIds[home1],
+          nonStriker: personIds[home2],
+          bowler: personIds[away2],
+          runs: { bat: 1 },
+        },
+      },
+    ],
+    seq,
+  );
+
+  const decided = await state(s, fixtureId);
+  // The winner, the method, AND the right ledger: "it ended" is the
+  // assertion that let the original unscoreable super over ship — the
+  // regression this task guards against would leave `state.innings` at 2
+  // (untouched) while `state.superOver.innings` silently stayed empty.
+  check(
+    "cricket super-over: decided by method super_over for the right winner, recorded in state.superOver.innings",
+    decided.status === "decided" &&
+      decided.outcome?.kind === "win" &&
+      decided.outcome.winner === homeEntrantId &&
+      decided.outcome.method === "super_over" &&
+      decided.state?.innings?.length === 2 &&
+      decided.state?.superOver?.innings?.length === 2,
+    JSON.stringify({ status: decided.status, outcome: decided.outcome, state: decided.state }),
+  );
+}
+
+// ---------------------------------------------------------------------------
 
 async function main() {
   await seedCatalog();
@@ -964,6 +1197,7 @@ async function main() {
   }
 
   await communityGateSuite();
+  await cricketSuperOverSuite();
 }
 
 main()

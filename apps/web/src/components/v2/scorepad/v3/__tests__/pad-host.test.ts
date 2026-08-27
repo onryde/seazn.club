@@ -297,6 +297,108 @@ describe("dedicatedEventTypes", () => {
   });
 });
 
+// R3.5/B — see dedicatedEventTypes' own doc (pad-host.tsx) for the fourth,
+// inverted instance of the "claimed but not actually reachable" family this
+// closes: a cricket super over disables its ENTIRE delivery row, and the
+// loop used to add `cricket.superover.ball` from those disabled tiles
+// anyway, which closed the only remaining route to recording one (no
+// enabled tile or sheet claimed the type either).
+function bugStub(): ScorebugSpec {
+  return {
+    context: "", phase: "live", strip: [],
+    halves: [{ who: [{ name: "H" }], big: "0" }, { who: [{ name: "A" }], big: "0" }],
+  };
+}
+
+function evTile(id: string, type: string, disabled?: boolean): TileSpec {
+  return {
+    id, label: "l", kind: "standard", phases: ["live"],
+    action: { event: { type, payload: {} } },
+    ...(disabled === undefined ? {} : { disabled }),
+  };
+}
+
+/** A tile that OPENS a sheet, rather than emitting an event directly —
+ *  `{sheet: key}`, cricket's real `wicket` tile's own action shape. */
+function sheetTile(id: string, sheetKey: string, disabled?: boolean): TileSpec {
+  return {
+    id, label: "l", kind: "standard", phases: ["live"],
+    action: { sheet: sheetKey },
+    ...(disabled === undefined ? {} : { disabled }),
+  };
+}
+
+describe("dedicatedEventTypes — a disabled tile is not a reachable surface", () => {
+  it("B1: every tile for a type disabled => the type is NOT claimed", () => {
+    const out = dedicatedEventTypes(
+      [evTile("run0", "cricket.superover.ball", true),
+       evTile("run1", "cricket.superover.ball", true)],
+      undefined, [], bugStub());
+    expect(out.has("cricket.superover.ball")).toBe(false);
+  });
+
+  it("B2: an enabled tile still claims its type", () => {
+    const out = dedicatedEventTypes([evTile("run0", "cricket.ball")], undefined, [], bugStub());
+    expect(out.has("cricket.ball")).toBe(true);
+  });
+
+  it("B3: one enabled + one disabled tile for the same type => still claimed", () => {
+    const out = dedicatedEventTypes(
+      [evTile("a", "football.goal", true), evTile("b", "football.goal")],
+      undefined, [], bugStub());
+    expect(out.has("football.goal")).toBe(true);
+  });
+
+  // B4 WAS WRONG (coordinator finding, R3.5/B follow-up) and asserted the
+  // opposite of this until now. `resolveSheet` (pad-host.tsx:854) has
+  // exactly ONE call site, reached only from a tile tap — a sheet is never
+  // an independently reachable surface. A sheet whose every opening tile is
+  // disabled is exactly as unreachable as those tiles, so claiming its
+  // event unconditionally suppressed the More panel that was the LAST route
+  // to it: cricket's real `wicket` sheet declares `cricket.superover.ball`
+  // (ballEventType(state) in a super over) and goes disabled with the whole
+  // delivery row for the length of one — see
+  // dedicated-event-types-superover.test.ts for the real-fold proof this
+  // synthetic case is modelling.
+  it("B4: a sheet whose ONLY opening tile is disabled => the type is NOT claimed", () => {
+    const out = dedicatedEventTypes(
+      [sheetTile("w", "wicket", true)],
+      { wicket: { event: "cricket.wicket", steps: [] } as never },
+      [], bugStub());
+    expect(out.has("cricket.wicket")).toBe(false);
+  });
+
+  // NOT the same case as B4, and must not be conflated with it. `undefined`
+  // (no tile anywhere points at this sheet) stays CLAIMED, deliberately:
+  // cricket's `overSummary` sheet has no opening tile at all in the fine
+  // (ball-by-ball) lane, and un-claiming it would surface
+  // `cricket.innings.summary` in More during a fine innings, where the fold
+  // refuses it outright (cricket.ts:1402-1404) — a brand-new dead-end tap,
+  // the exact class of defect this whole exclusion set exists to prevent.
+  // Pinned as its own case so a later change cannot quietly widen B4's fix
+  // from "every opener disabled" to "no opener found".
+  it("B4b: a sheet with NO tile pointing at it at all => still claimed", () => {
+    const out = dedicatedEventTypes(
+      [],
+      { overSummary: { event: "cricket.innings.summary", steps: [] } as never },
+      [], bugStub());
+    expect(out.has("cricket.innings.summary")).toBe(true);
+  });
+
+  it("B4c: a sheet with one enabled and one disabled opener => still claimed", () => {
+    const out = dedicatedEventTypes(
+      [sheetTile("w1", "wicket", true), sheetTile("w2", "wicket")],
+      { wicket: { event: "cricket.wicket", steps: [] } as never },
+      [], bugStub());
+    expect(out.has("cricket.wicket")).toBe(true);
+  });
+
+  it("B5: a tapModel-S scorebug half still claims its tapEvent type (R4's behaviour, unchanged)", () => {
+    const out = dedicatedEventTypes([], undefined, [], tappableScorebug());
+    expect(out.has("tennis.point")).toBe(true);
+  });
+});
+
 function field(over: Partial<PadField> = {}): PadField {
   return { kind: "toggle", path: "flag", ...over } as PadField;
 }

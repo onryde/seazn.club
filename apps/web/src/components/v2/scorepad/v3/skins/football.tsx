@@ -44,6 +44,14 @@
 //     here with a tile that throws on tap.
 "use client";
 import type { FidelityBand } from "@seazn/engine/sport";
+// R3.5 — the pad's own alternation and tally rules for the shoot-out, both
+// re-exported from the football module's own barrel (not imported out of
+// `sports/period` directly): a skin must not reach into another sport
+// family's folder, matching how this skin already imports nothing from
+// cricket's or tennis's own directories. Mirrors the cricket skin's
+// `import { eligibleBowlers, nextBattingSide, reviewsRemaining } from
+// "@seazn/engine/sports/cricket"`.
+import { expectedKicker, shootoutTally, type ShootoutKick } from "@seazn/engine/sports/football";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import type { SportTone } from "../sport-theme";
@@ -213,6 +221,14 @@ interface FootballStateShape {
   cards?: { side?: string; person?: string; color?: string }[];
   squads?: { home?: FootballSquadShape; away?: FootballSquadShape };
   asOf?: GameTimeShape;
+  /** R3.5 — `football.ts`'s own `State.shootout`. `kicks` typed as the SHARED
+   *  `ShootoutKick[]` (not a hand-mirrored `{side;scored}[]`), so this file
+   *  can never drift from what `expectedKicker`/`shootoutTally` themselves
+   *  accept. `null` before the phase reaches SHOOTOUT; `{kicks: []}` from
+   *  the moment it does, even before the first kick — the engine sets it in
+   *  the same step it sets `phase: "SHOOTOUT"` (football.ts's
+   *  `resolveFullTime`). */
+  shootout?: { kicks: readonly ShootoutKick[] } | null;
 }
 
 interface FootballCfgShape {
@@ -499,6 +515,34 @@ export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
   return "live"; // H1 | H2 | Q2..Q4 | ET_H1 | ET_H2 | SHOOTOUT
 }
 
+/**
+ * R3.5/Task F — the side due to kick next, in the scorer's own words, or
+ * `undefined` when there is no cue to show. `undefined` covers TWO real
+ * cases, both deliberate: outside SHOOTOUT entirely (this is the same phase
+ * gate `phaseAllows("football.shootout.kick", …)` already applies to the
+ * tile — a stray `state.shootout` object must not resurrect the cue once the
+ * match has moved on, e.g. to `done`), and at zero kicks, where
+ * `expectedKicker` returning `null` is a REAL answer (either side may start)
+ * rather than a missing one.
+ *
+ * Feeds BOTH surfaces this ruling touches from ONE computation: the
+ * `buildScorebug` LED strip item below, and `buildTiles`' disabled-tile
+ * gate (which reads `expectedKicker` directly, since it has no `t` to
+ * resolve text with).
+ *
+ * Why this exists at all, beyond convenience: `applyShootoutKick` hard-
+ * refuses an out-of-turn kick, and server-side error messages are not
+ * localised in this repo (no server-side i18n) — an out-of-turn tap would
+ * otherwise reach a Spanish or Dutch scorer in English. This prevents the
+ * refusal rather than explaining it afterwards.
+ */
+export function kickerCue(rawState: unknown, t: TFn): string | undefined {
+  const s = asState(rawState);
+  if (readPhase(s) !== "SHOOTOUT" || !s.shootout) return undefined;
+  const next = expectedKicker(s.shootout.kicks);
+  return next === null ? undefined : t(SIDE_LABEL[next]);
+}
+
 // ---------------------------------------------------------------------------
 // scorebug() — tapModel T: both halves are READOUTS. A Model-S half is a tap
 // target that scores; football scores through the Goal tiles, so declaring
@@ -547,6 +591,21 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   if (clock !== undefined) {
     strip.push({ id: "clock", label: t("scorepad.skin.football.header.clock"), value: clock, tone: "led" });
   }
+  // R3.5/Task F — whose kick is next, the engine's own alternation rule
+  // (`expectedKicker`) surfaced BEFORE the refusal rather than explaining it
+  // after. `kickerCue` returns `undefined` at zero kicks (either side may
+  // start — a real answer) and outside SHOOTOUT entirely, so this item is
+  // simply never pushed in either case, the same "honest when there is
+  // nothing to show" posture the clock item above already takes.
+  const nextKicker = kickerCue(state, t);
+  if (nextKicker !== undefined) {
+    strip.push({
+      id: "nextKicker",
+      label: t("scorepad.skin.football.header.nextKicker"),
+      value: nextKicker,
+      tone: "led",
+    });
+  }
   // NO ADDED-TIME ITEM — R3/F (F2), removed rather than re-attributed. B4 put
   // one here reading `periods[last].addedMinutes`, and the fixture that proved
   // it (an OPEN "H1" already carrying `addedMinutes: 3`) is a state the fold
@@ -573,12 +632,33 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   // stays in the four dictionaries for the wave that gives the pad a way to
   // record added time (R6/R8) — see `_INDEX.md`.
 
+  // R3.5/Task D — the shoot-out tally rides the SAME halves as the
+  // regulation score. Before this the board showed `1` and `1` while the
+  // headline above it already read "1 — 1 (2-1 pens)": two score readouts on
+  // one screen, disagreeing, which is exactly what design note D-11 exists
+  // to prevent. `shootoutTally` is the shared primitive, never a fourth
+  // hand-rolled reduce (see Task H — `summary()` itself no longer forks it).
+  //
+  // `state.shootout?.kicks` truthy from the MOMENT the fold reaches
+  // SHOOTOUT (`{kicks: []}`, never `undefined`), so `sub` reads `(0)`/`(0)`
+  // before the first kick too — a real, honest fact (the tally so far),
+  // not a placeholder.
+  const kicks = state.shootout?.kicks;
+  const pens = kicks ? shootoutTally(kicks) : null;
   return {
     context: contextParts.join(" · "),
     phase: resolvePhase(view),
     halves: [
-      { who: [{ name: t(SIDE_LABEL.home) }], big: String(state.goals?.home ?? 0) },
-      { who: [{ name: t(SIDE_LABEL.away) }], big: String(state.goals?.away ?? 0) },
+      {
+        who: [{ name: t(SIDE_LABEL.home) }],
+        big: String(state.goals?.home ?? 0),
+        ...(pens ? { sub: `(${pens.home})` } : {}),
+      },
+      {
+        who: [{ name: t(SIDE_LABEL.away) }],
+        big: String(state.goals?.away ?? 0),
+        ...(pens ? { sub: `(${pens.away})` } : {}),
+      },
     ],
     strip,
   };
@@ -621,6 +701,13 @@ export function swapSlotId(side: Side): string {
   return `sub-${side}`;
 }
 
+/** Sheet key for one side's shoot-out kick (R3.5/Task J). ONE per side, same
+ *  shape as `cardSheetKey`: the outcome (Scored/Missed) is the sheet's own
+ *  first and only step. */
+export function kickSheetKey(side: Side): string {
+  return `kick-${side}`;
+}
+
 /** Whether this event may be dispatched at the ACTIVE band — see `EVENT_BAND`. */
 function withinBand(eventType: string, band: FidelityBand): boolean {
   const declared = EVENT_BAND[eventType];
@@ -654,6 +741,48 @@ export function buildTiles(view: PadHostView): TileSpec[] {
         span: 2,
         phases: ["live"],
         action: { event: { type: "football.goal", payload: { by: entrantOf(state, side) } } },
+      });
+    }
+  }
+
+  // R3.5/Task J (ruling R3.5-5) — R3-4 AMENDED for the SHOOTOUT phase ONLY.
+  // That ruling put four RARE types in the generic More sheet, and it still
+  // stands everywhere else; in this phase the rare type IS the whole match,
+  // and the board otherwise held two card tiles and nothing else while the
+  // only action of the phase sat two taps deep. These occupy the space the
+  // Goal tiles vacate (`offerable("football.goal")` and
+  // `offerable("football.shootout.kick")` are mutually exclusive — see
+  // `phaseAllows` — so the two blocks never both fire).
+  //
+  // A tile opens a two-outcome SHEET (Scored/Missed) rather than emitting
+  // directly like Goal does: `football.shootout.kick`'s only required field
+  // beyond `by` is `scored`, but a mis-tap here decides a knockout match, so
+  // the sheet's own Cancel gives a mis-tap a step to escape from, and the
+  // DOCK still opens after commit for band-2+ taker attribution (same as
+  // Goal's scorer/assist chips) — see `buildDock`.
+  //
+  // The out-of-turn side's tile is DISABLED, not absent: a vanishing tile
+  // reads as a bug, and this same phase's `buildScorebug` strip already
+  // names whose turn it is (`kickerCue`) — the LED cue a scorer reads
+  // ambiently on the board itself, right above this grid. (`tile-grid.tsx`'s
+  // own `assertDisabledTilesExplained` is a `ContextStripSpec`-shaped
+  // validator no skin currently exercises against its own real output —
+  // football declines `context()` altogether, same as before this task,
+  // for the reason this file's header states: no persistent PER-PERSON slot
+  // the fold could hold, and "whose side kicks next" is not a person fact.
+  // The LED cue is the mechanism that actually reaches the scorer here.)
+  if (offerable("football.shootout.kick")) {
+    const next = state.shootout ? expectedKicker(state.shootout.kicks) : null;
+    for (const side of SIDES) {
+      tiles.push({
+        id: kickSheetKey(side),
+        label: "pad.football.action.shootoutKick",
+        sublabel: SIDE_LABEL[side],
+        kind: "primary",
+        span: 2,
+        phases: ["live"],
+        ...(next !== null && next !== side ? { disabled: true } : {}),
+        action: { sheet: kickSheetKey(side) },
       });
     }
   }
@@ -943,6 +1072,40 @@ function periodSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
  *  the event union), so unlike the card's offence it can never be skipped —
  *  and "scored" is deliberately absent: a converted penalty is a
  *  `football.goal {penalty: true}`, not this event. */
+/**
+ * The two-outcome sheet a kick tile opens (R3.5/Task J). A SHEET, not a
+ * direct-emit tile like Goal: a mis-tap here decides a knockout match, so
+ * the sheet's own Cancel gives a mis-tap a step to escape from before it
+ * commits — one tap more than Goal, matched to the stakes.
+ *
+ * `person` (the taker) is deliberately NOT asked here: it is `.optional()`
+ * on `FootballShootoutKick`, exactly like a goal's `scorer` — and the DOCK
+ * offers it after commit for band-2+ attribution (`buildDock`'s own
+ * `"football.shootout.kick"` case), which is what keeps that attribution
+ * reachable at all now that the kick is no longer routed through the
+ * generic More form (whose own `padSpec` field list carried it as an
+ * `attribution` entry — football.ts:2241).
+ */
+function kickSheet(view: PadHostView, side: Side): GuidedSheetSpec {
+  const state = asState(view.state);
+  const by = entrantOf(state, side);
+  return {
+    event: "football.shootout.kick",
+    steps: [
+      {
+        id: "outcome",
+        kind: "choice",
+        title: "pad.football.sheet.shootoutKick.outcome.title",
+        options: [
+          { id: "scored", label: vocabKey("outcome", "scored") ?? "scored" },
+          { id: "missed", label: vocabKey("outcome", "missed") ?? "missed" },
+        ],
+      },
+    ],
+    buildPayload: (answers) => ({ by, scored: answers.outcome === "scored" }),
+  };
+}
+
 function penaltySheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
   return {
@@ -971,6 +1134,14 @@ export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedShe
     penalty: penaltySheet(view),
   };
   for (const side of SIDES) sheets[cardSheetKey(side)] = cardSheet(view, side, t);
+  // R3.5/Task J — ALWAYS declared, same convention period/penalty/card take
+  // above: the SHEET's presence never depends on phase, only the TILE that
+  // opens it does (`buildTiles`' own `offerable("football.shootout.kick")`
+  // gate). Keeping the sheet unconditional is what lets `dedicatedEventTypes`
+  // (pad-host.tsx) resolve it at all, and what lets the copy-truth sweep
+  // (this skin's own test file) see its title/option labels without a
+  // phase-specific special case.
+  for (const side of SIDES) sheets[kickSheetKey(side)] = kickSheet(view, side);
   return sheets;
 }
 
@@ -1263,6 +1434,21 @@ export function buildDock(
     return { title: t("pad.football.dock.card.title"), chips };
   }
 
+  // R3.5/Task J — the taker, `person` on `FootballShootoutKick`, exactly as
+  // optional as a goal's `scorer`. Before this task the generic More-sheet
+  // form's own `attribution: [BY_SIDE, {kind:"person", path:"person"}]`
+  // (football.ts's `padSpec`) offered it; a dedicated tile+sheet removes
+  // that generic route entirely, so THIS is what keeps "band-2+ taker
+  // attribution stays reachable" true rather than a claim this task quietly
+  // broke. Band-gated like the penalty's own offence chips (`view.band < 2`
+  // returns `null`, no empty panel) — `by` needs no chip of its own here,
+  // the TILE already fixed the side.
+  if (eventType === "football.shootout.kick") {
+    if (side === null || view.band < 2) return null;
+    const chips = squadOf(state, side).onPitch.map((id) => personChip(`person:${id}`, "person", id, nameOf(view, id, t)));
+    return { title: t("pad.football.dock.shootoutKick.title"), chips };
+  }
+
   return null;
 }
 
@@ -1288,6 +1474,7 @@ function join(parts: (string | undefined)[]): string | undefined {
 
 export function footballDetail(ctx: ActivityDetailContext): string | undefined {
   const { t, eventType, payload, personNames } = ctx;
+  const state = asState(ctx.state);
   const named = (id: unknown): string | undefined =>
     typeof id === "string" && id.length > 0 ? (personNames?.[id] ?? t("eventCopy.unknownPerson")) : undefined;
 
@@ -1315,8 +1502,28 @@ export function footballDetail(ctx: ActivityDetailContext): string | undefined {
       return join([vocabText("outcome", payload.outcome, t), named(payload.taker)]);
     case "football.shot":
       return join([vocabText("outcome", payload.outcome, t), named(payload.taker)]);
-    case "football.shootout.kick":
-      return join([t(payload.scored === true ? "outcome.scored" : "outcome.missed"), named(payload.person)]);
+    case "football.shootout.kick": {
+      // R3.5/Task E — the SIDE first. For every other football event the
+      // side is inferable because the score moves; for a shoot-out kick it
+      // is the entire content of the event, and this is the panel a scorer
+      // VOIDS from, so a mis-tap was being corrected blind. The review's
+      // original "the log cannot say which side kicked" framing was WRONG
+      // (`_INDEX.md`): the read-only audit table already names it — only
+      // this, the SCORER's Activity panel, did not.
+      //
+      // `sideOfEntrant` already maps an entrant id to `Side` and returns
+      // `null` when it cannot — reused rather than a second resolver.
+      // `null` drops the segment through `join`, never a raw entrant id: an
+      // unresolvable side is a real state (a foreign entrant on a replayed
+      // ledger), and a UUID in a scorer's activity feed is the defect S13
+      // already had to fix once.
+      const kickSide = sideOfEntrant(state, payload.by);
+      return join([
+        kickSide === null ? undefined : t(SIDE_LABEL[kickSide]),
+        t(payload.scored === true ? "outcome.scored" : "outcome.missed"),
+        named(payload.person),
+      ]);
+    }
     case "football.sinbin.start":
     case "football.sinbin.end":
       return join([named(payload.person)]);

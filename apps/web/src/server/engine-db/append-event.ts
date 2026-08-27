@@ -15,6 +15,7 @@ import { loadLineupPair } from "./lineups";
 import { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
+import { log } from "@/server/logger";
 
 // What a caller supplies; persistence stamps id/seq/recordedAt (spec 03 §2 —
 // ids/time are injected). `id`/`recordedAt` are accepted for test determinism.
@@ -37,6 +38,16 @@ export interface AppendResult {
   summary: ScoreSummary;
   outcome: MatchOutcome | null;
   status: string;
+  /** F9 (R3.5 review) — carried through so `appendEvent` can log an accepted
+   *  event AFTER `withTenant` has committed, instead of `appendEventInTx`
+   *  logging it itself before the fixtures update, the pg_notify, and the
+   *  commit (see that function for why: a throw in any of those, or a
+   *  caller retrying a serialization/deadlock error, used to leave a log
+   *  line describing a write that never reached the ledger, or describing
+   *  it twice for the same seq). The P11 batch importer
+   *  (`event-import.ts`) gets this field too on its own `AppendResult`s and
+   *  does not use it — it has its own, separate per-fixture logging. */
+  sportKey: string;
 }
 
 interface FixtureRow {
@@ -250,9 +261,45 @@ export async function appendEventInTx(
   // full and `prior` — which the ledger already accepted, under the cfg now
   // frozen above — is replayed. `fold.ts` and every other read path pass no
   // options at all.
-  const state = foldMatch(sportModule, cfg, lineups, stream, {
-    strictFromSeq: candidate.seq,
-  });
+  // R3.5 Task K — this funnel was entirely silent: every super-over ball,
+  // every shoot-out kick and every refusal on both was invisible in
+  // production. Wrap ONLY the fold: everything from here to the insert below
+  // runs inside `tx`, where a throw aborts the transaction before any write
+  // (PROMPT-61, above) — that must keep happening exactly as it does today,
+  // so the catch below re-throws unchanged and never touches SQL itself.
+  const state = (() => {
+    try {
+      return foldMatch(sportModule, cfg, lineups, stream, {
+        strictFromSeq: candidate.seq,
+      });
+    } catch (error) {
+      // IDs, types and codes only. The payload carries striker/nonStriker/
+      // bowler/person ids and, for some events, free text; persons in this
+      // product carry consent flags, so a payload is never a log-safe value
+      // (case K5).
+      if (EngineError.is(error)) {
+        log.warn(
+          { fixtureId, eventType: input.type, code: error.code },
+          "scoring event refused",
+        );
+      } else {
+        // F10 (R3.5 review) — this catch only instrumented the EngineError
+        // (422) case above. A TypeError/RangeError thrown from inside a
+        // sport module, or a Zod issue surfacing as a plain Error, used to
+        // re-throw with NOTHING written to the log: production saw a bare
+        // 500 with no fixtureId, no event type, no seq to chase — strictly
+        // worse than the refusal case, which at least names the fixture and
+        // the code. Same ID-only-fields posture as the branch above (no
+        // `code` — a non-engine error has none); the error itself is
+        // untouched, re-thrown exactly as before, just below.
+        log.error(
+          { fixtureId, eventType: input.type, seq: candidate.seq },
+          "scoring event fold crashed",
+        );
+      }
+      throw error;
+    }
+  })();
   const summary = sportModule.summary(state);
   const outcome = sportModule.outcome(state);
   const active = resolveVoids(stream);
@@ -299,7 +346,14 @@ export async function appendEventInTx(
   `;
 
   const status = nextStatus(candidate.type, outcome, active);
-  // Fire once, on the transition from no-result to a decided result.
+  // Fire once, on the transition from no-result to a decided result. F9
+  // (R3.5 review) — this used to be the trigger for a "fixture decided"
+  // `log.info` call right here, before the fixtures update, the pg_notify,
+  // and the commit below. Logging now happens in `appendEvent`, AFTER
+  // `withTenant` resolves — see there for why. `firstResult` itself stays
+  // here: `appendEvent`'s PostHog capture and `event-import.ts`'s own
+  // per-fixture handling both still need it from this same computation, so
+  // the two can never disagree about when a fixture was decided.
   const firstResult: FirstResult | null =
     fixture.outcome === null && outcome !== null
       ? { distinctId: candidate.recordedBy ?? `org:${orgId}`, sportKey: division.sport_key, status }
@@ -324,7 +378,15 @@ export async function appendEventInTx(
   })})`;
 
   return {
-    appended: { seq: candidate.seq, event: candidate, state, summary, outcome, status },
+    appended: {
+      seq: candidate.seq,
+      event: candidate,
+      state,
+      summary,
+      outcome,
+      status,
+      sportKey: division.sport_key,
+    },
     firstResult,
   };
 }
@@ -353,6 +415,47 @@ export async function appendEvent(
   const { appended, firstResult } = await withTenant(orgId, (tx) =>
     appendEventInTx(tx, orgId, fixtureId, expectedSeq, input),
   );
+
+  // F9 (R3.5 review) — this used to log from INSIDE appendEventInTx, before
+  // the fixtures update, the pg_notify, and the commit: a throw in any of
+  // those, or a caller retrying a serialization/deadlock error, meant the
+  // line described an append that never reached the ledger, or described it
+  // twice for the same seq — exactly wrong for the question this logging
+  // exists to answer ("was this super over actually recorded?"). `withTenant`
+  // (postgres.js `sql.begin`) only resolves once COMMIT has gone through, so
+  // everything below can only ever describe a write that is actually in the
+  // ledger. IDs, types and counts only (case K5: never a payload value).
+  // `phase` is the fold's OWN phase, which is what makes a decider visible:
+  // the first accepted line whose phase is "super_over"/"SHOOTOUT" IS the
+  // decider entry, deliberately with no separate line.
+  log.info(
+    {
+      fixtureId,
+      sportKey: appended.sportKey,
+      eventType: appended.event.type,
+      seq: appended.seq,
+      phase: (appended.state as { phase?: unknown }).phase ?? null,
+      status: appended.status,
+    },
+    "scoring event appended",
+  );
+  if (firstResult !== null) {
+    // `method` is what a support question about a knockout result actually
+    // needs: shootout / super_over / boundary_count / extra_time — the
+    // difference between "they won" and "they won on penalties". Reuses the
+    // SAME `firstResult` the fold computed rather than re-testing outcomes a
+    // second time out here, so the two can never disagree about when a
+    // fixture was decided.
+    log.info(
+      {
+        fixtureId,
+        sportKey: firstResult.sportKey,
+        kind: (appended.outcome as { kind?: unknown }).kind ?? null,
+        method: (appended.outcome as { method?: unknown }).method ?? null,
+      },
+      "fixture decided",
+    );
+  }
 
   if (firstResult) {
     await captureServer({

@@ -6,7 +6,10 @@
 import { describe, expect, it } from "vitest";
 import type { EventEnvelope, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
+import { cricket } from "@seazn/engine/sports/cricket";
+import { ballSeq, cricketEnvelopes, foldCricket, tiedWithSuperOver, type CricketEventSpec } from "../../__tests__/_cricket-fold";
 import { answerStep, backStep, currentStep, initialSheetState } from "../../guided-sheet";
+import { assertDisabledTilesExplained } from "../../tile-grid";
 import type { GuidedSheetSpec, PadHostView, SkinDefV3 } from "../../types";
 import {
   EXTRA_KINDS,
@@ -31,6 +34,7 @@ import {
   nextOverNumber,
   oversText,
   overDots,
+  refusedEventTypes,
   resolvePeople,
   resolvePhase,
   runRate,
@@ -1931,6 +1935,44 @@ describe("dueBattingSide", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// R3.5 F4 (review finding, MAJOR) — dueBattingSide's two super-over branches
+// disagreed about what an ABSENT `battingSide` means: the pair-complete
+// branch (`so.length % 2 === 0`) defaulted to `null`; the mid-pair branch
+// one line up already defaulted to `"home"`. A real `foldMatch` always
+// populates `InningsState.battingSide` (required on the engine's own type),
+// so this exact fork is UNREACHABLE through a real fold — a hand-built
+// shape is the only way to exercise it, same posture as this file's own
+// pre-existing hand-built `dueBattingSide` cases in the block just above.
+//
+// Fixed by making the pair-complete branch default to the SAME "home" token
+// the mid-pair branch already assumes for the identical missing raw fact —
+// not by making the two branches return the SAME final answer, which they
+// never did even when the field IS present: the mid-pair branch returns the
+// OPPONENT of the last entry's side (an innings just opened for X; the
+// OTHER end is due), while the pair-complete branch returns that side
+// DIRECTLY (ICC: the side that batted SECOND in the pair just finished
+// bats FIRST in the next one — `dueBattingSide`'s own doc). A `null` return
+// here specifically re-arms `blockedByClosure` (`buildTiles`) and disables
+// the whole delivery row while the fold happily accepts the next ball — the
+// exact defect class Tasks C and R exist to remove, reproduced by malformed
+// data instead of a real state transition.
+// ---------------------------------------------------------------------------
+describe("dueBattingSide — the two super-over branches agree on an absent battingSide (F4)", () => {
+  it("mid-pair (so.length===1, odd — the pair's first innings closed, second not yet started), battingSide absent: opponent of the assumed 'home' default — away (UNCHANGED; pins the pre-existing behaviour this fix must not disturb)", () => {
+    const s = state({ phase: "super_over", superOver: { innings: [{ closed: true }] } });
+    expect(dueBattingSide(s, cfg())).toBe("away");
+  });
+
+  it("pair complete (so.length===2, even>0), battingSide absent on the last entry: the assumed 'home' default itself, never null — agrees with the mid-pair branch's own assumption instead of silently re-disabling the delivery row", () => {
+    const s = state({
+      phase: "super_over",
+      superOver: { innings: [{ closed: true, battingSide: "away" }, { closed: true }] },
+    });
+    expect(dueBattingSide(s, cfg())).toBe("home");
+  });
+});
+
 describe("buildContext — innings closed names the real cause (R2b defect 2)", () => {
   // R2b-next (2026-08-17): both fixtures below now carry TWO closed innings
   // — same reason as `buildTiles`'s own defect-2 block above: under the
@@ -2815,5 +2857,777 @@ describe("cricketSkinV3 — sheets() closes over the factory's own t (R2c)", () 
     const step = cricketSkinV3(marker).sheets!(v).review!.steps.find((s) => s.id === "by")!;
     const blocked = (step as { blocked?: (a: Readonly<Record<string, string>>) => Readonly<Record<string, string>> }).blocked!({ kind: "player" });
     expect(blocked["home-1"]).toBe("MARK:pad.cricket.sheet.review.by.blocked.noneLeft.short");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5 Task C — THE BLOCKER. `currentInnings` used to read `state.innings`
+// alone; the engine keeps a super over in `state.superOver.innings`. Every
+// assertion below runs against a REAL `foldMatch` state (via `_cricket-fold`,
+// this suite's sibling to `_football-fold.ts`) rather than a hand-built
+// literal — Task B round 1 in this same wave shipped green synthetic tests
+// over an unfixed defect, and only a real fold caught it. Case ids (C1-C22)
+// match `docs/superpowers/plans/2026-08-26-scorepad-v3-r35-deciders.md`'s
+// own matrix.
+//
+// `soBattingSideAt` (cricket.ts — exported R3.5 Task S; private before
+// that): battingFirst defaults to "home" (no toss posted), so home bats
+// main innings 1, away innings 2 — and by the ICC rule the side batting
+// SECOND in the match bats FIRST in the super over. Every fixture below
+// inherits that: SO pair 0's innings[0] is away, innings[1] is home; pair 1
+// (a `repeat`) flips it back.
+// ---------------------------------------------------------------------------
+
+/** Folds a tied one-over-a-side match straight to `phase: "super_over"` with
+ *  an EMPTY `superOver.innings` list (the state `decideTie` leaves behind
+ *  between the tie and the first super-over ball) — the shared starting
+ *  point almost every case below extends. `bpo` threads through cfg AND the
+ *  ball builder together so C20 (5-ball overs) is a one-argument change, not
+ *  two independently-kept numbers. */
+function tieToSuperOver(
+  cfgOverrides: Record<string, unknown> = {},
+  bpo = 6,
+): { cfg: ReturnType<typeof tiedWithSuperOver>; events: CricketEventSpec[] } {
+  const cfg = tiedWithSuperOver({ ballsPerOver: bpo, ballsPerInnings: bpo, ...cfgOverrides });
+  const b1 = ballSeq(bpo);
+  const b2 = ballSeq(bpo);
+  const inn1 = Array.from({ length: bpo }, () => b1("cricket.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 1 }));
+  const inn2 = Array.from({ length: bpo }, () => b2("cricket.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-11", bat: 1 }));
+  return { cfg, events: [["core.start"], ...inn1, ...inn2] };
+}
+
+describe("R3.5 Task C — cricket super over, scored against REAL folds", () => {
+  it("C1: a tie WITHOUT a super over is genuinely terminal — post phase hides the ball tiles by phase filtering, not by a disabled flag", () => {
+    const cfg = cricket.configSchema.parse({ ballsPerInnings: 6, ballsPerOver: 6, minOversForResult: 1 });
+    const b1 = ballSeq();
+    const b2 = ballSeq();
+    const events: CricketEventSpec[] = [
+      ["core.start"],
+      ...Array.from({ length: 6 }, () => b1("cricket.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 1 })),
+      ...Array.from({ length: 6 }, () => b2("cricket.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-11", bat: 1 })),
+    ];
+    const st = foldCricket(cfg, events);
+    expect(st.phase).toBe("done");
+    expect(st.outcome).toEqual({ kind: "tie" });
+    const v = view({ cfg, state: st });
+    expect(resolvePhase(v)).toBe("post");
+    // Mechanism check: tile-grid.tsx filters by `phases.includes(phase)` — a
+    // "post" board never renders a `phases:["live"]` tile at all, disabled
+    // or not. That is the actual, observable "hidden" this case names.
+    const tiles = buildTiles(v);
+    const visible = tiles.filter((tl) => tl.phases.includes(resolvePhase(v)));
+    expect(visible.some((tl) => tl.id === "run0" || tl.id === "wicket")).toBe(false);
+  });
+
+  it("C2: tie WITH a super over, no ball yet — the fine (ball) lane is offered; the coarse over-summary tile is not (R3.5 Task R defect 2, inverted from this case's pre-fix assertion — see this suite's own header on why a deleted defect probe is how this wave lost coverage once already)", () => {
+    const { cfg, events } = tieToSuperOver();
+    const st = foldCricket(cfg, events);
+    expect(st.phase).toBe("super_over");
+    expect(st.superOver).toMatchObject({ innings: [] });
+    expect(currentInnings(st)).toBeNull();
+    expect(inningsFidelity(currentInnings(st))).toBe("unopened");
+    const v = view({ cfg, state: st });
+    const tiles = buildTiles(v);
+    expect(tiles.some((tl) => tl.id === "run0")).toBe(true); // fine lane offered
+    for (const id of ["run0", "run1", "wide", "wicket"]) {
+      expect(tiles.find((tl) => tl.id === id)?.disabled, `${id} must not be disabled`).not.toBe(true);
+    }
+    // R3.5 Task R (defect 2) — `cricket.innings.summary` is refused
+    // outright in phase "super_over" (`applySummary`, cricket.ts:1481: a
+    // super over is always ball-by-ball, never coarse). Pre-fix this tile
+    // was pushed fully ENABLED here (`fidelity` reads "unopened" the same
+    // way it would pre-toss), a live 422 exactly like review/retire/
+    // inningsClose in the sibling defect-1 case below.
+    const overSummary = tiles.find((tl) => tl.id === "overSummary");
+    expect(overSummary === undefined || overSummary.disabled === true).toBe(true);
+    // R3.5 F3 (review finding, MAJOR) — no LONGER null. Pre-fix this window
+    // had no strip at all, so the five tiles `superOverTile` greys here
+    // (review/retire/inningsClose/overSummary, and declare when twoInnings)
+    // went completely unexplained — see the dedicated "R3.5 F3" describe
+    // block below for the fix and the `assertDisabledTilesExplained` proof.
+    const ctx = buildContext(v, t);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.slots.some((s) => !!s.message)).toBe(true);
+  });
+
+  it("C3: a COARSE main innings does not disable the super over's delivery row (the coarse-lane half of the blocker)", () => {
+    const cfg = cricket.configSchema.parse({ superOver: true });
+    const st = foldCricket(cfg, [
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 150, wickets: 5, legalBalls: 120, boundaries: 10 }],
+      ["cricket.innings.summary", { runs: 150, wickets: 7, legalBalls: 120, boundaries: 12 }],
+    ]);
+    expect(st.phase).toBe("super_over");
+    const tiles = buildTiles(view({ cfg, state: st }));
+    // The DELIVERY row (ball-emitting tiles) is what this case names — not
+    // review/retire/inningsClose, which R3.5 Task R now correctly disables
+    // for the SEPARATE reason that the fold refuses all three outright
+    // during any super over regardless of coarse/fine (see this suite's
+    // "R3.5 Task R" block's defect-1 case, below).
+    for (const id of ["run0", "run1", "run4", "wide", "wicket"]) {
+      expect(tiles.find((tl) => tl.id === id)?.disabled, `${id} must not be disabled`).not.toBe(true);
+    }
+    expect(tiles.map((tl) => tl.id)).toContain("run4");
+  });
+
+  it("C4/C5: the scorebug tracks the SUPER OVER's own runs/wickets/over, not the closed main innings", () => {
+    const { cfg, events } = tieToSuperOver();
+    const bso = ballSeq();
+    const st = foldCricket(cfg, [...events, bso("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 4, boundary: 4 })]);
+    const bug = buildScorebug(view({ cfg, state: st }), t);
+    expect(bug.halves[0]!.big).toBe("4/0"); // the super over's 4, not the closed innings' 6
+    expect(bug.context).toContain("0.1");
+  });
+
+  it("C6: the bowler named mid-super-over is the SUPER OVER's bowler, never the main innings'", () => {
+    const { cfg, events } = tieToSuperOver();
+    const bso = ballSeq();
+    // bat:2 (even) deliberately — an odd-run ball rotates strike, which
+    // would make this test about strike rotation instead of about the
+    // bowler source this case actually names.
+    const st = foldCricket(cfg, [...events, bso("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 2 })]);
+    const people = resolvePeople(st, {}, cfg);
+    expect(people.bowler).toBe("H-10");
+    expect(people.striker).toBe("A-1");
+    const bug = buildScorebug(view({ cfg, state: st }), t);
+    const bowlerItem = bug.strip.find((s) => s.value.startsWith("⚾"));
+    expect(bowlerItem?.value).toBe("⚾H-10");
+  });
+
+  it("C7: no target chip while the FIRST super-over innings is still being played — nothing to chase yet", () => {
+    const { cfg, events } = tieToSuperOver();
+    const bso = ballSeq();
+    const st = foldCricket(cfg, [...events, bso("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 })]);
+    expect(chaseTarget(cfg, st)).toBeNull();
+    const bug = buildScorebug(view({ cfg, state: st }), t);
+    const targetItem = bug.strip.find((s) => s.label === "scorepad.skin.cricket.header.target" || s.label === "scorepad.skin.cricket.header.dlsPar");
+    expect(targetItem).toBeUndefined();
+  });
+
+  it("C8: the target in the SECOND super-over innings is SO1's runs + 1, never the main innings'", () => {
+    const { cfg, events } = tieToSuperOver();
+    const bso1 = ballSeq();
+    const so1 = Array.from({ length: 6 }, () => bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 })); // SO1 closes 6/0
+    const bso2 = ballSeq();
+    const so2: [string, unknown][] = [bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 2 })];
+    const st = foldCricket(cfg, [...events, ...so1, ...so2]);
+    const soInnings = (st.superOver as { innings: { closed: boolean; runs: number }[] }).innings;
+    expect(soInnings).toHaveLength(2);
+    expect(soInnings[0]).toMatchObject({ closed: true, runs: 6 });
+    expect(chaseTarget(cfg, st)).toEqual({ value: 7, isDls: false });
+  });
+
+  it("C9: SO1 closing on 6 legal balls flips the due side but leaves tiles enabled and the scorebug on SO1's final score", () => {
+    const { cfg, events } = tieToSuperOver();
+    const bso1 = ballSeq();
+    const so1 = Array.from({ length: 6 }, () => bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 }));
+    const st = foldCricket(cfg, [...events, ...so1]);
+    const soInnings = (st.superOver as { innings: { closed: boolean }[] }).innings;
+    expect(soInnings).toHaveLength(1);
+    expect(soInnings[0]!.closed).toBe(true);
+    expect(dueBattingSide(st, cfg)).toBe("home"); // opponent of away, who just batted SO1
+    const v = view({ cfg, state: st });
+    // The BALL-EMITTING tiles — the ones the pre-fix `blockedByClosure`
+    // wrongly disabled — are enabled again. `review`/`retire`/`inningsClose`
+    // staying disabled here is correct and orthogonal (`closedTile`, gated
+    // on `inningsClosed` alone): nothing is open yet to review or close,
+    // the SAME shape the ordinary main-innings transition already has (see
+    // this file's "re-enables every ball-emitting tile..." test elsewhere).
+    const tiles = buildTiles(v);
+    for (const id of ["run0", "run1", "run4", "wide", "wicket"]) {
+      expect(tiles.find((tl) => tl.id === id)?.disabled, `${id} must not be disabled`).not.toBe(true);
+    }
+    expect(buildScorebug(v, t).halves[0]!.big).toBe("6/0"); // SO1's final score, held until SO2's first ball
+  });
+
+  it("C10: SO1 closing on 2 wickets (all-out in a super over) behaves the same as closing on balls — C9", () => {
+    const { cfg, events } = tieToSuperOver();
+    const bso1 = ballSeq();
+    const so1: [string, unknown][] = [
+      bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 }),
+      bso1("cricket.superover.ball", { striker: "A-2", nonStriker: "A-1", bowler: "H-10", bat: 0, wicket: { kind: "bowled", out: "A-2", bowlerCredited: true } }),
+      bso1("cricket.superover.ball", { striker: "A-3", nonStriker: "A-1", bowler: "H-10", bat: 0, wicket: { kind: "bowled", out: "A-3", bowlerCredited: true } }),
+    ];
+    const st = foldCricket(cfg, [...events, ...so1]);
+    const soInnings = (st.superOver as { innings: { closed: boolean; wickets: number }[] }).innings;
+    expect(soInnings).toHaveLength(1);
+    expect(soInnings[0]).toMatchObject({ closed: true, wickets: 2 });
+    expect(dueBattingSide(st, cfg)).toBe("home");
+    const tiles = buildTiles(view({ cfg, state: st }));
+    for (const id of ["run0", "run1", "run4", "wide", "wicket"]) {
+      expect(tiles.find((tl) => tl.id === id)?.disabled, `${id} must not be disabled`).not.toBe(true);
+    }
+  });
+
+  it("C11: the SECOND super-over innings passing its target decides the match immediately, method super_over", () => {
+    const { cfg, events } = tieToSuperOver();
+    const bso1 = ballSeq();
+    const so1 = Array.from({ length: 6 }, () => bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 })); // SO1 = 6/0
+    const bso2 = ballSeq();
+    const so2: [string, unknown][] = [
+      bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 4, boundary: 4 }),
+      bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 4, boundary: 4 }), // 8 >= target 7
+    ];
+    const st = foldCricket(cfg, [...events, ...so1, ...so2]);
+    expect(st.phase).toBe("done");
+    expect(st.outcome).toMatchObject({ kind: "win", winner: "H", method: "super_over" });
+  });
+
+  it("C12: a `repeat` opens a SECOND pair, and the scorebug follows it in", () => {
+    const { cfg, events } = tieToSuperOver(); // superOverStillTied defaults to "repeat"
+    const bso1 = ballSeq();
+    const so1 = Array.from({ length: 6 }, () => bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 })); // 6/0
+    const bso2 = ballSeq();
+    const so2 = Array.from({ length: 6 }, () => bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 1 })); // 6/0 — tied again
+    const bso3 = ballSeq();
+    const so3: [string, unknown][] = [bso3("cricket.superover.ball", { striker: "H-3", nonStriker: "H-4", bowler: "A-9", bat: 3 })];
+    const st = foldCricket(cfg, [...events, ...so1, ...so2, ...so3]);
+    expect(st.phase).toBe("super_over"); // still undecided — the repeat pair is live
+    const soInnings = (st.superOver as { innings: { battingSide: string; closed: boolean; runs: number }[] }).innings;
+    expect(soInnings).toHaveLength(3); // the SAME array grew into pair 2, never reset
+    expect(soInnings[2]).toMatchObject({ battingSide: "home", closed: false, runs: 3 });
+    const cur = currentInnings(st);
+    expect(cur).toMatchObject({ battingSide: "home", closed: false, runs: 3 });
+    expect(buildScorebug(view({ cfg, state: st }), t).halves[0]!.big).toBe("3/0");
+  });
+
+  it("C13: superOverStillTied boundary_count with UNEQUAL boundaries decides by boundaries across match + super over", () => {
+    const { cfg, events } = tieToSuperOver({ superOverStillTied: "boundary_count" });
+    const bso1 = ballSeq();
+    const so1 = Array.from({ length: 6 }, () => bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 })); // 6/0, 0 boundaries
+    const bso2 = ballSeq();
+    const so2: [string, unknown][] = [
+      bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 4, boundary: 4 }),
+      bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 0 }),
+      bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 0 }),
+      bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 1 }),
+      bso2("cricket.superover.ball", { striker: "H-2", nonStriker: "H-1", bowler: "A-10", bat: 1 }),
+      bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 0 }),
+    ]; // 6/0, 1 boundary — SAME runs as SO1, more boundaries overall
+    const st = foldCricket(cfg, [...events, ...so1, ...so2]);
+    expect(st.outcome).toMatchObject({ kind: "win", winner: "H", method: "boundary_count" });
+    expect(resolvePhase(view({ cfg, state: st }))).toBe("post");
+  });
+
+  it("C14: superOverStillTied boundary_count with EQUAL boundaries stands as a tie — the one path where boundary count does not decide", () => {
+    const { cfg, events } = tieToSuperOver({ superOverStillTied: "boundary_count" });
+    const bso1 = ballSeq();
+    const so1 = Array.from({ length: 6 }, () => bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 })); // 0 boundaries
+    const bso2 = ballSeq();
+    const so2 = Array.from({ length: 6 }, () => bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 1 })); // 0 boundaries
+    const st = foldCricket(cfg, [...events, ...so1, ...so2]);
+    expect(st.outcome).toEqual({ kind: "tie" });
+    expect(st.phase).toBe("done");
+  });
+
+  it("C15: superOverStillTied shared stands as a tie without comparing boundaries at all", () => {
+    const { cfg, events } = tieToSuperOver({ superOverStillTied: "shared" });
+    const bso1 = ballSeq();
+    // SO1: 0 boundaries. SO2: same 6 runs but via a single boundary — if
+    // "shared" secretly compared boundaries the way "boundary_count" does,
+    // this asymmetry would decide it; "shared" must ignore that and tie.
+    const so1 = Array.from({ length: 6 }, () => bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 }));
+    const bso2 = ballSeq();
+    const so2: [string, unknown][] = [
+      bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 4, boundary: 4 }),
+      bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 0 }),
+      bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 0 }),
+      bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 1 }),
+      bso2("cricket.superover.ball", { striker: "H-2", nonStriker: "H-1", bowler: "A-10", bat: 1 }),
+      bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 0 }),
+    ];
+    const st = foldCricket(cfg, [...events, ...so1, ...so2]);
+    expect(st.outcome).toEqual({ kind: "tie" });
+    expect(st.phase).toBe("done");
+  });
+
+  it("C16: the wicket sheet's out-candidates are the super over's OWN crease pair, never a stale or main-innings name", () => {
+    const { cfg, events } = tieToSuperOver();
+    const bso = ballSeq();
+    // bat:2 (even) — an odd-run ball rotates strike, which is not what this
+    // case is about; the two crease names are what matters, not their order.
+    const st = foldCricket(cfg, [...events, bso("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 2 })]);
+    const sheets = buildSheets(view({ cfg, state: st }), t);
+    const outStep = sheets.wicket!.steps.find((s) => s.id === "out") as { candidates?: string[] };
+    expect(outStep.candidates).toEqual(["A-1", "A-2"]);
+  });
+
+  it("C17: a wide inside a super over does not advance the over, and the wide tile stays enabled", () => {
+    const { cfg, events } = tieToSuperOver();
+    const bso = ballSeq();
+    const specs: CricketEventSpec[] = [...events, bso("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 0, extras: { kind: "wide", runs: 1 } })];
+    const st = foldCricket(cfg, specs);
+    const soInnings = (st.superOver as { innings: { legalBalls: number }[] }).innings;
+    expect(soInnings[0]!.legalBalls).toBe(0); // a wide is illegal — consumes no legal ball
+    const v = view({ cfg, state: st, events: cricketEnvelopes(specs) });
+    expect(buildScorebug(v, t).context).toContain("0.0");
+    const wideTile = buildTiles(v).find((tl) => tl.id === "wide")!;
+    expect(wideTile.disabled).not.toBe(true);
+  });
+
+  it("C18: a free hit inside a super over surfaces the freeHit strip chip, gated on the SO innings' own ball log", () => {
+    const { cfg, events } = tieToSuperOver();
+    const bso = ballSeq();
+    const specs: CricketEventSpec[] = [...events, bso("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 0, extras: { kind: "noball", runs: 1 } })];
+    const st = foldCricket(cfg, specs);
+    const v = view({ cfg, state: st, events: cricketEnvelopes(specs) });
+    expect(buildScorebug(v, t).strip.some((s) => s.id === "freeHit")).toBe(true);
+  });
+
+  it("C19: ballEventType is cricket.superover.ball for a REAL super-over state (regression guard — already correct pre-Task-C)", () => {
+    const { cfg, events } = tieToSuperOver();
+    const st = foldCricket(cfg, events);
+    expect(ballEventType(st)).toBe("cricket.superover.ball");
+  });
+
+  it("C20: a 5-ball-per-over cfg (Hundred) carries into the super over's own ballsLimit and over text", () => {
+    const { cfg, events } = tieToSuperOver({}, 5);
+    const bso = ballSeq(5);
+    const st = foldCricket(cfg, [...events, bso("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 })]);
+    const soInnings = (st.superOver as { innings: { ballsLimit: number | null }[] }).innings;
+    expect(soInnings[0]!.ballsLimit).toBe(5);
+    expect(buildScorebug(view({ cfg, state: st }), t).context).toContain("0.1");
+  });
+
+  it("C21: the cfg refine refuses a super over with inningsPerSide 2 (regression guard on the refine)", () => {
+    expect(() => cricket.configSchema.parse({ superOver: true, inningsPerSide: 2 })).toThrow();
+  });
+
+  it("C22: voiding the last super-over ball reverts the innings, the due side, and the closure state", () => {
+    const { cfg, events } = tieToSuperOver(); // 13 specs: indices 0..12
+    const bso1 = ballSeq();
+    const so1 = Array.from({ length: 6 }, () => bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 })); // indices 13..18
+    const closingId = `e-${events.length + so1.length - 1}`; // e-18: the 6th (closing) SO ball
+    const st = foldCricket(cfg, [...events, ...so1, ["core.void", {}, closingId]]);
+    const soInnings = (st.superOver as { innings: { closed: boolean; legalBalls: number }[] }).innings;
+    expect(soInnings[0]!.closed).toBe(false); // reverted — the closing ball never happened
+    expect(soInnings[0]!.legalBalls).toBe(5);
+    expect(dueBattingSide(st, cfg)).toBeNull(); // an innings is open again — nobody is "due"
+    const ctx = buildContext(view({ cfg, state: st }), t);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.slots.find((s) => s.id === "striker")?.message).toBeUndefined(); // no closure message
+    expect(buildScorebug(view({ cfg, state: st }), t).halves[0]!.big).toBe("5/0"); // reverted score
+  });
+
+  it("mutation guard: currentInnings falling back to `state.innings` alone reintroduces the blocker (C3/C4/C5/C6 all red)", () => {
+    // Not a real mutation of source (that is done by hand against the file,
+    // per this task's dispatch) — a local re-derivation of the OLD, buggy
+    // behaviour, asserted against the SAME real fold C4/C5/C6 use, so this
+    // test file itself documents exactly what regresses if `currentInnings`
+    // is ever reverted to `state.innings ?? []`.
+    const { cfg, events } = tieToSuperOver();
+    const bso = ballSeq();
+    const st = foldCricket(cfg, [...events, bso("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 4, boundary: 4 })]);
+    const oldCurrentInnings = (state: { innings?: { closed?: boolean }[] }) => {
+      const innings = state.innings ?? [];
+      return innings.find((i) => !i.closed) ?? innings[innings.length - 1] ?? null;
+    };
+    const oldInnings = oldCurrentInnings(st) as { runs?: number; closed?: boolean } | null;
+    // The old, buggy read: the closed MAIN innings (away's 6/0), not the SO.
+    expect(oldInnings?.closed).toBe(true);
+    expect(oldInnings?.runs).toBe(6);
+    // The FIXED read (currentInnings, imported above) disagrees, on purpose.
+    expect(currentInnings(st)?.closed).toBe(false);
+    expect(currentInnings(st)?.runs).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5 Task R — four defects the Task C fix introduced or left behind, all
+// living in the SAME ground Task C moved: `currentInnings` now correctly
+// points at the super over, but `dueBattingSide`/`chaseTarget`/the tile
+// gates in `buildTiles` each had their OWN, independent switch for "are we
+// in a super over" that no longer agreed with it. Every state below is a
+// REAL `foldMatch` fold, same posture as Task C's own block above — C12
+// (above) already proves a `repeat` opens pair 2, but stops one ball short
+// of the window these defects live in (it folds a ball of pair 2 before
+// asserting); the tests here stop exactly at that window instead.
+// ---------------------------------------------------------------------------
+
+describe("R3.5 Task R — super-over tile/target defects Task C left behind", () => {
+  it("defect 1: an OPEN super-over innings still refuses review/retire/inningsClose — closedTile/inningsClosed answers a different question now that currentInnings reads the super over itself", () => {
+    const { cfg, events } = tieToSuperOver();
+    const bso = ballSeq();
+    const st = foldCricket(cfg, [...events, bso("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 })]);
+    expect(st.phase).toBe("super_over");
+    const soInnings = (st.superOver as { innings: { closed: boolean }[] }).innings;
+    expect(soInnings[0]!.closed).toBe(false); // genuinely open, not closed — closedTile alone would not disable these
+    const tiles = buildTiles(view({ cfg, state: st }));
+    for (const id of ["review", "retire", "inningsClose"]) {
+      expect(tiles.find((tl) => tl.id === id)?.disabled, `${id} must be disabled`).toBe(true);
+    }
+  });
+
+  it("defect 3/4: pair 1 tied and closed, pair 2 not yet started — the delivery row is enabled, dueBattingSide names the side due to open pair 2, and chaseTarget is null (not pair 1's stale target) — the window C12 skips by folding one ball into pair 2 before asserting", () => {
+    const { cfg, events } = tieToSuperOver(); // superOverStillTied defaults to "repeat"
+    const bso1 = ballSeq();
+    const so1 = Array.from({ length: 6 }, () => bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 })); // pair 1 first innings: 6/0
+    const bso2 = ballSeq();
+    const so2 = Array.from({ length: 6 }, () => bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 1 })); // pair 1 second innings: 6/0 — ties, opens pair 2
+    const st = foldCricket(cfg, [...events, ...so1, ...so2]);
+    expect(st.phase).toBe("super_over"); // repeat policy — still live, awaiting pair 2's first ball
+    const soInnings = (st.superOver as { innings: { closed: boolean }[] }).innings;
+    expect(soInnings).toHaveLength(2);
+    expect(soInnings.every((i) => i.closed)).toBe(true); // pair 1 fully closed; pair 2 has not started
+    // soBattingSideAt(state, 2) (cricket.ts, exported R3.5 Task S — this
+    // test predates that export, so the formula is re-derived here rather
+    // than imported): pair = 1, pairFirst = battingFirst since pair % 2 !== 0,
+    // and battingFirst defaults to "home" (no toss posted — this suite's
+    // own header comment above). Index 2 is even within its pair, so the
+    // due side is pairFirst itself: "home" — the same side that just
+    // batted second (last) in pair 1, matching C12's own assertion that
+    // soInnings[2].battingSide is "home" for this identical fixture one
+    // ball further along.
+    expect(dueBattingSide(st, cfg)).toBe("home");
+    expect(chaseTarget(cfg, st)).toBeNull(); // pair 2 hasn't started — nothing to chase yet, not pair 1's stale 7
+    const tiles = buildTiles(view({ cfg, state: st }));
+    for (const id of ["run0", "run1", "run4", "wide", "wicket"]) {
+      expect(tiles.find((tl) => tl.id === id)?.disabled, `${id} must not be disabled`).not.toBe(true);
+    }
+  });
+
+  it("defect 4: once pair 2's first innings closes the target is pair 2's OWN + 1 (never pair 1's), live from the moment that innings closes and unchanged once pair 2's second innings actually opens", () => {
+    const { cfg, events } = tieToSuperOver();
+    const bso1 = ballSeq();
+    const so1 = Array.from({ length: 6 }, () => bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 })); // pair 1 first innings: 6/0
+    const bso2 = ballSeq();
+    const so2 = Array.from({ length: 6 }, () => bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 1 })); // pair 1 second innings: 6/0 — ties, opens pair 2
+    const bso3 = ballSeq();
+    const so3 = Array.from({ length: 6 }, () => bso3("cricket.superover.ball", { striker: "H-3", nonStriker: "H-4", bowler: "A-9", bat: 0 })); // pair 2 first innings: 0/0 — deliberately DIFFERENT from pair 1's 6, so a stale pair-1 target (7) is distinguishable from the correct pair-2 one (1)
+    const stFirstInningsClosed = foldCricket(cfg, [...events, ...so1, ...so2, ...so3]);
+    const soAt3 = (stFirstInningsClosed.superOver as { innings: { closed: boolean }[] }).innings;
+    expect(soAt3).toHaveLength(3);
+    expect(soAt3[2]!.closed).toBe(true); // pair 2's first innings just closed; its second has not been created yet
+    // The genuinely diverging checkpoint (mirrors C2/defect 2's own shape,
+    // one index later): the OLD `so.length % 2 === 1` check read 3 as "odd
+    // count, nothing to chase yet" and returned null. The target is already
+    // live the instant the chased-FROM innings closes, exactly as the
+    // engine itself treats it — `applySuperOverBall`'s own `target`,
+    // cricket.ts:1572-1573, is computed the same way for the very next
+    // ball, whether or not that ball has been bowled yet.
+    expect(chaseTarget(cfg, stFirstInningsClosed)).toEqual({ value: 1, isDls: false });
+    const bso4 = ballSeq();
+    const so4: [string, unknown][] = [bso4("cricket.superover.ball", { striker: "A-3", nonStriker: "A-4", bowler: "H-9", bat: 0 })]; // pair 2 second innings: one dot ball — stays open (target is 1)
+    const st = foldCricket(cfg, [...events, ...so1, ...so2, ...so3, ...so4]);
+    const soInnings = (st.superOver as { innings: { battingSide: string; closed: boolean; runs: number }[] }).innings;
+    expect(soInnings).toHaveLength(4);
+    expect(soInnings[3]).toMatchObject({ battingSide: "away", closed: false, runs: 0 }); // pair 2's second innings, genuinely open
+    expect(chaseTarget(cfg, st)).toEqual({ value: 1, isDls: false }); // unchanged — still pair 2's own target, never pair 1's 7
+  });
+
+  it("defect 5: post-decision, chaseTarget stops silently falling back to the main innings — it agrees with the scorebug on which innings list is live", () => {
+    const { cfg, events } = tieToSuperOver();
+    const bso1 = ballSeq();
+    const so1 = Array.from({ length: 6 }, () => bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 })); // SO1 = 6/0
+    const bso2 = ballSeq();
+    const so2: [string, unknown][] = [
+      bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 4, boundary: 4 }),
+      bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 4, boundary: 4 }), // 8 >= target 7 — decides the match
+    ];
+    const st = foldCricket(cfg, [...events, ...so1, ...so2]);
+    expect(st.phase).toBe("done");
+    expect(st.outcome).toMatchObject({ kind: "win", winner: "H", method: "super_over" });
+    const v = view({ cfg, state: st });
+    // The scorebug reads the super over's own final score — `currentInnings`
+    // is presence-based (`state.superOver` stays populated forever once
+    // played), so this half was never broken by Task C.
+    expect(buildScorebug(v, t).halves[0]!.big).toBe("8/0");
+    // R3.5 Task R (defect 5) — pre-fix, `chaseTarget` gated on
+    // `state.phase === "super_over"`, which is FALSE once the match is
+    // decided (`done`) — so it silently fell back to the MAIN innings' own,
+    // long-superseded target (the tied match's first-innings-6 + 1 = 7),
+    // disagreeing with the scorebug sitting right next to it. Routed
+    // through the same presence-based fact `currentInnings` already uses,
+    // there is nothing left to chase once the match is decided: null, not
+    // a stale 7.
+    expect(chaseTarget(cfg, st)).toBeNull();
+    expect(buildScorebug(v, t).strip.find((s) => s.label === "scorepad.skin.cricket.header.target")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5 Task S — THE BLOCKER. `resolvePeople`'s `battingSide` had no source
+// for C2's own window (`dueBattingSide` returned `null` there, on purpose —
+// Task R's own C2 ruling, `dueBattingSide`'s doc, cricket.tsx — and
+// `currentInnings` is `null` too, the SO list being empty), so it fell
+// through to a literal `"home"` default regardless of who actually opens the
+// super over. Every tapped delivery in that state embedded the WRONG side's
+// striker/non-striker and, so, the wrong side's bowler — refused 422 by the
+// engine's fielding-lineup check (`apps/web/e2e/
+// scorepad-v3-deciders-byhand.spec.ts`'s cricket case is the byhand proof).
+// Folds a REAL tie via `tieToSuperOver`/`foldCricket` (this suite's own C2
+// fixture, above) rather than a hand-built state literal — a mirror of the
+// engine agrees with itself; only a real fold can catch a fork like this one
+// (this suite's own "R3.5 Task C" header explains why, in full).
+// ---------------------------------------------------------------------------
+
+describe("R3.5 Task S — resolvePeople before the first super-over ball (C2's own window)", () => {
+  it("proposes the side that batted SECOND in the match, and a bowler from the FIELDING side's lineup, before any SO innings exists", () => {
+    const { cfg, events } = tieToSuperOver();
+    const st = foldCricket(cfg, events);
+    expect(st.phase).toBe("super_over");
+    // C2's own window, exactly: the SO list exists and is empty.
+    expect((st.superOver as { innings: unknown[] } | null)?.innings).toEqual([]);
+
+    const people = resolvePeople(st, {}, cfg);
+    // battingFirst defaults to "home" (no toss posted — this suite's own
+    // "R3.5 Task C" header above): home bats main innings 1, away innings 2.
+    // ICC: the side batting second in the MATCH bats first in the super
+    // over — away, never the pad's old literal "home" default.
+    expect(people.battingSide).toBe("away");
+    expect(people.bowlingSide).toBe("home");
+    // Lineup MEMBERSHIP, not just the side label — a side string can be
+    // "correct" by construction while the person id underneath it still
+    // isn't (e.g. an empty orders map or a stale default) — this is exactly
+    // the shape of assertion a bare `.battingSide` check would miss.
+    expect(st.orders.away).toContain(people.striker);
+    expect(st.orders.away).toContain(people.nonStriker);
+    expect(st.orders.home).toContain(people.bowler);
+    // The two batters must be distinct — a real opening pair, not the same
+    // person double-booked because the order came back empty.
+    expect(people.striker).not.toBe(people.nonStriker);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5 Task S follow-up — the SAME wrong-side fallback, with no super over
+// anywhere near it. Found by the Task S implementer while fixing the super
+// over, then reproduced directly before being believed: `resolvePeople`
+// ended in a bare `?? "home"`, so before innings one has a ball an away side
+// that won the toss and elected to bat still read as "home batting". The
+// striker came from the wrong order and the BOWLER came from the batting
+// side, which the fold refuses with "bowler … is not in the fielding
+// lineup" — the first ball of an ordinary match, not a decider.
+// ---------------------------------------------------------------------------
+describe("R3.5 Task S follow-up — the side batting first is read, not assumed", () => {
+  it("away wins the toss and elects to bat: the pad proposes AWAY batting and a HOME bowler", () => {
+    const cfg = cricket.configSchema.parse({ ballsPerInnings: 6, ballsPerOver: 6, minOversForResult: 1 });
+    const st = foldCricket(cfg, [["cricket.toss", { wonBy: "A", elected: "bat" }], ["core.start"]]);
+    expect(st.battingFirst, "the fold must record who bats first").toBe("away");
+    expect(st.innings, "this case is specifically BEFORE innings one has a ball").toHaveLength(0);
+
+    const people = resolvePeople(st, {}, cfg);
+    expect(people.battingSide).toBe("away");
+    expect(people.bowlingSide).toBe("home");
+    // The assertion that actually reproduces the 422: membership, not the
+    // side label. A bowler drawn from the batting order is what the fold
+    // rejects, and a side-string-only assertion would not have seen it.
+    expect(st.orders.home, "the proposed bowler must be in the FIELDING lineup").toContain(people.bowler);
+    expect(st.orders.away).toContain(people.striker);
+  });
+
+  it("no toss recorded: the home default survives", () => {
+    const cfg = cricket.configSchema.parse({ ballsPerInnings: 6, ballsPerOver: 6, minOversForResult: 1 });
+    const st = foldCricket(cfg, [["core.start"]]);
+    const people = resolvePeople(st, {}, cfg);
+    expect(people.battingSide).toBe("home");
+    expect(st.orders.away).toContain(people.bowler);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5 F1 (review finding, BLOCKER) — a wicket in a super over left
+// `fine.striker`/`.nonStriker` explicitly `null` ("awaiting replacement" —
+// `FineInnings.striker`'s own doc, cricket.ts), which `resolvePeople`'s old
+// `?? battingOrder[0]` fallback resolved straight to the batter JUST
+// dismissed whenever they were first in the order — the fold then refused
+// the very next tap ("… is not eligible (already dismissed)",
+// cricket.ts:1290-1291). Every super-over fold in this suite up to here
+// deliberately avoids a wicket (this file's own "R3.5 Task C" header); this
+// one takes one, in C2's own window (`so.length === 0`) so the fixture
+// composes directly with `tieToSuperOver` rather than a second copy of it.
+// ---------------------------------------------------------------------------
+describe("R3.5 F1 — resolvePeople after a super-over wicket proposes an ELIGIBLE replacement, never the batter just dismissed", () => {
+  function tiedWithSuperOverWicket() {
+    const { cfg, events } = tieToSuperOver();
+    const bso = ballSeq();
+    // Away bats first in the super over (Task S — the side batting second
+    // in the match). The very FIRST super-over ball dismisses the striker,
+    // A-1 — leaving fine.striker null and fine.nonStriker "A-2" (survivor).
+    const wicketBall = bso("cricket.superover.ball", {
+      striker: "A-1", nonStriker: "A-2", bowler: "H-11", bat: 0,
+      wicket: { kind: "bowled", out: "A-1", bowlerCredited: true },
+    });
+    const st = foldCricket(cfg, [...events, wicketBall]);
+    return { cfg, st };
+  }
+
+  it("the fold itself leaves the striker end null, awaiting a replacement — proves the fixture reaches the real bug window", () => {
+    const { st } = tiedWithSuperOverWicket();
+    const so = (st.superOver as { innings: { closed: boolean; fine: { striker: string | null; nonStriker: string | null; dismissed: string[] } }[] }).innings;
+    expect(so).toHaveLength(1);
+    expect(so[0]!.closed).toBe(false); // 1 wicket, not 2 — still open, awaiting the next ball
+    expect(so[0]!.fine.striker).toBeNull();
+    expect(so[0]!.fine.nonStriker).toBe("A-2");
+    expect(so[0]!.fine.dismissed).toEqual(["A-1"]);
+  });
+
+  it("proposes the next ELIGIBLE away batter for the null end, never A-1 (the batter just dismissed)", () => {
+    const { cfg, st } = tiedWithSuperOverWicket();
+    const people = resolvePeople(st, {}, cfg);
+    expect(people.striker).not.toBe("A-1");
+    expect(people.striker).toBe("A-3"); // first eligible away batter once A-1 (dismissed) and A-2 (survivor) are excluded
+    expect(people.nonStriker).toBe("A-2"); // the survivor, unchanged
+  });
+
+  it("the SUBMITTED next-ball payload (buildTiles) carries the eligible default too — the exact tap that used to 422", () => {
+    const { cfg, st } = tiedWithSuperOverWicket();
+    const v = view({ cfg, state: st });
+    const run1 = buildTiles(v).find((tl) => tl.id === "run1")!;
+    expect(run1.action).toMatchObject({
+      event: { type: "cricket.superover.ball", payload: { striker: "A-3", nonStriker: "A-2" } },
+    });
+  });
+
+  it("mutation guard: the OLD battingOrder[0] read this fix replaced names the dismissed batter — proves this suite would have caught the pre-fix bug", () => {
+    const { st } = tiedWithSuperOverWicket();
+    const battingOrder = (st.orders as { away: string[] }).away;
+    expect(battingOrder[0]).toBe("A-1"); // the pre-fix fallback's own answer
+    expect(resolvePeople(st, {}, tieToSuperOver().cfg).striker).not.toBe(battingOrder[0]);
+  });
+
+  it("a repeat pair carries the earlier pair's dismissals forward — a fresh innings for the SAME side later in the super over skips them, never resetting to battingOrder[0]/[1]", () => {
+    // Pair 1: away's A-1 then A-3 are dismissed on the first two balls
+    // (A-2 survives both — the crease's other end). 2 wickets is all-out for
+    // a super-over innings, so it closes right there at 0/2. Home's reply
+    // matches at 0 (six dot balls, closing on the over) — a tie, which
+    // "repeat" (this cfg's default `superOverStillTied`) sends to pair 2.
+    const { cfg, events } = tieToSuperOver();
+    const bso1 = ballSeq();
+    const awayPair1 = [
+      bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-11", bat: 0, wicket: { kind: "bowled", out: "A-1", bowlerCredited: true } }),
+      bso1("cricket.superover.ball", { striker: "A-3", nonStriker: "A-2", bowler: "H-11", bat: 0, wicket: { kind: "bowled", out: "A-3", bowlerCredited: true } }),
+    ];
+    const st1 = foldCricket(cfg, [...events, ...awayPair1]);
+    const so1Innings = (st1.superOver as { innings: { closed: boolean; wickets: number; runs: number }[] }).innings;
+    expect(so1Innings[0]).toMatchObject({ closed: true, wickets: 2, runs: 0 }); // all-out — confirmed before building on it
+    const bso2 = ballSeq();
+    const homePair1 = Array.from({ length: 6 }, () => bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-4", bat: 0 }));
+    const stTied = foldCricket(cfg, [...events, ...awayPair1, ...homePair1]);
+    expect(stTied.phase).toBe("super_over"); // repeat — tied 0-0, pair 2 is live, not decided
+    // Pair 2's FIRST innings is whoever batted second in pair 1 — home
+    // (soBattingSideAt(state, 2), same formula Task R's own defect-3/4 test
+    // already pins for this identical fixture shape).
+    expect(dueBattingSide(stTied, cfg)).toBe("home");
+    // Close pair 2's home innings too (six more dots — the score no longer
+    // matters, only that it closes and opens pair 2's SECOND innings: away,
+    // batting a genuinely FRESH innings for the first time since pair 1).
+    const bso3 = ballSeq();
+    const homePair2 = Array.from({ length: 6 }, () => bso3("cricket.superover.ball", { striker: "H-3", nonStriker: "H-4", bowler: "A-5", bat: 0 }));
+    const st = foldCricket(cfg, [...events, ...awayPair1, ...homePair1, ...homePair2]);
+    const soInnings = (st.superOver as { innings: { battingSide: "home" | "away"; closed: boolean }[] }).innings;
+    expect(soInnings).toHaveLength(3);
+    expect(soInnings.every((i) => i.closed)).toBe(true);
+    expect(dueBattingSide(st, cfg)).toBe("away"); // pair 2's second innings — away's turn again
+    // The window this case exists to prove: away's NEXT innings has not been
+    // created yet (no ball folded for it), so `fine` is entirely absent —
+    // the "both ends null, AND prior-pair history applies" case `crease`
+    // alone (empty here) cannot exclude. Only `state.superOver.dismissed.
+    // away` (carried, never reset between pairs) can.
+    const soDismissedAway = (st.superOver as { dismissed: { away: string[] } }).dismissed.away;
+    expect(soDismissedAway).toEqual(["A-1", "A-3"]);
+    const people = resolvePeople(st, {}, cfg);
+    expect(people.striker).toBe("A-2"); // first ELIGIBLE away batter — A-1 excluded
+    expect(people.nonStriker).toBe("A-4"); // second eligible — A-3 excluded too, never re-offered
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5 F3 (review finding, MAJOR) — `superOverTile` (buildTiles, above)
+// disables review/retire/inningsClose/declare/overSummary for the WHOLE of
+// a super over, and until this fix nothing anywhere told the scorer why:
+// `buildContext` returned `null` outright in the two windows with no open
+// innings (before the first super-over ball, and between two pairs), and
+// even MID-innings the striker/nonStriker/bowler slots carry a message only
+// when closure or a bowler-eligibility block ALSO applies — not every ball.
+// `assertDisabledTilesExplained` (tile-grid.tsx) is the validator that
+// exists to catch exactly this; Task R's own comment already conceded no
+// skin exercises it against real output. Wired here against THREE real
+// folds — the two null-context windows AND an ordinary mid-innings ball —
+// so the general fix, not merely the two named windows, is what regresses
+// if this notice is ever removed.
+// ---------------------------------------------------------------------------
+describe("R3.5 F3 — every super-over window that disables review/retire/inningsClose/overSummary explains why", () => {
+  it("C2 (so.length===0, before the first super-over ball): buildContext is no longer null, and assertDisabledTilesExplained sees a real explanation", () => {
+    const { cfg, events } = tieToSuperOver();
+    const st = foldCricket(cfg, events);
+    const v = view({ cfg, state: st });
+    const tiles = buildTiles(v);
+    const ctx = buildContext(v, t);
+    expect(ctx).not.toBeNull();
+    expect(assertDisabledTilesExplained(tiles, ctx)).toEqual([]);
+  });
+
+  it("between two pairs (pair 1 tied and closed, pair 2 not yet started): same proof, reusing Task R's own defect-3/4 fixture", () => {
+    const { cfg, events } = tieToSuperOver(); // superOverStillTied defaults to "repeat"
+    const bso1 = ballSeq();
+    const so1 = Array.from({ length: 6 }, () => bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 }));
+    const bso2 = ballSeq();
+    const so2 = Array.from({ length: 6 }, () => bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 1 }));
+    const st = foldCricket(cfg, [...events, ...so1, ...so2]);
+    expect(dueBattingSide(st, cfg)).not.toBeNull(); // confirms this IS the gap window (buildContext's own early-return condition)
+    const v = view({ cfg, state: st });
+    const tiles = buildTiles(v);
+    const ctx = buildContext(v, t);
+    expect(ctx).not.toBeNull();
+    expect(assertDisabledTilesExplained(tiles, ctx)).toEqual([]);
+  });
+
+  it("mid-innings (an ordinary ball already bowled, nothing closed, an eligible current bowler): the general case beyond the two named windows, where the ordinary slots carry no message of their own", () => {
+    const { cfg, events } = tieToSuperOver();
+    const bso = ballSeq();
+    const st = foldCricket(cfg, [...events, bso("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 })]);
+    const v = view({ cfg, state: st });
+    const tiles = buildTiles(v);
+    const ctx = buildContext(v, t);
+    // Confirms this is genuinely the "everything else looks fine" window —
+    // an open innings, a bowler already locked in for the over, nothing
+    // closed — so the ordinary striker/nonStriker/bowler slots carry no
+    // message of their own; only the super-over notice does.
+    expect(ctx!.slots.filter((s) => s.id !== "superOver").every((s) => !s.message)).toBe(true);
+    expect(assertDisabledTilesExplained(tiles, ctx)).toEqual([]);
+  });
+
+  it("an ordinary (non-super-over) live match carries no such notice — additive only, never shown outside a super over", () => {
+    const ctx = buildContext(view(), t);
+    expect(ctx!.slots.some((s) => s.id === "superOver")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5 F2 (review finding, BLOCKER) — `superOverTile` (buildTiles) disables
+// review/retire/inningsClose/declare/overSummary outright during a super
+// over, but `dedicatedEventTypes` (pad-host.tsx) skips a DISABLED tile's own
+// event type — so all five drop out of `dedicated` and `moreActions` lists
+// them in the generic More sheet as forms `applyDelivery`/`applySummary`/
+// `requireOpenInnings` refuse on tap. Cricket declared no
+// `refusedEventTypes` — the More sheet's SECOND exclusion set, "the fold
+// refuses this right now" — only football and tennis did (`types.ts`'s own
+// doc on the method). `refusedEventTypes` mirrors `superOverTile`'s own
+// gate exactly, so the two can never disagree.
+// ---------------------------------------------------------------------------
+describe("refusedEventTypes (F2) — the five types a super over disables, and nothing else", () => {
+  it("lists exactly the five non-ball types superOverTile disables, during a super over", () => {
+    const v = view({ state: state({ phase: "super_over" }) });
+    expect([...refusedEventTypes(v)].sort()).toEqual([
+      "cricket.innings.close",
+      "cricket.innings.declare",
+      "cricket.innings.summary",
+      "cricket.retire",
+      "cricket.review",
+    ]);
+  });
+
+  it("lists nothing outside a super over — live, pre, and done phases are all unrefused", () => {
+    expect(refusedEventTypes(view())).toEqual([]); // live (view()'s default)
+    expect(refusedEventTypes(view({ state: state({ phase: "pre" }) }))).toEqual([]);
+    expect(refusedEventTypes(view({ state: state({ phase: "done" }) }))).toEqual([]);
+  });
+
+  it("proved against a REAL super-over fold too, not just a hand-built phase flag", () => {
+    const { cfg, events } = tieToSuperOver();
+    const st = foldCricket(cfg, events);
+    const v = view({ cfg, state: st });
+    expect(refusedEventTypes(v)).toEqual(expect.arrayContaining(["cricket.review", "cricket.retire", "cricket.innings.close", "cricket.innings.summary"]));
   });
 });

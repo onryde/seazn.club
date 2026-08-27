@@ -12,10 +12,12 @@
 // together against the engine's OWN declared vocabulary. Same shape as
 // `cricket-dispatch-totality.test.ts`, kept parallel on purpose.
 //
-// FOUR SURFACES, per ruling R3-4: dedicated TILES (the two Goal tiles), the
-// skin's GUIDED SHEETS (card ×2, period, penalty), its SWAP slots
-// (`football.sub`), and the chassis's generic More sheet, which lists every
-// `padSpec(cfg)` action the skin does not already dedicate.
+// FOUR SURFACES, per ruling R3-4 (R3.5-5 amended it for ONE type — see
+// below): dedicated TILES (the two Goal tiles live/H1/H2/ET; the two kick
+// tiles during SHOOTOUT only, R3.5/Task J), the skin's GUIDED SHEETS
+// (card ×2, period, penalty, kick ×2), its SWAP slots (`football.sub`), and
+// the chassis's generic More sheet, which lists every `padSpec(cfg)` action
+// the skin does not already dedicate.
 //
 // ---------------------------------------------------------------------------
 // R3 REVIEW ROUND — THIS FILE WAS FALSE-GREEN, and the way it was false-green
@@ -293,15 +295,34 @@ describe("football dispatch-guard totality (R3/task B2 headline)", () => {
     }
   });
 
-  it("the four More-sheet types are exactly the ones ruling R3-4 routes there, and no dedicated type joins them", () => {
+  // R3.5/Task J (ruling R3.5-5) AMENDED R3-4 for `football.shootout.kick`
+  // specifically: it now rides a dedicated tile+sheet pair during SHOOTOUT
+  // (`buildTiles`/`buildSheets`, skins/football.tsx), the phase where it is
+  // the ENTIRE match rather than a rare type. Outside SHOOTOUT it was already
+  // REFUSED (`refusedEventTypes`), never offered via More either — so across
+  // every situation this sweep measures, it never appears in `viaMore` at
+  // all any more. R3-4 still stands for the other three: `football.shot` and
+  // both sin-bin forms remain generic-form-only in every situation.
+  it("the three remaining More-sheet types are exactly ruling R3-4's leftovers, and no dedicated type joins them", () => {
     const viaMore = new Set<string>();
     for (const s of situations()) for (const type of reachIn(s).viaMore) viaMore.add(type);
-    expect([...viaMore].sort()).toEqual([
-      "football.shootout.kick",
-      "football.shot",
-      "football.sinbin.end",
-      "football.sinbin.start",
-    ]);
+    expect([...viaMore].sort()).toEqual(["football.shot", "football.sinbin.end", "football.sinbin.start"]);
+  });
+
+  it("football.shootout.kick is a DEDICATED type during SHOOTOUT, and never appears in More in any situation (R3.5-5)", () => {
+    // Via SHEETS, not tiles: the kick tile's own action is `{sheet:
+    // "kick-<side>"}`, the SAME routing card/period/penalty already use —
+    // only Goal emits `{event}` directly. `reachIn` credits a `{sheet}`
+    // tile's reachability to `viaSheets` (see its own loop above).
+    const viaSheets = new Set<string>();
+    const leaks: string[] = [];
+    for (const s of situations()) {
+      const reach = reachIn(s);
+      for (const type of reach.viaSheets) viaSheets.add(type);
+      if (reach.viaMore.has("football.shootout.kick")) leaks.push(s.label);
+    }
+    expect(viaSheets.has("football.shootout.kick"), "no situation ever reached the SHOOTOUT kick sheets").toBe(true);
+    expect(leaks, `football.shootout.kick offered as a generic More form in:\n${leaks.join("\n")}`).toEqual([]);
   });
 
   // The de-duplication ruling this wave took (see `dedicatedEventTypes`'

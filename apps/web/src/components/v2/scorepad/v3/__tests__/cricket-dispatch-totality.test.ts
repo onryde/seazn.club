@@ -38,7 +38,7 @@ import { describe, expect, it } from "vitest";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import type { SquadState } from "@seazn/engine/core";
-import { buildScorebug, buildSheets, buildTiles } from "../skins/cricket";
+import { buildScorebug, buildSheets, buildTiles, refusedEventTypes } from "../skins/cricket";
 import { dedicatedEventTypes, moreActions } from "../pad-host";
 import type { GuidedSheetSpec, PadHostView, TileSpec } from "../types";
 import { grantAllEntitlements } from "../../__tests__/_cfg-space";
@@ -177,6 +177,57 @@ interface SweepResult {
   viaMore: Set<string>;
 }
 
+/**
+ * The generic More sheet's own reachable types for ONE situation (one cfg,
+ * one host view) — `dedicated`/`refused` must both be computed against THAT
+ * SAME view, never a different one, and never unioned with another
+ * situation's own sets first. `hostView.state` (not a hardcoded
+ * `liveState()`) is what `moreActions`' own panel walk (`buildPadView`) sees
+ * — exactly what `PadHostV3` itself passes in production (`pad-host.tsx`'s
+ * `padViewCtx`), and exactly the fact a prior version of this sweep got
+ * wrong (see `sweep`'s own header below).
+ *
+ * "live" reaches every innings/DLS/super-over panel; "post" is the only
+ * phase `playerLineAction`'s own panel is declared at (`moreActions` is
+ * phase-scoped via `buildPadView`, `pad-host.test.ts`'s own "never lists the
+ * same type twice" test proves this scoping directly) — swept regardless of
+ * which situation this is, same as before this fix.
+ */
+function moreTypesFor(cfg: unknown, hostView: PadHostView, dedicated: ReadonlySet<string>): Set<string> {
+  const spec = padSpecFor(cfg);
+  const entitlements = grantAllEntitlements(spec);
+  // R3.5 F2 (review finding, BLOCKER) — the SKIN's own refusal set, exactly
+  // as `PadHostV3` passes it (`pad-host.tsx`'s `refusedTypes`), never a set
+  // this test invents or leaves empty — cricket declared none at all before
+  // this fix, which is how five dead-end taps (review/retire/inningsClose/
+  // declare/overSummary) reached the generic form during a super over with
+  // this whole file staying green throughout.
+  const refused = new Set(refusedEventTypes(hostView));
+  const out = new Set<string>();
+  for (const phase of ["live", "post"] as const) {
+    const actions = moreActions(spec, { state: hostView.state, summary: {}, phase, band: 3, entitlements }, dedicated, refused);
+    for (const a of actions) out.add(a.type);
+  }
+  return out;
+}
+
+/**
+ * R3.5 F2 (review finding, BLOCKER) — this sweep used to UNION `dedicated`
+ * across the live view AND the super-over probe, then query `moreActions`
+ * with `state: liveState()` unconditionally regardless of which situation
+ * produced that union. A type dedicated ONLY in the live view (e.g.
+ * `cricket.review`, whose tile `superOverTile` disables during a super
+ * over) stayed in the union even while probing the super-over situation, so
+ * `moreActions` never saw it as reachable there — masking the exact
+ * per-phase hole `refusedEventTypes` (skins/cricket.tsx) now closes in
+ * production, and doing so for the WRONG reason (an accidental union, not a
+ * real refusal). A test that unions across phases can never see a
+ * per-phase hole. Mirrors football's own `reachIn`, which fixed the
+ * identical class of bug first (`__tests__/football-dispatch-totality.
+ * test.ts`'s own "never from a union across phases" comment) — every
+ * situation below now gets its OWN `dedicated`/`viaMore`, computed and
+ * consumed together, never shared with another situation.
+ */
 function sweep(): SweepResult {
   const viaTiles = new Set<string>();
   const viaSheets = new Set<string>();
@@ -200,24 +251,18 @@ function sweep(): SweepResult {
     // is a tapModel-T readout with no `tappable` half, so it contributes
     // nothing, and this sweep's answer is identical to what it was before the
     // widening. Same argument the empty slot table makes one line up.
-    let dedicated = dedicatedEventTypes(tiles, sheets, [], buildScorebug(live, (k: string) => k));
+    const liveDedicated = dedicatedEventTypes(tiles, sheets, [], buildScorebug(live, (k: string) => k));
+    for (const t of moreTypesFor(cfg, live, liveDedicated)) viaMore.add(t);
 
     if (probeSuperOver) {
       const so = baseView(cfg, superOverState());
       const soTiles = buildTiles(so);
+      const soSheets = buildSheets(so, (k: string) => k);
       for (const t of tileEventTypes(soTiles)) viaTiles.add(t);
-      dedicated = new Set([...dedicated, ...dedicatedEventTypes(soTiles, buildSheets(so, (k: string) => k), [], buildScorebug(so, (k: string) => k))]);
-    }
-
-    const spec = padSpecFor(cfg);
-    const entitlements = grantAllEntitlements(spec);
-    // "live" reaches every innings/DLS/super-over panel; "post" is the only
-    // phase playerLineAction's own panel is declared at (moreActions is
-    // phase-scoped via buildPadView, pad-host.test.ts's own "never lists
-    // the same type twice" test proves this scoping directly).
-    for (const phase of ["live", "post"] as const) {
-      const actions = moreActions(spec, { state: liveState(), summary: {}, phase, band: 3, entitlements }, dedicated, new Set());
-      for (const a of actions) viaMore.add(a.type);
+      // The super-over situation's OWN dedicated set — never unioned with
+      // the live pass above (this function's own header explains why).
+      const soDedicated = dedicatedEventTypes(soTiles, soSheets, [], buildScorebug(so, (k: string) => k));
+      for (const t of moreTypesFor(cfg, so, soDedicated)) viaMore.add(t);
     }
   }
 
@@ -250,6 +295,34 @@ describe("cricket dispatch-guard totality (R2/task E headline)", () => {
     // themselves, for every cfg this sweep explores.
     const invented = [...union].filter((t) => !ALL_EVENT_TYPES.has(t)).sort();
     expect(invented, `reachable type not in the engine's own eventSchemas: ${invented.join(", ")}`).toEqual([]);
+  });
+
+  // R3.5 F2 (review finding, BLOCKER) — the five non-ball types
+  // `superOverTile` (skins/cricket.tsx) disables outright during a super
+  // over must never reappear in the generic More sheet as a live 422:
+  // `cricket.review`/`.retire`/`.innings.close`/`.innings.summary` below.
+  // `cricket.innings.declare` is EXCLUDED from this specific assertion —
+  // structurally unreachable for ANY super-over cfg at all (the cfg refine
+  // forbids `inningsPerSide: 2` together with `superOver: true`, C21), so it
+  // can never appear in `viaMore` here whether or not the fix works; the
+  // `refusedEventTypes` unit test (skins/__tests__/cricket.test.ts) is where
+  // that fifth type is actually pinned, against the bare function.
+  //
+  // Computed directly (not via `sweep()`, which unions every cfg case
+  // together): this test's whole point is ONE situation's own reachability,
+  // and a union would risk masking exactly the class of bug `sweep`'s own
+  // header now explains.
+  it("cricket.review/.retire/.innings.close/.innings.summary never reach the generic More sheet during a super over", () => {
+    const cfg = cfgFor("t20", { superOver: true });
+    const so = baseView(cfg, superOverState());
+    const soTiles = buildTiles(so);
+    const soSheets = buildSheets(so, (k: string) => k);
+    const dedicated = dedicatedEventTypes(soTiles, soSheets, [], buildScorebug(so, (k: string) => k));
+    const viaMore = moreTypesFor(cfg, so, dedicated);
+    const leaked = ["cricket.review", "cricket.retire", "cricket.innings.close", "cricket.innings.summary"].filter((type) =>
+      viaMore.has(type),
+    );
+    expect(leaked, `dead-end taps offered via the generic More sheet during a super over: ${leaked.join(", ")}`).toEqual([]);
   });
 
   // R2c / C2 (owner-approved amendment to defect 4's ruling, 2026-08-18):

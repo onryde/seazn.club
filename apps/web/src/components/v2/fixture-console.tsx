@@ -15,7 +15,7 @@ import { LineupEditor } from "@/components/v2/lineup-editor";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
 import { useMsg } from "@/components/i18n/dict-provider";
-import { scoringErrorText } from "@/lib/scoring-vocab";
+import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import type { MessageKey } from "@/lib/messages";
@@ -256,9 +256,14 @@ const STATUS_STYLE: Record<string, string> = {
   in_play: "bg-amber-100 text-amber-700",
   decided: "bg-sky-100 text-sky-700",
   finalized: "bg-emerald-100 text-emerald-700",
-  abandoned: "bg-slate-100 text-slate-400",
+  // R3.5/Task P — was text-slate-400 (2.40:1 on this chip's bg-slate-100,
+  // under the WCAG AA 4.5:1 floor); text-slate-600 matches the "scheduled"
+  // chip above (same bg-slate-100 background, same muted-neutral intent)
+  // and clears 6.92:1. Ratio computed and pinned in
+  // components/v2/__tests__/history-panel-contrast.test.tsx.
+  abandoned: "bg-slate-100 text-slate-600",
   forfeited: "bg-red-50 text-red-500",
-  cancelled: "bg-slate-100 text-slate-400",
+  cancelled: "bg-slate-100 text-slate-600",
 };
 
 export function FixtureConsole({
@@ -368,7 +373,16 @@ export function FixtureConsole({
     [fixture.id, live.last_seq, resync, router],
   );
 
-  const summary = live.summary as { headline?: string } | null;
+  // `detail` added (R3.5/Task G) alongside the pre-existing `headline` cast —
+  // `shootoutScoreFromDetail` reads it to put a number in the decided
+  // sentence below when the method is a shoot-out.
+  const summary = live.summary as { headline?: string; detail?: unknown } | null;
+  // Same widening as apps/web/src/server/public-site/data.ts's PublicFixture
+  // — `live.outcome` was read only as `!== null` before this task (the
+  // `decided` boolean below); `method` reached nobody. Structural, not the
+  // engine's own MatchOutcome type: this component already treats `outcome`
+  // as loose JSON off the wire, not an engine import.
+  const outcome = live.outcome as { kind?: string; winner?: string; method?: string } | null;
   const scoring = canEdit && live.status !== "finalized" && live.status !== "cancelled";
   // An ABANDONED fixture is over, and the server records that in `status` while
   // leaving `outcome` NULL — the engine's own outcome for it is
@@ -399,6 +413,11 @@ export function FixtureConsole({
   for (const side of [home, away]) {
     for (const m of side?.members ?? []) entrantNames[m.person_id] = m.full_name;
   }
+  // R3.5/Task G — the v3 pad UNMOUNTS entirely once a fixture is decided
+  // (the `scoring && !decided` gate below), so this is the ONE surface left
+  // that can say who won and how; `msg`/`entrantNames` are exactly what
+  // `decidedOutcomeText` needs and this component already has both.
+  const decidedLine = decidedOutcomeText(outcome, entrantNames, msg, shootoutScoreFromDetail(summary?.detail));
   const lastVoidable = [...events]
     .reverse()
     .find((e) => e.type !== "core.void" && !events.some((v) => v.voids_event_id === e.id));
@@ -415,7 +434,14 @@ export function FixtureConsole({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-lg font-semibold tracking-tight text-slate-900">
             {home?.name ?? resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd")}{" "}
-            <span className="text-slate-400">{msg("schedule.vs")}</span>{" "}
+            {/* R3.5 accessibility fix — was text-slate-400 (~2.6:1 on white,
+                under the WCAG AA 4.5:1 floor for normal text); text-slate-600
+                is the token this codebase already uses for legible secondary
+                text on white (history-panel-contrast.test.tsx's own fix, and
+                the badge/label convention throughout components/v2). Ratio
+                computed and pinned in
+                components/v2/__tests__/history-panel-contrast.test.tsx. */}
+            <span className="text-slate-600">{msg("schedule.vs")}</span>{" "}
             {away?.name ?? resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd")}
           </h1>
           <span className={`badge ${STATUS_STYLE[live.status] ?? ""}`}>
@@ -425,7 +451,13 @@ export function FixtureConsole({
         <p className="mt-2 font-mono text-2xl text-slate-800">
           {summary?.headline ?? "—"}
         </p>
-        <p className="mt-1 text-xs text-slate-400">
+        {/* R3.5/Task G — the v3 pad unmounts once decided; this is the
+            organiser console's surviving surface for "who won, and how". */}
+        {decidedLine && <p className="mt-1 text-sm font-medium text-slate-700">{decidedLine}</p>}
+        {/* R3.5/Task P — was text-slate-400 (2.63:1 on this .card's white,
+            under the WCAG AA 4.5:1 floor); text-slate-600 clears 7.58:1,
+            same fix as the "vs" separator above. */}
+        <p className="mt-1 text-xs text-slate-600">
           {msg("schedule.round", { n: fixture.round_no })}
           {fixture.scheduled_at ? (
             <>
@@ -587,11 +619,11 @@ export function FixtureConsole({
       <section className="card overflow-hidden">
         <header className="border-b border-slate-100 px-4 py-3">
           <h2 className="text-sm font-semibold text-slate-700">
-            {msg("score.activity")} <span className="font-normal text-slate-400">({events.length})</span>
+            {msg("score.activity")} <span className="font-normal text-slate-600">({events.length})</span>
           </h2>
         </header>
         {events.length === 0 ? (
-          <p className="px-4 py-4 text-sm text-slate-400">{msg("score.noEvents")}</p>
+          <p className="px-4 py-4 text-sm text-slate-600">{msg("score.noEvents")}</p>
         ) : (
           <ul className="max-h-96 divide-y divide-slate-50 overflow-y-auto">
             {[...events].reverse().map((e) => {
@@ -624,13 +656,13 @@ export function FixtureConsole({
                   </span>
                   <span className="min-w-0 flex-1 truncate text-slate-700">
                     {desc.text}
-                    {recorder ? <span className="text-slate-400"> ({recorder})</span> : null}
+                    {recorder ? <span className="text-slate-600"> ({recorder})</span> : null}
                   </span>
                   {/* ClientTime: locale time renders differently on server vs
                       browser (17:59 vs 5:59 PM) — the mismatch forced a full
                       client re-render that ate early clicks. SSR emits an
                       empty span; the viewer-local time fills in after mount. */}
-                  <span className="shrink-0 text-slate-400">
+                  <span className="shrink-0 text-slate-600">
                     <ClientTime value={e.recorded_at} mode="time" />
                   </span>
                   {scoring && !voided && e.type !== "core.void" && !decidedLock(live.status) && (

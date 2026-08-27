@@ -16,6 +16,9 @@ import {
   nextBattingSide,
   eligibleBowlers,
   reviewsRemaining,
+  activeInnings,
+  soBattingSideAt,
+  soEligibleBatters,
   type CricketBallEv,
   type CricketCfg,
   type CricketEv,
@@ -1094,6 +1097,90 @@ describe("nextBattingSide", () => {
     expect(nextBattingSide({ ...base, inningsCount: 2 })).toBe("away");
     expect(nextBattingSide({ ...base, inningsCount: 3 })).toBe("home");
     expect(nextBattingSide({ ...base, inningsCount: 4 })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5 Task C — activeInnings: the ONE definition of "which innings list is
+// actually being played", shared by cricketPosition (below) and the v3 pad
+// (apps/web skins/cricket.tsx), which used to re-derive it as `state.innings`
+// alone and so spent every super over describing the innings before it.
+// ---------------------------------------------------------------------------
+
+describe("activeInnings — one definition, shared by the position axis and the pad", () => {
+  const main = [{ closed: true }, { closed: true }];
+  it("main innings while there is no super over", () => {
+    expect(activeInnings({ innings: main, superOver: null }))
+      .toEqual({ list: main, offset: 0, inSuperOver: false });
+  });
+  it("super-over innings once there is one, offset past the main innings", () => {
+    const so = [{ closed: false }];
+    expect(activeInnings({ innings: main, superOver: { innings: so } }))
+      .toEqual({ list: so, offset: 2, inSuperOver: true });
+  });
+  it("an EMPTY super-over list is still the active list", () => {
+    // The state decideTie leaves behind: phase super_over, no ball yet.
+    expect(activeInnings({ innings: main, superOver: { innings: [] } }))
+      .toEqual({ list: [], offset: 2, inSuperOver: true });
+  });
+  it("treats an absent superOver field the same as null", () => {
+    expect(activeInnings({ innings: main, superOver: undefined }).inSuperOver).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5 Task S — soBattingSideAt: the ICC super-over alternation rule, now
+// exported (same posture as nextBattingSide/eligibleBowlers/reviewsRemaining/
+// activeInnings above) so apps/web's v3 cricket skin can ask "who bats the
+// very first super-over ball" instead of hand-copying this formula — the
+// live 422 this task fixes. Each `it` below covers one `battingFirst` value
+// across indices 0..3 (pair 1's two innings, then pair 2's two), the same
+// "one cfg shape end to end, every index through the boundary" convention
+// `nextBattingSide`'s own suite (above) uses.
+// ---------------------------------------------------------------------------
+
+describe("soBattingSideAt", () => {
+  it("battingFirst home: the side batting second in the match (away) opens the super over, then alternates every innings, then flips again for pair 2", () => {
+    const state = { battingFirst: "home" as const };
+    expect(soBattingSideAt(state, 0)).toBe("away"); // pair 1, innings 1 — opponent of battingFirst
+    expect(soBattingSideAt(state, 1)).toBe("home"); // pair 1, innings 2
+    expect(soBattingSideAt(state, 2)).toBe("home"); // pair 2, innings 1 — the side batting second in pair 1
+    expect(soBattingSideAt(state, 3)).toBe("away"); // pair 2, innings 2
+  });
+
+  it("reads battingFirst, not a hardcoded home — an away-first match opens the super over with home instead", () => {
+    const state = { battingFirst: "away" as const };
+    expect(soBattingSideAt(state, 0)).toBe("home");
+    expect(soBattingSideAt(state, 1)).toBe("away");
+    expect(soBattingSideAt(state, 2)).toBe("away");
+    expect(soBattingSideAt(state, 3)).toBe("home");
+  });
+});
+
+// R3.5 F1 (review finding, BLOCKER) — the eligibility predicate
+// `applyDelivery`'s super-over branch checks verbatim (`fine.dismissed.
+// includes(person) || ctx.soIneligible.includes(person)`), exported so the
+// v3 pad's own default-picker (`resolvePeople`, apps/web `skins/cricket.tsx`)
+// can reuse it rather than forking a third copy — the same posture
+// `nextBattingSide`/`eligibleBowlers`/`activeInnings`/`soBattingSideAt` above
+// are exported for.
+describe("soEligibleBatters", () => {
+  it("excludes dismissed-this-innings, so-wide-ineligible, and crease occupants — returns the rest in batting order", () => {
+    expect(
+      soEligibleBatters(["p1", "p2", "p3", "p4", "p5"], ["p2"], ["p4"], ["p1"]),
+    ).toEqual(["p3", "p5"]);
+  });
+
+  it("returns the whole order when nobody is unavailable", () => {
+    expect(soEligibleBatters(["p1", "p2"], [], [], [])).toEqual(["p1", "p2"]);
+  });
+
+  it("returns an empty list, never a name outside the order, when everyone is unavailable", () => {
+    expect(soEligibleBatters(["p1", "p2"], ["p1"], [], ["p2"])).toEqual([]);
+  });
+
+  it("a name unioned across dismissed AND soIneligible is excluded only once, never breaking the filter", () => {
+    expect(soEligibleBatters(["p1", "p2"], ["p1"], ["p1"], [])).toEqual(["p2"]);
   });
 });
 

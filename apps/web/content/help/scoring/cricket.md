@@ -32,6 +32,14 @@ For about six seconds after a tap, **Undo** removes the entry outright — it ne
 
 If a side has used up its reviews for the innings, that side is greyed out when you record the next one, with the reason shown — an umpire review is never limited. Toss, reviews, innings close and — in Test formats — declarations, the follow-on and the close of the match are all on the pad. The commonest sit as their own buttons; the rest are under **More actions**, which always offers exactly what the format and the current state of the match allow.
 
+## Super overs
+
+A tied match goes to a super over automatically when your division has it enabled — there's no separate "start super over" step. It's scored with the same run, extra and wicket tiles as the rest of the innings.
+
+The side that batted second in the match bats first in the super over, so whoever bowled second in the match bowls first here. Two wickets ends that side's over (a super over is all out much sooner than a full innings), and so does bowling out the over. The reply then chases whatever the first side scored, plus one — reach that and the match is over on the spot.
+
+Still level after that? Your division's still-tied rule decides what happens next: **repeat** plays another super over, and keeps going until someone wins; **boundary count** gives the match to whoever hit more boundaries across the whole match, main innings included; **shared** records the match as a tie outright.
+
 ## Recording level
 
 Ball-by-ball scoring is the finest level a cricket match records, and it needs a plan that includes it. Below that, the pad records innings totals instead — a correct score and correct standings, with fewer details behind them. The chip in the pad header always says which level you're on, in words. See [choosing a detail level](/help/scoring/fidelity).

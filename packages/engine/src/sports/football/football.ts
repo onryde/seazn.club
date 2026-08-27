@@ -54,7 +54,7 @@ import type {
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
-import { expectedKicker, shootoutDecision } from "../period/shootout.ts";
+import { expectedKicker, shootoutDecision, shootoutTally } from "../period/shootout.ts";
 import type { PlayerStatRow, PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // ---------------------------------------------------------------------------
@@ -2546,15 +2546,13 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
   // §9.5 — defined at every prefix.
   summary(state): ScoreSummary {
     const { home, away } = state.goals;
-    const shootout = state.shootout
-      ? state.shootout.kicks.reduce(
-          (tally, kick) => {
-            if (kick.scored) tally[kick.side]++;
-            return tally;
-          },
-          { home: 0, away: 0 },
-        )
-      : null;
+    // R3.5/Task H (F22) — ONE tally. This was a THIRD hand-rolled copy of the
+    // shoot-out reduce (`period/kernel.ts` already reads `shootoutTally` for
+    // its own summary); `shootout.ts`'s own doc explains why that must not
+    // exist — the decision math (`shootoutDecision`) and the display cannot
+    // be allowed to fork. The inline reduce this replaced counted a
+    // `void: true` kick's `scored` value; `shootoutTally` does not.
+    const shootout = state.shootout ? shootoutTally(state.shootout.kicks) : null;
     const suffix = shootout ? ` (${shootout.home}–${shootout.away} pens)` : "";
     return {
       headline: `${home} — ${away}${suffix}`,

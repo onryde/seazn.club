@@ -1357,6 +1357,16 @@ jobs:
       - name: Run smoke test
         run: npm run test:smoke
 
+      # R3.5/Task N: `scripts/smoke-sports.ts` had NO caller in any workflow —
+      # only `scripts/smoke.ts` ran, so the per-sport drivers rotted unnoticed
+      # (football/cricket/volleyball were 422ing on an entrant-kind mismatch
+      # that predates this wave, and nothing reported it). The deciders smoke
+      # the owner asked for is worthless without a gate, so it gets one here:
+      # same job, same already-built server on :3000, same job-scoped
+      # DATABASE_URL — the marginal cost is the run itself, not another build.
+      - name: Run per-sport smoke (deciders)
+        run: npm run test:smoke:sports
+
       # The Playwright UI e2e suite moved to its own workflow (e2e.yml): it
       # runs on pushes to main, or on demand against a PR by number.
 

@@ -9,7 +9,7 @@ import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { divisionAccent, monogram } from "@/lib/division-hue";
-import { MatchRuleFields, buildRuleOverride } from "./match-rules";
+import { MatchRuleFields, buildRuleOverride, hydrateRuleValues, SPORT_RULES } from "./match-rules";
 import { STAGE_TEMPLATES, buildTemplateStages, clampKnob, detectTemplate, type StageDraft } from "./format-templates";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
@@ -186,6 +186,68 @@ export function currentQualifiedFromStages(
   return matched ? total : 4;
 }
 
+/**
+ * R3.5 review finding F7 — this editor used to hardcode `sportKey ===
+ * "generic" ? w/d/l : win/draw/loss` for every OTHER sport. That shipped two
+ * bugs: tennis and the nested-kernel family
+ * (`packages/engine/src/sports/nested/kernel.ts:179`) declare
+ * `points: { win, loss }` with no `draw` field at all, so the hardcoded
+ * third box rendered a control that could never hold a value and, on save,
+ * wrote a spurious `draw: 0` the schema doesn't use; cricket's
+ * `{ win, tie, noResult, loss, draw? }`
+ * (`packages/engine/src/sports/cricket/cricket.ts:52-60`) meant the same
+ * hardcoded pair couldn't reach `tie`/`noResult` at all.
+ *
+ * Fix: derive the editable keys from the ACTUAL saved config's `points`
+ * shape rather than from the sport key. The server's Zod parse
+ * (`usecases/divisions.ts`) fills in every schema-declared key — with its
+ * default — before `division.config` ever reaches this client component, so
+ * `Object.keys(cfg.points)` already IS the sport module's declared shape;
+ * no engine import needed here. `POINTS_KEY_CONCEPT` only recognises the
+ * win/draw/loss concept (both the generic module's bare `w`/`d`/`l` and
+ * everyone else's spelled-out names) — an unrecognised key is left out of
+ * the rendered grid entirely and passes through on save via the spread in
+ * `applyFormat`, untouched.
+ *
+ * Ruling (owner, R3.5 review): making cricket's `tie`/`noResult` genuinely
+ * editable is a NEW capability (its own help copy, its own tests), not part
+ * of this fix, and is deliberately left as a follow-up rather than
+ * half-built here — a box with no help text explaining what a "no result"
+ * pays would be the same dead/confusing-control defect in a new place.
+ * `editablePointsKeys` also excludes any key a MatchRuleFields field already
+ * owns a dedicated, better-explained input for (football's
+ * shootoutWin/shootoutLoss — see match-rules.tsx) so the two editors never
+ * double up on one key.
+ */
+const POINTS_KEY_CONCEPT: Record<string, { order: number; labelKey: MessageKey }> = {
+  w: { order: 0, labelKey: "divset.win" },
+  win: { order: 0, labelKey: "divset.win" },
+  d: { order: 1, labelKey: "divset.draw" },
+  draw: { order: 1, labelKey: "divset.draw" },
+  l: { order: 2, labelKey: "divset.loss" },
+  loss: { order: 2, labelKey: "divset.loss" },
+};
+
+function editablePointsKeys(sportKey: string, points: Record<string, unknown> | undefined): string[] {
+  if (!points) return [];
+  const dedicated = new Set((SPORT_RULES[sportKey] ?? []).map((f) => f.key));
+  return Object.keys(points)
+    .filter((k) => !dedicated.has(k) && POINTS_KEY_CONCEPT[k])
+    .sort((a, b) => POINTS_KEY_CONCEPT[a]!.order - POINTS_KEY_CONCEPT[b]!.order);
+}
+
+/** Mirrors `hydrateRuleValues` (match-rules.tsx) for the points sub-object:
+ *  initial string values for whatever keys `editablePointsKeys` says this
+ *  sport's saved config actually has. */
+function hydratePointsValues(sportKey: string, points: Record<string, unknown> | undefined): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const key of editablePointsKeys(sportKey, points)) {
+    const v = points![key];
+    if (typeof v === "number") values[key] = String(v);
+  }
+  return values;
+}
+
 export function DivisionSettings({
   division,
   orgId,
@@ -263,11 +325,45 @@ export function DivisionSettings({
   const [legs, setLegs] = useState(
     ((stages.find((st) => st.kind === "league" || st.kind === "group")?.config as { legs?: number } | null)?.legs) ?? 1,
   );
-  const cfg = (division.config ?? {}) as { points?: { w?: number; d?: number; l?: number }; progressScore?: boolean };
-  const [pointsW, setPointsW] = useState(cfg.points ? String(cfg.points.w ?? "") : "");
-  const [pointsD, setPointsD] = useState(cfg.points ? String(cfg.points.d ?? "") : "");
-  const [pointsL, setPointsL] = useState(cfg.points ? String(cfg.points.l ?? "") : "");
-  const [ruleValues, setRuleValues] = useState<Record<string, string>>({});
+  const cfg = (division.config ?? {}) as { points?: Record<string, number>; progressScore?: boolean };
+  // R3.5 review F7 — which boxes this editor shows/writes is derived from
+  // the saved config's OWN points shape, not the sport key (see
+  // editablePointsKeys above).
+  const pointsFieldKeys = editablePointsKeys(division.sport_key, cfg.points);
+  const [pointsValues, setPointsValues] = useState<Record<string, string>>(() =>
+    hydratePointsValues(division.sport_key, cfg.points),
+  );
+  const [ruleValues, setRuleValues] = useState<Record<string, string>>(() =>
+    hydrateRuleValues(division.sport_key, division.config),
+  );
+  // R3.5 review F6 — hydratePointsValues/hydrateRuleValues above only ever
+  // ran in the useState INITIALIZER, so once this instance is mounted,
+  // saving through `run()` (every action in this component funnels through
+  // it, and it always calls `router.refresh()`) swaps in a freshly-fetched
+  // `division` prop that this already-mounted instance never re-reads:
+  // ruleValues/pointsValues kept showing whatever the organiser last typed,
+  // including a field the server clamped, defaulted, or (F5) deliberately
+  // deleted.
+  //
+  // Render-time "derive from props" adjustment (the same pattern
+  // use-board-actions.ts and cricket-skin.tsx's striker/nonStriker/bowler
+  // resync already use in this codebase) rather than a useEffect: track the
+  // LAST config CONTENT seen in its own state slot, and when the incoming
+  // content differs, overwrite the derived state during render.
+  //
+  // Comparing the config's serialised CONTENT, never the `division.config`
+  // object reference, is load-bearing: the server hands back a brand-new
+  // object on every refresh even when nothing in it changed (an unrelated
+  // save elsewhere in this same component — name, logo, entrants — refreshes
+  // too), and reference comparison would resync on every one of those and
+  // discard an in-progress edit here for no reason.
+  const configSignature = JSON.stringify(division.config);
+  const [syncedConfigSignature, setSyncedConfigSignature] = useState(configSignature);
+  if (configSignature !== syncedConfigSignature) {
+    setSyncedConfigSignature(configSignature);
+    setRuleValues(hydrateRuleValues(division.sport_key, division.config));
+    setPointsValues(hydratePointsValues(division.sport_key, cfg.points));
+  }
   const [advancedText, setAdvancedText] = useState("");
   // Entrants block (spec 2026-07-18): the ticked kinds, the default, and the
   // team extras seed from the resolved effective model.
@@ -414,13 +510,45 @@ export function DivisionSettings({
         delete override.resultMode;
         delete override.allowDraws;
       }
-      Object.assign(override, buildRuleOverride(division.sport_key, ruleValues));
-      if (pointsW !== "" || pointsD !== "" || pointsL !== "") {
-        override.points = {
-          w: pointsW === "" ? (cfg.points?.w ?? 0) : Number(pointsW),
-          d: pointsD === "" ? (cfg.points?.d ?? 0) : Number(pointsD),
-          l: pointsL === "" ? (cfg.points?.l ?? 0) : Number(pointsL),
+      // R3.5/Task Q — buildRuleOverride can return a nested `{ points: {...} }`
+      // (football's shootoutWin/shootoutLoss). A bare Object.assign of the
+      // whole rule override would REPLACE override.points wholesale, dropping
+      // whatever of the existing config's points (win/draw/loss, or a
+      // shootout half the organiser isn't touching right now) the rule
+      // fields didn't themselves resend. Merge points separately; everything
+      // else a rule field returns is a fine top-level Object.assign, exactly
+      // as before.
+      const { points: rulePoints, ...ruleOverrideRest } = buildRuleOverride(division.sport_key, ruleValues);
+      Object.assign(override, ruleOverrideRest);
+      if (rulePoints && typeof rulePoints === "object") {
+        const mergedPoints: Record<string, unknown> = {
+          ...((override.points as Record<string, unknown>) ?? {}),
+          ...(rulePoints as Record<string, unknown>),
         };
+        // R3.5 review F5 — a rule field's build()/buildOnBlank() (currently
+        // only match-rules.tsx's shootoutPointsPatch) can ask to DELETE a key
+        // from the nested object by setting it to `undefined` rather than
+        // omitting it — omitting it would leave whatever `override.points`
+        // already carried forward from the `{...division.config}` base at
+        // the top of this function untouched. Resolve those markers into a
+        // real deletion here, so the PATCH body (and any `toEqual`/
+        // `toHaveProperty` assertion on it) is a clean object rather than
+        // one holding `undefined`-valued keys.
+        for (const key of Object.keys(mergedPoints)) {
+          if (mergedPoints[key] === undefined) delete mergedPoints[key];
+        }
+        override.points = mergedPoints;
+      }
+      if (pointsFieldKeys.some((k) => pointsValues[k] !== undefined && pointsValues[k] !== "")) {
+        // Spread whatever survived above (shootout points included) rather
+        // than replacing override.points outright, and write only the keys
+        // THIS sport's schema actually declares — see editablePointsKeys.
+        const pointsPatch: Record<string, unknown> = { ...((override.points as Record<string, unknown>) ?? {}) };
+        for (const key of pointsFieldKeys) {
+          const raw = pointsValues[key];
+          pointsPatch[key] = raw === undefined || raw === "" ? (cfg.points?.[key] ?? 0) : Number(raw);
+        }
+        override.points = pointsPatch;
       }
       if (advancedText.trim() !== "") {
         try {
@@ -688,25 +816,24 @@ export function DivisionSettings({
               </select>
             </label>
 
-            {cfg.points && (
+            {pointsFieldKeys.length > 0 && (
               <div>
                 <p className="text-xs text-slate-500">{msg("divset.standingsPoints")}</p>
                 <div className="mt-1 grid grid-cols-3 gap-2">
-                  <label className="block text-xs text-slate-500">
-                    {msg("divset.win")}
-                    <input type="number" min={0} max={99} disabled={!canEdit} value={pointsW}
-                      onChange={(e) => setPointsW(e.target.value)} className="input mt-1 w-full" />
-                  </label>
-                  <label className="block text-xs text-slate-500">
-                    {msg("divset.draw")}
-                    <input type="number" min={0} max={99} disabled={!canEdit} value={pointsD}
-                      onChange={(e) => setPointsD(e.target.value)} className="input mt-1 w-full" />
-                  </label>
-                  <label className="block text-xs text-slate-500">
-                    {msg("divset.loss")}
-                    <input type="number" min={0} max={99} disabled={!canEdit} value={pointsL}
-                      onChange={(e) => setPointsL(e.target.value)} className="input mt-1 w-full" />
-                  </label>
+                  {pointsFieldKeys.map((key) => (
+                    <label key={key} className="block text-xs text-slate-500">
+                      {msg(POINTS_KEY_CONCEPT[key]!.labelKey)}
+                      <input
+                        type="number"
+                        min={0}
+                        max={99}
+                        disabled={!canEdit}
+                        value={pointsValues[key] ?? ""}
+                        onChange={(e) => setPointsValues({ ...pointsValues, [key]: e.target.value })}
+                        className="input mt-1 w-full"
+                      />
+                    </label>
+                  ))}
                 </div>
               </div>
             )}
