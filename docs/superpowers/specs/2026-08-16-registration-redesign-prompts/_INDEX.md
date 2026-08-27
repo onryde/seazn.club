@@ -1910,6 +1910,78 @@ Both open calls went to the owner and both took the recommendation.
      step with a real missing value stays silent until the last click. This is
      the top of the funnel: a paying captain hits a dead end after consenting.
      NOTE: fixing this touches the RS006 stepper, widening RS007's file set.
+- **SESSION STATE (2026-08-27) — resume here.** Branch
+  `feat/rs007-status-join-payments`, worktree `.claude/worktrees/rs007`,
+  rebased on `addd126c5`. 8 commits, tree clean. Local env: DB
+  `postgresql://postgres@127.0.0.1:54515/seazn_rs007` (v379), prod server on
+  `http://localhost:3355` (built FROM this worktree), placement on 50451.
+  Seeded scenario: org `rs007-seed-mtblbdpu-7invf`, comp
+  `rs007-seed-competition-mtblbdpu-7invf`, divisions Teams (team) + Pairs
+  (pair), £25 offline, instructions carrying `{{reference}}`. A live status
+  page URL is in `/tmp/rs007-status-url.txt`. Seed/driver scripts live in the
+  session scratchpad (`seed-rs007.mjs`, `drive.mjs`, `shot.mjs`, `probe.mjs`).
+  DONE: promotion clock + lapse-to-tail (V378), claim-not-duplicate join +
+  pair join codes, sweep scheduler + per-entry reminders (V379), prod leg
+  gated, refund window bounded, status page rebuilt, 3 visual defects fixed.
+- **REVIEWER GAP LIST (first adversarial pass, 2026-08-27) — OPEN unless
+  marked.** Six waves ran implementer-only before this; that was a process
+  error and this list is what it cost.
+  1. **CRITICAL — the claim links are DEAD.** `entry-card.tsx:174,:187` link
+     to `/shared/{org}/{comp}/register/join`; **no such page exists** (only
+     the API route, at an unrelated path). Verified by hand: 404, no page
+     file. Cause is a brief error — W3 was told to render claim links AND
+     told not to touch the join page. Every team/pair registrant's link
+     404s. FIX = build the join page (RS007 scope item 2 all along).
+  2. **Refund fallback still has the hole it claims to close**:
+     `competitions.starts_on` is NULLABLE (`V207__competitions.sql:10`), so a
+     competition with neither `refund_lock_at` nor `starts_on` is STILL
+     refundable forever. Plus `new Date("YYYY-MM-DD")` = UTC midnight, so a US
+     club's lock fires ~20h early and an APAC club's stays open past kickoff.
+     Confirmed the fallback never WIDENS eligibility — direction is right,
+     trigger conditions are wrong.
+  3. **Reminder passes are not concurrency-safe**: `registrations.ts:3657`
+     and `:3702` send-then-UPDATE with no `for update` and no CAS guard,
+     unlike expire/lapse which lock and re-check. The workflow's own curl
+     retries can overlap a running invocation. Contradicts the route's and
+     the workflow's "idempotent/row-locked" claims — and this path runs in
+     prod for the FIRST TIME because of this PR.
+  4. **Claim vs organiser-withdraw TOCTOU**: the dead-status check runs on
+     the initial SELECT (~`registration-submit.ts:916`); the CAS WHERE
+     (`:965-979`) never re-checks status, so a withdraw landing between them
+     lets a claim write consent onto a dead entry. (Claim-vs-claim on the
+     same slot IS genuinely atomic — that part is clean.)
+  5. **Timing oracle on two NEW routes**: `resendRegistrationConfirmationPublic`
+     (`:1236`) and `reconcileRegistrationGroupBySession` (`:2671`) use
+     `!group || !tokenMatchesHash(...)`, short-circuiting when no row matches.
+     `buildGroupStatusView:3180` already carries the documented fix
+     (`DUMMY_ACCESS_HASH`, always compares) and they did not reuse it.
+  6. Reconcile-on-load has NO rate limit (`page.tsx:54`) unlike every sibling
+     public mutation. Cannot be triggered for someone else's session and
+     cannot double-apply — just uncapped external Stripe calls.
+  7. Concurrency claims are tested SEQUENTIALLY only — nothing fires two
+     claims or two sweeps in parallel, so nothing would have caught #3. The
+     workflow guard also never asserts the `concurrency:` block exists.
+  8. Three hardcoded English catch-block strings: `cancel-entry.tsx`,
+     `pay-button.tsx`, `resend-confirmation.tsx`. All other new strings are
+     present in all 4 dictionaries.
+  9. FYI only, self-acknowledged: join-code enumerability (`generateRefCode`,
+     not high-entropy), mitigated by the same 5/300s per-IP limit as POST.
+- **CORRECTION to this file's own earlier note**: the STATUS page's bad-token
+  state was NEVER the bare 404. It already renders a designed, branded "We
+  couldn't find that registration", and wrong-token vs nonexistent-group are
+  BYTE-IDENTICAL (same 200, same length, same visible text — verified). The
+  bare framework 404 came from the ORG-SLUG layer above it, which now has a
+  `not-found.tsx`. Copy nit outstanding: "Check your link and try again" asks
+  the reader to fix a link someone else sent them; the actionable line is
+  "ask the organiser to resend your confirmation".
+- **VERIFICATION LESSON, recorded because it repeated the folder's own
+  founding lesson**: 3098 unit tests were green while every claim link 404'd.
+  Screenshots caught the bank-details wrap, the banner overlap and the copy
+  failures — and still missed the dead links, because a screenshot proves a
+  link RENDERS, never that it RESOLVES. Only tapping it does. The walkthrough
+  spec this file already mandates was sequenced LAST; had it been first the
+  dead links would have failed immediately. It is now sequenced right after
+  the join page exists to tap.
 - **Owed to RS009, deliberately NOT built here**: the organiser needs to see
   which entries still have unclaimed players ("2 teams have incomplete
   rosters") before the draw. It belongs to RS005's Registrants tab and
