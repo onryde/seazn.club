@@ -136,3 +136,8 @@ describe.skipIf(!HAS_DB)("patchDivision — an explicit youth override survives 
     expect(patched.youth).toBe(false);
   });
 });
+
+afterAll(async () => {
+  if (!HAS_DB) return;
+  await sql.end();
+});
