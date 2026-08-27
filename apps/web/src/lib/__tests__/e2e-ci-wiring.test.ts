@@ -285,7 +285,7 @@ describe("e2e CI wiring", () => {
   // directory-anchored, so the move is what enrols it — but a rename or a
   // revert would leave the wiring above pointing at nothing.
   it("keeps the Connect walkthrough inside the walkthrough project", async () => {
-    const { default: unset } = await import("../../../playwright.config");
+    const unset = await configFor(undefined);
     const walkthrough = projectNamed(unset, "walkthrough");
     const selected = specFiles().filter((f) => selects(walkthrough, f));
     expect(

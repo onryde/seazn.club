@@ -1177,6 +1177,10 @@ describe("step 3 — the mixed-composition meter blocks an all-male roster and c
     clickByText("Next"); // -> ENTRIES
 
     (propsOf(divisionCard("div-mixed")).onAddTeam as () => void)();
+    // A team entry must be NAMED to leave this step (RS007): the server
+    // 422s a nameless team, and the client now says so here rather than at
+    // submit. Not what these tests are about -- name it and move on.
+    setByAriaLabel(island, "Team name", "Test Team");
     clickByText("Next"); // -> DETAILS
 
     clickByText("+ Add player");
@@ -1221,6 +1225,10 @@ describe("step 3 — an underage player is named BY ROW, not just anywhere on th
     });
     clickByText("Next"); // -> ENTRIES
     (propsOf(divisionCard("div-age")).onAddTeam as () => void)();
+    // A team entry must be NAMED to leave this step (RS007): the server
+    // 422s a nameless team, and the client now says so here rather than at
+    // submit. Not what these tests are about -- name it and move on.
+    setByAriaLabel(island, "Team name", "Test Team");
     clickByText("Next"); // -> DETAILS
 
     clickByText("+ Add player");
@@ -1269,6 +1277,10 @@ describe("step 3 — pasting a roster via the textarea parses into named rows (p
     (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
     clickByText("Next"); // -> ENTRIES
     (propsOf(divisionCard("div-team")).onAddTeam as () => void)();
+    // A team entry must be NAMED to leave this step (RS007): the server
+    // 422s a nameless team, and the client now says so here rather than at
+    // submit. Not what these tests are about -- name it and move on.
+    setByAriaLabel(island, "Team name", "Test Team");
     clickByText("Next"); // -> DETAILS
 
     const textarea = island.tree().find((e) => e.type === "textarea");
@@ -1548,6 +1560,10 @@ describe("step 4 — CONSENT", () => {
     (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Rep", email: "rep@example.com" });
     clickByText("Next"); // -> ENTRIES (2 open divisions — not collapsed)
     (propsOf(divisionCard("div-team")).onAddTeam as () => void)();
+    // A team entry must be NAMED to leave this step (RS007): the server
+    // 422s a nameless team, and the client now says so here rather than at
+    // submit. Not what these tests are about -- name it and move on.
+    setByAriaLabel(island, "Team name", "Test Team");
     clickByText("Next"); // -> DETAILS
     clickByText("+ Add player");
     clickByText("+ Add player");

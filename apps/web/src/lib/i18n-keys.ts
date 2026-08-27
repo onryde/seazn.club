@@ -3790,6 +3790,7 @@ export type DictionaryKey =
   | "register.entries.cart.remove"
   | "register.entries.cart.self"
   | "register.entries.cart.subtotal"
+  | "register.entries.cart.teamNameRequired"
   | "register.entries.cart.waitlistNote"
   | "register.entries.category.mens"
   | "register.entries.category.mixed"
