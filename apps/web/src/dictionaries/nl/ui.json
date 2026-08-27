@@ -4485,6 +4485,7 @@
   "register.review.heading": "Overzicht en betaling",
   "register.review.subtitle": "Controleer alles hieronder en verstuur dan.",
   "register.submit.error": "Er ging iets mis — probeer het opnieuw.",
+  "register.submit.errorRejected": "We konden je inschrijving niet versturen — controleer je gegevens en probeer het opnieuw, of neem contact op met de organisator.",
   "register.status.heading": "Je inschrijving",
   "register.status.notFound": "We konden die inschrijving niet vinden. Controleer je link en probeer het opnieuw.",
   "reg.status.rejected": "afgewezen"

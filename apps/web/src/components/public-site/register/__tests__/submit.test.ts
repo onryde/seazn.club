@@ -8,7 +8,7 @@
 // uses elsewhere (org-switch-target.test.ts tests the URL a component
 // hard-navigates to, not the navigate call itself).
 import { describe, expect, it } from "vitest";
-import { buildSubmitBody, resolvePostSubmitNavigation } from "../submit";
+import { buildSubmitBody, classifySubmitFailure, resolvePostSubmitNavigation } from "../submit";
 import { EMPTY_CART, EMPTY_CONSENT, EMPTY_CONTACT, type CartState, type ContactState } from "../types";
 
 describe("buildSubmitBody", () => {
@@ -154,5 +154,35 @@ describe("resolvePostSubmitNavigation", () => {
       "summer-smash",
     );
     expect(nav.url).toContain(encodeURIComponent("tok/with+special"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FIX 3 (RS006 fix wave, 2026-08-27) — classifies a submit failure's HTTP
+// status into which of register-stepper.tsx's two recovery messages shows.
+// See this function's own doc comment (submit.ts) for the full reasoning;
+// these tests pin the resulting table.
+// ---------------------------------------------------------------------------
+
+describe("classifySubmitFailure", () => {
+  it("409 (a concurrent checkout-mint race, e.g. REGISTRATION_CHECKOUT_CONFLICT) is retryable — the exact same submit is expected to succeed next time", () => {
+    expect(classifySubmitFailure(409)).toBe("retry");
+  });
+
+  it("any 5xx is retryable", () => {
+    expect(classifySubmitFailure(500)).toBe("retry");
+    expect(classifySubmitFailure(503)).toBe("retry");
+  });
+
+  it("no HTTP status at all (e.g. a dropped connection, before any response) defaults to retryable", () => {
+    expect(classifySubmitFailure(undefined)).toBe("retry");
+  });
+
+  it("400 (including the honeypot's generic 400) is rejected — resubmitting the exact same body would fail the exact same way", () => {
+    expect(classifySubmitFailure(400)).toBe("rejected");
+  });
+
+  it("422 is rejected", () => {
+    expect(classifySubmitFailure(422)).toBe("rejected");
   });
 });

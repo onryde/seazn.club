@@ -16,7 +16,7 @@
 // the seam is "render nothing, don't crash on the param" (RS006 prompt).
 import { useEffect, useRef, useState } from "react";
 import { useT } from "@/components/i18n/dict-provider";
-import { apiV1 } from "@/lib/client-v1";
+import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { formatMinor, type Currency } from "@/lib/currency";
 import {
   autoLinkObviousSelf,
@@ -29,7 +29,13 @@ import {
 } from "./cart";
 import { seasonStartYearFrom } from "./eligibility-presentation";
 import { clearRegisterState, REGISTER_STATE_VERSION, loadRegisterState, saveRegisterState } from "./storage";
-import { buildSubmitBody, resolvePostSubmitNavigation, type SubmitResultShape } from "./submit";
+import {
+  buildSubmitBody,
+  classifySubmitFailure,
+  resolvePostSubmitNavigation,
+  type SubmitFailureKind,
+  type SubmitResultShape,
+} from "./submit";
 import { StepConsent } from "./step-consent";
 import { StepDetails } from "./step-details";
 import { StepEntries } from "./step-entries";
@@ -146,7 +152,14 @@ export function RegisterStepper({
   // Step 5's submit — NOT persisted (a refresh mid-submit should retry, not
   // silently resume a stale "submitting" state).
   const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  // FIX 3 (RS006 fix wave) — was a bare `string | null` (whatever
+  // `err.message` happened to be, rendered as-is, the ONLY thing the
+  // registrant saw). `kind` (classifySubmitFailure, submit.ts) picks which
+  // of the two LOCALIZED recovery messages is PRIMARY; `detail` is the raw
+  // server message, still shown, but only ever as secondary text — server
+  // errors are English-only by design (no server-side i18n), so it must
+  // never be the primary thing a registrant reads.
+  const [submitError, setSubmitError] = useState<{ kind: SubmitFailureKind; detail: string } | null>(null);
   // Review finding #2 (MEDIUM) — focus management across step transitions.
   // `containerRef` scopes the DOM query the focus effect below runs
   // (mirrors modal.tsx's own `dialogRef`/`querySelectorAll` pattern);
@@ -193,7 +206,6 @@ export function RegisterStepper({
       // that state's own comment for why calling it here, post-hydration,
       // client-only, is what actually fixes the determinism this effect's
       // header now correctly claims.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCart({ ...EMPTY_CART, entries: autoSeedSingleDivision(openDivisions[0]!, crypto.randomUUID()) });
     }
     // A restored field the rep hasn't touched YET (this visit) must render
@@ -350,6 +362,19 @@ export function RegisterStepper({
    * deliberately left `true` on the success path — the page is about to
    * navigate away, so there is no further interaction to unblock; only the
    * catch branch resets it, so a failed attempt can be retried.
+   *
+   * FIX 3 (RS006 fix wave) — the catch branch used to render `err.message`
+   * verbatim as the ONLY thing the registrant saw: a bare server string
+   * (English-only, no server-side i18n — see `lib/errors.ts`) with no
+   * distinction between "retry the exact same click" (a 409 checkout-mint
+   * conflict, any 5xx) and "something about THIS submission needs to
+   * change first" (the honeypot's 400 included — indistinguishable, from
+   * here, from any other 400/422). `classifySubmitFailure` (submit.ts)
+   * makes that call from the HTTP status alone (via `ApiV1Error.status` —
+   * `apiV1`, `lib/client-v1.ts`). Neither `contact`/`consent`/`cart`/
+   * `website` state is ever touched in this catch branch, so whatever the
+   * registrant filled in across all five steps is still exactly there to
+   * resubmit — nothing is lost on a failed attempt.
    */
   async function handleSubmit() {
     setSubmitting(true);
@@ -363,7 +388,11 @@ export function RegisterStepper({
       const nav = resolvePostSubmitNavigation(result, orgSlug, competitionSlug);
       window.location.assign(nav.url);
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : t("register.submit.error"));
+      const status = err instanceof ApiV1Error ? err.status : undefined;
+      setSubmitError({
+        kind: classifySubmitFailure(status),
+        detail: err instanceof Error ? err.message : String(err),
+      });
       setSubmitting(false);
     }
   }
@@ -437,9 +466,18 @@ export function RegisterStepper({
         <>
           <StepReview summary={reviewSummary} locale={locale} />
           {submitError && (
-            <p role="alert" className="text-sm text-red-600">
-              {submitError}
-            </p>
+            <div role="alert" className="space-y-1">
+              {/* Primary — localized, actionable, never the raw server
+                  string (FIX 3: server errors are English-only by design,
+                  see handleSubmit's own doc comment above). */}
+              <p className="text-sm text-red-600">
+                {t(submitError.kind === "retry" ? "register.submit.error" : "register.submit.errorRejected")}
+              </p>
+              {/* Secondary — the raw detail, de-emphasized: useful context
+                  (e.g. "another checkout was just started"), never the
+                  primary thing read. */}
+              <p className="text-xs text-ink-muted">{submitError.detail}</p>
+            </div>
           )}
         </>
       )}

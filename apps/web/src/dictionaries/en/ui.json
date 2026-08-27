@@ -4485,6 +4485,7 @@
   "register.review.heading": "Review & pay",
   "register.review.subtitle": "Check everything below, then submit.",
   "register.submit.error": "Something went wrong — please try again.",
+  "register.submit.errorRejected": "We couldn't submit your registration — check your details and try again, or contact the organiser.",
   "register.status.heading": "Your registration",
   "register.status.notFound": "We couldn't find that registration. Check your link and try again.",
   "reg.status.rejected": "rejected"

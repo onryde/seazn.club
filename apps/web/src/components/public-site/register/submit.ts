@@ -101,3 +101,43 @@ export function resolvePostSubmitNavigation(
     url: `/shared/${orgSlug}/${competitionSlug}/register/status?rid=${result.group_id}&token=${encodeURIComponent(result.access_token)}`,
   };
 }
+
+/**
+ * FIX 3 (RS006 fix wave) — step 5's submit/pay failure path used to render
+ * `err.message` verbatim as the ONLY thing the registrant saw: a bare
+ * server string (English-only, no server-side i18n — see `lib/errors.ts`)
+ * with no distinction between "retry the exact same click" and "something
+ * about THIS submission needs to change first." This classifies an HTTP
+ * status into which of register-stepper.tsx's two localized recovery
+ * messages applies.
+ *
+ * `"retry"` — a 409 (a concurrent checkout-mint race losing the
+ * compare-and-swap in `createRegistrationCheckout`,
+ * `REGISTRATION_CHECKOUT_CONFLICT`, `registrations.ts`) or any 5xx: the
+ * failure is about TIMING/availability, not about what was submitted, so
+ * the exact same request is expected to succeed on retry. Absent status
+ * (no response reached the client at all — a dropped connection) is also
+ * bucketed here: the more optimistic assumption, and the one "please try
+ * again" is honest advice for.
+ *
+ * `"rejected"` — a 400 or 422: the SERVER refused this submission's own
+ * content. The honeypot's 400 is deliberately included here even though it
+ * is usually a false positive (a password manager filling the hidden
+ * field, not a real bot) — the response is indistinguishable, from this
+ * function's only input, from any other 400, and clicking Submit again
+ * with the EXACT same body would fail the exact same way either way, so
+ * "try again" would be dishonest advice.
+ *
+ * Any OTHER status (401/403/404/429/…) also falls to `"rejected"` — a
+ * narrower "at minimum 409/5xx vs 400/422" was the brief; nothing about
+ * this endpoint makes those specific codes reachable today, and "ask for
+ * something to change, or contact the organiser" degrades more safely than
+ * an unconditional "try again" would for an unanticipated code.
+ */
+export type SubmitFailureKind = "retry" | "rejected";
+
+export function classifySubmitFailure(status: number | undefined): SubmitFailureKind {
+  if (status === undefined) return "retry";
+  if (status === 409 || status >= 500) return "retry";
+  return "rejected";
+}

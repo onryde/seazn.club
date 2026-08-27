@@ -3841,6 +3841,7 @@ export type DictionaryKey =
   | "register.status.notFound"
   | "register.submit.card"
   | "register.submit.error"
+  | "register.submit.errorRejected"
   | "register.submit.fee"
   | "register.submit.free"
   | "register.subtitle"

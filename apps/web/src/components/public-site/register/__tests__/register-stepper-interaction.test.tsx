@@ -25,16 +25,24 @@
 // RS006 step 5 — mocks the submit POST. Hoisted so the factory below can
 // reference it (vi.mock is itself hoisted above every import by vitest's
 // transform) — same pattern as registration-submit.test.ts's refCodeMock.
+// FIX 3 (RS006 fix wave) — the factory now spreads the REAL module
+// (`importOriginal`) rather than replacing it outright: register-stepper.tsx
+// imports `ApiV1Error` from this same module to classify a failure's HTTP
+// status, and a bare `{ apiV1: ... }` replacement would leave `ApiV1Error`
+// `undefined` there, making `instanceof ApiV1Error` throw. Only `apiV1`
+// itself is overridden.
 const apiV1Mock = vi.hoisted(() => ({ impl: vi.fn() }));
-vi.mock("@/lib/client-v1", () => ({
-  apiV1: (...args: unknown[]) => apiV1Mock.impl(...args),
-}));
+vi.mock("@/lib/client-v1", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/client-v1")>();
+  return { ...actual, apiV1: (...args: unknown[]) => apiV1Mock.impl(...args) };
+});
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ReactElement, ReactNode } from "react";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
+import { ApiV1Error } from "@/lib/client-v1";
 import { t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import { DivisionCard } from "../division-card";
@@ -1680,15 +1688,99 @@ describe("step 5 — submit", () => {
     expect(assignMock).not.toHaveBeenCalledWith(expect.stringContaining("/register/status"));
   });
 
-  it("a submit failure shows an inline error and re-enables the button, rather than leaving it stuck", async () => {
+  // FIX 3 (RS006 fix wave) — a failed submit used to render `err.message`
+  // verbatim as the ONLY thing the registrant saw (the honeypot's 400, or a
+  // 409 from a concurrent checkout-mint race, included) — a bare,
+  // English-only server string with no distinction between "retry the
+  // exact same click" and "something about THIS submission needs to
+  // change." `submitError` is now `{ kind, detail }`: `kind` (classifySubmitFailure,
+  // submit.ts) picks which LOCALIZED message is PRIMARY, `detail` is the
+  // raw server string, still shown, but only ever as SECONDARY text.
+  //
+  // `alertBlock()` reads the role="alert" element's own two `<p>` children
+  // directly via `.children` (not a page-wide text search) — the ENTRIES/
+  // DETAILS steps have their OWN role="alert" blocks, but neither is
+  // mounted here (only one step renders at a time, and these tests never
+  // leave REVIEW), so this is unambiguous.
+  function alertBlock(island: ReturnType<typeof mount>["island"]) {
+    const el = island.tree().find((e) => propsOf(e).role === "alert");
+    expect(el, "no role=alert error block found").toBeTruthy();
+    const children = propsOf(el!).children as ReactElement[];
+    expect(children, "expected exactly 2 children — primary + secondary detail").toHaveLength(2);
+    return { primary: children[0]!, secondary: children[1]! };
+  }
+
+  it("a RETRYABLE failure (no HTTP status — e.g. a dropped connection) shows the retry-bucket message as PRIMARY, the raw detail only as secondary, and re-enables the button rather than leaving it stuck", async () => {
     apiV1Mock.impl.mockRejectedValueOnce(new Error("Registration is not open for this division"));
-    const { pageText, island } = await reachReview();
+    const { island } = await reachReview();
     const btn = island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition");
     await (propsOf(btn!).onClick as () => Promise<void>)();
 
-    expect(pageText()).toContain("Registration is not open for this division");
+    const { primary, secondary } = alertBlock(island);
+    expect(textOf(primary), "PRIMARY must be the localized retry copy, never the raw server string").toBe(
+      "Something went wrong — please try again.",
+    );
+    expect(textOf(secondary), "the raw detail is still shown, but only as secondary text").toBe(
+      "Registration is not open for this division",
+    );
+
     const btnAfter = island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition");
     expect(propsOf(btnAfter!).disabled, "button must not be stuck disabled after a failure").not.toBe(true);
     expect(assignMock, "must never navigate away on a failed submit").not.toHaveBeenCalled();
+  });
+
+  it("a REJECTED failure (400, e.g. the honeypot) shows the DIFFERENT rejected-bucket message, not the retry one", async () => {
+    apiV1Mock.impl.mockRejectedValueOnce(new ApiV1Error("Registration failed", 400, "UNKNOWN"));
+    const { island } = await reachReview();
+    const btn = island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition");
+    await (propsOf(btn!).onClick as () => Promise<void>)();
+
+    const { primary, secondary } = alertBlock(island);
+    expect(textOf(primary)).toBe(
+      "We couldn't submit your registration — check your details and try again, or contact the organiser.",
+    );
+    expect(textOf(secondary)).toBe("Registration failed");
+  });
+
+  it("a CONFLICT failure (409 — a concurrent checkout-mint race) shows the retry-bucket message, not the rejected one", async () => {
+    apiV1Mock.impl.mockRejectedValueOnce(
+      new ApiV1Error(
+        "Another checkout was just started for this registration — please refresh and try again",
+        409,
+        "REGISTRATION_CHECKOUT_CONFLICT",
+      ),
+    );
+    const { island } = await reachReview();
+    const btn = island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition");
+    await (propsOf(btn!).onClick as () => Promise<void>)();
+
+    const { primary } = alertBlock(island);
+    expect(textOf(primary)).toBe("Something went wrong — please try again.");
+  });
+
+  it("retrying after a failure resubmits the SAME contact/cart — nothing typed across all five steps is lost", async () => {
+    apiV1Mock.impl.mockRejectedValueOnce(new Error("temporary failure"));
+    apiV1Mock.impl.mockResolvedValueOnce({
+      group_id: "g2",
+      ref_code: "SZ-TEST-03",
+      access_token: "tok789",
+      currency: "gbp",
+      amount_cents: 0,
+      checkout_url: null,
+      entries: [],
+    });
+    const { island } = await reachReview();
+    const btn = () => island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition")!;
+
+    await (propsOf(btn()).onClick as () => Promise<void>)(); // fails
+    await (propsOf(btn()).onClick as () => Promise<void>)(); // retry, same button, re-enabled
+
+    expect(apiV1Mock.impl).toHaveBeenCalledTimes(2);
+    const firstJson = (apiV1Mock.impl.mock.calls[0]![1] as { json: unknown }).json;
+    const secondJson = (apiV1Mock.impl.mock.calls[1]![1] as { json: unknown }).json;
+    expect(secondJson, "identical resubmission — the failed attempt cleared nothing").toEqual(firstJson);
+    expect(assignMock).toHaveBeenCalledWith(
+      `/shared/${ORG_SLUG}/${COMPETITION_SLUG}/register/status?rid=g2&token=tok789`,
+    );
   });
 });

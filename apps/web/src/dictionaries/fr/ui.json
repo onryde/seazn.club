@@ -4485,6 +4485,7 @@
   "register.review.heading": "Vérification et paiement",
   "register.review.subtitle": "Vérifiez tout ci-dessous, puis validez.",
   "register.submit.error": "Une erreur s'est produite — veuillez réessayer.",
+  "register.submit.errorRejected": "Nous n'avons pas pu envoyer votre inscription — vérifiez vos informations et réessayez, ou contactez l'organisateur.",
   "register.status.heading": "Votre inscription",
   "register.status.notFound": "Nous n'avons pas trouvé cette inscription. Vérifiez votre lien et réessayez.",
   "reg.status.rejected": "refusée"

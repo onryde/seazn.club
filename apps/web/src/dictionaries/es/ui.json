@@ -4485,6 +4485,7 @@
   "register.review.heading": "Revisión y pago",
   "register.review.subtitle": "Revisa todo a continuación y envía.",
   "register.submit.error": "Algo salió mal — inténtalo de nuevo.",
+  "register.submit.errorRejected": "No hemos podido enviar tu inscripción — comprueba tus datos e inténtalo de nuevo, o contacta con el organizador.",
   "register.status.heading": "Tu inscripción",
   "register.status.notFound": "No hemos encontrado esa inscripción. Comprueba tu enlace e inténtalo de nuevo.",
   "reg.status.rejected": "rechazada"
