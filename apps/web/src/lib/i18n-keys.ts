@@ -1593,6 +1593,8 @@ export type DictionaryKey =
   | "divset.entrants.captain"
   | "divset.entrants.defaultKind"
   | "divset.entrants.desc"
+  | "divset.entrants.eligibility.hint"
+  | "divset.entrants.eligibility.label"
   | "divset.entrants.kind.individual"
   | "divset.entrants.kind.pair"
   | "divset.entrants.kind.team"

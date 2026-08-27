@@ -2166,6 +2166,8 @@
   "divset.entrants.save": "Save entrant settings",
   "divset.entrants.reset": "Reset to sport default",
   "divset.entrants.saved": "Entrant settings saved.",
+  "divset.entrants.eligibility.label": "Eligibility:",
+  "divset.entrants.eligibility.hint": "Checked at roster add — organisers can override with a reason.",
   "divset.entrants.resetDone": "Reset to the sport default.",
   "divset.entrants.note": "A kind can't be removed while entrants of that kind are still active — withdraw them first.",
   "stagetags.title": "Required court tags",

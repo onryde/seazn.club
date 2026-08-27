@@ -2121,6 +2121,8 @@
   "divset.entrants.save": "Guardar ajustes de participantes",
   "divset.entrants.reset": "Restablecer al valor predeterminado del deporte",
   "divset.entrants.saved": "Ajustes de participantes guardados.",
+  "divset.entrants.eligibility.label": "Elegibilidad:",
+  "divset.entrants.eligibility.hint": "Se comprueba al añadir un participante — el equipo organizador puede anularlo indicando un motivo.",
   "divset.entrants.resetDone": "Restablecido al valor predeterminado del deporte.",
   "divset.entrants.note": "Un tipo no se puede quitar mientras haya participantes de ese tipo activos: retíralos primero.",
   "stagetags.title": "Etiquetas de pista requeridas",

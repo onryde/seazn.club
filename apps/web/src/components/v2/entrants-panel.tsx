@@ -13,6 +13,36 @@ import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { SuspensionChip } from "@/components/discipline/suspension-chip";
+// RS007/V380 — the SAME organiser-facing category/age-band derivations the
+// registration hub's row card uses (registration-hub-division-row.tsx),
+// reused here rather than re-implemented: both are the SAME audience
+// (organiser console) reading the SAME `divisions` columns.
+import {
+  resolveDivisionCategory,
+  deriveAgeBand,
+  type DivisionCategoryValue,
+} from "@/components/registration-hub-row-derive";
+
+/** RS007/V380 — the division columns this panel badges above the roster.
+ *  Replaces the retired jsonb `eligibility` array (a `Record<string,
+ *  unknown>[]` of `{kind:"age"|"gender"|"custom", ...}` rules) — division
+ *  eligibility has been ONE representation (category/age_min/age_max/
+ *  eligibility_note) since V380; there is no second shape left to carry. */
+export interface EntrantsPanelEligibility {
+  category: string | null;
+  age_min: number | null;
+  age_max: number | null;
+  eligibility_note: string | null;
+}
+
+// Reuses the registration hub row's own category vocabulary (same
+// organiser audience) — "open" is deliberately absent, matching that row's
+// own "no restriction set, no badge" precedent (see eligibilityBadges below).
+const ENTRANT_CATEGORY_KEY: Record<Exclude<DivisionCategoryValue, "open">, MessageKey> = {
+  mens: "reg.hub.row.category.mens",
+  womens: "reg.hub.row.category.womens",
+  mixed: "reg.hub.row.category.mixed",
+};
 
 // Shared entrant-kind labels — reuse the same catalog keys the Settings tab
 // uses so "Individual / Pair / Team" read identically across the console.
@@ -80,7 +110,7 @@ interface Props {
   canEdit: boolean;
   positionGroups: PositionGroup[];
   roles: RoleSpec[];
-  eligibility: Record<string, unknown>[];
+  eligibility: EntrantsPanelEligibility;
   /** Effective entrant model (sport default merged with any config.entrants
    *  override) — decides which kinds the add form offers and whether the
    *  roster editor shows squad numbers / captain. */
@@ -210,19 +240,19 @@ export function EntrantsPanel({
     }
   }
 
+  const eligibilityBadgeList = eligibilityBadges(eligibility, msg);
+
   return (
     <div className="space-y-6">
-      {eligibility.length > 0 && (
+      {eligibilityBadgeList.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          <span className="font-medium">Eligibility:</span>
-          {eligibility.map((rule, i) => (
+          <span className="font-medium">{msg("divset.entrants.eligibility.label")}</span>
+          {eligibilityBadgeList.map((badge, i) => (
             <span key={i} className="rounded-full bg-white/70 px-2 py-0.5">
-              {eligibilityLabel(rule)}
+              {badge}
             </span>
           ))}
-          <span className="text-amber-600">
-            Checked at roster add — organisers can override with a reason.
-          </span>
+          <span className="text-amber-600">{msg("divset.entrants.eligibility.hint")}</span>
         </div>
       )}
 
@@ -423,20 +453,34 @@ export function EntrantsPanel({
   );
 }
 
-function eligibilityLabel(rule: Record<string, unknown>): string {
-  switch (rule.kind) {
-    case "age": {
-      const max = rule.maxAgeAt;
-      const cutoff = rule.cutoff as { month?: number; day?: number } | undefined;
-      return `U${Number(max) + 1} (cutoff ${cutoff?.day ?? 1}/${cutoff?.month ?? 1})`;
-    }
-    case "gender":
-      return `Gender: ${(rule.allowed as string[]).join(", ")}`;
-    case "custom":
-      return String(rule.note ?? "custom rule");
-    default:
-      return String(rule.kind ?? "rule");
+/** RS007/V380 — category/age-band badges plus the raw organiser note, in
+ *  that order. `open`/null carries no restriction to announce (same
+ *  precedent as the registration hub row's own categoryLabel — "Null/open
+ *  ... never a badge; only an explicit mens/womens/mixed restriction is
+ *  worth one"); the note renders VERBATIM (organiser-authored free text,
+ *  not a translated label — same "render as TEXT, never HTML/markdown"
+ *  rule the public register/join pages follow for the identical column). */
+export function eligibilityBadges(
+  e: EntrantsPanelEligibility,
+  msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): string[] {
+  const badges: string[] = [];
+  // e.category is the raw `divisions.category` column (string | null,
+  // matching DivisionRow — divisions.ts); the DB CHECK/zod enum already
+  // constrain its real values to DivisionCategoryValue, same precedent as
+  // this file's own `kind as EntrantKind` narrowing elsewhere.
+  const category = resolveDivisionCategory(e.category as DivisionCategoryValue | null);
+  if (category !== "open") badges.push(msg(ENTRANT_CATEGORY_KEY[category]));
+  const ageBand = deriveAgeBand(e.age_min, e.age_max);
+  if (ageBand.kind === "range") {
+    badges.push(msg("reg.hub.row.ageBand.range", { min: ageBand.min, max: ageBand.max }));
+  } else if (ageBand.kind === "min") {
+    badges.push(msg("reg.hub.row.ageBand.min", { min: ageBand.min }));
+  } else if (ageBand.kind === "max") {
+    badges.push(msg("reg.hub.row.ageBand.max", { max: ageBand.max }));
   }
+  if (e.eligibility_note) badges.push(e.eligibility_note);
+  return badges;
 }
 
 // ---------------------------------------------------------------------------

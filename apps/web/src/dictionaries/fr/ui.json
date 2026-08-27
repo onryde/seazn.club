@@ -2166,6 +2166,8 @@
   "divset.entrants.save": "Enregistrer les paramètres des participants",
   "divset.entrants.reset": "Rétablir la valeur par défaut du sport",
   "divset.entrants.saved": "Paramètres des participants enregistrés.",
+  "divset.entrants.eligibility.label": "Éligibilité :",
+  "divset.entrants.eligibility.hint": "Vérifié à l'ajout d'un participant — les organisateurs peuvent passer outre avec un motif.",
   "divset.entrants.resetDone": "Rétabli à la valeur par défaut du sport.",
   "divset.entrants.note": "Un type ne peut pas être supprimé tant que des participants de ce type sont actifs — retirez-les d'abord.",
   "stagetags.title": "Étiquettes de terrain requises",

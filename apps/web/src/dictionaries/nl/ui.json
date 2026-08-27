@@ -2121,6 +2121,8 @@
   "divset.entrants.save": "Deelnemersinstellingen opslaan",
   "divset.entrants.reset": "Terug naar sportstandaard",
   "divset.entrants.saved": "Deelnemersinstellingen opgeslagen.",
+  "divset.entrants.eligibility.label": "Toelaatbaarheid:",
+  "divset.entrants.eligibility.hint": "Gecontroleerd bij het toevoegen van een deelnemer — organisatoren kunnen dit met een reden overschrijven.",
   "divset.entrants.resetDone": "Teruggezet naar de sportstandaard.",
   "divset.entrants.note": "Een soort kan niet worden verwijderd zolang er nog actieve deelnemers van dat soort zijn — trek ze eerst terug.",
   "stagetags.title": "Vereiste veldlabels",
