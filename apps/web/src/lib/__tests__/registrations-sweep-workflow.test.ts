@@ -77,14 +77,44 @@ describe("registrations sweep workflow", () => {
 
   it("skips with a warning rather than failing when the secret is missing, for every leg", () => {
     const warnSteps = yml.match(/::warning::/g) ?? [];
-    const guardedSkips = yml.match(/if:\s*env\.CRON_SECRET\s*==\s*''/g) ?? [];
-    const guardedPosts = yml.match(/if:\s*env\.CRON_SECRET\s*!=\s*''/g) ?? [];
+    // NOT anchored on a leading `if:` — the production leg's condition is
+    // compound (see the PROD_SWEEP_ENABLED gate below), so an `if:`-anchored
+    // regex would silently count only the staging leg and pass at 1.
+    const guardedSkips = yml.match(/env\.CRON_SECRET\s*==\s*''/g) ?? [];
+    const guardedPosts = yml.match(/env\.CRON_SECRET\s*!=\s*''/g) ?? [];
     // One pair of guards per leg (skip step + gated POST step) — a leg
     // missing either half either fails hard on a missing secret (filling
     // the Actions tab with red) or silently never posts at all.
-    expect(warnSteps.length).toBeGreaterThanOrEqual(2);
+    expect(warnSteps.length).toBeGreaterThanOrEqual(3);
     expect(guardedSkips.length).toBeGreaterThanOrEqual(2);
     expect(guardedPosts.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("gates the production leg, and says out loud what to flip", () => {
+    // The seazn-club-prod Fly app did not exist when this shipped (prod.yml's
+    // header, owner-confirmed 2026-08-11), so an ungated production leg would
+    // fail loud hourly — 24 red runs a day — drowning the runs that matter.
+    // A gate is only acceptable because it ANNOUNCES itself; a silently
+    // disabled leg is the "seam left for later" that ships inert.
+    expect(yml).toContain("vars.PROD_SWEEP_ENABLED");
+    expect(yml).toMatch(/env\.PROD_SWEEP\s*!=\s*'true'/);
+    expect(yml).toMatch(/env\.PROD_SWEEP\s*==\s*'true'/);
+    // The warning must name the variable, or "why is prod not sweeping?"
+    // costs someone an afternoon in the workflow file.
+    expect(raw).toMatch(/::warning::[^"]*PROD_SWEEP_ENABLED/);
+    expect(raw).toMatch(/gh variable set PROD_SWEEP_ENABLED/);
+  });
+
+  it("does NOT gate the staging leg — staging exists and must sweep", () => {
+    // The gate is scoped to the production job only. A copy-paste that gated
+    // both would leave the money path exactly as dead as it was before this
+    // workflow existed, while every other assertion here still passed.
+    const stagingJob = yml.slice(
+      yml.indexOf("sweep-staging:"),
+      yml.indexOf("sweep-production:"),
+    );
+    expect(stagingJob.length).toBeGreaterThan(0);
+    expect(stagingJob).not.toContain("PROD_SWEEP");
   });
 
   it("fails loud on a non-200 rather than swallowing it", () => {
