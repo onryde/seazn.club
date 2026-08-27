@@ -47,6 +47,9 @@ That blindness is the whole reason the defects survived.
 | `scorepad-v3-deciders-byhand` | cricket super over, football shoot-out — every decider event tapped |
 | `scorepad-v3-deciders-fullmatch` | football to penalties; cricket to a tie, then the super over; undo in and after a decider |
 | `scorepad-v3-tennis-mtb` | tennis, through the deciding-set match tie-break, then the match point undone |
+| `scorepad-v3-badminton-match` | badminton, through a game boundary — Law 8.1 names the winner as next server — to a decided result, then undone |
+| `scorepad-v3-tabletennis-match` | table tennis, across the turnLength:2 rotation, into deuce, through a game boundary, to a decided result, then undone |
+| `scorepad-v3-volleyball-match` | volleyball, a set opened by answering the pad's own serve question, a set that inherits its opener by alternation, then the deciding set's own fresh toss, to a decided result, then undone |
 | `registration-connect` | the money path: organiser settings → public team entry on a paid division → card on `checkout.stripe.com` → webhook → confirmed |
 | `rs007-invite-pay-cancel` | invite + pay + cancel: two team entries in one cart (capacity ONE waitlists the second), one Stripe checkout for the cart's real subtotal, a claim link followed, the waitlisted sibling promoted but never paid, then cancelled through the status page — witnesses two confirmed defects (the subtotal keeping a withdrawn entry's fee; the cancel dialog promising a refund sourced from a sibling's charge). Meant to FAIL. |
 

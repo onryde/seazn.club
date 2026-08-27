@@ -200,7 +200,10 @@ test("volleyball v3 indoor: the serve anchor resolves D-17 and the rotation, ord
   await expect(strip(page, "server"), "resolved by the anchor — home is due next").toContainText("Home", {
     timeout: 20_000,
   });
-  await expect(strip(page, "rotation"), "FIVB 7.6.2 — home's own court-position number").toHaveText("2", {
+  // The strip item renders LABEL and value together ("Rotation 2"), so these
+  // anchor on both: a bare `toHaveText("2")` fails even when correct, and a
+  // `toContainText("2")` would pass on a label that happened to carry a digit.
+  await expect(strip(page, "rotation"), "FIVB 7.6.2 — home's own court-position number").toHaveText("Rotation 2", {
     timeout: 20_000,
   });
   await expect(v3Tile(page, "serveAnchor"), "resolved — the anchor tile withdraws").toHaveCount(0, {
@@ -211,7 +214,7 @@ test("volleyball v3 indoor: the serve anchor resolves D-17 and the rotation, ord
   await tapRally(page, "away");
   await expect(halfScore(page, "away")).toHaveText("1", { timeout: 20_000 });
   await expect(strip(page, "server")).toContainText("Away", { timeout: 20_000 });
-  await expect(strip(page, "rotation"), "away's OWN rotation number, independent of home's").toHaveText("2", {
+  await expect(strip(page, "rotation"), "away's OWN rotation number, independent of home's").toHaveText("Rotation 2", {
     timeout: 20_000,
   });
 
@@ -220,7 +223,7 @@ test("volleyball v3 indoor: the serve anchor resolves D-17 and the rotation, ord
   await tapRally(page, "home");
   await expect(halfScore(page, "home")).toHaveText("2", { timeout: 20_000 });
   await expect(strip(page, "server")).toContainText("Home", { timeout: 20_000 });
-  await expect(strip(page, "rotation"), "home's rotation moved from 2 to 3 — a genuine increment").toHaveText("3", {
+  await expect(strip(page, "rotation"), "home's rotation moved from 2 to 3 — a genuine increment").toHaveText("Rotation 3", {
     timeout: 20_000,
   });
 
@@ -341,8 +344,11 @@ test("volleyball v3 beach pair: the server is a named PERSON once anchored, no r
   });
   await openPad(page, fx);
 
-  // The anchor: home served, away won. Home's own service order (pairOrder
-  // 1 first) is what the FIRST rally after it reads from.
+  // The anchor: home served, away won. Under `within: "rally-winner"` the
+  // WINNER serves next, so it is AWAY's own service order (pairOrder 1 first)
+  // that the strip reads from here — not home's. An earlier draft of this
+  // test asserted home's, which is the one thing side-out guarantees it is
+  // not; it was committed without ever being run.
   await v3Tile(page, "serveAnchor").click();
   const sheet = v3Sheet(page);
   await expect(sheet).toBeVisible({ timeout: 20_000 });
@@ -355,8 +361,11 @@ test("volleyball v3 beach pair: the server is a named PERSON once anchored, no r
   await expect(
     strip(page, "server"),
     "FIVB 13.2 — the pad names the SERVER, not merely the side",
-  ).toContainText(homeFirst, { timeout: 20_000 });
-  await expect(strip(page, "server")).not.toContainText(homeSecond);
+  ).toContainText(awayFirst, { timeout: 20_000 });
+  // `pairOrder` runs the OTHER WAY from the array order in this fixture, so
+  // naming the second-listed player is what proves the skin read the declared
+  // order rather than the team sheet's.
+  await expect(strip(page, "server")).not.toContainText(awaySecond);
   // And no six-position rotation for a 2-player side, ever.
   await expect(strip(page, "rotation")).toHaveCount(0);
 
@@ -390,9 +399,9 @@ test("volleyball v3 beach pair: the server is a named PERSON once anchored, no r
     rally2.payload.scorer,
     "the dock's chip must reach the SUBMITTED rally — R5-2's product headline",
   ).toBe(fx.personIds[awaySecond]!);
-  // The server person too: this rally's own `server` is home's pairOrder-1
-  // player (the strip proved it above; this proves the wire payload agrees).
-  expect(rally2.payload.server).toBe(fx.personIds[homeFirst]!);
+  // The server person too: this rally was served by AWAY's pairOrder-1 player
+  // (the strip proved it above; this proves the wire payload agrees).
+  expect(rally2.payload.server).toBe(fx.personIds[awayFirst]!);
 });
 
 // ---------------------------------------------------------------------------
@@ -417,7 +426,14 @@ test("volleyball v3: the libero swap surfaces via the Swap-sheet, and FIVB's one
       { fullName: `V3 VB Libero OPP ${TAG}`, positionKey: "OPP" },
       { fullName: `V3 VB Libero OH2 ${TAG}`, positionKey: "OH" },
       { fullName: `V3 VB Libero MB2 ${TAG}`, positionKey: "MB" },
-      { fullName: libero, slot: "bench" },
+      // FIVB 19.1 — the libero is DESIGNATED on the match roster, before the
+      // match; a replacement cannot invent one (`core/lineup.ts`'s `bringOn`
+      // carries `onField`/`timesOn`/`positionKey` onto an existing member but
+      // never `slot.roles`). An earlier draft declared no roles here and tried
+      // to name the libero through the replacement below: the role was
+      // silently dropped, `liberoNamed` stayed false, and the tile this test
+      // is about never rendered at all.
+      { fullName: libero, slot: "bench", roles: ["libero"] },
       { fullName: `V3 VB Libero Bench2 ${TAG}`, slot: "bench" },
     ],
     away: indoorRoster("V3 VB Libero Away"),
@@ -426,13 +442,10 @@ test("volleyball v3: the libero swap surfaces via the Swap-sheet, and FIVB's one
   const middleBlockerId = fx.personIds[middleBlocker]!;
   const liberoId = fx.personIds[libero]!;
 
-  // No libero has been named on court yet (a bare team sheet declares no
-  // `roles`, matching every other seeded fixture in this file) — the swap
-  // tile only appears once a side has ACTUALLY used one, so establish the
-  // first exchange directly (this is the FIVB scoresheet's own act of
-  // bringing the libero on for the first time, not a UI this test is
-  // proving — the UI proof below is the SECOND exchange and the refused
-  // THIRD one).
+  // The libero is on the SHEET but not yet on court. Her first exchange is
+  // established directly — the FIVB scoresheet's own act of bringing her on,
+  // not a UI this test is proving. The UI proof below is the SECOND exchange
+  // and the refused THIRD one.
   await postEvent(page.request, fx.fixtureId, "core.lineup.replacement", {
     side: fx.homeEntrantId,
     off: middleBlockerId,
