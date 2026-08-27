@@ -1108,27 +1108,25 @@ async function cricketSuperOverSuite(): Promise<void> {
 
   // Super over, innings 1: away bats (they batted second in the main match —
   // ICC rule, `soBattingSideAt` in cricket.ts). Six dot balls closes it on
-  // the over; no wicket needed. Away totals 0.
-  for (let ball = 1; ball <= 6; ball++) {
-    seq = await appendAll(
-      s,
-      fixtureId,
-      [
-        {
-          type: "cricket.superover.ball",
-          payload: {
-            over: 0,
-            ballInOver: ball,
-            striker: personIds[away1],
-            nonStriker: personIds[away2],
-            bowler: personIds[home2],
-            runs: { bat: 0 },
-          },
-        },
-      ],
-      seq,
-    );
-  }
+  // the over; no wicket needed. Away totals 0. Batched into one appendAll
+  // call — same pattern the main-innings block above uses — since no
+  // assertion runs between individual balls.
+  seq = await appendAll(
+    s,
+    fixtureId,
+    [1, 2, 3, 4, 5, 6].map((ball) => ({
+      type: "cricket.superover.ball",
+      payload: {
+        over: 0,
+        ballInOver: ball,
+        striker: personIds[away1],
+        nonStriker: personIds[away2],
+        bowler: personIds[home2],
+        runs: { bat: 0 },
+      },
+    })),
+    seq,
+  );
   // Super over, innings 2: home bats. Target is SO1's runs + 1 = 1 — the very
   // first ball reaches it, deciding the match by super over on the spot.
   await appendAll(
