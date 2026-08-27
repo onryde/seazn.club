@@ -1747,6 +1747,35 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(div.payment_method).toBe("stripe");
   });
 
+  // V380 dropped the jsonb gender rules, so a free-text `eligibility_note` is
+  // the only surviving channel for a restriction the category enum cannot
+  // express, and `requiresGender` now treats a non-empty note as "collect
+  // gender" (collection only — nothing programmatically evaluates note text).
+  // The join-page preview wired that immediately; publicRegistrationInfo did
+  // not, because the two live in different files and only one lane touched it.
+  // Without the note passed through here, the SAME division collects gender on
+  // the join page and silently skips it on the main register flow — the split
+  // that makes a half-applied fix read as a working one.
+  it("collects gender on the register page when a note is the only restriction left", async () => {
+    const { orgSlug, competition, division } = await stripeRig();
+    await sql`
+      update divisions
+      set category = null, eligibility_note = 'Under-19 girls only'
+      where id = ${division.id}`;
+    const info = await publicRegistrationInfo(orgSlug, competition.slug);
+    const div = info.divisions.find((d) => d.division_id === division.id)!;
+    expect(div.requires_gender, "a note-only division must still collect gender").toBe(true);
+  });
+
+  it("does not collect gender for a division with no category and no note", async () => {
+    const { orgSlug, competition, division } = await stripeRig();
+    await sql`
+      update divisions set category = null, eligibility_note = null where id = ${division.id}`;
+    const info = await publicRegistrationInfo(orgSlug, competition.slug);
+    const div = info.divisions.find((d) => d.division_id === division.id)!;
+    expect(div.requires_gender, "an unrestricted division must not ask for gender").toBe(false);
+  });
+
   // RS003 W3a owner ruling 4: the group's currency snapshot must be
   // validated BEFORE any Stripe call — both that it is still an allowlisted
   // registration currency, AND that it still matches the org's CURRENT

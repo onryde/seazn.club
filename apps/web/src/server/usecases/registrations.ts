@@ -1608,8 +1608,13 @@ export async function publicRegistrationInfo(
         age_max: r.age_max,
       }),
       // Same idea as requires_dob, for gender (RS006 WHO step): a
-      // mens/womens/mixed category.
-      requires_gender: requiresGender({ category: r.category }),
+      // mens/womens/mixed category, OR a free-text eligibility_note, which
+      // after V380 is the only surviving channel for a restriction the
+      // category enum cannot express. Passing the note is not optional: the
+      // join-page preview (registration-submit.ts) already does, so omitting
+      // it here would make the SAME division collect gender on one public
+      // surface and not the other.
+      requires_gender: requiresGender({ category: r.category, eligibility_note: r.eligibility_note }),
       youth: r.youth,
       waitlisted: r.waitlisted,
       form_fields: r.form_fields ?? [],
