@@ -109,11 +109,20 @@ export function RegisterStepper({
   const [hydrated, setHydrated] = useState(false);
   const [contact, setContact] = useState<ContactState>(EMPTY_CONTACT);
   const [imPlaying, setImPlaying] = useState(false);
-  const [cart, setCart] = useState<CartState>(() =>
-    openDivisions.length === 1
-      ? { ...EMPTY_CART, entries: autoSeedSingleDivision(openDivisions[0]!, crypto.randomUUID()) }
-      : EMPTY_CART,
-  );
+  // FIX 2 (RS006 fix wave) — this used to be a lazy initializer that called
+  // `crypto.randomUUID()` directly for the single-open-division auto-seed
+  // (design §4: "step 2 collapses..."). That id genuinely differs between
+  // the server pass and the client's first render, which made the
+  // hydration effect's own "deterministic (same on server and first client
+  // render)" claim below false for this one case. Nothing on step 0
+  // rendered an entry-derived id, so no mismatch was visible YET — but it
+  // was one entry-id-keyed key/data-* away from a real hydration mismatch
+  // that discards the whole client tree. EMPTY_CART is trivially identical
+  // either side; the auto-seed (with a REAL id) now happens in the
+  // hydration effect below instead, which — like the sessionStorage
+  // restore it sits beside — only ever runs client-side, after the
+  // identical first paint.
+  const [cart, setCart] = useState<CartState>(EMPTY_CART);
   const [stepIndex, setStepIndex] = useState(0);
   const [whoAttempted, setWhoAttempted] = useState(false);
   const [entriesAttempted, setEntriesAttempted] = useState(false);
@@ -148,9 +157,12 @@ export function RegisterStepper({
   const stepFocusArmed = useRef(false);
 
   // Hydrate from sessionStorage once, client-only. The initial useState
-  // values above are deterministic (same on server and first client
-  // render), so this effect — which only ever runs in the browser — is
-  // what makes a mid-flow refresh survive without an SSR/CSR mismatch.
+  // values above are now genuinely deterministic (same on server and
+  // first client render — FIX 2, see the cart useState's own comment), so
+  // this effect — which only ever runs in the browser — is what makes a
+  // mid-flow refresh survive, AND (the `else` branch below) what seeds a
+  // single-open-division cart's real id, without an SSR/CSR mismatch
+  // either way.
   useEffect(() => {
     const saved = loadRegisterState(orgSlug, competitionSlug);
     if (saved) {
@@ -171,6 +183,18 @@ export function RegisterStepper({
       // "review" (step 5) has its own Submit action, not a "coming soon"
       // end-cap one past it (storage.ts's own doc comment on this field).
       setStepIndex(Math.min(saved.stepIndex, stepOrder.length - 1));
+    } else if (openDivisions.length === 1) {
+      // FIX 2 (RS006 fix wave) — design §4: "step 2 collapses when the
+      // competition has one open division," so that one division is
+      // auto-added on a FRESH visit (no saved snapshot to restore
+      // instead) so the cart is never empty once WHO is complete. This
+      // used to happen in the cart's OWN useState lazy initializer,
+      // generating the id with `crypto.randomUUID()` right there — see
+      // that state's own comment for why calling it here, post-hydration,
+      // client-only, is what actually fixes the determinism this effect's
+      // header now correctly claims.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCart({ ...EMPTY_CART, entries: autoSeedSingleDivision(openDivisions[0]!, crypto.randomUUID()) });
     }
     // A restored field the rep hasn't touched YET (this visit) must render
     // as pristine helper text, never a submitted-state error (fix wave

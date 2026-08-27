@@ -758,6 +758,44 @@ describe("review finding #2 — step transitions move focus to the new step's he
 });
 
 // ---------------------------------------------------------------------------
+// FIX 2 (RS006 fix wave, 2026-08-27) — the cart's useState lazy initializer
+// used to call crypto.randomUUID() directly (single-open-division auto-
+// seed), producing a DIFFERENT entry id on the server pass vs the client's
+// first render — the hydration effect's own comment claimed the initial
+// state was "deterministic (same on server and first client render)",
+// which was false for this one case. No jsdom in this workspace (same
+// reason as the focus-transition block above) — pinned at the source
+// level: the actual invariant (server and first client render produce
+// IDENTICAL state) isn't observable through this harness, only through a
+// genuine SSR-vs-CSR comparison — register-page-live.test.tsx's
+// renderToStaticMarkup pass and a real browser both already exercise that
+// (dispatch verification), and neither's fixture happens to be a
+// single-open-division competition, so this source-level pin is the only
+// thing in the suite that would have caught this specific defect.
+// ---------------------------------------------------------------------------
+
+describe("FIX 2 — the initial cart state is genuinely deterministic (source-level pin — no jsdom, see modal.test.ts's own header for the same split)", () => {
+  const stepperSrc = readFileSync(join(__dirname, "..", "register-stepper.tsx"), "utf8");
+
+  it("the cart's useState lazy initializer does not call crypto.randomUUID() — nothing left to differ between the server pass and the client's first render", () => {
+    const match = stepperSrc.match(/const \[cart, setCart\] = useState<CartState>\(([\s\S]*?)\);/);
+    expect(match, "cart's useState call not found").not.toBeNull();
+    expect(match![1], "the initializer itself must not generate an id").not.toMatch(/crypto\.randomUUID/);
+  });
+
+  it("the single-open-division auto-seed's crypto.randomUUID() now lives INSIDE the hydration effect (client-only, post-first-paint), not the initializer", () => {
+    const effectStart = stepperSrc.indexOf("const saved = loadRegisterState(orgSlug, competitionSlug);");
+    expect(effectStart, "hydration effect body not found").toBeGreaterThan(-1);
+    const effectEnd = stepperSrc.indexOf("}, []);", effectStart);
+    expect(effectEnd, "hydration effect's own closing (empty deps) not found").toBeGreaterThan(-1);
+    const effectBody = stepperSrc.slice(effectStart, effectEnd);
+    expect(effectBody, "autoSeedSingleDivision's id must be generated inside this effect").toMatch(
+      /autoSeedSingleDivision\([^)]*crypto\.randomUUID\(\)/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Review finding #3 (LOW) — a long, space-less division name can widen the
 // ENTRIES grid track past its share. Tailwind's arbitrary
 // `grid-cols-[1fr_320px]` syntax (unlike `grid-cols-N`) does NOT imply
