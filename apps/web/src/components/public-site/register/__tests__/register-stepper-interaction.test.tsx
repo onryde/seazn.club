@@ -640,6 +640,41 @@ describe("review finding #2 — step transitions move focus to the new step's he
 });
 
 // ---------------------------------------------------------------------------
+// Review finding #3 (LOW) — a long, space-less division name can widen the
+// ENTRIES grid track past its share. Tailwind's arbitrary
+// `grid-cols-[1fr_320px]` syntax (unlike `grid-cols-N`) does NOT imply
+// `minmax(0,1fr)`, so the divisions column's own default `min-width: auto`
+// lets a deeply-nested unbreakable string inflate the whole track. No real
+// layout engine in this harness (_hook-harness.tsx's own header) — pinned
+// at the source level, same technique as the nav-row z-index test above.
+// ---------------------------------------------------------------------------
+
+describe("review finding #3 — the divisions column resists a long division name widening the grid track (source-level pins — no layout engine in this harness)", () => {
+  it("the grid's divisions-column child (its first child, wrapping register.entries.heading) carries min-w-0", () => {
+    const src = readFileSync(join(__dirname, "..", "step-entries.tsx"), "utf8");
+    const gridIndex = src.indexOf("lg:grid-cols-[1fr_320px]");
+    expect(gridIndex, "grid-cols-[1fr_320px] not found — did the grid column spec change?").toBeGreaterThan(-1);
+    const nextClassNameIndex = src.indexOf('className="', gridIndex);
+    const nextClassName = src.slice(
+      nextClassNameIndex,
+      src.indexOf('"', nextClassNameIndex + 'className="'.length),
+    );
+    expect(nextClassName, "the grid's own divisions-column child must carry min-w-0").toContain("min-w-0");
+  });
+
+  it("division-card.tsx's own <h3>{division.name}</h3> can wrap or truncate instead of forcing its row wider", () => {
+    const src = readFileSync(join(__dirname, "..", "division-card.tsx"), "utf8");
+    const nameIndex = src.indexOf("{division.name}");
+    expect(nameIndex, "{division.name} not found in division-card.tsx").toBeGreaterThan(-1);
+    const nearby = src.slice(Math.max(0, nameIndex - 300), nameIndex);
+    expect(
+      /\b(truncate|break-words|break-all)\b/.test(nearby),
+      "the division-name heading must wrap or truncate — a long space-less name can otherwise widen its row",
+    ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Finding #4 — a stale-closed division in a restored cart doesn't count
 // toward the subtotal
 // ---------------------------------------------------------------------------

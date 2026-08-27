@@ -82,7 +82,9 @@ export function DivisionCard({
       }`}
     >
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <h3 className={`font-display text-lg font-semibold ${selfIneligible ? "text-ink-muted" : "text-ink"}`}>
+        <h3
+          className={`break-words font-display text-lg font-semibold ${selfIneligible ? "text-ink-muted" : "text-ink"}`}
+        >
           {division.name}
         </h3>
         <div className="font-display text-base font-bold text-ink">

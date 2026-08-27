@@ -33,7 +33,12 @@ export function StepEntries({
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_320px] lg:items-start">
-      <div className="rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
+      {/* min-w-0: Tailwind's arbitrary grid-cols-[...] syntax (unlike
+          grid-cols-N) does NOT imply minmax(0,1fr) — without this, a long,
+          space-less organiser-authored division name several levels down
+          (division-card.tsx's own <h3>) can inflate this whole 1fr track
+          past its fair share (review finding #3, LOW). */}
+      <div className="min-w-0 rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
         <h2 tabIndex={-1} className="font-display text-xl font-semibold uppercase tracking-wide text-ink">
           {t("register.entries.heading")}
         </h2>
