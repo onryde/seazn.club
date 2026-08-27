@@ -9,6 +9,7 @@ import { initSquads } from "@seazn/engine/core";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { ballSeq, cricketEnvelopes, foldCricket, tiedWithSuperOver, type CricketEventSpec } from "../../__tests__/_cricket-fold";
 import { answerStep, backStep, currentStep, initialSheetState } from "../../guided-sheet";
+import { assertDisabledTilesExplained } from "../../tile-grid";
 import type { GuidedSheetSpec, PadHostView, SkinDefV3 } from "../../types";
 import {
   EXTRA_KINDS,
@@ -33,6 +34,7 @@ import {
   nextOverNumber,
   oversText,
   overDots,
+  refusedEventTypes,
   resolvePeople,
   resolvePhase,
   runRate,
@@ -2938,7 +2940,14 @@ describe("R3.5 Task C — cricket super over, scored against REAL folds", () => 
     // inningsClose in the sibling defect-1 case below.
     const overSummary = tiles.find((tl) => tl.id === "overSummary");
     expect(overSummary === undefined || overSummary.disabled === true).toBe(true);
-    expect(buildContext(v, t)).toBeNull(); // no strip at all yet — a fortiori no message
+    // R3.5 F3 (review finding, MAJOR) — no LONGER null. Pre-fix this window
+    // had no strip at all, so the five tiles `superOverTile` greys here
+    // (review/retire/inningsClose/overSummary, and declare when twoInnings)
+    // went completely unexplained — see the dedicated "R3.5 F3" describe
+    // block below for the fix and the `assertDisabledTilesExplained` proof.
+    const ctx = buildContext(v, t);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.slots.some((s) => !!s.message)).toBe(true);
   });
 
   it("C3: a COARSE main innings does not disable the super over's delivery row (the coarse-lane half of the blocker)", () => {
@@ -3520,5 +3529,105 @@ describe("R3.5 F1 — resolvePeople after a super-over wicket proposes an ELIGIB
     const people = resolvePeople(st, {}, cfg);
     expect(people.striker).toBe("A-2"); // first ELIGIBLE away batter — A-1 excluded
     expect(people.nonStriker).toBe("A-4"); // second eligible — A-3 excluded too, never re-offered
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5 F3 (review finding, MAJOR) — `superOverTile` (buildTiles, above)
+// disables review/retire/inningsClose/declare/overSummary for the WHOLE of
+// a super over, and until this fix nothing anywhere told the scorer why:
+// `buildContext` returned `null` outright in the two windows with no open
+// innings (before the first super-over ball, and between two pairs), and
+// even MID-innings the striker/nonStriker/bowler slots carry a message only
+// when closure or a bowler-eligibility block ALSO applies — not every ball.
+// `assertDisabledTilesExplained` (tile-grid.tsx) is the validator that
+// exists to catch exactly this; Task R's own comment already conceded no
+// skin exercises it against real output. Wired here against THREE real
+// folds — the two null-context windows AND an ordinary mid-innings ball —
+// so the general fix, not merely the two named windows, is what regresses
+// if this notice is ever removed.
+// ---------------------------------------------------------------------------
+describe("R3.5 F3 — every super-over window that disables review/retire/inningsClose/overSummary explains why", () => {
+  it("C2 (so.length===0, before the first super-over ball): buildContext is no longer null, and assertDisabledTilesExplained sees a real explanation", () => {
+    const { cfg, events } = tieToSuperOver();
+    const st = foldCricket(cfg, events);
+    const v = view({ cfg, state: st });
+    const tiles = buildTiles(v);
+    const ctx = buildContext(v, t);
+    expect(ctx).not.toBeNull();
+    expect(assertDisabledTilesExplained(tiles, ctx)).toEqual([]);
+  });
+
+  it("between two pairs (pair 1 tied and closed, pair 2 not yet started): same proof, reusing Task R's own defect-3/4 fixture", () => {
+    const { cfg, events } = tieToSuperOver(); // superOverStillTied defaults to "repeat"
+    const bso1 = ballSeq();
+    const so1 = Array.from({ length: 6 }, () => bso1("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 }));
+    const bso2 = ballSeq();
+    const so2 = Array.from({ length: 6 }, () => bso2("cricket.superover.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-10", bat: 1 }));
+    const st = foldCricket(cfg, [...events, ...so1, ...so2]);
+    expect(dueBattingSide(st, cfg)).not.toBeNull(); // confirms this IS the gap window (buildContext's own early-return condition)
+    const v = view({ cfg, state: st });
+    const tiles = buildTiles(v);
+    const ctx = buildContext(v, t);
+    expect(ctx).not.toBeNull();
+    expect(assertDisabledTilesExplained(tiles, ctx)).toEqual([]);
+  });
+
+  it("mid-innings (an ordinary ball already bowled, nothing closed, an eligible current bowler): the general case beyond the two named windows, where the ordinary slots carry no message of their own", () => {
+    const { cfg, events } = tieToSuperOver();
+    const bso = ballSeq();
+    const st = foldCricket(cfg, [...events, bso("cricket.superover.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-10", bat: 1 })]);
+    const v = view({ cfg, state: st });
+    const tiles = buildTiles(v);
+    const ctx = buildContext(v, t);
+    // Confirms this is genuinely the "everything else looks fine" window —
+    // an open innings, a bowler already locked in for the over, nothing
+    // closed — so the ordinary striker/nonStriker/bowler slots carry no
+    // message of their own; only the super-over notice does.
+    expect(ctx!.slots.filter((s) => s.id !== "superOver").every((s) => !s.message)).toBe(true);
+    expect(assertDisabledTilesExplained(tiles, ctx)).toEqual([]);
+  });
+
+  it("an ordinary (non-super-over) live match carries no such notice — additive only, never shown outside a super over", () => {
+    const ctx = buildContext(view(), t);
+    expect(ctx!.slots.some((s) => s.id === "superOver")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.5 F2 (review finding, BLOCKER) — `superOverTile` (buildTiles) disables
+// review/retire/inningsClose/declare/overSummary outright during a super
+// over, but `dedicatedEventTypes` (pad-host.tsx) skips a DISABLED tile's own
+// event type — so all five drop out of `dedicated` and `moreActions` lists
+// them in the generic More sheet as forms `applyDelivery`/`applySummary`/
+// `requireOpenInnings` refuse on tap. Cricket declared no
+// `refusedEventTypes` — the More sheet's SECOND exclusion set, "the fold
+// refuses this right now" — only football and tennis did (`types.ts`'s own
+// doc on the method). `refusedEventTypes` mirrors `superOverTile`'s own
+// gate exactly, so the two can never disagree.
+// ---------------------------------------------------------------------------
+describe("refusedEventTypes (F2) — the five types a super over disables, and nothing else", () => {
+  it("lists exactly the five non-ball types superOverTile disables, during a super over", () => {
+    const v = view({ state: state({ phase: "super_over" }) });
+    expect([...refusedEventTypes(v)].sort()).toEqual([
+      "cricket.innings.close",
+      "cricket.innings.declare",
+      "cricket.innings.summary",
+      "cricket.retire",
+      "cricket.review",
+    ]);
+  });
+
+  it("lists nothing outside a super over — live, pre, and done phases are all unrefused", () => {
+    expect(refusedEventTypes(view())).toEqual([]); // live (view()'s default)
+    expect(refusedEventTypes(view({ state: state({ phase: "pre" }) }))).toEqual([]);
+    expect(refusedEventTypes(view({ state: state({ phase: "done" }) }))).toEqual([]);
+  });
+
+  it("proved against a REAL super-over fold too, not just a hand-built phase flag", () => {
+    const { cfg, events } = tieToSuperOver();
+    const st = foldCricket(cfg, events);
+    const v = view({ cfg, state: st });
+    expect(refusedEventTypes(v)).toEqual(expect.arrayContaining(["cricket.review", "cricket.retire", "cricket.innings.close", "cricket.innings.summary"]));
   });
 });

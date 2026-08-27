@@ -4221,6 +4221,8 @@
   "pad.cricket.context.bowler.blocked.quota.short": "Bowlde al {quota} overs",
   "pad.cricket.sheet.review.by.blocked.noneLeft.short": "Geen reviews meer deze innings",
   "pad.cricket.context.innings.closed": "Deze innings is gesloten.",
+  "pad.cricket.context.superOver.label": "Super over",
+  "pad.cricket.context.superOver.message": "Review, terugtrekking, innings-acties en het einde van de over zijn niet beschikbaar tijdens een Super Over.",
   "pad.cricket.sheet.wicket.kind.title": "Wat gebeurde er?",
   "pad.cricket.sheet.wicket.kind.freeHitHint": "Free hit — alleen Run out of Obstructing the field zijn van toepassing.",
   "pad.cricket.sheet.wicket.who.title": "Wie is uit?",

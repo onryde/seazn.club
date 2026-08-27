@@ -2745,6 +2745,8 @@ export type DictionaryKey =
   | "pad.cricket.context.innings.closed"
   | "pad.cricket.context.nonStriker"
   | "pad.cricket.context.striker"
+  | "pad.cricket.context.superOver.label"
+  | "pad.cricket.context.superOver.message"
   | "pad.cricket.dock.batRun1"
   | "pad.cricket.dock.batRun2"
   | "pad.cricket.dock.batRun3"

@@ -94,6 +94,7 @@ import {
   type Blocked,
   MORE_SHEET_KEY,
   type ActivityDetailContext,
+  type ContextSlot,
   type ContextStripSpec,
   type DockChip,
   type DockSpec,
@@ -1515,6 +1516,52 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   return tiles;
 }
 
+/**
+ * `SkinDefV3.refusedEventTypes` — the More sheet's second exclusion set:
+ * "the fold will not accept this at all right now" (types.ts's own doc).
+ *
+ * R3.5 F2 (review finding, BLOCKER) — `superOverTile` (above) disables five
+ * non-ball tiles outright for the WHOLE of a super over: review/retire/
+ * inningsClose/declare (the engine's own phase checks — `requireOpenInnings`
+ * for review/retire, `state.phase !== "live"` for inningsClose/declare,
+ * cricket.ts) and overSummary (`applySummary`, cricket.ts:1481 — a super
+ * over is always ball-by-ball, never coarse). `dedicatedEventTypes`
+ * (pad-host.tsx) skips a DISABLED tile's own event type entirely (Task B's
+ * own fix for the mirror-image defect: a claimed-but-unreachable surface) —
+ * so once `superOverTile` disables these five, all five drop OUT of
+ * `dedicated`, and `moreActions` lists every one of them in the generic
+ * More sheet as a live 422: five dead-end taps, precisely the class
+ * `dedicatedEventTypes`'s own doc says it exists to prevent. Cricket had
+ * declared no `refusedEventTypes` at all — only football and tennis did
+ * (types.ts's own doc on the method) — so nothing closed this gap.
+ *
+ * Mirrors `superOverTile`'s own gate literally (`state.phase ===
+ * "super_over"`) rather than re-deriving it — the two can never disagree,
+ * the same "one condition, two readers" posture tennis's own
+ * `gameAwardRefused` takes for the identical shape (buildTiles withholds a
+ * tile on a predicate; refusedEventTypes withholds the generic form on the
+ * SAME predicate).
+ *
+ * `cricket.innings.declare` is listed even though it can never actually be
+ * OFFERED alongside a super over (the cfg refine forbids `inningsPerSide: 2`
+ * together with `superOver: true`, C21) — same defensive posture
+ * `buildTiles`'s own `superOverTile(closedTile({id: "declare", ...}))`
+ * already takes for the identical reason (that tile's own comment: "the
+ * gate is added anyway ... it must not silently start passing a live tap
+ * through if that cfg exclusivity ever changes").
+ */
+export function refusedEventTypes(view: PadHostView): string[] {
+  const state = asState(view.state);
+  if (state.phase !== "super_over") return [];
+  return [
+    "cricket.review",
+    "cricket.retire",
+    "cricket.innings.close",
+    "cricket.innings.declare",
+    "cricket.innings.summary",
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // dock() — needs `t` for DockSpec.title (this file's header).
 //
@@ -1802,12 +1849,48 @@ export function bowlerBlocked(
 // editable" convention rather than writing a redundant `readOnly: false`.
 // ---------------------------------------------------------------------------
 
+/**
+ * R3.5 F3 (review finding, MAJOR) — `superOverTile` (`buildTiles` above)
+ * disables review/retire/inningsClose/declare/overSummary for the WHOLE of
+ * a super over, unconditionally — every ball of every super-over innings,
+ * not merely the two windows `buildContext` used to go fully `null` for
+ * (before the first super-over ball; between two pairs). Even mid-innings
+ * the ordinary striker/nonStriker/bowler slots carry a message only when
+ * closure or a bowler-eligibility block ALSO applies, which is not every
+ * ball — so most of a super over disabled five tiles with nothing anywhere
+ * explaining why. `assertDisabledTilesExplained` (tile-grid.tsx) exists to
+ * catch exactly this ("if any tile is disabled, at least one context slot
+ * must carry a non-empty message somewhere") and Task R's own comment
+ * already conceded no skin exercised it against real output.
+ *
+ * A single, UNCONDITIONAL slot — present whenever `state.phase ===
+ * "super_over"`, independent of whatever the ordinary slots do or don't
+ * say — is what makes that true for every window at once with one
+ * mechanism, matching the validator's own "one explanation, set-level, not
+ * per-tile" shape. Returned even when the rest of `buildContext` would
+ * otherwise be `null` (the two gap windows) — this file's own factory
+ * builds `{slots: [...]}` around it either way, never a bare early `null`
+ * once a super over is live.
+ */
+function superOverNoticeSlot(state: CricketStateShape, t: TFn): ContextSlot | null {
+  if (state.phase !== "super_over") return null;
+  return {
+    id: "superOver",
+    label: "pad.cricket.context.superOver.label",
+    pool: "onfield", // unused — readOnly, so no picker ever opens on this slot
+    required: false,
+    readOnly: true,
+    message: t("pad.cricket.context.superOver.message"),
+  };
+}
+
 export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextStripSpec | null {
   const state = asState(view.state);
   if (state.phase !== "live" && state.phase !== "super_over") return null;
   const cfg = asCfg(view.cfg);
+  const superOverSlot = superOverNoticeSlot(state, t);
   const innings = currentInnings(state);
-  if (innings === null) return null;
+  if (innings === null) return superOverSlot ? { slots: [superOverSlot] } : null;
   // R2b-next (owner-confirmed live blocker, 2026-08-17): closed, with
   // another innings due, is treated identically to "no innings open yet"
   // (the check right above) — there is genuinely no fold-backed state to
@@ -1817,7 +1900,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
   // through today. `basePayload`/`resolvePeople` (below, and in buildTiles)
   // still compute correct silent defaults for that first tap, exactly as
   // they already do before innings one's own first ball.
-  if (dueBattingSide(state, cfg) !== null) return null;
+  if (dueBattingSide(state, cfg) !== null) return superOverSlot ? { slots: [superOverSlot] } : null;
   const people = resolvePeople(state, view.contextOverrides, cfg);
   const bowlerReadOnly = bowlerIsReadOnly(innings);
   // R2b (owner ruling, live-tile audit defect 2, `_INDEX.md`): closure is the
@@ -1837,6 +1920,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
   const blockReason = inningsClosed ? null : bowlerBlockReason(state, people, cfg);
   return {
     slots: [
+      ...(superOverSlot ? [superOverSlot] : []),
       {
         id: "striker",
         label: "pad.cricket.context.striker",
@@ -2365,6 +2449,10 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     dock: (eventType, _view, payload) => buildDock(eventType, t, payload),
     context: (view) => buildContext(view, t),
     sheets: (view) => buildSheets(view, t),
+    // R3.5 F2 (review finding, BLOCKER) — closes the gap that let the More
+    // sheet re-offer review/retire/inningsClose/declare/overSummary as
+    // dead-end taps during a super over (this function's own doc, above).
+    refusedEventTypes,
     // D2 (R2 sign-off): the skin supplies per-ball detail so the activity
     // panel's rows differ from one another. Declared HERE rather than the
     // chassis importing `cricketBallDetail` directly — sport vocabulary stays

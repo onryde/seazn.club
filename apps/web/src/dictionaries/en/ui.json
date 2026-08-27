@@ -4221,6 +4221,8 @@
   "pad.cricket.context.bowler.blocked.quota.short": "Already bowled {quota} overs",
   "pad.cricket.sheet.review.by.blocked.noneLeft.short": "No reviews left this innings",
   "pad.cricket.context.innings.closed": "This innings is closed.",
+  "pad.cricket.context.superOver.label": "Super over",
+  "pad.cricket.context.superOver.message": "Review, retirement, innings actions and the over summary aren't available during a Super Over.",
   "pad.cricket.sheet.wicket.kind.title": "What happened?",
   "pad.cricket.sheet.wicket.kind.freeHitHint": "Free hit — only Run out or Obstructing the field apply.",
   "pad.cricket.sheet.wicket.who.title": "Who's out?",

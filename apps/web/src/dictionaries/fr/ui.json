@@ -4221,6 +4221,8 @@
   "pad.cricket.context.bowler.blocked.quota.short": "A déjà lancé {quota} overs",
   "pad.cricket.sheet.review.by.blocked.noneLeft.short": "Plus d'arbitrages cette manche",
   "pad.cricket.context.innings.closed": "Cette manche est terminée.",
+  "pad.cricket.context.superOver.label": "Super over",
+  "pad.cricket.context.superOver.message": "La révision, le retrait, les actions de manche et la fin de l'over ne sont pas disponibles pendant un Super Over.",
   "pad.cricket.sheet.wicket.kind.title": "Que s'est-il passé ?",
   "pad.cricket.sheet.wicket.kind.freeHitHint": "Free hit — seuls Run out ou Obstruction du terrain s'appliquent.",
   "pad.cricket.sheet.wicket.who.title": "Qui est éliminé ?",
