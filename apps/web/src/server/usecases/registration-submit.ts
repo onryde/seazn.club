@@ -15,7 +15,7 @@ import "server-only";
 // reused/ported here VERBATIM where the design is unchanged; every place this
 // file's behaviour differs from it is commented at the point of difference.
 import { randomBytes } from "node:crypto";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { generateRefCode } from "@/lib/ref-code";
@@ -817,14 +817,19 @@ export async function submitRegistrationGroup(
  *  re-pointed the squad-cap check at it — one source instead of two hand-
  *  copies). `null` cap reads as unlimited. Shared by `previewJoinEntry`'s
  *  `allow_new_player` and `joinTeamEntry`'s insert path so the two can never
- *  drift apart (this repo's parallel-vocab-lookup trap). */
-async function rosterAtCap(divisionId: string, registrationId: string): Promise<boolean> {
-  const [cap] = await sql<{ max: number | null }[]>`
-    select ${rosterCapExpr(sql)} as max
+ *  drift apart (this repo's parallel-vocab-lookup trap).
+ *
+ *  Parameterised on the connection (matching `divisionCtx`/`rosterCapExpr`
+ *  themselves, registrations.ts) — RS007: `joinTeamEntry`'s insert path
+ *  calls this a SECOND time from inside its own `sql.begin`, on `tx`, as the
+ *  authoritative re-check right before the INSERT it guards. */
+async function rosterAtCap(db: Tx | typeof sql, divisionId: string, registrationId: string): Promise<boolean> {
+  const [cap] = await db<{ max: number | null }[]>`
+    select ${rosterCapExpr(db)} as max
     from divisions d join sports sp on sp.key = d.sport_key
     where d.id = ${divisionId}`;
   if (cap?.max == null) return false;
-  const [{ n }] = await sql<{ n: number }[]>`
+  const [{ n }] = await db<{ n: number }[]>`
     select count(*)::int as n from registration_players where registration_id = ${registrationId}`;
   return n >= cap.max;
 }
@@ -871,7 +876,7 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
   // Never for a `pair` (fixed at two — claim only), and never once the
   // sport's cap is already met. Short-circuited so a pair never even issues
   // the cap query.
-  const allowNewPlayer = reg.entrant_kind !== "pair" && !(await rosterAtCap(reg.division_id, reg.id));
+  const allowNewPlayer = reg.entrant_kind !== "pair" && !(await rosterAtCap(sql, reg.division_id, reg.id));
 
   // Deliberately a SEPARATE count query from rosterAtCap's own (registered_
   // players where registration_id = ...) rather than threading its result
@@ -981,7 +986,7 @@ export async function joinTeamEntry(
         "This pair's roster is fixed — the second player claims their spot, it can't be added as new",
       );
     }
-    if (await rosterAtCap(reg.division_id, reg.id)) {
+    if (await rosterAtCap(sql, reg.division_id, reg.id)) {
       throw new HttpError(422, "This roster is already full");
     }
   }
@@ -1017,42 +1022,66 @@ export async function joinTeamEntry(
     now,
   );
 
-  let playerId: string;
-  if (input.player_id) {
-    // Atomic compare-and-swap: the WHERE clause IS the verification (belongs
-    // to this entry, still a pending captain-entered row) — a concurrent
-    // double-claim of the same slot can make at most one caller win, no
-    // separate SELECT-then-UPDATE race window. full_name is deliberately
-    // NOT overwritten — only the fields the insert path itself fills.
-    const [claimed] = await sql<{ id: string }[]>`
-      update registration_players
-      set dob = ${input.player.dob ?? null},
-          gender = ${input.player.gender ?? null},
-          consent_status = ${consentStatus},
-          consent_at = now(),
-          guardian_name = ${minor ? (input.guardian_name ?? null) : null},
-          user_id = ${linkUserId},
-          updated_at = now()
-      where id = ${input.player_id}
-        and registration_id = ${reg.id}
-        and source = 'captain_entered'
-        and consent_status = 'pending'
-      returning id`;
-    if (!claimed) {
-      // Distinguish "already claimed" (409, a real conflict) from every
-      // other reason the compare-and-swap could miss — wrong code, wrong
-      // entry, a self_joined row, or an id that doesn't exist — which all
-      // read as the same invalid-link 404 a dead join_code gives, so a
-      // caller can never learn WHICH case it was.
-      const [existing] = await sql<{ id: string }[]>`
-        select id from registration_players
-        where id = ${input.player_id} and registration_id = ${reg.id} and source = 'captain_entered'`;
-      if (existing) throw new HttpError(409, "This player has already joined");
-      throw new HttpError(404, "This join link is not valid");
+  // Everything above is a cheap pre-check (fast-fail before the eligibility
+  // work runs at all) — never authoritative on its own. Two windows lived
+  // between it and the write below: a concurrent withdraw (withdrawCore,
+  // registrations.ts) landing after this read but before the claim UPDATE,
+  // and rosterAtCap's own pre-check above being a plain SELECT-count ahead
+  // of an unguarded INSERT. Both close the same way withdrawCore closes its
+  // own: lock the row, re-read it LIVE, then write — inside one short
+  // transaction holding nothing but this claim/insert (RS007).
+  const playerId = await sql.begin(async (tx) => {
+    const [locked] = await tx<{ status: string; free_agent: boolean }[]>`
+      select status, free_agent from registrations where id = ${reg.id} for update`;
+    if (!locked) throw new HttpError(404, "This join link is not valid");
+    if (locked.free_agent) throw new HttpError(422, "This entry has no roster to join yet");
+    if (["withdrawn", "rejected", "expired"].includes(locked.status)) {
+      throw new HttpError(422, "This entry is no longer accepting players");
     }
-    playerId = claimed.id;
-  } else {
-    const [player] = await sql<{ id: string }[]>`
+
+    if (input.player_id) {
+      // Atomic compare-and-swap: the WHERE clause IS the verification
+      // (belongs to this entry, still a pending captain-entered row) — a
+      // concurrent double-claim of the same slot can make at most one
+      // caller win, no separate SELECT-then-UPDATE race window. full_name
+      // is deliberately NOT overwritten — only the fields the insert path
+      // itself fills.
+      const [claimed] = await tx<{ id: string }[]>`
+        update registration_players
+        set dob = ${input.player.dob ?? null},
+            gender = ${input.player.gender ?? null},
+            consent_status = ${consentStatus},
+            consent_at = now(),
+            guardian_name = ${minor ? (input.guardian_name ?? null) : null},
+            user_id = ${linkUserId},
+            updated_at = now()
+        where id = ${input.player_id}
+          and registration_id = ${reg.id}
+          and source = 'captain_entered'
+          and consent_status = 'pending'
+        returning id`;
+      if (!claimed) {
+        // Distinguish "already claimed" (409, a real conflict) from every
+        // other reason the compare-and-swap could miss — wrong code, wrong
+        // entry, a self_joined row, or an id that doesn't exist — which all
+        // read as the same invalid-link 404 a dead join_code gives, so a
+        // caller can never learn WHICH case it was.
+        const [existing] = await tx<{ id: string }[]>`
+          select id from registration_players
+          where id = ${input.player_id} and registration_id = ${reg.id} and source = 'captain_entered'`;
+        if (existing) throw new HttpError(409, "This player has already joined");
+        throw new HttpError(404, "This join link is not valid");
+      }
+      return claimed.id;
+    }
+
+    // Re-run under the lock just taken (review MAJOR, RS007) — the pre-check
+    // above is only a fast fail; two joiners racing the last open spot must
+    // never both pass this one.
+    if (await rosterAtCap(tx, reg.division_id, reg.id)) {
+      throw new HttpError(422, "This roster is already full");
+    }
+    const [player] = await tx<{ id: string }[]>`
       insert into registration_players
         (registration_id, full_name, dob, gender, source, consent_status,
          consent_at, guardian_name, user_id)
@@ -1061,8 +1090,8 @@ export async function joinTeamEntry(
         'self_joined', ${consentStatus}, now(), ${minor ? (input.guardian_name ?? null) : null}, ${linkUserId}
       )
       returning id`;
-    playerId = player!.id;
-  }
+    return player!.id;
+  });
 
   log.info(
     {
