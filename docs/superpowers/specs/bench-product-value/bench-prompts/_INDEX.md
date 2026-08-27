@@ -32,7 +32,7 @@ B03/B04/B05 are sequential (shared `scripts/bench/lib/`). B17 needs B15
 | B01 | `B01-runner-core.md` | CLI, pre-flight, HTTP client, report writer | B00 | **in review (#658)** |
 | B02 | `B02-pack-lib.md` | PackSchema, stage-0 validator, reconstruction | B01 | TODO |
 | B03 | `B03-seeding-layer.md` | org/comp/divisions/persons/officials/plans/claims | B02 | TODO |
-| B03r | `B03r-registration-layer.md` (to author) | registration entry path: `--entry` flag, http+browser drivers, PackSchema `registration` block, Stripe test-mode payer, funnel oracle | B03 + **RS007–RS011, RS010 merged** | TODO (gated) |
+| B03r | `B03r-registration-layer.md` | registration entry path: `--entry` flag, http+browser drivers, PackSchema `registration` block, Stripe test-mode payer, funnel oracle | B03 + **RS007–RS011, RS010 merged** | TODO (gated) |
 | B04 | `B04-scheduling-layer.md` | config apply, auto/validate, checker, certificate, metrics | B03 | TODO |
 | B05 | `B05-simulation-layer.md` | event loop, advancement, oracles, people-layer steps | B04 | TODO |
 | B06 | `B06-pack-darts-pilot.md` | suite 11 (PDC) — pilot proves the playbook | B05 | TODO |
@@ -45,7 +45,7 @@ B03/B04/B05 are sequential (shared `scripts/bench/lib/`). B17 needs B15
 | B13 | `B13-pack-tabletennis.md` | suite 6 (WTTC 25) | B06 | TODO |
 | B14 | `B14-pack-volleyball.md` | suite 7 (Paris 24 M+W) | B06 | TODO |
 | B15 | `B15-pack-hockey-icehockey.md` | suites 8 (Paris 24) + 9 (IIHF 25) | B06 | TODO |
-| B16 | `B16-pack-club-open.md` (to author) | suite 13 "Club Open" — customer journey, UI-first: signup → comp → restricted divisions → register/pay/join/consent → approve/promote → fixtures → **pad-tapped play** → results | B03r, B05, B06 | TODO (gated) |
+| B16 | `B16-pack-club-open.md` | suite 13 "Club Open" — customer journey, UI-first: signup → comp → restricted divisions → register/pay/join/consent → approve/promote → fixtures → **pad-tapped play** → results | B03r, B05, B06 | TODO (gated) |
 | B17 | `B17-disruption-suite.md` | suite 12: blackout→reflow, walkover, correction | B15 | TODO |
 | B18 | `B18-full-run-closeout.md` (amend) | all suites, perf baseline, report, docs, memory; + one `--entry registration` pass ("Registration at volume" baseline, report-only) | all | TODO |
 
@@ -109,8 +109,11 @@ fall back from, is live — no B-prompt needs its fallback path.
 
 - 2026-08-27 — **Registration + customer-journey amendment approved in
   brainstorm** (owner). New sessions B03r + B16, B18 amended, gate
-  RS010 → B03r added to `_MASTER.md`. Prompts for B03r/B16 not yet
-  authored — write them from the spec once RS007–RS011 status is known.
+  RS010 → B03r added to `_MASTER.md`. Prompts authored the same day:
+  `B03r-registration-layer.md` (PR 0 = app test hooks — hub panels and
+  stepper have zero `data-testid`s today; PR 1 = bench), `B16-pack-club-open.md`,
+  B18 amended with the `--entry registration` volume pass. Both prompts
+  cite 2026-08-27 state and re-pin at run time (B00 pattern).
 
 - 2026-08-13 — prompts authored, gated. S9+C0 merged; C1+S10 in flight.
   B-numbering: B16 intentionally absent (B15 covers suites 8+9).
