@@ -100,6 +100,10 @@ function fakePreview(): JoinPreviewResult {
     requires_dob: false,
     requires_gender: false,
     total_players: 0,
+    // RS007/V380 — non-null on purpose: the "verbatim" test below would
+    // pass just as easily with the null default even if the route silently
+    // dropped this field.
+    eligibility_note: "School-registered students only",
   };
 }
 

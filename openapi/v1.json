@@ -57708,6 +57708,16 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "eligibility_note": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -57733,7 +57743,8 @@
                               "requires_dob",
                               "requires_gender",
                               "youth",
-                              "form_fields"
+                              "form_fields",
+                              "eligibility_note"
                             ],
                             "additionalProperties": false
                           }
@@ -57801,7 +57812,8 @@
                             ],
                             "required": true
                           }
-                        ]
+                        ],
+                        "eligibility_note": "example"
                       }
                     ]
                   },
@@ -58674,6 +58686,16 @@
                           "type": "integer",
                           "minimum": 0,
                           "maximum": 9007199254740991
+                        },
+                        "eligibility_note": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -58688,7 +58710,8 @@
                         "allow_new_player",
                         "requires_dob",
                         "requires_gender",
-                        "total_players"
+                        "total_players",
+                        "eligibility_note"
                       ],
                       "additionalProperties": false
                     },
@@ -58717,7 +58740,8 @@
                     "allow_new_player": true,
                     "requires_dob": true,
                     "requires_gender": true,
-                    "total_players": 0
+                    "total_players": 0,
+                    "eligibility_note": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

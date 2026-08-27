@@ -198,6 +198,11 @@ export interface JoinPreviewResult {
    *  preview, with no second round-trip: claimed_before = total_players -
    *  unclaimed_slots.length (RS007). */
   total_players: number;
+  /** RS007/V380 — the retired jsonb "custom rule" note, now a first-class
+   *  column the join page renders as an organiser notice, same treatment as
+   *  the main register page's DivisionCard. Organiser-authored free text:
+   *  render as TEXT, never as HTML/markdown. */
+  eligibility_note: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +250,11 @@ interface EntryDivisionCtx {
   age_max: number | null;
   age_cutoff_month: number | null;
   age_cutoff_day: number | null;
+  /** RS007/V380 — the retired jsonb "custom rule" note, now a first-class
+   *  column `previewJoinEntry` surfaces to the join page (design: "manual,
+   *  shown as a warning"). Organiser-authored free text: render as TEXT,
+   *  never as HTML/markdown. */
+  eligibility_note: string | null;
   /** division_name/comp_name/org_name added for `previewJoinEntry`'s
    *  "division and competition/org context" read — the same bundle
    *  `publicRegistrationStatus`/`publicRegistrationStatusByRef`
@@ -265,7 +275,7 @@ interface EntryDivisionCtx {
 async function loadEntryDivisionCtx(divisionId: string): Promise<EntryDivisionCtx> {
   const [row] = await sql<EntryDivisionCtx[]>`
     select d.id, d.competition_id, d.org_id, d.category, d.age_min, d.age_max,
-           d.age_cutoff_month, d.age_cutoff_day,
+           d.age_cutoff_month, d.age_cutoff_day, d.eligibility_note,
            d.name as division_name,
            c.slug as comp_slug, c.name as comp_name, c.visibility as comp_visibility, c.starts_on,
            o.slug as org_slug, o.name as org_name, o.currency as org_currency,
@@ -888,6 +898,7 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
     }),
     requires_gender: requiresGender({ category: divCtx.category }),
     total_players: totalPlayers,
+    eligibility_note: divCtx.eligibility_note,
   };
 }
 

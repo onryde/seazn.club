@@ -3861,6 +3861,7 @@ export type DictionaryKey =
   | "register.nav.step"
   | "register.nav.who"
   | "register.notOpen"
+  | "register.organiserNote"
   | "register.payments.unavailable.body"
   | "register.payments.unavailable.title"
   | "register.review.heading"

@@ -1451,6 +1451,12 @@ export interface PublicDivisionInfo {
   /** Queue length behind a full division (PROMPT-52) — public. */
   waitlisted: number;
   form_fields: RegistrationFormField[];
+  /** RS007/V380 — the retired jsonb "custom rule" note, now a first-class
+   *  `divisions` column the ENTRIES step renders as an organiser notice
+   *  (design: "manual, shown as a warning" — components/public-site/
+   *  register/division-card.tsx). Organiser-authored free text: render as
+   *  TEXT, never as HTML/markdown. */
+  eligibility_note: string | null;
 }
 
 export interface PublicRegistrationInfoResult {
@@ -1503,9 +1509,11 @@ export async function publicRegistrationInfo(
       youth: boolean;
       active: number;
       waitlisted: number;
+      eligibility_note: string | null;
     })[]
   >`
     select rs.*, d.name, d.slug, d.sport_key, d.category, d.age_min, d.age_max, d.youth,
+           d.eligibility_note,
            (select count(*)::int from registrations r
              where r.division_id = rs.division_id
                and r.status in ${sql([...SPOT_HOLDERS])}) as active,
@@ -1579,6 +1587,7 @@ export async function publicRegistrationInfo(
       youth: r.youth,
       waitlisted: r.waitlisted,
       form_fields: r.form_fields ?? [],
+      eligibility_note: r.eligibility_note,
     };
   });
   return {

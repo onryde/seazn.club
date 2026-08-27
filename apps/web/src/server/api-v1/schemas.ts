@@ -2385,6 +2385,10 @@ export const PublicRegistrationDivision = z.object({
   /** Youth division (v3/11 gap 8): the form always adds guardian consent. */
   youth: z.boolean(),
   form_fields: z.array(RegistrationFormField),
+  /** RS007/V380 — the retired jsonb "custom rule" note, now a first-class
+   *  column the ENTRIES step renders as an organiser notice. Organiser-
+   *  authored free text: render as TEXT, never as HTML/markdown. */
+  eligibility_note: z.string().nullable(),
 });
 
 export const PublicRegistrationInfo = z.object({
@@ -2632,6 +2636,10 @@ export const PublicJoinPreviewResponse = z.object({
   /** This entry's WHOLE roster size — lets the join page compute a fill
    *  meter after a successful join with no second round-trip. */
   total_players: z.number().int().nonnegative(),
+  /** RS007/V380 — the retired jsonb "custom rule" note, now a first-class
+   *  column the join page renders as an organiser notice. Organiser-
+   *  authored free text: render as TEXT, never as HTML/markdown. */
+  eligibility_note: z.string().nullable(),
 });
 export type PublicJoinPreviewResponse = z.infer<typeof PublicJoinPreviewResponse>;
 

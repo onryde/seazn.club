@@ -1167,6 +1167,7 @@
   "register.subtitle": "Pick a division, fill in your details — takes under a minute.",
   "register.supportedBy": "Supported by",
   "register.notOpen": "Registration is not open for this competition.",
+  "register.organiserNote": "From the organiser: {note}",
   "status.breadcrumb": "Registration",
   "status.pending.title": "Registration received",
   "status.pending_card.title": "Almost in — payment confirms your spot",

@@ -148,6 +148,38 @@ describe("register join page (RS007) — the URL entry-card.tsx already emits", 
     });
   });
 
+  // RS007/V380 defect #3 — the wizard's custom rule was written and shown
+  // nowhere. eligibility_note is now rendered here too, same organiser-
+  // speaking template as the main register page's DivisionCard.
+  describe("the organiser's eligibility_note (RS007/V380 defect #3)", () => {
+    it("renders the note, interpolated into the organiser-speaking template", async () => {
+      usecaseMock.previewJoinEntry.mockResolvedValueOnce({
+        ...TEAM_PREVIEW,
+        eligibility_note: "School-registered students only",
+      });
+      const html = await render({ join_code: "JOIN123" });
+      expect(html).toContain("From the organiser: School-registered students only");
+    });
+
+    it("renders nothing when the division has no note set", async () => {
+      usecaseMock.previewJoinEntry.mockResolvedValueOnce({ ...TEAM_PREVIEW, eligibility_note: null });
+      const html = await render({ join_code: "JOIN123" });
+      expect(html).not.toContain("From the organiser");
+    });
+
+    it("still renders even in the full-roster designed state — general division info, not conditional on a slot being left", async () => {
+      usecaseMock.previewJoinEntry.mockResolvedValueOnce({
+        ...TEAM_PREVIEW,
+        unclaimed_slots: [],
+        allow_new_player: false,
+        eligibility_note: "School-registered students only",
+      });
+      const html = await render({ join_code: "FULL789" });
+      expect(html).toContain("This roster is already full");
+      expect(html).toContain("From the organiser: School-registered students only");
+    });
+  });
+
   describe("per-slot pre-selection (a per-slot claim link arrives with that slot pre-selected)", () => {
     it("the requested player_id's radio starts checked, and the others do not", async () => {
       usecaseMock.previewJoinEntry.mockResolvedValueOnce(TEAM_PREVIEW);

@@ -1167,6 +1167,7 @@
   "register.subtitle": "Kies een divisie, vul je gegevens in — duurt minder dan een minuut.",
   "register.supportedBy": "Ondersteund door",
   "register.notOpen": "Registratie is niet geopend voor deze competitie.",
+  "register.organiserNote": "Van de organisator: {note}",
   "status.breadcrumb": "Inschrijving",
   "status.pending.title": "Inschrijving ontvangen",
   "status.pending_card.title": "Bijna binnen — betaling bevestigt je plek",

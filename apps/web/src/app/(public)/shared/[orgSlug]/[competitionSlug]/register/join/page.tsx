@@ -97,6 +97,20 @@ export default async function RegisterJoinPage({ params, searchParams }: Props) 
           {t(ui, "register.join.heading", { entry: preview.display_name, division: preview.division_name })}
         </h1>
 
+        {/* RS007/V380 defect #3 — the wizard's custom rule was written and
+            shown nowhere. Same organiser-speaking template as the main
+            register page's DivisionCard, rendered server-side straight from
+            KNOWN, already-public preview data (this page's own header
+            comment) — organiser-authored free text, plain TEXT, never
+            HTML/markdown. Shown regardless of rosterFull: it is general
+            division information, not conditional on there being a slot
+            left to claim. */}
+        {preview.eligibility_note && (
+          <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800">
+            {t(ui, "register.organiserNote", { note: preview.eligibility_note })}
+          </p>
+        )}
+
         {rosterFull ? (
           <div className="mt-6 rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
             <h2 className="font-display text-lg font-semibold text-ink">{t(ui, "register.join.full.heading")}</h2>

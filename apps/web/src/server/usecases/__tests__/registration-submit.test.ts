@@ -1578,6 +1578,23 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
       expect(preview.requires_gender).toBe(false);
     });
 
+    // RS007/V380 defect #3 — the wizard's custom rule was written and shown
+    // nowhere. eligibility_note is now surfaced here too, alongside the
+    // main register page's DivisionCard, so a joiner sees the same notice a
+    // fresh entrant would.
+    it("surfaces the division's eligibility_note", async () => {
+      const { division, entry } = await rosterRig("team", []);
+      await sql`update divisions set eligibility_note = 'School-registered students only' where id = ${division.id}`;
+      const preview = await previewJoinEntry(entry.join_code!);
+      expect(preview.eligibility_note).toBe("School-registered students only");
+    });
+
+    it("eligibility_note is null when the division has none set", async () => {
+      const { entry } = await rosterRig("team", []);
+      const preview = await previewJoinEntry(entry.join_code!);
+      expect(preview.eligibility_note).toBeNull();
+    });
+
     // The join page's success state shows a fill meter ("2 of 4 confirmed")
     // computed client-side from total_players/unclaimed_slots with no second
     // round-trip — it needs the WHOLE roster size, not just what's pending.

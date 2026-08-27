@@ -65,6 +65,29 @@ describe.skipIf(!HAS_DB)("publicRegistrationInfo — RS006 eligibility/free-agen
     expect(d.age_max).toBeNull();
     expect(d.allow_free_agents).toBe(false);
     expect(d.requires_gender).toBe(false);
+    expect(d.eligibility_note).toBeNull();
+  });
+
+  // RS007/V380 defect #3: the wizard's custom rule was written and shown
+  // NOWHERE. eligibility_note is now a first-class column on the SAME
+  // publicRegistrationInfo read model as category/age_min/age_max above —
+  // this is that column's own entry condition proof.
+  it("returns eligibility_note for a division that has one set", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+
+    await sql`update divisions set eligibility_note = 'School-registered students only' where id = ${division.id}`;
+    await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      payment_method: "offline",
+      form_fields: [],
+    });
+
+    const info = await publicRegistrationInfo(orgSlug, competition.slug);
+    expect(info.divisions[0]!.eligibility_note).toBe("School-registered students only");
   });
 
   it("a mixed category requires gender (roster-composition signal) even with no age band", async () => {
