@@ -633,8 +633,8 @@ export async function patchDivision(
     // this transaction below is a race-condition backstop, not the primary
     // fix; this is what makes 422 the common path.
     if (patch.age_min !== undefined || patch.age_max !== undefined) {
-      const [currentBand] = await tx<{ age_min: number | null; age_max: number | null }[]>`
-        select age_min, age_max from divisions where id = ${id}`;
+      const [currentBand] = await tx<{ age_min: number | null; age_max: number | null; youth: boolean }[]>`
+        select age_min, age_max, youth from divisions where id = ${id}`;
       if (!currentBand) throw new HttpError(404, "division not found");
       const mergedMin = patch.age_min !== undefined ? patch.age_min : currentBand.age_min;
       const mergedMax = patch.age_max !== undefined ? patch.age_max : currentBand.age_max;
@@ -650,7 +650,26 @@ export async function patchDivision(
       // one that touches age_max compares against ITS OWN new value rather
       // than a stale read. An explicit `patch.youth` in the SAME request
       // always wins (organiser override).
-      if (patch.age_max !== undefined && patch.youth === undefined) {
+      //
+      // REGRESSION FIX (review, RS007): an override set by an EARLIER
+      // request must survive THIS one too — CreateDivision has no `youth`
+      // field (deriveYouth's own comment), so a PATCH naming `youth` on its
+      // own is the ONLY way an override is ever created, and
+      // toDivisionPatchBody (registration-hub-config-state.ts) sends
+      // age_max on EVERY hub Save, whatever the organiser actually touched,
+      // while never sending `youth` at all (no such control exists in the
+      // hub UI). Without this guard every hub Save silently re-derived over
+      // an override set through the API. `deriveYouth` is the only thing
+      // that ever writes `youth` on its own, so a STORED value that
+      // disagrees with what it would compute from the CURRENT (pre-patch)
+      // age_max can only be there because some earlier request explicitly
+      // set it — that is what "explicit override always wins over the
+      // derivation" (above) means in practice, not just same-request
+      // precedence. This flag governs player_name_display (safeguarding:
+      // whether children's names publish in full), so re-deriving over an
+      // active override by accident is the wrong default.
+      const currentIsOverride = currentBand.youth !== deriveYouth(currentBand.age_max);
+      if (patch.age_max !== undefined && patch.youth === undefined && !currentIsOverride) {
         effective.youth = deriveYouth(mergedMax);
       }
     }
