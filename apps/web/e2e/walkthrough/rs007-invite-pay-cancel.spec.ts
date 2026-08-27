@@ -139,14 +139,32 @@ async function releaseConnectAccount(orgId: string, priorId: string | null): Pro
   });
 }
 
-/** A rendered "£25.00"/"$25.00" -> 2500. Currency- and locale-format
- *  agnostic on purpose: GBP/USD/EUR all render exactly two minor-unit
- *  digits, so stripping every non-digit character from the matched amount
- *  IS the cents value — no need to know the org's currency to assert on it. */
+/** A rendered "£25.00" / "£25" / "€1.234,50" -> cents.
+ *
+ *  The original version of this helper stripped every non-digit and returned
+ *  that, on the stated premise that "GBP/USD/EUR all render exactly two
+ *  minor-unit digits". That premise is FALSE for this app: a whole amount
+ *  renders as "£25", which stripped to `25` — so the helper reported 25 cents
+ *  where the page said twenty-five pounds, and the assertion failed with a
+ *  message blaming a product defect that had already been fixed. A parser that
+ *  is wrong in the safe direction still accuses the wrong party.
+ *
+ *  So: read the trailing separator group. Exactly two digits after the last
+ *  `.`/`,` is a minor-unit fraction; anything else (three digits, or no
+ *  separator at all) is grouping. Handles "£25", "£25.00", "£1,234.50" and
+ *  "€1.234,50" alike, without needing to know the org's currency or locale. */
 function centsFromRenderedAmount(text: string): number {
-  const match = text.match(/\d[\d.,]*\d|\d/);
+  const match = text.match(/\d[\d.,\s  ]*\d|\d/);
   if (!match) throw new Error(`no monetary amount found in "${text}"`);
-  return Number(match[0].replace(/[^\d]/g, ""));
+  const raw = match[0].replace(/[\s  ]/g, "");
+  const trailing = raw.match(/[.,](\d+)$/);
+  const normalised =
+    trailing && trailing[1]!.length === 2
+      ? `${raw.slice(0, -trailing[0]!.length).replace(/[.,]/g, "")}.${trailing[1]}`
+      : raw.replace(/[.,]/g, "");
+  const value = Number(normalised);
+  if (!Number.isFinite(value)) throw new Error(`unparseable monetary amount "${text}"`);
+  return Math.round(value * 100);
 }
 
 interface PublicRegSnapshot {
@@ -182,7 +200,11 @@ test.use({
   viewport: { width: 1280, height: 900 },
 });
 
-test("RS007 witness — cancelling one of two cart entries: the subtotal keeps the withdrawn fee, and a promoted-but-unpaid sibling's cancel dialog offers to refund a stranger's card", async ({
+// Named for the INVARIANT, not the defects. It was written as a reproduction
+// and both defects it caught are now fixed (#11 `54b88fb9f`, #1 `af9c9021f`),
+// so a title asserting the bugs are present would read as a live failure to
+// anyone scanning a green run.
+test("RS007 witness — cancelling one of two cart entries drops the subtotal to what is still owed, and a promoted-but-unpaid sibling is never offered a refund off another entry's card", async ({
   page,
   browser,
   request,
