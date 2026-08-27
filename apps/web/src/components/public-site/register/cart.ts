@@ -9,13 +9,25 @@
 // randomness, the standard `useReducer` shape.
 //
 // RS006 W3 (step 3 — DETAILS) added the roster (`*_PLAYER`/`IMPORT_PLAYERS`)
-// and answers (`SET_ANSWERS`) actions. Two of the new per-player actions are
-// FINE-GRAINED (`REMOVE_PLAYER` takes an index, `UPDATE_PLAYER` takes an
-// index+patch) rather than a single coarse "SET_PLAYERS" the caller
-// computes — REMOVE specifically needs the reducer itself to shift/clear
-// that entry's `self_player_index` correctly (see its own doc comment),
-// which only works if the reducer knows WHICH index was removed, not just
-// the resulting array.
+// and answers (`SET_ANSWER`) actions. All three of the new per-item actions
+// are FINE-GRAINED (`REMOVE_PLAYER`/`UPDATE_PLAYER` take an index,
+// `SET_ANSWER` takes one key+value) rather than a coarse "SET_PLAYERS"/
+// "SET_ANSWERS" the caller computes — REMOVE specifically needs the reducer
+// itself to shift/clear that entry's `self_player_index` correctly (see its
+// own doc comment), which only works if the reducer knows WHICH index was
+// removed, not just the resulting array. SET_ANSWER started life coarse
+// (a whole `answers` object) and was narrowed to one key+value (RS006 fix
+// wave finding #1, MEDIUM): the coarse shape made the CALLER build the next
+// object by spreading `entry.answers` — a RENDER-time prop closure — so two
+// onChange events firing off the same render (a transition, an autofill
+// event, a future "clear all" control) both closed over the SAME
+// pre-first-write `entry`, and the second dispatch silently overwrote the
+// first with no error. A fine-grained action lets the REDUCER own the
+// merge against its own `state` argument (always fresh — see
+// `dispatchCart`'s `setCart((prev) => cartReducer(prev, action))` in
+// register-stepper.tsx, which applies queued actions sequentially against
+// the real previous state, never a stale closure) — same fix REMOVE_PLAYER/
+// UPDATE_PLAYER already relied on.
 //
 // RS006 (post-W3 fix): self-link state (`registering_self`/
 // `self_player_index`) moved from a single cart-level pair onto EACH
@@ -56,7 +68,7 @@ export type CartAction =
   | { type: "REMOVE_PLAYER"; id: string; index: number }
   | { type: "UPDATE_PLAYER"; id: string; index: number; patch: Partial<RosterPlayerState> }
   | { type: "IMPORT_PLAYERS"; id: string; players: RosterPlayerState[] }
-  | { type: "SET_ANSWERS"; id: string; answers: Record<string, string | boolean> }
+  | { type: "SET_ANSWER"; id: string; key: string; value: string | boolean }
   | { type: "SET_SELF_PLAYER_INDEX"; id: string; index: number | null };
 
 export function canAddEntry(cart: CartState): boolean {
@@ -240,10 +252,15 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
       };
     }
 
-    case "SET_ANSWERS": {
+    case "SET_ANSWER": {
+      // MERGE against `e.answers` — this entry's answers as THIS reducer
+      // application actually sees them, never a caller-built whole object —
+      // see the file header for why (fix wave finding #1).
       return {
         ...state,
-        entries: state.entries.map((e) => (e.id === action.id ? { ...e, answers: action.answers } : e)),
+        entries: state.entries.map((e) =>
+          e.id === action.id ? { ...e, answers: { ...e.answers, [action.key]: action.value } } : e,
+        ),
       };
     }
 

@@ -467,8 +467,8 @@ describe("cartReducer — IMPORT_PLAYERS (pasted roster)", () => {
   });
 });
 
-describe("cartReducer — SET_ANSWERS", () => {
-  it("replaces the answers object for the matching entry only", () => {
+describe("cartReducer — SET_ANSWER (fix wave finding #1: narrowed from a whole-object SET_ANSWERS to one key+value, reducer-owned merge)", () => {
+  it("merges one key into the matching entry's answers, other entries untouched", () => {
     const cart: CartState = {
       ...EMPTY_CART,
       entries: [
@@ -476,9 +476,49 @@ describe("cartReducer — SET_ANSWERS", () => {
         entry({ id: "e2", division_id: "div-team", entrant_kind: "team" }),
       ],
     };
-    const next = cartReducer(cart, { type: "SET_ANSWERS", id: "e1", answers: { shirt_size: "L", court_rules_ack: true } });
-    expect(next.entries[0]!.answers).toEqual({ shirt_size: "L", court_rules_ack: true });
+    const next = cartReducer(cart, { type: "SET_ANSWER", id: "e1", key: "shirt_size", value: "L" });
+    expect(next.entries[0]!.answers).toEqual({ shirt_size: "L" });
     expect(next.entries[1]!.answers).toEqual({}); // untouched
+  });
+
+  it("merges against EXISTING answers on the entry rather than replacing them", () => {
+    const cart: CartState = {
+      ...EMPTY_CART,
+      entries: [entry({ id: "e1", division_id: "div-team", entrant_kind: "team", answers: { shirt_size: "L" } })],
+    };
+    const next = cartReducer(cart, { type: "SET_ANSWER", id: "e1", key: "court_rules_ack", value: true });
+    expect(next.entries[0]!.answers).toEqual({ shirt_size: "L", court_rules_ack: true });
+  });
+
+  it("overwrites an existing key's own value without touching sibling keys", () => {
+    const cart: CartState = {
+      ...EMPTY_CART,
+      entries: [
+        entry({
+          id: "e1",
+          division_id: "div-team",
+          entrant_kind: "team",
+          answers: { shirt_size: "L", court_rules_ack: true },
+        }),
+      ],
+    };
+    const next = cartReducer(cart, { type: "SET_ANSWER", id: "e1", key: "shirt_size", value: "XL" });
+    expect(next.entries[0]!.answers).toEqual({ shirt_size: "XL", court_rules_ack: true });
+  });
+
+  it("two dispatches for different keys, folded sequentially (no shared render closure at this layer), both survive", () => {
+    const cart: CartState = {
+      ...EMPTY_CART,
+      entries: [entry({ id: "e1", division_id: "div-team", entrant_kind: "team" })],
+    };
+    const afterFirst = cartReducer(cart, { type: "SET_ANSWER", id: "e1", key: "shirt_size", value: "L" });
+    const afterSecond = cartReducer(afterFirst, {
+      type: "SET_ANSWER",
+      id: "e1",
+      key: "court_rules_ack",
+      value: true,
+    });
+    expect(afterSecond.entries[0]!.answers).toEqual({ shirt_size: "L", court_rules_ack: true });
   });
 });
 
