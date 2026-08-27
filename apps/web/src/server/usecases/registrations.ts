@@ -1842,47 +1842,81 @@ function checkoutRegistrationIds(session: Stripe.Checkout.Session): string[] {
  * enough, and this mirrors `handleRegistrationCheckoutAsyncPaymentFailed`'s
  * own registrations→divisions resolution below rather than adding a second,
  * parallel lookup path off a metadata field nothing else in this file reads.
+ *
+ * Review fixup (HIGH): the whole body is wrapped in try/catch, the same
+ * shape as `expireSupersededCheckoutSession` above — a transient failure on
+ * this function's OWN select or its OWN audit insert used to propagate out
+ * of `handleRegistrationCheckoutCompleted` and abort the confirmPaidRegistration
+ * loop that runs after it, contradicting this doc comment's own "does NOT
+ * block, refund, or leave the entry pending". Telemetry must never be able
+ * to break the path it observes.
+ *
+ * Review fixup (LOW): also idempotent against a redelivery. This function
+ * can run more than once for the SAME session — `checkout.session.completed`
+ * and `checkout.session.async_payment_succeeded` both dispatch through
+ * `handleRegistrationCheckoutCompleted` (billing-events.ts), and Stripe's own
+ * retry re-enters it whenever `billing_events.processed_at` stays null (a
+ * later failure elsewhere in the same event, or Stripe's plain at-least-once
+ * delivery). Unlike `confirmPaidRegistration`, this path is audit-only and
+ * has no status column of its own to short-circuit on, so it checks the
+ * ledger it writes to instead — the same "read state, then act" shape as
+ * confirmPaidRegistration's status check and the late-refund path's
+ * `refunded_cents` guard below, applied to the one thing an audit-only path
+ * actually has: a matching row already on record for this exact session.
  */
 async function checkDestinationAccountDrift(
   session: Stripe.Checkout.Session,
   regIds: string[],
   paymentIntentId: string | null,
 ): Promise<void> {
-  const mintedDestination = session.metadata?.destination_account;
-  if (!mintedDestination) return;
-  const [row] = await sql<
-    { org_id: string; competition_id: string; stripe_account_id: string | null }[]
-  >`
-    select r.org_id, d.competition_id, o.stripe_account_id
-    from registrations r
-    join divisions d on d.id = r.division_id
-    join organizations o on o.id = r.org_id
-    where r.id = ${regIds[0]!}`;
-  if (!row || row.stripe_account_id === mintedDestination) return;
-  log.error(
-    {
-      registrationId: regIds[0],
-      orgId: row.org_id,
-      mintedDestination,
-      currentDestination: row.stripe_account_id,
-      sessionId: session.id,
-      paymentIntentId,
-    },
-    "registration: destination account changed since checkout was minted — funds routed to the old account",
-  );
-  await audit(
-    sql,
-    row.competition_id,
-    row.org_id,
-    "registration.destination_account_mismatch",
-    {
-      checkout_session_id: session.id,
-      payment_intent_id: paymentIntentId,
-      minted_destination_account: mintedDestination,
-      current_destination_account: row.stripe_account_id,
-    },
-    null,
-  );
+  try {
+    const mintedDestination = session.metadata?.destination_account;
+    if (!mintedDestination) return;
+    const [row] = await sql<
+      { org_id: string; competition_id: string; stripe_account_id: string | null }[]
+    >`
+      select r.org_id, d.competition_id, o.stripe_account_id
+      from registrations r
+      join divisions d on d.id = r.division_id
+      join organizations o on o.id = r.org_id
+      where r.id = ${regIds[0]!}`;
+    if (!row || row.stripe_account_id === mintedDestination) return;
+    const [already] = await sql<{ n: number }[]>`
+      select 1 as n from competition_events
+      where type = 'registration.destination_account_mismatch'
+        and payload->>'checkout_session_id' = ${session.id}
+      limit 1`;
+    if (already) return; // redelivery of a drift already on record — silent no-op
+    log.error(
+      {
+        registrationId: regIds[0],
+        orgId: row.org_id,
+        mintedDestination,
+        currentDestination: row.stripe_account_id,
+        sessionId: session.id,
+        paymentIntentId,
+      },
+      "registration: destination account changed since checkout was minted — funds routed to the old account",
+    );
+    await audit(
+      sql,
+      row.competition_id,
+      row.org_id,
+      "registration.destination_account_mismatch",
+      {
+        checkout_session_id: session.id,
+        payment_intent_id: paymentIntentId,
+        minted_destination_account: mintedDestination,
+        current_destination_account: row.stripe_account_id,
+      },
+      null,
+    );
+  } catch (err) {
+    log.error(
+      { err, sessionId: session.id, registrationId: regIds[0] },
+      "registration: destination-account drift check failed — fulfilment continues",
+    );
+  }
 }
 
 /**
