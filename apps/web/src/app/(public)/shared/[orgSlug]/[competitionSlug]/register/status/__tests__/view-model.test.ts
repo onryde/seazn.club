@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   canCancelEntry,
   claimHref,
+  classifyStatusActionFailure,
   effectivePayDeadline,
   publicCheckoutPath,
   publicResendPath,
@@ -127,6 +128,25 @@ describe("claimHref", () => {
     expect(claimHref("riverside", "summer-smash", "JOIN123", "p1")).toBe(
       "/shared/riverside/summer-smash/register/join?join_code=JOIN123&player_id=p1",
     );
+  });
+});
+
+describe("classifyStatusActionFailure — cancel/pay/resend's shared HTTP-status classifier (RS007 i18n follow-up)", () => {
+  it("404 -> notFound (token/entryId/groupId no longer resolves)", () => {
+    expect(classifyStatusActionFailure(404)).toBe("notFound");
+  });
+  it("409 -> conflict (a genuine concurrency race — e.g. resumeRegistrationCheckout's REGISTRATION_CHECKOUT_CONFLICT)", () => {
+    expect(classifyStatusActionFailure(409)).toBe("conflict");
+  });
+  it("429 -> rateLimited (publicRateLimit tripped on the write route)", () => {
+    expect(classifyStatusActionFailure(429)).toBe("rateLimited");
+  });
+  it("422/400/503/5xx/no-response -> generic (one honest fallback; the raw detail supplies the specifics)", () => {
+    expect(classifyStatusActionFailure(422)).toBe("generic");
+    expect(classifyStatusActionFailure(400)).toBe("generic");
+    expect(classifyStatusActionFailure(503)).toBe("generic");
+    expect(classifyStatusActionFailure(500)).toBe("generic");
+    expect(classifyStatusActionFailure(undefined)).toBe("generic");
   });
 });
 
